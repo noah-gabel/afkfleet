@@ -1,0 +1,5 @@
+[env]
+# Build aws-lc with a real NASM on Windows, never with the prebuilt objects that
+# the `prebuilt-nasm` feature would silently fall back to when NASM isn't on
+# PATH (ADR-0009). Has no effect on other platforms.
+AWS_LC_SYS_PREBUILT_NASM = "0"

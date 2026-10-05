@@ -1,0 +1,22 @@
+# Normalize every text file to LF, whatever core.autocrlf says.
+* text=auto eol=lf
+
+# Binary files: never normalize line endings, never diff as text.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.webp  binary
+*.ico   binary
+*.icns  binary
+*.woff  binary
+*.woff2 binary
+*.ttf   binary
+*.otf   binary
+*.pdf   binary
+*.zip   binary
+*.gz    binary
+*.tar   binary
+*.exe   binary
+*.dll   binary
+*.db    binary

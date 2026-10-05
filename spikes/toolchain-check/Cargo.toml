@@ -1,0 +1,11 @@
+[package]
+name = "toolchain-check"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Throwaway (P0.2): proves that the pinned nightly compiles the pinned azalea. Re-run it in every Minecraft-version bump."
+
+[dependencies]
+# 0.16.0+mc26.1. Semver ignores the `+mc…` part, hence the exact `=` pin.
+azalea = "=0.16.0"

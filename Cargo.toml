@@ -1,0 +1,48 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+# Spikes are throwaway experiments with their own Cargo.lock (Plan.md §4).
+exclude = ["spikes"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+repository = "https://github.com/noah-gabel/afkfleet"
+
+# A dependency is declared here when a crate first uses it, never in advance: cargo
+# warns about unused workspace dependencies. Plan.md §5 lists the verified version and
+# any feature constraints for every registry crate (pinned in P0.3).
+#
+# Version policy (ADR-0009): a caret requirement on the full version, with Cargo.lock as
+# the exact pin; `=` only where semver can't express the constraint (azalea).
+# Features that choose a TLS stack or crypto provider are fixed here: rustls with
+# aws-lc-rs only; no ring, native-tls or webpki-roots. All other features are enabled
+# by the member that uses the crate.
+[workspace.dependencies]
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+todo = "deny"
+unimplemented = "deny"
+dbg_macro = "deny"
+print_stdout = "deny"
+print_stderr = "deny"
+indexing_slicing = "deny"
+await_holding_lock = "deny"
+large_futures = "warn"
+
+[profile.release]
+panic = "unwind"
+overflow-checks = true
+lto = "thin"

@@ -1,0 +1,16 @@
+[package]
+name = "tls-provider"
+version = "0.0.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+description = "Throwaway (P0.10): proves that every TLS-using crate builds with rustls and the aws-lc-rs provider only, on Windows and Linux."
+
+# The same versions and TLS-related features as Plan.md §5.
+[dependencies]
+rustls = "0.23.45"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
+tonic = { version = "0.14.6", features = ["tls-aws-lc", "tls-connect-info"] }
+rcgen = { version = "0.14.10", default-features = false, features = ["aws_lc_rs", "pem", "x509-parser"] }
+tokio-tungstenite = { version = "0.29.0", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
+tokio = { version = "1.53.2", features = ["macros", "rt-multi-thread"] }
