@@ -75,3 +75,26 @@ Consequences:
 - **fleet-mc must enforce its own connect timeout** (P3.4) and call `exit()` when it fires; the OS timeout is 21 s on Windows and much longer on Linux.
 - **Classifier input (P2.4):** classify by translation key, never by text. A `Text` reason (custom kick message, or plugin-generated text) has no key and should default to transient. `banned*`, `ip_banned`, `banned_ip.*`, `not_whitelisted` and `incompatible` are permanent; `duplicate_login` is the conflict case; `server_full`, `server_shutdown`, `kicked`, `idling` and `Disconnect(None)` look transient.
 - `Death` must be de-duplicated when mapping to a `Died` session event.
+
+## P1.4 Chat
+`cargo run -- chat`: AfkBot1 listens, AfkBot2 talks, RCON plays the console (offline server, `enforce-secure-profile=false`).
+
+| Case | `ChatPacket` | Registry `ChatKind` | azalea `sender` | `sender_uuid` | `is_whisper` | Key of `message()` | Plain text |
+|---|---|---|---|---|---|---|---|
+| Player chat | `Player` (unsigned) | id 0 (`chat`) | `AfkBot2` | the player's UUID | false | `chat.type.text` | `<AfkBot2> hello …` |
+| `/msg AfkBot1 …` | `Disguised` | id 2 (`msg_command_incoming`) | `AfkBot2` | **None** | true | `commands.message.display.incoming` | `AfkBot2 whispers to you: …` |
+| `/me waves` | `Disguised` | id 1 (`emote_command`) | `AfkBot2` | None | false | `chat.type.emote` | `* AfkBot2 waves` |
+| RCON `say` | `Disguised` | id 4 (`say_command`) | `Rcon` | None | false | `chat.type.announcement` | `[Rcon] …` |
+| RCON `tell AfkBot1 …` | `Disguised` | id 2 | `Rcon` | None | true | `commands.message.display.incoming` | `Rcon whispers to you: …` |
+| Join / leave | `System` | — | None | None | false | `multiplayer.player.joined` / `.left`, args `[name]` | `AfkBot2 joined the game` |
+| `/list` reply | `System` | — | None | None | false | `commands.list.players` | `There are 2 of a max of 60 …` |
+| `tellraw` text | `System` | — | None | None | false | none (`Text`) | as sent |
+| `tellraw "<Notch> I am not really Notch"` | `System` | — | **`Notch`** (spoofed) | None | false | none | `<Notch> I am not …` |
+
+- **Kinds:** `Player`/`Disguised` carry a registry `ChatKind` (`chat_type.chat_type`), a typed, reliable way to tell chat, emote, whisper and announcement apart. `System` carries no sender at all.
+- **Sender spoofing.** For `System` messages azalea's `sender()`/`split_sender_and_content()` guess the sender **by regex on the plain text**. Anything that can produce a system message (a `tellraw`, a plugin, a bridge bot) can fake `<Notch> …`. P2.3 must take the sender only from `Player`/`Disguised` packets (`chat_type.name`) and treat `System` text as sender-less.
+- **Formatting.** Legacy `§` codes inside a component arrive already parsed into styled siblings, so `to_string()` has no `§`. The core sanitizer must still strip `§` and control characters (defense in depth, P2.3).
+- **Sending:**
+  - `chat("text")` sends a chat message. `chat("/list")` sends a command, and `write_command_packet("list")` does the same without the slash; both got the `/list` reply.
+  - azalea **filters control characters and `§` and silently truncates to 256 characters** before sending: `a§cb\x07c\td` arrived as `acbcd`, and 300 × `x` arrived as 256 characters. No kick. The core `ChatMessage` limits (≤ 256, no control characters, no `§`, P2.2) match, so nothing is silently changed.
+  - Offline accounts send unsigned chat (`signed=false`), which a server with `enforce-secure-profile=false` accepts.

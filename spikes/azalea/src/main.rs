@@ -36,6 +36,7 @@ fn main() -> Res {
         "host-builder-exit" => exp::host::builder_exit(rest),
         "exit-race" => exp::host::exit_race(rest),
         "fail" => exp::fail::run(rest),
+        "chat" => exp::chat::run(rest),
         other => Err(format!("unknown command `{other}` (see README.md)").into()),
     }
 }
