@@ -14,3 +14,6 @@ cargo run -- <command> [args]   # RUST_LOG=debug for azalea's own logs
 | Command | Task | What it does |
 |---|---|---|
 | `join [secs]` | P1.1 | One offline bot (`AfkBot1`) joins with `Client::join` and stays online for `secs` seconds (default: until Ctrl-C) |
+| `host [join|builder|custom] [bots]` | P1.2 | Bots on one MC host thread, handed to the multi-threaded runtime; calls from a worker thread; `exit()` and clean-up |
+| `host-builder-exit [plain|nested][-remote]` | P1.2 | Does `ClientBuilder::start()` return after `exit()`? (It can deadlock: see FINDINGS) |
+| `exit-race [variant] [trials]` | P1.2 | How many `exit()` calls each trial needs until the event channel closes |

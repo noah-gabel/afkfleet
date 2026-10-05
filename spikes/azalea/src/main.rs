@@ -4,6 +4,8 @@
 //! decisions. This crate is not a workspace member and is allowed to be messy.
 
 mod exp;
+mod host;
+mod session;
 
 use std::error::Error;
 
@@ -29,6 +31,9 @@ fn main() -> Res {
     };
     match command.as_str() {
         "join" => exp::join::run(rest),
+        "host" => exp::host::run(rest),
+        "host-builder-exit" => exp::host::builder_exit(rest),
+        "exit-race" => exp::host::exit_race(rest),
         other => Err(format!("unknown command `{other}` (see README.md)").into()),
     }
 }
