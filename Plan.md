@@ -699,6 +699,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   | 0005 | SQLite via sqlx |
   | 0006 | Opaque tokens instead of JWT |
   | 0007 | Tauri Rust-side API proxy (keychain, no CORS) |
+
+  > Note (P0.12): ADR-0009 ("Phase 0 dependency and tooling conventions") was added for the decisions taken while setting up Phase 0:
+  > - the version policy and declaring dependencies on first use
+  > - the single TLS provider, with the ring ban and NASM enforcement
+  > - utoipa 6 and tokio-tungstenite 0.29
+  > - the stricter cargo-deny settings
+  > - CI calling `just`, and Node scripts
+  >
+  > ADR-0008 stays reserved for P1.10. ADR-0004 is `Proposed` until the spike confirms it.
 - [ ] **P0.13** Add a `docs/threat-model.md` skeleton based on §7.1.
 
 **Security:**
