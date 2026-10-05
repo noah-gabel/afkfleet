@@ -10,7 +10,15 @@ A self-hosted fleet of **Minecraft Java Edition AFK bots**, one per Microsoft ac
 > **Use responsibly.** Only run the bots on servers whose rules allow AFK bots. afkfleet isn't affiliated with Mojang or Microsoft.
 
 ## Status
-**Phase 0: Foundation & tooling** is in progress. The workspace, quality gates and CI are being set up; nothing is runnable yet.
+**Phase 0 (Foundation & tooling) is complete.** It's under review in its pull request. Nothing is runnable yet. What exists:
+- the Cargo workspace with all lints
+- the pinned toolchain
+- the quality gates: formatting, clippy, docs, tests, coverage gates, cargo-deny, Biome
+- CI and the architecture decision records
+
+**Next:** Phase 1, a time-boxed spike that de-risks the Minecraft layer.
+
+**Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 
 The roadmap and the progress of every phase are in [`Plan.md`](Plan.md).
 
@@ -29,7 +37,7 @@ Further reading:
 
 ## Prerequisites (development, Windows 11)
 - Git, [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell-on-windows) (`pwsh`) and [`just`](https://github.com/casey/just)
-- [rustup](https://rustup.rs). The pinned nightly toolchain in `rust-toolchain.toml` is installed automatically. Don't set a `rustup override` for this directory: it would take precedence over the pinned toolchain.
+- [rustup](https://rustup.rs). Run `rustup install` once in the repository to install the nightly pinned in `rust-toolchain.toml`. Don't set a `rustup override` for this directory: it would take precedence over the pinned toolchain.
 - MSVC Build Tools ("Desktop development with C++")
 - [NASM](https://www.nasm.us) on `PATH`, needed to build `aws-lc-rs` (the TLS crypto provider). CMake isn't needed.
 - Node 24 and pnpm

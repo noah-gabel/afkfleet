@@ -544,7 +544,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 **Introduces:** the tools cargo-nextest, cargo-llvm-cov, cargo-deny, cargo-insta and Biome. sqlx-cli comes in Phase 6. No runtime crates yet.
 
-- [ ] **P0.1** The repo already exists: it was created on GitHub with `README.md` and a GPL-3.0 `LICENSE`, then cloned. So there's no `git init`. Work on the branch `p0/foundation`. Add:
+- [x] **P0.1** The repo already exists: it was created on GitHub with `README.md` and a GPL-3.0 `LICENSE`, then cloned. So there's no `git init`. Work on the branch `p0/foundation`. Add:
   - `.gitignore`: `target/`, `node_modules/`, `.env*`, `*.db*`, `secrets/`, `*.pem`, `*.key`, `.claude/settings.local.json`
   - `.gitattributes`: `* text=auto eol=lf`, plus binary file types
   - `.editorconfig`
@@ -560,14 +560,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `.github/pull_request_template.md` with the Definition of Done checklist from `CLAUDE.md`
 
   > Note (P0.1): `.claude/settings.json` was dropped from this task and from the §4 layout at the user's request; the user doesn't provide one. `CLAUDE.md` security rule 12 now states the secret-file rule as an instruction instead. `.claude/settings.local.json` stays in `.gitignore`.
-- [ ] **P0.2** Pick the target Minecraft version and the matching azalea release or git rev. Pin a **dated nightly** in `rust-toolchain.toml` with the components `rustfmt`, `clippy` and `llvm-tools-preview`. Record this in ADR-0003, including the bump procedure (nightly + azalea + test-server `VERSION` change together).
+- [x] **P0.2** Pick the target Minecraft version and the matching azalea release or git rev. Pin a **dated nightly** in `rust-toolchain.toml` with the components `rustfmt`, `clippy` and `llvm-tools-preview`. Record this in ADR-0003, including the bump procedure (nightly + azalea + test-server `VERSION` change together).
 
   > Note (P0.2):
   > - **azalea:** `=0.16.0` from crates.io, so Minecraft 26.1 (the user's choice). The current Minecraft release is 26.3, so 26.2/26.3 servers need ViaVersion/ViaBackwards.
   > - **Nightly:** pinned to `nightly-2026-08-21`, not the first candidate `nightly-2026-10-01`, which fails to compile azalea 0.16.0 (E0284 in `azalea-core`). A bisect found 08-21 as the last good and 08-22 as the first bad nightly.
   > - **Verification:** `spikes/toolchain-check/` builds on Windows and in `rust:1-bookworm`. It stays in the repo for future bumps.
   > - **Details:** see ADR-0003.
-- [ ] **P0.3** Write the workspace `Cargo.toml`:
+- [x] **P0.3** Write the workspace `Cargo.toml`:
   - `[workspace.package]`: edition 2024, `license = "GPL-3.0-or-later"`, `publish = false`, `repository` = the GitHub URL. Every member inherits them (`license.workspace = true`, `publish.workspace = true`, …).
   - `[workspace.dependencies]` with **every crate from §5**, each version checked on docs.rs. Crates are only *used* in their own phase.
     - Crates that `fleet-core` uses (`backon`, `rand`, `chrono`, `uuid`, …) get `default-features = false`, and members enable only the features they need. `backon`, for example, pulls in a tokio sleeper by default.
@@ -605,10 +605,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Version policy:** caret requirements plus `Cargo.lock`, with `=` only for azalea (ADR-0009).
   > - `exclude = ["spikes"]`, so spikes nested under the workspace root can build on their own.
   > - `[workspace.package]` also sets `version = "0.1.0"`.
-- [ ] **P0.4** Write the remaining config files:
+- [x] **P0.4** Write the remaining config files:
   - `clippy.toml`: `allow-unwrap-in-tests`, `allow-expect-in-tests`, `allow-panic-in-tests`, `allow-indexing-slicing-in-tests`, `allow-print-in-tests`.
   - `rustfmt.toml`: stable options only, `max_width = 100`.
-- [ ] **P0.5** Write `deny.toml`:
+- [x] **P0.5** Write `deny.toml`:
   - advisories: `deny`
   - license allowlist: MIT, Apache-2.0, BSD-2/3-Clause, ISC, Zlib, Unicode-3.0, MPL-2.0
   - bans: `openssl-sys`, `native-tls`; warn on duplicate versions
@@ -626,10 +626,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Heads-up for P3:** a dry run against azalea 0.16.0's graph found two problems. Before azalea enters the workspace, the user has to decide on exceptions (approval + ADR) or on an azalea bump.
   >   - **Licenses:** `minecraft_folder_path` (Unlicense) and `socks5-impl` (GPL-3.0-or-later) aren't on the allowlist.
   >   - **Advisories:** RUSTSEC-2026-0118/0119 in `hickory-proto` 0.25.2 (fixed only in 0.26.1), and RUSTSEC-2023-0071 in `rsa` (no fix).
-- [ ] **P0.6** Add `.config/nextest.toml` with the profiles `default` (excludes `test(/^slow_/)`), `slow` and `ci`.
+- [x] **P0.6** Add `.config/nextest.toml` with the profiles `default` (excludes `test(/^slow_/)`), `slow` and `ci`.
 
   > Note (P0.6): The filter is `test(/(^|::)slow_/)`, not `test(/^slow_/)`. nextest matches the full test path, so a unit test is `tests::slow_join`, which `^slow_` would miss. Checked with a temporary `tests::slow_example`: `default` and `ci` skip it, `slow` selects only it.
-- [ ] **P0.7** Add a `justfile` with the recipes listed in `CLAUDE.md`. Set `set windows-shell := ["pwsh", "-NoLogo", "-NoProfile", "-Command"]` (PowerShell 7).
+- [x] **P0.7** Add a `justfile` with the recipes listed in `CLAUDE.md`. Set `set windows-shell := ["pwsh", "-NoLogo", "-NoProfile", "-Command"]` (PowerShell 7).
   - Every recipe must also run in `sh` on Linux CI: one command per line, no `&&`/`||`.
   - Set environment variables with just's `export`, e.g. `export RUSTDOCFLAGS := "-D warnings"`.
   - Anything more complex goes into a script under `scripts/`.
@@ -641,13 +641,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **CI building blocks.** `check` and `ci` are composed of building-block recipes (`fmt-check`, `clippy`, `docs`, `doctest`, `test-ci`, `stable-check`, `scripts-test`, `ui-check`, `ui-audit`), and each CI job runs one of them.
   > - **Coverage gates.** `scripts/coverage-gates.mjs` is plain Node (Node 24 is required everywhere anyway), with `node --test` tests. A gate whose files don't exist yet is skipped; the workspace gate never is. The auth and vault path patterns follow the server layout in `CLAUDE.md` and get confirmed in P7.
   > - **NASM.** `.cargo/config.toml` (a file not in the §4 layout) sets `AWS_LC_SYS_PREBUILT_NASM=0` for every cargo invocation, so a missing NASM fails the build instead of silently linking prebuilt objects (ADR-0009, P0.10).
-- [ ] **P0.8** Set up the frontend workspace:
+- [x] **P0.8** Set up the frontend workspace:
   - `package.json`
   - `pnpm-workspace.yaml` (`apps/*`, `packages/*`)
   - `biome.json` (ignores `packages/ui/src/generated/`)
   - `tsconfig.base.json` (strict flags from §5)
-- [ ] **P0.9** 🔴 Create `crates/fleet-core` with one trivial test. Use it to prove that fmt, clippy, nextest and llvm-cov all run.
-- [ ] **P0.10** Check that the **single rustls provider (aws-lc-rs)** builds on Windows (MSVC) and in the Linux builder image, with `reqwest`, `tonic`, `rcgen` and `tokio-tungstenite` configured for it.
+- [x] **P0.9** 🔴 Create `crates/fleet-core` with one trivial test. Use it to prove that fmt, clippy, nextest and llvm-cov all run.
+- [x] **P0.10** Check that the **single rustls provider (aws-lc-rs)** builds on Windows (MSVC) and in the Linux builder image, with `reqwest`, `tonic`, `rcgen` and `tokio-tungstenite` configured for it.
   - NASM is installed on the dev machine; CMake isn't needed for non-FIPS builds. Document this in the README, and make sure the Windows CI runner has NASM.
   - `cargo tree -i ring` must be empty or justified.
   - If it can't be done, move everything to `ring` instead and record that in an ADR. Never mix providers.
@@ -660,7 +660,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - `cargo deny` with the root `deny.toml` passes, so no license beyond the allowlist is needed. webpki-roots' CDLA-Permissive-2.0 is avoided.
   > - **Prebuilt NASM objects.** rustls's `aws_lc_rs` feature enables aws-lc's `prebuilt-nasm`, which silently links prebuilt objects when NASM isn't on PATH. `.cargo/config.toml` sets `AWS_LC_SYS_PREBUILT_NASM=0`; a build without NASM was confirmed to fail.
   > - **Not covered here.** `tauri-plugin-updater` and `testcontainers` default to ring, so they must use `default-features = false` (§5). The ring ban in `deny.toml` enforces it.
-- [ ] **P0.11** Set up CI (GitHub Actions) with these jobs:
+- [x] **P0.11** Set up CI (GitHub Actions) with these jobs:
   - `fmt`
   - `clippy` (`--all-targets -D warnings`)
   - `docs`: `cargo doc --no-deps --workspace` with `RUSTDOCFLAGS="-D warnings"`
@@ -688,7 +688,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **frontend** also runs the `scripts/` tests and `pnpm audit`, because the frontend workspace exists since P0.8.
   > - **audit.yml** runs weekly (Mondays) and on demand: `just deny` and `just ui-audit`.
   > - **Job names for the required checks:** `fmt`, `clippy (ubuntu-latest)`, `clippy (windows-latest)`, `docs`, `test (ubuntu-latest)`, `test (windows-latest)`, `coverage`, `deny`, `stable-check`, `frontend`.
-- [ ] **P0.12** Add `docs/adr/0000-template.md` and these ADRs:
+- [x] **P0.12** Add `docs/adr/0000-template.md` and these ADRs:
 
   | ADR | Topic |
   |---|---|
@@ -708,7 +708,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - CI calling `just`, and Node scripts
   >
   > ADR-0008 stays reserved for P1.10. ADR-0004 is `Proposed` until the spike confirms it.
-- [ ] **P0.13** Add a `docs/threat-model.md` skeleton based on §7.1.
+- [x] **P0.13** Add a `docs/threat-model.md` skeleton based on §7.1.
 
 **Security:**
 - All lints active from the start.
