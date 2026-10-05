@@ -609,6 +609,17 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - sources: crates.io plus the pinned azalea git repo only
   - every license on the allowlist must be compatible with GPL-3.0 (all of the above are)
   - our own crates are GPL-3.0-or-later and unpublished; `[licenses.private] ignore = true` skips them, so the allowlist applies only to dependencies
+
+  > Note (P0.5):
+  > - **Sources:** crates.io only, because azalea is pinned from crates.io (ADR-0003); no git source is allowed.
+  > - **Stricter than the plan:**
+  >   - `ring` is banned too, so "`cargo tree -i ring` empty or justified" is enforced; a justified exception needs a `wrappers` entry and an ADR.
+  >   - `unsound = "all"` and `yanked = "deny"`.
+  > - `[graph] targets` limits the check to Windows MSVC and Linux GNU, so mobile-only dependencies don't count.
+  > - `unused-allowed-license = "allow"`: the allowlist is meant for future dependencies.
+  > - **Heads-up for P3:** a dry run against azalea 0.16.0's graph found two problems. Before azalea enters the workspace, the user has to decide on exceptions (approval + ADR) or on an azalea bump.
+  >   - **Licenses:** `minecraft_folder_path` (Unlicense) and `socks5-impl` (GPL-3.0-or-later) aren't on the allowlist.
+  >   - **Advisories:** RUSTSEC-2026-0118/0119 in `hickory-proto` 0.25.2 (fixed only in 0.26.1), and RUSTSEC-2023-0071 in `rsa` (no fix).
 - [ ] **P0.6** Add `.config/nextest.toml` with the profiles `default` (excludes `test(/^slow_/)`), `slow` and `ci`.
 - [ ] **P0.7** Add a `justfile` with the recipes listed in `CLAUDE.md`. Set `set windows-shell := ["pwsh", "-NoLogo", "-NoProfile", "-Command"]` (PowerShell 7).
   - Every recipe must also run in `sh` on Linux CI: one command per line, no `&&`/`||`.

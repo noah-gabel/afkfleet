@@ -1,0 +1,55 @@
+# cargo-deny configuration (cargo-deny 0.20).
+# Weakening any rule here needs the user's explicit approval and an ADR
+# (CLAUDE.md, security rule 10).
+
+[graph]
+# Only the platforms we ship: Windows (development, desktop app) and Linux
+# (server, agent). Mobile-only dependencies, such as tauri's ring on iOS and
+# Android, don't count.
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+all-features = true
+
+[advisories]
+# Vulnerabilities are always errors. Unmaintained and unsound crates are
+# errors anywhere in the graph. Ignoring an advisory needs the user's approval.
+unmaintained = "all"
+unsound = "all"
+yanked = "deny"
+ignore = []
+
+[licenses]
+# Every license here is compatible with GPL-3.0-or-later.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "MPL-2.0",
+]
+# The allowlist is meant for future dependencies too, so unused entries are expected.
+unused-allowed-license = "allow"
+
+[licenses.private]
+# Our own crates are GPL-3.0-or-later and unpublished; the allowlist applies
+# only to dependencies.
+ignore = true
+
+[bans]
+multiple-versions = "warn"
+wildcards = "deny"
+# Path dependencies between workspace crates have no version requirement.
+allow-wildcard-paths = true
+deny = [
+    { crate = "openssl-sys", reason = "rustls with aws-lc-rs is the only TLS stack" },
+    { crate = "native-tls", reason = "rustls with aws-lc-rs is the only TLS stack" },
+    { crate = "ring", reason = "aws-lc-rs is the only rustls crypto provider (P0.10); an exception needs a `wrappers` entry and an ADR" },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
