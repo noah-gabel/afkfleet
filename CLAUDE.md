@@ -83,7 +83,7 @@ Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so 
 | `just ci` | Everything CI runs |
 | `just fmt-check` · `clippy` · `docs` · `doctest` · `test-ci` · `stable-check` · `scripts-test` · `ui-check` · `ui-audit` | The building blocks of `check` and `ci`. Each CI job runs one of them, so local and CI runs can't drift apart |
 
-Recipes for tools that arrive in later phases (`gen`, `db-prepare`, `mc-up`/`mc-down`, `dev-*`, `ui-test`, `e2e`) print the phase they arrive in and exit with an error until then.
+Recipes for tools that arrive in later phases (`gen`, `db-prepare`, `dev-*`, `ui-test`, `e2e`) print the phase they arrive in and exit with an error until then.
 
 ## Architecture rules
 **Crates and dependencies** (full table in Plan.md §4):

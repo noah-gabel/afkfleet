@@ -54,11 +54,13 @@ gen: (_unavailable "gen" "P6")
 # Prepare sqlx offline query data in .sqlx/.
 db-prepare: (_unavailable "db-prepare" "P6")
 
-# Start the local offline-mode Minecraft server.
-mc-up: (_unavailable "mc-up" "P1")
+# Start the local offline-mode Minecraft server and wait until it's healthy (needs Docker).
+mc-up:
+    docker compose --file deploy/compose.dev.yaml up --detach --wait --wait-timeout 300 minecraft
 
-# Stop the local Minecraft server.
-mc-down: (_unavailable "mc-down" "P1")
+# Stop the local Minecraft server and delete its world.
+mc-down:
+    docker compose --file deploy/compose.dev.yaml down --volumes
 
 # Run the server with deploy/dev/ configs.
 dev-server: (_unavailable "dev-server" "P6")

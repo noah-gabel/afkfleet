@@ -61,7 +61,10 @@ There's nothing to run yet. The first runnable product is the standalone agent i
 pnpm install   # frontend tooling (Biome)
 just check     # format, lints, docs, tests: run before every commit
 just ci        # everything CI runs
+just mc-up     # local offline-mode Minecraft 26.1 test server on 127.0.0.1:25565 (needs Docker)
+just mc-down   # stop it and delete its world
 ```
+The test server runs in offline mode, so it's for local development only. RCON is enabled with a random password and isn't published; run commands with `docker compose --file deploy/compose.dev.yaml exec minecraft rcon-cli <command>`.
 `just --list` shows every recipe; [`CLAUDE.md`](CLAUDE.md) describes them and the project's working rules.
 
 Every change goes through a pull request; nobody commits to `main`.

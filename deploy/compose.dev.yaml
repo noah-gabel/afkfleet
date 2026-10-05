@@ -1,0 +1,41 @@
+# Local development stack. Start it with `just mc-up`, stop it with `just mc-down`.
+#
+# DEVELOPMENT ONLY. The Minecraft server runs in offline mode, so anyone who
+# can reach it can join under any name. It is bound to 127.0.0.1 and must
+# never be exposed. RCON is enabled with a random password per start and its
+# port isn't published: use `docker compose --file deploy/compose.dev.yaml
+# exec minecraft rcon-cli <command>`.
+#
+# Phase 5 adds the agent to this file.
+name: afkfleet-dev
+
+services:
+  minecraft:
+    # Pinned tag and digest. Bump it deliberately (ADR-0003).
+    image: itzg/minecraft-server:2026.9.2-java25@sha256:de5d1b1a83eba576f6c8a688fac2a3523ce457724cdebc8ea48d7818b74cdf6e
+    environment:
+      EULA: "TRUE"
+      TYPE: VANILLA
+      # Must match the Minecraft version of the pinned azalea (ADR-0003).
+      VERSION: "26.1"
+      ONLINE_MODE: "FALSE"
+      ENFORCE_SECURE_PROFILE: "FALSE"
+      LEVEL_TYPE: minecraft:flat
+      VIEW_DISTANCE: "4"
+      SIMULATION_DISTANCE: "4"
+      # The default of 20 is too low for load tests; override with MC_MAX_PLAYERS.
+      MAX_PLAYERS: ${MC_MAX_PLAYERS:-60}
+      SPAWN_PROTECTION: "0"
+      MODE: survival
+      DIFFICULTY: peaceful
+      ENABLE_AUTOPAUSE: "FALSE"
+      ENABLE_RCON: "TRUE"
+      MEMORY: 2G
+    ports:
+      - "127.0.0.1:25565:25565"
+    healthcheck:
+      test: mc-health
+      # The first start downloads the server jar.
+      start_period: 3m
+      interval: 5s
+      retries: 20
