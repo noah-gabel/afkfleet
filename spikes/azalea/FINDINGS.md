@@ -89,10 +89,10 @@ Consequences:
 | Join / leave | `System` | — | None | None | false | `multiplayer.player.joined` / `.left`, args `[name]` | `AfkBot2 joined the game` |
 | `/list` reply | `System` | — | None | None | false | `commands.list.players` | `There are 2 of a max of 60 …` |
 | `tellraw` text | `System` | — | None | None | false | none (`Text`) | as sent |
-| `tellraw "<Notch> I am not really Notch"` | `System` | — | **`Notch`** (spoofed) | None | false | none | `<Notch> I am not …` |
+| `tellraw "<AfkBot7> I am not really AfkBot7"` | `System` | — | **`AfkBot7`** (spoofed) | None | false | none | `<AfkBot7> I am not …` |
 
 - **Kinds:** `Player`/`Disguised` carry a registry `ChatKind` (`chat_type.chat_type`), a typed, reliable way to tell chat, emote, whisper and announcement apart. `System` carries no sender at all.
-- **Sender spoofing.** For `System` messages azalea's `sender()`/`split_sender_and_content()` guess the sender **by regex on the plain text**. Anything that can produce a system message (a `tellraw`, a plugin, a bridge bot) can fake `<Notch> …`. P2.3 must take the sender only from `Player`/`Disguised` packets (`chat_type.name`) and treat `System` text as sender-less.
+- **Sender spoofing.** For `System` messages azalea's `sender()`/`split_sender_and_content()` guess the sender **by regex on the plain text**. Anything that can produce a system message (a `tellraw`, a plugin, a bridge bot) can fake `<AfkBot7> …`. P2.3 must take the sender only from `Player`/`Disguised` packets (`chat_type.name`) and treat `System` text as sender-less.
 - **Formatting.** Legacy `§` codes inside a component arrive already parsed into styled siblings, so `to_string()` has no `§`. The core sanitizer must still strip `§` and control characters (defense in depth, P2.3).
 - **Sending:**
   - `chat("text")` sends a chat message. `chat("/list")` sends a command, and `write_command_packet("list")` does the same without the slash; both got the `/list` reply.

@@ -69,7 +69,7 @@ pub fn run(_args: &[String]) -> Res {
             Step::Rcon("tell AfkBot1 a whisper from the console"),
             Step::Rcon(r#"tellraw AfkBot1 {"text":"red text","color":"red"}"#),
             Step::Rcon("tellraw AfkBot1 \"legacy §ccodes§r in a text component\""),
-            Step::Rcon(r#"tellraw AfkBot1 {"text":"<Notch> I am not really Notch"}"#),
+            Step::Rcon(r#"tellraw AfkBot1 {"text":"<AfkBot7> I am not really AfkBot7"}"#),
             Step::Talker("control chars and §", "a§cb\u{7}c\td".into()),
             Step::Talker("300 characters", "x".repeat(300)),
             Step::Listener("command via chat()", "/list".into()),

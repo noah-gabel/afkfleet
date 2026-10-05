@@ -1,5 +1,7 @@
 # azalea spike (Phase 1)
 
+> **Archived.** The findings are recorded in [ADR-0008](../../docs/adr/0008-azalea-integration.md). This code isn't maintained and isn't built by CI. It stays here as evidence, and as a quick way to re-check azalea's behavior at the next azalea bump (ADR-0003).
+
 Throwaway experiments that de-risk [azalea](https://github.com/azalea-rs/azalea) 0.16.0 (Minecraft 26.1) before `fleet-mc` is built. **This isn't a workspace member.** CI doesn't build it, and it's allowed to be messy. [`FINDINGS.md`](FINDINGS.md) records what each experiment showed; the decisions are in [ADR-0008](../../docs/adr/0008-azalea-integration.md).
 
 ## Running

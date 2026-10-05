@@ -727,7 +727,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** De-risk the Minecraft layer before building on it.
 - The code lives in `spikes/azalea/`, its own Cargo project and **not** a workspace member.
 - It may be messy.
-- It gets archived once ADR-0008 is written.
+- It gets archived once ADR-0008 is written. **Done:** the spike is archived, and ADR-0008 holds the results.
 
 **Introduces:** `azalea` (pinned), `tokio`.
 
@@ -800,13 +800,19 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Criterion.** At the user's approval, "memory returns" was checked as: RSS **plateaus** across cycles, and threads, fds and Worlds return to the post-warm-up baseline. glibc keeps freed memory, so RSS never drops back to the pre-join value.
   > - **Result.** 20 cycles of 25 bots in Linux, a fresh host thread per bot: threads and fds back to baseline every cycle, every World freed, RSS after teardown flat at ~110 MiB from cycle ~9. No leak.
   > - **Teardown.** `exit()`, drop every handle, close the host thread. `disconnect()` alone keeps the ECS running. See ADR-0008 §10.
-- [ ] **P1.10** Write **ADR-0008 "azalea integration"** with:
+- [x] **P1.10** Write **ADR-0008 "azalea integration"** with:
   - the answers
   - the chosen model
   - the gotchas found
   - API snippets that `fleet-mc` can reuse
 
   Update ADR-0004 to confirm or revise it.
+
+  > Note (P1.10):
+  > - **ADR-0008** also lists the open questions as answered or explicitly deferred (§11).
+  > - **ADR-0004** is now Accepted, revised to one host thread per bot with the single-threaded executor.
+  > - **Archived.** The spike stays in `spikes/azalea/` with an "Archived" banner, at the user's choice.
+  > - **Proposed, not made.** ADR-0008 lists changes to P2.4, P2.7, P2.10, P3.2, P3.4, P3.5 and P4.6. They're proposed in the Phase 1 PR for the user to decide; the later phases weren't edited.
 
 **Security:** never commit real account tokens. Use offline mode for everything except P1.8.
 
