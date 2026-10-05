@@ -628,6 +628,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - Set environment variables with just's `export`, e.g. `export RUSTDOCFLAGS := "-D warnings"`.
   - Anything more complex goes into a script under `scripts/`.
   - `check` also runs `cargo doc --no-deps --workspace`.
+
+  > Note (P0.7):
+  > - **Stubs.** Recipes whose tools arrive later (`gen`, `db-prepare`, `mc-up`/`mc-down`, `dev-*`, `ui-test`, `e2e`) print their phase and exit 1. That keeps the `CLAUDE.md` table in sync; each phase gives its recipes real bodies.
+  > - **Extra checks.** `check` also runs doctests (nextest skips them) and the tests for `scripts/`.
+  > - **CI building blocks.** `check` and `ci` are composed of building-block recipes (`fmt-check`, `clippy`, `docs`, `doctest`, `test-ci`, `stable-check`, `scripts-test`, `ui-check`, `ui-audit`), and each CI job runs one of them.
+  > - **Coverage gates.** `scripts/coverage-gates.mjs` is plain Node (Node 24 is required everywhere anyway), with `node --test` tests. A gate whose files don't exist yet is skipped; the workspace gate never is. The auth and vault path patterns follow the server layout in `CLAUDE.md` and get confirmed in P7.
+  > - **NASM.** `.cargo/config.toml` (a file not in the §4 layout) sets `AWS_LC_SYS_PREBUILT_NASM=0` for every cargo invocation, so a missing NASM fails the build instead of silently linking prebuilt objects (ADR-0009, P0.10).
 - [ ] **P0.8** Set up the frontend workspace:
   - `package.json`
   - `pnpm-workspace.yaml` (`apps/*`, `packages/*`)

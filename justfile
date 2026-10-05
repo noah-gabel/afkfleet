@@ -1,0 +1,121 @@
+# afkfleet development commands. Keep the command table in CLAUDE.md in sync.
+#
+# Recipes run in PowerShell 7 on Windows and in sh on Linux CI, so every line
+# must work in both: one command per line, no `&&` or `||`, environment
+# variables only through just's `export`. Anything more complex goes into
+# scripts/.
+
+set windows-shell := ["pwsh", "-NoLogo", "-NoProfile", "-Command"]
+
+export RUSTDOCFLAGS := "-D warnings"
+
+# The stable toolchain for `stable-check`, and the crates it checks: every crate
+# that doesn't depend on azalea or azalea-auth.
+stable := "1.99.0"
+stable_crates := "-p fleet-core"
+
+# List all recipes.
+default:
+    @just --list
+
+# Formatting, lints, docs, tests and frontend checks: run before a task is done.
+check: fmt-check clippy docs test doctest scripts-test ui-check
+
+# Everything CI runs.
+ci: fmt-check clippy docs test-ci scripts-test cov deny stable-check ui-check ui-audit
+
+# Run nextest for the workspace, or for one crate: `just test fleet-core`.
+test crate="":
+    cargo nextest run {{ if crate == "" { "--workspace" } else { "-p " + crate } }}
+
+# Slow tests: containers and a real Minecraft server (needs Docker).
+test-slow:
+    cargo nextest run --workspace --profile slow --no-tests=warn
+
+# Coverage, checked against the gates from Plan.md §8.
+cov:
+    cargo llvm-cov nextest --workspace --no-report
+    cargo llvm-cov report --summary-only
+    cargo llvm-cov report --json --output-path target/coverage.json
+    node scripts/coverage-gates.mjs target/coverage.json
+
+# cargo-deny: advisories, licenses, bans and sources.
+deny:
+    cargo deny check
+
+# Format Rust and frontend code.
+fmt:
+    cargo fmt --all
+    pnpm exec biome format --write .
+
+# Export ts-rs types to packages/ui/src/generated/ and check proto codegen.
+gen: (_unavailable "gen" "P6")
+
+# Prepare sqlx offline query data in .sqlx/.
+db-prepare: (_unavailable "db-prepare" "P6")
+
+# Start the local offline-mode Minecraft server.
+mc-up: (_unavailable "mc-up" "P1")
+
+# Stop the local Minecraft server.
+mc-down: (_unavailable "mc-down" "P1")
+
+# Run the server with deploy/dev/ configs.
+dev-server: (_unavailable "dev-server" "P6")
+
+# Run the agent with deploy/dev/ configs.
+dev-agent: (_unavailable "dev-agent" "P5")
+
+# Run the desktop app in development mode.
+dev-app: (_unavailable "dev-app" "P8")
+
+# Frontend unit and component tests (Vitest).
+ui-test: (_unavailable "ui-test" "P8")
+
+# End-to-end tests (Playwright).
+e2e: (_unavailable "e2e" "P8")
+
+# --- Building blocks of `check` and `ci` (CI runs them as separate jobs) ---
+
+# Check Rust formatting.
+fmt-check:
+    cargo fmt --all --check
+
+# Clippy with all workspace lints, warnings denied.
+clippy:
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+# Build the docs with warnings denied (RUSTDOCFLAGS above).
+docs:
+    cargo doc --no-deps --workspace
+
+# Doctests; nextest doesn't run them.
+doctest:
+    cargo test --workspace --doc
+
+# Tests with the CI profile (JUnit, no retries), then doctests.
+test-ci:
+    cargo nextest run --workspace --profile ci
+    cargo test --workspace --doc
+
+# The workspace crates that must also build on stable Rust.
+stable-check:
+    cargo +{{ stable }} check {{ stable_crates }} --all-targets
+
+# Tests for the scripts in scripts/.
+scripts-test:
+    node --test "scripts/*.test.mjs"
+
+# Biome, then each package's typecheck and tests (the frontend packages arrive in P8).
+ui-check:
+    pnpm exec biome ci .
+    pnpm -r --if-present run typecheck
+    pnpm -r --if-present run test
+
+# Known vulnerabilities in npm dependencies.
+ui-audit:
+    pnpm audit
+
+_unavailable recipe phase:
+    @echo "just {{ recipe }} is available from {{ phase }}."
+    @exit 1

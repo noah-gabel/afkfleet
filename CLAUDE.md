@@ -68,7 +68,7 @@ Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so 
 
 | Command | What it does |
 |---|---|
-| `just check` | `cargo fmt --check`, clippy (`--all-targets -D warnings`), `cargo doc --no-deps --workspace` with `RUSTDOCFLAGS="-D warnings"`, nextest default profile, and biome + `tsc --noEmit` once the frontend exists. **Run before saying a task is done.** |
+| `just check` | `cargo fmt --check`, clippy (`--all-targets -D warnings`), `cargo doc --no-deps --workspace` with `RUSTDOCFLAGS="-D warnings"`, nextest default profile, doctests, the `scripts/` tests, and biome + `tsc --noEmit` once the frontend exists. **Run before saying a task is done.** |
 | `just test [crate]` | nextest for the workspace or one crate |
 | `just test-slow` | nextest `slow` profile (needs Docker: Minecraft container, compose) |
 | `just cov` | cargo-llvm-cov with the coverage gates (per-crate and per-module gates are checked by a script over the JSON report) |
@@ -81,6 +81,9 @@ Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so 
 | `just dev-app` | `pnpm tauri dev` |
 | `just ui-test` / `just e2e` | Vitest / Playwright |
 | `just ci` | Everything CI runs |
+| `just fmt-check` · `clippy` · `docs` · `doctest` · `test-ci` · `stable-check` · `scripts-test` · `ui-check` · `ui-audit` | The building blocks of `check` and `ci`. Each CI job runs one of them, so local and CI runs can't drift apart |
+
+Recipes for tools that arrive in later phases (`gen`, `db-prepare`, `mc-up`/`mc-down`, `dev-*`, `ui-test`, `e2e`) print the phase they arrive in and exit with an error until then.
 
 ## Architecture rules
 **Crates and dependencies** (full table in Plan.md §4):
