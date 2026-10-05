@@ -215,3 +215,21 @@ The server (vanilla 26.1, view distance 4) used ~18 % of one core on average dur
 So fleet-mc must take auth failures from the account hook (`join()` errors), immediately call `exit()` and report `AuthInvalid`, instead of waiting ~30 s for an unhelpful disconnect.
 
 **Real-account test: the user's optional step.** The steps are in README.md. Its result goes into the PR conversation, not into this file.
+
+## P1.9 Clean disconnect, no leaks (Linux container)
+`linux.sh leak <teardown> <cycles> 25`, with the chosen model: every cycle joins 25 bots, each with its own App and its **own freshly spawned host thread**. Each cycle: 10 s online, teardown, drop every handle, close the host threads, settle 15 s, sample. A `Weak` reference to every bot's World shows directly whether it was freed. The pass criterion (approved): RSS plateaus across the cycles, and threads, fds and tasks return to the post-warm-up baseline.
+
+- **Baseline.** 3 threads and 10 fds before the first join. The first join creates Bevy's process-wide pools (compute 2, IO 1, async compute 1) and `async-compat`'s thread, so the post-warm-up baseline is **8 threads, 16 fds**.
+- **`disconnect()` alone doesn't end the runner** (0 of 25 ended 5 s later; the World stays alive while its runner runs). In this model it's still cleaned up: closing the host thread drops its `LocalSet`, which drops azalea's runner task and with it the World (0 Worlds alive).
+- **`exit()` + dropping every handle + closing the thread**, over 20 cycles with the default allocator:
+
+  | Cycle | 1 | 2 | 4 | 6 | 8 | 10 | 12 | 14 | 16 | 18 | 20 |
+  |---|---|---|---|---|---|---|---|---|---|---|---|
+  | RSS after teardown (MiB) | 100 | 102 | 105 | 108 | 105 | 109 | 109 | 109 | 111 | 110 | 110 |
+  | RSS online (MiB) | 114 | 118 | 120 | 122 | 122 | 124 | 125 | 124 | 126 | 127 | 129 |
+  | threads / fds | 8 / 16 | 8 / 16 | 8 / 16 | 8 / 16 | 8 / 16 | 8 / 16 | 8 / 16 | 8 / 16 | 8 / 16 | 8 / 16 | 8 / 16 |
+  | Worlds still alive | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 | 0 |
+
+  In every cycle all 25 runners ended (`AppExit::Success`) and all 25 host threads finished. The server listed 0 players at the end.
+- **Verdict: no leak.** Threads, fds and Worlds return exactly to the baseline. RSS after teardown grows ~9 MiB over the first 9 cycles, then **plateaus** at 108–112 MiB through cycle 20. Online RSS drifts up slowly (~0.5 MiB per cycle late in the run), which is allocator fragmentation: every World is provably freed. glibc keeps freed memory, so RSS never drops back to the 8 MiB pre-join baseline.
+- `MALLOC_ARENA_MAX=2` made it worse (+14 MiB over 7 cycles against +7 MiB), so we don't set it.

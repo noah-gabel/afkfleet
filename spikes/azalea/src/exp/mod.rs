@@ -6,5 +6,6 @@ pub mod chat;
 pub mod fail;
 pub mod host;
 pub mod join;
+pub mod leak;
 pub mod panic;
 pub mod scale;

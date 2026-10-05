@@ -109,3 +109,11 @@ impl Host {
             .is_none_or(thread::JoinHandle::is_finished)
     }
 }
+
+impl Host {
+    /// Closes the job queue and hands back the OS thread, which ends once its
+    /// `LocalSet` has no more work (P1.9: one host thread per session).
+    pub fn close(mut self) -> Option<thread::JoinHandle<()>> {
+        self.thread.take()
+    }
+}

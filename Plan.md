@@ -794,7 +794,12 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Checked without credentials.** A garbage token and an offline account were tested against it.
   > - **Real-account join.** That's the user's optional step: `fetch-token` (device code through azalea's re-exported auth, no cache file, token written to gitignored `secrets/`), then `account-join`.
   > - **Gotchas.** Auth failures raise no azalea event, `join()` does nothing by default, and azalea's `MicrosoftAccount` derives `Debug` over its token. See ADR-0008 §9.
-- [ ] **P1.9** Disconnect cleanly and check that no threads or tasks leak and that memory returns afterwards.
+- [x] **P1.9** Disconnect cleanly and check that no threads or tasks leak and that memory returns afterwards.
+
+  > Note (P1.9):
+  > - **Criterion.** At the user's approval, "memory returns" was checked as: RSS **plateaus** across cycles, and threads, fds and Worlds return to the post-warm-up baseline. glibc keeps freed memory, so RSS never drops back to the pre-join value.
+  > - **Result.** 20 cycles of 25 bots in Linux, a fresh host thread per bot: threads and fds back to baseline every cycle, every World freed, RSS after teardown flat at ~110 MiB from cycle ~9. No leak.
+  > - **Teardown.** `exit()`, drop every handle, close the host thread. `disconnect()` alone keeps the ECS running. See ADR-0008 §10.
 - [ ] **P1.10** Write **ADR-0008 "azalea integration"** with:
   - the answers
   - the chosen model

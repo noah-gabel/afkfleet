@@ -45,6 +45,7 @@ fn main() -> Res {
         "idle-actions" => exp::actions::idle(rest),
         "fault" => exp::panic::run(rest),
         "scale" => exp::scale::run(rest),
+        "leak" => exp::leak::run(rest),
         "fetch-token" => exp::account::fetch_token(rest),
         "account-join" => exp::account::account_join(rest),
         "account-check" => exp::account::account_check(rest),
