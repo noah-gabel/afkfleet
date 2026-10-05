@@ -186,7 +186,7 @@ pub fn builder_exit(args: &[String]) -> Res {
                 )
                 .reconnect_after(None)
                 .set_handler(handle)
-                .start(Account::offline("AfkBot1"), DEV_SERVER)
+                .start(Account::offline("AfkBot1"), DEV_SERVER.as_str())
                 .await
         };
         let exit = if nested {

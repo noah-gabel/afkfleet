@@ -131,3 +131,28 @@ Consequences:
 
   So an anti-AFK mode needs a swing, jump, sneak or hotbar change more often than the server's idle timeout. The `afk` preset (P2.7) as written ("a random small rotation every 45–120 s, an occasional jump, and a swing every few minutes") only survives if the jump or swing comes often enough.
 - `set_selected_hotbar_slot` and the attack workaround take the ECS write lock briefly; all actions are cheap and belong on the host thread.
+
+## P1.6 Panics and hangs inside the ECS (Linux container)
+`linux.sh fault <mode> [st]`: a custom `GameTick` system panics or loops forever once a shared flag is set. Bots: AfkBot1–3 on host thread 0, plus a **witness** (AfkBot9) on host thread 1. The witness also tells us when the server drops AfkBot1 (it sees AfkBot1 leave the tab list). Container: `--cpus 4`, so Bevy's process-wide pools are IO 1, async compute 1, **compute 2** threads. `st` switches every App to Bevy's single-threaded executor.
+
+| Run | Faulty bot | Other bots, same host thread | Witness (other host thread) | Host thread | How we learn about it | Server drops the faulty bot |
+|---|---|---|---|---|---|---|
+| (a) App per bot, **panic** | ticks stop; event channel **stays open** | keep ticking | keeps ticking | survives, responds | `appexit_rx` fails **at once** ("runner task died") | not within 20 s; **~1 s after we drop every handle** (World dropped → socket closed) |
+| (b) **Swarm** of 3, panic | all 3 stop | — (same shard) | keeps ticking | survives | `start()` panics (azalea's `expect` at `swarm/builder.rs:597`) | ~28 s (server keepalive timeout) |
+| (c) App per bot, **hang** | ticks stop | **freeze too** (host thread blocked) | keeps ticking | **blocked forever** (jobs time out) | only the Tick watchdog | ~29 s (keepalive timeout); dropping handles doesn't help, the stuck runner holds the World |
+| (d) **starve**: one hang per compute-pool thread, each on its own host thread | all stop | — | **freezes too** | witness's host thread blocked | only the Tick watchdog | — |
+| (a) + `st`, panic | ticks stop | keep ticking | keeps ticking | survives (panic is caught by tokio on the host thread) | `appexit_rx` fails at once | ~1 s after dropping every handle |
+| (c) + `st`, hang | ticks stop | freeze (host thread blocked) | keeps ticking | blocked forever | Tick watchdog | ~29 s |
+| (d) + `st`, starve | all stop | — | **keeps ticking** | witness fine | Tick watchdog | ~29 s |
+
+Conclusions:
+- **Panics are contained to one App** (per-bot Apps, with either executor) and are detected immediately through the runner's `AppExit` receiver, so the Tick watchdog isn't needed for them. Recovery: drop every handle of that bot (World → socket closes, the server removes the player within a second), then reconnect through the normal backoff path. Without the drop, the bot stays a zombie on the server until its keepalive timeout.
+- **A Swarm shard dies as a whole** on one panic, and its teardown can deadlock (P1.2).
+- **Hangs are the dangerous case.**
+  - They block the whole host thread, and nothing in-process can free it.
+  - With Bevy's default multi-threaded executor, systems run on a **process-wide compute pool** (2 threads here), so a couple of hangs anywhere freeze **every bot in the process**.
+  - The **single-threaded executor** fixes the second part: systems run on the App's own host thread, and a hang stays on that thread.
+- **What the watchdog has to do:**
+  - Tick stalled while Online, on a host thread whose job queue no longer responds: the host thread is hung. Abandon it (it can't be joined or killed), move its other bots to a fresh host thread (they reconnect), and count abandoned threads.
+  - Each abandoned thread keeps its bots' sockets until the server's keepalive timeout (~30 s), and the thread itself leaks. Above a small limit, restart the agent process (Docker `restart: unless-stopped`).
+- The `par_iter_mut` in azalea-entity still uses the compute pool under `st`, but Bevy's scope lets the calling thread run those tasks, and the starve run showed no stall.

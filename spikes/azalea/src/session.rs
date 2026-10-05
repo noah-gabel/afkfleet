@@ -324,3 +324,102 @@ impl azalea::app::Plugin for SetupPlugin {
         }
     }
 }
+
+/// A Swarm shard: several bots in **one** App/World with one runner (P1.6,
+/// P1.7). Every bot gets its own `Bridge` state, so each still ends up with
+/// its own `Session`. `runner_end` reports the shared runner for all of them.
+pub async fn connect_swarm(
+    accounts: Vec<Account>,
+    address: String,
+    setup: Option<AppSetup>,
+    join_delay: Option<std::time::Duration>,
+) -> Res<Vec<Session>> {
+    use azalea::swarm::{DefaultSwarmPlugins, SwarmBuilder};
+
+    let mut pending = Vec::new();
+    let mut builder = SwarmBuilder::new_without_plugins()
+        .add_plugins((DefaultPlugins, bot_plugins(), DefaultSwarmPlugins))
+        .reconnect_after(None)
+        .set_handler(bridge_handler);
+    for account in accounts {
+        let name = account.username().to_owned();
+        let (client_tx, client_rx) = oneshot::channel();
+        let (event_tx, events) = mpsc::channel(EVENT_CAPACITY);
+        let ticks = Arc::new(TickStats::new());
+        let bridge = Bridge(Some(Arc::new(BridgeInner {
+            client_tx: Mutex::new(Some(client_tx)),
+            events: event_tx,
+            ticks: ticks.clone(),
+        })));
+        builder = builder.add_account_with_state(account, bridge);
+        pending.push((name, client_rx, events, ticks));
+    }
+    if let Some(delay) = join_delay {
+        builder = builder.join_delay(delay);
+    }
+    if let Some(setup) = setup {
+        builder = builder.add_plugins(SetupPlugin(Mutex::new(Some(setup))));
+    }
+
+    let start = task::spawn_local(async move { builder.start(address.as_str()).await });
+    let mut end_txs = Vec::new();
+    let mut sessions_parts = Vec::new();
+    for (name, client_rx, events, ticks) in pending {
+        let (end_tx, runner_end) = oneshot::channel();
+        end_txs.push(end_tx);
+        sessions_parts.push((name, client_rx, events, ticks, runner_end));
+    }
+    task::spawn_local(async move {
+        let end = match start.await {
+            Ok(exit) => format!("swarm start() returned {exit:?}"),
+            Err(e) if e.is_panic() => "swarm start() panicked".to_owned(),
+            Err(e) => format!("swarm start() task failed: {e}"),
+        };
+        info!(%end, "swarm runner ended");
+        for tx in end_txs {
+            let _ = tx.send(end.clone());
+        }
+    });
+
+    let mut sessions = Vec::new();
+    for (name, client_rx, events, ticks, runner_end) in sessions_parts {
+        let client = client_rx
+            .await
+            .map_err(|_| format!("{name}: swarm ended before Init"))?;
+        sessions.push(Session {
+            name,
+            client,
+            events,
+            ticks,
+            runner_end,
+        });
+    }
+    Ok(sessions)
+}
+
+/// Switches every schedule of an App to Bevy's single-threaded executor, so
+/// its systems run on the host thread that runs the App instead of the
+/// process-wide `ComputeTaskPool` (P1.6/P1.7).
+pub fn single_threaded(app: &mut App) {
+    use azalea::ecs::schedule::{ExecutorKind, Schedules};
+    let mut schedules = app.world_mut().resource_mut::<Schedules>();
+    for (_, schedule) in schedules.iter_mut() {
+        schedule.set_executor_kind(ExecutorKind::SingleThreaded);
+    }
+}
+
+/// Runs two optional setups in order.
+pub fn combine(a: Option<AppSetup>, b: Option<AppSetup>) -> Option<AppSetup> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(Box::new(move |app: &mut App| {
+            a(app);
+            b(app);
+        })),
+        (a, b) => a.or(b),
+    }
+}
+
+/// `Some(single_threaded)` when `on`.
+pub fn st_setup(on: bool) -> Option<AppSetup> {
+    on.then(|| Box::new(single_threaded) as AppSetup)
+}

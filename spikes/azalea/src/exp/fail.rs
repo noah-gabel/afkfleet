@@ -67,21 +67,21 @@ pub fn run(args: &[String]) -> Res {
                 Ok(())
             }
             // --- Kicks from a running server ---
-            "kick" => kicked(join("AfkBot1", DEV_SERVER).await?, "kick AfkBot1 Bye from the spike").await,
-            "kick-noreason" => kicked(join("AfkBot1", DEV_SERVER).await?, "kick AfkBot1").await,
+            "kick" => kicked(join("AfkBot1", DEV_SERVER.as_str()).await?, "kick AfkBot1 Bye from the spike").await,
+            "kick-noreason" => kicked(join("AfkBot1", DEV_SERVER.as_str()).await?, "kick AfkBot1").await,
             "ban" => {
-                let s = join("AfkBot1", DEV_SERVER).await?;
+                let s = join("AfkBot1", DEV_SERVER.as_str()).await?;
                 kicked(s, "ban AfkBot1 Spike test ban").await?;
                 info!("rejoining while banned");
-                observe(&mut join("AfkBot1", DEV_SERVER).await?, 10).await;
+                observe(&mut join("AfkBot1", DEV_SERVER.as_str()).await?, 10).await;
                 info!(out = %rcon::rcon("pardon AfkBot1")?, "pardoned");
                 Ok(())
             }
             "ban-ip" => {
-                let s = join("AfkBot1", DEV_SERVER).await?;
+                let s = join("AfkBot1", DEV_SERVER.as_str()).await?;
                 kicked(s, "ban-ip AfkBot1 Spike test ip ban").await?;
                 info!("rejoining while IP-banned");
-                observe(&mut join("AfkBot2", DEV_SERVER).await?, 10).await;
+                observe(&mut join("AfkBot2", DEV_SERVER.as_str()).await?, 10).await;
                 let banlist = rcon::rcon("banlist ips")?;
                 info!(lines = banlist.lines().count(), "ip banlist (not logged: holds an IP)");
                 // The banned IP is the Docker gateway; pardon every listed IP.
@@ -102,15 +102,15 @@ pub fn run(args: &[String]) -> Res {
             }
             "whitelist" => {
                 info!(out = %rcon::rcon("whitelist on")?, "whitelist");
-                observe(&mut join("AfkBot9", DEV_SERVER).await?, 10).await;
+                observe(&mut join("AfkBot9", DEV_SERVER.as_str()).await?, 10).await;
                 info!(out = %rcon::rcon("whitelist off")?, "whitelist");
                 Ok(())
             }
             "duplicate" => {
-                let mut first = join("AfkBot1", DEV_SERVER).await?;
+                let mut first = join("AfkBot1", DEV_SERVER.as_str()).await?;
                 wait_for(&mut first, |e| matches!(e, Event::Spawn), Duration::from_secs(15)).await?;
                 info!("first AfkBot1 is online; joining a second AfkBot1");
-                let mut second = join("AfkBot1", DEV_SERVER).await?;
+                let mut second = join("AfkBot1", DEV_SERVER.as_str()).await?;
                 let (a, b) = tokio::join!(observe(&mut first, 10), observe(&mut second, 10));
                 info!(first = a, second = b, "events seen (first, second)");
                 Ok(())
@@ -118,9 +118,9 @@ pub fn run(args: &[String]) -> Res {
             "full" => {
                 info!("restarting the dev server with MC_MAX_PLAYERS=1");
                 rcon::dev_up(&[("MC_MAX_PLAYERS", "1")])?;
-                let mut first = join("AfkBot1", DEV_SERVER).await?;
+                let mut first = join("AfkBot1", DEV_SERVER.as_str()).await?;
                 wait_for(&mut first, |e| matches!(e, Event::Spawn), Duration::from_secs(30)).await?;
-                observe(&mut join("AfkBot2", DEV_SERVER).await?, 10).await;
+                observe(&mut join("AfkBot2", DEV_SERVER.as_str()).await?, 10).await;
                 first.client.exit();
                 info!("restoring the dev server");
                 rcon::dev_up(&[])?;
@@ -140,7 +140,7 @@ pub fn run(args: &[String]) -> Res {
             }
             "idle" => {
                 info!(out = %rcon::rcon("setidletimeout 1")?, "idle timeout");
-                let mut s = join("AfkBot1", DEV_SERVER).await?;
+                let mut s = join("AfkBot1", DEV_SERVER.as_str()).await?;
                 wait_for(&mut s, |e| matches!(e, Event::Spawn), Duration::from_secs(15)).await?;
                 let started = Instant::now();
                 observe(&mut s, 120).await;
@@ -149,7 +149,7 @@ pub fn run(args: &[String]) -> Res {
                 Ok(())
             }
             "stop" => {
-                let mut s = join("AfkBot1", DEV_SERVER).await?;
+                let mut s = join("AfkBot1", DEV_SERVER.as_str()).await?;
                 wait_for(&mut s, |e| matches!(e, Event::Spawn), Duration::from_secs(15)).await?;
                 info!(out = %rcon::rcon("stop")?, "rcon stop");
                 observe(&mut s, 20).await;
@@ -159,7 +159,7 @@ pub fn run(args: &[String]) -> Res {
                 Ok(())
             }
             "kill" => {
-                let mut s = join("AfkBot1", DEV_SERVER).await?;
+                let mut s = join("AfkBot1", DEV_SERVER.as_str()).await?;
                 wait_for(&mut s, |e| matches!(e, Event::Spawn), Duration::from_secs(15)).await?;
                 info!(out = %rcon::docker(&["kill", DEV_CONTAINER])?, "docker kill");
                 observe(&mut s, 20).await;
@@ -169,7 +169,7 @@ pub fn run(args: &[String]) -> Res {
                 Ok(())
             }
             "pause" => {
-                let mut s = join("AfkBot1", DEV_SERVER).await?;
+                let mut s = join("AfkBot1", DEV_SERVER.as_str()).await?;
                 wait_for(&mut s, |e| matches!(e, Event::Spawn), Duration::from_secs(15)).await?;
                 let before = s.ticks.ticks.load(std::sync::atomic::Ordering::Relaxed);
                 info!(out = %rcon::docker(&["pause", DEV_CONTAINER])?, "docker pause (server frozen, TCP open)");
@@ -190,7 +190,7 @@ pub fn run(args: &[String]) -> Res {
             }
             // --- Plugins: reconnect and respawn ---
             "death" => {
-                let mut s = join("AfkBot1", DEV_SERVER).await?;
+                let mut s = join("AfkBot1", DEV_SERVER.as_str()).await?;
                 wait_for(&mut s, |e| matches!(e, Event::Spawn), Duration::from_secs(15)).await?;
                 info!(out = %rcon::rcon("kill AfkBot1")?, "rcon kill");
                 observe(&mut s, 10).await;

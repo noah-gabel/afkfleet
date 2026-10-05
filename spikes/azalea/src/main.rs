@@ -6,6 +6,7 @@
 mod exp;
 mod host;
 mod rcon;
+mod sample;
 mod session;
 
 use std::error::Error;
@@ -17,7 +18,10 @@ pub type Res<T = ()> = Result<T, Box<dyn Error + Send + Sync>>;
 
 /// The local dev server from `deploy/compose.dev.yaml` (`just mc-up`).
 /// `127.0.0.1`, not `localhost`: on Windows `localhost` may resolve to `::1`.
-pub const DEV_SERVER: &str = "127.0.0.1:25565";
+/// `linux.sh` overrides it with `SPIKE_SERVER=minecraft:25565`.
+pub static DEV_SERVER: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    std::env::var("SPIKE_SERVER").unwrap_or_else(|_| "127.0.0.1:25565".to_owned())
+});
 
 fn main() -> Res {
     tracing_subscriber::fmt()
@@ -39,6 +43,11 @@ fn main() -> Res {
         "chat" => exp::chat::run(rest),
         "actions" => exp::actions::run(rest),
         "idle-actions" => exp::actions::idle(rest),
+        "fault" => exp::panic::run(rest),
+        "scale" => exp::scale::run(rest),
+        "fetch-token" => exp::account::fetch_token(rest),
+        "account-join" => exp::account::account_join(rest),
+        "account-check" => exp::account::account_check(rest),
         other => Err(format!("unknown command `{other}` (see README.md)").into()),
     }
 }

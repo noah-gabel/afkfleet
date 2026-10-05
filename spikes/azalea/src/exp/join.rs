@@ -24,7 +24,8 @@ pub fn run(args: &[String]) -> Res {
         .enable_all()
         .build()?;
     LocalSet::new().block_on(&rt, async move {
-        let (bot, mut events) = Client::join(Account::offline("AfkBot1"), DEV_SERVER).await?;
+        let (bot, mut events) =
+            Client::join(Account::offline("AfkBot1"), DEV_SERVER.as_str()).await?;
         let deadline = async {
             match hold {
                 Some(d) => tokio::time::sleep(d).await,
