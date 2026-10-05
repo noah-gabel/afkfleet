@@ -156,3 +156,45 @@ Conclusions:
   - Tick stalled while Online, on a host thread whose job queue no longer responds: the host thread is hung. Abandon it (it can't be joined or killed), move its other bots to a fresh host thread (they reconnect), and count abandoned threads.
   - Each abandoned thread keeps its bots' sockets until the server's keepalive timeout (~30 s), and the thread itself leaks. Above a small limit, restart the agent process (Docker `restart: unless-stopped`).
 - The `par_iter_mut` in azalea-entity still uses the compute pool under `st`, but Bevy's scope lets the calling thread run those tasks, and the starve run showed no stall.
+
+## P1.7 Resources: hosting models (Linux container)
+**Decision rule (written before measuring):**
+1. Shards (Swarms) are only acceptable if per-bot isolation fails the budget. P1.6 showed one panic kills a whole shard, and P1.2 showed Swarm teardown can deadlock.
+2. Among per-bot models, prefer the smallest blast radius (`an-st` > `a4-st` > `a1-st`) whose **50-bot** steady state fits a small VPS: **RSS ≤ ~1.5 GiB** and **CPU ≤ ~1 core**, with ticks at ~20/s per bot.
+3. If two models are within ~20 % of each other, the smaller blast radius wins.
+
+Method: `linux.sh scale <model> <bots>`, one fresh process per data point, `--cpus 4`.
+- Joins are staggered 250 ms apart. After every bot has spawned, a 30 s warm-up, then a 60 s window: RSS sampled every 5 s; CPU from utime+stime over the window (`getconf CLK_TCK`); threads and fds at the end.
+- Built with `packet-event` (the bridge drops packet events), so CPU is an upper bound for a fleet-mc built without it.
+- `docker stats` sampled the server and spike containers every 15 s alongside.
+
+Results (steady state, Linux container `--cpus 4`, 20.0 ticks/s per bot in every run, no dropped events; baseline process before joining: 9 MiB, 5 threads):
+
+| Model | Bots | Join (s) | RSS avg (MiB) | RSS per bot (MiB) | CPU (cores) | CPU per bot | Threads | fds |
+|---|---|---|---|---|---|---|---|---|
+| `a1-st` | 10 | 2.6 | 54 | 4.5 | 0.070 | 0.70 % | 9 | 28 |
+| `a4-st` | 10 | 2.6 | 55 | 4.7 | 0.081 | 0.81 % | 12 | 40 |
+| `an-st` | 10 | 2.6 | 57 | 4.8 | 0.089 | 0.89 % | 18 | 64 |
+| `a4` (multi-threaded executor) | 10 | 2.6 | 57 | 4.8 | **1.601** | 16.0 % | 12 | 40 |
+| `s10` | 10 | 2.6 | 30 | 2.2 | 0.214 | 2.14 % | 9 | 28 |
+| `s` | 10 | 2.5 | 30 | 2.2 | 0.214 | 2.14 % | 9 | 28 |
+| `a1-st` | 25 | 6.4 | 104 | 3.8 | 0.153 | 0.61 % | 9 | 43 |
+| `a4-st` | 25 | 6.4 | 105 | 3.9 | 0.176 | 0.70 % | 12 | 55 |
+| `an-st` | 25 | 6.4 | 116 | 4.3 | 0.215 | 0.86 % | 33 | 139 |
+| `a4` | 25 | 6.7 | 109 | 4.0 | **2.152** | 8.6 % | 12 | 55 |
+| `s10` | 25 | 6.1 | 49 | 1.6 | 0.580 | 2.32 % | 11 | 51 |
+| `s` | 25 | 6.6 | 39 | 1.2 | 0.237 | 0.95 % | 9 | 43 |
+| `a1-st` | 50 | 12.8 | 193 | 3.7 | 0.292 | 0.58 % | 9 | 68 |
+| `a4-st` | 50 | 12.8 | 195 | 3.7 | 0.336 | 0.67 % | 12 | 80 |
+| **`an-st`** | 50 | 12.8 | **222** | 4.3 | **0.425** | 0.85 % | 58 | 264 |
+| `a4` | 50 | 16.1 | 204 | 3.9 | **2.338** | 4.7 % | 12 | 80 |
+| `s10` | 50 | 12.2 | 82 | 1.5 | 0.956 | 1.91 % | 13 | 84 |
+| `s` | 50 | 13.2 | 59 | 1.0 | 0.266 | 0.53 % | 9 | 68 |
+
+The server (vanilla 26.1, view distance 4) used ~18 % of one core on average during the 50-bot runs (peak 34 %), with ~1.9 GiB of memory.
+
+- **The multi-threaded executor is the expensive part:** 1.6–2.3 cores for 10–50 bots, against 0.07–0.34 cores for the same bots with the single-threaded executor (≈ 7× at 50 bots). Many small Apps each dispatching their systems to the shared compute pool at 60 Hz costs far more than running them inline. `s10` (5 multi-threaded Apps) shows the same effect; one big Swarm (`s`) amortizes it.
+- **Memory:** about 3.7–4.3 MiB per bot for an App per bot, 1–2 MiB per bot in a Swarm. Host threads add little: `an-st` is +27 MiB and +46 threads over `a4-st` at 50 bots.
+- **Threads:** process-wide Bevy pools (compute 2, IO 1, async compute 1, plus `async-compat`) and 2 tokio workers, plus one per host thread. No per-bot threads appear unless we create them.
+
+**Choice (by the rule above): `an-st`, one App and one host thread per bot, with the single-threaded executor.** It has the smallest blast radius: a panic or a hang affects exactly one bot. At 50 bots it uses 222 MiB and 0.43 cores, far inside the budget (≤ 1.5 GiB, ≤ 1 core). Swarms would save ~160 MiB at 50 bots, but they fail the isolation requirement (P1.6) and can deadlock on teardown (P1.2).

@@ -11,6 +11,14 @@ cd spikes/azalea
 cargo run -- <command> [args]   # RUST_LOG=debug for azalea's own logs
 ```
 
+Measurements (P1.6, P1.7, P1.9) run in Linux, the production platform. `linux.sh` runs the same commands in `rust:1-bookworm` on the dev server's Docker network:
+
+```sh
+spikes/azalea/linux.sh scale an-st 50     # from Git Bash or any POSIX shell
+```
+
+The first run downloads the pinned nightly and builds azalea; named volumes (`afkfleet-p1-*`) cache both.
+
 | Command | Task | What it does |
 |---|---|---|
 | `join [secs]` | P1.1 | One offline bot (`AfkBot1`) joins with `Client::join` and stays online for `secs` seconds (default: until Ctrl-C) |
@@ -21,3 +29,5 @@ cargo run -- <command> [args]   # RUST_LOG=debug for azalea's own logs
 | `chat` | P1.4 | Two bots and RCON exchange chat, whispers, emotes, announcements, `tellraw` and commands; logs how each arrives |
 | `actions` | P1.5 | Look, jump, sneak, swing, hotbar, use item, attack (with the raw-packet workaround), respawn, each checked via RCON |
 | `idle-actions` | P1.5 | Six bots, one action type each, under `setidletimeout 1`: which actions keep a bot from being kicked |
+| `fault <mode> [st]` | P1.6 | Panic or hang in a custom ECS system: `custom-panic`, `swarm-panic`, `custom-hang`, `starve`; `st` = single-threaded executor. Run in Linux (`linux.sh`) |
+| `scale <model>[-st] <bots>` | P1.7 | Steady-state RSS, CPU, threads and fds for `a1`, `a4`, `an`, `s10`, `s`. Run in Linux |
