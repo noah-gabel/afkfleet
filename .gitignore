@@ -1,0 +1,15 @@
+# Build output (matches at any depth, including spikes/*/target)
+target/
+
+# Node
+node_modules/
+
+# Secrets and local data: never commit these (CLAUDE.md, security rule 11)
+.env*
+*.db*
+secrets/
+*.pem
+*.key
+
+# Local Claude Code settings
+.claude/settings.local.json
