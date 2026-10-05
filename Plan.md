@@ -651,6 +651,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - NASM is installed on the dev machine; CMake isn't needed for non-FIPS builds. Document this in the README, and make sure the Windows CI runner has NASM.
   - `cargo tree -i ring` must be empty or justified.
   - If it can't be done, move everything to `ring` instead and record that in an ADR. Never mix providers.
+
+  > Note (P0.10):
+  > - **Spike.** Verified with `spikes/tls-provider/`, which isn't a workspace member (the user's choice). reqwest 0.13.5, tonic 0.14.6, rcgen 0.14.10 and tokio-tungstenite 0.29.0, with the §5 features, install the aws-lc-rs provider and build their clients. That works on Windows (MSVC + NASM) and in `rust:1-bookworm`.
+  > - **Dependency graph:**
+  >   - `cargo tree -i ring --target all` prints nothing. `ring` appears in `Cargo.lock` only as an inactive optional dependency and is never compiled.
+  >   - `openssl-sys`, `native-tls` and `webpki-roots` aren't in the graph at all.
+  >   - `cargo deny` with the root `deny.toml` passes, so no license beyond the allowlist is needed. webpki-roots' CDLA-Permissive-2.0 is avoided.
+  > - **Prebuilt NASM objects.** rustls's `aws_lc_rs` feature enables aws-lc's `prebuilt-nasm`, which silently links prebuilt objects when NASM isn't on PATH. `.cargo/config.toml` sets `AWS_LC_SYS_PREBUILT_NASM=0`; a build without NASM was confirmed to fail.
+  > - **Not covered here.** `tauri-plugin-updater` and `testcontainers` default to ring, so they must use `default-features = false` (§5). The ring ban in `deny.toml` enforces it.
 - [ ] **P0.11** Set up CI (GitHub Actions) with these jobs:
   - `fmt`
   - `clippy` (`--all-targets -D warnings`)
