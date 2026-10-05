@@ -17,3 +17,4 @@ cargo run -- <command> [args]   # RUST_LOG=debug for azalea's own logs
 | `host [join\|builder\|custom] [bots]` | P1.2 | Bots on one MC host thread, handed to the multi-threaded runtime; calls from a worker thread; `exit()` and clean-up |
 | `host-builder-exit [plain\|nested][-remote]` | P1.2 | Does `ClientBuilder::start()` return after `exit()`? (It can deadlock: see FINDINGS) |
 | `exit-race [variant] [trials]` | P1.2 | How many `exit()` calls each trial needs until the event channel closes |
+| `fail <scenario> [custom\|join] [version]` | P1.3 | One failure scenario: `closed`, `blackhole`, `blackhole-exit`, `unresolvable`, `kick`, `kick-noreason`, `ban`, `ban-ip`, `whitelist`, `duplicate`, `full`, `outdated [version]`, `idle`, `stop`, `kill`, `pause`, `death`. Some restart the dev server |

@@ -33,3 +33,45 @@ Results (`cargo run -- host <variant> 3`, then `exit-race`, `host-builder-exit`)
 - tokio's `num_alive_tasks` doesn't count `LocalSet` tasks; our own counter only sees our jobs, not azalea's internal `spawn_local`s.
 
 **Conclusion:** Variant C. It disables plugins like B, avoids B's teardown deadlock, and is the only variant that reports how the runner ended (`AppExit`, or the sender dropped on a panic). The cost is relying on `#[doc(hidden)] start_ecs_runner`, acceptable because azalea is pinned exactly and the ADR-0003 bump procedure re-checks it.
+
+## P1.3 Without auto-reconnect/respawn, and what failures look like
+**Plugins off.** Variant C (`DefaultBotPlugins` with `AutoReconnectPlugin` and `AutoRespawnPlugin` disabled) works:
+
+| Check | C (plugins off) | A `Client::join` (plugins on) |
+|---|---|---|
+| 10 s after a kick | nothing happens | `Login` + `Spawn` again after 5.3 s; **no new `Init`** |
+| 10 s after `/kill` | still dead (health 0) | respawned (health 20) |
+
+`Client::join` can't do it: a per-entity `AutoReconnectDelay(Duration::MAX)` could stop reconnecting, but nothing turns off auto-respawn.
+
+**After a disconnect or failed connect, the ECS runner keeps running** (`runner_ended=false` 8–10 s later), so every session must end with `exit()`. `exit()` also cleanly cancels a connect that's still pending (blackhole case): the runner returns `Success` and the event channel closes.
+
+**Failure catalogue** (`cargo run -- fail <scenario>`). All kick reasons arrive as `Event::Disconnect(Some(FormattedText))`. A translatable reason carries a stable key, and some carry args:
+
+| Scenario | Event | Variant | Key | Args | Plain text |
+|---|---|---|---|---|---|
+| Closed port (`127.0.0.1:25599`) | `ConnectionFailed`, after 2.1 s on Windows | — | — | `io::ErrorKind::ConnectionRefused` (os error 10061) | |
+| Blackhole (`192.0.2.10`) | `ConnectionFailed`, after **21 s** (Windows TCP default; azalea has **no connect timeout**) | — | — | `TimedOut` (10060) | |
+| Unresolvable (`nonexistent.invalid`) | no event: `resolve()` returns `ResolveError` in ~5 ms | — | — | | |
+| `kick AfkBot1 <reason>` | `Disconnect` | **Text** | none | — | the operator's reason |
+| `kick AfkBot1` | `Disconnect` | Translatable | `multiplayer.disconnect.kicked` | — | Kicked by an operator |
+| `ban` (while online) | `Disconnect` | Translatable | `multiplayer.disconnect.banned` | — | You are banned from this server |
+| Joining while banned | `Disconnect` (login phase) | Translatable | `multiplayer.disconnect.banned.reason` | `[reason]` | You are banned from this server.\nReason: … |
+| `ban-ip` (while online) | `Disconnect` | Translatable | `multiplayer.disconnect.ip_banned` | — | You have been IP banned from this server |
+| Joining while IP-banned | `Disconnect` (login) | Translatable | `multiplayer.disconnect.banned_ip.reason` | `[reason]` | Your IP address is banned … |
+| Not whitelisted | `Disconnect` (login) | Translatable | `multiplayer.disconnect.not_whitelisted` | — | You are not white-listed on this server! |
+| Duplicate login | `Disconnect` to the **already-online** session; the newcomer gets in | Translatable | `multiplayer.disconnect.duplicate_login` | — | You logged in from another location |
+| Server full | `Disconnect` (login) | Translatable | `multiplayer.disconnect.server_full` | — | The server is full! |
+| Server newer (26.3) | `Disconnect` (login) | Translatable | `multiplayer.disconnect.incompatible` | `["26.3"]` | Incompatible client! Please use 26.3 |
+| Server older (1.21.11) | `Disconnect` (login) | Translatable | `multiplayer.disconnect.incompatible` | `["1.21.11"]` | Incompatible client! Please use 1.21.11 |
+| Idle timeout (`setidletimeout 1`) | `Disconnect` after 60 s of standing still | Translatable | `multiplayer.disconnect.idling` | — | You have been idle for too long! |
+| `stop` | `Disconnect` | Translatable | `multiplayer.disconnect.server_shutdown` | — | Server closed |
+| `docker kill` (TCP gone) | `Disconnect(None)` immediately | — | — | — | |
+| `docker pause` for 75 s (server frozen, TCP open) | **nothing**: no event, and **ticks continued** (1,501 = 20/s); `Disconnect(None)` only once the server was unpaused (its own watchdog had crashed it) | — | — | — | |
+| `/kill` (death) | `Chat` (`death.attack.genericKill`), then **`Death` twice** (packet, then health 0) | | | | |
+
+Consequences:
+- **A Tick watchdog can't see a dead server.** Ticks are client-side, so a frozen server or a silently dropped link (no RST) leaves the bot "Online" forever. azalea has no read timeout. fleet-mc also needs a **packet-liveness timeout**: vanilla servers send a KeepAlive every ~15 s (`Event::KeepAlive`), and vanilla clients give up after 30 s.
+- **fleet-mc must enforce its own connect timeout** (P3.4) and call `exit()` when it fires; the OS timeout is 21 s on Windows and much longer on Linux.
+- **Classifier input (P2.4):** classify by translation key, never by text. A `Text` reason (custom kick message, or plugin-generated text) has no key and should default to transient. `banned*`, `ip_banned`, `banned_ip.*`, `not_whitelisted` and `incompatible` are permanent; `duplicate_login` is the conflict case; `server_full`, `server_shutdown`, `kicked`, `idling` and `Disconnect(None)` look transient.
+- `Death` must be de-duplicated when mapping to a `Died` session event.

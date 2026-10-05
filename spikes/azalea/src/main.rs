@@ -5,6 +5,7 @@
 
 mod exp;
 mod host;
+mod rcon;
 mod session;
 
 use std::error::Error;
@@ -34,6 +35,7 @@ fn main() -> Res {
         "host" => exp::host::run(rest),
         "host-builder-exit" => exp::host::builder_exit(rest),
         "exit-race" => exp::host::exit_race(rest),
+        "fail" => exp::fail::run(rest),
         other => Err(format!("unknown command `{other}` (see README.md)").into()),
     }
 }
