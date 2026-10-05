@@ -9,6 +9,12 @@ A self-hosted fleet of **Minecraft Java Edition AFK bots**, one per Microsoft ac
 
 > **Use responsibly.** Only run the bots on servers whose rules allow AFK bots. afkfleet isn't affiliated with Mojang or Microsoft.
 
+## Disclosure
+
+afkfleet is **a hobby project** I'm building for my friends with Claude Code. I use Claude to code faster and follow production standards to keep the risk of vulnerabilities low, but the code hasn't been professionally audited: use it at your own risk. A lot of the structure is deliberately overkill for a hobby project; it's also an experiment in how far strict tooling can keep AI-written code safe.
+
+There's no support, and I don't take feature requests. Security reports are welcome, though: see [SECURITY.md](SECURITY.md).
+
 ## Status
 **Phase 0 (Foundation & tooling) is complete.** It's under review in its pull request. Nothing is runnable yet. What exists:
 - the Cargo workspace with all lints
