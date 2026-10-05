@@ -178,86 +178,86 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 
 ## 5. Crate & tool registry
 
-**Rule: one crate per concern, used throughout the whole project.** A concern that isn't covered here needs the user's approval, an ADR, and an entry in this table and in the index in `CLAUDE.md`. All Rust crates are declared once in `[workspace.dependencies]`. A blank baseline means "latest stable at Phase 0".
+**Rule: one crate per concern, used throughout the whole project.** A concern that isn't covered here needs the user's approval, an ADR, and an entry in this table and in the index in `CLAUDE.md`. All Rust crates are declared once in `[workspace.dependencies]`, when the first crate uses them (see the P0.3 note). Versions were pinned in P0.3 (2026-10-05) after checking crates.io and docs.rs. They're caret requirements, and `Cargo.lock` holds the exact pin (ADR-0009). **dfo** means `default-features = false` at workspace level.
 
 ### Rust: runtime, domain & infrastructure
-| Concern | Crate | Baseline | Used in | Notes |
+| Concern | Crate | Version | Used in | Notes |
 |---|---|---|---|---|
-| Minecraft protocol & client | `azalea` | 0.16 (exact pin or git rev) | fleet-mc | Needs nightly. Disable its `AutoReconnectPlugin` and `AutoRespawnPlugin`. Runs only inside a `LocalSet` |
-| Microsoft / Minecraft auth | `azalea-auth` | same rev as azalea | fleet-server | Device-code flow. Never use its file cache |
-| Async runtime | `tokio` | 1.x | runtime, mc, agent, server, client | `test-util` feature in dev |
-| Cancellation, task tracking | `tokio-util` | 0.7 | runtime, mc, agent, server | `CancellationToken`, `TaskTracker` |
-| Stream adapters | `tokio-stream` | | proto, agent, server | gRPC streams, broadcast → stream |
-| Sink/Stream extension traits | `futures-util` | | client, server | WebSocket split/send |
-| Async fns in `dyn` traits | `async-trait` | | server | Only for `Arc<dyn Port>`. Use generics + RPITIT elsewhere |
-| Retry & backoff | `backon` | 1.x | core (policy), agent, client | Exponential backoff with jitter |
-| Rate limiting (keyed / in-process) | `governor` | 0.10 | runtime (chat), server (per user) | |
-| Rate limiting (HTTP middleware) | `tower_governor` | 0.8 | server | Per IP |
-| TTL cache / single-flight | `moka` | | server | MC token cache, WS tickets |
-| Library errors | `thiserror` | 2.x | all libraries | |
-| Binary error reporting | `anyhow` | 1.x | `main.rs` only | |
-| Serialization | `serde`, `serde_json` | 1.x | all | |
-| Configuration | `figment` | 0.10 | agent, server | TOML file + env; upstream is quiet but the crate is stable |
-| DTO & config validation | `garde` | 0.23 | api-types, agent, server | Domain value objects use hand-written constructors |
-| Logging / tracing | `tracing`, `tracing-subscriber` | | all | `env-filter`, `json` |
-| Metrics | `metrics`, `metrics-exporter-prometheus` | –, 0.18 | runtime, agent, server | Internal port only |
-| IDs | `uuid` | 1.x | core | v7, serde |
-| Time | `chrono` | 0.4 | core, server | Always UTC |
-| CLI | `clap` | 4.x | agent, server | derive |
-| Hidden password prompt | `rpassword` | | server CLI | |
+| Minecraft protocol & client | `azalea` | `=0.16.0` (+mc26.1) | fleet-mc | Needs nightly (ADR-0003). Disable its `AutoReconnectPlugin` and `AutoRespawnPlugin`. Runs only inside a `LocalSet` |
+| Microsoft / Minecraft auth | `azalea-auth` | `=0.16.0` (+mc26.1) | fleet-server | Device-code flow. Never use its file cache |
+| Async runtime | `tokio` | 1.53.2 | runtime, mc, agent, server, client | `test-util` feature in dev |
+| Cancellation, task tracking | `tokio-util` | 0.7.19 | runtime, mc, agent, server | `CancellationToken`, `TaskTracker` |
+| Stream adapters | `tokio-stream` | 0.1.19 | proto, agent, server | gRPC streams, broadcast → stream |
+| Sink/Stream extension traits | `futures-util` | 0.3.34 | client, server | WebSocket split/send |
+| Async fns in `dyn` traits | `async-trait` | 0.1.92 | server | Only for `Arc<dyn Port>`. Use generics + RPITIT elsewhere |
+| Retry & backoff | `backon` | 1.6.0, dfo | core (policy), agent, client | Exponential backoff with jitter. The default features pull in a tokio sleeper |
+| Rate limiting (keyed / in-process) | `governor` | 0.10.4 | runtime (chat), server (per user) | |
+| Rate limiting (HTTP middleware) | `tower_governor` | 0.8.0 | server | Per IP |
+| TTL cache / single-flight | `moka` | 0.12.16 | server | MC token cache, WS tickets |
+| Library errors | `thiserror` | 2.0.21 | all libraries | |
+| Binary error reporting | `anyhow` | 1.0.104 | `main.rs` only | |
+| Serialization | `serde`, `serde_json` | 1.0.229, 1.0.151 | all | |
+| Configuration | `figment` | 0.10.19 | agent, server | TOML file + env; upstream is quiet but the crate is stable |
+| DTO & config validation | `garde` | 0.23.0 | api-types, agent, server | Domain value objects use hand-written constructors |
+| Logging / tracing | `tracing`, `tracing-subscriber` | 0.1.44, 0.3.23 | all | `env-filter`, `json` |
+| Metrics | `metrics`, `metrics-exporter-prometheus` | 0.24.6, 0.18.3 (dfo) | runtime, agent, server | Internal port only. The exporter's default `push-gateway` brings its own TLS stack: enable `http-listener` only |
+| IDs | `uuid` | 1.27.0, dfo | core | v7, serde |
+| Time | `chrono` | 0.4.45, dfo | core, server | Always UTC. No `clock` feature in core: time is passed in |
+| CLI | `clap` | 4.6.7 | agent, server | derive |
+| Hidden password prompt | `rpassword` | 7.5.4 | server CLI | |
 
 ### Rust: API, transport & persistence
-| Concern | Crate | Baseline | Used in | Notes |
+| Concern | Crate | Version | Used in | Notes |
 |---|---|---|---|---|
-| HTTP framework + WebSocket server | `axum` | 0.8 | server | `ws` feature |
-| Typed headers (and cookies later) | `axum-extra` | matches axum | server | `TypedHeader<Authorization<Bearer>>` |
-| Service abstraction | `tower` | | server, client | |
-| HTTP middleware | `tower-http` | 0.7 | server | request-id, trace, timeout, body limit, sensitive headers, set-header, catch-panic |
-| OpenAPI | `utoipa`, `utoipa-axum` | 5/0.2 or 6/0.3 | server | P0 picks one; 6.x is very new |
-| Database | `sqlx` | **0.9** | server | `sqlite`, `migrate`, `macros`, `chrono`, `uuid`; offline `.sqlx/` |
-| gRPC | `tonic`, `tonic-prost` | **0.14** | proto, agent, server | Features `tls-aws-lc`, `tls-connect-info` |
-| Protobuf | `prost` | 0.14 | proto | |
-| Protobuf codegen | `tonic-prost-build`, `protox` | 0.14 / 0.9 | proto (`build.rs`) | Pure Rust, no system `protoc` |
-| TLS | `rustls` | 0.23 | agent, server, client, desktop | **Only the aws-lc-rs provider**, installed explicitly at startup |
-| X.509 / CSR | `rcgen` | 0.14 | server (CA, signing), agent (CSR) | `x509-parser` feature |
-| HTTP client | `reqwest` | **0.13** | client, server, desktop | Feature `rustls`, no native-tls |
-| WebSocket client | `tokio-tungstenite` | 0.30 | client | rustls |
-| Rust → TypeScript types | `ts-rs` | 12 | api-types | `chrono-impl`, `uuid-impl` |
+| HTTP framework + WebSocket server | `axum` | 0.8.9 | server | `ws` feature |
+| Typed headers (and cookies later) | `axum-extra` | 0.12.6 | server | `TypedHeader<Authorization<Bearer>>` |
+| Service abstraction | `tower` | 0.5.3 | server, client | |
+| HTTP middleware | `tower-http` | 0.7.1 | server | request-id, trace, timeout, body limit, sensitive headers, set-header, catch-panic |
+| OpenAPI | `utoipa`, `utoipa-axum` | 6.0.0, 0.3.0 | server | P0 picked 6.x (ADR-0009): released 2026-09-22, re-check at P6 |
+| Database | `sqlx` | **0.9.0**, dfo | server | `runtime-tokio`, `sqlite`, `migrate`, `macros`, `chrono`, `uuid`; no TLS feature (SQLite); offline `.sqlx/` |
+| gRPC | `tonic`, `tonic-prost` | **0.14.6** | proto, agent, server | Features `tls-aws-lc`, `tls-connect-info`. Never `tls-ring` or `tls-webpki-roots` |
+| Protobuf | `prost` | 0.14.4 | proto | |
+| Protobuf codegen | `tonic-prost-build`, `protox` | 0.14.6, 0.9.1 | proto (`build.rs`) | Pure Rust, no system `protoc` |
+| TLS | `rustls` | 0.23.45 | agent, server, client, desktop | **Only the aws-lc-rs provider**, installed explicitly at startup. The default features select it |
+| X.509 / CSR | `rcgen` | 0.14.10, dfo | server (CA, signing), agent (CSR) | `aws_lc_rs`, `pem`, `x509-parser`. The default is ring |
+| HTTP client | `reqwest` | **0.13.5**, dfo | client, server, desktop | Feature `rustls` (aws-lc-rs + platform verifier), no native-tls |
+| WebSocket client | `tokio-tungstenite` | 0.29.0, dfo | client | `connect`, `rustls-tls-native-roots`. 0.29 matches axum 0.8.9's `ws`, so only one tungstenite is built |
+| Rust → TypeScript types | `ts-rs` | 12.0.1 | api-types | `chrono-impl`, `uuid-impl` |
 
 ### Rust: security
-| Concern | Crate | Baseline | Used in | Notes |
+| Concern | Crate | Version | Used in | Notes |
 |---|---|---|---|---|
-| Password hashing | `argon2` | **0.6** | server | Argon2id, in `spawn_blocking` behind a semaphore |
-| Authenticated encryption | `chacha20poly1305` | **0.11** | server (vault) | XChaCha20-Poly1305 |
-| Hashing | `sha2` | **0.11** | server | Token hashes, certificate fingerprints |
-| Constant-time comparison | `subtle` | 2.x | server | |
-| Encoding | `base64` | | server, client | URL-safe, no padding |
-| Secret wrappers | `secrecy` | 0.10 | core, mc, agent, server, client, desktop | Redacted `Debug` |
-| Memory zeroing | `zeroize` | 1.x | server, agent | |
-| Secure randomness | `getrandom` | | server | Tokens, keys, nonces: **always** use this |
-| Non-security randomness | `rand` | **0.10** | core, runtime | Jitter, random look angles; seeded `StdRng` in tests |
-| TOTP 2FA | `totp-rs` | 6 | server | Features `qr`, `gen_secret` |
-| Password strength | `zxcvbn` | 3 | server | |
+| Password hashing | `argon2` | **0.6.0** | server | Argon2id, in `spawn_blocking` behind a semaphore |
+| Authenticated encryption | `chacha20poly1305` | **0.11.0** | server (vault) | XChaCha20-Poly1305 |
+| Hashing | `sha2` | **0.11.0** | server | Token hashes, certificate fingerprints |
+| Constant-time comparison | `subtle` | 2.6.1 | server | |
+| Encoding | `base64` | 0.23.1 | server, client | URL-safe, no padding |
+| Secret wrappers | `secrecy` | 0.10.3 | core, mc, agent, server, client, desktop | Redacted `Debug` |
+| Memory zeroing | `zeroize` | 1.9.0 | server, agent | |
+| Secure randomness | `getrandom` | 0.4.3 | server | Tokens, keys, nonces: **always** use this |
+| Non-security randomness | `rand` | **0.10.3**, dfo | core, runtime | Jitter, random look angles; seeded `StdRng` in tests. No OS randomness in core |
+| TOTP 2FA | `totp-rs` | 6.0.0 | server | Feature `qr`. `gen_secret` uses rand's thread RNG, so P7 generates the secret bytes with `getrandom` instead (security rule 4) |
+| Password strength | `zxcvbn` | 3.1.1 | server | |
 
 ### Rust: desktop
-| Concern | Crate | Baseline | Used in | Notes |
+| Concern | Crate | Version | Used in | Notes |
 |---|---|---|---|---|
-| Desktop shell | `tauri` | **≥ 2.11.1** | desktop | 2.11.1 fixes CVE-2026-42184 (`is_local_url` origin bypass on Windows) |
-| Open the device-code URL | `tauri-plugin-opener` | 2.x | desktop | Called only from Rust |
-| Single instance | `tauri-plugin-single-instance` | 2.x | desktop | |
-| Signed auto-update | `tauri-plugin-updater` | 2.x | desktop | |
-| OS credential store | `keyring-core` + `windows-native-keyring-store` | 1.x (keyring v4 family) | desktop | Refresh token storage |
+| Desktop shell | `tauri`, `tauri-build` | **2.12.1** (≥ 2.11.1), 2.7.1 | desktop | 2.11.1 fixes CVE-2026-42184 (`is_local_url` origin bypass on Windows). `tauri-build` is the required build-dependency (approved in P0) |
+| Open the device-code URL | `tauri-plugin-opener` | 2.7.0 | desktop | Called only from Rust |
+| Single instance | `tauri-plugin-single-instance` | 2.5.2 | desktop | |
+| Signed auto-update | `tauri-plugin-updater` | 2.13.1, dfo | desktop | Its default `rustls-tls` feature forces the ring provider; TLS comes from the workspace `reqwest` instead |
+| OS credential store | `keyring-core` + `windows-native-keyring-store` | 1.0.0, 1.1.0 (keyring v4 family) | desktop | Refresh token storage |
 
 ### Rust: testing
-| Concern | Crate | Baseline | Notes |
+| Concern | Crate | Version | Notes |
 |---|---|---|---|
-| Fixtures / parametrized tests | `rstest` | | `#[case]` tables |
-| Property testing | `proptest` | | State machine, parsers |
-| Snapshot testing | `insta` | | `json` and `redactions` features |
-| Mocks | `mockall` | 0.15 | Only for interaction checks; put `#[automock]` above `#[async_trait]` |
-| Containers | `testcontainers` | 0.28 | `itzg/minecraft-server` |
+| Fixtures / parametrized tests | `rstest` | 0.27.0 | `#[case]` tables |
+| Property testing | `proptest` | 1.11.0 | State machine, parsers |
+| Snapshot testing | `insta` | 1.49.0 | `json` and `redactions` features |
+| Mocks | `mockall` | 0.15.0 | Only for interaction checks; put `#[automock]` above `#[async_trait]` |
+| Containers | `testcontainers` | 0.28.0, dfo | `itzg/minecraft-server`. The default `ring` feature turns on TLS for the Docker client, which the local socket doesn't need |
 | Time control | `tokio` `test-util` | | `start_paused`, `advance` |
-| Fuzzing | `libfuzzer-sys`, `arbitrary` | | Driven by cargo-fuzz |
+| Fuzzing | `libfuzzer-sys`, `arbitrary` | 0.4.13, 1.4.2 | Driven by cargo-fuzz |
 
 ### Frontend (same one-library-per-concern rule)
 | Concern | Package | Notes |
@@ -282,12 +282,12 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Lint & format | `@biomejs/biome` | |
 
 ### Tools & infrastructure (not crates)
-- **Rust tooling:**
-  - rustup (dated nightly)
-  - `just`
-  - cargo-nextest, cargo-llvm-cov, cargo-deny, cargo-mutants, cargo-fuzz
-  - sqlx-cli **0.9**
-  - cargo-insta, cargo-chef
+- **Rust tooling** (versions pinned in P0.3; tools for later phases are re-checked when they're introduced):
+  - rustup with the dated nightly from `rust-toolchain.toml` (ADR-0003), plus stable 1.99.0 for the `stable-check` job
+  - `just` 1.58.0
+  - cargo-nextest 0.9.146, cargo-llvm-cov 0.9.1, cargo-deny 0.20.2, cargo-insta 1.49.0
+  - Later: sqlx-cli **0.9.0** (P6), cargo-chef 0.1.78 (P5), cargo-mutants 27.1.0 and cargo-fuzz 0.13.2 (P13)
+- **Frontend tooling:** pnpm 12.9.1 (`packageManager`) and Biome 2.5.15 from P0.8; every other package is pinned in the phase that introduces it.
 - **Runtime & hosting:**
   - Docker + Docker Compose
   - Caddy 2 (TLS for the public API)
@@ -588,6 +588,17 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     large_futures = "warn"
     ```
   - `[profile.release]` with `panic = "unwind"`, `overflow-checks = true` and `lto = "thin"`.
+
+  > Note (P0.3):
+  > - **Declared on first use.** The pinned nightly's cargo has a lint, `cargo::unused_workspace_dependencies` (warn by default), which fires once per declared but unused workspace dependency. All §5 crates up front meant 67 warnings. At the user's choice, `[workspace.dependencies]` holds only crates that are in use (none in Phase 0). The versions checked on docs.rs and crates.io, and the feature constraints, are pinned in §5 instead, and each phase copies its entries from there. No lint was changed.
+  > - **Changes from the baseline:**
+  >   - utoipa 6.0.0 / utoipa-axum 0.3.0
+  >   - tokio-tungstenite 0.29.0 instead of 0.30, matching axum 0.8.9's `ws`
+  >   - base64 0.23.1 and getrandom 0.4.3 are the current releases
+  >   - `tauri-build` 2.7.1 added to the registry (approved)
+  > - **Version policy:** caret requirements plus `Cargo.lock`, with `=` only for azalea (ADR-0009).
+  > - `exclude = ["spikes"]`, so spikes nested under the workspace root can build on their own.
+  > - `[workspace.package]` also sets `version = "0.1.0"`.
 - [ ] **P0.4** Write the remaining config files:
   - `clippy.toml`: `allow-unwrap-in-tests`, `allow-expect-in-tests`, `allow-panic-in-tests`, `allow-indexing-slicing-in-tests`, `allow-print-in-tests`.
   - `rustfmt.toml`: stable options only, `max_width = 100`.

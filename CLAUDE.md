@@ -122,7 +122,7 @@ fleet-server/src/
 
 ## Crate registry: one crate per concern
 **Never add a dependency or swap a crate without asking the user first.** If they approve, write an ADR and update Plan.md §5 and this list.
-- Add dependencies only in `[workspace.dependencies]`; members use `dep.workspace = true`.
+- Add dependencies only in `[workspace.dependencies]`; members use `dep.workspace = true`. Declare a crate there when the first member uses it, with the version and feature constraints from Plan.md §5. Cargo warns about unused workspace dependencies.
 - **Default features in `fleet-core`:** disable them and enable only what you need. Some crates pull in IO or tokio by default (for example `backon` with its tokio sleeper). `cargo tree -p fleet-core` must show no tokio and no IO crates.
 - Every crate inherits `license` (`GPL-3.0-or-later`) and `publish = false` from `[workspace.package]` (`license.workspace = true`, `publish.workspace = true`).
 - Before using any crate API, **check it on docs.rs for the pinned version**. These crates changed recently: sqlx 0.9, tonic 0.14 (+ `tonic-prost`), rand 0.10, argon2 0.6, chacha20poly1305 0.11, sha2 0.11, reqwest 0.13, keyring v4, azalea.
@@ -170,7 +170,7 @@ fleet-server/src/
 | | Non-security randomness | `rand` |
 | | 2FA | `totp-rs` |
 | | Password strength | `zxcvbn` |
-| Desktop | Shell | `tauri` ≥ 2.11.1 |
+| Desktop | Shell | `tauri` ≥ 2.11.1, `tauri-build` |
 | | Plugins | `tauri-plugin-opener`, `tauri-plugin-single-instance`, `tauri-plugin-updater` |
 | | Keychain | `keyring-core` + `windows-native-keyring-store` |
 | Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, tokio `test-util` |
