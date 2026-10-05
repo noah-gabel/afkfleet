@@ -98,3 +98,36 @@ Consequences:
   - `chat("text")` sends a chat message. `chat("/list")` sends a command, and `write_command_packet("list")` does the same without the slash; both got the `/list` reply.
   - azalea **filters control characters and `§` and silently truncates to 256 characters** before sending: `a§cb\x07c\td` arrived as `acbcd`, and 300 × `x` arrived as 256 characters. No kick. The core `ChatMessage` limits (≤ 256, no control characters, no `§`, P2.2) match, so nothing is silently changed.
   - Offline accounts send unsigned chat (`signed=false`), which a server with `enforce-secure-profile=false` accepts.
+
+## P1.5 Actions
+`cargo run -- actions` and `cargo run -- idle-actions`. Every call runs on the host thread through the job channel and is checked against the server via RCON where possible.
+
+| Action | azalea 0.16.0 call | Check | Result |
+|---|---|---|---|
+| Look | `set_direction(yaw, pitch)`; `look_at(Vec3)` | `direction()`; RCON `data get entity AfkBot1 Rotation` | `[45.0f, -10.05f]` on the server (pitch is quantized) |
+| Jump | `jump()` (one jump; `set_jumping(bool)` = hold) | y offset per tick | rises to +1.25 and lands after 10 ticks |
+| Sneak | `set_crouching(bool)` | `crouching()` | true |
+| Swing | no `Client` method: `ecs.write().trigger(SwingArmEvent { entity })` | other bot receives `ClientboundAnimate` | `SwingMainHand` |
+| Hotbar | `set_selected_hotbar_slot(u8)`; **panics if ≥ 9** (`assert!`) | RCON `execute if items entity AfkBot1 weapon.mainhand minecraft:stick` | Test passed |
+| Use item | `start_use_item()` (main hand) | snowball count via RCON `clear AfkBot1 minecraft:snowball 0` | 16 → 15 |
+| Target in view | `hit_result()` → `HitResult::Entity(EntityHitResult { entity, .. })` (the bot's ECS `Entity`); updates one tick after a look | pig 2 blocks ahead / 6 blocks ahead | entity at 2 blocks; **not** at 6 blocks: the picker respects reach |
+| Reach | `attributes().entity_interaction_range.calculate()` | | 3.0 |
+| Attack | `attack(entity)`: **broken, gets the bot kicked** (see below). Workaround `attack_raw` | pig Health via RCON | 10.0 → 9.0 with the workaround |
+| Respawn | no `Client` method: `ecs.write().write_message(PerformRespawnEvent { entity })` | `health()` | 0.0 → 20.0 |
+
+- **`attack()` is broken in azalea 0.16.0 against vanilla 26.1.** `ServerboundAttack { entity_id: MinecraftEntityId }` lacks `#[var]`, so the id goes out as a 4-byte int where the server expects a VarInt. The server disconnects the bot with `Internal Exception: io.netty.handler.codec.DecoderException: … ServerboundAttackPacket was larger than I expected, found 3 bytes extra`. Every attack kicks the bot.
+  - **Workaround (`attack_raw` in `src/exp/actions.rs`):** look up the target's `MinecraftEntityId` in the bot's `EntityIdIndex`, write `VarInt(packet id) + VarInt(entity id)` with `RawConnection::net_conn().write_raw`, then trigger `SwingArmEvent`. It works (damage dealt, no kick). Unlike `attack()`, it doesn't reset azalea's `TicksSinceLastAttack`, so `has_attack_cooldown()` stays false; fleet-mc should reset that component too, or rely on the core's attack interval (≥ 500 ms).
+  - Worth reporting upstream; the next azalea bump should re-check it.
+- **Idle timer** (`setidletimeout 1`, one action every 20 s per bot, 100 s):
+
+  | Action | Kicked for idling? |
+  |---|---|
+  | none | yes |
+  | rotate (`set_direction`) | **yes**: rotating alone doesn't count as activity |
+  | swing | no |
+  | jump | no |
+  | sneak toggle | no |
+  | hotbar change | no |
+
+  So an anti-AFK mode needs a swing, jump, sneak or hotbar change more often than the server's idle timeout. The `afk` preset (P2.7) as written ("a random small rotation every 45–120 s, an occasional jump, and a swing every few minutes") only survives if the jump or swing comes often enough.
+- `set_selected_hotbar_slot` and the attack workaround take the ECS write lock briefly; all actions are cheap and belong on the host thread.

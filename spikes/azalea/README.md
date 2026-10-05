@@ -19,3 +19,5 @@ cargo run -- <command> [args]   # RUST_LOG=debug for azalea's own logs
 | `exit-race [variant] [trials]` | P1.2 | How many `exit()` calls each trial needs until the event channel closes |
 | `fail <scenario> [custom\|join] [version]` | P1.3 | One failure scenario: `closed`, `blackhole`, `blackhole-exit`, `unresolvable`, `kick`, `kick-noreason`, `ban`, `ban-ip`, `whitelist`, `duplicate`, `full`, `outdated [version]`, `idle`, `stop`, `kill`, `pause`, `death`. Some restart the dev server |
 | `chat` | P1.4 | Two bots and RCON exchange chat, whispers, emotes, announcements, `tellraw` and commands; logs how each arrives |
+| `actions` | P1.5 | Look, jump, sneak, swing, hotbar, use item, attack (with the raw-packet workaround), respawn, each checked via RCON |
+| `idle-actions` | P1.5 | Six bots, one action type each, under `setidletimeout 1`: which actions keep a bot from being kicked |
