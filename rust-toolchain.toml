@@ -1,0 +1,7 @@
+# A dated nightly, because azalea needs nightly Rust.
+# Change it only in a deliberate Minecraft-version bump: nightly, azalea and the
+# test server's VERSION change together (docs/adr/0003-azalea-and-pinned-nightly.md).
+[toolchain]
+channel = "nightly-2026-08-21"
+components = ["rustfmt", "clippy", "llvm-tools-preview"]
+profile = "minimal"
