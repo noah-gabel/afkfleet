@@ -236,12 +236,13 @@ pub fn account_join(args: &[String]) -> Res {
             "corrupted-token".to_owned(),
         );
     }
-    info!(?account, corrupt, "account loaded (Debug is redacted)");
+    // Name and UUID stay out of the output, so it can be shared safely.
+    info!(corrupt, "account file loaded");
     run_join(account, server, true)
 }
 
 pub fn account_check(_args: &[String]) -> Res {
-    let placeholder = Uuid::from_u128(0x1234_5678_9abc_4def_8123_456789abcdef);
+    let placeholder = Uuid::from_u128(0x1234_5678_9abc_4def_8123_4567_89ab_cdef);
     let account = ExternalTokenAccount::new("AfkBot1", placeholder, "not-a-real-token".to_owned());
     info!(
         ?account,

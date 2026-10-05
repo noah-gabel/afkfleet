@@ -198,3 +198,20 @@ The server (vanilla 26.1, view distance 4) used ~18 % of one core on average dur
 - **Threads:** process-wide Bevy pools (compute 2, IO 1, async compute 1, plus `async-compat`) and 2 tokio workers, plus one per host thread. No per-bot threads appear unless we create them.
 
 **Choice (by the rule above): `an-st`, one App and one host thread per bot, with the single-threaded executor.** It has the smallest blast radius: a panic or a hang affects exactly one bot. At 50 bots it uses 222 MiB and 0.43 cores, far inside the budget (≤ 1.5 GiB, ≤ 1 core). Swarms would save ~160 MiB at 50 bots, but they fail the isolation requirement (P1.6) and can deadlock on teardown (P1.2).
+
+## P1.8 Custom `AccountTrait` with an externally supplied token
+`ExternalTokenAccount` (`src/exp/account.rs`) holds name, UUID and a Minecraft access token, the shape an agent gets from the server. It compiles against azalea 0.16.0. The trait signatures need `uuid::Uuid` and `reqwest::Proxy`, which resolve to the same crates azalea uses.
+- **The trait has two traps.** The default `join()` does **nothing** (it returns `Ok`), so a custom account must call `azalea_auth::sessionserver::join` itself, or online-mode joins fail. And `certs`/`set_certs` must actually store the certificates: chat signing does `account.certs().expect(…)` once a `ChatSigningSession` exists.
+- **`Debug` must be hand-written.** azalea's own `MicrosoftAccount` *derives* `Debug` over its access token, and `Account` is `Debug`, so Debug-printing an azalea `Account` can leak a token. Ours prints `token: "<redacted>"`.
+- **`refresh()`** is called by azalea **once** after `InvalidSession`/`ForbiddenOperation`, then `join` is retried. That's the natural hook for P4.3's "ask the control plane for one fresh token".
+
+`cargo run -- account-check` against the local online-mode server (`compose.online.yaml`, no real credentials):
+
+| Case | What happens |
+|---|---|
+| `ExternalTokenAccount` with a garbage token | Session server: `ForbiddenOperation` → our `refresh()` (1×) → retry fails → azalea only **logs** `Error during authentication: SessionServer(ForbiddenOperation)`, **no event**. The connection then hangs in the login phase until the server gives up after **~30 s**: `Disconnect(multiplayer.disconnect.slow_login)` in one run, `Disconnect(None)` in another. Only our account's recorded `last_join_error = ForbiddenOperation` says "the token is bad". |
+| `Account::offline` against online mode | `Disconnect(multiplayer.disconnect.unverified_username)` ("Failed to verify username!") after ~0.25 s |
+
+So fleet-mc must take auth failures from the account hook (`join()` errors), immediately call `exit()` and report `AuthInvalid`, instead of waiting ~30 s for an unhelpful disconnect.
+
+**Real-account test: the user's optional step.** The steps are in README.md. Its result goes into the PR conversation, not into this file.
