@@ -680,6 +680,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   Also run `deny` (and `pnpm audit` once the frontend exists) on a weekly `schedule`, so new security advisories show up even when nothing is pushed. There's no Dependabot.
 
   After the first CI run on the `p0/foundation` PR, the user adds the job names as required status checks in the `main` ruleset.
+
+  > Note (P0.11):
+  > - **Jobs call `just`.** Every job runs one `just` recipe (just and the cargo tools come from `taiki-e/install-action` at pinned versions), so CI and `just ci` can't drift apart.
+  > - **Toolchains.** The nightly comes from `rust-toolchain.toml` via `rustup install`, so there's no toolchain action. The stable version comes from the justfile.
+  > - **Windows.** `clippy` and `test` also run on `windows-latest`, with NASM from `ilammy/setup-nasm`. All other jobs run on `ubuntu-latest`.
+  > - **frontend** also runs the `scripts/` tests and `pnpm audit`, because the frontend workspace exists since P0.8.
+  > - **audit.yml** runs weekly (Mondays) and on demand: `just deny` and `just ui-audit`.
+  > - **Job names for the required checks:** `fmt`, `clippy (ubuntu-latest)`, `clippy (windows-latest)`, `docs`, `test (ubuntu-latest)`, `test (windows-latest)`, `coverage`, `deny`, `stable-check`, `frontend`.
 - [ ] **P0.12** Add `docs/adr/0000-template.md` and these ADRs:
 
   | ADR | Topic |
