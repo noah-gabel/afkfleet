@@ -130,7 +130,6 @@ afkfleet/
 ├── CLAUDE.md · Plan.md · README.md · LICENSE (GPL-3.0) · SECURITY.md
 ├── .gitignore · .gitattributes · .editorconfig
 ├── .github/                   # workflows/, pull_request_template.md
-├── .claude/settings.json      # Claude Code permission rules (owned by the user)
 ├── Cargo.toml                 # workspace: members, [workspace.dependencies], [workspace.lints], profiles
 ├── rust-toolchain.toml        # dated nightly (required by azalea)
 ├── rustfmt.toml · clippy.toml · deny.toml · .config/nextest.toml
@@ -559,7 +558,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     - a note that the project is built with AI assistance
   - `SECURITY.md`: report vulnerabilities through GitHub's private vulnerability reporting
   - `.github/pull_request_template.md` with the Definition of Done checklist from `CLAUDE.md`
-  - `.claude/settings.json`: commit the user-provided file unchanged
+
+  > Note (P0.1): `.claude/settings.json` was dropped from this task and from the §4 layout at the user's request; the user doesn't provide one. `CLAUDE.md` security rule 12 now states the secret-file rule as an instruction instead. `.claude/settings.local.json` stays in `.gitignore`.
 - [ ] **P0.2** Pick the target Minecraft version and the matching azalea release or git rev. Pin a **dated nightly** in `rust-toolchain.toml` with the components `rustfmt`, `clippy` and `llvm-tools-preview`. Record this in ADR-0003, including the bump procedure (nightly + azalea + test-server `VERSION` change together).
 - [ ] **P0.3** Write the workspace `Cargo.toml`:
   - `[workspace.package]`: edition 2024, `license = "GPL-3.0-or-later"`, `publish = false`, `repository` = the GitHub URL. Every member inherits them (`license.workspace = true`, `publish.workspace = true`, …).

@@ -20,7 +20,6 @@ Where things are:
 - **Threat model:** `docs/threat-model.md`
 - **Operations:** `docs/runbook.md`
 - **Project overview and status:** `README.md` (kept current, see step 6 below)
-- **Claude Code permission rules:** `.claude/settings.json`. Owned by the user; never edit it.
 
 ## How to work with Plan.md
 1. **Find the current phase.** It's the first phase with unchecked tasks. Don't work on later phases unless the user asks.
@@ -277,7 +276,8 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
     - Never commit secrets, `.env` files, databases, keys or real account data.
     - Never commit personal data either: real names, email addresses, Windows usernames or home paths (`C:\Users\…`), IP addresses, real server addresses or domains, Minecraft account names or UUIDs.
     - Examples and tests use placeholders: `example.com`, `192.0.2.10`, `AfkBot1`, `C:\path\to\afkfleet`.
-12. **You can't read secret files, by design.** `.claude/settings.json` blocks reading `secrets/`, `.env*`, `*.pem` and `*.key`. When development needs a secret file (e.g. a dev vault key), write a `just` recipe that generates it into the gitignored `secrets/` folder and ask the user to run it.
+    - The one exception is the repository's own GitHub URL (e.g. `repository` in `Cargo.toml`). It's public anyway.
+12. **Never read secret files:** `secrets/`, `.env*`, `*.pem` or `*.key`. When development needs a secret file (e.g. a dev vault key), write a `just` recipe that generates it into the gitignored `secrets/` folder and ask the user to run it.
 
 ## Testing conventions
 **Where tests go**
