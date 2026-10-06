@@ -16,13 +16,17 @@ afkfleet is **a hobby project** I'm building for my friends with Claude Code. I 
 There's no support, and I don't take feature requests. Security reports are welcome, though: see [SECURITY.md](SECURITY.md).
 
 ## Status
-**Phase 0 (Foundation & tooling) is complete.** It's under review in its pull request. Nothing is runnable yet. What exists:
-- the Cargo workspace with all lints
-- the pinned toolchain
-- the quality gates: formatting, clippy, docs, tests, coverage gates, cargo-deny, Biome
-- CI and the architecture decision records
+**Phase 1 (azalea spike) is complete.** It's under review in its pull request. The product itself isn't runnable yet. What exists:
+- **From Phase 0:**
+  - the Cargo workspace with all lints and the pinned toolchain
+  - the quality gates: formatting, clippy, docs, tests, coverage gates, cargo-deny, Biome
+  - CI and the architecture decision records
+- **From Phase 1:**
+  - a local Minecraft test server (`just mc-up`)
+  - [ADR-0008](docs/adr/0008-azalea-integration.md), which records how afkfleet uses azalea: one isolated azalea App and thread per bot, the failure catalogue, the watchdog design, and workarounds for azalea bugs
+  - the spike that produced the evidence, archived in [`spikes/azalea/`](spikes/azalea/)
 
-**Next:** Phase 1, a time-boxed spike that de-risks the Minecraft layer.
+**Next:** Phase 2, the pure domain core (`fleet-core`).
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 
@@ -61,7 +65,10 @@ There's nothing to run yet. The first runnable product is the standalone agent i
 pnpm install   # frontend tooling (Biome)
 just check     # format, lints, docs, tests: run before every commit
 just ci        # everything CI runs
+just mc-up     # local offline-mode Minecraft 26.1 test server on 127.0.0.1:25565 (needs Docker)
+just mc-down   # stop it and delete its world
 ```
+The test server runs in offline mode, so it's for local development only. RCON is enabled with a random password and isn't published; run commands with `docker compose --file deploy/compose.dev.yaml exec minecraft rcon-cli <command>`.
 `just --list` shows every recipe; [`CLAUDE.md`](CLAUDE.md) describes them and the project's working rules.
 
 Every change goes through a pull request; nobody commits to `main`.

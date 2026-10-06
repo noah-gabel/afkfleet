@@ -39,7 +39,7 @@ One pull request changes all of these together, never one alone:
 1. **azalea:** pick the new azalea release on crates.io and note its Minecraft version.
 2. **Pins:** update `azalea`/`azalea-auth` in Plan.md §5, `Cargo.toml` (once used) and `spikes/toolchain-check/Cargo.toml`.
 3. **Nightly:** start with the newest nightly whose `rustfmt`, `clippy` and `llvm-tools-preview` exist for `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu`. If azalea fails to build, bisect back to the newest nightly that works, counting only the azalea error as "bad".
-4. **Test server:** update the Minecraft test server's `VERSION` (from P1.1).
+4. **Test server:** update `VERSION` (and, if needed, the pinned `itzg/minecraft-server` image) in `deploy/compose.dev.yaml` (from P1.1).
 5. **Verify:**
    - build `spikes/toolchain-check` on Windows and in a Linux container
    - run `cargo deny` against its graph

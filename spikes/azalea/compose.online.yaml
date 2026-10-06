@@ -1,0 +1,37 @@
+# Phase 1 spike only (P1.8): a LOCAL online-mode Minecraft 26.1 server, so the
+# optional real-account test never touches a public server. Bound to
+# 127.0.0.1:25567 only; never expose it. It needs outbound internet to reach
+# Mojang's session server.
+#
+#   docker compose --file spikes/azalea/compose.online.yaml up --detach --wait
+#   docker compose --file spikes/azalea/compose.online.yaml down --volumes
+#
+# `down --volumes` matters after a real-account test: the server's usercache
+# and logs hold the account name.
+name: afkfleet-p1-online
+
+services:
+  minecraft:
+    # Same pinned image as deploy/compose.dev.yaml.
+    image: itzg/minecraft-server:2026.9.2-java25@sha256:de5d1b1a83eba576f6c8a688fac2a3523ce457724cdebc8ea48d7818b74cdf6e
+    environment:
+      EULA: "TRUE"
+      TYPE: VANILLA
+      VERSION: "26.1"
+      ONLINE_MODE: "TRUE"
+      ENFORCE_SECURE_PROFILE: "TRUE"
+      LEVEL_TYPE: minecraft:flat
+      VIEW_DISTANCE: "3"
+      SIMULATION_DISTANCE: "3"
+      SPAWN_PROTECTION: "0"
+      DIFFICULTY: peaceful
+      ENABLE_AUTOPAUSE: "FALSE"
+      ENABLE_RCON: "TRUE"
+      MEMORY: 1G
+    ports:
+      - "127.0.0.1:25567:25565"
+    healthcheck:
+      test: mc-health
+      start_period: 3m
+      interval: 5s
+      retries: 20
