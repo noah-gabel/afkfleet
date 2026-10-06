@@ -10,8 +10,10 @@
 //! - [`id`]: typed IDs for users, accounts, bots, agents and modes.
 //! - [`value`]: server addresses and the names of Minecraft accounts and users.
 //! - [`chat`]: the messages bots send, and sanitized messages they receive.
+//! - [`disconnect`]: why a session ended, and whether the bot retries.
 
 pub mod chat;
+pub mod disconnect;
 pub mod id;
 mod text;
 pub mod value;

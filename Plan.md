@@ -875,7 +875,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - bidi controls
   >   - zero-width and invisible characters (U+200B–U+200D, U+2060, U+FEFF, U+00AD)
   > - **Storage.** Chat is stored as columns, so there's no serde.
-- [ ] **P2.4** 🔴 `DisconnectReason` and a classifier that returns `Transient`, `Permanent(kind)`, `Conflict(DuplicateLogin)` or `AuthInvalid`. Table-driven tests use real kick messages and translation keys from the spike (ADR-0008 §6).
+- [x] **P2.4** 🔴 `DisconnectReason` and a classifier that returns `Transient`, `Permanent(kind)`, `Conflict(DuplicateLogin)` or `AuthInvalid`. Table-driven tests use real kick messages and translation keys from the spike (ADR-0008 §6).
 
   > Note (P2.4): The input also covers these reasons (ADR-0010):
   > - `AuthRejected`, classified as `AuthInvalid`
