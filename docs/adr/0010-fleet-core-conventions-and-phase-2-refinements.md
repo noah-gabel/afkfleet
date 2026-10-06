@@ -136,7 +136,7 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
   - "Twice" means twice in a row *(group B)*. `fresh` doesn't survive a Backoff, and `auth_retried` starts over after Online or a Backoff; the backoff bounds the rest.
   - `AuthInvalid` while Online counts as transient *(group B)*. The session was accepted at join, and a retry without a backoff would let a server drive reconnects.
   - `Reset` from `Failed(Auth)` asks for a normal session; the account has been signed in again by then *(group B)*.
-  - fleet-mc's `refresh()` fails fast (ADR-0008 §9 points here).
+  - fleet-mc's `refresh()` fails fast (ADR-0008 §9 points here). *Refined by [ADR-0011](0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md): it's a no-op that returns `Ok(())`, because any error it returned would be logged by azalea as a misleading Microsoft-flow error. The adapter still never asks for a token.*
   - A non-retryable `SessionUnavailable` goes to `Failed(SessionDenied)`.
 - **New event `CrashLoop`:** from any state to `Failed(CrashLoop)`, so the supervisor's restart limit (§6 row 7) also goes through `transition()`. Packet liveness arrives as `Disconnected(LivenessTimeout)`. `CrashLoop` overwrites an earlier failure reason and drops a pending restart *(group B)*.
 - **Session ends** *(group B)*: `ConnectFailed(f)`, `Disconnected(reason)`, `WatchdogTimeout` (the same as `Disconnected(WatchdogTimeout)`) and `SessionClosed` are handled alike in Connecting and Online, and are no-ops in every other state.
@@ -250,7 +250,7 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
   - A separate test checks every permission against every other kind of resource.
 
 **Minecraft ports (P2.10).**
-- `connect` returns a `Result`, for immediate failures such as the abandoned-thread limit. Network failures still arrive as `ConnectionFailed` events.
+- `connect` returns a `Result`, for immediate failures such as the abandoned-thread limit. Network failures still arrive as `ConnectionFailed` events. *The limit and who ends the process are decided in [ADR-0011](0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md): fleet-mc refuses new threads, and the agent exits.*
 - `SessionHandle` gains `respawn()`, because `Effect::Respawn` needs a port method.
 - `perform` takes a `GameAction`; chat goes through `send_chat`. `GameAction` is `fleet_core::mode::GameAction`, defined in P2.8, and its hotbar slot is a `HotbarSlot` *(group C)*.
 - `disconnect()` means the full teardown from ADR-0008 §10, including abandoning a hung thread.
@@ -303,7 +303,7 @@ Points marked *(group E)* were settled while building P2.10. On 2026-10-06 the u
   - **The decision:** no state-machine change. A bot's spec gets an optional list of kick texts that count as a duplicate login, empty by default (P4.1). The classifier compares the sanitized kick message exactly against that list, so vanilla servers still go by key.
 - **Flagged, not decided:**
   - **P4.1:** `BotSpec` sits in fleet-runtime, but fleet-proto and fleet-server need it too.
-  - **P3.4/P5:** the connect timeout has no config key.
+  - **P3.4/P5:** the connect timeout has no config key. *Decided in [ADR-0011](0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md): `[runtime] connect_timeout_secs`, default 30 s, from `connect()` until `Joined`.*
   - **P4.7/P10:** `Paused` and `Failed` must survive an actor or agent restart, so a fresh `Start` doesn't kick a human (§6 row 3).
   - **P9.6/P9.8** *(group D)*: how a Member picks a grantee. Members can't list users, and looking users up by name must not let them enumerate usernames.
   - **P7.13** *(group D)*: the audit log is Admin+, so Admins see the Owner's and other Admins' activity, including their IP addresses and the chat their bots sent.

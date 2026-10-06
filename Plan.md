@@ -184,8 +184,8 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Concern | Crate | Version | Used in | Notes |
 |---|---|---|---|---|
 | Minecraft protocol & client | `azalea` | `=0.16.0` (+mc26.1) | fleet-mc | Needs nightly (ADR-0003). Disable its `AutoReconnectPlugin` and `AutoRespawnPlugin`. Runs only inside a `LocalSet` |
-| Microsoft / Minecraft auth | `azalea-auth` | `=0.16.0` (+mc26.1) | fleet-server | Device-code flow. Never use its file cache |
-| Async runtime | `tokio` | 1.53.2 | runtime, mc, agent, server, client | `test-util` feature in dev |
+| Microsoft / Minecraft auth | `azalea-auth` | `=0.16.0` (+mc26.1) | fleet-server | Device-code flow. Never use its file cache. fleet-mc reaches only `azalea::auth::sessionserver` and `certs`, through azalea's re-export, never the Microsoft flows; its clippy config bans them (ADR-0011) |
+| Async runtime | `tokio` | 1.53.2 | runtime, mc, testkit, agent, server, client | `test-util` feature in dev. Clippy bans `unbounded_channel`; azalea's two mandated channels are the only exceptions (ADR-0011) |
 | Cancellation, task tracking | `tokio-util` | 0.7.19 | runtime, mc, agent, server | `CancellationToken`, `TaskTracker` |
 | Stream adapters | `tokio-stream` | 0.1.19 | proto, agent, server | gRPC streams, broadcast → stream |
 | Sink/Stream extension traits | `futures-util` | 0.3.34 | client, server | WebSocket split/send |
@@ -199,9 +199,9 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Serialization | `serde`, `serde_json` | 1.0.229, 1.0.151 | all | |
 | Configuration | `figment` | 0.10.19 | agent, server | TOML file + env; upstream is quiet but the crate is stable |
 | DTO & config validation | `garde` | 0.23.0 | api-types, agent, server | Domain value objects use hand-written constructors |
-| Logging / tracing | `tracing`, `tracing-subscriber` | 0.1.44, 0.3.23 | all | `env-filter`, `json` |
+| Logging / tracing | `tracing`, `tracing-subscriber` | 0.1.44, 0.3.23 | all | `env-filter`, `json`. fleet-mc has `tracing-subscriber` as a dev-dependency, to capture logs in its redaction tests (ADR-0011) |
 | Metrics | `metrics`, `metrics-exporter-prometheus` | 0.24.6, 0.18.3 (dfo) | runtime, agent, server | Internal port only. The exporter's default `push-gateway` brings its own TLS stack: enable `http-listener` only |
-| IDs | `uuid` | 1.27.0, dfo | core | v7, serde |
+| IDs | `uuid` | 1.27.0, dfo | core, mc | v7, serde. fleet-mc only names `Uuid` in azalea's `AccountTrait` (ADR-0011) |
 | Time | `chrono` | 0.4.45, dfo | core, server | Always UTC. No `clock` feature in core: time is passed in |
 | CLI | `clap` | 4.6.7 | agent, server | derive |
 | Hidden password prompt | `rpassword` | 7.5.4 | server CLI | |
@@ -220,7 +220,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Protobuf codegen | `tonic-prost-build`, `protox` | 0.14.6, 0.9.1 | proto (`build.rs`) | Pure Rust, no system `protoc` |
 | TLS | `rustls` | 0.23.45 | agent, server, client, desktop | **Only the aws-lc-rs provider**, installed explicitly at startup. The default features select it |
 | X.509 / CSR | `rcgen` | 0.14.10, dfo | server (CA, signing), agent (CSR) | `aws_lc_rs`, `pem`, `x509-parser`. The default is ring |
-| HTTP client | `reqwest` | **0.13.5**, dfo | client, server, desktop | Feature `rustls` (aws-lc-rs + platform verifier), no native-tls |
+| HTTP client | `reqwest` | **0.13.5**, dfo | client, server, desktop, mc | Feature `rustls` (aws-lc-rs + platform verifier), no native-tls. fleet-mc enables no features: it only names `reqwest::Proxy` in azalea's `AccountTrait` (ADR-0011) |
 | WebSocket client | `tokio-tungstenite` | 0.29.0, dfo | client | `connect`, `rustls-tls-native-roots`. 0.29 matches axum 0.8.9's `ws`, so only one tungstenite is built |
 | Rust → TypeScript types | `ts-rs` | 12.0.1 | api-types | `chrono-impl`, `uuid-impl` |
 
@@ -308,7 +308,7 @@ The bots run as one tokio task each, which is the user's decision. azalea needs 
 | 5 | Expired or invalid session token | Auth error on join | Request one fresh token. If it fails again: `Failed(Auth)` and account marked "re-auth required" |
 | 6 | Zombie session: azalea ECS panic or hang (azalea has no `catch_unwind`), frozen server or dead link | **Panic:** the runner's `AppExit` receiver fails at once. **Hang:** the Tick watchdog, no `Tick` for `watchdog_timeout` (30 s) while Online. **Frozen server or dead link:** the packet-liveness timeout, no packet for `packet_liveness_timeout` (30 s) while Online. Ticks are client-side and keep running then (ADR-0008 §5) | Tear down the session and treat it as a transient disconnect |
 | 7 | Panic in the bot actor task | Supervisor sees `JoinError::is_panic()` | Restart the actor from its last spec. More than 5 restarts in 10 min → `Failed(CrashLoop)` |
-| 8 | MC host thread hangs | Tick watchdog (row 6), and the thread's job queue stops answering | **Abandon** the thread and count it; it is never joined or respawned. The bot reconnects on a fresh thread. Above the abandoned-thread limit, the agent process exits and Docker restarts it (ADR-0008 §5) |
+| 8 | MC host thread hangs | Tick watchdog (row 6), and the thread's job queue stops answering | **Abandon** the thread and count it; it is never joined or respawned. The bot reconnects on a fresh thread. Above the abandoned-thread limit (`max_abandoned_threads`, default 3), fleet-mc refuses new host threads (`HostUnavailable`), and the agent process exits and Docker restarts it (ADR-0008 §5, ADR-0011) |
 | 9 | Agent can't reach the server | gRPC stream error | Bots **keep running** on the last desired state. The agent reconnects with backoff, sends `Hello` with its actual state, and receives `ReconcileFull` |
 | 10 | Agent crash or OOM | Docker healthcheck / exit code | `restart: unless-stopped`. The server marks the agent stale after the heartbeat timeout and shows its bots as `Unknown` until it reconciles |
 | 11 | Server crash | Docker | Restart. SQLite WAL keeps the data durable and agents reconnect by themselves |
@@ -517,7 +517,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Conventions**
 - Each task has an ID `P<phase>.<n>`. 🔴 means *the test comes first*, strictly. Tasks without 🔴 (scaffolding, config, wiring) are verified by `just check`, CI or the task's demo, but any logic they add still gets tests.
 - A phase is finished when every task is ticked **and** its Definition of Done (DoD) holds.
-- **Branches:** one branch per task, `p<phase>/<task-id>-<slug>` (e.g. `p2/p2.6-bot-state-machine`). Phases 0 and 1 each use a single branch, `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each (see the note under Phase 2). Every branch ends in a PR that the user reviews and merges. The `Plan.md` checkbox is ticked in that same PR.
+- **Branches:** one branch per task, `p<phase>/<task-id>-<slug>` (e.g. `p2/p2.6-bot-state-machine`). Phases 0 and 1 each use a single branch, `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each (see the note under Phase 2). Phase 3 uses five group branches plus one task branch for P3.9 (see the note under Phase 3). Every branch ends in a PR that the user reviews and merges. The `Plan.md` checkbox is ticked in that same PR.
 - Phases are vertical slices:
   - **0–5** produce a working standalone bot.
   - **6–11** build the fully managed system with the app.
@@ -1067,6 +1067,23 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** A tested azalea implementation of the Minecraft ports, plus a scriptable fake for every layer above it.
 **Introduces:** `azalea`, `tokio`, `tokio-util`, `tracing`. Dev: `testcontainers`.
 
+> Note (P3):
+> - **Five group branches, plus one task branch.** At the user's request, Phase 3 is built in group PRs like Phase 2. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
+>
+>   | Group | Branch | Tasks |
+>   |---|---|---|
+>   | A | `p3/p3.1-testkit-fakes` | P3.1 |
+>   | B | `p3/p3.2-p3.5-host-pool-and-events` | P3.2, P3.5 |
+>   | C | `p3/p3.3-account-adapter` | P3.3, alone, so the Minecraft token handling gets a focused review |
+>   | D | `p3/p3.4-p3.6-connector-actions-slow-suite` | P3.4, P3.7, P3.6, in that commit order: P3.6 can only be proven live, so the slow harness comes first |
+>   | E | `p3/p3.8-teardown-and-wrap-up` | P3.8 and the phase wrap-up |
+>   | — | `p3/p3.9-hold-use` | P3.9, its own task after group E |
+> - **Decisions.** The user answered the Phase 3 plan's open questions on 2026-10-06. [ADR-0011](docs/adr/0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md) records them; the notes below summarize what changes a task.
+> - **azalea's advisories and licenses** are accepted (RUSTSEC-2023-0071, -2026-0118, -2026-0119) or excepted per crate (`minecraft_folder_path`, `socks5-impl`), with recorded reasons. The `deny.toml` entries and ADR-0012 land in group B, together with azalea.
+> - **Dependencies.** Also approved: `uuid` and `reqwest` (no features) in fleet-mc, only to name types in azalea's `AccountTrait`; `tracing-subscriber` and `rstest` as fleet-mc dev-dependencies; `tokio` in fleet-testkit. `tokio-util` comes only if a task needs it.
+> - **Lint guards.** Clippy bans `unbounded_channel`, with two approved `#[expect]`s for azalea's mandated channels (P3.4). fleet-mc's clippy config bans azalea's Microsoft login functions. A `scripts/` test checks that every crate-local `clippy.toml` carries the root's settings.
+> - **Test servers.** Only local Docker servers: itzg in offline and online mode through testcontainers, with the image pinned in `deploy/compose.dev.yaml`. No public game servers.
+
 - [ ] **P3.1** 🔴 `fleet-testkit`: `FakeConnector` and `FakeSession`. They need to support:
   - scripted connect results
   - injected events (`Joined`, `Chat`, `Died`, `Disconnected(reason)`)
@@ -1077,11 +1094,31 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   Write tests for the fake itself.
 
   > Note (P3.1, from Phase 2): Liveness stamps are `std::time::Instant`. The fake stamps them with `tokio::time::Instant::now().into_std()`, so paused time works. Both stamps are set when the session is created (ADR-0010).
+
+  > Note (P3.1, from the Phase 3 plan) (ADR-0011):
+  > - **Types.** `FakeConnector`, `FakeSession`, `FakeEvents` and a test-side `SessionController` per session.
+  > - **Liveness.** Both stamps follow tokio's clock until a test freezes one.
+  > - **Hang** freezes both stamps, and every call fails with `TimedOut`.
+  > - **The event contract** of ADR-0010 is enforced by the fake: one terminal event, then `None`; `Died` once until `respawn()`; only `Chat` is dropped, and counted.
+  > - **No panics.** It's library code, so misuse returns an error.
 - [ ] **P3.2** 🔴 `McHostPool` spawns one host thread per session (ADR-0008 §2):
   - Each thread has a current-thread runtime and a `LocalSet`, and ends when its session ends.
   - Work reaches the thread over a bounded queue.
   - A hung thread is **abandoned** and counted, never joined or respawned. Test this with an injected job that never returns.
+
+  > Note (P3.2, from the Phase 3 plan) (ADR-0011):
+  > - **Thread names.** `mc-` plus the last 12 hex characters of the `BotId`, its random part. That's 15 bytes, Linux's limit, and the leading timestamp would make truncated names collide.
+  > - **Limit.** Above `max_abandoned_threads` (default 3, Appendix A), the pool refuses new threads, so `connect()` returns `HostUnavailable`. The library never ends the process; the agent does (P5.3).
+  > - **Diagnostics.** `live_threads()` and `abandoned_threads()` are public, for P3.8 and P4.9.
+  > - **Test time.** These tests wait for a real OS thread, which tokio's paused clock would race. So they use real time with upper-bound timeouts that only fire on failure, and never a sleep. The hung job blocks on a std `sync_channel` that the test releases at the end.
 - [ ] **P3.3** Account adapter: a custom `AccountTrait` for server-issued `SessionCredentials`, and offline accounts for dev and tests.
+
+  > Note (P3.3, from the Phase 3 plan) (ADR-0011):
+  > - **Session-server errors.** `InvalidSession` and `ForbiddenOperation` give `AuthRejected`. `Banned` and `MultiplayerDisabled` give a new permanent reason. An outage, HTTP error, rate limit, unknown response or timeout gives a new transient reason. That's a small fleet-core change in this task, which amends ADR-0010.
+  > - **`refresh()`** is a no-op that returns `Ok(())`. An error would make azalea log a misleading Microsoft-flow error.
+  > - **`join()`** runs on Bevy's IO pool, not on the host thread. It's bounded by a timeout, because azalea's HTTP client has none, and it reports to the session over a bounded channel.
+  > - **The adapter doesn't check `expires_at`.**
+  > - **Log redaction.** The tests capture every level from every target, azalea included, and assert that the token never appears. A failing assertion reports only the target and a count, never the captured lines or the token.
 - [ ] **P3.4** `AzaleaConnector` implements `MinecraftConnector`:
   - azalea's auto-reconnect and auto-respawn are **disabled**
   - connect timeout
@@ -1092,23 +1129,60 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - The account's `refresh()` fails fast, because the core state machine now requests the fresh token (ADR-0010).
 
   > Note (P3.4, from group E): `ConnectParams` carries the `BotId`, so host threads can be named after their bot, which helps when one is abandoned (ADR-0010).
+
+  > Note (P3.4, from the Phase 3 plan) (ADR-0011):
+  > - **Connect timeout.** It runs from `connect()` until `Joined`: resolve, TCP, login, session join and configuration. The default is 30 s, from the new key `[runtime] connect_timeout_secs` (Appendix A). Resolving happens inside the session, so a resolve error arrives as `ConnectionFailed`.
+  > - **`refresh()`** is decided in P3.3.
+  > - **The two azalea-mandated unbounded channels** carry the approved `#[expect(clippy::disallowed_methods, …)]`.
+  > - **Diagnostics.** `live_worlds()` and `dropped_chat()` are public.
+  > - **Fault injection.** A hook behind a fleet-mc cargo feature, off by default, adds a system to a session's App for the containment test (P3.7).
 - [ ] **P3.5** 🔴 Map azalea events to `SessionEvent`, with unit tests on the pure mapping functions. Chat goes through the core sanitizer, with the sender taken only from where ADR-0008 §7 allows; kick reasons go through the core classifier input. `Tick` and server events such as `KeepAlive` only update the session's liveness timestamps (ADR-0008 §4–5).
 
   > Note (P3.5, from the group A review): **Logging chat.** Sanitized chat text keeps `\n`. Log it as a structured field (`?` or JSON), never with `%` (Display), so a server can't forge log lines.
 
   > Note (P3.5, from group E): **Event delivery.** The bounded bridge (ADR-0008 §4) may drop only `Chat` events, and it counts them. `Joined`, `Died`, `Disconnected` and `ConnectionFailed` are always delivered, at most one terminal event per session, after which `next()` returns `None` (ADR-0010).
+
+  > Note (P3.5, from the Phase 3 plan) (ADR-0011):
+  > - **Chat.** Action-bar (`overlay`) messages are dropped and counted. An unknown `ChatKind` falls back to `chat`. The text is what the vanilla client shows, without the chat-type decoration.
+  > - **Lifecycle.** `Joined` is the first `Spawn` only. A `Died` before `Joined` is held until after it.
+  > - **Liveness.** Received packets are observed through `ReceiveGamePacketEvent`, so `packet-event` stays off.
+  > - **Terminal signals.** Other sources inject them into the bridge (the account's auth result, the connect timeout, `AppExit`), and the first one wins.
 - [ ] **P3.6** 🔴 Map each `Action` to azalea calls: look, rotate, jump, sneak, swing, use item, attack facing entity (with a reach check), hotbar, respawn, chat.
 
   > Note (P3.6, from group C, the user's idea): Check whether azalea can hold right-click (use item) down continuously, the way `Sneak{on}` holds sneak. If it can, propose a `HoldUse{on}` action as an additive change to the mode model. It's a new action type, so older servers reject modes that use it (ADR-0010).
 
   > Note (P3.6, from group E, the user's decision): The adapter skips any `GameAction` with a non-finite angle and logs it, as a safety net behind mode validation. The `SessionHandle::perform` docs say so (ADR-0010).
+
+  > Note (P3.6, from the Phase 3 plan) (ADR-0011):
+  > - **Commit order.** In group D, P3.6 comes after P3.7, so its red tests run against a live server and check the effects through RCON. P3.7's "every action" scenario arrives with it.
+  > - **HoldUse.** azalea 0.16.0 only has a one-shot use. Holding would send `UseItem` and later a raw `PlayerAction{ReleaseUseItem}`, for items with a use duration. This task verifies that on the test server and records the result in ADR-0011. The mode-model change is P3.9.
 - [ ] **P3.7** 🔴 Slow integration tests (`slow_*`, testcontainers + itzg, offline mode):
   - join and see the join message
   - send chat and see it echoed back
   - perform every action without an error
   - get kicked by RCON (`docker exec … rcon-cli kick`) and receive `Disconnected` with a reason
   - reconnect
+
+  > Note (P3.7, from the Phase 3 plan) (ADR-0011):
+  > - **A few scenario tests.** Each owns one container and runs several steps. nextest can't share a container between test processes, so a nextest test group serializes them. A fast test checks that the image and `VERSION` match the pins in `deploy/compose.dev.yaml`.
+  > - **Online mode, added.** A local online-mode container: a garbage token gives `AuthRejected` within seconds, and an offline account gives `unverified_username`. Neither uses real credentials. Azalea's full login path runs under the log-redaction check (P3.3).
+  > - **Fault containment, added.** A panic injected into one session's ECS ends it as `Disconnected(SessionCrashed)`, while a second session from the same pool keeps ticking, sends chat and performs an action.
+  > - **ADR-0003's bump procedure** gains the test pin.
 - [ ] **P3.8** 🔴 Clean-up test: after the full teardown from ADR-0008 §10 (not just `disconnect()`), the thread count and the number of live Worlds go back to baseline.
+
+  > Note (P3.8, from the Phase 3 plan) (ADR-0011):
+  > - **Baseline.** Taken after a warm-up join (P1.9).
+  > - **Every platform.** `live_threads()` and `live_worlds()` must return to it.
+  > - **Linux only.** The OS thread count from `/proc/self/status` must as well; Windows has no portable count without `unsafe` or a new crate.
+  > - **Group E also adds:**
+  >   - **The user's real-account check.** A `manual_` test in its own nextest profile, run by a `just` recipe. It reads `secrets/p1.8-account.txt`, which the user creates with the archived spike's `fetch-token`, and the AI never reads it. No error message ever includes the file's contents.
+  >   - **A `slow-tests` CI workflow.** Weekly and on demand; not a required check.
+  >   - **The threat model's B4 section.**
+- [ ] **P3.9** 🔴 `HoldUse{on}`: hold the use button down, the way `Sneak{on}` holds sneak (the user's idea, from P3.6). It's its own branch and PR, right after group E.
+  - fleet-core: an additive `Action::HoldUse{on}` and `GameAction` variant, with validation and the mode snapshots updated. It's a new tag, so older servers reject modes that use it (ADR-0010).
+  - fleet-mc: the mapping that P3.6 verified, with a live test.
+
+  If P3.6 finds it isn't feasible, this task is closed with a note instead.
 
 **Security:**
 - Credentials are never logged.
@@ -1189,6 +1263,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P4.7, from Phase 2):
   > - **Restart limit.** "5 restarts in 10 min" uses the core `FailureWindow` and ends with the core `CrashLoop` event (ADR-0010).
   > - **Open question, flagged and not yet decided.** `Paused` (a human is playing) and `Failed` must survive an actor or agent restart. Otherwise a fresh `Start` kicks the human (§6 row 3).
+
+  > Note (P4.7, from Phase 3): The abandoned-thread limit lives in fleet-mc: above it, `connect()` returns `HostUnavailable`. Ending the agent process at the limit is P5.3's job (ADR-0011).
 - [ ] **P4.8** 🔴 **Chaos property test.** Random sequences of these events, run with paused time:
   - transient and permanent kicks
   - connection failures
@@ -1202,6 +1278,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - Connect attempts stay inside the policy bounds (no reconnect storms).
   - The `Fleet` API always responds.
 - [ ] **P4.9** Metrics: bots per state, reconnects, watchdog trips, actor restarts.
+
+  > Note (P4.9, from Phase 3): Also export fleet-mc's diagnostics: live and abandoned host threads, live Worlds, and dropped chat (ADR-0011).
 
 **Security:**
 - Every channel is bounded.
@@ -1226,8 +1304,12 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - standalone mode only allows **offline** accounts
 
   > Note (P5.1, from group C): `mode = "afk"` and `mode = "farm"` in `[[standalone.bots]]` map to `ModeDefinition::afk()` and `ModeDefinition::farm()`. Core has no lookup by name; this task adds it (ADR-0010).
+
+  > Note (P5.1, from Phase 3): `[runtime]` gains `connect_timeout_secs` (default 30), which goes into `ConnectParams`, and `max_abandoned_threads` (default 3), which goes to `McHostPool` (Appendix A, ADR-0011).
 - [ ] **P5.2** Telemetry: pretty logs in dev and JSON in prod, an env filter, and a panic hook that logs through `tracing`.
 - [ ] **P5.3** Wiring: `McHostPool` + `AzaleaConnector` + `Fleet`, with the standalone spec source.
+
+  > Note (P5.3, from Phase 3): When `McHostPool::abandoned_threads()` reaches `max_abandoned_threads`, the agent shuts down and exits with an error, so Docker restarts it (§6 row 8). The library never ends the process itself (ADR-0011).
 - [ ] **P5.4** 🔴 Signals (Ctrl+C, SIGTERM) trigger a graceful shutdown within `shutdown_timeout`.
 - [ ] **P5.5** 🔴 A `healthcheck` subcommand. The agent touches a heartbeat file every 10 s, and the check fails when the file is stale. This works in distroless images, which have no curl.
 - [ ] **P5.6** `deploy/docker/agent.Dockerfile`:
@@ -1831,6 +1913,8 @@ name = "agent-1"
 max_bots = 50
 watchdog_timeout_secs = 30
 packet_liveness_timeout_secs = 30
+connect_timeout_secs = 30                # from connect() until the bot has joined (ADR-0011)
+max_abandoned_threads = 3                # hung host threads before the agent exits (ADR-0011)
 shutdown_timeout_secs = 10
 heartbeat_file = "/tmp/afkfleet-agent.alive"
 

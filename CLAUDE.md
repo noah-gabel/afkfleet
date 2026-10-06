@@ -26,7 +26,7 @@ Where things are:
 2. **Pick the task.** Take the next unchecked task, or the one the user names (e.g. "do P4.3"). Before coding, restate its goal and acceptance criteria in 2–4 lines.
 3. **Branch.**
    - Start from an up-to-date `main`: `git switch main`, then `git pull`.
-   - Create the task branch `p<phase>/<task-id>-<slug>`, e.g. `p2/p2.6-bot-state-machine`. Phases 0 and 1 each use one branch for the whole phase: `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each, with one commit per task (Plan.md, the note under Phase 2).
+   - Create the task branch `p<phase>/<task-id>-<slug>`, e.g. `p2/p2.6-bot-state-machine`. Phases 0 and 1 each use one branch for the whole phase: `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each, with one commit per task (Plan.md, the note under Phase 2). Phase 3 does the same with five group branches, plus one task branch for P3.9 (Plan.md, the note under Phase 3).
    - One task, or one Phase 2 group, per branch. If the previous PR isn't merged yet, stop and tell the user instead of stacking branches.
 4. **TDD.**
    1. Write the tests first.
@@ -89,6 +89,8 @@ Recipes for tools that arrive in later phases (`gen`, `db-prepare`, `dev-*`, `ui
 **Crates and dependencies** (full table in Plan.md §4):
 - `fleet-core` is pure: no IO, no tokio, no azalea. It contains domain types, the bot state machine, policies, `authorize()` and the Minecraft port traits.
 - **Only `fleet-mc` may depend on `azalea`; only `fleet-server` may depend on `azalea-auth`.**
+  - `fleet-mc` may use only `azalea::auth::sessionserver` and `azalea::auth::certs`, through azalea's re-export, to join with a server-issued Minecraft token.
+  - The Microsoft flows (device code, Microsoft tokens, the account cache) belong to `fleet-server` alone. `fleet-mc`'s `clippy.toml` bans them (ADR-0011).
 - azalea code runs only on the MC host threads in `fleet-mc` (current-thread runtime + `LocalSet`). Never call azalea from a normal tokio task.
 
 **Bot lifecycle:**
@@ -243,7 +245,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 ## Async & concurrency rules
 - **Never block the runtime.** CPU-heavy work (argon2, crypto on large data) goes to `spawn_blocking`. No `std::thread::sleep`, and no blocking file IO in async code.
 - **Every network or IO await has a timeout** (`tokio::time::timeout`), or a comment explaining why it doesn't need one.
-- **Channels are always bounded.** No `unbounded_channel`.
+- **Channels are always bounded.** No `unbounded_channel`: clippy's `disallowed-methods` bans it. The only exceptions are the two channels azalea's API forces on `fleet-mc`, each marked with an approved `#[expect]` (ADR-0011).
 - **Never hold a `std::sync::Mutex` guard across `.await`.** Prefer message passing to shared locks.
 - **Every spawned task has an owner** (`JoinSet` / `TaskTracker`) and a child `CancellationToken`. No fire-and-forget `tokio::spawn`.
 - **`tokio::select!` branches must be cancel-safe**, or have a comment explaining why it's fine.
