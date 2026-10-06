@@ -4,7 +4,6 @@
 //! state machine, retry and circuit-breaker policies, mode scheduling,
 //! `authorize()` and the Minecraft port traits. It does no IO and depends on
 //! neither tokio nor azalea, so every rule here can be tested deterministically.
-//! Time and randomness are always passed in (ADR-0010).
 //!
 //! # Modules
 //! - [`id`]: typed IDs for users, accounts, bots, agents and modes.
@@ -14,8 +13,42 @@
 //! - [`resilience`]: retry backoff, failure windows and the circuit breaker.
 //! - [`bot`]: the bot state machine.
 //! - [`mode`]: what a bot does while it's online, and the presets.
+//! - [`mc`]: the Minecraft ports the runtime drives a session through.
 //! - [`authz`]: who may do what, decided by [`authz::authorize`].
 //! - [`time`]: saturating arithmetic on points in time and durations.
+//!
+//! # How it fits together
+//! A bot's actor (in fleet-runtime) feeds every command and session event to
+//! [`bot::transition`], which returns the next state and the [`bot::Effect`]s
+//! to execute. The actor runs them through the [`mc`] ports:
+//! [`mc::MinecraftConnector`] starts a session, and [`mc::SessionHandle`]
+//! acts in it. [`disconnect::DisconnectReason::classify`] decides what an
+//! ended session means, and the [`resilience`] policies decide how long to
+//! wait before the next attempt. While the bot is online, a
+//! [`mode::ModePlan`] decides what it does and when, as
+//! [`mode::GameAction`]s for the session and chat for the chat queue. On the
+//! server, [`authz::authorize`] decides every request.
+//!
+//! # Conventions
+//! These hold for the whole crate (ADR-0010):
+//! - **Time is passed in.** Functions take `now: DateTime<Utc>`, and core never
+//!   reads a clock. Only the session's liveness stamps are monotonic
+//!   `Instant`s, written by the adapter.
+//! - **Randomness is passed in** as `&mut impl Rng`, and core types never
+//!   store a random number generator. IDs take 10 random bytes from the
+//!   caller instead.
+//! - **Errors.** Each module that can fail has its own error enum. Its
+//!   variants carry context, such as an index, a length or a limit, and never
+//!   the untrusted input, so an error message can't carry it into a log.
+//!   [`bot::transition`], [`disconnect::DisconnectReason::classify`] and the
+//!   chat sanitizer are total and return no errors.
+//! - **Stored formats.** Value objects and modes deserialize through their
+//!   validating constructors. Changes to stored JSON are additive only, and a
+//!   new action or schedule type fails to load on an older server instead of
+//!   running in part. Runtime types such as [`bot::BotState`],
+//!   [`disconnect::DisconnectReason`] and [`mc::SessionCredentials`] have no
+//!   serde: their wire formats come with the proto and DTO conversions.
+//! - **Secrets** are `SecretString`s, whose `Debug` output is redacted.
 
 pub mod authz;
 pub mod bot;

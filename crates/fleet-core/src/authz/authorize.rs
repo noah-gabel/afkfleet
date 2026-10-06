@@ -21,7 +21,7 @@ pub enum AuthzError {
     #[error("forbidden")]
     Forbidden,
     /// The permission doesn't apply to this kind of resource: a bug in the
-    /// caller. It's denied like everything else.
+    /// caller. It's denied like everything else, and the API answers 500.
     #[error("the permission doesn't apply to this kind of resource")]
     WrongResource,
 }

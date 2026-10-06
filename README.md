@@ -16,7 +16,7 @@ afkfleet is **a hobby project** I'm building for my friends with Claude Code. I 
 There's no support, and I don't take feature requests. Security reports are welcome, though: see [SECURITY.md](SECURITY.md).
 
 ## Status
-**Phase 1 (azalea spike) is complete.** It's under review in its pull request. The product itself isn't runnable yet. What exists:
+**Phase 2 (domain core) is complete.** Its last pull request is under review. The product itself isn't runnable yet. What exists:
 - **From Phase 0:**
   - the Cargo workspace with all lints and the pinned toolchain
   - the quality gates: formatting, clippy, docs, tests, coverage gates, cargo-deny, Biome
@@ -25,8 +25,19 @@ There's no support, and I don't take feature requests. Security reports are welc
   - a local Minecraft test server (`just mc-up`)
   - [ADR-0008](docs/adr/0008-azalea-integration.md), which records how afkfleet uses azalea: one isolated azalea App and thread per bot, the failure catalogue, the watchdog design, and workarounds for azalea bugs
   - the spike that produced the evidence, archived in [`spikes/azalea/`](spikes/azalea/)
+- **From Phase 2:** [`crates/fleet-core`](crates/fleet-core/), the pure domain core. It has no IO and no tokio, and it's tested with seeded randomness and fixed times. It contains:
+  - typed IDs, plus validated server addresses, names and chat messages
+  - the sanitizer for chat received from servers
+  - the disconnect classifier: retry, give up, or pause because a human logged in
+  - retry backoff and the circuit breaker
+  - the bot state machine
+  - modes, the `afk` and `farm` presets, and their scheduler
+  - authorization: roles, account grants and the command allowlist
+  - the Minecraft ports that the azalea adapter will implement
 
-**Next:** Phase 2, the pure domain core (`fleet-core`).
+  [ADR-0010](docs/adr/0010-fleet-core-conventions-and-phase-2-refinements.md) records its conventions and every decision made along the way.
+
+**Next:** Phase 3, the azalea adapter (`fleet-mc`) and the test kit (`fleet-testkit`).
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 

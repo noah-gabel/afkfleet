@@ -12,7 +12,8 @@ use crate::time;
 /// A game action resolved for the session to perform: random choices are
 /// made, and chat is split off into [`PlannedAction::Chat`].
 ///
-/// P2.10's `SessionHandle::perform` takes it (ADR-0010).
+/// [`SessionHandle::perform`](crate::mc::SessionHandle::perform) takes it
+/// (ADR-0010).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum GameAction {
     /// Look in a fixed direction, in degrees.
@@ -54,7 +55,8 @@ pub enum GameAction {
 /// for the bot's outbound chat queue (P4.5).
 #[derive(Debug, Clone, PartialEq)]
 pub enum PlannedAction {
-    /// Perform this on the session.
+    /// Perform this with
+    /// [`SessionHandle::perform`](crate::mc::SessionHandle::perform).
     Game(GameAction),
     /// Send this through the chat queue.
     Chat(ChatMessage),

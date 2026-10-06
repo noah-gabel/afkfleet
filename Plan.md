@@ -1036,9 +1036,20 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **`disconnect()`** returns `()`: the teardown always finishes, and calling it again is harmless. `liveness()` is synchronous.
   > - **`Liveness`** has public fields and no constructor. std can't make an `Instant` without `Instant::now()`, which `fleet-core`'s clippy config bans, so core can't test one; the fakes (P3.1) build them.
   > - **TDD.** Only the redaction test has a meaningful red phase: a stub `Debug` that printed the token failed it. The rest of the task is declarations.
-- [ ] **P2.11** A `thiserror` error enum per module, and crate- and module-level docs.
+- [x] **P2.11** A `thiserror` error enum per module, and crate- and module-level docs.
 
   > Note (P2.11): Error enums are built in each task, because each task tests its error paths first. P2.11 audits them and writes the crate docs (ADR-0010).
+
+  > Note (P2.11, built in group E): **Audit result.**
+  > - **Errors.** 15 enums, one per fallible module: the 13 from groups A–D plus `ConnectError` and `SessionError`. Each is `Copy`, its fields are positions, lengths, limits or the crate's own enums, and foreign errors are dropped instead of wrapped, so no message can echo input. Every variant has a test that asserts it, and every public fallible function has an `# Errors` section.
+  > - **Fixes.**
+  >   - A test pins the one composed message, `CommandAllowlistError::Invalid`.
+  >   - The `GameAction` docs link to `SessionHandle::perform`.
+  >   - The allowlist error's `index` fields say they're positions.
+  >   - The `authz` docs list `WrongResource` (500).
+  >   - One sentence in the `id` docs is fixed.
+  > - **Crate docs.** The module list now includes `mc`, plus a "How it fits together" section and the conventions from ADR-0010.
+  > - **Flagged:** serde_json's own errors quote their input (see P11.4).
 
 **Security:**
 - Every constructor rejects oversized input and control characters.
@@ -1589,6 +1600,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P11.4** 🔴 Modes CRUD: `GET`, `POST`, `PUT`, `DELETE` on `/modes`. Core validation errors become field errors. Built-in modes are read-only.
 
   > Note (P11.4, from Phase 2): Editing a mode that's assigned to bots must re-run the command check for every one of them. A mode with a command outside the allowlist needs Manage on each bot (ADR-0010).
+
+  > Note (P11.4, from group E): open question, flagged and not yet decided. `fleet-core`'s own errors never quote their input, but serde_json's do: an unknown action type or a bad field value in mode JSON comes back as e.g. ``unknown variant `…` `` or `invalid type: string "…"`, which can hold chat text. The existing rules already say: internal errors never reach clients, and chat is logged only at debug. How the server maps and logs these errors is decided here (ADR-0010).
 
   > Note (P11.4, from group C): `ModeDraft::validate` stops at the first error. Each `ModeError` becomes a field error at `steps[step]`: `AngleOutOfRange` names its field, and `DuplicateStep` its `LimitedStep` kind (ADR-0010).
 

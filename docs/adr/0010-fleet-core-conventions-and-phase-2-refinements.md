@@ -307,6 +307,7 @@ Points marked *(group E)* were settled while building P2.10. On 2026-10-06 the u
   - **P4.7/P10:** `Paused` and `Failed` must survive an actor or agent restart, so a fresh `Start` doesn't kick a human (§6 row 3).
   - **P9.6/P9.8** *(group D)*: how a Member picks a grantee. Members can't list users, and looking users up by name must not let them enumerate usernames.
   - **P7.13** *(group D)*: the audit log is Admin+, so Admins see the Owner's and other Admins' activity, including their IP addresses and the chat their bots sent.
+  - **P11.4** *(group E)*: `fleet-core`'s error enums never carry input, but serde_json's own errors quote it (``unknown variant `…` ``, `invalid type: string "…"`), so a malformed mode can put chat text into an error message. The server decides how it maps and logs them.
 - **Costs:**
   - The test build compiles rand 0.9 (proptest) next to 0.10; cargo-deny only warns.
   - A clippy config lives in `crates/fleet-core/` and repeats the root file's test allowances.
