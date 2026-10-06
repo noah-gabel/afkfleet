@@ -214,7 +214,7 @@ The server (vanilla 26.1, view distance 4) used ~18 % of one core on average dur
 
 So fleet-mc must take auth failures from the account hook (`join()` errors), immediately call `exit()` and report `AuthInvalid`, instead of waiting ~30 s for an unhelpful disconnect.
 
-**Real-account test: the user's optional step.** The steps are in README.md. Its result goes into the PR conversation, not into this file.
+**Real-account test: the user's optional step.** The steps are in README.md. The user ran it on 2026-10-06 against `compose.online.yaml`. The bot spawned, its chat message was accepted with `enforce-secure-profile` on, and `exit()` disconnected it cleanly. So `join()`, cert storage and chat signing work with a real token. Only the outcome is recorded here, no account data.
 
 ## P1.9 Clean disconnect, no leaks (Linux container)
 `linux.sh leak <teardown> <cycles> 25`, with the chosen model: every cycle joins 25 bots, each with its own App and its **own freshly spawned host thread**. Each cycle: 10 s online, teardown, drop every handle, close the host threads, settle 15 s, sample. A `Weak` reference to every bot's World shows directly whether it was freed. The pass criterion (approved): RSS plateaus across the cycles, and threads, fds and tasks return to the post-warm-up baseline.

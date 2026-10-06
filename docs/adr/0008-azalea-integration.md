@@ -184,7 +184,7 @@ impl AccountTrait for ExternalTokenAccount {
 }
 ```
 
-The garbage-token and offline cases were verified against a local online-mode server (`spikes/azalea/compose.online.yaml`). A real-account join is the user's optional step (spike README); it isn't needed for this decision.
+The garbage-token and offline cases were verified against a local online-mode server (`spikes/azalea/compose.online.yaml`). The user also ran the optional real-account join against that server on 2026-10-06 (spike README). The bot spawned, its chat message was accepted while the server enforced secure profiles, and `exit()` disconnected it cleanly. So `join()`, certificate storage and chat signing work with a real token.
 
 ### 10. Teardown and leaks
 **A session ends in this order:**
@@ -213,7 +213,7 @@ Closing the thread drops its `LocalSet`, which drops azalea's runner task and wi
 | Actions, swing API, reach check (P1.5) | **Answered**: §8; `attack()` needs the workaround |
 | What does a panic do to the client, its events, and other clients? (P1.6) | **Answered**: §3, §5 (hangs added) |
 | Per-bot App vs Swarm shards (P1.7) | **Answered**: §2 |
-| Custom `AccountTrait` with external token and cert storage (P1.8) | **Answered**, compile-checked and verified with a garbage token (§9). **Deferred:** a real-account join with signed chat. That's the user's optional step; it isn't needed for this decision. |
+| Custom `AccountTrait` with external token and cert storage (P1.8) | **Answered**: compile-checked, verified with a garbage token, and verified by the user with a real account and signed chat on 2026-10-06 (§9) |
 | Clean disconnect, no leaks (P1.9) | **Answered**: §10 |
 | CPU without the `packet-event` feature | **Deferred to P3**: measured with it, so the numbers are an upper bound |
 | How many abandoned (hung) host threads before restarting the process | **Deferred to P4.6/P4.7**: a policy value, not an azalea question |
