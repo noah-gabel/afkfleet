@@ -182,6 +182,7 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
   - **P4.1:** `BotSpec` sits in fleet-runtime, but fleet-proto and fleet-server need it too.
   - **P3.4/P5:** the connect timeout has no config key.
   - **P4.7/P10:** `Paused` and `Failed` must survive an actor or agent restart, so a fresh `Start` doesn't kick a human (§6 row 3).
+  - **P2.6/P4:** a duplicate login reported as plain text, with no translation key, classifies as transient (ADR-0008 §6). A proxy or plugin may kick the bot that way when a human logs in; BungeeCord/Waterfall in online mode probably does. The bot then reconnects and kicks the human, and the circuit breaker only limits how often. The options include documenting proxies as unsupported for conflict detection, a cautious path for keyless kicks while Online, and a per-server list of conflict texts. (Found in the group A review.)
 - **Costs:**
   - The test build compiles rand 0.9 (proptest) next to 0.10; cargo-deny only warns.
   - A clippy config lives in `crates/fleet-core/` and repeats the root file's test allowances.

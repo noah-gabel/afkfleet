@@ -881,6 +881,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P2.4): The input also covers these reasons (ADR-0010):
   > - `AuthRejected`, classified as `AuthInvalid`
   > - `SessionCrashed`, `WatchdogTimeout`, `LivenessTimeout` and `ConnectFailed` (including `HostUnavailable`), all transient
+  >
+  > **Known limit.** A duplicate login that a proxy or plugin reports as plain text has no key, so it classifies as transient. See the open question under P2.6.
 - [x] **P2.5** 🔴 Resilience policies:
   - `RetryPolicy` wraps `backon`'s exponential builder: base, factor, cap, jitter, and a reset after a stable period. Tests assert **bounds**, not exact values.
   - `CircuitBreaker` (closed, open, half-open) is pure, with time passed in.
@@ -904,6 +906,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Auth.** The state machine owns "request one fresh token, then `Failed(Auth)`".
   > - **Stop.** Without a session, `Stop` goes straight to `Stopped`. The first invariant reads "Stop, then SessionClosed, ends in Stopped".
   > - **Unfitting events** are no-ops.
+  > - **Open question, flagged and not yet decided.** A plain-text duplicate-login kick (no translation key) is transient, so behind a proxy that kicks that way the bot would reconnect and kick the human. Decide how the state machine or P4 handles it (ADR-0010, "Flagged, not decided").
 - [ ] **P2.7** 🔴 The mode model:
   - `Action` enum: `Look{yaw,pitch}`, `RotateRandom{max_yaw,max_pitch}`, `Jump`, `Sneak{on}`, `SwingArm`, `UseItem`, `AttackFacingEntity`, `SelectHotbarSlot(0..=8)`, `SendChat(ChatMessage)`.
   - `Schedule`: `AtStart` or `Every{interval, jitter}`, plus a `probability`.

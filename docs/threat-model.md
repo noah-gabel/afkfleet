@@ -88,5 +88,6 @@ To be written per boundary (STRIDE: spoofing, tampering, repudiation, informatio
 ## Accepted risks and known limits
 - **Session tokens outlive server outages.** A Minecraft session token lives about 24 h. If the server is unreachable for longer, a bot that disconnects can't rejoin until it's back (Plan.md §6).
 - **Users with Manage act as the player.** That's the purpose of the permission: an insider with Manage on an account can run any command as that player. The audit log records it.
+- **Plain-text duplicate-login kicks aren't recognized.** The classifier only knows the vanilla key `multiplayer.disconnect.duplicate_login`. A proxy or plugin that kicks the bot with plain text when a human logs in makes the bot reconnect and kick the human; the circuit breaker only limits how often. Open question for P2.6/P4 (ADR-0010).
 - **azalea faults share a host thread.** A panic inside azalea can affect every bot on the same MC host thread. P1.6/P1.7 measure the blast radius (ADR-0004).
 - **azalea 0.16.0 dependencies with open advisories.** `hickory-proto` 0.25.2 (RUSTSEC-2026-0118/0119) and `rsa` (RUSTSEC-2023-0071). They must be resolved or explicitly accepted before P3 (ADR-0003).
