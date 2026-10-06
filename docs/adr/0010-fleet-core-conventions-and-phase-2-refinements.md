@@ -192,12 +192,62 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
   - A tick before the next due time, including one with the clock gone backwards, runs nothing *(group C)*.
 - **Mode JSON** uses struct variants (`{"type":"select_hotbar_slot","slot":3}`) instead of Plan.md's tuple notation. A mode is `{"steps":[{"action":{…},"schedule":{"type":"every","interval_ms":…,"jitter_ms":…},"probability":…}]}`; every field is required *(group C)*.
 
-**Authorization (P2.9).**
+**Authorization (P2.9).** Points marked *(group D)* were settled while building P2.9. On 2026-10-06 the user decided the mode rules, grants, roles, the allowlist format, invites, self-service routes and agent enrollment.
 - **Admins:** an Admin's implicit Manage covers accounts owned by Members, plus the Admin's own. Accounts of the Owner and of other Admins need an explicit grant (§7.1 over §7.3).
 - **Commands in modes:**
   - `CommandAllowlist` is a core type, because `authorize` is pure.
   - Changing a bot's mode needs Manage when the mode contains a command outside the allowlist; otherwise a mode could get around "any `/command` needs Manage".
   - P11 must re-run that check for every bot when a mode is edited.
+- **API** *(group D)*: `authorize(&Actor, Permission, &ResourceContext) -> Result<(), AuthzError>`.
+  - **`ResourceContext`** is one of:
+    - `Global`
+    - `Account{owner, grant}`: `grant` is the actor's own grant, and a bot is authorized through its account
+    - `Mode{owner, visibility}`
+    - `User(UserRef)`
+    - `Invite{role}`
+    - `Personal{owner}`
+
+    The caller loads these facts, including the owner's current role.
+  - **`AuthzError`** is one of:
+    - `NotFound`: the actor can't even see the resource, so the API answers 404
+    - `Forbidden`: 403
+    - `WrongResource`: a permission checked against the wrong kind of resource, which is a caller bug
+  - **Structure.** Each kind of context has its own function, and it matches every `Permission` without a wildcard, so a new permission needs a decision for each. The order is always: does the permission apply, may the actor see the resource, may they do this.
+  - **`Permission`** is `Copy`. `SendChat` and `SetBotMode` carry a `CommandCheck`. Only `CommandAllowlist::check` and `check_mode` create one, so a caller can't claim "allowlisted" without an allowlist, and no chat text reaches `Debug` output.
+  - **Names.** `Role`, `GrantLevel` and `ModeVisibility` map to `users.role`, `account_grants.level` and `modes.visibility` through `as_str` and `FromStr`.
+- **Accounts** *(group D)*:
+  - The effective level is the higher of the explicit grant and the implicit Manage: the owner (decided by ID), the Owner, or an Admin on a Member's account.
+  - Only Manage edits grants, so "nobody grants above their own level" always holds; a test pins it.
+  - Nobody grants to themselves. Otherwise an Admin could turn implicit Manage into a grant that outlives the Member's promotion to Admin.
+  - The server address and auto-start need Manage, because Appendix B's `PATCH /bots/{id}` needs Manage except for the mode.
+- **Allowlist** *(group D)*:
+  - Entries are written the way they're typed in chat (`"/spawn"`). Each must be a valid `ChatMessage`: `/` plus a non-empty command name without arguments. At most 64 entries; a missing key means an empty list.
+  - Errors carry the entry's index, never its text.
+  - An allowlisted command passes with any arguments.
+- **Modes** *(group D)*:
+  - Built-in modes are read-only for everyone, the Owner included.
+  - Private modes follow the account rule: their owner, the Owner, and Admins for Members' modes. Everyone else gets 404.
+  - Shared modes are visible to everyone, and edited by their creator and the Owner. Shared modes need Admin+ (Appendix B), so a creator demoted to Member can no longer edit theirs.
+  - Changing a mode needs the rights both before and after a visibility change, so an Admin can't share a Member's private mode.
+- **Users and invites** *(group D)*:
+  - Only the Owner changes roles, between Member and Admin. Admins disable and enable Members. Nobody acts on themselves or on an Owner, and nobody becomes the Owner this way.
+  - Ownership transfer waits for a route.
+  - Admins list all invites. Creating and revoking an invite follow the same rule: Member invites need Admin+, Admin invites the Owner, and Owner invites are never allowed.
+  - Members get 404 on other users and on invites.
+- **Agents** *(group D)*: only the Owner enrolls agents; viewing and disabling them stays Admin+. This deviates from §7.3. An agent receives session tokens for the bots assigned to it, and P10.5 assigns bots to any agent with free capacity, so an Admin's own agent could otherwise get the Owner's tokens.
+- **Personal resources** *(group D)*: profile, sessions, 2FA, link flows and event tickets belong to one user. Everyone else gets 404, the Owner included. So every authed handler calls `authorize()`, the self-service routes too.
+- **The Owner's limits** *(group D)*: §7.3's "can do everything" leaves out:
+  - editing built-in modes
+  - changing their own role or disabling themselves
+  - acting on another Owner
+  - Owner invites
+  - granting to themselves
+  - other users' personal resources
+- **Not in `authorize`** *(group D)*: step-up (§7.2) is an authentication check in P7, and the account quota belongs to P9.4.
+- **Matrix** *(group D)*:
+  - The snapshot `authorization_matrix` has one table per kind of resource. Accounts are shown by actor, owner and grant; everything else by actor and target. The cells are `ok`, `403` or `404`.
+  - An exhaustive match in the test makes a new permission fail until the matrix lists it.
+  - A separate test checks every permission against every other kind of resource.
 
 **Minecraft ports (P2.10).**
 - `connect` returns a `Result`, for immediate failures such as the abandoned-thread limit. Network failures still arrive as `ConnectionFailed` events.
@@ -216,6 +266,15 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
   - **P4.2** executes the breaker effects and follows the group B actor contracts. A spec change to a Paused or Failed bot takes effect at Resume or Reset.
   - **P11** re-checks mode commands on edit. For Paused or Failed bots the app shows Resume or Reset instead of Start and Stop, because the state machine ignores Start and Stop there.
   - **P2.10** takes `mode::GameAction` in `perform`. **P5.1** maps the config's mode names to the presets, **P11.1** seeds the built-in mode rows with fixed IDs, and **P11.4** turns each `ModeError` into a field error at `steps[step]` *(group C)*.
+  - **From group D** (each has a note in Plan.md):
+    - **P7.1** adds a single-Owner index.
+    - **P7.8** maps `AuthzError` to 404, 403 or 500, and checks the self-service routes through `Personal`.
+    - **P7.9** has the Owner change roles and Admins disable Members.
+    - **P9.4 and P9.6** check link flows through `Personal` and grants with their grantee.
+    - **P10.3** has only the Owner enroll agents.
+    - **P11.2** checks `ViewMode` and `SetBotMode` when a bot switches modes.
+    - **P11.4** follows the mode rules.
+    - **P11.9** shows the grants on a promoted Member's accounts.
 - **Decided in group B: plain-text duplicate login** (flagged in the group A review).
   - **The problem:** a duplicate login reported as plain text, with no translation key, classifies as transient (ADR-0008 §6). A proxy or plugin may kick the bot that way when a human logs in; BungeeCord/Waterfall in online mode probably does. The bot then reconnects and kicks the human, and the circuit breaker only limits how often.
   - **The decision:** no state-machine change. A bot's spec gets an optional list of kick texts that count as a duplicate login, empty by default (P4.1). The classifier compares the sanitized kick message exactly against that list, so vanilla servers still go by key.
@@ -223,6 +282,8 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
   - **P4.1:** `BotSpec` sits in fleet-runtime, but fleet-proto and fleet-server need it too.
   - **P3.4/P5:** the connect timeout has no config key.
   - **P4.7/P10:** `Paused` and `Failed` must survive an actor or agent restart, so a fresh `Start` doesn't kick a human (§6 row 3).
+  - **P9.6/P9.8** *(group D)*: how a Member picks a grantee. Members can't list users, and looking users up by name must not let them enumerate usernames.
+  - **P7.13** *(group D)*: the audit log is Admin+, so Admins see the Owner's and other Admins' activity, including their IP addresses and the chat their bots sent.
 - **Costs:**
   - The test build compiles rand 0.9 (proptest) next to 0.10; cargo-deny only warns.
   - A clippy config lives in `crates/fleet-core/` and repeats the root file's test allowances.
@@ -243,3 +304,9 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
 - **All errors at once** (group C). P11.4 could show every field error together, but it's more API and test surface, and the app's schema catches most mistakes before they reach the server.
 - **Rescheduling from the old due time** (group C). It keeps a steadier rhythm, but after a late tick the next run could come sooner than the interval, so the chat and attack limits wouldn't hold.
 - **A preset enum with names and fixed IDs** (group C). The names would become a config format, and the IDs would need an unchecked constructor in `id`, before anything uses them.
+- **`Permission<'a>` with references to the message and the allowlist** (group D). `authorize` would run the check itself. But `Permission` would carry a lifetime, and its `Debug` output would contain chat text. Either way, the caller has to send the message it checked.
+- **Any Admin edits any shared mode** (group D). That's simpler, but an Admin could change another Admin's or the Owner's modes. The user chose creator and Owner.
+- **Re-sharing below Manage** (group D). "Never above your own level" would then matter: Control holders could share up to Control. That's more surface, and it contradicts §7.3's "edit grants: Manage".
+- **Admins enroll agents, as §7.3 says** (group D). An Admin's agent could receive the Owner's session tokens unless P10 restricted the scheduler. Owner-only enrollment closes that with one rule.
+- **Self-service routes exempt from `authorize()`** (group D). One permission less, but it breaks "every authed handler calls `authorize()`", and each handler would scope its own queries.
+- **A `TransferOwnership` permission now** (group D). It has no route or task yet. It comes with one.

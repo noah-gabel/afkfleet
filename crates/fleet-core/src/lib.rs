@@ -14,8 +14,10 @@
 //! - [`resilience`]: retry backoff, failure windows and the circuit breaker.
 //! - [`bot`]: the bot state machine.
 //! - [`mode`]: what a bot does while it's online, and the presets.
+//! - [`authz`]: who may do what, decided by [`authz::authorize`].
 //! - [`time`]: saturating arithmetic on points in time and durations.
 
+pub mod authz;
 pub mod bot;
 pub mod chat;
 pub mod disconnect;

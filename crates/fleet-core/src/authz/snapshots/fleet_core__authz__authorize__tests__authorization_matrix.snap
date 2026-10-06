@@ -1,0 +1,288 @@
+---
+source: crates/fleet-core/src/authz/authorize.rs
+expression: matrix()
+---
+# Authorization matrix
+Generated from `authorize` by its tests. ok = allowed, 403 = Forbidden, 404 = NotFound.
+
+## Accounts and bots
+Rows: the actor's role, and whose account it is. Columns: the grant the actor holds on it.
+
+### ViewBot
+actor   owner           no grant  view  control  manage
+Owner   self            ok        ok    ok       ok
+Owner   a Member        ok        ok    ok       ok
+Owner   an Admin        ok        ok    ok       ok
+Admin   self            ok        ok    ok       ok
+Admin   a Member        ok        ok    ok       ok
+Admin   another Admin   404       ok    ok       ok
+Admin   the Owner       404       ok    ok       ok
+Member  self            ok        ok    ok       ok
+Member  another Member  404       ok    ok       ok
+Member  an Admin        404       ok    ok       ok
+Member  the Owner       404       ok    ok       ok
+
+### ControlBot
+actor   owner           no grant  view  control  manage
+Owner   self            ok        ok    ok       ok
+Owner   a Member        ok        ok    ok       ok
+Owner   an Admin        ok        ok    ok       ok
+Admin   self            ok        ok    ok       ok
+Admin   a Member        ok        ok    ok       ok
+Admin   another Admin   404       403   ok       ok
+Admin   the Owner       404       403   ok       ok
+Member  self            ok        ok    ok       ok
+Member  another Member  404       403   ok       ok
+Member  an Admin        404       403   ok       ok
+Member  the Owner       404       403   ok       ok
+
+### SendChat: plain chat or an allowlisted command
+actor   owner           no grant  view  control  manage
+Owner   self            ok        ok    ok       ok
+Owner   a Member        ok        ok    ok       ok
+Owner   an Admin        ok        ok    ok       ok
+Admin   self            ok        ok    ok       ok
+Admin   a Member        ok        ok    ok       ok
+Admin   another Admin   404       403   ok       ok
+Admin   the Owner       404       403   ok       ok
+Member  self            ok        ok    ok       ok
+Member  another Member  404       403   ok       ok
+Member  an Admin        404       403   ok       ok
+Member  the Owner       404       403   ok       ok
+
+### SendChat: a command off the allowlist
+actor   owner           no grant  view  control  manage
+Owner   self            ok        ok    ok       ok
+Owner   a Member        ok        ok    ok       ok
+Owner   an Admin        ok        ok    ok       ok
+Admin   self            ok        ok    ok       ok
+Admin   a Member        ok        ok    ok       ok
+Admin   another Admin   404       403   403      ok
+Admin   the Owner       404       403   403      ok
+Member  self            ok        ok    ok       ok
+Member  another Member  404       403   403      ok
+Member  an Admin        404       403   403      ok
+Member  the Owner       404       403   403      ok
+
+### SetBotMode: no command off the allowlist
+actor   owner           no grant  view  control  manage
+Owner   self            ok        ok    ok       ok
+Owner   a Member        ok        ok    ok       ok
+Owner   an Admin        ok        ok    ok       ok
+Admin   self            ok        ok    ok       ok
+Admin   a Member        ok        ok    ok       ok
+Admin   another Admin   404       403   ok       ok
+Admin   the Owner       404       403   ok       ok
+Member  self            ok        ok    ok       ok
+Member  another Member  404       403   ok       ok
+Member  an Admin        404       403   ok       ok
+Member  the Owner       404       403   ok       ok
+
+### SetBotMode: a command off the allowlist
+actor   owner           no grant  view  control  manage
+Owner   self            ok        ok    ok       ok
+Owner   a Member        ok        ok    ok       ok
+Owner   an Admin        ok        ok    ok       ok
+Admin   self            ok        ok    ok       ok
+Admin   a Member        ok        ok    ok       ok
+Admin   another Admin   404       403   403      ok
+Admin   the Owner       404       403   403      ok
+Member  self            ok        ok    ok       ok
+Member  another Member  404       403   403      ok
+Member  an Admin        404       403   403      ok
+Member  the Owner       404       403   403      ok
+
+### ConfigureBot
+actor   owner           no grant  view  control  manage
+Owner   self            ok        ok    ok       ok
+Owner   a Member        ok        ok    ok       ok
+Owner   an Admin        ok        ok    ok       ok
+Admin   self            ok        ok    ok       ok
+Admin   a Member        ok        ok    ok       ok
+Admin   another Admin   404       403   403      ok
+Admin   the Owner       404       403   403      ok
+Member  self            ok        ok    ok       ok
+Member  another Member  404       403   403      ok
+Member  an Admin        404       403   403      ok
+Member  the Owner       404       403   403      ok
+
+### ManageGrants
+actor   owner           no grant  view  control  manage
+Owner   self            ok        ok    ok       ok
+Owner   a Member        ok        ok    ok       ok
+Owner   an Admin        ok        ok    ok       ok
+Admin   self            ok        ok    ok       ok
+Admin   a Member        ok        ok    ok       ok
+Admin   another Admin   404       403   403      ok
+Admin   the Owner       404       403   403      ok
+Member  self            ok        ok    ok       ok
+Member  another Member  404       403   403      ok
+Member  an Admin        404       403   403      ok
+Member  the Owner       404       403   403      ok
+
+### Grant view to another user
+actor   owner           no grant  view  control  manage
+Owner   self            ok        ok    ok       ok
+Owner   a Member        ok        ok    ok       ok
+Owner   an Admin        ok        ok    ok       ok
+Admin   self            ok        ok    ok       ok
+Admin   a Member        ok        ok    ok       ok
+Admin   another Admin   404       403   403      ok
+Admin   the Owner       404       403   403      ok
+Member  self            ok        ok    ok       ok
+Member  another Member  404       403   403      ok
+Member  an Admin        404       403   403      ok
+Member  the Owner       404       403   403      ok
+
+### Grant control to another user
+actor   owner           no grant  view  control  manage
+Owner   self            ok        ok    ok       ok
+Owner   a Member        ok        ok    ok       ok
+Owner   an Admin        ok        ok    ok       ok
+Admin   self            ok        ok    ok       ok
+Admin   a Member        ok        ok    ok       ok
+Admin   another Admin   404       403   403      ok
+Admin   the Owner       404       403   403      ok
+Member  self            ok        ok    ok       ok
+Member  another Member  404       403   403      ok
+Member  an Admin        404       403   403      ok
+Member  the Owner       404       403   403      ok
+
+### Grant manage to another user
+actor   owner           no grant  view  control  manage
+Owner   self            ok        ok    ok       ok
+Owner   a Member        ok        ok    ok       ok
+Owner   an Admin        ok        ok    ok       ok
+Admin   self            ok        ok    ok       ok
+Admin   a Member        ok        ok    ok       ok
+Admin   another Admin   404       403   403      ok
+Admin   the Owner       404       403   403      ok
+Member  self            ok        ok    ok       ok
+Member  another Member  404       403   403      ok
+Member  an Admin        404       403   403      ok
+Member  the Owner       404       403   403      ok
+
+### Grant view to oneself
+actor   owner           no grant  view  control  manage
+Owner   self            403       403   403      403
+Owner   a Member        403       403   403      403
+Owner   an Admin        403       403   403      403
+Admin   self            403       403   403      403
+Admin   a Member        403       403   403      403
+Admin   another Admin   404       403   403      403
+Admin   the Owner       404       403   403      403
+Member  self            403       403   403      403
+Member  another Member  404       403   403      403
+Member  an Admin        404       403   403      403
+Member  the Owner       404       403   403      403
+
+### RelinkAccount
+actor   owner           no grant  view  control  manage
+Owner   self            ok        ok    ok       ok
+Owner   a Member        ok        ok    ok       ok
+Owner   an Admin        ok        ok    ok       ok
+Admin   self            ok        ok    ok       ok
+Admin   a Member        ok        ok    ok       ok
+Admin   another Admin   404       403   403      ok
+Admin   the Owner       404       403   403      ok
+Member  self            ok        ok    ok       ok
+Member  another Member  404       403   403      ok
+Member  an Admin        404       403   403      ok
+Member  the Owner       404       403   403      ok
+
+### DeleteAccount
+actor   owner           no grant  view  control  manage
+Owner   self            ok        ok    ok       ok
+Owner   a Member        ok        ok    ok       ok
+Owner   an Admin        ok        ok    ok       ok
+Admin   self            ok        ok    ok       ok
+Admin   a Member        ok        ok    ok       ok
+Admin   another Admin   404       403   403      ok
+Admin   the Owner       404       403   403      ok
+Member  self            ok        ok    ok       ok
+Member  another Member  404       403   403      ok
+Member  an Admin        404       403   403      ok
+Member  the Owner       404       403   403      ok
+
+## Fleet-wide
+Columns: the actor's role.
+
+permission                 Owner  Admin  Member
+LinkAccount                ok     ok     ok
+CreateMode private         ok     ok     ok
+CreateMode shared          ok     ok     403
+ListUsers                  ok     ok     403
+ListInvites                ok     ok     403
+CreateInvite for a Member  ok     ok     403
+CreateInvite for an Admin  ok     403    403
+CreateInvite for an Owner  403    403    403
+ViewAgents                 ok     ok     403
+EnrollAgent                ok     403    403
+DisableAgent               ok     ok     403
+ViewAuditLog               ok     ok     403
+
+## Invites
+Rows: the role the invite gives. Columns: the actor's role.
+
+### RevokeInvite
+invite for  Owner  Admin  Member
+Member      ok     ok     404
+Admin       ok     403    404
+Owner       403    403    404
+
+## Modes
+Rows: the actor's role, and whose mode it is with its visibility. Columns: the permission.
+
+actor   mode                      ViewMode  UpdateMode to private  UpdateMode to shared  DeleteMode
+Owner   built-in                  ok        403                    403                   403
+Owner   own private               ok        ok                     ok                    ok
+Owner   own shared                ok        ok                     ok                    ok
+Owner   a Member's private        ok        ok                     ok                    ok
+Owner   a Member's shared         ok        ok                     ok                    ok
+Owner   an Admin's private        ok        ok                     ok                    ok
+Owner   an Admin's shared         ok        ok                     ok                    ok
+Admin   built-in                  ok        403                    403                   403
+Admin   own private               ok        ok                     ok                    ok
+Admin   own shared                ok        ok                     ok                    ok
+Admin   a Member's private        ok        ok                     403                   ok
+Admin   a Member's shared         ok        403                    403                   403
+Admin   another Admin's private   404       404                    404                   404
+Admin   another Admin's shared    ok        403                    403                   403
+Admin   the Owner's private       404       404                    404                   404
+Admin   the Owner's shared        ok        403                    403                   403
+Member  built-in                  ok        403                    403                   403
+Member  own private               ok        ok                     403                   ok
+Member  own shared                ok        403                    403                   403
+Member  another Member's private  404       404                    404                   404
+Member  another Member's shared   ok        403                    403                   403
+Member  an Admin's private        404       404                    404                   404
+Member  an Admin's shared         ok        403                    403                   403
+Member  the Owner's private       404       404                    404                   404
+Member  the Owner's shared        ok        403                    403                   403
+
+## Users
+Rows: the actor's role, and the target user. Columns: the permission.
+
+actor   target          SetRole member  SetRole admin  SetRole owner  SetDisabled
+Owner   self            403             403            403            403
+Owner   a Member        ok              ok             403            ok
+Owner   an Admin        ok              ok             403            ok
+Admin   self            403             403            403            403
+Admin   a Member        403             403            403            ok
+Admin   another Admin   403             403            403            403
+Admin   the Owner       403             403            403            403
+Member  self            403             403            403            403
+Member  another Member  404             404            404            404
+Member  an Admin        404             404            404            404
+Member  the Owner       404             404            404            404
+
+## Personal resources
+Rows: the actor's role, and whom the resource belongs to. Columns: the permission.
+
+actor   belongs to    UsePersonal
+Owner   self          ok
+Owner   another user  404
+Admin   self          ok
+Admin   another user  404
+Member  self          ok
+Member  another user  404

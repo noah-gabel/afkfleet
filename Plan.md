@@ -404,6 +404,13 @@ The full analysis lives in `docs/threat-model.md`.
 | Manage Admins, transfer ownership | Owner |
 | Agents, audit log, server settings | Admin+ |
 
+> Note (P2.9): The built `authorize()` refines this table (ADR-0010):
+> - **Agents.** Only the Owner enrolls agents; viewing and disabling them is Admin+.
+> - **Roles.** Only the Owner changes roles, so Admins manage Members by disabling and enabling them. Ownership transfer gets a permission together with a route.
+> - **Modes.** Private modes follow the account rule. Shared modes are edited by their creator, while an Admin, and by the Owner. Built-in modes are read-only.
+> - **The Owner's "everything"** leaves out: built-in modes, their own role and account status, another Owner, Owner invites, grants to themselves, and other users' personal resources.
+> - **Server settings** get a permission when a route exists.
+
 **How it's enforced**
 - One function decides everything: `fleet_core::authz::authorize(&Actor, Permission, &ResourceContext) -> Result<(), AuthzError>`.
 - It is pure, **denies by default**, and has an exhaustive table test.
@@ -966,7 +973,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **`GameAction`** lives in `fleet_core::mode`, as the user decided; P2.10's `perform` takes it.
   > - **Rescheduling from `now`.** A step that ran is due again one gap after `now`, not after its old due time. So there's no catch-up, and two runs are never closer than the interval, even when the runtime wakes late. A skipped roll reschedules too.
   > - **No serde** on `ModePlan`, `PlanTick`, `PlannedAction` or `GameAction`.
-- [ ] **P2.9** 🔴 Authorization: `Role`, `GrantLevel`, `Permission`, `Actor`, `ResourceContext`, `authorize()`.
+- [x] **P2.9** 🔴 Authorization: `Role`, `GrantLevel`, `Permission`, `Actor`, `ResourceContext`, `authorize()`.
   - An **exhaustive matrix test** covers every role × grant × permission. It's generated and snapshotted with insta, so every change shows up in review.
   - Edge cases: an Admin acting on the Owner or another Admin, granting above your own level, deny by default.
 
@@ -976,6 +983,27 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Built-in modes.** `ResourceContext::Mode{owner: None}` is a built-in mode.
 
   > Note (P2.9, from the group A review): **Allowlist format.** Appendix A writes allowlist entries as `"/spawn"`, but `ChatMessage::command_name()` returns `spawn`, so the formats must match. Compare exactly and case-sensitively against the allowlist, so the check fails closed: `/Spawn`, `/minecraft:spawn` and `/spawn` followed by a zero-width space all need Manage.
+
+  > Note (P2.9, built in group D): The user decided eight questions on 2026-10-06 (ADR-0010):
+  > - **Private modes** follow the account rule: their owner, the Owner, and Admins for Members' modes see and edit them. Everyone else gets 404.
+  > - **Shared modes** are visible to everyone. Their creator and the Owner edit them. Shared modes need Admin+ (Appendix B), so a creator who's demoted to Member can no longer edit theirs.
+  > - **Grants.** Only Manage edits grants, so "never above your own level" always holds; a test pins it. Nobody grants to themselves, so an Admin can't turn implicit Manage into a grant that outlives a Member's promotion to Admin. A grant to an alt account is an accepted risk (threat model; P11.9 shows the grants at a promotion).
+  > - **Roles.** Only the Owner changes roles, between Member and Admin, never their own or the Owner's. Admins disable and enable Members. Ownership transfer gets no permission until it has a route (P7.9).
+  > - **Allowlist entries** keep the slash: `/` plus a command name without arguments, at most 64 entries. A missing key means an empty list, so every command needs Manage.
+  > - **Invites.** Admins list all invites. Revoking follows creating: Member invites need Admin+, Admin invites the Owner, and Owner invites are never allowed.
+  > - **Self-service routes** check `ResourceContext::Personal{owner}` with `Permission::UsePersonal`: allowed for the owner, 404 for everyone else, the Owner included.
+  > - **Agents.** Only the Owner enrolls agents; viewing and disabling them stays Admin+. An agent receives session tokens for the bots assigned to it, so an Admin's own agent could otherwise get the Owner's. This deviates from §7.3.
+  >
+  > Also settled while building it (ADR-0010):
+  > - **API.**
+  >   - `ResourceContext` is `Global`, `Account{owner, grant}`, `Mode{owner, visibility}`, `User(UserRef)`, `Invite{role}` or `Personal{owner}`. `grant` is the actor's own grant, and a bot is authorized through its account.
+  >   - `AuthzError` is `NotFound` (the actor can't even see it: 404), `Forbidden` (403) or `WrongResource` (a permission checked against the wrong kind of resource: a caller bug).
+  >   - `Permission` is `Copy`. `SendChat` and `SetBotMode` carry a `CommandCheck` that only `CommandAllowlist::check` and `check_mode` create, so no chat text ends up in `Debug` output.
+  > - **Server address and auto-start** need Manage (`ConfigureBot`): Appendix B's `PATCH /bots/{id}` needs Manage except for the mode.
+  > - **The Owner's limits.** §7.3's "can do everything" doesn't cover these: editing built-in modes, changing their own role or disabling themselves, acting on another Owner, Owner invites, granting to themselves, and other users' personal resources.
+  > - **Names.** `Role`, `GrantLevel` and `ModeVisibility` map to `users.role`, `account_grants.level` and `modes.visibility` through `as_str` and `FromStr`.
+  > - **Not in `authorize`:** step-up (§7.2) is an authentication check in P7, and the account quota belongs to P9.4.
+  > - **Matrix.** The snapshot `authorization_matrix` has a table per kind of resource: accounts by actor, owner and grant; the rest by actor and target. A separate test checks every permission against every other kind of resource.
 - [ ] **P2.10** 🔴 Minecraft ports, traits only:
   - `MinecraftConnector::connect(ConnectParams) -> (SessionHandle, SessionEvents)`
   - `SessionHandle` (clone, perform `Action`, send chat, disconnect, read liveness)
@@ -1244,6 +1272,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P7.1** 🔴 Migrations and repositories: `sessions` (with token families), `invites`, `login_attempts`, `user_mfa`.
 
   > Note (P7.1, from the group A review): **IDs aren't secrets.** v7 IDs reveal their creation time. Invite codes and session tokens come from `getrandom`, never from an ID, and access is decided by `authorize()`, not by how hard an ID is to guess.
+
+  > Note (P7.1, from group D): **One Owner.** The `users` migration adds a partial unique index on `role` for `'owner'`. `authorize()` also refuses to act on any other user with the Owner role (ADR-0010).
 - [ ] **P7.2** 🔴 `PasswordService`:
   - Argon2id with the configured parameters
   - runs in `spawn_blocking` behind a semaphore
@@ -1268,10 +1298,20 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - mandatory for **every** user, not configurable: until they enroll, login returns `mfa_setup_required` plus a single-use setup token that only works for enroll and confirm (§7.2). That includes users who just registered with an invite.
   - tests: the setup token is rejected on every other endpoint, expires after 10 min and can't be reused
 - [ ] **P7.8** 🔴 The `AuthUser` extractor (Bearer token via `axum-extra`) loads session and user and rejects disabled users. A `require(permission, resource)` helper calls `fleet_core::authz::authorize`.
+
+  > Note (P7.8, from group D) (ADR-0010):
+  > - **Errors.** `AuthzError::NotFound` becomes 404 and `Forbidden` 403. `WrongResource` is a bug in the handler: 500, logged at `error`.
+  > - **Self-service routes** (`/me/*`, `/me/sessions/{id}`, `/auth/logout`, `/events/ticket`) check `Permission::UsePersonal` on `ResourceContext::Personal{owner}`, so every authed handler calls `authorize()`. Someone else's session gives 404.
+  > - **Step-up** (§7.2) is checked here or in the handler, not by `authorize()`.
 - [ ] **P7.9** 🔴 Admin endpoints:
   - `GET /users`
   - `PATCH /users/{id}` (role, disabled). Changing either revokes all of that user's sessions.
   - `POST`, `GET` and `DELETE` on `/invites`
+
+  > Note (P7.9, from group D) (ADR-0010):
+  > - **Roles** change only through the Owner (`SetRole`, Member ↔ Admin), never on the Owner themselves or another Owner. Admins only disable and enable Members (`SetDisabled`), so Appendix B's "Admin+" for `PATCH /users/{id}` means the `disabled` field for Admins.
+  > - **Ownership transfer** has no permission yet. It gets one together with a route.
+  > - **Invites.** Admins create and revoke Member invites; Admin invites are the Owner's (`CreateInvite{role}` on `Global`, `RevokeInvite` on `ResourceContext::Invite{role}`). Admins list all invites.
 - [ ] **P7.10** 🔴 Rate limiting:
   - tower_governor per IP, globally and on auth routes, via `into_make_service_with_connect_info`
   - `trusted_proxies` CIDRs decide when `X-Forwarded-For` is honored
@@ -1388,6 +1428,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `GET /accounts/link/{flow_id}` returns the status.
   - On success, check the profile and game ownership, store the encrypted token, and give the creator Manage.
   - Member quota from `accounts.max_per_member`.
+
+  > Note (P9.4, from group D): Starting a flow checks `LinkAccount` (every role). `GET /accounts/link/{flow_id}` checks `UsePersonal` on `ResourceContext::Personal{owner}` with the flow's creator, so other users get 404 (ADR-0010).
 - [ ] **P9.5** 🔴 `SessionTokenService`:
   - single-flight refresh per account (moka)
   - stores rotated refresh tokens atomically
@@ -1399,6 +1441,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - delete (step-up + Manage)
   - grants CRUD (never above your own level)
   - re-link
+
+  > Note (P9.6, from group D) (ADR-0010):
+  > - **Permissions.** `ViewBot` for list and get, `DeleteAccount`, `RelinkAccount`, `ManageGrants` (list, revoke) and `Grant{level, grantee}` (create, change), all on `ResourceContext::Account{owner, grant}` with the actor's own grant.
+  > - **Grants.** Only Manage edits grants, and nobody grants to themselves.
+  > - **Flagged, not decided:** how a Member picks a grantee. Members can't list users, so the dialog (P9.8) needs a lookup that doesn't let them enumerate usernames.
 - [ ] **P9.7** Offline accounts only when `accounts.allow_offline = true`. It's off by default and meant for dev.
 - [ ] **P9.8** 🔴 App screens:
   - accounts list
@@ -1439,6 +1486,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   2. `afkfleet-agent enroll` creates a key and a CSR (rcgen).
   3. It calls `AgentEnrollment.Enroll`. This RPC uses TLS without a client certificate and is rate-limited; the agent pins the CA fingerprint from the enrollment bundle.
   4. The agent stores its cert and key, readable only by itself.
+
+  > Note (P10.3, from group D): **Only the Owner** creates enrollment tokens (`EnrollAgent`), not an Admin as step 1 says. An agent receives session tokens for the bots assigned to it, and P10.5 assigns bots to any agent with free capacity, so an Admin's own agent could otherwise get the Owner's. Viewing and disabling agents stays Admin+ (ADR-0010).
 - [ ] **P10.4** 🔴 `AgentControl.Connect` bidi stream. It requires:
   - a verified client certificate
   - an allowlisted fingerprint and an enabled agent
@@ -1501,6 +1550,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P11.2, from the group A review): **SSRF.** `ServerAddress` allows loopback and private addresses (ADR-0010). An SSRF policy for the server address must check the resolved IP addresses, not the host string.
 
   > Note (P11.2, from group B): `start`, `stop` and `restart` change nothing for a Paused or Failed bot: the state machine ignores `Start` and `Stop` there (ADR-0010). Decide here what the API answers in that case.
+
+  > Note (P11.2, from group D) (ADR-0010):
+  > - **Switching a bot's mode** takes two checks: `ViewMode` on the mode, and `SetBotMode(allowlist.check_mode(&mode))` on the bot.
+  > - **Server address and auto-start** need Manage (`ConfigureBot`).
+  > - **Lifecycle calls** need `ControlBot`.
 - [ ] **P11.3** 🔴 Chat:
   - `POST /bots/{id}/chat`:
     - takes a `ChatMessage`
@@ -1508,11 +1562,19 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     - rate-limited per bot and per user
     - audited
   - `GET /bots/{id}/chat?before=&limit=` with cursor pagination.
+
+  > Note (P11.3, from group D): The handler checks `SendChat(allowlist.check(&message))` and then sends that same message. An allowlisted command passes with any arguments (threat model). Reading the history needs `ViewBot` (ADR-0010).
 - [ ] **P11.4** 🔴 Modes CRUD: `GET`, `POST`, `PUT`, `DELETE` on `/modes`. Core validation errors become field errors. Built-in modes are read-only.
 
   > Note (P11.4, from Phase 2): Editing a mode that's assigned to bots must re-run the command check for every one of them. A mode with a command outside the allowlist needs Manage on each bot (ADR-0010).
 
   > Note (P11.4, from group C): `ModeDraft::validate` stops at the first error. Each `ModeError` becomes a field error at `steps[step]`: `AngleOutOfRange` names its field, and `DuplicateStep` its `LimitedStep` kind (ADR-0010).
+
+  > Note (P11.4, from group D): Modes follow `authorize()` (ADR-0010):
+  > - **Built-in** modes are read-only for everyone.
+  > - **Private** modes are seen and edited by their owner, the Owner, and Admins for Members' modes. Everyone else gets 404, also in `GET /modes`.
+  > - **Shared** modes are seen by everyone, and edited by their creator while they're an Admin, and by the Owner. Creating one needs Admin+.
+  > - **Changing the visibility** needs the rights before and after the change, so an Admin can't share a Member's private mode.
 - [ ] **P11.5** 🔴 Live events:
   1. `POST /events/ticket` returns a single-use ticket valid for 30 s (moka).
   2. The client opens a WebSocket at `GET /events?ticket=…`.
@@ -1540,6 +1602,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P11.9, from the group A review): **Chat console.** Render each message as its own block, with the sender outside the text, so a `\n[Server] …` inside a message can't pass as a separate line. The sanitizer keeps combining marks, so clip stacked ones (Zalgo text) with CSS overflow.
 
   > Note (P11.9, from group B): **Controls.** For paused or failed bots, the app shows Resume or Reset instead of Start and Stop (ADR-0010).
+
+  > Note (P11.9, from group D, the user's request): **Promotions.** When a Member is promoted to Admin (P8.8), the app shows the existing grants on their accounts, and the server provides them, so the Owner can review and revoke them. Grants made before the promotion survive it, including one an Admin gave an alt account (ADR-0010, threat model).
 
 **DoD:** The user's real fleet runs for 24 h, managed from the app. Every event shows up live, and the logs contain no unhandled errors.
 
@@ -1721,6 +1785,7 @@ allow_offline = false                    # dev only
 [chat]
 retention_days = 14
 command_allowlist = ["/spawn", "/home", "/afk"]   # usable with Control; every other /command needs Manage
+                                                 # each entry: "/" + one command name, no arguments; at most 64; missing = empty
 ```
 
 `agent.toml`
@@ -1781,6 +1846,13 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 | `GET /audit` | Admin+ | Audit log (cursor-paginated) |
 | `POST /events/ticket` · `GET /events?ticket=` | user | WebSocket live events |
 | `GET /health/live` · `GET /health/ready` | public (no prefix) | Health |
+
+> Note (P2.9): `authorize()` refines these levels (ADR-0010):
+> - `POST /agents/enrollment-tokens` is Owner-only.
+> - `PATCH /users/{id}`: only the Owner changes roles; Admins disable and enable Members.
+> - `DELETE /invites/{id}`: an Admin invite is the Owner's.
+> - `PATCH /bots/{id}`: the server and auto-start need Manage, the mode Control, and a mode with a command off the allowlist Manage.
+> - The `user` routes check `Personal`.
 
 ### C. Control-plane protocol sketch (`proto/fleet/v1/agent.proto`)
 ```proto
