@@ -49,8 +49,9 @@ pub enum Host {
 /// The host is a domain name or an IP address; IPv6 addresses need brackets
 /// when a port follows (`[2001:db8::1]:25565`). Domain names are lowercase
 /// ASCII: internationalized names, `_`, empty labels and a trailing dot are
-/// rejected, and so is an all-numeric last label, which some resolvers would
-/// read as an IP address. There's no scheme, path or user info.
+/// rejected, and so is a last label that doesn't start with a letter, which
+/// some resolvers would read as an IP address (`2130706433`, `0x7f000001`).
+/// There's no scheme, path or user info.
 ///
 /// The address remembers whether a port was given; [`ServerAddress::port`]
 /// falls back to [`ServerAddress::DEFAULT_PORT`]. Loopback and private
@@ -164,8 +165,9 @@ fn parse_host(text: &str) -> Result<Host, ServerAddressError> {
 /// Checks a domain name and returns it in lowercase.
 ///
 /// Labels are 1–63 characters of `a`–`z`, `0`–`9` and `-`, without a hyphen at
-/// either end. The last label mustn't be all digits: no top-level domain is,
-/// and some resolvers would read `1.2.3` or `2130706433` as an IPv4 address.
+/// either end. The last label must start with a letter: no top-level domain
+/// starts with a digit, and resolvers that accept the old `inet_aton` forms
+/// would read `1.2.3`, `2130706433` or `0x7f000001` as an IPv4 address.
 fn parse_domain(text: &str) -> Result<String, ServerAddressError> {
     if !text.is_ascii() {
         return Err(ServerAddressError::InvalidHost);
@@ -175,7 +177,7 @@ fn parse_domain(text: &str) -> Result<String, ServerAddressError> {
         return Err(ServerAddressError::InvalidHost);
     }
     let last_label = name.rsplit('.').next().unwrap_or_default();
-    if last_label.bytes().all(|b| b.is_ascii_digit()) {
+    if !last_label.starts_with(|c: char| c.is_ascii_lowercase()) {
         return Err(ServerAddressError::InvalidHost);
     }
     Ok(name)
@@ -348,6 +350,9 @@ mod tests {
     #[case::numeric_last_label("1.2.3", ServerAddressError::InvalidHost)]
     #[case::ipv4_as_a_number("2130706433", ServerAddressError::InvalidHost)]
     #[case::hex_ipv4("0x7f.1", ServerAddressError::InvalidHost)]
+    #[case::hex_ipv4_as_a_number("0x7f000001", ServerAddressError::InvalidHost)]
+    #[case::hex_last_part("127.0.0.0x1", ServerAddressError::InvalidHost)]
+    #[case::last_label_starts_with_a_digit("example.1com", ServerAddressError::InvalidHost)]
     #[case::ipv4_out_of_range("999.1.1.1", ServerAddressError::InvalidHost)]
     #[case::empty_host(":25565", ServerAddressError::InvalidHost)]
     #[case::unclosed_bracket("[2001:db8::1", ServerAddressError::InvalidHost)]

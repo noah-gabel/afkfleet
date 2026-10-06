@@ -863,6 +863,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **`ServerAddress`:**
   >   - remembers whether a port was given
   >   - rejects non-ASCII hosts, `_`, a trailing dot and userinfo
+  >   - requires the last label of a domain to start with a letter, so `0x7f000001` and `127.0.0.0x1` aren't read as IP addresses
   >   - needs brackets around IPv6 when a port follows
 - [x] **P2.3** 🔴 `IncomingChat` sanitizer: strip format codes and control characters, cap the length, and keep the kind (player, system or whisper) and the sender. This turns untrusted server text into something safe to store and display.
 

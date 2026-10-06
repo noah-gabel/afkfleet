@@ -89,8 +89,9 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
 - **`ServerAddress`:**
   - Remembers whether a port was given. `port()` still returns 25565 by default.
   - Rejects non-ASCII/IDN hosts, `_`, a trailing dot and userinfo.
+  - The last label of a domain must start with a letter. No top-level domain starts with a digit, and resolvers that accept the old `inet_aton` forms would read `2130706433` or `0x7f000001` as an IP address. (Amended after the group A review.)
   - IPv6 needs brackets when a port follows.
-  - Loopback and private addresses are allowed (dev uses localhost). An SSRF policy would be a server rule (P11).
+  - Loopback and private addresses are allowed (dev uses localhost). An SSRF policy would be a server rule (P11), and it must check the resolved IP addresses, not the host string.
 
 **Incoming chat (P2.3).**
 - **Kinds:** `chat`, `emote`, `whisper`, `announcement`, `system`. Team chat and outgoing whispers map to `chat`.
