@@ -26,11 +26,12 @@ pub enum RetryPolicyError {
 /// Exponential backoff with jitter, and the stable-online period after which
 /// the attempt counter starts over (Plan.md §6).
 ///
-/// The delay before attempt `n` starts at the base delay and doubles with
-/// every attempt. backon computes it and adds a random jitter of up to 100 %
-/// *after* capping it, so backon gets half the configured maximum: every delay
-/// then stays within the maximum (ADR-0010). With the defaults (5 s, 300 s) the
-/// first delay is 5–10 s and later ones are 150–300 s.
+/// The delay after the `n`-th failed attempt in a row starts at the base
+/// delay and doubles with every failure. backon computes it and adds a random
+/// jitter of up to 100 % *after* capping it, so backon gets half the configured
+/// maximum: every delay then stays within the maximum (ADR-0010). With the
+/// defaults (5 s, 300 s) the first delay is 5–10 s and later ones are
+/// 150–300 s.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RetryPolicy {
     base: Duration,
@@ -91,7 +92,8 @@ impl RetryPolicy {
         self.stable_after
     }
 
-    /// Returns the delay before attempt `attempt` (the first attempt is 1).
+    /// Returns the delay after `attempt` failed attempts in a row, before the
+    /// next one (the first failure is 1).
     ///
     /// The jitter is seeded from `rng`, so a seeded RNG gives the same delay
     /// every time. The result always lies within [`RetryPolicy::bounds`].
@@ -108,7 +110,7 @@ impl RetryPolicy {
         jittered.max(lower).min(upper)
     }
 
-    /// Returns the shortest and the longest delay before attempt `attempt`:
+    /// Returns the shortest and the longest delay after `attempt` failures:
     /// the delay without jitter, and twice that, but no more than the maximum.
     #[must_use]
     pub fn bounds(&self, attempt: NonZeroU32) -> (Duration, Duration) {

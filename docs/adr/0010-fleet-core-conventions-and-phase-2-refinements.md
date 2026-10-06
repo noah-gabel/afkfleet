@@ -121,20 +121,39 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
   - A failure is a connect failure, or a transient disconnect before the stable period. A success is a stable online period.
   - Appendix E's "circuit open too long → Failed" arrow is dropped. A flapping server stays transient.
 
-**Bot state machine (P2.6), changes to Appendix E.**
+**Bot state machine (P2.6), changes to Appendix E.** Points marked *(group B)* were settled while building P2.6. The user decided sticky Paused and Failed, the breaker effects and the plain-text duplicate login on 2026-10-06.
 - **Signature:** `transition(&BotState, BotEvent, now, &RetryPolicy) -> Transition`. Attempts are 1-based.
 - **States:** `Online{since, attempt}`, `AwaitingSession{attempt, fresh}`, `Connecting{attempt, auth_retried}`, `Stopping{restart}`.
   - Without the attempt in `Online`, the stable-period reset of P2.6 can't be computed.
+- **Attempt counting** *(group B)*:
+  - `AwaitingSession`, `Connecting` and `Online` carry the number of the current attempt.
+  - `Backoff{n}` and `ScheduleRetry{n}` name the attempt that failed. The actor waits `RetryPolicy::delay(n)`, so the first retry waits 5–10 s (§6). `RetryDue` asks for attempt n + 1.
+  - A session that ends after the stable period starts the counter over: `Backoff{1}`.
 - **"Request one fresh token, then fail" lives in the state machine, not in azalea's `refresh()`:**
   - The first `AuthInvalid` before reaching Online goes to `AwaitingSession{fresh: true}` and emits `RequestSession{fresh: true}`, so the server bypasses its token cache. There's no backoff.
   - The second goes to `Failed(Auth)`.
+  - "Twice" means twice in a row *(group B)*. `fresh` doesn't survive a Backoff, and `auth_retried` starts over after Online or a Backoff; the backoff bounds the rest.
+  - `AuthInvalid` while Online counts as transient *(group B)*. The session was accepted at join, and a retry without a backoff would let a server drive reconnects.
+  - `Reset` from `Failed(Auth)` asks for a normal session; the account has been signed in again by then *(group B)*.
   - fleet-mc's `refresh()` fails fast (ADR-0008 §9 points here).
   - A non-retryable `SessionUnavailable` goes to `Failed(SessionDenied)`.
-- **New event `CrashLoop`:** from any state to `Failed(CrashLoop)`, so the supervisor's restart limit (§6 row 7) also goes through `transition()`. Packet liveness arrives as `Disconnected(LivenessTimeout)`.
+- **New event `CrashLoop`:** from any state to `Failed(CrashLoop)`, so the supervisor's restart limit (§6 row 7) also goes through `transition()`. Packet liveness arrives as `Disconnected(LivenessTimeout)`. `CrashLoop` overwrites an earlier failure reason and drops a pending restart *(group B)*.
+- **Session ends** *(group B)*: `ConnectFailed(f)`, `Disconnected(reason)`, `WatchdogTimeout` (the same as `Disconnected(WatchdogTimeout)`) and `SessionClosed` are handled alike in Connecting and Online, and are no-ops in every other state.
 - **Stop and restart:**
-  - `Stop` goes straight to `Stopped` when there's no session.
+  - `Stop` goes straight to `Stopped` when there's no session, except in Paused and Failed (below).
   - From Connecting or Online, `Stop` goes to `Stopping{restart: false}` and emits `Disconnect`. `SessionClosed` then gives `Stopped`.
   - `Start` during `Stopping` sets `restart: true`, and `SessionClosed` then gives `AwaitingSession`. So restart (Appendix B) and a server change (P4.2) also go through `transition()`.
+- **Paused and Failed are sticky** *(group B)*:
+  - `Start` and `Stop` are no-ops there. Only `Resume` (Paused), `Reset` (Failed) and `CrashLoop` leave them.
+  - So Stop-then-Start can't kick a human (§6 row 3) or retry a failed bot without Reset (§6 row 2). Restart and server changes wait for Resume or Reset.
+  - The first P2.6 invariant therefore excludes Paused and Failed.
+- **Circuit-breaker effects** *(group B)*. `ScheduleRetry{attempt}` stays as in Appendix E. Three new effects tell the actor's breaker what happened, so the rule is tested in core:
+  - `RecordFailure`: a session failed before the stable period (connecting failed, or a transient end while Online). It always comes right before `ScheduleRetry`.
+  - `RecordSuccess`: the bot leaves Online after the stable period, whatever the exit.
+  - `ResetBreaker`: `Start`, `Reset` or `Resume` (re)starts the bot, so a run started on purpose doesn't inherit an old cool-down. Automatic retries still go through the breaker.
+  - A retry after `SessionUnavailable` doesn't involve the breaker.
+- **`Notify`** is only for alerts that need a human: entering Paused or Failed *(group B)*.
+- **Effect order** *(group B)*: `StopMode`, `Disconnect`, then `RecordSuccess` or `RecordFailure`, then `ScheduleRetry`, `RequestSession` or `Notify`. A deliberate start emits `ResetBreaker` before `RequestSession`.
 - **Other exits:**
   - Leaving Connecting or Online for any reason emits `Disconnect`, so the full teardown from ADR-0008 §10 always runs.
   - `SessionClosed` while Connecting or Online counts as a transient disconnect (`SessionCrashed`).
@@ -143,6 +162,9 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
   - The actor holds the session credentials; events carry none.
   - Leaving a state cancels that state's timer or session request, so a stale `RetryDue` can't fire early.
   - The actor sends `SessionClosed` once teardown has finished or timed out. fleet-mc abandons a hung host thread, so `Stopping` always ends.
+  - Only the current session's events reach `transition()`, at most one terminal event per session *(group B)*. Once `Disconnect` has run, the actor drops that session's events, and it reports `SessionClosed` for it only if no newer session has connected since.
+  - Every `RequestSession` gets exactly one answer; a timeout becomes `SessionUnavailable{retryable: true}`. Connecting ends through fleet-mc's connect timeout *(group B)*.
+  - The actor publishes every state change, plus `Died`, as events for the app (P4.7, P11). `Notify` is only for the alerts above *(group B)*.
 
 **Modes (P2.7, P2.8).**
 - **`afk` preset:** `RotateRandom` ±30° yaw and ±10° pitch every 45–120 s, plus `SwingArm` every 20–40 s. 40 s is below 60 s, the shortest non-zero `player-idle-timeout`; rotation alone doesn't reset the idle timer (ADR-0008 §8).
@@ -173,16 +195,20 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
 
 ## Consequences
 - **Easier:** every rule in `fleet-core` is deterministic and testable with a seeded RNG and fixed times. Stored data can't skip validation, and untrusted text can't reach logs through error messages.
-- **The state machine has more fields than Appendix E** (`attempt` in `Online`, `fresh`, `auth_retried`, `restart`). In exchange, the runtime never decides lifecycle state itself.
+- **The state machine has more fields and effects than Appendix E**: `attempt` in `Online`, `fresh`, `auth_retried` and `restart`, plus the three breaker effects. In exchange, the runtime never decides lifecycle state or breaker outcomes itself.
 - **Later phases inherit requirements:**
   - **P3.1 and P4.6** stamp liveness with `tokio::time::Instant::now().into_std()`.
   - **P4** maps tokio's `Instant` to `DateTime` for `now`.
-  - **P11** re-checks mode commands on edit.
+  - **P4.1** adds per-server conflict texts (below).
+  - **P4.2** executes the breaker effects and follows the group B actor contracts. A spec change to a Paused or Failed bot takes effect at Resume or Reset.
+  - **P11** re-checks mode commands on edit. For Paused or Failed bots the app shows Resume or Reset instead of Start and Stop, because the state machine ignores Start and Stop there.
+- **Decided in group B: plain-text duplicate login** (flagged in the group A review).
+  - **The problem:** a duplicate login reported as plain text, with no translation key, classifies as transient (ADR-0008 §6). A proxy or plugin may kick the bot that way when a human logs in; BungeeCord/Waterfall in online mode probably does. The bot then reconnects and kicks the human, and the circuit breaker only limits how often.
+  - **The decision:** no state-machine change. A bot's spec gets an optional list of kick texts that count as a duplicate login, empty by default (P4.1). The classifier compares the sanitized kick message exactly against that list, so vanilla servers still go by key.
 - **Flagged, not decided:**
   - **P4.1:** `BotSpec` sits in fleet-runtime, but fleet-proto and fleet-server need it too.
   - **P3.4/P5:** the connect timeout has no config key.
   - **P4.7/P10:** `Paused` and `Failed` must survive an actor or agent restart, so a fresh `Start` doesn't kick a human (§6 row 3).
-  - **P2.6/P4:** a duplicate login reported as plain text, with no translation key, classifies as transient (ADR-0008 §6). A proxy or plugin may kick the bot that way when a human logs in; BungeeCord/Waterfall in online mode probably does. The bot then reconnects and kicks the human, and the circuit breaker only limits how often. The options include documenting proxies as unsupported for conflict detection, a cautious path for keyless kicks while Online, and a per-server list of conflict texts. (Found in the group A review.)
 - **Costs:**
   - The test build compiles rand 0.9 (proptest) next to 0.10; cargo-deny only warns.
   - A clippy config lives in `crates/fleet-core/` and repeats the root file's test allowances.
@@ -194,3 +220,7 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
 - **Our own jitter on top of an unjittered backon, or no backon in core.** Both are possible. Halving backon's cap keeps Plan.md's "wraps backon" without delays above the configured maximum.
 - **The adapter refreshes the token** (ADR-0008 §9 as written). That keeps the retry policy out of the pure core, where it can't be tested exhaustively.
 - **Admins with Manage on literally every account.** This contradicts §7.1 and lets an Admin take over the Owner's accounts.
+- **Stop and Start leaving Paused and Failed** (group B). It was the first reading of "Stop from any state ends in Stopped". But then Stop-then-Start, or the restart endpoint, kicks a human or retries a failed bot without Reset.
+- **The breaker outcome as a cause on `ScheduleRetry`** (group B). A stable session that ends without a retry (Stop, a duplicate login, a permanent kick, `CrashLoop`) would never report its success. A stale cool-down would then survive into the next run, and one failed connect after Resume would wait 15 min instead of 5–10 s.
+- **Pausing on every keyless kick while Online** (group B). Paper and Spigot send their configurable shutdown and restart kicks as plain text, so every server restart would pause every bot until someone resumed it.
+- **Documenting proxies as unsupported for conflict detection** (group B). It's cheaper, but it leaves the bot fighting a human behind a BungeeCord-style proxy.
