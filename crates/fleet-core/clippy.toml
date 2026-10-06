@@ -1,6 +1,7 @@
 # fleet-core's own clippy configuration. Clippy reads the nearest clippy.toml
 # and doesn't merge it with the root one, so the root file's test allowances are
-# repeated here. Keep them in sync with ../../clippy.toml.
+# repeated here, and so is the ban on unbounded channels below. `just scripts-test`
+# checks that this file carries every root setting (scripts/clippy-config.mjs).
 allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
@@ -31,6 +32,8 @@ disallowed-methods = [
     { path = "uuid::Uuid::new_v4", reason = "IDs are minted from caller data with `new_v7` (ADR-0010)", allow-invalid = true },
     { path = "uuid::Uuid::new_v7", reason = "uuid's `new_v7` draws its own random bytes; use the ID types' `new_v7` (ADR-0010)", allow-invalid = true },
     { path = "uuid::Timestamp::now", reason = "fleet-core takes time as a parameter (ADR-0010)", allow-invalid = true },
+    # Repeated from the root clippy.toml: channels are always bounded (ADR-0011).
+    { path = "tokio::sync::mpsc::unbounded_channel", reason = "channels are always bounded; overload is an explicit error (CLAUDE.md, ADR-0011)", allow-invalid = true },
 ]
 
 # The same guard for the types behind the OS's randomness.

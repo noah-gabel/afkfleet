@@ -9,7 +9,9 @@ allow-print-in-tests = true
 # Channels are always bounded (CLAUDE.md, async rules). The only exceptions are
 # the two channels azalea's API forces on fleet-mc, each with an approved
 # `#[expect]` (ADR-0011). `allow-invalid` keeps clippy quiet in crates without
-# tokio.
+# tokio. Crate-local clippy.toml files must repeat every setting in this file,
+# because clippy doesn't merge them; `just scripts-test` checks it
+# (scripts/clippy-config.mjs).
 disallowed-methods = [
     { path = "tokio::sync::mpsc::unbounded_channel", reason = "channels are always bounded; overload is an explicit error (CLAUDE.md, ADR-0011)", allow-invalid = true },
 ]
