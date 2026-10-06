@@ -9,7 +9,7 @@
 //! # Modules
 //! - [`id`]: typed IDs for users, accounts, bots, agents and modes.
 //! - [`value`]: server addresses and the names of Minecraft accounts and users.
-//! - [`chat`]: the messages bots send.
+//! - [`chat`]: the messages bots send, and sanitized messages they receive.
 
 pub mod chat;
 pub mod id;

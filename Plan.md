@@ -864,7 +864,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - remembers whether a port was given
   >   - rejects non-ASCII hosts, `_`, a trailing dot and userinfo
   >   - needs brackets around IPv6 when a port follows
-- [ ] **P2.3** 🔴 `IncomingChat` sanitizer: strip format codes and control characters, cap the length, and keep the kind (player, system or whisper) and the sender. This turns untrusted server text into something safe to store and display.
+- [x] **P2.3** 🔴 `IncomingChat` sanitizer: strip format codes and control characters, cap the length, and keep the kind (player, system or whisper) and the sender. This turns untrusted server text into something safe to store and display.
 
   > Note (P2.3) (ADR-0010):
   > - **Kinds.** `chat`, `emote`, `whisper`, `announcement` and `system`; the spike saw all five (ADR-0008 §7).
