@@ -850,7 +850,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Minting.** IDs are minted from caller data with `new_v7(created_at, [u8; 10])`; the server supplies `getrandom` bytes. uuid's `v7` feature stays off, because it pulls in getrandom.
   > - **Parsing.** Parsing and deserializing accept only v7 UUIDs.
   > - **serde.** It uses `try_from`/`into` `Uuid` instead of `transparent`: the same wire format, but validated (ADR-0010).
-- [ ] **P2.2** 🔴 Value objects with fallible constructors (`TryFrom<&str>`). Each one gets a test for every rejection case, plus a proptest that it **never panics on arbitrary input**.
+- [x] **P2.2** 🔴 Value objects with fallible constructors (`TryFrom<&str>`). Each one gets a test for every rejection case, plus a proptest that it **never panics on arbitrary input**.
   - `ServerAddress`: host or IP, optional port 1–65535 (default 25565), no scheme or path, ≤ 253 chars.
   - `ChatMessage`: 1–256 chars after trimming, no control characters, no `§`.
   - `McUsername`: 3–16 characters from `[A-Za-z0-9_]`.
