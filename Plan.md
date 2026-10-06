@@ -306,9 +306,9 @@ The bots run as one tokio task each, which is the user's decision. azalea needs 
 | 3 | Duplicate login (a human logged into the account) | Classifier | `Paused`. **Never fight the human.** The user resumes it. |
 | 4 | Flapping server | Circuit breaker (N failures within a window) | Open circuit with a long cool-down, then one half-open attempt |
 | 5 | Expired or invalid session token | Auth error on join | Request one fresh token. If it fails again: `Failed(Auth)` and account marked "re-auth required" |
-| 6 | Zombie client (azalea ECS panic or hang; azalea has no `catch_unwind`) | **Watchdog**: no `Tick` for `watchdog_timeout` (30 s) while Online | Tear down the session and treat it as a transient disconnect |
+| 6 | Zombie session: azalea ECS panic or hang (azalea has no `catch_unwind`), frozen server or dead link | **Panic:** the runner's `AppExit` receiver fails at once. **Hang:** the Tick watchdog, no `Tick` for `watchdog_timeout` (30 s) while Online. **Frozen server or dead link:** the packet-liveness timeout, no packet for `packet_liveness_timeout` (30 s) while Online. Ticks are client-side and keep running then (ADR-0008 §5) | Tear down the session and treat it as a transient disconnect |
 | 7 | Panic in the bot actor task | Supervisor sees `JoinError::is_panic()` | Restart the actor from its last spec. More than 5 restarts in 10 min → `Failed(CrashLoop)` |
-| 8 | MC host thread dies | Host pool health check | Respawn the thread. Its bots get `Disconnected` and follow the normal path |
+| 8 | MC host thread hangs | Tick watchdog (row 6), and the thread's job queue stops answering | **Abandon** the thread and count it; it is never joined or respawned. The bot reconnects on a fresh thread. Above the abandoned-thread limit, the agent process exits and Docker restarts it (ADR-0008 §5) |
 | 9 | Agent can't reach the server | gRPC stream error | Bots **keep running** on the last desired state. The agent reconnects with backoff, sends `Hello` with its actual state, and receives `ReconcileFull` |
 | 10 | Agent crash or OOM | Docker healthcheck / exit code | `restart: unless-stopped`. The server marks the agent stale after the heartbeat timeout and shows its bots as `Unknown` until it reconciles |
 | 11 | Server crash | Docker | Restart. SQLite WAL keeps the data durable and agents reconnect by themselves |
@@ -695,7 +695,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   | 0001 | Use ADRs |
   | 0002 | Hexagonal architecture & crate layout |
   | 0003 | azalea + pinned nightly |
-  | 0004 | One tokio task per bot + MC host threads (to be confirmed by the spike) |
+  | 0004 | One tokio task per bot + MC host threads (revised by the spike to one host thread per bot, see ADR-0008) |
   | 0005 | SQLite via sqlx |
   | 0006 | Opaque tokens instead of JWT |
   | 0007 | Tauri Rust-side API proxy (keychain, no CORS) |
@@ -812,7 +812,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **ADR-0008** also lists the open questions as answered or explicitly deferred (§11).
   > - **ADR-0004** is now Accepted, revised to one host thread per bot with the single-threaded executor.
   > - **Archived.** The spike stays in `spikes/azalea/` with an "Archived" banner, at the user's choice.
-  > - **Proposed, not made.** ADR-0008 lists changes to P2.4, P2.7, P2.10, P3.2, P3.4, P3.5 and P4.6. They're proposed in the Phase 1 PR for the user to decide; the later phases weren't edited.
+  > - **Plan changes.** ADR-0008 lists changes to P2.4, P2.7, P2.10, P3.2, P3.4, P3.5 and P4.6. The user accepted them in the Phase 1 review, and they were applied in the same PR, together with P3.1, P3.8, P9.3, the fault table (§6) and the agent config (Appendix A).
 
 **Security:** never commit real account tokens. Use offline mode for everything except P1.8.
 
@@ -832,7 +832,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `Username` (app login): 3–32 characters, normalized to lowercase.
   - Command detection: `ChatMessage::command_name()` for allowlist checks.
 - [ ] **P2.3** 🔴 `IncomingChat` sanitizer: strip format codes and control characters, cap the length, and keep the kind (player, system or whisper) and the sender. This turns untrusted server text into something safe to store and display.
-- [ ] **P2.4** 🔴 `DisconnectReason` and a classifier that returns `Transient`, `Permanent(kind)`, `Conflict(DuplicateLogin)` or `AuthInvalid`. Table-driven tests use real kick messages and translation keys from the spike.
+- [ ] **P2.4** 🔴 `DisconnectReason` and a classifier that returns `Transient`, `Permanent(kind)`, `Conflict(DuplicateLogin)` or `AuthInvalid`. Table-driven tests use real kick messages and translation keys from the spike (ADR-0008 §6).
 - [ ] **P2.5** 🔴 Resilience policies:
   - `RetryPolicy` wraps `backon`'s exponential builder: base, factor, cap, jitter, and a reset after a stable period. Tests assert **bounds**, not exact values.
   - `CircuitBreaker` (closed, open, half-open) is pure, with time passed in.
@@ -856,7 +856,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     | Yaw / pitch | Valid ranges |
 
   - Built-in presets as validated constants:
-    - **`afk`**: a random small rotation every 45–120 s, an occasional jump, and a swing every few minutes.
+    - **`afk`**: a random small rotation every 45–120 s, plus a swing, jump or sneak more often than the server's idle timeout. Rotation alone doesn't reset that timer (ADR-0008 §8).
     - **`farm`**: a fixed look direction, a hotbar slot chosen at start, and attack every 0.65–0.8 s.
   - insta snapshots of the serialized presets, so stored modes stay compatible.
 - [ ] **P2.8** 🔴 `ModePlan`: a pure scheduler that takes a definition, an RNG and the current time and returns `(next_due, Vec<Action>)`. The runtime then only sleeps and executes. Tests use a seeded RNG.
@@ -865,9 +865,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - Edge cases: an Admin acting on the Owner or another Admin, granting above your own level, deny by default.
 - [ ] **P2.10** 🔴 Minecraft ports, traits only:
   - `MinecraftConnector::connect(ConnectParams) -> (SessionHandle, SessionEvents)`
-  - `SessionHandle` (clone, perform `Action`, send chat, disconnect)
+  - `SessionHandle` (clone, perform `Action`, send chat, disconnect, read liveness)
   - `SessionEvents::next()`
-  - `SessionEvent` (`Joined`, `Chat`, `Tick`, `Died`, `Disconnected`, `ConnectionFailed`)
+  - `SessionEvent` (`Joined`, `Chat`, `Died`, `Disconnected`, `ConnectionFailed`)
+  - liveness: when the session last saw a `Tick` and last received a packet from the server. The session updates both in place instead of queueing events (ADR-0008 §4–5).
   - `SessionCredentials`, which holds the token as a `SecretString`
 
   Use RPITIT with `+ Send` futures.
@@ -891,21 +892,22 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 - [ ] **P3.1** 🔴 `fleet-testkit`: `FakeConnector` and `FakeSession`. They need to support:
   - scripted connect results
-  - injected events (`Joined`, `Chat`, `Tick`, `Died`, `Disconnected(reason)`)
+  - injected events (`Joined`, `Chat`, `Died`, `Disconnected(reason)`)
+  - liveness timestamps that a test can advance or freeze
   - a log of performed actions and sent chat
   - "hang" (no more ticks) and "fail on action" modes
 
   Write tests for the fake itself.
-- [ ] **P3.2** 🔴 `McHostPool`:
-  - N OS threads, each with a current-thread runtime and a `LocalSet`.
-  - Join jobs arrive over a bounded mpsc and go to the least-loaded thread.
-  - A thread that dies is detected and **respawned**. Test this with an injected failing job.
+- [ ] **P3.2** 🔴 `McHostPool` spawns one host thread per session (ADR-0008 §2):
+  - Each thread has a current-thread runtime and a `LocalSet`, and ends when its session ends.
+  - Work reaches the thread over a bounded queue.
+  - A hung thread is **abandoned** and counted, never joined or respawned. Test this with an injected job that never returns.
 - [ ] **P3.3** Account adapter: a custom `AccountTrait` for server-issued `SessionCredentials`, and offline accounts for dev and tests.
 - [ ] **P3.4** `AzaleaConnector` implements `MinecraftConnector`:
   - azalea's auto-reconnect and auto-respawn are **disabled**
   - connect timeout
-  - the model chosen in ADR-0008
-- [ ] **P3.5** 🔴 Map azalea events to `SessionEvent`, with unit tests on the pure mapping functions. Chat goes through the core sanitizer, and kick reasons through the core classifier input.
+  - start, hosting model and executor as decided in ADR-0008 §1–3
+- [ ] **P3.5** 🔴 Map azalea events to `SessionEvent`, with unit tests on the pure mapping functions. Chat goes through the core sanitizer, with the sender taken only from where ADR-0008 §7 allows; kick reasons go through the core classifier input. `Tick` and server events such as `KeepAlive` only update the session's liveness timestamps (ADR-0008 §4–5).
 - [ ] **P3.6** 🔴 Map each `Action` to azalea calls: look, rotate, jump, sneak, swing, use item, attack facing entity (with a reach check), hotbar, respawn, chat.
 - [ ] **P3.7** 🔴 Slow integration tests (`slow_*`, testcontainers + itzg, offline mode):
   - join and see the join message
@@ -913,7 +915,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - perform every action without an error
   - get kicked by RCON (`docker exec … rcon-cli kick`) and receive `Disconnected` with a reason
   - reconnect
-- [ ] **P3.8** 🔴 Clean-up test: after `disconnect()` the pool load and thread count go back to baseline.
+- [ ] **P3.8** 🔴 Clean-up test: after the full teardown from ADR-0008 §10 (not just `disconnect()`), the thread count and the number of live Worlds go back to baseline.
 
 **Security:**
 - Credentials are never logged.
@@ -957,7 +959,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - when the bucket or queue is full it returns `RateLimited` or `QueueFull` **instead of blocking**
   - user chat and mode chat share it
   - governor's clock is injected, so the tests run on controlled time (see §8)
-- [ ] **P4.6** 🔴 Watchdog: if there's no `Tick` for `watchdog_timeout` while Online, raise `WatchdogTimeout`, tear the session down and reconnect.
+- [ ] **P4.6** 🔴 Watchdog, while Online (fault table in ADR-0008 §5):
+  - no `Tick` for `watchdog_timeout`: raise `WatchdogTimeout`, tear the session down and reconnect
+  - no packet from the server for `packet_liveness_timeout`: tear the session down and treat it as a transient disconnect
+
+  Both timeouts come from `[runtime]` in the agent config (Appendix A).
 - [ ] **P4.7** 🔴 `Supervisor` and `Fleet` handle:
   - actors run in a `JoinSet` or `TaskTracker`
   - panics are detected and the actor restarted, within the intensity limit
@@ -1210,6 +1216,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P9.3** 🔴 `MicrosoftAuthProvider` port (`start_device_flow`, `poll`, `refresh`, `minecraft_session`), with an `azalea-auth` adapter and a fake.
   - Use azalea-auth's default client ID; a custom Azure app ID would need approval from Mojang.
   - **Never** use azalea's file cache.
+  - At `trace`, azalea-auth logs Microsoft access and refresh tokens. `fleet-server` caps the `azalea_auth` log level at `info`, whatever the configured filter says.
 - [ ] **P9.4** 🔴 Device-code flow:
   - `POST /accounts/link` returns `{flow_id, user_code, verification_uri, expires_at}`.
   - A background poller runs bounded and cancellable, with per-user and total caps.
@@ -1540,9 +1547,9 @@ command_allowlist = ["/spawn", "/home", "/afk"]   # usable with Control; every o
 name = "agent-1"
 
 [runtime]
-mc_host_threads = 2
 max_bots = 50
 watchdog_timeout_secs = 30
+packet_liveness_timeout_secs = 30
 shutdown_timeout_secs = 10
 heartbeat_file = "/tmp/afkfleet-agent.alive"
 

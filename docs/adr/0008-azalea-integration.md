@@ -225,7 +225,7 @@ Closing the thread drops its `LocalSet`, which drops azalea's runner task and wi
   - Never hold an ECS guard (`component()` returns one) while calling another `Client` method on the same thread: `parking_lot` locks aren't reentrant. azalea itself does exactly this in `SwarmBuilder::start`: its client-handler loop calls `username()` while holding `ecs.write()`, which deadlocks when an event arrives after `exit()` cleared the World. That's the reason we avoid `ClientBuilder` and `SwarmBuilder`; report it upstream.
   - azalea relies on `#[doc(hidden)] start_ecs_runner`, `RawConnection::write_raw` and the plugin list. All are re-checked at every azalea bump (ADR-0003 step 5).
 - **Hangs can't be contained inside the process,** only bounded (a single-threaded executor, per-host-thread blast radius, abandoned-thread limit, process restart). If production shows frequent hangs, the process-per-bot connector stays the escape hatch (ADR-0004).
-- **Plan changes this implies** (proposed in the Phase 1 PR, not made yet):
+- **Plan changes this implies** (accepted in the Phase 1 review and applied to Plan.md in the same PR):
   - P2.4: the key table.
   - P2.7: the `afk` preset and the idle timer.
   - P2.10 / P3.5: `SessionEvent` needs a packet-liveness signal.

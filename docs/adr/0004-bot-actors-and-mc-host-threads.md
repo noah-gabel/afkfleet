@@ -39,7 +39,7 @@ The Phase 1 spike measured both (ADR-0008, P1.6 and P1.7):
 - **Async-native actors.** They use tokio timers and channels, so they're fully testable with fakes and paused time.
 - **Blast radius of one bot.** A panic or a hang affects exactly one bot. A hang leaks one thread until the process restarts.
 - **Cost.** At 50 bots: 222 MiB, 0.43 cores and 58 threads (P1.7). That's comfortable for a small VPS.
-- **`McHostPool` (P3.2) changes** from "N threads, least-loaded placement, respawn" to "a thread per session, abandon on hang". Its tests change with it; the change is proposed in the Phase 1 PR.
+- **`McHostPool` (P3.2) changes** from "N threads, least-loaded placement, respawn" to "a thread per session, abandon on hang". Its tests change with it; Plan.md P3.2 was updated in the Phase 1 PR.
 - **Escape hatch.** If in-process isolation turns out not to be enough (e.g. frequent hangs), a process-per-bot connector can implement the same port without touching the runtime.
 
 ## Alternatives considered
