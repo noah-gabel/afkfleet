@@ -1,0 +1,29 @@
+---
+source: crates/fleet-core/src/mode/definition.rs
+expression: json
+---
+{
+  "steps": [
+    {
+      "action": {
+        "type": "select_hotbar_slot",
+        "slot": 0
+      },
+      "schedule": {
+        "type": "at_start"
+      },
+      "probability": 100
+    },
+    {
+      "action": {
+        "type": "attack_facing_entity"
+      },
+      "schedule": {
+        "type": "every",
+        "interval_ms": 650,
+        "jitter_ms": 150
+      },
+      "probability": 100
+    }
+  ]
+}

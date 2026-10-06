@@ -917,7 +917,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Session ends.** `ConnectFailed`, `Disconnected`, `WatchdogTimeout` and `SessionClosed` are handled alike in Connecting and Online. `AuthInvalid` while Online counts as transient, so a server can't drive reconnects without a backoff.
   > - **`Notify`** only on entering Paused or Failed. The actor publishes every state change, plus `Died`, for the app.
   > - **More proptest invariants:** session and mode effects balance; at most 2 connects per `Start`, `Reset`, `Resume` or `RetryDue`; `Notify` and the breaker effects match the state change.
-- [ ] **P2.7** 🔴 The mode model:
+- [x] **P2.7** 🔴 The mode model:
   - `Action` enum: `Look{yaw,pitch}`, `RotateRandom{max_yaw,max_pitch}`, `Jump`, `Sneak{on}`, `SwingArm`, `UseItem`, `AttackFacingEntity`, `SelectHotbarSlot(0..=8)`, `SendChat(ChatMessage)`.
   - `Schedule`: `AtStart` or `Every{interval, jitter}`, plus a `probability`.
   - `ModeDefinition` and `validate()`, with these limits:
@@ -941,12 +941,31 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **JSON:** struct variants (`{"type":"select_hotbar_slot","slot":3}`), and `validate()` is `ModeDraft::validate`.
   > - **Limits:** probability is a percent from 1 to 100; interval and jitter are each ≤ 24 h; at most one `AtStart` chat step.
   > - **Commands:** `commands()` feeds the authorization check.
-- [ ] **P2.8** 🔴 `ModePlan`: a pure scheduler that takes a definition, an RNG and the current time and returns `(next_due, Vec<Action>)`. The runtime then only sleeps and executes. Tests use a seeded RNG.
+
+  > Note (P2.7, built in group C): The user decided five questions on 2026-10-06 (ADR-0010):
+  > - **Limited steps.** A mode has at most one at-start and one repeating step each for `AttackFacingEntity` and `SendChat`. Otherwise two steps would get around the attack or chat interval, or fire together on every join.
+  > - **Angles** are degrees. `Look`: yaw −180 to 180, pitch −90 to 90. `RotateRandom`: `max_yaw` 0 to 180, `max_pitch` 0 to 90, not both 0. NaN and ±∞ are rejected.
+  > - **Errors.** `validate` returns the first `ModeError` in step order. `step` is the index into `steps`, and angle errors name their field.
+  > - **New types fail closed.** An older server can't read a stored mode that uses a newer action or schedule type; the rollback promise covers new fields only.
+  > - **Presets** are only the definitions `ModeDefinition::afk()` and `farm()`. Their names come with P5.1 and their fixed IDs with P11.1.
+  >
+  > Also settled while building it (ADR-0010):
+  > - **JSON:** `{"steps":[{"action":{"type":"swing_arm"},"schedule":{"type":"every","interval_ms":20000,"jitter_ms":20000},"probability":100}]}`. Every field is required, and reading a `ModeDefinition` runs `validate`.
+  > - **`HotbarSlot`** is a newtype for 0..=8, because azalea panics above 8 (ADR-0008 §8). An invalid slot fails while deserializing, like an invalid `ChatMessage`.
+  > - **Whole milliseconds.** `validate` drops anything finer than a millisecond before checking, so a definition round-trips through its JSON exactly.
+  > - **Snapshots** pin serde_json's own output: `afk_preset`, `farm_preset` and `all_variants` (every type and field name).
+- [x] **P2.8** 🔴 `ModePlan`: a pure scheduler that takes a definition, an RNG and the current time and returns `(next_due, Vec<Action>)`. The runtime then only sleeps and executes. Tests use a seeded RNG.
 
   > Note (P2.8) (ADR-0010):
   > - **Return value.** `PlanTick { actions: Vec<PlannedAction>, next_due: Option<…> }`. `RotateRandom` is resolved to a relative `Turn`, and chat is kept separate for the P4.5 queue.
   > - **Timing.** Gaps are uniform in [interval, interval + jitter], the first run comes one gap after the start, and there's no catch-up.
   > - **Pitch.** After applying a `Turn`, the adapter (P3.6) clamps the pitch to [-90, 90].
+
+  > Note (P2.8, built in group C) (ADR-0010):
+  > - **API.** `ModePlan::start(&definition, now, rng) -> (ModePlan, PlanTick)` runs the at-start steps, and `tick(now, rng) -> PlanTick` runs every due step in step order. `PlannedAction` is `Game(GameAction)` or `Chat(ChatMessage)`.
+  > - **`GameAction`** lives in `fleet_core::mode`, as the user decided; P2.10's `perform` takes it.
+  > - **Rescheduling from `now`.** A step that ran is due again one gap after `now`, not after its old due time. So there's no catch-up, and two runs are never closer than the interval, even when the runtime wakes late. A skipped roll reschedules too.
+  > - **No serde** on `ModePlan`, `PlanTick`, `PlannedAction` or `GameAction`.
 - [ ] **P2.9** 🔴 Authorization: `Role`, `GrantLevel`, `Permission`, `Actor`, `ResourceContext`, `authorize()`.
   - An **exhaustive matrix test** covers every role × grant × permission. It's generated and snapshotted with insta, so every change shows up in review.
   - Edge cases: an Admin acting on the Owner or another Admin, granting above your own level, deny by default.
@@ -973,6 +992,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **`disconnect()`** is the full ADR-0008 §10 teardown.
   > - **Liveness** stamps are `std::time::Instant`, set when the session is created, so they're never empty.
   > - **`SessionCredentials`** is `Offline` or `Online`.
+
+  > Note (P2.10, from group C): `perform` takes `fleet_core::mode::GameAction`, which P2.8 already defines. Its hotbar slot is a `HotbarSlot`, so the port can't get a slot above 8 (ADR-0010).
 - [ ] **P2.11** A `thiserror` error enum per module, and crate- and module-level docs.
 
   > Note (P2.11): Error enums are built in each task, because each task tests its error paths first. P2.11 audits them and writes the crate docs (ADR-0010).
@@ -1020,6 +1041,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P3.5, from the group A review): **Logging chat.** Sanitized chat text keeps `\n`. Log it as a structured field (`?` or JSON), never with `%` (Display), so a server can't forge log lines.
 - [ ] **P3.6** 🔴 Map each `Action` to azalea calls: look, rotate, jump, sneak, swing, use item, attack facing entity (with a reach check), hotbar, respawn, chat.
+
+  > Note (P3.6, from group C, the user's idea): Check whether azalea can hold right-click (use item) down continuously, the way `Sneak{on}` holds sneak. If it can, propose a `HoldUse{on}` action as an additive change to the mode model. It's a new action type, so older servers reject modes that use it (ADR-0010).
 - [ ] **P3.7** 🔴 Slow integration tests (`slow_*`, testcontainers + itzg, offline mode):
   - join and see the join message
   - send chat and see it echoed back
@@ -1140,6 +1163,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - validated with garde, with clear error messages
   - `[standalone]` and `[control_plane]` are mutually exclusive
   - standalone mode only allows **offline** accounts
+
+  > Note (P5.1, from group C): `mode = "afk"` and `mode = "farm"` in `[[standalone.bots]]` map to `ModeDefinition::afk()` and `ModeDefinition::farm()`. Core has no lookup by name; this task adds it (ADR-0010).
 - [ ] **P5.2** Telemetry: pretty logs in dev and JSON in prod, an env filter, and a panic hook that logs through `tracing`.
 - [ ] **P5.3** Wiring: `McHostPool` + `AzaleaConnector` + `Fleet`, with the standalone spec source.
 - [ ] **P5.4** 🔴 Signals (Ctrl+C, SIGTERM) trigger a graceful shutdown within `shutdown_timeout`.
@@ -1464,6 +1489,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `bots`: 1:1 with an account; server address, mode, desired state, auto-start, assigned agent
   - `modes`: owner, visibility, definition JSON (validated by core), version
   - `chat_messages`
+
+  > Note (P11.1, from group C): The `modes` migration seeds the built-in modes `afk` and `farm`: fixed v7 IDs (ADR-0010), no owner, and the JSON of `ModeDefinition::afk()` and `farm()`.
 - [ ] **P11.2** 🔴 Bot endpoints:
   - `GET /bots`, `GET /bots/{id}`
   - `PATCH /bots/{id}` (server, mode, auto-start)
@@ -1484,6 +1511,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P11.4** 🔴 Modes CRUD: `GET`, `POST`, `PUT`, `DELETE` on `/modes`. Core validation errors become field errors. Built-in modes are read-only.
 
   > Note (P11.4, from Phase 2): Editing a mode that's assigned to bots must re-run the command check for every one of them. A mode with a command outside the allowlist needs Manage on each bot (ADR-0010).
+
+  > Note (P11.4, from group C): `ModeDraft::validate` stops at the first error. Each `ModeError` becomes a field error at `steps[step]`: `AngleOutOfRange` names its field, and `DuplicateStep` its `LimitedStep` kind (ADR-0010).
 - [ ] **P11.5** 🔴 Live events:
   1. `POST /events/ticket` returns a single-use ticket valid for 30 s (moka).
   2. The client opens a WebSocket at `GET /events?ticket=…`.
