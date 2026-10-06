@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc e34eda9e427c34d9a63d91b590a8050dfdccc4a3043bc9fbc2ad508e860737a0 # shrinks to draft = ModeDraft { steps: [Step { action: AttackFacingEntity, schedule: Every { interval: 500ms, jitter: 0ns }, probability: 1 }] }

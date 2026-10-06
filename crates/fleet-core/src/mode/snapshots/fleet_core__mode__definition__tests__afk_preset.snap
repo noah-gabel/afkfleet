@@ -1,0 +1,32 @@
+---
+source: crates/fleet-core/src/mode/definition.rs
+expression: json
+---
+{
+  "steps": [
+    {
+      "action": {
+        "type": "rotate_random",
+        "max_yaw": 30.0,
+        "max_pitch": 10.0
+      },
+      "schedule": {
+        "type": "every",
+        "interval_ms": 45000,
+        "jitter_ms": 75000
+      },
+      "probability": 100
+    },
+    {
+      "action": {
+        "type": "swing_arm"
+      },
+      "schedule": {
+        "type": "every",
+        "interval_ms": 20000,
+        "jitter_ms": 20000
+      },
+      "probability": 100
+    }
+  ]
+}

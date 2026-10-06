@@ -56,12 +56,13 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
 - **JSON** is used only for `modes.definition_json` and the agent config.
   - IDs serialize through `try_from`/`into` `Uuid`. That's the wire format of `transparent`, but validated.
   - Value objects use `try_from = "String"`, `into = "String"`, so every deserialize re-runs the constructor.
-  - Mode types are internally tagged (`"type"`), snake_case, with **struct variants only**: serde can't serialize `Variant(u8)` or `Variant(UnitEnum)` inside an internally tagged enum.
+  - Mode types are internally tagged (`"type"`), snake_case, with **unit or struct variants, never tuple or newtype variants**: serde can't serialize `Variant(u8)` or `Variant(UnitEnum)` inside an internally tagged enum. A unit variant reads and writes as `{"type":"jump"}`. (Clarified in group C: the first wording said "struct variants only".)
   - Durations are `*_ms` integers.
 - **Compatibility:**
   - Unknown fields are ignored when reading stored data, so a rolled-back server can still read newer rows. API input stays strict through the DTOs' `deny_unknown_fields` (P6.9).
   - Changes are additive only, with `#[serde(default)]`. A rename or removal needs a DB migration that rewrites the stored JSON.
-  - insta snapshots of the presets are the tripwire.
+  - **New tags fail closed** *(group C)*. A new action or schedule type is a tag an older server doesn't know, so a stored mode that uses one fails to load there instead of running in part. The rollback promise above covers new fields, not new tags.
+  - insta snapshots of the presets, and of a draft with every tag and field name, are the tripwire.
 - **SQL columns** (`chat_messages.kind`, `users.role`, `account_grants.level`) use `as_str()` and `FromStr`. A round-trip test pins the strings.
 - **No serde in Phase 2** for `IncomingChat`, `DisconnectReason`, `BotState`, the policies, `ModePlan`, `Liveness` or `SessionCredentials`. Their wire formats come with the proto and DTO conversions (P6, P10).
 
@@ -80,7 +81,7 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
 ### Refinements of Plan.md, Appendix E and ADR-0008
 **IDs (P2.1).**
 - The constructor is `new_v7(created_at, random: [u8; 10])`. It goes through `uuid::Builder::from_unix_timestamp_millis` and rejects timestamps outside 0 ≤ ms < 2⁴⁸, which uuid would otherwise truncate silently.
-- Parsing and deserializing accept only v7 UUIDs. Built-in mode rows get fixed v7 constants.
+- Parsing and deserializing accept only v7 UUIDs. Built-in mode rows get fixed v7 constants, which P11.1's migration seeds *(group C)*.
 
 **Value objects (P2.2).**
 - **`ChatMessage`:**
@@ -166,9 +167,10 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
   - Every `RequestSession` gets exactly one answer; a timeout becomes `SessionUnavailable{retryable: true}`. Connecting ends through fleet-mc's connect timeout *(group B)*.
   - The actor publishes every state change, plus `Died`, as events for the app (P4.7, P11). `Notify` is only for the alerts above *(group B)*.
 
-**Modes (P2.7, P2.8).**
+**Modes (P2.7, P2.8).** Points marked *(group C)* were settled while building P2.7 and P2.8. The user decided the limited steps, the angle ranges, the first error, new tags failing closed and the preset scope on 2026-10-06.
 - **`afk` preset:** `RotateRandom` ±30° yaw and ±10° pitch every 45–120 s, plus `SwingArm` every 20–40 s. 40 s is below 60 s, the shortest non-zero `player-idle-timeout`; rotation alone doesn't reset the idle timer (ADR-0008 §8).
 - **`farm` preset:** `SelectHotbarSlot(0)` at start, plus `AttackFacingEntity` every 650–800 ms, with no Look: the server restores the account's saved rotation at join. Any other direction or slot is a custom mode.
+- **Presets are definitions only** *(group C)*: `ModeDefinition::afk()` and `farm()`. The agent config's names (`mode = "afk"`) come with P5.1, the fixed IDs with P11.1.
 - **Schedules:**
   - Each gap is uniform in [interval, interval + jitter].
   - The first run comes one gap after the start; there's no catch-up after a long gap.
@@ -176,8 +178,16 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
   - Interval and jitter are each ≤ 24 h.
   - An empty mode is valid (idle).
   - At most one `AtStart` chat step, because it runs on every join.
+- **Limited steps** *(group C)*: at most one `AtStart` and one `Every` step each for `AttackFacingEntity` and `SendChat`. The intervals are per step, so two repeating attacks at 500 ms would attack every 250 ms, and 32 chat steps at 30 s would send about one message a second; several at-start attacks would fire together on every join.
+- **Angles** *(group C)* are degrees. `Look`: yaw −180 to 180 (as the debug screen shows it), pitch −90 to 90. `RotateRandom`: `max_yaw` 0 to 180, `max_pitch` 0 to 90, and not both 0, since that never turns. NaN, ±∞ and negative maxima are rejected; a negative maximum would also make the sampled range empty.
+- **Validation** *(group C)*:
+  - `ModeDraft::validate` returns the first `ModeError` in step order. `TooManySteps` is checked before any step; within a step the action comes first, then the probability, the schedule and the limited kind.
+  - `step` is the index into `steps`, and `AngleOutOfRange` names its field, so P11.4 can show field errors.
+  - The minimum interval and the limited kinds come from exhaustive `match`es over `Action`, and so does `commands()`: a new action needs a decision about each.
+  - Durations count in whole milliseconds, as they're stored: `validate` drops anything finer before checking, so a definition round-trips through its JSON exactly.
+- **`HotbarSlot`** *(group C)* is a newtype for 0..=8, because azalea panics above 8 (ADR-0008 §8), and the port's actions carry it too. An invalid slot fails while deserializing, like an invalid `ChatMessage`.
 - **`ModePlan` returns resolved `PlannedAction`s:** `RotateRandom` becomes a relative `Turn`, and chat is kept apart so it goes through the P4.5 queue. `next_due` is `None` when only `AtStart` steps exist. After applying a `Turn`, the adapter (P3.6) clamps the pitch to [-90, 90].
-- **Mode JSON** uses struct variants (`{"type":"select_hotbar_slot","slot":3}`) instead of Plan.md's tuple notation.
+- **Mode JSON** uses struct variants (`{"type":"select_hotbar_slot","slot":3}`) instead of Plan.md's tuple notation. A mode is `{"steps":[{"action":{…},"schedule":{"type":"every","interval_ms":…,"jitter_ms":…},"probability":…}]}`; every field is required *(group C)*.
 
 **Authorization (P2.9).**
 - **Admins:** an Admin's implicit Manage covers accounts owned by Members, plus the Admin's own. Accounts of the Owner and of other Admins need an explicit grant (§7.1 over §7.3).
@@ -202,6 +212,7 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
   - **P4.1** adds per-server conflict texts (below).
   - **P4.2** executes the breaker effects and follows the group B actor contracts. A spec change to a Paused or Failed bot takes effect at Resume or Reset.
   - **P11** re-checks mode commands on edit. For Paused or Failed bots the app shows Resume or Reset instead of Start and Stop, because the state machine ignores Start and Stop there.
+  - **P5.1** maps the config's mode names to the presets, **P11.1** seeds the built-in mode rows with fixed IDs, and **P11.4** turns each `ModeError` into a field error at `steps[step]` *(group C)*.
 - **Decided in group B: plain-text duplicate login** (flagged in the group A review).
   - **The problem:** a duplicate login reported as plain text, with no translation key, classifies as transient (ADR-0008 §6). A proxy or plugin may kick the bot that way when a human logs in; BungeeCord/Waterfall in online mode probably does. The bot then reconnects and kicks the human, and the circuit breaker only limits how often.
   - **The decision:** no state-machine change. A bot's spec gets an optional list of kick texts that count as a duplicate login, empty by default (P4.1). The classifier compares the sanitized kick message exactly against that list, so vanilla servers still go by key.
@@ -224,3 +235,7 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
 - **The breaker outcome as a cause on `ScheduleRetry`** (group B). A stable session that ends without a retry (Stop, a duplicate login, a permanent kick, `CrashLoop`) would never report its success. A stale cool-down would then survive into the next run, and one failed connect after Resume would wait 15 min instead of 5–10 s.
 - **Pausing on every keyless kick while Online** (group B). Paper and Spigot send their configurable shutdown and restart kicks as plain text, so every server restart would pause every bot until someone resumed it.
 - **Documenting proxies as unsupported for conflict detection** (group B). It's cheaper, but it leaves the bot fighting a human behind a BungeeCord-style proxy.
+- **Per-step limits only, or a combined average rate per kind** (group C). Per step leaves attacks without any cap. An average rate (Σ 1/interval ≤ 1/min) is more flexible, but two steps can still fire at the same moment.
+- **An `Unknown` catch-all action** (group C). An older server could then run the rest of a newer mode, but a rolled-back bot would silently run only part of it.
+- **All errors at once** (group C). P11.4 could show every field error together, but it's more API and test surface, and the app's schema catches most mistakes before they reach the server.
+- **A preset enum with names and fixed IDs** (group C). The names would become a config format, and the IDs would need an unchecked constructor in `id`, before anything uses them.

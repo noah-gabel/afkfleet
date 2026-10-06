@@ -13,12 +13,14 @@
 //! - [`disconnect`]: why a session ended, and whether the bot retries.
 //! - [`resilience`]: retry backoff, failure windows and the circuit breaker.
 //! - [`bot`]: the bot state machine.
+//! - [`mode`]: what a bot does while it's online, and the presets.
 //! - [`time`]: saturating arithmetic on points in time and durations.
 
 pub mod bot;
 pub mod chat;
 pub mod disconnect;
 pub mod id;
+pub mod mode;
 pub mod resilience;
 mod text;
 pub mod time;
