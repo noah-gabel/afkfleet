@@ -21,8 +21,12 @@ repository = "https://github.com/noah-gabel/afkfleet"
 # aws-lc-rs only; no ring, native-tls or webpki-roots. All other features are enabled
 # by the member that uses the crate.
 [workspace.dependencies]
+# backon: without default features only fastrand is left; the defaults pull in tokio.
+backon = { version = "1.6.0", default-features = false }
 # chrono: no `clock`/`now`, because fleet-core takes time as a parameter (ADR-0010).
 chrono = { version = "0.4.45", default-features = false }
+# rand: no `sys_rng`/`thread_rng`; fleet-core takes an RNG as a parameter (ADR-0010).
+rand = { version = "0.10.3", default-features = false }
 serde = "1.0.229"
 thiserror = "2.0.21"
 # uuid: never `v4`/`v7`/`rng`, which pull in getrandom; IDs are minted from caller data (ADR-0010).

@@ -11,9 +11,13 @@
 //! - [`value`]: server addresses and the names of Minecraft accounts and users.
 //! - [`chat`]: the messages bots send, and sanitized messages they receive.
 //! - [`disconnect`]: why a session ended, and whether the bot retries.
+//! - [`resilience`]: retry backoff, failure windows and the circuit breaker.
+//! - [`time`]: saturating arithmetic on points in time and durations.
 
 pub mod chat;
 pub mod disconnect;
 pub mod id;
+pub mod resilience;
 mod text;
+pub mod time;
 pub mod value;

@@ -880,7 +880,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P2.4): The input also covers these reasons (ADR-0010):
   > - `AuthRejected`, classified as `AuthInvalid`
   > - `SessionCrashed`, `WatchdogTimeout`, `LivenessTimeout` and `ConnectFailed` (including `HostUnavailable`), all transient
-- [ ] **P2.5** 🔴 Resilience policies:
+- [x] **P2.5** 🔴 Resilience policies:
   - `RetryPolicy` wraps `backon`'s exponential builder: base, factor, cap, jitter, and a reset after a stable period. Tests assert **bounds**, not exact values.
   - `CircuitBreaker` (closed, open, half-open) is pure, with time passed in.
   - Proptests: delay ≤ cap, and the breaker never lets an attempt through while open.
