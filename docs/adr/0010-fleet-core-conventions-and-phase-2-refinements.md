@@ -64,7 +64,7 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
   - **New tags fail closed** *(group C)*. A new action or schedule type is a tag an older server doesn't know, so a stored mode that uses one fails to load there instead of running in part. The rollback promise above covers new fields, not new tags.
   - insta snapshots of the presets, and of a draft with every tag and field name, are the tripwire.
 - **SQL columns** (`chat_messages.kind`, `users.role`, `account_grants.level`) use `as_str()` and `FromStr`. A round-trip test pins the strings.
-- **No serde in Phase 2** for `IncomingChat`, `DisconnectReason`, `BotState`, the policies, `ModePlan`, `Liveness` or `SessionCredentials`. Their wire formats come with the proto and DTO conversions (P6, P10).
+- **No serde in Phase 2** for `IncomingChat`, `DisconnectReason`, `BotState`, the policies, `ModePlan` (with `PlanTick`, `PlannedAction` and `GameAction`, *group C*), `Liveness` or `SessionCredentials`. Their wire formats come with the proto and DTO conversions (P6, P10).
 
 **Lint guard.** `crates/fleet-core/clippy.toml` repeats the root test allowances and adds `disallowed-methods` and `disallowed-types` for the clock and OS-randomness entry points.
 - Missing features alone don't keep them out: once P4 and P6 turn on chrono `clock` and rand's std features, a workspace build unifies those features into `fleet-core` too.
@@ -187,6 +187,9 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
   - Durations count in whole milliseconds, as they're stored: `validate` drops anything finer before checking, so a definition round-trips through its JSON exactly.
 - **`HotbarSlot`** *(group C)* is a newtype for 0..=8, because azalea panics above 8 (ADR-0008 §8), and the port's actions carry it too. An invalid slot fails while deserializing, like an invalid `ChatMessage`.
 - **`ModePlan` returns resolved `PlannedAction`s:** `RotateRandom` becomes a relative `Turn`, and chat is kept apart so it goes through the P4.5 queue. `next_due` is `None` when only `AtStart` steps exist. After applying a `Turn`, the adapter (P3.6) clamps the pitch to [-90, 90].
+  - **API** *(group C)*: `ModePlan::start(&definition, now, rng) -> (ModePlan, PlanTick)` runs the at-start steps and schedules the rest; `tick(now, rng) -> PlanTick` runs every due step in step order. `PlannedAction` is `Game(GameAction)` or `Chat(ChatMessage)`, and `GameAction` lives in `mode`, as the user decided.
+  - **Rescheduling from `now`** *(group C)*: a step that ran is due again one gap after `now`, not after its old due time. That is what "no catch-up" means, and it keeps two runs of a step at least an interval apart even when the runtime wakes late, so the attack and chat limits hold. A skipped roll reschedules too.
+  - A tick before the next due time, including one with the clock gone backwards, runs nothing *(group C)*.
 - **Mode JSON** uses struct variants (`{"type":"select_hotbar_slot","slot":3}`) instead of Plan.md's tuple notation. A mode is `{"steps":[{"action":{…},"schedule":{"type":"every","interval_ms":…,"jitter_ms":…},"probability":…}]}`; every field is required *(group C)*.
 
 **Authorization (P2.9).**
@@ -199,7 +202,7 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
 **Minecraft ports (P2.10).**
 - `connect` returns a `Result`, for immediate failures such as the abandoned-thread limit. Network failures still arrive as `ConnectionFailed` events.
 - `SessionHandle` gains `respawn()`, because `Effect::Respawn` needs a port method.
-- `perform` takes a `GameAction`; chat goes through `send_chat`.
+- `perform` takes a `GameAction`; chat goes through `send_chat`. `GameAction` is `fleet_core::mode::GameAction`, defined in P2.8, and its hotbar slot is a `HotbarSlot` *(group C)*.
 - `disconnect()` means the full teardown from ADR-0008 §10, including abandoning a hung thread.
 - `SessionCredentials` is `Offline{username}` or `Online{username, uuid, access_token, expires_at}`.
 
@@ -212,7 +215,7 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
   - **P4.1** adds per-server conflict texts (below).
   - **P4.2** executes the breaker effects and follows the group B actor contracts. A spec change to a Paused or Failed bot takes effect at Resume or Reset.
   - **P11** re-checks mode commands on edit. For Paused or Failed bots the app shows Resume or Reset instead of Start and Stop, because the state machine ignores Start and Stop there.
-  - **P5.1** maps the config's mode names to the presets, **P11.1** seeds the built-in mode rows with fixed IDs, and **P11.4** turns each `ModeError` into a field error at `steps[step]` *(group C)*.
+  - **P2.10** takes `mode::GameAction` in `perform`. **P5.1** maps the config's mode names to the presets, **P11.1** seeds the built-in mode rows with fixed IDs, and **P11.4** turns each `ModeError` into a field error at `steps[step]` *(group C)*.
 - **Decided in group B: plain-text duplicate login** (flagged in the group A review).
   - **The problem:** a duplicate login reported as plain text, with no translation key, classifies as transient (ADR-0008 §6). A proxy or plugin may kick the bot that way when a human logs in; BungeeCord/Waterfall in online mode probably does. The bot then reconnects and kicks the human, and the circuit breaker only limits how often.
   - **The decision:** no state-machine change. A bot's spec gets an optional list of kick texts that count as a duplicate login, empty by default (P4.1). The classifier compares the sanitized kick message exactly against that list, so vanilla servers still go by key.
@@ -238,4 +241,5 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
 - **Per-step limits only, or a combined average rate per kind** (group C). Per step leaves attacks without any cap. An average rate (Σ 1/interval ≤ 1/min) is more flexible, but two steps can still fire at the same moment.
 - **An `Unknown` catch-all action** (group C). An older server could then run the rest of a newer mode, but a rolled-back bot would silently run only part of it.
 - **All errors at once** (group C). P11.4 could show every field error together, but it's more API and test surface, and the app's schema catches most mistakes before they reach the server.
+- **Rescheduling from the old due time** (group C). It keeps a steadier rhythm, but after a late tick the next run could come sooner than the interval, so the chat and attack limits wouldn't hold.
 - **A preset enum with names and fixed IDs** (group C). The names would become a config format, and the IDs would need an unchecked constructor in `id`, before anything uses them.

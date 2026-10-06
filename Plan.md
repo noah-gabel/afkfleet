@@ -954,12 +954,18 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **`HotbarSlot`** is a newtype for 0..=8, because azalea panics above 8 (ADR-0008 §8). An invalid slot fails while deserializing, like an invalid `ChatMessage`.
   > - **Whole milliseconds.** `validate` drops anything finer than a millisecond before checking, so a definition round-trips through its JSON exactly.
   > - **Snapshots** pin serde_json's own output: `afk_preset`, `farm_preset` and `all_variants` (every type and field name).
-- [ ] **P2.8** 🔴 `ModePlan`: a pure scheduler that takes a definition, an RNG and the current time and returns `(next_due, Vec<Action>)`. The runtime then only sleeps and executes. Tests use a seeded RNG.
+- [x] **P2.8** 🔴 `ModePlan`: a pure scheduler that takes a definition, an RNG and the current time and returns `(next_due, Vec<Action>)`. The runtime then only sleeps and executes. Tests use a seeded RNG.
 
   > Note (P2.8) (ADR-0010):
   > - **Return value.** `PlanTick { actions: Vec<PlannedAction>, next_due: Option<…> }`. `RotateRandom` is resolved to a relative `Turn`, and chat is kept separate for the P4.5 queue.
   > - **Timing.** Gaps are uniform in [interval, interval + jitter], the first run comes one gap after the start, and there's no catch-up.
   > - **Pitch.** After applying a `Turn`, the adapter (P3.6) clamps the pitch to [-90, 90].
+
+  > Note (P2.8, built in group C) (ADR-0010):
+  > - **API.** `ModePlan::start(&definition, now, rng) -> (ModePlan, PlanTick)` runs the at-start steps, and `tick(now, rng) -> PlanTick` runs every due step in step order. `PlannedAction` is `Game(GameAction)` or `Chat(ChatMessage)`.
+  > - **`GameAction`** lives in `fleet_core::mode`, as the user decided; P2.10's `perform` takes it.
+  > - **Rescheduling from `now`.** A step that ran is due again one gap after `now`, not after its old due time. So there's no catch-up, and two runs are never closer than the interval, even when the runtime wakes late. A skipped roll reschedules too.
+  > - **No serde** on `ModePlan`, `PlanTick`, `PlannedAction` or `GameAction`.
 - [ ] **P2.9** 🔴 Authorization: `Role`, `GrantLevel`, `Permission`, `Actor`, `ResourceContext`, `authorize()`.
   - An **exhaustive matrix test** covers every role × grant × permission. It's generated and snapshotted with insta, so every change shows up in review.
   - Edge cases: an Admin acting on the Owner or another Admin, granting above your own level, deny by default.
@@ -986,6 +992,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **`disconnect()`** is the full ADR-0008 §10 teardown.
   > - **Liveness** stamps are `std::time::Instant`, set when the session is created, so they're never empty.
   > - **`SessionCredentials`** is `Offline` or `Online`.
+
+  > Note (P2.10, from group C): `perform` takes `fleet_core::mode::GameAction`, which P2.8 already defines. Its hotbar slot is a `HotbarSlot`, so the port can't get a slot above 8 (ADR-0010).
 - [ ] **P2.11** A `thiserror` error enum per module, and crate- and module-level docs.
 
   > Note (P2.11): Error enums are built in each task, because each task tests its error paths first. P2.11 audits them and writes the crate docs (ADR-0010).
