@@ -65,8 +65,9 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
 - **SQL columns** (`chat_messages.kind`, `users.role`, `account_grants.level`) use `as_str()` and `FromStr`. A round-trip test pins the strings.
 - **No serde in Phase 2** for `IncomingChat`, `DisconnectReason`, `BotState`, the policies, `ModePlan`, `Liveness` or `SessionCredentials`. Their wire formats come with the proto and DTO conversions (P6, P10).
 
-**Lint guard.** `crates/fleet-core/clippy.toml` repeats the root test allowances and adds `disallowed-methods` for the clock and OS-randomness entry points.
+**Lint guard.** `crates/fleet-core/clippy.toml` repeats the root test allowances and adds `disallowed-methods` and `disallowed-types` for the clock and OS-randomness entry points.
 - Missing features alone don't keep them out: once P4 and P6 turn on chrono `clock` and rand's std features, a workspace build unifies those features into `fleet-core` too.
+- The lists cover every entry point of the pinned versions: `Instant::now`, `SystemTime::now`, chrono's `Utc::now` and `Local::now`, rand's free functions (`rng`, `random*`, `fill`, `make_rng`) and the `ThreadRng`/`SysRng` types, and uuid's `now_v1`/`now_v6`/`now_v7`, `new_v4`, `new_v7` and `Timestamp::now`. A probe built with rand's `thread_rng` and uuid's `v7`/`std` features confirmed that clippy flags them. (Amended after the group A review: the first list had only `rand::rng` from rand, and only `now_v7`/`new_v4` from uuid.)
 - This makes the lints stricter, not weaker.
 
 **Dependencies** (versions from Plan.md §5; ADR-0009 policy):
