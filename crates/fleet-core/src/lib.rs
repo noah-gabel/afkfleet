@@ -12,8 +12,10 @@
 //! - [`chat`]: the messages bots send, and sanitized messages they receive.
 //! - [`disconnect`]: why a session ended, and whether the bot retries.
 //! - [`resilience`]: retry backoff, failure windows and the circuit breaker.
+//! - [`bot`]: the bot state machine.
 //! - [`time`]: saturating arithmetic on points in time and durations.
 
+pub mod bot;
 pub mod chat;
 pub mod disconnect;
 pub mod id;

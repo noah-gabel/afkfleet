@@ -1,0 +1,9 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 390333c48a315ecc306c9c77c51581e4f4928726b7345da8f60d5f2f67b699e1 # shrinks to since = 0, attempt = 1, online_for = 0, stable_after = 1, reason = Kicked(Kick { key: Some(TranslationKey("multiplayer.disconnect.unverified_username")), message: "bye" })
+cc 230e5ccb5383f26a15086f02e833c4b12127c476d027b4bec668b489c268acb8 # shrinks to state = Paused { reason: Conflict { kind: DuplicateLogin } }, event = CrashLoop, now = 1970-01-01T00:00:00Z
+cc f986d4536de793179f4fdcdd10eb6b91bdeee0f3bf668d6f17682e4088bce4a1 # shrinks to state = AwaitingSession { attempt: 1, fresh: false }, now = 1970-01-01T00:00:00Z

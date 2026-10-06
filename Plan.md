@@ -882,7 +882,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - `AuthRejected`, classified as `AuthInvalid`
   > - `SessionCrashed`, `WatchdogTimeout`, `LivenessTimeout` and `ConnectFailed` (including `HostUnavailable`), all transient
   >
-  > **Known limit.** A duplicate login that a proxy or plugin reports as plain text has no key, so it classifies as transient. See the open question under P2.6.
+  > **Known limit.** A duplicate login that a proxy or plugin reports as plain text has no key, so it classifies as transient. Decided in group B: P4.1 adds per-server conflict texts (see P2.6).
 - [x] **P2.5** 🔴 Resilience policies:
   - `RetryPolicy` wraps `backon`'s exponential builder: base, factor, cap, jitter, and a reset after a stable period. Tests assert **bounds**, not exact values.
   - `CircuitBreaker` (closed, open, half-open) is pure, with time passed in.
@@ -893,7 +893,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Jitter.** backon adds its jitter after the cap (`d + d·U[0,1)`), so it's given `max / 2`. Jittered delays then stay ≤ `max`, which requires `max ≥ 2 × base`. The jitter is seeded from the injected RNG.
   > - **`FailureWindow`.** A pure counter for "N failures within a window". It backs the breaker, and later P4.7.
   > - **Breaker.** One per bot, and it only decides how long to wait. Appendix E's "circuit open too long → Failed" arrow is dropped.
-- [ ] **P2.6** 🔴 The **bot state machine**: `BotState`, `BotEvent`, `Effect`, and `transition(&state, event, now) -> Transition` (Appendix E). It needs example tests for every transition and proptest invariants:
+- [x] **P2.6** 🔴 The **bot state machine**: `BotState`, `BotEvent`, `Effect`, and `transition(&state, event, now) -> Transition` (Appendix E). It needs example tests for every transition and proptest invariants:
   - A `Stop` from any state ends in `Stopped`, and emits `Disconnect` if a session exists.
   - `Failed` and `Paused` never emit `Connect` before `Reset` or `Resume`.
   - There is never a `Connect` effect while `Connecting` or `Online`.
@@ -906,7 +906,17 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Auth.** The state machine owns "request one fresh token, then `Failed(Auth)`".
   > - **Stop.** Without a session, `Stop` goes straight to `Stopped`. The first invariant reads "Stop, then SessionClosed, ends in Stopped".
   > - **Unfitting events** are no-ops.
-  > - **Open question, flagged and not yet decided.** A plain-text duplicate-login kick (no translation key) is transient, so behind a proxy that kicks that way the bot would reconnect and kick the human. Decide how the state machine or P4 handles it (ADR-0010, "Flagged, not decided").
+
+  > Note (P2.6, built in group B): The user decided three questions on 2026-10-06 (ADR-0010):
+  > - **Plain-text duplicate login.** No state-machine change: P4.1 adds per-server conflict texts. Until then, a keyless kick while Online backs off like any transient one, and a test pins that.
+  > - **Paused and Failed are sticky.** `Start` and `Stop` are no-ops there; only `Resume`, `Reset` and `CrashLoop` leave them. So the first invariant holds for every other state, and the second holds for any event sequence without `Reset` or `Resume`.
+  > - **Breaker effects.** `RecordFailure` (a session failed before the stable period, always right before `ScheduleRetry`), `RecordSuccess` (leaving Online after the stable period, whatever the exit) and `ResetBreaker` (`Start`, `Reset` or `Resume` (re)starts the bot).
+  >
+  > Also settled while building it (ADR-0010):
+  > - **Attempts.** `Backoff{n}` and `ScheduleRetry{n}` name the attempt that failed, and the actor waits `RetryPolicy::delay(n)`, so the first retry waits 5–10 s. The `RetryPolicy` docs now count failures, too.
+  > - **Session ends.** `ConnectFailed`, `Disconnected`, `WatchdogTimeout` and `SessionClosed` are handled alike in Connecting and Online. `AuthInvalid` while Online counts as transient, so a server can't drive reconnects without a backoff.
+  > - **`Notify`** only on entering Paused or Failed. The actor publishes every state change, plus `Died`, for the app.
+  > - **More proptest invariants:** session and mode effects balance; at most 2 connects per `Start`, `Reset`, `Resume` or `RetryDue`; `Notify` and the breaker effects match the state change.
 - [ ] **P2.7** 🔴 The mode model:
   - `Action` enum: `Look{yaw,pitch}`, `RotateRandom{max_yaw,max_pitch}`, `Jump`, `Sneak{on}`, `SwingArm`, `UseItem`, `AttackFacingEntity`, `SelectHotbarSlot(0..=8)`, `SendChat(ChatMessage)`.
   - `Schedule`: `AtStart` or `Every{interval, jitter}`, plus a `probability`.
@@ -1036,6 +1046,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P4.1** 🔴 `BotSpec` (account, server, mode, desired run state) and `BotSnapshot` (state, since, last disconnect reason, attempt, uptime).
 
   > Note (P4.1, from Phase 2): open question, flagged and not yet decided: fleet-proto and fleet-server also need to build a `BotSpec` (Appendix C `AssignBot`), but they may only depend on `fleet-core`.
+
+  > Note (P4.1, from group B): **Conflict texts.** A bot's spec gets an optional list of kick texts that count as a duplicate login, empty by default. Some proxies kick with plain text when a human logs in; BungeeCord/Waterfall in online mode probably does. The classifier compares the sanitized kick message exactly against the list, so vanilla servers still go by translation key. The list's limits and config keys are decided here (ADR-0010).
 - [ ] **P4.2** 🔴 `BotActor`:
   - `tokio::select!` over the inbox (`Start`, `Stop`, `UpdateSpec`, `SendChat`, `Reset`, `Resume`), session events, timers and cancellation.
   - It executes the core `Effect`s and computes retry delays with `RetryPolicy`.
@@ -1057,6 +1069,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Restart** and a server change go through `Stopping{restart}`.
 
   > Note (P4.2, from the group A review): **Half-open breaker.** `CircuitBreaker::permits` doesn't limit the half-open state to one attempt. The actor makes one attempt at a time and reports its outcome before it asks again.
+
+  > Note (P4.2, from group B) (ADR-0010):
+  > - **Breaker effects.** The actor runs `RecordFailure`, `RecordSuccess` and `ResetBreaker` on its `CircuitBreaker`, in order. Then for `ScheduleRetry{n}` it waits `RetryPolicy::delay(n)`, or until the breaker's cool-down ends if that's later.
+  > - **Session events.** Only the current session's events reach `transition()`. Once `Disconnect` has run, the actor drops that session's events, and it sends `SessionClosed` for it only if no newer session has connected since.
+  > - **Session requests.** Every `RequestSession` gets exactly one answer; a timeout becomes `SessionUnavailable{retryable: true}`.
+  > - **Published events.** Every state change, plus `Died`, goes out as an event for the app (P4.7, P11). `Notify` is only for alerts that need a human.
+  > - **Paused and Failed.** `Start` and `Stop` are no-ops there, so applying a spec's desired run state leaves them alone. A server change to a Paused or Failed bot takes effect at Resume or Reset.
 - [ ] **P4.3** 🔴 `SessionCredentialProvider` port:
   - In standalone mode it returns offline credentials.
   - In managed mode it asks the control plane (Phase 10).
@@ -1453,6 +1472,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   Every call is authorized, audited and reconciled.
 
   > Note (P11.2, from the group A review): **SSRF.** `ServerAddress` allows loopback and private addresses (ADR-0010). An SSRF policy for the server address must check the resolved IP addresses, not the host string.
+
+  > Note (P11.2, from group B): `start`, `stop` and `restart` change nothing for a Paused or Failed bot: the state machine ignores `Start` and `Stop` there (ADR-0010). Decide here what the API answers in that case.
 - [ ] **P11.3** 🔴 Chat:
   - `POST /bots/{id}/chat`:
     - takes a `ChatMessage`
@@ -1488,6 +1509,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - **Admin:** an audit-log viewer and an agents view.
 
   > Note (P11.9, from the group A review): **Chat console.** Render each message as its own block, with the sender outside the text, so a `\n[Server] …` inside a message can't pass as a separate line. The sanitizer keeps combining marks, so clip stacked ones (Zalgo text) with CSS overflow.
+
+  > Note (P11.9, from group B): **Controls.** For paused or failed bots, the app shows Resume or Reset instead of Start and Stop (ADR-0010).
 
 **DoD:** The user's real fleet runs for 24 h, managed from the app. Every event shows up live, and the logs contain no unhandled errors.
 
@@ -1824,3 +1847,9 @@ message ServerMessage {
  permanent kick / auth invalid twice / crash loop / circuit open too long ──▶ Failed ──Reset──▶ AwaitingSession
  duplicate login (a human is playing)                                      ──▶ Paused ──Resume──▶ AwaitingSession
 ```
+
+> Note (P2.6): The built state machine (`fleet_core::bot`) refines this chart. The changes are listed in ADR-0010:
+> - state fields, the `CrashLoop` event and `Stopping{restart}`
+> - sticky `Paused` and `Failed`
+> - the breaker effects `RecordFailure`, `RecordSuccess` and `ResetBreaker`
+> - no "circuit open too long" arrow
