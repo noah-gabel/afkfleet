@@ -1084,7 +1084,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 > - **Lint guards.** Clippy bans `unbounded_channel`, with two approved `#[expect]`s for azalea's mandated channels (P3.4). fleet-mc's clippy config bans azalea's Microsoft login functions. A `scripts/` test checks that every crate-local `clippy.toml` carries the root's settings.
 > - **Test servers.** Only local Docker servers: itzg in offline and online mode through testcontainers, with the image pinned in `deploy/compose.dev.yaml`. No public game servers.
 
-- [ ] **P3.1** 🔴 `fleet-testkit`: `FakeConnector` and `FakeSession`. They need to support:
+- [x] **P3.1** 🔴 `fleet-testkit`: `FakeConnector` and `FakeSession`. They need to support:
   - scripted connect results
   - injected events (`Joined`, `Chat`, `Died`, `Disconnected(reason)`)
   - liveness timestamps that a test can advance or freeze
