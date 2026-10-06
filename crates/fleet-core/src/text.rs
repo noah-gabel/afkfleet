@@ -5,6 +5,7 @@
 //! - control characters (Unicode category Cc) are never allowed
 //! - `§` starts a legacy formatting code
 //! - bidirectional controls can reorder what a reader sees ("Trojan Source")
+//! - invisible characters can hide text or make two names look identical
 
 /// The section sign, which starts a legacy Minecraft formatting code.
 pub(crate) const SECTION_SIGN: char = '§';
@@ -21,16 +22,38 @@ pub(crate) fn is_bidi_control(c: char) -> bool {
     BIDI_CONTROLS.contains(&c)
 }
 
-/// Zero-width and invisible format characters: zero-width space, non-joiner
-/// and joiner, word joiner, the byte-order mark and the soft hyphen. They can
-/// hide text or make two names look identical (ADR-0010).
-const INVISIBLE: [char; 6] = [
-    '\u{200B}', '\u{200C}', '\u{200D}', '\u{2060}', '\u{FEFF}', '\u{00AD}',
+/// Invisible characters, as inclusive ranges: the format characters (Unicode
+/// category Cf) that show no glyph, the line and paragraph separators, blank
+/// fillers and variation selectors. They can hide text, break a name across
+/// lines or make two names look identical (ADR-0010). The bidi controls have
+/// their own list. U+FE0F stays, because it selects the emoji form of a symbol.
+const INVISIBLE: [(char, char); 19] = [
+    ('\u{00AD}', '\u{00AD}'),   // soft hyphen
+    ('\u{034F}', '\u{034F}'),   // combining grapheme joiner
+    ('\u{115F}', '\u{1160}'),   // Hangul choseong and jungseong fillers
+    ('\u{17B4}', '\u{17B5}'),   // Khmer inherent vowels
+    ('\u{180B}', '\u{180F}'),   // Mongolian variation selectors and vowel separator
+    ('\u{200B}', '\u{200D}'),   // zero-width space, non-joiner and joiner
+    ('\u{2028}', '\u{2029}'),   // line and paragraph separators
+    ('\u{2060}', '\u{2064}'),   // word joiner and invisible math operators
+    ('\u{206A}', '\u{206F}'),   // deprecated format characters
+    ('\u{3164}', '\u{3164}'),   // Hangul filler
+    ('\u{FE00}', '\u{FE0E}'),   // variation selectors 1–15
+    ('\u{FEFF}', '\u{FEFF}'),   // byte-order mark
+    ('\u{FFA0}', '\u{FFA0}'),   // halfwidth Hangul filler
+    ('\u{FFF9}', '\u{FFFB}'),   // interlinear annotation controls
+    ('\u{13430}', '\u{1343F}'), // Egyptian hieroglyph format controls
+    ('\u{1BCA0}', '\u{1BCA3}'), // shorthand format controls
+    ('\u{1D173}', '\u{1D17A}'), // musical symbol format controls
+    ('\u{E0000}', '\u{E007F}'), // tags, which can spell out hidden text
+    ('\u{E0100}', '\u{E01EF}'), // variation selectors 17–256
 ];
 
-/// Whether `c` is a zero-width or invisible format character.
+/// Whether `c` is an invisible character.
 pub(crate) fn is_invisible(c: char) -> bool {
-    INVISIBLE.contains(&c)
+    INVISIBLE
+        .iter()
+        .any(|&(first, last)| (first..=last).contains(&c))
 }
 
 /// Whether [`sanitize`] keeps line breaks.
@@ -171,8 +194,39 @@ mod tests {
     #[case::word_joiner('\u{2060}')]
     #[case::byte_order_mark('\u{FEFF}')]
     #[case::soft_hyphen('\u{00AD}')]
+    #[case::combining_grapheme_joiner('\u{034F}')]
+    #[case::hangul_choseong_filler('\u{115F}')]
+    #[case::hangul_jungseong_filler('\u{1160}')]
+    #[case::khmer_inherent_vowel('\u{17B4}')]
+    #[case::mongolian_variation_selector('\u{180B}')]
+    #[case::mongolian_vowel_separator('\u{180E}')]
+    #[case::line_separator('\u{2028}')]
+    #[case::paragraph_separator('\u{2029}')]
+    #[case::function_application('\u{2061}')]
+    #[case::invisible_plus('\u{2064}')]
+    #[case::inhibit_symmetric_swapping('\u{206A}')]
+    #[case::nominal_digit_shapes('\u{206F}')]
+    #[case::hangul_filler('\u{3164}')]
+    #[case::variation_selector_1('\u{FE00}')]
+    #[case::text_variation_selector('\u{FE0E}')]
+    #[case::halfwidth_hangul_filler('\u{FFA0}')]
+    #[case::interlinear_annotation_anchor('\u{FFF9}')]
+    #[case::interlinear_annotation_terminator('\u{FFFB}')]
+    #[case::egyptian_hieroglyph_format_control('\u{13430}')]
+    #[case::shorthand_format_control('\u{1BCA0}')]
+    #[case::musical_symbol_format_control('\u{1D173}')]
+    #[case::language_tag('\u{E0001}')]
+    #[case::tag_latin_small_a('\u{E0061}')]
+    #[case::cancel_tag('\u{E007F}')]
+    #[case::variation_selector_17('\u{E0100}')]
+    #[case::variation_selector_256('\u{E01EF}')]
     fn sanitize_strips_bidi_and_invisible_characters(#[case] c: char) {
         assert_eq!(keep(&format!("a{c}b")), "ab");
+    }
+
+    #[test]
+    fn sanitize_keeps_the_emoji_variation_selector() {
+        assert_eq!(keep("I \u{2764}\u{FE0F} it"), "I \u{2764}\u{FE0F} it");
     }
 
     #[test]

@@ -62,7 +62,7 @@ Ranked by impact if compromised:
 | Bot abuse (`/op`, `/pay`, …) | Slash commands need **Manage**, or must be on the allowlist; per-bot and per-user chat rate limits; every sent message is audited | P11.3 |
 | Database or backup leak | MS tokens and TOTP secrets encrypted with XChaCha20-Poly1305, bound to their record by AAD; key stored outside the DB and backups; passwords hashed with Argon2id; session tokens stored as SHA-256 | P7.4, P9.2, P12.3 |
 | Rogue or compromised agent | mTLS with server-signed certificates; single-use enrollment tokens; fingerprint allowlist and revocation; an agent only ever gets session tokens for bots assigned to it | P10.3, P10.6, P10.9 |
-| Malicious chat / XSS | Chat is sanitized plain text (control and format codes stripped, length capped); React escaping; no `dangerouslySetInnerHTML`; strict CSP | P2.3, P8.3, P11.9 |
+| Malicious chat / XSS | Chat is sanitized plain text (control characters, format codes, bidi controls and invisible characters stripped, length capped); React escaping; no `dangerouslySetInnerHTML`; strict CSP | P2.3, P8.3, P11.9 |
 | DoS | Rate limits, body-size limits, timeouts, bounded queues, an argon2 semaphore, WebSocket connection caps | P6.6, P7.10, P11.5, P13.4 |
 | Supply chain | `cargo deny` (advisories, licenses, sources, bans incl. a single TLS provider), `pnpm audit`, committed lockfiles, minimal crate registry, actions pinned to commit SHAs, weekly audit run (ADR-0009) | P0.5, P0.11 |
 | Information leakage | Generic error messages with request IDs; no stack traces; uniform login responses plus a dummy hash against username enumeration; secrets redacted from logs | P6.5, P7.12, P9 |

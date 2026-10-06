@@ -98,7 +98,8 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
 - **Sender:** only player-type packets have one (ADR-0008 §7). It's `{ name: sanitized display text, ≤ 64 chars; uuid: optional }`, not a `McUsername`, because display names can carry prefixes and nicknames.
 - **Text:**
   - Capped at 1024 chars, cut on a char boundary, with a `truncated` flag.
-  - `\n` is kept. Other control characters, `§` together with the following char, bidi controls and the zero-width/invisible characters U+200B–U+200D, U+2060, U+FEFF and U+00AD are stripped, from the text and the sender name alike.
+  - `\n` is kept. Other control characters, `§` together with the following char, bidi controls and invisible characters are stripped, from the text and the sender name alike.
+  - "Invisible" means the format characters (Cf) that show no glyph, U+2028/U+2029, the Hangul fillers, the tags U+E0000–E007F and every variation selector except U+FE0F, which picks the emoji form of a symbol. The ranges are in `text.rs`. (Amended after the group A review: the first list had only U+200B–U+200D, U+2060, U+FEFF and U+00AD, so line separators, blank fillers and hidden tag text got through.)
   - The lists are hand-written; no new crate.
 
 **Disconnect reasons (P2.4).** Beyond ADR-0008 §6, the classifier input also has:

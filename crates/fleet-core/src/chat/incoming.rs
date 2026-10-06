@@ -289,6 +289,9 @@ mod tests {
     #[case::byte_order_mark("\u{FEFF}AfkBot7", "AfkBot7")]
     #[case::formatting("§c[Admin] §fAfkBot7", "[Admin] AfkBot7")]
     #[case::newline("Afk\nBot7", "AfkBot7")]
+    #[case::line_separator("Afk\u{2028}Bot7", "AfkBot7")]
+    #[case::hangul_filler("AfkBot7\u{3164}", "AfkBot7")]
+    #[case::hidden_tag_text("AfkBot7\u{E0068}\u{E0069}", "AfkBot7")]
     fn sender_names_are_sanitized(#[case] raw: &str, #[case] expected: &str) {
         let chat = IncomingChat::player(PlayerChatKind::Whisper, raw, None, "hi");
         assert_eq!(chat.sender().unwrap().name(), expected);

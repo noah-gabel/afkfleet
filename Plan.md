@@ -874,7 +874,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - other control characters
   >   - `§` pairs
   >   - bidi controls
-  >   - zero-width and invisible characters (U+200B–U+200D, U+2060, U+FEFF, U+00AD)
+  >   - invisible characters: the format characters that show no glyph (U+200B–U+200D, U+2060–U+2064, U+FEFF, U+00AD, …), U+2028/U+2029, the Hangul fillers, tags and every variation selector except U+FE0F; the ranges are in `text.rs`
   > - **Storage.** Chat is stored as columns, so there's no serde.
 - [x] **P2.4** 🔴 `DisconnectReason` and a classifier that returns `Transient`, `Permanent(kind)`, `Conflict(DuplicateLogin)` or `AuthInvalid`. Table-driven tests use real kick messages and translation keys from the spike (ADR-0008 §6).
 
