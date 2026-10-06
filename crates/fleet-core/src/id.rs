@@ -15,7 +15,8 @@
 //! never reads a clock or the OS's randomness, so an ID is minted from data the
 //! caller passes in: the creation time and 10 random bytes (the server takes them
 //! from the OS's secure random source). Parsing and deserializing accept only
-//! version 7 UUIDs, and serialize to the plain hyphenated string (ADR-0010).
+//! version 7 UUIDs, and IDs serialize to the plain hyphenated string
+//! (ADR-0010).
 
 use core::fmt;
 use core::str::FromStr;

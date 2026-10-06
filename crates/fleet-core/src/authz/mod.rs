@@ -31,6 +31,8 @@
 //! - [`AuthzError::NotFound`] (404) when the actor may not even see the
 //!   resource, so its existence stays hidden.
 //! - [`AuthzError::Forbidden`] (403) when they may see it, but not do this.
+//! - [`AuthzError::WrongResource`] (500) when the caller checked a permission
+//!   against the wrong kind of resource: a bug, denied like everything else.
 
 mod allowlist;
 mod authorize;

@@ -256,6 +256,24 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
 - `disconnect()` means the full teardown from ADR-0008 §10, including abandoning a hung thread.
 - `SessionCredentials` is `Offline{username}` or `Online{username, uuid, access_token, expires_at}`.
 
+Points marked *(group E)* were settled while building P2.10. On 2026-10-06 the user decided the errors, the event delivery, liveness as data and the `BotId` in `ConnectParams`.
+- **Traits** *(group E)*:
+  - `MinecraftConnector` has the associated types `Session: SessionHandle` and `Events: SessionEvents`.
+  - The connector and the handle are `Send + Sync + 'static`, the events `Send + 'static`.
+  - Every method returns `impl Future<…> + Send` (RPITIT). A doctest in `mc` drives the ports from generic code and checks that the resulting future is `Send`.
+- **`ConnectParams`** *(group E)* is `{bot_id, server, credentials, connect_timeout}`. The `BotId` lets fleet-mc name host threads after their bot and tag its logs.
+- **`connect`** *(group E)* resolves once the session has started, before the bot reaches the server. The outcome arrives as `Joined`, `ConnectionFailed` or `Disconnected`, and a connect timeout as `ConnectionFailed(TimedOut)`.
+- **Errors** *(group E)*:
+  - `ConnectError` is `HostUnavailable`. The actor reports it as `ConnectFailure::HostUnavailable`.
+  - `SessionError` is `Closed` (the session ended or is being torn down), `QueueFull` (the host thread's bounded queue is full: overload is an error, not a wait), `TimedOut` (the host thread didn't answer; the watchdog decides whether it hangs) or `NotInWorld` (azalea's getters panic before login and after `exit()`, so the adapter checks first).
+- **Event delivery** *(group E)*: the bridge is bounded (ADR-0008 §4), but only `Chat` may be dropped when the consumer lags, and the adapter counts those drops. `Joined`, `Died`, `Disconnected` and `ConnectionFailed` are always delivered. A dropped `Died` would leave the bot dead, and a dropped `Disconnected` would leave the actor waiting.
+- **`SessionEvents::next`** *(group E)* is cancel-safe, because the actor calls it in `select!`. `Died` comes once per death. A session ends with at most one terminal event, `Disconnected` or `ConnectionFailed`, after which `next` returns `None`.
+- **`disconnect()`** *(group E)* returns `()`. The teardown always finishes, and calling it again, from any clone or after the session ended on its own, is harmless.
+- **Liveness** *(group E)* is data only: `Liveness { last_tick, last_packet }`, with public fields and no constructor, read synchronously through `liveness()`.
+  - The comparison against the timeouts is P4.6's. When both stamps are stale, the tick stall wins (`WatchdogTimeout`), because a hung host thread stops both.
+  - std can't make an `Instant` without `Instant::now()`, which `fleet-core`'s clippy config bans, so core doesn't test with one. The fakes build them (P3.1).
+- **Non-finite angles** *(group E, the user's decision)*: the adapter skips any `GameAction` with a non-finite angle and logs it, as a safety net behind mode validation (P3.6).
+
 ## Consequences
 - **Easier:** every rule in `fleet-core` is deterministic and testable with a seeded RNG and fixed times. Stored data can't skip validation, and untrusted text can't reach logs through error messages.
 - **The state machine has more fields and effects than Appendix E**: `attempt` in `Online`, `fresh`, `auth_retried` and `restart`, plus the three breaker effects. In exchange, the runtime never decides lifecycle state or breaker outcomes itself.
@@ -275,6 +293,11 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
     - **P11.2** checks `ViewMode` and `SetBotMode` when a bot switches modes.
     - **P11.4** follows the mode rules.
     - **P11.9** shows the grants on a promoted Member's accounts.
+  - **From group E** (each has a note in Plan.md):
+    - **P3.4** names host threads after the `BotId` in `ConnectParams`.
+    - **P3.5** drops only `Chat` events, and delivers every lifecycle event.
+    - **P3.6** skips and logs actions with non-finite angles.
+    - **P4.6** compares the `Liveness` stamps, and the tick stall wins when both are stale.
 - **Decided in group B: plain-text duplicate login** (flagged in the group A review).
   - **The problem:** a duplicate login reported as plain text, with no translation key, classifies as transient (ADR-0008 §6). A proxy or plugin may kick the bot that way when a human logs in; BungeeCord/Waterfall in online mode probably does. The bot then reconnects and kicks the human, and the circuit breaker only limits how often.
   - **The decision:** no state-machine change. A bot's spec gets an optional list of kick texts that count as a duplicate login, empty by default (P4.1). The classifier compares the sanitized kick message exactly against that list, so vanilla servers still go by key.
@@ -284,6 +307,7 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
   - **P4.7/P10:** `Paused` and `Failed` must survive an actor or agent restart, so a fresh `Start` doesn't kick a human (§6 row 3).
   - **P9.6/P9.8** *(group D)*: how a Member picks a grantee. Members can't list users, and looking users up by name must not let them enumerate usernames.
   - **P7.13** *(group D)*: the audit log is Admin+, so Admins see the Owner's and other Admins' activity, including their IP addresses and the chat their bots sent.
+  - **P11.4** *(group E)*: `fleet-core`'s error enums never carry input, but serde_json's own errors quote it (``unknown variant `…` ``, `invalid type: string "…"`), so a malformed mode can put chat text into an error message. The server decides how it maps and logs them.
 - **Costs:**
   - The test build compiles rand 0.9 (proptest) next to 0.10; cargo-deny only warns.
   - A clippy config lives in `crates/fleet-core/` and repeats the root file's test allowances.
@@ -310,3 +334,7 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
 - **Admins enroll agents, as §7.3 says** (group D). An Admin's agent could receive the Owner's session tokens unless P10 restricted the scheduler. Owner-only enrollment closes that with one rule.
 - **Self-service routes exempt from `authorize()`** (group D). One permission less, but it breaks "every authed handler calls `authorize()`", and each handler would scope its own queries.
 - **A `TransferOwnership` permission now** (group D). It has no route or task yet. It comes with one.
+- **A pure stall check in core** (group E): `Liveness::stall(now, timeouts)`. It would pin the precedence rule in core, but core can't make an `Instant` in tests without an exception to its clippy guard, and "traits only" is P2.10's scope.
+- **Dropping any event under load** (group E), as ADR-0008 §4 first read. The actor would then depend on timeouts to notice a lost `Died` or `Disconnected`.
+- **One opaque session error** (group E). It's simpler, but P4.4's logs couldn't tell overload from a dead session.
+- **`ConnectParams` without the `BotId`** (group E). Spans can carry the bot's ID, but a hung host thread that's abandoned is easier to find by name.

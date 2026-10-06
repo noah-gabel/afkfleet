@@ -21,7 +21,7 @@ pub enum CommandAllowlistError {
     /// forbidden character.
     #[error("allowlist entry {index}: {reason}")]
     Invalid {
-        /// The entry.
+        /// The entry's position, from 0.
         index: usize,
         /// Why it isn't a valid [`ChatMessage`].
         reason: ChatMessageError,
@@ -29,20 +29,20 @@ pub enum CommandAllowlistError {
     /// The entry doesn't start with `/`.
     #[error("allowlist entry {index} doesn't start with `/`")]
     MissingSlash {
-        /// The entry.
+        /// The entry's position, from 0.
         index: usize,
     },
     /// The entry has no command name after the `/`.
     #[error("allowlist entry {index} has no command name")]
     EmptyName {
-        /// The entry.
+        /// The entry's position, from 0.
         index: usize,
     },
     /// The entry has arguments after the command name. The allowlist holds
     /// names only, and an allowlisted command passes with any arguments.
     #[error("allowlist entry {index} has arguments; list only the command")]
     HasArguments {
-        /// The entry.
+        /// The entry's position, from 0.
         index: usize,
     },
 }
@@ -279,6 +279,16 @@ mod tests {
                 index: 0,
                 reason: ChatMessageError::TooLong { units: 257 }
             })
+        );
+    }
+
+    #[test]
+    fn invalid_entry_message_names_the_position_and_reason_but_not_the_entry() {
+        let error = CommandAllowlist::try_new(&["/spawn", "/sp\u{7}awn"]).unwrap_err();
+
+        assert_eq!(
+            error.to_string(),
+            "allowlist entry 1: the message contains a forbidden character at position 3"
         );
     }
 
