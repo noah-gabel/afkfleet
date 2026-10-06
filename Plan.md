@@ -251,9 +251,9 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 ### Rust: testing
 | Concern | Crate | Version | Notes |
 |---|---|---|---|
-| Fixtures / parametrized tests | `rstest` | 0.27.0 | `#[case]` tables |
-| Property testing | `proptest` | 1.11.0 | State machine, parsers |
-| Snapshot testing | `insta` | 1.49.0 | `json` and `redactions` features |
+| Fixtures / parametrized tests | `rstest` | 0.27.0, dfo | `#[case]` tables. The default async-timeout and crate-renaming features aren't needed (ADR-0010) |
+| Property testing | `proptest` | 1.11.0, dfo | State machine, parsers. Only `std`, which reads `PROPTEST_CASES`; no fork or timeout mode (ADR-0010) |
+| Snapshot testing | `insta` | 1.49.0 | `json` and `redactions` features, enabled by the member that uses them (fleet-core: `json`) |
 | Mocks | `mockall` | 0.15.0 | Only for interaction checks; put `#[automock]` above `#[async_trait]` |
 | Containers | `testcontainers` | 0.28.0, dfo | `itzg/minecraft-server`. The default `ring` feature turns on TLS for the Docker client, which the local socket doesn't need |
 | Time control | `tokio` `test-util` | | `start_paused`, `advance` |
@@ -510,7 +510,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Conventions**
 - Each task has an ID `P<phase>.<n>`. 🔴 means *the test comes first*, strictly. Tasks without 🔴 (scaffolding, config, wiring) are verified by `just check`, CI or the task's demo, but any logic they add still gets tests.
 - A phase is finished when every task is ticked **and** its Definition of Done (DoD) holds.
-- **Branches:** one branch per task, `p<phase>/<task-id>-<slug>` (e.g. `p2/p2.6-bot-state-machine`). Phases 0 and 1 each use a single branch, `p0/foundation` and `p1/azalea-spike`. Every branch ends in a PR that the user reviews and merges. The `Plan.md` checkbox is ticked in that same PR.
+- **Branches:** one branch per task, `p<phase>/<task-id>-<slug>` (e.g. `p2/p2.6-bot-state-machine`). Phases 0 and 1 each use a single branch, `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each (see the note under Phase 2). Every branch ends in a PR that the user reviews and merges. The `Plan.md` checkbox is ticked in that same PR.
 - Phases are vertical slices:
   - **0–5** produce a working standalone bot.
   - **6–11** build the fully managed system with the app.
@@ -822,26 +822,91 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 ### Phase 2: Domain core (`fleet-core`)
 **Goal:** Every business rule as pure, exhaustively tested Rust, with **no tokio and no IO**.
-**Introduces:** `serde`, `thiserror`, `uuid`, `chrono`, `rand`, `backon`, `secrecy`. Dev: `rstest`, `proptest`, `insta`.
+**Introduces:** `serde`, `thiserror`, `uuid`, `chrono`, `rand`, `backon`, `secrecy`. Dev: `rstest`, `proptest`, `insta`, `serde_json`.
 
-- [ ] **P2.1** 🔴 ID newtypes `UserId`, `AccountId`, `BotId`, `AgentId`, `ModeId`: uuid v7, `#[serde(transparent)]`, `Display`. They can't be confused with each other.
-- [ ] **P2.2** 🔴 Value objects with fallible constructors (`TryFrom<&str>`). Each one gets a test for every rejection case, plus a proptest that it **never panics on arbitrary input**.
+> Note (P2):
+> - **Five group branches.** At the user's request, Phase 2 is built in five PRs instead of one per task. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
+>
+>   | Group | Branch | Tasks |
+>   |---|---|---|
+>   | A | `p2/p2.1-p2.5-values-and-policies` | P2.1–P2.5 |
+>   | B | `p2/p2.6-bot-state-machine` | P2.6 |
+>   | C | `p2/p2.7-p2.8-modes-and-scheduler` | P2.7–P2.8 |
+>   | D | `p2/p2.9-authorization` | P2.9 |
+>   | E | `p2/p2.10-p2.11-ports-errors-docs` | P2.10–P2.11 |
+> - **Decisions.** The phase-wide conventions and the user's answers to the Phase 2 plan's open questions are in [ADR-0010](docs/adr/0010-fleet-core-conventions-and-phase-2-refinements.md):
+>   - time (`DateTime<Utc>` passed in, `Instant` for liveness)
+>   - injected randomness
+>   - errors per task
+>   - persistence formats
+>
+>   The notes below summarize the decisions that change a task.
+> - **Dependencies.** `serde_json` is an extra dev-dependency, for the mode JSON tests. `rstest` and `proptest` are declared without default features (§5).
+> - **DoD.** "No tokio or IO crates" is checked on normal dependencies: `cargo tree -p fleet-core -e normal`. Dev-only crates such as insta's tempfile don't ship.
+
+- [x] **P2.1** 🔴 ID newtypes `UserId`, `AccountId`, `BotId`, `AgentId`, `ModeId`: uuid v7, `#[serde(transparent)]`, `Display`. They can't be confused with each other.
+
+  > Note (P2.1):
+  > - **Minting.** IDs are minted from caller data with `new_v7(created_at, [u8; 10])`; the server supplies `getrandom` bytes. uuid's `v7` feature stays off, because it pulls in getrandom.
+  > - **Parsing.** Parsing and deserializing accept only v7 UUIDs.
+  > - **serde.** It uses `try_from`/`into` `Uuid` instead of `transparent`: the same wire format, but validated (ADR-0010).
+- [x] **P2.2** 🔴 Value objects with fallible constructors (`TryFrom<&str>`). Each one gets a test for every rejection case, plus a proptest that it **never panics on arbitrary input**.
   - `ServerAddress`: host or IP, optional port 1–65535 (default 25565), no scheme or path, ≤ 253 chars.
   - `ChatMessage`: 1–256 chars after trimming, no control characters, no `§`.
   - `McUsername`: 3–16 characters from `[A-Za-z0-9_]`.
   - `Username` (app login): 3–32 characters, normalized to lowercase.
   - Command detection: `ChatMessage::command_name()` for allowlist checks.
-- [ ] **P2.3** 🔴 `IncomingChat` sanitizer: strip format codes and control characters, cap the length, and keep the kind (player, system or whisper) and the sender. This turns untrusted server text into something safe to store and display.
-- [ ] **P2.4** 🔴 `DisconnectReason` and a classifier that returns `Transient`, `Permanent(kind)`, `Conflict(DuplicateLogin)` or `AuthInvalid`. Table-driven tests use real kick messages and translation keys from the spike (ADR-0008 §6).
-- [ ] **P2.5** 🔴 Resilience policies:
+
+  > Note (P2.2) (ADR-0010):
+  > - **`ChatMessage`** counts the 256 limit in UTF-16 code units, because vanilla checks the Java string length. It also rejects bidi controls.
+  > - **`Username`** allows ASCII `[a-z0-9_.-]`, starting with a letter or digit.
+  > - **`ServerAddress`:**
+  >   - remembers whether a port was given
+  >   - rejects non-ASCII hosts, `_`, a trailing dot and userinfo
+  >   - requires the last label of a domain to start with a letter, so `0x7f000001` and `127.0.0.0x1` aren't read as IP addresses
+  >   - needs brackets around IPv6 when a port follows
+- [x] **P2.3** 🔴 `IncomingChat` sanitizer: strip format codes and control characters, cap the length, and keep the kind (player, system or whisper) and the sender. This turns untrusted server text into something safe to store and display.
+
+  > Note (P2.3) (ADR-0010):
+  > - **Kinds.** `chat`, `emote`, `whisper`, `announcement` and `system`; the spike saw all five (ADR-0008 §7).
+  > - **Sender.** Only non-system kinds have one: a sanitized display name of at most 64 chars, plus an optional UUID.
+  > - **Text.** It's capped at 1024 chars, with a `truncated` flag, and `\n` is kept. These are stripped from the text and from sender names:
+  >   - other control characters
+  >   - `§` pairs
+  >   - bidi controls
+  >   - invisible characters: the format characters that show no glyph (U+200B–U+200D, U+2060–U+2064, U+FEFF, U+00AD, …), U+2028/U+2029, the Hangul fillers, tags and every variation selector except U+FE0F; the ranges are in `text.rs`
+  > - **Storage.** Chat is stored as columns, so there's no serde.
+- [x] **P2.4** 🔴 `DisconnectReason` and a classifier that returns `Transient`, `Permanent(kind)`, `Conflict(DuplicateLogin)` or `AuthInvalid`. Table-driven tests use real kick messages and translation keys from the spike (ADR-0008 §6).
+
+  > Note (P2.4): The input also covers these reasons (ADR-0010):
+  > - `AuthRejected`, classified as `AuthInvalid`
+  > - `SessionCrashed`, `WatchdogTimeout`, `LivenessTimeout` and `ConnectFailed` (including `HostUnavailable`), all transient
+  >
+  > **Known limit.** A duplicate login that a proxy or plugin reports as plain text has no key, so it classifies as transient. See the open question under P2.6.
+- [x] **P2.5** 🔴 Resilience policies:
   - `RetryPolicy` wraps `backon`'s exponential builder: base, factor, cap, jitter, and a reset after a stable period. Tests assert **bounds**, not exact values.
   - `CircuitBreaker` (closed, open, half-open) is pure, with time passed in.
   - Proptests: delay ≤ cap, and the breaker never lets an attempt through while open.
+
+  > Note (P2.5) (ADR-0010):
+  > - **Factor.** Fixed at 2; there's no config key for it.
+  > - **Jitter.** backon adds its jitter after the cap (`d + d·U[0,1)`), so it's given `max / 2`. Jittered delays then stay ≤ `max`, which requires `max ≥ 2 × base`. The jitter is seeded from the injected RNG.
+  > - **`FailureWindow`.** A pure counter for "N failures within a window". It backs the breaker, and later P4.7.
+  > - **Breaker.** One per bot, and it only decides how long to wait. Appendix E's "circuit open too long → Failed" arrow is dropped.
 - [ ] **P2.6** 🔴 The **bot state machine**: `BotState`, `BotEvent`, `Effect`, and `transition(&state, event, now) -> Transition` (Appendix E). It needs example tests for every transition and proptest invariants:
   - A `Stop` from any state ends in `Stopped`, and emits `Disconnect` if a session exists.
   - `Failed` and `Paused` never emit `Connect` before `Reset` or `Resume`.
   - There is never a `Connect` effect while `Connecting` or `Online`.
   - The attempt counter resets after the stable-online period.
+
+  > Note (P2.6): Decided in the Phase 2 plan and built in group B (ADR-0010):
+  > - **Signature.** `transition(&state, event, now, &RetryPolicy)`.
+  > - **State fields.** `Online{since, attempt}`, `AwaitingSession{attempt, fresh}`, `Connecting{attempt, auth_retried}`, `Stopping{restart}`.
+  > - **New event.** `CrashLoop`.
+  > - **Auth.** The state machine owns "request one fresh token, then `Failed(Auth)`".
+  > - **Stop.** Without a session, `Stop` goes straight to `Stopped`. The first invariant reads "Stop, then SessionClosed, ends in Stopped".
+  > - **Unfitting events** are no-ops.
+  > - **Open question, flagged and not yet decided.** A plain-text duplicate-login kick (no translation key) is transient, so behind a proxy that kicks that way the bot would reconnect and kick the human. Decide how the state machine or P4 handles it (ADR-0010, "Flagged, not decided").
 - [ ] **P2.7** 🔴 The mode model:
   - `Action` enum: `Look{yaw,pitch}`, `RotateRandom{max_yaw,max_pitch}`, `Jump`, `Sneak{on}`, `SwingArm`, `UseItem`, `AttackFacingEntity`, `SelectHotbarSlot(0..=8)`, `SendChat(ChatMessage)`.
   - `Schedule`: `AtStart` or `Every{interval, jitter}`, plus a `probability`.
@@ -859,10 +924,29 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     - **`afk`**: a random small rotation every 45–120 s, plus a swing, jump or sneak more often than the server's idle timeout. Rotation alone doesn't reset that timer (ADR-0008 §8).
     - **`farm`**: a fixed look direction, a hotbar slot chosen at start, and attack every 0.65–0.8 s.
   - insta snapshots of the serialized presets, so stored modes stay compatible.
+
+  > Note (P2.7): Decided in the Phase 2 plan and built in group C (ADR-0010):
+  > - **`afk`:** `RotateRandom` ±30°/±10° every 45–120 s, plus `SwingArm` every 20–40 s.
+  > - **`farm`:** hotbar slot 0 at start, plus an attack every 650–800 ms, with no Look.
+  > - **JSON:** struct variants (`{"type":"select_hotbar_slot","slot":3}`), and `validate()` is `ModeDraft::validate`.
+  > - **Limits:** probability is a percent from 1 to 100; interval and jitter are each ≤ 24 h; at most one `AtStart` chat step.
+  > - **Commands:** `commands()` feeds the authorization check.
 - [ ] **P2.8** 🔴 `ModePlan`: a pure scheduler that takes a definition, an RNG and the current time and returns `(next_due, Vec<Action>)`. The runtime then only sleeps and executes. Tests use a seeded RNG.
+
+  > Note (P2.8) (ADR-0010):
+  > - **Return value.** `PlanTick { actions: Vec<PlannedAction>, next_due: Option<…> }`. `RotateRandom` is resolved to a relative `Turn`, and chat is kept separate for the P4.5 queue.
+  > - **Timing.** Gaps are uniform in [interval, interval + jitter], the first run comes one gap after the start, and there's no catch-up.
+  > - **Pitch.** After applying a `Turn`, the adapter (P3.6) clamps the pitch to [-90, 90].
 - [ ] **P2.9** 🔴 Authorization: `Role`, `GrantLevel`, `Permission`, `Actor`, `ResourceContext`, `authorize()`.
   - An **exhaustive matrix test** covers every role × grant × permission. It's generated and snapshotted with insta, so every change shows up in review.
   - Edge cases: an Admin acting on the Owner or another Admin, granting above your own level, deny by default.
+
+  > Note (P2.9) (ADR-0010):
+  > - **Admins.** An Admin's implicit Manage covers Members' accounts and the Admin's own, but not the Owner's or other Admins'.
+  > - **Commands.** `CommandAllowlist` is a core type. Changing to a mode that contains a non-allowlisted command needs Manage.
+  > - **Built-in modes.** `ResourceContext::Mode{owner: None}` is a built-in mode.
+
+  > Note (P2.9, from the group A review): **Allowlist format.** Appendix A writes allowlist entries as `"/spawn"`, but `ChatMessage::command_name()` returns `spawn`, so the formats must match. Compare exactly and case-sensitively against the allowlist, so the check fails closed: `/Spawn`, `/minecraft:spawn` and `/spawn` followed by a zero-width space all need Manage.
 - [ ] **P2.10** 🔴 Minecraft ports, traits only:
   - `MinecraftConnector::connect(ConnectParams) -> (SessionHandle, SessionEvents)`
   - `SessionHandle` (clone, perform `Action`, send chat, disconnect, read liveness)
@@ -872,7 +956,16 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `SessionCredentials`, which holds the token as a `SecretString`
 
   Use RPITIT with `+ Send` futures.
+
+  > Note (P2.10) (ADR-0010):
+  > - **`connect`** returns a `Result`.
+  > - **`SessionHandle`** gains `respawn()`. `perform` takes a `GameAction`, and chat goes through `send_chat`.
+  > - **`disconnect()`** is the full ADR-0008 §10 teardown.
+  > - **Liveness** stamps are `std::time::Instant`, set when the session is created, so they're never empty.
+  > - **`SessionCredentials`** is `Offline` or `Online`.
 - [ ] **P2.11** A `thiserror` error enum per module, and crate- and module-level docs.
+
+  > Note (P2.11): Error enums are built in each task, because each task tests its error paths first. P2.11 audits them and writes the crate docs (ADR-0010).
 
 **Security:**
 - Every constructor rejects oversized input and control characters.
@@ -898,6 +991,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - "hang" (no more ticks) and "fail on action" modes
 
   Write tests for the fake itself.
+
+  > Note (P3.1, from Phase 2): Liveness stamps are `std::time::Instant`. The fake stamps them with `tokio::time::Instant::now().into_std()`, so paused time works. Both stamps are set when the session is created (ADR-0010).
 - [ ] **P3.2** 🔴 `McHostPool` spawns one host thread per session (ADR-0008 §2):
   - Each thread has a current-thread runtime and a `LocalSet`, and ends when its session ends.
   - Work reaches the thread over a bounded queue.
@@ -907,7 +1002,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - azalea's auto-reconnect and auto-respawn are **disabled**
   - connect timeout
   - start, hosting model and executor as decided in ADR-0008 §1–3
+
+  > Note (P3.4, from Phase 2): open questions, flagged and not yet decided:
+  > - Appendix A has no config key for the connect timeout that `ConnectParams` carries.
+  > - The account's `refresh()` fails fast, because the core state machine now requests the fresh token (ADR-0010).
 - [ ] **P3.5** 🔴 Map azalea events to `SessionEvent`, with unit tests on the pure mapping functions. Chat goes through the core sanitizer, with the sender taken only from where ADR-0008 §7 allows; kick reasons go through the core classifier input. `Tick` and server events such as `KeepAlive` only update the session's liveness timestamps (ADR-0008 §4–5).
+
+  > Note (P3.5, from the group A review): **Logging chat.** Sanitized chat text keeps `\n`. Log it as a structured field (`?` or JSON), never with `%` (Display), so a server can't forge log lines.
 - [ ] **P3.6** 🔴 Map each `Action` to azalea calls: look, rotate, jump, sneak, swing, use item, attack facing entity (with a reach check), hotbar, respawn, chat.
 - [ ] **P3.7** 🔴 Slow integration tests (`slow_*`, testcontainers + itzg, offline mode):
   - join and see the join message
@@ -933,6 +1034,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Introduces:** `governor`, `metrics`. Dev: `fleet-testkit`.
 
 - [ ] **P4.1** 🔴 `BotSpec` (account, server, mode, desired run state) and `BotSnapshot` (state, since, last disconnect reason, attempt, uptime).
+
+  > Note (P4.1, from Phase 2): open question, flagged and not yet decided: fleet-proto and fleet-server also need to build a `BotSpec` (Appendix C `AssignBot`), but they may only depend on `fleet-core`.
 - [ ] **P4.2** 🔴 `BotActor`:
   - `tokio::select!` over the inbox (`Start`, `Stop`, `UpdateSpec`, `SendChat`, `Reset`, `Resume`), session events, timers and cancellation.
   - It executes the core `Effect`s and computes retry delays with `RetryPolicy`.
@@ -946,10 +1049,20 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `Stop` during backoff
   - changing the server reconnects
   - changing the mode does **not** reconnect
+
+  > Note (P4.2, from Phase 2) (ADR-0010):
+  > - **Clock.** The actor's clock derives `DateTime<Utc>` from tokio's `Instant`, anchored at startup, so paused time drives `transition`, the breaker and `ModePlan`.
+  > - **Leaving a state** cancels that state's timer or session request.
+  > - **`SessionClosed`** is sent once teardown has finished or timed out.
+  > - **Restart** and a server change go through `Stopping{restart}`.
+
+  > Note (P4.2, from the group A review): **Half-open breaker.** `CircuitBreaker::permits` doesn't limit the half-open state to one attempt. The actor makes one attempt at a time and reports its outcome before it asks again.
 - [ ] **P4.3** 🔴 `SessionCredentialProvider` port:
   - In standalone mode it returns offline credentials.
   - In managed mode it asks the control plane (Phase 10).
   - On an expired token it refreshes once, then goes to `Failed(Auth)`.
+
+  > Note (P4.3, from Phase 2): The "refresh once" is driven by the core state machine. The first `AuthInvalid` emits `RequestSession{fresh: true}`, and the provider must bypass any token cache for it. The second goes to `Failed(Auth)` (ADR-0010).
 - [ ] **P4.4** 🔴 `ModeRunner` drives the core `ModePlan` through the `SessionHandle`.
   - A failed action is logged and skipped, never fatal.
   - It stops cleanly on disconnect or mode change.
@@ -969,6 +1082,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - panics are detected and the actor restarted, within the intensity limit
   - API: `apply(spec)`, `remove(id)`, `send_chat`, `snapshot_all`, `subscribe`
   - graceful shutdown: cancel, then disconnect every bot within the timeout
+
+  > Note (P4.7, from Phase 2):
+  > - **Restart limit.** "5 restarts in 10 min" uses the core `FailureWindow` and ends with the core `CrashLoop` event (ADR-0010).
+  > - **Open question, flagged and not yet decided.** `Paused` (a human is playing) and `Failed` must survive an actor or agent restart. Otherwise a fresh `Start` kicks the human (§6 row 3).
 - [ ] **P4.8** 🔴 **Chaos property test.** Random sequences of these events, run with paused time:
   - transient and permanent kicks
   - connection failures
@@ -1081,6 +1198,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Introduces:** `argon2`, `getrandom`, `sha2`, `subtle`, `base64`, `zeroize`, `chacha20poly1305`, `totp-rs`, `zxcvbn`, `governor`, `tower_governor`, `rpassword`.
 
 - [ ] **P7.1** 🔴 Migrations and repositories: `sessions` (with token families), `invites`, `login_attempts`, `user_mfa`.
+
+  > Note (P7.1, from the group A review): **IDs aren't secrets.** v7 IDs reveal their creation time. Invite codes and session tokens come from `getrandom`, never from an ID, and access is decided by `authorize()`, not by how hard an ID is to guess.
 - [ ] **P7.2** 🔴 `PasswordService`:
   - Argon2id with the configured parameters
   - runs in `spawn_blocking` behind a semaphore
@@ -1208,6 +1327,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P9.1** 🔴 Migrations and repositories:
   - `mc_accounts`: owner, MC UUID and name, kind, encrypted refresh token, `key_id`, status
   - `account_grants`
+
+  > Note (P9.1, from the group A review): **Account identity.** `McUsername` keeps its case, but Minecraft names are case-insensitive. Identify accounts by MC UUID; any lookup or comparison by name ignores case.
 - [ ] **P9.2** 🔴 Vault extensions:
   - purpose-bound AAD (`account_id|ms_refresh`)
   - `vault rotate-key` CLI that re-encrypts transactionally
@@ -1330,6 +1451,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `POST /bots/{id}/start|stop|restart|reset|resume`
 
   Every call is authorized, audited and reconciled.
+
+  > Note (P11.2, from the group A review): **SSRF.** `ServerAddress` allows loopback and private addresses (ADR-0010). An SSRF policy for the server address must check the resolved IP addresses, not the host string.
 - [ ] **P11.3** 🔴 Chat:
   - `POST /bots/{id}/chat`:
     - takes a `ChatMessage`
@@ -1338,11 +1461,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     - audited
   - `GET /bots/{id}/chat?before=&limit=` with cursor pagination.
 - [ ] **P11.4** 🔴 Modes CRUD: `GET`, `POST`, `PUT`, `DELETE` on `/modes`. Core validation errors become field errors. Built-in modes are read-only.
+
+  > Note (P11.4, from Phase 2): Editing a mode that's assigned to bots must re-run the command check for every one of them. A mode with a command outside the allowlist needs Manage on each bot (ADR-0010).
 - [ ] **P11.5** 🔴 Live events:
   1. `POST /events/ticket` returns a single-use ticket valid for 30 s (moka).
   2. The client opens a WebSocket at `GET /events?ticket=…`.
   3. Events are **filtered per user at send time**.
   4. Limits: per-user connection cap, `Resync` on `Lagged`, ping/pong with an idle timeout, maximum frame size.
+
+  > Note (P11.5, from the group A review): The ticket comes from `getrandom`, never from a v7 ID, which reveals its creation time.
 - [ ] **P11.6** 🔴 Retention job: chat older than `chat.retention_days` is deleted. The audit log is kept longer (configurable).
 - [ ] **P11.7** 🔴 Full-flow integration test: in-process server + in-process agent with `FakeConnector`.
   1. Start a bot via `fleet-client`.
@@ -1359,6 +1486,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     - an event timeline
   - **Mode editor:** an action list with validation.
   - **Admin:** an audit-log viewer and an agents view.
+
+  > Note (P11.9, from the group A review): **Chat console.** Render each message as its own block, with the sender outside the text, so a `\n[Server] …` inside a message can't pass as a separate line. The sanitizer keeps combining marks, so clip stacked ones (Zalgo text) with CSS overflow.
 
 **DoD:** The user's real fleet runs for 24 h, managed from the app. Every event shows up live, and the logs contain no unhandled errors.
 

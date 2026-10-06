@@ -161,6 +161,7 @@ Agents get a Minecraft access token, UUID and name from the server, never a Micr
 - **`Debug` is hand-written** and redacts the token. azalea's `MicrosoftAccount` *derives* `Debug` over its token, so never Debug-print an azalea `Account`.
 - **Auth failures produce no event.** When the session server rejects the token, azalea calls `refresh()` **once**, retries `join()`, then only *logs* the error. The connection then hangs in the login phase until the server gives up ~30 s later, with `multiplayer.disconnect.slow_login` or a bare `Disconnect(None)`. So the account itself records the `ClientSessionServerError` kind from `join()`, and `fleet-mc` turns it into `AuthInvalid` and calls `exit()` straight away.
 - **`refresh()`** is where P4.3's "refresh once" goes: ask the `SessionCredentialProvider` for one fresh token and swap it in. If none comes, return an error.
+  > Superseded by [ADR-0010](0010-fleet-core-conventions-and-phase-2-refinements.md): the "request one fresh token" now lives in the core state machine, so `refresh()` fails fast.
 
 ```rust
 impl AccountTrait for ExternalTokenAccount {

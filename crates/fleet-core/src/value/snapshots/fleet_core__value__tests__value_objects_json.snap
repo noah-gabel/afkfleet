@@ -1,0 +1,11 @@
+---
+source: crates/fleet-core/src/value/mod.rs
+expression: values
+---
+{
+  "server": "mc.example.com:25566",
+  "ipv6_server": "[2001:db8::1]",
+  "mc_username": "AfkBot1",
+  "username": "alice",
+  "chat": "/spawn home"
+}

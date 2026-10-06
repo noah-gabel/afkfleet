@@ -1,0 +1,40 @@
+# fleet-core's own clippy configuration. Clippy reads the nearest clippy.toml
+# and doesn't merge it with the root one, so the root file's test allowances are
+# repeated here. Keep them in sync with ../../clippy.toml.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-print-in-tests = true
+
+# fleet-core never reads a clock or the OS's randomness: time and randomness are
+# passed in (ADR-0010). Building without chrono's `now` and rand's `sys_rng` keeps
+# these out of `-p fleet-core` builds, but a workspace build unifies the features
+# other crates enable, so this lint is the guard. `allow-invalid` keeps clippy
+# quiet when a path doesn't exist in the current feature set.
+disallowed-methods = [
+    { path = "std::time::Instant::now", reason = "fleet-core takes time as a parameter (ADR-0010)" },
+    { path = "std::time::SystemTime::now", reason = "fleet-core takes time as a parameter (ADR-0010)" },
+    { path = "chrono::Utc::now", reason = "fleet-core takes `now` as a parameter (ADR-0010)", allow-invalid = true },
+    { path = "chrono::Local::now", reason = "fleet-core takes `now` as a parameter (ADR-0010)", allow-invalid = true },
+    { path = "rand::rng", reason = "fleet-core takes an RNG as a parameter (ADR-0010)", allow-invalid = true },
+    { path = "rand::random", reason = "fleet-core takes an RNG as a parameter (ADR-0010)", allow-invalid = true },
+    { path = "rand::random_iter", reason = "fleet-core takes an RNG as a parameter (ADR-0010)", allow-invalid = true },
+    { path = "rand::random_range", reason = "fleet-core takes an RNG as a parameter (ADR-0010)", allow-invalid = true },
+    { path = "rand::random_bool", reason = "fleet-core takes an RNG as a parameter (ADR-0010)", allow-invalid = true },
+    { path = "rand::random_ratio", reason = "fleet-core takes an RNG as a parameter (ADR-0010)", allow-invalid = true },
+    { path = "rand::fill", reason = "fleet-core takes an RNG as a parameter (ADR-0010)", allow-invalid = true },
+    { path = "rand::make_rng", reason = "fleet-core takes an RNG as a parameter (ADR-0010)", allow-invalid = true },
+    { path = "uuid::Uuid::now_v1", reason = "IDs are minted from caller data with `new_v7` (ADR-0010)", allow-invalid = true },
+    { path = "uuid::Uuid::now_v6", reason = "IDs are minted from caller data with `new_v7` (ADR-0010)", allow-invalid = true },
+    { path = "uuid::Uuid::now_v7", reason = "IDs are minted from caller data with `new_v7` (ADR-0010)", allow-invalid = true },
+    { path = "uuid::Uuid::new_v4", reason = "IDs are minted from caller data with `new_v7` (ADR-0010)", allow-invalid = true },
+    { path = "uuid::Uuid::new_v7", reason = "uuid's `new_v7` draws its own random bytes; use the ID types' `new_v7` (ADR-0010)", allow-invalid = true },
+    { path = "uuid::Timestamp::now", reason = "fleet-core takes time as a parameter (ADR-0010)", allow-invalid = true },
+]
+
+# The same guard for the types behind the OS's randomness.
+disallowed-types = [
+    { path = "rand::rngs::ThreadRng", reason = "fleet-core takes an RNG as a parameter (ADR-0010)", allow-invalid = true },
+    { path = "rand::rngs::SysRng", reason = "fleet-core takes an RNG as a parameter (ADR-0010)", allow-invalid = true },
+]
