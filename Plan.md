@@ -1004,7 +1004,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Names.** `Role`, `GrantLevel` and `ModeVisibility` map to `users.role`, `account_grants.level` and `modes.visibility` through `as_str` and `FromStr`.
   > - **Not in `authorize`:** step-up (§7.2) is an authentication check in P7, and the account quota belongs to P9.4.
   > - **Matrix.** The snapshot `authorization_matrix` has a table per kind of resource: accounts by actor, owner and grant; the rest by actor and target. A separate test checks every permission against every other kind of resource.
-- [ ] **P2.10** 🔴 Minecraft ports, traits only:
+- [x] **P2.10** 🔴 Minecraft ports, traits only:
   - `MinecraftConnector::connect(ConnectParams) -> (SessionHandle, SessionEvents)`
   - `SessionHandle` (clone, perform `Action`, send chat, disconnect, read liveness)
   - `SessionEvents::next()`
@@ -1022,6 +1022,20 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **`SessionCredentials`** is `Offline` or `Online`.
 
   > Note (P2.10, from group C): `perform` takes `fleet_core::mode::GameAction`, which P2.8 already defines. Its hotbar slot is a `HotbarSlot`, so the port can't get a slot above 8 (ADR-0010).
+
+  > Note (P2.10, built in group E): The user decided four questions on 2026-10-06 (ADR-0010):
+  > - **Errors.** `SessionError` is `Closed`, `QueueFull`, `TimedOut` or `NotInWorld`; `ConnectError` is `HostUnavailable`, which the actor reports as `ConnectFailure::HostUnavailable`.
+  > - **Event delivery.** Only `Chat` may be dropped when the consumer lags, and the adapter counts the drops. `Joined`, `Died`, `Disconnected` and `ConnectionFailed` are always delivered.
+  > - **Liveness** is data only: `Liveness { last_tick, last_packet }`. The watchdog's comparison is P4.6's.
+  > - **`ConnectParams`** is `{bot_id, server, credentials, connect_timeout}`. The `BotId` lets fleet-mc name host threads and tag its logs.
+  >
+  > Also settled while building it (ADR-0010):
+  > - **Traits.** `MinecraftConnector` has the associated types `Session` and `Events`. The connector and the handle are `Send + Sync + 'static`, the events `Send + 'static`, and every future is `Send`. A doctest drives the ports from generic code and checks that.
+  > - **`connect`** resolves once the session has started, before the bot reaches the server. The outcome arrives as an event, and a connect timeout as `ConnectionFailed(TimedOut)`.
+  > - **`SessionEvents::next`** is cancel-safe and returns `None` after the session's one terminal event (`Disconnected` or `ConnectionFailed`). `Died` comes once per death.
+  > - **`disconnect()`** returns `()`: the teardown always finishes, and calling it again is harmless. `liveness()` is synchronous.
+  > - **`Liveness`** has public fields and no constructor. std can't make an `Instant` without `Instant::now()`, which `fleet-core`'s clippy config bans, so core can't test one; the fakes (P3.1) build them.
+  > - **TDD.** Only the redaction test has a meaningful red phase: a stub `Debug` that printed the token failed it. The rest of the task is declarations.
 - [ ] **P2.11** A `thiserror` error enum per module, and crate- and module-level docs.
 
   > Note (P2.11): Error enums are built in each task, because each task tests its error paths first. P2.11 audits them and writes the crate docs (ADR-0010).
@@ -1065,12 +1079,18 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P3.4, from Phase 2): open questions, flagged and not yet decided:
   > - Appendix A has no config key for the connect timeout that `ConnectParams` carries.
   > - The account's `refresh()` fails fast, because the core state machine now requests the fresh token (ADR-0010).
+
+  > Note (P3.4, from group E): `ConnectParams` carries the `BotId`, so host threads can be named after their bot, which helps when one is abandoned (ADR-0010).
 - [ ] **P3.5** 🔴 Map azalea events to `SessionEvent`, with unit tests on the pure mapping functions. Chat goes through the core sanitizer, with the sender taken only from where ADR-0008 §7 allows; kick reasons go through the core classifier input. `Tick` and server events such as `KeepAlive` only update the session's liveness timestamps (ADR-0008 §4–5).
 
   > Note (P3.5, from the group A review): **Logging chat.** Sanitized chat text keeps `\n`. Log it as a structured field (`?` or JSON), never with `%` (Display), so a server can't forge log lines.
+
+  > Note (P3.5, from group E): **Event delivery.** The bounded bridge (ADR-0008 §4) may drop only `Chat` events, and it counts them. `Joined`, `Died`, `Disconnected` and `ConnectionFailed` are always delivered, at most one terminal event per session, after which `next()` returns `None` (ADR-0010).
 - [ ] **P3.6** 🔴 Map each `Action` to azalea calls: look, rotate, jump, sneak, swing, use item, attack facing entity (with a reach check), hotbar, respawn, chat.
 
   > Note (P3.6, from group C, the user's idea): Check whether azalea can hold right-click (use item) down continuously, the way `Sneak{on}` holds sneak. If it can, propose a `HoldUse{on}` action as an additive change to the mode model. It's a new action type, so older servers reject modes that use it (ADR-0010).
+
+  > Note (P3.6, from group E, the user's decision): The adapter skips any `GameAction` with a non-finite angle and logs it, as a safety net behind mode validation. The `SessionHandle::perform` docs say so (ADR-0010).
 - [ ] **P3.7** 🔴 Slow integration tests (`slow_*`, testcontainers + itzg, offline mode):
   - join and see the join message
   - send chat and see it echoed back
@@ -1147,6 +1167,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - no packet from the server for `packet_liveness_timeout`: tear the session down and treat it as a transient disconnect
 
   Both timeouts come from `[runtime]` in the agent config (Appendix A).
+
+  > Note (P4.6, from group E, the user's decision): The session's `Liveness` holds the two stamps, and the comparison lives here. When both stamps are stale, the tick stall wins: `WatchdogTimeout`, not `LivenessTimeout`, because a hung host thread stops both (ADR-0010).
 - [ ] **P4.7** 🔴 `Supervisor` and `Fleet` handle:
   - actors run in a `JoinSet` or `TaskTracker`
   - panics are detected and the actor restarted, within the intensity limit

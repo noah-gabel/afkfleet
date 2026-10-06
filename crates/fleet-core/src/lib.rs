@@ -22,6 +22,7 @@ pub mod bot;
 pub mod chat;
 pub mod disconnect;
 pub mod id;
+pub mod mc;
 pub mod mode;
 pub mod resilience;
 mod text;

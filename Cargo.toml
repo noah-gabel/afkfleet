@@ -27,6 +27,9 @@ backon = { version = "1.6.0", default-features = false }
 chrono = { version = "0.4.45", default-features = false }
 # rand: no `sys_rng`/`thread_rng`; fleet-core takes an RNG as a parameter (ADR-0010).
 rand = { version = "0.10.3", default-features = false }
+# secrecy: `SecretString` with a redacted `Debug`; it has no default features and only
+# pulls in zeroize (alloc).
+secrecy = "0.10.3"
 serde = "1.0.229"
 thiserror = "2.0.21"
 # uuid: never `v4`/`v7`/`rng`, which pull in getrandom; IDs are minted from caller data (ADR-0010).

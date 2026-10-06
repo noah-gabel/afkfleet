@@ -77,6 +77,7 @@ pub fn single_threaded(app: &mut App) {
 
 ### 4. Events: bounded bridge, ticks as a timestamp
 - azalea's event channel is **unbounded**. A host-side pump forwards events into a bounded channel with `try_send` and counts what it drops.
+  > Refined by [ADR-0010](0010-fleet-core-conventions-and-phase-2-refinements.md) (group E): only chat events may be dropped. `Joined`, `Died`, `Disconnected` and `ConnectionFailed` are always delivered.
 - **`Tick`** (20 Hz) is never queued: it only updates an atomic "last tick" timestamp, which is all the watchdog needs.
 - **`Packet` events** flood the channel (most of the drops). `fleet-mc` builds azalea with `default-features = false, features = ["online-mode"]`:
   - no `packet-event`
