@@ -97,6 +97,10 @@ The ECS runner's `AppExit` receiver, a tick timestamp and a packet timestamp cov
 | Unreachable address | `ConnectionFailed(TimedOut)` only after the OS's TCP timeout (21 s measured on Windows; Linux defaults are longer, not measured); azalea has **no connect timeout** | `fleet-mc` enforces its own connect timeout, then `exit()`. `exit()` cleanly cancels a connect in progress. |
 | Unresolvable host | `ResolveError` from `resolve()` in milliseconds, no event | Map to `ConnectionFailed` |
 
+> Refined by [ADR-0011](0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md) (Phase 3 plan):
+> - **The abandoned-thread limit** defaults to 3. Above it, fleet-mc refuses new host threads (`connect()` returns `HostUnavailable`), and the agent exits (P5.3).
+> - **The connect timeout** runs from `connect()` until `Joined`, resolving included.
+
 ### 6. Disconnect reasons (input for P2.4)
 Kick reasons arrive as `Event::Disconnect(Option<FormattedText>)`.
 - **Classify by translation key, never by text.** The key is in `FormattedText::Translatable(t).key` and the args are in `t.args`.
@@ -161,8 +165,10 @@ Agents get a Minecraft access token, UUID and name from the server, never a Micr
 - **Trap: certificates.** `certs()`/`set_certs()` must store them; chat signing `expect`s them.
 - **`Debug` is hand-written** and redacts the token. azalea's `MicrosoftAccount` *derives* `Debug` over its token, so never Debug-print an azalea `Account`.
 - **Auth failures produce no event.** When the session server rejects the token, azalea calls `refresh()` **once**, retries `join()`, then only *logs* the error. The connection then hangs in the login phase until the server gives up ~30 s later, with `multiplayer.disconnect.slow_login` or a bare `Disconnect(None)`. So the account itself records the `ClientSessionServerError` kind from `join()`, and `fleet-mc` turns it into `AuthInvalid` and calls `exit()` straight away.
+  > Refined by [ADR-0011](0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md): only `InvalidSession` and `ForbiddenOperation` mean a rejected token. `Banned` and `MultiplayerDisabled` get a permanent reason; an outage, rate limit or timeout gets a transient one. `join()` runs on Bevy's IO pool, not on the host thread.
 - **`refresh()`** is where P4.3's "refresh once" goes: ask the `SessionCredentialProvider` for one fresh token and swap it in. If none comes, return an error.
   > Superseded by [ADR-0010](0010-fleet-core-conventions-and-phase-2-refinements.md): the "request one fresh token" now lives in the core state machine, so `refresh()` fails fast.
+  > Refined by [ADR-0011](0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md): `refresh()` is a no-op that returns `Ok(())`. Every error it could return is a Microsoft-flow `AuthError`, which azalea would log at error level as if it were true.
 
 ```rust
 impl AccountTrait for ExternalTokenAccount {
@@ -220,6 +226,10 @@ Closing the thread drops its `LocalSet`, which drops azalea's runner task and wi
 | CPU without the `packet-event` feature | **Deferred to P3**: measured with it, so the numbers are an upper bound |
 | How many abandoned (hung) host threads before restarting the process | **Deferred to P4.6/P4.7**: a policy value, not an azalea question |
 | Report the attack-packet and Swarm-deadlock bugs upstream | **Deferred to the user**: outside this repository |
+
+> Updated by [ADR-0011](0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md) (Phase 3 plan):
+> - **CPU without `packet-event`** is closed without a measurement: fleet-mc builds without the feature, so the cost can only drop below these numbers.
+> - **The abandoned-thread limit** defaults to 3 (Plan.md Appendix A, `max_abandoned_threads`).
 
 ## Consequences
 - **Gotchas `fleet-mc` must handle:**

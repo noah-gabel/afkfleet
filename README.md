@@ -16,7 +16,7 @@ afkfleet is **a hobby project** I'm building for my friends with Claude Code. I 
 There's no support, and I don't take feature requests. Security reports are welcome, though: see [SECURITY.md](SECURITY.md).
 
 ## Status
-**Phase 2 (domain core) is complete.** Its last pull request is under review. The product itself isn't runnable yet. What exists:
+**Phase 3 (azalea adapter and test kit) is in progress.** The product itself isn't runnable yet. What exists:
 - **From Phase 0:**
   - the Cargo workspace with all lints and the pinned toolchain
   - the quality gates: formatting, clippy, docs, tests, coverage gates, cargo-deny, Biome
@@ -36,8 +36,9 @@ There's no support, and I don't take feature requests. Security reports are welc
   - the Minecraft ports that the azalea adapter will implement
 
   [ADR-0010](docs/adr/0010-fleet-core-conventions-and-phase-2-refinements.md) records its conventions and every decision made along the way.
+- **From Phase 3 so far:** [`crates/fleet-testkit`](crates/fleet-testkit/), scriptable fakes for the Minecraft ports. Tests of the bot runtime can script connects, emit server events, freeze a session's liveness or make it hang, and read what the bot did, all without a Minecraft server. [ADR-0011](docs/adr/0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md) records Phase 3's decisions.
 
-**Next:** Phase 3, the azalea adapter (`fleet-mc`) and the test kit (`fleet-testkit`).
+**Next:** the rest of Phase 3, the azalea adapter (`fleet-mc`).
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 
