@@ -936,6 +936,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P2.8) (ADR-0010):
   > - **Return value.** `PlanTick { actions: Vec<PlannedAction>, next_due: Option<…> }`. `RotateRandom` is resolved to a relative `Turn`, and chat is kept separate for the P4.5 queue.
   > - **Timing.** Gaps are uniform in [interval, interval + jitter], the first run comes one gap after the start, and there's no catch-up.
+  > - **Pitch.** After applying a `Turn`, the adapter (P3.6) clamps the pitch to [-90, 90].
 - [ ] **P2.9** 🔴 Authorization: `Role`, `GrantLevel`, `Permission`, `Actor`, `ResourceContext`, `authorize()`.
   - An **exhaustive matrix test** covers every role × grant × permission. It's generated and snapshotted with insta, so every change shows up in review.
   - Edge cases: an Admin acting on the Owner or another Admin, granting above your own level, deny by default.
@@ -944,6 +945,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Admins.** An Admin's implicit Manage covers Members' accounts and the Admin's own, but not the Owner's or other Admins'.
   > - **Commands.** `CommandAllowlist` is a core type. Changing to a mode that contains a non-allowlisted command needs Manage.
   > - **Built-in modes.** `ResourceContext::Mode{owner: None}` is a built-in mode.
+
+  > Note (P2.9, from the group A review): **Allowlist format.** Appendix A writes allowlist entries as `"/spawn"`, but `ChatMessage::command_name()` returns `spawn`, so the formats must match. Compare exactly and case-sensitively against the allowlist, so the check fails closed: `/Spawn`, `/minecraft:spawn` and `/spawn` followed by a zero-width space all need Manage.
 - [ ] **P2.10** 🔴 Minecraft ports, traits only:
   - `MinecraftConnector::connect(ConnectParams) -> (SessionHandle, SessionEvents)`
   - `SessionHandle` (clone, perform `Action`, send chat, disconnect, read liveness)
@@ -1004,6 +1007,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - Appendix A has no config key for the connect timeout that `ConnectParams` carries.
   > - The account's `refresh()` fails fast, because the core state machine now requests the fresh token (ADR-0010).
 - [ ] **P3.5** 🔴 Map azalea events to `SessionEvent`, with unit tests on the pure mapping functions. Chat goes through the core sanitizer, with the sender taken only from where ADR-0008 §7 allows; kick reasons go through the core classifier input. `Tick` and server events such as `KeepAlive` only update the session's liveness timestamps (ADR-0008 §4–5).
+
+  > Note (P3.5, from the group A review): **Logging chat.** Sanitized chat text keeps `\n`. Log it as a structured field (`?` or JSON), never with `%` (Display), so a server can't forge log lines.
 - [ ] **P3.6** 🔴 Map each `Action` to azalea calls: look, rotate, jump, sneak, swing, use item, attack facing entity (with a reach check), hotbar, respawn, chat.
 - [ ] **P3.7** 🔴 Slow integration tests (`slow_*`, testcontainers + itzg, offline mode):
   - join and see the join message
@@ -1050,6 +1055,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Leaving a state** cancels that state's timer or session request.
   > - **`SessionClosed`** is sent once teardown has finished or timed out.
   > - **Restart** and a server change go through `Stopping{restart}`.
+
+  > Note (P4.2, from the group A review): **Half-open breaker.** `CircuitBreaker::permits` doesn't limit the half-open state to one attempt. The actor makes one attempt at a time and reports its outcome before it asks again.
 - [ ] **P4.3** 🔴 `SessionCredentialProvider` port:
   - In standalone mode it returns offline credentials.
   - In managed mode it asks the control plane (Phase 10).
@@ -1191,6 +1198,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Introduces:** `argon2`, `getrandom`, `sha2`, `subtle`, `base64`, `zeroize`, `chacha20poly1305`, `totp-rs`, `zxcvbn`, `governor`, `tower_governor`, `rpassword`.
 
 - [ ] **P7.1** 🔴 Migrations and repositories: `sessions` (with token families), `invites`, `login_attempts`, `user_mfa`.
+
+  > Note (P7.1, from the group A review): **IDs aren't secrets.** v7 IDs reveal their creation time. Invite codes and session tokens come from `getrandom`, never from an ID, and access is decided by `authorize()`, not by how hard an ID is to guess.
 - [ ] **P7.2** 🔴 `PasswordService`:
   - Argon2id with the configured parameters
   - runs in `spawn_blocking` behind a semaphore
@@ -1318,6 +1327,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P9.1** 🔴 Migrations and repositories:
   - `mc_accounts`: owner, MC UUID and name, kind, encrypted refresh token, `key_id`, status
   - `account_grants`
+
+  > Note (P9.1, from the group A review): **Account identity.** `McUsername` keeps its case, but Minecraft names are case-insensitive. Identify accounts by MC UUID; any lookup or comparison by name ignores case.
 - [ ] **P9.2** 🔴 Vault extensions:
   - purpose-bound AAD (`account_id|ms_refresh`)
   - `vault rotate-key` CLI that re-encrypts transactionally
@@ -1440,6 +1451,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `POST /bots/{id}/start|stop|restart|reset|resume`
 
   Every call is authorized, audited and reconciled.
+
+  > Note (P11.2, from the group A review): **SSRF.** `ServerAddress` allows loopback and private addresses (ADR-0010). An SSRF policy for the server address must check the resolved IP addresses, not the host string.
 - [ ] **P11.3** 🔴 Chat:
   - `POST /bots/{id}/chat`:
     - takes a `ChatMessage`
@@ -1455,6 +1468,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   2. The client opens a WebSocket at `GET /events?ticket=…`.
   3. Events are **filtered per user at send time**.
   4. Limits: per-user connection cap, `Resync` on `Lagged`, ping/pong with an idle timeout, maximum frame size.
+
+  > Note (P11.5, from the group A review): The ticket comes from `getrandom`, never from a v7 ID, which reveals its creation time.
 - [ ] **P11.6** 🔴 Retention job: chat older than `chat.retention_days` is deleted. The audit log is kept longer (configurable).
 - [ ] **P11.7** 🔴 Full-flow integration test: in-process server + in-process agent with `FakeConnector`.
   1. Start a bot via `fleet-client`.
@@ -1471,6 +1486,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     - an event timeline
   - **Mode editor:** an action list with validation.
   - **Admin:** an audit-log viewer and an agents view.
+
+  > Note (P11.9, from the group A review): **Chat console.** Render each message as its own block, with the sender outside the text, so a `\n[Server] …` inside a message can't pass as a separate line. The sanitizer keeps combining marks, so clip stacked ones (Zalgo text) with CSS overflow.
 
 **DoD:** The user's real fleet runs for 24 h, managed from the app. Every event shows up live, and the logs contain no unhandled errors.
 

@@ -154,7 +154,7 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
   - Interval and jitter are each ≤ 24 h.
   - An empty mode is valid (idle).
   - At most one `AtStart` chat step, because it runs on every join.
-- **`ModePlan` returns resolved `PlannedAction`s:** `RotateRandom` becomes a relative `Turn`, and chat is kept apart so it goes through the P4.5 queue. `next_due` is `None` when only `AtStart` steps exist.
+- **`ModePlan` returns resolved `PlannedAction`s:** `RotateRandom` becomes a relative `Turn`, and chat is kept apart so it goes through the P4.5 queue. `next_due` is `None` when only `AtStart` steps exist. After applying a `Turn`, the adapter (P3.6) clamps the pitch to [-90, 90].
 - **Mode JSON** uses struct variants (`{"type":"select_hotbar_slot","slot":3}`) instead of Plan.md's tuple notation.
 
 **Authorization (P2.9).**
