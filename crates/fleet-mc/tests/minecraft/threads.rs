@@ -103,16 +103,23 @@ mod tests {
     /// The name reader sees a real named thread, so the clean-up test can
     /// wait for host threads to leave. The `test (ubuntu-latest)` CI job
     /// runs it.
+    ///
+    /// Rust names the OS thread from inside the new thread, before it runs
+    /// the closure, so the test waits for the closure to start: right after
+    /// `spawn()`, `/proc` can still show the old name.
     #[cfg(target_os = "linux")]
     #[test]
     fn a_named_thread_shows_up_by_its_name() {
         let (release, parked) = std::sync::mpsc::sync_channel::<()>(0);
+        let (started_tx, started) = std::sync::mpsc::sync_channel::<()>(0);
         let thread = std::thread::Builder::new()
             .name("mc-p38probe".to_owned())
             .spawn(move || {
+                started_tx.send(()).unwrap();
                 let _ = parked.recv();
             })
             .unwrap();
+        started.recv().unwrap();
 
         let names = os_thread_names().unwrap();
         release.send(()).unwrap();
