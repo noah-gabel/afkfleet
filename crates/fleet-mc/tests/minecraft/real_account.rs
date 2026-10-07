@@ -1,8 +1,8 @@
 //! The user's real-account check (ADR-0011): a session with a real Minecraft
-//! token joins a local online-mode server, sends signed chat, then `/me`.
-//! Neither the token nor a chat-signing private key may reach a log, except
-//! where azalea-auth logs the certificate response at TRACE (an accepted risk
-//! that P5.2 caps).
+//! token joins a local online-mode server and sends signed chat, then `/me`,
+//! which the server rejects (a known limit, see the step). Neither the token
+//! nor a chat-signing private key may reach a log, except where azalea-auth
+//! logs the certificate response at TRACE (an accepted risk that P5.2 caps).
 //!
 //! The session's steps only record their results. The teardown and the log
 //! checks always run, and failed steps are reported after them.
@@ -37,9 +37,12 @@ const ACCOUNT_FILE: &str = concat!(
 const ACCOUNT_FILE_NAME: &str = "secrets/p1.8-account.txt";
 /// The chat the bot sends, signed.
 const CHAT: &str = "hello from the afkfleet real-account check";
-/// The `/me` command the bot sends, and the text of its echo.
+/// The `/me` command the bot sends, and the text its echo would have.
 const EMOTE: &str = "/me waves from the afkfleet real-account check";
 const EMOTE_TEXT: &str = "waves from the afkfleet real-account check";
+/// The translation key of a server's answer to an unsigned command that
+/// needs signed arguments.
+const REJECTED_COMMAND: &str = "chat.disabled.invalid_command_signature";
 /// What every PEM private key's header contains.
 const PRIVATE_KEY: &str = "PRIVATE KEY";
 /// Where azalea-auth 0.16.0 logs the certificate response, chat-signing
@@ -166,25 +169,25 @@ fn kind(event: &SessionEvent) -> String {
     }
 }
 
-/// Waits for an event that satisfies `wanted`, skipping others. A failure
-/// names only `what` and the kinds of the events the session sent, and a
-/// rejected token says it may have expired.
+/// Waits for an event that satisfies `wanted`, skipping others, and returns
+/// it. A failure names only `what` and the kinds of the events the session
+/// sent, and a rejected token says it may have expired.
 async fn wait_quietly(
     events: &mut McEvents,
     what: &str,
     wanted: impl Fn(&SessionEvent) -> bool,
-) -> Result<(), String> {
+) -> Result<SessionEvent, String> {
     let mut seen = Vec::new();
     let mut rejected = false;
     let found = tokio::time::timeout(WITHIN, async {
         while let Some(event) = events.next().await {
             if wanted(&event) {
-                return true;
+                return Some(event);
             }
             rejected |= event == SessionEvent::Disconnected(DisconnectReason::AuthRejected);
             seen.push(kind(&event));
         }
-        false
+        None
     })
     .await;
     if rejected {
@@ -193,8 +196,8 @@ async fn wait_quietly(
         ));
     }
     match found {
-        Ok(true) => Ok(()),
-        Ok(false) => Err(format!("the session ended before {what}; it sent {seen:?}")),
+        Ok(Some(event)) => Ok(event),
+        Ok(None) => Err(format!("the session ended before {what}; it sent {seen:?}")),
         Err(_) => Err(format!(
             "{what} didn't happen within {WITHIN:?}; the session sent {seen:?}"
         )),
@@ -218,6 +221,36 @@ async fn echoed(
         is_chat(event, kind, Some(name), echo)
     })
     .await
+    .map(drop)
+}
+
+/// Sends `/me` and expects the server to reject it: the known limit (Plan.md
+/// P11.3, ADR-0011). azalea sends every command unsigned, and a server that
+/// enforces secure chat answers a command with message arguments with one
+/// system message, logs an error, and drops it, while `send_chat` returns
+/// `Ok`. The bot stays up. If the emote's echo ever arrives instead, azalea
+/// signs commands now.
+async fn emote_rejected(
+    session: &McSession,
+    events: &mut McEvents,
+    name: &str,
+) -> Result<(), String> {
+    let sent = session.send_chat(EMOTE.parse().unwrap()).await;
+    if let Err(error) = sent {
+        return Err(format!("sending /me failed: {error}"));
+    }
+    // fleet-mc renders the server's translation with azalea-language, or
+    // shows the key where it has none.
+    let rejection = azalea_language::get(REJECTED_COMMAND).unwrap_or(REJECTED_COMMAND);
+    let answer = wait_quietly(events, "/me's rejection", |event| {
+        is_chat(event, ChatKind::Emote, Some(name), EMOTE_TEXT)
+            || is_chat(event, ChatKind::System, None, rejection)
+    })
+    .await?;
+    if is_chat(&answer, ChatKind::Emote, Some(name), EMOTE_TEXT) {
+        return Err("azalea now signs commands: update this step and the P11 note".to_owned());
+    }
+    Ok(())
 }
 
 /// What the session's steps found. Each failure names only the step and
@@ -228,13 +261,16 @@ struct Outcome {
     emote: Result<(), String>,
 }
 
-/// Joins, sends signed chat, then `/me`. Nothing here fails the test: the
+/// Joins, sends signed chat, then `/me`, which the server rejects. Nothing
+/// here fails the test: the
 /// teardown and the log checks must run whatever happens (the user's
 /// decision, after a failed chat once skipped them).
 async fn session_steps(session: &McSession, events: &mut McEvents, name: &str) -> Outcome {
     let not_tried = || Err("not tried: the bot didn't join".to_owned());
     // 1. The session server accepts the real token, and the bot joins.
-    let join = wait_quietly(events, "the join", |event| *event == SessionEvent::Joined).await;
+    let join = wait_quietly(events, "the join", |event| *event == SessionEvent::Joined)
+        .await
+        .map(drop);
     if join.is_err() {
         return Outcome {
             join,
@@ -253,17 +289,9 @@ async fn session_steps(session: &McSession, events: &mut McEvents, name: &str) -
         name,
     )
     .await;
-    // 3. `/me`: azalea sends every command unsigned, which a server that
-    // enforces secure chat may reject for a command with message arguments.
-    // Its result is checked last.
-    let emote = echoed(
-        session,
-        events,
-        "/me",
-        (EMOTE, ChatKind::Emote, EMOTE_TEXT),
-        name,
-    )
-    .await;
+    // 3. `/me` is rejected, the known limit (see `emote_rejected`). Its
+    // result is checked last.
+    let emote = emote_rejected(session, events, name).await;
     Outcome { join, chat, emote }
 }
 

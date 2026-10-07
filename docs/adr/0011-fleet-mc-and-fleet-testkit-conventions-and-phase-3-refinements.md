@@ -197,12 +197,17 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
   - **`send_chat`.**
     - Commands, `NotNeeded` and `Ready` go out at once, so offline accounts never wait.
     - `Pending` waits on the caller's side, never on the host thread, until the bot entered the game plus `McConfig::chat_signing_timeout` (10 s). Measuring from the game state means a hung fetch can't make every call wait.
-    - `Failed`, or `Pending` at that deadline, returns the new `SessionError::ChatUnavailable` without sending (ADR-0010). It's logged at `warn` once per session, and the session stays up. Later calls check again, so chat works once azalea's hourly retry succeeds.
+    - `Failed`, or `Pending` at that deadline, returns the new `SessionError::ChatUnavailable` without sending (ADR-0010). It's logged at `warn` once per session, and the session stays up. Later calls check again, so chat works once azalea's hourly retry succeeds. A key fetch that hangs keeps chat unavailable until the next reconnect, since azalea never retries it.
     - The host job checks the state again right before it queues the message.
   - **Tests.** The pure parts (`needs_signing`, `Certs`, `signing`, `decide`, the deadline) and the wait, under paused time, were red against stubs first. So were the plugin, on an App with hand-made components and login packets, and the fake's new `fail_chat`.
     - The offline slow scenarios show that offline accounts are unaffected.
     - Only the user's real-account check can show the fix end to end, since only a real token gets `IsAuthenticated`.
-  - **Commands, not verified.** azalea sends every command unsigned. A server that enforces secure chat may reject commands with message arguments (`/me`, `/msg`, `/say`, …), so the real-account check sends `/me` and checks its echo last.
+  - **Commands: a known limit, not decided** *(found by the user's real-account check)*. azalea sends every command unsigned. On a server that enforces secure chat, commands with message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) are rejected:
+    - the bot gets one system message (`chat.disabled.invalid_command_signature`) and stays up
+    - the server logs an ERROR each time
+    - `send_chat` returns `Ok` anyway
+
+    The options are to sign commands, which needs the server's command tree, or to refuse such commands on enforcing servers with an error. P11.3 decides it for user commands and P4.5 for mode chat; command signing isn't built in Phase 3 *(the user's decision)*. The real-account check expects the rejection, and fails if the emote's echo ever arrives.
 
 ### Events (P3.5)
 - **Chat:**
@@ -312,6 +317,10 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
     - The Linux run before merge used a temporary `push` trigger on the branch, removed before the PR was opened, since the PR's description can't be edited once it's open.
   - **The real-account check,** `manual_real_account_scenario`, joins the online-mode container with the user's real token, sends signed chat and waits for its echo, then sends `/me` and waits for the emote's echo, and tears down.
     - The steps only record their results, as event kinds. The teardown and the log checks always run, and failed steps are reported after them *(the user's decision, after a failed chat skipped the log checks)*.
+    - `/me` is expected to be rejected, the known limit under "Chat signing". If the emote's echo arrives instead, the step fails with "azalea now signs commands: update this step and the P11 note".
+    - **The user's results** (2026-10-07, after the chat-signing fix):
+      - passed: the join, the signed chat, the token absent from every log at every level, and `PRIVATE KEY` only under `azalea_auth::certs`
+      - `/me` was rejected, with one system message and an ERROR in the server's log
     - Then:
       - the token must not appear in the capture, at any level of any target
       - `PRIVATE KEY` may appear only under `azalea_auth::certs`, whose `fetch_certificates` logs the certificate response at `trace` in azalea-auth 0.16.0 (the accepted risk P5.2 caps). Any other target fails

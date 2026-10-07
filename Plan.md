@@ -1277,7 +1277,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Waiting.** A chat message, not a command, waits while signing is `Pending`, at most until the game state plus `McConfig::chat_signing_timeout` (10 s).
   > - **Refusing.** `Failed`, or still `Pending` at that deadline, gives the new `SessionError::ChatUnavailable`, logged at `warn` once. The session stays up.
   > - **The fake** gains `fail_chat`.
-  > - **Commands** are never signed by azalea. Whether an enforcing server rejects `/me` is checked by the real-account check.
+  > - **A key fetch that hangs** keeps chat unavailable until the next reconnect, since azalea never retries it.
+  > - **Commands** are never signed by azalea. A server that enforces secure chat rejects those with message arguments, while `send_chat` returns `Ok` (found by the user's real-account check; flagged under P4.5 and P11.3).
 - [x] **P3.8** 🔴 Clean-up test: after the full teardown from ADR-0008 §10 (not just `disconnect()`), the thread count and the number of live Worlds go back to baseline.
 
   > Note (P3.8, from the Phase 3 plan) (ADR-0011):
@@ -1315,7 +1316,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - The token must not appear in any log, and `PRIVATE KEY` only under `azalea_auth::certs` (azalea-auth 0.16.0 logs the certificate response at `trace`, which P5.2 caps).
   >   - Only the nextest `manual` profile includes `manual_` tests. Only the user runs `just test-real-account` (CLAUDE.md).
   >   - Errors name only a line number and the expected key, and a failed wait names only the step and event kinds. A rejected token says it may have expired, since `fetch-token` writes no expiry.
-  >   - It also sends `/me` and checks the emote's echo. The steps only record their results: the teardown and the log checks always run, and failed steps are reported after them. The first run failed at the signed chat (see P3.7's note) and skipped the log checks.
+  >   - It also sends `/me` and expects the server to reject it: the known limit under P11.3. If the emote's echo arrives instead, the step fails with "azalea now signs commands: update this step and the P11 note".
+  >   - The steps only record their results: the teardown and the log checks always run, and failed steps are reported after them. The first run failed at the signed chat (see P3.7's note) and skipped the log checks.
+  >   - **The user's results** (2026-10-07, after the P3.7 fix):
+  >     - passed: the join, the signed chat, the token absent from every log at every level, and `PRIVATE KEY` only under `azalea_auth::certs`
+  >     - `/me` was rejected: the bot got one system message and stayed up, and the server logged at ERROR "Received unsigned command packet from AfkBot1, but the command requires signable arguments: …"
   > - **The `slow-tests` workflow** runs weekly (Mondays, 07:17 UTC) and on demand, on ubuntu; it isn't a required check.
   > - **The threat model's B4 section** is written. It adds two accepted risks: Minecraft servers aren't authenticated, and a server can grow a bot's memory.
   > - **The Phase 3 DoD** is checked in group E and again in P3.9's PR, which finishes the phase.
@@ -1397,6 +1402,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - governor's clock is injected, so the tests run on controlled time (see §8)
 
   > Note (P4.5, from Phase 3, group E): **flagged, not decided.** `send_chat` can fail with `SessionError::ChatUnavailable` when an online session can't sign chat for a server that enforces it. The session stays up, and a later call may succeed. This task decides what the queue does then, for user chat and mode chat (ADR-0011).
+  >
+  > Mode chat with a command that takes message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) is rejected by a server that enforces secure chat, while `send_chat` returns `Ok`. That's undecided here too; see P11.3's note.
 - [ ] **P4.6** 🔴 Watchdog, while Online (fault table in ADR-0008 §5):
   - no `Tick` for `watchdog_timeout`: raise `WatchdogTimeout`, tear the session down and reconnect
   - no packet from the server for `packet_liveness_timeout`: tear the session down and treat it as a transient disconnect
@@ -1841,6 +1848,17 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `GET /bots/{id}/chat?before=&limit=` with cursor pagination.
 
   > Note (P11.3, from group D): The handler checks `SendChat(allowlist.check(&message))` and then sends that same message. An allowlisted command passes with any arguments (threat model). Reading the history needs `ViewBot` (ADR-0010).
+
+  > Note (P11.3, from Phase 3, group E, found by the user's real-account check): **flagged, not decided.**
+  > - **The limit.** On a server that enforces secure chat, azalea's unsigned commands with message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) are rejected.
+  >   - The bot gets one system message and stays up.
+  >   - The server logs an ERROR each time.
+  >   - `send_chat` returns `Ok` anyway.
+  > - **The options:**
+  >   - sign commands, which needs the server's command tree to know which arguments are signable
+  >   - refuse such commands on enforcing servers, with an error
+  >
+  > P4.5 decides the same for mode chat (ADR-0011).
 - [ ] **P11.4** 🔴 Modes CRUD: `GET`, `POST`, `PUT`, `DELETE` on `/modes`. Core validation errors become field errors. Built-in modes are read-only.
 
   > Note (P11.4, from Phase 2): Editing a mode that's assigned to bots must re-run the command check for every one of them. A mode with a command outside the allowlist needs Manage on each bot (ADR-0010).
