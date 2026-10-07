@@ -10,6 +10,7 @@ use std::time::Instant;
 
 use azalea::Event;
 use fleet_core::chat::{ChatSender, IncomingChat};
+use fleet_core::disconnect::DisconnectReason;
 use fleet_core::id::BotId;
 use fleet_core::mc::{SessionEvent, SessionEvents};
 use tokio::sync::Notify;
@@ -84,7 +85,9 @@ pub(crate) fn bridge(
     });
     (
         EventSink {
-            shared: Arc::clone(&shared),
+            source: Arc::new(Source {
+                shared: Arc::clone(&shared),
+            }),
         },
         McEvents { shared },
     )
@@ -315,15 +318,42 @@ impl Shared {
 }
 
 /// The host thread's side of the bridge. Clones feed the same session.
+///
+/// When the last clone is dropped, a session that hasn't ended ends as
+/// `Disconnected(SessionCrashed)`: its events can't come anymore, for
+/// example because its host thread is gone, and the actor must not wait for
+/// them.
 #[derive(Debug, Clone)]
 pub(crate) struct EventSink {
+    source: Arc<Source>,
+}
+
+/// What every clone of one sink shares; dropping it is dropping the last
+/// clone.
+#[derive(Debug)]
+struct Source {
     shared: Arc<Shared>,
+}
+
+impl Drop for Source {
+    fn drop(&mut self) {
+        // A no-op once the session ended or was closed.
+        if self
+            .shared
+            .terminate(Terminal::Disconnected(DisconnectReason::SessionCrashed))
+        {
+            warn!(
+                bot_id = %self.shared.bot_id,
+                "the session's event source went away without a terminal event, so it ended as crashed"
+            );
+        }
+    }
 }
 
 impl EventSink {
     /// Maps one azalea event and applies the delivery rules.
     pub(crate) fn forward(&self, event: &Event) -> Delivery {
-        self.shared.apply(map_event(event), Instant::now())
+        self.source.shared.apply(map_event(event), Instant::now())
     }
 
     /// Ends the session with `terminal`, from a source other than azalea's
@@ -331,18 +361,18 @@ impl EventSink {
     /// Returns whether it was the first terminal event, which is the one
     /// delivered.
     pub(crate) fn terminate(&self, terminal: Terminal) -> bool {
-        self.shared.terminate(terminal)
+        self.source.shared.terminate(terminal)
     }
 
     /// The bot respawned, so its next death is reported again.
     pub(crate) fn respawned(&self) {
-        self.shared.respawned();
+        self.source.shared.respawned();
     }
 
     /// Tears the bridge down: queued events are dropped, and
     /// [`McEvents::next`] returns `None`.
     pub(crate) fn close(&self) {
-        self.shared.close();
+        self.source.shared.close();
     }
 }
 
@@ -389,6 +419,7 @@ mod tests {
     use core::time::Duration;
     use fleet_core::chat::IncomingChat;
     use fleet_core::disconnect::{ConnectFailure, DisconnectReason};
+    use rstest::rstest;
 
     fn start(capacity: usize) -> (EventSink, McEvents, Arc<EventCounters>, Arc<LivenessStamps>) {
         let counters = Arc::new(EventCounters::default());
@@ -407,7 +438,7 @@ mod tests {
     }
 
     fn apply(sink: &EventSink, mapped: Mapped) -> Delivery {
-        sink.shared.apply(mapped, Instant::now())
+        sink.source.shared.apply(mapped, Instant::now())
     }
 
     fn chat(text: &str) -> Mapped {
@@ -603,6 +634,62 @@ mod tests {
     }
 
     // --- Terminal events and teardown ---
+
+    fn crashed() -> SessionEvent {
+        SessionEvent::Disconnected(DisconnectReason::SessionCrashed)
+    }
+
+    #[test]
+    fn dropping_every_sink_ends_a_live_session_as_crashed() {
+        let (sink, events, ..) = start(8);
+        apply(&sink, Mapped::Spawn);
+        let clone = sink.clone();
+
+        drop(sink);
+        assert_eq!(queued(&events), [SessionEvent::Joined]);
+        drop(clone);
+
+        assert_eq!(queued(&events), [crashed()]);
+        assert!(matches!(events.shared.next(), Next::End));
+    }
+
+    #[rstest]
+    #[case::after_a_terminal_event(true)]
+    #[case::after_close(false)]
+    fn dropping_the_sink_of_an_ended_session_changes_nothing(#[case] terminal: bool) {
+        let (sink, events, ..) = start(8);
+        if terminal {
+            apply(&sink, Mapped::Terminal(kicked()));
+        } else {
+            sink.close();
+        }
+
+        drop(sink);
+
+        let expected: &[SessionEvent] = if terminal {
+            &[SessionEvent::Disconnected(
+                DisconnectReason::ConnectionClosed,
+            )]
+        } else {
+            &[]
+        };
+        assert_eq!(queued(&events), expected);
+        assert!(matches!(events.shared.next(), Next::End));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn dropping_the_sink_wakes_a_waiting_consumer() {
+        let (sink, mut events, ..) = start(8);
+        let waiting = tokio::spawn(async move { events.next().await });
+        tokio::task::yield_now().await;
+
+        drop(sink);
+
+        let event = tokio::time::timeout(Duration::from_secs(1), waiting)
+            .await
+            .expect("the consumer wasn't woken");
+        assert_eq!(event.unwrap(), Some(crashed()));
+    }
 
     #[test]
     fn first_terminal_event_wins() {

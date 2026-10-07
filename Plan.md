@@ -1189,6 +1189,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Cut-off chat** goes through `IncomingChat::from_parts` with `truncated = true`. Only the text counts: a cut-off sender name is just capped. A kick keeps its class, because classifying uses only the top-level key.
   > - **Dependencies.** fleet-mc depends directly on `azalea-chat` (to name the argument type, which azalea doesn't re-export) and `azalea-language`, both `=0.16.0` and already in azalea's graph (§5).
   > - **Every azalea bump** re-checks the renderer against azalea-chat (ADR-0003).
+
+  > Note (P3.5, from the group B review) (ADR-0011): **A dropped sink ends the session.** When the last `EventSink` clone is dropped, for example because the host thread is gone, a session that hasn't ended gets `Disconnected(SessionCrashed)`, logged at `warn`, so the actor never waits for events that can't come. Once the session ended or was closed, dropping the sink changes nothing.
 - [ ] **P3.6** 🔴 Map each `Action` to azalea calls: look, rotate, jump, sneak, swing, use item, attack facing entity (with a reach check), hotbar, respawn, chat.
 
   > Note (P3.6, from group C, the user's idea): Check whether azalea can hold right-click (use item) down continuously, the way `Sneak{on}` holds sneak. If it can, propose a `HoldUse{on}` action as an additive change to the mode model. It's a new action type, so older servers reject modes that use it (ADR-0010).
