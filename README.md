@@ -41,10 +41,11 @@ There's no support, and I don't take feature requests. Security reports are welc
   - the first parts of [`crates/fleet-mc`](crates/fleet-mc/), the azalea adapter:
     - the host pool, which gives every bot its own thread and abandons a thread that hangs
     - the event bridge, which turns azalea's events into sanitized session events and never drops anything but chat
+    - the account adapter, which logs in with the server-issued Minecraft token (never a Microsoft one) and never logs it. It tells a rejected token, an account the session server restricts and a session-server outage apart, so an outage is retried instead of failing the bot
 
   [ADR-0011](docs/adr/0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md) records Phase 3's decisions, and [ADR-0012](docs/adr/0012-azalea-advisory-and-license-exceptions.md) records azalea's accepted advisories and license exceptions.
 
-**Next:** the rest of `fleet-mc`: the account adapter, the connector, the actions, and the slow tests against a real Minecraft server.
+**Next:** the rest of `fleet-mc`: the connector, the actions, and the slow tests against a real Minecraft server.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 

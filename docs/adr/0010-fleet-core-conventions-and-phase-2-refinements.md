@@ -110,6 +110,10 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
 - `WatchdogTimeout` (tick stall), transient
 - `LivenessTimeout` (no packets), transient
 - `ConnectFailed{HostUnavailable}` (the port's connect error), transient
+- *Amended in Phase 3, group C ([ADR-0011](0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md), the user's decisions): the account hook's session-server errors are split, so a Mojang outage no longer fails every online bot:*
+  - *`AccountRestricted{restriction}`: the session server refuses the account for good. It's permanent, with the new kinds `PermanentKind::AccountBanned` (Mojang banned it from multiplayer) and `PermanentKind::MultiplayerDisabled`. The existing `Banned` stays the Minecraft server's ban.*
+  - *`SessionServerFailed{failure}` (`Unreachable`, `RateLimited`, `TimedOut`, `Unexpected`): the session server couldn't confirm the join this time. It's transient, so it backs off instead of asking for a fresh token.*
+  - *`FailReason::Kicked{kind}` is renamed `FailReason::Permanent{kind}`: a session-server refusal isn't a kick.*
 
 **Resilience (P2.5).**
 - **`RetryPolicy`:**

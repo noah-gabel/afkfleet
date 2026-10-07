@@ -13,11 +13,27 @@
 //!   thread, azalea's events are mapped to `SessionEvent`s and pass a bounded
 //!   bridge that only ever drops chat; ticks and received packets only stamp
 //!   the session's liveness.
+//! - A session logs in with the server-issued Minecraft token, never a
+//!   Microsoft one (security rule 6). Its account joins through the session
+//!   server under a timeout and reports a refused join to the session, since
+//!   azalea raises no event for it. Offline sessions use azalea's offline
+//!   account.
 //! - [`McConfig`] holds the tuning values that ADR-0011 decided.
 //!
 //! Like all library code here, it never panics: failures are errors, and
 //! overload is [`JobError::QueueFull`] instead of a wait.
 
+// Until the connector (P3.4) builds accounts, only the tests use this module.
+// The user approved this expectation in group C; P3.4 removes it (ADR-0011).
+// Test builds use these items, so it applies outside them only.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the connector builds accounts in P3.4 (group D); approved in group C (ADR-0011)"
+    )
+)]
+mod account;
 mod config;
 // Until the connector (P3.4) wires it up, only the tests use the bridge's
 // producer side: the mapping, the sink and the liveness plugin. The user
@@ -32,6 +48,8 @@ mod config;
 )]
 mod events;
 mod host;
+#[cfg(test)]
+mod log_capture;
 
 pub use config::McConfig;
 pub use events::McEvents;

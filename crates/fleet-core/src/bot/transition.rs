@@ -201,7 +201,9 @@ fn session_ended(
                         failed_attempt(attempt, effects)
                     }
                 }
-                DisconnectClass::Permanent { kind } => fail(FailReason::Kicked { kind }, effects),
+                DisconnectClass::Permanent { kind } => {
+                    fail(FailReason::Permanent { kind }, effects)
+                }
                 DisconnectClass::Conflict { kind } => {
                     pause(PauseReason::Conflict { kind }, effects)
                 }
@@ -216,7 +218,7 @@ fn connecting_ended(attempt: NonZeroU32, auth_retried: bool, class: DisconnectCl
     let effects = vec![Effect::Disconnect];
     match class {
         DisconnectClass::Transient => failed_attempt(attempt, effects),
-        DisconnectClass::Permanent { kind } => fail(FailReason::Kicked { kind }, effects),
+        DisconnectClass::Permanent { kind } => fail(FailReason::Permanent { kind }, effects),
         DisconnectClass::Conflict { kind } => pause(PauseReason::Conflict { kind }, effects),
         // The first rejected session is retried at once with a fresh one; the
         // second fails the bot (ADR-0010).
@@ -305,7 +307,8 @@ mod tests {
     use super::*;
     use crate::bot::{BotNotification, FailReason, PauseReason};
     use crate::disconnect::{
-        ConflictKind, ConnectFailure, DisconnectClass, DisconnectReason, PermanentKind,
+        AccountRestriction, ConflictKind, ConnectFailure, DisconnectClass, DisconnectReason,
+        PermanentKind, SessionServerFailure,
     };
     use crate::time;
     use Effect::{
@@ -322,6 +325,13 @@ mod tests {
         ConnectFailure::Unresolvable,
         ConnectFailure::HostUnavailable,
         ConnectFailure::Other,
+    ];
+
+    const SESSION_SERVER_FAILURES: [SessionServerFailure; 4] = [
+        SessionServerFailure::Unreachable,
+        SessionServerFailure::RateLimited,
+        SessionServerFailure::TimedOut,
+        SessionServerFailure::Unexpected,
     ];
 
     const DUPLICATE_LOGIN: PauseReason = PauseReason::Conflict {
@@ -427,8 +437,8 @@ mod tests {
         BotState::Stopping { restart }
     }
 
-    fn kicked(kind: PermanentKind) -> FailReason {
-        FailReason::Kicked { kind }
+    fn permanent(kind: PermanentKind) -> FailReason {
+        FailReason::Permanent { kind }
     }
 
     // Effects.
@@ -483,6 +493,22 @@ mod tests {
         kick("multiplayer.disconnect.unverified_username")
     }
 
+    fn account_banned() -> DisconnectReason {
+        DisconnectReason::AccountRestricted {
+            restriction: AccountRestriction::Banned,
+        }
+    }
+
+    fn multiplayer_disabled() -> DisconnectReason {
+        DisconnectReason::AccountRestricted {
+            restriction: AccountRestriction::MultiplayerDisabled,
+        }
+    }
+
+    fn session_server_failed(failure: SessionServerFailure) -> DisconnectReason {
+        DisconnectReason::SessionServerFailed { failure }
+    }
+
     /// What a `BungeeCord` proxy sends when the same account logs in again:
     /// plain text, no translation key.
     fn plain_text_kick() -> DisconnectReason {
@@ -504,8 +530,11 @@ mod tests {
             unverified(),
             plain_text_kick(),
             kick("multiplayer.disconnect.server_shutdown"),
+            account_banned(),
+            multiplayer_disabled(),
         ];
         reasons.extend(CONNECT_FAILURES.map(|failure| DisconnectReason::ConnectFailed { failure }));
+        reasons.extend(SESSION_SERVER_FAILURES.map(session_server_failed));
         reasons
     }
 
@@ -573,7 +602,7 @@ mod tests {
         to(awaiting(1, false), &[ResetBreaker, request(false)])
     )]
     #[case::reset_after_a_ban(
-        failed(kicked(PermanentKind::Banned)),
+        failed(permanent(PermanentKind::Banned)),
         BotEvent::Reset,
         to(awaiting(1, false), &[ResetBreaker, request(false)])
     )]
@@ -685,7 +714,7 @@ mod tests {
     #[case::backoff(backoff(2), &[fail(FailReason::CrashLoop)])]
     #[case::paused(paused(), &[fail(FailReason::CrashLoop)])]
     #[case::failed_after_a_ban(
-        failed(kicked(PermanentKind::Banned)),
+        failed(permanent(PermanentKind::Banned)),
         &[fail(FailReason::CrashLoop)]
     )]
     #[case::failed_by_a_crash_loop(failed(FailReason::CrashLoop), &[fail(FailReason::CrashLoop)])]
@@ -731,25 +760,52 @@ mod tests {
         connecting(2, false),
         BotEvent::Disconnected(banned()),
         to(
-            failed(kicked(PermanentKind::Banned)),
-            &[Disconnect, fail(kicked(PermanentKind::Banned))]
+            failed(permanent(PermanentKind::Banned)),
+            &[Disconnect, fail(permanent(PermanentKind::Banned))]
         )
     )]
     #[case::not_whitelisted(
         connecting(2, false),
         BotEvent::Disconnected(not_whitelisted()),
         to(
-            failed(kicked(PermanentKind::NotWhitelisted)),
-            &[Disconnect, fail(kicked(PermanentKind::NotWhitelisted))]
+            failed(permanent(PermanentKind::NotWhitelisted)),
+            &[Disconnect, fail(permanent(PermanentKind::NotWhitelisted))]
         )
     )]
     #[case::wrong_version(
         connecting(2, false),
         BotEvent::Disconnected(wrong_version()),
         to(
-            failed(kicked(PermanentKind::WrongVersion)),
-            &[Disconnect, fail(kicked(PermanentKind::WrongVersion))]
+            failed(permanent(PermanentKind::WrongVersion)),
+            &[Disconnect, fail(permanent(PermanentKind::WrongVersion))]
         )
+    )]
+    #[case::account_banned(
+        connecting(2, false),
+        BotEvent::Disconnected(account_banned()),
+        to(
+            failed(permanent(PermanentKind::AccountBanned)),
+            &[Disconnect, fail(permanent(PermanentKind::AccountBanned))]
+        )
+    )]
+    #[case::multiplayer_disabled(
+        connecting(2, false),
+        BotEvent::Disconnected(multiplayer_disabled()),
+        to(
+            failed(permanent(PermanentKind::MultiplayerDisabled)),
+            &[Disconnect, fail(permanent(PermanentKind::MultiplayerDisabled))]
+        )
+    )]
+    // Unlike a rejected token, an outage gets a backoff, not a fresh session.
+    #[case::session_server_failed(
+        connecting(2, false),
+        BotEvent::Disconnected(session_server_failed(SessionServerFailure::Unreachable)),
+        to(backoff(2), &[Disconnect, RecordFailure, retry(2)])
+    )]
+    #[case::session_server_failed_with_a_fresh_session(
+        connecting(2, true),
+        BotEvent::Disconnected(session_server_failed(SessionServerFailure::TimedOut)),
+        to(backoff(2), &[Disconnect, RecordFailure, retry(2)])
     )]
     #[case::duplicate_login(
         connecting(2, false),
@@ -837,17 +893,48 @@ mod tests {
         online(2),
         BotEvent::Disconnected(banned()),
         to(
-            failed(kicked(PermanentKind::Banned)),
-            &[StopMode, Disconnect, fail(kicked(PermanentKind::Banned))]
+            failed(permanent(PermanentKind::Banned)),
+            &[StopMode, Disconnect, fail(permanent(PermanentKind::Banned))]
         )
     )]
     #[case::banned_after_the_stable_period(
         stable_online(2),
         BotEvent::Disconnected(banned()),
         to(
-            failed(kicked(PermanentKind::Banned)),
-            &[StopMode, Disconnect, RecordSuccess, fail(kicked(PermanentKind::Banned))]
+            failed(permanent(PermanentKind::Banned)),
+            &[StopMode, Disconnect, RecordSuccess, fail(permanent(PermanentKind::Banned))]
         )
+    )]
+    #[case::account_banned(
+        online(2),
+        BotEvent::Disconnected(account_banned()),
+        to(
+            failed(permanent(PermanentKind::AccountBanned)),
+            &[StopMode, Disconnect, fail(permanent(PermanentKind::AccountBanned))]
+        )
+    )]
+    #[case::multiplayer_disabled_after_the_stable_period(
+        stable_online(2),
+        BotEvent::Disconnected(multiplayer_disabled()),
+        to(
+            failed(permanent(PermanentKind::MultiplayerDisabled)),
+            &[
+                StopMode,
+                Disconnect,
+                RecordSuccess,
+                fail(permanent(PermanentKind::MultiplayerDisabled)),
+            ]
+        )
+    )]
+    #[case::session_server_failed(
+        online(2),
+        BotEvent::Disconnected(session_server_failed(SessionServerFailure::RateLimited)),
+        to(backoff(2), &[StopMode, Disconnect, RecordFailure, retry(2)])
+    )]
+    #[case::session_server_failed_after_the_stable_period(
+        stable_online(2),
+        BotEvent::Disconnected(session_server_failed(SessionServerFailure::Unexpected)),
+        to(backoff(1), &[StopMode, Disconnect, RecordSuccess, retry(1)])
     )]
     #[case::duplicate_login(
         online(2),
@@ -1051,9 +1138,11 @@ mod tests {
 
     fn fail_reason_strategy() -> impl Strategy<Value = FailReason> {
         prop_oneof![
-            Just(kicked(PermanentKind::Banned)),
-            Just(kicked(PermanentKind::NotWhitelisted)),
-            Just(kicked(PermanentKind::WrongVersion)),
+            Just(permanent(PermanentKind::Banned)),
+            Just(permanent(PermanentKind::NotWhitelisted)),
+            Just(permanent(PermanentKind::WrongVersion)),
+            Just(permanent(PermanentKind::AccountBanned)),
+            Just(permanent(PermanentKind::MultiplayerDisabled)),
             Just(FailReason::Auth),
             Just(FailReason::SessionDenied),
             Just(FailReason::CrashLoop),

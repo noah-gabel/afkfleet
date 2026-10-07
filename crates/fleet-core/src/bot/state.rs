@@ -66,8 +66,9 @@ pub enum BotState {
 /// Why a bot is [`BotState::Failed`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum FailReason {
-    /// The server kicked the bot for a reason that won't heal.
-    Kicked {
+    /// The session ended for a reason that won't heal: the server kicked the
+    /// bot, or the session server refused the account (ADR-0011).
+    Permanent {
         /// Why.
         kind: PermanentKind,
     },

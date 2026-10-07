@@ -4,7 +4,9 @@
 //! decides whether the bot retries, stops for good, or pauses because a human
 //! logged in (ADR-0008 §5, §6 and §9; ADR-0010). Kick reasons are classified by
 //! their translation key, never by their text: the text depends on the server's
-//! language and plugins.
+//! language and plugins. The session server's answers to a join come from the
+//! account's `join()` hook and are split by what they mean for the account
+//! (ADR-0011).
 
 use crate::text::{self, LineBreaks};
 
@@ -76,6 +78,29 @@ pub enum ConnectFailure {
     Other,
 }
 
+/// Why the session server refused the account for good (ADR-0011). Retrying
+/// can't change it; only the account's owner can.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AccountRestriction {
+    /// Mojang banned the account from multiplayer.
+    Banned,
+    /// The account's settings don't allow multiplayer, e.g. parental controls.
+    MultiplayerDisabled,
+}
+
+/// Why the session server couldn't confirm a join this time (ADR-0011).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SessionServerFailure {
+    /// It couldn't be reached, or it said it's unavailable.
+    Unreachable,
+    /// It turned the join down for now: too many requests.
+    RateLimited,
+    /// It didn't answer within the adapter's session-join timeout.
+    TimedOut,
+    /// It answered with something the adapter doesn't know.
+    Unexpected,
+}
+
 /// Why a Minecraft session ended.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum DisconnectReason {
@@ -92,6 +117,21 @@ pub enum DisconnectReason {
     /// this from the account's `join()` hook, since azalea raises no event for it
     /// (ADR-0008 §9).
     AuthRejected,
+    /// The session server refused the account for a reason that won't heal.
+    /// Like [`AuthRejected`](Self::AuthRejected), the adapter learns this from
+    /// the account's `join()` hook (ADR-0011).
+    AccountRestricted {
+        /// Why.
+        restriction: AccountRestriction,
+    },
+    /// The session server couldn't confirm the join this time: an outage, an
+    /// HTTP error, rate limiting, an answer the adapter doesn't know, or the
+    /// adapter's own timeout. The adapter learns this from the account's
+    /// `join()` hook (ADR-0011).
+    SessionServerFailed {
+        /// What went wrong.
+        failure: SessionServerFailure,
+    },
     /// The session's ECS runner died, e.g. after a panic (ADR-0008 §5).
     SessionCrashed,
     /// No game tick for the watchdog timeout: the session hung.
@@ -123,12 +163,18 @@ pub enum DisconnectClass {
 /// Why a disconnect is permanent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PermanentKind {
-    /// The account or its IP address is banned.
+    /// The server banned the account or its IP address.
     Banned,
     /// The account isn't on the whitelist.
     NotWhitelisted,
     /// The server runs a different Minecraft version.
     WrongVersion,
+    /// Mojang banned the account from multiplayer, on every server. The
+    /// session server said so (ADR-0011).
+    AccountBanned,
+    /// The account's settings don't allow multiplayer. The session server
+    /// said so (ADR-0011).
+    MultiplayerDisabled,
 }
 
 /// Why a disconnect is a conflict.
@@ -149,12 +195,13 @@ impl DisconnectReason {
         })
     }
 
-    /// Classifies the reason (ADR-0008 §6).
+    /// Classifies the reason (ADR-0008 §6, ADR-0011).
     ///
     /// Kicks are classified by translation key; a kick without a known key
-    /// (plain text, or a key this version doesn't know) is transient. Every
-    /// other reason is transient, except a rejected session, which is
-    /// [`DisconnectClass::AuthInvalid`].
+    /// (plain text, or a key this version doesn't know) is transient. A
+    /// rejected session is [`DisconnectClass::AuthInvalid`], and an account
+    /// the session server restricts is permanent. Every other reason is
+    /// transient, including a session server that couldn't confirm the join.
     #[must_use]
     pub fn classify(&self) -> DisconnectClass {
         match self {
@@ -163,8 +210,15 @@ impl DisconnectReason {
                 .as_ref()
                 .map_or(DisconnectClass::Transient, |key| classify_key(key.as_str())),
             Self::AuthRejected => DisconnectClass::AuthInvalid,
+            Self::AccountRestricted { restriction } => DisconnectClass::Permanent {
+                kind: match restriction {
+                    AccountRestriction::Banned => PermanentKind::AccountBanned,
+                    AccountRestriction::MultiplayerDisabled => PermanentKind::MultiplayerDisabled,
+                },
+            },
             Self::ConnectionClosed
             | Self::ConnectFailed { .. }
+            | Self::SessionServerFailed { .. }
             | Self::SessionCrashed
             | Self::WatchdogTimeout
             | Self::LivenessTimeout => DisconnectClass::Transient,
@@ -215,6 +269,12 @@ mod tests {
     };
     const DUPLICATE_LOGIN: DisconnectClass = DisconnectClass::Conflict {
         kind: ConflictKind::DuplicateLogin,
+    };
+    const ACCOUNT_BANNED: DisconnectClass = DisconnectClass::Permanent {
+        kind: PermanentKind::AccountBanned,
+    };
+    const MULTIPLAYER_DISABLED: DisconnectClass = DisconnectClass::Permanent {
+        kind: PermanentKind::MultiplayerDisabled,
     };
 
     /// The kick rows of ADR-0008 §6, with the keys and texts the spike saw
@@ -328,6 +388,32 @@ mod tests {
         DisconnectClass::Transient
     )]
     #[case::auth_rejected(DisconnectReason::AuthRejected, DisconnectClass::AuthInvalid)]
+    #[case::account_banned(
+        DisconnectReason::AccountRestricted { restriction: AccountRestriction::Banned },
+        ACCOUNT_BANNED
+    )]
+    #[case::multiplayer_disabled(
+        DisconnectReason::AccountRestricted {
+            restriction: AccountRestriction::MultiplayerDisabled,
+        },
+        MULTIPLAYER_DISABLED
+    )]
+    #[case::session_server_unreachable(
+        DisconnectReason::SessionServerFailed { failure: SessionServerFailure::Unreachable },
+        DisconnectClass::Transient
+    )]
+    #[case::session_server_rate_limited(
+        DisconnectReason::SessionServerFailed { failure: SessionServerFailure::RateLimited },
+        DisconnectClass::Transient
+    )]
+    #[case::session_server_timed_out(
+        DisconnectReason::SessionServerFailed { failure: SessionServerFailure::TimedOut },
+        DisconnectClass::Transient
+    )]
+    #[case::session_server_unexpected(
+        DisconnectReason::SessionServerFailed { failure: SessionServerFailure::Unexpected },
+        DisconnectClass::Transient
+    )]
     #[case::session_crashed(DisconnectReason::SessionCrashed, DisconnectClass::Transient)]
     #[case::watchdog_timeout(DisconnectReason::WatchdogTimeout, DisconnectClass::Transient)]
     #[case::liveness_timeout(DisconnectReason::LivenessTimeout, DisconnectClass::Transient)]
