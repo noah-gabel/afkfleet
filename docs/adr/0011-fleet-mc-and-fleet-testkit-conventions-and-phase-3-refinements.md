@@ -59,6 +59,8 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
 - **fleet-mc** *(group B review)*: `azalea-chat` and `azalea-language`, `=0.16.0` like azalea, which already depends on both, so the graph doesn't change. They're used only by the bounded renderer (P3.5): azalea doesn't re-export azalea-chat's `PrimitiveOrComponent`, the type of a translation's arguments, and the renderer looks up translation templates itself.
 - **fleet-mc, dev** *(group C, the user's approval)*: `log` 0.4.34, already in the graph through azalea and reqwest. The log capture's own test emits a `log` record to prove that records from `log`-based crates (reqwest, rustls) reach the capture.
 - *(group C)* fleet-mc also uses `secrecy`, which §5 already lists for it. The workspace entry of `reqwest` fixes the `rustls` feature, per the root manifest's TLS rule; azalea-auth already enables it, so fleet-mc's build doesn't change, and fleet-mc enables no features of its own.
+- *(group D, the user's decision)* **The log capture moves to fleet-testkit** (`fleet_testkit::log_capture`), so fleet-mc's slow tests can reach it and P9's server redaction test can reuse it. fleet-testkit gains `tracing` and `tracing-subscriber`, and `log` as a dev-dependency. fleet-mc drops `tracing-subscriber` and `log` and dev-depends on fleet-testkit. As testkit library code the capture doesn't panic: `install()` and `check_absent()` return errors, and a `SecretLeak` names only targets and counts.
+- *(group D)* **`testcontainers` 0.28.0** (§5, no features) is a fleet-mc dev-dependency for the slow tests. `cargo deny` passes with it, and it adds no duplicate crates beyond those already reported.
 
 ### Lint guards
 - **Bounded channels.** The root `clippy.toml` bans `tokio::sync::mpsc::unbounded_channel` through `disallowed-methods`.
@@ -156,6 +158,29 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
 - **Crashes.** An `AppExit` error becomes `Disconnected(SessionCrashed)`.
 - **Diagnostics.** `live_worlds()` (a `Weak` of the ECS) and `dropped_chat()` are public diagnostics.
 - **Fault injection** for the containment test is a small hook that adds a system to a session's App. It sits behind a fleet-mc cargo feature that's off by default; the exact API is shown in group D's PR.
+- **Built in group D** (the user's decisions, 2026-10-07):
+  - **Shape.** `AzaleaConnector::new(&McConfig)` owns its host pool. `connect()` spawns the host thread and queues the session's driver there with `HostThread::start`, a crate-private addition to the host pool. That's a `JoinSet` job without an answer or a job timeout, so the driver's owner is the one this ADR approved. Then `connect()` returns. `McSession` is the `SessionHandle`.
+  - **The driver** holds the session's only counting `EventSink` and no `HostThread` handle.
+    - Every wait before `Joined` (resolving, the join callback, the connect) also watches the stop signal, the connect deadline and azalea's runner. The deadline is taken in std time in `connect()`, so a paused clock on the caller's runtime can't move it.
+    - Its loop checks, in order: stop, the account's reports, the connect deadline until joined, the runner's end, then events. *(The user's notice on the plan)* The deadline comes before events, so a server that keeps sending events before `Joined` can't starve it. A unit test floods the loop and was red against the events-first order.
+  - **Endings.**
+    - A resolve error is `ConnectionFailed(Unresolvable)`, tested through the pure waiting helper, never through DNS.
+    - A runner end nobody asked for (`Ok(AppExit)` included), a closed join callback or a closed event channel is `Disconnected(SessionCrashed)`.
+  - **Teardown** follows ADR-0008 §10.
+    1. `disconnect()` closes the bridge first, so the driver's end isn't reported as a crash.
+    2. It stops the driver. The driver writes `AppExit` (with or without a `Client`), waits up to `app_exit_timeout` (2 s) for the runner, then drops the `Client` and the event receiver. The oneshot of `AppExit` is never polled again after it finished.
+    3. `disconnect()` waits up to that plus 1 s for the driver, then shuts the host thread down, which abandons a hung one.
+  - **The owner's bridge handle** is a `BridgeControl` that doesn't count as a source, so "a dropped sink ends the session" still holds.
+  - **The `Client`** lives in a slot that only host-thread jobs clone from, so no handle outside the thread keeps a World alive. A drop guard empties it.
+  - **Calls** fail with `NotInWorld` before `Joined`, or when the host thread finds no `Client`, and with `Closed` once the session ended or was torn down.
+  - **Fault injection.** `AzaleaConnector::with_app_hook(self, impl Fn(BotId, &mut azalea::app::App) + Send + Sync + 'static) -> Self`, behind the off-by-default `fault-injection` feature. The hook runs after azalea's plugins and before the single-threaded executor is set, so its systems run single-threaded too. *(The user's notice on the plan)* With the feature and without `debug_assertions`, fleet-mc hits a `compile_error!`, so no release build can include the hook. Clippy's `--all-features` run and the slow tests are debug builds.
+  - **Stubs inside the PR** *(the user's decision)*. P3.4's `perform`, `send_chat` and `respawn` check the state and run an empty host job, so P3.7 and P3.6 get real red runs. `respawn` already tells the bridge, inside its job.
+  - **The event channel is attached when azalea spawns the bot** *(found in CI on Linux, the user's decision)*.
+    - **The race.** In one `Update` pass, azalea spawns the bot's entity, sends the join callback, polls the connect task and reports a failed connect through `LocalPlayerEvents`. It drops the event when the entity doesn't have that component yet.
+    - **Why only on Linux.** Variant C, as in ADR-0008 §1, the spike and azalea's own `Client::join`, attached it after the callback. On a loaded Linux host, a refused loopback connect failed before that, so the event was lost and the session ended at the connect timeout as `TimedOut`. Locally it took one CPU and eight parallel test processes to reproduce: 19 of 24 runs failed.
+    - **The fix.** `build_app` adds an observer on `Add` of `LocalEntity` that inserts `LocalPlayerEvents` at once, before the connect is polled. *(The user's addition)* It moves the one sender into the bot's component, taken from an `Option`, so no clone stays in the App. The channel closes when the bot's entity goes, which is still a crash, and a second local entity gets no channel, logged at `warn`.
+    - **Tests.** Unit tests cover the component at spawn, the second entity, the channel closing with the entity, and a connect failure in the spawn frame reaching the session; they were red first. Under the same Linux stress, 24 of 24 runs pass.
+    - **Upstream.** azalea's own `Client::join` has the same race, so it joins the list of upstream reports left to the user (ADR-0008 §11).
 
 ### Events (P3.5)
 - **Chat:**
@@ -197,6 +222,25 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
 - **Pure helpers** are unit-tested: the pitch clamp after a `Turn`, the yaw wrap, skipping non-finite angles (logged), and the attack packet's bytes.
 - **Live tests** check the effects through RCON.
 - **HoldUse.** azalea 0.16.0 has only a one-shot use (`start_use_item`). Holding works by sending `UseItem` and later a raw `PlayerAction{ReleaseUseItem}`, for items with a use duration (shield, bow, food); block and entity clicks would need repeated packets. P3.6 verifies this on the test server and records the result here. **P3.9** then adds `HoldUse{on}` as its own task right after group E, or closes with a note if it isn't feasible.
+- **Built in group D** (the user's decisions, 2026-10-07):
+  - **One synchronous host job per action.** Several `Client` methods panic when a component is missing (`set_direction`, `set_crouching`, `hit_result`, `with_raw_connection_mut`), so the job first checks the component through `get_component` or `try_query_self`. A missing one gives `NotInWorld`. No read guard is held while a `Client` method runs.
+  - **Mapping.**
+    - `Look` and `Turn` use `set_direction`. `Turn` reads `LookDirection`, wraps the yaw and clamps the pitch.
+    - `Jump` is `jump`, `UseItem` is `start_use_item` (a block click when the bot looks at a block), `Sneak` is `set_crouching`, `SwingArm` triggers `SwingArmEvent`, and `SelectHotbarSlot` is `set_selected_hotbar_slot`.
+    - `AttackFacingEntity`:
+      - It takes the `HitResultComponent`, which azalea limits to the reach. Nothing in reach gives `Ok`, logged at `debug`.
+      - It writes the attack packet by hand: a `VarInt` packet ID and a `VarInt` entity ID, through `RawConnection::write_raw` (ADR-0008 §8).
+      - It swings and resets `TicksSinceLastAttack`, as azalea's own attack would.
+    - The respawn writes `PerformRespawnEvent` and calls `BridgeControl::respawned` in the same job.
+  - **Non-finite angles** are skipped before the job, logged at `warn`, and the call returns `Ok`.
+  - **Live checks** are in `slow_actions_scenario`. Swings are seen by a second bot through a test-only system added by the `fault-injection` hook, which counts `Animate` packets *(the user's decision)*. A failed `execute if` answers nothing over RCON, so "not sneaking" is checked with `execute unless`.
+  - **HoldUse: feasible** *(checked by a temporary probe, never committed, the user's decision)*. Against the 26.1 test server, with a bow and arrows:
+    1. One `start_use_item` started drawing.
+    2. A release after about 1 tick shot nothing (the control).
+    3. 25 ticks of holding shot nothing yet.
+    4. A `ServerboundPlayerAction { action: ReleaseUseItem, pos: BlockPos::default(), direction: Down, seq: 0 }` then shot one arrow. The bow's `minecraft.used` statistic went to 1, the arrows from 16 to 15, and one arrow entity appeared.
+
+    The packet encodes correctly through azalea's normal writer (`RawConnection::write`, or `Client::write_packet` on the host thread), so no hand-written bytes are needed. **P3.9** maps `HoldUse{on: true}` to `start_use_item` and `{on: false}` to that release. Items without a use duration (block and entity clicks) aren't covered. To repeat the probe, run those steps with the `fault-injection` hook adding a system that writes the release packet when a flag is set.
 
 ### Slow tests (P3.7, P3.8)
 - **Local servers only.** They use testcontainers with `itzg/minecraft-server`, offline and online mode, bound to localhost. The image and `VERSION` are the ones pinned in `deploy/compose.dev.yaml`, and a fast test asserts that the two pins match.
@@ -213,6 +257,18 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
   - It joins the online-mode container and sends signed chat.
   - No error message ever includes the file's contents, format errors included; they name only the line number and the expected key.
 - **A `slow-tests` CI workflow** comes in group E: weekly and on demand, ubuntu, not a required check.
+- **Built in group D** (P3.7, the user's decisions, 2026-10-07):
+  - **One test binary,** `crates/fleet-mc/tests/minecraft/`, with a harness, the fast `pins` test and a module per scenario: offline, online and fault containment.
+    - The nextest test group `minecraft` (`max-threads = 1`) serializes the `slow_` tests.
+    - `just test-slow` turns on `fault-injection`. The containment module is `cfg`-gated on it, so `just test` still builds the binary and runs `pins`.
+  - **Containers.** `GenericImage` with the compose `tag@digest`, the dev stack's environment and `MEMORY` 1G. It waits for the image's healthcheck within 5 min. A host-config modifier binds the one mapped game port (host port 0) to `127.0.0.1` and turns `publish_all_ports` off, so RCON is never published.
+  - **RCON** runs through `exec(["rcon-cli", …])`.
+  - **Waiting.** Waits are bounded (60 s), and a failed wait shows the events the session sent meanwhile.
+  - **Found: a bot never sees its own join message.** The server broadcasts it before it adds the player. So the offline scenario's second bot sees the first one join and rejoin, as in the spike, and both bots see the first one's chat echo.
+  - **Red, then green** *(the user's decision)*. The chat steps failed against P3.4's stub `send_chat`; P3.7 wired it to `client.chat`, which also sends `/commands` (ADR-0008 §7).
+  - **Results.** All three scenarios pass in about 50 s.
+    - **Online mode:** a garbage token gives `AuthRejected` in seconds, an offline account is kicked with `unverified_username`, and the marker token never appears at any level of any target.
+    - **Containment:** a panic hooked into one session's `GameTick` ends it as `SessionCrashed`. The other session on the same pool keeps ticking, chats and acts, and both threads shut down without being abandoned.
 
 ### Closed or moved items
 - **ADR-0008 §11, "CPU without the `packet-event` feature":** closed without a measurement. fleet-mc builds without the feature, so the cost can only drop below the P1.7 numbers, and no decision depends on it.

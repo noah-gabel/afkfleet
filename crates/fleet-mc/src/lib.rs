@@ -5,6 +5,11 @@
 //! Every session runs on a host thread of its own (ADR-0008 §2), so a panic or
 //! a hang in azalea affects exactly one bot:
 //!
+//! - [`AzaleaConnector`] is the `MinecraftConnector`. It starts each session
+//!   on a new host thread with azalea's auto-reconnect and auto-respawn off and
+//!   Bevy's single-threaded executor, bounds connecting with the connect
+//!   timeout, and tears a session down in ADR-0008 §10's order.
+//!   [`McSession`] is the actor's handle to it.
 //! - [`McHostPool`] starts one [`HostThread`] per session: a named OS thread
 //!   with a current-thread tokio runtime and a `LocalSet`, which is what azalea
 //!   needs. Work reaches it over a bounded queue. A thread that hangs is
@@ -23,34 +28,19 @@
 //! Like all library code here, it never panics: failures are errors, and
 //! overload is [`JobError::QueueFull`] instead of a wait.
 
-// Until the connector (P3.4) builds accounts, only the tests use this module.
-// The user approved this expectation in group C; P3.4 removes it (ADR-0011).
-// Test builds use these items, so it applies outside them only.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the connector builds accounts in P3.4 (group D); approved in group C (ADR-0011)"
-    )
-)]
+#[cfg(all(feature = "fault-injection", not(debug_assertions)))]
+compile_error!(
+    "fleet-mc's `fault-injection` feature is for the slow tests only: no release build may include its App hook (ADR-0011)"
+);
+
 mod account;
+mod actions;
 mod config;
-// Until the connector (P3.4) wires it up, only the tests use the bridge's
-// producer side: the mapping, the sink and the liveness plugin. The user
-// approved this expectation in group B; P3.4 removes it (ADR-0011). Test
-// builds use these items, so it applies outside them only.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "the event bridge's producer side is wired into the connector in P3.4 (group D); approved in group B (ADR-0011)"
-    )
-)]
+mod connector;
 mod events;
 mod host;
-#[cfg(test)]
-mod log_capture;
 
 pub use config::McConfig;
+pub use connector::{AzaleaConnector, McSession};
 pub use events::McEvents;
 pub use host::{HostThread, JobError, McHostPool, ShutdownOutcome, SpawnError};

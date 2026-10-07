@@ -20,3 +20,6 @@ mod map;
 mod render;
 
 pub use bridge::McEvents;
+pub(crate) use bridge::{BridgeControl, EventCounters, EventSink, Phase, bridge};
+pub(crate) use liveness::{LivenessStamps, PacketLivenessPlugin};
+pub(crate) use map::Terminal;

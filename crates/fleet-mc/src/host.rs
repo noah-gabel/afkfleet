@@ -380,6 +380,23 @@ impl HostThread {
         }
     }
 
+    /// Starts `job` on the host thread and leaves it running: no answer, and
+    /// no job timeout. It's for work that lasts as long as the session, such as
+    /// the session's driver. Like any job, it's a task of the thread's
+    /// `JoinSet`, so shutting the thread down drops it.
+    ///
+    /// # Errors
+    /// [`JobError::QueueFull`] if the queue is full, or [`JobError::Closed`]
+    /// if the thread has ended or is shutting down.
+    pub(crate) fn start<F, Fut>(&self, job: F) -> Result<(), JobError>
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + 'static,
+    {
+        self.inner
+            .queue(Box::new(move || -> LocalJob { Box::pin(job()) }))
+    }
+
     /// Ends the host thread: it stops taking jobs, drops the jobs still queued
     /// or running, and with them everything the session left on the thread.
     ///
@@ -637,5 +654,98 @@ mod tests {
     )]
     fn errors_have_fixed_messages(#[case] message: String, #[case] expected: &str) {
         assert_eq!(message, expected);
+    }
+
+    // --- Started jobs (real time: they wait for a real OS thread) ---
+
+    /// The upper bound for waits that only run out when a test fails.
+    const WITHIN: Duration = Duration::from_secs(10);
+
+    fn bot() -> BotId {
+        "018bcfe5-6800-7bab-abab-abababababab".parse().unwrap()
+    }
+
+    /// A pool whose jobs time out after a millisecond, so a started job that
+    /// were bound by the job timeout would be cut short.
+    fn impatient_pool() -> McHostPool {
+        McHostPool::new(&McConfig {
+            job_timeout: Duration::from_millis(1),
+            ..McConfig::default()
+        })
+    }
+
+    async fn within<F: Future>(future: F) -> F::Output {
+        time::timeout(WITHIN, future)
+            .await
+            .expect("the host thread didn't answer within the test's bound")
+    }
+
+    /// Sends on its channel when dropped, so a test sees a job being dropped.
+    struct DropSignal(Option<oneshot::Sender<()>>);
+
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            if let Some(signal) = self.0.take() {
+                let _ = signal.send(());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn a_started_job_runs_on_the_host_thread_past_the_job_timeout() {
+        let pool = impatient_pool();
+        let host = pool.spawn(bot()).unwrap();
+        let (release_tx, release_rx) = oneshot::channel::<()>();
+        let (done_tx, done_rx) = oneshot::channel();
+
+        host.start(move || async move {
+            let _ = release_rx.await;
+            let _ = done_tx.send(thread::current().name().map(str::to_owned));
+        })
+        .unwrap();
+        // Far past the job timeout, in real time, without sleeping.
+        let until = Instant::now() + Duration::from_millis(50);
+        within(async {
+            while Instant::now() < until {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        release_tx.send(()).unwrap();
+
+        let name = within(done_rx).await.unwrap();
+        assert_eq!(name.as_deref(), Some(host.name()));
+        within(host.shutdown()).await;
+    }
+
+    #[tokio::test]
+    async fn shutdown_drops_a_started_job_that_never_ends() {
+        let pool = impatient_pool();
+        let host = pool.spawn(bot()).unwrap();
+        let (running_tx, running_rx) = oneshot::channel();
+        let (dropped_tx, dropped_rx) = oneshot::channel();
+
+        host.start(move || async move {
+            let _signal = DropSignal(Some(dropped_tx));
+            let _ = running_tx.send(());
+            core::future::pending::<()>().await;
+        })
+        .unwrap();
+        within(running_rx).await.unwrap();
+        let outcome = within(host.shutdown()).await;
+
+        assert_eq!(outcome, ShutdownOutcome::Ended);
+        within(dropped_rx).await.unwrap();
+        assert_eq!(pool.live_threads(), 0);
+    }
+
+    #[tokio::test]
+    async fn start_after_shutdown_returns_closed() {
+        let host = impatient_pool().spawn(bot()).unwrap();
+        within(host.shutdown()).await;
+
+        let started = host.start(|| async {});
+
+        assert_eq!(started, Err(JobError::Closed));
     }
 }

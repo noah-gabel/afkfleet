@@ -5,8 +5,11 @@
 //!
 //! - [`mc`]: a fake [`MinecraftConnector`](fleet_core::mc::MinecraftConnector)
 //!   whose sessions a test drives through a [`SessionController`](mc::SessionController).
+//! - [`log_capture`]: a process-wide capture of every log line, for tests
+//!   that check a secret never reaches a log.
 //!
 //! Fakes are preferred over mocks; `mockall` is only for checking interactions
 //! (CLAUDE.md, testing conventions).
 
+pub mod log_capture;
 pub mod mc;

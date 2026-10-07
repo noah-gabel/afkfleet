@@ -28,9 +28,10 @@ ci: fmt-check clippy docs test-ci scripts-test cov deny stable-check ui-check ui
 test crate="":
     cargo nextest run {{ if crate == "" { "--workspace" } else { "-p " + crate } }}
 
-# Slow tests: containers and a real Minecraft server (needs Docker).
+# Slow tests: containers and a real Minecraft server (needs Docker), one at a time.
+# They need fleet-mc's test-only `fault-injection` feature (ADR-0011).
 test-slow:
-    cargo nextest run --workspace --profile slow --no-tests=warn
+    cargo nextest run --workspace --profile slow --no-tests=warn --features fleet-mc/fault-injection
 
 # Coverage, checked against the gates from Plan.md §8.
 cov:

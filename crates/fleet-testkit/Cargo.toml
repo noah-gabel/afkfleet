@@ -13,6 +13,11 @@ workspace = true
 [dependencies]
 fleet-core.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
+# The log capture for redaction tests (ADR-0011).
+tracing.workspace = true
+tracing-subscriber.workspace = true
 
 [dev-dependencies]
+# The log capture's own test emits a `log` record to prove the bridge.
+log.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
