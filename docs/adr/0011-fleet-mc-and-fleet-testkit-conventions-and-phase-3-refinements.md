@@ -157,7 +157,7 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
   - Chat is logged only at `debug`, as a `?` field.
 - **Refined in group B** (the user's decisions):
   - **Chat kinds.** A chat type's registry id is assigned by the server. fleet-mc reads it in vanilla's order, which azalea's `ChatKindKey::ALL` follows: 1 is an emote, 2 an incoming whisper, 4 `/say`. Everything else is `chat`, including the echo of a whisper the bot sent, team chat, unknown ids and inline (`Direct`) chat types. Resolving the id against the registry the server actually sent would need the session's ECS in the mapping. So a server whose data packs reorder chat types can mislabel a kind. That's a known limit; the text and the sender don't depend on it.
-  - **Verified senders.** Only a sender from a `Player` packet carries a UUID. Only such a sender counts as verified for permission or trigger decisions; a `Disguised` sender is display-only (see "Flagged, not decided").
+  - **Chat senders are server-attributed, not verified** *(corrected in the group B review)*. azalea 0.16 never verifies chat signatures, and fleet-mc shows a `Player` packet's `unsigned_content` when there is one. So a sender's name, a `Player` packet's UUID and the text are all only what the server claims. No permission or trigger decision may rely on a chat sender. A feature that needs one must verify the message signature and use the signed body, in an ADR of its own.
   - **System messages** keep their whole sanitized text, and their sender is never guessed.
   - **Action-bar messages** have their own counter, `ignored_action_bar`, apart from `dropped_chat`, and they log nothing. Some servers send several a second, and `dropped_chat` should stay a signal of overload.
   - **Unknown events.** azalea's `Event` is `#[non_exhaustive]`. A variant the mapping doesn't name lands in its catch-all, which ignores it and logs it at `debug`. Every azalea bump re-checks the variants against the mapping (ADR-0003, step 5).
@@ -222,8 +222,8 @@ They aren't config keys yet: a fleet-mc config struct holds them, and P5 adds ke
   - **Every azalea bump** re-checks the three ignored advisories and removes the hickory ones once azalea uses hickory ≥ 0.26.1.
 - **Flagged, not decided** (group B, the user's request):
   - **A per-server chat format (P4.1, P11.9).** Some servers send player chat through a plugin, as system messages like `[CLAN] Name : message`. A per-server chat format, next to the per-server conflict texts, could extract the sender from such messages for display.
-    - A parsed sender is marked unverified, and it's never used for any permission or trigger decision.
-    - Only senders from `Player` packets, which carry a UUID, count as verified. `Disguised` senders have no UUID and are display-only.
+    - A parsed sender is marked as parsed from the text. Like every chat sender, it's never used for any permission or trigger decision.
+    - *(corrected in the group B review)* No chat sender is verified, a `Player` packet's UUID included: azalea 0.16 doesn't verify chat signatures, so senders are only what the server claims (see "Events"). A feature that needs a trustworthy sender must verify the signature and use the signed body, in its own ADR.
     - P3.5 keeps the whole sanitized text of system messages, so this stays possible.
 
 ## Alternatives considered

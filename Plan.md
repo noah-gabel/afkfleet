@@ -1248,8 +1248,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P4.1, from group B): **Conflict texts.** A bot's spec gets an optional list of kick texts that count as a duplicate login, empty by default. Some proxies kick with plain text when a human logs in; BungeeCord/Waterfall in online mode probably does. The classifier compares the sanitized kick message exactly against the list, so vanilla servers still go by translation key. The list's limits and config keys are decided here (ADR-0010).
 
   > Note (P4.1, from Phase 3, the user's request): **Chat format, flagged and not decided.** Next to the conflict texts, a server may later get a chat format for plugin chat that arrives as system messages, such as `[CLAN] Name : message`. It extracts the sender for display only:
-  > - A parsed sender is marked unverified, and it's never used for any permission or trigger decision.
-  > - Only senders from Player packets, which carry a UUID (`ChatSender::uuid()` is `Some`), count as verified for such decisions. Disguised senders have no UUID, so they're display-only too.
+  > - A parsed sender is marked as parsed from the text. Like every chat sender, it's never used for any permission or trigger decision.
+  > - *(corrected in the group B review)* Chat senders are server-attributed, not verified. azalea 0.16 never verifies chat signatures, and fleet-mc shows a Player packet's `unsigned_content`, so even a Player packet's UUID and text are only what the server claims. A feature that needs a trustworthy sender must verify the signature and use the signed body, in its own ADR.
   > - fleet-mc keeps the whole sanitized text of system messages, so this stays possible (P3.5, ADR-0011).
 - [ ] **P4.2** 🔴 `BotActor`:
   - `tokio::select!` over the inbox (`Start`, `Stop`, `UpdateSpec`, `SendChat`, `Reset`, `Resume`), session events, timers and cancellation.
@@ -1773,7 +1773,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.9, from group D, the user's request): **Promotions.** When a Member is promoted to Admin (P8.8), the app shows the existing grants on their accounts, and the server provides them, so the Owner can review and revoke them. Grants made before the promotion survive it, including one an Admin gave an alt account (ADR-0010, threat model).
 
-  > Note (P11.9, from Phase 3, the user's request): **Unverified senders.** If P4.1's per-server chat format is built, the chat console shows a parsed sender as unverified, visibly different from a verified one. Only senders from Player packets, which carry a UUID, count as verified for permission or trigger decisions; Disguised senders are display-only (ADR-0011).
+  > Note (P11.9, from Phase 3, the user's request): **Parsed senders.** If P4.1's per-server chat format is built, the chat console shows a sender parsed from the text visibly differently from one a player packet named. Neither is verified: azalea 0.16 doesn't verify chat signatures, so every chat sender is only what the server claims, and none drives a permission or trigger decision (ADR-0011, threat model).
 
 **DoD:** The user's real fleet runs for 24 h, managed from the app. Every event shows up live, and the logs contain no unhandled errors.
 
