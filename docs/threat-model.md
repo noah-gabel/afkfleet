@@ -1,6 +1,7 @@
 # Threat model
 
 > **Status: skeleton (P0.13).** Based on Plan.md §7.1. It gets expanded as the components are built:
+> - the Minecraft servers (B4) in **P3** (done)
 > - authentication and authorization in **P7**
 > - the vault and Microsoft accounts in **P9**
 > - the control plane in **P10**
@@ -83,7 +84,37 @@ To be written per boundary (STRIDE: spoofing, tampering, repudiation, informatio
 *To be expanded in P10.*
 
 ### Minecraft servers (B4)
-*To be expanded in P2/P3.*
+*Expanded in P3 (ADR-0008, ADR-0010, ADR-0011).*
+
+**What crosses the boundary.** The agent speaks the Minecraft protocol with each server its bots join. It's encrypted only in online mode, with the server's own key.
+- **From the server:** chat, kick reasons, game state (chunks, entities) and the timing of every packet.
+- **From the bot:** chat and commands, actions, and the account's name and UUID.
+- **During an online login,** the agent also calls Mojang over TLS: the session server's join, with the Minecraft token, and the chat-signing certificates.
+- **Server names** are looked up through DNS.
+
+A Minecraft server never receives the Minecraft token, and an agent never holds a Microsoft token (security rule 6).
+
+**What a hostile server controls:** every byte a bot receives, and when it kicks the bot or goes quiet. fleet-core's sanitizer and classifier and fleet-mc's adapter treat all of it as untrusted. The runtime's watchdog (P4.6) is the last line.
+
+| STRIDE | Threat | Mitigation | Verified by |
+|---|---|---|---|
+| Spoofing | An impostor server, through DNS or the network path | The token goes only to Mojang over TLS, and Mojang binds the join to the server's key, so an impostor can't pass the login on. The rest is an accepted risk (below) | `fleet-mc` `online::slow_online_mode_scenario`; the user's `real_account::manual_real_account_scenario` |
+| Spoofing | Forged chat senders: system text naming a player, or a sender the server made up | Senders come only from player and disguised packets, and system chat never gets one. No permission or trigger decision relies on a sender (accepted risk, below) | `map::system_chat_has_no_sender_even_when_its_text_names_one`, `incoming::a_spoofed_sender_in_system_text_stays_text` |
+| Tampering | Chat or kick text with control characters, format codes, bidi controls or newlines, aimed at logs and the UI | The core sanitizer strips them and caps the length. Text is stored and rendered as plain text, and chat is logged only at `debug`, as a structured `?` field | P2.3 (`incoming::received_chat_is_always_clean`), `disconnect::kick_messages_are_sanitized_and_capped`, `map::chat_text_and_sender_are_sanitized`; P8.3, P11.9 |
+| Tampering | A kick text that pretends to be a ban or a duplicate login | Kicks are classified by translation key, never by text, and a kick without a known key is transient. Per-server conflict texts are opt-in (P4.1, accepted risk below) | P2.4 (`disconnect::classifies_kicks_by_key`, `kicks_without_a_known_key_are_transient`), `map::nested_args_keep_a_ban_permanent` |
+| Repudiation | What a bot said on a server | Every message a bot sends is audited. An online account signs its chat, so what it says is attributable to the player, as with any client | P11.3; signed chat in the user's real-account check |
+| Information disclosure | The Minecraft token or the chat-signing key reaching a log | fleet-mc never logs the token, and both binaries cap `azalea_auth` at `info` (P5.2, P9.3). Redaction tests capture every level of every target. The real-account check also allows `PRIVATE KEY` only under `azalea_auth::certs` | `account::tests::the_token_never_appears_in_the_adapters_logs`, `online::slow_online_mode_scenario`, `real_account::manual_real_account_scenario`; P5.2's cap test |
+| Information disclosure | What a server and the DNS learn: the account, the agent's IP, the server names it resolves | Inherent to playing. IP addresses are never looked up, and the DNS fallback is an accepted risk (below) | — |
+| Denial of service | Nested translations that render exponentially | fleet-mc renders server text itself and stops at 4,096 characters or 16,384 steps. azalea's own rendering, in its `info` kick log, stays off because azalea's targets default to `warn` (P5.2) | `render::nested_arguments_stop_at_the_char_budget`, `nested_empty_arguments_stop_at_the_step_budget`, `map::nested_system_chat_is_cut_off_and_marked_truncated` |
+| Denial of service | Chat floods | The bounded bridge drops only chat, and counts it. Lifecycle events are always delivered | `bridge::full_queue_drops_only_chat_and_counts_it`, `lifecycle_events_are_delivered_past_the_capacity` |
+| Denial of service | A login that stalls, or a flood of events before the join | The connect timeout runs from `connect()` to `Joined` and is checked before events | `driver::a_quiet_server_times_out_at_the_deadline`, `a_flood_of_events_before_the_join_still_times_out_at_the_deadline`, `tests/connector.rs` |
+| Denial of service | A server that goes quiet after the join | Packets and ticks stamp the session's liveness, and the watchdog tears a quiet session down | `bridge::forwarded_ticks_and_keep_alives_only_stamp_liveness`; P4.6 |
+| Denial of service | A packet that makes azalea panic or hang (accepted risks below) | One host thread and App per bot, with the single-threaded executor. A panic ends only that session, as crashed. A hung thread is abandoned and counted, and at the limit the agent restarts (P5.3) | `containment::slow_fault_containment_scenario`, `app::every_schedule_runs_single_threaded`, `tests/host_pool.rs` (`hung_thread_is_abandoned_on_shutdown_and_counted`, `pool_refuses_new_threads_once_the_abandoned_limit_is_reached`) |
+| Denial of service | Oversized or compressed packets | azalea caps a packet at 8 MiB uncompressed and checks that before decompressing. Accumulated state isn't capped (accepted risk below) | azalea-protocol 0.16.0 `read.rs`, re-checked at every azalea bump |
+| Denial of service | Kick and reconnect loops | Retry backoff and the circuit breaker. A duplicate login pauses the bot, which never fights a human | P2.5, P2.6 |
+| Denial of service | Leaks across reconnects | Every way a session ends frees its host thread and World. On Linux, the OS thread count doesn't grow past its baseline after a warm-up | `teardown::slow_teardown_scenario` (P3.8), `tests/connector.rs` |
+| Elevation of privilege | A server making a bot act for it | Bots act only on their mode and on users' commands, never on received chat. Slash commands need Manage or the allowlist | P2.9, P11.3 |
+| Elevation of privilege | Code execution through parsing | No `unsafe` in our code (`unsafe_code = "forbid"`). azalea is pinned exactly, its advisories are reviewed (ADR-0012), and a fault stays in its host thread | The workspace lints, `cargo deny`, the containment scenario |
 
 ## Accepted risks and known limits
 - **Session tokens outlive server outages.** A Minecraft session token lives about 24 h. If the server is unreachable for longer, a bot that disconnects can't rejoin until it's back (Plan.md §6).
@@ -97,5 +128,13 @@ To be written per boundary (STRIDE: spoofing, tampering, repudiation, informatio
 - **azalea's trace logs contain secrets.** Both binaries cap `azalea_auth` at `info`, whatever the operator's filter says, and a redaction test checks each cap (ADR-0011).
   - **Agent:** in every online session, azalea fetches the account's chat-signing certificates with the Minecraft token, and `azalea_auth::certs` logs the whole response at `trace`, the chat-signing private key included. The agent's filter keeps azalea's targets at `warn` by default, and the cap holds even when the operator asks for more (P5.2). fleet-mc's own code never logs the token; a redaction test captures every level from every target to check that.
   - **fleet-server:** its Microsoft flows run through azalea-auth, which at `trace` logs the Microsoft access token, the whole token response with the refresh token, the Xbox Live, XSTS and Minecraft auth responses, and the account cache. The same cap keeps all of it out (P9.3), and P9's redaction test checks it.
+- **Minecraft servers aren't authenticated.** The Minecraft protocol doesn't prove a server's identity: it encrypts with the server's own key, without a certificate. So whoever controls DNS or the network path between an agent and a server can pose as that server.
+  - The Minecraft token never reaches a Minecraft server, only Mojang's session server over TLS. In online mode Mojang binds the join to the server's key, so an impostor can't pass the bot's login on to the real server.
+  - The impostor still gets everything the bot says and does there. That includes anything users send through the bot's chat, such as `/login <password>` for a server's login plugin.
+  - **Offline accounts have no protection at all:** the connection isn't encrypted, so anyone on the path can read and change it, and anyone can join under the bot's name (ADR-0008, ADR-0011).
+- **A server can grow a bot's memory.**
+  - azalea caps a single packet at 8 MiB uncompressed and checks the declared size before decompressing (azalea-protocol 0.16.0). Nothing caps the World a server fills with chunks and entities, and fleet-mc doesn't limit a bot's memory.
+  - The agent container's memory limit (P12.2) and Docker's restart (Plan.md §6 row 10) bound it, which briefly disconnects every bot on that agent.
+  - If this turns out to happen, a process-per-bot connector is the fallback (ADR-0004), as for hangs.
 - **azalea's resolver may fall back to Google's DNS.** azalea looks server names up with hickory and the system's resolver configuration. When the host has none, it queries Google's public DNS instead, which then learns which server names the agent resolves. Server addresses that are IP addresses are never looked up. The connect timeout bounds every lookup, since azalea's resolver has none (ADR-0011).
 - **azalea 0.16.0 dependencies with open advisories.** `hickory-proto` 0.25.2 (RUSTSEC-2026-0118/0119) and `rsa` (RUSTSEC-2023-0071). The user accepted them with recorded reasons: the hickory code is either not compiled or not reachable, and azalea never decrypts with RSA. `deny.toml` ignores exactly these IDs, and every azalea bump re-checks them (ADR-0011, ADR-0012).
