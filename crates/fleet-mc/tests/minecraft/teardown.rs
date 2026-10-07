@@ -59,12 +59,6 @@ async fn slow_teardown_scenario() {
     cycle(&connector, &server, 0).await;
     nothing_left(&connector, "the warm-up").await;
     let baseline = os_baseline().await;
-    // TEMPORARY (group E): one thread that stays parked after the baseline,
-    // to show the Linux check failing. Reverted in the next commit.
-    let (_release, parked) = std::sync::mpsc::sync_channel::<()>(0);
-    std::thread::spawn(move || {
-        let _ = parked.recv();
-    });
 
     for n in 1..=CYCLES {
         cycle(&connector, &server, n).await;
