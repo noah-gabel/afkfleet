@@ -95,7 +95,9 @@ pub enum Action {
     /// lets go, raises a shield or eats. While the bot looks at a block or
     /// an entity within reach, holding clicks that instead, as
     /// [`Action::UseItem`] does, so for a shield, look at the sky or into
-    /// open air.
+    /// open air. Right after a throw or a shot, that entity can be the
+    /// projectile itself, which the bot still sees in front of it for a
+    /// while (ADR-0011).
     ///
     /// Besides letting go, a hold ends when the bot dies, selects another
     /// hotbar slot, finishes the item (food) or disconnects. That's how the
