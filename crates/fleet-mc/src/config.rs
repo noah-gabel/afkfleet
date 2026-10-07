@@ -24,6 +24,9 @@ pub struct McConfig {
     /// pool refuses new threads, and the agent exits so Docker restarts it
     /// (P5.3).
     pub max_abandoned_threads: NonZeroUsize,
+    /// How many events a session's bridge holds before chat is dropped.
+    /// Lifecycle events are always delivered.
+    pub event_capacity: NonZeroUsize,
 }
 
 impl Default for McConfig {
@@ -33,6 +36,7 @@ impl Default for McConfig {
             job_timeout: Duration::from_secs(5),
             thread_shutdown_timeout: Duration::from_secs(5),
             max_abandoned_threads: non_zero(3),
+            event_capacity: non_zero(64),
         }
     }
 }
@@ -57,5 +61,6 @@ mod tests {
         assert_eq!(config.job_timeout, Duration::from_secs(5));
         assert_eq!(config.thread_shutdown_timeout, Duration::from_secs(5));
         assert_eq!(config.max_abandoned_threads.get(), 3);
+        assert_eq!(config.event_capacity.get(), 64);
     }
 }

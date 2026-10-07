@@ -43,6 +43,7 @@ One pull request changes all of these together, never one alone:
 5. **Verify:**
    - build `spikes/toolchain-check` on Windows and in a Linux container
    - run `cargo deny` against its graph
+   - re-check azalea's `Event` variants against fleet-mc's mapping (`crates/fleet-mc/src/events/map.rs`): a new variant lands in the catch-all and is only logged at `debug` (ADR-0011)
    - run `just ci` and `just test-slow`
 6. **Record:** update this ADR, or supersede it, and `docs/runbook.md` (from P12).
 

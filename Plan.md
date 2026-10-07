@@ -1145,8 +1145,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Diagnostics.** `live_worlds()` and `dropped_chat()` are public.
   > - **Fault injection.** A hook behind a fleet-mc cargo feature, off by default, adds a system to a session's App for the containment test (P3.7).
 
-  > Note (P3.4, from group B): **Host-thread handles.** A host thread ends when every `HostThread` clone is dropped (P3.2), so no task on the thread itself may hold a clone, or the thread never ends without `disconnect()`.
-- [ ] **P3.5** 🔴 Map azalea events to `SessionEvent`, with unit tests on the pure mapping functions. Chat goes through the core sanitizer, with the sender taken only from where ADR-0008 §7 allows; kick reasons go through the core classifier input. `Tick` and server events such as `KeepAlive` only update the session's liveness timestamps (ADR-0008 §4–5).
+  > Note (P3.4, from group B):
+  > - **Host-thread handles.** A host thread ends when every `HostThread` clone is dropped (P3.2), so no task on the thread itself may hold a clone, or the thread never ends without `disconnect()`.
+  > - **Wiring the event bridge (P3.5).** P3.4 removes the temporary `#[expect(dead_code)]` on `mod events` and wires the producer side:
+  >   - a pump on the host thread passes each event from azalea's `LocalPlayerEvents` channel to `EventSink::forward`
+  >   - every App gets the `PacketLivenessPlugin`
+  >   - the connect timeout, `AppExit` and the account's auth result go through `EventSink::terminate`
+  >   - `disconnect()` calls `EventSink::close`, and `liveness()` reads the session's `LivenessStamps`
+  >   - the connector shares one `EventCounters` between its sessions and exposes `ignored_action_bar()` next to `dropped_chat()`
+- [x] **P3.5** 🔴 Map azalea events to `SessionEvent`, with unit tests on the pure mapping functions. Chat goes through the core sanitizer, with the sender taken only from where ADR-0008 §7 allows; kick reasons go through the core classifier input. `Tick` and server events such as `KeepAlive` only update the session's liveness timestamps (ADR-0008 §4–5).
 
   > Note (P3.5, from the group A review): **Logging chat.** Sanitized chat text keeps `\n`. Log it as a structured field (`?` or JSON), never with `%` (Display), so a server can't forge log lines.
 
@@ -1157,6 +1164,18 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Lifecycle.** `Joined` is the first `Spawn` only. A `Died` before `Joined` is held until after it.
   > - **Liveness.** Received packets are observed through `ReceiveGamePacketEvent`, so `packet-event` stays off.
   > - **Terminal signals.** Other sources inject them into the bridge (the account's auth result, the connect timeout, `AppExit`), and the first one wins.
+
+  > Note (P3.5, from group B, the user's decisions) (ADR-0011):
+  > - **Chat kinds.** The server assigns the registry ids, and they're read in vanilla's order (azalea's `ChatKindKey::ALL`): 1 is an emote, 2 an incoming whisper, 4 `/say`. Everything else is `chat`: the echo of a whisper the bot sent, team chat, unknown ids and inline chat types. A server whose data packs reorder chat types can mislabel a kind; the text and the sender don't depend on it. That's a known limit.
+  > - **Action bar.** Overlay messages are counted on their own (`ignored_action_bar`), apart from `dropped_chat`, and log nothing, so `dropped_chat` stays a signal of overload.
+  > - **System messages** keep their whole sanitized text, and their sender is never guessed (see the chat-format note under P4.1).
+  > - **Unknown azalea events** land in the mapping's catch-all and are logged at `debug`. Every azalea bump re-checks the variants (ADR-0003).
+  > - **Dead code until P3.4.** Outside the tests, nothing calls the bridge's producer side yet (the mapping, `EventSink`, the liveness plugin). So `mod events` carries a temporary `#[expect(dead_code)]`, approved by the user, in non-test builds only. P3.4 removes it.
+  > - **Shape.**
+  >   - `McEvents` is the public `SessionEvents`. Its queue follows the fake's design (a `Mutex<VecDeque>` plus `Notify`): chat is dropped at the capacity (64, `McConfig::event_capacity`), and lifecycle events always go in.
+  >   - `EventSink` maps and applies azalea's events, takes injected terminal events (`terminate`, the first one wins), learns of respawns (`respawned`) and closes the bridge.
+  >   - `LivenessStamps` are atomic offsets that never move backwards. `PacketLivenessPlugin` stamps every `ReceiveGamePacketEvent` in `Update`.
+  >   - The tests build kick reasons from JSON, through `serde_json` as a dev-dependency.
 - [ ] **P3.6** 🔴 Map each `Action` to azalea calls: look, rotate, jump, sneak, swing, use item, attack facing entity (with a reach check), hotbar, respawn, chat.
 
   > Note (P3.6, from group C, the user's idea): Check whether azalea can hold right-click (use item) down continuously, the way `Sneak{on}` holds sneak. If it can, propose a `HoldUse{on}` action as an additive change to the mode model. It's a new action type, so older servers reject modes that use it (ADR-0010).
@@ -1166,6 +1185,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P3.6, from the Phase 3 plan) (ADR-0011):
   > - **Commit order.** In group D, P3.6 comes after P3.7, so its red tests run against a live server and check the effects through RCON. P3.7's "every action" scenario arrives with it.
   > - **HoldUse.** azalea 0.16.0 only has a one-shot use. Holding would send `UseItem` and later a raw `PlayerAction{ReleaseUseItem}`, for items with a use duration. This task verifies that on the test server and records the result in ADR-0011. The mode-model change is P3.9.
+
+  > Note (P3.6, from group B): **Respawn.** After the respawn, the session calls `EventSink::respawned()`, so the bot's next death is reported again (P3.5).
 - [ ] **P3.7** 🔴 Slow integration tests (`slow_*`, testcontainers + itzg, offline mode):
   - join and see the join message
   - send chat and see it echoed back
@@ -1214,6 +1235,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P4.1, from Phase 2): open question, flagged and not yet decided: fleet-proto and fleet-server also need to build a `BotSpec` (Appendix C `AssignBot`), but they may only depend on `fleet-core`.
 
   > Note (P4.1, from group B): **Conflict texts.** A bot's spec gets an optional list of kick texts that count as a duplicate login, empty by default. Some proxies kick with plain text when a human logs in; BungeeCord/Waterfall in online mode probably does. The classifier compares the sanitized kick message exactly against the list, so vanilla servers still go by translation key. The list's limits and config keys are decided here (ADR-0010).
+
+  > Note (P4.1, from Phase 3, the user's request): **Chat format, flagged and not decided.** Next to the conflict texts, a server may later get a chat format for plugin chat that arrives as system messages, such as `[CLAN] Name : message`. It extracts the sender for display only:
+  > - A parsed sender is marked unverified, and it's never used for any permission or trigger decision.
+  > - Only senders from Player packets, which carry a UUID (`ChatSender::uuid()` is `Some`), count as verified for such decisions. Disguised senders have no UUID, so they're display-only too.
+  > - fleet-mc keeps the whole sanitized text of system messages, so this stays possible (P3.5, ADR-0011).
 - [ ] **P4.2** 🔴 `BotActor`:
   - `tokio::select!` over the inbox (`Start`, `Stop`, `UpdateSpec`, `SendChat`, `Reset`, `Resume`), session events, timers and cancellation.
   - It executes the core `Effect`s and computes retry delays with `RetryPolicy`.
@@ -1290,6 +1316,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P4.9** Metrics: bots per state, reconnects, watchdog trips, actor restarts.
 
   > Note (P4.9, from Phase 3): Also export fleet-mc's diagnostics: live and abandoned host threads, live Worlds, and dropped chat (ADR-0011).
+
+  > Note (P4.9, from Phase 3, group B): `abandoned_threads()`, `dropped_chat()` and `ignored_action_bar()` only count up, so they're counters; `live_threads()` and `live_worlds()` are gauges (ADR-0011).
 
 **Security:**
 - Every channel is bounded.
@@ -1731,6 +1759,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P11.9, from group B): **Controls.** For paused or failed bots, the app shows Resume or Reset instead of Start and Stop (ADR-0010).
 
   > Note (P11.9, from group D, the user's request): **Promotions.** When a Member is promoted to Admin (P8.8), the app shows the existing grants on their accounts, and the server provides them, so the Owner can review and revoke them. Grants made before the promotion survive it, including one an Admin gave an alt account (ADR-0010, threat model).
+
+  > Note (P11.9, from Phase 3, the user's request): **Unverified senders.** If P4.1's per-server chat format is built, the chat console shows a parsed sender as unverified, visibly different from a verified one. Only senders from Player packets, which carry a UUID, count as verified for permission or trigger decisions; Disguised senders are display-only (ADR-0011).
 
 **DoD:** The user's real fleet runs for 24 h, managed from the app. Every event shows up live, and the logs contain no unhandled errors.
 

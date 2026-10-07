@@ -36,9 +36,15 @@ There's no support, and I don't take feature requests. Security reports are welc
   - the Minecraft ports that the azalea adapter will implement
 
   [ADR-0010](docs/adr/0010-fleet-core-conventions-and-phase-2-refinements.md) records its conventions and every decision made along the way.
-- **From Phase 3 so far:** [`crates/fleet-testkit`](crates/fleet-testkit/), scriptable fakes for the Minecraft ports. Tests of the bot runtime can script connects, emit server events, freeze a session's liveness or make it hang, and read what the bot did, all without a Minecraft server. [ADR-0011](docs/adr/0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md) records Phase 3's decisions.
+- **From Phase 3 so far:**
+  - [`crates/fleet-testkit`](crates/fleet-testkit/), scriptable fakes for the Minecraft ports. Tests of the bot runtime can script connects, emit server events, freeze a session's liveness or make it hang, and read what the bot did, all without a Minecraft server.
+  - the first parts of [`crates/fleet-mc`](crates/fleet-mc/), the azalea adapter:
+    - the host pool, which gives every bot its own thread and abandons a thread that hangs
+    - the event bridge, which turns azalea's events into sanitized session events and never drops anything but chat
 
-**Next:** the rest of Phase 3, the azalea adapter (`fleet-mc`).
+  [ADR-0011](docs/adr/0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md) records Phase 3's decisions, and [ADR-0012](docs/adr/0012-azalea-advisory-and-license-exceptions.md) records azalea's accepted advisories and license exceptions.
+
+**Next:** the rest of `fleet-mc`: the account adapter, the connector, the actions, and the slow tests against a real Minecraft server.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 

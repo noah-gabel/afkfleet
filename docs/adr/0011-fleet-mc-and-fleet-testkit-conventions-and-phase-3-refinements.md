@@ -154,6 +154,16 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
   - It only drops `Chat`, counted, with one `warn` per burst.
   - Other sources inject terminal signals into it: the account's auth result, the connect timeout and `AppExit`. The first terminal signal wins.
   - Chat is logged only at `debug`, as a `?` field.
+- **Refined in group B** (the user's decisions):
+  - **Chat kinds.** A chat type's registry id is assigned by the server. fleet-mc reads it in vanilla's order, which azalea's `ChatKindKey::ALL` follows: 1 is an emote, 2 an incoming whisper, 4 `/say`. Everything else is `chat`, including the echo of a whisper the bot sent, team chat, unknown ids and inline (`Direct`) chat types. Resolving the id against the registry the server actually sent would need the session's ECS in the mapping. So a server whose data packs reorder chat types can mislabel a kind. That's a known limit; the text and the sender don't depend on it.
+  - **Verified senders.** Only a sender from a `Player` packet carries a UUID. Only such a sender counts as verified for permission or trigger decisions; a `Disguised` sender is display-only (see "Flagged, not decided").
+  - **System messages** keep their whole sanitized text, and their sender is never guessed.
+  - **Action-bar messages** have their own counter, `ignored_action_bar`, apart from `dropped_chat`, and they log nothing. Some servers send several a second, and `dropped_chat` should stay a signal of overload.
+  - **Unknown events.** azalea's `Event` is `#[non_exhaustive]`. A variant the mapping doesn't name lands in its catch-all, which ignores it and logs it at `debug`. Every azalea bump re-checks the variants against the mapping (ADR-0003, step 5).
+  - **The queue** follows the fake's design: a `Mutex<VecDeque>` plus `Notify`, so lifecycle events always go in and `next()` is cancel-safe. Chat is dropped once the queue holds `event_capacity` events. The contract bounds the lifecycle events: one `Joined`, one terminal event, and one `Died` per respawn.
+  - **Liveness stamps** are atomic offsets from the session's start, so they never move backwards. A Bevy plugin stamps every `ReceiveGamePacketEvent` in `Update`, as a closure system that holds the session's stamps.
+  - **Dead code until P3.4.** Outside the tests, nothing calls the producer side (the mapping, the sink and the liveness plugin) until the connector does. The user approved a temporary `#[expect(dead_code, reason = …)]` on `mod events`, in non-test builds only. P3.4 removes it, and the expectation fails as soon as everything is used.
+  - **Test values.** Kick reasons are built from JSON with `serde_json`, a dev-dependency, since azalea doesn't re-export `TranslatableComponent`.
 
 ### Actions (P3.6)
 - **Pure helpers** are unit-tested: the pitch clamp after a `Turn`, the yaw wrap, skipping non-finite angles (logged), and the attack packet's bytes.
@@ -200,6 +210,11 @@ They aren't config keys yet: a fleet-mc config struct holds them, and P5 adds ke
   - **P5.3** exits the agent when the pool's abandoned-thread count reaches the limit.
   - **P4.9** exports the pool's and connector's diagnostics as metrics.
   - **Every azalea bump** re-checks the three ignored advisories and removes the hickory ones once azalea uses hickory ≥ 0.26.1.
+- **Flagged, not decided** (group B, the user's request):
+  - **A per-server chat format (P4.1, P11.9).** Some servers send player chat through a plugin, as system messages like `[CLAN] Name : message`. A per-server chat format, next to the per-server conflict texts, could extract the sender from such messages for display.
+    - A parsed sender is marked unverified, and it's never used for any permission or trigger decision.
+    - Only senders from `Player` packets, which carry a UUID, count as verified. `Disguised` senders have no UUID and are display-only.
+    - P3.5 keeps the whole sanitized text of system messages, so this stays possible.
 
 ## Alternatives considered
 - **Blocking Phase 3 until upstream fixes the advisories.** No `rsa` fix is in sight, so it would stall the project.

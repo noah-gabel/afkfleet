@@ -9,13 +9,30 @@
 //!   with a current-thread tokio runtime and a `LocalSet`, which is what azalea
 //!   needs. Work reaches it over a bounded queue. A thread that hangs is
 //!   abandoned and counted, and at the limit the pool refuses new threads.
+//! - [`McEvents`] delivers a session's events to its actor. On the host
+//!   thread, azalea's events are mapped to `SessionEvent`s and pass a bounded
+//!   bridge that only ever drops chat; ticks and received packets only stamp
+//!   the session's liveness.
 //! - [`McConfig`] holds the tuning values that ADR-0011 decided.
 //!
 //! Like all library code here, it never panics: failures are errors, and
 //! overload is [`JobError::QueueFull`] instead of a wait.
 
 mod config;
+// Until the connector (P3.4) wires it up, only the tests use the bridge's
+// producer side: the mapping, the sink and the liveness plugin. The user
+// approved this expectation in group B; P3.4 removes it (ADR-0011). Test
+// builds use these items, so it applies outside them only.
+#[cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "the event bridge's producer side is wired into the connector in P3.4 (group D); approved in group B (ADR-0011)"
+    )
+)]
+mod events;
 mod host;
 
 pub use config::McConfig;
+pub use events::McEvents;
 pub use host::{HostThread, JobError, McHostPool, ShutdownOutcome, SpawnError};
