@@ -1,0 +1,39 @@
+# The slow tests against local Minecraft containers (`just test-slow`), weekly
+# and on demand. They need Docker, take about ten minutes and contact Mojang's
+# session server, so they aren't a required check (ADR-0011). Third-party
+# actions are pinned to full commit SHAs (version in the comment), as in ci.yml.
+name: Slow tests
+
+on:
+  schedule:
+    - cron: "17 7 * * 1" # Mondays, 07:17 UTC, an hour after audit.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: slow-tests-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  JUST_VERSION: "1.58.0"
+
+jobs:
+  slow-tests:
+    name: slow-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@${{ env.JUST_VERSION }},cargo-nextest@0.9.146
+      - run: just test-slow
