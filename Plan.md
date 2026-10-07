@@ -1270,6 +1270,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Online mode** *(as planned)*: a garbage token ends in `AuthRejected` within seconds, and an offline account is kicked with `unverified_username`. The marker token never shows in the TRACE capture of every target.
   > - **The log capture moved to fleet-testkit** *(the user's decision)*: `install()` and `check_absent()` return errors instead of panicking.
   > - **Failure output.** A failed wait shows the events the session sent meanwhile.
+
+  > Note (P3.7, from group E, found by the user's real-account check; the user's decisions) (ADR-0010, ADR-0011): **Chat waits for signing.**
+  > - **The bug.** `send_chat` returned `Ok` for chat that a server enforcing secure chat drops. azalea sets up the chat-signing session in the background after the join and sends chat unsigned until then.
+  > - **The fix.** A plugin publishes each session's signing state: `NotNeeded` (offline account, offline-mode server, or a server that doesn't enforce secure chat, from its login packet), `Pending`, `Ready` or `Failed`.
+  > - **Waiting.** A chat message, not a command, waits while signing is `Pending`, at most until the game state plus `McConfig::chat_signing_timeout` (10 s).
+  > - **Refusing.** `Failed`, or still `Pending` at that deadline, gives the new `SessionError::ChatUnavailable`, logged at `warn` once. The session stays up.
+  > - **The fake** gains `fail_chat`.
+  > - **Commands** are never signed by azalea. Whether an enforcing server rejects `/me` is checked by the real-account check.
 - [x] **P3.8** 🔴 Clean-up test: after the full teardown from ADR-0008 §10 (not just `disconnect()`), the thread count and the number of live Worlds go back to baseline.
 
   > Note (P3.8, from the Phase 3 plan) (ADR-0011):
@@ -1307,6 +1315,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - The token must not appear in any log, and `PRIVATE KEY` only under `azalea_auth::certs` (azalea-auth 0.16.0 logs the certificate response at `trace`, which P5.2 caps).
   >   - Only the nextest `manual` profile includes `manual_` tests. Only the user runs `just test-real-account` (CLAUDE.md).
   >   - Errors name only a line number and the expected key, and a failed wait names only the step and event kinds. A rejected token says it may have expired, since `fetch-token` writes no expiry.
+  >   - It also sends `/me` and checks the emote's echo. The steps only record their results: the teardown and the log checks always run, and failed steps are reported after them. The first run failed at the signed chat (see P3.7's note) and skipped the log checks.
   > - **The `slow-tests` workflow** runs weekly (Mondays, 07:17 UTC) and on demand, on ubuntu; it isn't a required check.
   > - **The threat model's B4 section** is written. It adds two accepted risks: Minecraft servers aren't authenticated, and a server can grow a bot's memory.
   > - **The Phase 3 DoD** is checked in group E and again in P3.9's PR, which finishes the phase.
@@ -1386,6 +1395,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - when the bucket or queue is full it returns `RateLimited` or `QueueFull` **instead of blocking**
   - user chat and mode chat share it
   - governor's clock is injected, so the tests run on controlled time (see §8)
+
+  > Note (P4.5, from Phase 3, group E): **flagged, not decided.** `send_chat` can fail with `SessionError::ChatUnavailable` when an online session can't sign chat for a server that enforces it. The session stays up, and a later call may succeed. This task decides what the queue does then, for user chat and mode chat (ADR-0011).
 - [ ] **P4.6** 🔴 Watchdog, while Online (fault table in ADR-0008 §5):
   - no `Tick` for `watchdog_timeout`: raise `WatchdogTimeout`, tear the session down and reconnect
   - no packet from the server for `packet_liveness_timeout`: tear the session down and treat it as a transient disconnect

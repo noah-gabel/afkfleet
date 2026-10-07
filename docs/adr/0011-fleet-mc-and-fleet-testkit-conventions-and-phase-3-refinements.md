@@ -182,6 +182,28 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
     - **Tests.** Unit tests cover the component at spawn, the second entity, the channel closing with the entity, and a connect failure in the spawn frame reaching the session; they were red first. Under the same Linux stress, 24 of 24 runs pass.
     - **Upstream.** azalea's own `Client::join` has the same race, so it joins the list of upstream reports left to the user (ADR-0008 §11).
 
+- **Chat signing** *(found in group E by the user's real-account check; the user's decisions, 2026-10-07)*.
+  - **The bug.** `send_chat` returned `Ok` for chat that a server enforcing secure chat drops.
+    - azalea-client 0.16.0 fetches the chat-signing certificates in the background once the bot is in the game and authenticated (`chat_signing.rs`). Only when they arrive does it send `ServerboundChatSessionUpdate` and insert `ChatSigningSession`.
+    - Until then, `chat/handler.rs` sends chat with `signature: None`, and the server answers "chat disabled due to missing profile public key". P1.8 only passed because it slept 3 s first.
+    - A failed fetch is retried an hour later (`OnlyRefreshCertsAfter`). A fetch that hangs never ends, because azalea's HTTP client has no timeout.
+  - **The state.** A `SigningPlugin` in every session's App publishes the session's signing state over a `watch` channel, every frame:
+    - `NotNeeded`: an offline account, a server that didn't authenticate the join (offline mode), or one whose login packet says it doesn't enforce secure chat. azalea parses `enforces_secure_chat` but doesn't keep it, so the plugin reads it from the received packets.
+    - `Ready`: `ChatSigningSession` is there.
+    - `Failed`: `OnlyRefreshCertsAfter` without a session.
+    - `Pending`: anything else.
+
+    It also publishes when the bot entered the game state.
+  - **`send_chat`.**
+    - Commands, `NotNeeded` and `Ready` go out at once, so offline accounts never wait.
+    - `Pending` waits on the caller's side, never on the host thread, until the bot entered the game plus `McConfig::chat_signing_timeout` (10 s). Measuring from the game state means a hung fetch can't make every call wait.
+    - `Failed`, or `Pending` at that deadline, returns the new `SessionError::ChatUnavailable` without sending (ADR-0010). It's logged at `warn` once per session, and the session stays up. Later calls check again, so chat works once azalea's hourly retry succeeds.
+    - The host job checks the state again right before it queues the message.
+  - **Tests.** The pure parts (`needs_signing`, `Certs`, `signing`, `decide`, the deadline) and the wait, under paused time, were red against stubs first. So were the plugin, on an App with hand-made components and login packets, and the fake's new `fail_chat`.
+    - The offline slow scenarios show that offline accounts are unaffected.
+    - Only the user's real-account check can show the fix end to end, since only a real token gets `IsAuthenticated`.
+  - **Commands, not verified.** azalea sends every command unsigned. A server that enforces secure chat may reject commands with message arguments (`/me`, `/msg`, `/say`, …), so the real-account check sends `/me` and checks its echo last.
+
 ### Events (P3.5)
 - **Chat:**
   - The sender comes only from `Player` and `Disguised` packets (ADR-0008 §7).
@@ -288,9 +310,11 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
       - **The next run failed as it should:** "8 OS threads … more than the 7 after the warm-up", the extra one under the test thread's name. The revert passed.
       - **The 7 baseline threads** are the main and test threads, Bevy's four pool threads and async-compat's runtime thread.
     - The Linux run before merge used a temporary `push` trigger on the branch, removed before the PR was opened, since the PR's description can't be edited once it's open.
-  - **The real-account check,** `manual_real_account_scenario`, joins the online-mode container with the user's real token, sends signed chat and waits for its echo, and tears down. Then:
-    - the token must not appear in the capture, at any level of any target
-    - `PRIVATE KEY` may appear only under `azalea_auth::certs`, whose `fetch_certificates` logs the certificate response at `trace` in azalea-auth 0.16.0 (the accepted risk P5.2 caps). Any other target fails
+  - **The real-account check,** `manual_real_account_scenario`, joins the online-mode container with the user's real token, sends signed chat and waits for its echo, then sends `/me` and waits for the emote's echo, and tears down.
+    - The steps only record their results, as event kinds. The teardown and the log checks always run, and failed steps are reported after them *(the user's decision, after a failed chat skipped the log checks)*.
+    - Then:
+      - the token must not appear in the capture, at any level of any target
+      - `PRIVATE KEY` may appear only under `azalea_auth::certs`, whose `fetch_certificates` logs the certificate response at `trace` in azalea-auth 0.16.0 (the accepted risk P5.2 caps). Any other target fails
   - **Only the user runs it.** Only the nextest `manual` profile includes `manual_` tests, and `just test-real-account` runs it. CLAUDE.md says the AI never runs either.
     - The file is read straight into a `SecretString` and parsed strictly: `name=`, `uuid=` and `token=` in `fetch-token`'s order, with CRLF, trailing empty lines and spaces accepted. Errors name only a line number and the expected key.
     - A failed wait names only the step and the kinds of events.

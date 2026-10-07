@@ -62,6 +62,7 @@ struct State {
     death_pending: bool,
     hung: bool,
     failing_actions: Option<SessionError>,
+    failing_chat: Option<SessionError>,
     frozen_tick: Option<Instant>,
     frozen_packet: Option<Instant>,
     dropped_chat: u64,
@@ -126,6 +127,9 @@ impl Shared {
         let mut state = self.lock();
         state.ready()?;
         if let (Performed::Action(_), Some(error)) = (&call, state.failing_actions) {
+            return Err(error);
+        }
+        if let (Performed::Chat(_), Some(error)) = (&call, state.failing_chat) {
             return Err(error);
         }
         if matches!(call, Performed::Respawn) {
@@ -344,6 +348,18 @@ impl SessionController {
     /// Lets [`SessionHandle::perform`] succeed again.
     pub fn succeed_actions(&self) {
         self.shared.lock().failing_actions = None;
+    }
+
+    /// Makes [`SessionHandle::send_chat`] fail with `error` until
+    /// [`succeed_chat`](Self::succeed_chat), as when the session can't sign
+    /// chat. Actions and respawns still work.
+    pub fn fail_chat(&self, error: SessionError) {
+        self.shared.lock().failing_chat = Some(error);
+    }
+
+    /// Lets [`SessionHandle::send_chat`] succeed again.
+    pub fn succeed_chat(&self) {
+        self.shared.lock().failing_chat = None;
     }
 
     /// Returns what the code under test did in this session, in order.

@@ -1,6 +1,7 @@
 //! A session's Bevy App, as ADR-0008 §1 and §3 decided: azalea's plugins
-//! without auto-reconnect and auto-respawn, the packet-liveness plugin, the
-//! bot's event channel, and the single-threaded executor on every schedule.
+//! without auto-reconnect and auto-respawn, the packet-liveness and
+//! chat-signing plugins, the bot's event channel, and the single-threaded
+//! executor on every schedule.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -19,6 +20,7 @@ use tokio::sync::mpsc;
 use tracing::warn;
 
 use crate::events::{LivenessStamps, PacketLivenessPlugin};
+use crate::signing::SigningPlugin;
 
 /// The channel azalea's `LocalPlayerEvents` sends a session's events on. The
 /// session loop drains it into the bounded bridge at once.
@@ -31,12 +33,14 @@ pub(super) fn event_channel() -> (mpsc::UnboundedSender<Event>, mpsc::UnboundedR
 }
 
 /// Builds the App of one session. `events` becomes the bot's
-/// `LocalPlayerEvents` when azalea spawns it. `extra` adds to the App before
-/// the executor is set, so whatever it adds runs single-threaded too (the
-/// fault-injection hook's systems, in the slow tests).
+/// `LocalPlayerEvents` when azalea spawns it, and `signing` publishes where
+/// its chat signing is. `extra` adds to the App before the executor is set,
+/// so whatever it adds runs single-threaded too (the fault-injection hook's
+/// systems, in the slow tests).
 pub(super) fn build_app(
     stamps: Arc<LivenessStamps>,
     events: mpsc::UnboundedSender<Event>,
+    signing: SigningPlugin,
     extra: impl FnOnce(&mut App),
 ) -> App {
     let mut app = App::new();
@@ -48,6 +52,7 @@ pub(super) fn build_app(
             .disable::<AutoReconnectPlugin>()
             .disable::<AutoRespawnPlugin>(),
         PacketLivenessPlugin(stamps),
+        signing,
     ));
     give_events_to_the_bot(&mut app, events);
     extra(&mut app);
@@ -100,19 +105,28 @@ mod tests {
     use azalea::protocol::connect::ConnectionError;
     use tokio::sync::mpsc::error::TryRecvError;
 
+    use crate::signing::SigningState;
+
     fn stamps() -> Arc<LivenessStamps> {
         Arc::new(LivenessStamps::new(Instant::now()))
     }
 
+    fn signing() -> SigningPlugin {
+        SigningPlugin {
+            online: false,
+            state: Arc::new(tokio::sync::watch::Sender::new(SigningState::new(false))),
+        }
+    }
+
     fn app() -> App {
         let (events, _) = event_channel();
-        build_app(stamps(), events, |_| {})
+        build_app(stamps(), events, signing(), |_| {})
     }
 
     /// A session's App and the receiver of its bot's events.
     fn listening_app() -> (App, mpsc::UnboundedReceiver<Event>) {
         let (events, receiver) = event_channel();
-        (build_app(stamps(), events, |_| {}), receiver)
+        (build_app(stamps(), events, signing(), |_| {}), receiver)
     }
 
     /// Every schedule's executor kind.
@@ -142,7 +156,7 @@ mod tests {
     #[test]
     fn what_extra_adds_runs_single_threaded_too() {
         let (events, _) = event_channel();
-        let app = build_app(stamps(), events, |app| {
+        let app = build_app(stamps(), events, signing(), |app| {
             for (_, schedule) in app.world_mut().resource_mut::<Schedules>().iter_mut() {
                 schedule.set_executor_kind(ExecutorKind::MultiThreaded);
             }

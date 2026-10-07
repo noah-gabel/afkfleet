@@ -18,6 +18,10 @@
 //!   thread, azalea's events are mapped to `SessionEvent`s and pass a bounded
 //!   bridge that only ever drops chat; ticks and received packets only stamp
 //!   the session's liveness.
+//! - A session's chat, on a server that enforces secure chat, waits for
+//!   azalea's chat-signing session, at most until a deadline after the join.
+//!   Chat that can't be signed fails with `ChatUnavailable` instead of being
+//!   dropped by the server.
 //! - A session logs in with the server-issued Minecraft token, never a
 //!   Microsoft one (security rule 6). Its account joins through the session
 //!   server under a timeout and reports a refused join to the session, since
@@ -39,6 +43,7 @@ mod config;
 mod connector;
 mod events;
 mod host;
+mod signing;
 
 pub use config::McConfig;
 pub use connector::{AzaleaConnector, McSession};

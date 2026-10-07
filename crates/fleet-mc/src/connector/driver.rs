@@ -33,6 +33,7 @@ use super::AppHook;
 use super::app::{build_app, event_channel};
 use crate::account::AuthReports;
 use crate::events::{EventSink, LivenessStamps, Phase, Terminal};
+use crate::signing::SigningPlugin;
 
 /// Where a session's `Client` lives while the bot is in a world. Only the
 /// host thread clones the `Client` out of it, so no handle outside the thread
@@ -117,6 +118,8 @@ pub(super) struct Driver {
     pub(super) reports: AuthReports,
     pub(super) sink: EventSink,
     pub(super) stamps: Arc<LivenessStamps>,
+    /// Publishes where the session's chat signing is.
+    pub(super) signing: SigningPlugin,
     pub(super) slot: Arc<ClientSlot>,
     pub(super) worlds: Arc<Worlds>,
     /// Sent, or closed, when the session is to be torn down.
@@ -149,6 +152,7 @@ impl Driver {
             reports,
             sink,
             stamps,
+            signing,
             slot,
             worlds,
             mut stop,
@@ -171,9 +175,9 @@ impl Driver {
         // on Linux, where a refused connect fails within that frame).
         let (events_tx, mut events) = event_channel();
         #[cfg(feature = "fault-injection")]
-        let mut app = session_app(stamps, events_tx, bot_id, hook.as_ref());
+        let mut app = session_app(stamps, events_tx, signing, bot_id, hook.as_ref());
         #[cfg(not(feature = "fault-injection"))]
-        let mut app = session_app(stamps, events_tx, bot_id);
+        let mut app = session_app(stamps, events_tx, signing, bot_id);
         // Variant C (ADR-0008 §1). The runner is a task of the host thread's
         // LocalSet, so closing the thread drops it and with it the World.
         let (ecs, start_running_systems, app_exit) = azalea::start_ecs_runner(app.main_mut());
@@ -263,10 +267,11 @@ async fn resolve(
 fn session_app(
     stamps: Arc<LivenessStamps>,
     events: mpsc::UnboundedSender<Event>,
+    signing: SigningPlugin,
     bot_id: BotId,
     hook: Option<&AppHook>,
 ) -> App {
-    build_app(stamps, events, |app| {
+    build_app(stamps, events, signing, |app| {
         if let Some(hook) = hook {
             hook(bot_id, app);
         }
@@ -278,9 +283,10 @@ fn session_app(
 fn session_app(
     stamps: Arc<LivenessStamps>,
     events: mpsc::UnboundedSender<Event>,
+    signing: SigningPlugin,
     _bot_id: BotId,
 ) -> App {
-    build_app(stamps, events, |_| {})
+    build_app(stamps, events, signing, |_| {})
 }
 
 /// The bot's entity from the join callback, or `None` after reporting why

@@ -35,6 +35,11 @@ pub struct McConfig {
     /// after `exit()` (ADR-0008 §10). A runner that doesn't end in time is
     /// left to the host thread's shutdown, which drops it.
     pub app_exit_timeout: Duration,
+    /// How long after an online bot enters the game its chat may wait for
+    /// azalea's chat-signing session, on a server that enforces secure chat.
+    /// Chat that still can't be signed then fails with
+    /// `SessionError::ChatUnavailable` instead of being dropped by the server.
+    pub chat_signing_timeout: Duration,
 }
 
 impl Default for McConfig {
@@ -47,6 +52,7 @@ impl Default for McConfig {
             event_capacity: non_zero(64),
             session_join_timeout: Duration::from_secs(10),
             app_exit_timeout: Duration::from_secs(2),
+            chat_signing_timeout: Duration::from_secs(10),
         }
     }
 }
@@ -74,5 +80,6 @@ mod tests {
         assert_eq!(config.event_capacity.get(), 64);
         assert_eq!(config.session_join_timeout, Duration::from_secs(10));
         assert_eq!(config.app_exit_timeout, Duration::from_secs(2));
+        assert_eq!(config.chat_signing_timeout, Duration::from_secs(10));
     }
 }

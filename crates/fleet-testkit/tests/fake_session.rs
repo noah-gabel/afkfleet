@@ -283,6 +283,28 @@ async fn failing_actions_fail_perform_only_until_they_succeed_again() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn failing_chat_fails_send_chat_only_until_it_succeeds_again() {
+    let (session, _events, controller) = start_joined().await;
+    controller.fail_chat(SessionError::ChatUnavailable);
+
+    let failed = session.send_chat(message("not signed")).await;
+    let action = session.perform(GameAction::Jump).await;
+    controller.succeed_chat();
+    let again = session.send_chat(message("signed")).await;
+
+    assert_eq!(failed, Err(SessionError::ChatUnavailable));
+    assert_eq!(action, Ok(()));
+    assert_eq!(again, Ok(()));
+    assert_eq!(
+        controller.log(),
+        [
+            Performed::Action(GameAction::Jump),
+            Performed::Chat(message("signed")),
+        ]
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn calls_after_a_terminal_event_fail_with_closed() {
     let (session, _events, controller) = start_joined().await;
     assert_eq!(

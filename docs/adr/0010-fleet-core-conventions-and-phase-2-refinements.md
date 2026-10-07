@@ -270,6 +270,7 @@ Points marked *(group E)* were settled while building P2.10. On 2026-10-06 the u
 - **Errors** *(group E)*:
   - `ConnectError` is `HostUnavailable`. The actor reports it as `ConnectFailure::HostUnavailable`.
   - `SessionError` is `Closed` (the session ended or is being torn down), `QueueFull` (the host thread's bounded queue is full: overload is an error, not a wait), `TimedOut` (the host thread didn't answer; the watchdog decides whether it hangs) or `NotInWorld` (azalea's getters panic before login and after `exit()`, so the adapter checks first).
+    - *(Phase 3, group E, the user's decision; ADR-0011)* **`ChatUnavailable`** joins them. `send_chat` returns it for a chat message that the server would drop because the session can't sign it. The session stays up.
 - **Event delivery** *(group E)*: the bridge is bounded (ADR-0008 §4), but only `Chat` may be dropped when the consumer lags, and the adapter counts those drops. `Joined`, `Died`, `Disconnected` and `ConnectionFailed` are always delivered. A dropped `Died` would leave the bot dead, and a dropped `Disconnected` would leave the actor waiting.
 - **`SessionEvents::next`** *(group E)* is cancel-safe, because the actor calls it in `select!`. `Died` comes once per death. A session ends with at most one terminal event, `Disconnected` or `ConnectionFailed`, after which `next` returns `None`.
 - **`disconnect()`** *(group E)* returns `()`. The teardown always finishes, and calling it again, from any clone or after the session ended on its own, is harmless.
