@@ -10,6 +10,13 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[features]
+# Test-only: `AzaleaConnector::with_app_hook`, which adds systems to a session's
+# App so the slow tests can inject a panic or watch packets. No production crate
+# may enable it, and a release build with it doesn't compile (ADR-0011). Only
+# `just test-slow` turns it on.
+fault-injection = []
+
 [dependencies]
 azalea = { workspace = true, features = ["online-mode"] }
 azalea-chat.workspace = true

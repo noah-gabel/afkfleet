@@ -118,7 +118,7 @@ struct State {
 
 /// Where the session is, as far as its events go.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-enum Phase {
+pub(crate) enum Phase {
     /// Connecting: `Joined` hasn't been queued yet.
     #[default]
     Starting,
@@ -310,6 +310,10 @@ impl Shared {
         self.lock().next()
     }
 
+    fn phase(&self) -> Phase {
+        self.lock().phase
+    }
+
     /// Locks the state. It stays consistent if a holder panicked, so a
     /// poisoned lock is used as it is.
     fn lock(&self) -> MutexGuard<'_, State> {
@@ -364,15 +368,44 @@ impl EventSink {
         self.source.shared.terminate(terminal)
     }
 
+    /// Where the session is, as far as its events go.
+    pub(crate) fn phase(&self) -> Phase {
+        self.source.shared.phase()
+    }
+
+    /// A handle for the session's owner, which doesn't count as a source: the
+    /// session still ends as crashed once every sink is gone.
+    pub(crate) fn control(&self) -> BridgeControl {
+        BridgeControl {
+            shared: Arc::clone(&self.source.shared),
+        }
+    }
+}
+
+/// The owner's side of a session's bridge: it reads the phase, learns of
+/// respawns and tears the bridge down. Unlike an [`EventSink`], dropping it
+/// doesn't end the session, so the owner can hold one without hiding a lost
+/// host thread.
+#[derive(Debug, Clone)]
+pub(crate) struct BridgeControl {
+    shared: Arc<Shared>,
+}
+
+impl BridgeControl {
+    /// Where the session is, as far as its events go.
+    pub(crate) fn phase(&self) -> Phase {
+        self.shared.phase()
+    }
+
     /// The bot respawned, so its next death is reported again.
     pub(crate) fn respawned(&self) {
-        self.source.shared.respawned();
+        self.shared.respawned();
     }
 
     /// Tears the bridge down: queued events are dropped, and
     /// [`McEvents::next`] returns `None`.
     pub(crate) fn close(&self) {
-        self.source.shared.close();
+        self.shared.close();
     }
 }
 
@@ -512,7 +545,7 @@ mod tests {
 
         assert_eq!(apply(&sink, Mapped::Death), Delivery::Queued);
         assert_eq!(apply(&sink, Mapped::Death), Delivery::DuplicateDeath);
-        sink.respawned();
+        sink.control().respawned();
         assert_eq!(apply(&sink, Mapped::Death), Delivery::Queued);
 
         assert_eq!(
@@ -661,7 +694,7 @@ mod tests {
         if terminal {
             apply(&sink, Mapped::Terminal(kicked()));
         } else {
-            sink.close();
+            sink.control().close();
         }
 
         drop(sink);
@@ -743,7 +776,7 @@ mod tests {
         let (sink, events, ..) = start(8);
         apply(&sink, chat("queued"));
 
-        sink.close();
+        sink.control().close();
 
         assert!(matches!(events.shared.next(), Next::End));
         assert_eq!(apply(&sink, chat("late")), Delivery::SessionEnded);
@@ -794,7 +827,7 @@ mod tests {
         let waiting = tokio::spawn(async move { events.next().await });
         tokio::task::yield_now().await;
 
-        sink.close();
+        sink.control().close();
 
         assert_eq!(waiting.await.unwrap(), None);
     }
@@ -806,6 +839,84 @@ mod tests {
 
         assert_send(&events.next());
         assert_send(&events);
+    }
+
+    // --- The owner's control ---
+
+    #[test]
+    fn control_follows_the_phase() {
+        let (sink, _events, ..) = start(8);
+        let control = sink.control();
+        assert_eq!(control.phase(), Phase::Starting);
+
+        apply(&sink, Mapped::Spawn);
+        assert_eq!(control.phase(), Phase::Joined);
+        assert_eq!(sink.phase(), Phase::Joined);
+
+        apply(&sink, Mapped::Terminal(kicked()));
+        assert_eq!(control.phase(), Phase::Ended);
+    }
+
+    #[test]
+    fn control_close_tears_the_bridge_down() {
+        let (sink, events, ..) = start(8);
+        apply(&sink, chat("queued"));
+
+        sink.control().close();
+
+        assert_eq!(sink.phase(), Phase::Closed);
+        assert!(matches!(events.shared.next(), Next::End));
+    }
+
+    #[test]
+    fn control_respawned_reports_the_next_death_again() {
+        let (sink, events, ..) = start(8);
+        let control = sink.control();
+        apply(&sink, Mapped::Spawn);
+        apply(&sink, Mapped::Death);
+
+        control.respawned();
+
+        assert_eq!(apply(&sink, Mapped::Death), Delivery::Queued);
+        assert_eq!(
+            queued(&events),
+            [SessionEvent::Joined, SessionEvent::Died, SessionEvent::Died]
+        );
+    }
+
+    #[test]
+    fn a_held_control_doesnt_keep_the_session_alive() {
+        let (sink, events, ..) = start(8);
+        let control = sink.control();
+        apply(&sink, Mapped::Spawn);
+
+        drop(sink);
+
+        assert_eq!(queued(&events), [SessionEvent::Joined, crashed()]);
+        assert_eq!(control.phase(), Phase::Ended);
+    }
+
+    #[test]
+    fn dropping_the_control_ends_nothing() {
+        let (sink, events, ..) = start(8);
+        apply(&sink, Mapped::Spawn);
+
+        drop(sink.control());
+
+        assert_eq!(queued(&events), [SessionEvent::Joined]);
+        assert_eq!(sink.phase(), Phase::Joined);
+    }
+
+    #[test]
+    fn closing_before_the_sink_drops_means_no_crash() {
+        let (sink, events, ..) = start(8);
+        apply(&sink, Mapped::Spawn);
+
+        sink.control().close();
+        drop(sink);
+
+        assert_eq!(queued(&events), []);
+        assert!(matches!(events.shared.next(), Next::End));
     }
 
     // --- The azalea side ---

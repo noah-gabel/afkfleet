@@ -1141,7 +1141,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Tests.** The join's bookkeeping takes the session-server future, so fast tests script it; the one call into azalea is covered by P3.7's online-mode scenario. The log capture also bridges `log` records (reqwest, rustls) through `tracing-log`; `log` is a new fleet-mc dev-dependency.
   > - **Dead code until P3.4.** `mod account` carries a temporary `#[expect(dead_code)]` in non-test builds, approved by the user; P3.4 removes it.
   > - **Found:** azalea logs the chat-signing private key at `trace` (`azalea_auth::certs`). It's a known limit in the threat model. P5.2 caps `azalea_auth` at `info`, like fleet-server does (P9.3).
-- [ ] **P3.4** `AzaleaConnector` implements `MinecraftConnector`:
+- [x] **P3.4** `AzaleaConnector` implements `MinecraftConnector`:
   - azalea's auto-reconnect and auto-respawn are **disabled**
   - connect timeout
   - start, hosting model and executor as decided in ADR-0008 §1–3
@@ -1167,6 +1167,21 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - the connect timeout, `AppExit` and the account's auth result go through `EventSink::terminate`
   >   - `disconnect()` calls `EventSink::close`, and `liveness()` reads the session's `LivenessStamps`
   >   - the connector shares one `EventCounters` between its sessions and exposes `ignored_action_bar()` next to `dropped_chat()`
+
+  > Note (P3.4, from group D, the user's decisions) (ADR-0011):
+  > - **Shape.** `AzaleaConnector::new(&McConfig)` owns its `McHostPool`. It exposes `pool()`, `live_worlds()`, `dropped_chat()` and `ignored_action_bar()`. `connect()` spawns the host thread, queues the session's driver with the new `HostThread::start` (a `JoinSet` task with no answer and no job timeout) and returns at once. `McSession` is the `SessionHandle`.
+  > - **The driver** runs on the host thread for the whole session. Every wait before `Joined` (resolving, the join callback, the connect) also watches the stop signal, the connect deadline and azalea's runner.
+  > - **Loop order** *(the user's notice)*: stop, auth reports, the connect deadline until joined, the runner's end, then events. So a server that keeps sending events before `Joined` can't starve the connect timeout. A test floods the loop with events and was red against an events-first order.
+  > - **Endings.**
+  >   - A resolve error is `ConnectionFailed(Unresolvable)`.
+  >   - A runner end nobody asked for (an `Ok` too), a closed join callback or a closed event channel is `Disconnected(SessionCrashed)`.
+  >   - A call that finds no `Client` or no components on the host thread is `NotInWorld`.
+  > - **Teardown.** `disconnect()` closes the bridge first, so a normal teardown never reports a crash. Then it stops the driver, which exits azalea, waits up to `McConfig::app_exit_timeout` (2 s) for the runner and drops the `Client`. Then it waits up to that plus 1 s for the driver, and shuts the host thread down. It's idempotent from every clone.
+  > - **The owner's bridge handle** is a non-counting `BridgeControl` (`phase`, `close`, `respawned`), so the rule that a dropped sink ends the session still holds.
+  > - **The `Client`** lives in a slot that only host-thread jobs clone from. A drop guard empties it when the driver ends.
+  > - **Stubs until P3.6/P3.7** *(the user's decision)*. `perform`, `send_chat` and `respawn` check the session state and run an empty host job; `respawn` already tells the bridge. P3.7 wires `send_chat`, and P3.6 the rest.
+  > - **Fault injection.** `AzaleaConnector::with_app_hook(self, impl Fn(BotId, &mut azalea::app::App) + Send + Sync + 'static) -> Self`, behind the off-by-default `fault-injection` feature. *(The user's notice)* A build without `debug_assertions` and with the feature hits a `compile_error!`, so no release build can include the hook.
+  > - **Tests.** The loopback tests (Plan §8 allows loopback outside the slow profile) cover a silent server timing out, a refused port, teardown, dropped handles and the host limit. The session loop, the pre-join waits, the App's plugins and executor, and `HostThread::start` have unit tests.
 - [x] **P3.5** 🔴 Map azalea events to `SessionEvent`, with unit tests on the pure mapping functions. Chat goes through the core sanitizer, with the sender taken only from where ADR-0008 §7 allows; kick reasons go through the core classifier input. `Tick` and server events such as `KeepAlive` only update the session's liveness timestamps (ADR-0008 §4–5).
 
   > Note (P3.5, from the group A review): **Logging chat.** Sanitized chat text keeps `\n`. Log it as a structured field (`?` or JSON), never with `%` (Display), so a server can't forge log lines.

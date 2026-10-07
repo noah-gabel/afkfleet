@@ -156,6 +156,23 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
 - **Crashes.** An `AppExit` error becomes `Disconnected(SessionCrashed)`.
 - **Diagnostics.** `live_worlds()` (a `Weak` of the ECS) and `dropped_chat()` are public diagnostics.
 - **Fault injection** for the containment test is a small hook that adds a system to a session's App. It sits behind a fleet-mc cargo feature that's off by default; the exact API is shown in group D's PR.
+- **Built in group D** (the user's decisions, 2026-10-07):
+  - **Shape.** `AzaleaConnector::new(&McConfig)` owns its host pool. `connect()` spawns the host thread and queues the session's driver there with `HostThread::start`, a crate-private addition to the host pool. That's a `JoinSet` job without an answer or a job timeout, so the driver's owner is the one this ADR approved. Then `connect()` returns. `McSession` is the `SessionHandle`.
+  - **The driver** holds the session's only counting `EventSink` and no `HostThread` handle.
+    - Every wait before `Joined` (resolving, the join callback, the connect) also watches the stop signal, the connect deadline and azalea's runner. The deadline is taken in std time in `connect()`, so a paused clock on the caller's runtime can't move it.
+    - Its loop checks, in order: stop, the account's reports, the connect deadline until joined, the runner's end, then events. *(The user's notice on the plan)* The deadline comes before events, so a server that keeps sending events before `Joined` can't starve it. A unit test floods the loop and was red against the events-first order.
+  - **Endings.**
+    - A resolve error is `ConnectionFailed(Unresolvable)`, tested through the pure waiting helper, never through DNS.
+    - A runner end nobody asked for (`Ok(AppExit)` included), a closed join callback or a closed event channel is `Disconnected(SessionCrashed)`.
+  - **Teardown** follows ADR-0008 §10.
+    1. `disconnect()` closes the bridge first, so the driver's end isn't reported as a crash.
+    2. It stops the driver. The driver writes `AppExit` (with or without a `Client`), waits up to `app_exit_timeout` (2 s) for the runner, then drops the `Client` and the event receiver. The oneshot of `AppExit` is never polled again after it finished.
+    3. `disconnect()` waits up to that plus 1 s for the driver, then shuts the host thread down, which abandons a hung one.
+  - **The owner's bridge handle** is a `BridgeControl` that doesn't count as a source, so "a dropped sink ends the session" still holds.
+  - **The `Client`** lives in a slot that only host-thread jobs clone from, so no handle outside the thread keeps a World alive. A drop guard empties it.
+  - **Calls** fail with `NotInWorld` before `Joined`, or when the host thread finds no `Client`, and with `Closed` once the session ended or was torn down.
+  - **Fault injection.** `AzaleaConnector::with_app_hook(self, impl Fn(BotId, &mut azalea::app::App) + Send + Sync + 'static) -> Self`, behind the off-by-default `fault-injection` feature. The hook runs after azalea's plugins and before the single-threaded executor is set, so its systems run single-threaded too. *(The user's notice on the plan)* With the feature and without `debug_assertions`, fleet-mc hits a `compile_error!`, so no release build can include the hook. Clippy's `--all-features` run and the slow tests are debug builds.
+  - **Stubs inside the PR** *(the user's decision)*. P3.4's `perform`, `send_chat` and `respawn` check the state and run an empty host job, so P3.7 and P3.6 get real red runs. `respawn` already tells the bridge, inside its job.
 
 ### Events (P3.5)
 - **Chat:**
