@@ -46,6 +46,8 @@ let client = Client::new(entity, ecs);
 // appexit_rx: Ok(AppExit) after exit(); Err(_) the moment the runner task dies (a panic).
 ```
 
+> Refined by [ADR-0011](0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md) (group D, found in CI on Linux): inserting `LocalPlayerEvents` after the join callback, as above, can lose the session's first events. azalea spawns the bot, polls the connect and reports a failed connect in the same frame, so a refused connect on a loaded Linux host was dropped. fleet-mc attaches the channel with an observer on `Add` of `LocalEntity` instead, the moment the bot is spawned. azalea's own `Client::join` has the same race.
+
 ### 2. Hosting model: one App and one MC host thread per bot
 Every bot gets its own Bevy App/World (Variant C) **and its own host thread**.
 - **Blast radius:** a panic or a hang affects exactly one bot.

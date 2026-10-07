@@ -19,7 +19,6 @@ use azalea::Event;
 use azalea::account::Account;
 use azalea::app::{App, AppExit};
 use azalea::ecs::entity::Entity;
-use azalea::events::LocalPlayerEvents;
 use azalea::join::{ConnectOpts, StartJoinServerEvent};
 use azalea::protocol::address::{ResolvedAddr, ServerAddr};
 use fleet_core::disconnect::{ConnectFailure, DisconnectReason};
@@ -31,7 +30,7 @@ use tracing::{Instrument as _, debug, info_span, warn};
 
 #[cfg(feature = "fault-injection")]
 use super::AppHook;
-use super::app::build_app;
+use super::app::{build_app, event_channel};
 use crate::account::AuthReports;
 use crate::events::{EventSink, LivenessStamps, Phase, Terminal};
 
@@ -167,10 +166,14 @@ impl Driver {
             return;
         };
 
+        // The bot's events: azalea gets the sender the moment it spawns the
+        // bot, so nothing it reports in that same frame is lost (found in CI
+        // on Linux, where a refused connect fails within that frame).
+        let (events_tx, mut events) = event_channel();
         #[cfg(feature = "fault-injection")]
-        let mut app = session_app(stamps, bot_id, hook.as_ref());
+        let mut app = session_app(stamps, events_tx, bot_id, hook.as_ref());
         #[cfg(not(feature = "fault-injection"))]
-        let mut app = session_app(stamps, bot_id);
+        let mut app = session_app(stamps, events_tx, bot_id);
         // Variant C (ADR-0008 §1). The runner is a task of the host thread's
         // LocalSet, so closing the thread drops it and with it the World.
         let (ecs, start_running_systems, app_exit) = azalea::start_ecs_runner(app.main_mut());
@@ -197,33 +200,13 @@ impl Driver {
         // connect; the deadline, the stop signal and the runner bound it.
         let joined = before_join(callback_rx.recv(), deadline, &mut stop, &mut app_exit).await;
 
-        let mut events = None;
         if let Some(entity) = joining_entity(joined, &sink) {
-            #[expect(
-                clippy::disallowed_methods,
-                reason = "azalea's LocalPlayerEvents takes an unbounded sender; the loop below drains it into the bounded bridge at once (ADR-0011, approved)"
-            )]
-            let (event_tx, event_rx) = mpsc::unbounded_channel();
-            let listening = ecs.write().get_entity_mut(entity).map(|mut player| {
-                player.insert(LocalPlayerEvents(event_tx));
-            });
-            if listening.is_ok() {
-                slot.set(Client::new(entity, Arc::clone(&ecs)));
-                events = Some(event_rx);
-            } else {
-                warn!(
-                    "the bot's entity was gone before it could report events, so the session ended as crashed"
-                );
-                sink.terminate(Terminal::Disconnected(DisconnectReason::SessionCrashed));
-            }
-        }
-
-        if let Some(events) = &mut events {
+            slot.set(Client::new(entity, Arc::clone(&ecs)));
             // After `Joined`, nothing here waits on the network but the event
             // stream; the watchdog bounds a session that goes quiet (P4.6).
             let end = session_loop(
                 &sink,
-                events,
+                &mut events,
                 &mut reports,
                 &mut app_exit,
                 &mut stop,
@@ -277,8 +260,13 @@ async fn resolve(
 
 /// The session's App, with the test's hook if one is set.
 #[cfg(feature = "fault-injection")]
-fn session_app(stamps: Arc<LivenessStamps>, bot_id: BotId, hook: Option<&AppHook>) -> App {
-    build_app(stamps, |app| {
+fn session_app(
+    stamps: Arc<LivenessStamps>,
+    events: mpsc::UnboundedSender<Event>,
+    bot_id: BotId,
+    hook: Option<&AppHook>,
+) -> App {
+    build_app(stamps, events, |app| {
         if let Some(hook) = hook {
             hook(bot_id, app);
         }
@@ -287,8 +275,12 @@ fn session_app(stamps: Arc<LivenessStamps>, bot_id: BotId, hook: Option<&AppHook
 
 /// The session's App.
 #[cfg(not(feature = "fault-injection"))]
-fn session_app(stamps: Arc<LivenessStamps>, _bot_id: BotId) -> App {
-    build_app(stamps, |_| {})
+fn session_app(
+    stamps: Arc<LivenessStamps>,
+    events: mpsc::UnboundedSender<Event>,
+    _bot_id: BotId,
+) -> App {
+    build_app(stamps, events, |_| {})
 }
 
 /// The bot's entity from the join callback, or `None` after reporting why
