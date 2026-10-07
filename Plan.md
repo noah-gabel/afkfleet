@@ -1249,6 +1249,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >
   >   Swings are seen by a watcher bot through a test-only system *(the user's decision)*. The containment scenario's action is now a look that RCON confirms.
   > - **HoldUse is feasible** *(a temporary probe, never committed; the user's decision)*. With a bow and arrows, `start_use_item` started drawing. Released after about 1 tick, it shot nothing; held for 25 ticks, it shot nothing yet. A raw `ServerboundPlayerAction{ReleaseUseItem}` (`pos` default, `direction` Down, `seq` 0) then shot one arrow: the bow's `used` statistic went to 1 and an arrow entity appeared. The packet encodes correctly through azalea's normal writer, so no hand-written bytes are needed. P3.9 can map `HoldUse{on}` to `start_use_item` and that release packet (ADR-0011).
+
+  > Note (P3.6, from group E, the user's decision) (ADR-0011): **The respawn step was flaky.**
+  > - **The failure.** About 4 local runs in 10 failed with "the second death didn't happen within 60s", from before group E's changes too.
+  > - **The cause, as far as the runs show.** The step killed the bot as soon as the server reported full health after the respawn. A respawned player takes no damage, not even from `/kill`, until its client says it has loaded (`PlayerLoaded`), and azalea sends that only once the bot is in a loaded chunk again.
+  > - **The fix.** The scenario's hook now also counts each time azalea adds its `HasClientLoaded` marker, and the step waits for that before the second kill. It then passed 8 runs in 8.
 - [x] **P3.7** 🔴 Slow integration tests (`slow_*`, testcontainers + itzg, offline mode):
   - join and see the join message
   - send chat and see it echoed back
@@ -1270,7 +1275,16 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Online mode** *(as planned)*: a garbage token ends in `AuthRejected` within seconds, and an offline account is kicked with `unverified_username`. The marker token never shows in the TRACE capture of every target.
   > - **The log capture moved to fleet-testkit** *(the user's decision)*: `install()` and `check_absent()` return errors instead of panicking.
   > - **Failure output.** A failed wait shows the events the session sent meanwhile.
-- [ ] **P3.8** 🔴 Clean-up test: after the full teardown from ADR-0008 §10 (not just `disconnect()`), the thread count and the number of live Worlds go back to baseline.
+
+  > Note (P3.7, from group E, found by the user's real-account check; the user's decisions) (ADR-0010, ADR-0011): **Chat waits for signing.**
+  > - **The bug.** `send_chat` returned `Ok` for chat that a server enforcing secure chat drops. azalea sets up the chat-signing session in the background after the join and sends chat unsigned until then.
+  > - **The fix.** A plugin publishes each session's signing state: `NotNeeded` (offline account, offline-mode server, or a server that doesn't enforce secure chat, from its login packet), `Pending`, `Ready` or `Failed`.
+  > - **Waiting.** A chat message, not a command, waits while signing is `Pending`, at most until the game state plus `McConfig::chat_signing_timeout` (10 s).
+  > - **Refusing.** `Failed`, or still `Pending` at that deadline, gives the new `SessionError::ChatUnavailable`, logged at `warn` once. The session stays up.
+  > - **The fake** gains `fail_chat`.
+  > - **A key fetch that hangs** keeps chat unavailable until the next reconnect, since azalea never retries it.
+  > - **Commands** are never signed by azalea. A server that enforces secure chat rejects those with message arguments, while `send_chat` returns `Ok` (found by the user's real-account check; flagged under P4.5 and P11.3).
+- [x] **P3.8** 🔴 Clean-up test: after the full teardown from ADR-0008 §10 (not just `disconnect()`), the thread count and the number of live Worlds go back to baseline.
 
   > Note (P3.8, from the Phase 3 plan) (ADR-0011):
   > - **Baseline.** Taken after a warm-up join (P1.9).
@@ -1282,6 +1296,39 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - **The threat model's B4 section.**
 
   > Note (P3.8, from group D): **testcontainers adds a thread.** Dropping a container from a current-thread runtime starts one process-wide cleanup thread, so the OS thread count's baseline must be taken after the container has started and been dropped once, or allow for that thread. `live_threads()` and `live_worlds()` don't count it.
+
+  > Note (P3.8, from group E, the user's decisions) (ADR-0011):
+  > - **"The full teardown"** is `McSession::disconnect()`, which follows ADR-0008 §10. "Not just `disconnect()`" means azalea's `Client::disconnect()`.
+  > - **The scenario.** `slow_teardown_scenario` runs one warm-up cycle and three measured ones. Each cycle puts four bots online at once and ends them each way a session can end:
+  >   - two with the full teardown
+  >   - one kicked through RCON before its `disconnect()`
+  >   - one whose handles are all dropped without `disconnect()` (P3.2)
+  > - **Checks.**
+  >   - After the warm-up and after every cycle, `live_threads()` and `live_worlds()` are 0 (they count only fleet-mc's own), and nothing is abandoned.
+  >   - On Linux, the OS thread count reaches at most the baseline, within 30 s, longer than tokio's 10 s blocking-thread keep-alive. The baseline is taken after the warm-up, once no host thread is left in the OS's list.
+  >   - Every check runs while the container is up, so the cleanup thread above never counts.
+  > - **Red runs.**
+  >   - A temporary, uncommitted break (the driver kept a `Client` clone) failed it on the Worlds.
+  >   - In CI on Linux, a temporary commit parked one thread after the baseline. The run used a temporary `push` trigger on the branch, removed before the PR opened.
+  > - **Found by that run: the baseline hid the parked thread.**
+  >   - The first run passed when it had to fail. fleet-mc counts a host thread as ended just before its OS thread exits, so a warm-up thread that was still exiting inflated the baseline.
+  >   - The baseline is now taken only once no thread named `mc-…` is left in `/proc/self/task`, and a failed check shows the threads by name.
+  >   - The next run failed as it should ("8 OS threads … more than the 7 after the warm-up", the extra one under the test thread's name), and the revert passed.
+
+  > Note (Phase 3 wrap-up, group E, the user's decisions) (ADR-0011):
+  > - **The real-account check.**
+  >   - `manual_real_account_scenario` joins the online-mode container with the user's real token, sends signed chat and sees its echo, and tears down.
+  >   - The token must not appear in any log, and `PRIVATE KEY` only under `azalea_auth::certs` (azalea-auth 0.16.0 logs the certificate response at `trace`, which P5.2 caps).
+  >   - Only the nextest `manual` profile includes `manual_` tests. Only the user runs `just test-real-account` (CLAUDE.md).
+  >   - Errors name only a line number and the expected key, and a failed wait names only the step and event kinds. A rejected token says it may have expired, since `fetch-token` writes no expiry.
+  >   - It also sends `/me` and expects the server to reject it: the known limit under P11.3. If the emote's echo arrives instead, the step fails with "azalea now signs commands: update this step and the P11 note".
+  >   - The steps only record their results: the teardown and the log checks always run, and failed steps are reported after them. The first run failed at the signed chat (see P3.7's note) and skipped the log checks.
+  >   - **The user's results** (2026-10-07, after the P3.7 fix):
+  >     - passed: the join, the signed chat, the token absent from every log at every level, and `PRIVATE KEY` only under `azalea_auth::certs`
+  >     - `/me` was rejected: the bot got one system message and stayed up, and the server logged at ERROR "Received unsigned command packet from AfkBot1, but the command requires signable arguments: …"
+  > - **The `slow-tests` workflow** runs weekly (Mondays, 07:17 UTC) and on demand, on ubuntu; it isn't a required check.
+  > - **The threat model's B4 section** is written. It adds two accepted risks: Minecraft servers aren't authenticated, and a server can grow a bot's memory.
+  > - **The Phase 3 DoD** is checked in group E and again in P3.9's PR, which finishes the phase.
 - [ ] **P3.9** 🔴 `HoldUse{on}`: hold the use button down, the way `Sneak{on}` holds sneak (the user's idea, from P3.6). It's its own branch and PR, right after group E.
   - fleet-core: an additive `Action::HoldUse{on}` and `GameAction` variant, with validation and the mode snapshots updated. It's a new tag, so older servers reject modes that use it (ADR-0010).
   - fleet-mc: the mapping that P3.6 verified, with a live test.
@@ -1358,6 +1405,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - when the bucket or queue is full it returns `RateLimited` or `QueueFull` **instead of blocking**
   - user chat and mode chat share it
   - governor's clock is injected, so the tests run on controlled time (see §8)
+
+  > Note (P4.5, from Phase 3, group E): **flagged, not decided.** `send_chat` can fail with `SessionError::ChatUnavailable` when an online session can't sign chat for a server that enforces it. The session stays up, and a later call may succeed. This task decides what the queue does then, for user chat and mode chat (ADR-0011).
+  >
+  > Mode chat with a command that takes message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) is rejected by a server that enforces secure chat, while `send_chat` returns `Ok`. That's undecided here too; see P11.3's note.
 - [ ] **P4.6** 🔴 Watchdog, while Online (fault table in ADR-0008 §5):
   - no `Tick` for `watchdog_timeout`: raise `WatchdogTimeout`, tear the session down and reconnect
   - no packet from the server for `packet_liveness_timeout`: tear the session down and treat it as a transient disconnect
@@ -1802,6 +1853,17 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `GET /bots/{id}/chat?before=&limit=` with cursor pagination.
 
   > Note (P11.3, from group D): The handler checks `SendChat(allowlist.check(&message))` and then sends that same message. An allowlisted command passes with any arguments (threat model). Reading the history needs `ViewBot` (ADR-0010).
+
+  > Note (P11.3, from Phase 3, group E, found by the user's real-account check): **flagged, not decided.**
+  > - **The limit.** On a server that enforces secure chat, azalea's unsigned commands with message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) are rejected.
+  >   - The bot gets one system message and stays up.
+  >   - The server logs an ERROR each time.
+  >   - `send_chat` returns `Ok` anyway.
+  > - **The options:**
+  >   - sign commands, which needs the server's command tree to know which arguments are signable
+  >   - refuse such commands on enforcing servers, with an error
+  >
+  > P4.5 decides the same for mode chat (ADR-0011).
 - [ ] **P11.4** 🔴 Modes CRUD: `GET`, `POST`, `PUT`, `DELETE` on `/modes`. Core validation errors become field errors. Built-in modes are read-only.
 
   > Note (P11.4, from Phase 2): Editing a mode that's assigned to bots must re-run the command check for every one of them. A mode with a command outside the allowlist needs Manage on each bot (ADR-0010).

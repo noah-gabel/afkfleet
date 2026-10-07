@@ -143,6 +143,12 @@ pub(crate) fn offline(name: &str) -> SessionCredentials {
     }
 }
 
+/// An expiry for online credentials. Any will do: the adapter never reads it.
+/// The tests don't depend on chrono, so the type is left to inference.
+pub(crate) fn any_expiry<T: Default>() -> T {
+    T::default()
+}
+
 /// Connects `bot_id` with `credentials` to `server`.
 pub(crate) async fn connect(
     connector: &AzaleaConnector,

@@ -3,6 +3,7 @@
 use core::fmt;
 use core::future::Future;
 use core::time::Duration;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use azalea::Client;
@@ -18,6 +19,7 @@ use super::driver::ClientSlot;
 use crate::actions;
 use crate::events::{BridgeControl, LivenessStamps, Phase};
 use crate::host::HostThread;
+use crate::signing::{self, Decision, SigningState};
 
 /// How much longer than the driver's own wait for azalea's runner
 /// [`disconnect`](McSession::disconnect) waits for the driver to end, before
@@ -50,6 +52,12 @@ struct Inner {
     driver_ended: watch::Receiver<()>,
     /// How long `disconnect()` waits for the driver to end.
     driver_wait: Duration,
+    /// Where the session's chat signing is, published by its App.
+    signing: watch::Receiver<SigningState>,
+    /// How long after the game state chat may wait for signing.
+    chat_signing_timeout: Duration,
+    /// Whether unavailable chat was logged at `warn` already.
+    warned_chat_unavailable: AtomicBool,
 }
 
 impl fmt::Debug for McSession {
@@ -71,6 +79,8 @@ pub(super) struct Parts {
     pub(super) stop: oneshot::Sender<()>,
     pub(super) driver_ended: watch::Receiver<()>,
     pub(super) app_exit_timeout: Duration,
+    pub(super) signing: watch::Receiver<SigningState>,
+    pub(super) chat_signing_timeout: Duration,
 }
 
 impl McSession {
@@ -85,6 +95,9 @@ impl McSession {
                 stop: Mutex::new(Some(parts.stop)),
                 driver_ended: parts.driver_ended,
                 driver_wait: parts.app_exit_timeout.saturating_add(DRIVER_GRACE),
+                signing: parts.signing,
+                chat_signing_timeout: parts.chat_signing_timeout,
+                warned_chat_unavailable: AtomicBool::new(false),
             }),
         }
     }
@@ -114,6 +127,23 @@ impl McSession {
             }
         };
         async move { job?.await? }
+    }
+
+    /// Logs, once per session, that chat can't go out because it can't be
+    /// signed. Later refusals only return the error.
+    fn chat_unavailable(&self) {
+        if !self
+            .inner
+            .warned_chat_unavailable
+            .swap(true, Ordering::Relaxed)
+        {
+            let signing = self.inner.signing.borrow().signing;
+            warn!(
+                bot_id = %self.inner.bot_id,
+                ?signing,
+                "the server requires signed chat and the session can't sign it, so chat fails until it can"
+            );
+        }
     }
 
     /// Locks the stop signal, poison-tolerantly: it holds a plain value.
@@ -146,18 +176,50 @@ impl SessionHandle for McSession {
         })
     }
 
+    /// A chat message on a server that enforces secure chat waits for
+    /// azalea's chat-signing session, at most until `chat_signing_timeout`
+    /// after the bot entered the game, and fails with
+    /// [`SessionError::ChatUnavailable`] if it can't be signed: azalea would
+    /// send it unsigned, and the server would drop it (ADR-0011). Commands
+    /// and offline accounts never wait.
     fn send_chat(
         &self,
         message: ChatMessage,
     ) -> impl Future<Output = Result<(), SessionError>> + Send {
-        // azalea sends text starting with `/` as a command (ADR-0008 §7).
-        // `ChatMessage` already keeps to azalea's limits, so nothing is
-        // dropped or cut silently. The text is only queued for the next tick,
-        // which can't fail.
-        self.call(move |client| {
-            client.chat(message.as_str());
-            Ok(())
-        })
+        let session = self.clone();
+        async move {
+            // azalea sends text starting with `/` as a command, never signed
+            // (ADR-0008 §7).
+            let command = message.as_str().starts_with('/');
+            let timeout = session.inner.chat_signing_timeout;
+            if !command && session.inner.control.phase() == Phase::Joined {
+                let mut signing = session.inner.signing.clone();
+                let ready = signing::signed_chat_ready(&mut signing, timeout).await;
+                if ready == Err(SessionError::ChatUnavailable) {
+                    session.chat_unavailable();
+                }
+                ready?;
+            }
+            let signing = session.inner.signing.clone();
+            // `ChatMessage` already keeps to azalea's limits, so nothing is
+            // dropped or cut silently. The text is only queued for the next
+            // tick, which can't fail.
+            let sent = session
+                .call(move |client| {
+                    // Checked again on the host thread, right before the
+                    // message is queued, so unsigned chat never slips out.
+                    if !command && !sendable(&signing, timeout) {
+                        return Err(SessionError::ChatUnavailable);
+                    }
+                    client.chat(message.as_str());
+                    Ok(())
+                })
+                .await;
+            if sent == Err(SessionError::ChatUnavailable) {
+                session.chat_unavailable();
+            }
+            sent
+        }
     }
 
     fn respawn(&self) -> impl Future<Output = Result<(), SessionError>> + Send {
@@ -200,6 +262,14 @@ impl SessionHandle for McSession {
     fn liveness(&self) -> Liveness {
         self.inner.stamps.read()
     }
+}
+
+/// Whether a chat message can go out now, given the session's `signing`.
+fn sendable(signing: &watch::Receiver<SigningState>, timeout: Duration) -> bool {
+    let state = *signing.borrow();
+    let now = tokio::time::Instant::now();
+    let past_deadline = now >= signing::deadline(state, now, timeout);
+    signing::decide(state.signing, false, past_deadline) == Decision::Send
 }
 
 /// Waits until `receiver`'s sender is gone. It never sends.

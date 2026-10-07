@@ -132,6 +132,8 @@ Kick reasons arrive as `Event::Disconnect(Option<FormattedText>)`.
 - **Formatting.** Legacy `§` codes arrive parsed into styled siblings, and `to_string()` gives plain text without them. The core sanitizer still strips `§` and control characters.
 - **Sending.** `chat("text")` sends a message, and `chat("/cmd")` or `write_command_packet("cmd")` sends a command. azalea **silently drops control characters and `§` and truncates to 256 characters**; the core `ChatMessage` limits match, so nothing gets changed silently. Offline accounts send unsigned chat.
 
+  > Refined by [ADR-0011](0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md) (group E, found by the user's real-account check): azalea also sends an *online* account's chat unsigned until its chat-signing session is set up, in the background after the join. A server that enforces secure chat drops it. So fleet-mc's `send_chat` waits for the session, with a deadline, and otherwise returns `ChatUnavailable`. P1.8 only passed because it slept 3 s before chatting. Commands are never signed.
+
 ### 8. Actions (input for P2.7, P3.6)
 | `Action` | Call (on the host thread) |
 |---|---|

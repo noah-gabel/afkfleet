@@ -16,7 +16,7 @@ afkfleet is **a hobby project** I'm building for my friends with Claude Code. I 
 There's no support, and I don't take feature requests. Security reports are welcome, though: see [SECURITY.md](SECURITY.md).
 
 ## Status
-**Phase 3 (azalea adapter and test kit) is in progress.** The product itself isn't runnable yet. What exists:
+**Phase 3 (azalea adapter and test kit) is nearly done:** only P3.9, holding the use button, is left. The product itself isn't runnable yet. What exists:
 - **From Phase 0:**
   - the Cargo workspace with all lints and the pinned toolchain
   - the quality gates: formatting, clippy, docs, tests, coverage gates, cargo-deny, Biome
@@ -43,12 +43,14 @@ There's no support, and I don't take feature requests. Security reports are welc
     - the event bridge, which turns azalea's events into sanitized session events and never drops anything but chat
     - the account adapter, which logs in with the server-issued Minecraft token (never a Microsoft one) and never logs it. It tells a rejected token, an account the session server restricts and a session-server outage apart, so an outage is retried instead of failing the bot
     - the connector, which starts each bot's azalea session on its own thread, bounds connecting with a timeout, and tears a session down in a fixed order so nothing of it is left behind
-    - the bot actions: look, turn, jump, sneak, swing, use the held item, attack what's in reach, pick a hotbar slot, respawn and chat, each checked against a real server
-  - slow tests against local Minecraft servers in containers (`just test-slow`): joining, chat, kicks, reconnects, every action, online-mode logins that must never log the token, and a crash in one bot that leaves another running
+    - the bot actions: look, turn, jump, sneak, swing, use the held item, attack what's in reach, pick a hotbar slot, respawn and chat, each checked against a real server. On a server that requires signed chat, an online bot's chat waits until it can be signed, and fails instead of being silently dropped
+  - slow tests against local Minecraft servers in containers (`just test-slow`, and weekly on GitHub): joining, chat, kicks, reconnects, every action, online-mode logins that must never log the token, a crash in one bot that leaves another running, and a clean-up test that proves every way a bot's session ends leaves no thread and no World behind
+  - a real-account check that only you run (`just test-real-account`): your real token joins a local online-mode server, sends signed chat, and never reaches a log
+  - the threat model's analysis of what a hostile Minecraft server can do, with the test behind each mitigation ([`docs/threat-model.md`](docs/threat-model.md), B4)
 
   [ADR-0011](docs/adr/0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md) records Phase 3's decisions, and [ADR-0012](docs/adr/0012-azalea-advisory-and-license-exceptions.md) records azalea's accepted advisories and license exceptions.
 
-**Next:** the clean-up test that proves a torn-down bot leaves nothing behind, and the wrap-up of Phase 3.
+**Next:** P3.9, a `HoldUse` action that holds the use button down (for example to draw a bow), the last task of Phase 3. Then Phase 4, the bot runtime.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 
@@ -90,8 +92,18 @@ just ci        # everything CI runs
 just mc-up     # local offline-mode Minecraft 26.1 test server on 127.0.0.1:25565 (needs Docker)
 just mc-down   # stop it and delete its world
 just test-slow # slow tests against local Minecraft containers, one at a time (needs Docker)
+just test-real-account # the real-account check: you only (see below)
 ```
 The test server runs in offline mode, so it's for local development only. RCON is enabled with a random password and isn't published; run commands with `docker compose --file deploy/compose.dev.yaml exec minecraft rcon-cli <command>`.
+
+The slow tests also run on GitHub weekly and on demand (the `Slow tests` workflow); it isn't a required check.
+
+**The real-account check** shows that a real Minecraft token joins a local online-mode server and sends signed chat, and that the token never reaches a log. It needs your real credentials, so only you run it; the AI never does.
+1. Right before running, create `secrets/p1.8-account.txt` (gitignored) with the archived spike's `fetch-token`: `cd spikes/azalea`, then `cargo run -- fetch-token`, and sign in with the code it shows. The file holds no expiry, and a token lasts about a day. If the session server rejects it, fetch a new one.
+2. Run `just test-real-account` (needs Docker and internet). It never prints the file's contents.
+3. Report only the outcome, and delete the file afterwards.
+
+When the test ends, its container is removed together with its volumes, which hold the account name in the server's usercache and logs. A killed run can leave the container behind; check `docker ps -a`.
 `just --list` shows every recipe; [`CLAUDE.md`](CLAUDE.md) describes them and the project's working rules.
 
 Every change goes through a pull request; nobody commits to `main`.

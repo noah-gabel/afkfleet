@@ -23,6 +23,10 @@ pub enum SessionError {
     /// The bot isn't in a world: it hasn't joined yet, or it has left.
     #[error("the bot isn't in a world")]
     NotInWorld,
+    /// The server requires signed chat and the session can't sign it, so the
+    /// message wasn't sent. The session itself stays up (ADR-0011).
+    #[error("the server requires signed chat, and the session can't sign it")]
+    ChatUnavailable,
 }
 
 /// A handle to one running Minecraft session (Plan.md P2.10; ADR-0008,
@@ -45,7 +49,9 @@ pub trait SessionHandle: Clone + Send + Sync + 'static {
     /// Sends a chat message or a `/command`.
     ///
     /// # Errors
-    /// As for [`perform`](Self::perform).
+    /// As for [`perform`](Self::perform), and
+    /// [`SessionError::ChatUnavailable`] for a chat message the server would
+    /// drop because the session can't sign it.
     fn send_chat(
         &self,
         message: ChatMessage,
@@ -79,6 +85,10 @@ mod tests {
     #[case::queue_full(SessionError::QueueFull, "the session's job queue is full")]
     #[case::timed_out(SessionError::TimedOut, "the session didn't answer in time")]
     #[case::not_in_world(SessionError::NotInWorld, "the bot isn't in a world")]
+    #[case::chat_unavailable(
+        SessionError::ChatUnavailable,
+        "the server requires signed chat, and the session can't sign it"
+    )]
     fn errors_have_fixed_messages(#[case] error: SessionError, #[case] message: &str) {
         assert_eq!(error.to_string(), message);
     }
