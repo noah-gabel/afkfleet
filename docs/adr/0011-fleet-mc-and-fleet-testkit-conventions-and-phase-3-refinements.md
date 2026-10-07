@@ -89,7 +89,16 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
 - **The abandoned-thread limit** resolves the contradiction:
   - Above a configurable limit (default 3, agent key `[runtime] max_abandoned_threads`), the pool refuses new threads, so `connect()` returns `HostUnavailable` and no more threads pile up.
   - The library never ends the process: the agent watches the count and exits at the limit, and Docker restarts it (P5.3, Plan.md §6 row 8).
+  - *(group B, the user's decision)* "At the limit" means `abandoned_threads() >= max_abandoned_threads`: the pool refuses new threads at the same count where the agent exits. So the limit is a `NonZeroUsize`, since 0 would refuse every thread.
+  - *(group B, the user's decision)* `abandoned_threads()` only counts up, even when an abandoned thread ends after all. `live_threads()` goes down then. The agent's restart resets both.
 - **Test time.** These tests wait for a real OS thread, and tokio's paused clock auto-advances while the test runtime is idle, which races the thread. So host-pool tests use **real time with generous upper-bound timeouts that only fire on failure, and never a sleep**. A hang is a job blocked on a std `sync_channel` that the test releases at the end. Paused time stays the rule wherever all waiting happens on the test's own runtime.
+- **No `CancellationToken`** *(group B, the user's decision)*. This is a deliberate exception to the CLAUDE.md rule that every spawned task has a child `CancellationToken`:
+  - A host thread's jobs are tasks of the thread's `JoinSet`, which owns them.
+  - A oneshot stop signal ends the job loop, and dropping the `JoinSet` and the `LocalSet` cancels every task the session left, azalea's runner included.
+  - So `tokio-util` stays out of fleet-mc until a task needs it.
+- **Handles** *(group B, the user's requirement)*. `HostThread` is `Clone`. The thread also ends once every clone is dropped, because the job channel and the stop signal close with the last one. So an actor that panics or is aborted without calling `disconnect()` can't leave a bot running. A test covers it, and no task on the host thread may hold a clone (P3.4).
+- **Never joined** *(group B)*. Joining a thread blocks, which the caller's runtime must not do, and a hung thread can't be joined at all. Each thread sends an exit signal as the last thing it does: its drop guard lowers the live count and then closes a `watch` channel. Shutdown waits for that signal, and `HostThread::ended()` exposes it.
+- **Jobs** *(group B)*. `run` queues a job at once and returns a `Send` future for the answer. A job whose caller has given up by the time it starts is skipped. A panicking job answers `Closed`, is logged at `warn`, and the thread keeps serving.
 
 ### Account adapter (P3.3)
 - **Token.** An immutable `SecretString`, so it needs no lock.

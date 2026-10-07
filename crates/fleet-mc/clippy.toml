@@ -1,0 +1,15 @@
+# fleet-mc's own clippy configuration. Clippy reads the nearest clippy.toml
+# and doesn't merge it with the root one, so the root file's test allowances
+# and its ban on unbounded channels are repeated here. `just scripts-test`
+# checks that this file carries every root setting (scripts/clippy-config.mjs).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-print-in-tests = true
+
+disallowed-methods = [
+    # Repeated from the root clippy.toml: channels are always bounded. azalea's two
+    # mandated channels carry an approved `#[expect]` (ADR-0011).
+    { path = "tokio::sync::mpsc::unbounded_channel", reason = "channels are always bounded; overload is an explicit error (CLAUDE.md, ADR-0011)", allow-invalid = true },
+]

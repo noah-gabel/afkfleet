@@ -38,6 +38,7 @@ thiserror = "2.0.21"
 # tokio: no default features exist; members enable only what they use (`sync`,
 # `time`, …) and `test-util` in tests.
 tokio = "1.53.2"
+tracing = "0.1.44"
 # uuid: never `v4`/`v7`/`rng`, which pull in getrandom; IDs are minted from caller data (ADR-0010).
 uuid = { version = "1.27.0", default-features = false }
 

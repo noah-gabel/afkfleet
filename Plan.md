@@ -1101,7 +1101,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Hang** freezes both stamps, and every call fails with `TimedOut`.
   > - **The event contract** of ADR-0010 is enforced by the fake: one terminal event, then `None`; `Died` once until `respawn()`; only `Chat` is dropped, and counted.
   > - **No panics.** It's library code, so misuse returns an error.
-- [ ] **P3.2** 🔴 `McHostPool` spawns one host thread per session (ADR-0008 §2):
+- [x] **P3.2** 🔴 `McHostPool` spawns one host thread per session (ADR-0008 §2):
   - Each thread has a current-thread runtime and a `LocalSet`, and ends when its session ends.
   - Work reaches the thread over a bounded queue.
   - A hung thread is **abandoned** and counted, never joined or respawned. Test this with an injected job that never returns.
@@ -1111,6 +1111,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Limit.** Above `max_abandoned_threads` (default 3, Appendix A), the pool refuses new threads, so `connect()` returns `HostUnavailable`. The library never ends the process; the agent does (P5.3).
   > - **Diagnostics.** `live_threads()` and `abandoned_threads()` are public, for P3.8 and P4.9.
   > - **Test time.** These tests wait for a real OS thread, which tokio's paused clock would race. So they use real time with upper-bound timeouts that only fire on failure, and never a sleep. The hung job blocks on a std `sync_channel` that the test releases at the end.
+
+  > Note (P3.2, from group B, the user's decisions) (ADR-0011):
+  > - **Limit.** The pool refuses new threads once `abandoned_threads() >= max_abandoned_threads`, the same point where the agent exits (P5.3).
+  > - **Counting.** `abandoned_threads()` only counts up, even when an abandoned thread ends after all; `live_threads()` goes down then. A pool's counts are shared by its clones.
+  > - **No `CancellationToken`.** A host thread's jobs are tasks of its `JoinSet`. The stop signal ends the loop, and dropping the `JoinSet` and the `LocalSet` cancels them. That's a deliberate exception to the CLAUDE.md task rule, and `tokio-util` stays out.
+  > - **Handles.** `HostThread` is `Clone`. The thread also ends when every clone is dropped (the job channel and the stop signal close), so an actor that panics or is aborted without `disconnect()` can't leave a bot running. A test covers it.
+  > - **API.** `McConfig` holds the defaults (`max_abandoned_threads` is a `NonZeroUsize`, since 0 would refuse every thread). `spawn(bot_id)` returns a `HostThread` or a `SpawnError`, which becomes `ConnectError::HostUnavailable`. `run(job)` queues at once and fails with a `JobError`, which becomes the matching `SessionError`. A job whose caller has given up is skipped. `shutdown()` returns `Ended` or `Abandoned`, the first outcome on every later call; `ended()` resolves when the thread is gone.
+  > - **Threads are never joined.** Joining would block the caller's runtime; the exit signal, sent last by the thread, says when it has ended.
 - [ ] **P3.3** Account adapter: a custom `AccountTrait` for server-issued `SessionCredentials`, and offline accounts for dev and tests.
 
   > Note (P3.3, from the Phase 3 plan) (ADR-0011):
@@ -1136,6 +1144,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The two azalea-mandated unbounded channels** carry the approved `#[expect(clippy::disallowed_methods, …)]`.
   > - **Diagnostics.** `live_worlds()` and `dropped_chat()` are public.
   > - **Fault injection.** A hook behind a fleet-mc cargo feature, off by default, adds a system to a session's App for the containment test (P3.7).
+
+  > Note (P3.4, from group B): **Host-thread handles.** A host thread ends when every `HostThread` clone is dropped (P3.2), so no task on the thread itself may hold a clone, or the thread never ends without `disconnect()`.
 - [ ] **P3.5** 🔴 Map azalea events to `SessionEvent`, with unit tests on the pure mapping functions. Chat goes through the core sanitizer, with the sender taken only from where ADR-0008 §7 allows; kick reasons go through the core classifier input. `Tick` and server events such as `KeepAlive` only update the session's liveness timestamps (ADR-0008 §4–5).
 
   > Note (P3.5, from the group A review): **Logging chat.** Sanitized chat text keeps `\n`. Log it as a structured field (`?` or JSON), never with `%` (Display), so a server can't forge log lines.
