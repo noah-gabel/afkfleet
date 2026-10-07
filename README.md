@@ -90,8 +90,18 @@ just ci        # everything CI runs
 just mc-up     # local offline-mode Minecraft 26.1 test server on 127.0.0.1:25565 (needs Docker)
 just mc-down   # stop it and delete its world
 just test-slow # slow tests against local Minecraft containers, one at a time (needs Docker)
+just test-real-account # the real-account check: you only (see below)
 ```
 The test server runs in offline mode, so it's for local development only. RCON is enabled with a random password and isn't published; run commands with `docker compose --file deploy/compose.dev.yaml exec minecraft rcon-cli <command>`.
+
+The slow tests also run on GitHub weekly and on demand (the `Slow tests` workflow); it isn't a required check.
+
+**The real-account check** shows that a real Minecraft token joins a local online-mode server and sends signed chat, and that the token never reaches a log. It needs your real credentials, so only you run it; the AI never does.
+1. Right before running, create `secrets/p1.8-account.txt` (gitignored) with the archived spike's `fetch-token`: `cd spikes/azalea`, then `cargo run -- fetch-token`, and sign in with the code it shows. The file holds no expiry, and a token lasts about a day. If the session server rejects it, fetch a new one.
+2. Run `just test-real-account` (needs Docker and internet). It never prints the file's contents.
+3. Report only the outcome, and delete the file afterwards.
+
+When the test ends, its container is removed together with its volumes, which hold the account name in the server's usercache and logs. A killed run can leave the container behind; check `docker ps -a`.
 `just --list` shows every recipe; [`CLAUDE.md`](CLAUDE.md) describes them and the project's working rules.
 
 Every change goes through a pull request; nobody commits to `main`.

@@ -33,6 +33,13 @@ test crate="":
 test-slow:
     cargo nextest run --workspace --profile slow --no-tests=warn --features fleet-mc/fault-injection
 
+# The user's real-account check (ADR-0011): a real token from
+# secrets/p1.8-account.txt joins a local online-mode container (needs Docker).
+# It needs the user's real credentials, so only the user runs it; the AI never
+# does. Create the file with the archived spike's fetch-token right before.
+test-real-account:
+    cargo nextest run -p fleet-mc --profile manual
+
 # Coverage, checked against the gates from Plan.md §8.
 cov:
     cargo llvm-cov nextest --workspace --no-report

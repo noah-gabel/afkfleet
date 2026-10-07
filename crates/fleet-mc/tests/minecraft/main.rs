@@ -7,7 +7,12 @@
 //! Docker: run them with `just test-slow`, which also turns on fleet-mc's
 //! test-only `fault-injection` feature for the actions and containment
 //! scenarios, which add systems to a session's App. The `pins` and `threads`
-//! tests are fast and run with every `just test`.
+//! tests, and the account-file tests of `real_account`, are fast and run
+//! with every `just test`.
+//!
+//! The `manual_` scenario needs the user's real credentials, so only the user
+//! runs it, with `just test-real-account`; no other nextest profile includes
+//! it.
 // Integration tests are test code, but clippy only applies the test allowances
 // of clippy.toml (unwrap, panic, …) inside `#[cfg(test)]`; without this, the
 // helper functions would count as library code.
@@ -23,5 +28,6 @@ mod harness;
 mod offline;
 mod online;
 mod pins;
+mod real_account;
 mod teardown;
 mod threads;

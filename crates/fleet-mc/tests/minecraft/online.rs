@@ -13,19 +13,13 @@ use fleet_testkit::log_capture;
 use secrecy::SecretString;
 use uuid::Uuid;
 
-use crate::harness::{Mode, Server, bot, connect, offline, wait_for, within};
+use crate::harness::{Mode, Server, any_expiry, bot, connect, offline, wait_for, within};
 
 /// A garbage token that's easy to find in captured logs.
 const MARKER: &str = "afkfleet-redaction-marker-online-5b81e2";
 /// The Minecraft server gives up on a stalled login after 30 s; a refused
 /// token must end the session well before that (ADR-0008 §9).
 const WELL_BEFORE_THE_SERVER: Duration = Duration::from_secs(20);
-
-/// Any expiry will do: the adapter never reads it. The test doesn't depend
-/// on chrono, so the type is left to inference.
-fn any_expiry<T: Default>() -> T {
-    T::default()
-}
 
 fn garbage_token() -> SessionCredentials {
     SessionCredentials::Online {

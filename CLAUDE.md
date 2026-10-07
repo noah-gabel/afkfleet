@@ -71,6 +71,7 @@ Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so 
 | `just check` | `cargo fmt --check`, clippy (`--all-targets -D warnings`), `cargo doc --no-deps --workspace` with `RUSTDOCFLAGS="-D warnings"`, nextest default profile, doctests, the `scripts/` tests, and biome + `tsc --noEmit` once the frontend exists. **Run before saying a task is done.** |
 | `just test [crate]` | nextest for the workspace or one crate |
 | `just test-slow` | nextest `slow` profile with fleet-mc's test-only `fault-injection` feature, one Minecraft container at a time (needs Docker) |
+| `just test-real-account` | **The user only; the AI never runs it.** nextest `manual` profile: the user's real token from `secrets/p1.8-account.txt` joins a local online-mode container and sends signed chat (needs Docker) |
 | `just cov` | cargo-llvm-cov with the coverage gates (per-crate and per-module gates are checked by a script over the JSON report) |
 | `just deny` | `cargo deny check` |
 | `just fmt` | `cargo fmt` + biome format |
@@ -292,6 +293,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 - Unit tests: `#[cfg(test)] mod tests` at the bottom of the file.
 - Component and integration tests: `crates/<crate>/tests/*.rs`.
 - Slow tests (containers, real Minecraft) have names starting with `slow_`.
+- Manual tests need the user's real credentials and have names starting with `manual_`. **Only the user runs them**, with `just test-real-account`. The AI never runs that recipe or the `manual` nextest profile, and no other profile includes them.
 
 **How to write them**
 - Names describe behavior, e.g. `login_with_wrong_password_returns_401_and_counts_attempt`.
