@@ -137,6 +137,7 @@ fleet-server/src/
 | Area | Concern | Crate |
 |---|---|---|
 | Domain & runtime | Minecraft | `azalea` (fleet-mc only) |
+| | Chat components, translations | `azalea-chat`, `azalea-language` (fleet-mc only, for its bounded renderer) |
 | | MS auth | `azalea-auth` (server only) |
 | | Async runtime | `tokio` |
 | | Cancellation | `tokio-util` (`CancellationToken`, `TaskTracker`) |
@@ -249,7 +250,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 - **Every network or IO await has a timeout** (`tokio::time::timeout`), or a comment explaining why it doesn't need one.
 - **Channels are always bounded.** No `unbounded_channel`: clippy's `disallowed-methods` bans it. The only exceptions are the two channels azalea's API forces on `fleet-mc`, each marked with an approved `#[expect]` (ADR-0011).
 - **Never hold a `std::sync::Mutex` guard across `.await`.** Prefer message passing to shared locks.
-- **Every spawned task has an owner** (`JoinSet` / `TaskTracker`) and a child `CancellationToken`. No fire-and-forget `tokio::spawn`.
+- **Every spawned task has an owner** (`JoinSet` / `TaskTracker`) and a child `CancellationToken`. No fire-and-forget `tokio::spawn`. The one exception is fleet-mc's host threads: their jobs belong to the thread's `JoinSet` and end with its stop signal (ADR-0011).
 - **`tokio::select!` branches must be cancel-safe**, or have a comment explaining why it's fine.
 - **Overload is an explicit error.** When a queue is full or a rate limit is hit, return `QueueFull`, `RateLimited` or `429`. Never wait forever.
 

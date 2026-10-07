@@ -24,6 +24,16 @@ repository = "https://github.com/noah-gabel/afkfleet"
 # Workspace crates, by path (unpublished, so no version).
 fleet-core = { path = "crates/fleet-core" }
 
+# azalea: exact pin (ADR-0003), fleet-mc only. Without default features: `log` would
+# add Bevy's LogPlugin to every App, and `packet-event` floods the event channel
+# (ADR-0008 §4). fleet-mc enables `online-mode`.
+azalea = { version = "=0.16.0", default-features = false }
+# azalea-chat and azalea-language: the same exact pin as azalea, which already depends on
+# both. fleet-mc only, for its bounded renderer of server text: azalea doesn't re-export
+# the chat argument type, and its own rendering grows exponentially (ADR-0011).
+azalea-chat = "=0.16.0"
+azalea-language = "=0.16.0"
+
 # backon: without default features only fastrand is left; the defaults pull in tokio.
 backon = { version = "1.6.0", default-features = false }
 # chrono: no `clock`/`now`, because fleet-core takes time as a parameter (ADR-0010).
@@ -38,6 +48,7 @@ thiserror = "2.0.21"
 # tokio: no default features exist; members enable only what they use (`sync`,
 # `time`, …) and `test-util` in tests.
 tokio = "1.53.2"
+tracing = "0.1.44"
 # uuid: never `v4`/`v7`/`rng`, which pull in getrandom; IDs are minted from caller data (ADR-0010).
 uuid = { version = "1.27.0", default-features = false }
 

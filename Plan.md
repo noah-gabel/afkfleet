@@ -184,6 +184,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Concern | Crate | Version | Used in | Notes |
 |---|---|---|---|---|
 | Minecraft protocol & client | `azalea` | `=0.16.0` (+mc26.1) | fleet-mc | Needs nightly (ADR-0003). Disable its `AutoReconnectPlugin` and `AutoRespawnPlugin`. Runs only inside a `LocalSet` |
+| Minecraft chat components & translations | `azalea-chat`, `azalea-language` | `=0.16.0` (+mc26.1) | fleet-mc | Already in azalea's graph at the same pin. Only for fleet-mc's bounded renderer of server text: it names `PrimitiveOrComponent`, which azalea doesn't re-export, and looks up translation templates, because azalea's own rendering grows exponentially (ADR-0011). Bumped together with azalea |
 | Microsoft / Minecraft auth | `azalea-auth` | `=0.16.0` (+mc26.1) | fleet-server | Device-code flow. Never use its file cache. fleet-mc reaches only `azalea::auth::sessionserver` and `certs`, through azalea's re-export, never the Microsoft flows; its clippy config bans them (ADR-0011) |
 | Async runtime | `tokio` | 1.53.2 | runtime, mc, testkit, agent, server, client | `test-util` feature in dev. Clippy bans `unbounded_channel`; azalea's two mandated channels are the only exceptions (ADR-0011) |
 | Cancellation, task tracking | `tokio-util` | 0.7.19 | runtime, mc, agent, server | `CancellationToken`, `TaskTracker` |
@@ -1101,7 +1102,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Hang** freezes both stamps, and every call fails with `TimedOut`.
   > - **The event contract** of ADR-0010 is enforced by the fake: one terminal event, then `None`; `Died` once until `respawn()`; only `Chat` is dropped, and counted.
   > - **No panics.** It's library code, so misuse returns an error.
-- [ ] **P3.2** 🔴 `McHostPool` spawns one host thread per session (ADR-0008 §2):
+- [x] **P3.2** 🔴 `McHostPool` spawns one host thread per session (ADR-0008 §2):
   - Each thread has a current-thread runtime and a `LocalSet`, and ends when its session ends.
   - Work reaches the thread over a bounded queue.
   - A hung thread is **abandoned** and counted, never joined or respawned. Test this with an injected job that never returns.
@@ -1111,6 +1112,16 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Limit.** Above `max_abandoned_threads` (default 3, Appendix A), the pool refuses new threads, so `connect()` returns `HostUnavailable`. The library never ends the process; the agent does (P5.3).
   > - **Diagnostics.** `live_threads()` and `abandoned_threads()` are public, for P3.8 and P4.9.
   > - **Test time.** These tests wait for a real OS thread, which tokio's paused clock would race. So they use real time with upper-bound timeouts that only fire on failure, and never a sleep. The hung job blocks on a std `sync_channel` that the test releases at the end.
+
+  > Note (P3.2, from group B, the user's decisions) (ADR-0011):
+  > - **Limit.** The pool refuses new threads once `abandoned_threads() >= max_abandoned_threads`, the same point where the agent exits (P5.3).
+  > - **Counting.** `abandoned_threads()` only counts up, even when an abandoned thread ends after all; `live_threads()` goes down then. A pool's counts are shared by its clones.
+  > - **No `CancellationToken`.** A host thread's jobs are tasks of its `JoinSet`. The stop signal ends the loop, and dropping the `JoinSet` and the `LocalSet` cancels them. That's a deliberate exception to the CLAUDE.md task rule, and `tokio-util` stays out.
+  > - **Handles.** `HostThread` is `Clone`. The thread also ends when every clone is dropped (the job channel and the stop signal close), so an actor that panics or is aborted without `disconnect()` can't leave a bot running. A test covers it.
+  > - **API.** `McConfig` holds the defaults (`max_abandoned_threads` is a `NonZeroUsize`, since 0 would refuse every thread). `spawn(bot_id)` returns a `HostThread` or a `SpawnError`, which becomes `ConnectError::HostUnavailable`. `run(job)` queues at once and fails with a `JobError`, which becomes the matching `SessionError`. A job whose caller has given up is skipped. `shutdown()` returns `Ended` or `Abandoned`, the first outcome on every later call; `ended()` resolves when the thread is gone.
+  > - **Threads are never joined.** Joining would block the caller's runtime; the exit signal, sent last by the thread, says when it has ended.
+
+  > Note (P3.2, from the group B review) (ADR-0011): **Threads dropped while hung count too.** When the last `HostThread` handle drops before a shutdown decided the outcome, the pool keeps the thread as an orphan: its exit signal and a deadline, the shutdown timeout after the drop. `spawn()` and `abandoned_threads()` settle the orphans first, without blocking or spawning: one that has ended is forgotten, and one past its deadline is counted as abandoned and logged at `warn`. So a hung session whose owner never called `disconnect()` still counts against the limit.
 - [ ] **P3.3** Account adapter: a custom `AccountTrait` for server-issued `SessionCredentials`, and offline accounts for dev and tests.
 
   > Note (P3.3, from the Phase 3 plan) (ADR-0011):
@@ -1136,7 +1147,16 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The two azalea-mandated unbounded channels** carry the approved `#[expect(clippy::disallowed_methods, …)]`.
   > - **Diagnostics.** `live_worlds()` and `dropped_chat()` are public.
   > - **Fault injection.** A hook behind a fleet-mc cargo feature, off by default, adds a system to a session's App for the containment test (P3.7).
-- [ ] **P3.5** 🔴 Map azalea events to `SessionEvent`, with unit tests on the pure mapping functions. Chat goes through the core sanitizer, with the sender taken only from where ADR-0008 §7 allows; kick reasons go through the core classifier input. `Tick` and server events such as `KeepAlive` only update the session's liveness timestamps (ADR-0008 §4–5).
+
+  > Note (P3.4, from group B):
+  > - **Host-thread handles.** A host thread ends when every `HostThread` clone is dropped (P3.2), so no task on the thread itself may hold a clone, or the thread never ends without `disconnect()`.
+  > - **Wiring the event bridge (P3.5).** P3.4 removes the temporary `#[expect(dead_code)]` on `mod events` and wires the producer side:
+  >   - a pump on the host thread passes each event from azalea's `LocalPlayerEvents` channel to `EventSink::forward`
+  >   - every App gets the `PacketLivenessPlugin`
+  >   - the connect timeout, `AppExit` and the account's auth result go through `EventSink::terminate`
+  >   - `disconnect()` calls `EventSink::close`, and `liveness()` reads the session's `LivenessStamps`
+  >   - the connector shares one `EventCounters` between its sessions and exposes `ignored_action_bar()` next to `dropped_chat()`
+- [x] **P3.5** 🔴 Map azalea events to `SessionEvent`, with unit tests on the pure mapping functions. Chat goes through the core sanitizer, with the sender taken only from where ADR-0008 §7 allows; kick reasons go through the core classifier input. `Tick` and server events such as `KeepAlive` only update the session's liveness timestamps (ADR-0008 §4–5).
 
   > Note (P3.5, from the group A review): **Logging chat.** Sanitized chat text keeps `\n`. Log it as a structured field (`?` or JSON), never with `%` (Display), so a server can't forge log lines.
 
@@ -1147,6 +1167,30 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Lifecycle.** `Joined` is the first `Spawn` only. A `Died` before `Joined` is held until after it.
   > - **Liveness.** Received packets are observed through `ReceiveGamePacketEvent`, so `packet-event` stays off.
   > - **Terminal signals.** Other sources inject them into the bridge (the account's auth result, the connect timeout, `AppExit`), and the first one wins.
+
+  > Note (P3.5, from group B, the user's decisions) (ADR-0011):
+  > - **Chat kinds.** The server assigns the registry ids, and they're read in vanilla's order (azalea's `ChatKindKey::ALL`): 1 is an emote, 2 an incoming whisper, 4 `/say`. Everything else is `chat`: the echo of a whisper the bot sent, team chat, unknown ids and inline chat types. A server whose data packs reorder chat types can mislabel a kind; the text and the sender don't depend on it. That's a known limit.
+  > - **Action bar.** Overlay messages are counted on their own (`ignored_action_bar`), apart from `dropped_chat`, and log nothing, so `dropped_chat` stays a signal of overload.
+  > - **System messages** keep their whole sanitized text, and their sender is never guessed (see the chat-format note under P4.1).
+  > - **Unknown azalea events** land in the mapping's catch-all and are logged at `debug`. Every azalea bump re-checks the variants (ADR-0003).
+  > - **Dead code until P3.4.** Outside the tests, nothing calls the bridge's producer side yet (the mapping, `EventSink`, the liveness plugin). So `mod events` carries a temporary `#[expect(dead_code)]`, approved by the user, in non-test builds only. P3.4 removes it.
+  > - **Shape.**
+  >   - `McEvents` is the public `SessionEvents`. Its queue follows the fake's design (a `Mutex<VecDeque>` plus `Notify`): chat is dropped at the capacity (64, `McConfig::event_capacity`), and lifecycle events always go in.
+  >   - `EventSink` maps and applies azalea's events, takes injected terminal events (`terminate`, the first one wins), learns of respawns (`respawned`) and closes the bridge.
+  >   - `LivenessStamps` are atomic offsets that never move backwards. `PacketLivenessPlugin` stamps every `ReceiveGamePacketEvent` in `Update`.
+  >   - The tests build kick reasons from JSON, through `serde_json` as a dev-dependency.
+
+  > Note (P3.5, from the group B review, the user's decisions) (ADR-0011): **Bounded rendering of server text.**
+  > - **The problem.** azalea's `FormattedText::to_string()` re-renders every argument of a translation. For an unknown key, the template is the key itself (or the JSON `fallback`), so a key like `%1$s%1$s%1$s%1$s`, nested, grows exponentially: a 507-byte system message renders to 16.7 million characters.
+  > - **The renderer.** fleet-mc renders server text itself, at all six places the mapping used `to_string()`: system chat, player and disguised names and texts, and kick reasons.
+  >   - It follows azalea-chat's `TranslatableComponent::read` rules: `%%`, `%s`, `%N$s`, known keys through `azalea_language::get`, else the fallback, else the key; a malformed template shows the key.
+  >   - It walks the text by reference with an explicit stack, never cloning a subtree.
+  >   - It stops after 4,096 characters or 16,384 steps, and reports whether it stopped. A step is a component visited, an argument substituted (whatever it renders to) or a character written, so templates of empty substitutions are paid for too.
+  > - **Cut-off chat** goes through `IncomingChat::from_parts` with `truncated = true`. Only the text counts: a cut-off sender name is just capped. A kick keeps its class, because classifying uses only the top-level key.
+  > - **Dependencies.** fleet-mc depends directly on `azalea-chat` (to name the argument type, which azalea doesn't re-export) and `azalea-language`, both `=0.16.0` and already in azalea's graph (§5).
+  > - **Every azalea bump** re-checks the renderer against azalea-chat (ADR-0003).
+
+  > Note (P3.5, from the group B review) (ADR-0011): **A dropped sink ends the session.** When the last `EventSink` clone is dropped, for example because the host thread is gone, a session that hasn't ended gets `Disconnected(SessionCrashed)`, logged at `warn`, so the actor never waits for events that can't come. Once the session ended or was closed, dropping the sink changes nothing.
 - [ ] **P3.6** 🔴 Map each `Action` to azalea calls: look, rotate, jump, sneak, swing, use item, attack facing entity (with a reach check), hotbar, respawn, chat.
 
   > Note (P3.6, from group C, the user's idea): Check whether azalea can hold right-click (use item) down continuously, the way `Sneak{on}` holds sneak. If it can, propose a `HoldUse{on}` action as an additive change to the mode model. It's a new action type, so older servers reject modes that use it (ADR-0010).
@@ -1156,6 +1200,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P3.6, from the Phase 3 plan) (ADR-0011):
   > - **Commit order.** In group D, P3.6 comes after P3.7, so its red tests run against a live server and check the effects through RCON. P3.7's "every action" scenario arrives with it.
   > - **HoldUse.** azalea 0.16.0 only has a one-shot use. Holding would send `UseItem` and later a raw `PlayerAction{ReleaseUseItem}`, for items with a use duration. This task verifies that on the test server and records the result in ADR-0011. The mode-model change is P3.9.
+
+  > Note (P3.6, from group B): **Respawn.** After the respawn, the session calls `EventSink::respawned()`, so the bot's next death is reported again (P3.5).
 - [ ] **P3.7** 🔴 Slow integration tests (`slow_*`, testcontainers + itzg, offline mode):
   - join and see the join message
   - send chat and see it echoed back
@@ -1204,6 +1250,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P4.1, from Phase 2): open question, flagged and not yet decided: fleet-proto and fleet-server also need to build a `BotSpec` (Appendix C `AssignBot`), but they may only depend on `fleet-core`.
 
   > Note (P4.1, from group B): **Conflict texts.** A bot's spec gets an optional list of kick texts that count as a duplicate login, empty by default. Some proxies kick with plain text when a human logs in; BungeeCord/Waterfall in online mode probably does. The classifier compares the sanitized kick message exactly against the list, so vanilla servers still go by translation key. The list's limits and config keys are decided here (ADR-0010).
+
+  > Note (P4.1, from Phase 3, the user's request): **Chat format, flagged and not decided.** Next to the conflict texts, a server may later get a chat format for plugin chat that arrives as system messages, such as `[CLAN] Name : message`. It extracts the sender for display only:
+  > - A parsed sender is marked as parsed from the text. Like every chat sender, it's never used for any permission or trigger decision.
+  > - *(corrected in the group B review)* Chat senders are server-attributed, not verified. azalea 0.16 never verifies chat signatures, and fleet-mc shows a Player packet's `unsigned_content`, so even a Player packet's UUID and text are only what the server claims. A feature that needs a trustworthy sender must verify the signature and use the signed body, in its own ADR.
+  > - fleet-mc keeps the whole sanitized text of system messages, so this stays possible (P3.5, ADR-0011).
 - [ ] **P4.2** 🔴 `BotActor`:
   - `tokio::select!` over the inbox (`Start`, `Stop`, `UpdateSpec`, `SendChat`, `Reset`, `Resume`), session events, timers and cancellation.
   - It executes the core `Effect`s and computes retry delays with `RetryPolicy`.
@@ -1281,6 +1332,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P4.9, from Phase 3): Also export fleet-mc's diagnostics: live and abandoned host threads, live Worlds, and dropped chat (ADR-0011).
 
+  > Note (P4.9, from Phase 3, group B): `abandoned_threads()`, `dropped_chat()` and `ignored_action_bar()` only count up, so they're counters; `live_threads()` and `live_worlds()` are gauges (ADR-0011).
+
 **Security:**
 - Every channel is bounded.
 - Chat only accepts a validated `ChatMessage`.
@@ -1307,6 +1360,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P5.1, from Phase 3): `[runtime]` gains `connect_timeout_secs` (default 30), which goes into `ConnectParams`, and `max_abandoned_threads` (default 3), which goes to `McHostPool` (Appendix A, ADR-0011).
 - [ ] **P5.2** Telemetry: pretty logs in dev and JSON in prod, an env filter, and a panic hook that logs through `tracing`.
+
+  > Note (P5.2, from Phase 3, group B review): **azalea's log targets stay at `warn`** in the default filter. azalea_client's disconnect plugin formats kick reasons at `info`, with azalea's own rendering, which grows exponentially on hostile nested translations (P3.5) and panics on a `%0$s` placeholder, since it computes `d - 1` on an unsigned digit with overflow checks on. A disabled level never formats, so neither can happen (ADR-0011).
 - [ ] **P5.3** Wiring: `McHostPool` + `AzaleaConnector` + `Fleet`, with the standalone spec source.
 
   > Note (P5.3, from Phase 3): When `McHostPool::abandoned_threads()` reaches `max_abandoned_threads`, the agent shuts down and exits with an error, so Docker restarts it (§6 row 8). The library never ends the process itself (ADR-0011).
@@ -1721,6 +1776,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P11.9, from group B): **Controls.** For paused or failed bots, the app shows Resume or Reset instead of Start and Stop (ADR-0010).
 
   > Note (P11.9, from group D, the user's request): **Promotions.** When a Member is promoted to Admin (P8.8), the app shows the existing grants on their accounts, and the server provides them, so the Owner can review and revoke them. Grants made before the promotion survive it, including one an Admin gave an alt account (ADR-0010, threat model).
+
+  > Note (P11.9, from Phase 3, the user's request): **Parsed senders.** If P4.1's per-server chat format is built, the chat console shows a sender parsed from the text visibly differently from one a player packet named. Neither is verified: azalea 0.16 doesn't verify chat signatures, so every chat sender is only what the server claims, and none drives a permission or trigger decision (ADR-0011, threat model).
 
 **DoD:** The user's real fleet runs for 24 h, managed from the app. Every event shows up live, and the logs contain no unhandled errors.
 
