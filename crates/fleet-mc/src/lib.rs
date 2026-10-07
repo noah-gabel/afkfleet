@@ -34,6 +34,7 @@ compile_error!(
 );
 
 mod account;
+mod actions;
 mod config;
 mod connector;
 mod events;

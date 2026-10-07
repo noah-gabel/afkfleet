@@ -1217,7 +1217,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Every azalea bump** re-checks the renderer against azalea-chat (ADR-0003).
 
   > Note (P3.5, from the group B review) (ADR-0011): **A dropped sink ends the session.** When the last `EventSink` clone is dropped, for example because the host thread is gone, a session that hasn't ended gets `Disconnected(SessionCrashed)`, logged at `warn`, so the actor never waits for events that can't come. Once the session ended or was closed, dropping the sink changes nothing.
-- [ ] **P3.6** 🔴 Map each `Action` to azalea calls: look, rotate, jump, sneak, swing, use item, attack facing entity (with a reach check), hotbar, respawn, chat.
+- [x] **P3.6** 🔴 Map each `Action` to azalea calls: look, rotate, jump, sneak, swing, use item, attack facing entity (with a reach check), hotbar, respawn, chat.
 
   > Note (P3.6, from group C, the user's idea): Check whether azalea can hold right-click (use item) down continuously, the way `Sneak{on}` holds sneak. If it can, propose a `HoldUse{on}` action as an additive change to the mode model. It's a new action type, so older servers reject modes that use it (ADR-0010).
 
@@ -1228,6 +1228,26 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **HoldUse.** azalea 0.16.0 only has a one-shot use. Holding would send `UseItem` and later a raw `PlayerAction{ReleaseUseItem}`, for items with a use duration. This task verifies that on the test server and records the result in ADR-0011. The mode-model change is P3.9.
 
   > Note (P3.6, from group B): **Respawn.** After the respawn, the session calls `EventSink::respawned()`, so the bot's next death is reported again (P3.5).
+
+  > Note (P3.6, from group D, the user's decisions) (ADR-0011):
+  > - **Mapping.** Each action runs in one synchronous job on the host thread.
+  >   - Components that azalea's `Client` methods would panic on (`LookDirection`, `PhysicsState`, the hit result, the entity index, the connection) are checked first; a missing one gives `NotInWorld`.
+  >   - `Turn` reads the direction, wraps the yaw to −180..180 and clamps the pitch to −90..=90.
+  >   - `AttackFacingEntity` takes azalea's target, which already respects the reach. With nothing in reach it returns `Ok` and logs at `debug`. Otherwise it writes the attack packet by hand (ADR-0008 §8), swings, and resets `TicksSinceLastAttack`.
+  >   - `respawn()` sends `PerformRespawnEvent` and tells the bridge in the same job.
+  >   - A non-finite angle is skipped, logged at `warn`, and returns `Ok`.
+  > - **Tests.** Unit tests cover the turn, the finite check and the attack packet's bytes; they were red against stubs first. The new `slow_actions_scenario` was red against P3.4's stub `perform` and is green now. It checks through RCON:
+  >   - the rotation after a look and after a turn
+  >   - the `jump` statistic
+  >   - sneaking on and off (an inline predicate)
+  >   - `SelectedItemSlot`
+  >   - a thrown snowball's `used` statistic
+  >   - a pig hurt within reach and one untouched beyond it
+  >   - a `/me` emote's echo
+  >   - full health after a respawn, and a second `Died` after a second kill
+  >
+  >   Swings are seen by a watcher bot through a test-only system *(the user's decision)*. The containment scenario's action is now a look that RCON confirms.
+  > - **HoldUse is feasible** *(a temporary probe, never committed; the user's decision)*. With a bow and arrows, `start_use_item` started drawing. Released after about 1 tick, it shot nothing; held for 25 ticks, it shot nothing yet. A raw `ServerboundPlayerAction{ReleaseUseItem}` (`pos` default, `direction` Down, `seq` 0) then shot one arrow: the bow's `used` statistic went to 1 and an arrow entity appeared. The packet encodes correctly through azalea's normal writer, so no hand-written bytes are needed. P3.9 can map `HoldUse{on}` to `start_use_item` and that release packet (ADR-0011).
 - [x] **P3.7** 🔴 Slow integration tests (`slow_*`, testcontainers + itzg, offline mode):
   - join and see the join message
   - send chat and see it echoed back
@@ -1266,6 +1286,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - fleet-mc: the mapping that P3.6 verified, with a live test.
 
   If P3.6 finds it isn't feasible, this task is closed with a note instead.
+
+  > Note (P3.9, from group D): **Feasible.** P3.6's probe held a bow for 25 ticks with one `start_use_item` and shot the arrow on a raw `ServerboundPlayerAction{ReleaseUseItem}`, sent through azalea's normal packet writer. Releasing after about 1 tick shot nothing. Items without a use duration (block and entity clicks) would still need repeated packets (ADR-0011).
 
 **Security:**
 - Credentials are never logged.

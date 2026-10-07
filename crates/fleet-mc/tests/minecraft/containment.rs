@@ -76,7 +76,14 @@ async fn slow_fault_containment_scenario() {
     )
     .await;
     // ...and acts.
-    assert_eq!(bystander.perform(GameAction::Jump).await, Ok(()));
+    let looked = bystander
+        .perform(GameAction::Look {
+            yaw: 45.0,
+            pitch: 20.0,
+        })
+        .await;
+    assert_eq!(looked, Ok(()));
+    server.sees_rotation("AfkBot2", 45.0, 20.0).await;
 
     within("the victim's teardown", victim.disconnect()).await;
     within("the bystander's teardown", bystander.disconnect()).await;

@@ -43,11 +43,12 @@ There's no support, and I don't take feature requests. Security reports are welc
     - the event bridge, which turns azalea's events into sanitized session events and never drops anything but chat
     - the account adapter, which logs in with the server-issued Minecraft token (never a Microsoft one) and never logs it. It tells a rejected token, an account the session server restricts and a session-server outage apart, so an outage is retried instead of failing the bot
     - the connector, which starts each bot's azalea session on its own thread, bounds connecting with a timeout, and tears a session down in a fixed order so nothing of it is left behind
-  - slow tests against local Minecraft servers in containers (`just test-slow`): joining, chat, kicks, reconnects, online-mode logins that must never log the token, and a crash in one bot that leaves another running
+    - the bot actions: look, turn, jump, sneak, swing, use the held item, attack what's in reach, pick a hotbar slot, respawn and chat, each checked against a real server
+  - slow tests against local Minecraft servers in containers (`just test-slow`): joining, chat, kicks, reconnects, every action, online-mode logins that must never log the token, and a crash in one bot that leaves another running
 
   [ADR-0011](docs/adr/0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md) records Phase 3's decisions, and [ADR-0012](docs/adr/0012-azalea-advisory-and-license-exceptions.md) records azalea's accepted advisories and license exceptions.
 
-**Next:** the bot actions in `fleet-mc`, proven against a real Minecraft server.
+**Next:** the clean-up test that proves a torn-down bot leaves nothing behind, and the wrap-up of Phase 3.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 

@@ -216,6 +216,25 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
 - **Pure helpers** are unit-tested: the pitch clamp after a `Turn`, the yaw wrap, skipping non-finite angles (logged), and the attack packet's bytes.
 - **Live tests** check the effects through RCON.
 - **HoldUse.** azalea 0.16.0 has only a one-shot use (`start_use_item`). Holding works by sending `UseItem` and later a raw `PlayerAction{ReleaseUseItem}`, for items with a use duration (shield, bow, food); block and entity clicks would need repeated packets. P3.6 verifies this on the test server and records the result here. **P3.9** then adds `HoldUse{on}` as its own task right after group E, or closes with a note if it isn't feasible.
+- **Built in group D** (the user's decisions, 2026-10-07):
+  - **One synchronous host job per action.** Several `Client` methods panic when a component is missing (`set_direction`, `set_crouching`, `hit_result`, `with_raw_connection_mut`), so the job first checks the component through `get_component` or `try_query_self`. A missing one gives `NotInWorld`. No read guard is held while a `Client` method runs.
+  - **Mapping.**
+    - `Look` and `Turn` use `set_direction`. `Turn` reads `LookDirection`, wraps the yaw and clamps the pitch.
+    - `Jump` is `jump`, `UseItem` is `start_use_item` (a block click when the bot looks at a block), `Sneak` is `set_crouching`, `SwingArm` triggers `SwingArmEvent`, and `SelectHotbarSlot` is `set_selected_hotbar_slot`.
+    - `AttackFacingEntity`:
+      - It takes the `HitResultComponent`, which azalea limits to the reach. Nothing in reach gives `Ok`, logged at `debug`.
+      - It writes the attack packet by hand: a `VarInt` packet ID and a `VarInt` entity ID, through `RawConnection::write_raw` (ADR-0008 §8).
+      - It swings and resets `TicksSinceLastAttack`, as azalea's own attack would.
+    - The respawn writes `PerformRespawnEvent` and calls `BridgeControl::respawned` in the same job.
+  - **Non-finite angles** are skipped before the job, logged at `warn`, and the call returns `Ok`.
+  - **Live checks** are in `slow_actions_scenario`. Swings are seen by a second bot through a test-only system added by the `fault-injection` hook, which counts `Animate` packets *(the user's decision)*. A failed `execute if` answers nothing over RCON, so "not sneaking" is checked with `execute unless`.
+  - **HoldUse: feasible** *(checked by a temporary probe, never committed, the user's decision)*. Against the 26.1 test server, with a bow and arrows:
+    1. One `start_use_item` started drawing.
+    2. A release after about 1 tick shot nothing (the control).
+    3. 25 ticks of holding shot nothing yet.
+    4. A `ServerboundPlayerAction { action: ReleaseUseItem, pos: BlockPos::default(), direction: Down, seq: 0 }` then shot one arrow. The bow's `minecraft.used` statistic went to 1, the arrows from 16 to 15, and one arrow entity appeared.
+
+    The packet encodes correctly through azalea's normal writer (`RawConnection::write`, or `Client::write_packet` on the host thread), so no hand-written bytes are needed. **P3.9** maps `HoldUse{on: true}` to `start_use_item` and `{on: false}` to that release. Items without a use duration (block and entity clicks) aren't covered. To repeat the probe, run those steps with the `fault-injection` hook adding a system that writes the release packet when a flag is set.
 
 ### Slow tests (P3.7, P3.8)
 - **Local servers only.** They use testcontainers with `itzg/minecraft-server`, offline and online mode, bound to localhost. The image and `VERSION` are the ones pinned in `deploy/compose.dev.yaml`, and a fast test asserts that the two pins match.

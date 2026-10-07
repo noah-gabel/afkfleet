@@ -12,9 +12,10 @@ use fleet_core::mc::{Liveness, SessionError, SessionHandle};
 use fleet_core::mode::GameAction;
 use tokio::sync::{oneshot, watch};
 use tokio::time;
-use tracing::debug;
+use tracing::{debug, warn};
 
 use super::driver::ClientSlot;
+use crate::actions;
 use crate::events::{BridgeControl, LivenessStamps, Phase};
 use crate::host::HostThread;
 
@@ -125,12 +126,23 @@ impl McSession {
 }
 
 impl SessionHandle for McSession {
+    /// Skips an action with a non-finite angle and logs it, as a safety net
+    /// behind mode validation (ADR-0010).
     fn perform(&self, action: GameAction) -> impl Future<Output = Result<(), SessionError>> + Send {
-        // A stub until P3.6 maps the action: it runs an empty job (group D,
-        // the user's decision).
-        self.call(move |_client| {
-            let _ = action;
-            Ok(())
+        let finite = actions::has_finite_angles(&action);
+        if !finite {
+            warn!(
+                bot_id = %self.inner.bot_id,
+                ?action,
+                "skipped a game action with a non-finite angle; mode validation should have refused it"
+            );
+        }
+        self.call(move |client| {
+            if finite {
+                actions::perform(client, action)
+            } else {
+                Ok(())
+            }
         })
     }
 
@@ -150,11 +162,10 @@ impl SessionHandle for McSession {
 
     fn respawn(&self) -> impl Future<Output = Result<(), SessionError>> + Send {
         let control = self.inner.control.clone();
-        self.call(move |_client| {
-            // A stub until P3.6 respawns the bot (group D, the user's
-            // decision). The bridge learns of it in the same job, so a death
-            // after the respawn is reported again, and one before it isn't
-            // reported twice.
+        self.call(move |client| {
+            actions::respawn(client);
+            // In the same job, so a death after the respawn is reported
+            // again, and one before it isn't reported twice (P3.5).
             control.respawned();
             Ok(())
         })
