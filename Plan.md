@@ -1249,6 +1249,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >
   >   Swings are seen by a watcher bot through a test-only system *(the user's decision)*. The containment scenario's action is now a look that RCON confirms.
   > - **HoldUse is feasible** *(a temporary probe, never committed; the user's decision)*. With a bow and arrows, `start_use_item` started drawing. Released after about 1 tick, it shot nothing; held for 25 ticks, it shot nothing yet. A raw `ServerboundPlayerAction{ReleaseUseItem}` (`pos` default, `direction` Down, `seq` 0) then shot one arrow: the bow's `used` statistic went to 1 and an arrow entity appeared. The packet encodes correctly through azalea's normal writer, so no hand-written bytes are needed. P3.9 can map `HoldUse{on}` to `start_use_item` and that release packet (ADR-0011).
+
+  > Note (P3.6, from group E, the user's decision) (ADR-0011): **The respawn step was flaky.**
+  > - **The failure.** About 4 local runs in 10 failed with "the second death didn't happen within 60s", from before group E's changes too.
+  > - **The cause, as far as the runs show.** The step killed the bot as soon as the server reported full health after the respawn. A respawned player takes no damage, not even from `/kill`, until its client says it has loaded (`PlayerLoaded`), and azalea sends that only once the bot is in a loaded chunk again.
+  > - **The fix.** The scenario's hook now also counts each time azalea adds its `HasClientLoaded` marker, and the step waits for that before the second kill. It then passed 8 runs in 8.
 - [x] **P3.7** 🔴 Slow integration tests (`slow_*`, testcontainers + itzg, offline mode):
   - join and see the join message
   - send chat and see it echoed back

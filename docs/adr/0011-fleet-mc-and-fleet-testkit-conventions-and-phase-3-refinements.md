@@ -261,6 +261,9 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
     - The respawn writes `PerformRespawnEvent` and calls `BridgeControl::respawned` in the same job.
   - **Non-finite angles** are skipped before the job, logged at `warn`, and the call returns `Ok`.
   - **Live checks** are in `slow_actions_scenario`. Swings are seen by a second bot through a test-only system added by the `fault-injection` hook, which counts `Animate` packets *(the user's decision)*. A failed `execute if` answers nothing over RCON, so "not sneaking" is checked with `execute unless`.
+  - **The respawn step waits for the bot to load** *(found in group E, the user's decision)*.
+    - About 4 local runs in 10 lost the second kill. A respawned player takes no damage, not even from `/kill`, until its client sends `PlayerLoaded`, and azalea does that only once the bot is in a loaded chunk again.
+    - The hook now also counts azalea's `HasClientLoaded` additions, and the step waits for a new one before it kills again. It then passed 8 runs in 8.
   - **HoldUse: feasible** *(checked by a temporary probe, never committed, the user's decision)*. Against the 26.1 test server, with a bow and arrows:
     1. One `start_use_item` started drawing.
     2. A release after about 1 tick shot nothing (the control).

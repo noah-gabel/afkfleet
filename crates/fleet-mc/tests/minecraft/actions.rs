@@ -3,13 +3,17 @@
 //!
 //! The server keeps no state for an arm swing, so a second bot, the watcher,
 //! counts the swing animations it receives, through a test-only system that
-//! the `fault-injection` hook adds to its App.
+//! the `fault-injection` hook adds to its App. The same hook counts when the
+//! bot tells the server it has loaded, which the respawn step waits for.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use azalea::app::Update;
+use azalea::ecs::lifecycle::Add;
 use azalea::ecs::message::MessageReader;
+use azalea::ecs::observer::On;
+use azalea::entity::HasClientLoaded;
 use azalea::packet::game::ReceiveGamePacketEvent;
 use azalea::protocol::packets::game::ClientboundGamePacket;
 use azalea::protocol::packets::game::c_animate::AnimationAction;
@@ -25,12 +29,14 @@ use crate::harness::{Mode, Server, bot, connect, is_chat, offline, wait_for, wit
 const NAME: &str = "AfkBot1";
 const WATCHER: &str = "AfkBot2";
 
-/// The bot under test, its server, and the swings its watcher has seen.
+/// The bot under test, its server, the swings its watcher has seen, and how
+/// often the bot told the server it has loaded.
 struct Scene {
     server: Server,
     session: McSession,
     events: McEvents,
     swings: Arc<AtomicUsize>,
+    loads: Arc<AtomicUsize>,
 }
 
 impl Scene {
@@ -77,13 +83,25 @@ impl Scene {
     }
 }
 
-/// An App hook that makes `watcher` count the main-hand swings it sees.
-fn count_swings_seen_by(
+/// An App hook that counts in `loads` each time `tested` tells the server
+/// it has loaded, and makes `watcher` count the main-hand swings it sees.
+fn watch_the_scene(
+    tested: BotId,
+    loads: &Arc<AtomicUsize>,
     watcher: BotId,
     swings: &Arc<AtomicUsize>,
 ) -> impl Fn(BotId, &mut azalea::app::App) + Send + Sync + 'static {
+    let loads = Arc::clone(loads);
     let swings = Arc::clone(swings);
     move |bot_id, app| {
+        if bot_id == tested {
+            // azalea adds `HasClientLoaded` when it sends `PlayerLoaded`, and
+            // removes it on a respawn.
+            let loads = Arc::clone(&loads);
+            app.add_observer(move |_: On<Add, HasClientLoaded>| {
+                loads.fetch_add(1, Ordering::SeqCst);
+            });
+        }
         if bot_id != watcher {
             return;
         }
@@ -232,7 +250,18 @@ async fn chat_command(scene: &mut Scene) {
 async fn respawn(scene: &mut Scene) {
     scene.server.rcon(&format!("kill {NAME}")).await;
     scene.died("the first death").await;
+    let loads = scene.loads.load(Ordering::SeqCst);
     assert_eq!(within("the respawn", scene.session.respawn()).await, Ok(()));
+    // The server ignores damage to a respawned player until its client says
+    // it has loaded, which azalea does only once the bot is in a loaded chunk
+    // again. A kill before that is lost (found in group E: about 4 runs in
+    // 10 failed here).
+    within("the bot loading again after the respawn", async {
+        while scene.loads.load(Ordering::SeqCst) <= loads {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
     scene
         .server
         .eventually(
@@ -249,8 +278,13 @@ async fn respawn(scene: &mut Scene) {
 async fn slow_actions_scenario() {
     let server = Server::start(Mode::Offline).await;
     let swings = Arc::new(AtomicUsize::new(0));
-    let connector = AzaleaConnector::new(&McConfig::default())
-        .with_app_hook(count_swings_seen_by(bot(2), &swings));
+    let loads = Arc::new(AtomicUsize::new(0));
+    let connector = AzaleaConnector::new(&McConfig::default()).with_app_hook(watch_the_scene(
+        bot(1),
+        &loads,
+        bot(2),
+        &swings,
+    ));
     let (session, mut events) = connect(&connector, &server, bot(1), offline(NAME)).await;
     wait_for(&mut events, "the bot's join", |event| {
         *event == SessionEvent::Joined
@@ -278,6 +312,7 @@ async fn slow_actions_scenario() {
         session,
         events,
         swings,
+        loads,
     };
 
     look_and_turn(&scene).await;
