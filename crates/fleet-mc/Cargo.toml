@@ -32,8 +32,10 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-log.workspace = true
+# The log capture for the redaction tests (ADR-0011).
+fleet-testkit.workspace = true
 rstest.workspace = true
 serde_json.workspace = true
+# The slow tests' local Minecraft servers (ADR-0011).
+testcontainers.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
-tracing-subscriber.workspace = true

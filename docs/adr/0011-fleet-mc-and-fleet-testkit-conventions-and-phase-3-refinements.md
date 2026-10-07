@@ -59,6 +59,8 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
 - **fleet-mc** *(group B review)*: `azalea-chat` and `azalea-language`, `=0.16.0` like azalea, which already depends on both, so the graph doesn't change. They're used only by the bounded renderer (P3.5): azalea doesn't re-export azalea-chat's `PrimitiveOrComponent`, the type of a translation's arguments, and the renderer looks up translation templates itself.
 - **fleet-mc, dev** *(group C, the user's approval)*: `log` 0.4.34, already in the graph through azalea and reqwest. The log capture's own test emits a `log` record to prove that records from `log`-based crates (reqwest, rustls) reach the capture.
 - *(group C)* fleet-mc also uses `secrecy`, which §5 already lists for it. The workspace entry of `reqwest` fixes the `rustls` feature, per the root manifest's TLS rule; azalea-auth already enables it, so fleet-mc's build doesn't change, and fleet-mc enables no features of its own.
+- *(group D, the user's decision)* **The log capture moves to fleet-testkit** (`fleet_testkit::log_capture`), so fleet-mc's slow tests can reach it and P9's server redaction test can reuse it. fleet-testkit gains `tracing` and `tracing-subscriber`, and `log` as a dev-dependency. fleet-mc drops `tracing-subscriber` and `log` and dev-depends on fleet-testkit. As testkit library code the capture doesn't panic: `install()` and `check_absent()` return errors, and a `SecretLeak` names only targets and counts.
+- *(group D)* **`testcontainers` 0.28.0** (§5, no features) is a fleet-mc dev-dependency for the slow tests. `cargo deny` passes with it, and it adds no duplicate crates beyond those already reported.
 
 ### Lint guards
 - **Bounded channels.** The root `clippy.toml` bans `tokio::sync::mpsc::unbounded_channel` through `disallowed-methods`.
@@ -230,6 +232,18 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
   - It joins the online-mode container and sends signed chat.
   - No error message ever includes the file's contents, format errors included; they name only the line number and the expected key.
 - **A `slow-tests` CI workflow** comes in group E: weekly and on demand, ubuntu, not a required check.
+- **Built in group D** (P3.7, the user's decisions, 2026-10-07):
+  - **One test binary,** `crates/fleet-mc/tests/minecraft/`, with a harness, the fast `pins` test and a module per scenario: offline, online and fault containment.
+    - The nextest test group `minecraft` (`max-threads = 1`) serializes the `slow_` tests.
+    - `just test-slow` turns on `fault-injection`. The containment module is `cfg`-gated on it, so `just test` still builds the binary and runs `pins`.
+  - **Containers.** `GenericImage` with the compose `tag@digest`, the dev stack's environment and `MEMORY` 1G. It waits for the image's healthcheck within 5 min. A host-config modifier binds the one mapped game port (host port 0) to `127.0.0.1` and turns `publish_all_ports` off, so RCON is never published.
+  - **RCON** runs through `exec(["rcon-cli", …])`.
+  - **Waiting.** Waits are bounded (60 s), and a failed wait shows the events the session sent meanwhile.
+  - **Found: a bot never sees its own join message.** The server broadcasts it before it adds the player. So the offline scenario's second bot sees the first one join and rejoin, as in the spike, and both bots see the first one's chat echo.
+  - **Red, then green** *(the user's decision)*. The chat steps failed against P3.4's stub `send_chat`; P3.7 wired it to `client.chat`, which also sends `/commands` (ADR-0008 §7).
+  - **Results.** All three scenarios pass in about 50 s.
+    - **Online mode:** a garbage token gives `AuthRejected` in seconds, an offline account is kicked with `unverified_username`, and the marker token never appears at any level of any target.
+    - **Containment:** a panic hooked into one session's `GameTick` ends it as `SessionCrashed`. The other session on the same pool keeps ticking, chats and acts, and both threads shut down without being abandoned.
 
 ### Closed or moved items
 - **ADR-0008 §11, "CPU without the `packet-event` feature":** closed without a measurement. fleet-mc builds without the feature, so the cost can only drop below the P1.7 numbers, and no decision depends on it.

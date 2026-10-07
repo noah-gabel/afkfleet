@@ -11,6 +11,15 @@ default-filter = "test(/(^|::)slow_/)"
 # Containers and the Minecraft server take a while to start.
 slow-timeout = { period = "60s", terminate-after = 10 }
 
+# Each slow test starts its own Minecraft container (nextest can't share one
+# between test processes), so they run one at a time (ADR-0011).
+[[profile.slow.overrides]]
+filter = "test(/(^|::)slow_/)"
+test-group = "minecraft"
+
+[test-groups]
+minecraft = { max-threads = 1 }
+
 [profile.ci]
 default-filter = "not test(/(^|::)slow_/)"
 retries = 0

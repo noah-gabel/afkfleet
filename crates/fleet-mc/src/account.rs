@@ -292,7 +292,7 @@ impl<T: Clone> Slot<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::log_capture;
+    use fleet_testkit::log_capture;
     use rstest::rstest;
     use std::sync::Arc;
     use tokio::sync::mpsc::error::TryRecvError;
@@ -595,7 +595,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn the_token_never_appears_in_the_adapters_logs() {
         const MARKER: &str = "afkfleet-redaction-marker-7f3a9c";
-        log_capture::install();
+        log_capture::install().unwrap();
         let (wrapped, _wrapped_reports) = account(online(MARKER), bot(), JOIN_TIMEOUT);
         let (bare, _bare_reports) = token_account(MARKER);
 
@@ -616,6 +616,6 @@ mod tests {
             ) > 0,
             "the adapter's own log lines weren't captured"
         );
-        log_capture::assert_absent(MARKER);
+        log_capture::check_absent(MARKER).unwrap();
     }
 }

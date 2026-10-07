@@ -138,10 +138,12 @@ impl SessionHandle for McSession {
         &self,
         message: ChatMessage,
     ) -> impl Future<Output = Result<(), SessionError>> + Send {
-        // A stub until P3.7 sends it: it runs an empty job (group D, the
-        // user's decision).
-        self.call(move |_client| {
-            drop(message);
+        // azalea sends text starting with `/` as a command (ADR-0008 §7).
+        // `ChatMessage` already keeps to azalea's limits, so nothing is
+        // dropped or cut silently. The text is only queued for the next tick,
+        // which can't fail.
+        self.call(move |client| {
+            client.chat(message.as_str());
             Ok(())
         })
     }

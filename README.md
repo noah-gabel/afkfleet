@@ -42,10 +42,12 @@ There's no support, and I don't take feature requests. Security reports are welc
     - the host pool, which gives every bot its own thread and abandons a thread that hangs
     - the event bridge, which turns azalea's events into sanitized session events and never drops anything but chat
     - the account adapter, which logs in with the server-issued Minecraft token (never a Microsoft one) and never logs it. It tells a rejected token, an account the session server restricts and a session-server outage apart, so an outage is retried instead of failing the bot
+    - the connector, which starts each bot's azalea session on its own thread, bounds connecting with a timeout, and tears a session down in a fixed order so nothing of it is left behind
+  - slow tests against local Minecraft servers in containers (`just test-slow`): joining, chat, kicks, reconnects, online-mode logins that must never log the token, and a crash in one bot that leaves another running
 
   [ADR-0011](docs/adr/0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md) records Phase 3's decisions, and [ADR-0012](docs/adr/0012-azalea-advisory-and-license-exceptions.md) records azalea's accepted advisories and license exceptions.
 
-**Next:** the rest of `fleet-mc`: the connector, the actions, and the slow tests against a real Minecraft server.
+**Next:** the bot actions in `fleet-mc`, proven against a real Minecraft server.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 
@@ -86,6 +88,7 @@ just check     # format, lints, docs, tests: run before every commit
 just ci        # everything CI runs
 just mc-up     # local offline-mode Minecraft 26.1 test server on 127.0.0.1:25565 (needs Docker)
 just mc-down   # stop it and delete its world
+just test-slow # slow tests against local Minecraft containers, one at a time (needs Docker)
 ```
 The test server runs in offline mode, so it's for local development only. RCON is enabled with a random password and isn't published; run commands with `docker compose --file deploy/compose.dev.yaml exec minecraft rcon-cli <command>`.
 `just --list` shows every recipe; [`CLAUDE.md`](CLAUDE.md) describes them and the project's working rules.

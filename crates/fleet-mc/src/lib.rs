@@ -38,8 +38,6 @@ mod config;
 mod connector;
 mod events;
 mod host;
-#[cfg(test)]
-mod log_capture;
 
 pub use config::McConfig;
 pub use connector::{AzaleaConnector, McSession};

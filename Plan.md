@@ -200,7 +200,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Serialization | `serde`, `serde_json` | 1.0.229, 1.0.151 | all | |
 | Configuration | `figment` | 0.10.19 | agent, server | TOML file + env; upstream is quiet but the crate is stable |
 | DTO & config validation | `garde` | 0.23.0 | api-types, agent, server | Domain value objects use hand-written constructors |
-| Logging / tracing | `tracing`, `tracing-subscriber` | 0.1.44, 0.3.23 | all | `env-filter`, `json`. fleet-mc has `tracing-subscriber` as a dev-dependency, to capture logs in its redaction tests (ADR-0011) |
+| Logging / tracing | `tracing`, `tracing-subscriber` | 0.1.44, 0.3.23 | all | `env-filter`, `json`. fleet-testkit's log capture uses `tracing` and `tracing-subscriber`; the redaction tests use it (ADR-0011) |
 | Metrics | `metrics`, `metrics-exporter-prometheus` | 0.24.6, 0.18.3 (dfo) | runtime, agent, server | Internal port only. The exporter's default `push-gateway` brings its own TLS stack: enable `http-listener` only |
 | IDs | `uuid` | 1.27.0, dfo | core, mc | v7, serde. fleet-mc only names `Uuid` in azalea's `AccountTrait` (ADR-0011) |
 | Time | `chrono` | 0.4.45, dfo | core, server | Always UTC. No `clock` feature in core: time is passed in |
@@ -256,9 +256,9 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Property testing | `proptest` | 1.11.0, dfo | State machine, parsers. Only `std`, which reads `PROPTEST_CASES`; no fork or timeout mode (ADR-0010) |
 | Snapshot testing | `insta` | 1.49.0 | `json` and `redactions` features, enabled by the member that uses them (fleet-core: `json`) |
 | Mocks | `mockall` | 0.15.0 | Only for interaction checks; put `#[automock]` above `#[async_trait]` |
-| Containers | `testcontainers` | 0.28.0, dfo | `itzg/minecraft-server`. The default `ring` feature turns on TLS for the Docker client, which the local socket doesn't need |
+| Containers | `testcontainers` | 0.28.0, dfo | `itzg/minecraft-server`, for fleet-mc's slow tests (P3.7). The default `ring` feature turns on TLS for the Docker client, which the local socket and the Windows named pipe don't need; no feature is enabled |
 | Time control | `tokio` `test-util` | | `start_paused`, `advance` |
-| `log` records in tests | `log` | 0.4.34 | fleet-mc dev only: its log capture's test emits a `log` record to prove that reqwest's and rustls's logs reach the redaction check through `tracing-log` (ADR-0011) |
+| `log` records in tests | `log` | 0.4.34 | fleet-testkit dev only: its log capture's test emits a `log` record to prove that reqwest's and rustls's logs reach the redaction check through `tracing-log` (ADR-0011) |
 | Fuzzing | `libfuzzer-sys`, `arbitrary` | 0.4.13, 1.4.2 | Driven by cargo-fuzz |
 
 ### Frontend (same one-library-per-concern rule)
@@ -1228,7 +1228,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **HoldUse.** azalea 0.16.0 only has a one-shot use. Holding would send `UseItem` and later a raw `PlayerAction{ReleaseUseItem}`, for items with a use duration. This task verifies that on the test server and records the result in ADR-0011. The mode-model change is P3.9.
 
   > Note (P3.6, from group B): **Respawn.** After the respawn, the session calls `EventSink::respawned()`, so the bot's next death is reported again (P3.5).
-- [ ] **P3.7** 🔴 Slow integration tests (`slow_*`, testcontainers + itzg, offline mode):
+- [x] **P3.7** 🔴 Slow integration tests (`slow_*`, testcontainers + itzg, offline mode):
   - join and see the join message
   - send chat and see it echoed back
   - perform every action without an error
@@ -1240,6 +1240,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Online mode, added.** A local online-mode container: a garbage token gives `AuthRejected` within seconds, and an offline account gives `unverified_username`. Neither uses real credentials. Azalea's full login path runs under the log-redaction check (P3.3).
   > - **Fault containment, added.** A panic injected into one session's ECS ends it as `Disconnected(SessionCrashed)`, while a second session from the same pool keeps ticking, sends chat and performs an action.
   > - **ADR-0003's bump procedure** gains the test pin.
+
+  > Note (P3.7, from group D, the user's decisions) (ADR-0011):
+  > - **Layout.** One test binary, `crates/fleet-mc/tests/minecraft/`, holds the harness, the fast `pins` test and one module per scenario. Each `slow_` scenario starts its own container, and the nextest test group `minecraft` (one thread) runs them one at a time. `just test-slow` turns on the `fault-injection` feature, which the containment module needs; it's `cfg`-gated, so the binary and `pins` build without it.
+  > - **Containers.** Each uses the compose pins (`tag@digest`) and the dev stack's environment, with `MEMORY` 1G, and waits for the image's healthcheck (5 min bound). Only the game port is published, on `127.0.0.1` and a random port, with `publish_all_ports` off, so RCON stays inside; `rcon-cli` runs through `exec`.
+  > - **Found: a bot never sees its own join message.** The server broadcasts it before adding the new player; the spike also saw it through a second bot. So the offline scenario has a watcher, AfkBot2, that sees AfkBot1 join and rejoin. Both see AfkBot1's chat echo. That deviates from the approved plan's wording ("see `AfkBot1 joined the game`"), not from this task's.
+  > - **Red, then green.** The chat steps failed against P3.4's stub `send_chat`, which P3.7 then wired to `client.chat`. All three scenarios pass in about 50 s together.
+  > - **Online mode** *(as planned)*: a garbage token ends in `AuthRejected` within seconds, and an offline account is kicked with `unverified_username`. The marker token never shows in the TRACE capture of every target.
+  > - **The log capture moved to fleet-testkit** *(the user's decision)*: `install()` and `check_absent()` return errors instead of panicking.
+  > - **Failure output.** A failed wait shows the events the session sent meanwhile.
 - [ ] **P3.8** 🔴 Clean-up test: after the full teardown from ADR-0008 §10 (not just `disconnect()`), the thread count and the number of live Worlds go back to baseline.
 
   > Note (P3.8, from the Phase 3 plan) (ADR-0011):
@@ -1250,6 +1259,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - **The user's real-account check.** A `manual_` test in its own nextest profile, run by a `just` recipe. It reads `secrets/p1.8-account.txt`, which the user creates with the archived spike's `fetch-token`, and the AI never reads it. No error message ever includes the file's contents.
   >   - **A `slow-tests` CI workflow.** Weekly and on demand; not a required check.
   >   - **The threat model's B4 section.**
+
+  > Note (P3.8, from group D): **testcontainers adds a thread.** Dropping a container from a current-thread runtime starts one process-wide cleanup thread, so the OS thread count's baseline must be taken after the container has started and been dropped once, or allow for that thread. `live_threads()` and `live_worlds()` don't count it.
 - [ ] **P3.9** 🔴 `HoldUse{on}`: hold the use button down, the way `Sneak{on}` holds sneak (the user's idea, from P3.6). It's its own branch and PR, right after group E.
   - fleet-core: an additive `Action::HoldUse{on}` and `GameAction` variant, with validation and the mode snapshots updated. It's a new tag, so older servers reject modes that use it (ADR-0010).
   - fleet-mc: the mapping that P3.6 verified, with a live test.

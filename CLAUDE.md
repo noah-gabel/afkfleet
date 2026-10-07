@@ -70,7 +70,7 @@ Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so 
 |---|---|
 | `just check` | `cargo fmt --check`, clippy (`--all-targets -D warnings`), `cargo doc --no-deps --workspace` with `RUSTDOCFLAGS="-D warnings"`, nextest default profile, doctests, the `scripts/` tests, and biome + `tsc --noEmit` once the frontend exists. **Run before saying a task is done.** |
 | `just test [crate]` | nextest for the workspace or one crate |
-| `just test-slow` | nextest `slow` profile (needs Docker: Minecraft container, compose) |
+| `just test-slow` | nextest `slow` profile with fleet-mc's test-only `fault-injection` feature, one Minecraft container at a time (needs Docker) |
 | `just cov` | cargo-llvm-cov with the coverage gates (per-crate and per-module gates are checked by a script over the JSON report) |
 | `just deny` | `cargo deny check` |
 | `just fmt` | `cargo fmt` + biome format |
@@ -179,7 +179,7 @@ fleet-server/src/
 | Desktop | Shell | `tauri` ≥ 2.11.1, `tauri-build` |
 | | Plugins | `tauri-plugin-opener`, `tauri-plugin-single-instance`, `tauri-plugin-updater` |
 | | Keychain | `keyring-core` + `windows-native-keyring-store` |
-| Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, tokio `test-util`, `log` (fleet-mc dev only, for its log capture's bridge test) |
+| Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, tokio `test-util`, `log` (fleet-testkit dev only, for its log capture's bridge test) |
 | | Fuzzing | `libfuzzer-sys`, `arbitrary` |
 
 **Frontend packages**
