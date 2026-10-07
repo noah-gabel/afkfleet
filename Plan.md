@@ -1140,7 +1140,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The log** is one `debug` line per failed join, with a fixed label, never azalea's error text.
   > - **Tests.** The join's bookkeeping takes the session-server future, so fast tests script it; the one call into azalea is covered by P3.7's online-mode scenario. The log capture also bridges `log` records (reqwest, rustls) through `tracing-log`; `log` is a new fleet-mc dev-dependency.
   > - **Dead code until P3.4.** `mod account` carries a temporary `#[expect(dead_code)]` in non-test builds, approved by the user; P3.4 removes it.
-  > - **Found:** azalea logs the chat-signing private key at `trace` (`azalea_auth::certs`). It's a known limit in the threat model, and P5.2 keeps `azalea_auth` below `trace`.
+  > - **Found:** azalea logs the chat-signing private key at `trace` (`azalea_auth::certs`). It's a known limit in the threat model. P5.2 caps `azalea_auth` at `info`, like fleet-server does (P9.3).
 - [ ] **P3.4** `AzaleaConnector` implements `MinecraftConnector`:
   - azalea's auto-reconnect and auto-respawn are **disabled**
   - connect timeout
@@ -1374,7 +1374,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P5.2, from Phase 3, group B review): **azalea's log targets stay at `warn`** in the default filter. azalea_client's disconnect plugin formats kick reasons at `info`, with azalea's own rendering, which grows exponentially on hostile nested translations (P3.5) and panics on a `%0$s` placeholder, since it computes `d - 1` on an unsigned digit with overflow checks on. A disabled level never formats, so neither can happen (ADR-0011).
 
-  > Note (P5.2, from Phase 3, group C, the user's decision): **`azalea_auth` never logs at `trace`**, even when the operator's filter asks for it. `azalea_auth::certs` logs the whole chat-signing certificate response at `trace`, private key included, in every online session. The filter caps that target below `trace`, and a test checks the cap (ADR-0011, threat model).
+  > Note (P5.2, from Phase 3, group C, the user's decisions): **`azalea_auth` is capped at `info`**, whatever the operator's filter says. `azalea_auth::certs` logs the whole chat-signing certificate response at `trace`, private key included, in every online session. It's the same cap as fleet-server's (P9.3), and a test checks it (ADR-0011, threat model).
 - [ ] **P5.3** Wiring: `McHostPool` + `AzaleaConnector` + `Fleet`, with the standalone spec source.
 
   > Note (P5.3, from Phase 3): When `McHostPool::abandoned_threads()` reaches `max_abandoned_threads`, the agent shuts down and exits with an error, so Docker restarts it (§6 row 8). The library never ends the process itself (ADR-0011).
@@ -1605,6 +1605,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - Use azalea-auth's default client ID; a custom Azure app ID would need approval from Mojang.
   - **Never** use azalea's file cache.
   - At `trace`, azalea-auth logs Microsoft access and refresh tokens. `fleet-server` caps the `azalea_auth` log level at `info`, whatever the configured filter says.
+
+  > Note (P9.3, from Phase 3, group C, the user's decisions): **The `azalea_auth` cap, in detail.**
+  > - **What it covers.** At `trace`, azalea-auth 0.16 logs the Microsoft access token, the whole token response (refresh token included), the Xbox Live and XSTS auth responses, the Minecraft auth, ownership and profile responses, and the account cache. At `debug` it logs nothing secret.
+  > - **One rule for both binaries.** fleet-server's filter caps `azalea_auth` at `info`, whatever the configured filter says. The agent has the same cap (P5.2), because azalea logs the chat-signing private key at `trace` in every online session.
+  > - **Tested.** P9's redaction test checks the cap: with the configured filter at `trace`, nothing from `azalea_auth` below `info` gets through (ADR-0011, threat model).
 - [ ] **P9.4** 🔴 Device-code flow:
   - `POST /accounts/link` returns `{flow_id, user_code, verification_uri, expires_at}`.
   - A background poller runs bounded and cancellable, with per-user and total caps.
@@ -1642,6 +1647,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Security:**
 - Refresh tokens never leave the server.
 - A test checks that logs are redacted.
+- fleet-server's log filter caps `azalea_auth` at `info`, the same cap as the agent's (P5.2), and the redaction test checks it. At `trace`, azalea-auth logs Microsoft and Minecraft tokens, the refresh token and the account cache (P9.3).
 - AAD-binding test.
 - Per-user caps on link flows.
 

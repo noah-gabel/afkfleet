@@ -146,7 +146,8 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
   - **`McConfig::session_join_timeout`** holds the 10 s default.
   - **Dead code until P3.4.** Nothing outside the tests builds an account until the connector does, so `mod account` carries a temporary `#[expect(dead_code, reason = …)]` in non-test builds, approved by the user. P3.4 removes it, as it does for `mod events`.
   - **The log capture** is installed with tracing-subscriber's `try_init()`, which also installs the `tracing-log` bridge, so `log` records from reqwest and rustls are captured under their own target (the user's addition). Its own tests prove the bridge, span fields and a failure message without the secret.
-- **azalea logs secrets at TRACE** *(found in group C, the user's decision)*. In every online session azalea fetches the chat-signing certificates with the Minecraft token, and `azalea_auth::certs::fetch_certificates` logs the whole response at `trace`, the chat-signing private key PEM included. That's a known limit (threat model). The agent's filter never lets `azalea_auth` log at `trace`, even when the operator's filter asks for it (P5.2).
+- **azalea logs secrets at TRACE** *(found in group C, the user's decision)*. In every online session azalea fetches the chat-signing certificates with the Minecraft token, and `azalea_auth::certs::fetch_certificates` logs the whole response at `trace`, the chat-signing private key PEM included. That's a known limit (threat model).
+  - *(the user's decision after review)* **Both binaries cap `azalea_auth` at `info`**, whatever the configured filter says: the agent in P5.2, fleet-server in P9.3. On fleet-server, `trace` would also log the Microsoft access token, the whole token response with the refresh token, the Xbox Live, XSTS and Minecraft auth responses, and the account cache. azalea-auth's `debug` lines carry nothing secret, but one level for both is simpler to check. P9's redaction test checks the server's cap.
 
 ### Connector (P3.4)
 - **Startup.** Variant C, with auto-reconnect and auto-respawn disabled and the single-threaded executor (ADR-0008 §1–3).
@@ -236,7 +237,7 @@ They aren't config keys yet: a fleet-mc config struct holds them, and P5 adds ke
   - **P5.1** parses `connect_timeout_secs` and `max_abandoned_threads`.
   - **P5.3** exits the agent when the pool's abandoned-thread count reaches the limit.
   - **P4.9** exports the pool's and connector's diagnostics as metrics.
-  - **P5.2** never lets `azalea_auth` log at `trace` *(group C)*.
+  - **P5.2** and **P9.3** cap `azalea_auth` at `info` *(group C)*.
   - **Every azalea bump** re-checks the three ignored advisories and removes the hickory ones once azalea uses hickory ≥ 0.26.1.
 - **Flagged, not decided** (group B, the user's request):
   - **A per-server chat format (P4.1, P11.9).** Some servers send player chat through a plugin, as system messages like `[CLAN] Name : message`. A per-server chat format, next to the per-server conflict texts, could extract the sender from such messages for display.
