@@ -57,6 +57,7 @@ pub(crate) fn has_finite_angles(action: &GameAction) -> bool {
         | GameAction::Sneak { .. }
         | GameAction::SwingArm
         | GameAction::UseItem
+        | GameAction::HoldUse { .. }
         | GameAction::AttackFacingEntity
         | GameAction::SelectHotbarSlot { .. } => true,
     }
@@ -117,6 +118,8 @@ pub(crate) fn perform(client: &Client, action: GameAction) -> Result<(), Session
             client.start_use_item();
             Ok(())
         }
+        // Wired in the next commit, with its live check (P3.9).
+        GameAction::HoldUse { .. } => Ok(()),
         GameAction::Sneak { on } => {
             require::<PhysicsState>(client)?;
             client.set_crouching(on);

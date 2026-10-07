@@ -42,6 +42,12 @@ pub enum GameAction {
     SwingArm,
     /// Use the held item, like a right-click.
     UseItem,
+    /// Hold the use button down, or let go of it. See [`Action::HoldUse`]
+    /// for what it does and what ends a hold.
+    HoldUse {
+        /// Whether the bot holds the use button from now on.
+        on: bool,
+    },
     /// Attack the entity the bot is looking at, if one is within reach.
     AttackFacingEntity,
     /// Select a hotbar slot.
@@ -198,6 +204,7 @@ fn resolve<R: Rng + ?Sized>(action: &Action, rng: &mut R) -> PlannedAction {
         Action::Sneak { on } => GameAction::Sneak { on },
         Action::SwingArm => GameAction::SwingArm,
         Action::UseItem => GameAction::UseItem,
+        Action::HoldUse { on } => GameAction::HoldUse { on },
         Action::AttackFacingEntity => GameAction::AttackFacingEntity,
         Action::SelectHotbarSlot { slot } => GameAction::SelectHotbarSlot { slot },
         Action::SendChat { ref message } => return PlannedAction::Chat(message.clone()),
@@ -411,6 +418,35 @@ mod tests {
     }
 
     #[test]
+    fn the_bow_pattern_lets_go_then_draws_again_every_interval() {
+        let mut rng = rng(1);
+        let mode = definition(vec![
+            at_start(Action::HoldUse { on: true }),
+            step(
+                Action::HoldUse { on: false },
+                every(ms(2_000), Duration::ZERO),
+            ),
+            step(
+                Action::HoldUse { on: true },
+                every(ms(2_000), Duration::ZERO),
+            ),
+        ]);
+        let hold = |on| game(GameAction::HoldUse { on });
+
+        let (mut plan, first) = ModePlan::start(&mode, start(), &mut rng);
+        assert_eq!(first.actions, [hold(true)]);
+        for n in 1..=3 {
+            assert_eq!(
+                plan.tick(after(2_000 * n), &mut rng),
+                PlanTick {
+                    actions: vec![hold(false), hold(true)],
+                    next_due: Some(after(2_000 * (n + 1))),
+                }
+            );
+        }
+    }
+
+    #[test]
     fn a_late_tick_runs_each_step_once_and_reschedules_from_now() {
         let mut rng = rng(1);
         let mode = definition(vec![step(Action::Jump, every(ms(1_000), Duration::ZERO))]);
@@ -477,6 +513,8 @@ mod tests {
     #[case::sneak(Action::Sneak { on: false }, game(GameAction::Sneak { on: false }))]
     #[case::swing_arm(Action::SwingArm, game(GameAction::SwingArm))]
     #[case::use_item(Action::UseItem, game(GameAction::UseItem))]
+    #[case::hold_use(Action::HoldUse { on: true }, game(GameAction::HoldUse { on: true }))]
+    #[case::release_use(Action::HoldUse { on: false }, game(GameAction::HoldUse { on: false }))]
     #[case::attack(Action::AttackFacingEntity, game(GameAction::AttackFacingEntity))]
     #[case::select_hotbar_slot(
         Action::SelectHotbarSlot { slot: slot(4) },
