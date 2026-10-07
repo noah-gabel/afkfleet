@@ -1,8 +1,11 @@
 //! The user's real-account check (ADR-0011): a session with a real Minecraft
-//! token joins a local online-mode server and sends signed chat. Neither the
-//! token nor a chat-signing private key may reach a log, except where
-//! azalea-auth logs the certificate response at TRACE (an accepted risk that
-//! P5.2 caps).
+//! token joins a local online-mode server, sends signed chat, then `/me`.
+//! Neither the token nor a chat-signing private key may reach a log, except
+//! where azalea-auth logs the certificate response at TRACE (an accepted risk
+//! that P5.2 caps).
+//!
+//! The session's steps only record their results. The teardown and the log
+//! checks always run, and failed steps are reported after them.
 //!
 //! **It needs the user's real credentials, so only the user runs it**, with
 //! `just test-real-account`; the AI never runs it or the `manual` profile.
@@ -18,7 +21,7 @@ use std::{fs, io};
 use fleet_core::chat::ChatKind;
 use fleet_core::disconnect::DisconnectReason;
 use fleet_core::mc::{SessionCredentials, SessionEvent, SessionEvents, SessionHandle};
-use fleet_mc::{AzaleaConnector, McConfig, McEvents};
+use fleet_mc::{AzaleaConnector, McConfig, McEvents, McSession};
 use fleet_testkit::log_capture;
 use secrecy::{ExposeSecret as _, SecretString};
 use uuid::Uuid;
@@ -34,6 +37,9 @@ const ACCOUNT_FILE: &str = concat!(
 const ACCOUNT_FILE_NAME: &str = "secrets/p1.8-account.txt";
 /// The chat the bot sends, signed.
 const CHAT: &str = "hello from the afkfleet real-account check";
+/// The `/me` command the bot sends, and the text of its echo.
+const EMOTE: &str = "/me waves from the afkfleet real-account check";
+const EMOTE_TEXT: &str = "waves from the afkfleet real-account check";
 /// What every PEM private key's header contains.
 const PRIVATE_KEY: &str = "PRIVATE KEY";
 /// Where azalea-auth 0.16.0 logs the certificate response, chat-signing
@@ -161,9 +167,13 @@ fn kind(event: &SessionEvent) -> String {
 }
 
 /// Waits for an event that satisfies `wanted`, skipping others. A failure
-/// names only `what` and the kinds of the events the session sent. A
+/// names only `what` and the kinds of the events the session sent, and a
 /// rejected token says it may have expired.
-async fn wait_quietly(events: &mut McEvents, what: &str, wanted: impl Fn(&SessionEvent) -> bool) {
+async fn wait_quietly(
+    events: &mut McEvents,
+    what: &str,
+    wanted: impl Fn(&SessionEvent) -> bool,
+) -> Result<(), String> {
     let mut seen = Vec::new();
     let mut rejected = false;
     let found = tokio::time::timeout(WITHIN, async {
@@ -177,14 +187,84 @@ async fn wait_quietly(events: &mut McEvents, what: &str, wanted: impl Fn(&Sessio
         false
     })
     .await;
-    assert!(
-        !rejected,
-        "the session server rejected the token before {what}. It may have expired: run the spike's fetch-token again right before this test (spikes/azalea/README.md)"
-    );
-    let Ok(found) = found else {
-        panic!("{what} didn't happen within {WITHIN:?}; the session sent {seen:?}");
-    };
-    assert!(found, "the session ended before {what}; it sent {seen:?}");
+    if rejected {
+        return Err(format!(
+            "the session server rejected the token before {what}. It may have expired: run the spike's fetch-token again right before this test (spikes/azalea/README.md)"
+        ));
+    }
+    match found {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(format!("the session ended before {what}; it sent {seen:?}")),
+        Err(_) => Err(format!(
+            "{what} didn't happen within {WITHIN:?}; the session sent {seen:?}"
+        )),
+    }
+}
+
+/// Sends `text` and waits for its echo: chat of `kind` with the account,
+/// `name`, as its sender and `echo` as its text.
+async fn echoed(
+    session: &McSession,
+    events: &mut McEvents,
+    what: &str,
+    (text, kind, echo): (&str, ChatKind, &str),
+    name: &str,
+) -> Result<(), String> {
+    let sent = session.send_chat(text.parse().unwrap()).await;
+    if let Err(error) = sent {
+        return Err(format!("sending {what} failed: {error}"));
+    }
+    wait_quietly(events, &format!("{what}'s echo"), |event| {
+        is_chat(event, kind, Some(name), echo)
+    })
+    .await
+}
+
+/// What the session's steps found. Each failure names only the step and
+/// kinds of events, so the steps can fail without hiding the log checks.
+struct Outcome {
+    join: Result<(), String>,
+    chat: Result<(), String>,
+    emote: Result<(), String>,
+}
+
+/// Joins, sends signed chat, then `/me`. Nothing here fails the test: the
+/// teardown and the log checks must run whatever happens (the user's
+/// decision, after a failed chat once skipped them).
+async fn session_steps(session: &McSession, events: &mut McEvents, name: &str) -> Outcome {
+    let not_tried = || Err("not tried: the bot didn't join".to_owned());
+    // 1. The session server accepts the real token, and the bot joins.
+    let join = wait_quietly(events, "the join", |event| *event == SessionEvent::Joined).await;
+    if join.is_err() {
+        return Outcome {
+            join,
+            chat: not_tried(),
+            emote: not_tried(),
+        };
+    }
+    // 2. Signed chat goes through: the server enforces secure profiles and
+    // echoes it with the account as its sender. `send_chat` waits for
+    // azalea's chat-signing session first.
+    let chat = echoed(
+        session,
+        events,
+        "the signed chat",
+        (CHAT, ChatKind::Chat, CHAT),
+        name,
+    )
+    .await;
+    // 3. `/me`: azalea sends every command unsigned, which a server that
+    // enforces secure chat may reject for a command with message arguments.
+    // Its result is checked last.
+    let emote = echoed(
+        session,
+        events,
+        "/me",
+        (EMOTE, ChatKind::Emote, EMOTE_TEXT),
+        name,
+    )
+    .await;
+    Outcome { join, chat, emote }
 }
 
 #[tokio::test]
@@ -204,31 +284,19 @@ async fn manual_real_account_scenario() {
     let server = Server::start(Mode::Online).await;
     let connector = AzaleaConnector::new(&McConfig::default());
 
-    // 1. The session server accepts the real token, and the bot joins.
+    // 1 to 3. The session's steps, which record their results.
     let (session, mut events) = connect(&connector, &server, bot(1), credentials).await;
-    wait_quietly(&mut events, "the join", |event| {
-        *event == SessionEvent::Joined
-    })
-    .await;
+    let outcome = session_steps(&session, &mut events, &name).await;
 
-    // 2. Signed chat goes through: the server enforces secure profiles and
-    // echoes it with the account as its sender.
-    let sent = session.send_chat(CHAT.parse().unwrap()).await;
-    assert_eq!(sent, Ok(()), "sending the chat failed");
-    wait_quietly(&mut events, "the signed chat's echo", |event| {
-        is_chat(event, ChatKind::Chat, Some(&name), CHAT)
-    })
-    .await;
-
-    // 3. The teardown leaves nothing behind.
+    // 4. The teardown leaves nothing behind.
     within("the teardown", session.disconnect()).await;
     assert_eq!(connector.pool().live_threads(), 0);
 
-    // 4. The token never reached a log, at any level of any target. A leak
+    // 5. The token never reached a log, at any level of any target. A leak
     // names only targets and counts.
     log_capture::check_absent(token.expose_secret()).unwrap();
 
-    // 5. A chat-signing private key reached a log only where azalea-auth
+    // 6. A chat-signing private key reached a log only where azalea-auth
     // 0.16.0 logs the certificate response at TRACE, which P5.2 caps.
     if let Err(leak) = log_capture::check_absent(PRIVATE_KEY) {
         assert!(
@@ -236,6 +304,20 @@ async fn manual_real_account_scenario() {
             "a private key reached a log outside {CERTS_TARGET}: {leak}"
         );
     }
+
+    // 7. Only now, the session's steps.
+    let failures: Vec<String> = [
+        ("join", outcome.join),
+        ("signed chat", outcome.chat),
+        ("/me", outcome.emote),
+    ]
+    .into_iter()
+    .filter_map(|(step, result)| result.err().map(|failure| format!("{step}: {failure}")))
+    .collect();
+    assert!(
+        failures.is_empty(),
+        "the log checks passed, but steps failed: {failures:#?}"
+    );
 }
 
 mod tests {
