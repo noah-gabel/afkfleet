@@ -12,4 +12,23 @@ disallowed-methods = [
     # Repeated from the root clippy.toml: channels are always bounded. azalea's two
     # mandated channels carry an approved `#[expect]` (ADR-0011).
     { path = "tokio::sync::mpsc::unbounded_channel", reason = "channels are always bounded; overload is an explicit error (CLAUDE.md, ADR-0011)", allow-invalid = true },
+
+    # Agents never receive Microsoft tokens (security rule 6): the Microsoft flows,
+    # azalea's account cache and its Microsoft accounts belong to fleet-server alone.
+    # fleet-mc joins with a server-issued Minecraft token through
+    # `azalea::auth::sessionserver` and `azalea::auth::certs` only (ADR-0011). No
+    # `allow-invalid`: a path that stops resolving after an azalea bump is reported.
+    { path = "azalea::auth::auth", reason = "Microsoft flows are fleet-server's alone; agents never receive Microsoft tokens (ADR-0011)" },
+    { path = "azalea::auth::get_ms_link_code", reason = "Microsoft flows are fleet-server's alone; agents never receive Microsoft tokens (ADR-0011)" },
+    { path = "azalea::auth::get_ms_auth_token", reason = "Microsoft flows are fleet-server's alone; agents never receive Microsoft tokens (ADR-0011)" },
+    { path = "azalea::auth::interactive_get_ms_auth_token", reason = "Microsoft flows are fleet-server's alone; agents never receive Microsoft tokens (ADR-0011)" },
+    { path = "azalea::auth::refresh_ms_auth_token", reason = "Microsoft flows are fleet-server's alone; agents never receive Microsoft tokens (ADR-0011)" },
+    { path = "azalea::auth::get_minecraft_token", reason = "Microsoft flows are fleet-server's alone; agents never receive Microsoft tokens (ADR-0011)" },
+    { path = "azalea::auth::cache::get_account_in_cache", reason = "azalea's account cache holds Microsoft tokens; agents never use it (ADR-0011)" },
+    { path = "azalea::auth::cache::set_account_in_cache", reason = "azalea's account cache holds Microsoft tokens; agents never use it (ADR-0011)" },
+    { path = "azalea::account::Account::microsoft", reason = "Microsoft accounts are fleet-server's alone; fleet-mc's account takes a server-issued Minecraft token (ADR-0011)" },
+    { path = "azalea::account::Account::microsoft_with_opts", reason = "Microsoft accounts are fleet-server's alone; fleet-mc's account takes a server-issued Minecraft token (ADR-0011)" },
+    { path = "azalea::account::Account::microsoft_with_custom_client_id_and_scope", reason = "Microsoft accounts are fleet-server's alone; fleet-mc's account takes a server-issued Minecraft token (ADR-0011)" },
+    { path = "azalea::account::Account::with_microsoft_access_token", reason = "Microsoft accounts are fleet-server's alone; fleet-mc's account takes a server-issued Minecraft token (ADR-0011)" },
+    { path = "azalea::account::Account::with_microsoft_access_token_and_custom_client_id_and_scope", reason = "Microsoft accounts are fleet-server's alone; fleet-mc's account takes a server-issued Minecraft token (ADR-0011)" },
 ]

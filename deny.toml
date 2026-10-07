@@ -15,7 +15,13 @@ all-features = true
 unmaintained = "all"
 unsound = "all"
 yanked = "deny"
-ignore = []
+# azalea's advisories, accepted by the user (ADR-0011, ADR-0012). Every azalea bump
+# re-checks them.
+ignore = [
+    { id = "RUSTSEC-2023-0071", reason = "rsa via azalea: we never decrypt with RSA; chat signing uses the blinded sign_with_rng, the handshake only encrypts with the server's public key. No fix exists; re-check at every azalea bump (ADR-0012)" },
+    { id = "RUSTSEC-2026-0118", reason = "hickory-proto 0.25 via azalea: the NSEC3 code needs hickory's DNSSEC features, which aren't compiled. Remove at the next azalea bump (ADR-0012)" },
+    { id = "RUSTSEC-2026-0119", reason = "hickory-proto 0.25 via azalea: only encoding is quadratic, and we encode only our own one-question queries for a validated ServerAddress. Remove at the next azalea bump (ADR-0012)" },
+]
 
 [licenses]
 # Every license here is compatible with GPL-3.0-or-later.
@@ -31,6 +37,12 @@ allow = [
 ]
 # The allowlist is meant for future dependencies too, so unused entries are expected.
 unused-allowed-license = "allow"
+# Two unconditional azalea dependencies, excepted per crate and version instead of
+# widening the allowlist (ADR-0011, ADR-0012). Both licenses are GPL-compatible.
+exceptions = [
+    { crate = "minecraft_folder_path@0.1.2", allow = ["Unlicense"] },
+    { crate = "socks5-impl@0.8.7", allow = ["GPL-3.0-or-later"] },
+]
 
 [licenses.private]
 # Our own crates are GPL-3.0-or-later and unpublished; the allowlist applies

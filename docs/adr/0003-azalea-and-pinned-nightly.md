@@ -57,6 +57,8 @@ One pull request changes all of these together, never one alone:
     - `hickory-proto` 0.25.2: RUSTSEC-2026-0118 and RUSTSEC-2026-0119, fixed only in 0.26.1
     - `rsa`: RUSTSEC-2023-0071 (Marvin), no fix released
   - Each one needs the user's approval (license exception or advisory ignore, with an ADR), or an azalea release that fixes it.
+
+  > Resolved by [ADR-0012](0012-azalea-advisory-and-license-exceptions.md) (Phase 3, group B): the user accepted all five. `deny.toml` ignores the three advisories and excepts the two crates by version, and every bump re-checks them.
 - **Bans and sources already pass.** azalea's HTTP client uses rustls with aws-lc-rs, so it fits ADR-0009's single provider.
 
 ## Alternatives considered

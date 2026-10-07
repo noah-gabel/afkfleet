@@ -48,6 +48,8 @@ Re-checked on 2026-10-06 against the current rustsec.org entries, and with a `ca
 
 The `deny.toml` entries land in group B, together with azalea, because cargo-deny warns about ignores that match nothing. ADR-0012 records them there.
 
+*(group B)* With azalea in the workspace, `cargo deny check` reported exactly these five items. [ADR-0012](0012-azalea-advisory-and-license-exceptions.md) records the entries; the license exceptions are pinned to the crate versions.
+
 ### Dependencies
 These crates are in the Plan.md §5 registry already; these are new uses, approved by the user:
 - **fleet-mc:** `uuid` and `reqwest` (no features). They're needed only to name `Uuid` and `reqwest::Proxy` in azalea's `AccountTrait`.
@@ -66,6 +68,13 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
   - azalea's Microsoft `Account` constructors
 
   So "agents never receive Microsoft tokens" (security rule 6) is checked by the lints, not only by review. The paths are verified by a probe, as in ADR-0010.
+
+  *(group B)* The 0.16.0 list has 13 paths, all through azalea's re-exports and without `allow-invalid`, so a path that stops resolving after a bump is reported:
+  - the six `azalea::auth` functions above
+  - `azalea::auth::cache::{get_account_in_cache, set_account_in_cache}`
+  - `azalea::account::Account::{microsoft, microsoft_with_opts, microsoft_with_custom_client_id_and_scope, with_microsoft_access_token, with_microsoft_access_token_and_custom_client_id_and_scope}`
+
+  A temporary probe referenced all 13, and clippy flagged each one; `azalea::auth::sessionserver::join` and `Account::offline` stayed allowed. The probe wasn't committed. `check_ownership` and `get_profile` take a Minecraft token, not a Microsoft one, so they aren't banned.
 - **The azalea-auth rule, clarified.** fleet-mc uses only `azalea::auth::sessionserver` and `azalea::auth::certs`, through azalea's re-export, with no direct dependency on `azalea-auth`. Microsoft flows are fleet-server's alone.
 
 ### Test kit (P3.1)

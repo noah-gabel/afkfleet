@@ -24,6 +24,11 @@ repository = "https://github.com/noah-gabel/afkfleet"
 # Workspace crates, by path (unpublished, so no version).
 fleet-core = { path = "crates/fleet-core" }
 
+# azalea: exact pin (ADR-0003), fleet-mc only. Without default features: `log` would
+# add Bevy's LogPlugin to every App, and `packet-event` floods the event channel
+# (ADR-0008 §4). fleet-mc enables `online-mode`.
+azalea = { version = "=0.16.0", default-features = false }
+
 # backon: without default features only fastrand is left; the defaults pull in tokio.
 backon = { version = "1.6.0", default-features = false }
 # chrono: no `clock`/`now`, because fleet-core takes time as a parameter (ADR-0010).
