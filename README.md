@@ -16,7 +16,7 @@ afkfleet is **a hobby project** I'm building for my friends with Claude Code. I 
 There's no support, and I don't take feature requests. Security reports are welcome, though: see [SECURITY.md](SECURITY.md).
 
 ## Status
-**Phase 3 (azalea adapter and test kit) is in progress.** The product itself isn't runnable yet. What exists:
+**Phase 3 (azalea adapter and test kit) is nearly done:** only P3.9, holding the use button, is left. The product itself isn't runnable yet. What exists:
 - **From Phase 0:**
   - the Cargo workspace with all lints and the pinned toolchain
   - the quality gates: formatting, clippy, docs, tests, coverage gates, cargo-deny, Biome
@@ -44,11 +44,13 @@ There's no support, and I don't take feature requests. Security reports are welc
     - the account adapter, which logs in with the server-issued Minecraft token (never a Microsoft one) and never logs it. It tells a rejected token, an account the session server restricts and a session-server outage apart, so an outage is retried instead of failing the bot
     - the connector, which starts each bot's azalea session on its own thread, bounds connecting with a timeout, and tears a session down in a fixed order so nothing of it is left behind
     - the bot actions: look, turn, jump, sneak, swing, use the held item, attack what's in reach, pick a hotbar slot, respawn and chat, each checked against a real server
-  - slow tests against local Minecraft servers in containers (`just test-slow`): joining, chat, kicks, reconnects, every action, online-mode logins that must never log the token, and a crash in one bot that leaves another running
+  - slow tests against local Minecraft servers in containers (`just test-slow`, and weekly on GitHub): joining, chat, kicks, reconnects, every action, online-mode logins that must never log the token, a crash in one bot that leaves another running, and a clean-up test that proves every way a bot's session ends leaves no thread and no World behind
+  - a real-account check that only you run (`just test-real-account`): your real token joins a local online-mode server, sends signed chat, and never reaches a log
+  - the threat model's analysis of what a hostile Minecraft server can do, with the test behind each mitigation ([`docs/threat-model.md`](docs/threat-model.md), B4)
 
   [ADR-0011](docs/adr/0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md) records Phase 3's decisions, and [ADR-0012](docs/adr/0012-azalea-advisory-and-license-exceptions.md) records azalea's accepted advisories and license exceptions.
 
-**Next:** the clean-up test that proves a torn-down bot leaves nothing behind, and the wrap-up of Phase 3.
+**Next:** P3.9, a `HoldUse` action that holds the use button down (for example to draw a bow), the last task of Phase 3. Then Phase 4, the bot runtime.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 

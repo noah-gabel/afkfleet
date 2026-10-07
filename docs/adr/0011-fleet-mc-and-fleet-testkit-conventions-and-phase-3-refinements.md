@@ -269,6 +269,34 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
   - **Results.** All three scenarios pass in about 50 s.
     - **Online mode:** a garbage token gives `AuthRejected` in seconds, an offline account is kicked with `unverified_username`, and the marker token never appears at any level of any target.
     - **Containment:** a panic hooked into one session's `GameTick` ends it as `SessionCrashed`. The other session on the same pool keeps ticking, chats and acts, and both threads shut down without being abandoned.
+- **Built in group E** (P3.8 and the wrap-up, the user's decisions, 2026-10-07):
+  - **The leak test,** `slow_teardown_scenario`, runs one warm-up cycle and three measured ones. Each cycle puts four bots online at once and ends them each way a session can end:
+    - two with the full teardown
+    - one kicked through RCON before its `disconnect()`
+    - one whose handles are all dropped without `disconnect()` (the actor-panic path, see "Host pool")
+
+    The full teardown is `McSession::disconnect()`, which follows ADR-0008 §10. P3.8's "not just `disconnect()`" means azalea's `Client::disconnect()`.
+  - **Checks.**
+    - After the warm-up and after every cycle, `live_threads()` and `live_worlds()` are **0**: they count only fleet-mc's own threads and Worlds. No thread may be abandoned.
+    - **On Linux,** the OS thread count from `/proc/self/status` must reach **at most** the baseline, within 30 s. The baseline is taken after the warm-up, once no host thread is left in the OS's list. That's longer than tokio's 10 s keep-alive, so an idle blocking-pool thread that existed at the baseline can come and go without failing the test.
+    - Every check runs while the container is up, so testcontainers' cleanup thread never counts.
+  - **Red runs.**
+    - Against a temporary, uncommitted break (the driver kept a `Client` clone), the scenario failed with "every World being freed after the warm-up didn't happen within 60s".
+    - In CI on Linux, a temporary commit parked one thread after the baseline.
+      - **The first run passed when it had to fail.** fleet-mc counts a host thread as ended just before its OS thread exits, so a warm-up thread still exiting inflated the baseline and hid the parked one.
+      - **The fix:** the baseline is taken only once no thread named `mc-…` is left in `/proc/self/task`. A failed check shows the threads by name, now and at the baseline.
+      - **The next run failed as it should:** "8 OS threads … more than the 7 after the warm-up", the extra one under the test thread's name. The revert passed.
+      - **The 7 baseline threads** are the main and test threads, Bevy's four pool threads and async-compat's runtime thread.
+    - The Linux run before merge used a temporary `push` trigger on the branch, removed before the PR was opened, since the PR's description can't be edited once it's open.
+  - **The real-account check,** `manual_real_account_scenario`, joins the online-mode container with the user's real token, sends signed chat and waits for its echo, and tears down. Then:
+    - the token must not appear in the capture, at any level of any target
+    - `PRIVATE KEY` may appear only under `azalea_auth::certs`, whose `fetch_certificates` logs the certificate response at `trace` in azalea-auth 0.16.0 (the accepted risk P5.2 caps). Any other target fails
+  - **Only the user runs it.** Only the nextest `manual` profile includes `manual_` tests, and `just test-real-account` runs it. CLAUDE.md says the AI never runs either.
+    - The file is read straight into a `SecretString` and parsed strictly: `name=`, `uuid=` and `token=` in `fetch-token`'s order, with CRLF, trailing empty lines and spaces accepted. Errors name only a line number and the expected key.
+    - A failed wait names only the step and the kinds of events.
+    - `fetch-token` writes no expiry, so a rejected join says the token may have expired and to fetch it again. The README says to fetch it right before running.
+  - **The `slow-tests` workflow** (`.github/workflows/slow-tests.yml`) runs `just test-slow` on ubuntu, Mondays at 07:17 UTC and on demand. It has a 60 min timeout and isn't a required check.
+  - **The threat model's B4 section** adds two accepted risks: Minecraft servers aren't authenticated, and a server can grow a bot's memory.
 
 ### Closed or moved items
 - **ADR-0008 §11, "CPU without the `packet-event` feature":** closed without a measurement. fleet-mc builds without the feature, so the cost can only drop below the P1.7 numbers, and no decision depends on it.
@@ -294,6 +322,7 @@ They aren't config keys yet: a fleet-mc config struct holds them, and P5 adds ke
   - **P5.3** exits the agent when the pool's abandoned-thread count reaches the limit.
   - **P4.9** exports the pool's and connector's diagnostics as metrics.
   - **P5.2** and **P9.3** cap `azalea_auth` at `info` *(group C)*.
+  - **P12.2's** memory limit on the agent container also bounds the World a hostile server can grow *(group E, threat model)*.
   - **Every azalea bump** re-checks the three ignored advisories and removes the hickory ones once azalea uses hickory ≥ 0.26.1.
 - **Flagged, not decided** (group B, the user's request):
   - **A per-server chat format (P4.1, P11.9).** Some servers send player chat through a plugin, as system messages like `[CLAN] Name : message`. A per-server chat format, next to the per-server conflict texts, could extract the sender from such messages for display.

@@ -1270,7 +1270,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Online mode** *(as planned)*: a garbage token ends in `AuthRejected` within seconds, and an offline account is kicked with `unverified_username`. The marker token never shows in the TRACE capture of every target.
   > - **The log capture moved to fleet-testkit** *(the user's decision)*: `install()` and `check_absent()` return errors instead of panicking.
   > - **Failure output.** A failed wait shows the events the session sent meanwhile.
-- [ ] **P3.8** 🔴 Clean-up test: after the full teardown from ADR-0008 §10 (not just `disconnect()`), the thread count and the number of live Worlds go back to baseline.
+- [x] **P3.8** 🔴 Clean-up test: after the full teardown from ADR-0008 §10 (not just `disconnect()`), the thread count and the number of live Worlds go back to baseline.
 
   > Note (P3.8, from the Phase 3 plan) (ADR-0011):
   > - **Baseline.** Taken after a warm-up join (P1.9).
@@ -1282,6 +1282,34 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - **The threat model's B4 section.**
 
   > Note (P3.8, from group D): **testcontainers adds a thread.** Dropping a container from a current-thread runtime starts one process-wide cleanup thread, so the OS thread count's baseline must be taken after the container has started and been dropped once, or allow for that thread. `live_threads()` and `live_worlds()` don't count it.
+
+  > Note (P3.8, from group E, the user's decisions) (ADR-0011):
+  > - **"The full teardown"** is `McSession::disconnect()`, which follows ADR-0008 §10. "Not just `disconnect()`" means azalea's `Client::disconnect()`.
+  > - **The scenario.** `slow_teardown_scenario` runs one warm-up cycle and three measured ones. Each cycle puts four bots online at once and ends them each way a session can end:
+  >   - two with the full teardown
+  >   - one kicked through RCON before its `disconnect()`
+  >   - one whose handles are all dropped without `disconnect()` (P3.2)
+  > - **Checks.**
+  >   - After the warm-up and after every cycle, `live_threads()` and `live_worlds()` are 0 (they count only fleet-mc's own), and nothing is abandoned.
+  >   - On Linux, the OS thread count reaches at most the baseline, within 30 s, longer than tokio's 10 s blocking-thread keep-alive. The baseline is taken after the warm-up, once no host thread is left in the OS's list.
+  >   - Every check runs while the container is up, so the cleanup thread above never counts.
+  > - **Red runs.**
+  >   - A temporary, uncommitted break (the driver kept a `Client` clone) failed it on the Worlds.
+  >   - In CI on Linux, a temporary commit parked one thread after the baseline. The run used a temporary `push` trigger on the branch, removed before the PR opened.
+  > - **Found by that run: the baseline hid the parked thread.**
+  >   - The first run passed when it had to fail. fleet-mc counts a host thread as ended just before its OS thread exits, so a warm-up thread that was still exiting inflated the baseline.
+  >   - The baseline is now taken only once no thread named `mc-…` is left in `/proc/self/task`, and a failed check shows the threads by name.
+  >   - The next run failed as it should ("8 OS threads … more than the 7 after the warm-up", the extra one under the test thread's name), and the revert passed.
+
+  > Note (Phase 3 wrap-up, group E, the user's decisions) (ADR-0011):
+  > - **The real-account check.**
+  >   - `manual_real_account_scenario` joins the online-mode container with the user's real token, sends signed chat and sees its echo, and tears down.
+  >   - The token must not appear in any log, and `PRIVATE KEY` only under `azalea_auth::certs` (azalea-auth 0.16.0 logs the certificate response at `trace`, which P5.2 caps).
+  >   - Only the nextest `manual` profile includes `manual_` tests. Only the user runs `just test-real-account` (CLAUDE.md).
+  >   - Errors name only a line number and the expected key, and a failed wait names only the step and event kinds. A rejected token says it may have expired, since `fetch-token` writes no expiry.
+  > - **The `slow-tests` workflow** runs weekly (Mondays, 07:17 UTC) and on demand, on ubuntu; it isn't a required check.
+  > - **The threat model's B4 section** is written. It adds two accepted risks: Minecraft servers aren't authenticated, and a server can grow a bot's memory.
+  > - **The Phase 3 DoD** is checked in group E and again in P3.9's PR, which finishes the phase.
 - [ ] **P3.9** 🔴 `HoldUse{on}`: hold the use button down, the way `Sneak{on}` holds sneak (the user's idea, from P3.6). It's its own branch and PR, right after group E.
   - fleet-core: an additive `Action::HoldUse{on}` and `GameAction` variant, with validation and the mode snapshots updated. It's a new tag, so older servers reject modes that use it (ADR-0010).
   - fleet-mc: the mapping that P3.6 verified, with a live test.
