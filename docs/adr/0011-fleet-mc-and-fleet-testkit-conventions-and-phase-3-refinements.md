@@ -56,6 +56,7 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
 - **fleet-mc, dev:** `tracing-subscriber` (the log-redaction tests) and `rstest`.
 - **fleet-testkit:** `tokio` (`sync`, `time`), for its channels and its paused-time liveness stamps.
 - **`tokio-util`** (Phase 3's "Introduces" line) is added only if a task really needs it.
+- **fleet-mc** *(group B review)*: `azalea-chat` and `azalea-language`, `=0.16.0` like azalea, which already depends on both, so the graph doesn't change. They're used only by the bounded renderer (P3.5): azalea doesn't re-export azalea-chat's `PrimitiveOrComponent`, the type of a translation's arguments, and the renderer looks up translation templates itself.
 
 ### Lint guards
 - **Bounded channels.** The root `clippy.toml` bans `tokio::sync::mpsc::unbounded_channel` through `disallowed-methods`.
@@ -164,6 +165,15 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
   - **Liveness stamps** are atomic offsets from the session's start, so they never move backwards. A Bevy plugin stamps every `ReceiveGamePacketEvent` in `Update`, as a closure system that holds the session's stamps.
   - **Dead code until P3.4.** Outside the tests, nothing calls the producer side (the mapping, the sink and the liveness plugin) until the connector does. The user approved a temporary `#[expect(dead_code, reason = …)]` on `mod events`, in non-test builds only. P3.4 removes it, and the expectation fails as soon as everything is used.
   - **Test values.** Kick reasons are built from JSON with `serde_json`, a dev-dependency, since azalea doesn't re-export `TranslatableComponent`.
+- **Bounded rendering of server text** *(group B review, the user's decisions)*:
+  - **The problem.** azalea's `FormattedText::to_string()` clones and re-renders every argument of a translation. For an unknown key, the template is the key itself, or the JSON `fallback`, and each `%1$s` re-renders its argument. So nesting grows exponentially: a 507-byte system message renders to 16.7 million characters.
+  - **The renderer.** fleet-mc renders server text itself, wherever the mapping used `to_string()` (six places).
+    - It follows azalea-chat 0.16's `TranslatableComponent::read` rules: `%%` is `%`; `%s` is the next argument; `%N$s` is argument N (one digit) and leaves the `%s` count alone; a missing argument is empty; any other `%` is written as it is; a `%` and a digit without `$s` makes the template invalid, and the translation shows its key. The template is `azalea_language::get(key)`, else the fallback, else the key.
+    - It walks the text by reference, with an explicit stack instead of recursion, so hostile nesting can't exhaust the host thread's stack, and it never clones a subtree.
+    - It stops after 4,096 characters or 16,384 steps, and reports whether it stopped. A step is a component visited, an argument substituted (whatever it renders to) or a character written. Every template character is either written or part of a placeholder, so the budget bounds all the work.
+    - Tests compare it with azalea-chat's own rendering on ordinary text.
+  - **Cut-off chat** goes through `IncomingChat::from_parts` with `truncated = true`. Only a cut-off text counts; a cut-off sender name is only capped. A kick's class comes from its top-level key, so cutting off its text never changes it.
+  - **azalea still renders in two places we don't control:** its disconnect plugin formats kick reasons at `info`, and its own `read` panics on `%0$s` with overflow checks on. So the agent's default log filter keeps azalea's targets at `warn` (P5.2).
 
 ### Actions (P3.6)
 - **Pure helpers** are unit-tested: the pitch clamp after a `Turn`, the yaw wrap, skipping non-finite angles (logged), and the attack packet's bytes.

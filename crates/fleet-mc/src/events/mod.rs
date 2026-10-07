@@ -11,9 +11,12 @@
 //!   [`McEvents`] is its consumer side.
 //! - `liveness` holds the session's tick and packet stamps. Ticks and received
 //!   packets only stamp liveness; they're never queued.
+//! - `render` turns server text into plain text within a fixed budget, since
+//!   azalea's own rendering of nested translations grows exponentially.
 
 mod bridge;
 mod liveness;
 mod map;
+mod render;
 
 pub use bridge::McEvents;

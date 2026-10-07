@@ -1364,6 +1364,8 @@ name = "fleet-mc"
 version = "0.1.0"
 dependencies = [
  "azalea",
+ "azalea-chat",
+ "azalea-language",
  "fleet-core",
  "rstest",
  "serde_json",

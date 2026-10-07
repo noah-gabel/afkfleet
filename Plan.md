@@ -184,6 +184,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Concern | Crate | Version | Used in | Notes |
 |---|---|---|---|---|
 | Minecraft protocol & client | `azalea` | `=0.16.0` (+mc26.1) | fleet-mc | Needs nightly (ADR-0003). Disable its `AutoReconnectPlugin` and `AutoRespawnPlugin`. Runs only inside a `LocalSet` |
+| Minecraft chat components & translations | `azalea-chat`, `azalea-language` | `=0.16.0` (+mc26.1) | fleet-mc | Already in azalea's graph at the same pin. Only for fleet-mc's bounded renderer of server text: it names `PrimitiveOrComponent`, which azalea doesn't re-export, and looks up translation templates, because azalea's own rendering grows exponentially (ADR-0011). Bumped together with azalea |
 | Microsoft / Minecraft auth | `azalea-auth` | `=0.16.0` (+mc26.1) | fleet-server | Device-code flow. Never use its file cache. fleet-mc reaches only `azalea::auth::sessionserver` and `certs`, through azalea's re-export, never the Microsoft flows; its clippy config bans them (ADR-0011) |
 | Async runtime | `tokio` | 1.53.2 | runtime, mc, testkit, agent, server, client | `test-util` feature in dev. Clippy bans `unbounded_channel`; azalea's two mandated channels are the only exceptions (ADR-0011) |
 | Cancellation, task tracking | `tokio-util` | 0.7.19 | runtime, mc, agent, server | `CancellationToken`, `TaskTracker` |
@@ -1176,6 +1177,16 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - `EventSink` maps and applies azalea's events, takes injected terminal events (`terminate`, the first one wins), learns of respawns (`respawned`) and closes the bridge.
   >   - `LivenessStamps` are atomic offsets that never move backwards. `PacketLivenessPlugin` stamps every `ReceiveGamePacketEvent` in `Update`.
   >   - The tests build kick reasons from JSON, through `serde_json` as a dev-dependency.
+
+  > Note (P3.5, from the group B review, the user's decisions) (ADR-0011): **Bounded rendering of server text.**
+  > - **The problem.** azalea's `FormattedText::to_string()` re-renders every argument of a translation. For an unknown key, the template is the key itself (or the JSON `fallback`), so a key like `%1$s%1$s%1$s%1$s`, nested, grows exponentially: a 507-byte system message renders to 16.7 million characters.
+  > - **The renderer.** fleet-mc renders server text itself, at all six places the mapping used `to_string()`: system chat, player and disguised names and texts, and kick reasons.
+  >   - It follows azalea-chat's `TranslatableComponent::read` rules: `%%`, `%s`, `%N$s`, known keys through `azalea_language::get`, else the fallback, else the key; a malformed template shows the key.
+  >   - It walks the text by reference with an explicit stack, never cloning a subtree.
+  >   - It stops after 4,096 characters or 16,384 steps, and reports whether it stopped. A step is a component visited, an argument substituted (whatever it renders to) or a character written, so templates of empty substitutions are paid for too.
+  > - **Cut-off chat** goes through `IncomingChat::from_parts` with `truncated = true`. Only the text counts: a cut-off sender name is just capped. A kick keeps its class, because classifying uses only the top-level key.
+  > - **Dependencies.** fleet-mc depends directly on `azalea-chat` (to name the argument type, which azalea doesn't re-export) and `azalea-language`, both `=0.16.0` and already in azalea's graph (§5).
+  > - **Every azalea bump** re-checks the renderer against azalea-chat (ADR-0003).
 - [ ] **P3.6** 🔴 Map each `Action` to azalea calls: look, rotate, jump, sneak, swing, use item, attack facing entity (with a reach check), hotbar, respawn, chat.
 
   > Note (P3.6, from group C, the user's idea): Check whether azalea can hold right-click (use item) down continuously, the way `Sneak{on}` holds sneak. If it can, propose a `HoldUse{on}` action as an additive change to the mode model. It's a new action type, so older servers reject modes that use it (ADR-0010).
@@ -1345,6 +1356,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P5.1, from Phase 3): `[runtime]` gains `connect_timeout_secs` (default 30), which goes into `ConnectParams`, and `max_abandoned_threads` (default 3), which goes to `McHostPool` (Appendix A, ADR-0011).
 - [ ] **P5.2** Telemetry: pretty logs in dev and JSON in prod, an env filter, and a panic hook that logs through `tracing`.
+
+  > Note (P5.2, from Phase 3, group B review): **azalea's log targets stay at `warn`** in the default filter. azalea_client's disconnect plugin formats kick reasons at `info`, with azalea's own rendering, which grows exponentially on hostile nested translations (P3.5) and panics on a `%0$s` placeholder, since it computes `d - 1` on an unsigned digit with overflow checks on. A disabled level never formats, so neither can happen (ADR-0011).
 - [ ] **P5.3** Wiring: `McHostPool` + `AzaleaConnector` + `Fleet`, with the standalone spec source.
 
   > Note (P5.3, from Phase 3): When `McHostPool::abandoned_threads()` reaches `max_abandoned_threads`, the agent shuts down and exits with an error, so Docker restarts it (§6 row 8). The library never ends the process itself (ADR-0011).

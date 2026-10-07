@@ -12,6 +12,8 @@ workspace = true
 
 [dependencies]
 azalea = { workspace = true, features = ["online-mode"] }
+azalea-chat.workspace = true
+azalea-language.workspace = true
 fleet-core.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }

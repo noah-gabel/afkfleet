@@ -37,13 +37,14 @@ The project needs a reproducible toolchain: the same compiler for every develope
 ### Bump procedure (Minecraft version upgrade)
 One pull request changes all of these together, never one alone:
 1. **azalea:** pick the new azalea release on crates.io and note its Minecraft version.
-2. **Pins:** update `azalea`/`azalea-auth` in Plan.md §5, `Cargo.toml` (once used) and `spikes/toolchain-check/Cargo.toml`.
+2. **Pins:** update `azalea`/`azalea-auth` (and `azalea-chat`/`azalea-language`, which fleet-mc uses directly) in Plan.md §5, `Cargo.toml` (once used) and `spikes/toolchain-check/Cargo.toml`.
 3. **Nightly:** start with the newest nightly whose `rustfmt`, `clippy` and `llvm-tools-preview` exist for `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu`. If azalea fails to build, bisect back to the newest nightly that works, counting only the azalea error as "bad".
 4. **Test server:** update `VERSION` (and, if needed, the pinned `itzg/minecraft-server` image) in `deploy/compose.dev.yaml` (from P1.1).
 5. **Verify:**
    - build `spikes/toolchain-check` on Windows and in a Linux container
    - run `cargo deny` against its graph
    - re-check azalea's `Event` variants against fleet-mc's mapping (`crates/fleet-mc/src/events/map.rs`): a new variant lands in the catch-all and is only logged at `debug` (ADR-0011)
+   - re-check fleet-mc's renderer (`crates/fleet-mc/src/events/render.rs`) against azalea-chat's `TranslatableComponent::read` and `FormattedText` rendering; its tests compare the two on ordinary text (ADR-0011)
    - run `just ci` and `just test-slow`
 6. **Record:** update this ADR, or supersede it, and `docs/runbook.md` (from P12).
 

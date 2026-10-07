@@ -28,6 +28,11 @@ fleet-core = { path = "crates/fleet-core" }
 # add Bevy's LogPlugin to every App, and `packet-event` floods the event channel
 # (ADR-0008 §4). fleet-mc enables `online-mode`.
 azalea = { version = "=0.16.0", default-features = false }
+# azalea-chat and azalea-language: the same exact pin as azalea, which already depends on
+# both. fleet-mc only, for its bounded renderer of server text: azalea doesn't re-export
+# the chat argument type, and its own rendering grows exponentially (ADR-0011).
+azalea-chat = "=0.16.0"
+azalea-language = "=0.16.0"
 
 # backon: without default features only fastrand is left; the defaults pull in tokio.
 backon = { version = "1.6.0", default-features = false }

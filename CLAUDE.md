@@ -137,6 +137,7 @@ fleet-server/src/
 | Area | Concern | Crate |
 |---|---|---|
 | Domain & runtime | Minecraft | `azalea` (fleet-mc only) |
+| | Chat components, translations | `azalea-chat`, `azalea-language` (fleet-mc only, for its bounded renderer) |
 | | MS auth | `azalea-auth` (server only) |
 | | Async runtime | `tokio` |
 | | Cancellation | `tokio-util` (`CancellationToken`, `TaskTracker`) |
