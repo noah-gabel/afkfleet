@@ -258,6 +258,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Mocks | `mockall` | 0.15.0 | Only for interaction checks; put `#[automock]` above `#[async_trait]` |
 | Containers | `testcontainers` | 0.28.0, dfo | `itzg/minecraft-server`. The default `ring` feature turns on TLS for the Docker client, which the local socket doesn't need |
 | Time control | `tokio` `test-util` | | `start_paused`, `advance` |
+| `log` records in tests | `log` | 0.4.34 | fleet-mc dev only: its log capture's test emits a `log` record to prove that reqwest's and rustls's logs reach the redaction check through `tracing-log` (ADR-0011) |
 | Fuzzing | `libfuzzer-sys`, `arbitrary` | 0.4.13, 1.4.2 | Driven by cargo-fuzz |
 
 ### Frontend (same one-library-per-concern rule)
@@ -302,8 +303,8 @@ The bots run as one tokio task each, which is the user's decision. azalea needs 
 
 | # | Fault | Detected by | Recovery |
 |---|---|---|---|
-| 1 | Connection drop / transient kick | `Disconnected` / `ConnectionFailed` event | `Backoff` with exponential jittered delay (default 5 s → 5 min) → reconnect |
-| 2 | Kick that won't heal (banned, not whitelisted, wrong version) | `DisconnectReason` classifier | `Failed(reason)`, alert the user, no retry until **Reset** |
+| 1 | Connection drop / transient kick / session server unavailable | `Disconnected` / `ConnectionFailed` event; the account's join report (ADR-0011) | `Backoff` with exponential jittered delay (default 5 s → 5 min) → reconnect |
+| 2 | Kick that won't heal (banned, not whitelisted, wrong version), or an account the session server refuses (banned from multiplayer, multiplayer disabled) | `DisconnectReason` classifier | `Failed(reason)`, alert the user, no retry until **Reset** |
 | 3 | Duplicate login (a human logged into the account) | Classifier | `Paused`. **Never fight the human.** The user resumes it. |
 | 4 | Flapping server | Circuit breaker (N failures within a window) | Open circuit with a long cool-down, then one half-open attempt |
 | 5 | Expired or invalid session token | Auth error on join | Request one fresh token. If it fails again: `Failed(Auth)` and account marked "re-auth required" |
@@ -1122,7 +1123,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Threads are never joined.** Joining would block the caller's runtime; the exit signal, sent last by the thread, says when it has ended.
 
   > Note (P3.2, from the group B review) (ADR-0011): **Threads dropped while hung count too.** When the last `HostThread` handle drops before a shutdown decided the outcome, the pool keeps the thread as an orphan: its exit signal and a deadline, the shutdown timeout after the drop. `spawn()` and `abandoned_threads()` settle the orphans first, without blocking or spawning: one that has ended is forgotten, and one past its deadline is counted as abandoned and logged at `warn`. So a hung session whose owner never called `disconnect()` still counts against the limit.
-- [ ] **P3.3** Account adapter: a custom `AccountTrait` for server-issued `SessionCredentials`, and offline accounts for dev and tests.
+- [x] **P3.3** Account adapter: a custom `AccountTrait` for server-issued `SessionCredentials`, and offline accounts for dev and tests.
 
   > Note (P3.3, from the Phase 3 plan) (ADR-0011):
   > - **Session-server errors.** `InvalidSession` and `ForbiddenOperation` give `AuthRejected`. `Banned` and `MultiplayerDisabled` give a new permanent reason. An outage, HTTP error, rate limit, unknown response or timeout gives a new transient reason. That's a small fleet-core change in this task, which amends ADR-0010.
@@ -1130,6 +1131,16 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **`join()`** runs on Bevy's IO pool, not on the host thread. It's bounded by a timeout, because azalea's HTTP client has none, and it reports to the session over a bounded channel.
   > - **The adapter doesn't check `expires_at`.**
   > - **Log redaction.** The tests capture every level from every target, azalea included, and assert that the token never appears. A failing assertion reports only the target and a count, never the captured lines or the token.
+
+  > Note (P3.3, from group C, the user's decisions) (ADR-0010, ADR-0011):
+  > - **New reasons.** `AccountRestricted{restriction}` (`Banned`, `MultiplayerDisabled`) is permanent, with the new kinds `PermanentKind::AccountBanned` and `MultiplayerDisabled`. `SessionServerFailed{failure}` (`Unreachable`, `RateLimited`, `TimedOut`, `Unexpected`) is transient.
+  > - **`FailReason::Kicked` is now `FailReason::Permanent`**, since a session-server refusal isn't a kick.
+  > - **On our timeout**, `join()` returns azalea's `Unknown("no answer within the session-join timeout")`. The timeout is `McConfig::session_join_timeout` (10 s).
+  > - **Reports** go over a bounded channel of one, written with `try_send`: `account(credentials, bot_id, join_timeout)` returns azalea's `Account` and the receiver, which P3.4's pump turns into `EventSink::terminate`.
+  > - **The log** is one `debug` line per failed join, with a fixed label, never azalea's error text.
+  > - **Tests.** The join's bookkeeping takes the session-server future, so fast tests script it; the one call into azalea is covered by P3.7's online-mode scenario. The log capture also bridges `log` records (reqwest, rustls) through `tracing-log`; `log` is a new fleet-mc dev-dependency.
+  > - **Dead code until P3.4.** `mod account` carries a temporary `#[expect(dead_code)]` in non-test builds, approved by the user; P3.4 removes it.
+  > - **Found:** azalea logs the chat-signing private key at `trace` (`azalea_auth::certs`). It's a known limit in the threat model, and P5.2 keeps `azalea_auth` below `trace`.
 - [ ] **P3.4** `AzaleaConnector` implements `MinecraftConnector`:
   - azalea's auto-reconnect and auto-respawn are **disabled**
   - connect timeout
@@ -1362,6 +1373,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P5.2** Telemetry: pretty logs in dev and JSON in prod, an env filter, and a panic hook that logs through `tracing`.
 
   > Note (P5.2, from Phase 3, group B review): **azalea's log targets stay at `warn`** in the default filter. azalea_client's disconnect plugin formats kick reasons at `info`, with azalea's own rendering, which grows exponentially on hostile nested translations (P3.5) and panics on a `%0$s` placeholder, since it computes `d - 1` on an unsigned digit with overflow checks on. A disabled level never formats, so neither can happen (ADR-0011).
+
+  > Note (P5.2, from Phase 3, group C, the user's decision): **`azalea_auth` never logs at `trace`**, even when the operator's filter asks for it. `azalea_auth::certs` logs the whole chat-signing certificate response at `trace`, private key included, in every online session. The filter caps that target below `trace`, and a test checks the cap (ADR-0011, threat model).
 - [ ] **P5.3** Wiring: `McHostPool` + `AzaleaConnector` + `Fleet`, with the standalone spec source.
 
   > Note (P5.3, from Phase 3): When `McHostPool::abandoned_threads()` reaches `max_abandoned_threads`, the agent shuts down and exits with an error, so Docker restarts it (§6 row 8). The library never ends the process itself (ADR-0011).

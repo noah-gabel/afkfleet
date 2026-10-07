@@ -27,6 +27,10 @@ pub struct McConfig {
     /// How many events a session's bridge holds before chat is dropped.
     /// Lifecycle events are always delivered.
     pub event_capacity: NonZeroUsize,
+    /// How long an online account's join call to the session server may take.
+    /// azalea's HTTP client has no timeout of its own, so without this a
+    /// stalled session server would hold the login until the connect timeout.
+    pub session_join_timeout: Duration,
 }
 
 impl Default for McConfig {
@@ -37,6 +41,7 @@ impl Default for McConfig {
             thread_shutdown_timeout: Duration::from_secs(5),
             max_abandoned_threads: non_zero(3),
             event_capacity: non_zero(64),
+            session_join_timeout: Duration::from_secs(10),
         }
     }
 }
@@ -62,5 +67,6 @@ mod tests {
         assert_eq!(config.thread_shutdown_timeout, Duration::from_secs(5));
         assert_eq!(config.max_abandoned_threads.get(), 3);
         assert_eq!(config.event_capacity.get(), 64);
+        assert_eq!(config.session_join_timeout, Duration::from_secs(10));
     }
 }

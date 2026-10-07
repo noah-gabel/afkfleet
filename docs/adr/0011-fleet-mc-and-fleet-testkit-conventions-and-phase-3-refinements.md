@@ -57,6 +57,8 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
 - **fleet-testkit:** `tokio` (`sync`, `time`), for its channels and its paused-time liveness stamps.
 - **`tokio-util`** (Phase 3's "Introduces" line) is added only if a task really needs it.
 - **fleet-mc** *(group B review)*: `azalea-chat` and `azalea-language`, `=0.16.0` like azalea, which already depends on both, so the graph doesn't change. They're used only by the bounded renderer (P3.5): azalea doesn't re-export azalea-chat's `PrimitiveOrComponent`, the type of a translation's arguments, and the renderer looks up translation templates itself.
+- **fleet-mc, dev** *(group C, the user's approval)*: `log` 0.4.34, already in the graph through azalea and reqwest. The log capture's own test emits a `log` record to prove that records from `log`-based crates (reqwest, rustls) reach the capture.
+- *(group C)* fleet-mc also uses `secrecy`, which §5 already lists for it. The workspace entry of `reqwest` fixes the `rustls` feature, per the root manifest's TLS rule; azalea-auth already enables it, so fleet-mc's build doesn't change, and fleet-mc enables no features of its own.
 
 ### Lint guards
 - **Bounded channels.** The root `clippy.toml` bans `tokio::sync::mpsc::unbounded_channel` through `disallowed-methods`.
@@ -132,6 +134,19 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
 
   When the assertion fails, its message **never prints the captured lines or the token**. It reports only where the token appeared, as a target and a count, so a failing run with a real token can't leak it to the terminal.
 - **Known limit.** `AccountTrait::access_token()` hands azalea a plain `String` copy that we can't zeroize.
+- **Built in group C** (the user's decisions, 2026-10-07):
+  - **The new reasons.** `DisconnectReason::AccountRestricted{restriction}` covers `Banned` and `MultiplayerDisabled`. It's permanent, with the new kinds `PermanentKind::AccountBanned` and `PermanentKind::MultiplayerDisabled`; the existing `Banned` stays the Minecraft server's ban, so the two stay apart. `DisconnectReason::SessionServerFailed{failure}` is transient, with `Unreachable` (`AuthServersUnreachable`, an HTTP error), `RateLimited`, `TimedOut` (our timeout) and `Unexpected` (`Unknown`, `UnexpectedResponse`). It mirrors `ConnectFailed{failure}`, so the bot status can say why. ADR-0010 is amended.
+  - **`FailReason::Kicked{kind}` is renamed `FailReason::Permanent{kind}`**, since a session-server refusal isn't a kick.
+  - **On our timeout**, `join()` returns `ClientSessionServerError::Unknown("no answer within the session-join timeout")`, so azalea's error log says what happened. It's neither `InvalidSession` nor `ForbiddenOperation`, so azalea doesn't refresh and retry.
+  - **The report channel** is a bounded `mpsc` channel of capacity 1, written with `try_send`. It carries the classified `DisconnectReason`, and P3.4's host-thread pump turns it into `EventSink::terminate`. A full channel already holds the report that ends the session, and a closed one means the session is gone, so a report that doesn't fit is dropped without waiting. The account holds no `EventSink` clone, so the bridge's "a dropped sink ends the session" rule doesn't depend on azalea's lifetimes. An offline account's channel is closed from the start.
+  - **The log.** A failed join logs one `debug` line with the `bot_id` and a fixed label of the error's kind, never azalea's error text, which can carry the session server's response body. The session's terminal event carries the reason.
+  - **Test seam.** The join's bookkeeping (timeout, classification, report, log) is a function that takes the session-server future, so fast tests drive it with scripted results and, under paused time, a future that never ends. The one call into azalea is covered by the online-mode slow scenario (P3.7).
+  - **Certificates** live in a small generic slot, a poison-tolerant `Mutex<Option<T>>` whose `Debug` shows only whether it's set. That's unit-tested without building an `RsaPrivateKey`, which would need `rsa` as a new dev-dependency.
+  - **`refresh()`** is overridden explicitly, not left to azalea's default, so a bump can't change it silently.
+  - **`McConfig::session_join_timeout`** holds the 10 s default.
+  - **Dead code until P3.4.** Nothing outside the tests builds an account until the connector does, so `mod account` carries a temporary `#[expect(dead_code, reason = …)]` in non-test builds, approved by the user. P3.4 removes it, as it does for `mod events`.
+  - **The log capture** is installed with tracing-subscriber's `try_init()`, which also installs the `tracing-log` bridge, so `log` records from reqwest and rustls are captured under their own target (the user's addition). Its own tests prove the bridge, span fields and a failure message without the secret.
+- **azalea logs secrets at TRACE** *(found in group C, the user's decision)*. In every online session azalea fetches the chat-signing certificates with the Minecraft token, and `azalea_auth::certs::fetch_certificates` logs the whole response at `trace`, the chat-signing private key PEM included. That's a known limit (threat model). The agent's filter never lets `azalea_auth` log at `trace`, even when the operator's filter asks for it (P5.2).
 
 ### Connector (P3.4)
 - **Startup.** Variant C, with auto-reconnect and auto-respawn disabled and the single-threaded executor (ADR-0008 §1–3).
@@ -214,13 +229,14 @@ They aren't config keys yet: a fleet-mc config struct holds them, and P5 adds ke
   - azalea's three advisories are accepted with a recorded reason and a removal trigger.
   - Two lint guards make the security rules about unbounded channels and Microsoft tokens mechanical.
 - **Harder:**
-  - fleet-core grows two disconnect reasons in group C.
+  - fleet-core grows two disconnect reasons in group C, and `FailReason::Kicked` becomes `FailReason::Permanent`.
   - The host-pool tests run in real time, bounded by timeouts.
   - The slow suite needs Docker and takes about ten minutes.
 - **Later phases inherit requirements:**
   - **P5.1** parses `connect_timeout_secs` and `max_abandoned_threads`.
   - **P5.3** exits the agent when the pool's abandoned-thread count reaches the limit.
   - **P4.9** exports the pool's and connector's diagnostics as metrics.
+  - **P5.2** never lets `azalea_auth` log at `trace` *(group C)*.
   - **Every azalea bump** re-checks the three ignored advisories and removes the hickory ones once azalea uses hickory ≥ 0.26.1.
 - **Flagged, not decided** (group B, the user's request):
   - **A per-server chat format (P4.1, P11.9).** Some servers send player chat through a plugin, as system messages like `[CLAN] Name : message`. A per-server chat format, next to the per-server conflict texts, could extract the sender from such messages for display.

@@ -15,11 +15,18 @@ azalea = { workspace = true, features = ["online-mode"] }
 azalea-chat.workspace = true
 azalea-language.workspace = true
 fleet-core.workspace = true
+# Only to name `reqwest::Proxy` in azalea's `AccountTrait` (ADR-0011).
+reqwest.workspace = true
+secrecy.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
 tracing.workspace = true
+# Only to name `Uuid` in azalea's `AccountTrait` (ADR-0011).
+uuid.workspace = true
 
 [dev-dependencies]
+log.workspace = true
 rstest.workspace = true
 serde_json.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+tracing-subscriber.workspace = true

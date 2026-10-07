@@ -40,6 +40,10 @@ backon = { version = "1.6.0", default-features = false }
 chrono = { version = "0.4.45", default-features = false }
 # rand: no `sys_rng`/`thread_rng`; fleet-core takes an RNG as a parameter (ADR-0010).
 rand = { version = "0.10.3", default-features = false }
+# reqwest: TLS is fixed here, `rustls` (aws-lc-rs + platform verifier), never native-tls.
+# fleet-mc enables nothing else: it only names `reqwest::Proxy` in azalea's `AccountTrait`,
+# and azalea-auth already builds reqwest with `rustls` (ADR-0011).
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 # secrecy: `SecretString` with a redacted `Debug`; it has no default features and only
 # pulls in zeroize (alloc).
 secrecy = "0.10.3"
@@ -49,11 +53,16 @@ thiserror = "2.0.21"
 # `time`, …) and `test-util` in tests.
 tokio = "1.53.2"
 tracing = "0.1.44"
+# tracing-subscriber: the default features include `tracing-log`, which bridges `log`
+# records into the redaction tests' capture (ADR-0011).
+tracing-subscriber = "0.3.23"
 # uuid: never `v4`/`v7`/`rng`, which pull in getrandom; IDs are minted from caller data (ADR-0010).
 uuid = { version = "1.27.0", default-features = false }
 
 # Tests
 insta = "1.49.0"
+# log: fleet-mc's log capture test emits a `log` record to prove the bridge (ADR-0011).
+log = "0.4.34"
 # proptest and rstest: members enable only what they need (ADR-0010). proptest's
 # `std` keeps `PROPTEST_CASES` working.
 proptest = { version = "1.11.0", default-features = false }
