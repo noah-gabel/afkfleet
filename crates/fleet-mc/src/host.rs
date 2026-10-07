@@ -19,6 +19,7 @@ use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
+use std::time::Instant;
 
 use fleet_core::id::BotId;
 use fleet_core::mc::{ConnectError, SessionError};
@@ -120,6 +121,56 @@ struct PoolShared {
     live: AtomicUsize,
     /// Threads abandoned so far. It only counts up.
     abandoned: AtomicUsize,
+    /// Threads whose handles were all dropped before a shutdown decided how
+    /// they ended. Settled by `spawn` and `abandoned_threads`.
+    orphans: Mutex<Vec<Orphan>>,
+}
+
+/// A host thread whose last handle was dropped without a shutdown outcome.
+/// Dropping the handles stops it, unless it hangs: if it hasn't ended by its
+/// deadline, the shutdown timeout after the drop, it's counted as abandoned.
+#[derive(Debug)]
+struct Orphan {
+    bot_id: BotId,
+    name: String,
+    /// Closes when the thread has ended.
+    exit: watch::Receiver<()>,
+    deadline: Instant,
+}
+
+impl PoolShared {
+    /// Settles the orphans without blocking: one that has ended is
+    /// forgotten, and one past its deadline is counted as abandoned.
+    fn settle_orphans(&self) {
+        let now = Instant::now();
+        self.lock_orphans().retain(|orphan| {
+            // The exit signal's sender is gone once the thread has ended.
+            if orphan.exit.has_changed().is_err() {
+                return false;
+            }
+            if now < orphan.deadline {
+                return true;
+            }
+            let abandoned = self
+                .abandoned
+                .fetch_add(1, Ordering::SeqCst)
+                .saturating_add(1);
+            warn!(
+                bot_id = %orphan.bot_id,
+                thread = %orphan.name,
+                abandoned,
+                limit = self.max_abandoned.get(),
+                "a host thread whose handles were dropped didn't end in time, so it was abandoned"
+            );
+            false
+        });
+    }
+
+    /// Locks the orphans, poison-tolerantly: the list stays consistent if a
+    /// holder panicked.
+    fn lock_orphans(&self) -> MutexGuard<'_, Vec<Orphan>> {
+        self.orphans.lock().unwrap_or_else(PoisonError::into_inner)
+    }
 }
 
 impl McHostPool {
@@ -135,6 +186,7 @@ impl McHostPool {
                 max_abandoned: config.max_abandoned_threads,
                 live: AtomicUsize::new(0),
                 abandoned: AtomicUsize::new(0),
+                orphans: Mutex::new(Vec::new()),
             }),
         }
     }
@@ -212,8 +264,12 @@ impl McHostPool {
 
     /// Returns how many hung host threads were abandoned so far. It never goes
     /// down, even when an abandoned thread ends after all.
+    ///
+    /// A thread whose handles were all dropped without a shutdown counts too,
+    /// once it's still running the shutdown timeout after the drop.
     #[must_use]
     pub fn abandoned_threads(&self) -> usize {
+        self.shared.settle_orphans();
         self.shared.abandoned.load(Ordering::SeqCst)
     }
 }
@@ -403,6 +459,32 @@ impl HostInner {
     /// Locks the state, poison-tolerantly like [`lock_stop`](Self::lock_stop).
     fn lock_state(&self) -> MutexGuard<'_, HostState> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+impl Drop for HostInner {
+    /// The last handle is gone, and the stop signal and the job queue close
+    /// with it, so the thread ends, unless it hangs. If no shutdown decided
+    /// how it ended, the pool keeps it as an orphan, so a hang still counts
+    /// against the abandoned-thread limit.
+    fn drop(&mut self) {
+        let undecided = self
+            .state
+            .get_mut()
+            .map_or_else(
+                |poisoned| poisoned.into_inner().outcome(),
+                |state| state.outcome(),
+            )
+            .is_none();
+        if undecided {
+            let now = Instant::now();
+            self.pool.lock_orphans().push(Orphan {
+                bot_id: self.bot_id,
+                name: core::mem::take(&mut self.name),
+                exit: self.exit.clone(),
+                deadline: now.checked_add(self.pool.shutdown_timeout).unwrap_or(now),
+            });
+        }
     }
 }
 

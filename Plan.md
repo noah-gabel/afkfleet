@@ -1120,6 +1120,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Handles.** `HostThread` is `Clone`. The thread also ends when every clone is dropped (the job channel and the stop signal close), so an actor that panics or is aborted without `disconnect()` can't leave a bot running. A test covers it.
   > - **API.** `McConfig` holds the defaults (`max_abandoned_threads` is a `NonZeroUsize`, since 0 would refuse every thread). `spawn(bot_id)` returns a `HostThread` or a `SpawnError`, which becomes `ConnectError::HostUnavailable`. `run(job)` queues at once and fails with a `JobError`, which becomes the matching `SessionError`. A job whose caller has given up is skipped. `shutdown()` returns `Ended` or `Abandoned`, the first outcome on every later call; `ended()` resolves when the thread is gone.
   > - **Threads are never joined.** Joining would block the caller's runtime; the exit signal, sent last by the thread, says when it has ended.
+
+  > Note (P3.2, from the group B review) (ADR-0011): **Threads dropped while hung count too.** When the last `HostThread` handle drops before a shutdown decided the outcome, the pool keeps the thread as an orphan: its exit signal and a deadline, the shutdown timeout after the drop. `spawn()` and `abandoned_threads()` settle the orphans first, without blocking or spawning: one that has ended is forgotten, and one past its deadline is counted as abandoned and logged at `warn`. So a hung session whose owner never called `disconnect()` still counts against the limit.
 - [ ] **P3.3** Account adapter: a custom `AccountTrait` for server-issued `SessionCredentials`, and offline accounts for dev and tests.
 
   > Note (P3.3, from the Phase 3 plan) (ADR-0011):

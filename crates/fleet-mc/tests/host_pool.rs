@@ -18,6 +18,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc as std_mpsc;
+use std::time::Instant;
 
 use fleet_core::id::BotId;
 use fleet_mc::{HostThread, JobError, McConfig, McHostPool, ShutdownOutcome, SpawnError};
@@ -252,7 +253,77 @@ async fn second_shutdown_of_an_ended_thread_returns_ended() {
     assert_eq!(again, ShutdownOutcome::Ended);
 }
 
+/// Waits, without sleeping, until `duration` has passed in real time.
+async fn real_time_passes(duration: Duration) {
+    let until = Instant::now() + duration;
+    within(async {
+        while Instant::now() < until {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+}
+
 // --- Hung threads ---
+
+#[tokio::test]
+async fn hung_thread_whose_handles_were_dropped_is_counted_as_abandoned() {
+    let pool = pool_with(|config| config.thread_shutdown_timeout = SHORT);
+    let host = pool.spawn(bot(BOT)).unwrap();
+    let ended = host.ended();
+    let hang = hang(&host).await;
+
+    drop(host);
+
+    within(async {
+        while pool.abandoned_threads() < 1 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await;
+    assert_eq!(pool.abandoned_threads(), 1);
+    assert_eq!(pool.live_threads(), 1);
+    hang.release();
+    within(ended).await;
+    assert_eq!(pool.live_threads(), 0);
+    assert_eq!(pool.abandoned_threads(), 1);
+}
+
+#[tokio::test]
+async fn spawn_counts_a_dropped_hung_thread_against_the_limit() {
+    let pool = pool_with(|config| {
+        config.thread_shutdown_timeout = SHORT;
+        config.max_abandoned_threads = NonZeroUsize::MIN;
+    });
+    let host = pool.spawn(bot(BOT)).unwrap();
+    let hang = hang(&host).await;
+    drop(host);
+    real_time_passes(SHORT).await;
+
+    let refused = pool.spawn(bot(OTHER_BOT));
+
+    assert_eq!(
+        refused.unwrap_err(),
+        SpawnError::AbandonedLimit {
+            abandoned: 1,
+            limit: 1
+        }
+    );
+    hang.release();
+}
+
+#[tokio::test]
+async fn ended_thread_whose_handles_were_dropped_is_not_counted() {
+    let pool = pool_with(|config| config.thread_shutdown_timeout = SHORT);
+    let host = pool.spawn(bot(BOT)).unwrap();
+    let ended = host.ended();
+
+    drop(host);
+    within(ended).await;
+    real_time_passes(SHORT).await;
+
+    assert_eq!(pool.abandoned_threads(), 0);
+}
 
 #[tokio::test]
 async fn hung_thread_is_abandoned_on_shutdown_and_counted() {
