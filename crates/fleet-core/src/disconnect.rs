@@ -7,6 +7,12 @@
 //! language and plugins. The session server's answers to a join come from the
 //! account's `join()` hook and are split by what they mean for the account
 //! (ADR-0011).
+//!
+//! Some proxies report a duplicate login as plain text. A bot's
+//! [`ConflictTexts`] list those texts, and [`ConflictTexts::classify`] applies
+//! them on top of [`DisconnectReason::classify`] (ADR-0013).
+
+use std::collections::BTreeSet;
 
 use crate::text::{self, LineBreaks};
 
@@ -224,6 +230,144 @@ impl DisconnectReason {
             | Self::LivenessTimeout => DisconnectClass::Transient,
         }
     }
+}
+
+/// Why config entries can't form [`ConflictTexts`].
+///
+/// `index` is the entry's position in the list, counting from 0. The entry's
+/// text is never included.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum ConflictTextsError {
+    /// The list has more than [`ConflictTexts::MAX_ENTRIES`] entries.
+    #[error("the list has {count} conflict texts; the limit is {max}", max = ConflictTexts::MAX_ENTRIES)]
+    TooMany {
+        /// How many entries it has.
+        count: usize,
+    },
+    /// The entry is empty.
+    #[error("conflict text {index} is empty")]
+    Empty {
+        /// The entry's position, from 0.
+        index: usize,
+    },
+    /// The entry contains a character that a kick message never has: `§`, a
+    /// control character other than `\n`, a bidirectional control or an
+    /// invisible character. Kick messages are sanitized, so the entry could
+    /// never match.
+    #[error(
+        "conflict text {index} contains a character kick messages never have, at position {position}"
+    )]
+    ForbiddenChar {
+        /// The entry's position, from 0.
+        index: usize,
+        /// The character's position in the entry, counted in characters.
+        position: usize,
+    },
+    /// The entry is longer than [`ConflictTexts::MAX_LEN`] characters.
+    #[error("conflict text {index} is {chars} characters long; the limit is {max}", max = ConflictTexts::MAX_LEN)]
+    TooLong {
+        /// The entry's position, from 0.
+        index: usize,
+        /// The entry's length in characters.
+        chars: usize,
+    },
+}
+
+/// Kick messages that count as a duplicate login: someone else logged in to
+/// the bot's account (Plan.md P4.1; ADR-0010, ADR-0013).
+///
+/// Vanilla servers send a duplicate login with its translation key, which
+/// [`DisconnectReason::classify`] knows. Some proxies kick with plain text
+/// instead (`BungeeCord` and Waterfall in online mode probably do), so a bot's
+/// spec can list those texts. [`ConflictTexts::classify`] then compares a
+/// kick's sanitized message against them, exactly and case-sensitively, but
+/// only when [`DisconnectReason::classify`] calls the kick transient: a key
+/// that means something else always wins.
+///
+/// The default list is empty, which changes nothing.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConflictTexts {
+    texts: BTreeSet<String>,
+}
+
+impl ConflictTexts {
+    /// The most entries a list may have.
+    pub const MAX_ENTRIES: usize = 16;
+
+    /// The longest entry, in characters: the longest kick message kept.
+    pub const MAX_LEN: usize = Kick::MAX_MESSAGE_LEN;
+
+    /// Builds the list from config entries.
+    ///
+    /// Entries are compared exactly, so they're taken as written, without
+    /// trimming. Duplicates count once.
+    ///
+    /// # Errors
+    /// - [`ConflictTextsError::TooMany`] for more than
+    ///   [`ConflictTexts::MAX_ENTRIES`] entries.
+    /// - [`ConflictTextsError::Empty`] for an empty entry.
+    /// - [`ConflictTextsError::ForbiddenChar`] for an entry with a character
+    ///   that sanitizing would strip.
+    /// - [`ConflictTextsError::TooLong`] for an entry longer than
+    ///   [`ConflictTexts::MAX_LEN`] characters.
+    ///
+    /// The first invalid entry decides the error.
+    pub fn try_new<S: AsRef<str>>(entries: &[S]) -> Result<Self, ConflictTextsError> {
+        if entries.len() > Self::MAX_ENTRIES {
+            return Err(ConflictTextsError::TooMany {
+                count: entries.len(),
+            });
+        }
+        let texts = entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| conflict_text(index, entry.as_ref()))
+            .collect::<Result<_, _>>()?;
+        Ok(Self { texts })
+    }
+
+    /// Whether the list is empty.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.texts.is_empty()
+    }
+
+    /// Returns the texts, in sorted order.
+    pub fn iter(&self) -> impl Iterator<Item = &str> {
+        self.texts.iter().map(String::as_str)
+    }
+
+    /// Classifies `reason` like [`DisconnectReason::classify`], except that a
+    /// kick it calls transient whose message is on this list is a duplicate
+    /// login.
+    #[must_use]
+    pub fn classify(&self, reason: &DisconnectReason) -> DisconnectClass {
+        match (reason.classify(), reason) {
+            (DisconnectClass::Transient, DisconnectReason::Kicked(kick))
+                if self.texts.contains(kick.message()) =>
+            {
+                DisconnectClass::Conflict {
+                    kind: ConflictKind::DuplicateLogin,
+                }
+            }
+            (class, _) => class,
+        }
+    }
+}
+
+/// Checks one config entry of [`ConflictTexts`] at `index`.
+fn conflict_text(index: usize, entry: &str) -> Result<String, ConflictTextsError> {
+    if entry.is_empty() {
+        return Err(ConflictTextsError::Empty { index });
+    }
+    if let Some(position) = text::first_stripped(entry, LineBreaks::Keep) {
+        return Err(ConflictTextsError::ForbiddenChar { index, position });
+    }
+    let chars = entry.chars().count();
+    if chars > ConflictTexts::MAX_LEN {
+        return Err(ConflictTextsError::TooLong { index, chars });
+    }
+    Ok(entry.to_owned())
 }
 
 /// The kick keys of ADR-0008 §6. Every other key is transient.
@@ -472,6 +616,216 @@ mod tests {
         fn never_panics(key in proptest::option::of(any::<String>()), message in any::<String>()) {
             let reason = DisconnectReason::kicked(key.as_deref(), &message);
             let _ = reason.classify();
+        }
+    }
+
+    // Conflict texts.
+
+    /// A proxy's plain-text duplicate-login kick (a placeholder text).
+    const PROXY_TEXT: &str = "You are already connected to this proxy!";
+
+    fn texts(entries: &[&str]) -> ConflictTexts {
+        ConflictTexts::try_new(entries).unwrap()
+    }
+
+    #[test]
+    fn an_empty_list_is_the_default() {
+        let list = ConflictTexts::try_new::<&str>(&[]).unwrap();
+
+        assert!(list.is_empty());
+        assert_eq!(list, ConflictTexts::default());
+    }
+
+    #[test]
+    fn keeps_entries_exactly_as_written() {
+        let list = texts(&[" Spaced out ", "Line one\nline two", "Ünïcödé 😀"]);
+
+        assert_eq!(
+            list.iter().collect::<Vec<_>>(),
+            [" Spaced out ", "Line one\nline two", "Ünïcödé 😀"]
+        );
+    }
+
+    #[test]
+    fn duplicates_count_once() {
+        let list = texts(&[PROXY_TEXT, PROXY_TEXT]);
+
+        assert_eq!(list.iter().collect::<Vec<_>>(), [PROXY_TEXT]);
+    }
+
+    #[test]
+    fn accepts_the_most_entries_and_the_longest_entry() {
+        let entries: Vec<String> = (0..ConflictTexts::MAX_ENTRIES)
+            .map(|i| format!("{i}{}", "x".repeat(ConflictTexts::MAX_LEN - 2)))
+            .collect();
+
+        let list = ConflictTexts::try_new(&entries).unwrap();
+
+        assert_eq!(list.iter().count(), ConflictTexts::MAX_ENTRIES);
+    }
+
+    #[test]
+    fn rejects_too_many_entries() {
+        let entries = vec!["text"; ConflictTexts::MAX_ENTRIES + 1];
+
+        assert_eq!(
+            ConflictTexts::try_new(&entries),
+            Err(ConflictTextsError::TooMany { count: 17 })
+        );
+    }
+
+    #[rstest]
+    #[case::empty("", ConflictTextsError::Empty { index: 1 })]
+    #[case::section_sign("§cKicked", ConflictTextsError::ForbiddenChar { index: 1, position: 0 })]
+    #[case::control_char("Kicked\t!", ConflictTextsError::ForbiddenChar { index: 1, position: 6 })]
+    #[case::carriage_return("Line\r\nbreak", ConflictTextsError::ForbiddenChar { index: 1, position: 4 })]
+    #[case::bidi_control("Kick\u{202E}ed", ConflictTextsError::ForbiddenChar { index: 1, position: 4 })]
+    #[case::invisible("Kick\u{200B}ed", ConflictTextsError::ForbiddenChar { index: 1, position: 4 })]
+    #[case::too_long(
+        &"x".repeat(1025),
+        ConflictTextsError::TooLong { index: 1, chars: 1025 }
+    )]
+    #[case::too_long_in_chars(
+        &"😀".repeat(1025),
+        ConflictTextsError::TooLong { index: 1, chars: 1025 }
+    )]
+    fn rejects_an_invalid_entry_by_its_index(
+        #[case] entry: &str,
+        #[case] expected: ConflictTextsError,
+    ) {
+        assert_eq!(ConflictTexts::try_new(&["fine", entry]), Err(expected));
+    }
+
+    #[test]
+    fn the_first_invalid_entry_decides_the_error() {
+        assert_eq!(
+            ConflictTexts::try_new(&["ok", "§bad", ""]),
+            Err(ConflictTextsError::ForbiddenChar {
+                index: 1,
+                position: 0
+            })
+        );
+    }
+
+    #[test]
+    fn errors_never_include_the_entry() {
+        let error = ConflictTexts::try_new(&["§secret text"]).unwrap_err();
+
+        assert!(!error.to_string().contains("secret"), "{error}");
+        assert!(!format!("{error:?}").contains("secret"), "{error:?}");
+    }
+
+    #[rstest]
+    #[case::too_many(
+        ConflictTextsError::TooMany { count: 17 },
+        "the list has 17 conflict texts; the limit is 16"
+    )]
+    #[case::empty(ConflictTextsError::Empty { index: 2 }, "conflict text 2 is empty")]
+    #[case::forbidden_char(
+        ConflictTextsError::ForbiddenChar { index: 0, position: 3 },
+        "conflict text 0 contains a character kick messages never have, at position 3"
+    )]
+    #[case::too_long(
+        ConflictTextsError::TooLong { index: 1, chars: 1025 },
+        "conflict text 1 is 1025 characters long; the limit is 1024"
+    )]
+    fn errors_have_fixed_messages(#[case] error: ConflictTextsError, #[case] message: &str) {
+        assert_eq!(error.to_string(), message);
+    }
+
+    #[rstest]
+    #[case::plain_text(None)]
+    #[case::unknown_key(Some("proxy.disconnect.already_connected"))]
+    #[case::invalid_key(Some("Not A Key"))]
+    #[case::known_transient_key(Some("multiplayer.disconnect.kicked"))]
+    fn a_listed_transient_kick_is_a_duplicate_login(#[case] key: Option<&str>) {
+        let reason = DisconnectReason::kicked(key, PROXY_TEXT);
+
+        assert_eq!(texts(&[PROXY_TEXT]).classify(&reason), DUPLICATE_LOGIN);
+    }
+
+    #[test]
+    fn the_sanitized_message_is_compared() {
+        let reason = DisconnectReason::kicked(None, &format!("§c{PROXY_TEXT}\u{200B}"));
+
+        assert_eq!(texts(&[PROXY_TEXT]).classify(&reason), DUPLICATE_LOGIN);
+    }
+
+    #[rstest]
+    #[case::different_case("you are already connected to this proxy!")]
+    #[case::prefix("You are already connected")]
+    #[case::longer("You are already connected to this proxy! Try again.")]
+    #[case::trailing_space("You are already connected to this proxy! ")]
+    fn only_an_exact_match_counts(#[case] message: &str) {
+        let reason = DisconnectReason::kicked(None, message);
+
+        assert_eq!(
+            texts(&[PROXY_TEXT]).classify(&reason),
+            DisconnectClass::Transient
+        );
+    }
+
+    #[rstest]
+    #[case::banned("multiplayer.disconnect.banned", BANNED)]
+    #[case::not_whitelisted("multiplayer.disconnect.not_whitelisted", NOT_WHITELISTED)]
+    #[case::wrong_version("multiplayer.disconnect.incompatible", WRONG_VERSION)]
+    #[case::unverified_username(
+        "multiplayer.disconnect.unverified_username",
+        DisconnectClass::AuthInvalid
+    )]
+    #[case::duplicate_login("multiplayer.disconnect.duplicate_login", DUPLICATE_LOGIN)]
+    fn a_key_that_isnt_transient_wins_over_the_list(
+        #[case] key: &str,
+        #[case] expected: DisconnectClass,
+    ) {
+        let reason = DisconnectReason::kicked(Some(key), PROXY_TEXT);
+
+        assert_eq!(texts(&[PROXY_TEXT]).classify(&reason), expected);
+    }
+
+    #[rstest]
+    #[case::connection_closed(DisconnectReason::ConnectionClosed)]
+    #[case::auth_rejected(DisconnectReason::AuthRejected)]
+    #[case::session_crashed(DisconnectReason::SessionCrashed)]
+    #[case::liveness_timeout(DisconnectReason::LivenessTimeout)]
+    fn reasons_other_than_kicks_are_never_compared(#[case] reason: DisconnectReason) {
+        assert_eq!(texts(&[PROXY_TEXT]).classify(&reason), reason.classify());
+    }
+
+    proptest! {
+        #[test]
+        fn an_empty_list_classifies_like_classify(
+            key in proptest::option::of(any::<String>()),
+            message in any::<String>(),
+        ) {
+            let reason = DisconnectReason::kicked(key.as_deref(), &message);
+            prop_assert_eq!(ConflictTexts::default().classify(&reason), reason.classify());
+        }
+
+        #[test]
+        fn a_list_only_turns_transient_kicks_into_conflicts(
+            key in proptest::option::of(any::<String>()),
+            message in any::<String>(),
+            listed in any::<bool>(),
+        ) {
+            let reason = DisconnectReason::kicked(key.as_deref(), &message);
+            let DisconnectReason::Kicked(kick) = &reason else {
+                panic!("expected a kick");
+            };
+            let entries: Vec<&str> = if listed && !kick.message().is_empty() {
+                vec![kick.message()]
+            } else {
+                vec![PROXY_TEXT]
+            };
+            let list = ConflictTexts::try_new(&entries).unwrap();
+
+            let class = list.classify(&reason);
+
+            let expected = match reason.classify() {
+                DisconnectClass::Transient if entries.contains(&kick.message()) => DUPLICATE_LOGIN,
+                other => other,
+            };
+            prop_assert_eq!(class, expected);
         }
     }
 }

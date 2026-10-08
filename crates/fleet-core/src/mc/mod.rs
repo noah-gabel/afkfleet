@@ -8,7 +8,9 @@
 //! - The [`SessionHandle`] performs [`GameAction`](crate::mode::GameAction)s,
 //!   sends chat, respawns, reads the session's [`Liveness`] and tears the
 //!   session down. Its calls fail with a [`SessionError`].
-//! - [`SessionCredentials`] carry the Minecraft access token as a secret.
+//! - [`SessionCredentials`] carry the Minecraft access token as a secret. A
+//!   [`SessionCredentialProvider`] hands them out for each connection
+//!   attempt.
 //!
 //! fleet-mc implements the ports with azalea, on one host thread per session
 //! (ADR-0008 §2), and fleet-testkit with a scriptable fake. Every future they
@@ -55,7 +57,9 @@ mod liveness;
 mod session;
 
 pub use connector::{ConnectError, ConnectParams, MinecraftConnector};
-pub use credentials::SessionCredentials;
+pub use credentials::{
+    CredentialError, SessionCredentialProvider, SessionCredentials, SessionRequest,
+};
 pub use event::{SessionEvent, SessionEvents};
 pub use liveness::Liveness;
 pub use session::{SessionError, SessionHandle};

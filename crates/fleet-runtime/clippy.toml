@@ -1,0 +1,41 @@
+# fleet-runtime's own clippy configuration. Clippy reads the nearest clippy.toml
+# and doesn't merge it with the root one, so the root file's test allowances and
+# its ban on unbounded channels are repeated here. `just scripts-test` checks that
+# this file carries every root setting (scripts/clippy-config.mjs).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-print-in-tests = true
+
+# fleet-runtime never reads the wall clock or the OS's randomness. Its caller
+# passes in a wall-clock anchor and a seed, and all time goes through tokio's
+# clock (`tokio::time::Instant::now`), which paused-time tests control
+# (ADR-0013). `elapsed` reads the real clock just like `now`: the watchdog
+# compares the session's `Liveness` stamps, which are std `Instant`s, so
+# `stamp.elapsed()` would bypass paused time. `allow-invalid` keeps clippy quiet
+# when a path doesn't exist in the current feature set.
+disallowed-methods = [
+    { path = "std::time::Instant::now", reason = "use tokio's clock, so paused-time tests control it (ADR-0013)" },
+    { path = "std::time::Instant::elapsed", reason = "it reads the real clock; compare against tokio's clock, so paused-time tests control it (ADR-0013)" },
+    { path = "std::time::SystemTime::now", reason = "the wall-clock anchor is passed in (ADR-0013)" },
+    { path = "std::time::SystemTime::elapsed", reason = "it reads the real clock; the wall-clock anchor is passed in (ADR-0013)" },
+    { path = "chrono::Utc::now", reason = "the wall-clock anchor is passed in (ADR-0013)", allow-invalid = true },
+    { path = "chrono::Local::now", reason = "the wall-clock anchor is passed in (ADR-0013)", allow-invalid = true },
+    { path = "rand::rng", reason = "RNGs are seeded from the seed that's passed in (ADR-0013)", allow-invalid = true },
+    { path = "rand::random", reason = "RNGs are seeded from the seed that's passed in (ADR-0013)", allow-invalid = true },
+    { path = "rand::random_iter", reason = "RNGs are seeded from the seed that's passed in (ADR-0013)", allow-invalid = true },
+    { path = "rand::random_range", reason = "RNGs are seeded from the seed that's passed in (ADR-0013)", allow-invalid = true },
+    { path = "rand::random_bool", reason = "RNGs are seeded from the seed that's passed in (ADR-0013)", allow-invalid = true },
+    { path = "rand::random_ratio", reason = "RNGs are seeded from the seed that's passed in (ADR-0013)", allow-invalid = true },
+    { path = "rand::fill", reason = "RNGs are seeded from the seed that's passed in (ADR-0013)", allow-invalid = true },
+    { path = "rand::make_rng", reason = "RNGs are seeded from the seed that's passed in (ADR-0013)", allow-invalid = true },
+    # Repeated from the root clippy.toml: channels are always bounded (ADR-0011).
+    { path = "tokio::sync::mpsc::unbounded_channel", reason = "channels are always bounded; overload is an explicit error (CLAUDE.md, ADR-0011)", allow-invalid = true },
+]
+
+# The same guard for the types behind the OS's randomness.
+disallowed-types = [
+    { path = "rand::rngs::ThreadRng", reason = "RNGs are seeded from the seed that's passed in (ADR-0013)", allow-invalid = true },
+    { path = "rand::rngs::SysRng", reason = "RNGs are seeded from the seed that's passed in (ADR-0013)", allow-invalid = true },
+]

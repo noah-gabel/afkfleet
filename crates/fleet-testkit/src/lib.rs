@@ -4,7 +4,8 @@
 //! misuse shows up as an error or an outcome value (ADR-0011).
 //!
 //! - [`mc`]: a fake [`MinecraftConnector`](fleet_core::mc::MinecraftConnector)
-//!   whose sessions a test drives through a [`SessionController`](mc::SessionController).
+//!   whose sessions a test drives through a [`SessionController`](mc::SessionController),
+//!   and a fake [`SessionCredentialProvider`](fleet_core::mc::SessionCredentialProvider).
 //! - [`log_capture`]: a process-wide capture of every log line, for tests
 //!   that check a secret never reaches a log.
 //!

@@ -187,12 +187,12 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Minecraft chat components & translations | `azalea-chat`, `azalea-language` | `=0.16.0` (+mc26.1) | fleet-mc | Already in azalea's graph at the same pin. Only for fleet-mc's bounded renderer of server text: it names `PrimitiveOrComponent`, which azalea doesn't re-export, and looks up translation templates, because azalea's own rendering grows exponentially (ADR-0011). Bumped together with azalea |
 | Microsoft / Minecraft auth | `azalea-auth` | `=0.16.0` (+mc26.1) | fleet-server | Device-code flow. Never use its file cache. fleet-mc reaches only `azalea::auth::sessionserver` and `certs`, through azalea's re-export, never the Microsoft flows; its clippy config bans them (ADR-0011) |
 | Async runtime | `tokio` | 1.53.2 | runtime, mc, testkit, agent, server, client | `test-util` feature in dev. Clippy bans `unbounded_channel`; azalea's two mandated channels are the only exceptions (ADR-0011) |
-| Cancellation, task tracking | `tokio-util` | 0.7.19 | runtime, mc, agent, server | `CancellationToken`, `TaskTracker` |
+| Cancellation, task tracking | `tokio-util` | 0.7.19 | runtime, mc, agent, server | `CancellationToken`, `TaskTracker`. fleet-runtime enables no features: it uses only `CancellationToken`, and its actors live in tokio's `JoinSet`, which reports panics (ADR-0013) |
 | Stream adapters | `tokio-stream` | 0.1.19 | proto, agent, server | gRPC streams, broadcast → stream |
 | Sink/Stream extension traits | `futures-util` | 0.3.34 | client, server | WebSocket split/send |
 | Async fns in `dyn` traits | `async-trait` | 0.1.92 | server | Only for `Arc<dyn Port>`. Use generics + RPITIT elsewhere |
 | Retry & backoff | `backon` | 1.6.0, dfo | core (policy), agent, client | Exponential backoff with jitter. The default features pull in a tokio sleeper |
-| Rate limiting (keyed / in-process) | `governor` | 0.10.4 | runtime (chat), server (per user) | |
+| Rate limiting (keyed / in-process) | `governor` | 0.10.4, dfo | runtime (chat), server (per user) | fleet-runtime enables `std` only. The defaults add `quanta`, `dashmap` and `jitter`, which pulls rand 0.9 and getrandom 0.3 into normal dependencies. Without `quanta` there's no `DefaultClock`: the chat queue uses `direct_with_clock` with a tokio-backed clock, so paused time controls it (ADR-0013) |
 | Rate limiting (HTTP middleware) | `tower_governor` | 0.8.0 | server | Per IP |
 | TTL cache / single-flight | `moka` | 0.12.16 | server | MC token cache, WS tickets |
 | Library errors | `thiserror` | 2.0.21 | all libraries | |
@@ -203,7 +203,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Logging / tracing | `tracing`, `tracing-subscriber` | 0.1.44, 0.3.23 | all | `env-filter`, `json`. fleet-testkit's log capture uses `tracing` and `tracing-subscriber`; the redaction tests use it (ADR-0011) |
 | Metrics | `metrics`, `metrics-exporter-prometheus` | 0.24.6, 0.18.3 (dfo) | runtime, agent, server | Internal port only. The exporter's default `push-gateway` brings its own TLS stack: enable `http-listener` only |
 | IDs | `uuid` | 1.27.0, dfo | core, mc | v7, serde. fleet-mc only names `Uuid` in azalea's `AccountTrait` (ADR-0011) |
-| Time | `chrono` | 0.4.45, dfo | core, server | Always UTC. No `clock` feature in core: time is passed in |
+| Time | `chrono` | 0.4.45, dfo | core, runtime, server | Always UTC. No `clock` feature in core or runtime: time is passed in. The runtime derives `DateTime<Utc>` from tokio's clock, anchored at a wall time its caller passes in (ADR-0010, ADR-0013) |
 | CLI | `clap` | 4.6.7 | agent, server | derive |
 | Hidden password prompt | `rpassword` | 7.5.4 | server CLI | |
 
@@ -519,7 +519,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Conventions**
 - Each task has an ID `P<phase>.<n>`. 🔴 means *the test comes first*, strictly. Tasks without 🔴 (scaffolding, config, wiring) are verified by `just check`, CI or the task's demo, but any logic they add still gets tests.
 - A phase is finished when every task is ticked **and** its Definition of Done (DoD) holds.
-- **Branches:** one branch per task, `p<phase>/<task-id>-<slug>` (e.g. `p2/p2.6-bot-state-machine`). Phases 0 and 1 each use a single branch, `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each (see the note under Phase 2). Phase 3 uses five group branches plus one task branch for P3.9 (see the note under Phase 3). Every branch ends in a PR that the user reviews and merges. The `Plan.md` checkbox is ticked in that same PR.
+- **Branches:** one branch per task, `p<phase>/<task-id>-<slug>` (e.g. `p2/p2.6-bot-state-machine`). Phases 0 and 1 each use a single branch, `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each (see the note under Phase 2). Phase 3 uses five group branches plus one task branch for P3.9 (see the note under Phase 3). Phase 4 uses five group branches (see the note under Phase 4). Every branch ends in a PR that the user reviews and merges. The `Plan.md` checkbox is ticked in that same PR.
 - Phases are vertical slices:
   - **0–5** produce a working standalone bot.
   - **6–11** build the fully managed system with the app.
@@ -1369,9 +1369,25 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 ### Phase 4: Bot runtime (`fleet-runtime`)
 **Goal:** Self-healing bots, one supervised actor each, with modes and a watchdog. All of it is proven with fakes and paused time.
-**Introduces:** `governor`, `metrics`. Dev: `fleet-testkit`.
+**Introduces:** `governor`, `metrics`, `tokio-util` (only `CancellationToken`; Phase 3 didn't need it). Dev: `fleet-testkit`.
 
-- [ ] **P4.1** 🔴 `BotSpec` (account, server, mode, desired run state) and `BotSnapshot` (state, since, last disconnect reason, attempt, uptime).
+> Note (P4):
+> - **Five group branches.** At the user's request, Phase 4 is built in group PRs like Phases 2 and 3. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
+>
+>   | Group | Branch | Tasks |
+>   |---|---|---|
+>   | A | `p4/p4.1-p4.3-spec-and-credentials` | P4.1, P4.3 |
+>   | B | `p4/p4.4-p4.5-chat-queue-and-mode-runner` | P4.5, then P4.4: mode chat goes through the queue. The runtime clock and the governor clock land in P4.5, their first user |
+>   | C | `p4/p4.2-p4.6-bot-actor-and-watchdog` | P4.2, P4.6 |
+>   | D | `p4/p4.7-supervisor-and-fleet` | P4.7 |
+>   | E | `p4/p4.8-p4.9-metrics-chaos-and-wrap-up` | P4.9, P4.8 and the phase wrap-up |
+>
+>   The queue and the mode runner are built against the fake before the actor, so the actor PR wires real pieces instead of placeholders.
+> - **Decisions.** The user answered the Phase 4 plan's open questions on 2026-10-08. [ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md) records them; the notes below summarize what changes a task.
+> - **Dependencies.** `governor` without default features plus `std` (no quanta, dashmap or jitter, so no rand 0.9 or getrandom 0.3 in normal dependencies), `tokio-util` without features, `metrics`, and `chrono` in fleet-runtime for `DateTime` only. No `metrics-util`.
+> - **Determinism.** `Fleet::new` takes a wall-clock anchor and a seed from its caller; the runtime never reads the wall clock or the OS's randomness. fleet-runtime's `clippy.toml` bans those entry points, so all time goes through tokio's clock, which paused-time tests control.
+
+- [x] **P4.1** 🔴 `BotSpec` (account, server, mode, desired run state) and `BotSnapshot` (state, since, last disconnect reason, attempt, uptime).
 
   > Note (P4.1, from Phase 2): open question, flagged and not yet decided: fleet-proto and fleet-server also need to build a `BotSpec` (Appendix C `AssignBot`), but they may only depend on `fleet-core`.
 
@@ -1381,6 +1397,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - A parsed sender is marked as parsed from the text. Like every chat sender, it's never used for any permission or trigger decision.
   > - *(corrected in the group B review)* Chat senders are server-attributed, not verified. azalea 0.16 never verifies chat signatures, and fleet-mc shows a Player packet's `unsigned_content`, so even a Player packet's UUID and text are only what the server claims. A feature that needs a trustworthy sender must verify the signature and use the signed body, in its own ADR.
   > - fleet-mc keeps the whole sanitized text of system messages, so this stays possible (P3.5, ADR-0011).
+
+  > Note (P4.1, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
+  > - **Where.** `BotSpec` and `BotSnapshot` are pure data in `fleet_core::bot`, without serde, so fleet-proto and fleet-server can build them.
+  > - **`BotSpec`** is `{ id, account, server, mode, desired, conflict_texts }`. The account is `BotAccount::Offline(McUsername)` or `BotAccount::Online(AccountId)`, and it never changes for a bot. The mode is the resolved `ModeDefinition`.
+  > - **`BotSnapshot`** is `{ bot_id, state, since, last_disconnect }`; `attempt()` and `uptime(now)` are derived when read, so nothing goes stale between state changes.
+  > - **Conflict texts.** `DisconnectReason::classify(&self)` stays unchanged, since fleet-mc calls it. `ConflictTexts::classify` applies the texts on top of it, for every kick that `classify()` calls Transient, whatever its key; a key that means Permanent, Conflict or AuthInvalid wins. `transition()` takes `&BotRules { retry, conflict_texts }` instead of `&RetryPolicy`.
+  > - **Limits.** At most 16 texts of 1–1024 characters, compared exactly and case-sensitively, taken as written. A text with a character the kick sanitizer strips is rejected; errors name the index, never the text.
+  > - **The chat format** is deferred to the server side (P11.9).
 - [ ] **P4.2** 🔴 `BotActor`:
   - `tokio::select!` over the inbox (`Start`, `Stop`, `UpdateSpec`, `SendChat`, `Reset`, `Resume`), session events, timers and cancellation.
   - It executes the core `Effect`s and computes retry delays with `RetryPolicy`.
@@ -1411,16 +1435,28 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Paused and Failed.** `Start` and `Stop` are no-ops there, so applying a spec's desired run state leaves them alone. A server change to a Paused or Failed bot takes effect at Resume or Reset.
 
   > Note (P4.2, from P3.9): **Not decided: re-apply holds after a respawn.** A death ends a `HoldUse` hold, and only a new join runs the at-start steps again. So an at-start hold comes back after a reconnect but not after a respawn (ADR-0011).
-- [ ] **P4.3** 🔴 `SessionCredentialProvider` port:
+
+  > Note (P4.2, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
+  > - **Holds after a respawn** aren't re-applied; that's a known limit. A repeating `HoldUse{on: true}` step does re-apply a hold after a death. P11.4 decides about "on respawn" steps.
+  > - **A failed `respawn()`** is retried every 5 s while the session lives; the first failure logs at `warn`, the retries at `debug`. After 12 failed calls in a row the session ends with the new `DisconnectReason::RespawnFailed` (Transient, added to fleet-core in this task), so the bot reconnects and respawns on join.
+  > - **Events.** `FleetEvent { bot_id, at, kind }` with `StateChanged(BotSnapshot)`, `Died`, `ChatReceived`, `ChatSent{ticket}` and `ChatFailed{ticket, reason}`, on one bounded `broadcast` per fleet.
+  > - **The session-request timeout** is 30 s, a `RuntimeConfig` default.
+- [x] **P4.3** 🔴 `SessionCredentialProvider` port:
   - In standalone mode it returns offline credentials.
   - In managed mode it asks the control plane (Phase 10).
   - On an expired token it refreshes once, then goes to `Failed(Auth)`.
 
   > Note (P4.3, from Phase 2): The "refresh once" is driven by the core state machine. The first `AuthInvalid` emits `RequestSession{fresh: true}`, and the provider must bypass any token cache for it. The second goes to `Failed(Auth)` (ADR-0010).
+
+  > Note (P4.3, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The port lives in `fleet_core::mc`, so fleet-testkit can provide its fake: `session(SessionRequest { bot_id, account, fresh })` returns `SessionCredentials` or `CredentialError { retryable }`. `OfflineCredentials` lives in fleet-runtime, the managed implementation in fleet-agent (P10.6). The runtime doesn't check `expires_at`.
 - [ ] **P4.4** 🔴 `ModeRunner` drives the core `ModePlan` through the `SessionHandle`.
   - A failed action is logged and skipped, never fatal.
   - It stops cleanly on disconnect or mode change.
   - Tests assert the timing on a paused clock.
+
+  > Note (P4.4, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
+  > - **Logging.** A failed action logs at `warn` for the first failure of each kind per session, then at `debug`.
+  > - **A mode change** lets go first (`HoldUse{on:false}`, `Sneak{on:false}`), then starts the new plan with its at-start steps. The slot stays, and an equal definition changes nothing.
 - [ ] **P4.5** 🔴 Outbound chat queue:
   - bounded at 16, with one governor token bucket per bot
   - when the bucket or queue is full it returns `RateLimited` or `QueueFull` **instead of blocking**
@@ -1430,6 +1466,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P4.5, from Phase 3, group E): **flagged, not decided.** `send_chat` can fail with `SessionError::ChatUnavailable` when an online session can't sign chat for a server that enforces it. The session stays up, and a later call may succeed. This task decides what the queue does then, for user chat and mode chat (ADR-0011).
   >
   > Mode chat with a command that takes message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) is rejected by a server that enforces secure chat, while `send_chat` returns `Ok`. That's undecided here too; see P11.3's note.
+
+  > Note (P4.5, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
+  > - **Admission.** The bucket (one message per 3 s, burst 3) is checked when a message is queued. User chat while the bot isn't Online returns `NotOnline`.
+  > - **Results.** `send_chat` returns a ticket once queued; the outcome comes later as `ChatSent` or `ChatFailed`. Queued messages fail with `ChatFailed{Disconnected}` on a disconnect. A failed send doesn't refund its token.
+  > - **`ChatUnavailable`** drops the message: user chat gets `ChatFailed{ChatUnavailable}`, mode chat is logged at `debug` and skipped. No retry.
+  > - **Mode chat** that's rate-limited or finds the queue full is skipped and logged.
+  > - **Commands with message arguments** get nothing special here; P11.3's rule applies to mode chat too.
+
+  > Note (P4.5, from the PR #14 review, the user's request): **Prove the chrono and rand bans.** fleet-runtime's `clippy.toml` lists chrono's and rand's clock and OS-randomness paths with `allow-invalid`, which would hide a path that doesn't resolve. When chrono and rand become fleet-runtime dependencies, show a red clippy run proving that each banned chrono and rand path fires. That means `chrono::Utc::now` and `Local::now`, rand's `rng`, `random`, `random_iter`, `random_range`, `random_bool`, `random_ratio`, `fill` and `make_rng`, and the `ThreadRng` and `SysRng` types. Use a temporary probe, never committed, with the features that make these paths exist enabled only for the probe, as ADR-0010's probe did (ADR-0013).
 - [ ] **P4.6** 🔴 Watchdog, while Online (fault table in ADR-0008 §5):
   - no `Tick` for `watchdog_timeout`: raise `WatchdogTimeout`, tear the session down and reconnect
   - no packet from the server for `packet_liveness_timeout`: tear the session down and treat it as a transient disconnect
@@ -1437,6 +1482,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   Both timeouts come from `[runtime]` in the agent config (Appendix A).
 
   > Note (P4.6, from group E, the user's decision): The session's `Liveness` holds the two stamps, and the comparison lives here. When both stamps are stale, the tick stall wins: `WatchdogTimeout`, not `LivenessTimeout`, because a hung host thread stops both (ADR-0010).
+
+  > Note (P4.6, from the Phase 4 plan) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The watchdog checks every 1 s, a `RuntimeConfig` default.
 - [ ] **P4.7** 🔴 `Supervisor` and `Fleet` handle:
   - actors run in a `JoinSet` or `TaskTracker`
   - panics are detected and the actor restarted, within the intensity limit
@@ -1448,6 +1495,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Open question, flagged and not yet decided.** `Paused` (a human is playing) and `Failed` must survive an actor or agent restart. Otherwise a fresh `Start` kicks the human (§6 row 3).
 
   > Note (P4.7, from Phase 3): The abandoned-thread limit lives in fleet-mc: above it, `connect()` returns `HostUnavailable`. Ending the agent process at the limit is P5.3's job (ADR-0011).
+
+  > Note (P4.7, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
+  > - **Inside.** Actors run in tokio's `JoinSet` with child `CancellationToken`s. The `Fleet` handle talks to the supervisor task over a bounded queue with a reply timeout.
+  > - **API.** Also `reset`, `resume`, `restart` (a no-op when desired = Stopped), `snapshot(id)` and `shutdown(timeout)`; bots start and stop only through the desired state. `apply(spec, restore: Option<StickyState>)` refuses a new bot above `max_bots` (`AtCapacity`) and a changed account (`AccountChanged`). `remove` returns once accepted; until the `Removed` event, `apply` for that bot returns `Busy`.
+  > - **Restarts never skip the backoff.** The supervisor keeps each bot's spec, snapshot, restart window and a copy of its circuit breaker, which the actor publishes after each breaker effect. A pure `fleet_core::bot::restore` turns AwaitingSession, Connecting, Online and Backoff into `Backoff{attempt}` with `ScheduleRetry` (`Backoff{1}` after a stable Online); Paused, Failed and Stopped stay, and Stopping becomes Stopped. A panic isn't a breaker failure.
+  > - **Crash loop.** The 6th panic within 10 min starts the actor once more with `CrashLoop` first. If it panics again, the supervisor publishes `Failed(CrashLoop)` itself and starts an actor only on Reset.
+  > - **Agent restarts.** The server is the source of truth (P10.5); the standalone agent persists nothing, a documented limit.
 - [ ] **P4.8** 🔴 **Chaos property test.** Random sequences of these events, run with paused time:
   - transient and permanent kicks
   - connection failures
@@ -1460,11 +1514,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - Bots with desired = Running that only see transient faults end up Online.
   - Connect attempts stay inside the policy bounds (no reconnect storms).
   - The `Fleet` API always responds.
+
+  > Note (P4.8, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): A fixed 500 cases (`with_cases(500)`), as an exception to `PROPTEST_CASES`. Panics come from a test-only connector wrapper in fleet-runtime's `tests/`; the fakes stay panic-free. The storm invariant holds across actor panics too, with no exception for connects after a restart.
 - [ ] **P4.9** Metrics: bots per state, reconnects, watchdog trips, actor restarts.
 
   > Note (P4.9, from Phase 3): Also export fleet-mc's diagnostics: live and abandoned host threads, live Worlds, and dropped chat (ADR-0011).
 
   > Note (P4.9, from Phase 3, group B): `abandoned_threads()`, `dropped_chat()` and `ignored_action_bar()` only count up, so they're counters; `live_threads()` and `live_worlds()` are gauges (ADR-0011).
+
+  > Note (P4.9, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The metrics are `afkfleet_bots{state}`, `afkfleet_bot_reconnects_total`, `afkfleet_watchdog_trips_total{kind}` and `afkfleet_actor_restarts_total`, with no `bot_id` label. Tests install a hand-written recorder per test with metrics' thread-local `set_default_local_recorder`. **fleet-mc's diagnostics move to P5.3:** fleet-runtime may depend only on fleet-core (§4), so the two notes above are the agent's job.
 
 **Security:**
 - Every channel is bounded.
@@ -1491,6 +1549,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P5.1, from group C): `mode = "afk"` and `mode = "farm"` in `[[standalone.bots]]` map to `ModeDefinition::afk()` and `ModeDefinition::farm()`. Core has no lookup by name; this task adds it (ADR-0010).
 
   > Note (P5.1, from Phase 3): `[runtime]` gains `connect_timeout_secs` (default 30), which goes into `ConnectParams`, and `max_abandoned_threads` (default 3), which goes to `McHostPool` (Appendix A, ADR-0011).
+
+  > Note (P5.1, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): `[[standalone.bots]]` gains `conflict_texts = […]`, kick texts that count as a duplicate login; a missing key means an empty list (`ConflictTexts`, at most 16 entries of 1–1024 characters). P5 also supplies the runtime's wall-clock anchor and seed to `Fleet::new`.
 - [ ] **P5.2** Telemetry: pretty logs in dev and JSON in prod, an env filter, and a panic hook that logs through `tracing`.
 
   > Note (P5.2, from Phase 3, group B review): **azalea's log targets stay at `warn`** in the default filter. azalea_client's disconnect plugin formats kick reasons at `info`, with azalea's own rendering, which grows exponentially on hostile nested translations (P3.5) and panics on a `%0$s` placeholder, since it computes `d - 1` on an unsigned digit with overflow checks on. A disabled level never formats, so neither can happen (ADR-0011).
@@ -1499,6 +1559,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P5.3** Wiring: `McHostPool` + `AzaleaConnector` + `Fleet`, with the standalone spec source.
 
   > Note (P5.3, from Phase 3): When `McHostPool::abandoned_threads()` reaches `max_abandoned_threads`, the agent shuts down and exits with an error, so Docker restarts it (§6 row 8). The library never ends the process itself (ADR-0011).
+
+  > Note (P5.3, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
+  > - **fleet-mc's diagnostics** are exported here, since fleet-runtime can't read them: `abandoned_threads()`, `dropped_chat()` and `ignored_action_bar()` as counters, `live_threads()` and `live_worlds()` as gauges.
+  > - **Paused and Failed across an agent restart.** The standalone agent persists nothing, so a restart starts every bot again; that's a documented limit for a dev-only mode with offline accounts. In managed mode the server sends the sticky state (P10.5).
 - [ ] **P5.4** 🔴 Signals (Ctrl+C, SIGTERM) trigger a graceful shutdown within `shutdown_timeout`.
 - [ ] **P5.5** 🔴 A `healthcheck` subcommand. The agent touches a heartbeat file every 10 s, and the check fails when the file is stale. This works in distroless images, which have no curl.
 - [ ] **P5.6** `deploy/docker/agent.Dockerfile`:
@@ -1809,7 +1873,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `Scheduler`: in v1, the first agent with free capacity, labels optional
   - `Reconciler`: compares desired with reported state and sends `Assign`, `Unassign` or `UpdateSpec`
   - stale agent detection, which marks its bots `Unknown`
+
+  > Note (P10.5, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
+  > - **Sticky state.** The server stores `bots.last_state` from `BotStatus` and sends a Paused or Failed state with `AssignBot`/`ReconcileFull`, so the agent's `Fleet::apply(spec, restore)` starts the bot there instead of kicking a human (§6 row 3).
+  > - **Moving a bot** to another agent waits for the old agent's `Removed` event (or a timeout), so two agents never run the same account at once.
 - [ ] **P10.6** 🔴 Session grants: `SessionRequest{bot_id}` returns `SessionGrant`, but only if the bot is assigned to *this* agent; otherwise `SessionDenied`. On the agent this backs `SessionCredentialProvider`.
+
+  > Note (P10.6, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The port is `fleet_core::mc`'s credentials provider, and the runtime doesn't check `expires_at`. The managed provider never hands out a token that expires within the connect timeout.
 - [ ] **P10.7** 🔴 Agent client:
   - reconnects with backon
   - keeps bots running during outages
@@ -1850,6 +1920,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `chat_messages`
 
   > Note (P11.1, from group C): The `modes` migration seeds the built-in modes `afk` and `farm`: fixed v7 IDs (ADR-0010), no owner, and the JSON of `ModeDefinition::afk()` and `farm()`.
+
+  > Note (P11.1, from Phase 4, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Conflict texts are stored per server** in managed mode: set once in the app for all bots on that server, and sent to agents as each bot's resolved `ConflictTexts` in its spec.
 - [ ] **P11.2** 🔴 Bot endpoints:
   - `GET /bots`, `GET /bots/{id}`
   - `PATCH /bots/{id}` (server, mode, auto-start)
@@ -1885,6 +1957,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - refuse such commands on enforcing servers, with an error
   >
   > P4.5 decides the same for mode chat (ADR-0011).
+
+  > Note (P11.3, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
+  > - **Mode chat follows this task's rule.** P4.5 does nothing special for commands with message arguments; whatever is decided here applies to mode chat too, through `ChatUnavailable`.
+  > - **The per-bot chat limit.** §7.4 says it's configurable, and the agent's queue uses one message per 3 s, burst 3 as a default. Decide here where that setting lives (server settings, sent to agents).
 - [ ] **P11.4** 🔴 Modes CRUD: `GET`, `POST`, `PUT`, `DELETE` on `/modes`. Core validation errors become field errors. Built-in modes are read-only.
 
   > Note (P11.4, from Phase 2): Editing a mode that's assigned to bots must re-run the command check for every one of them. A mode with a command outside the allowlist needs Manage on each bot (ADR-0010).
@@ -1898,6 +1974,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Private** modes are seen and edited by their owner, the Owner, and Admins for Members' modes. Everyone else gets 404, also in `GET /modes`.
   > - **Shared** modes are seen by everyone, and edited by their creator while they're an Admin, and by the Owner. Creating one needs Admin+.
   > - **Changing the visibility** needs the rights before and after the change, so an Admin can't share a Member's private mode.
+
+  > Note (P11.4, from Phase 4, the user's request) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **After a respawn none of the at-start setup runs again** (look, slot, sneak, hold); only a repeating step comes back. Decide here whether modes get "on respawn" steps (e.g. `/home`, then the setup). That needs a `SessionEvent::Respawned` port event, with which the actor's respawn retry can also confirm that the bot is alive again instead of trusting an `Ok`.
 - [ ] **P11.5** 🔴 Live events:
   1. `POST /events/ticket` returns a single-use ticket valid for 30 s (moka).
   2. The client opens a WebSocket at `GET /events?ticket=…`.
@@ -1929,6 +2007,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P11.9, from group D, the user's request): **Promotions.** When a Member is promoted to Admin (P8.8), the app shows the existing grants on their accounts, and the server provides them, so the Owner can review and revoke them. Grants made before the promotion survive it, including one an Admin gave an alt account (ADR-0010, threat model).
 
   > Note (P11.9, from Phase 3, the user's request): **Parsed senders.** If P4.1's per-server chat format is built, the chat console shows a sender parsed from the text visibly differently from one a player packet named. Neither is verified: azalea 0.16 doesn't verify chat signatures, so every chat sender is only what the server claims, and none drives a permission or trigger decision (ADR-0011, threat model).
+
+  > Note (P11.9, from Phase 4, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **The chat format is parsed on the server.** It stays out of the bot's spec and the agent: the server already has each system message's whole sanitized text, so a per-server format can extract the sender for display here.
 
 **DoD:** The user's real fleet runs for 24 h, managed from the app. Every event shows up live, and the logs contain no unhandled errors.
 

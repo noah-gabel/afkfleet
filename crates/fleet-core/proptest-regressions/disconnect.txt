@@ -4,5 +4,4 @@
 #
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
-cc 5c9199f07a2f6b00c35bfd50529f817bc4ca69c1dab1466391cf468b56d29964 # shrinks to raw = "AΣ\u{a01}𝕒𑤷A    𞓐aᤀ 🌀  ", max_chars = 0
-cc e67e2bf6928d2901fd2fbefd3ab2ed78028e372c56e5d66705df3551c145d66c # shrinks to raw = "\u{e0100}"
+cc 6959a0dcdc1930d516b19165128749928e92b8acfc59844ced6fc1b0ec708e90 # shrinks to key = None, message = "®", listed = true
