@@ -1458,6 +1458,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Respawn** retries 5 s after each failed call; `Closed` ends the retry at `debug` and never counts; each death warns on its first failure.
   > - **Events and logs.** `Notify` is published as the new `FleetEventKind::Alert(BotNotification)`, right after its `StateChanged`. No event for the starting state: the snapshot watch gets Stopped. `last_disconnect` changes only when a session ends on its own. State changes log at `info`; a session that ends on its own and is retried, a session-request timeout and a retryable credential error at `warn` (a kick's text only at `debug`); Paused at `warn`, Failed at `error`.
   > - **Tests.** fleet-testkit's fake session gained `fail_respawn`, `succeed_respawn` and `delay_disconnect`. Crashes come from a test-only wrapper in fleet-runtime's `tests/`, as for P4.8.
+
+  > Note (P4.2, found and fixed in P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Reset and Resume ignored the desired state.** A Paused bot whose spec said desired = Stopped connected again on Resume, and a Failed one on Reset. Both now feed their event and then apply the desired state, as `UpdateSpec` does: with desired = Stopped the bot passes `AwaitingSession{1}` and ends Stopped, and the session request is dropped before the provider is ever asked. A regression test covers both.
 - [x] **P4.3** 🔴 `SessionCredentialProvider` port:
   - In standalone mode it returns offline credentials.
   - In managed mode it asks the control plane (Phase 10).
@@ -1527,7 +1529,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Ready session events go first,** as before every session-ending input (P4.2): a queued duplicate-login kick pauses the bot instead of a trip that would reconnect it.
   > - **Settings.** `watchdog_timeout` and `packet_liveness_timeout` (30 s each) are `RuntimeConfig` fields for Appendix A's keys; `watchdog_period` (1 s) is a default only, and a zero period counts as 1 ms. A trip is recorded in `last_disconnect` and logs at `warn` like any session that ends on its own.
   > - **Tests** are in `tests/bot_actor.rs`, next to the actor's helpers, instead of a separate file: sharing those helpers through `tests/common` would leave them unused in the other test files.
-- [ ] **P4.7** 🔴 `Supervisor` and `Fleet` handle:
+- [x] **P4.7** 🔴 `Supervisor` and `Fleet` handle:
   - actors run in a `JoinSet` or `TaskTracker`
   - panics are detected and the actor restarted, within the intensity limit
   - API: `apply(spec)`, `remove(id)`, `send_chat`, `snapshot_all`, `subscribe`
@@ -1553,6 +1555,16 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The actor's inbox** takes one `BotCommand` per `Fleet` call: `UpdateSpec`, `Restart`, `Reset`, `Resume` and `SendChat`. Bots start and stop only through the spec's desired state; `restart` is the `Restart` command, which the actor ignores while desired = Stopped.
   > - **The supervisor owns the `watch`es.** It creates each bot's snapshot and breaker `watch` and passes the senders in `BotActorParts`; the breaker watch's current value is where a new actor starts.
   > - **A restored starting point.** `BotActorParts` will need one for a restarted actor: the `Transition` from `fleet_core::bot::restore()` (e.g. Backoff with `ScheduleRetry`), or a sticky Paused or Failed from `apply`'s restore. Today the actor starts Stopped and applies the desired state. P4.7 decides what the actor publishes for a restored state.
+
+  > Note (P4.7, from group D, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
+  > - **Shape.** `Fleet::new(FleetParts)` returns `(Fleet, Supervisor)` after checking the chat quota and every channel capacity against tokio's limits (`FleetSetupError`). The caller runs `supervisor.run(cancel)` in a task it owns; a cancelled token or every `Fleet` dropped shuts down within `RuntimeConfig::shutdown_timeout` (10 s).
+  > - **Calls.** A full supervisor queue is `Busy` at once, no answer within 5 s is `TimedOut`, and an ended supervisor is `ShuttingDown`. One `BotCommand` per call by `try_send`; a refused one is `Busy` and stores no spec. `send_chat` returns `SendChatError { Fleet, Chat }`.
+  > - **`apply`.** New: `AccountInUse` when a live bot's account clashes (`BotAccount::clashes_with`: offline names ignore ASCII case), `Busy` when only a removing bot holds it, `AtCapacity` at `max_bots` (every known bot counts until `Removed`). Known: `AccountChanged` compares exactly, an equal spec isn't forwarded, a restore is ignored. `StickyState` lives in `fleet_core::bot`.
+  > - **Starting points.** `BotActorParts.start: Transition`: Stopped, a sticky state, `restore()`, or `CrashLoop` on the restored state. Only a start state that differs from the `watch` is published (a sticky start without an `Alert`); `last_disconnect` carries over. `restore()` of a stable Online also records a success.
+  > - **Crashes.** A panic, a `TaskCrashed` and an unexpected exit (logged at `error`) count in the window; a restart logs at `warn` in the bot's span, the crash loop at `error`. After the crash-loop actor crashes too, calls act like a Failed actor's, and `reset` starts a new one. The window is cleared only by a `reset` while the bot is crash-looped: its actor was started for a crash loop, or it has none. *(PR #17 review)* That goes by the supervisor's own record, since a Reset can come before the crash-loop actor has published `Failed(CrashLoop)`.
+  > - **Removal** publishes `StateChanged(Stopped)` only for a bot its actor stops through `transition()`; a Paused, Failed or crash-looped bot gets only `Removed`, so P10.5 keeps the server's stored state. While removing: `apply` is `Busy`, the other commands `UnknownBot`, a second `remove` `Ok`, and reads still show the bot.
+  > - **Shutdown** returns `ShutdownReport { stopped, aborted, crashed }`; calls meanwhile are `ShuttingDown`, and an accepted removal still publishes `Removed`.
+  > - **Tests** are the folder crate `tests/fleet/` (`main.rs`, `panicky.rs`, `supervisor.rs`).
 - [ ] **P4.8** 🔴 **Chaos property test.** Random sequences of these events, run with paused time:
   - transient and permanent kicks
   - connection failures
@@ -1569,6 +1581,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P4.8, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): A fixed 500 cases (`with_cases(500)`), as an exception to `PROPTEST_CASES`. Panics come from a test-only connector wrapper in fleet-runtime's `tests/`; the fakes stay panic-free. The storm invariant holds across actor panics too, with no exception for connects after a restart.
 
   > Note (P4.8, from group C, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Deliberate restarts start a new run.** A `Restart` or a server change starts a new run at once, in AwaitingSession and Backoff too, dropping the backoff and the breaker's cool-down, as Start, Reset and Resume already do. So the storm invariant must leave the connects of a deliberate new run out of its bound.
+
+  > Note (P4.8, from group D, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The chaos test becomes `tests/fleet/chaos.rs` in the fleet test crate and reuses `tests/fleet/panicky.rs`, whose `PanickyConnector` panics on chosen connects (the actor itself) or in a session's `perform` or `disconnect` (`TaskCrashed`).
 - [ ] **P4.9** Metrics: bots per state, reconnects, watchdog trips, actor restarts.
 
   > Note (P4.9, from Phase 3): Also export fleet-mc's diagnostics: live and abandoned host threads, live Worlds, and dropped chat (ADR-0011).
@@ -1604,6 +1618,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P5.1, from Phase 3): `[runtime]` gains `connect_timeout_secs` (default 30), which goes into `ConnectParams`, and `max_abandoned_threads` (default 3), which goes to `McHostPool` (Appendix A, ADR-0011).
 
   > Note (P5.1, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): `[[standalone.bots]]` gains `conflict_texts = […]`, kick texts that count as a duplicate login; a missing key means an empty list (`ConflictTexts`, at most 16 entries of 1–1024 characters). P5 also supplies the runtime's wall-clock anchor and seed to `Fleet::new`.
+
+  > Note (P5.1, from P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): `[runtime] max_bots` and `shutdown_timeout_secs` map to `RuntimeConfig::max_bots` and `shutdown_timeout`. Two `[[standalone.bots]]` entries whose accounts clash are refused with a clear message, using `BotAccount::clashes_with` (offline names compare ignoring ASCII case), the same rule as the runtime's `AccountInUse`.
 - [ ] **P5.2** Telemetry: pretty logs in dev and JSON in prod, an env filter, and a panic hook that logs through `tracing`.
 
   > Note (P5.2, from Phase 3, group B review): **azalea's log targets stay at `warn`** in the default filter. azalea_client's disconnect plugin formats kick reasons at `info`, with azalea's own rendering, which grows exponentially on hostile nested translations (P3.5) and panics on a `%0$s` placeholder, since it computes `d - 1` on an unsigned digit with overflow checks on. A disabled level never formats, so neither can happen (ADR-0011).
@@ -1616,7 +1632,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P5.3, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
   > - **fleet-mc's diagnostics** are exported here, since fleet-runtime can't read them: `abandoned_threads()`, `dropped_chat()` and `ignored_action_bar()` as counters, `live_threads()` and `live_worlds()` as gauges.
   > - **Paused and Failed across an agent restart.** The standalone agent persists nothing, so a restart starts every bot again; that's a documented limit for a dev-only mode with offline accounts. In managed mode the server sends the sticky state (P10.5).
+
+  > Note (P5.3, from P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): `Fleet::new` returns the handle and the `Supervisor`; the agent runs `supervisor.run(cancel)` in a task it owns and reports a `FleetSetupError` at startup.
 - [ ] **P5.4** 🔴 Signals (Ctrl+C, SIGTERM) trigger a graceful shutdown within `shutdown_timeout`.
+
+  > Note (P5.4, from P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): A signal calls `Fleet::shutdown(shutdown_timeout)`, or cancels the supervisor's token, which shuts down within `RuntimeConfig::shutdown_timeout`. `shutdown` returns a `ShutdownReport { stopped, aborted, crashed }` for the log.
 - [ ] **P5.5** 🔴 A `healthcheck` subcommand. The agent touches a heartbeat file every 10 s, and the check fails when the file is stale. This works in distroless images, which have no curl.
 - [ ] **P5.6** `deploy/docker/agent.Dockerfile`:
   - cargo-chef
@@ -1930,6 +1950,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P10.5, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
   > - **Sticky state.** The server stores `bots.last_state` from `BotStatus` and sends a Paused or Failed state with `AssignBot`/`ReconcileFull`, so the agent's `Fleet::apply(spec, restore)` starts the bot there instead of kicking a human (§6 row 3).
   > - **Moving a bot** to another agent waits for the old agent's `Removed` event (or a timeout), so two agents never run the same account at once.
+
+  > Note (P10.5, from P4.7, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **No `Stopped` before `Removed` for a sticky bot.** A removed bot publishes `StateChanged(Stopped)` only if its actor stopped it through `transition()`. A Paused, Failed or crash-looped bot gets only `Removed`, so `bots.last_state` keeps the Paused or Failed the server sends with `AssignBot` on the next agent. Otherwise the new agent would connect and kick the human who's playing (§6 row 3), or retry a failed account.
 - [ ] **P10.6** 🔴 Session grants: `SessionRequest{bot_id}` returns `SessionGrant`, but only if the bot is assigned to *this* agent; otherwise `SessionDenied`. On the agent this backs `SessionCredentialProvider`.
 
   > Note (P10.6, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The port is `fleet_core::mc`'s credentials provider, and the runtime doesn't check `expires_at`. The managed provider never hands out a token that expires within the connect timeout.
@@ -1940,6 +1962,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - forwards events through a bounded buffer that drops the oldest chat when full and **never blocks the bots**
 
   > Note (P10.7, from Phase 4, group B) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The agent maps the runtime's `FleetEvent`s to `BotEvent`. `ChatSent` and `ChatFailed` carry the runtime's `ChatTicket`, which the agent maps back to `SendChat`'s request id. `ModeChatSent{message}` is outgoing mode chat, with no request id.
+
+  > Note (P10.7, from P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The agent maps `FleetEventKind::Removed` too, since P10.5's move to another agent waits for it.
 
   > Note (P10.7, from the PR #15 review): **An event can come before its ticket.** `ChatQueue::send` returns the ticket while the queue's delivery task may already be publishing `ChatSent` or `ChatFailed` for it, so on the agent the event can arrive before the `send_chat` reply. The agent must handle a ticket it hasn't mapped to a request id yet, for example by handling replies and events in one task, or by holding unknown tickets briefly.
 

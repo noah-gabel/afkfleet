@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 465ee8a38485ada3de321708aa3dbb871daf52075d8fe0887bb296a55efad1f5 # shrinks to state = AwaitingSession { attempt: 1, fresh: false }, now = 1970-01-01T00:00:00Z
+cc cadd57f686598067350a629eb77eb1b6eeaa896999d7559768e78b950925a751 # shrinks to state = Backoff { attempt: 1 }, now = 1970-01-01T00:00:00Z

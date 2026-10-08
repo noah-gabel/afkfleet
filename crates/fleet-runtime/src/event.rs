@@ -53,4 +53,14 @@ pub enum FleetEventKind {
     /// connects it again. It comes right after the `StateChanged` it belongs
     /// to (ADR-0013).
     Alert(BotNotification),
+    /// The fleet removed the bot: its actor has ended, and it's the bot's
+    /// last event. Normally every teardown has finished and the account is
+    /// free. After an actor was aborted at the shutdown timeout, its sessions
+    /// were dropped instead, and fleet-mc ends them right after.
+    ///
+    /// A bot that was running publishes `StateChanged(Stopped)` first. A
+    /// Paused, Failed or crash-looped bot doesn't, so its last published
+    /// state stays: the server keeps it and restores it when it assigns the
+    /// bot again (P10.5; ADR-0013).
+    Removed,
 }

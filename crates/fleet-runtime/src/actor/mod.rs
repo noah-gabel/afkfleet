@@ -14,9 +14,14 @@
 //!   change, deaths, incoming chat, and alerts for a human.
 //!
 //! A [`BotCommand`] comes in per `Fleet` call. Start and stop come only from
-//! the spec's desired state. Before any input that ends a session, the actor
-//! applies the session events that are already ready, so a duplicate-login
-//! kick that's already queued always pauses the bot first.
+//! the spec's desired state, which applies when the actor starts and after
+//! every `UpdateSpec`, `Reset` and `Resume`. Before any input that ends a
+//! session, the actor applies the session events that are already ready, so a
+//! duplicate-login kick that's already queued always pauses the bot first.
+//!
+//! The supervisor decides where an actor starts (P4.7): a new bot's Stopped,
+//! a sticky Paused or Failed, or, after a crash, `restore()`'s answer from the
+//! last published state, so a restart never skips the backoff.
 
 mod command;
 mod effects;
@@ -32,7 +37,9 @@ use core::time::Duration;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use fleet_core::bot::{BotEvent, BotRules, BotSnapshot, BotSpec, BotState, DesiredRunState};
+use fleet_core::bot::{
+    BotEvent, BotRules, BotSnapshot, BotSpec, BotState, DesiredRunState, Transition,
+};
 use fleet_core::disconnect::DisconnectReason;
 use fleet_core::mc::{
     CredentialError, MinecraftConnector, SessionCredentialProvider, SessionCredentials,
@@ -91,6 +98,12 @@ pub struct BotActorParts<C, P> {
     /// Holds the bot's circuit breaker: its current value is where the actor
     /// starts, and the actor writes a copy after each breaker effect.
     pub breaker: watch::Sender<CircuitBreaker>,
+    /// Where the actor starts, as the supervisor computed it (ADR-0013): a
+    /// new bot's `Stopped`, a sticky `Paused` or `Failed`, `restore()`'s
+    /// answer for a restarted actor, or a crash loop's `Failed(CrashLoop)`.
+    /// The actor takes on its state, executes its effects, then applies the
+    /// spec's desired state.
+    pub start: Transition,
 }
 
 /// Why [`BotActor::run`] returned.
@@ -167,6 +180,8 @@ pub struct BotActor<C: MinecraftConnector, P> {
     span: Span,
     /// The parent of every session's token; a child of `run`'s token.
     run_token: CancellationToken,
+    /// Where `run` starts; taken when it does.
+    start: Option<Transition>,
     state: BotState,
     last_disconnect: Option<DisconnectReason>,
     /// Events that effects produced, applied after the current one.
@@ -196,9 +211,12 @@ impl<C: MinecraftConnector, P> fmt::Debug for BotActor<C, P> {
 }
 
 impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
-    /// Builds the actor and its bounded inbox. The bot starts Stopped; the
-    /// snapshot `watch` gets that state without an event, and
-    /// [`run`](Self::run) applies the spec's desired state.
+    /// Builds the actor and its bounded inbox.
+    ///
+    /// The snapshot `watch`'s current value is the bot's last published
+    /// snapshot: a new bot's Stopped, or what a crashed actor left. Its
+    /// `last_disconnect` carries over. [`run`](Self::run) then takes on the
+    /// starting point and applies the spec's desired state (ADR-0013).
     #[must_use]
     pub fn new(parts: BotActorParts<C, P>) -> (Self, BotInbox) {
         let BotActorParts {
@@ -214,15 +232,14 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             tickets,
             snapshot,
             breaker,
+            start,
         } = parts;
         let (sender, inbox) = mpsc::channel(config.actor_inbox.get());
-        snapshot.send_replace(BotSnapshot {
-            bot_id: spec.id,
-            state: BotState::Stopped,
-            since: clock.now(),
-            last_disconnect: None,
-        });
-        let start = breaker.borrow().clone();
+        let (state, last_disconnect) = {
+            let last = snapshot.borrow();
+            (last.state, last.last_disconnect.clone())
+        };
+        let breaker_start = breaker.borrow().clone();
         let actor = Self {
             rules: BotRules {
                 retry,
@@ -236,14 +253,15 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             events,
             snapshot,
             breaker_copy: breaker,
-            breaker: start,
+            breaker: breaker_start,
             mode: watch::Sender::new(spec.mode.clone()),
             queue: ChatQueue::new(spec.id, config.chat_queue, bucket, tickets),
             inbox,
             span: info_span!("bot", bot_id = %spec.id),
             run_token: CancellationToken::new(),
-            state: BotState::Stopped,
-            last_disconnect: None,
+            start: Some(start),
+            state,
+            last_disconnect,
             pending: VecDeque::new(),
             held_credentials: None,
             session_request: None,
@@ -264,13 +282,18 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
     /// Runs the bot until `cancel` is cancelled or every inbox sender is
     /// dropped, then stops it and waits for its teardowns. It returns early
     /// if one of its tasks panics.
+    ///
+    /// It first takes on the starting point: its state, published only if it
+    /// differs from the last published one, then its effects. Then the spec's
+    /// desired state applies.
     pub async fn run(mut self, cancel: CancellationToken) -> ActorExit {
         let span = self.span.clone();
         async move {
             self.run_token = cancel.child_token();
-            if self.spec.desired == DesiredRunState::Running {
-                self.feed(BotEvent::Start).await;
+            if let Some(start) = self.start.take() {
+                self.begin(start).await;
             }
+            self.apply_desired().await;
             loop {
                 let input = self.next_input(&cancel).await;
                 if let ControlFlow::Break(exit) = self.handle(input).await {
@@ -365,8 +388,17 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
                     self.restart().await;
                 }
             }
-            BotCommand::Reset => self.feed(BotEvent::Reset).await,
-            BotCommand::Resume => self.feed(BotEvent::Resume).await,
+            // Reset and Resume leave Failed and Paused, then the desired
+            // state applies, so a bot that should be stopped ends Stopped
+            // without asking for a session (found in P4.7).
+            BotCommand::Reset => {
+                self.feed(BotEvent::Reset).await;
+                self.apply_desired().await;
+            }
+            BotCommand::Resume => {
+                self.feed(BotEvent::Resume).await;
+                self.apply_desired().await;
+            }
             BotCommand::SendChat { message, reply } => {
                 // An error only means the caller stopped waiting.
                 let _ = reply.send(self.queue.send(message));
@@ -405,15 +437,22 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
         });
         self.rules.conflict_texts.clone_from(&spec.conflict_texts);
         self.spec = spec;
+        if self.spec.desired == DesiredRunState::Running && server_changed && has_run(self.state) {
+            self.restart().await;
+        } else {
+            self.apply_desired().await;
+        }
+    }
+
+    /// Applies the spec's desired state: Start, or Stop after the ready
+    /// session events, since a Stop ends the session.
+    async fn apply_desired(&mut self) {
         match self.spec.desired {
+            DesiredRunState::Running => self.feed(BotEvent::Start).await,
             DesiredRunState::Stopped => {
                 self.drain().await;
                 self.feed(BotEvent::Stop).await;
             }
-            DesiredRunState::Running if server_changed && has_run(self.state) => {
-                self.restart().await;
-            }
-            DesiredRunState::Running => self.feed(BotEvent::Start).await,
         }
     }
 
@@ -690,6 +729,10 @@ mod tests {
             tickets: ChatTickets::new(),
             snapshot,
             breaker: watch::Sender::new(CircuitBreaker::new(policy)),
+            start: Transition {
+                state: BotState::Stopped,
+                effects: Vec::new(),
+            },
         });
         let mut actor = actor;
         actor.feed(BotEvent::Start).await;

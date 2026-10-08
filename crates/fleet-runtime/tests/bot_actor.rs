@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use fleet_core::bot::{
-    BotAccount, BotNotification, BotSnapshot, BotSpec, BotState, DesiredRunState, FailReason,
-    PauseReason,
+    BotAccount, BotNotification, BotSnapshot, BotSpec, BotState, DesiredRunState, Effect,
+    FailReason, PauseReason, Transition,
 };
 use fleet_core::chat::{ChatMessage, IncomingChat};
 use fleet_core::disconnect::{
@@ -181,6 +181,14 @@ async fn advance(duration: Duration) {
 
 // --- The actor under test ---
 
+/// Where a new bot's actor starts: Stopped, with nothing to do.
+fn new_start() -> Transition {
+    Transition {
+        state: BotState::Stopped,
+        effects: Vec::new(),
+    }
+}
+
 /// What a test sets up before the actor starts.
 struct Setup {
     spec: BotSpec,
@@ -190,6 +198,13 @@ struct Setup {
     seed: u64,
     connector: FakeConnector,
     credentials: FakeCredentials,
+    /// What the snapshot `watch` holds before the actor starts: the last
+    /// snapshot of an actor that crashed, or a new bot's Stopped.
+    previous: BotSnapshot,
+    /// Where the actor starts.
+    start: Transition,
+    /// The breaker the actor starts with; a new one if `None`.
+    breaker: Option<CircuitBreaker>,
 }
 
 impl Setup {
@@ -202,6 +217,14 @@ impl Setup {
             seed: 1,
             connector: FakeConnector::new(),
             credentials: FakeCredentials::new(),
+            previous: BotSnapshot {
+                bot_id: bot_id(),
+                state: BotState::Stopped,
+                since: anchor(),
+                last_disconnect: None,
+            },
+            start: new_start(),
+            breaker: None,
         }
     }
 
@@ -214,13 +237,11 @@ impl Setup {
     async fn start_with<C: MinecraftConnector>(self, connector: C) -> Bot {
         let clock = RuntimeClock::new(anchor());
         let (events_tx, events) = broadcast::channel(256);
-        let (snapshot_tx, snapshot) = watch::channel(BotSnapshot {
-            bot_id: bot_id(),
-            state: BotState::Stopped,
-            since: anchor(),
-            last_disconnect: None,
-        });
-        let (breaker_tx, breaker) = watch::channel(CircuitBreaker::new(self.circuit));
+        let (snapshot_tx, snapshot) = watch::channel(self.previous);
+        let (breaker_tx, breaker) = watch::channel(
+            self.breaker
+                .unwrap_or_else(|| CircuitBreaker::new(self.circuit)),
+        );
         let bucket = ChatBucket::new(self.config.chat_interval, self.config.chat_burst).unwrap();
         let (actor, inbox) = BotActor::new(BotActorParts {
             spec: self.spec,
@@ -235,6 +256,7 @@ impl Setup {
             tickets: ChatTickets::new(),
             snapshot: snapshot_tx,
             breaker: breaker_tx,
+            start: self.start,
         });
         let cancel = CancellationToken::new();
         let task = tokio::spawn(actor.run(cancel.clone()));
@@ -529,6 +551,168 @@ async fn a_mode_change_while_online_does_not_reconnect() {
     assert!(!controller.is_torn_down());
     assert_eq!(bot.connects(), 1);
     assert_eq!(bot.states(), []);
+}
+
+// --- Starting points (P4.7) ---
+
+/// A snapshot the `watch` held before the actor starts, as a crashed actor
+/// left it.
+fn previous(state: BotState, since: DateTime<Utc>) -> BotSnapshot {
+    BotSnapshot {
+        bot_id: bot_id(),
+        state,
+        since,
+        last_disconnect: Some(DisconnectReason::ConnectionClosed),
+    }
+}
+
+/// `restore()`'s answer for an unstable Online or a Backoff on `attempt`.
+fn restored(attempt: NonZeroU32) -> Transition {
+    Transition {
+        state: backoff(attempt),
+        effects: vec![Effect::ScheduleRetry { attempt }],
+    }
+}
+
+fn earlier(duration: Duration) -> DateTime<Utc> {
+    anchor() - chrono::TimeDelta::from_std(duration).unwrap()
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_restored_bot_backs_off_before_it_connects_again() {
+    let mut setup = Setup::new(running());
+    setup.previous = previous(online(earlier(secs(60)), n(2)), earlier(secs(60)));
+    setup.start = restored(n(2));
+    let mut bot = setup.start().await;
+
+    assert_eq!(bot.state(), backoff(n(2)));
+    assert_eq!(
+        bot.snapshot.borrow().since,
+        anchor(),
+        "it entered Backoff now"
+    );
+    assert_eq!(bot.states(), [backoff(n(2))]);
+    let (lower, upper) = policy().bounds(n(2));
+    advance(lower.checked_sub(ms(1)).unwrap()).await;
+    assert_eq!(bot.connects(), 0);
+    advance(upper.checked_sub(lower).unwrap() + ms(1)).await;
+    assert_eq!(bot.connects(), 1);
+    assert_eq!(bot.state(), connecting(n(3)));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_restored_backoff_waits_out_an_open_breaker() {
+    let mut setup = Setup::new(running());
+    setup.circuit = circuit(1);
+    let mut breaker = CircuitBreaker::new(setup.circuit);
+    breaker.record_failure(anchor());
+    let until = breaker.open_until().unwrap();
+    setup.breaker = Some(breaker);
+    setup.previous = previous(backoff(n(1)), earlier(secs(1)));
+    setup.start = restored(n(1));
+    let bot = setup.start().await;
+
+    advance(time::elapsed(anchor(), until).checked_sub(ms(1)).unwrap()).await;
+    assert_eq!(bot.connects(), 0, "the breaker is still open");
+    advance(ms(2)).await;
+
+    assert_eq!(bot.connects(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_last_disconnect_carries_over_to_a_restarted_actor() {
+    let mut setup = Setup::new(running());
+    setup.previous = previous(online(earlier(secs(60)), n(1)), earlier(secs(60)));
+    setup.start = restored(n(1));
+
+    let bot = setup.start().await;
+
+    assert_eq!(
+        bot.last_disconnect(),
+        Some(DisconnectReason::ConnectionClosed)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_unchanged_start_publishes_nothing_and_keeps_its_since() {
+    let mut setup = Setup::new(running());
+    setup.previous = previous(DUPLICATE_LOGIN, earlier(secs(100)));
+    setup.start = Transition {
+        state: DUPLICATE_LOGIN,
+        effects: Vec::new(),
+    };
+    let mut bot = setup.start().await;
+    advance(secs(3_600)).await;
+
+    assert_eq!(bot.state(), DUPLICATE_LOGIN);
+    assert_eq!(bot.snapshot.borrow().since, earlier(secs(100)));
+    assert_eq!(bot.kinds(), []);
+    assert_eq!(bot.connects(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_sticky_start_publishes_its_state_without_an_alert() {
+    let mut setup = Setup::new(running());
+    setup.start = Transition {
+        state: DUPLICATE_LOGIN,
+        effects: Vec::new(),
+    };
+    let mut bot = setup.start().await;
+    advance(secs(3_600)).await;
+
+    assert_eq!(
+        bot.kinds(),
+        [FleetEventKind::StateChanged(BotSnapshot {
+            bot_id: bot_id(),
+            state: DUPLICATE_LOGIN,
+            since: anchor(),
+            last_disconnect: None,
+        })]
+    );
+    assert_eq!(bot.connects(), 0);
+    assert_eq!(bot.credentials.requests().len(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_crash_loop_start_publishes_the_failure_then_its_alert() {
+    let failed = BotState::Failed {
+        reason: FailReason::CrashLoop,
+    };
+    let alert = BotNotification::Failed {
+        reason: FailReason::CrashLoop,
+    };
+    let mut setup = Setup::new(running());
+    setup.previous = previous(backoff(n(3)), earlier(secs(5)));
+    setup.start = Transition {
+        state: failed,
+        effects: vec![Effect::Notify(alert)],
+    };
+    let mut bot = setup.start().await;
+    advance(secs(3_600)).await;
+
+    let kinds = bot.kinds();
+    assert!(
+        matches!(
+            &kinds[..],
+            [FleetEventKind::StateChanged(snapshot), FleetEventKind::Alert(alerted)]
+                if snapshot.state == failed && *alerted == alert
+        ),
+        "{kinds:?}"
+    );
+    assert_eq!(bot.connects(), 0);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_restored_bot_that_should_be_stopped_ends_stopped() {
+    let mut setup = Setup::new(stopped());
+    setup.previous = previous(online(earlier(secs(60)), n(1)), earlier(secs(60)));
+    setup.start = restored(n(1));
+    let mut bot = setup.start().await;
+    advance(secs(3_600)).await;
+
+    assert_eq!(bot.state(), BotState::Stopped);
+    assert_eq!(bot.states(), [backoff(n(1)), BotState::Stopped]);
+    assert_eq!(bot.connects(), 0);
 }
 
 // --- Sessions and credentials ---
@@ -1098,6 +1282,52 @@ async fn resume_and_reset_connect_again() {
 
     assert_eq!(bot.state(), connecting(n(1)));
     assert_eq!(bot.connects(), 3);
+}
+
+// Found in P4.7's plan review: Resume and Reset ignored the desired state, so
+// a paused bot that should be stopped connected again.
+#[tokio::test(start_paused = true)]
+async fn resume_leaves_a_paused_bot_that_should_be_stopped_stopped() {
+    let (mut bot, controller) = Bot::online(Setup::new(running())).await;
+    emit(&controller, duplicate_login());
+    settle().await;
+    bot.update(stopped()).await;
+    assert_eq!(bot.state(), DUPLICATE_LOGIN);
+    let _ = bot.kinds();
+
+    bot.send(BotCommand::Resume).await;
+    advance(secs(3_600)).await;
+
+    assert_eq!(bot.state(), BotState::Stopped);
+    assert_eq!(bot.states(), [awaiting(n(1)), BotState::Stopped]);
+    assert_eq!(
+        bot.credentials.requests().len(),
+        1,
+        "no new session request"
+    );
+    assert_eq!(bot.connects(), 1, "no new connect");
+}
+
+#[tokio::test(start_paused = true)]
+async fn reset_leaves_a_failed_bot_that_should_be_stopped_stopped() {
+    let (mut bot, controller) = Bot::online(Setup::new(running())).await;
+    emit(&controller, kick("multiplayer.disconnect.banned"));
+    settle().await;
+    bot.update(stopped()).await;
+    assert!(matches!(bot.state(), BotState::Failed { .. }));
+    let _ = bot.kinds();
+
+    bot.send(BotCommand::Reset).await;
+    advance(secs(3_600)).await;
+
+    assert_eq!(bot.state(), BotState::Stopped);
+    assert_eq!(bot.states(), [awaiting(n(1)), BotState::Stopped]);
+    assert_eq!(
+        bot.credentials.requests().len(),
+        1,
+        "no new session request"
+    );
+    assert_eq!(bot.connects(), 1, "no new connect");
 }
 
 #[tokio::test(start_paused = true)]

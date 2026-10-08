@@ -1,4 +1,5 @@
-//! [`ChatBucket`]: a bot's chat rate limit.
+//! [`ChatBucket`]: a bot's chat rate limit, and [`ChatQuota`], the validated
+//! limit each bucket is built from.
 
 use core::fmt;
 use core::num::NonZeroU32;
@@ -22,6 +23,27 @@ pub enum ChatBucketError {
     ZeroInterval,
 }
 
+/// A validated chat rate limit: a bucket that holds `burst` messages and gains
+/// one per `interval`. The fleet checks it once when it's built, so every
+/// bot's [`ChatBucket`] comes from it without an error path (ADR-0013).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChatQuota {
+    quota: Quota,
+}
+
+impl ChatQuota {
+    /// Checks a chat rate limit.
+    ///
+    /// # Errors
+    /// [`ChatBucketError::ZeroInterval`] if `interval` is zero.
+    pub fn try_new(interval: Duration, burst: NonZeroU32) -> Result<Self, ChatBucketError> {
+        let quota = Quota::with_period(interval)
+            .ok_or(ChatBucketError::ZeroInterval)?
+            .allow_burst(burst);
+        Ok(Self { quota })
+    }
+}
+
 /// A bot's chat rate limit: a token bucket that holds `burst` messages and
 /// gains one per `interval` (Plan.md §7.4: one per 3 s, burst 3).
 ///
@@ -40,12 +62,15 @@ impl ChatBucket {
     /// # Errors
     /// [`ChatBucketError::ZeroInterval`] if `interval` is zero.
     pub fn new(interval: Duration, burst: NonZeroU32) -> Result<Self, ChatBucketError> {
-        let quota = Quota::with_period(interval)
-            .ok_or(ChatBucketError::ZeroInterval)?
-            .allow_burst(burst);
-        Ok(Self {
-            limiter: Arc::new(RateLimiter::direct_with_clock(quota, TokioClock)),
-        })
+        ChatQuota::try_new(interval, burst).map(Self::with_quota)
+    }
+
+    /// Builds a full bucket for `quota`, which was checked when it was made.
+    #[must_use]
+    pub fn with_quota(quota: ChatQuota) -> Self {
+        Self {
+            limiter: Arc::new(RateLimiter::direct_with_clock(quota.quota, TokioClock)),
+        }
     }
 
     /// Takes one message's token, if the bucket has one.
@@ -105,6 +130,42 @@ mod tests {
         assert!(bucket.try_take());
 
         assert!(!clone.try_take());
+    }
+
+    #[test]
+    fn a_quota_with_a_zero_interval_is_refused() {
+        assert_eq!(
+            ChatQuota::try_new(Duration::ZERO, burst(3)),
+            Err(ChatBucketError::ZeroInterval)
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_bucket_from_a_quota_lets_its_burst_through_then_one_per_interval() {
+        let quota = ChatQuota::try_new(Duration::from_secs(3), burst(2));
+        assert!(quota.is_ok(), "{quota:?}");
+        let bucket = ChatBucket::with_quota(quota.unwrap());
+
+        assert_eq!([bucket.try_take(), bucket.try_take()], [true; 2]);
+        assert!(!bucket.try_take());
+
+        tokio::time::advance(Duration::from_millis(2_999)).await;
+        assert!(!bucket.try_take());
+        tokio::time::advance(Duration::from_millis(1)).await;
+        assert!(bucket.try_take());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn buckets_from_one_quota_are_separate() {
+        let quota = ChatQuota::try_new(Duration::from_secs(3), burst(1));
+        assert!(quota.is_ok(), "{quota:?}");
+        let quota = quota.unwrap();
+        let first = ChatBucket::with_quota(quota);
+        let second = ChatBucket::with_quota(quota);
+
+        assert!(first.try_take());
+
+        assert!(second.try_take(), "the second bucket is still full");
     }
 
     #[test]
