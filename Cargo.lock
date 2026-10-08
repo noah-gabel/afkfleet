@@ -1698,6 +1698,7 @@ dependencies = [
  "fleet-testkit",
  "governor",
  "proptest",
+ "rand 0.10.3",
  "rstest",
  "thiserror 2.0.21",
  "tokio",

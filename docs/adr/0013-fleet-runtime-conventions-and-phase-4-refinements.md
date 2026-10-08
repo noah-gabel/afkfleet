@@ -71,6 +71,10 @@ The queue and the mode runner are built against the fake before the actor, so th
 ### Mode runner (P4.4)
 - A failed action is skipped. The first failure of each `SessionError` kind per session logs at `warn`, later ones at `debug`.
 - **A mode change** lets go first (`HoldUse{on:false}`, `Sneak{on:false}`), then starts the new plan with its at-start steps. The selected slot stays, and an update with an equal definition changes nothing.
+- *(group B, the user's decisions)* What the runner looks like as built:
+  - **One task per Online session**, started at `StartMode` with a `CancellationToken` and a `watch::Receiver<ModeDefinition>`. A changed definition lets go and restarts the plan inside the same task, so the warn-once memory lasts the whole session.
+  - **It ends** at cancellation, when a call fails with `Closed` (the session has ended), or when the owner drops the `watch` sender. A cancellation interrupts a tick's actions; a mode change waits until they're done.
+  - **Logging.** Failed actions and refused mode chat (`RateLimited`, `QueueFull`) share the runner's warn-once log. Mode chat that finds the queue closed (`NotOnline`) always logs at `debug` (see Actor).
 
 ### Actor (P4.2)
 - **Events.** `FleetEvent { bot_id, at, kind }`, where `kind` is `StateChanged(BotSnapshot)`, `Died`, `ChatReceived(IncomingChat)`, `ChatSent{ticket}`, `ChatFailed{ticket, reason}` or *(group B)* `ModeChatSent{message}`. There's one bounded `broadcast` per fleet, and a lagging subscriber resyncs (§6 row 12). *(group B)* The type is defined in P4.5, the queue being its first publisher.
@@ -113,6 +117,7 @@ A fixed 500 cases (`with_cases(500)`), as an exception to `PROPTEST_CASES`, so t
 - `Fleet::new` takes a wall-clock anchor (`DateTime<Utc>`) and a seed (`u64`) from its caller. The runtime clock derives `DateTime<Utc>` from tokio's `Instant` anchored there (ADR-0010), and each actor's `StdRng` is derived from the seed. The runtime never reads the wall clock or the OS's randomness, so chrono's `clock` and rand's `sys_rng` stay off. P5 supplies both values.
 - `crates/fleet-runtime/clippy.toml` repeats the root settings and bans `std::time::Instant::now`, `SystemTime::now`, chrono's `Utc::now`/`Local::now` and rand's OS entry points. tokio's `Instant::now` stays allowed: it's the runtime's clock. This makes the lints stricter.
 - *(PR #14 review, the user's request)* It also bans `std::time::Instant::elapsed` and `std::time::SystemTime::elapsed`. They read the real clock just like `now`. The watchdog (P4.6) compares the session's `Liveness` stamps, which are std `Instant`s, so `stamp.elapsed()` would bypass paused time; it compares against tokio's clock instead. A temporary probe, never committed, called each one, and clippy flagged both as `disallowed_methods` with their reasons.
+- *(group B, the PR #14 review's request)* The chrono and rand bans are proven too. chrono arrived in P4.5 and rand in P4.4. A temporary probe, never committed, enabled chrono's `clock` and rand's `thread_rng` for fleet-runtime only and used each banned path. Clippy flagged all 12 with their reasons: `chrono::Utc::now`, `chrono::Local::now`, `rand::rng`, `random`, `random_iter`, `random_range`, `random_bool`, `random_ratio`, `fill` and `make_rng` as `disallowed_methods`, and `rand::rngs::ThreadRng` and `SysRng` as `disallowed_types`. So `allow-invalid` hides none of them.
 
 ### Settings without a config key
 They're `RuntimeConfig` fields with defaults, like fleet-mc's `McConfig`, and P5.1 maps only Appendix A's keys:

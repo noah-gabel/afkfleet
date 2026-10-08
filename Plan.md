@@ -1454,7 +1454,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P4.3, from Phase 2): The "refresh once" is driven by the core state machine. The first `AuthInvalid` emits `RequestSession{fresh: true}`, and the provider must bypass any token cache for it. The second goes to `Failed(Auth)` (ADR-0010).
 
   > Note (P4.3, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The port lives in `fleet_core::mc`, so fleet-testkit can provide its fake: `session(SessionRequest { bot_id, account, fresh })` returns `SessionCredentials` or `CredentialError { retryable }`. `OfflineCredentials` lives in fleet-runtime, the managed implementation in fleet-agent (P10.6). The runtime doesn't check `expires_at`.
-- [ ] **P4.4** 🔴 `ModeRunner` drives the core `ModePlan` through the `SessionHandle`.
+- [x] **P4.4** 🔴 `ModeRunner` drives the core `ModePlan` through the `SessionHandle`.
   - A failed action is logged and skipped, never fatal.
   - It stops cleanly on disconnect or mode change.
   - Tests assert the timing on a paused clock.
@@ -1462,6 +1462,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P4.4, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
   > - **Logging.** A failed action logs at `warn` for the first failure of each kind per session, then at `debug`.
   > - **A mode change** lets go first (`HoldUse{on:false}`, `Sneak{on:false}`), then starts the new plan with its at-start steps. The slot stays, and an equal definition changes nothing.
+
+  > Note (P4.4, from group B, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
+  > - **Shape.** One `ModeRunner` task per Online session. The actor starts it at `StartMode` with a `CancellationToken` and a `watch::Receiver<ModeDefinition>`. A changed definition lets go and restarts the plan inside the same task, so the warn-once memory lasts the whole session. The runner ends at cancellation, when the session has ended (a call fails with `Closed`), or when the owner drops the `watch` sender.
+  > - **Cancellation** interrupts a tick's actions; a mode change waits until they're done.
+  > - **Logging.** Failed actions and refused mode chat (`RateLimited`, `QueueFull`) share the runner's warn-once log; the queue's delivery keeps its own for failed sends. *(the user's addition)* Mode chat that finds the queue closed (`NotOnline`) always logs at `debug`, so a disconnect can't produce a spurious warning.
+  > - **Timing.** The runner wakes at most once per sleep, and a late tick doesn't catch up (P2.8). tokio's timer rounds a deadline up to the next millisecond, which the jitter test allows for.
+  > - **Tests** read log levels through a small level-recording subscriber in the test file: fleet-testkit's log capture doesn't record levels.
 - [x] **P4.5** 🔴 Outbound chat queue:
   - bounded at 16, with one governor token bucket per bot
   - when the bucket or queue is full it returns `RateLimited` or `QueueFull` **instead of blocking**
@@ -1490,6 +1497,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The bucket** (`ChatBucket`) is shared and outlives the sessions, so a reconnect doesn't refill it, and the supervisor keeps it across actor restarts (P4.7).
   > - **Shape.** `ChatQueue::open(session, events, clock, cancel)` returns the session's `ChatDelivery`, which the actor spawns, and a `ModeChat` handle for the mode runner. `close()` cancels the delivery, which fails what's still queued. A send that's already running finishes, since every `SessionHandle` call has its own timeout. The settings are `RuntimeConfig` fields.
   > - **Naming.** The delivery task is `ChatDelivery`, not `ChatSender`: fleet-core's incoming chat already has a `ChatSender`.
+
+  > Note (P4.5, from group B): **The bans are proven.** chrono arrived in P4.5 and rand in P4.4. A temporary probe, never committed, then enabled chrono's `clock` and rand's `thread_rng` (which brings `std_rng` and `sys_rng`) for fleet-runtime only and used each banned path. Clippy flagged all 12 with their reasons: `disallowed_methods` for `chrono::Utc::now`, `chrono::Local::now`, `rand::rng`, `random`, `random_iter`, `random_range`, `random_bool`, `random_ratio`, `fill` and `make_rng`, and `disallowed_types` for `rand::rngs::ThreadRng` and `SysRng`. The files were restored afterwards.
 - [ ] **P4.6** 🔴 Watchdog, while Online (fault table in ADR-0008 §5):
   - no `Tick` for `watchdog_timeout`: raise `WatchdogTimeout`, tear the session down and reconnect
   - no packet from the server for `packet_liveness_timeout`: tear the session down and treat it as a transient disconnect
