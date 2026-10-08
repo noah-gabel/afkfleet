@@ -1350,6 +1350,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - `slow_actions_scenario`'s `hold_use` step checks three things: on, then off right away, leaves nothing drawn; a full draw shoots nothing while held; the release shoots one arrow.
   >   - Red first: against a release that did nothing, and against an immediate release without the cancel, which shot an arrow from the bow it had left drawn.
   > - **Runs** (2026-10-08): `slow_actions_scenario` alone passed 10 of 10. Three full `just test-slow` runs passed every scenario (actions, offline, online, fault containment, teardown), 3 of 3 each.
+  > - **A slot change and a hold in the same tick** *(from the PR review)*. An at-start "select a slot, then hold" runs in one tick on every join. azalea doesn't directly order its slot packet (`ensure_has_sent_carried_item`) against the use (`handle_start_use_item_queued`). If the slot packet reached the server after the use, it would end the hold.
+  >   - The `hold_use` step now selects the bow's slot from slot 0 and holds with no wait between, waits a full draw, lets go, and expects one more arrow. The bow is only the instrument.
+  >   - It passed 5 runs of 5 on its own, and one full `just test-slow` run.
+  >   - A temporary probe, never committed, logged the bot's packets in 3 more runs. Both actions landed before the same tick, and in that tick `set_carried_item` went out about 0.05–0.1 ms before `use_item`.
+  >   - That order is what azalea 0.16.0's schedule does today; no direct ordering constraint declares it. So the live step guards it at every azalea bump (ADR-0003).
 
 **Security:**
 - Credentials are never logged.

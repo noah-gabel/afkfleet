@@ -214,7 +214,9 @@ async fn arrows_shot(scene: &Scene) -> i64 {
 /// First, hold and let go right away: the release cancels the use azalea
 /// hasn't sent yet, so nothing is left drawn, and a later release shoots
 /// nothing. Then hold for a full draw: nothing is shot while the bot holds,
-/// one arrow when it lets go.
+/// one arrow when it lets go. Last, from another slot, select the bow's slot
+/// and hold in the same tick: the hold still draws, and the release shoots
+/// one more arrow. The bow is only the instrument.
 ///
 /// azalea doesn't move projectiles between the server's position updates,
 /// so for a while after a throw or a shot, the bot's own picture shows the
@@ -266,6 +268,40 @@ async fn hold_use(scene: &Scene) {
             "execute if entity @e[type=minecraft:arrow]",
             // A selector's test also answers the count: "Test passed. Count: 1".
             |output| output.starts_with("Test passed"),
+        )
+        .await;
+    scene.server.rcon("kill @e[type=minecraft:arrow]").await;
+
+    // A slot change and a hold in the same tick, as an at-start "select a
+    // slot, then hold" runs on every join. The server must see the new slot
+    // before the use: a use with the old slot uses its item, and a slot change
+    // after the use ends the hold.
+    scene.select(0).await;
+    scene
+        .server
+        .eventually(
+            "slot 0 selected",
+            &format!("data get entity {NAME} SelectedItemSlot"),
+            |output| data_floats(output) == [0.0],
+        )
+        .await;
+    // Also lets the arrow's removal reach the bot.
+    ticks_pass(&scene.session, 3).await;
+    scene.select(4).await;
+    scene.perform(GameAction::HoldUse { on: true }).await;
+    ticks_pass(&scene.session, 25).await;
+    assert_eq!(
+        arrows_shot(scene).await,
+        1,
+        "an arrow was shot while held after the slot change"
+    );
+    scene.perform(GameAction::HoldUse { on: false }).await;
+    scene
+        .server
+        .eventually(
+            "the arrow shot after a slot change and a hold in the same tick",
+            &format!("scoreboard players get {NAME} bows"),
+            |output| score(output) == Some(2),
         )
         .await;
     scene.server.rcon("kill @e[type=minecraft:arrow]").await;

@@ -290,9 +290,14 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
       1. on, then off right away; 25 ticks; off again: no arrow, because a bow left drawn would shoot now
       2. on, then 25 ticks: still no arrow
       3. off: one arrow (the `minecraft.used:minecraft.bow` score, and an arrow entity)
+      4. *(from the PR review)* from slot 0, select the bow's slot and hold with no wait between, as an at-start "select a slot, then hold" does on every join; a full draw; off: one more arrow
     - **Red runs.** Against a release that did nothing, the release check failed. Against an immediate release without the cancel, the back-to-back check failed with one arrow shot, so the wrong order is real.
       - The first version of that check ran after the shot. It passed against the immediate release, 3 runs of 3, because the second hold clicked the arrow (the finding above). Running it first, before any arrow exists, made it fail as it should.
     - **Results** (2026-10-08, local, Docker Desktop): `slow_actions_scenario` alone passed 10 runs of 10, about 22 s each. Three full `just test-slow` runs passed every scenario each time: actions, offline, online, fault containment and teardown, 3 of 3 each, about 92 s a run.
+  - **A slot change and a hold in the same tick** *(from the PR review)*. azalea sends the slot change (`ensure_has_sent_carried_item`, ordered only after mining) and the use (`handle_start_use_item_queued`) in the same `GameTick`, with no direct order between them (checked in azalea-client 0.16.0's `InventoryPlugin`). If the slot packet reached the server after the use, it would end the hold.
+    - Step 4 above checks this live. It passed 5 runs of 5 on its own and one full `just test-slow` run.
+    - A temporary probe, never committed, logged the bot's packets in 3 more runs. Both actions landed before the same tick, and in that tick `set_carried_item` went out about 0.05–0.1 ms before `use_item`.
+    - That order is what azalea 0.16.0's schedule does today, not a declared direct constraint. So the step guards it at every azalea bump (ADR-0003).
 
 ### Slow tests (P3.7, P3.8)
 - **Local servers only.** They use testcontainers with `itzg/minecraft-server`, offline and online mode, bound to localhost. The image and `VERSION` are the ones pinned in `deploy/compose.dev.yaml`, and a fast test asserts that the two pins match.
