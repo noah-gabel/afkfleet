@@ -11,8 +11,17 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# `DateTime` only: the runtime never reads the wall clock (ADR-0013).
+chrono.workspace = true
 fleet-core.workspace = true
+governor = { workspace = true, features = ["std"] }
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "sync", "time"] }
+tokio-util.workspace = true
+tracing.workspace = true
 
 [dev-dependencies]
+fleet-testkit.workspace = true
+proptest = { workspace = true, features = ["std"] }
 rstest.workspace = true
-tokio = { workspace = true, features = ["macros", "rt"] }
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }

@@ -58,13 +58,23 @@ The queue and the mode runner are built against the fake before the actor, so th
 - A mode chat step that's rate-limited or finds the queue full is skipped and logged, and runs again at its next scheduled time.
 - A token isn't refunded when a send fails.
 - **Commands with message arguments** (`/me`, `/msg`, …) on servers that enforce secure chat get nothing special in Phase 4: they go out and the server rejects them. P11.3's rule for user commands applies to mode chat too, through `ChatUnavailable`, because only fleet-mc knows whether a session signs.
+- *(group B, the user's decisions)* What the queue looks like as built:
+  - **Events.** `FleetEvent` is defined in P4.5 with all its kinds (see Actor), so the queue's `ChatDelivery` publishes `ChatSent` and `ChatFailed` on the fleet's `broadcast` itself. The `RuntimeClock` stamps them, which makes the queue the clock's first user.
+  - **Tickets** come from one fleet-wide counter, `ChatTickets`. A ticket never repeats while the agent runs, even across actor restarts, so the agent can map it to the control plane's request id.
+  - **`ChatFailure`** is `Disconnected`, `ChatUnavailable`, `TimedOut`, `SessionBusy` or `NotInWorld`. A message still queued at a close, or a send that finds the session `Closed`, is `Disconnected`; the other `SessionError`s map one to one (`QueueFull` is `SessionBusy`).
+  - **Mode chat** that's sent is published as `ModeChatSent{message}`, so the server learns what a mode said (P11). Mode chat that isn't sent is only logged.
+  - **Admission** reserves a queue slot before it takes a token, so `QueueFull` uses up no token and `RateLimited` holds no slot.
+  - **Logging.** Mode chat that's refused (`RateLimited`, `QueueFull`) or fails in the session logs at `warn` for the first time per kind and session, then at `debug`, like a failed action. `ChatUnavailable` stays at `debug`. User chat that fails logs at `debug`. No log carries the text.
+  - **The bucket** (`ChatBucket`) is shared: user chat and mode chat draw from it, it outlives the sessions, and the supervisor keeps it across actor restarts (P4.7). It runs on governor's `direct_with_clock` with a clock that reads tokio's `Instant` as a std `Instant`.
+  - **Shape.** `ChatQueue::open(session, events, clock, cancel)` returns the session's `ChatDelivery`, which the actor spawns, and a `ModeChat` handle for the mode runner. `close()` cancels the delivery, which fails what's still queued. A send that's already running finishes, since every `SessionHandle` call has its own timeout, so its outcome is the real one. The task is named `ChatDelivery` because fleet-core's incoming chat already has a `ChatSender`.
 
 ### Mode runner (P4.4)
 - A failed action is skipped. The first failure of each `SessionError` kind per session logs at `warn`, later ones at `debug`.
 - **A mode change** lets go first (`HoldUse{on:false}`, `Sneak{on:false}`), then starts the new plan with its at-start steps. The selected slot stays, and an update with an equal definition changes nothing.
 
 ### Actor (P4.2)
-- **Events.** `FleetEvent { bot_id, at, kind }`, where `kind` is `StateChanged(BotSnapshot)`, `Died`, `ChatReceived(IncomingChat)`, `ChatSent{ticket}` or `ChatFailed{ticket, reason}`. There's one bounded `broadcast` per fleet, and a lagging subscriber resyncs (§6 row 12).
+- **Events.** `FleetEvent { bot_id, at, kind }`, where `kind` is `StateChanged(BotSnapshot)`, `Died`, `ChatReceived(IncomingChat)`, `ChatSent{ticket}`, `ChatFailed{ticket, reason}` or *(group B)* `ModeChatSent{message}`. There's one bounded `broadcast` per fleet, and a lagging subscriber resyncs (§6 row 12). *(group B)* The type is defined in P4.5, the queue being its first publisher.
+- **Chat queue and mode runner** *(group B, the user's decision)*. At `StartMode` the actor opens the chat queue before it starts the mode runner. At `StopMode` or a disconnect it cancels the runner first and closes the queue after that, so mode chat never meets a closed queue; each gets its own child token of the session's token. A mode-chat send that still finds the queue closed (`NotOnline`) logs at `debug`, never `warn`, so a disconnect can't produce a spurious warning. The actor instruments both tasks with the bot's span.
 - **Respawn.** A failed `respawn()` call is retried every 5 s while the session lives; the first failure logs at `warn`, the retries at `debug`. After 12 failed calls in a row the session ends with the new `DisconnectReason::RespawnFailed` (Transient), so the bot reconnects and respawns on join. An `Ok` ends the retrying, even if the server ignored it, since the ports can't tell.
 - **Holds after a respawn** aren't re-applied; that's a known limit. A repeating `HoldUse{on: true}` step does re-apply a hold after a death, an at-start one doesn't. After a respawn none of the at-start setup runs again (look, slot, sneak, hold); P11 decides whether modes get "on respawn" steps, which needs a `SessionEvent::Respawned` port event.
 
@@ -87,6 +97,7 @@ It checks every 1 s while Online. A tick stall gives `WatchdogTimeout`, a packet
 
     Then the spec's desired state applies.
   - A panic isn't a breaker failure; only the restart window counts it.
+  - *(group B, the user's decision)* The supervisor also keeps each bot's `ChatBucket` and hands the same one to a restarted actor, so a crash doesn't refill it. It owns the fleet's `ChatTickets` and gives every actor a clone.
   - The 6th panic within 10 min gives `CrashLoop`: the supervisor starts the actor once more with `CrashLoop` as its first event, so `Failed(CrashLoop)` goes through `transition()`. If that actor panics too, the supervisor publishes `Failed(CrashLoop)` itself and starts an actor only on Reset.
 - **Across an agent restart** the server is the source of truth: it stores `bots.last_state` and sends the sticky state with `AssignBot`/`ReconcileFull` (P10). The standalone agent persists nothing, which is a documented limit for a dev-only mode with offline accounts.
 
@@ -148,6 +159,8 @@ Approved by the user; all are in Plan.md §5:
     - conflict texts per server in managed mode
     - where the per-bot chat limit lives (server settings, sent to agents)
     - "on respawn" mode steps and `SessionEvent::Respawned`, with which the respawn retry can confirm that the bot is alive instead of trusting an `Ok`
+  - **P10.7** *(group B)*: the agent maps `FleetEvent`s to `BotEvent`, a chat ticket back to `SendChat`'s request id, and `ModeChatSent` to outgoing chat without one.
+  - **P11.1** *(group B)*: `chat_messages` can record outgoing mode chat from `ModeChatSent`.
   - **P11.3:** its rule for commands with message arguments covers mode chat too.
   - **P11.9:** the chat format is parsed on the server.
 
@@ -162,6 +175,11 @@ Approved by the user; all are in Plan.md §5:
 - **Storing `uptime` in the snapshot,** refreshed every second. It costs a publish per bot per second.
 - **Re-applying holds after a respawn,** or restarting the mode then. Both need a "respawned" port event the ports don't have; restarting the whole mode would also repeat at-start chat and attacks on every death.
 - **Awaiting the real send in `send_chat`.** The caller would wait behind the queue and up to fleet-mc's 10 s signing wait.
+- *(group B)* **The queue reporting outcomes to the actor over its own channel,** with `FleetEvent` left to P4.2. The actor would have to drain that channel at all times, or the delivery would stall behind it.
+- *(group B)* **Per-bot tickets** start over after an actor restart, so a ticket the agent still maps could repeat. **Caller-supplied ids** would contradict "`send_chat` returns a ticket".
+- *(group B)* **Taking the token before the queue slot.** A message refused with `QueueFull` would still use up a token.
+- *(group B)* **No event for mode chat,** or ticket-less `ChatSent`. Without an event the server never learns what a mode said; an optional ticket would blur user chat and mode chat in one kind.
+- *(group B)* **A fresh chat bucket after an actor restart.** Each crash would allow another burst.
 - **Retrying or reconnecting on `ChatUnavailable`.** Retrying has unbounded latency; reconnecting lets chat failures drive reconnects.
 - **fleet-mc refusing message-argument commands now.** A hard-coded vanilla list misses aliases and plugin overrides, and it belongs to P11.3's rule for user commands.
 - **Restarting a crashed actor from Stopped.** Its next connect would skip the backoff, and a fresh breaker would forget an open circuit.
