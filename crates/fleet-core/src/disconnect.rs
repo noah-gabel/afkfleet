@@ -145,6 +145,10 @@ pub enum DisconnectReason {
     /// No packet from the server for the liveness timeout: the server froze or
     /// the link died.
     LivenessTimeout,
+    /// The bot died and couldn't be respawned: the runtime's respawn calls
+    /// kept failing, so the session ends and the bot respawns when it joins
+    /// again (ADR-0013).
+    RespawnFailed,
 }
 
 /// What a disconnect means for the bot.
@@ -227,7 +231,8 @@ impl DisconnectReason {
             | Self::SessionServerFailed { .. }
             | Self::SessionCrashed
             | Self::WatchdogTimeout
-            | Self::LivenessTimeout => DisconnectClass::Transient,
+            | Self::LivenessTimeout
+            | Self::RespawnFailed => DisconnectClass::Transient,
         }
     }
 }
@@ -561,6 +566,7 @@ mod tests {
     #[case::session_crashed(DisconnectReason::SessionCrashed, DisconnectClass::Transient)]
     #[case::watchdog_timeout(DisconnectReason::WatchdogTimeout, DisconnectClass::Transient)]
     #[case::liveness_timeout(DisconnectReason::LivenessTimeout, DisconnectClass::Transient)]
+    #[case::respawn_failed(DisconnectReason::RespawnFailed, DisconnectClass::Transient)]
     fn classifies_other_reasons(
         #[case] reason: DisconnectReason,
         #[case] expected: DisconnectClass,
@@ -788,6 +794,7 @@ mod tests {
     #[case::auth_rejected(DisconnectReason::AuthRejected)]
     #[case::session_crashed(DisconnectReason::SessionCrashed)]
     #[case::liveness_timeout(DisconnectReason::LivenessTimeout)]
+    #[case::respawn_failed(DisconnectReason::RespawnFailed)]
     fn reasons_other_than_kicks_are_never_compared(#[case] reason: DisconnectReason) {
         assert_eq!(texts(&[PROXY_TEXT]).classify(&reason), reason.classify());
     }

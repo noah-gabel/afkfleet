@@ -305,6 +305,39 @@ async fn failing_chat_fails_send_chat_only_until_it_succeeds_again() {
 }
 
 #[tokio::test(start_paused = true)]
+async fn failing_respawns_fail_respawn_only_until_they_succeed_again() {
+    let (session, _events, controller) = start_joined().await;
+    controller.fail_respawn(SessionError::NotInWorld);
+
+    let failed = session.respawn().await;
+    let action = session.perform(GameAction::Jump).await;
+    controller.succeed_respawn();
+    let again = session.respawn().await;
+
+    assert_eq!(failed, Err(SessionError::NotInWorld));
+    assert_eq!(action, Ok(()));
+    assert_eq!(again, Ok(()));
+    assert_eq!(
+        controller.log(),
+        [Performed::Action(GameAction::Jump), Performed::Respawn]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_respawn_leaves_the_bot_dead() {
+    let (session, _events, controller) = start_joined().await;
+    assert_eq!(controller.emit(SessionEvent::Died), EmitOutcome::Queued);
+    controller.fail_respawn(SessionError::TimedOut);
+
+    assert_eq!(session.respawn().await, Err(SessionError::TimedOut));
+
+    assert_eq!(
+        controller.emit(SessionEvent::Died),
+        EmitOutcome::DuplicateDeath
+    );
+}
+
+#[tokio::test(start_paused = true)]
 async fn calls_after_a_terminal_event_fail_with_closed() {
     let (session, _events, controller) = start_joined().await;
     assert_eq!(
@@ -385,6 +418,31 @@ async fn disconnect_finishes_on_a_hung_session() {
 
     assert!(teardown.is_ok());
     assert!(controller.is_torn_down());
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_delayed_disconnect_closes_at_once_and_returns_after_the_delay() {
+    let (session, mut events, controller) = start_joined().await;
+    controller.delay_disconnect(Duration::from_secs(10));
+    let started = tokio::time::Instant::now();
+    let teardown = tokio::spawn({
+        let session = session.clone();
+        async move { session.disconnect().await }
+    });
+    tokio::task::yield_now().await;
+
+    assert!(controller.is_torn_down());
+    assert_eq!(
+        session.perform(GameAction::Jump).await,
+        Err(SessionError::Closed)
+    );
+    assert_eq!(events.next().await, None);
+    assert!(!teardown.is_finished());
+
+    teardown.await.unwrap();
+
+    assert_eq!(started.elapsed(), Duration::from_secs(10));
+    assert_eq!(controller.log(), [Performed::Disconnect]);
 }
 
 // --- Liveness ---

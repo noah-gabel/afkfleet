@@ -317,6 +317,11 @@ async fn the_first_failure_of_each_kind_warns_and_the_rest_are_debug() {
         [Level::WARN, Level::DEBUG]
     );
     assert_eq!(levels.of("isn't in a world"), [Level::WARN, Level::DEBUG]);
+    assert_eq!(
+        levels.spans_of("isn't in a world"),
+        ["", ""],
+        "the runner opens no span of its own; the actor instruments it (ADR-0013)"
+    );
 }
 
 #[tokio::test(start_paused = true)]

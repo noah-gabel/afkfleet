@@ -18,8 +18,11 @@
 //! - [`ChatQueue`] is a bot's outbound chat: a bounded queue with a rate
 //!   limit, shared by user chat and mode chat.
 //! - [`ModeRunner`] runs a bot's mode in one session.
+//! - [`BotActor`] is one bot's actor. It takes a [`BotCommand`] per `Fleet`
+//!   call through its [`BotInbox`] and ends with an [`ActorExit`].
 //! - [`FleetEvent`]s tell the app what happened to a bot.
 
+mod actor;
 mod chat;
 mod clock;
 mod config;
@@ -28,6 +31,9 @@ mod event;
 mod failure_log;
 mod mode;
 
+pub use actor::{
+    ActorExit, BotActor, BotActorParts, BotCommand, BotInbox, CrashedTask, InboxError,
+};
 pub use chat::{
     ChatBucket, ChatBucketError, ChatDelivery, ChatError, ChatFailure, ChatQueue, ChatTicket,
     ChatTickets, ModeChat,

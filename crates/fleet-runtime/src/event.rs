@@ -1,7 +1,7 @@
 //! [`FleetEvent`]: what the runtime tells the app about its bots.
 
 use chrono::{DateTime, Utc};
-use fleet_core::bot::BotSnapshot;
+use fleet_core::bot::{BotNotification, BotSnapshot};
 use fleet_core::chat::{ChatMessage, IncomingChat};
 use fleet_core::id::BotId;
 
@@ -49,4 +49,8 @@ pub enum FleetEventKind {
         /// The message.
         message: ChatMessage,
     },
+    /// The bot paused or failed and needs a human: `Resume` or `Reset`
+    /// connects it again. It comes right after the `StateChanged` it belongs
+    /// to (ADR-0013).
+    Alert(BotNotification),
 }

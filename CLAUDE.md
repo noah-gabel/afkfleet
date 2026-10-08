@@ -251,7 +251,9 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 - **Every network or IO await has a timeout** (`tokio::time::timeout`), or a comment explaining why it doesn't need one.
 - **Channels are always bounded.** No `unbounded_channel`: clippy's `disallowed-methods` bans it. The only exceptions are the two channels azalea's API forces on `fleet-mc`, each marked with an approved `#[expect]` (ADR-0011).
 - **Never hold a `std::sync::Mutex` guard across `.await`.** Prefer message passing to shared locks.
-- **Every spawned task has an owner** (`JoinSet` / `TaskTracker`) and a child `CancellationToken`. No fire-and-forget `tokio::spawn`. The one exception is fleet-mc's host threads: their jobs belong to the thread's `JoinSet` and end with its stop signal (ADR-0011).
+- **Every spawned task has an owner** (`JoinSet` / `TaskTracker`) and a child `CancellationToken`. No fire-and-forget `tokio::spawn`. There are two exceptions:
+  - fleet-mc's host threads: their jobs belong to the thread's `JoinSet` and end with its stop signal (ADR-0011).
+  - the bot actor's teardown task: its `JoinSet` owns it, it runs to the end because the port guarantees `disconnect()` finishes, and an aborted actor aborts it too (ADR-0013).
 - **`tokio::select!` branches must be cancel-safe**, or have a comment explaining why it's fine.
 - **Overload is an explicit error.** When a queue is full or a rate limit is hit, return `QueueFull`, `RateLimited` or `429`. Never wait forever.
 
