@@ -11,7 +11,7 @@
 //! - [`chat`]: the messages bots send, and sanitized messages they receive.
 //! - [`disconnect`]: why a session ended, and whether the bot retries.
 //! - [`resilience`]: retry backoff, failure windows and the circuit breaker.
-//! - [`bot`]: the bot state machine.
+//! - [`bot`]: the bot state machine, and a bot's spec and status.
 //! - [`mode`]: what a bot does while it's online, and the presets.
 //! - [`mc`]: the Minecraft ports the runtime drives a session through.
 //! - [`authz`]: who may do what, decided by [`authz::authorize`].
@@ -23,7 +23,8 @@
 //! to execute. The actor runs them through the [`mc`] ports:
 //! [`mc::MinecraftConnector`] starts a session, and [`mc::SessionHandle`]
 //! acts in it. [`disconnect::DisconnectReason::classify`] decides what an
-//! ended session means, and the [`resilience`] policies decide how long to
+//! ended session means, with a bot's [`disconnect::ConflictTexts`] on top,
+//! and the [`resilience`] policies decide how long to
 //! wait before the next attempt. While the bot is online, a
 //! [`mode::ModePlan`] decides what it does and when, as
 //! [`mode::GameAction`]s for the session and chat for the chat queue. On the
@@ -40,12 +41,13 @@
 //! - **Errors.** Each module that can fail has its own error enum. Its
 //!   variants carry context, such as an index, a length or a limit, and never
 //!   the untrusted input, so an error message can't carry it into a log.
-//!   [`bot::transition`], [`disconnect::DisconnectReason::classify`] and the
-//!   chat sanitizer are total and return no errors.
+//!   [`bot::transition`], [`disconnect::DisconnectReason::classify`],
+//!   [`disconnect::ConflictTexts::classify`] and the chat sanitizer are total
+//!   and return no errors.
 //! - **Stored formats.** Value objects and modes deserialize through their
 //!   validating constructors. Changes to stored JSON are additive only, and a
 //!   new action or schedule type fails to load on an older server instead of
-//!   running in part. Runtime types such as [`bot::BotState`],
+//!   running in part. Runtime types such as [`bot::BotState`], [`bot::BotSpec`],
 //!   [`disconnect::DisconnectReason`] and [`mc::SessionCredentials`] have no
 //!   serde: their wire formats come with the proto and DTO conversions.
 //! - **Secrets** are `SecretString`s, whose `Debug` output is redacted.

@@ -4,7 +4,7 @@ use core::num::NonZeroU32;
 
 use chrono::{DateTime, Utc};
 
-use super::{BotEvent, BotNotification, BotState, Effect, FailReason, PauseReason};
+use super::{BotEvent, BotNotification, BotRules, BotState, Effect, FailReason, PauseReason};
 use crate::disconnect::{DisconnectClass, DisconnectReason};
 use crate::resilience::RetryPolicy;
 
@@ -21,16 +21,19 @@ pub struct Transition {
 
 /// Applies `event` to `state` at `now`.
 ///
-/// `policy` decides when a bot has been online long enough to count as stable:
-/// its attempt counter then starts over, and the circuit breaker records a
-/// success. An event that doesn't fit the state changes nothing.
+/// `rules.retry` decides when a bot has been online long enough to count as
+/// stable: its attempt counter then starts over, and the circuit breaker
+/// records a success. `rules.conflict_texts` decides which plain-text kicks
+/// count as a duplicate login. An event that doesn't fit the state changes
+/// nothing.
 pub fn transition(
     state: &BotState,
     event: BotEvent,
     now: DateTime<Utc>,
-    policy: &RetryPolicy,
+    rules: &BotRules,
 ) -> Transition {
     let state = *state;
+    let policy = &rules.retry;
     match event {
         BotEvent::Start => start(state),
         BotEvent::Stop => stop(state, now, policy),
@@ -51,7 +54,9 @@ pub fn transition(
             now,
             policy,
         ),
-        BotEvent::Disconnected(reason) => session_ended(state, reason.classify(), now, policy),
+        BotEvent::Disconnected(reason) => {
+            session_ended(state, rules.conflict_texts.classify(&reason), now, policy)
+        }
         BotEvent::RetryDue => retry_due(state),
         BotEvent::WatchdogTimeout => session_ended(
             state,
@@ -307,8 +312,8 @@ mod tests {
     use super::*;
     use crate::bot::{BotNotification, FailReason, PauseReason};
     use crate::disconnect::{
-        AccountRestriction, ConflictKind, ConnectFailure, DisconnectClass, DisconnectReason,
-        PermanentKind, SessionServerFailure,
+        AccountRestriction, ConflictKind, ConflictTexts, ConnectFailure, DisconnectClass,
+        DisconnectReason, PermanentKind, SessionServerFailure,
     };
     use crate::time;
     use Effect::{
@@ -355,8 +360,24 @@ mod tests {
         RetryPolicy::try_new(secs(5), secs(300), secs(300)).unwrap()
     }
 
+    /// The default policy and no conflict texts.
+    fn rules() -> BotRules {
+        BotRules {
+            retry: policy(),
+            conflict_texts: ConflictTexts::default(),
+        }
+    }
+
+    /// The default policy and the given conflict texts.
+    fn rules_with(conflict_texts: &[&str]) -> BotRules {
+        BotRules {
+            retry: policy(),
+            conflict_texts: ConflictTexts::try_new(conflict_texts).unwrap(),
+        }
+    }
+
     fn apply(state: BotState, event: BotEvent) -> Transition {
-        transition(&state, event, at(NOW), &policy())
+        transition(&state, event, at(NOW), &rules())
     }
 
     fn to(state: BotState, effects: &[Effect]) -> Transition {
@@ -374,7 +395,7 @@ mod tests {
     ) -> (BotState, Vec<Effect>) {
         let mut effects = Vec::new();
         for (second, event) in (0..).zip(events) {
-            let next = transition(&state, event, at(NOW + second), &policy());
+            let next = transition(&state, event, at(NOW + second), &rules());
             effects.extend(next.effects);
             state = next.state;
         }
@@ -954,6 +975,52 @@ mod tests {
         assert_eq!(apply(state, event), expected);
     }
 
+    /// A proxy's plain-text duplicate-login kick (a placeholder text).
+    const PROXY_TEXT: &str = "You are already connected to this proxy!";
+
+    #[rstest]
+    #[case::connecting(connecting(2, false), to(paused(), &[Disconnect, pause()]))]
+    #[case::online(online(2), to(paused(), &[StopMode, Disconnect, pause()]))]
+    #[case::stable_online(
+        stable_online(2),
+        to(paused(), &[StopMode, Disconnect, RecordSuccess, pause()])
+    )]
+    fn a_listed_plain_text_kick_pauses_the_bot(
+        #[case] state: BotState,
+        #[case] expected: Transition,
+    ) {
+        let event = BotEvent::Disconnected(DisconnectReason::kicked(None, PROXY_TEXT));
+
+        assert_eq!(
+            transition(&state, event, at(NOW), &rules_with(&[PROXY_TEXT])),
+            expected
+        );
+    }
+
+    #[test]
+    fn an_unlisted_plain_text_kick_stays_transient() {
+        let event = BotEvent::Disconnected(DisconnectReason::kicked(None, "Server restarting"));
+
+        assert_eq!(
+            transition(&online(2), event, at(NOW), &rules_with(&[PROXY_TEXT])),
+            to(backoff(2), &[StopMode, Disconnect, RecordFailure, retry(2)])
+        );
+    }
+
+    #[test]
+    fn a_permanent_key_wins_over_a_listed_text() {
+        let event = BotEvent::Disconnected(DisconnectReason::kicked(
+            Some("multiplayer.disconnect.banned"),
+            PROXY_TEXT,
+        ));
+
+        let banned = permanent(PermanentKind::Banned);
+        assert_eq!(
+            transition(&online(2), event, at(NOW), &rules_with(&[PROXY_TEXT])),
+            to(failed(banned), &[StopMode, Disconnect, fail(banned)])
+        );
+    }
+
     #[rstest]
     fn session_end_events_match_their_disconnect_reasons(
         #[values(connecting(2, false), connecting(2, true), online(2), stable_online(2))]
@@ -1005,7 +1072,7 @@ mod tests {
         let event = BotEvent::Disconnected(transient());
 
         assert_eq!(
-            transition(&state, event, at(1_000 + online_for), &policy()),
+            transition(&state, event, at(1_000 + online_for), &rules()),
             expected
         );
     }
@@ -1216,8 +1283,8 @@ mod tests {
             state in state_strategy(),
             now in time_strategy(),
         ) {
-            let stop = transition(&state, BotEvent::Stop, now, &policy());
-            let closed = transition(&stop.state, BotEvent::SessionClosed, now, &policy());
+            let stop = transition(&state, BotEvent::Stop, now, &rules());
+            let closed = transition(&stop.state, BotEvent::SessionClosed, now, &rules());
 
             if matches!(state, BotState::Paused { .. } | BotState::Failed { .. }) {
                 prop_assert_eq!(stop, to(state, &[]));
@@ -1242,7 +1309,7 @@ mod tests {
                     break;
                 }
                 now = time::add(now, secs(pause));
-                let next = transition(&state, event, now, &policy());
+                let next = transition(&state, event, now, &rules());
                 prop_assert!(!next.effects.contains(&Connect));
                 prop_assert!(
                     matches!(next.state, BotState::Paused { .. } | BotState::Failed { .. }),
@@ -1259,7 +1326,7 @@ mod tests {
             event in event_strategy(),
             now in time_strategy(),
         ) {
-            let next = transition(&state, event, now, &policy());
+            let next = transition(&state, event, now, &rules());
             prop_assert!(!next.effects.contains(&Connect));
         }
 
@@ -1269,7 +1336,7 @@ mod tests {
             event in event_strategy(),
             now in time_strategy(),
         ) {
-            let next = transition(&state, event, now, &policy());
+            let next = transition(&state, event, now, &rules());
             if next.effects.contains(&Connect) {
                 prop_assert!(
                     matches!(state, BotState::AwaitingSession { .. }),
@@ -1296,14 +1363,17 @@ mod tests {
                 reason.classify(),
                 DisconnectClass::Transient | DisconnectClass::AuthInvalid
             ));
-            let policy = RetryPolicy::try_new(secs(5), secs(300), secs(stable_after)).unwrap();
+            let rules = BotRules {
+                retry: RetryPolicy::try_new(secs(5), secs(300), secs(stable_after)).unwrap(),
+                conflict_texts: ConflictTexts::default(),
+            };
             let state = BotState::Online { since: at(since), attempt };
 
             let next = transition(
                 &state,
                 BotEvent::Disconnected(reason),
                 at(since + online_for),
-                &policy,
+                &rules,
             );
 
             let stable = u64::try_from(online_for).is_ok_and(|online_for| online_for >= stable_after);
@@ -1318,7 +1388,7 @@ mod tests {
             let (mut sessions, mut modes) = (0_i64, 0_i64);
             for (event, pause) in steps {
                 now = time::add(now, secs(pause));
-                let next = transition(&state, event, now, &policy());
+                let next = transition(&state, event, now, &rules());
                 for effect in &next.effects {
                     match effect {
                         Connect => sessions += 1,
@@ -1350,7 +1420,7 @@ mod tests {
                     triggers += 1;
                 }
                 now = time::add(now, secs(pause));
-                let next = transition(&state, event, now, &policy());
+                let next = transition(&state, event, now, &rules());
                 connects += count(&next.effects, Connect);
                 state = next.state;
                 prop_assert!(connects <= 2 * (1 + triggers));
@@ -1364,7 +1434,7 @@ mod tests {
             now in time_strategy(),
         ) {
             let crash_loop = event == BotEvent::CrashLoop;
-            let next = transition(&state, event, now, &policy());
+            let next = transition(&state, event, now, &rules());
 
             let notifications: Vec<_> = next
                 .effects
@@ -1386,7 +1456,7 @@ mod tests {
             event in event_strategy(),
             now in time_strategy(),
         ) {
-            let next = transition(&state, event, now, &policy());
+            let next = transition(&state, event, now, &rules());
 
             let retries: Vec<_> = next
                 .effects
@@ -1430,7 +1500,7 @@ mod tests {
         ) {
             let deliberate =
                 matches!(event, BotEvent::Start | BotEvent::Reset | BotEvent::Resume);
-            let next = transition(&state, event, now, &policy());
+            let next = transition(&state, event, now, &rules());
 
             let resets = count(&next.effects, ResetBreaker);
             prop_assert_eq!(resets, usize::from(deliberate && !next.effects.is_empty()));

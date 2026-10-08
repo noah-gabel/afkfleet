@@ -128,6 +128,7 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
 
 **Bot state machine (P2.6), changes to Appendix E.** Points marked *(group B)* were settled while building P2.6. The user decided sticky Paused and Failed, the breaker effects and the plain-text duplicate login on 2026-10-06.
 - **Signature:** `transition(&BotState, BotEvent, now, &RetryPolicy) -> Transition`. Attempts are 1-based.
+  - *Amended in Phase 4, P4.1 ([ADR-0013](0013-fleet-runtime-conventions-and-phase-4-refinements.md), the user's decisions): `transition(&BotState, BotEvent, now, &BotRules)`, where `BotRules { retry, conflict_texts }` adds the bot's conflict texts to the retry policy. `Disconnected` is classified with `ConflictTexts::classify`, which applies the texts on top of the unchanged `DisconnectReason::classify`.*
 - **States:** `Online{since, attempt}`, `AwaitingSession{attempt, fresh}`, `Connecting{attempt, auth_retried}`, `Stopping{restart}`.
   - Without the attempt in `Online`, the stable-period reset of P2.6 can't be computed.
 - **Attempt counting** *(group B)*:
@@ -287,7 +288,7 @@ Points marked *(group E)* were settled while building P2.10. On 2026-10-06 the u
 - **Later phases inherit requirements:**
   - **P3.1 and P4.6** stamp liveness with `tokio::time::Instant::now().into_std()`.
   - **P4** maps tokio's `Instant` to `DateTime` for `now`.
-  - **P4.1** adds per-server conflict texts (below).
+  - **P4.1** adds per-server conflict texts (below). *Built in P4.1 as `ConflictTexts` ([ADR-0013](0013-fleet-runtime-conventions-and-phase-4-refinements.md)).*
   - **P4.2** executes the breaker effects and follows the group B actor contracts. A spec change to a Paused or Failed bot takes effect at Resume or Reset.
   - **P11** re-checks mode commands on edit. For Paused or Failed bots the app shows Resume or Reset instead of Start and Stop, because the state machine ignores Start and Stop there.
   - **P2.10** takes `mode::GameAction` in `perform`. **P5.1** maps the config's mode names to the presets, **P11.1** seeds the built-in mode rows with fixed IDs, and **P11.4** turns each `ModeError` into a field error at `steps[step]` *(group C)*.
@@ -308,10 +309,11 @@ Points marked *(group E)* were settled while building P2.10. On 2026-10-06 the u
 - **Decided in group B: plain-text duplicate login** (flagged in the group A review).
   - **The problem:** a duplicate login reported as plain text, with no translation key, classifies as transient (ADR-0008 §6). A proxy or plugin may kick the bot that way when a human logs in; BungeeCord/Waterfall in online mode probably does. The bot then reconnects and kicks the human, and the circuit breaker only limits how often.
   - **The decision:** no state-machine change. A bot's spec gets an optional list of kick texts that count as a duplicate login, empty by default (P4.1). The classifier compares the sanitized kick message exactly against that list, so vanilla servers still go by key.
+  - *Built in P4.1 ([ADR-0013](0013-fleet-runtime-conventions-and-phase-4-refinements.md)): `ConflictTexts`, at most 16 entries of 1–1024 characters, compared only for kicks that `classify()` calls Transient, whatever their key. A key that means Permanent, Conflict or AuthInvalid wins.*
 - **Flagged, not decided:**
-  - **P4.1:** `BotSpec` sits in fleet-runtime, but fleet-proto and fleet-server need it too.
+  - **P4.1:** `BotSpec` sits in fleet-runtime, but fleet-proto and fleet-server need it too. *Decided in [ADR-0013](0013-fleet-runtime-conventions-and-phase-4-refinements.md): `BotSpec` and `BotSnapshot` live in `fleet_core::bot`.*
   - **P3.4/P5:** the connect timeout has no config key. *Decided in [ADR-0011](0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md): `[runtime] connect_timeout_secs`, default 30 s, from `connect()` until `Joined`.*
-  - **P4.7/P10:** `Paused` and `Failed` must survive an actor or agent restart, so a fresh `Start` doesn't kick a human (§6 row 3).
+  - **P4.7/P10:** `Paused` and `Failed` must survive an actor or agent restart, so a fresh `Start` doesn't kick a human (§6 row 3). *Decided in [ADR-0013](0013-fleet-runtime-conventions-and-phase-4-refinements.md): the supervisor restores an actor's state through a pure `restore()` in core, and across an agent restart the server sends the sticky state (P10).*
   - **P9.6/P9.8** *(group D)*: how a Member picks a grantee. Members can't list users, and looking users up by name must not let them enumerate usernames.
   - **P7.13** *(group D)*: the audit log is Admin+, so Admins see the Owner's and other Admins' activity, including their IP addresses and the chat their bots sent.
   - **P11.4** *(group E)*: `fleet-core`'s error enums never carry input, but serde_json's own errors quote it (``unknown variant `…` ``, `invalid type: string "…"`), so a malformed mode can put chat text into an error message. The server decides how it maps and logs them.

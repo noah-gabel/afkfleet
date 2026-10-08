@@ -208,6 +208,7 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
     - `send_chat` returns `Ok` anyway
 
     The options are to sign commands, which needs the server's command tree, or to refuse such commands on enforcing servers with an error. P11.3 decides it for user commands and P4.5 for mode chat; command signing isn't built in Phase 3 *(the user's decision)*. The real-account check expects the rejection, and fails if the emote's echo ever arrives.
+    - *Decided for mode chat in P4.5 ([ADR-0013](0013-fleet-runtime-conventions-and-phase-4-refinements.md), the user's decision): nothing special in Phase 4. P11.3's rule for user commands applies to mode chat too, through `ChatUnavailable`.*
 
 ### Events (P3.5)
 - **Chat:**
@@ -279,7 +280,7 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
   - **Why the cancel.** The use goes out at the next game tick, the release at once. Without the cancel, a hold and a release within one tick (two at-start steps, or two repeating steps due together) reach the server the wrong way round, and the bot keeps holding. Always releasing also covers a hold that was already sent before a second one was queued.
   - **What ends a hold:** letting go, death and respawn, a hotbar slot change, the item finishing (food), and a disconnect. That's how the vanilla server handles them; only letting go is checked live.
     - At-start steps run again on each join, so an at-start hold comes back after a reconnect but not after a respawn.
-    - Re-applying holds after a respawn is flagged under P4.2, not decided.
+    - Re-applying holds after a respawn is flagged under P4.2, not decided. *Decided in [ADR-0013](0013-fleet-runtime-conventions-and-phase-4-refinements.md): holds aren't re-applied, a known limit. A repeating `HoldUse{on: true}` step re-applies a hold after a death; P11 decides whether modes get "on respawn" steps, which needs a `SessionEvent::Respawned` port event.*
   - **Blocks and entities.** While the bot looks at a block or an entity within reach, a use clicks it instead (`UseItemOn`, or an entity interaction), as `UseItem` always did. For a shield, look at the sky or into open air.
   - **Found: projectiles in front of the bot.** azalea doesn't move projectiles between the server's position updates. So for a while after a throw or a shot, the bot's own picture still shows the projectile within reach, and a use clicks it instead of drawing.
     - A temporary probe, never committed, logged the packets the bot sent: a hold about 100 ms after a shot sent two `interact` packets and no `UseItem`, and a hold 1.25 s later sent `UseItem`.
@@ -383,13 +384,14 @@ They aren't config keys yet: a fleet-mc config struct holds them, and P5 adds ke
 - **Later phases inherit requirements:**
   - **P5.1** parses `connect_timeout_secs` and `max_abandoned_threads`.
   - **P5.3** exits the agent when the pool's abandoned-thread count reaches the limit.
-  - **P4.9** exports the pool's and connector's diagnostics as metrics.
-  - **P4.2** decides whether to re-apply `HoldUse` holds after a respawn (P3.9).
+  - **P4.9** exports the pool's and connector's diagnostics as metrics. *Moved to P5.3 in [ADR-0013](0013-fleet-runtime-conventions-and-phase-4-refinements.md): fleet-runtime may depend only on fleet-core, so the agent exports them.*
+  - **P4.2** decides whether to re-apply `HoldUse` holds after a respawn (P3.9). *Decided in [ADR-0013](0013-fleet-runtime-conventions-and-phase-4-refinements.md): they aren't re-applied.*
   - **P5.2** and **P9.3** cap `azalea_auth` at `info` *(group C)*.
   - **P12.2's** memory limit on the agent container also bounds the World a hostile server can grow *(group E, threat model)*.
   - **Every azalea bump** re-checks the three ignored advisories and removes the hickory ones once azalea uses hickory ≥ 0.26.1.
 - **Flagged, not decided** (group B, the user's request):
   - **A per-server chat format (P4.1, P11.9).** Some servers send player chat through a plugin, as system messages like `[CLAN] Name : message`. A per-server chat format, next to the per-server conflict texts, could extract the sender from such messages for display.
+    - *Decided in [ADR-0013](0013-fleet-runtime-conventions-and-phase-4-refinements.md): deferred to the server side (P11.9), so it stays out of the bot's spec and the agent.*
     - A parsed sender is marked as parsed from the text. Like every chat sender, it's never used for any permission or trigger decision.
     - *(corrected in the group B review)* No chat sender is verified, a `Player` packet's UUID included: azalea 0.16 doesn't verify chat signatures, so senders are only what the server claims (see "Events"). A feature that needs a trustworthy sender must verify the signature and use the signed body, in its own ADR.
     - P3.5 keeps the whole sanitized text of system messages, so this stays possible.

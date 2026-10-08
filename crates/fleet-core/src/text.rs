@@ -109,6 +109,15 @@ pub(crate) fn sanitize(raw: &str, max_chars: usize, line_breaks: LineBreaks) -> 
     }
 }
 
+/// Returns the position (counted in characters) of the first character that
+/// [`sanitize`] would drop: a `§`, which starts a formatting code, or a
+/// character it strips. `None` means sanitizing leaves `raw` unchanged, apart
+/// from the length cap.
+pub(crate) fn first_stripped(raw: &str, line_breaks: LineBreaks) -> Option<usize> {
+    raw.chars()
+        .position(|c| c == SECTION_SIGN || is_stripped(c, line_breaks))
+}
+
 /// Whether [`sanitize`] drops `c` (apart from formatting codes).
 fn is_stripped(c: char, line_breaks: LineBreaks) -> bool {
     let kept_line_break = c == '\n' && line_breaks == LineBreaks::Keep;
@@ -276,7 +285,36 @@ mod tests {
             && !is_invisible(c)
     }
 
+    #[rstest]
+    #[case::section_sign("ab§cd", LineBreaks::Keep, Some(2))]
+    #[case::trailing_section_sign("ab§", LineBreaks::Keep, Some(2))]
+    #[case::control_char("a\tb", LineBreaks::Keep, Some(1))]
+    #[case::bidi_control("\u{202E}ab", LineBreaks::Keep, Some(0))]
+    #[case::invisible("ab\u{200B}", LineBreaks::Keep, Some(2))]
+    #[case::first_of_several("a\u{200B}§b", LineBreaks::Keep, Some(1))]
+    #[case::kept_newline("a\nb", LineBreaks::Keep, None)]
+    #[case::stripped_newline("a\nb", LineBreaks::Strip, Some(1))]
+    #[case::emoji_variation_selector("\u{2764}\u{FE0F}", LineBreaks::Keep, None)]
+    #[case::multibyte_before("ü😀\u{7}", LineBreaks::Keep, Some(2))]
+    #[case::clean("You logged in from another location", LineBreaks::Keep, None)]
+    #[case::empty("", LineBreaks::Keep, None)]
+    fn first_stripped_finds_the_first_dropped_char(
+        #[case] raw: &str,
+        #[case] line_breaks: LineBreaks,
+        #[case] expected: Option<usize>,
+    ) {
+        assert_eq!(first_stripped(raw, line_breaks), expected);
+    }
+
     proptest::proptest! {
+        #[test]
+        fn first_stripped_is_none_exactly_when_sanitizing_changes_nothing(
+            raw in proptest::prelude::any::<String>(),
+        ) {
+            let unchanged = sanitize(&raw, usize::MAX, LineBreaks::Keep).text == raw;
+            proptest::prop_assert_eq!(first_stripped(&raw, LineBreaks::Keep).is_none(), unchanged);
+        }
+
         #[test]
         fn sanitized_text_is_clean_capped_and_stable(
             raw in proptest::prelude::any::<String>(),
