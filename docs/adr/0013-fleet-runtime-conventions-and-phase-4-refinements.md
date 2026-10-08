@@ -98,6 +98,12 @@ The queue and the mode runner are built against the fake before the actor, so th
 ### Watchdog (P4.6)
 It checks every 1 s while Online. A tick stall gives `WatchdogTimeout`, a packet stall `Disconnected(LivenessTimeout)`, and the tick stall wins when both are stale (ADR-0010).
 
+*(group C, the user's decisions)* As built:
+- **It's a timer in the actor's `select!`,** armed when the bot goes Online and dropped when it leaves. The first check comes 1 s after the join, and each check arms the next one a period later. It reads the session's `Liveness` and feeds `transition()` directly, with no task or channel of its own.
+- **A stamp is stale when it's at least its timeout old,** so with 30 s and a 1 s period a stall is caught 30–31 s after the last tick or packet. The check compares the stamps with tokio's clock as a std `Instant` through `saturating_duration_since`, never the banned `elapsed()`, so paused time drives it, and a stamp later than now counts as fresh.
+- **Ready session events go first.** Before a trip ends the session, the actor applies the session events that are already ready (see Actor). A trip applies only if the same session is still online afterwards, so a queued duplicate-login kick pauses the bot instead.
+- **Settings.** `watchdog_timeout` and `packet_liveness_timeout` (30 s each) are `RuntimeConfig` fields for Appendix A's keys. `watchdog_period` (1 s) is a default without a key; a zero period counts as 1 ms, so the biased loop can't spin. A trip is recorded in `last_disconnect` and logs at `warn` like any session that ends on its own; P4.9 counts it.
+
 ### Supervisor and `Fleet` (P4.7)
 - **Inside.** Actors run in tokio's `JoinSet`, which reports `JoinError::is_panic()`, each with a child `CancellationToken`. The `Fleet` handle talks to the supervisor task over a bounded queue with a reply timeout, and the supervisor forwards to the actor inboxes with `try_send`. That's how "the Fleet API always responds" holds.
 - **API:** `apply(spec, restore: Option<StickyState>)`, `remove`, `reset`, `resume`, `restart`, `send_chat`, `snapshot`, `snapshot_all`, `subscribe` and `shutdown(timeout)`.
@@ -148,7 +154,7 @@ They're `RuntimeConfig` fields with defaults, like fleet-mc's `McConfig`, and P5
 | Session events applied before a session-ending input *(group C)* | 67 (64 + 3) |
 | Restart window | 6 panics in 10 min |
 
-*(group C)* The connect timeout is a `RuntimeConfig` field too, but it's Appendix A's `[runtime] connect_timeout_secs` (30 s), which P5.1 maps.
+*(group C)* The connect timeout, the watchdog timeout and the packet-liveness timeout are `RuntimeConfig` fields too, but they're Appendix A's `[runtime]` keys (`connect_timeout_secs`, `watchdog_timeout_secs`, `packet_liveness_timeout_secs`, 30 s each), which P5.1 maps.
 
 ### Dependencies
 Approved by the user; all are in Plan.md §5:
@@ -214,6 +220,7 @@ Approved by the user; all are in Plan.md §5:
 - *(group C)* **A respawn retry on a fixed 5 s cadence,** or one that counts `Closed`: a call that's slow to fail would bunch the retries, and an ended session would warn for nothing.
 - *(group C)* **`Notify` as a log line only:** the app would derive alerts from state changes itself.
 - *(group C)* **Clearing `last_disconnect` on a deliberate end:** the last fault would vanish with a Stop.
+- *(group C)* **A watchdog task per session,** reporting stalls over a channel: one more task and channel for a check the actor's loop does in place. **Stale only beyond the timeout (`>`):** a stall would be caught a second later, at 31–32 s.
 - **Retrying or reconnecting on `ChatUnavailable`.** Retrying has unbounded latency; reconnecting lets chat failures drive reconnects.
 - **fleet-mc refusing message-argument commands now.** A hard-coded vanilla list misses aliases and plugin overrides, and it belongs to P11.3's rule for user commands.
 - **Restarting a crashed actor from Stopped.** Its next connect would skip the backoff, and a fresh breaker would forget an open circuit.

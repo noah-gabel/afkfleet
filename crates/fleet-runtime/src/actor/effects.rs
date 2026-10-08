@@ -83,8 +83,12 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
         if !matches!(self.state, BotState::Backoff { .. }) {
             self.retry = None;
         }
-        if !matches!(self.state, BotState::Online { .. }) {
+        if matches!(self.state, BotState::Online { .. }) {
+            // The watchdog checks only while the bot is Online (P4.6).
+            self.arm_watchdog();
+        } else {
             self.respawn = None;
+            self.watchdog = None;
         }
     }
 
@@ -196,6 +200,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
     fn disconnect(&mut self) {
         self.session_events = None;
         self.respawn = None;
+        self.watchdog = None;
         if let Some(session) = self.session.take() {
             self.close_session(session);
         }

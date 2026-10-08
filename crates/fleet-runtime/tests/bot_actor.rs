@@ -1457,3 +1457,142 @@ async fn cancellation_applies_a_queued_duplicate_login_first() {
     assert_eq!(bot.state(), DUPLICATE_LOGIN);
     assert_eq!(bot.exit().await, ActorExit::Stopped);
 }
+
+// --- The watchdog (P4.6) ---
+
+/// Steps paused time forward one second at a time, `seconds` times, so the
+/// watchdog checks once a second as it does in production.
+async fn tick_seconds(seconds: u64) {
+    for _ in 0..seconds {
+        advance(secs(1)).await;
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_tick_stall_trips_the_watchdog_after_30_s_and_reconnects() {
+    let (mut bot, controller) = Bot::online(Setup::new(running())).await;
+    controller.freeze_ticks();
+
+    tick_seconds(29).await;
+    assert!(matches!(bot.state(), BotState::Online { .. }));
+    tick_seconds(1).await;
+
+    assert_eq!(bot.state(), backoff(n(1)));
+    assert_eq!(
+        bot.last_disconnect(),
+        Some(DisconnectReason::WatchdogTimeout)
+    );
+    assert!(controller.is_torn_down());
+    assert_eq!(bot.states(), [backoff(n(1))]);
+    advance(policy().bounds(n(1)).1).await;
+    assert_eq!(bot.connects(), 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_packet_stall_ends_the_session_as_a_liveness_timeout() {
+    let (bot, controller) = Bot::online(Setup::new(running())).await;
+    controller.freeze_packets();
+
+    tick_seconds(29).await;
+    assert!(matches!(bot.state(), BotState::Online { .. }));
+    tick_seconds(1).await;
+
+    assert_eq!(bot.state(), backoff(n(1)));
+    assert_eq!(
+        bot.last_disconnect(),
+        Some(DisconnectReason::LivenessTimeout)
+    );
+    assert!(controller.is_torn_down());
+}
+
+#[tokio::test(start_paused = true)]
+async fn when_both_stamps_are_stale_the_tick_stall_wins() {
+    let (bot, controller) = Bot::online(Setup::new(running())).await;
+    controller.freeze_ticks();
+    controller.freeze_packets();
+
+    tick_seconds(30).await;
+
+    assert_eq!(
+        bot.last_disconnect(),
+        Some(DisconnectReason::WatchdogTimeout)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_shorter_packet_timeout_trips_first_when_only_packets_are_stale() {
+    let mut setup = Setup::new(running());
+    setup.config.packet_liveness_timeout = secs(10);
+    let (bot, controller) = Bot::online(setup).await;
+    controller.freeze_ticks();
+    controller.freeze_packets();
+
+    tick_seconds(10).await;
+
+    assert_eq!(
+        bot.last_disconnect(),
+        Some(DisconnectReason::LivenessTimeout)
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_hung_session_trips_the_watchdog_and_the_bot_reconnects() {
+    let (bot, controller) = Bot::online(Setup::new(running())).await;
+    controller.hang();
+
+    tick_seconds(30).await;
+
+    assert_eq!(
+        bot.last_disconnect(),
+        Some(DisconnectReason::WatchdogTimeout)
+    );
+    assert!(
+        controller.is_torn_down(),
+        "a hung session's teardown finishes"
+    );
+    advance(policy().bounds(n(1)).1).await;
+    let next = bot.session(1).await;
+    emit(&next, SessionEvent::Joined);
+    settle().await;
+    assert!(matches!(bot.state(), BotState::Online { attempt, .. } if attempt == n(2)));
+}
+
+#[tokio::test(start_paused = true)]
+async fn healthy_stamps_never_trip_the_watchdog() {
+    let (bot, _controller) = Bot::online(Setup::new(running())).await;
+
+    tick_seconds(300).await;
+
+    assert!(matches!(bot.state(), BotState::Online { .. }));
+    assert_eq!(bot.connects(), 1);
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_watchdog_checks_only_while_the_bot_is_online() {
+    let bot = Setup::new(running()).start().await;
+    let controller = bot.session(0).await;
+    controller.freeze_ticks();
+    controller.freeze_packets();
+
+    tick_seconds(60).await;
+
+    assert_eq!(
+        bot.state(),
+        connecting(n(1)),
+        "the connect timeout covers it"
+    );
+    assert_eq!(bot.last_disconnect(), None);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_watchdog_trip_logs_a_warning() {
+    let levels = Levels::default();
+    let _guard = tracing::subscriber::set_default(levels.clone());
+    let (_bot, controller) = Bot::online(Setup::new(running())).await;
+    controller.freeze_ticks();
+
+    tick_seconds(30).await;
+
+    assert_eq!(levels.of("the session ended"), [Level::WARN]);
+    assert!(levels.of("reason=WatchdogTimeout").contains(&Level::WARN));
+}

@@ -22,11 +22,13 @@ mod command;
 mod effects;
 mod respawn;
 mod session;
+mod watchdog;
 
 use core::fmt;
 use core::future::Future;
 use core::ops::ControlFlow;
 use core::pin::Pin;
+use core::time::Duration;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
@@ -34,7 +36,7 @@ use fleet_core::bot::{BotEvent, BotRules, BotSnapshot, BotSpec, BotState, Desire
 use fleet_core::disconnect::DisconnectReason;
 use fleet_core::mc::{
     CredentialError, MinecraftConnector, SessionCredentialProvider, SessionCredentials,
-    SessionEvent,
+    SessionEvent, SessionHandle as _,
 };
 use fleet_core::mode::ModeDefinition;
 use fleet_core::resilience::{CircuitBreaker, RetryPolicy};
@@ -50,6 +52,7 @@ pub use command::{BotCommand, BotInbox, InboxError};
 
 use self::respawn::RespawnOutcome;
 use self::session::{Session, next_event};
+use self::watchdog::Stall;
 use crate::chat::{ChatBucket, ChatQueue, ChatTickets};
 use crate::clock::RuntimeClock;
 use crate::config::RuntimeConfig;
@@ -136,6 +139,8 @@ enum Input {
     Answer(SessionAnswer),
     RetryDue,
     Respawn(RespawnOutcome),
+    /// Time for the watchdog to check the session.
+    WatchdogCheck,
     Session(Option<SessionEvent>),
 }
 
@@ -170,6 +175,8 @@ pub struct BotActor<C: MinecraftConnector, P> {
     session_request: Slot<SessionAnswer>,
     retry: Option<Pin<Box<Sleep>>>,
     respawn: Slot<RespawnOutcome>,
+    /// The watchdog's next check, while the bot is Online.
+    watchdog: Option<Pin<Box<Sleep>>>,
     session: Option<Session<C::Session>>,
     session_events: Option<C::Events>,
     /// How many sessions have connected.
@@ -242,6 +249,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             session_request: None,
             retry: None,
             respawn: None,
+            watchdog: None,
             session: None,
             session_events: None,
             generation: 0,
@@ -303,6 +311,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             outcome = wait(&mut self.respawn), if self.respawn.is_some() => {
                 Input::Respawn(outcome)
             }
+            () = wait(&mut self.watchdog), if self.watchdog.is_some() => Input::WatchdogCheck,
             event = next_event(&mut self.session_events), if self.session_events.is_some() => {
                 Input::Session(event)
             }
@@ -330,6 +339,10 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
                 if outcome == RespawnOutcome::GaveUp {
                     self.respawn_failed().await;
                 }
+            }
+            Input::WatchdogCheck => {
+                self.watchdog = None;
+                self.check_liveness().await;
             }
             Input::Session(event) => self.session_event(event).await,
         }
@@ -442,6 +455,50 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
         }
     }
 
+    /// The watchdog's check (P4.6): a tick stall ends the session with
+    /// `WatchdogTimeout`, a packet stall with `LivenessTimeout`, after the
+    /// ready session events; otherwise the next check is armed.
+    async fn check_liveness(&mut self) {
+        let Some(session) = &self.session else {
+            return;
+        };
+        let generation = session.generation;
+        let found = watchdog::stall(
+            session.handle.liveness(),
+            tokio::time::Instant::now().into_std(),
+            self.config.watchdog_timeout,
+            self.config.packet_liveness_timeout,
+        );
+        let Some(found) = found else {
+            self.arm_watchdog();
+            return;
+        };
+        self.drain().await;
+        if !self.is_current_online(generation) {
+            return;
+        }
+        match found {
+            Stall::Tick => {
+                self.ended(DisconnectReason::WatchdogTimeout, BotEvent::WatchdogTimeout)
+                    .await;
+            }
+            Stall::Packet => {
+                self.ended(
+                    DisconnectReason::LivenessTimeout,
+                    BotEvent::Disconnected(DisconnectReason::LivenessTimeout),
+                )
+                .await;
+            }
+        }
+    }
+
+    /// Arms the watchdog's next check, one period from now. A zero period
+    /// counts as 1 ms, so the loop can't spin.
+    fn arm_watchdog(&mut self) {
+        let period = self.config.watchdog_period.max(Duration::from_millis(1));
+        self.watchdog = Some(Box::pin(tokio::time::sleep(period)));
+    }
+
     /// Whether the session with `generation` is still the bot's, online.
     fn is_current_online(&self, generation: u64) -> bool {
         self.session
@@ -483,6 +540,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
         self.session_request = None;
         self.retry = None;
         self.respawn = None;
+        self.watchdog = None;
         if let Some(session) = self.session.take() {
             self.close_session(session);
         }
@@ -832,5 +890,60 @@ mod tests {
         );
         assert!(debug.contains("state: Online"), "{debug}");
         assert!(debug.ends_with(", .. }"), "{debug}");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_queued_duplicate_login_goes_before_a_watchdog_trip() {
+        let (mut actor, snapshots, controller) = online().await;
+        controller.freeze_ticks();
+        tokio::time::advance(Duration::from_secs(30)).await;
+        assert_eq!(controller.emit(duplicate_login()), EmitOutcome::Queued);
+
+        let _ = actor.handle(Input::WatchdogCheck).await;
+
+        assert_eq!(snapshots.borrow().state, PAUSED);
+        assert!(matches!(
+            snapshots.borrow().last_disconnect,
+            Some(DisconnectReason::Kicked(_))
+        ));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn without_a_queued_event_a_stalled_session_trips_the_watchdog() {
+        let (mut actor, snapshots, controller) = online().await;
+        controller.freeze_ticks();
+        tokio::time::advance(Duration::from_secs(30)).await;
+
+        let _ = actor.handle(Input::WatchdogCheck).await;
+
+        assert!(matches!(snapshots.borrow().state, BotState::Backoff { .. }));
+        assert_eq!(
+            snapshots.borrow().last_disconnect,
+            Some(DisconnectReason::WatchdogTimeout)
+        );
+        assert!(actor.watchdog.is_none());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_live_session_arms_the_next_check() {
+        let (mut actor, snapshots, _controller) = online().await;
+        actor.watchdog = None;
+
+        let _ = actor.handle(Input::WatchdogCheck).await;
+
+        assert!(matches!(snapshots.borrow().state, BotState::Online { .. }));
+        assert!(actor.watchdog.is_some());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_zero_watchdog_period_still_waits_a_millisecond() {
+        let (mut actor, _snapshots, _controller) = online().await;
+        actor.config.watchdog_period = Duration::ZERO;
+        actor.arm_watchdog();
+        let started = tokio::time::Instant::now();
+
+        wait(&mut actor.watchdog).await;
+
+        assert_eq!(started.elapsed(), Duration::from_millis(1));
     }
 }
