@@ -171,6 +171,25 @@ mod tests {
         (0..=100_000_i64).prop_map(at)
     }
 
+    /// Paused, and Failed for every reason.
+    fn sticky_strategy() -> impl Strategy<Value = BotState> {
+        let permanent = |kind| FailReason::Permanent { kind };
+        prop_oneof![
+            Just(PAUSED),
+            proptest::sample::select(vec![
+                permanent(PermanentKind::Banned),
+                permanent(PermanentKind::NotWhitelisted),
+                permanent(PermanentKind::WrongVersion),
+                permanent(PermanentKind::AccountBanned),
+                permanent(PermanentKind::MultiplayerDisabled),
+                FailReason::Auth,
+                FailReason::SessionDenied,
+                FailReason::CrashLoop,
+            ])
+            .prop_map(|reason| BotState::Failed { reason }),
+        ]
+    }
+
     fn state_strategy() -> impl Strategy<Value = BotState> {
         prop_oneof![
             Just(BotState::Stopped),
@@ -185,13 +204,7 @@ mod tests {
             (time_strategy(), attempt_strategy())
                 .prop_map(|(since, attempt)| BotState::Online { since, attempt }),
             attempt_strategy().prop_map(|attempt| BotState::Backoff { attempt }),
-            Just(PAUSED),
-            Just(BotState::Failed {
-                reason: FailReason::Auth
-            }),
-            Just(BotState::Failed {
-                reason: FailReason::CrashLoop
-            }),
+            sticky_strategy(),
             any::<bool>().prop_map(|restart| BotState::Stopping { restart }),
         ]
     }
@@ -246,10 +259,10 @@ mod tests {
             }
         }
 
+        // Generated directly, not filtered out of every state: a filter that
+        // rejects most cases aborts the run at CI's 1000 cases.
         #[test]
-        fn sticky_states_stay_as_they_are(state in state_strategy(), now in time_strategy()) {
-            prop_assume!(matches!(state, BotState::Paused { .. } | BotState::Failed { .. }));
-
+        fn sticky_states_stay_as_they_are(state in sticky_strategy(), now in time_strategy()) {
             prop_assert_eq!(restore(&state, now, &rules()), to(state, &[]));
         }
 
