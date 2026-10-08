@@ -1473,6 +1473,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **`ChatUnavailable`** drops the message: user chat gets `ChatFailed{ChatUnavailable}`, mode chat is logged at `debug` and skipped. No retry.
   > - **Mode chat** that's rate-limited or finds the queue full is skipped and logged.
   > - **Commands with message arguments** get nothing special here; P11.3's rule applies to mode chat too.
+
+  > Note (P4.5, from the PR #14 review, the user's request): **Prove the chrono and rand bans.** fleet-runtime's `clippy.toml` lists chrono's and rand's clock and OS-randomness paths with `allow-invalid`, which would hide a path that doesn't resolve. When chrono and rand become fleet-runtime dependencies, show a red clippy run proving that each banned chrono and rand path fires. That means `chrono::Utc::now` and `Local::now`, rand's `rng`, `random`, `random_iter`, `random_range`, `random_bool`, `random_ratio`, `fill` and `make_rng`, and the `ThreadRng` and `SysRng` types. Use a temporary probe, never committed, with the features that make these paths exist enabled only for the probe, as ADR-0010's probe did (ADR-0013).
 - [ ] **P4.6** 🔴 Watchdog, while Online (fault table in ADR-0008 §5):
   - no `Tick` for `watchdog_timeout`: raise `WatchdogTimeout`, tear the session down and reconnect
   - no packet from the server for `packet_liveness_timeout`: tear the session down and treat it as a transient disconnect

@@ -11,11 +11,15 @@ allow-print-in-tests = true
 # fleet-runtime never reads the wall clock or the OS's randomness. Its caller
 # passes in a wall-clock anchor and a seed, and all time goes through tokio's
 # clock (`tokio::time::Instant::now`), which paused-time tests control
-# (ADR-0013). `allow-invalid` keeps clippy quiet when a path doesn't exist in
-# the current feature set.
+# (ADR-0013). `elapsed` reads the real clock just like `now`: the watchdog
+# compares the session's `Liveness` stamps, which are std `Instant`s, so
+# `stamp.elapsed()` would bypass paused time. `allow-invalid` keeps clippy quiet
+# when a path doesn't exist in the current feature set.
 disallowed-methods = [
     { path = "std::time::Instant::now", reason = "use tokio's clock, so paused-time tests control it (ADR-0013)" },
+    { path = "std::time::Instant::elapsed", reason = "it reads the real clock; compare against tokio's clock, so paused-time tests control it (ADR-0013)" },
     { path = "std::time::SystemTime::now", reason = "the wall-clock anchor is passed in (ADR-0013)" },
+    { path = "std::time::SystemTime::elapsed", reason = "it reads the real clock; the wall-clock anchor is passed in (ADR-0013)" },
     { path = "chrono::Utc::now", reason = "the wall-clock anchor is passed in (ADR-0013)", allow-invalid = true },
     { path = "chrono::Local::now", reason = "the wall-clock anchor is passed in (ADR-0013)", allow-invalid = true },
     { path = "rand::rng", reason = "RNGs are seeded from the seed that's passed in (ADR-0013)", allow-invalid = true },

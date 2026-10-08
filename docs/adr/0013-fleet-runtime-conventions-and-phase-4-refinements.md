@@ -101,6 +101,7 @@ A fixed 500 cases (`with_cases(500)`), as an exception to `PROPTEST_CASES`, so t
 ### Determinism and lint guard
 - `Fleet::new` takes a wall-clock anchor (`DateTime<Utc>`) and a seed (`u64`) from its caller. The runtime clock derives `DateTime<Utc>` from tokio's `Instant` anchored there (ADR-0010), and each actor's `StdRng` is derived from the seed. The runtime never reads the wall clock or the OS's randomness, so chrono's `clock` and rand's `sys_rng` stay off. P5 supplies both values.
 - `crates/fleet-runtime/clippy.toml` repeats the root settings and bans `std::time::Instant::now`, `SystemTime::now`, chrono's `Utc::now`/`Local::now` and rand's OS entry points. tokio's `Instant::now` stays allowed: it's the runtime's clock. This makes the lints stricter.
+- *(PR #14 review, the user's request)* It also bans `std::time::Instant::elapsed` and `std::time::SystemTime::elapsed`. They read the real clock just like `now`. The watchdog (P4.6) compares the session's `Liveness` stamps, which are std `Instant`s, so `stamp.elapsed()` would bypass paused time; it compares against tokio's clock instead. A temporary probe, never committed, called each one, and clippy flagged both as `disallowed_methods` with their reasons.
 
 ### Settings without a config key
 They're `RuntimeConfig` fields with defaults, like fleet-mc's `McConfig`, and P5.1 maps only Appendix A's keys:

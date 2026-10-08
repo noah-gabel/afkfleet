@@ -12,7 +12,7 @@ export RUSTDOCFLAGS := "-D warnings"
 # The stable toolchain for `stable-check`, and the crates it checks: every crate
 # that doesn't depend on azalea or azalea-auth.
 stable := "1.99.0"
-stable_crates := "-p fleet-core -p fleet-testkit"
+stable_crates := "-p fleet-core -p fleet-testkit -p fleet-runtime"
 
 # List all recipes.
 default:
