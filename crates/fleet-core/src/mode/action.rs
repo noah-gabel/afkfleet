@@ -88,6 +88,26 @@ pub enum Action {
     SwingArm,
     /// Use the held item, like a right-click.
     UseItem,
+    /// Hold the use button down, or let go of it, like holding right-click
+    /// (ADR-0011).
+    ///
+    /// Holding is for items used over time: it draws a bow until the bot
+    /// lets go, raises a shield or eats. While the bot looks at a block or
+    /// an entity within reach, holding clicks that instead, as
+    /// [`Action::UseItem`] does, so for a shield, look at the sky or into
+    /// open air. Right after a throw or a shot, that entity can be the
+    /// projectile itself, which the bot still sees in front of it for a
+    /// while (ADR-0011).
+    ///
+    /// Besides letting go, a hold ends when the bot dies, selects another
+    /// hotbar slot, finishes the item (food) or disconnects. That's how the
+    /// vanilla server handles them; only letting go is checked against a real
+    /// server. At-start steps run again on each join, so an at-start hold
+    /// comes back after a reconnect, but not after a respawn.
+    HoldUse {
+        /// Whether the bot holds the use button from now on.
+        on: bool,
+    },
     /// Attack the entity the bot is looking at, if one is within reach.
     AttackFacingEntity,
     /// Select a hotbar slot.
@@ -156,12 +176,22 @@ mod tests {
     #[case::sneak(Action::Sneak { on: true })]
     #[case::swing_arm(Action::SwingArm)]
     #[case::use_item(Action::UseItem)]
+    #[case::hold_use(Action::HoldUse { on: false })]
     #[case::attack(Action::AttackFacingEntity)]
     #[case::select_hotbar_slot(Action::SelectHotbarSlot { slot: slot(8) })]
     #[case::send_chat(Action::SendChat { message: "/spawn".parse().unwrap() })]
     fn every_action_round_trips_through_json(#[case] action: Action) {
         let json = serde_json::to_string(&action).unwrap();
         assert_eq!(serde_json::from_str::<Action>(&json).unwrap(), action);
+    }
+
+    #[test]
+    fn hold_use_is_tagged_hold_use() {
+        let action = Action::HoldUse { on: true };
+        let json = r#"{"type":"hold_use","on":true}"#;
+
+        assert_eq!(serde_json::to_string(&action).unwrap(), json);
+        assert_eq!(serde_json::from_str::<Action>(json).unwrap(), action);
     }
 
     #[rstest]
@@ -173,6 +203,8 @@ mod tests {
     #[case::empty_chat(r#"{"type":"send_chat","message":"  "}"#)]
     #[case::missing_field(r#"{"type":"look","yaw":1.0}"#)]
     #[case::wrong_field_type(r#"{"type":"sneak","on":"yes"}"#)]
+    #[case::hold_use_without_on(r#"{"type":"hold_use"}"#)]
+    #[case::hold_use_wrong_field_type(r#"{"type":"hold_use","on":"yes"}"#)]
     fn rejects_malformed_action_json(#[case] json: &str) {
         assert!(serde_json::from_str::<Action>(json).is_err(), "{json}");
     }

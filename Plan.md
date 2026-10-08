@@ -1329,13 +1329,32 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The `slow-tests` workflow** runs weekly (Mondays, 07:17 UTC) and on demand, on ubuntu; it isn't a required check.
   > - **The threat model's B4 section** is written. It adds two accepted risks: Minecraft servers aren't authenticated, and a server can grow a bot's memory.
   > - **The Phase 3 DoD** is checked in group E and again in P3.9's PR, which finishes the phase.
-- [ ] **P3.9** 🔴 `HoldUse{on}`: hold the use button down, the way `Sneak{on}` holds sneak (the user's idea, from P3.6). It's its own branch and PR, right after group E.
+- [x] **P3.9** 🔴 `HoldUse{on}`: hold the use button down, the way `Sneak{on}` holds sneak (the user's idea, from P3.6). It's its own branch and PR, right after group E.
   - fleet-core: an additive `Action::HoldUse{on}` and `GameAction` variant, with validation and the mode snapshots updated. It's a new tag, so older servers reject modes that use it (ADR-0010).
   - fleet-mc: the mapping that P3.6 verified, with a live test.
 
   If P3.6 finds it isn't feasible, this task is closed with a note instead.
 
   > Note (P3.9, from group D): **Feasible.** P3.6's probe held a bow for 25 ticks with one `start_use_item` and shot the arrow on a raw `ServerboundPlayerAction{ReleaseUseItem}`, sent through azalea's normal packet writer. Releasing after about 1 tick shot nothing. Items without a use duration (block and entity clicks) would still need repeated packets (ADR-0011).
+
+  > Note (P3.9, the user's decisions, 2026-10-07 and -08) (ADR-0010, ADR-0011):
+  > - **Limits.** A repeating hold-use step needs at least 500 ms (`MIN_HOLD_USE_INTERVAL`), like an attack. Holding and letting go are limited apart, at most one at-start and one repeating step each, so a mode can shoot a bow again and again: draw at start, then every 2 s let go and draw again. It's never a command.
+  > - **Order.** A use is queued for azalea's next game tick, but a release goes out at once, so a hold and a release in the same tick would reach the server the wrong way round.
+  >   - `HoldUse{on: true}` and `UseItem` insert azalea's `StartUseItemQueued` directly, instead of calling `start_use_item`.
+  >   - `HoldUse{on: false}` removes a use that's still queued, then always writes the release.
+  >   - `UseItem` now returns `NotInWorld` once the bot has left its world, like the other actions; in game it behaves as before.
+  > - **What ends a hold:** letting go, death and respawn, a hotbar slot change, the item finishing (food), and a disconnect, as the vanilla server handles them; only letting go is checked live. An at-start hold comes back after a reconnect but not after a respawn (flagged under P4.2). For a shield, look at the sky or into open air, since a use clicks a block or entity in reach.
+  > - **Found: projectiles.** azalea doesn't move projectiles between the server's position updates, so right after a throw or a shot, a use can click the projectile in front of the bot instead of drawing. A temporary probe saw it. It's a known limit; the live step clears projectiles first.
+  > - **Tests.**
+  >   - Unit tests cover the release packet's bytes, and queuing and cancelling a use.
+  >   - `slow_actions_scenario`'s `hold_use` step checks three things: on, then off right away, leaves nothing drawn; a full draw shoots nothing while held; the release shoots one arrow.
+  >   - Red first: against a release that did nothing, and against an immediate release without the cancel, which shot an arrow from the bow it had left drawn.
+  > - **Runs** (2026-10-08): `slow_actions_scenario` alone passed 10 of 10. Three full `just test-slow` runs passed every scenario (actions, offline, online, fault containment, teardown), 3 of 3 each.
+  > - **A slot change and a hold in the same tick** *(from the PR review)*. An at-start "select a slot, then hold" runs in one tick on every join. azalea doesn't directly order its slot packet (`ensure_has_sent_carried_item`) against the use (`handle_start_use_item_queued`). If the slot packet reached the server after the use, it would end the hold.
+  >   - The `hold_use` step now selects the bow's slot from slot 0 and holds with no wait between, waits a full draw, lets go, and expects one more arrow. The bow is only the instrument.
+  >   - It passed 5 runs of 5 on its own, and one full `just test-slow` run.
+  >   - A temporary probe, never committed, logged the bot's packets in 3 more runs. Both actions landed before the same tick, and in that tick `set_carried_item` went out about 0.05–0.1 ms before `use_item`.
+  >   - That order is what azalea 0.16.0's schedule does today; no direct ordering constraint declares it. So the live step guards it at every azalea bump (ADR-0003).
 
 **Security:**
 - Credentials are never logged.
@@ -1390,6 +1409,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Session requests.** Every `RequestSession` gets exactly one answer; a timeout becomes `SessionUnavailable{retryable: true}`.
   > - **Published events.** Every state change, plus `Died`, goes out as an event for the app (P4.7, P11). `Notify` is only for alerts that need a human.
   > - **Paused and Failed.** `Start` and `Stop` are no-ops there, so applying a spec's desired run state leaves them alone. A server change to a Paused or Failed bot takes effect at Resume or Reset.
+
+  > Note (P4.2, from P3.9): **Not decided: re-apply holds after a respawn.** A death ends a `HoldUse` hold, and only a new join runs the at-start steps again. So an at-start hold comes back after a reconnect but not after a respawn (ADR-0011).
 - [ ] **P4.3** 🔴 `SessionCredentialProvider` port:
   - In standalone mode it returns offline credentials.
   - In managed mode it asks the control plane (Phase 10).

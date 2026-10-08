@@ -1,5 +1,6 @@
 //! Every game action, the respawn and a chat command have their effect on a
-//! real server, checked through RCON (Plan.md P3.6; ADR-0008 §8, ADR-0011).
+//! real server, checked through RCON (Plan.md P3.6, P3.9; ADR-0008 §8,
+//! ADR-0011).
 //!
 //! The server keeps no state for an arm swing, so a second bot, the watcher,
 //! counts the swing animations it receives, through a test-only system that
@@ -199,6 +200,113 @@ async fn select_and_use(scene: &Scene) {
     scene.scored("a thrown snowball", "snowballs").await;
 }
 
+/// The bot's `bows` score: how many arrows it has shot. An unset score is 0.
+async fn arrows_shot(scene: &Scene) -> i64 {
+    let output = scene
+        .server
+        .rcon(&format!("scoreboard players get {NAME} bows"))
+        .await;
+    score(&output).unwrap_or(0)
+}
+
+/// Hold the use button with a bow, at the sky (Plan.md P3.9; ADR-0011).
+///
+/// First, hold and let go right away: the release cancels the use azalea
+/// hasn't sent yet, so nothing is left drawn, and a later release shoots
+/// nothing. Then hold for a full draw: nothing is shot while the bot holds,
+/// one arrow when it lets go. Last, from another slot, select the bow's slot
+/// and hold in the same tick: the hold still draws, and the release shoots
+/// one more arrow. The bow is only the instrument.
+///
+/// azalea doesn't move projectiles between the server's position updates,
+/// so for a while after a throw or a shot, the bot's own picture shows the
+/// projectile right in front of it, and a use clicks that entity instead
+/// (found in P3.9). So the step clears them first and runs the back-to-back
+/// check before any arrow exists.
+async fn hold_use(scene: &Scene) {
+    for command in [
+        "kill @e[type=minecraft:snowball]".to_owned(),
+        format!("item replace entity {NAME} hotbar.4 with minecraft:bow"),
+        format!("item replace entity {NAME} inventory.0 with minecraft:arrow 16"),
+    ] {
+        scene.server.rcon(&command).await;
+    }
+    scene.select(4).await;
+    scene.look(0.0, -60.0).await;
+    ticks_pass(&scene.session, 3).await;
+
+    scene.perform(GameAction::HoldUse { on: true }).await;
+    scene.perform(GameAction::HoldUse { on: false }).await;
+    // A bow at full draw takes 20 ticks.
+    ticks_pass(&scene.session, 25).await;
+    // Had the hold survived, the bow would be drawn now, and this would
+    // shoot it.
+    scene.perform(GameAction::HoldUse { on: false }).await;
+    ticks_pass(&scene.session, 10).await;
+    assert_eq!(
+        arrows_shot(scene).await,
+        0,
+        "on, then off right away, left the bow drawn"
+    );
+
+    scene.perform(GameAction::HoldUse { on: true }).await;
+    ticks_pass(&scene.session, 25).await;
+    assert_eq!(arrows_shot(scene).await, 0, "an arrow was shot while held");
+    scene.perform(GameAction::HoldUse { on: false }).await;
+    scene
+        .server
+        .eventually(
+            "the arrow shot on the release",
+            &format!("scoreboard players get {NAME} bows"),
+            |output| score(output) == Some(1),
+        )
+        .await;
+    scene
+        .server
+        .eventually(
+            "the shot arrow",
+            "execute if entity @e[type=minecraft:arrow]",
+            // A selector's test also answers the count: "Test passed. Count: 1".
+            |output| output.starts_with("Test passed"),
+        )
+        .await;
+    scene.server.rcon("kill @e[type=minecraft:arrow]").await;
+
+    // A slot change and a hold in the same tick, as an at-start "select a
+    // slot, then hold" runs on every join. The server must see the new slot
+    // before the use: a use with the old slot uses its item, and a slot change
+    // after the use ends the hold.
+    scene.select(0).await;
+    scene
+        .server
+        .eventually(
+            "slot 0 selected",
+            &format!("data get entity {NAME} SelectedItemSlot"),
+            |output| data_floats(output) == [0.0],
+        )
+        .await;
+    // Also lets the arrow's removal reach the bot.
+    ticks_pass(&scene.session, 3).await;
+    scene.select(4).await;
+    scene.perform(GameAction::HoldUse { on: true }).await;
+    ticks_pass(&scene.session, 25).await;
+    assert_eq!(
+        arrows_shot(scene).await,
+        1,
+        "an arrow was shot while held after the slot change"
+    );
+    scene.perform(GameAction::HoldUse { on: false }).await;
+    scene
+        .server
+        .eventually(
+            "the arrow shot after a slot change and a hold in the same tick",
+            &format!("scoreboard players get {NAME} bows"),
+            |output| score(output) == Some(2),
+        )
+        .await;
+    scene.server.rcon("kill @e[type=minecraft:arrow]").await;
+}
+
 /// Attack with an empty hand: a pig 6 blocks east is out of reach, one 2
 /// blocks south isn't. The bot's target updates a tick after it looks.
 async fn attack(scene: &Scene) {
@@ -302,6 +410,7 @@ async fn slow_actions_scenario() {
     for objective in [
         "jumps minecraft.custom:minecraft.jump",
         "snowballs minecraft.used:minecraft.snowball",
+        "bows minecraft.used:minecraft.bow",
     ] {
         server
             .rcon(&format!("scoreboard objectives add {objective}"))
@@ -320,6 +429,7 @@ async fn slow_actions_scenario() {
     sneak(&scene).await;
     swing(&scene).await;
     select_and_use(&scene).await;
+    hold_use(&scene).await;
     attack(&scene).await;
     chat_command(&mut scene).await;
     respawn(&mut scene).await;

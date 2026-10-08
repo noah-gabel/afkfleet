@@ -131,6 +131,8 @@ mod tests {
 
     /// The reader sees a real thread come and go, so the clean-up test's
     /// check can fail at all. The `test (ubuntu-latest)` CI job runs it.
+    /// It needs its own process, which nextest gives it: under plain
+    /// `cargo test` it fails about 9 times in 20.
     #[cfg(target_os = "linux")]
     #[test]
     fn a_new_thread_raises_the_os_count() {

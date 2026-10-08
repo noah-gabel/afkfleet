@@ -67,6 +67,16 @@ expression: json
     },
     {
       "action": {
+        "type": "hold_use",
+        "on": true
+      },
+      "schedule": {
+        "type": "at_start"
+      },
+      "probability": 100
+    },
+    {
+      "action": {
         "type": "attack_facing_entity"
       },
       "schedule": {

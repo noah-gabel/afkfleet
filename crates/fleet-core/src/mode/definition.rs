@@ -165,7 +165,9 @@ impl fmt::Display for Angle {
 }
 
 /// A kind of step a mode may have at most once (ADR-0010). Two of them would
-/// get around the attack or chat interval, or fire together on every join.
+/// get around the attack, chat or hold-use interval, or fire together on
+/// every join. [`Action::HoldUse`] counts holding and letting go apart, so a
+/// mode can let go and draw again on a schedule.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LimitedStep {
     /// [`Action::SendChat`] at start.
@@ -176,6 +178,14 @@ pub enum LimitedStep {
     StartAttack,
     /// [`Action::AttackFacingEntity`] repeating.
     RepeatingAttack,
+    /// [`Action::HoldUse`] holding (`on: true`) at start.
+    StartHold,
+    /// [`Action::HoldUse`] holding (`on: true`) repeating.
+    RepeatingHold,
+    /// [`Action::HoldUse`] letting go (`on: false`) at start.
+    StartRelease,
+    /// [`Action::HoldUse`] letting go (`on: false`) repeating.
+    RepeatingRelease,
 }
 
 impl fmt::Display for LimitedStep {
@@ -185,6 +195,10 @@ impl fmt::Display for LimitedStep {
             Self::RepeatingChat => "repeating chat",
             Self::StartAttack => "attack-at-start",
             Self::RepeatingAttack => "repeating attack",
+            Self::StartHold => "hold-at-start",
+            Self::RepeatingHold => "repeating hold",
+            Self::StartRelease => "release-at-start",
+            Self::RepeatingRelease => "repeating release",
         })
     }
 }
@@ -196,6 +210,9 @@ impl ModeDefinition {
     pub const MIN_INTERVAL: Duration = Duration::from_millis(250);
     /// The shortest interval of a repeating [`Action::AttackFacingEntity`].
     pub const MIN_ATTACK_INTERVAL: Duration = Duration::from_millis(500);
+    /// The shortest interval of a repeating [`Action::HoldUse`], holding or
+    /// letting go (ADR-0010).
+    pub const MIN_HOLD_USE_INTERVAL: Duration = Duration::from_millis(500);
     /// The shortest interval of a repeating [`Action::SendChat`] (Plan.md
     /// §7.3).
     pub const MIN_CHAT_INTERVAL: Duration = Duration::from_secs(30);
@@ -229,6 +246,7 @@ impl ModeDefinition {
             | Action::Sneak { .. }
             | Action::SwingArm
             | Action::UseItem
+            | Action::HoldUse { .. }
             | Action::AttackFacingEntity
             | Action::SelectHotbarSlot { .. } => None,
         })
@@ -305,7 +323,8 @@ impl ModeDraft {
     /// - at most [`ModeDefinition::MAX_STEPS`] steps; an empty mode is valid
     ///   and does nothing
     /// - a repeating step's interval is at least 250 ms, 500 ms for an attack
-    ///   and 30 s for chat, and at most 24 h; its jitter is at most 24 h
+    ///   or a hold-use and 30 s for chat, and at most 24 h; its jitter is at
+    ///   most 24 h
     /// - durations count in whole milliseconds, as they're stored; anything
     ///   finer is dropped before the check
     /// - the probability is 1 to 100 percent
@@ -374,6 +393,7 @@ fn check_action(index: usize, action: &Action) -> Result<(), ModeError> {
         | Action::Sneak { .. }
         | Action::SwingArm
         | Action::UseItem
+        | Action::HoldUse { .. }
         | Action::AttackFacingEntity
         | Action::SelectHotbarSlot { .. }
         | Action::SendChat { .. } => Ok(()),
@@ -426,6 +446,7 @@ const fn min_interval(action: &Action) -> Duration {
     match action {
         Action::AttackFacingEntity => ModeDefinition::MIN_ATTACK_INTERVAL,
         Action::SendChat { .. } => ModeDefinition::MIN_CHAT_INTERVAL,
+        Action::HoldUse { .. } => ModeDefinition::MIN_HOLD_USE_INTERVAL,
         Action::Look { .. }
         | Action::RotateRandom { .. }
         | Action::Jump
@@ -445,6 +466,10 @@ const fn limited_kind(action: &Action, schedule: Schedule) -> Option<LimitedStep
         Action::SendChat { .. } => Some(LimitedStep::StartChat),
         Action::AttackFacingEntity if repeating => Some(LimitedStep::RepeatingAttack),
         Action::AttackFacingEntity => Some(LimitedStep::StartAttack),
+        Action::HoldUse { on: true } if repeating => Some(LimitedStep::RepeatingHold),
+        Action::HoldUse { on: true } => Some(LimitedStep::StartHold),
+        Action::HoldUse { on: false } if repeating => Some(LimitedStep::RepeatingRelease),
+        Action::HoldUse { on: false } => Some(LimitedStep::StartRelease),
         Action::Look { .. }
         | Action::RotateRandom { .. }
         | Action::Jump
@@ -537,6 +562,10 @@ mod tests {
         Action::RotateRandom { max_yaw, max_pitch }
     }
 
+    const fn hold(on: bool) -> Action {
+        Action::HoldUse { on }
+    }
+
     fn draft(steps: Vec<Step>) -> ModeDraft {
         ModeDraft { steps }
     }
@@ -554,6 +583,9 @@ mod tests {
     #[case::shortest_interval(step(Action::Jump, every(ms(250), ms(0))))]
     #[case::shortest_attack_interval(step(Action::AttackFacingEntity, every(ms(500), ms(0))))]
     #[case::shortest_chat_interval(step(chat("hello"), every(ms(30_000), ms(0))))]
+    #[case::shortest_hold_interval(step(hold(true), every(ms(500), ms(0))))]
+    #[case::shortest_release_interval(step(hold(false), every(ms(500), ms(0))))]
+    #[case::hold_at_start(at_start(hold(true)))]
     #[case::longest_interval_and_jitter(step(Action::UseItem, every(DAY, DAY)))]
     #[case::lowest_probability(with_probability(1, at_start(Action::SwingArm)))]
     #[case::look_at_the_lower_limits(at_start(look(-180.0, -90.0)))]
@@ -585,6 +617,14 @@ mod tests {
     #[case::chat_below_30_s(
         step(chat("hi"), every(ms(29_999), ms(60_000))),
         IntervalTooShort { step: 0, min: ms(30_000) }
+    )]
+    #[case::hold_below_500_ms(
+        step(hold(true), every(ms(499), ms(1_000))),
+        IntervalTooShort { step: 0, min: ms(500) }
+    )]
+    #[case::release_below_500_ms(
+        step(hold(false), every(ms(499), ms(1_000))),
+        IntervalTooShort { step: 0, min: ms(500) }
     )]
     #[case::sub_millisecond_parts_dont_count(
         step(Action::Jump, every(Duration::from_micros(249_999), ms(0))),
@@ -739,6 +779,22 @@ mod tests {
         repeating(Action::AttackFacingEntity),
         LimitedStep::RepeatingAttack
     )]
+    #[case::hold_at_start(at_start(hold(true)), at_start(hold(true)), LimitedStep::StartHold)]
+    #[case::repeating_hold(
+        repeating(hold(true)),
+        repeating(hold(true)),
+        LimitedStep::RepeatingHold
+    )]
+    #[case::release_at_start(
+        at_start(hold(false)),
+        at_start(hold(false)),
+        LimitedStep::StartRelease
+    )]
+    #[case::repeating_release(
+        repeating(hold(false)),
+        repeating(hold(false)),
+        LimitedStep::RepeatingRelease
+    )]
     fn rejects_a_second_limited_step(
         #[case] first: Step,
         #[case] second: Step,
@@ -755,8 +811,33 @@ mod tests {
             repeating(chat("/afk")),
             at_start(Action::AttackFacingEntity),
             repeating(Action::AttackFacingEntity),
+            at_start(hold(true)),
+            repeating(hold(true)),
+            at_start(hold(false)),
+            repeating(hold(false)),
         ];
         assert!(validate(steps).is_ok());
+    }
+
+    #[test]
+    fn a_mode_can_shoot_a_bow_again_and_again() {
+        // Draw at start; then, every 2 s, let go (the shot) and draw again.
+        // Both repeating steps are due together and run in step order.
+        let steps = vec![
+            at_start(hold(true)),
+            step(hold(false), every(ms(2_000), Duration::ZERO)),
+            step(hold(true), every(ms(2_000), Duration::ZERO)),
+        ];
+        assert!(validate(steps).is_ok());
+    }
+
+    #[rstest]
+    #[case::start_hold(LimitedStep::StartHold, "hold-at-start")]
+    #[case::repeating_hold(LimitedStep::RepeatingHold, "repeating hold")]
+    #[case::start_release(LimitedStep::StartRelease, "release-at-start")]
+    #[case::repeating_release(LimitedStep::RepeatingRelease, "repeating release")]
+    fn hold_use_kinds_are_named_in_errors(#[case] kind: LimitedStep, #[case] name: &str) {
+        assert_eq!(kind.to_string(), name);
     }
 
     #[test]
@@ -811,7 +892,10 @@ mod tests {
     }
 
     #[rstest]
-    #[case::none(vec![at_start(chat("hello")), repeating(Action::Jump)], &[])]
+    #[case::none(
+        vec![at_start(chat("hello")), repeating(Action::Jump), at_start(hold(true))],
+        &[]
+    )]
     #[case::one(vec![at_start(chat("/spawn")), repeating(chat("hello"))], &["/spawn"])]
     #[case::in_step_order(
         vec![repeating(chat("/afk")), at_start(Action::Jump), at_start(chat("/home base"))],
@@ -927,6 +1011,7 @@ mod tests {
             at_start(Action::Sneak { on: true }),
             at_start(Action::SwingArm),
             at_start(Action::UseItem),
+            at_start(hold(true)),
             at_start(Action::AttackFacingEntity),
             at_start(Action::SelectHotbarSlot {
                 slot: HotbarSlot::LAST,
@@ -1086,6 +1171,7 @@ mod tests {
             any::<bool>().prop_map(|on| Action::Sneak { on }),
             Just(Action::SwingArm),
             Just(Action::UseItem),
+            any::<bool>().prop_map(hold),
             Just(Action::AttackFacingEntity),
             slot_action(),
             chat_action(),
@@ -1164,30 +1250,29 @@ mod tests {
         })
     }
 
-    /// A valid draft: up to 28 unlimited steps plus at most one step of each
-    /// limited kind, in any order.
+    /// A valid draft: up to 24 unlimited steps plus at most one step of each
+    /// of the 8 limited kinds, in any order.
     fn valid_draft() -> impl Strategy<Value = ModeDraft> {
         let unlimited = prop_oneof![
             valid_at_start(valid_unlimited_action()),
             valid_repeating(valid_unlimited_action(), 250),
         ];
-        (
-            vec(unlimited, 0..=28),
+        let limited = (
             proptest::option::of(valid_at_start(chat_action())),
             proptest::option::of(valid_repeating(chat_action(), 30_000)),
             proptest::option::of(valid_at_start(Just(Action::AttackFacingEntity))),
             proptest::option::of(valid_repeating(Just(Action::AttackFacingEntity), 500)),
+            proptest::option::of(valid_at_start(Just(hold(true)))),
+            proptest::option::of(valid_repeating(Just(hold(true)), 500)),
+            proptest::option::of(valid_at_start(Just(hold(false)))),
+            proptest::option::of(valid_repeating(Just(hold(false)), 500)),
         )
-            .prop_map(
-                |(mut steps, start_chat, repeating_chat, start_attack, repeating_attack)| {
-                    steps.extend(
-                        [start_chat, repeating_chat, start_attack, repeating_attack]
-                            .into_iter()
-                            .flatten(),
-                    );
-                    steps
-                },
-            )
+            .prop_map(|(a, b, c, d, e, f, g, h)| [a, b, c, d, e, f, g, h]);
+        (vec(unlimited, 0..=24), limited)
+            .prop_map(|(mut steps, limited)| {
+                steps.extend(limited.into_iter().flatten());
+                steps
+            })
             .prop_shuffle()
             .prop_map(draft)
     }

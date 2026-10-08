@@ -146,6 +146,8 @@ Kick reasons arrive as `Event::Disconnect(Option<FormattedText>)`.
 | `AttackFacingEntity` | `hit_result().as_entity_hit_result()` gives the target (the picker already respects reach, `entity_interaction_range` = 3.0), then **`attack_raw`** (below) |
 | respawn | `ecs.write().write_message(PerformRespawnEvent { entity })` |
 
+> Refined by [ADR-0011](0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md) (P3.9): `UseItem` and the new `HoldUse{on: true}` insert azalea's `StartUseItemQueued` directly instead of calling `start_use_item()`. `HoldUse{on: false}` removes a use that's still queued and then writes a `ServerboundPlayerAction{ReleaseUseItem}` at once, so a hold and a release in the same tick can't reach the server the wrong way round.
+
 - **`Client::attack` is broken in azalea 0.16.0 against 26.1.** `ServerboundAttack.entity_id` lacks `#[var]`, so the server kicks the bot (`… ServerboundAttackPacket was larger than I expected, found 3 bytes extra`). The workaround writes the packet by hand:
 
   ```rust

@@ -270,7 +270,34 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
     3. 25 ticks of holding shot nothing yet.
     4. A `ServerboundPlayerAction { action: ReleaseUseItem, pos: BlockPos::default(), direction: Down, seq: 0 }` then shot one arrow. The bow's `minecraft.used` statistic went to 1, the arrows from 16 to 15, and one arrow entity appeared.
 
-    The packet encodes correctly through azalea's normal writer (`RawConnection::write`, or `Client::write_packet` on the host thread), so no hand-written bytes are needed. **P3.9** maps `HoldUse{on: true}` to `start_use_item` and `{on: false}` to that release. Items without a use duration (block and entity clicks) aren't covered. To repeat the probe, run those steps with the `fault-injection` hook adding a system that writes the release packet when a flag is set.
+    The packet encodes correctly through azalea's normal writer (`RawConnection::write`, or `Client::write_packet` on the host thread), so no hand-written bytes are needed. **P3.9** maps `HoldUse{on: true}` to `start_use_item` and `{on: false}` to that release *(superseded by "Built in P3.9" below: holding inserts `StartUseItemQueued` directly, and letting go first cancels a use that's still queued)*. Items without a use duration (block and entity clicks) aren't covered. To repeat the probe, run those steps with the `fault-injection` hook adding a system that writes the release packet when a flag is set.
+- **Built in P3.9** (`HoldUse{on}`, the user's decisions, 2026-10-07 and -08):
+  - **Holding.** `HoldUse{on: true}` and `UseItem` insert azalea's public `StartUseItemQueued{hand: MainHand, force_block: None}` directly, instead of calling `start_use_item`, whose `StartUseItemEvent` "just inserts the `StartUseItemQueued` component" a frame later. azalea's `handle_start_use_item_queued` sends the use at the next `GameTick`.
+    - The job first checks the components that handler queries (`HitResultComponent`, `LookDirection`, `BlockStatePredictionHandler`), so a use can't stay queued; a missing one is `NotInWorld`.
+    - So `UseItem` now returns `NotInWorld` once the bot has left its world, like every other action, instead of `Ok` with nothing sent. In game it behaves as before: the snowball step passes unchanged.
+  - **Letting go.** `HoldUse{on: false}` removes a `StartUseItemQueued` that's still there, then always writes the release at once: `ServerboundPlayerAction{ReleaseUseItem, BlockPos::default(), Down, seq 0}` through `NetworkConnection::write`. A missing connection or a write error is `NotInWorld`. The vanilla server's `releaseUsingItem` does nothing when the player isn't using an item.
+  - **Why the cancel.** The use goes out at the next game tick, the release at once. Without the cancel, a hold and a release within one tick (two at-start steps, or two repeating steps due together) reach the server the wrong way round, and the bot keeps holding. Always releasing also covers a hold that was already sent before a second one was queued.
+  - **What ends a hold:** letting go, death and respawn, a hotbar slot change, the item finishing (food), and a disconnect. That's how the vanilla server handles them; only letting go is checked live.
+    - At-start steps run again on each join, so an at-start hold comes back after a reconnect but not after a respawn.
+    - Re-applying holds after a respawn is flagged under P4.2, not decided.
+  - **Blocks and entities.** While the bot looks at a block or an entity within reach, a use clicks it instead (`UseItemOn`, or an entity interaction), as `UseItem` always did. For a shield, look at the sky or into open air.
+  - **Found: projectiles in front of the bot.** azalea doesn't move projectiles between the server's position updates. So for a while after a throw or a shot, the bot's own picture still shows the projectile within reach, and a use clicks it instead of drawing.
+    - A temporary probe, never committed, logged the packets the bot sent: a hold about 100 ms after a shot sent two `interact` packets and no `UseItem`, and a hold 1.25 s later sent `UseItem`.
+    - Whether the bow pattern (let go, then draw again in the same tick) can hit this depends on whether the server announces the new arrow before azalea's next game tick. That isn't checked. It's a known limit.
+  - **Tests.**
+    - **Unit tests** cover the release packet's body (`05`, eight zero bytes for the position, `00`, `00`), and queuing and cancelling a use on a bare `World`. They were red against stubs first.
+    - **`slow_actions_scenario`'s `hold_use` step** first kills leftover snowballs, then, with a bow at the sky:
+      1. on, then off right away; 25 ticks; off again: no arrow, because a bow left drawn would shoot now
+      2. on, then 25 ticks: still no arrow
+      3. off: one arrow (the `minecraft.used:minecraft.bow` score, and an arrow entity)
+      4. *(from the PR review)* from slot 0, select the bow's slot and hold with no wait between, as an at-start "select a slot, then hold" does on every join; a full draw; off: one more arrow
+    - **Red runs.** Against a release that did nothing, the release check failed. Against an immediate release without the cancel, the back-to-back check failed with one arrow shot, so the wrong order is real.
+      - The first version of that check ran after the shot. It passed against the immediate release, 3 runs of 3, because the second hold clicked the arrow (the finding above). Running it first, before any arrow exists, made it fail as it should.
+    - **Results** (2026-10-08, local, Docker Desktop): `slow_actions_scenario` alone passed 10 runs of 10, about 22 s each. Three full `just test-slow` runs passed every scenario each time: actions, offline, online, fault containment and teardown, 3 of 3 each, about 92 s a run.
+  - **A slot change and a hold in the same tick** *(from the PR review)*. azalea sends the slot change (`ensure_has_sent_carried_item`, ordered only after mining) and the use (`handle_start_use_item_queued`) in the same `GameTick`, with no direct order between them (checked in azalea-client 0.16.0's `InventoryPlugin`). If the slot packet reached the server after the use, it would end the hold.
+    - Step 4 above checks this live. It passed 5 runs of 5 on its own and one full `just test-slow` run.
+    - A temporary probe, never committed, logged the bot's packets in 3 more runs. Both actions landed before the same tick, and in that tick `set_carried_item` went out about 0.05–0.1 ms before `use_item`.
+    - That order is what azalea 0.16.0's schedule does today, not a declared direct constraint. So the step guards it at every azalea bump (ADR-0003).
 
 ### Slow tests (P3.7, P3.8)
 - **Local servers only.** They use testcontainers with `itzg/minecraft-server`, offline and online mode, bound to localhost. The image and `VERSION` are the ones pinned in `deploy/compose.dev.yaml`, and a fast test asserts that the two pins match.
@@ -357,6 +384,7 @@ They aren't config keys yet: a fleet-mc config struct holds them, and P5 adds ke
   - **P5.1** parses `connect_timeout_secs` and `max_abandoned_threads`.
   - **P5.3** exits the agent when the pool's abandoned-thread count reaches the limit.
   - **P4.9** exports the pool's and connector's diagnostics as metrics.
+  - **P4.2** decides whether to re-apply `HoldUse` holds after a respawn (P3.9).
   - **P5.2** and **P9.3** cap `azalea_auth` at `info` *(group C)*.
   - **P12.2's** memory limit on the agent container also bounds the World a hostile server can grow *(group E, threat model)*.
   - **Every azalea bump** re-checks the three ignored advisories and removes the hickory ones once azalea uses hickory ≥ 0.26.1.
