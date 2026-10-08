@@ -164,7 +164,7 @@ Approved by the user; all are in Plan.md §5:
     - conflict texts per server in managed mode
     - where the per-bot chat limit lives (server settings, sent to agents)
     - "on respawn" mode steps and `SessionEvent::Respawned`, with which the respawn retry can confirm that the bot is alive instead of trusting an `Ok`
-  - **P10.7** *(group B)*: the agent maps `FleetEvent`s to `BotEvent`, a chat ticket back to `SendChat`'s request id, and `ModeChatSent` to outgoing chat without one.
+  - **P10.7** *(group B)*: the agent maps `FleetEvent`s to `BotEvent`, a chat ticket back to `SendChat`'s request id, and `ModeChatSent` to outgoing chat without one. *(PR #15 review)* A ticket's event can arrive before the `send_chat` reply, so the agent handles a ticket it hasn't mapped yet.
   - **P11.1** *(group B)*: `chat_messages` can record outgoing mode chat from `ModeChatSent`.
   - **P11.3:** its rule for commands with message arguments covers mode chat too.
   - **P11.9:** the chat format is parsed on the server.
