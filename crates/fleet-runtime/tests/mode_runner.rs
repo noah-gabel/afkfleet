@@ -5,9 +5,9 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
-use core::fmt::{self, Write as _};
+mod common;
+
 use core::time::Duration;
-use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use fleet_core::chat::ChatMessage;
@@ -27,9 +27,9 @@ use rand::rngs::StdRng;
 use tokio::sync::{broadcast, watch};
 use tokio::task::{JoinHandle, JoinSet};
 use tokio_util::sync::CancellationToken;
-use tracing::field::{Field, Visit};
-use tracing::span::{Attributes, Id, Record};
-use tracing::{Event, Level, Metadata};
+use tracing::Level;
+
+use common::Levels;
 
 // --- Modes ---
 
@@ -192,73 +192,6 @@ impl Runner {
         self.mode.send_replace(definition);
         settle().await;
     }
-}
-
-// --- Log levels ---
-
-/// Records the level and the fields of every event, so a test can check
-/// what was logged at which level. It's installed for the test's thread; the
-/// current-thread runtime polls the spawned tasks there too.
-#[derive(Debug, Clone, Default)]
-struct Levels {
-    events: Arc<Mutex<Vec<(Level, String)>>>,
-}
-
-impl Levels {
-    /// The levels of the events whose fields contain `needle`, in order.
-    fn of(&self, needle: &str) -> Vec<Level> {
-        self.events
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(_, text)| text.contains(needle))
-            .map(|(level, _)| *level)
-            .collect()
-    }
-
-    /// Whether any event was logged at `warn` or `error`.
-    fn any_warning(&self) -> bool {
-        self.events
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(level, _)| matches!(*level, Level::WARN | Level::ERROR))
-    }
-}
-
-struct Fields(String);
-
-impl Visit for Fields {
-    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
-        let _ = write!(self.0, "{}={value:?} ", field.name());
-    }
-}
-
-impl tracing::Subscriber for Levels {
-    fn enabled(&self, _: &Metadata<'_>) -> bool {
-        true
-    }
-
-    fn new_span(&self, _: &Attributes<'_>) -> Id {
-        Id::from_u64(1)
-    }
-
-    fn record(&self, _: &Id, _: &Record<'_>) {}
-
-    fn record_follows_from(&self, _: &Id, _: &Id) {}
-
-    fn event(&self, event: &Event<'_>) {
-        let mut fields = Fields(String::new());
-        event.record(&mut fields);
-        self.events
-            .lock()
-            .unwrap()
-            .push((*event.metadata().level(), fields.0));
-    }
-
-    fn enter(&self, _: &Id) {}
-
-    fn exit(&self, _: &Id) {}
 }
 
 // --- Tests ---

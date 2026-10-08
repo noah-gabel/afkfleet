@@ -236,8 +236,11 @@ impl<S: SessionHandle> ChatDelivery<S> {
                 // One copy goes to the session, the other into the event.
                 match self.session.send_chat(message.clone()).await {
                     Ok(()) => self.publish(FleetEventKind::ModeChatSent { message }),
-                    // fleet-mc already warns once per session (ADR-0013).
-                    Err(error @ SessionError::ChatUnavailable) => {
+                    // fleet-mc already warns about `ChatUnavailable` once per
+                    // session. `Closed` only means the session has ended,
+                    // and the actor closes the queue then: no fault worth a
+                    // warning, as for the mode runner (ADR-0013).
+                    Err(error @ (SessionError::ChatUnavailable | SessionError::Closed)) => {
                         debug!(%error, "mode chat wasn't sent; skipped");
                     }
                     Err(error) => {

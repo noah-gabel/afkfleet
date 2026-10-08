@@ -5,6 +5,8 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
+mod common;
+
 use core::num::{NonZeroU32, NonZeroUsize};
 use core::time::Duration;
 
@@ -27,6 +29,9 @@ use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::TryRecvError;
 use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
+use tracing::Level;
+
+use common::Levels;
 
 fn bot_id() -> BotId {
     "018bcfe5-6800-7bab-abab-abababababab".parse().unwrap()
@@ -442,6 +447,29 @@ async fn mode_chat_that_isnt_sent_publishes_nothing(#[case] error: SessionError)
 
     assert_eq!(controller.log(), []);
     assert_eq!(bot.published(), []);
+}
+
+#[tokio::test(start_paused = true)]
+async fn mode_chat_in_a_session_that_ended_logs_below_warn() {
+    let levels = Levels::default();
+    let _guard = tracing::subscriber::set_default(levels.clone());
+    let mut bot = Bot::new(RuntimeConfig::default());
+    let (mode_chat, controller) = bot.open().await;
+    let ended =
+        SessionEvent::Disconnected(fleet_core::disconnect::DisconnectReason::ConnectionClosed);
+    assert_eq!(controller.emit(ended), EmitOutcome::Queued);
+
+    mode_chat.send(message("/spawn")).unwrap();
+    mode_chat.send(message("/home")).unwrap();
+    settle().await;
+
+    assert_eq!(controller.log(), []);
+    assert_eq!(bot.published(), []);
+    assert_eq!(
+        levels.of("the session has ended"),
+        [Level::DEBUG, Level::DEBUG]
+    );
+    assert!(!levels.any_warning(), "a session that ended never warns");
 }
 
 #[tokio::test(start_paused = true)]
