@@ -20,6 +20,9 @@
 //! - [`ModeRunner`] runs a bot's mode in one session.
 //! - [`BotActor`] is one bot's actor. It takes a [`BotCommand`] per `Fleet`
 //!   call through its [`BotInbox`] and ends with an [`ActorExit`].
+//! - [`Fleet`] is the runtime's API, and [`Supervisor`] the task behind it:
+//!   it runs one actor per bot, restarts an actor that crashes without
+//!   skipping its backoff, and shuts the fleet down within a timeout.
 //! - [`FleetEvent`]s tell the app what happened to a bot.
 
 mod actor;
@@ -29,17 +32,22 @@ mod config;
 mod credentials;
 mod event;
 mod failure_log;
+mod fleet;
 mod mode;
 
 pub use actor::{
     ActorExit, BotActor, BotActorParts, BotCommand, BotInbox, CrashedTask, InboxError,
 };
 pub use chat::{
-    ChatBucket, ChatBucketError, ChatDelivery, ChatError, ChatFailure, ChatQueue, ChatTicket,
-    ChatTickets, ModeChat,
+    ChatBucket, ChatBucketError, ChatDelivery, ChatError, ChatFailure, ChatQueue, ChatQuota,
+    ChatTicket, ChatTickets, ModeChat,
 };
 pub use clock::RuntimeClock;
 pub use config::RuntimeConfig;
 pub use credentials::OfflineCredentials;
 pub use event::{FleetEvent, FleetEventKind};
+pub use fleet::{
+    CapacitySetting, Fleet, FleetError, FleetParts, FleetSetupError, SendChatError, ShutdownReport,
+    Supervisor,
+};
 pub use mode::ModeRunner;

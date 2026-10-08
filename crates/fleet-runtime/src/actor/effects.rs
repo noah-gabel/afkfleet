@@ -5,7 +5,9 @@ use core::num::NonZeroU32;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use fleet_core::bot::{BotEvent, BotNotification, BotSnapshot, BotState, Effect, transition};
+use fleet_core::bot::{
+    BotEvent, BotNotification, BotSnapshot, BotState, Effect, Transition, transition,
+};
 use fleet_core::disconnect::{ConnectFailure, DisconnectReason};
 use fleet_core::mc::{
     ConnectError, ConnectParams, MinecraftConnector, SessionCredentialProvider, SessionHandle as _,
@@ -27,9 +29,25 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
     /// Applies `event`, then every event its effects produce, in order.
     pub(super) async fn feed(&mut self, event: BotEvent) {
         self.pending.push_back(event);
+        self.run_pending().await;
+    }
+
+    /// Applies the events that effects produced, in order.
+    async fn run_pending(&mut self) {
         while let Some(event) = self.pending.pop_front() {
             self.step(event).await;
         }
+    }
+
+    /// Takes on the starting point (ADR-0013): its state, published only if
+    /// it differs from the last published one, then its effects and the
+    /// events they produce. `self.state` still holds the last published
+    /// state here.
+    pub(super) async fn begin(&mut self, start: Transition) {
+        let now = self.clock.now();
+        let changed = start.state != self.state;
+        self.enter(start, changed, false, now).await;
+        self.run_pending().await;
     }
 
     /// Applies one event: the transition, then its effects, in order.
@@ -45,8 +63,21 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
                     | BotEvent::SessionClosed
             );
         let transition = transition(&old, event, now, &self.rules);
+        let changed = transition.state != old;
+        self.enter(transition, changed, ended_on_its_own, now).await;
+    }
+
+    /// Takes on `transition` at `now`: its state, published if `changed`,
+    /// then its effects, in order.
+    async fn enter(
+        &mut self,
+        transition: Transition,
+        changed: bool,
+        ended_on_its_own: bool,
+        now: DateTime<Utc>,
+    ) {
         self.state = transition.state;
-        if self.state != old {
+        if changed {
             self.changed(now, ended_on_its_own);
         }
         for effect in transition.effects {

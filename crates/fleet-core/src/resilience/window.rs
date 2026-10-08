@@ -46,6 +46,20 @@ impl FailureWindow {
     pub fn clear(&mut self) {
         self.failures.clear();
     }
+
+    /// Returns how many failures the window held after the last
+    /// [`record`](Self::record): at most `threshold`. Failures that have aged
+    /// out since are only dropped by the next `record`.
+    #[must_use]
+    pub fn len(&self) -> usize {
+        self.failures.len()
+    }
+
+    /// Whether no failure is recorded.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.failures.is_empty()
+    }
 }
 
 #[cfg(test)]
@@ -106,6 +120,30 @@ mod tests {
         window.clear();
         assert!(!window.record(at(2)));
         assert!(!window.record(at(3)));
+    }
+
+    #[test]
+    fn len_counts_the_failures_within_the_window() {
+        let mut window = three_per_minute();
+        assert!(window.is_empty());
+
+        window.record(at(0));
+        window.record(at(10));
+        assert_eq!(window.len(), 2);
+        assert!(!window.is_empty());
+
+        window.record(at(80));
+        assert_eq!(window.len(), 1, "the first two aged out");
+    }
+
+    #[test]
+    fn len_never_exceeds_the_threshold() {
+        let mut window = three_per_minute();
+        for second in 0..10 {
+            window.record(at(second));
+        }
+
+        assert_eq!(window.len(), 3);
     }
 
     #[test]

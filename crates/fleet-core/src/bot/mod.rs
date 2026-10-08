@@ -25,6 +25,12 @@
 //! [`BotSpec`] says what it should be doing, and its [`BotSnapshot`] what it's
 //! doing now (ADR-0013).
 //!
+//! [`restore`] picks a bot up after its actor crashed, from the last state it
+//! published, without skipping the backoff. A [`StickyState`] is a Paused or
+//! Failed state that outlives the actor and the agent: the server passes it
+//! back when it assigns the bot, so a bot never connects over a human playing
+//! on its account (ADR-0013).
+//!
 //! The actor's side of the contract:
 //! - It holds the session credentials; events carry none.
 //! - Leaving a state cancels that state's timer or session request.
@@ -37,6 +43,7 @@
 
 mod effect;
 mod event;
+mod restore;
 mod rules;
 mod snapshot;
 mod spec;
@@ -45,8 +52,9 @@ mod transition;
 
 pub use effect::{BotNotification, Effect};
 pub use event::BotEvent;
+pub use restore::restore;
 pub use rules::BotRules;
 pub use snapshot::BotSnapshot;
-pub use spec::{BotAccount, BotSpec, DesiredRunState};
+pub use spec::{BotAccount, BotSpec, DesiredRunState, StickyState};
 pub use state::{BotState, FailReason, PauseReason};
 pub use transition::{Transition, transition};

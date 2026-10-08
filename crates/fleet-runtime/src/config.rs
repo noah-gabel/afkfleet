@@ -5,10 +5,13 @@ use core::time::Duration;
 
 /// The runtime's settings. [`Default`] gives the ones ADR-0013 decided.
 ///
-/// `connect_timeout`, `watchdog_timeout` and `packet_liveness_timeout` are
-/// Appendix A's `[runtime]` keys, which the agent maps (P5.1); the others
-/// aren't config keys yet and keep these defaults. Tests shrink them to reach
-/// a case easily. The supervisor adds its settings in P4.7.
+/// `connect_timeout`, `watchdog_timeout`, `packet_liveness_timeout`,
+/// `max_bots` and `shutdown_timeout` are Appendix A's `[runtime]` keys, which
+/// the agent maps (P5.1); the others aren't config keys yet and keep these
+/// defaults. Tests shrink them to reach a case easily.
+///
+/// `Fleet::new` checks every capacity it hands to tokio against tokio's
+/// limits, so no setting can make the runtime panic (ADR-0013).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeConfig {
     /// A bot's chat bucket gains one message per this interval (Plan.md
@@ -57,6 +60,31 @@ pub struct RuntimeConfig {
     /// How often the watchdog checks while the bot is Online. A zero period
     /// counts as 1 ms, so the actor's loop can't spin.
     pub watchdog_period: Duration,
+    /// How many bots the fleet holds at most, in any state, until each one's
+    /// `Removed`. A new bot beyond that is refused with `AtCapacity`
+    /// (Appendix A's `max_bots`).
+    pub max_bots: NonZeroUsize,
+    /// How many `Fleet` calls the supervisor's queue holds. A call beyond
+    /// that is refused with `Busy` instead of waiting.
+    pub supervisor_queue: NonZeroUsize,
+    /// How many events the fleet's `broadcast` keeps for a subscriber that
+    /// lags behind; one that falls further behind resyncs from the
+    /// snapshots (Plan.md §6 row 12). tokio's `broadcast` allocates its whole
+    /// buffer up front, so a huge value that passes `Fleet::new`'s check can
+    /// still run out of memory; the `mpsc` queues allocate as they fill.
+    pub event_buffer: NonZeroUsize,
+    /// How long a `Fleet` call waits for the supervisor's answer before it
+    /// gives up with `TimedOut`.
+    pub reply_timeout: Duration,
+    /// How long a shutdown waits for the actors to stop before it aborts the
+    /// rest. The supervisor also uses it when its token is cancelled or every
+    /// `Fleet` handle is dropped (Appendix A's `shutdown_timeout_secs`).
+    pub shutdown_timeout: Duration,
+    /// How many crashes of a bot's actor within `restart_window` end in
+    /// `CrashLoop` (Plan.md §6 row 7).
+    pub restart_limit: NonZeroUsize,
+    /// The window that `restart_limit` counts crashes in.
+    pub restart_window: Duration,
 }
 
 impl Default for RuntimeConfig {
@@ -76,6 +104,13 @@ impl Default for RuntimeConfig {
             watchdog_timeout: Duration::from_secs(30),
             packet_liveness_timeout: Duration::from_secs(30),
             watchdog_period: Duration::from_secs(1),
+            max_bots: NonZeroUsize::MIN.saturating_add(49),
+            supervisor_queue: NonZeroUsize::MIN.saturating_add(63),
+            event_buffer: NonZeroUsize::MIN.saturating_add(1023),
+            reply_timeout: Duration::from_secs(5),
+            shutdown_timeout: Duration::from_secs(10),
+            restart_limit: NonZeroUsize::MIN.saturating_add(5),
+            restart_window: Duration::from_mins(10),
         }
     }
 }
@@ -100,5 +135,12 @@ mod tests {
         assert_eq!(config.watchdog_timeout, Duration::from_secs(30));
         assert_eq!(config.packet_liveness_timeout, Duration::from_secs(30));
         assert_eq!(config.watchdog_period, Duration::from_secs(1));
+        assert_eq!(config.max_bots.get(), 50);
+        assert_eq!(config.supervisor_queue.get(), 64);
+        assert_eq!(config.event_buffer.get(), 1024);
+        assert_eq!(config.reply_timeout, Duration::from_secs(5));
+        assert_eq!(config.shutdown_timeout, Duration::from_secs(10));
+        assert_eq!(config.restart_limit.get(), 6);
+        assert_eq!(config.restart_window, Duration::from_mins(10));
     }
 }

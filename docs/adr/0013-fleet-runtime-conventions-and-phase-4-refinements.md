@@ -94,6 +94,7 @@ The queue and the mode runner are built against the fake before the actor, so th
   - **Respawn.** A failed call is retried 5 s after it failed; the session ends after the 12th failed call in a row, about 55 s after the death. `Closed` ends the retry at `debug` and never counts, since the session's own end follows. Each death warns on its first failure.
   - **Events and logs.** `Notify` is published as `Alert(BotNotification)`, right after the `StateChanged` it belongs to. The starting state (Stopped) goes into the snapshot `watch` without an event. `last_disconnect` changes only when a session ends on its own: a kick or other reason, a failed connect (including no host thread and the actor's connect timeout), events that end without a reason (`SessionCrashed`), a watchdog or liveness trip, or a respawn failure; a deliberate end leaves it as it was. State changes log at `info`. A session that ends on its own and is retried, a session-request timeout and a retryable credential error log at `warn`, with the reason's kind and translation key; a kick's text goes only to `debug`. Paused logs at `warn` (a human playing is expected), Failed at `error`.
   - **Tests.** fleet-testkit's fake session gained `fail_respawn(error)`, `succeed_respawn()` and `delay_disconnect(duration)`; a delayed `disconnect()` closes the session at once and returns after the delay on tokio's clock, the way fleet-mc closes first and then waits for its thread. Crashes come from a test-only panicking wrapper in fleet-runtime's `tests/`, as P4.8 decided; the fakes stay panic-free.
+- *(group D, found in the plan review and fixed in P4.7)* **Reset and Resume apply the desired state.** Group C's actor fed only `Reset` or `Resume`, so a Paused bot whose spec had since said desired = Stopped connected again on Resume (and a Failed one on Reset), and resending the spec couldn't stop it once P4.7 answers an equal spec without forwarding it. Both now feed their event, then apply the desired state in the same turn, as `UpdateSpec` does: with desired = Stopped the bot passes `AwaitingSession{1}` and ends Stopped. The session request is dropped before it's ever polled, so the provider is never asked and nothing connects. No core change was needed, and a reset of a bot without an actor does the same. A regression test in `tests/bot_actor.rs` covers both paths.
 
 ### Watchdog (P4.6)
 It checks every 1 s while Online. A tick stall gives `WatchdogTimeout`, a packet stall `Disconnected(LivenessTimeout)`, and the tick stall wins when both are stale (ADR-0010).
@@ -109,8 +110,9 @@ It checks every 1 s while Online. A tick stall gives `WatchdogTimeout`, a packet
 - **API:** `apply(spec, restore: Option<StickyState>)`, `remove`, `reset`, `resume`, `restart`, `send_chat`, `snapshot`, `snapshot_all`, `subscribe` and `shutdown(timeout)`.
   - Bots start and stop only through the spec's desired state. `restart` is a no-op when the desired state is Stopped.
   - `apply` refuses a new bot above `[runtime] max_bots` with `AtCapacity`.
-  - The errors are `UnknownBot`, `Busy`, `AtCapacity`, `AccountChanged`, `ShuttingDown` and `TimedOut`.
+  - The errors are `UnknownBot`, `Busy`, `AtCapacity`, `AccountChanged`, *(group D)* `AccountInUse`, `ShuttingDown` and `TimedOut`.
   - `remove` returns once the supervisor accepted it. The teardown runs in the background, then `StateChanged(Stopped)` and `Removed` go out. Until `Removed`, `apply` for that `BotId` returns `Busy`.
+  - *(group D, the user's decision; refines the line above)* `StateChanged(Stopped)` goes out only when the actor stops a running bot through `transition()`. A Paused, Failed or crash-looped bot gets only `Removed`, and its last published state stays. The reason is P10.5: it moves a bot by waiting for the old agent's `Removed`, then sends the server's stored `last_state` with `AssignBot` as the sticky restore. A `Stopped` right before `Removed` would overwrite a stored Paused or Failed, so the new agent would connect and kick the human who's playing (§6 row 3), or retry a failed account.
 - **Restarts never skip the backoff.**
   - The supervisor keeps each bot's spec, snapshot `watch`, restart window and circuit breaker. The actor writes a copy of its breaker into a private `watch` after each breaker effect, so a panic doesn't reset it.
   - A pure `fleet_core::bot::restore(&BotState, now, &BotRules) -> Transition` decides the restored state and its effects:
@@ -122,6 +124,38 @@ It checks every 1 s while Online. A tick stall gives `WatchdogTimeout`, a packet
   - A panic isn't a breaker failure; only the restart window counts it.
   - *(group B, the user's decision)* The supervisor also keeps each bot's `ChatBucket` and hands the same one to a restarted actor, so a crash doesn't refill it. It owns the fleet's `ChatTickets` and gives every actor a clone.
   - The 6th panic within 10 min gives `CrashLoop`: the supervisor starts the actor once more with `CrashLoop` as its first event, so `Failed(CrashLoop)` goes through `transition()`. If that actor panics too, the supervisor publishes `Failed(CrashLoop)` itself and starts an actor only on Reset.
+- *(group D, the user's decisions)* What the supervisor looks like as built:
+  - **Shape.** `Fleet::new(FleetParts { connector, credentials, retry, circuit, config, anchor, seed })` returns `Result<(Fleet, Supervisor), FleetSetupError>`. The caller runs `supervisor.run(cancel)` in a task it owns (P5.3), like the actor's `run`. `Fleet` isn't generic and is `Clone`.
+  - **Setup checks.** `Fleet::new` checks the settings before it builds anything:
+    - The chat rate limit becomes a `ChatQuota` (`try_new`), checked once. Every bot's bucket is `ChatBucket::with_quota(quota)`, which can't fail; `ChatBucket::new` stays and is built on the two.
+    - Every capacity handed to tokio is checked against tokio's documented limit, since tokio panics above it: `event_buffer` against `usize::MAX / 2` (`broadcast`), and `supervisor_queue`, `actor_inbox` and `chat_queue` against `Semaphore::MAX_PERMITS` (`mpsc`). `broadcast` allocates its whole buffer up front, so a huge value that passes can still run out of memory; `mpsc` allocates as it fills.
+    - Errors: `FleetSetupError::ChatQuota(ChatBucketError)` and `CapacityTooLarge { setting: CapacitySetting }`, which names the field.
+  - **Calls.** A `Fleet` call `try_send`s to the supervisor's queue: full is `Busy` at once. It then waits for the answer up to `reply_timeout` (5 s, no config key): `TimedOut`. A closed queue or a dropped reply means the supervisor has ended: `ShuttingDown`. `TimedOut` is only for a live supervisor that doesn't answer in time.
+  - **Forwarding.** The supervisor forwards one `BotCommand` per call with `try_send` and never waits for an actor. When that fails (`Full`, or `Closed` in the short race before an actor's exit is handled), the call is `Busy`, and `apply` doesn't store the spec, so a restart never starts from a spec the caller was told failed. For `send_chat` the supervisor answers with the receiver the actor answers on; an actor that ends before it answers also gives `Busy`. `send_chat` returns `Result<ChatTicket, SendChatError>`, with `Fleet(FleetError)` and `Chat(ChatError)`.
+  - **`apply` for a new bot.** It's refused with `AccountInUse` when a live bot's account clashes, by the new `BotAccount::clashes_with`: offline names compare ignoring ASCII case, since Minecraft names are unique whatever their case, and online accounts by `AccountId`. If only a bot that's being removed holds the account, the answer is `Busy`, since the account is free once its `Removed` goes out. `max_bots` (50) counts every bot the fleet knows, in any state, until its `Removed`.
+  - **`apply` for a known bot.** `AccountChanged` compares exactly, like the actor, so a change only in case is a changed account (offline-mode servers derive the player's UUID from the exact name). A spec equal to the stored one answers `Ok` without being forwarded, so a full reconcile (P10) doesn't fill the inboxes. A restore for a bot the fleet already runs is ignored and logged at `debug`: the actor's own state is newer than the server's stored one.
+  - **`StickyState`** is `fleet_core::bot::StickyState { Paused(PauseReason), Failed(FailReason) }`, pure data next to `BotSpec`, with `From<StickyState> for BotState`.
+  - **Starting points.** `BotActorParts` gained `start: Transition`, which the supervisor computes:
+
+    | Start | Value |
+    |---|---|
+    | New bot | `Stopped`, no effects |
+    | Sticky | `Paused` or `Failed`, no effects |
+    | Restart | `restore()` |
+    | Crash loop | `transition(&restore(..).state, CrashLoop, ..)` |
+
+    The actor takes on the state, executes the effects (e.g. `ScheduleRetry`), then applies the desired state: Running feeds `Start`, Stopped feeds `Stop`.
+  - **What a start publishes.** A `StateChanged`, with `since` = now, goes out only if the start state differs from what the snapshot `watch` holds. A restart that keeps Paused publishes nothing and keeps its `since`. A new bot's `watch` starts as Stopped, so a sticky start publishes `StateChanged(Paused)` without an `Alert`, since the server already knows. A crash loop's `Notify` still publishes its `Alert`. `last_disconnect` carries over from the `watch`.
+  - **`restore()` of a stable Online** returns `[RecordSuccess, ScheduleRetry{1}]`, as `leave()` does when a stable session ends any other way.
+  - **Crashes.** A panic, a `TaskCrashed`, and an exit the supervisor didn't ask for all count in the bot's restart window (`restart_limit` = 6 within `restart_window` = 10 min). An unexpected `Stopped` or abort is a bug: it logs at `error` and is handled like a crash. A restart logs at `warn` in the bot's span, with the kind of crash and the count in the window, since it's a recovered fault and the panic itself is logged by the actor or P5.2's panic hook. The crash loop, and a crash of the crash-loop actor, log at `error`. `FailureWindow` gained `len()` and `is_empty()` for the count.
+  - **After the crash-loop actor crashes too,** the bot has no actor and shows `Failed(CrashLoop)`, published only if it changed. Calls act as on a live Failed actor: `apply` stores the spec for the next actor, `resume` and `restart` answer `Ok` and do nothing, `send_chat` is `Chat(NotOnline)`, `remove` publishes `Removed` at once, and `reset` starts an actor from `transition(Failed(CrashLoop), Reset)`.
+  - **The restart window is cleared** only when the supervisor forwards a `reset` while the last state is `Failed(CrashLoop)`, with or without a live actor, so a human's retry after a crash loop gets the whole window. A Reset out of any other Failed reason leaves it alone.
+  - **While a bot is being removed,** `apply` is `Busy`; `reset`, `resume`, `restart` and `send_chat` are `UnknownBot`; a second `remove` is `Ok`; `snapshot` and `snapshot_all` still show the bot until `Removed`. A crash during removal logs at `warn` and isn't restarted; `Removed` still goes out.
+  - **Shutdown.** `shutdown(timeout)` cancels every actor, waits up to `timeout`, then aborts the rest, which drops their sessions so fleet-mc ends the host threads. It returns `ShutdownReport { stopped, aborted, crashed }` and logs aborts at `warn`; a crash during the shutdown counts under `crashed` and logs at `warn`. Calls that arrive meanwhile, and every later call, answer `ShuttingDown`. A removal accepted before still publishes `Removed`. The call waits `timeout` plus the reply timeout. A cancelled run token, or every `Fleet` dropped, shuts down the same way within `RuntimeConfig::shutdown_timeout` (10 s, Appendix A's `shutdown_timeout_secs`).
+  - **Order.** The `select!` is biased: cancellation, actor exits (`join_next_with_id`, mapped back to the bot by task ID), then calls. A crash is handled and its actor restarted before the next call.
+  - **Randomness.** The supervisor keeps one `StdRng` seeded from the seed, and every actor start draws `StdRng::seed_from_u64(next_u64())`, so a run replays for the same order of calls.
+  - **`snapshot_all`** is sorted by `BotId`: the supervisor keeps its bots in a `BTreeMap`.
+  - **Tests** are one folder crate, `tests/fleet/`, as fleet-mc's `tests/minecraft/`: `main.rs` reaches the shared `Levels` with `#[path = "../common/mod.rs"]`, `panicky.rs` has the connector whose connects or sessions panic on cue, and `supervisor.rs` the scenarios. P4.8's chaos test becomes `tests/fleet/chaos.rs` and reuses `panicky.rs`, so every helper is used somewhere in the crate.
 - **Across an agent restart** the server is the source of truth: it stores `bots.last_state` and sends the sticky state with `AssignBot`/`ReconcileFull` (P10). The standalone agent persists nothing, which is a documented limit for a dev-only mode with offline accounts.
 
 ### Chaos test (P4.8)
@@ -153,8 +187,11 @@ They're `RuntimeConfig` fields with defaults, like fleet-mc's `McConfig`, and P5
 | Respawn retry | every 5 s, 12 failed calls |
 | Session events applied before a session-ending input *(group C)* | 67 (64 + 3) |
 | Restart window | 6 panics in 10 min |
+| `Fleet` reply timeout *(group D)* | 5 s |
 
 *(group C)* The connect timeout, the watchdog timeout and the packet-liveness timeout are `RuntimeConfig` fields too, but they're Appendix A's `[runtime]` keys (`connect_timeout_secs`, `watchdog_timeout_secs`, `packet_liveness_timeout_secs`, 30 s each), which P5.1 maps.
+
+*(group D)* So are `max_bots` (50) and the shutdown timeout (10 s), for Appendix A's `max_bots` and `shutdown_timeout_secs`. The new `RuntimeConfig` fields are `max_bots`, `supervisor_queue` (64), `event_buffer` (1024), `reply_timeout` (5 s), `shutdown_timeout` (10 s), `restart_limit` (6) and `restart_window` (10 min).
 
 ### Dependencies
 Approved by the user; all are in Plan.md §5:
@@ -188,7 +225,12 @@ Approved by the user; all are in Plan.md §5:
     - "on respawn" mode steps and `SessionEvent::Respawned`, with which the respawn retry can confirm that the bot is alive instead of trusting an `Ok`
   - **P10.7** *(group B)*: the agent maps `FleetEvent`s to `BotEvent`, a chat ticket back to `SendChat`'s request id, and `ModeChatSent` to outgoing chat without one. *(PR #15 review)* A ticket's event can arrive before the `send_chat` reply, so the agent handles a ticket it hasn't mapped yet. *(group C)* It maps `Alert` too.
   - **P4.7** *(group C)*: the supervisor counts `ActorExit::TaskCrashed` like a panic, owns each bot's snapshot and breaker `watch`es, sends one `BotCommand` per `Fleet` call, and gives `BotActorParts` a restored starting point for a restarted actor (the `Transition` from `restore()`, or a sticky Paused or Failed from `apply`'s restore), deciding what the actor publishes for it.
-  - **P4.8** *(group C)*: a `Restart` or server change starts a deliberate new run, in AwaitingSession and Backoff too, so the storm invariant leaves those connects out of its bound.
+  - **P4.8** *(group C)*: a `Restart` or server change starts a deliberate new run, in AwaitingSession and Backoff too, so the storm invariant leaves those connects out of its bound. *(group D)* The chaos test becomes `tests/fleet/chaos.rs` and reuses `tests/fleet/panicky.rs`.
+  - **P5.1** *(group D)*: map `max_bots` and `shutdown_timeout_secs` to `RuntimeConfig`, and refuse two `[[standalone.bots]]` entries whose accounts clash, with `BotAccount::clashes_with`.
+  - **P5.3** *(group D)*: the agent runs `supervisor.run(cancel)` in a task it owns, and reports a `FleetSetupError` from `Fleet::new` at startup.
+  - **P5.4** *(group D)*: a signal calls `Fleet::shutdown(shutdown_timeout)`, or cancels the supervisor's token, and logs the `ShutdownReport`.
+  - **P10.5** *(group D)*: a removed Paused, Failed or crash-looped bot publishes no `StateChanged(Stopped)` before `Removed`, so the server keeps its stored state and restores it on the next agent.
+  - **P10.7** *(group D)*: the agent maps `FleetEventKind::Removed` too, since P10.5's move waits for it.
   - **P11.1** *(group B)*: `chat_messages` can record outgoing mode chat from `ModeChatSent`.
   - **P11.3:** its rule for commands with message arguments covers mode chat too.
   - **P11.9:** the chat format is parsed on the server.
@@ -221,6 +263,30 @@ Approved by the user; all are in Plan.md §5:
 - *(group C)* **`Notify` as a log line only:** the app would derive alerts from state changes itself.
 - *(group C)* **Clearing `last_disconnect` on a deliberate end:** the last fault would vanish with a Stop.
 - *(group C)* **A watchdog task per session,** reporting stalls over a channel: one more task and channel for a check the actor's loop does in place. **Stale only beyond the timeout (`>`):** a stall would be caught a second later, at 31–32 s.
+- *(group D)* **`Fleet::spawn` into a given `JoinSet`, or a `Fleet` that holds the supervisor's `JoinHandle`.** The first hides the task from its owner's own patterns; the second needs a lock around the handle for every clone.
+- *(group D)* **Cancelling without a bound, or aborting at once,** when the supervisor's token is cancelled or every handle dropped. The first relies only on the port's guarantee; the second publishes no Stopped at all.
+- *(group D)* **`shutdown` returning `()` or `Err(TimedOut)` on aborts.** The caller couldn't tell how many bots stopped cleanly. **Waiting for room in a full supervisor queue:** overload is an error, not a wait.
+- *(group D)* **A `Chat` variant in `FleetError`, or a nested `Result`.** Every other call's signature would admit an error it can't produce, or callers would unwrap twice.
+- *(group D)* **`StickyState` in fleet-runtime, or a plain `BotState`.** fleet-proto and fleet-server couldn't build the first, and the second allows restoring an Online bot.
+- *(group D)* **An `ActorStart` enum the actor resolves itself** (reading its last state from the `watch` and calling `restore()`). The actor would know about restarts; a plain `Transition` keeps all of that in the supervisor.
+- *(group D)* **Publishing every start state, or none.** Always publishing repeats an unchanged Paused after each restart; never publishing hides Online becoming Backoff after a crash.
+- *(group D)* **`restore()` without `RecordSuccess` for a stable Online:** a breaker that was half-open when the bot joined would stay half-open after the crash.
+- *(group D)* **Forcing or refusing a restore for a known bot.** Forcing needs a path into Paused or Failed outside `transition()`; refusing makes the agent resend without it.
+- *(group D)* **Every removal ending with `StateChanged(Stopped)`:** see the refined `remove` line above; P10.5 would lose a stored Paused.
+- *(group D)* **Clearing the restart window on every reset, or never.** Any reset would hide a crash loop that's still going; never clearing would send a reset soon after a crash loop straight back into it.
+- *(group D)* **`Busy` for every call to a bot without an actor:** `apply` couldn't update its spec until a reset.
+- *(group D)* **`apply` keeping the spec when the inbox is closed:** the caller would be told `Ok` for a spec the next actor might start from only by luck of timing.
+- *(group D)* **Seeds mixed from the bot ID:** order-independent, but needs a hand-written stable mixing function.
+- *(group D)* **Restart logs at `error`:** a recovered fault at the level that means "a human must act", next to the panic's own error log.
+- *(group D)* **Calls before actor exits in the `select!`:** more calls would meet a crashed actor's closed inbox.
+- *(group D)* **`max_bots` counting only desired-Running bots:** an `apply` that flips a known bot to Running could then fail with `AtCapacity`.
+- *(group D)* **No account-clash check in the runtime:** a server or config bug would run two bots on one account, which kick each other into Paused.
+- *(group D)* **A private comparison in the supervisor** instead of `BotAccount::clashes_with`: P5.1 would write its own. **Naming it `is_same_account`:** it would contradict `AccountChanged`, which treats a change only in case as a different account.
+- *(group D)* **Forgetting a bot that stopped unexpectedly, or keeping it without an actor:** a runtime bug would silently stop a bot instead of ending in `CrashLoop`.
+- *(group D)* **A validated `RuntimeConfig`, or an `apply` error for a zero chat interval:** the supervisor would still carry an error path that can't be reached, or report a config problem per bot.
+- *(group D)* **Leaving the capacities unchecked** (the group B/C precedent): a caller's `RuntimeConfig` could make the library panic inside tokio.
+- *(group D)* **Supervisor tests in `bot_actor.rs`, or a shared helper included by `#[path]` in several crates:** one oversized file, or a helper that's dead code wherever it isn't used.
+- *(group D, Reset and Resume)* **A core event from Paused or Failed straight to Stopped:** no `AwaitingSession` detour, but `transition()`, its proptests and ADR-0010's event list would change.
 - **Retrying or reconnecting on `ChatUnavailable`.** Retrying has unbounded latency; reconnecting lets chat failures drive reconnects.
 - **fleet-mc refusing message-argument commands now.** A hard-coded vanilla list misses aliases and plugin overrides, and it belongs to P11.3's rule for user commands.
 - **Restarting a crashed actor from Stopped.** Its next connect would skip the backoff, and a fresh breaker would forget an open circuit.

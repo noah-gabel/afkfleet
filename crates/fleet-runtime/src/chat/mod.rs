@@ -21,7 +21,7 @@ mod ticket;
 
 use fleet_core::mc::SessionError;
 
-pub use bucket::{ChatBucket, ChatBucketError};
+pub use bucket::{ChatBucket, ChatBucketError, ChatQuota};
 pub use queue::{ChatDelivery, ChatQueue, ModeChat};
 pub use ticket::{ChatTicket, ChatTickets};
 
