@@ -44,7 +44,8 @@ struct Entry {
     crashes: FailureWindow,
     /// The running actor; none after a second crash loop.
     actor: Option<Live>,
-    /// Whether the running actor was started after a crash loop.
+    /// Whether the bot is crash-looped: its actor was started for a crash
+    /// loop, or it has none after the crash-loop actor crashed too.
     crash_looped: bool,
     /// Whether the bot is being removed.
     removing: bool,
@@ -299,8 +300,9 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> Supervisor<C, P> {
             ));
         }
         // A human chose to try again after a crash loop: the new run gets
-        // the whole restart window.
-        if action == Lifecycle::Reset && state == CRASH_LOOP {
+        // the whole restart window. The supervisor's own record counts too,
+        // since the crash-loop actor may not have published its state yet.
+        if action == Lifecycle::Reset && (entry.crash_looped || state == CRASH_LOOP) {
             entry.crashes.clear();
             entry.crash_looped = false;
         }
@@ -1029,6 +1031,49 @@ mod tests {
             entry.snapshot.borrow().state,
             BotState::Failed { .. }
         ));
+    }
+
+    // Found in the PR #17 review: a Reset that came before the crash-loop
+    // actor had published Failed(CrashLoop) left the flag and the window as
+    // they were, so a single crash much later failed the bot at once.
+    #[tokio::test(start_paused = true)]
+    async fn a_reset_right_after_a_crash_loop_starts_still_clears_the_window() {
+        let (mut supervisor, _connector, mut events) = supervisor();
+        apply(&mut supervisor, spec(DesiredRunState::Running)).unwrap();
+        settle().await;
+        let now = supervisor.clock.now();
+        let entry_mut = supervisor.bots.get_mut(&bot()).unwrap();
+        for _ in 0..5 {
+            let _ = entry_mut.crashes.record(now);
+        }
+        end_actor_behind_its_back(&mut supervisor).await;
+        supervisor.exited(
+            bot(),
+            Ok(ActorExit::TaskCrashed {
+                task: CrashedTask::ModeRunner,
+            }),
+        );
+        assert!(entry(&supervisor).crash_looped, "the 6th crash");
+
+        // Before the crash-loop actor has run, so its state isn't published.
+        assert_eq!(lifecycle(&mut supervisor, Lifecycle::Reset), Ok(()));
+
+        assert!(!entry(&supervisor).crash_looped);
+        assert!(entry(&supervisor).crashes.is_empty());
+        settle().await;
+        tokio::time::advance(Duration::from_hours(24)).await;
+        settle().await;
+        end_actor_behind_its_back(&mut supervisor).await;
+        let _ = kinds(&mut events);
+        supervisor.exited(
+            bot(),
+            Ok(ActorExit::TaskCrashed {
+                task: CrashedTask::ModeRunner,
+            }),
+        );
+        let entry = entry(&supervisor);
+        assert!(entry.actor.is_some(), "a single crash restarts the bot");
+        assert_ne!(entry.snapshot.borrow().state, CRASH_LOOP);
     }
 
     /// Swaps the actor's inbox for one that's full.
