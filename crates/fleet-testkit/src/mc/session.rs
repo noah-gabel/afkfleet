@@ -2,6 +2,7 @@
 //! fake Minecraft session, shared between the code under test and the test.
 
 use core::future::Future;
+use core::time::Duration;
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Instant;
@@ -63,6 +64,10 @@ struct State {
     hung: bool,
     failing_actions: Option<SessionError>,
     failing_chat: Option<SessionError>,
+    failing_respawn: Option<SessionError>,
+    /// How long [`SessionHandle::disconnect`] takes after it has closed the
+    /// session.
+    disconnect_delay: Duration,
     frozen_tick: Option<Instant>,
     frozen_packet: Option<Instant>,
     dropped_chat: u64,
@@ -132,6 +137,9 @@ impl Shared {
         if let (Performed::Chat(_), Some(error)) = (&call, state.failing_chat) {
             return Err(error);
         }
+        if let (Performed::Respawn, Some(error)) = (&call, state.failing_respawn) {
+            return Err(error);
+        }
         if matches!(call, Performed::Respawn) {
             state.death_pending = false;
         }
@@ -139,16 +147,19 @@ impl Shared {
         Ok(())
     }
 
-    fn tear_down(&self) {
-        {
+    /// Tears the session down and returns how long the teardown still takes.
+    fn tear_down(&self) -> Duration {
+        let delay = {
             let mut state = self.lock();
             if state.phase != Phase::TornDown {
                 state.phase = Phase::TornDown;
                 state.queue.clear();
                 state.log.push(Performed::Disconnect);
             }
-        }
+            state.disconnect_delay
+        };
         self.events_ready.notify_one();
+        delay
     }
 
     fn next(&self) -> Next {
@@ -216,7 +227,12 @@ impl SessionHandle for FakeSession {
 
     fn disconnect(&self) -> impl Future<Output = ()> + Send {
         let shared = Arc::clone(&self.shared);
-        async move { shared.tear_down() }
+        async move {
+            let delay = shared.tear_down();
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
+        }
     }
 
     fn liveness(&self) -> Liveness {
@@ -360,6 +376,27 @@ impl SessionController {
     /// Lets [`SessionHandle::send_chat`] succeed again.
     pub fn succeed_chat(&self) {
         self.shared.lock().failing_chat = None;
+    }
+
+    /// Makes [`SessionHandle::respawn`] fail with `error` until
+    /// [`succeed_respawn`](Self::succeed_respawn). A failed respawn leaves
+    /// the bot dead. Actions and chat still work.
+    pub fn fail_respawn(&self, error: SessionError) {
+        self.shared.lock().failing_respawn = Some(error);
+    }
+
+    /// Lets [`SessionHandle::respawn`] succeed again.
+    pub fn succeed_respawn(&self) {
+        self.shared.lock().failing_respawn = None;
+    }
+
+    /// Makes every later [`SessionHandle::disconnect`] slow, the way fleet-mc
+    /// closes a session first and then waits for its host thread: the session
+    /// is torn down at once (calls fail with [`SessionError::Closed`] and
+    /// [`next`](SessionEvents::next) returns `None`), and `disconnect`
+    /// returns after `delay` on tokio's clock.
+    pub fn delay_disconnect(&self, delay: Duration) {
+        self.shared.lock().disconnect_delay = delay;
     }
 
     /// Returns what the code under test did in this session, in order.

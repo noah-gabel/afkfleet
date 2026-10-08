@@ -74,6 +74,7 @@ fn config(interval_ms: u64, burst: u32, queue: usize) -> RuntimeConfig {
         chat_interval: Duration::from_millis(interval_ms),
         chat_burst: NonZeroU32::new(burst).unwrap(),
         chat_queue: NonZeroUsize::new(queue).unwrap(),
+        ..RuntimeConfig::default()
     }
 }
 
@@ -470,6 +471,11 @@ async fn mode_chat_in_a_session_that_ended_logs_below_warn() {
         [Level::DEBUG, Level::DEBUG]
     );
     assert!(!levels.any_warning(), "a session that ended never warns");
+    assert_eq!(
+        levels.spans_of("the session has ended"),
+        ["", ""],
+        "the delivery opens no span of its own; the actor instruments it (ADR-0013)"
+    );
 }
 
 #[tokio::test(start_paused = true)]

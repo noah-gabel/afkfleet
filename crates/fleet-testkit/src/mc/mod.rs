@@ -7,8 +7,8 @@
 //!   code under test holds), its [`FakeEvents`], and a [`SessionController`]
 //!   for the test.
 //! - Through the controller, a test emits events, freezes the liveness stamps,
-//!   makes the session hang or its actions fail, and reads a log of what the
-//!   code under test did.
+//!   makes the session hang or its actions, chat or respawns fail, slows its
+//!   teardown down, and reads a log of what the code under test did.
 //! - [`FakeCredentials`] implements [`SessionCredentialProvider`]: it answers
 //!   with scripted credentials, can leave a request unanswered, and records
 //!   every request.

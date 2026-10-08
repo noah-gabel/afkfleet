@@ -544,6 +544,7 @@ mod tests {
             DisconnectReason::SessionCrashed,
             DisconnectReason::WatchdogTimeout,
             DisconnectReason::LivenessTimeout,
+            DisconnectReason::RespawnFailed,
             banned(),
             not_whitelisted(),
             wrong_version(),
@@ -875,6 +876,11 @@ mod tests {
     #[case::liveness_timeout(
         online(2),
         BotEvent::Disconnected(DisconnectReason::LivenessTimeout),
+        to(backoff(2), &[StopMode, Disconnect, RecordFailure, retry(2)])
+    )]
+    #[case::respawn_failed(
+        online(2),
+        BotEvent::Disconnected(DisconnectReason::RespawnFailed),
         to(backoff(2), &[StopMode, Disconnect, RecordFailure, retry(2)])
     )]
     #[case::watchdog_timeout(
