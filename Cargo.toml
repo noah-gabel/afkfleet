@@ -39,6 +39,10 @@ azalea-language = "=0.16.0"
 backon = { version = "1.6.0", default-features = false }
 # chrono: no `clock`/`now`, because fleet-core takes time as a parameter (ADR-0010).
 chrono = { version = "0.4.45", default-features = false }
+# governor: the defaults add `quanta`, `dashmap` and `jitter`, and `jitter` pulls rand 0.9
+# and getrandom 0.3 into normal dependencies. fleet-runtime enables `std` and runs its
+# chat bucket on a tokio-backed clock (ADR-0013).
+governor = { version = "0.10.4", default-features = false }
 # rand: no `sys_rng`/`thread_rng`; fleet-core takes an RNG as a parameter (ADR-0010).
 rand = { version = "0.10.3", default-features = false }
 # reqwest: TLS is fixed here, `rustls` (aws-lc-rs + platform verifier), never native-tls.
@@ -53,6 +57,8 @@ thiserror = "2.0.21"
 # tokio: no default features exist; members enable only what they use (`sync`,
 # `time`, …) and `test-util` in tests.
 tokio = "1.53.2"
+# tokio-util: fleet-runtime enables no features; it uses only `CancellationToken` (ADR-0013).
+tokio-util = { version = "0.7.19", default-features = false }
 tracing = "0.1.44"
 # tracing-subscriber: the default features include `tracing-log`, which bridges `log`
 # records into fleet-testkit's log capture for the redaction tests (ADR-0011).

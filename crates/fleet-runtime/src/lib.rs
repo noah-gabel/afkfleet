@@ -13,7 +13,27 @@
 //!
 //! - [`OfflineCredentials`] is the standalone agent's session-credential
 //!   provider: offline accounts log in with their name.
+//! - [`RuntimeClock`] is the runtime's wall clock, and [`RuntimeConfig`] its
+//!   settings.
+//! - [`ChatQueue`] is a bot's outbound chat: a bounded queue with a rate
+//!   limit, shared by user chat and mode chat.
+//! - [`ModeRunner`] runs a bot's mode in one session.
+//! - [`FleetEvent`]s tell the app what happened to a bot.
 
+mod chat;
+mod clock;
+mod config;
 mod credentials;
+mod event;
+mod failure_log;
+mod mode;
 
+pub use chat::{
+    ChatBucket, ChatBucketError, ChatDelivery, ChatError, ChatFailure, ChatQueue, ChatTicket,
+    ChatTickets, ModeChat,
+};
+pub use clock::RuntimeClock;
+pub use config::RuntimeConfig;
 pub use credentials::OfflineCredentials;
+pub use event::{FleetEvent, FleetEventKind};
+pub use mode::ModeRunner;
