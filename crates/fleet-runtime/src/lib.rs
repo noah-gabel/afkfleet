@@ -10,3 +10,10 @@
 //! The runtime never reads the wall clock or the OS's randomness. Its caller
 //! passes in a wall-clock anchor and a seed, and all time goes through tokio's
 //! clock, so paused-time tests control everything (ADR-0013).
+//!
+//! - [`OfflineCredentials`] is the standalone agent's session-credential
+//!   provider: offline accounts log in with their name.
+
+mod credentials;
+
+pub use credentials::OfflineCredentials;

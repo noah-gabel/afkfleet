@@ -9,3 +9,10 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+fleet-core.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }

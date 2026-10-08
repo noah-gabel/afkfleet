@@ -1686,6 +1686,11 @@ dependencies = [
 [[package]]
 name = "fleet-runtime"
 version = "0.1.0"
+dependencies = [
+ "fleet-core",
+ "rstest",
+ "tokio",
+]
 
 [[package]]
 name = "fleet-testkit"

@@ -1441,7 +1441,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **A failed `respawn()`** is retried every 5 s while the session lives; the first failure logs at `warn`, the retries at `debug`. After 12 failed calls in a row the session ends with the new `DisconnectReason::RespawnFailed` (Transient, added to fleet-core in this task), so the bot reconnects and respawns on join.
   > - **Events.** `FleetEvent { bot_id, at, kind }` with `StateChanged(BotSnapshot)`, `Died`, `ChatReceived`, `ChatSent{ticket}` and `ChatFailed{ticket, reason}`, on one bounded `broadcast` per fleet.
   > - **The session-request timeout** is 30 s, a `RuntimeConfig` default.
-- [ ] **P4.3** 🔴 `SessionCredentialProvider` port:
+- [x] **P4.3** 🔴 `SessionCredentialProvider` port:
   - In standalone mode it returns offline credentials.
   - In managed mode it asks the control plane (Phase 10).
   - On an expired token it refreshes once, then goes to `Failed(Auth)`.

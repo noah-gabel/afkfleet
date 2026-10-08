@@ -9,6 +9,9 @@
 //! - Through the controller, a test emits events, freezes the liveness stamps,
 //!   makes the session hang or its actions fail, and reads a log of what the
 //!   code under test did.
+//! - [`FakeCredentials`] implements [`SessionCredentialProvider`]: it answers
+//!   with scripted credentials, can leave a request unanswered, and records
+//!   every request.
 //!
 //! The fake keeps the port contract of ADR-0010, so code tested against it
 //! can rely on the same guarantees as against fleet-mc:
@@ -53,13 +56,16 @@
 //! ```
 //!
 //! [`MinecraftConnector`]: fleet_core::mc::MinecraftConnector
+//! [`SessionCredentialProvider`]: fleet_core::mc::SessionCredentialProvider
 //! [`ConnectParams`]: fleet_core::mc::ConnectParams
 //! [`SessionHandle`]: fleet_core::mc::SessionHandle
 //! [`SessionHandle::respawn`]: fleet_core::mc::SessionHandle::respawn
 //! [`SessionEvents::next`]: fleet_core::mc::SessionEvents::next
 
 mod connector;
+mod credentials;
 mod session;
 
 pub use connector::FakeConnector;
+pub use credentials::FakeCredentials;
 pub use session::{EmitOutcome, FakeEvents, FakeSession, Performed, SessionController};
