@@ -1460,6 +1460,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Tests.** fleet-testkit's fake session gained `fail_respawn`, `succeed_respawn` and `delay_disconnect`. Crashes come from a test-only wrapper in fleet-runtime's `tests/`, as for P4.8.
 
   > Note (P4.2, found and fixed in P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Reset and Resume ignored the desired state.** A Paused bot whose spec said desired = Stopped connected again on Resume, and a Failed one on Reset. Both now feed their event and then apply the desired state, as `UpdateSpec` does: with desired = Stopped the bot passes `AwaitingSession{1}` and ends Stopped, and the session request is dropped before the provider is ever asked. A regression test covers both.
+
+  > Note (P4.2, found and fixed in P4.8) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **A crashing actor stopped reading its inbox.** After its mode runner, chat delivery or a teardown panicked, the actor waited for its teardowns, which can take seconds, before it returned `TaskCrashed`. Meanwhile a `send_chat` forwarded to it ended `TimedOut` after 5 s, and a Reset, Resume or Restart was answered `Ok`, then lost with the actor: a resumed Paused bot came back Paused. The P4.8 plan found it.
+  > - **The fix.** `crash()` now closes the inbox first, so the supervisor's next forward is refused at once (`Busy`), and drops the commands already queued, which answers a waiting `send_chat` with `Busy` too.
+  > - **Known limit.** A command that reaches the inbox in the same instant as the crash is still lost, as with a panic of the actor itself. The chaos test treats a call in the same instant as a crash of that bot as possibly lost.
+  > - **Test.** A regression test in `tests/fleet/supervisor.rs` first failed with `TimedOut` for `send_chat` and `Ok` for `resume`. It now checks that `send_chat`, `resume` and `restart` answer `Busy` without the clock moving.
 - [x] **P4.3** 🔴 `SessionCredentialProvider` port:
   - In standalone mode it returns offline credentials.
   - In managed mode it asks the control plane (Phase 10).

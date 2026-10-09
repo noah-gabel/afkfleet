@@ -11,7 +11,7 @@ use fleet_core::chat::ChatMessage;
 use fleet_core::disconnect::{ConflictKind, ConflictTexts, DisconnectReason};
 use fleet_core::id::BotId;
 use fleet_core::mc::SessionEvent;
-use fleet_core::mode::{ModeDefinition, ModeDraft, Step};
+use fleet_core::mode::{Action, ModeDefinition, ModeDraft, Schedule, Step};
 use fleet_core::resilience::{CircuitPolicy, RetryPolicy};
 use fleet_runtime::{Fleet, FleetEvent, FleetEventKind, FleetParts, RuntimeConfig};
 use fleet_testkit::mc::{EmitOutcome, FakeConnector, FakeCredentials, SessionController};
@@ -72,6 +72,18 @@ pub(crate) fn running(bot: &str, name: &str) -> BotSpec {
 
 pub(crate) fn stopped(bot: &str, name: &str) -> BotSpec {
     spec(bot, name, DesiredRunState::Stopped)
+}
+
+/// A bot that should run, with a mode that jumps when it joins, so a
+/// session that panics on a jump crashes the mode runner.
+pub(crate) fn jumping(bot: &str, name: &str) -> BotSpec {
+    let mut spec = running(bot, name);
+    spec.mode = mode(vec![Step {
+        action: Action::Jump,
+        schedule: Schedule::AtStart,
+        probability: 100,
+    }]);
+    spec
 }
 
 /// The defaults of Appendix A: 5 s to 300 s, stable after 300 s.

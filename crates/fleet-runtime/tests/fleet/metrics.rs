@@ -10,30 +10,17 @@ use std::collections::BTreeSet;
 
 use fleet_core::bot::BotState;
 use fleet_core::mc::{ConnectError, SessionEvent};
-use fleet_core::mode::{Action, Schedule, Step};
 use fleet_testkit::mc::SessionController;
 use rstest::rstest;
 
 use crate::harness::{
-    BOT, Harness, OTHER, Setup, advance, backoff, connecting, crash_loop, emit, id, kick, mode, n,
-    policy, running, secs, settle, step_seconds, stopped,
+    BOT, Harness, OTHER, Setup, advance, backoff, connecting, crash_loop, emit, id, jumping, kick,
+    n, policy, running, secs, settle, step_seconds, stopped,
 };
 use crate::panicky::PanicOn;
 use crate::recorder::{ACTOR_RESTARTS, BOTS, RECONNECTS, Recorder, WATCHDOG_TRIPS, bots, series};
 
 const TRANSIENT: &str = "multiplayer.disconnect.server_shutdown";
-
-/// A mode that jumps when the bot joins, so a session that panics on a
-/// jump crashes the mode runner.
-fn jumping(bot: &str, name: &str) -> fleet_core::bot::BotSpec {
-    let mut spec = running(bot, name);
-    spec.mode = mode(vec![Step {
-        action: Action::Jump,
-        schedule: Schedule::AtStart,
-        probability: 100,
-    }]);
-    spec
-}
 
 /// Waits out the longest first backoff, so the bot connects again.
 async fn back_off_once() {

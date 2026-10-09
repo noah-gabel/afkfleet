@@ -577,8 +577,18 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
     /// events, then tears the session down without a state change, so the
     /// last published state stays and a restarted actor never skips its
     /// backoff (ADR-0013).
+    ///
+    /// It serves no command from here on, while the teardown may take a
+    /// while. So it first closes its inbox: the supervisor's next forward is
+    /// refused at once, which the caller gets as `Busy`, instead of being
+    /// accepted and then lost. The commands already queued are dropped,
+    /// which answers a waiting `send_chat` with `Busy` too. A command that
+    /// reaches the inbox in the same instant as the crash is lost, as with a
+    /// panic of the actor itself (found in P4.8).
     async fn crash(&mut self, task: CrashedTask) -> ActorExit {
         error!(bot_id = %self.spec.id, ?task, "a task of the bot crashed; the actor ends");
+        self.inbox.close();
+        while let Ok(_unanswered) = self.inbox.try_recv() {}
         self.drain().await;
         self.session_events = None;
         self.session_request = None;

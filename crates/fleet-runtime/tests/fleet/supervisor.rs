@@ -4,6 +4,7 @@
 //! stops every bot within its timeout.
 
 use core::num::{NonZeroU32, NonZeroUsize};
+use core::time::Duration;
 
 use fleet_core::bot::{BotNotification, BotState, FailReason, StickyState};
 use fleet_core::id::BotId;
@@ -16,8 +17,8 @@ use tracing::Level;
 use crate::common::Levels;
 use crate::harness::{
     BOT, CRASH_LOOP, DUPLICATE_LOGIN, Harness, OTHER, PAUSED, Setup, advance, awaiting, backoff,
-    circuit, connecting, crash_loop, emit, id, kick, message, mode, ms, n, policy, running, secs,
-    settle, stopped,
+    circuit, connecting, crash_loop, emit, id, jumping, kick, message, mode, ms, n, policy,
+    running, secs, settle, stopped,
 };
 use crate::panicky::{PanicOn, PanickyConnector};
 
@@ -384,6 +385,31 @@ async fn a_crashed_task_restarts_the_bot_like_a_panic() {
     assert!(controller.is_torn_down());
     assert_eq!(levels.of("it restarts from its last state"), [Level::WARN]);
     assert_eq!(fleet.connector.attempts(), 1);
+}
+
+// Found while planning P4.8: a crashing actor waited for its slow teardown
+// without reading its inbox, so `send_chat` timed out after 5 s, and a
+// Resume or Restart was answered `Ok`, then lost with the actor.
+#[tokio::test(start_paused = true)]
+async fn while_a_crashed_actor_tears_down_its_calls_are_busy_at_once() {
+    let fleet = Setup::new().start().await;
+    fleet.connector.sessions_panic_on(PanicOn::Jump);
+    fleet.apply(jumping(BOT, "AfkBot1")).await;
+    let controller = fleet.session(0).await;
+    controller.delay_disconnect(secs(20));
+    emit(&controller, SessionEvent::Joined);
+    settle().await;
+    assert!(controller.is_torn_down(), "the runner crashed at its jump");
+    let started = tokio::time::Instant::now();
+
+    let chat = fleet.fleet.send_chat(id(BOT), message("hi")).await;
+    let resume = fleet.fleet.resume(id(BOT)).await;
+    let restart = fleet.fleet.restart(id(BOT)).await;
+
+    assert_eq!(chat, Err(SendChatError::Fleet(FleetError::Busy)));
+    assert_eq!(resume, Err(FleetError::Busy));
+    assert_eq!(restart, Err(FleetError::Busy));
+    assert_eq!(started.elapsed(), Duration::ZERO);
 }
 
 #[tokio::test(start_paused = true)]
