@@ -17,6 +17,7 @@ use fleet_core::resilience::{CircuitPolicyError, RetryPolicyError};
 use fleet_core::value::{AgentNameError, McUsernameError, ServerAddressError};
 
 use super::ENV_PREFIX;
+use super::log::{LogFilterError, UnknownLogFormatError};
 
 /// Why [`load`](super::load) failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -429,6 +430,12 @@ pub enum ProblemKind {
     /// Circuit-breaker settings that don't fit together.
     #[error(transparent)]
     Circuit(CircuitPolicyError),
+    /// An unknown log format.
+    #[error(transparent)]
+    LogFormat(UnknownLogFormatError),
+    /// An invalid log filter.
+    #[error(transparent)]
+    LogFilter(LogFilterError),
     /// Neither `[standalone]` nor `[control_plane]` is there.
     #[error("the config needs [standalone] or [control_plane]")]
     NoMode,

@@ -18,6 +18,7 @@
 //! Secrets never go in this file; Phase 10's keys only name files.
 
 mod error;
+mod log;
 mod raw;
 mod validate;
 
@@ -38,6 +39,7 @@ pub use error::{
     ConfigError, KeyPath, KeySegment, ParseError, ParseProblem, ParseSource, Problem, ProblemKind,
     Problems,
 };
+pub use log::{LogConfig, LogFilter, LogFilterError, LogFormat, UnknownLogFormatError};
 
 /// The prefix of the environment variables that override config keys:
 /// `AFKFLEET_AGENT__` plus the key path in capitals, with `__` between the
@@ -64,6 +66,8 @@ pub struct AgentConfig {
     pub circuit: CircuitPolicy,
     /// The file the agent touches while it's healthy (P5.5); an absolute path.
     pub heartbeat_file: PathBuf,
+    /// How the agent logs (`[log]`).
+    pub log: LogConfig,
     /// Standalone or managed.
     pub mode: AgentMode,
 }

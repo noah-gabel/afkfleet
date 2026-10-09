@@ -9,8 +9,11 @@
 //! # Modules
 //! - [`config`]: `agent.toml` plus `AFKFLEET_AGENT__…` environment variables,
 //!   validated into the settings the runtime and the adapter take.
+//! - [`telemetry`]: logging, with azalea's caps and a panic hook that logs
+//!   through `tracing`.
 //!
 //! The `afkfleet-agent` binary arrives with the wiring (P5.3); until then this
 //! crate is a library only (ADR-0014).
 
 pub mod config;
+pub mod telemetry;

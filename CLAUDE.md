@@ -180,7 +180,7 @@ fleet-server/src/
 | Desktop | Shell | `tauri` ≥ 2.11.1, `tauri-build` |
 | | Plugins | `tauri-plugin-opener`, `tauri-plugin-single-instance`, `tauri-plugin-updater` |
 | | Keychain | `keyring-core` + `windows-native-keyring-store` |
-| Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, tokio `test-util`, `log` (fleet-testkit dev only, for its log capture's bridge test) |
+| Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, tokio `test-util`, `log` (dev only: fleet-testkit's log capture and fleet-agent's telemetry, each to prove the `log` bridge) |
 | | Fuzzing | `libfuzzer-sys`, `arbitrary` |
 
 **Frontend packages**
@@ -241,6 +241,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
   - `info`: lifecycle events
   - `debug`: details
 - Chat content is logged only at `debug`.
+- The agent's JSON lines put an event's fields next to the line's own keys, and a duplicate key in one line is ambiguous (most tools keep only one value). So no field may be named `timestamp`, `level`, `target`, `message` (other than tracing's own), `span`, `spans` or `fields`, and no span field `name` (ADR-0014).
 
 **Documentation:** every public item has a `///` doc (including `# Errors`), and every module has a `//!` header explaining its role. This is enforced:
 - `missing_docs` is a workspace lint, and CI denies warnings, so an undocumented public item fails the build.

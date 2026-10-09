@@ -74,6 +74,9 @@ pub(crate) struct RawConfig {
     #[serde(default)]
     #[garde(dive)]
     pub(crate) retry: RawRetry,
+    #[serde(default)]
+    #[garde(skip)]
+    pub(crate) log: RawLog,
     #[garde(skip)]
     pub(crate) standalone: Option<RawStandalone>,
     #[garde(skip)]
@@ -149,6 +152,14 @@ impl Default for RawRetry {
             circuit_cooldown_secs: DEFAULT_CIRCUIT_COOLDOWN_SECS,
         }
     }
+}
+
+/// `[log]`. Missing keys take their defaults (`json`, `info`).
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields, expecting = "a table of log settings")]
+pub(crate) struct RawLog {
+    pub(crate) format: Option<String>,
+    pub(crate) filter: Option<String>,
 }
 
 /// `[standalone]`.

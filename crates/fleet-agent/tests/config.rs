@@ -12,8 +12,9 @@ use std::time::Duration;
 
 use figment::Jail;
 use fleet_agent::config::{
-    AgentConfig, AgentMode, ConfigError, ControlPlaneConfig, ParseError, ParseProblem, ParseSource,
-    ProblemKind, Problems, StandaloneBot, load,
+    AgentConfig, AgentMode, ConfigError, ControlPlaneConfig, LogConfig, LogFilter, LogFilterError,
+    LogFormat, ParseError, ParseProblem, ParseSource, ProblemKind, Problems, StandaloneBot,
+    UnknownLogFormatError, load,
 };
 use fleet_core::bot::BotAccount;
 use fleet_core::disconnect::{ConflictTexts, ConflictTextsError};
@@ -125,6 +126,10 @@ circuit_failures = 9
 circuit_window_secs = 601
 circuit_cooldown_secs = 901
 
+[log]
+format = "pretty"
+filter = "debug,azalea=info"
+
 [[standalone.bots]]
 username = "AfkBot1"
 server = "localhost:25565"
@@ -169,6 +174,13 @@ conflict_texts = ["You logged in from another location"]
             CircuitPolicy::try_new(nonzero(9), secs(601), secs(901)).unwrap()
         );
         assert_eq!(config.heartbeat_file, heartbeat);
+        assert_eq!(
+            config.log,
+            LogConfig {
+                format: LogFormat::Pretty,
+                filter: LogFilter::try_from("debug,azalea=info").unwrap(),
+            }
+        );
         assert_eq!(
             bots(&config),
             [
@@ -216,6 +228,7 @@ fn missing_keys_take_their_defaults() {
             std::env::temp_dir().join("afkfleet-agent.alive")
         );
         assert_eq!(bots(&config)[0].conflict_texts, ConflictTexts::default());
+        assert_eq!(config.log, LogConfig::default());
     });
 }
 
@@ -277,6 +290,47 @@ fn a_numeric_text_from_the_environment_must_be_quoted() {
 
         jail.set_env("AFKFLEET_AGENT__NAME", "\"123\"");
         assert_eq!(load_toml(jail, MINIMAL).unwrap().name.as_str(), "123");
+    });
+}
+
+#[test]
+fn a_log_filter_from_the_environment_stays_text() {
+    in_jail(|jail| {
+        jail.set_env("AFKFLEET_AGENT__LOG__FILTER", "debug,azalea=info");
+
+        let config = load_toml(jail, MINIMAL).unwrap();
+
+        assert_eq!(config.log.filter.as_str(), "debug,azalea=info");
+    });
+}
+
+#[test]
+fn spaces_between_filter_directives_are_allowed() {
+    in_jail(|jail| {
+        let toml = format!("{MINIMAL}\n[log]\nfilter = \"debug, azalea_client=info\"\n");
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(config.log.filter.as_str(), "debug,azalea_client=info");
+    });
+}
+
+#[test]
+fn bad_log_settings_are_refused() {
+    in_jail(|jail| {
+        let toml =
+            format!("{MINIMAL}\n[log]\nformat = \"compact\"\nfilter = \"info,azalea=loud\"\n");
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["log.filter", "log.format"]);
+        assert_eq!(
+            kinds(&problems),
+            [
+                ProblemKind::LogFilter(LogFilterError::InvalidDirective { index: 1 }),
+                ProblemKind::LogFormat(UnknownLogFormatError),
+            ]
+        );
+        assert!(!problems.to_string().contains("loud"));
     });
 }
 

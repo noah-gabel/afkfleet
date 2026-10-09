@@ -18,10 +18,10 @@ use fleet_core::value::{AgentName, McUsername, ServerAddress};
 use fleet_mc::McConfig;
 use fleet_runtime::RuntimeConfig;
 
-use super::raw::{RawBot, RawConfig, RawControlPlane, RawRetry, RawRuntime, RawStandalone};
+use super::raw::{RawBot, RawConfig, RawControlPlane, RawLog, RawRetry, RawRuntime, RawStandalone};
 use super::{
     AgentConfig, AgentMode, ConfigError, ControlPlaneConfig, DEFAULT_HEARTBEAT_FILE_NAME, KeyPath,
-    ProblemKind, Problems, StandaloneBot,
+    LogConfig, LogFilter, LogFormat, ProblemKind, Problems, StandaloneBot,
 };
 
 /// Validates `raw`: garde's ranges first, then fleet-core's constructors and
@@ -49,11 +49,17 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<AgentConfig, ConfigError> {
     let name = agent_name(raw.name.as_deref(), &mut problems);
     let heartbeat_file = heartbeat_file(&raw.runtime, &mut problems);
     let policies = policies(&raw.retry, &mut problems);
+    let log = log_config(&raw.log, &mut problems);
     let mode = mode(raw, &mut problems);
 
-    let (true, Some(name), Some(heartbeat_file), Some((retry, circuit)), Some(mode)) =
-        (problems.is_empty(), name, heartbeat_file, policies, mode)
-    else {
+    let (true, Some(name), Some(heartbeat_file), Some((retry, circuit)), Some(log), Some(mode)) = (
+        problems.is_empty(),
+        name,
+        heartbeat_file,
+        policies,
+        log,
+        mode,
+    ) else {
         return Err(ConfigError::Invalid(problems.sorted()));
     };
     Ok(AgentConfig {
@@ -63,7 +69,30 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<AgentConfig, ConfigError> {
         retry,
         circuit,
         heartbeat_file,
+        log,
         mode,
+    })
+}
+
+/// `[log]`: a missing key takes its default.
+fn log_config(raw: &RawLog, problems: &mut Problems) -> Option<LogConfig> {
+    let section = KeyPath::root().key("log");
+    let format = match raw.format.as_deref() {
+        None => Some(LogFormat::default()),
+        Some(name) => name
+            .parse()
+            .map_err(|error| problems.push(section.key("format"), ProblemKind::LogFormat(error)))
+            .ok(),
+    };
+    let filter = match raw.filter.as_deref() {
+        None => Some(LogFilter::default()),
+        Some(text) => LogFilter::try_from(text)
+            .map_err(|error| problems.push(section.key("filter"), ProblemKind::LogFilter(error)))
+            .ok(),
+    };
+    Some(LogConfig {
+        format: format?,
+        filter: filter?,
     })
 }
 

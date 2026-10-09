@@ -91,7 +91,8 @@ Each later group asks its own implementation-level questions in its session: tok
   - Since flattened fields share the line's keys, CLAUDE.md's logging rules forbid fields named `timestamp`, `level`, `target`, `message` (except tracing's own), `span`, `spans` or `fields`, and span fields named `name` *(the user's addition)*.
 - **Pretty** is tracing-subscriber's single-line `Full` format, with ANSI colors only when stdout is a terminal.
 - **azalea's levels.** azalea's targets stay at `warn` unless the operator names them, and `azalea_auth` is capped at `info` (ADR-0011). The layer's filter is `(EnvFilter ∧ azalea cap ∧ azalea_auth cap) ∨ panic target`:
-  - **EnvFilter** gets `azalea=warn` in front of the operator's directives unless the operator has a *plain* `azalea` directive (no span, no fields). That's the only directive with the same specificity, where the order would decide (EnvFilter matches targets by prefix and prefers the longer target, then a span).
+  - **EnvFilter** gets a default for azalea in front of the operator's directives unless the operator has a *plain* `azalea` directive (no span, no fields). That's the only directive with the same specificity, where the order would decide (EnvFilter matches targets by prefix and prefers the longer target, then a span).
+    - *(found in the build, the user's decision)* The default is `warn`, or the operator's global level if that's lower (`off` when there's none), so it only ever lowers azalea. A plain `azalea=warn` was more specific than the global level, so `filter = "off"` or `"error"` still let azalea's warnings through.
   - **The azalea cap** (a `Targets` filter, *the user's decision*) holds every `azalea…` target at `warn`, unless some operator directive names that target. The cap then takes the most verbose level the directives naming it set, so nothing depends on order. A target-free span directive such as `[mc_session]=debug`, fleet-mc's session span, can't lift azalea by accident.
   - **The `azalea_auth` cap** (a `Targets` filter) keeps `azalea_auth` at `info`, whatever the filter names.
   - **Panic reports** (target `afkfleet::panic`) always get through, whatever the filter says *(the user's decision)*. The default panic hook is replaced, so a filter without a global level, `off` or `panic=off` would otherwise drop them silently.
@@ -102,6 +103,13 @@ Each later group asks its own implementation-level questions in its session: tok
     - It's cut at 1024 characters, with ` [truncated]` appended when cut.
   - A `backtrace` field appears only when `RUST_BACKTRACE` asks for one.
 - **The `log` bridge.** reqwest, rustls and hickory log through the `log` crate, which `try_init` bridges into tracing. tracing-log 0.2.0 dispatches each record with its real target, so filters and caps apply to it. A test proves it, with `log` 0.4.34 as a new fleet-agent dev-dependency.
+
+- *(as built, group A)*:
+  - **Shape.** `telemetry::init(&LogConfig)` installs the global subscriber with the `log` bridge, then logs the startup warning and installs the panic hook; a second call is `TelemetryError::AlreadyInstalled`. `telemetry::layer(config, ansi, writer)` builds the layer, so tests write into a buffer. `config::LogFilter` reads each directive with tracing-subscriber's own `Directive` parser and refuses a bad one by its index, without echoing it.
+  - **EnvFilter's span directives** match the span's target as well as the event's, so `azalea[x]=debug` means azalea's own spans named `x`. Inside such a span, EnvFilter enables every target at that level; the caps still hold.
+  - **Panic reports** use the target `afkfleet::panic`, which no crate's prefix shares, with the fields `thread`, `location`, `payload` and `backtrace`.
+  - **fleet-core's `text` module** becomes public with only `sanitize_untrusted` and `UntrustedText`; the chat sanitizer's own items stay private.
+  - **Tests** run the real layer in JSON into a buffer: 11 filters against 5 probe targets, panic reports, the startup warning, the JSON shape and the pretty format. `tests/telemetry_init.rs` and `tests/panic_hook.rs` each hold one test, since `init` sets process-wide state. Everything was red against stubs first.
 
 ### Wiring and shutdown (P5.3, P5.4; group B)
 - **`run` is generic and tested on fakes.** The library's `run` is generic over the connector, a small agent-side `HostDiagnostics` trait (fleet-mc's five numbers) and a shutdown future.

@@ -18,8 +18,13 @@ fleet-runtime.workspace = true
 garde = { workspace = true, features = ["derive"] }
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 
 [dev-dependencies]
 # `figment::Jail`: a temporary directory and environment per test (ADR-0014).
 figment = { workspace = true, features = ["test"] }
+# `log` records, to prove the bridge into tracing keeps their targets (ADR-0014).
+log.workspace = true
 rstest.workspace = true
+serde_json.workspace = true

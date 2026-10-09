@@ -258,7 +258,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Mocks | `mockall` | 0.15.0 | Only for interaction checks; put `#[automock]` above `#[async_trait]` |
 | Containers | `testcontainers` | 0.28.0, dfo | `itzg/minecraft-server`, for fleet-mc's slow tests (P3.7). The default `ring` feature turns on TLS for the Docker client, which the local socket and the Windows named pipe don't need; no feature is enabled |
 | Time control | `tokio` `test-util` | | `start_paused`, `advance` |
-| `log` records in tests | `log` | 0.4.34 | fleet-testkit dev only: its log capture's test emits a `log` record to prove that reqwest's and rustls's logs reach the redaction check through `tracing-log` (ADR-0011) |
+| `log` records in tests | `log` | 0.4.34 | Dev-dependency only. fleet-testkit: its log capture's test emits a `log` record to prove that reqwest's and rustls's logs reach the redaction check through `tracing-log` (ADR-0011). fleet-agent: its telemetry test proves that the log filter and azalea's caps see a `log` record's real target (ADR-0014) |
 | Fuzzing | `libfuzzer-sys`, `arbitrary` | 0.4.13, 1.4.2 | Driven by cargo-fuzz |
 
 ### Frontend (same one-library-per-concern rule)
@@ -1736,7 +1736,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Environment limits.** A value that reads as a number can't fill a text key: `AFKFLEET_AGENT__NAME=123` fails as a wrong type, so quote it as `'"123"'`. `[[standalone.bots]]` can only be replaced as a whole.
   > - **A lint exception in tests** (the user's approval). figment's `Jail` fixes its closure's error type to `figment::Error`, which is larger than `clippy::result_large_err` allows, so every config test goes through one helper with an `#[expect]`.
   > - **Tests:** `tests/config.rs` (39 cases, each in `figment::Jail`) plus unit tests of the error conversion and the key mapping. They were red against stubs first, as were `ModePreset`'s and `AgentName`'s.
-- [ ] **P5.2** Telemetry: pretty logs in dev and JSON in prod, an env filter, and a panic hook that logs through `tracing`.
+- [x] **P5.2** Telemetry: pretty logs in dev and JSON in prod, an env filter, and a panic hook that logs through `tracing`.
 
   > Note (P5.2, from Phase 3, group B review): **azalea's log targets stay at `warn`** in the default filter. azalea_client's disconnect plugin formats kick reasons at `info`, with azalea's own rendering, which grows exponentially on hostile nested translations (P3.5) and panics on a `%0$s` placeholder, since it computes `d - 1` on an unsigned digit with overflow checks on. A disabled level never formats, so neither can happen (ADR-0011).
 
@@ -1755,6 +1755,28 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - The payload is untrusted. It goes through fleet-core's new `text::sanitize_untrusted`, which makes each line break ` | `, and is cut at 1024 characters with ` [truncated]` appended.
   >   - A backtrace is included only when `RUST_BACKTRACE` asks for one.
   > - **The `log` bridge** (reqwest, rustls, hickory) is checked by a test: filters and caps see a `log` record's real target.
+
+  > Note (P5.2, as built, group A) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
+  > - **Shape.**
+  >   - `fleet_agent::telemetry::init(&LogConfig)` installs the global subscriber and the `log` bridge, the startup warning and the panic hook. It returns `TelemetryError::AlreadyInstalled` when a subscriber or logger is already there.
+  >   - `telemetry::layer(config, ansi, writer)` builds the layer, so tests can write into a buffer.
+  >   - The config gains `LogConfig { format: LogFormat, filter: LogFilter }`. `LogFilter` reads each directive with tracing-subscriber's own `Directive` parser and refuses a bad one by its index, without echoing it.
+  > - **Found in the build: azalea's default only lowers** (the user's decision).
+  >   - The `azalea=warn` in front of the operator's directives is more specific than their global level, so `filter = "off"` or `"error"` still let azalea's warnings through, and so did a filter without a global level.
+  >   - The default is now `warn`, or the operator's global level if that's lower (`off` when there's none).
+  > - **Found: EnvFilter applies a span directive's target to the span too.** So `azalea[x]=debug` means azalea's own spans named `x`. Inside such a span EnvFilter enables every target at that level, and the caps still hold: `azalea_auth` stays at `info` and azalea at what's named.
+  > - **Panic reports** have the target `afkfleet::panic`, a name no crate prefix shares, with the fields `thread`, `location`, `payload` and `backtrace`.
+  > - **fleet-core** makes `text` a public module that exposes only `sanitize_untrusted` and `UntrustedText`; the chat sanitizer's own items stay private.
+  > - **Tests.**
+  >   - Unit tests run the real layer in JSON into a buffer:
+  >     - 11 filters × 5 probe targets, including the span cases
+  >     - panic reports getting through `off`, `afkfleet::panic=off` and a filter without a global level
+  >     - the startup warning
+  >     - the JSON shape and the pretty format with and without colors
+  >     - the panic helpers
+  >   - `tests/telemetry_init.rs` covers the second `init` and the `log` bridge (`azalea_auth::certs` at `debug` is dropped, `info` is kept, `reqwest` at `debug` is kept).
+  >   - `tests/panic_hook.rs` panics on a named thread and checks the one event.
+  >   - Each was red against stubs first.
 - [ ] **P5.3** Wiring: `McHostPool` + `AzaleaConnector` + `Fleet`, with the standalone spec source.
 
   > Note (P5.3, from Phase 3): When `McHostPool::abandoned_threads()` reaches `max_abandoned_threads`, the agent shuts down and exits with an error, so Docker restarts it (§6 row 8). The library never ends the process itself (ADR-0011).
@@ -2468,6 +2490,10 @@ stable_after_secs = 300
 circuit_failures = 8
 circuit_window_secs = 600
 circuit_cooldown_secs = 900
+
+[log]
+format = "json"                          # or "pretty": one colored line per event, for development
+filter = "info"                          # EnvFilter syntax; azalea stays at warn unless named, azalea_auth at info
 
 [control_plane]                          # managed mode (production)
 url = "https://fleet.example.com:7443"

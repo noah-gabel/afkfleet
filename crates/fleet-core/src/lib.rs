@@ -17,6 +17,7 @@
 //! - [`mc`]: the Minecraft ports the runtime drives a session through.
 //! - [`authz`]: who may do what, decided by [`authz::authorize`].
 //! - [`time`]: saturating arithmetic on points in time and durations.
+//! - [`text`]: sanitizing untrusted text for a log line.
 //!
 //! # How it fits together
 //! A bot's actor (in fleet-runtime) feeds every command and session event to
@@ -61,6 +62,6 @@ pub mod id;
 pub mod mc;
 pub mod mode;
 pub mod resilience;
-mod text;
+pub mod text;
 pub mod time;
 pub mod value;
