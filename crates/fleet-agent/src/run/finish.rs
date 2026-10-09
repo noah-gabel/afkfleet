@@ -160,28 +160,20 @@ async fn join_by(
 
 #[cfg(test)]
 mod tests {
-    use core::num::NonZeroUsize;
-    use std::sync::Arc;
-
-    use chrono::DateTime;
     use fleet_core::bot::{BotAccount, BotSpec, DesiredRunState};
     use fleet_core::disconnect::ConflictTexts;
     use fleet_core::mc::SessionEvent;
     use fleet_core::mode::ModePreset;
-    use fleet_core::resilience::{CircuitPolicy, RetryPolicy};
-    use fleet_runtime::{FleetParts, OfflineCredentials, ShutdownReport, Supervisor};
+    use fleet_runtime::ShutdownReport;
     use fleet_testkit::mc::{EmitOutcome, FakeConnector};
     use serde_json::Value;
     use tokio::time::Instant;
 
     use super::*;
+    use crate::run::testing::{TestSupervisor, fleet, secs, settle};
     use crate::signals::Signal;
     use crate::signals::testing::ChannelSignals;
     use crate::telemetry::capture::{Capture, json_on_this_thread};
-
-    const fn secs(secs: u64) -> Duration {
-        Duration::from_secs(secs)
-    }
 
     /// The defaults: 10 s to shut down, 5 s to reply.
     const TIMEOUTS: Timeouts = Timeouts {
@@ -197,11 +189,9 @@ mod tests {
         limit: 3,
     };
 
-    type Held = Supervisor<FakeConnector, OfflineCredentials>;
-
     struct Setup {
         fleet: Fleet,
-        supervisor: Option<Held>,
+        supervisor: Option<TestSupervisor>,
         fake: FakeConnector,
         cancel: CancellationToken,
         tasks: JoinSet<()>,
@@ -211,26 +201,7 @@ mod tests {
         /// A fleet whose supervisor queue holds `queue` calls; its
         /// supervisor isn't running yet.
         fn new(queue: usize) -> Self {
-            let fake = FakeConnector::new();
-            let config = RuntimeConfig {
-                supervisor_queue: NonZeroUsize::new(queue).unwrap(),
-                ..RuntimeConfig::default()
-            };
-            let (fleet, supervisor) = Fleet::new(FleetParts {
-                connector: Arc::new(fake.clone()),
-                credentials: Arc::new(OfflineCredentials),
-                retry: RetryPolicy::try_new(secs(5), secs(300), secs(300)).unwrap(),
-                circuit: CircuitPolicy::try_new(
-                    NonZeroUsize::new(8).unwrap(),
-                    secs(600),
-                    secs(900),
-                )
-                .unwrap(),
-                config,
-                anchor: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
-                seed: 1,
-            })
-            .unwrap();
+            let (fleet, supervisor, fake) = fleet(queue);
             Self {
                 fleet,
                 supervisor: Some(supervisor),
@@ -354,12 +325,6 @@ mod tests {
             )
             .await;
             (outcome, started.elapsed())
-        }
-    }
-
-    async fn settle() {
-        for _ in 0..64 {
-            tokio::task::yield_now().await;
         }
     }
 

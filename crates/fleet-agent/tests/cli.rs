@@ -1,5 +1,6 @@
 //! The `afkfleet-agent` binary: its command line, the errors it prints
-//! before logging exists, and its exit codes (Plan.md P5.3; ADR-0014).
+//! before logging exists, its exit codes, and the `healthcheck` command
+//! (Plan.md P5.3, P5.5; ADR-0014).
 //!
 //! Each test starts the real binary with its own deadline, and a guard kills
 //! the agent if the test ends first, so a hang can't stall the run. Threads
@@ -10,15 +11,15 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
-use std::fs;
+use std::fs::{self, File};
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
-use fleet_agent::cli::RUN_EXIT_CODES;
+use fleet_agent::cli::{HEALTHCHECK_EXIT_CODES, RUN_EXIT_CODES};
 
 const BINARY: &str = env!("CARGO_BIN_EXE_afkfleet-agent");
 
@@ -117,6 +118,20 @@ fn path_arg(path: &Path) -> &str {
     path.to_str().unwrap()
 }
 
+/// A valid standalone config: one bot at `127.0.0.1:1`, where nothing
+/// listens, so it backs off and retries.
+const ONE_BOT: &str = "name = \"cli-agent\"\n\
+     [[standalone.bots]]\n\
+     username = \"AfkBot1\"\n\
+     server = \"127.0.0.1:1\"\n\
+     mode = \"afk\"\n";
+
+/// Writes [`ONE_BOT`] as the config in `dir`, and returns the config's path
+/// and its heartbeat file's.
+fn one_bot_config(dir: &Path) -> (PathBuf, PathBuf) {
+    (write_config(dir, ONE_BOT), dir.join("agent.alive"))
+}
+
 #[test]
 fn a_missing_config_exits_1_with_one_plain_line_on_stderr() {
     let missing = test_dir("missing_config").join("missing.toml");
@@ -198,6 +213,96 @@ fn the_version_is_the_crates() {
     );
 }
 
+#[test]
+fn a_fresh_heartbeat_is_healthy_with_exit_0_and_one_line_on_stdout() {
+    let (config, heartbeat) = one_bot_config(&test_dir("healthcheck_fresh"));
+    fs::write(&heartbeat, "").unwrap();
+
+    let finished = finish(&["healthcheck", "--config", path_arg(&config)]);
+
+    assert_eq!(finished.status.code(), Some(0), "{}", finished.stderr);
+    assert_eq!(finished.stdout.lines().count(), 1, "{}", finished.stdout);
+    assert!(
+        finished.stdout.starts_with("healthy: the heartbeat is ")
+            && finished.stdout.ends_with(" s old\n"),
+        "{}",
+        finished.stdout
+    );
+    assert_eq!(finished.stderr, "");
+}
+
+#[test]
+fn a_stale_heartbeat_is_unhealthy_with_exit_1_and_one_line_on_stdout() {
+    let (config, heartbeat) = one_bot_config(&test_dir("healthcheck_stale"));
+    File::create(&heartbeat)
+        .unwrap()
+        .set_modified(SystemTime::now() - Duration::from_secs(60))
+        .unwrap();
+
+    let finished = finish(&["healthcheck", "--config", path_arg(&config)]);
+
+    assert_eq!(finished.status.code(), Some(1), "{}", finished.stderr);
+    assert_eq!(finished.stdout.lines().count(), 1, "{}", finished.stdout);
+    assert!(
+        finished
+            .stdout
+            .starts_with("unhealthy: the heartbeat file is ")
+            && finished.stdout.ends_with(" s old\n"),
+        "{}",
+        finished.stdout
+    );
+    assert_eq!(finished.stderr, "");
+}
+
+#[test]
+fn a_missing_heartbeat_file_is_unhealthy_with_exit_1() {
+    let (config, heartbeat) = one_bot_config(&test_dir("healthcheck_missing"));
+
+    let finished = finish(&["healthcheck", "--config", path_arg(&config)]);
+
+    assert_eq!(finished.status.code(), Some(1), "{}", finished.stderr);
+    assert_eq!(
+        finished.stdout,
+        format!("unhealthy: no heartbeat file at {}\n", heartbeat.display())
+    );
+    assert_eq!(finished.stderr, "");
+}
+
+#[test]
+fn a_healthcheck_with_a_missing_config_exits_1_with_one_plain_line_on_stderr() {
+    let missing = test_dir("healthcheck_missing_config").join("missing.toml");
+
+    let finished = finish(&["healthcheck", "--config", path_arg(&missing)]);
+
+    assert_eq!(finished.status.code(), Some(1));
+    assert_eq!(finished.stdout, "");
+    assert_eq!(
+        finished.stderr,
+        format!("afkfleet-agent: no config file at {}\n", missing.display())
+    );
+}
+
+#[test]
+fn a_healthcheck_without_a_config_is_a_usage_error_with_exit_1() {
+    let finished = finish(&["healthcheck"]);
+
+    assert_eq!(finished.status.code(), Some(1));
+    assert_eq!(finished.stdout, "");
+    assert!(finished.stderr.contains("--config"), "{}", finished.stderr);
+}
+
+#[test]
+fn the_help_of_healthcheck_lists_its_exit_codes() {
+    let finished = finish(&["healthcheck", "--help"]);
+
+    assert_eq!(finished.status.code(), Some(0));
+    assert!(
+        finished.stdout.contains(HEALTHCHECK_EXIT_CODES),
+        "{}",
+        finished.stdout
+    );
+}
+
 /// SIGTERM, as `docker stop` sends it. Unix only: Windows' Ctrl+C and
 /// Ctrl+Break can't be sent to another process without unsafe code.
 #[cfg(unix)]
@@ -222,18 +327,13 @@ mod sigterm {
         receiver
     }
 
+    /// How long the test waits for the agent's output before it looks for
+    /// the heartbeat file again.
+    const POLL: Duration = Duration::from_millis(20);
+
     #[test]
     fn sigterm_stops_the_agent_with_exit_0_and_logs_the_report_last() {
-        let dir = test_dir("sigterm");
-        // Nothing listens on port 1, so the bot backs off and retries.
-        let config = write_config(
-            &dir,
-            "name = \"cli-agent\"\n\
-             [[standalone.bots]]\n\
-             username = \"AfkBot1\"\n\
-             server = \"127.0.0.1:1\"\n\
-             mode = \"afk\"\n",
-        );
+        let (config, heartbeat) = one_bot_config(&test_dir("sigterm"));
         let mut child = agent(&["run", "--config", path_arg(&config)])
             .spawn()
             .unwrap();
@@ -255,6 +355,22 @@ mod sigterm {
             seen.push(line);
             if is_running {
                 break;
+            }
+        }
+        // The first beat comes right after "the agent is running"; waiting
+        // for the agent's output in between needs no sleep.
+        while !heartbeat.exists() {
+            let wait = POLL.min(deadline.saturating_duration_since(Instant::now()));
+            match lines.recv_timeout(wait) {
+                Ok(Some(line)) => seen.push(line),
+                Ok(None) => panic!("the agent's output ended before its first beat: {seen:#?}"),
+                Err(mpsc::RecvTimeoutError::Timeout) => assert!(
+                    Instant::now() < deadline,
+                    "the agent should beat before the deadline: {seen:#?}"
+                ),
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    panic!("the agent's output thread ended: {seen:#?}")
+                }
             }
         }
         let pid = running.0.as_ref().unwrap().id().to_string();

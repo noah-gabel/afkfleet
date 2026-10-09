@@ -1,4 +1,6 @@
-# Local development stack. Start it with `just mc-up`, stop it with `just mc-down`.
+# Local development stack. `just mc-up` starts the Minecraft server alone,
+# `just stack-up` builds the agent's image and starts the server and the
+# agent, and `just mc-down` stops both and deletes the server's world.
 #
 # DEVELOPMENT ONLY. The Minecraft server runs in offline mode, so anyone who
 # can reach it can join under any name. It is bound to 127.0.0.1 and must
@@ -6,7 +8,8 @@
 # port isn't published: use `docker compose --file deploy/compose.dev.yaml
 # exec minecraft rcon-cli <command>`.
 #
-# Phase 5 adds the agent to this file.
+# fleet-mc's `pins` test reads the first `image:` and `VERSION:` lines, so the
+# minecraft service stays first.
 name: afkfleet-dev
 
 services:
@@ -39,3 +42,41 @@ services:
       start_period: 3m
       interval: 5s
       retries: 20
+
+  # The standalone agent with deploy/dev/agent.compose.toml: AfkBot4-6 against
+  # the server above (Plan.md P5.6, ADR-0014). Its image's HEALTHCHECK runs
+  # `afkfleet-agent healthcheck` with the same config.
+  agent:
+    image: afkfleet-agent:dev
+    build:
+      context: ..
+      dockerfile: deploy/docker/agent.Dockerfile
+    # Always the local build, never a registry's image of the same name.
+    pull_policy: build
+    # Started only once the server is healthy, so the bots don't use up their
+    # retries (or open the circuit breaker) while its first start downloads
+    # the jar and builds the world.
+    depends_on:
+      minecraft:
+        condition: service_healthy
+    volumes:
+      - ./dev/agent.compose.toml:/etc/afkfleet/agent.toml:ro
+    # Above the agent's worst-case shutdown: shutdown_timeout_secs (10 s) + the
+    # 5 s reply timeout + the 1 s runtime shutdown. Docker's default 10 s would
+    # SIGKILL it first, losing exit code 4 and the last line (ADR-0014). A
+    # fleet-agent test checks it against agent.compose.toml.
+    stop_grace_period: 20s
+    # Exit 3 (abandoned-thread limit) and 4 (supervisor) restart the agent; a
+    # stop by a signal (0) stays stopped.
+    restart: on-failure
+    read_only: true
+    # The heartbeat file's default directory.
+    tmpfs:
+      - /tmp:size=1m
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    # About twice what 50 bots used in ADR-0008's measurement; production's
+    # limits come from group D's demo (P12.2).
+    mem_limit: 512m
+    cpus: 1.0

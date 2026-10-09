@@ -77,7 +77,8 @@ Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so 
 | `just fmt` | `cargo fmt` + biome format |
 | `just gen` | Export ts-rs types to `packages/ui/src/generated/`; proto codegen check |
 | `just db-prepare` | `cargo sqlx prepare` (offline query data in `.sqlx/`) |
-| `just mc-up` / `just mc-down` | Local offline-mode Minecraft server (`itzg/minecraft-server`) |
+| `just mc-up` / `just mc-down` | Local offline-mode Minecraft server (`itzg/minecraft-server`); `mc-down` stops the agent too and deletes the world |
+| `just stack-up` | Builds the agent's image and starts the local server plus the agent (`deploy/dev/agent.compose.toml`) in Docker, waiting until both are healthy |
 | `just dev-server` / `just dev-agent` | Run server / agent with the configs in `deploy/dev/` |
 | `just dev-app` | `pnpm tauri dev` |
 | `just ui-test` / `just e2e` | Vitest / Playwright |

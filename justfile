@@ -66,14 +66,21 @@ db-prepare: (_unavailable "db-prepare" "P6")
 mc-up:
     docker compose --file deploy/compose.dev.yaml up --detach --wait --wait-timeout 300 minecraft
 
-# Stop the local Minecraft server and delete its world.
+# Build the agent's image and start the local server and the agent (deploy/dev/agent.compose.toml) in Docker, then wait until both are healthy.
+stack-up:
+    docker compose --file deploy/compose.dev.yaml up --build --detach --wait --wait-timeout 300
+
+# Stop the local stack (the server and the agent) and delete the server's world.
 mc-down:
     docker compose --file deploy/compose.dev.yaml down --volumes
 
 # Run the server with deploy/dev/ configs.
 dev-server: (_unavailable "dev-server" "P6")
 
+# No exit message: on Windows, Ctrl+C reaches just and PowerShell too, so just
+# would call a clean stop a failure. The agent logs its own errors and exit code.
 # Run the agent with deploy/dev/agent.toml: three bots against `just mc-up`'s server.
+[no-exit-message]
 dev-agent:
     cargo run -p fleet-agent --bin afkfleet-agent -- run --config deploy/dev/agent.toml
 

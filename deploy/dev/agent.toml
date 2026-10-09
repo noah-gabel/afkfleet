@@ -1,7 +1,8 @@
 # The agent's development config, for `just dev-agent` on the host only: it
 # runs three offline-mode bots against `just mc-up`'s server, which listens on
-# 127.0.0.1:25565. The agent in compose.dev.yaml (Phase 5, group C) reaches the
-# server as minecraft:25565 and gets a config of its own.
+# 127.0.0.1:25565. The agent in compose.dev.yaml (`just stack-up`) reaches the
+# server as minecraft:25565 with a config of its own, agent.compose.toml, and
+# other bots, so both agents can run at once.
 #
 # DEVELOPMENT ONLY: standalone mode joins with offline accounts, which only an
 # offline-mode server accepts. Keys left out take Plan.md Appendix A's

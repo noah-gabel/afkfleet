@@ -23,7 +23,11 @@ use fleet_core::resilience::{CircuitPolicy, RetryPolicy, RetryPolicyError};
 use fleet_core::value::{AgentNameError, McUsernameError};
 use fleet_mc::McConfig;
 use fleet_runtime::RuntimeConfig;
+use jail::in_jail;
 use rstest::rstest;
+
+#[path = "common/jail.rs"]
+mod jail;
 
 /// The smallest valid config: a name and one bot.
 const MINIMAL: &str = r#"
@@ -34,18 +38,6 @@ username = "AfkBot1"
 server = "localhost:25565"
 mode = "afk"
 "#;
-
-/// Runs `test` inside a `figment::Jail`.
-#[expect(
-    clippy::result_large_err,
-    reason = "figment::Jail fixes the closure's error type to figment::Error (ADR-0014)"
-)]
-fn in_jail(test: impl FnOnce(&mut Jail)) {
-    Jail::expect_with(|jail| {
-        test(jail);
-        Ok(())
-    });
-}
 
 fn load_toml(jail: &mut Jail, toml: &str) -> Result<AgentConfig, ConfigError> {
     jail.create_file("agent.toml", toml).unwrap();

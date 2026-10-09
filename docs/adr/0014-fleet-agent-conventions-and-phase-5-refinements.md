@@ -193,6 +193,32 @@ Each later group asks its own implementation-level questions in its session: tok
 - **P5.6** as planned: cargo-chef, a pinned nightly builder, `gcr.io/distroless/cc-debian12:nonroot`, a `HEALTHCHECK` through the subcommand, and a `stop_grace_period` above `shutdown_timeout` (ADR-0013).
   - *(group B, the user's decision)* The agent's worst case is shutdown_timeout + reply_timeout, plus main.rs's 1 s runtime-shutdown bound, so the grace period must be above that: **20 s** for the 10 s default. Otherwise Docker's SIGKILL replaces exit code 4 and the last line.
 
+- *(as built, group C: P5.5; the user answered group C's questions on 2026-10-09)*:
+  - **The heartbeat is a port.** `heartbeat::Heartbeat::touch()` is a fifth generic of `RunParts`, so the run's tests count beats on paused time; a file's modification time follows the wall clock, which paused time doesn't move. main.rs passes `FileHeartbeat` on `heartbeat_file`.
+  - **A touch** opens the file with `create(true).write(true).truncate(false)` (Windows needs write access to set the time) and calls `File::set_modified(now)`, in `spawn_blocking`, since the rules keep blocking file IO off the runtime. The file stays empty and is never truncated or deleted *(the user's decision)*: a wrong `heartbeat_file` can't destroy data, and deleting the file would. After a container restart, an old file can look fresh only until the new agent's first beat.
+  - **The beat is a task of its own** *(the user's decision)*, owned by the run with a child token, so a slow `snapshot_all` (up to the 5 s reply timeout) never delays the signals or the diagnostics. It starts once "the agent is running", beats at once and then every 10 s, and awaits each touch before the next beat, so at most one is in flight. The run cancels it when the shutdown starts.
+  - **Failures are logged once per streak** *(the user's decisions)*: a `warn` when the fleet stops answering or the file can't be touched (with `file` and the IO error), and an `info` when it works again. The agent keeps running, and the container turns unhealthy. Since the first beat comes right after the start, a wrong path shows up at once.
+  - **The check's output** *(the user's decisions)*: one line on stdout, healthy or not. stderr is left for errors that keep the check from running, a config that can't be loaded (the same text and exit 1 as `run`) or a usage error. A usage error counts as `healthcheck`'s when the first argument is `healthcheck`.
+  - **A time in the future** *(the user's decision)* counts as age 0 up to 30 s ahead, so small clock corrections never fail the check. Further ahead is unhealthy with a line of its own: a healthy agent's next beat fixes the time within 10 s and Docker's retries absorb that check, while a hung agent can't look healthy for the length of a big backward jump.
+- *(as built, group C: P5.6)*:
+  - **Debian 13, not 12** *(found in the plan's review, the user's decision)*. distroless's README now lists only Debian 13 images and calls every other tag deprecated and no longer updated, so the runtime is `gcr.io/distroless/cc-debian13:nonroot`. The builder is `rust:1.99.0-slim-trixie`, the same Debian, so the binary's glibc matches. Plan.md P5.6 keeps the original text, with a deviation note.
+  - **Production runs on linux/arm64** *(the user's requirement)*; development and CI run on x86_64.
+    - Both base images are pinned by tag and **multi-arch index digest**, the top-level digest of `docker buildx imagetools inspect`, never one platform's. Nothing in the Dockerfile names an architecture, so the same file builds natively on both.
+    - deny.toml's `[graph] targets` gains `aarch64-unknown-linux-gnu`. That checks more of the graph and weakens nothing; `cargo deny check` stays clean, with no `ring` on aarch64.
+    - The arm64 builder stage was built under QEMU as a smoke check. P12.1 builds the whole image for arm64.
+  - **The builder** *(the user's decisions)* installs cargo-chef with `cargo install --locked` on the image's stable toolchain, then copies `rust-toolchain.toml` alone and runs `rustup toolchain install`, two cached layers before any source. The toolchain file stays the nightly's only pin, so ADR-0003's bump steps don't change. Everything builds with `--locked`.
+  - **The runtime** runs as distroless's nonroot user, with static OCI labels only (title, description, source, licenses). The config belongs at `/etc/afkfleet/agent.toml`, the path of both the `CMD` and the `HEALTHCHECK` (10 s interval, 5 s timeout, 30 s start period, 3 retries).
+  - **`.dockerignore` is an allowlist** *(the user's decision)*: only the workspace's manifests, `rust-toolchain.toml`, `.cargo/config.toml` and `crates/` enter the context. `.gitignore`'s secret patterns are then excluded again at any depth, since the last matching rule wins and `crates/` is allowed whole. A build listing the context showed only those files.
+  - **The compose agent** *(the user's decisions)*:
+    - It has its own config, `deploy/dev/agent.compose.toml`: AfkBot4–6, so `just dev-agent`'s AfkBot1–3 can run beside it, at `minecraft:25565`, with JSON logs.
+    - It starts once the server is healthy, so its bots don't use up retries, or open the breaker, while the server's first start builds the world.
+    - `stop_grace_period: 20s`; `restart: on-failure`, since exit codes 3 and 4 should restart it and a stop by a signal (0) shouldn't.
+    - `read_only` with a 1 MiB tmpfs at `/tmp` for the heartbeat file, `cap_drop: [ALL]`, `no-new-privileges`, 512 MiB and 1 CPU (about twice ADR-0008's 50-bot measurement).
+    - `image: afkfleet-agent:dev` with `pull_policy: build`, so compose never pulls that name from a registry.
+    - `just stack-up` builds it and waits until both services are healthy.
+  - **A fast test guards the files** *(the user's decisions)*. `tests/deploy.rs` loads both dev configs and checks that the grace period outlasts the compose config's worst-case shutdown, with `RUNTIME_SHUTDOWN` now public in `run` for it. It also checks that compose mounts the config where the Dockerfile's `CMD` and `HEALTHCHECK` read it. The approved `in_jail` helper moved to `tests/common/jail.rs`, so it's still one `#[expect]`.
+  - **No CI job builds the image on every PR** *(the user's decision)*. Group D's PR, and every later PR that changes the Dockerfile, `.dockerignore`, `Cargo.lock` or `rust-toolchain.toml`, runs the "Slow tests" workflow on its branch before it's merged.
+
 ### End-to-end test and demo (P5.7, DoD; group D)
 - **`crates/fleet-agent/tests/slow_compose.rs`**, a `slow_` test, drives `docker compose` through `std::process::Command`, with its own project name, so it never touches the `afkfleet-dev` stack. It reads the agent's JSON logs for state changes and RCON `list` for who's online, and checks the exit code and the `ShutdownReport`.
   - `just test-slow` builds the agent image first, since a cold build can outlast the slow profile's 10 minutes.
@@ -218,6 +244,7 @@ Approved by the user, all in Plan.md §5:
   - `metrics-exporter-prometheus` 0.18.3 with no features until P12.4. Its metrics-util dependency always enables `storage`, which brings rand 0.9 (`thread_rng`) and getrandom 0.3 into normal dependencies; both were already in the lockfile, and nothing uses them for secrets. One `metrics` 0.24.x in the tree keeps the runtime and the exporter on the same recorder.
   - `rustls` 0.23.45 with its default features (aws-lc-rs), already in the lockfile through reqwest.
   - Already declared, newly used by the agent: tokio (`rt`, `rt-multi-thread`, `macros`, `sync`, `time`; `test-util` in tests), tokio-util (no features), chrono (`now`), the `metrics` facade (the agent records the diagnostics itself), and fleet-testkit as a dev-dependency.
+- *(group C)*: no new crates. The agent image's base images are `rust:1.99.0-slim-trixie` (builder) and `gcr.io/distroless/cc-debian13:nonroot` (runtime), both pinned by multi-arch index digest, and the builder installs cargo-chef 0.1.78 (§5's tools).
 - fleet-agent depends on fleet-core, fleet-runtime and fleet-mc (§4).
 - No crate-local `clippy.toml`: the root one applies.
 - **One lint exception in tests** *(the user's approval)*. figment's `Jail` fixes its closure's error type to `figment::Error`, which is larger than `clippy::result_large_err` allows. So every test goes through one helper, `in_jail`, whose closure carries `#[expect(clippy::result_large_err, reason = …)]`. Production code isn't affected: `load` converts figment's error into a small boxed one.
@@ -235,6 +262,8 @@ Approved by the user, all in Plan.md §5:
   - **P10:** check `[control_plane]`'s URL and files; `AgentName` goes into the `Hello` and `agents.name`; the managed provider uses the same config.
   - **P11.1:** fixed IDs for `ModePreset`.
   - **P12.4:** the metrics endpoint and its key.
+  - **P12.1** *(group C)*: build the agent image for linux/arm64, natively on the server or on GitHub's `ubuntu-24.04-arm` runner. The weekly audit scans the built image (e.g. Trivy), since `cargo deny` covers only crates. `created`, `revision` and `version` labels come through build args once CI publishes the image.
+  - **P12.2** *(group C)*: production is linux/arm64, and the agent's memory and CPU limits come from group D's measured demo numbers, not from the dev values.
 
 ## Alternatives considered
 - **More, smaller groups (5), or fewer, larger ones (3).** Five would split P5.3 from P5.4, which share the run loop. Three would put the healthcheck and Docker in one oversized PR.

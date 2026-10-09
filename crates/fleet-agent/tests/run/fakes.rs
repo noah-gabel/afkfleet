@@ -1,9 +1,11 @@
-//! Fakes for fleet-mc's diagnostics and for the stop signals.
+//! Fakes for fleet-mc's diagnostics, the stop signals and the heartbeat.
 
+use std::io;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use fleet_agent::diagnostics::{HostDiagnostics, HostSample};
+use fleet_agent::heartbeat::Heartbeat;
 use fleet_agent::signals::{ShutdownSignals, Signal};
 use tokio::sync::mpsc;
 
@@ -49,6 +51,24 @@ impl FakeSignals {
     pub(crate) fn new() -> (mpsc::Sender<Signal>, Self) {
         let (sender, receiver) = mpsc::channel(4);
         (sender, Self(receiver))
+    }
+}
+
+/// Counts the beats; clones share the count.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct FakeHeartbeat(Arc<AtomicUsize>);
+
+impl FakeHeartbeat {
+    /// How many beats were recorded.
+    pub(crate) fn beats(&self) -> usize {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+impl Heartbeat for FakeHeartbeat {
+    fn touch(&self) -> impl Future<Output = io::Result<()>> + Send {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        core::future::ready(Ok(()))
     }
 }
 
