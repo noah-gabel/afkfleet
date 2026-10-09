@@ -277,6 +277,11 @@ Approved by the user; all are in Plan.md §5:
   - **P5.1** *(group D)*: map `max_bots` and `shutdown_timeout_secs` to `RuntimeConfig`, and refuse two `[[standalone.bots]]` entries whose accounts clash, with `BotAccount::clashes_with`.
   - **P5.3** *(group D)*: the agent runs `supervisor.run(cancel)` in a task it owns, and reports a `FleetSetupError` from `Fleet::new` at startup.
   - **P5.4** *(group D)*: a signal calls `Fleet::shutdown(shutdown_timeout)`, or cancels the supervisor's token, and logs the `ShutdownReport`.
+  - **P5.3** *(group E)*:
+    - the agent passes `Fleet::new` a random seed from `getrandom`, never a fixed one, so two agents never jitter their reconnects in lockstep
+    - if the supervisor's task ends without a requested shutdown (a `JoinError` or an early return), the agent logs it at `error` and exits with an error code, so Docker restarts it, as at the abandoned-thread limit
+    - the agent installs the Prometheus recorder before it calls `Fleet::new`, since the metrics' descriptions and 0-series go to the recorder installed at that moment
+  - **P5.6** *(group E)*: the compose file gives the agent a `stop_grace_period` above `shutdown_timeout` (e.g. 15 s for the 10 s default), since `docker stop` kills after 10 s by default.
   - **P10.5** *(group D)*: a removed Paused, Failed or crash-looped bot publishes no `StateChanged(Stopped)` before `Removed`, so the server keeps its stored state and restores it on the next agent.
   - **P10.7** *(group D)*: the agent maps `FleetEventKind::Removed` too, since P10.5's move waits for it.
   - **P11.1** *(group B)*: `chat_messages` can record outgoing mode chat from `ModeChatSent`.

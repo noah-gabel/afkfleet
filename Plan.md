@@ -1651,6 +1651,17 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - Three cases the `Fleet` can't reach are unit tests, with a second, `cfg(test)` recorder in `src/metrics.rs`: a crash of the crash-loop actor, the supervisor's own `Failed(CrashLoop)`, and a trip that the drained events overtake.
   >   - Two temporary mutations, never committed, showed that the "doesn't count" tests catch the bug: counting a trip before the drain, and counting every crash as a restart.
 
+  > Note (Phase 4 wrap-up, group E) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
+  > - **The Phase 4 DoD, checked on 2026-10-09:**
+  >   - **Coverage ≥ 85 %:** `just cov` gives fleet-runtime 98.25 % of lines (4666/4749), and the workspace 98.94 %; every gate passes.
+  >   - **The chaos test passes 500 cases:** it asserts the count itself, and still runs 500 with `PROPTEST_CASES=1000`.
+  >   - **`just test fleet-runtime` under 30 s:** 288 tests in about 7.9 s, the chaos test about 7.5 s of it.
+  > - **The phase's security list:**
+  >   - **Every channel is bounded:** the supervisor queue, the actor inboxes and the chat queues are `mpsc::channel`s with a capacity from `RuntimeConfig`, checked against tokio's limits; the events are one bounded `broadcast`; `watch` and `oneshot` hold one value. clippy bans `unbounded_channel`.
+  >   - **Chat only through a validated `ChatMessage`:** `Fleet::send_chat`, the queue and mode chat all take `fleet_core::chat::ChatMessage`.
+  >   - **No `unwrap`:** none, nor `expect` or `panic!`, outside test modules; the lints deny them.
+  > - **Later phases inherit** four new notes, in P5.3 and P5.6.
+
 **Security:**
 - Every channel is bounded.
 - Chat only accepts a validated `ChatMessage`.
@@ -1694,6 +1705,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Paused and Failed across an agent restart.** The standalone agent persists nothing, so a restart starts every bot again; that's a documented limit for a dev-only mode with offline accounts. In managed mode the server sends the sticky state (P10.5).
 
   > Note (P5.3, from P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): `Fleet::new` returns the handle and the `Supervisor`; the agent runs `supervisor.run(cancel)` in a task it owns and reports a `FleetSetupError` at startup.
+
+  > Note (P5.3, from Phase 4, group E, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
+  > - **A real seed.** The agent passes `Fleet::new` a random seed from `getrandom`, never a fixed one, so two agents never jitter their reconnects in lockstep.
+  > - **An unexpected end of the supervisor.** If the supervisor's task ends without a requested shutdown (a `JoinError` or an early return), the agent logs it at `error` and exits with an error code, so Docker restarts it, as at the abandoned-thread limit.
+  > - **The recorder first.** The agent installs the Prometheus recorder before it calls `Fleet::new`. The `metrics` crate sends the descriptions and the 0-series to the recorder installed at that moment; anything registered earlier goes to the no-op recorder and is lost (P4.9).
 - [ ] **P5.4** 🔴 Signals (Ctrl+C, SIGTERM) trigger a graceful shutdown within `shutdown_timeout`.
 
   > Note (P5.4, from P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): A signal calls `Fleet::shutdown(shutdown_timeout)`, or cancels the supervisor's token, which shuts down within `RuntimeConfig::shutdown_timeout`. `shutdown` returns a `ShutdownReport { stopped, aborted, crashed }` for the log.
@@ -1704,6 +1720,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - runtime `gcr.io/distroless/cc-debian12:nonroot`
 
   Also `deploy/compose.dev.yaml` with an itzg server plus the agent.
+
+  > Note (P5.6, from Phase 4, group E, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The compose file gives the agent a `stop_grace_period` above `shutdown_timeout`, e.g. 15 s for the 10 s default, since `docker stop` kills a container after 10 s by default, before the fleet's graceful shutdown ends.
 - [ ] **P5.7** 🔴 Slow end-to-end test:
   1. `compose up`, and all bots come Online.
   2. Restart the MC container; the bots reconnect within the policy.
