@@ -77,7 +77,10 @@ mc-down:
 # Run the server with deploy/dev/ configs.
 dev-server: (_unavailable "dev-server" "P6")
 
+# No exit message: on Windows, Ctrl+C reaches just and PowerShell too, so just
+# would call a clean stop a failure. The agent logs its own errors and exit code.
 # Run the agent with deploy/dev/agent.toml: three bots against `just mc-up`'s server.
+[no-exit-message]
 dev-agent:
     cargo run -p fleet-agent --bin afkfleet-agent -- run --config deploy/dev/agent.toml
 

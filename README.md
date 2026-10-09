@@ -111,7 +111,7 @@ The bots join within a few seconds; the log shows each bot's ID with its name. C
 
 Or run the server and the agent both in Docker: `just stack-up` builds the agent's image and starts three other bots (see [Running the agent in Docker](#running-the-agent-in-docker)).
 
-On Windows, Ctrl+C reaches every process in the console, `just` and `cargo` included, so the prompt can come back before the agent's last lines.
+On Windows, Ctrl+C reaches every process in the console, `just`, PowerShell and `cargo` included, not only the agent. So the prompt can come back before the agent's last lines, and `just` may report the recipe as failed even when the agent stopped cleanly. The agent's own exit code is the one in its last line, "the agent stopped".
 
 ### Running the agent
 ```sh
