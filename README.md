@@ -16,7 +16,7 @@ afkfleet is **a hobby project** I'm building for my friends with Claude Code. I 
 There's no support, and I don't take feature requests. Security reports are welcome, though: see [SECURITY.md](SECURITY.md).
 
 ## Status
-**Phase 4 (the bot runtime) is done.** The product itself isn't runnable yet. What exists:
+**Phase 5 (the standalone agent) is in progress.** Its first runnable product, `afkfleet-agent`, runs a few offline-mode bots against a local server (see [Quickstart](#quickstart)). What exists:
 - **From Phase 0:**
   - the Cargo workspace with all lints and the pinned toolchain
   - the quality gates: formatting, clippy, docs, tests, coverage gates, cargo-deny, Biome
@@ -60,8 +60,14 @@ There's no support, and I don't take feature requests. Security reports are welc
   - a chaos test: 500 random runs of kicks, failed connects, hangs, crashes and API calls, which check that bots heal, never reconnect in a storm, never connect while a human plays, and that the API always answers
 
   [ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md) records Phase 4's decisions.
+- **From Phase 5 so far:** [`crates/fleet-agent`](crates/fleet-agent/) and its `afkfleet-agent` binary:
+  - the config: `agent.toml` plus `AFKFLEET_AGENT__…` environment variables. A typo is an error with its key, and every problem is listed at once
+  - logging: JSON lines or a pretty format, a filter that keeps azalea quiet and its auth logs safe, and a panic hook that logs through it
+  - the wiring of the azalea adapter to the bot runtime. Each bot gets a new ID at every start, logged with its name. The agent exports the adapter's numbers as metrics and exits so Docker can restart it when too many host threads hang
 
-**Next:** Phase 5, the standalone agent and the first runnable product: `afkfleet-agent run --config agent.toml` runs a few offline-mode bots against a local server.
+  [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md) records Phase 5's decisions.
+
+**Next:** the rest of Phase 5: a graceful shutdown on signals, a healthcheck and a Docker image, and an end-to-end test against a server restart.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 
@@ -93,7 +99,28 @@ Further reading:
   ```
 
 ## Quickstart
-There's nothing to run yet. The first runnable product is the standalone agent in Phase 5.
+Run three bots against a local offline-mode server (needs Docker):
+```sh
+just mc-up      # the local Minecraft 26.1 server on 127.0.0.1:25565
+just dev-agent  # afkfleet-agent with deploy/dev/agent.toml
+```
+The bots join within a few seconds; the log shows each bot's ID with its name. `just mc-down` stops the server and deletes its world.
+
+### Running the agent
+```sh
+afkfleet-agent run --config agent.toml
+```
+- **The config** is a TOML file ([`deploy/dev/agent.toml`](deploy/dev/agent.toml) is an example; Plan.md's Appendix A lists every key and its default). `AFKFLEET_AGENT__…` environment variables override any key, with `__` between the parts, e.g. `AFKFLEET_AGENT__LOG__FILTER=debug`. Unknown keys are errors.
+- **Standalone mode** (`[standalone]`) is for development only: its bots use offline accounts, which only an offline-mode server accepts. Managed mode (`[control_plane]`) arrives in Phase 10.
+- **Logs** go to stdout, as JSON lines by default or as one readable line per event with `[log] format = "pretty"`. A config error is printed to stderr before logging starts.
+- **Exit codes**, also listed by `afkfleet-agent run --help`:
+
+  | Code | Meaning |
+  |---|---|
+  | 1 | Startup error: the config, logging, or the fleet's setup |
+  | 2 | Usage error |
+  | 3 | Too many Minecraft host threads hung (the abandoned-thread limit); the agent shut its bots down first, so Docker can restart it |
+  | 4 | The fleet's supervisor ended unasked, or didn't end when asked |
 
 ## Development
 ```sh
@@ -102,6 +129,7 @@ just check     # format, lints, docs, tests: run before every commit
 just ci        # everything CI runs
 just mc-up     # local offline-mode Minecraft 26.1 test server on 127.0.0.1:25565 (needs Docker)
 just mc-down   # stop it and delete its world
+just dev-agent # run the agent with deploy/dev/agent.toml against that server
 just test-slow # slow tests against local Minecraft containers, one at a time (needs Docker)
 just test-real-account # the real-account check: you only (see below)
 ```

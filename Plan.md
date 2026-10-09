@@ -186,8 +186,8 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Minecraft protocol & client | `azalea` | `=0.16.0` (+mc26.1) | fleet-mc | Needs nightly (ADR-0003). Disable its `AutoReconnectPlugin` and `AutoRespawnPlugin`. Runs only inside a `LocalSet` |
 | Minecraft chat components & translations | `azalea-chat`, `azalea-language` | `=0.16.0` (+mc26.1) | fleet-mc | Already in azalea's graph at the same pin. Only for fleet-mc's bounded renderer of server text: it names `PrimitiveOrComponent`, which azalea doesn't re-export, and looks up translation templates, because azalea's own rendering grows exponentially (ADR-0011). Bumped together with azalea |
 | Microsoft / Minecraft auth | `azalea-auth` | `=0.16.0` (+mc26.1) | fleet-server | Device-code flow. Never use its file cache. fleet-mc reaches only `azalea::auth::sessionserver` and `certs`, through azalea's re-export, never the Microsoft flows; its clippy config bans them (ADR-0011) |
-| Async runtime | `tokio` | 1.53.2 | runtime, mc, testkit, agent, server, client | `test-util` feature in dev. Clippy bans `unbounded_channel`; azalea's two mandated channels are the only exceptions (ADR-0011) |
-| Cancellation, task tracking | `tokio-util` | 0.7.19 | runtime, mc, agent, server | `CancellationToken`, `TaskTracker`. fleet-runtime enables no features: it uses only `CancellationToken`, and its actors live in tokio's `JoinSet`, which reports panics (ADR-0013) |
+| Async runtime | `tokio` | 1.53.2 | runtime, mc, testkit, agent, server, client | `test-util` feature in dev. Clippy bans `unbounded_channel`; azalea's two mandated channels are the only exceptions (ADR-0011). The agent builds a multi-threaded runtime after loading its config (ADR-0014) |
+| Cancellation, task tracking | `tokio-util` | 0.7.19 | runtime, mc, agent, server | `CancellationToken`, `TaskTracker`. fleet-runtime and the agent enable no features: they use only `CancellationToken`, and their tasks live in tokio's `JoinSet`, which reports panics (ADR-0013, ADR-0014) |
 | Stream adapters | `tokio-stream` | 0.1.19 | proto, agent, server | gRPC streams, broadcast → stream |
 | Sink/Stream extension traits | `futures-util` | 0.3.34 | client, server | WebSocket split/send |
 | Async fns in `dyn` traits | `async-trait` | 0.1.92 | server | Only for `Arc<dyn Port>`. Use generics + RPITIT elsewhere |
@@ -196,14 +196,14 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Rate limiting (HTTP middleware) | `tower_governor` | 0.8.0 | server | Per IP |
 | TTL cache / single-flight | `moka` | 0.12.16 | server | MC token cache, WS tickets |
 | Library errors | `thiserror` | 2.0.21 | all libraries | |
-| Binary error reporting | `anyhow` | 1.0.104 | `main.rs` only | |
+| Binary error reporting | `anyhow` | 1.0.104 | `main.rs` only | Not declared yet: the agent's `main.rs` maps its typed errors to exit codes itself. It arrives with the first `main.rs` that uses it (ADR-0014) |
 | Serialization | `serde`, `serde_json` | 1.0.229, 1.0.151 | all | |
 | Configuration | `figment` | 0.10.19 | agent, server | TOML file + env; upstream is quiet but the crate is stable. It has no default features: the agent enables `toml` and `env`, and `test` (`Jail`) in its tests, whose one closure carries an approved `#[expect(clippy::result_large_err)]` (ADR-0014) |
 | DTO & config validation | `garde` | 0.23.0 | api-types, agent, server | Domain value objects use hand-written constructors. It has no default features; members enable `derive` and the rules they use. The agent's config uses garde for its number ranges only and converts texts with the core constructors, so it reports every problem at once (ADR-0014) |
 | Logging / tracing | `tracing`, `tracing-subscriber` | 0.1.44, 0.3.23 | all | `env-filter`, `json`. fleet-testkit's log capture uses `tracing` and `tracing-subscriber`; the redaction tests use it (ADR-0011) |
-| Metrics | `metrics`, `metrics-exporter-prometheus` | 0.24.6, 0.18.3 (dfo) | runtime, agent, server | Internal port only. The exporter's default `push-gateway` brings its own TLS stack: enable `http-listener` only |
+| Metrics | `metrics`, `metrics-exporter-prometheus` | 0.24.6, 0.18.3 (dfo) | runtime, agent, server | Internal port only. The exporter's default `push-gateway` brings its own TLS stack: enable `http-listener` only. Until P12.4 serves the endpoint, the agent enables no features and only installs the recorder. Its metrics-util dependency always enables `storage`, which brings rand 0.9 and getrandom 0.3 into normal dependencies (both already in the graph, neither used for secrets) (ADR-0014) |
 | IDs | `uuid` | 1.27.0, dfo | core, mc | v7, serde. fleet-mc only names `Uuid` in azalea's `AccountTrait` (ADR-0011) |
-| Time | `chrono` | 0.4.45, dfo | core, runtime, server | Always UTC. No `clock` feature in core or runtime: time is passed in. The runtime derives `DateTime<Utc>` from tokio's clock, anchored at a wall time its caller passes in (ADR-0010, ADR-0013) |
+| Time | `chrono` | 0.4.45, dfo | core, runtime, agent, server | Always UTC. No `clock` feature in core or runtime: time is passed in. The runtime derives `DateTime<Utc>` from tokio's clock, anchored at a wall time its caller passes in (ADR-0010, ADR-0013). The agent enables `now` only, for that one read at startup; `clock` would add local time zones (ADR-0014) |
 | CLI | `clap` | 4.6.7 | agent, server | derive |
 | Hidden password prompt | `rpassword` | 7.5.4 | server CLI | |
 
@@ -219,7 +219,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | gRPC | `tonic`, `tonic-prost` | **0.14.6** | proto, agent, server | Features `tls-aws-lc`, `tls-connect-info`. Never `tls-ring` or `tls-webpki-roots` |
 | Protobuf | `prost` | 0.14.4 | proto | |
 | Protobuf codegen | `tonic-prost-build`, `protox` | 0.14.6, 0.9.1 | proto (`build.rs`) | Pure Rust, no system `protoc` |
-| TLS | `rustls` | 0.23.45 | agent, server, client, desktop | **Only the aws-lc-rs provider**, installed explicitly at startup. The default features select it |
+| TLS | `rustls` | 0.23.45 | agent, server, client, desktop | **Only the aws-lc-rs provider**, installed explicitly at startup. The default features select it. The agent's `main.rs` installs it before anything else runs (ADR-0014) |
 | X.509 / CSR | `rcgen` | 0.14.10, dfo | server (CA, signing), agent (CSR) | `aws_lc_rs`, `pem`, `x509-parser`. The default is ring |
 | HTTP client | `reqwest` | **0.13.5**, dfo | client, server, desktop, mc | Feature `rustls` (aws-lc-rs + platform verifier), no native-tls. fleet-mc enables no features: it only names `reqwest::Proxy` in azalea's `AccountTrait` (ADR-0011) |
 | WebSocket client | `tokio-tungstenite` | 0.29.0, dfo | client | `connect`, `rustls-tls-native-roots`. 0.29 matches axum 0.8.9's `ws`, so only one tungstenite is built |
@@ -235,7 +235,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Encoding | `base64` | 0.23.1 | server, client | URL-safe, no padding |
 | Secret wrappers | `secrecy` | 0.10.3 | core, mc, agent, server, client, desktop | Redacted `Debug` |
 | Memory zeroing | `zeroize` | 1.9.0 | server, agent | |
-| Secure randomness | `getrandom` | 0.4.3 | server | Tokens, keys, nonces: **always** use this |
+| Secure randomness | `getrandom` | 0.4.3 | server, agent | Tokens, keys, nonces: **always** use this. The agent draws its runtime seed and its bot IDs' random bytes from it; no features (ADR-0014) |
 | Non-security randomness | `rand` | **0.10.3**, dfo | core, runtime | Jitter, random look angles; seeded `StdRng` in tests. No OS randomness in core |
 | TOTP 2FA | `totp-rs` | 6.0.0 | server | Feature `qr`. `gen_secret` uses rand's thread RNG, so P7 generates the secret bytes with `getrandom` instead (security rule 4) |
 | Password strength | `zxcvbn` | 3.1.1 | server | |
@@ -1676,7 +1676,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 ### Phase 5: Standalone agent (`fleet-agent`), the first runnable product
 **Goal:** `afkfleet-agent run --config agent.toml` runs a few dev bots (offline mode) against a local server. It survives server restarts and shuts down cleanly.
-**Introduces:** `clap`, `figment`, `garde`, `tracing-subscriber`, `anyhow`, `metrics-exporter-prometheus`.
+**Introduces:** `clap`, `figment`, `garde`, `tracing-subscriber`, `metrics-exporter-prometheus`, `getrandom`, `rustls`. *(anyhow was planned here; group B didn't need it, so it arrives with the first `main.rs` that uses it, ADR-0014.)*
 
 > Note (P5):
 > - **Four group branches.** At the user's request, Phase 5 is built in group PRs like Phases 2–4. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
@@ -1690,7 +1690,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >
 >   Each later group asks its own implementation-level questions in its session.
 > - **Decisions.** The user answered the Phase 5 plan's open questions on 2026-10-09. [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md) records them; the notes below summarize what changes a task.
-> - **Dependencies.** `figment` (`toml`, `env`; `test` for `Jail` in tests), `garde` with `derive`, `tracing-subscriber` with `env-filter` and `json`, and `log` as a fleet-agent dev-dependency (group A).
+> - **Dependencies.** `figment` (`toml`, `env`; `test` for `Jail` in tests), `garde` with `derive`, `tracing-subscriber` with `env-filter` and `json`, and `log` as a fleet-agent dev-dependency (group A). Group B adds `clap` (`derive`), `getrandom`, `metrics-exporter-prometheus` (no features), `rustls` (its defaults: aws-lc-rs), chrono's `now`, tokio's `rt-multi-thread`, and fleet-testkit as a dev-dependency.
 
 - [x] **P5.1** 🔴 Config (Appendix A):
   - loaded with figment from TOML plus `AFKFLEET_AGENT__…` env variables
@@ -1777,7 +1777,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - `tests/telemetry_init.rs` covers the second `init` and the `log` bridge (`azalea_auth::certs` at `debug` is dropped, `info` is kept, `reqwest` at `debug` is kept).
   >   - `tests/panic_hook.rs` panics on a named thread and checks the one event.
   >   - Each was red against stubs first.
-- [ ] **P5.3** Wiring: `McHostPool` + `AzaleaConnector` + `Fleet`, with the standalone spec source.
+- [x] **P5.3** Wiring: `McHostPool` + `AzaleaConnector` + `Fleet`, with the standalone spec source.
 
   > Note (P5.3, from Phase 3): When `McHostPool::abandoned_threads()` reaches `max_abandoned_threads`, the agent shuts down and exits with an error, so Docker restarts it (§6 row 8). The library never ends the process itself (ADR-0011).
 
@@ -1804,6 +1804,37 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - 4: the supervisor ended unasked
   > - **Fleet events.** One task logs `ChatReceived` and `ModeChatSent` at `debug`, and `Lagged` at `debug` with its count. Nothing else.
   > - `run` refuses `[control_plane]` until P10.
+
+  > Note (P5.3, as built, group B) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
+  > - **Shape.**
+  >   - The binary is `afkfleet-agent` (`crates/fleet-agent/src/main.rs`); `fleet_agent::cli` holds its clap structs, so they're testable and group C can add `healthcheck`.
+  >   - `fleet_agent::run::run(RunParts { config, connector, diagnostics, anchor, seed }) -> Outcome { exit, report }`. `Exit` gives the exit code: `StartupFailed` 1, `AbandonedLimit` 3, `SupervisorFailed` 4 (0 comes with P5.4).
+  >   - `fleet_agent::diagnostics::HostDiagnostics` has one method, `sample() -> HostSample` (fleet-mc's five numbers), implemented for `AzaleaConnector`, which owns its `McHostPool`. main.rs passes one connector as both the connector and the diagnostics.
+  > - **main.rs** (the user's decisions):
+  >   - The order: `Cli::try_parse` (clap's own output and code), `config::load` (before any runtime exists: it reads a file), `telemetry::init`, the aws-lc-rs provider, the Prometheus recorder, a multi-threaded tokio runtime, `run`, `Runtime::shutdown_timeout(1 s)`, then the last line, "the agent stopped" with `exit_code`.
+  >   - Errors before logging exists go to stderr as one plain message through `writeln!` (no `#[expect(clippy::print_stderr)]`) and exit 1. Every later startup error is one `error` event, "the agent can't start", and exits 1.
+  >   - No anyhow: main.rs maps typed errors to codes itself.
+  >   - The anchor is `Utc::now()` (chrono's `now`), the seed `getrandom::u64()`.
+  >   - The Prometheus handle isn't kept: nothing serves it until P12.4, and with no histograms the recorder needs no upkeep.
+  > - **One deadline for a shutdown** (the user's decision): shutdown_timeout + reply_timeout from its start.
+  >   - `Fleet::shutdown` answers `Ok(report)`: the supervisor's task is joined by the deadline.
+  >   - `Busy` or `ShuttingDown`: a `warn`, the supervisor's token is cancelled (it then shuts down without a report), and its task is joined by the deadline.
+  >   - `TimedOut` has used up the deadline: the token is cancelled, and the run exits 4 at once.
+  >   - A supervisor that doesn't end by the deadline, or panics, is an `error` and exits 4. **Exit code 4 also means "didn't end when asked".**
+  >   - A bot the fleet refuses at startup is logged at `error` with its ID and username; the fleet shuts down the same way, and the run exits 1 (or 4).
+  > - **Diagnostics:** sampled at once and every 5 s (a constant; missed ticks are skipped). The counters `afkfleet_mc_abandoned_threads_total`, `afkfleet_mc_dropped_chat_total` and `afkfleet_mc_ignored_action_bar_total` take fleet-mc's totals with `absolute()`; `afkfleet_mc_host_threads` (abandoned threads that still run included) and `afkfleet_mc_worlds` are gauges. All are described and registered at 0 right after `Fleet::new`.
+  > - **Logs.**
+  >   - `run` enters the root span `agent{agent=…}` itself, so the bots' spans nest in it; main.rs logs its own lines in a span of the same name. fleet-mc's `mc_session` spans are created on host threads and stay roots.
+  >   - `info`: "starting a standalone bot" (`bot_id`, `username`, `server`, `mode`), "the agent is running" (`bots`), "the agent stopped" (`exit_code`, plus `stopped`, `aborted` and `crashed` with a report).
+  >   - `error`: "the abandoned-thread limit is reached; shutting down" (`abandoned`, `limit`); "the fleet's supervisor ended unasked" (`panicked`). A `JoinError` is never logged: its text carries the panic payload, which is untrusted and already logged, sanitized, by the panic hook.
+  >   - The event task logs "the bot received chat" (`kind`, `sender`, `text`, `truncated`), "the bot's mode sent chat" (`text`) and a lag (`skipped`) at `debug`. Chat text is a plain string field, so both formats escape its line breaks.
+  > - **Dev:** `deploy/dev/agent.toml` runs AfkBot1 and AfkBot2 on `afk` and AfkBot3 on `farm` against `127.0.0.1:25565`, with pretty logs; `just dev-agent` runs it.
+  > - **Tests.**
+  >   - `tests/run/`: the IDs and the startup lines, the span nesting, every startup error, the limit, the sampling period and the metrics, on fleet-testkit's `FakeConnector`, a fake diagnostics source and paused time.
+  >   - Unit tests: the specs, the watch, the event log, the metrics, and `finish` against a real `Fleet` whose supervisor a test task holds, runs, drops or panics. Each `finish` case checks the exit code and the paused time it ends at (15 s for `TimedOut` and a hung supervisor).
+  >   - `tests/cli.rs` runs the binary: a missing or invalid config exits 1 with the plain message on stderr, a usage error exits 2, `run --help` lists the codes, `--version`. Each run has its own deadline, and a guard kills the child.
+  >   - 48 tests were red against stubs first.
+  > - **Until P5.4,** the binary has no graceful stop: a signal ends it the default way.
 - [ ] **P5.4** 🔴 Signals (Ctrl+C, SIGTERM) trigger a graceful shutdown within `shutdown_timeout`.
 
   > Note (P5.4, from P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): A signal calls `Fleet::shutdown(shutdown_timeout)`, or cancels the supervisor's token, which shuts down within `RuntimeConfig::shutdown_timeout`. `shutdown` returns a `ShutdownReport { stopped, aborted, crashed }` for the log.
@@ -1823,6 +1854,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   Also `deploy/compose.dev.yaml` with an itzg server plus the agent.
 
   > Note (P5.6, from Phase 4, group E, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The compose file gives the agent a `stop_grace_period` above `shutdown_timeout`, e.g. 15 s for the 10 s default, since `docker stop` kills a container after 10 s by default, before the fleet's graceful shutdown ends.
+
+  > Note (P5.6, from group B, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): The agent's worst-case shutdown is shutdown_timeout + reply_timeout, plus main.rs's 1 s runtime-shutdown bound. So `stop_grace_period` must be above that: **20 s** for the 10 s default, not the 15 s above. Otherwise Docker's SIGKILL replaces exit code 4 and the last line, "the agent stopped".
 - [ ] **P5.7** 🔴 Slow end-to-end test:
   1. `compose up`, and all bots come Online.
   2. Restart the MC container; the bots reconnect within the policy.

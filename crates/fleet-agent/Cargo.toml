@@ -1,6 +1,6 @@
 [package]
 name = "fleet-agent"
-description = "The afkfleet agent: loads its config, sets up logging and runs the bots through fleet-runtime and fleet-mc. A library now; the afkfleet-agent binary arrives in P5.3."
+description = "The afkfleet agent: loads its config, sets up logging and runs the bots through fleet-runtime and fleet-mc. The afkfleet-agent binary is the first runnable product."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,21 +10,37 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[[bin]]
+name = "afkfleet-agent"
+path = "src/main.rs"
+
 [dependencies]
+# `now` only: one wall-clock read at startup, for the runtime's anchor and the bot IDs.
+chrono = { workspace = true, features = ["now"] }
+clap = { workspace = true, features = ["derive"] }
 figment = { workspace = true, features = ["env", "toml"] }
 fleet-core.workspace = true
 fleet-mc.workspace = true
 fleet-runtime.workspace = true
 garde = { workspace = true, features = ["derive"] }
+getrandom.workspace = true
+# The agent records fleet-mc's diagnostics itself.
+metrics.workspace = true
+metrics-exporter-prometheus.workspace = true
+rustls.workspace = true
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
+tokio-util.workspace = true
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 
 [dev-dependencies]
 # `figment::Jail`: a temporary directory and environment per test (ADR-0014).
 figment = { workspace = true, features = ["test"] }
+fleet-testkit.workspace = true
 # `log` records, to prove the bridge into tracing keeps their targets (ADR-0014).
 log.workspace = true
 rstest.workspace = true
 serde_json.workspace = true
+tokio = { workspace = true, features = ["test-util"] }

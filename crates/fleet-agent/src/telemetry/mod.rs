@@ -24,7 +24,7 @@ mod format;
 mod panic;
 
 #[cfg(test)]
-mod capture;
+pub(crate) mod capture;
 
 use std::io::IsTerminal as _;
 

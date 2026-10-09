@@ -1,0 +1,48 @@
+# The agent's development config, for `just dev-agent` on the host only: it
+# runs three offline-mode bots against `just mc-up`'s server, which listens on
+# 127.0.0.1:25565. The agent in compose.dev.yaml (Phase 5, group C) reaches the
+# server as minecraft:25565 and gets a config of its own.
+#
+# DEVELOPMENT ONLY: standalone mode joins with offline accounts, which only an
+# offline-mode server accepts. Keys left out take Plan.md Appendix A's
+# defaults; AFKFLEET_AGENT__… environment variables override any key, e.g.
+# AFKFLEET_AGENT__LOG__FILTER=debug.
+
+name = "dev-agent"
+
+# [runtime]
+# max_bots = 50
+# watchdog_timeout_secs = 30
+# packet_liveness_timeout_secs = 30
+# connect_timeout_secs = 30
+# max_abandoned_threads = 3
+# shutdown_timeout_secs = 10
+# heartbeat_file = "/tmp/afkfleet-agent.alive"   # an absolute path; default: the OS temp directory's afkfleet-agent.alive
+
+# [retry]
+# base_delay_secs = 5
+# max_delay_secs = 300
+# stable_after_secs = 300
+# circuit_failures = 8
+# circuit_window_secs = 600
+# circuit_cooldown_secs = 900
+
+[log]
+format = "pretty"
+filter = "info"                          # EnvFilter syntax; azalea stays at warn unless named, azalea_auth at info
+
+[[standalone.bots]]
+username = "AfkBot1"
+server = "127.0.0.1:25565"
+mode = "afk"
+
+[[standalone.bots]]
+username = "AfkBot2"
+server = "127.0.0.1:25565"
+mode = "afk"
+
+[[standalone.bots]]
+username = "AfkBot3"
+server = "127.0.0.1:25565"
+mode = "farm"
+# conflict_texts = []                    # kick texts that count as a duplicate login; at most 16
