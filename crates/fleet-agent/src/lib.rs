@@ -13,15 +13,17 @@
 //! - [`telemetry`]: logging, with azalea's caps and a panic hook that logs
 //!   through `tracing`.
 //! - [`diagnostics`]: fleet-mc's numbers, sampled into metrics.
+//! - [`signals`]: the signals that stop the agent.
 //! - [`run`]: the fleet's run, from the first bot to the exit code.
 //!
 //! The binary (`src/main.rs`) only wires these together: it loads the
 //! config before the async runtime starts, installs the TLS provider and the
-//! metrics recorder, and passes fleet-mc's `AzaleaConnector` to
-//! [`run::run`].
+//! metrics recorder, and passes fleet-mc's `AzaleaConnector` and the OS's
+//! signals to [`run::run`].
 
 pub mod cli;
 pub mod config;
 pub mod diagnostics;
 pub mod run;
+pub mod signals;
 pub mod telemetry;

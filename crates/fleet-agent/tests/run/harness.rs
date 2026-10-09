@@ -9,6 +9,7 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use fleet_agent::config::{AgentConfig, AgentMode, LogConfig, LogFilter, LogFormat, StandaloneBot};
 use fleet_agent::run::{Outcome, RunParts, run};
+use fleet_agent::signals::Signal;
 use fleet_agent::telemetry::layer;
 use fleet_core::disconnect::ConflictTexts;
 use fleet_core::mc::SessionEvent;
@@ -18,12 +19,13 @@ use fleet_mc::McConfig;
 use fleet_runtime::RuntimeConfig;
 use fleet_testkit::mc::{EmitOutcome, FakeConnector, SessionController};
 use serde_json::Value;
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::layer::SubscriberExt as _;
 
 use crate::common::Capture;
-use crate::fakes::FakeDiagnostics;
+use crate::fakes::{FakeDiagnostics, FakeSignals};
 
 // --- Values ---
 
@@ -120,6 +122,7 @@ pub(crate) struct Agent {
     pub(crate) fake: FakeConnector,
     pub(crate) diagnostics: FakeDiagnostics,
     pub(crate) capture: Capture,
+    signals: Option<mpsc::Sender<Signal>>,
     task: JoinHandle<Outcome>,
     _logs: DefaultGuard,
 }
@@ -127,13 +130,24 @@ pub(crate) struct Agent {
 impl Agent {
     /// Runs the agent with `config` and lets it start.
     pub(crate) async fn start(config: AgentConfig) -> Self {
+        Self::start_with(config, None).await
+    }
+
+    /// Runs the agent with `config`, with `early` already sent before it
+    /// starts, and lets it start.
+    pub(crate) async fn start_with(config: AgentConfig, early: Option<Signal>) -> Self {
         let (capture, logs) = capture_logs();
         let fake = FakeConnector::new();
         let diagnostics = FakeDiagnostics::default();
+        let (sender, signals) = FakeSignals::new();
+        if let Some(signal) = early {
+            sender.send(signal).await.unwrap();
+        }
         let task = tokio::spawn(run(RunParts {
             config,
             connector: Arc::new(fake.clone()),
             diagnostics: diagnostics.clone(),
+            signals,
             anchor: anchor(),
             seed: 1,
         }));
@@ -142,9 +156,22 @@ impl Agent {
             fake,
             diagnostics,
             capture,
+            signals: Some(sender),
             task,
             _logs: logs,
         }
+    }
+
+    /// Sends `signal` and lets the tasks run.
+    pub(crate) async fn signal(&self, signal: Signal) {
+        let sender = self.signals.as_ref().expect("the signals were dropped");
+        sender.send(signal).await.unwrap();
+        settle().await;
+    }
+
+    /// Drops the signals' sender, so no signal can come any more.
+    pub(crate) fn drop_signals(&mut self) {
+        self.signals = None;
     }
 
     /// The controller of session `index`, which must have started.

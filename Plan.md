@@ -1690,7 +1690,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >
 >   Each later group asks its own implementation-level questions in its session.
 > - **Decisions.** The user answered the Phase 5 plan's open questions on 2026-10-09. [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md) records them; the notes below summarize what changes a task.
-> - **Dependencies.** `figment` (`toml`, `env`; `test` for `Jail` in tests), `garde` with `derive`, `tracing-subscriber` with `env-filter` and `json`, and `log` as a fleet-agent dev-dependency (group A). Group B adds `clap` (`derive`), `getrandom`, `metrics-exporter-prometheus` (no features), `rustls` (its defaults: aws-lc-rs), chrono's `now`, tokio's `rt-multi-thread`, and fleet-testkit as a dev-dependency.
+> - **Dependencies.** `figment` (`toml`, `env`; `test` for `Jail` in tests), `garde` with `derive`, `tracing-subscriber` with `env-filter` and `json`, and `log` as a fleet-agent dev-dependency (group A). Group B adds `clap` (`derive`), `getrandom`, `metrics-exporter-prometheus` (no features), `rustls` (its defaults: aws-lc-rs), chrono's `now`, tokio's `rt-multi-thread` and `signal`, and fleet-testkit as a dev-dependency.
 
 - [x] **P5.1** 🔴 Config (Appendix A):
   - loaded with figment from TOML plus `AFKFLEET_AGENT__…` env variables
@@ -1835,11 +1835,24 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - `tests/cli.rs` runs the binary: a missing or invalid config exits 1 with the plain message on stderr, a usage error exits 2, `run --help` lists the codes, `--version`. Each run has its own deadline, and a guard kills the child.
   >   - 48 tests were red against stubs first.
   > - **Until P5.4,** the binary has no graceful stop: a signal ends it the default way.
-- [ ] **P5.4** 🔴 Signals (Ctrl+C, SIGTERM) trigger a graceful shutdown within `shutdown_timeout`.
+- [x] **P5.4** 🔴 Signals (Ctrl+C, SIGTERM) trigger a graceful shutdown within `shutdown_timeout`.
 
   > Note (P5.4, from P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): A signal calls `Fleet::shutdown(shutdown_timeout)`, or cancels the supervisor's token, which shuts down within `RuntimeConfig::shutdown_timeout`. `shutdown` returns a `ShutdownReport { stopped, aborted, crashed }` for the log.
 
   > Note (P5.4, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): A signal calls `Fleet::shutdown(shutdown_timeout)` and logs the report. A second signal only logs that the shutdown is already running. Signals: SIGTERM and SIGINT on Linux, Ctrl+C and Ctrl+Break on Windows.
+
+  > Note (P5.4, as built, group B) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
+  > - **Deviation: a signal source, not a shutdown future** (the user's decision). One future can't show the second signal, so `run` takes a `fleet_agent::signals::ShutdownSignals` with a cancel-safe `recv() -> Signal`.
+  >   - `OsSignals::install()` registers SIGTERM and SIGINT (Unix) or Ctrl+C and Ctrl+Break (Windows). main.rs calls it inside the runtime, which tokio's signal handling needs, and before the fleet starts, so an early signal isn't lost. An error there is a startup error (exit 1).
+  >   - A stream that ends never makes a signal up: the source then waits forever, and so does the tests' channel fake once its sender is gone.
+  >   - Other platforms fail to build with a `compile_error!`.
+  > - **The first signal** logs "shutting down" with `signal` ("SIGTERM", "SIGINT", "Ctrl+C", "Ctrl+Break") and shuts down with P5.3's single deadline. The run ends with `Exit::Stopped`, code 0, even if bots had to be aborted. P5.3's fallbacks keep the code: `Busy` or `ShuttingDown` still give 0 once the supervisor ends; `TimedOut` or a hung supervisor give 4.
+  > - **A later signal** only logs "already shutting down" with `signal`, while the fleet shuts down and while its supervisor is awaited; the deadline doesn't move.
+  > - **Tests**, all red first on assertions, against stubs that compiled: a source that installed the real handlers but never yielded (so a signal was swallowed instead of ending the process), names that were wrong, and a watch and shutdown that ignored signals.
+  >   - Unit tests: the names, the source's stream merging (an ended stream leaves the other working; with both ended, nothing comes), the watch, and `finish` after a signal (each fallback, and repeats while the fleet shuts down and while the supervisor is awaited).
+  >   - `tests/run/signals.rs`: a signal stops the bots with exit 0 and the report; a bot slower than the shutdown timeout is aborted at 10 s, still exit 0; a second signal is only logged and doesn't change the 8 s shutdown; a signal sent before the start is handled once the agent runs; a source that ends never stops the agent.
+  >   - Unix only: `tests/signals.rs` (one test: `OsSignals` receives SIGTERM, then SIGINT, sent to its own process with `kill`) and `tests/cli.rs`'s SIGTERM test (the binary with one bot at `127.0.0.1:1`, `kill -TERM` after "the agent is running", exit 0 and "the agent stopped" with the report as the last line). Windows' Ctrl+C and Ctrl+Break can't be sent without unsafe code; `just dev-agent` exercises them.
+  >   - The Unix tests were run red and green in a Linux container, since the dev machine is Windows.
 - [ ] **P5.5** 🔴 A `healthcheck` subcommand. The agent touches a heartbeat file every 10 s, and the check fails when the file is stale. This works in distroless images, which have no curl.
 
   > Note (P5.5, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):

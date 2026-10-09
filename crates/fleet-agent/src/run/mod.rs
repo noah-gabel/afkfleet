@@ -1,9 +1,10 @@
 //! The agent's run: fleet-mc's connector wired to fleet-runtime's fleet, for
 //! the bots of a standalone config (Plan.md P5.3, ADR-0014).
 //!
-//! [`run`] is generic over the connector and the diagnostics, so tests drive
-//! it with fleet-testkit's fakes on paused time; main.rs passes fleet-mc's
-//! `AzaleaConnector` for both.
+//! [`run`] is generic over the connector, the diagnostics and the signals,
+//! so tests drive it with fleet-testkit's fakes and a signal channel on
+//! paused time; main.rs passes fleet-mc's `AzaleaConnector` for the first
+//! two and the OS's signals.
 //!
 //! 1. A `[control_plane]` config is refused until Phase 10.
 //! 2. Each standalone bot gets a fresh random v7 ID.
@@ -11,8 +12,9 @@
 //!    task the run owns, and one more task logs chat at `debug`.
 //! 4. Every bot is applied, each with one `info` line that ties its ID to
 //!    its username, server and mode.
-//! 5. The run watches the supervisor and samples fleet-mc's diagnostics
-//!    every 5 s. At the abandoned-thread limit, it shuts the fleet down.
+//! 5. The run watches the supervisor and the stop signals, and samples
+//!    fleet-mc's diagnostics every 5 s. A signal or the abandoned-thread
+//!    limit shuts the fleet down; a later signal is only logged.
 //!
 //! Every shutdown has one deadline, the shutdown timeout plus the reply
 //! timeout. The [`Outcome`] says how the run ended, and its [`Exit`] gives
@@ -40,15 +42,19 @@ use self::specs::{StartupError, os_random, standalone_specs};
 use self::watch::{Reason, watch};
 use crate::config::{AgentConfig, AgentMode, StandaloneBot};
 use crate::diagnostics::{self, HostDiagnostics};
+use crate::signals::ShutdownSignals;
 
 /// Everything a run is built from.
-pub struct RunParts<C, D> {
+pub struct RunParts<C, D, S> {
     /// The validated config.
     pub config: AgentConfig,
     /// Starts every bot's sessions.
     pub connector: Arc<C>,
     /// The Minecraft adapter's numbers, sampled every 5 s.
     pub diagnostics: D,
+    /// The signals that stop the agent. They're installed before the run
+    /// starts, so an early signal isn't lost.
+    pub signals: S,
     /// The wall time at which the run starts: the runtime's clock starts
     /// here, and the bot IDs carry it.
     pub anchor: DateTime<Utc>,
@@ -56,7 +62,7 @@ pub struct RunParts<C, D> {
     pub seed: u64,
 }
 
-impl<C, D> fmt::Debug for RunParts<C, D> {
+impl<C, D, S> fmt::Debug for RunParts<C, D, S> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RunParts")
             .field("config", &self.config)
@@ -69,6 +75,9 @@ impl<C, D> fmt::Debug for RunParts<C, D> {
 /// How a run ended, which decides the process's exit code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Exit {
+    /// A signal stopped the agent: every bot was stopped, or aborted at the
+    /// shutdown timeout.
+    Stopped,
     /// The agent couldn't start: the config, logging, or the fleet's setup.
     StartupFailed,
     /// The abandoned-thread limit was reached; the agent shut down first.
@@ -82,6 +91,7 @@ impl Exit {
     #[must_use]
     pub const fn code(self) -> u8 {
         match self {
+            Self::Stopped => 0,
             Self::StartupFailed => 1,
             Self::AbandonedLimit => 3,
             Self::SupervisorFailed => 4,
@@ -128,30 +138,34 @@ pub fn agent_span(name: &AgentName) -> Span {
     info_span!("agent", agent = %name)
 }
 
-/// Runs the agent until it has to stop, and says why it stopped.
+/// Runs the agent until a signal stops it or it has to stop, and says why
+/// it stopped.
 ///
 /// Startup errors are logged at `error` and end the run with
 /// [`Exit::StartupFailed`]; a bot the fleet refuses at startup shuts the
 /// fleet down first.
-pub async fn run<C, D>(parts: RunParts<C, D>) -> Outcome
+pub async fn run<C, D, S>(parts: RunParts<C, D, S>) -> Outcome
 where
     C: MinecraftConnector,
     D: HostDiagnostics,
+    S: ShutdownSignals,
 {
     let span = agent_span(&parts.config.name);
     run_in_span(parts).instrument(span).await
 }
 
 /// The run, inside the agent's span.
-async fn run_in_span<C, D>(parts: RunParts<C, D>) -> Outcome
+async fn run_in_span<C, D, S>(parts: RunParts<C, D, S>) -> Outcome
 where
     C: MinecraftConnector,
     D: HostDiagnostics,
+    S: ShutdownSignals,
 {
     let RunParts {
         config,
         connector,
         diagnostics,
+        mut signals,
         anchor,
         seed,
     } = parts;
@@ -179,6 +193,7 @@ where
         info!(bots = bots.len(), "the agent is running");
         watch(
             &mut supervisor_task,
+            &mut signals,
             &diagnostics,
             config.mc.max_abandoned_threads,
         )
@@ -191,6 +206,7 @@ where
         &fleet,
         &mut supervisor_task,
         &cancel,
+        &mut signals,
         Timeouts::of(&config.runtime),
     )
     .await;
@@ -279,6 +295,7 @@ mod tests {
     use crate::telemetry::capture::json_on_this_thread;
 
     #[rstest]
+    #[case::stopped(Exit::Stopped, 0)]
     #[case::startup_failed(Exit::StartupFailed, 1)]
     #[case::abandoned_limit(Exit::AbandonedLimit, 3)]
     #[case::supervisor_failed(Exit::SupervisorFailed, 4)]

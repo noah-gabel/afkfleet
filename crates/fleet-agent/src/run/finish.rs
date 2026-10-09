@@ -10,6 +10,9 @@
 //!    without a report. `TimedOut` has used up the deadline already.
 //! 3. The supervisor's task must then end by the deadline. If it doesn't, or
 //!    if it panics, the run ends with [`Exit::SupervisorFailed`].
+//!
+//! A signal that arrives meanwhile is only logged: the shutdown is already
+//! running, and the deadline stays as it is.
 
 use core::pin::{Pin, pin};
 use core::time::Duration;
@@ -18,10 +21,11 @@ use fleet_runtime::{Fleet, FleetError, RuntimeConfig, ShutdownReport};
 use tokio::task::JoinSet;
 use tokio::time::Sleep;
 use tokio_util::sync::CancellationToken;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use super::watch::Reason;
 use super::{Exit, Outcome};
+use crate::signals::{ShutdownSignals, Signal};
 
 /// How long a shutdown may take.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,14 +48,19 @@ impl Timeouts {
 
 /// Ends the run for `reason`: logs it, and shuts the fleet down unless its
 /// supervisor has already ended.
-pub(crate) async fn finish(
+pub(crate) async fn finish<S: ShutdownSignals>(
     reason: Reason,
     fleet: &Fleet,
     supervisor: &mut JoinSet<()>,
     cancel: &CancellationToken,
+    signals: &mut S,
     timeouts: Timeouts,
 ) -> Outcome {
     let exit = match reason {
+        Reason::Signal(signal) => {
+            info!(signal = signal.name(), "shutting down");
+            Exit::Stopped
+        }
         Reason::SupervisorEnded { panicked } => {
             error!(panicked, "the fleet's supervisor ended unasked");
             cancel.cancel();
@@ -71,7 +80,17 @@ pub(crate) async fn finish(
         timeouts.shutdown.saturating_add(timeouts.reply)
     ));
     // `shutdown` itself waits until the deadline at most.
-    let report = match fleet.shutdown(timeouts.shutdown).await {
+    let mut shutdown = pin!(fleet.shutdown(timeouts.shutdown));
+    let confirmed = loop {
+        tokio::select! {
+            biased;
+            // Both branches are cancel-safe: the pinned `shutdown` keeps
+            // running, and the signals' `recv` loses nothing.
+            confirmed = &mut shutdown => break confirmed,
+            signal = signals.recv() => already_shutting_down(signal),
+        }
+    };
+    let report = match confirmed {
         Ok(report) => Some(report),
         Err(error) => {
             warn!(
@@ -87,7 +106,12 @@ pub(crate) async fn finish(
             None
         }
     };
-    join_by(supervisor, deadline, exit, report).await
+    join_by(supervisor, deadline, signals, exit, report).await
+}
+
+/// Logs a signal that arrived while the shutdown runs.
+fn already_shutting_down(signal: Signal) {
+    info!(signal = signal.name(), "already shutting down");
 }
 
 /// The outcome when the supervisor ended unasked or didn't end when asked.
@@ -101,15 +125,19 @@ const SUPERVISOR_FAILED: Outcome = Outcome {
 async fn join_by(
     supervisor: &mut JoinSet<()>,
     mut deadline: Pin<&mut Sleep>,
+    signals: &mut impl ShutdownSignals,
     exit: Exit,
     report: Option<ShutdownReport>,
 ) -> Outcome {
-    let joined = tokio::select! {
-        biased;
-        // Both branches are cancel-safe: `join_next` loses nothing, and the
-        // pinned deadline keeps its time.
-        joined = supervisor.join_next() => Ok(joined),
-        () = &mut deadline => Err(()),
+    let joined = loop {
+        tokio::select! {
+            biased;
+            // Every branch is cancel-safe: `join_next` and the signals'
+            // `recv` lose nothing, and the pinned deadline keeps its time.
+            joined = supervisor.join_next() => break Ok(joined),
+            () = &mut deadline => break Err(()),
+            signal = signals.recv() => already_shutting_down(signal),
+        }
     };
     match joined {
         // `None`: the supervisor's task was already joined.
@@ -147,6 +175,8 @@ mod tests {
     use tokio::time::Instant;
 
     use super::*;
+    use crate::signals::Signal;
+    use crate::signals::testing::ChannelSignals;
     use crate::telemetry::capture::{Capture, json_on_this_thread};
 
     const fn secs(secs: u64) -> Duration {
@@ -294,14 +324,35 @@ mod tests {
             settle().await;
         }
 
-        /// Runs `finish` and returns its outcome with the time it took.
+        /// Runs `finish` with no signal coming, and returns its outcome
+        /// with the time it took.
         async fn finish(
             &self,
             reason: Reason,
             supervisor: &mut JoinSet<()>,
         ) -> (Outcome, Duration) {
+            let (_sender, mut signals) = ChannelSignals::new();
+            self.finish_with(reason, supervisor, &mut signals).await
+        }
+
+        /// Runs `finish` with `signals`, and returns its outcome with the
+        /// time it took.
+        async fn finish_with(
+            &self,
+            reason: Reason,
+            supervisor: &mut JoinSet<()>,
+            signals: &mut ChannelSignals,
+        ) -> (Outcome, Duration) {
             let started = Instant::now();
-            let outcome = finish(reason, &self.fleet, supervisor, &self.cancel, TIMEOUTS).await;
+            let outcome = finish(
+                reason,
+                &self.fleet,
+                supervisor,
+                &self.cancel,
+                signals,
+                TIMEOUTS,
+            )
+            .await;
             (outcome, started.elapsed())
         }
     }
@@ -499,6 +550,140 @@ mod tests {
 
         assert_eq!(outcome.exit, Exit::SupervisorFailed);
         assert_eq!(took, DEADLINE);
+    }
+
+    // --- After a signal ---
+
+    const SIGTERM: Reason = Reason::Signal(Signal::Terminate);
+    const ALREADY: &str = "already shutting down";
+
+    #[tokio::test(start_paused = true)]
+    async fn a_signal_shuts_the_fleet_down_and_exits_stopped_with_the_report() {
+        let (capture, _guard) = json_on_this_thread();
+        let mut setup = Setup::new(64);
+        let mut supervisor = setup.run_supervisor();
+        setup.one_bot_online().await;
+
+        let (outcome, took) = setup.finish(SIGTERM, &mut supervisor).await;
+
+        assert_eq!(
+            outcome,
+            Outcome {
+                exit: Exit::Stopped,
+                report: Some(ShutdownReport {
+                    stopped: 1,
+                    aborted: 0,
+                    crashed: 0
+                })
+            }
+        );
+        assert_eq!(took, Duration::ZERO);
+        let lines = capture.lines_with("shutting down");
+        assert_eq!(lines.len(), 1, "{}", capture.text());
+        assert_eq!(lines[0]["level"], "INFO");
+        assert_eq!(lines[0]["signal"], "SIGTERM");
+    }
+
+    /// `busy`: the fleet answers `Busy`; otherwise `ShuttingDown`.
+    #[rstest::rstest]
+    #[case::busy(true)]
+    #[case::shutting_down(false)]
+    #[tokio::test(start_paused = true)]
+    async fn after_a_signal_an_unconfirmed_shutdown_still_exits_stopped_once_the_supervisor_ends(
+        #[case] busy: bool,
+    ) {
+        let (capture, _guard) = json_on_this_thread();
+        let mut setup = Setup::new(1);
+        let mut supervisor = if busy {
+            let supervisor = setup.hold_until_cancelled();
+            setup.fill_the_queue().await;
+            supervisor
+        } else {
+            setup.drop_supervisor()
+        };
+
+        let (outcome, took) = setup.finish(SIGTERM, &mut supervisor).await;
+
+        assert_eq!(
+            outcome,
+            Outcome {
+                exit: Exit::Stopped,
+                report: None
+            }
+        );
+        assert_eq!(took, Duration::ZERO);
+        assert_eq!(levels_of(&capture, DIDNT_CONFIRM), ["WARN"]);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn after_a_signal_a_shutdown_that_times_out_exits_supervisor_failed_at_the_deadline() {
+        let mut setup = Setup::new(64);
+        let mut supervisor = setup.hold_until_cancelled();
+
+        let (outcome, took) = setup.finish(SIGTERM, &mut supervisor).await;
+
+        assert_eq!(outcome.exit, Exit::SupervisorFailed);
+        assert_eq!(took, DEADLINE);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn after_a_signal_a_hung_supervisor_exits_supervisor_failed_at_the_deadline() {
+        let mut setup = Setup::new(1);
+        let mut supervisor = setup.hold_forever();
+        setup.fill_the_queue().await;
+
+        let (outcome, took) = setup.finish(SIGTERM, &mut supervisor).await;
+
+        assert_eq!(outcome.exit, Exit::SupervisorFailed);
+        assert_eq!(took, DEADLINE);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_second_signal_while_the_fleet_shuts_down_is_only_logged() {
+        let (capture, _guard) = json_on_this_thread();
+        let mut setup = Setup::new(64);
+        // Nobody answers, so `shutdown` runs until the deadline.
+        let mut supervisor = setup.hold_until_cancelled();
+        let (sender, mut signals) = ChannelSignals::new();
+
+        let ((outcome, took), ()) = tokio::join!(
+            setup.finish_with(SIGTERM, &mut supervisor, &mut signals),
+            async {
+                tokio::time::sleep(secs(3)).await;
+                sender.send(Signal::Interrupt).await.unwrap();
+            }
+        );
+
+        assert_eq!(outcome.exit, Exit::SupervisorFailed);
+        assert_eq!(took, DEADLINE);
+        let repeated = capture.lines_with(ALREADY);
+        assert_eq!(repeated.len(), 1, "{}", capture.text());
+        assert_eq!(repeated[0]["level"], "INFO");
+        assert_eq!(repeated[0]["signal"], "SIGINT");
+        assert_eq!(capture.lines_with("shutting down").len(), 1);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_second_signal_while_waiting_for_the_supervisor_is_only_logged() {
+        let (capture, _guard) = json_on_this_thread();
+        let mut setup = Setup::new(1);
+        let mut supervisor = setup.hold_forever();
+        setup.fill_the_queue().await;
+        let (sender, mut signals) = ChannelSignals::new();
+
+        let ((outcome, took), ()) = tokio::join!(
+            setup.finish_with(SIGTERM, &mut supervisor, &mut signals),
+            async {
+                tokio::time::sleep(secs(3)).await;
+                sender.send(Signal::Terminate).await.unwrap();
+            }
+        );
+
+        assert_eq!(outcome.exit, Exit::SupervisorFailed);
+        assert_eq!(took, DEADLINE);
+        let repeated = capture.lines_with(ALREADY);
+        assert_eq!(repeated.len(), 1, "{}", capture.text());
+        assert_eq!(repeated[0]["signal"], "SIGTERM");
     }
 
     #[rstest::rstest]

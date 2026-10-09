@@ -1,8 +1,9 @@
 //! Watching a running fleet until the agent has to stop.
 //!
-//! The watch ends when the fleet's supervisor ends on its own, or when a
-//! sample of fleet-mc's diagnostics reaches the abandoned-thread limit. Each
-//! sample also updates the diagnostics' metrics.
+//! The watch ends when the fleet's supervisor ends on its own, when a signal
+//! arrives, or when a sample of fleet-mc's diagnostics reaches the
+//! abandoned-thread limit. Each sample also updates the diagnostics'
+//! metrics.
 
 use core::num::NonZeroUsize;
 
@@ -10,10 +11,13 @@ use tokio::task::JoinSet;
 use tokio::time::MissedTickBehavior;
 
 use crate::diagnostics::{self, HostDiagnostics, SAMPLE_PERIOD};
+use crate::signals::{ShutdownSignals, Signal};
 
 /// Why the agent stops.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Reason {
+    /// A signal asked the agent to stop.
+    Signal(Signal),
     /// A bot couldn't be applied at startup; that's already logged.
     StartupFailed,
     /// fleet-mc abandoned `abandoned` hung threads, at least its `limit`.
@@ -31,11 +35,12 @@ pub(crate) enum Reason {
     },
 }
 
-/// Watches the fleet: its supervisor's task in `supervisor`, and the
-/// diagnostics, sampled at once and then every
+/// Watches the fleet: its supervisor's task in `supervisor`, the stop
+/// signals, and the diagnostics, sampled at once and then every
 /// [`SAMPLE_PERIOD`](crate::diagnostics::SAMPLE_PERIOD).
-pub(crate) async fn watch<D: HostDiagnostics>(
+pub(crate) async fn watch<D: HostDiagnostics, S: ShutdownSignals>(
     supervisor: &mut JoinSet<()>,
+    signals: &mut S,
     diagnostics: &D,
     limit: NonZeroUsize,
 ) -> Reason {
@@ -45,14 +50,15 @@ pub(crate) async fn watch<D: HostDiagnostics>(
     loop {
         tokio::select! {
             biased;
-            // Both branches are cancel-safe: `join_next` and `tick` lose
-            // nothing when the other one wins.
+            // Every branch is cancel-safe: `join_next`, the signals' `recv`
+            // and `tick` lose nothing when another one wins.
             Some(joined) = supervisor.join_next(), if !supervisor.is_empty() => {
                 // The payload isn't kept: it's untrusted, and the panic
                 // hook has logged it, sanitized.
                 let panicked = joined.is_err_and(|error| error.is_panic());
                 return Reason::SupervisorEnded { panicked };
             }
+            signal = signals.recv() => return Reason::Signal(signal),
             _ = samples.tick() => {
                 let sample = diagnostics.sample();
                 diagnostics::record(&sample);
@@ -76,6 +82,7 @@ mod tests {
 
     use super::*;
     use crate::diagnostics::HostSample;
+    use crate::signals::testing::ChannelSignals;
 
     struct FakeDiagnostics(Mutex<HostSample>);
 
@@ -106,12 +113,34 @@ mod tests {
         supervisor: &mut JoinSet<()>,
         diagnostics: &FakeDiagnostics,
     ) -> Option<Reason> {
+        let (_sender, mut signals) = ChannelSignals::new();
         tokio::time::timeout(
             Duration::from_secs(60),
-            watch(supervisor, diagnostics, LIMIT),
+            watch(supervisor, &mut signals, diagnostics, LIMIT),
         )
         .await
         .ok()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_signal_ends_the_watch_with_that_signal() {
+        let mut supervisor = running_supervisor();
+        let (sender, mut signals) = ChannelSignals::new();
+        sender.send(Signal::Interrupt).await.unwrap();
+
+        let reason = tokio::time::timeout(
+            Duration::from_secs(60),
+            watch(
+                &mut supervisor,
+                &mut signals,
+                &FakeDiagnostics::abandoned(0),
+                LIMIT,
+            ),
+        )
+        .await
+        .ok();
+
+        assert_eq!(reason, Some(Reason::Signal(Signal::Interrupt)));
     }
 
     #[tokio::test(start_paused = true)]

@@ -8,7 +8,8 @@
 //! 3. It sets up logging, installs the aws-lc-rs TLS provider and the
 //!    Prometheus recorder (before the fleet registers its metrics), and runs
 //!    the fleet on a multi-threaded tokio runtime, with fleet-mc's
-//!    `AzaleaConnector` as the connector and the diagnostics.
+//!    `AzaleaConnector` as the connector and the diagnostics. SIGTERM and
+//!    SIGINT (Ctrl+C and Ctrl+Break on Windows) shut it down gracefully.
 //! 4. Its last log line, "the agent stopped", carries the exit code.
 
 use core::fmt::Display;
@@ -22,6 +23,7 @@ use clap::Parser as _;
 use fleet_agent::cli::{Cli, Command};
 use fleet_agent::config::{self, AgentConfig};
 use fleet_agent::run::{Exit, Outcome, RunParts, agent_span, run};
+use fleet_agent::signals::OsSignals;
 use fleet_agent::telemetry;
 use fleet_mc::AzaleaConnector;
 use metrics_exporter_prometheus::PrometheusBuilder;
@@ -101,14 +103,28 @@ fn start(config: AgentConfig, span: &Span) -> Outcome {
         }
     };
     let connector = AzaleaConnector::new(&config.mc);
-    let parts = RunParts {
-        config,
-        connector: Arc::new(connector.clone()),
-        diagnostics: connector,
-        anchor: chrono::Utc::now(),
-        seed,
-    };
-    let outcome = runtime.block_on(run(parts));
+    let outcome = runtime.block_on(async {
+        // Inside the runtime, which tokio's signal handling needs, and before
+        // the fleet starts, so an early signal isn't lost.
+        let signals = match OsSignals::install() {
+            Ok(signals) => signals,
+            Err(error) => {
+                return cant_start(
+                    span,
+                    &format_args!("the signal handlers can't be installed: {error}"),
+                );
+            }
+        };
+        run(RunParts {
+            config,
+            connector: Arc::new(connector.clone()),
+            diagnostics: connector,
+            signals,
+            anchor: chrono::Utc::now(),
+            seed,
+        })
+        .await
+    });
     runtime.shutdown_timeout(RUNTIME_SHUTDOWN);
     outcome
 }

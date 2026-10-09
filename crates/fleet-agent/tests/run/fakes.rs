@@ -1,9 +1,11 @@
-//! A fake for fleet-mc's diagnostics.
+//! Fakes for fleet-mc's diagnostics and for the stop signals.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use fleet_agent::diagnostics::{HostDiagnostics, HostSample};
+use fleet_agent::signals::{ShutdownSignals, Signal};
+use tokio::sync::mpsc;
 
 /// Answers every sample with what the test set, and counts the samples.
 /// Clones share both.
@@ -34,5 +36,27 @@ impl HostDiagnostics for FakeDiagnostics {
     fn sample(&self) -> HostSample {
         self.samples.fetch_add(1, Ordering::SeqCst);
         *self.sample.lock().unwrap()
+    }
+}
+
+/// Delivers the signals the test sends; waits forever once the sender is
+/// gone, like the OS's source once its streams end.
+#[derive(Debug)]
+pub(crate) struct FakeSignals(mpsc::Receiver<Signal>);
+
+impl FakeSignals {
+    /// A source and the sender that feeds it.
+    pub(crate) fn new() -> (mpsc::Sender<Signal>, Self) {
+        let (sender, receiver) = mpsc::channel(4);
+        (sender, Self(receiver))
+    }
+}
+
+impl ShutdownSignals for FakeSignals {
+    async fn recv(&mut self) -> Signal {
+        match self.0.recv().await {
+            Some(signal) => signal,
+            None => core::future::pending().await,
+        }
     }
 }

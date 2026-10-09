@@ -64,10 +64,11 @@ There's no support, and I don't take feature requests. Security reports are welc
   - the config: `agent.toml` plus `AFKFLEET_AGENT__…` environment variables. A typo is an error with its key, and every problem is listed at once
   - logging: JSON lines or a pretty format, a filter that keeps azalea quiet and its auth logs safe, and a panic hook that logs through it
   - the wiring of the azalea adapter to the bot runtime. Each bot gets a new ID at every start, logged with its name. The agent exports the adapter's numbers as metrics and exits so Docker can restart it when too many host threads hang
+  - a graceful shutdown on SIGTERM or SIGINT (Ctrl+C or Ctrl+Break on Windows): every bot leaves the server within the shutdown timeout
 
   [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md) records Phase 5's decisions.
 
-**Next:** the rest of Phase 5: a graceful shutdown on signals, a healthcheck and a Docker image, and an end-to-end test against a server restart.
+**Next:** the rest of Phase 5: a healthcheck and a Docker image, and an end-to-end test against a server restart.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 
@@ -104,7 +105,9 @@ Run three bots against a local offline-mode server (needs Docker):
 just mc-up      # the local Minecraft 26.1 server on 127.0.0.1:25565
 just dev-agent  # afkfleet-agent with deploy/dev/agent.toml
 ```
-The bots join within a few seconds; the log shows each bot's ID with its name. `just mc-down` stops the server and deletes its world.
+The bots join within a few seconds; the log shows each bot's ID with its name. Ctrl+C stops the agent: each bot leaves the server, and the last line reports how many stopped. `just mc-down` stops the server and deletes its world.
+
+On Windows, Ctrl+C reaches every process in the console, `just` and `cargo` included, so the prompt can come back before the agent's last lines.
 
 ### Running the agent
 ```sh
@@ -113,10 +116,12 @@ afkfleet-agent run --config agent.toml
 - **The config** is a TOML file ([`deploy/dev/agent.toml`](deploy/dev/agent.toml) is an example; Plan.md's Appendix A lists every key and its default). `AFKFLEET_AGENT__…` environment variables override any key, with `__` between the parts, e.g. `AFKFLEET_AGENT__LOG__FILTER=debug`. Unknown keys are errors.
 - **Standalone mode** (`[standalone]`) is for development only: its bots use offline accounts, which only an offline-mode server accepts. Managed mode (`[control_plane]`) arrives in Phase 10.
 - **Logs** go to stdout, as JSON lines by default or as one readable line per event with `[log] format = "pretty"`. A config error is printed to stderr before logging starts.
+- **Stopping:** SIGTERM or SIGINT (Ctrl+C or Ctrl+Break on Windows) stops every bot within `[runtime] shutdown_timeout_secs` (10 s by default); a bot that takes longer is aborted. A second signal changes nothing: the shutdown is already running.
 - **Exit codes**, also listed by `afkfleet-agent run --help`:
 
   | Code | Meaning |
   |---|---|
+  | 0 | Stopped by a signal |
   | 1 | Startup error: the config, logging, or the fleet's setup |
   | 2 | Usage error |
   | 3 | Too many Minecraft host threads hung (the abandoned-thread limit); the agent shut its bots down first, so Docker can restart it |

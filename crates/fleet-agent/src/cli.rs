@@ -11,6 +11,7 @@ use clap::{Parser, Subcommand};
 /// The exit codes of `afkfleet-agent run`, shown in its help.
 pub const RUN_EXIT_CODES: &str = "\
 Exit codes:
+  0  stopped by a signal (SIGTERM or SIGINT; Ctrl+C or Ctrl+Break on Windows)
   1  startup error: the config, logging, or the fleet's setup
   2  usage error
   3  the abandoned-thread limit was reached; the agent shut down first
@@ -34,7 +35,7 @@ pub struct Cli {
 /// The agent's commands.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum Command {
-    /// Runs the bots of a standalone config.
+    /// Runs the bots of a standalone config until a signal stops them.
     #[command(after_help = RUN_EXIT_CODES)]
     Run {
         /// The config file (TOML). `AFKFLEET_AGENT__…` environment variables

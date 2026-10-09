@@ -197,3 +197,92 @@ fn the_version_is_the_crates() {
         concat!("afkfleet-agent ", env!("CARGO_PKG_VERSION"))
     );
 }
+
+/// SIGTERM, as `docker stop` sends it. Unix only: Windows' Ctrl+C and
+/// Ctrl+Break can't be sent to another process without unsafe code.
+#[cfg(unix)]
+mod sigterm {
+    use std::io::{BufRead, BufReader};
+    use std::time::Instant;
+
+    use super::*;
+
+    /// Sends each line of `pipe` on a thread, then `None` once it closes.
+    fn lines_of(pipe: impl Read + Send + 'static) -> mpsc::Receiver<Option<String>> {
+        let (sender, receiver) = mpsc::sync_channel(256);
+        thread::spawn(move || {
+            for line in BufReader::new(pipe).lines() {
+                let Ok(line) = line else { break };
+                if sender.send(Some(line)).is_err() {
+                    return;
+                }
+            }
+            let _ = sender.send(None);
+        });
+        receiver
+    }
+
+    #[test]
+    fn sigterm_stops_the_agent_with_exit_0_and_logs_the_report_last() {
+        let dir = test_dir("sigterm");
+        // Nothing listens on port 1, so the bot backs off and retries.
+        let config = write_config(
+            &dir,
+            "name = \"cli-agent\"\n\
+             [[standalone.bots]]\n\
+             username = \"AfkBot1\"\n\
+             server = \"127.0.0.1:1\"\n\
+             mode = \"afk\"\n",
+        );
+        let mut child = agent(&["run", "--config", path_arg(&config)])
+            .spawn()
+            .unwrap();
+        let lines = lines_of(child.stdout.take().unwrap());
+        let stderr = drain(child.stderr.take().unwrap());
+        let mut running = Running(Some(child));
+        let deadline = Instant::now() + DEADLINE;
+        let next = || {
+            lines
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .expect("the agent should finish before the deadline")
+        };
+
+        // Logged only after the signal handlers are installed.
+        let mut seen = Vec::new();
+        loop {
+            let line = next().expect("the agent should run before its output ends");
+            let is_running = line.contains("\"the agent is running\"");
+            seen.push(line);
+            if is_running {
+                break;
+            }
+        }
+        let pid = running.0.as_ref().unwrap().id().to_string();
+        let status = Command::new("kill").args(["-TERM", &pid]).status().unwrap();
+        assert!(status.success());
+        while let Some(line) = next() {
+            seen.push(line);
+        }
+        let status = running.0.take().unwrap().wait().unwrap();
+
+        let stderr = stderr.recv_timeout(DEADLINE).unwrap();
+        assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+        let lines: Vec<serde_json::Value> = seen
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let last = lines.last().unwrap();
+        assert_eq!(last["message"], "the agent stopped", "{seen:#?}");
+        assert_eq!(last["exit_code"], 0);
+        let stopped = last["stopped"].as_u64().unwrap();
+        let aborted = last["aborted"].as_u64().unwrap();
+        assert_eq!(stopped + aborted, 1, "{last}");
+        assert_eq!(last["crashed"], 0);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line["message"] == "shutting down" && line["signal"] == "SIGTERM"),
+            "{seen:#?}"
+        );
+    }
+}
