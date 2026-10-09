@@ -1570,7 +1570,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Removal** publishes `StateChanged(Stopped)` only for a bot its actor stops through `transition()`; a Paused, Failed or crash-looped bot gets only `Removed`, so P10.5 keeps the server's stored state. While removing: `apply` is `Busy`, the other commands `UnknownBot`, a second `remove` `Ok`, and reads still show the bot.
   > - **Shutdown** returns `ShutdownReport { stopped, aborted, crashed }`; calls meanwhile are `ShuttingDown`, and an accepted removal still publishes `Removed`.
   > - **Tests** are the folder crate `tests/fleet/` (`main.rs`, `panicky.rs`, `supervisor.rs`).
-- [ ] **P4.8** 🔴 **Chaos property test.** Random sequences of these events, run with paused time:
+- [x] **P4.8** 🔴 **Chaos property test.** Random sequences of these events, run with paused time:
   - transient and permanent kicks
   - connection failures
   - hangs
@@ -1588,6 +1588,44 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P4.8, from group C, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Deliberate restarts start a new run.** A `Restart` or a server change starts a new run at once, in AwaitingSession and Backoff too, dropping the backoff and the breaker's cool-down, as Start, Reset and Resume already do. So the storm invariant must leave the connects of a deliberate new run out of its bound.
 
   > Note (P4.8, from group D, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The chaos test becomes `tests/fleet/chaos.rs` in the fleet test crate and reuses `tests/fleet/panicky.rs`, whose `PanickyConnector` panics on chosen connects (the actor itself) or in a session's `perform` or `disconnect` (`TaskCrashed`).
+
+  > Note (P4.8, from group E, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
+  > - **Cases.**
+  >   - **Size.** 1–3 bots (`AfkBot1`–`AfkBot3`), 1–30 steps, and 0–90 s of paused time after each step. Settings are Appendix A's defaults.
+  >   - **Faults:**
+  >     - transient, permanent and duplicate-login kicks
+  >     - failed connects (`Refused`, `Unresolvable`, `Other`, `HostUnavailable`), a connect that never joins (the test fails it after the connect timeout, as fleet-mc would), auth rejections, retryable, refused and stuck credentials
+  >     - a hung session, a dead link, a tick stall, and teardowns of 0–20 s, so new sessions often connect while an old one still tears down
+  >     - panics in connect, perform or teardown, and a crash burst of 1–8 panics on the next connects; at most 8 crashes per bot
+  >   - **Calls:** spec updates (`afk` ↔ a cheap mode with a jump every 5 s and chat every 60 s, two placeholder servers, the desired state), Restart, Reset, Resume, `send_chat`, `snapshot`, `snapshot_all`, and remove plus re-add. The re-add works as P10.5 does: it retries on `Busy` until `Removed`, and restores a Paused or Failed last state.
+  > - **Per-bot scripts in the test.** `panicky.rs` scripts connects and panics per bot and logs every connect and panic. `credentials.rs` (`ScriptedCredentials`) answers per bot. A "server" task joins each new session unless the bot's script says otherwise. fleet-testkit is unchanged.
+  > - **The model.**
+  >   - A fault counts only once it has landed: the event was queued, the scripted answer used, or the panic fired.
+  >   - A bot leaves the class that must end Online when a non-transient fault lands, and comes back on a Reset (Failed) or Resume (Paused) answered `Ok`. A call in the same instant as a crash of its bot doesn't bring it back (see the P4.2 note).
+  > - **Invariants:**
+  >   - **No panic escapes:** the supervisor's task ends without a panic at the final shutdown.
+  >   - **Healing:** a bot that should run, with only transient faults and at most 5 fired crashes, ends Online; with 6 or more it may end `Failed(CrashLoop)`.
+  >   - **No storms,** on the events and the connect log:
+  >     - `AwaitingSession{1}` only after a deliberate call.
+  >     - `AwaitingSession{m≥2}` only after `Backoff{m−1}`, at least `bounds(m−1).0` later.
+  >     - `Backoff{n}` keeps the attempt it came from, or is `Backoff{1}` after a stable Online.
+  >     - Each connect follows its own published `Connecting`, so none while Paused or Failed. The fresh-token retry is allowed.
+  >     - A `Lagged` on the test's receiver or the connector's fails the case.
+  >   - **The API answers** before the clock moves and never `TimedOut`. `Busy` is allowed. The final shutdown answers within its timeout plus the reply timeout, and every call after it answers `ShuttingDown`.
+  >   - **Metrics:** the bots gauge equals `snapshot_all` after settling and is 0 after the shutdown. The reconnect counter equals the published `Connecting`s with attempt > 1 or `auth_retried`.
+  > - **Settling.** No new faults are injected; the scripted ones run out. It ends once every bot is in a state it stays in, with no stalled session left and no perform panic waiting on an Online bot. The cap is each scripted fault's worst wait (max backoff, breaker cool-down, timeouts, the slowest teardown) times the number of faults plus 3.
+  > - **Probes** *(added during the build, the user's decision)*. Every bot the test holds and isn't removing gets a `send_chat` every 5 s, during the pauses and the settling. Any answer but `TimedOut`, `ShuttingDown` or `UnknownBot` passes, if it comes before the clock moves. Without them, the test passed all 500 cases with the crash-gap fix reverted (P4.2's note), because random steps rarely call a bot whose crashed actor is still tearing down. The probes cost about 1.5 s.
+  > - **Coverage.**
+  >   - The test runs exactly 500 cases (`Config::with_cases(500)`, plus any seeds in the regressions file), and `PROPTEST_CASES=1000` still runs 500.
+  >   - It prints how many cases reached each target and fails if one is 0. Targets: a crash loop, a duplicate-login pause, the fresh-token retry, a sticky re-add, a teardown running at a connect, a tick trip, a packet trip, and *(the user's addition)* a probe while a session whose `perform` panicked is still inside its `disconnect()`, from the connector's own log.
+  >   - A typical run: crash loop 51, pause 134, fresh token 92, sticky re-add 48, teardown at a connect 58, tick trip 163, packet trip 124, probe in a crash teardown 65. To lift the last one, perform panics and slow teardowns weigh 6 instead of 3 and 4, and the probes run every 5 s instead of only after each step.
+  >   - Failures persist next to the file, as `tests/fleet/chaos.proptest-regressions`.
+  > - **Red runs** (temporary, uncommitted breaks, each restored afterwards):
+  >   - **Without the crash-gap fix:** "a Fleet call took time to answer", shrunk to one bot with `SlowTeardown(6)`, `Panic(Perform)` and a transient kick, all at pause 0. A probe reached the actor while it waited for its teardown.
+  >   - **`restore()` returning `Backoff{1}` for every state:** "Backoff{1} after Connecting { attempt: 3, … }", shrunk to one bot with a retryable credential refusal, a server change, stuck credentials and a connect panic.
+  >   - **`restore()` without `ScheduleRetry`:** "the fleet didn't settle within 5240s", shrunk to one bot with a crash burst of 1.
+  > - **Time.** The chaos test takes about 7–7.7 s, and `just test fleet-runtime` (288 tests) about 7.9 s.
+  > - **Helpers.** `awaiting`, `PAUSED` and `DUPLICATE_LOGIN` moved back from `harness.rs` to `supervisor.rs`, the only file that uses them.
 - [x] **P4.9** Metrics: bots per state, reconnects, watchdog trips, actor restarts.
 
   > Note (P4.9, from Phase 3): Also export fleet-mc's diagnostics: live and abandoned host threads, live Worlds, and dropped chat (ADR-0011).

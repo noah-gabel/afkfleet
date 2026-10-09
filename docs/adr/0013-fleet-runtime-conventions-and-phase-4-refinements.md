@@ -166,6 +166,35 @@ It checks every 1 s while Online. A tick stall gives `WatchdogTimeout`, a packet
 ### Chaos test (P4.8)
 A fixed 500 cases (`with_cases(500)`), as an exception to `PROPTEST_CASES`, so the DoD's count holds locally and in CI within the 30 s budget. Actor panics come from a test-only connector wrapper in fleet-runtime's `tests/`; the testkit fakes stay panic-free. The "no reconnect storms" invariant holds across actor panics too, with no exception for connects after a restart.
 
+*(group E, the user's decisions)* What the chaos test looks like as built (`tests/fleet/chaos.rs`):
+- **Cases.**
+  - **Size.** 1–3 bots, 1–30 steps, and 0–90 s of paused time after each step, with Appendix A's settings.
+  - **Faults,** each for one bot:
+    - transient, permanent and duplicate-login kicks
+    - failed connects, a connect that never joins (failed by the test after the connect timeout, as fleet-mc would), auth rejections, and retryable, refused and stuck credentials
+    - a hung session, a dead link, a tick stall, and teardowns of 0–20 s
+    - panics in connect, perform or teardown, and crash bursts of 1–8 panics on the next connects, at most 8 per bot, so some cases reach the crash loop
+  - **Calls:** spec updates (`afk` and a cheap custom mode, two placeholder servers, the desired state), Restart, Reset, Resume, `send_chat`, the reads, and remove plus re-add. The re-add works as P10.5's move does: `apply` is retried on `Busy` until `Removed`, with the last published Paused or Failed as the restore.
+- **Faults are scripted per bot in the test:** `panicky.rs` for connects and panics, `ScriptedCredentials` for session requests. A server task joins each new session unless the bot's script says otherwise. fleet-testkit doesn't change. A fault counts only once it has landed, and the end-state rule reads what the test injected, never the bot's own events, so a bug that fails a bot on a transient fault can't excuse itself.
+- **Invariants.**
+  - **No panic escapes:** the supervisor's task ends cleanly.
+  - **Healing:** a bot that should run, saw only transient faults and at most 5 fired crashes, ends Online; with 6 or more it may end `Failed(CrashLoop)`. Reset and Resume bring a Failed or Paused bot back into that class, unless the call came in the same instant as a crash of its bot (see Actor).
+  - **The storm bound,** attempt-aware:
+    - `AwaitingSession{1}` only follows a deliberate call.
+    - `AwaitingSession{m≥2}` only follows `Backoff{m−1}`, at least `bounds(m−1).0` after it.
+    - `Backoff{n}` keeps the attempt of the state it left, or is `Backoff{1}` after a stable Online.
+    - Each connect follows its own published `Connecting`, read by the connector from its own event receiver, so a bot never connects while Paused or Failed. The fresh-token retry is allowed by its own rule.
+    - A `Lagged` on either receiver fails the case.
+  - **The API:** every call answers before the clock moves, and never `TimedOut`.
+  - **Metrics:** the bots gauge equals `snapshot_all` and is 0 after the shutdown; the reconnect counter equals the published `Connecting`s with attempt > 1 or `auth_retried`.
+- **Probes** *(added during the build)*. Every bot the test holds and isn't removing gets a `send_chat` every 5 s. Without them, the test as planned passed all 500 cases with the crash-gap fix reverted, since random steps rarely call a bot whose crashed actor is still tearing down. With them it failed at once.
+- **Settling** ends once every bot is in a state it stays in, with no stalled session left and no perform panic waiting on an Online bot. The cap is each scripted fault's worst wait times their number plus 3.
+- **Coverage.**
+  - The test counts the cases that reached each of 8 targets and fails if one is 0. The targets are a crash loop, a duplicate-login pause, the fresh-token retry, a sticky re-add, a teardown running at a connect, a trip of each kind, and a probe while a crashed session is still inside `disconnect()`.
+  - The weights keep each target in about 7 % of cases or more.
+  - The test also asserts that it ran exactly 500 new cases, so `PROPTEST_CASES` can't change the count.
+- **Red runs** on temporary breaks: the reverted crash-gap fix, `restore()` resetting the attempt, and `restore()` without `ScheduleRetry`. Each failed with a shrunk one-bot case (Plan.md P4.8).
+
 ### Metrics (P4.9)
 - `afkfleet_bots{state}` (gauge), `afkfleet_bot_reconnects_total`, `afkfleet_watchdog_trips_total{kind="tick"|"packet"}` and `afkfleet_actor_restarts_total`. No `bot_id` label.
 - Tests install a hand-written recorder per test through metrics' thread-local `set_default_local_recorder`, so they work under plain `cargo test` too. No new crate.
@@ -321,5 +350,9 @@ Approved by the user; all are in Plan.md §5:
 - *(group E)* **Counting every stall the watchdog finds:** stalls that the drained events overtook ended no session.
 - *(group E)* **Counting every crash, or only the restarts after the crash-loop start:** the first counts crashes rather than restarts; the second hides the last start.
 - *(group E)* **`BotState::as_str()` in fleet-core:** the labels belong to the metrics. **A public `describe_metrics()` for the agent,** or no descriptions until P12.4: series would appear only once something happens, and the agent would carry one more step.
+- *(group E, chaos test)* **Panics capped at 5 per bot:** the crash loop would never be reached. **A model of the restart window:** more test code to get right than a rule that allows `CrashLoop` from 6 crashes on. **Leaving out duplicate logins:** the main safety rule (§6 row 3) would go unchecked.
+- *(group E, chaos test)* **Per-bot scripts in fleet-testkit:** its API would grow for one test. **Judging a bot by its own events:** a bug that fails a bot on a transient fault would excuse itself.
+- *(group E, chaos test)* **A minimum gap between connects, or a count bound:** a restart that reset the attempt counter would pass. **Scaled-down settings:** the test would prove a policy nobody runs.
+- *(group E, chaos test)* **The `farm` preset:** an attack every 650–800 ms is about 30 times the wakeups. **Probes only after each step:** the crash-teardown target was reached in about 2.5 % of cases. **No probes:** the test missed the crash gap entirely.
 - *(group E)* **The test recorder in fleet-testkit:** a new dependency there. **A separate test crate for the metrics:** a second copy of the fleet setup. **A test hook to reach the crash-loop actor's crash:** a code path in the runtime only for tests.
 - **The runtime reading the clock and the OS's randomness itself.** chrono's `clock` and rand's OS features would then unify into fleet-core's build.

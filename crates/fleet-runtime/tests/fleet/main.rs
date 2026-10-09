@@ -1,6 +1,8 @@
-//! Component tests for the fleet (Plan.md P4.7; ADR-0013): its supervisor
+//! Component tests for the fleet (Plan.md P4.7–P4.9; ADR-0013): its supervisor
 //! and the `Fleet` handle, against fleet-testkit's fakes on paused time.
 //!
+//! - `chaos` is the chaos property test (P4.8), with `credentials`, whose
+//!   session credentials fail per bot on cue.
 //! - `harness` holds what the test files share: values, paused-time helpers
 //!   and the fleet under test.
 //! - `panicky` wraps the fake connector so connects or sessions panic on
@@ -13,8 +15,10 @@
 // helper functions would count as library code.
 #![cfg(test)]
 
+mod chaos;
 #[path = "../common/mod.rs"]
 mod common;
+mod credentials;
 mod harness;
 mod metrics;
 mod panicky;

@@ -6,9 +6,9 @@ use core::time::Duration;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use fleet_core::bot::{BotAccount, BotSpec, BotState, DesiredRunState, FailReason, PauseReason};
+use fleet_core::bot::{BotAccount, BotSpec, BotState, DesiredRunState, FailReason};
 use fleet_core::chat::ChatMessage;
-use fleet_core::disconnect::{ConflictKind, ConflictTexts, DisconnectReason};
+use fleet_core::disconnect::{ConflictTexts, DisconnectReason};
 use fleet_core::id::BotId;
 use fleet_core::mc::SessionEvent;
 use fleet_core::mode::{Action, ModeDefinition, ModeDraft, Schedule, Step};
@@ -91,29 +91,23 @@ pub(crate) fn policy() -> RetryPolicy {
     RetryPolicy::try_new(secs(5), secs(300), secs(300)).unwrap()
 }
 
-/// `threshold` failures within 600 s open the breaker for 900 s.
+/// How long an open breaker waits, as Appendix A's default.
+pub(crate) const BREAKER_COOLDOWN: Duration = secs(900);
+
+/// `threshold` failures within 600 s open the breaker for
+/// [`BREAKER_COOLDOWN`].
 pub(crate) fn circuit(threshold: usize) -> CircuitPolicy {
-    CircuitPolicy::try_new(NonZeroUsize::new(threshold).unwrap(), secs(600), secs(900)).unwrap()
+    CircuitPolicy::try_new(
+        NonZeroUsize::new(threshold).unwrap(),
+        secs(600),
+        BREAKER_COOLDOWN,
+    )
+    .unwrap()
 }
-
-pub(crate) const DUPLICATE_LOGIN: PauseReason = PauseReason::Conflict {
-    kind: ConflictKind::DuplicateLogin,
-};
-
-pub(crate) const PAUSED: BotState = BotState::Paused {
-    reason: DUPLICATE_LOGIN,
-};
 
 pub(crate) const CRASH_LOOP: BotState = BotState::Failed {
     reason: FailReason::CrashLoop,
 };
-
-pub(crate) const fn awaiting(attempt: NonZeroU32) -> BotState {
-    BotState::AwaitingSession {
-        attempt,
-        fresh: false,
-    }
-}
 
 pub(crate) const fn connecting(attempt: NonZeroU32) -> BotState {
     BotState::Connecting {

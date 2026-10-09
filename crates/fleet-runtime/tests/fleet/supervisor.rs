@@ -6,7 +6,8 @@
 use core::num::{NonZeroU32, NonZeroUsize};
 use core::time::Duration;
 
-use fleet_core::bot::{BotNotification, BotState, FailReason, StickyState};
+use fleet_core::bot::{BotNotification, BotState, FailReason, PauseReason, StickyState};
+use fleet_core::disconnect::ConflictKind;
 use fleet_core::id::BotId;
 use fleet_core::mc::{ConnectError, SessionEvent};
 use fleet_core::mode::{Action, Schedule, Step};
@@ -16,11 +17,25 @@ use tracing::Level;
 
 use crate::common::Levels;
 use crate::harness::{
-    BOT, CRASH_LOOP, DUPLICATE_LOGIN, Harness, OTHER, PAUSED, Setup, advance, awaiting, backoff,
-    circuit, connecting, crash_loop, emit, id, jumping, kick, message, mode, ms, n, policy,
-    running, secs, settle, stopped,
+    BOT, CRASH_LOOP, Harness, OTHER, Setup, advance, backoff, circuit, connecting, crash_loop,
+    emit, id, jumping, kick, message, mode, ms, n, policy, running, secs, settle, stopped,
 };
 use crate::panicky::{PanicOn, PanickyConnector};
+
+const DUPLICATE_LOGIN: PauseReason = PauseReason::Conflict {
+    kind: ConflictKind::DuplicateLogin,
+};
+
+const PAUSED: BotState = BotState::Paused {
+    reason: DUPLICATE_LOGIN,
+};
+
+const fn awaiting(attempt: NonZeroU32) -> BotState {
+    BotState::AwaitingSession {
+        attempt,
+        fresh: false,
+    }
+}
 
 // --- Bots come and go ---
 
