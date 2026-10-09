@@ -73,8 +73,9 @@ mc-down:
 # Run the server with deploy/dev/ configs.
 dev-server: (_unavailable "dev-server" "P6")
 
-# Run the agent with deploy/dev/ configs.
-dev-agent: (_unavailable "dev-agent" "P5")
+# Run the agent with deploy/dev/agent.toml: three bots against `just mc-up`'s server.
+dev-agent:
+    cargo run -p fleet-agent --bin afkfleet-agent -- run --config deploy/dev/agent.toml
 
 # Run the desktop app in development mode.
 dev-app: (_unavailable "dev-app" "P8")

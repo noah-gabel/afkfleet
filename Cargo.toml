@@ -40,7 +40,11 @@ azalea-language = "=0.16.0"
 # backon: without default features only fastrand is left; the defaults pull in tokio.
 backon = { version = "1.6.0", default-features = false }
 # chrono: no `clock`/`now`, because fleet-core takes time as a parameter (ADR-0010).
+# Only the agent enables `now` (= `std`), for its one wall-clock read at startup;
+# `clock` would add local time zones, which nothing uses (ADR-0014).
 chrono = { version = "0.4.45", default-features = false }
+# clap: the agent's command line; the member enables `derive` (ADR-0014).
+clap = "4.6.7"
 # figment: the agent's config, TOML plus `AFKFLEET_AGENT__` env variables. No default
 # features exist; the agent enables `toml` and `env`, and `test` (`Jail`) in its tests
 # (ADR-0014).
@@ -48,6 +52,9 @@ figment = "0.10.19"
 # garde: range checks on the agent's config. No default features exist; the agent
 # enables `derive` (ADR-0014).
 garde = "0.23.0"
+# getrandom: every secret, and the agent's bot IDs and runtime seed. No features: `fill`
+# and `u64` need none (ADR-0014).
+getrandom = "0.4.3"
 # governor: the defaults add `quanta`, `dashmap` and `jitter`, and `jitter` pulls rand 0.9
 # and getrandom 0.3 into normal dependencies. fleet-runtime enables `std` and runs its
 # chat bucket on a tokio-backed clock (ADR-0013).
@@ -55,12 +62,22 @@ governor = { version = "0.10.4", default-features = false }
 # metrics: the facade only, with no features; its one dependency is rapidhash. The agent
 # installs the Prometheus exporter (P5.3); fleet-runtime records into it (ADR-0013).
 metrics = "0.24.6"
+# metrics-exporter-prometheus: no features. The defaults add a push gateway with its own
+# TLS stack, and the agent only installs the recorder until P12.4 enables `http-listener`.
+# Its metrics-util dependency always enables `storage`, which brings rand 0.9
+# (thread_rng) and getrandom 0.3 into normal dependencies; both were already in the
+# lockfile, and nothing uses them for secrets. One `metrics` 0.24.x in the tree keeps
+# the runtime and the exporter on the same recorder (ADR-0014).
+metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 # rand: no `sys_rng`/`thread_rng`; fleet-core takes an RNG as a parameter (ADR-0010).
 rand = { version = "0.10.3", default-features = false }
 # reqwest: TLS is fixed here, `rustls` (aws-lc-rs + platform verifier), never native-tls.
 # fleet-mc enables nothing else: it only names `reqwest::Proxy` in azalea's `AccountTrait`,
 # and azalea-auth already builds reqwest with `rustls` (ADR-0011).
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
+# rustls: the default features select the aws-lc-rs provider, which the agent installs
+# at startup; never ring (deny.toml) (ADR-0014).
+rustls = "0.23.45"
 # secrecy: `SecretString` with a redacted `Debug`; it has no default features and only
 # pulls in zeroize (alloc).
 secrecy = "0.10.3"

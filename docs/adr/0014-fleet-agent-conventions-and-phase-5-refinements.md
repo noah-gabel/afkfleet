@@ -125,12 +125,65 @@ Each later group asks its own implementation-level questions in its session: tok
   | 1 | Startup error: config, telemetry, `FleetSetupError` |
   | 2 | clap's own usage errors, left as they are |
   | 3 | The abandoned-thread limit was reached, after shutting down |
-  | 4 | The supervisor ended without a requested shutdown |
+  | 4 | The supervisor ended without a requested shutdown, or didn't end when asked *(group B, the user's decision)* |
 
 - **Fleet events.** In standalone mode, one subscriber task logs `ChatReceived` and `ModeChatSent` at `debug`, and `Lagged` at `debug` with its count. Nothing else, since the actor already logs every state change.
 - **Signals.** A signal calls `Fleet::shutdown(shutdown_timeout)`, which returns the `ShutdownReport` for the log. Cancelling the token gives no report.
   - A second signal only logs that the shutdown is already running; it's bounded at `shutdown_timeout` plus the 5 s reply timeout.
   - The signals are SIGTERM and SIGINT on Linux, and Ctrl+C and Ctrl+Break on Windows.
+
+- *(as built, group B: P5.3; the user answered group B's questions on 2026-10-09)*:
+  - **Shape.**
+    - The binary is `afkfleet-agent`. `fleet_agent::cli` holds its clap structs; `run --config <PATH>` is required, so no stray `agent.toml` in the working directory is picked up. `run --help` lists the exit codes, and the top-level help points there.
+    - `run::run(RunParts { config, connector, diagnostics, anchor, seed }) -> Outcome { exit, report }`. `Exit::code()` gives the process's code.
+    - `diagnostics::HostDiagnostics::sample() -> HostSample` reads fleet-mc's five numbers. `AzaleaConnector` implements it; it owns its `McHostPool`, so main.rs passes one connector as both.
+  - **main.rs, in order:**
+    1. `Cli::try_parse`, handling clap's error itself (its own output and code), so group C can map `healthcheck`'s usage errors to 1.
+    2. `config::load`, before any async runtime exists, since it reads a file.
+    3. `telemetry::init`. Errors up to here go to stderr as one plain message, written with `writeln!` (no `#[expect(clippy::print_stderr)]`), and exit 1.
+    4. The aws-lc-rs rustls provider, installed now although Phase 5 uses no TLS, so the rule holds from the first binary.
+    5. The Prometheus recorder (`install_recorder()`, no exporter features). Its handle isn't kept: nothing serves it until P12.4, and without histograms it needs no upkeep.
+    6. A multi-threaded tokio runtime, so one slow actor can't stall the others or the signal handling.
+    7. `run`, with `Utc::now()` as the anchor (chrono's `now`, which adds no crates; `clock` would add local time zones) and `getrandom::u64()` as the seed.
+    8. `Runtime::shutdown_timeout(1 s)`, so nothing stuck keeps the process alive once the code is decided.
+    9. The last line, "the agent stopped", with `exit_code`, and `stopped`, `aborted` and `crashed` when a report exists, on every exit path once logging is up.
+
+    Every startup error after `telemetry::init` is one `error` event, "the agent can't start", with the error.
+  - **No anyhow:** main.rs maps typed errors to exit codes itself, so anyhow would only wrap and unwrap them. §5 notes that it arrives with the first `main.rs` that uses it.
+  - **One deadline per shutdown** *(the user's decision)*: shutdown_timeout + reply_timeout from the shutdown's start, the bound above.
+    - On `Ok(report)`, the supervisor's task is joined by the deadline.
+    - On `Busy` or `ShuttingDown` (both immediate), a `warn`, then the supervisor's token is cancelled, which shuts the fleet down within shutdown_timeout without a report, and its task is joined by the deadline.
+    - `TimedOut` has used up the deadline: the token is cancelled and the run exits 4 at once.
+    - A supervisor that doesn't end by the deadline, or panics, is an `error` and exits 4.
+    - A bot the fleet refuses at startup (after the config's checks, only `Busy`, `ShuttingDown` or `TimedOut` can happen) is logged at `error` with its ID and username; the fleet shuts down the same way, and the run exits 1, or 4 if the supervisor doesn't end.
+    - A fresh wait after an error would double the worst case to 30 s.
+  - **Diagnostics** are sampled at once and every 5 s *(the user's decision)*, a constant, with missed ticks skipped. A thread counts as abandoned only after its 5 s shutdown timeout anyway. Each sample sets the metrics, with no labels *(the user's names)*:
+
+    | Metric | Kind |
+    |---|---|
+    | `afkfleet_mc_abandoned_threads_total` | counter, from fleet-mc's total (`absolute()`) |
+    | `afkfleet_mc_dropped_chat_total` | counter: incoming chat dropped because a session's event queue was full |
+    | `afkfleet_mc_ignored_action_bar_total` | counter |
+    | `afkfleet_mc_host_threads` | gauge: running host threads, abandoned ones that still run included |
+    | `afkfleet_mc_worlds` | gauge |
+
+    They're described and registered at 0 right after `Fleet::new`. Counts convert without `as`: counters saturate at `u64::MAX`, gauges at `u32::MAX`, which `f64` holds exactly.
+  - **Logs.**
+    - `run` enters the root span `agent{agent=…}` itself, and spawns the supervisor in it, so every bot's span nests in it. main.rs logs its own lines in a span of the same name, outside `run`. fleet-mc's `mc_session` spans are created on host threads and stay roots.
+    - At `info`: one "starting a standalone bot" per bot (`bot_id`, `username`, `server`, `mode`), "the agent is running" (`bots`) once every bot is applied, and "the agent stopped".
+    - A `JoinError` is never logged: its text carries the panic payload, which is untrusted and already logged, sanitized, by the panic hook. The lines carry `panicked` instead.
+    - The event task's chat text is a plain string field, never `%`, so both formats escape its line breaks and a chat line can't forge a log line.
+  - **Testing `finish`** uses a real `Fleet` whose `Supervisor` a test task runs, holds without running, drops, or panics, instead of a trait for the tests only *(the user's decision)*. Each case checks the exit code and the paused time at which it ends.
+  - **The binary's tests** (`tests/cli.rs`) start the real `afkfleet-agent`. Each run has its own deadline and a guard that kills it, since nextest's `ci` profile has no slow-timeout. Threads drain its pipes, and its config and an absolute heartbeat file live in a directory of their own under Cargo's temp directory for tests *(the user's safeguards)*.
+  - **`deploy/dev/agent.toml`** runs AfkBot1 and AfkBot2 on `afk` and AfkBot3 on `farm` against `127.0.0.1:25565`: compose binds that address, and `localhost` may resolve to `::1` first on Windows. It's for `just dev-agent` on the host only; the compose agent (group C) reaches the server as `minecraft:25565` with its own config.
+- *(as built, group B: P5.4)*:
+  - **A signal source instead of "a shutdown future"** *(the user's decision)*. One future can't show a second signal, so `run` is generic over `signals::ShutdownSignals`, whose `recv() -> Signal` is cancel-safe.
+    - `OsSignals::install()` registers SIGTERM and SIGINT (Unix) or Ctrl+C and Ctrl+Break (Windows). main.rs calls it inside the runtime, which tokio's signal registration needs, and before the fleet starts, so an early signal isn't lost; an error is a startup error.
+    - When a tokio stream ends, `recv` waits forever instead of making a signal up or spinning; the tests' channel fake does the same once its sender is dropped.
+    - A platform that's neither Unix nor Windows fails to build with a `compile_error!`.
+  - **Exit code 0** (`Exit::Stopped`) follows the first signal, even when bots had to be aborted. P5.3's fallbacks keep it: `Busy` or `ShuttingDown` still end with 0 once the supervisor ends, while `TimedOut` or a hung supervisor end with 4.
+  - **The log** has "shutting down" with `signal` for the first signal, and "already shutting down" for every later one, both while the fleet shuts down and while its supervisor is awaited. The deadline never moves.
+  - **Tests.** The red step failed on assertions against stubs that compiled, *(the user's correction)*: the stub source installed the real handlers but never yielded, so a test's own SIGTERM was swallowed instead of ending the test process. `tests/signals.rs` is one sequential test (SIGTERM, then SIGINT) in its own binary, since two tests signalling their own process would see each other's signals under plain `cargo test`. It and the binary's SIGTERM test are Unix only, since Windows' console events can't be sent without unsafe code; they ran red and green in a Linux container.
 
 ### Healthcheck and Docker (P5.5, P5.6; group C)
 - **The heartbeat** touches the file every 10 s, and only when `fleet.snapshot_all()` returns `Ok` *(the user's decision)*. `Busy`, `TimedOut` and `ShuttingDown` never touch it: a hung supervisor leaves each timed-out call in its queue, and after about 64 heartbeats every call answers `Busy` at once, which would hide the hang. A test covers that case.
@@ -138,6 +191,7 @@ Each later group asks its own implementation-level questions in its session: tok
   - It exits only 0 (healthy) or 1 (unhealthy), with one line saying why, because Docker reserves 2 for healthchecks.
   - clap's usage errors for `healthcheck` map to 1 too, through `try_parse`; `--help` and `--version` stay 0.
 - **P5.6** as planned: cargo-chef, a pinned nightly builder, `gcr.io/distroless/cc-debian12:nonroot`, a `HEALTHCHECK` through the subcommand, and a `stop_grace_period` above `shutdown_timeout` (ADR-0013).
+  - *(group B, the user's decision)* The agent's worst case is shutdown_timeout + reply_timeout, plus main.rs's 1 s runtime-shutdown bound, so the grace period must be above that: **20 s** for the 10 s default. Otherwise Docker's SIGKILL replaces exit code 4 and the last line.
 
 ### End-to-end test and demo (P5.7, DoD; group D)
 - **`crates/fleet-agent/tests/slow_compose.rs`**, a `slow_` test, drives `docker compose` through `std::process::Command`, with its own project name, so it never touches the `afkfleet-dev` stack. It reads the agent's JSON logs for state changes and RCON `list` for who's online, and checks the exit code and the `ShutdownReport`.
@@ -158,6 +212,12 @@ Approved by the user, all in Plan.md §5:
 - `serde` with `derive`.
 - `tracing-subscriber` with `env-filter` and `json`, its default features kept.
 - `log` 0.4.34 as a fleet-agent dev-dependency.
+- *(group B)*:
+  - `clap` 4.6.7 with `derive`.
+  - `getrandom` 0.4.3, with no features, for the seed and the bot IDs' bytes. §5's "Used in" gains the agent.
+  - `metrics-exporter-prometheus` 0.18.3 with no features until P12.4. Its metrics-util dependency always enables `storage`, which brings rand 0.9 (`thread_rng`) and getrandom 0.3 into normal dependencies; both were already in the lockfile, and nothing uses them for secrets. One `metrics` 0.24.x in the tree keeps the runtime and the exporter on the same recorder.
+  - `rustls` 0.23.45 with its default features (aws-lc-rs), already in the lockfile through reqwest.
+  - Already declared, newly used by the agent: tokio (`rt`, `rt-multi-thread`, `macros`, `sync`, `time`; `test-util` in tests), tokio-util (no features), chrono (`now`), the `metrics` facade (the agent records the diagnostics itself), and fleet-testkit as a dev-dependency.
 - fleet-agent depends on fleet-core, fleet-runtime and fleet-mc (§4).
 - No crate-local `clippy.toml`: the root one applies.
 - **One lint exception in tests** *(the user's approval)*. figment's `Jail` fixes its closure's error type to `figment::Error`, which is larger than `clippy::result_large_err` allows. So every test goes through one helper, `in_jail`, whose closure carries `#[expect(clippy::result_large_err, reason = …)]`. Production code isn't affected: `load` converts figment's error into a small boxed one.
