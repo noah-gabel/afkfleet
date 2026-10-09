@@ -19,7 +19,7 @@ use fleet_core::mode::GameAction;
 use fleet_testkit::mc::{FakeConnector, FakeEvents, FakeSession};
 
 /// Where a [`PanickySession`] panics.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum PanicOn {
     /// When it's asked to jump, which the mode runner does.
     Jump,
@@ -37,7 +37,7 @@ struct Script {
     /// Whether every connect from now on panics.
     panic_always: bool,
     /// Where the sessions it starts panic.
-    sessions: Option<PanicOn>,
+    sessions: BTreeSet<PanicOn>,
 }
 
 /// Wraps a [`FakeConnector`]: connects and sessions behave like the fake's
@@ -71,9 +71,9 @@ impl PanickyConnector {
         self.script.lock().unwrap().panic_always = on;
     }
 
-    /// Makes the sessions it starts from now on panic at `panic_on`.
+    /// Makes the sessions it starts from now on panic at `panic_on` too.
     pub(crate) fn sessions_panic_on(&self, panic_on: PanicOn) {
-        self.script.lock().unwrap().sessions = Some(panic_on);
+        self.script.lock().unwrap().sessions.insert(panic_on);
     }
 }
 
@@ -91,7 +91,7 @@ impl MinecraftConnector for PanickyConnector {
             let attempt = script.attempts;
             (
                 script.panic_always || script.panicking.contains(&attempt),
-                script.sessions,
+                script.sessions.clone(),
             )
         };
         let fake = self.fake.clone();
@@ -105,12 +105,12 @@ impl MinecraftConnector for PanickyConnector {
 
 /// A [`FakeSession`] that panics where its connector's script said.
 #[derive(Debug, Clone)]
-pub(crate) struct PanickySession(FakeSession, Option<PanicOn>);
+pub(crate) struct PanickySession(FakeSession, BTreeSet<PanicOn>);
 
 impl SessionHandle for PanickySession {
     fn perform(&self, action: GameAction) -> impl Future<Output = Result<(), SessionError>> + Send {
         let session = self.0.clone();
-        let panics = self.1 == Some(PanicOn::Jump) && action == GameAction::Jump;
+        let panics = self.1.contains(&PanicOn::Jump) && action == GameAction::Jump;
         async move {
             assert!(!panics, "a test panic in perform");
             session.perform(action).await
@@ -130,7 +130,7 @@ impl SessionHandle for PanickySession {
 
     fn disconnect(&self) -> impl Future<Output = ()> + Send {
         let session = self.0.clone();
-        let panics = self.1 == Some(PanicOn::Disconnect);
+        let panics = self.1.contains(&PanicOn::Disconnect);
         async move {
             session.disconnect().await;
             assert!(!panics, "a test panic in disconnect");

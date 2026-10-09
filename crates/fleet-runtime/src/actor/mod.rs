@@ -27,7 +27,7 @@ mod command;
 mod effects;
 mod respawn;
 mod session;
-mod watchdog;
+pub(crate) mod watchdog;
 
 use core::fmt;
 use core::future::Future;
@@ -37,9 +37,7 @@ use core::time::Duration;
 use std::collections::VecDeque;
 use std::sync::Arc;
 
-use fleet_core::bot::{
-    BotEvent, BotRules, BotSnapshot, BotSpec, BotState, DesiredRunState, Transition,
-};
+use fleet_core::bot::{BotEvent, BotRules, BotSpec, BotState, DesiredRunState, Transition};
 use fleet_core::disconnect::DisconnectReason;
 use fleet_core::mc::{
     CredentialError, MinecraftConnector, SessionCredentialProvider, SessionCredentials,
@@ -64,6 +62,8 @@ use crate::chat::{ChatBucket, ChatQueue, ChatTickets};
 use crate::clock::RuntimeClock;
 use crate::config::RuntimeConfig;
 use crate::event::FleetEvent;
+use crate::metrics;
+use crate::snapshot::SnapshotPublisher;
 
 /// Everything a [`BotActor`] is built from (ADR-0013).
 ///
@@ -93,8 +93,10 @@ pub struct BotActorParts<C, P> {
     pub bucket: ChatBucket,
     /// The fleet's chat ticket counter.
     pub tickets: ChatTickets,
-    /// Where the actor publishes the bot's snapshot.
-    pub snapshot: watch::Sender<BotSnapshot>,
+    /// Where the actor publishes the bot's snapshot. Its current value is
+    /// the bot's last published snapshot, and each publish moves the bot in
+    /// the `afkfleet_bots{state}` gauge (P4.9).
+    pub snapshot: SnapshotPublisher,
     /// Holds the bot's circuit breaker: its current value is where the actor
     /// starts, and the actor writes a copy after each breaker effect.
     pub breaker: watch::Sender<CircuitBreaker>,
@@ -171,7 +173,7 @@ pub struct BotActor<C: MinecraftConnector, P> {
     clock: RuntimeClock,
     rng: StdRng,
     events: broadcast::Sender<FleetEvent>,
-    snapshot: watch::Sender<BotSnapshot>,
+    snapshot: SnapshotPublisher,
     breaker_copy: watch::Sender<CircuitBreaker>,
     breaker: CircuitBreaker,
     mode: watch::Sender<ModeDefinition>,
@@ -516,6 +518,9 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
         if !self.is_current_online(generation) {
             return;
         }
+        // Counted only now: a trip that the drained events overtook ended
+        // no session (P4.9).
+        metrics::watchdog_trip(found);
         match found {
             Stall::Tick => {
                 self.ended(DisconnectReason::WatchdogTimeout, BotEvent::WatchdogTimeout)
@@ -658,7 +663,7 @@ mod tests {
     use core::time::Duration;
 
     use chrono::DateTime;
-    use fleet_core::bot::{BotAccount, PauseReason};
+    use fleet_core::bot::{BotAccount, BotSnapshot, PauseReason};
     use fleet_core::disconnect::{ConflictKind, ConflictTexts};
     use fleet_core::mc::SessionEvent;
     use fleet_core::mode::ModeDraft;
@@ -667,6 +672,9 @@ mod tests {
     use rand::SeedableRng as _;
 
     use super::*;
+    use crate::metrics::WATCHDOG_TRIPS;
+    use crate::metrics::testing::Recorder;
+    use crate::snapshot::SnapshotOwner;
 
     const PAUSED: BotState = BotState::Paused {
         reason: PauseReason::Conflict {
@@ -685,7 +693,7 @@ mod tests {
     /// hand instead of by `run`, so a test can line inputs up exactly.
     async fn online() -> (
         BotActor<FakeConnector, FakeCredentials>,
-        watch::Receiver<BotSnapshot>,
+        SnapshotOwner,
         SessionController,
     ) {
         let connector = FakeConnector::new();
@@ -699,7 +707,7 @@ mod tests {
         };
         let config = RuntimeConfig::default();
         let clock = RuntimeClock::new(DateTime::from_timestamp(1_700_000_000, 0).unwrap());
-        let (snapshot, snapshots) = watch::channel(BotSnapshot {
+        let snapshots = SnapshotOwner::new(BotSnapshot {
             bot_id: spec.id,
             state: BotState::Stopped,
             since: clock.now(),
@@ -727,7 +735,7 @@ mod tests {
             events: broadcast::channel(64).0,
             bucket: ChatBucket::new(config.chat_interval, config.chat_burst).unwrap(),
             tickets: ChatTickets::new(),
-            snapshot,
+            snapshot: snapshots.publisher(),
             breaker: watch::Sender::new(CircuitBreaker::new(policy)),
             start: Transition {
                 state: BotState::Stopped,
@@ -949,6 +957,40 @@ mod tests {
             snapshots.borrow().last_disconnect,
             Some(DisconnectReason::Kicked(_))
         ));
+    }
+
+    // The trip counter (P4.9): the drained events can only be lined up
+    // with a check here, not through the `Fleet`.
+
+    #[tokio::test(start_paused = true)]
+    async fn a_trip_the_drained_events_overtake_is_not_counted() {
+        let recorder = Recorder::default();
+        let _metrics = recorder.install();
+        let (mut actor, snapshots, controller) = online().await;
+        controller.freeze_ticks();
+        tokio::time::advance(Duration::from_secs(30)).await;
+        assert_eq!(controller.emit(duplicate_login()), EmitOutcome::Queued);
+
+        let _ = actor.handle(Input::WatchdogCheck).await;
+
+        assert_eq!(snapshots.borrow().state, PAUSED);
+        assert_eq!(recorder.counter(WATCHDOG_TRIPS, &[("kind", "tick")]), None);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_trip_that_ends_the_session_is_counted() {
+        let recorder = Recorder::default();
+        let _metrics = recorder.install();
+        let (mut actor, _snapshots, controller) = online().await;
+        controller.freeze_ticks();
+        tokio::time::advance(Duration::from_secs(30)).await;
+
+        let _ = actor.handle(Input::WatchdogCheck).await;
+
+        assert_eq!(
+            recorder.counter(WATCHDOG_TRIPS, &[("kind", "tick")]),
+            Some(1)
+        );
     }
 
     #[tokio::test(start_paused = true)]

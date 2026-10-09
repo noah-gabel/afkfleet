@@ -1583,13 +1583,30 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P4.8, from group C, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Deliberate restarts start a new run.** A `Restart` or a server change starts a new run at once, in AwaitingSession and Backoff too, dropping the backoff and the breaker's cool-down, as Start, Reset and Resume already do. So the storm invariant must leave the connects of a deliberate new run out of its bound.
 
   > Note (P4.8, from group D, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The chaos test becomes `tests/fleet/chaos.rs` in the fleet test crate and reuses `tests/fleet/panicky.rs`, whose `PanickyConnector` panics on chosen connects (the actor itself) or in a session's `perform` or `disconnect` (`TaskCrashed`).
-- [ ] **P4.9** Metrics: bots per state, reconnects, watchdog trips, actor restarts.
+- [x] **P4.9** Metrics: bots per state, reconnects, watchdog trips, actor restarts.
 
   > Note (P4.9, from Phase 3): Also export fleet-mc's diagnostics: live and abandoned host threads, live Worlds, and dropped chat (ADR-0011).
 
   > Note (P4.9, from Phase 3, group B): `abandoned_threads()`, `dropped_chat()` and `ignored_action_bar()` only count up, so they're counters; `live_threads()` and `live_worlds()` are gauges (ADR-0011).
 
   > Note (P4.9, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The metrics are `afkfleet_bots{state}`, `afkfleet_bot_reconnects_total`, `afkfleet_watchdog_trips_total{kind}` and `afkfleet_actor_restarts_total`, with no `bot_id` label. Tests install a hand-written recorder per test with metrics' thread-local `set_default_local_recorder`. **fleet-mc's diagnostics move to P5.3:** fleet-runtime may depend only on fleet-core (§4), so the two notes above are the agent's job.
+
+  > Note (P4.9, from group E, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
+  > - **The bots gauge** changes with every snapshot write:
+  >   - The supervisor's `Entry` holds a `SnapshotOwner`, which isn't `Clone`. It counts the bot in its first state, and its `Drop` takes the bot out of its current one, so removing a bot or ending the supervisor does too.
+  >   - Actors publish through a clonable `SnapshotPublisher`, which `BotActorParts.snapshot` now takes instead of the raw `watch::Sender`. Each publish moves the bot from the old state's label to the new one. Dropping a publisher changes nothing.
+  >   - So no write can skip the gauge. P4.8's chaos test checks it against `snapshot_all` too.
+  > - **What counts:**
+  >   - **A reconnect:** every connect that isn't the first of a deliberate run (`attempt > 1 || auth_retried`), the fresh-token retry and failed connects included.
+  >   - **A watchdog trip:** only one that ends the session, after the drained events. It's labelled `kind="tick"` or `kind="packet"`.
+  >   - **An actor restart:** every actor the supervisor starts after a crash, the crash-loop start included. A new bot, a Reset, and a crash during removal, during a shutdown or after a crash loop don't count.
+  > - **Labels.** The 8 `state` labels come from a private, exhaustive match in fleet-runtime with no catch-all arm: `stopped`, `awaiting_session`, `connecting`, `online`, `backoff`, `paused`, `failed`, `stopping`. A new `BotState` variant doesn't compile without one, and fleet-core is unchanged.
+  > - **Registration.** `Fleet::new` describes the four metrics and registers every series at 0, in the recorder installed at that moment (see P5.3).
+  > - **Dependency.** `metrics` 0.24.6, whose only dependency is `rapidhash`.
+  > - **Tests:**
+  >   - `tests/fleet/metrics.rs` uses a hand-written recorder (`tests/fleet/recorder.rs`). The helpers it shares with `supervisor.rs` moved to `tests/fleet/harness.rs`.
+  >   - Three cases the `Fleet` can't reach are unit tests, with a second, `cfg(test)` recorder in `src/metrics.rs`: a crash of the crash-loop actor, the supervisor's own `Failed(CrashLoop)`, and a trip that the drained events overtake.
+  >   - Two temporary mutations, never committed, showed that the "doesn't count" tests catch the bug: counting a trip before the drain, and counting every crash as a restart.
 
 **Security:**
 - Every channel is bounded.

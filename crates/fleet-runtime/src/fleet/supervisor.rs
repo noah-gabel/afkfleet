@@ -29,13 +29,16 @@ use crate::chat::{ChatBucket, ChatError, ChatQuota, ChatTickets};
 use crate::clock::RuntimeClock;
 use crate::config::RuntimeConfig;
 use crate::event::{FleetEvent, FleetEventKind};
+use crate::metrics;
+use crate::snapshot::SnapshotOwner;
 
 /// What the supervisor keeps of one bot, across its actors.
 struct Entry {
     spec: BotSpec,
-    /// The bot's snapshot. Each actor gets a clone and publishes into it;
-    /// its current value is where a restarted actor picks up.
-    snapshot: watch::Sender<BotSnapshot>,
+    /// The bot's snapshot. Each actor gets a publisher for it; its current
+    /// value is where a restarted actor picks up. It counts the bot in the
+    /// `afkfleet_bots{state}` gauge until the entry is dropped (P4.9).
+    snapshot: SnapshotOwner,
     /// The actor's copy of its circuit breaker, so a restart keeps it.
     breaker: watch::Sender<CircuitBreaker>,
     /// The bot's chat rate limit, kept so a restart doesn't refill it.
@@ -223,7 +226,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> Supervisor<C, P> {
         }
         let id = spec.id;
         let entry = Entry {
-            snapshot: watch::Sender::new(BotSnapshot {
+            snapshot: SnapshotOwner::new(BotSnapshot {
                 bot_id: id,
                 state: BotState::Stopped,
                 since: self.clock.now(),
@@ -374,6 +377,8 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> Supervisor<C, P> {
         // The new actor makes its own span, so it starts outside this one.
         let span = entry.span.clone();
         if let Some(start) = span.in_scope(|| self.after_exit(id, crash, now)) {
+            // A restart after a crash, the crash-loop start included (P4.9).
+            metrics::actor_restart();
             self.start_actor(id, start);
         }
     }
@@ -453,7 +458,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> Supervisor<C, P> {
                 last_disconnect: last.last_disconnect.clone(),
             }
         };
-        entry.snapshot.send_replace(snapshot.clone());
+        entry.snapshot.publish(snapshot.clone());
         self.publish(id, FleetEventKind::StateChanged(snapshot));
         self.publish(
             id,
@@ -480,7 +485,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> Supervisor<C, P> {
             events: self.events.clone(),
             bucket: entry.bucket.clone(),
             tickets: self.tickets.clone(),
-            snapshot: entry.snapshot.clone(),
+            snapshot: entry.snapshot.publisher(),
             breaker: entry.breaker.clone(),
             start,
         });
@@ -680,6 +685,8 @@ mod tests {
     use crate::event::FleetEventKind;
     use crate::fleet::command::Lifecycle;
     use crate::fleet::{Fleet, SendChatError};
+    use crate::metrics::testing::Recorder;
+    use crate::metrics::{ACTOR_RESTARTS, BOTS};
 
     const BOT: &str = "018bcfe5-6800-7bab-abab-abababababab";
 
@@ -934,9 +941,11 @@ mod tests {
         settle().await;
         let entry_mut = supervisor.bots.get_mut(&bot()).unwrap();
         entry_mut.crash_looped = true;
-        entry_mut
-            .snapshot
-            .send_modify(|snapshot| snapshot.state = CRASH_LOOP);
+        let failed = BotSnapshot {
+            state: CRASH_LOOP,
+            ..entry_mut.snapshot.borrow().clone()
+        };
+        entry_mut.snapshot.publish(failed);
         end_actor_behind_its_back(&mut supervisor).await;
         let _ = kinds(&mut events);
 
@@ -949,6 +958,55 @@ mod tests {
 
         assert!(entry(&supervisor).actor.is_none());
         assert_eq!(kinds(&mut events), []);
+    }
+
+    // The metrics of the paths above, which the `Fleet` can't reach (P4.9).
+
+    #[tokio::test(start_paused = true)]
+    async fn the_supervisors_own_crash_loop_moves_the_bot_to_failed_in_the_gauge() {
+        let recorder = Recorder::default();
+        let _metrics = recorder.install();
+        let (mut supervisor, _connector, _events) = supervisor();
+        apply(&mut supervisor, spec(DesiredRunState::Running)).unwrap();
+        settle().await;
+        supervisor.bots.get_mut(&bot()).unwrap().crash_looped = true;
+        end_actor_behind_its_back(&mut supervisor).await;
+        assert_eq!(recorder.gauge(BOTS, &[("state", "connecting")]), Some(1.0));
+
+        supervisor.exited(
+            bot(),
+            Ok(ActorExit::TaskCrashed {
+                task: CrashedTask::ModeRunner,
+            }),
+        );
+
+        assert_eq!(recorder.gauge(BOTS, &[("state", "connecting")]), Some(0.0));
+        assert_eq!(recorder.gauge(BOTS, &[("state", "failed")]), Some(1.0));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_crash_of_the_crash_loop_actor_is_no_restart() {
+        let recorder = Recorder::default();
+        let _metrics = recorder.install();
+        let (mut supervisor, _connector, mut events) = supervisor();
+
+        crash_looped(&mut supervisor, &mut events).await;
+
+        assert_eq!(recorder.counter(ACTOR_RESTARTS, &[]), Some(0));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_reset_that_starts_an_actor_for_a_bot_without_one_is_no_restart() {
+        let recorder = Recorder::default();
+        let _metrics = recorder.install();
+        let (mut supervisor, _connector, mut events) = supervisor();
+        crash_looped(&mut supervisor, &mut events).await;
+
+        assert_eq!(lifecycle(&mut supervisor, Lifecycle::Reset), Ok(()));
+        settle().await;
+
+        assert!(entry(&supervisor).actor.is_some());
+        assert_eq!(recorder.counter(ACTOR_RESTARTS, &[]), Some(0));
     }
 
     #[tokio::test(start_paused = true)]

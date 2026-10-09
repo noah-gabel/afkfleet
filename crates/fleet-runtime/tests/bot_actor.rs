@@ -32,6 +32,7 @@ use fleet_core::time;
 use fleet_runtime::{
     ActorExit, BotActor, BotActorParts, BotCommand, BotInbox, ChatBucket, ChatError, ChatTickets,
     CrashedTask, FleetEvent, FleetEventKind, InboxError, RuntimeClock, RuntimeConfig,
+    SnapshotOwner,
 };
 use fleet_testkit::mc::{
     EmitOutcome, FakeConnector, FakeCredentials, FakeEvents, FakeSession, Performed,
@@ -237,7 +238,7 @@ impl Setup {
     async fn start_with<C: MinecraftConnector>(self, connector: C) -> Bot {
         let clock = RuntimeClock::new(anchor());
         let (events_tx, events) = broadcast::channel(256);
-        let (snapshot_tx, snapshot) = watch::channel(self.previous);
+        let snapshot = SnapshotOwner::new(self.previous);
         let (breaker_tx, breaker) = watch::channel(
             self.breaker
                 .unwrap_or_else(|| CircuitBreaker::new(self.circuit)),
@@ -254,7 +255,7 @@ impl Setup {
             events: events_tx,
             bucket,
             tickets: ChatTickets::new(),
-            snapshot: snapshot_tx,
+            snapshot: snapshot.publisher(),
             breaker: breaker_tx,
             start: self.start,
         });
@@ -282,7 +283,7 @@ struct Bot {
     credentials: FakeCredentials,
     circuit: CircuitPolicy,
     inbox: Option<BotInbox>,
-    snapshot: watch::Receiver<BotSnapshot>,
+    snapshot: SnapshotOwner,
     breaker: watch::Receiver<CircuitBreaker>,
     events: broadcast::Receiver<FleetEvent>,
     cancel: CancellationToken,

@@ -24,6 +24,10 @@
 //!   it runs one actor per bot, restarts an actor that crashes without
 //!   skipping its backoff, and shuts the fleet down within a timeout.
 //! - [`FleetEvent`]s tell the app what happened to a bot.
+//! - [`SnapshotOwner`] holds a bot's snapshot `watch`, and its actors
+//!   publish through a [`SnapshotPublisher`]. Together they keep the
+//!   `afkfleet_bots{state}` gauge, one of the runtime's four metrics (P4.9):
+//!   the bots per state, reconnects, watchdog trips and actor restarts.
 
 mod actor;
 mod chat;
@@ -33,7 +37,9 @@ mod credentials;
 mod event;
 mod failure_log;
 mod fleet;
+mod metrics;
 mod mode;
+mod snapshot;
 
 pub use actor::{
     ActorExit, BotActor, BotActorParts, BotCommand, BotInbox, CrashedTask, InboxError,
@@ -51,3 +57,4 @@ pub use fleet::{
     Supervisor,
 };
 pub use mode::ModeRunner;
+pub use snapshot::{SnapshotOwner, SnapshotPublisher};

@@ -23,6 +23,7 @@ use super::BotActor;
 use super::respawn::respawn;
 use super::session::Session;
 use crate::event::{FleetEvent, FleetEventKind};
+use crate::metrics;
 use crate::mode::ModeRunner;
 
 impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
@@ -97,7 +98,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             since: now,
             last_disconnect: self.last_disconnect.clone(),
         };
-        self.snapshot.send_replace(snapshot.clone());
+        self.snapshot.publish(snapshot.clone());
         info!(state = ?self.state, "the bot's state changed");
         if ended_on_its_own
             && matches!(
@@ -196,6 +197,16 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             credentials,
             connect_timeout: self.config.connect_timeout,
         };
+        // Every connect but the first of a deliberate run is the bot
+        // connecting on its own: a retry, or the fresh-token retry (P4.9).
+        if let BotState::Connecting {
+            attempt,
+            auth_retried,
+        } = self.state
+            && (attempt.get() > 1 || auth_retried)
+        {
+            metrics::reconnect();
+        }
         let connector = Arc::clone(&self.connector);
         // `connect` resolves once the session has started (port contract),
         // long before the connect timeout; the bound keeps a connector that

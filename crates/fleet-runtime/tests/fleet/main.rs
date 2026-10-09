@@ -5,7 +5,9 @@
 //!   and the fleet under test.
 //! - `panicky` wraps the fake connector so connects or sessions panic on
 //!   cue, as a bug in the ports would; the fakes stay panic-free.
-//! - `supervisor` holds the scenarios.
+//! - `recorder` is a `metrics` recorder a test installs on its own thread.
+//! - `supervisor` holds the supervisor's scenarios, and `metrics` those of
+//!   the runtime's metrics (P4.9).
 // Integration tests are test code, but clippy only applies the test allowances
 // of clippy.toml (unwrap, panic, …) inside `#[cfg(test)]`; without this, the
 // helper functions would count as library code.
@@ -14,5 +16,7 @@
 #[path = "../common/mod.rs"]
 mod common;
 mod harness;
+mod metrics;
 mod panicky;
+mod recorder;
 mod supervisor;
