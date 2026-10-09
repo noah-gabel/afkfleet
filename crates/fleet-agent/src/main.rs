@@ -17,7 +17,6 @@
 //! Docker reserves 2 for healthchecks.
 
 use core::fmt::Display;
-use core::time::Duration;
 use std::io::Write as _;
 use std::path::Path;
 use std::process::ExitCode;
@@ -29,16 +28,12 @@ use fleet_agent::cli::{self, Cli, Command};
 use fleet_agent::config::{self, AgentConfig};
 use fleet_agent::healthcheck;
 use fleet_agent::heartbeat::FileHeartbeat;
-use fleet_agent::run::{Exit, Outcome, RunParts, agent_span, run};
+use fleet_agent::run::{Exit, Outcome, RUNTIME_SHUTDOWN, RunParts, agent_span, run};
 use fleet_agent::signals::OsSignals;
 use fleet_agent::telemetry;
 use fleet_mc::AzaleaConnector;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use tracing::{Span, error};
-
-/// How long the runtime's remaining tasks get once the exit code is
-/// decided, so nothing stuck can keep the process alive.
-const RUNTIME_SHUTDOWN: Duration = Duration::from_secs(1);
 
 fn main() -> ExitCode {
     let cli = match Cli::try_parse() {

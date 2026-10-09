@@ -32,6 +32,7 @@ mod testing;
 mod watch;
 
 use core::fmt;
+use core::time::Duration;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -51,6 +52,14 @@ use crate::config::{AgentConfig, AgentMode, StandaloneBot};
 use crate::diagnostics::{self, HostDiagnostics};
 use crate::heartbeat::Heartbeat;
 use crate::signals::ShutdownSignals;
+
+/// How long the binary gives the async runtime's remaining tasks once the
+/// exit code is decided, so nothing stuck can keep the process alive.
+///
+/// It's the last part of the agent's worst-case shutdown, after the shutdown
+/// timeout and the reply timeout, so Docker's `stop_grace_period` must be
+/// longer than all three (ADR-0014).
+pub const RUNTIME_SHUTDOWN: Duration = Duration::from_secs(1);
 
 /// Everything a run is built from.
 pub struct RunParts<C, D, S, H> {

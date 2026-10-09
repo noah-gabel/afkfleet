@@ -1,0 +1,36 @@
+# The config of the agent in deploy/compose.dev.yaml, which mounts it at
+# /etc/afkfleet/agent.toml (`just stack-up`). It runs three offline-mode bots
+# against the compose server, which the agent reaches as minecraft:25565. They
+# aren't deploy/dev/agent.toml's bots, so `just dev-agent` can run at the same
+# time without logging them out.
+#
+# DEVELOPMENT ONLY: standalone mode joins with offline accounts, which only an
+# offline-mode server accepts. Keys left out take Plan.md Appendix A's
+# defaults; AFKFLEET_AGENT__… environment variables on the compose service
+# override any key.
+#
+# The heartbeat file keeps its default, /tmp/afkfleet-agent.alive, on the
+# container's tmpfs. compose.dev.yaml's stop_grace_period (20 s) must stay
+# above shutdown_timeout_secs + 6 s (the 5 s reply timeout and the 1 s
+# runtime shutdown); a fleet-agent test checks it.
+
+name = "compose-agent"
+
+[log]
+format = "json"                          # the production default; `docker compose logs agent` shows it
+filter = "info"
+
+[[standalone.bots]]
+username = "AfkBot4"
+server = "minecraft:25565"
+mode = "afk"
+
+[[standalone.bots]]
+username = "AfkBot5"
+server = "minecraft:25565"
+mode = "afk"
+
+[[standalone.bots]]
+username = "AfkBot6"
+server = "minecraft:25565"
+mode = "farm"

@@ -4,9 +4,10 @@
 
 [graph]
 # Only the platforms we ship: Windows (development, desktop app) and Linux
-# (server, agent). Mobile-only dependencies, such as tauri's ring on iOS and
+# (server, agent). Production runs on linux/arm64, development and CI on
+# x86_64 (ADR-0014). Mobile-only dependencies, such as tauri's ring on iOS and
 # Android, don't count.
-targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu"]
+targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 all-features = true
 
 [advisories]

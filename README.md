@@ -66,10 +66,11 @@ There's no support, and I don't take feature requests. Security reports are welc
   - the wiring of the azalea adapter to the bot runtime. Each bot gets a new ID at every start, logged with its name. The agent exports the adapter's numbers as metrics and exits so Docker can restart it when too many host threads hang
   - a graceful shutdown on SIGTERM or SIGINT (Ctrl+C or Ctrl+Break on Windows): every bot leaves the server within the shutdown timeout
   - a heartbeat file, touched every 10 s while the fleet answers, and an `afkfleet-agent healthcheck` command that checks it without a shell or curl
+  - a Docker image (distroless, nonroot, building natively on amd64 and arm64) with a `HEALTHCHECK`, and an agent in the dev compose stack: `just stack-up`
 
   [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md) records Phase 5's decisions.
 
-**Next:** the rest of Phase 5: a healthcheck and a Docker image, and an end-to-end test against a server restart.
+**Next:** the rest of Phase 5: an end-to-end test against a server restart, and a one-hour demo with five bots.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 
@@ -108,6 +109,8 @@ just dev-agent  # afkfleet-agent with deploy/dev/agent.toml
 ```
 The bots join within a few seconds; the log shows each bot's ID with its name. Ctrl+C stops the agent: each bot leaves the server, and the last line reports how many stopped. `just mc-down` stops the server and deletes its world.
 
+Or run the server and the agent both in Docker: `just stack-up` builds the agent's image and starts three other bots (see [Running the agent in Docker](#running-the-agent-in-docker)).
+
 On Windows, Ctrl+C reaches every process in the console, `just` and `cargo` included, so the prompt can come back before the agent's last lines.
 
 ### Running the agent
@@ -135,14 +138,27 @@ afkfleet-agent run --config agent.toml
   | 0 | Healthy: the heartbeat file was touched less than 30 s ago |
   | 1 | Unhealthy: the file is missing, 30 s old or more, unreadable, or its time is more than 30 s in the future. Also a usage or config error, which goes to stderr as for `run`. Docker reserves 2, so it's never used |
 
+### Running the agent in Docker
+[`deploy/docker/agent.Dockerfile`](deploy/docker/agent.Dockerfile) builds the agent's image from the repository root: a builder with the pinned nightly and cargo-chef, and a distroless runtime (`gcr.io/distroless/cc-debian13:nonroot`) without a shell. The base images are pinned by multi-arch digest, so the same file builds natively on linux/amd64 and linux/arm64 (production runs on arm64). `.dockerignore` lets only the Rust workspace into the build.
+```sh
+just stack-up   # build afkfleet-agent:dev, start the server and the agent, wait until both are healthy
+docker compose --file deploy/compose.dev.yaml logs -f agent   # the agent's JSON logs
+just mc-down    # stop both and delete the server's world
+```
+- **The config** belongs at `/etc/afkfleet/agent.toml`. The image runs `run --config /etc/afkfleet/agent.toml`, and its `HEALTHCHECK` (every 10 s) runs `healthcheck --config /etc/afkfleet/agent.toml`. If you run the agent with another `--config` path, override the `HEALTHCHECK` with the same path, or it checks another config's heartbeat file. `AFKFLEET_AGENT__…` variables apply to both either way.
+- **The compose agent** uses [`deploy/dev/agent.compose.toml`](deploy/dev/agent.compose.toml): AfkBot4–6 against the compose server at `minecraft:25565`, with JSON logs. They aren't `just dev-agent`'s bots, so both agents can run at once. It starts once the server is healthy.
+- **Stopping:** `docker stop` sends SIGTERM and kills the container once its grace period is over. The agent's worst-case shutdown is `shutdown_timeout_secs` plus 6 s (the reply timeout and the runtime's own shutdown), so the grace period must be longer: the compose file sets 20 s for the 10 s default. Otherwise Docker's kill replaces the exit code and the last line.
+- **Hardening** in the compose file: the nonroot user, a read-only root filesystem with a 1 MiB tmpfs at `/tmp` for the heartbeat file, no capabilities, `no-new-privileges`, 512 MiB of memory and 1 CPU, and a restart after a non-zero exit (`on-failure`).
+
 ## Development
 ```sh
 pnpm install   # frontend tooling (Biome)
 just check     # format, lints, docs, tests: run before every commit
 just ci        # everything CI runs
 just mc-up     # local offline-mode Minecraft 26.1 test server on 127.0.0.1:25565 (needs Docker)
-just mc-down   # stop it and delete its world
+just mc-down   # stop it (and the Docker agent) and delete its world
 just dev-agent # run the agent with deploy/dev/agent.toml against that server
+just stack-up  # build the agent's image and run the server and the agent in Docker
 just test-slow # slow tests against local Minecraft containers, one at a time (needs Docker)
 just test-real-account # the real-account check: you only (see below)
 ```

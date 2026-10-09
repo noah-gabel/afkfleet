@@ -1,0 +1,21 @@
+# The Docker build context is the repository root (deploy/docker/agent.Dockerfile).
+# This is an allowlist: only what the Rust build needs gets in, so nothing
+# secret (secrets/, .env files, keys, databases) can enter the context, even a
+# file added later (ADR-0014).
+*
+!Cargo.toml
+!Cargo.lock
+!rust-toolchain.toml
+!.cargo/config.toml
+!crates/
+
+# Build output inside a crate, if any.
+crates/**/target
+
+# .gitignore's secret patterns again, at any depth: the last matching rule
+# wins, and crates/ is allowed as a whole.
+**/.env*
+**/*.pem
+**/*.key
+**/secrets
+**/*.db*

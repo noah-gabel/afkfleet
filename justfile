@@ -66,7 +66,11 @@ db-prepare: (_unavailable "db-prepare" "P6")
 mc-up:
     docker compose --file deploy/compose.dev.yaml up --detach --wait --wait-timeout 300 minecraft
 
-# Stop the local Minecraft server and delete its world.
+# Build the agent's image and start the local server and the agent (deploy/dev/agent.compose.toml) in Docker, then wait until both are healthy.
+stack-up:
+    docker compose --file deploy/compose.dev.yaml up --build --detach --wait --wait-timeout 300
+
+# Stop the local stack (the server and the agent) and delete the server's world.
 mc-down:
     docker compose --file deploy/compose.dev.yaml down --volumes
 

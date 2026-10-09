@@ -294,6 +294,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
   - Docker + Docker Compose
   - Caddy 2 (TLS for the public API)
   - `itzg/minecraft-server` (test server)
+  - the agent image's base images (P5.6), pinned by multi-arch index digest in `deploy/docker/agent.Dockerfile`: `rust:1.99.0-slim-trixie` (builder) and `gcr.io/distroless/cc-debian13:nonroot` (runtime)
 - **Windows build dependencies:** MSVC Build Tools ("Desktop development with C++"), NASM (for aws-lc-rs). CMake isn't needed for non-FIPS builds.
 - **Automation:** GitHub Actions (CI). No Dependabot or Renovate: `cargo deny` and `pnpm audit` flag vulnerable dependencies in CI (also on a weekly schedule), and dependency updates are done by hand in their own PR.
 
@@ -1881,7 +1882,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - `tests/cli.rs`: the binary's healthcheck for a fresh, a stale and a missing file, a missing config, a usage error (exit 1) and `--help` (exit 0). The Unix SIGTERM test also waits for its configured heartbeat file before it sends the signal, so the wiring is checked end to end.
   >   - The Unix-only tests ran red and green in a Linux container.
   >   - The shared test fleet of `run`'s unit tests moved into `run::testing`, used by `finish`'s tests and the beat's.
-- [ ] **P5.6** `deploy/docker/agent.Dockerfile`:
+- [x] **P5.6** `deploy/docker/agent.Dockerfile`:
   - cargo-chef
   - a nightly builder
   - runtime `gcr.io/distroless/cc-debian12:nonroot`
@@ -1891,6 +1892,34 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P5.6, from Phase 4, group E, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The compose file gives the agent a `stop_grace_period` above `shutdown_timeout`, e.g. 15 s for the 10 s default, since `docker stop` kills a container after 10 s by default, before the fleet's graceful shutdown ends.
 
   > Note (P5.6, from group B, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): The agent's worst-case shutdown is shutdown_timeout + reply_timeout, plus main.rs's 1 s runtime-shutdown bound. So `stop_grace_period` must be above that: **20 s** for the 10 s default, not the 15 s above. Otherwise Docker's SIGKILL replaces exit code 4 and the last line, "the agent stopped".
+
+  > Note (P5.6, as built, group C) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md); the user answered group C's questions on 2026-10-09):
+  > - **Deviation: `gcr.io/distroless/cc-debian13:nonroot`, not `cc-debian12`.** distroless's README now lists only Debian 13 images and says other tags are no longer updated. The builder is Debian 13 too (`rust:1.99.0-slim-trixie`), so the binary's glibc matches.
+  > - **Production is linux/arm64** (the user's requirement).
+  >   - Both base images are pinned by their multi-arch index digest, never by one platform's, and nothing in the Dockerfile names an architecture, so it builds natively on amd64 and arm64.
+  >   - deny.toml's `[graph] targets` gains `aarch64-unknown-linux-gnu`. `cargo deny check` stays clean, with no `ring` on aarch64.
+  >   - The arm64 builder stage was built under QEMU as a smoke check; a full arm64 build is P12.1's.
+  > - **`deploy/docker/agent.Dockerfile`:**
+  >   - `chef` installs cargo-chef 0.1.78 (`cargo install --locked`, with the image's stable toolchain), then copies `rust-toolchain.toml` alone and runs `rustup toolchain install`. Both are cached layers before any source, and the toolchain file stays the nightly's only pin.
+  >   - `planner` runs `cargo chef prepare`. `builder` cooks the dependencies, then builds `--release --locked --package fleet-agent --bin afkfleet-agent`.
+  >   - The runtime has static OCI labels (title, description, source, licenses), the binary at `/usr/local/bin/afkfleet-agent`, `CMD ["run", "--config", "/etc/afkfleet/agent.toml"]`, and `HEALTHCHECK --interval=10s --timeout=5s --start-period=30s --retries=3` through `healthcheck` with the same path. A comment and the README say that another `--config` path needs the same override on the HEALTHCHECK.
+  > - **`.dockerignore`** is an allowlist: the workspace manifests, `rust-toolchain.toml`, `.cargo/config.toml` and `crates/`. After them, `.gitignore`'s secret patterns are excluded again at any depth.
+  > - **`deploy/compose.dev.yaml`** gains the `agent` service after `minecraft`, since fleet-mc's `pins` test reads the first `image:` line:
+  >   - `afkfleet-agent:dev`, built with `pull_policy: build`
+  >   - started once the server is healthy, so the bots don't use up their retries while its first start builds the world
+  >   - `deploy/dev/agent.compose.toml` mounted read-only at `/etc/afkfleet/agent.toml`
+  >   - `stop_grace_period: 20s` and `restart: on-failure`
+  >   - `read_only` with a 1 MiB tmpfs at `/tmp`, `cap_drop: [ALL]`, `no-new-privileges`, 512 MiB and 1 CPU
+  > - **`deploy/dev/agent.compose.toml`** runs AfkBot4 and AfkBot5 on `afk` and AfkBot6 on `farm` at `minecraft:25565`, with JSON logs, so it never logs out `just dev-agent`'s AfkBot1–3.
+  > - **`just stack-up`** builds the image and starts both services, waiting until they're healthy; `just mc-down` stops both.
+  > - `RUNTIME_SHUTDOWN` (1 s) moved from main.rs to `fleet_agent::run`, so a test can read it.
+  > - **`tests/deploy.rs`** (fast):
+  >   - Both dev configs load, inside `Jail` with an empty environment.
+  >   - Every compose bot joins `minecraft:25565`, and none clashes with a dev bot.
+  >   - The grace period exceeds the compose config's shutdown and reply timeouts plus `RUNTIME_SHUTDOWN`. With 15 s, the test failed.
+  >   - Compose mounts the config at `/etc/afkfleet/agent.toml`, and the Dockerfile's `ENTRYPOINT`, `CMD` and `HEALTHCHECK` use that path.
+  >   - The approved `in_jail` helper moved to `tests/common/jail.rs`; it's still one `#[expect]`.
+  > - **Demo:** `just stack-up` brought both services up healthy (`healthy: the heartbeat is 5 s old`), and AfkBot4–6 came online. `docker compose stop agent` ended in 0.4 s with exit code 0 and "the agent stopped" (`stopped: 3`) last, with no `warn` or `error` line.
 - [ ] **P5.7** 🔴 Slow end-to-end test:
   1. `compose up`, and all bots come Online.
   2. Restart the MC container; the bots reconnect within the policy.
@@ -1901,6 +1930,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The image is built first.** `just test-slow` builds it before the timed test, since a cold build can outlast the slow profile's 10 minutes.
   > - **Clean-up.** The test runs `down -v` for its own project before it starts, and in a guard that also runs when the test panics.
 
+  > Note (P5.7, from group C, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): **No CI job builds the image on every PR.** Instead, group D's PR, and every later PR that changes the Dockerfile, `.dockerignore`, `Cargo.lock` or `rust-toolchain.toml`, runs the "Slow tests" workflow on its branch before it's merged. The user starts it under Actions → Slow tests → Run workflow, so the image build is checked in CI.
+
 **DoD:** Demo with 5 bots AFK on a local server for 1 h, with one server restart in between. The logs show no errors except the expected disconnect warnings.
 
 > Note (DoD, from the Phase 5 plan, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): `just demo-agent` (logic in a script under `scripts/`) runs the demo and prints a summary:
@@ -1910,6 +1941,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 > - the shutdown report
 >
 > The AI runs it in group D and puts its output in the PR; the user can re-run it, for example after a Minecraft-version bump.
+
+> Note (DoD, from group C, the user's decision): The demo also records the agent's peak memory and CPU (`docker stats`), so P12.2's limits come from a measured value with headroom, not a guess.
 
 ---
 
@@ -2368,6 +2401,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - pinned nightly builder
   - distroless non-root runtime
   - `HEALTHCHECK` through the `healthcheck` subcommand
+
+  > Note (P12.1, from Phase 5, group C, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
+  > - **Production is linux/arm64.** P12.1 builds the image for arm64, natively on the server or on GitHub's `ubuntu-24.04-arm` runner. The base images stay pinned by multi-arch index digest, and the Dockerfile names no architecture.
+  > - **An image scan.** There's no Dependabot, and `cargo deny` covers only crates, so the weekly scheduled audit also scans the built agent image (e.g. Trivy). OS-level CVEs in the pinned base images then surface. Digest bumps stay deliberate PRs.
+  > - **Labels.** The agent image has static OCI labels (source, licenses, title, description). `created`, `revision` and `version` change with every build, so they come through build args once CI publishes the image.
 - [ ] **P12.2** `deploy/compose.yaml`:
   - **Caddy:** ports 80/443, Let's Encrypt, HSTS; proxies `/api` and WebSockets to `server:8080`.
   - **Server:** on the internal network. Port 7443 is published only when remote agents exist.
@@ -2380,6 +2418,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     - `security_opt: [no-new-privileges:true]`
     - CPU and memory limits
     - `restart: unless-stopped`
+
+  > Note (P12.2, from Phase 5, group C, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): Production is linux/arm64. The agent's memory and CPU limits come from group D's measured demo numbers, with headroom, not from the dev compose file's 512 MiB and 1 CPU.
 - [ ] **P12.3** 🔴 Backups:
   - a scheduled `VACUUM INTO` with retention, plus a `backup` CLI
   - a restore runbook
