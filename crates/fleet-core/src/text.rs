@@ -6,6 +6,9 @@
 //! - `§` starts a legacy formatting code
 //! - bidirectional controls can reorder what a reader sees ("Trojan Source")
 //! - invisible characters can hide text or make two names look identical
+//!
+//! [`sanitize_untrusted`] applies them to any other untrusted text bound for
+//! a log, such as a dependency's panic message (ADR-0014).
 
 /// The section sign, which starts a legacy Minecraft formatting code.
 pub(crate) const SECTION_SIGN: char = '§';
@@ -109,6 +112,52 @@ pub(crate) fn sanitize(raw: &str, max_chars: usize, line_breaks: LineBreaks) -> 
     }
 }
 
+/// Untrusted text made safe for one log line by [`sanitize_untrusted`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UntrustedText {
+    /// The text: one line, at most the requested number of characters.
+    pub text: String,
+    /// Whether characters were cut off at the length cap.
+    pub truncated: bool,
+}
+
+/// What a line break becomes in [`sanitize_untrusted`].
+const LINE_SEPARATOR: &str = " | ";
+
+/// Makes untrusted text safe for one log line.
+///
+/// It applies the chat sanitizer's rules: `§` codes, control characters,
+/// bidirectional controls and invisible characters are stripped, `\r\n`
+/// becomes `\n` and a lone `\r` is dropped. Then each line break becomes
+/// ` | `, so the result is a single line that can't start what looks like a
+/// new log line. The result has at most `max_chars` characters, separators
+/// included; the cut is plain, so it can split a ` | `. Sanitizing twice
+/// gives the same text.
+#[must_use]
+pub fn sanitize_untrusted(raw: &str, max_chars: usize) -> UntrustedText {
+    let sanitized = sanitize(raw, max_chars, LineBreaks::Keep);
+    let mut text = String::new();
+    let mut truncated = sanitized.truncated;
+    let mut kept = 0_usize;
+    let mut buffer = [0_u8; 4];
+    'text: for c in sanitized.text.chars() {
+        let piece = if c == '\n' {
+            LINE_SEPARATOR
+        } else {
+            c.encode_utf8(&mut buffer)
+        };
+        for piece_char in piece.chars() {
+            if kept == max_chars {
+                truncated = true;
+                break 'text;
+            }
+            text.push(piece_char);
+            kept += 1;
+        }
+    }
+    UntrustedText { text, truncated }
+}
+
 /// Returns the position (counted in characters) of the first character that
 /// [`sanitize`] would drop: a `§`, which starts a formatting code, or a
 /// character it strips. `None` means sanitizing leaves `raw` unchanged, apart
@@ -163,6 +212,46 @@ mod tests {
     #[case::emoji('😀')]
     fn allows_ordinary_characters(#[case] c: char) {
         assert!(!is_forbidden_in_message(c));
+    }
+
+    #[rstest]
+    #[case::multi_line("first\nsecond\nthird", 64, "first | second | third", false)]
+    #[case::crlf("a\r\nb", 64, "a | b", false)]
+    #[case::lone_carriage_return("a\rb", 64, "ab", false)]
+    #[case::stripped("§cred\u{1B}[31m\u{202E}x\u{200B}y\u{7}", 64, "red[31mxy", false)]
+    #[case::empty("", 64, "", false)]
+    #[case::exactly_at_the_cap("abc", 3, "abc", false)]
+    #[case::separator_exactly_at_the_cap("a\nb", 5, "a | b", false)]
+    #[case::cut_by_the_sanitizer("abcdef", 3, "abc", true)]
+    #[case::cut_inside_a_separator("ab\ncd", 4, "ab |", true)]
+    #[case::cut_after_a_separator("a\nbcd", 5, "a | b", true)]
+    #[case::cut_on_a_char_boundary("😀😀", 1, "😀", true)]
+    fn untrusted_text_becomes_one_capped_line(
+        #[case] raw: &str,
+        #[case] max_chars: usize,
+        #[case] text: &str,
+        #[case] truncated: bool,
+    ) {
+        assert_eq!(
+            sanitize_untrusted(raw, max_chars),
+            UntrustedText {
+                text: text.to_owned(),
+                truncated
+            }
+        );
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn untrusted_text_is_one_clean_line_within_the_cap(
+            raw in proptest::prelude::any::<String>(),
+            max_chars in 0_usize..64,
+        ) {
+            let once = sanitize_untrusted(&raw, max_chars);
+            proptest::prop_assert!(once.text.chars().count() <= max_chars);
+            proptest::prop_assert!(!once.text.chars().any(char::is_control));
+            proptest::prop_assert_eq!(sanitize_untrusted(&once.text, max_chars).text, once.text);
+        }
     }
 
     fn keep(raw: &str) -> String {

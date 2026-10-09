@@ -23,6 +23,8 @@ repository = "https://github.com/noah-gabel/afkfleet"
 [workspace.dependencies]
 # Workspace crates, by path (unpublished, so no version).
 fleet-core = { path = "crates/fleet-core" }
+fleet-mc = { path = "crates/fleet-mc" }
+fleet-runtime = { path = "crates/fleet-runtime" }
 fleet-testkit = { path = "crates/fleet-testkit" }
 
 # azalea: exact pin (ADR-0003), fleet-mc only. Without default features: `log` would
@@ -39,6 +41,13 @@ azalea-language = "=0.16.0"
 backon = { version = "1.6.0", default-features = false }
 # chrono: no `clock`/`now`, because fleet-core takes time as a parameter (ADR-0010).
 chrono = { version = "0.4.45", default-features = false }
+# figment: the agent's config, TOML plus `AFKFLEET_AGENT__` env variables. No default
+# features exist; the agent enables `toml` and `env`, and `test` (`Jail`) in its tests
+# (ADR-0014).
+figment = "0.10.19"
+# garde: range checks on the agent's config. No default features exist; the agent
+# enables `derive` (ADR-0014).
+garde = "0.23.0"
 # governor: the defaults add `quanta`, `dashmap` and `jitter`, and `jitter` pulls rand 0.9
 # and getrandom 0.3 into normal dependencies. fleet-runtime enables `std` and runs its
 # chat bucket on a tokio-backed clock (ADR-0013).

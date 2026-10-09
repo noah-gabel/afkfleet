@@ -1,0 +1,30 @@
+[package]
+name = "fleet-agent"
+description = "The afkfleet agent: loads its config, sets up logging and runs the bots through fleet-runtime and fleet-mc. A library now; the afkfleet-agent binary arrives in P5.3."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+figment = { workspace = true, features = ["env", "toml"] }
+fleet-core.workspace = true
+fleet-mc.workspace = true
+fleet-runtime.workspace = true
+garde = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+
+[dev-dependencies]
+# `figment::Jail`: a temporary directory and environment per test (ADR-0014).
+figment = { workspace = true, features = ["test"] }
+# `log` records, to prove the bridge into tracing keeps their targets (ADR-0014).
+log.workspace = true
+rstest.workspace = true
+serde_json.workspace = true

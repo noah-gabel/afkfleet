@@ -198,8 +198,8 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Library errors | `thiserror` | 2.0.21 | all libraries | |
 | Binary error reporting | `anyhow` | 1.0.104 | `main.rs` only | |
 | Serialization | `serde`, `serde_json` | 1.0.229, 1.0.151 | all | |
-| Configuration | `figment` | 0.10.19 | agent, server | TOML file + env; upstream is quiet but the crate is stable |
-| DTO & config validation | `garde` | 0.23.0 | api-types, agent, server | Domain value objects use hand-written constructors |
+| Configuration | `figment` | 0.10.19 | agent, server | TOML file + env; upstream is quiet but the crate is stable. It has no default features: the agent enables `toml` and `env`, and `test` (`Jail`) in its tests, whose one closure carries an approved `#[expect(clippy::result_large_err)]` (ADR-0014) |
+| DTO & config validation | `garde` | 0.23.0 | api-types, agent, server | Domain value objects use hand-written constructors. It has no default features; members enable `derive` and the rules they use. The agent's config uses garde for its number ranges only and converts texts with the core constructors, so it reports every problem at once (ADR-0014) |
 | Logging / tracing | `tracing`, `tracing-subscriber` | 0.1.44, 0.3.23 | all | `env-filter`, `json`. fleet-testkit's log capture uses `tracing` and `tracing-subscriber`; the redaction tests use it (ADR-0011) |
 | Metrics | `metrics`, `metrics-exporter-prometheus` | 0.24.6, 0.18.3 (dfo) | runtime, agent, server | Internal port only. The exporter's default `push-gateway` brings its own TLS stack: enable `http-listener` only |
 | IDs | `uuid` | 1.27.0, dfo | core, mc | v7, serde. fleet-mc only names `Uuid` in azalea's `AccountTrait` (ADR-0011) |
@@ -258,7 +258,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Mocks | `mockall` | 0.15.0 | Only for interaction checks; put `#[automock]` above `#[async_trait]` |
 | Containers | `testcontainers` | 0.28.0, dfo | `itzg/minecraft-server`, for fleet-mc's slow tests (P3.7). The default `ring` feature turns on TLS for the Docker client, which the local socket and the Windows named pipe don't need; no feature is enabled |
 | Time control | `tokio` `test-util` | | `start_paused`, `advance` |
-| `log` records in tests | `log` | 0.4.34 | fleet-testkit dev only: its log capture's test emits a `log` record to prove that reqwest's and rustls's logs reach the redaction check through `tracing-log` (ADR-0011) |
+| `log` records in tests | `log` | 0.4.34 | Dev-dependency only. fleet-testkit: its log capture's test emits a `log` record to prove that reqwest's and rustls's logs reach the redaction check through `tracing-log` (ADR-0011). fleet-agent: its telemetry test proves that the log filter and azalea's caps see a `log` record's real target (ADR-0014) |
 | Fuzzing | `libfuzzer-sys`, `arbitrary` | 0.4.13, 1.4.2 | Driven by cargo-fuzz |
 
 ### Frontend (same one-library-per-concern rule)
@@ -519,7 +519,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Conventions**
 - Each task has an ID `P<phase>.<n>`. 🔴 means *the test comes first*, strictly. Tasks without 🔴 (scaffolding, config, wiring) are verified by `just check`, CI or the task's demo, but any logic they add still gets tests.
 - A phase is finished when every task is ticked **and** its Definition of Done (DoD) holds.
-- **Branches:** one branch per task, `p<phase>/<task-id>-<slug>` (e.g. `p2/p2.6-bot-state-machine`). Phases 0 and 1 each use a single branch, `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each (see the note under Phase 2). Phase 3 uses five group branches plus one task branch for P3.9 (see the note under Phase 3). Phase 4 uses five group branches (see the note under Phase 4). Every branch ends in a PR that the user reviews and merges. The `Plan.md` checkbox is ticked in that same PR.
+- **Branches:** one branch per task, `p<phase>/<task-id>-<slug>` (e.g. `p2/p2.6-bot-state-machine`). Phases 0 and 1 each use a single branch, `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each (see the note under Phase 2). Phase 3 uses five group branches plus one task branch for P3.9 (see the note under Phase 3). Phase 4 uses five group branches (see the note under Phase 4). Phase 5 uses four group branches (see the note under Phase 5). Every branch ends in a PR that the user reviews and merges. The `Plan.md` checkbox is ticked in that same PR.
 - Phases are vertical slices:
   - **0–5** produce a working standalone bot.
   - **6–11** build the fully managed system with the app.
@@ -1678,7 +1678,21 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** `afkfleet-agent run --config agent.toml` runs a few dev bots (offline mode) against a local server. It survives server restarts and shuts down cleanly.
 **Introduces:** `clap`, `figment`, `garde`, `tracing-subscriber`, `anyhow`, `metrics-exporter-prometheus`.
 
-- [ ] **P5.1** 🔴 Config (Appendix A):
+> Note (P5):
+> - **Four group branches.** At the user's request, Phase 5 is built in group PRs like Phases 2–4. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
+>
+>   | Group | Branch | Tasks |
+>   |---|---|---|
+>   | A | `p5/p5.1-p5.2-config-and-telemetry` | P5.1, P5.2. fleet-agent is a library only, without a binary or a placeholder command |
+>   | B | `p5/p5.3-p5.4-wiring-and-shutdown` | P5.3, P5.4: `afkfleet-agent run`, `just dev-agent`, `deploy/dev/agent.toml` |
+>   | C | `p5/p5.5-p5.6-healthcheck-and-docker` | P5.5, P5.6: the healthcheck exists for the container |
+>   | D | `p5/p5.7-e2e-and-wrap-up` | P5.7, the DoD demo and the phase wrap-up |
+>
+>   Each later group asks its own implementation-level questions in its session.
+> - **Decisions.** The user answered the Phase 5 plan's open questions on 2026-10-09. [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md) records them; the notes below summarize what changes a task.
+> - **Dependencies.** `figment` (`toml`, `env`; `test` for `Jail` in tests), `garde` with `derive`, `tracing-subscriber` with `env-filter` and `json`, and `log` as a fleet-agent dev-dependency (group A).
+
+- [x] **P5.1** 🔴 Config (Appendix A):
   - loaded with figment from TOML plus `AFKFLEET_AGENT__…` env variables
   - validated with garde, with clear error messages
   - `[standalone]` and `[control_plane]` are mutually exclusive
@@ -1691,11 +1705,78 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P5.1, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): `[[standalone.bots]]` gains `conflict_texts = […]`, kick texts that count as a duplicate login; a missing key means an empty list (`ConflictTexts`, at most 16 entries of 1–1024 characters). P5 also supplies the runtime's wall-clock anchor and seed to `Fleet::new`.
 
   > Note (P5.1, from P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): `[runtime] max_bots` and `shutdown_timeout_secs` map to `RuntimeConfig::max_bots` and `shutdown_timeout`. Two `[[standalone.bots]]` entries whose accounts clash are refused with a clear message, using `BotAccount::clashes_with` (offline names compare ignoring ASCII case), the same rule as the runtime's `AccountInUse`.
-- [ ] **P5.2** Telemetry: pretty logs in dev and JSON in prod, an env filter, and a panic hook that logs through `tracing`.
+
+  > Note (P5.1, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
+  > - **Loading.** The file must exist at exactly the given path: figment's `Toml::file` would search parent directories and treat a missing file as empty, so `load` checks first and uses `Toml::file_exact`. `AFKFLEET_AGENT__…` variables override any key.
+  > - **Unknown keys are errors,** in the file and in the environment (`deny_unknown_fields`, and no `flatten`, which would silently turn it off). `[standalone]` and `[control_plane]` are two optional fields, and exactly one must be present.
+  > - **Optional keys.** Every `[runtime]` and `[retry]` key takes Appendix A's value when it's missing. `name` is required, and so are each bot's `username`, `server` and `mode`. `heartbeat_file` defaults to the OS temp directory's `afkfleet-agent.alive`, so `just dev-agent` works on Windows too.
+  > - **Ranges:**
+  >   - `[runtime]`: `max_bots` 1–1000, the watchdog and liveness timeouts 5–600 s, the connect timeout 5–300 s, `max_abandoned_threads` 1–100, the shutdown timeout 1–300 s.
+  >   - `[retry]`: the base delay 1–3600 s, the max delay 1–86 400 s (and at least twice the base), `stable_after_secs` **60**–86 400 s, `circuit_failures` 1–1000, the circuit window and cool-down 1–86 400 s.
+  >   - `stable_after_secs` starts at a minute, so a server that kicks the bot a few seconds after every join can't cause endless reconnects at the base delay, with the breaker never opening.
+  > - **`name`** is the new `fleet_core::value::AgentName`: 1–64 ASCII letters, digits, `-`, `_` and `.`, starting with a letter or digit. P10 sends it to the server.
+  > - **`heartbeat_file`** must be absolute. **`[control_plane]`** keys are typed and non-empty; P10 checks the URL and the files.
+  > - **Bots.**
+  >   - 1 to `max_bots` entries.
+  >   - Accounts that clash are refused on the later entry.
+  >   - Each entry is offline by construction: it only has a `username`.
+  >   - Entries get no `BotId`; P5.3 mints one at every start.
+  > - **Modes by name:** the new `fleet_core::mode::ModePreset { Afk, Farm }`, with exact lowercase names. Its error lists the valid names and never the input.
+  > - **Errors.**
+  >   - Parse errors (bad TOML, a wrong type, an unknown key) stop at the first. They name the key and the file or the environment variable; a TOML syntax error shows only its position.
+  >   - Validation then lists every problem at once, sorted by key, without echoing values.
+  >   - So texts are read as `String`s and required keys as `Option`s, and converted with the core constructors in the validation pass.
+
+  > Note (P5.1, as built, group A) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
+  > - **Shape.** `fleet_agent::config::load(path) -> Result<AgentConfig, ConfigError>`.
+  >   - `AgentConfig { name, runtime: RuntimeConfig, mc: McConfig, retry, circuit, heartbeat_file, mode: AgentMode }`, where `AgentMode` is `Standalone(Vec<StandaloneBot>)` or `ControlPlane(ControlPlaneConfig)`.
+  >   - `ConfigError` is `NotFound { path }`, `Parse(Box<ParseError>)` or `Invalid(Problems)`. Each `Problem` has a `KeyPath` and a `ProblemKind`.
+  > - **Deviation: garde checks only the ranges.** The texts go through fleet-core's constructors in a second pass, so every problem is reported at once.
+  > - **figment's error is never kept or printed.** Its own text shows a `default.` profile prefix, and for environment variables a key that isn't the variable's name. `ParseError` rebuilds the variable's name from the key path.
+  > - **Environment limits.** A value that reads as a number can't fill a text key: `AFKFLEET_AGENT__NAME=123` fails as a wrong type, so quote it as `'"123"'`. `[[standalone.bots]]` can only be replaced as a whole.
+  > - **A lint exception in tests** (the user's approval). figment's `Jail` fixes its closure's error type to `figment::Error`, which is larger than `clippy::result_large_err` allows, so every config test goes through one helper with an `#[expect]`.
+  > - **Tests:** `tests/config.rs` (39 cases, each in `figment::Jail`) plus unit tests of the error conversion and the key mapping. They were red against stubs first, as were `ModePreset`'s and `AgentName`'s.
+- [x] **P5.2** Telemetry: pretty logs in dev and JSON in prod, an env filter, and a panic hook that logs through `tracing`.
 
   > Note (P5.2, from Phase 3, group B review): **azalea's log targets stay at `warn`** in the default filter. azalea_client's disconnect plugin formats kick reasons at `info`, with azalea's own rendering, which grows exponentially on hostile nested translations (P3.5) and panics on a `%0$s` placeholder, since it computes `d - 1` on an unsigned digit with overflow checks on. A disabled level never formats, so neither can happen (ADR-0011).
 
   > Note (P5.2, from Phase 3, group C, the user's decisions): **`azalea_auth` is capped at `info`**, whatever the operator's filter says. `azalea_auth::certs` logs the whole chat-signing certificate response at `trace`, private key included, in every online session. It's the same cap as fleet-server's (P9.3), and a test checks it (ADR-0011, threat model).
+
+  > Note (P5.2, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
+  > - **A new `[log]` section** (Appendix A): `format = "json" | "pretty"` (default `json`) and `filter` (EnvFilter syntax, default `info`). `AFKFLEET_AGENT__LOG__…` overrides them; `RUST_LOG` has no effect. Logs go to stdout.
+  > - **JSON** puts the event's fields at the top level (`flatten_event`), with `span` and `spans`. CLAUDE.md forbids field names that would collide. **Pretty** is the single-line format, with colors only on a terminal.
+  > - **azalea's levels.** The filter is `(EnvFilter ∧ azalea cap ∧ azalea_auth cap) ∨ panic target`:
+  >   - EnvFilter gets `azalea=warn` in front unless the operator writes a plain `azalea` directive.
+  >   - A separate cap holds every `azalea…` target at `warn` unless an operator directive names it, so a target-free span directive like `[mc_session]=debug` can't lift azalea.
+  >   - `azalea_auth` stays at `info`.
+  >   - Panic reports always get through.
+  >   - One startup warning when the operator names an azalea target above `warn`.
+  > - **The panic hook** replaces the default one and logs one `error` event with the location, the thread and the payload.
+  >   - The payload is untrusted. It goes through fleet-core's new `text::sanitize_untrusted`, which makes each line break ` | `, and is cut at 1024 characters with ` [truncated]` appended.
+  >   - A backtrace is included only when `RUST_BACKTRACE` asks for one.
+  > - **The `log` bridge** (reqwest, rustls, hickory) is checked by a test: filters and caps see a `log` record's real target.
+
+  > Note (P5.2, as built, group A) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
+  > - **Shape.**
+  >   - `fleet_agent::telemetry::init(&LogConfig)` installs the global subscriber and the `log` bridge, the startup warning and the panic hook. It returns `TelemetryError::AlreadyInstalled` when a subscriber or logger is already there.
+  >   - `telemetry::layer(config, ansi, writer)` builds the layer, so tests can write into a buffer.
+  >   - The config gains `LogConfig { format: LogFormat, filter: LogFilter }`. `LogFilter` reads each directive with tracing-subscriber's own `Directive` parser and refuses a bad one by its index, without echoing it.
+  > - **Found in the build: azalea's default only lowers** (the user's decision).
+  >   - The `azalea=warn` in front of the operator's directives is more specific than their global level, so `filter = "off"` or `"error"` still let azalea's warnings through, and so did a filter without a global level.
+  >   - The default is now `warn`, or the operator's global level if that's lower (`off` when there's none).
+  > - **Found: EnvFilter applies a span directive's target to the span too.** So `azalea[x]=debug` means azalea's own spans named `x`. Inside such a span EnvFilter enables every target at that level, and the caps still hold: `azalea_auth` stays at `info` and azalea at what's named.
+  > - **Panic reports** have the target `afkfleet::panic`, a name no crate prefix shares, with the fields `thread`, `location`, `payload` and `backtrace`.
+  > - **fleet-core** makes `text` a public module that exposes only `sanitize_untrusted` and `UntrustedText`; the chat sanitizer's own items stay private.
+  > - **Tests.**
+  >   - Unit tests run the real layer in JSON into a buffer:
+  >     - 11 filters × 5 probe targets, including the span cases
+  >     - panic reports getting through `off`, `afkfleet::panic=off` and a filter without a global level
+  >     - the startup warning
+  >     - the JSON shape and the pretty format with and without colors
+  >     - the panic helpers
+  >   - `tests/telemetry_init.rs` covers the second `init` and the `log` bridge (`azalea_auth::certs` at `debug` is dropped, `info` is kept, `reqwest` at `debug` is kept).
+  >   - `tests/panic_hook.rs` panics on a named thread and checks the one event.
+  >   - Each was red against stubs first.
 - [ ] **P5.3** Wiring: `McHostPool` + `AzaleaConnector` + `Fleet`, with the standalone spec source.
 
   > Note (P5.3, from Phase 3): When `McHostPool::abandoned_threads()` reaches `max_abandoned_threads`, the agent shuts down and exits with an error, so Docker restarts it (§6 row 8). The library never ends the process itself (ADR-0011).
@@ -1710,10 +1791,30 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **A real seed.** The agent passes `Fleet::new` a random seed from `getrandom`, never a fixed one, so two agents never jitter their reconnects in lockstep.
   > - **An unexpected end of the supervisor.** If the supervisor's task ends without a requested shutdown (a `JoinError` or an early return), the agent logs it at `error` and exits with an error code, so Docker restarts it, as at the abandoned-thread limit.
   > - **The recorder first.** The agent installs the Prometheus recorder before it calls `Fleet::new`. The `metrics` crate sends the descriptions and the 0-series to the recorder installed at that moment; anything registered earlier goes to the no-op recorder and is lost (P4.9).
+
+  > Note (P5.3, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
+  > - **`run` is generic** over the connector, an agent-side `HostDiagnostics` trait (fleet-mc's five numbers) and a shutdown future. Tests use fleet-testkit's `FakeConnector` and fakes on paused time, so the exits at the abandoned-thread limit and at the supervisor's end are tested.
+  > - **Bot IDs.** Each standalone bot gets a random `BotId::new_v7(anchor, getrandom bytes)` at every start. One `info` line per bot logs its ID with its username, server and mode.
+  > - **Metrics:** `install_recorder()` only, with no listener and no port; P12.4 adds the endpoint.
+  > - **Exit codes,** listed in the README and in `--help`:
+  >   - 0: clean shutdown after a signal
+  >   - 1: startup error
+  >   - 2: clap's usage errors
+  >   - 3: abandoned-thread limit
+  >   - 4: the supervisor ended unasked
+  > - **Fleet events.** One task logs `ChatReceived` and `ModeChatSent` at `debug`, and `Lagged` at `debug` with its count. Nothing else.
+  > - `run` refuses `[control_plane]` until P10.
 - [ ] **P5.4** 🔴 Signals (Ctrl+C, SIGTERM) trigger a graceful shutdown within `shutdown_timeout`.
 
   > Note (P5.4, from P4.7) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): A signal calls `Fleet::shutdown(shutdown_timeout)`, or cancels the supervisor's token, which shuts down within `RuntimeConfig::shutdown_timeout`. `shutdown` returns a `ShutdownReport { stopped, aborted, crashed }` for the log.
+
+  > Note (P5.4, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): A signal calls `Fleet::shutdown(shutdown_timeout)` and logs the report. A second signal only logs that the shutdown is already running. Signals: SIGTERM and SIGINT on Linux, Ctrl+C and Ctrl+Break on Windows.
 - [ ] **P5.5** 🔴 A `healthcheck` subcommand. The agent touches a heartbeat file every 10 s, and the check fails when the file is stale. This works in distroless images, which have no curl.
+
+  > Note (P5.5, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
+  > - **Heartbeat.** The file is touched every 10 s, and only when `fleet.snapshot_all()` returns `Ok`. `Busy`, `TimedOut` and `ShuttingDown` never touch it: a hung supervisor's queue fills with timed-out calls, after which every call answers `Busy` at once. A test covers that case.
+  > - **`healthcheck --config <path>`** loads the same config. The file is stale when it's missing or 30 s old or more.
+  > - It exits only 0 or 1, since Docker reserves 2. clap usage errors for `healthcheck` map to 1 too.
 - [ ] **P5.6** `deploy/docker/agent.Dockerfile`:
   - cargo-chef
   - a nightly builder
@@ -1727,7 +1828,20 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   2. Restart the MC container; the bots reconnect within the policy.
   3. Stop the agent; the disconnect is clean.
 
+  > Note (P5.7, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
+  > - **Shape.** A `slow_` test in `crates/fleet-agent/tests/` drives `docker compose` through `std::process::Command`, with its own project name. It reads the agent's JSON logs and RCON `list`, and checks the exit code and the `ShutdownReport`.
+  > - **The image is built first.** `just test-slow` builds it before the timed test, since a cold build can outlast the slow profile's 10 minutes.
+  > - **Clean-up.** The test runs `down -v` for its own project before it starts, and in a guard that also runs when the test panics.
+
 **DoD:** Demo with 5 bots AFK on a local server for 1 h, with one server restart in between. The logs show no errors except the expected disconnect warnings.
+
+> Note (DoD, from the Phase 5 plan, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): `just demo-agent` (logic in a script under `scripts/`) runs the demo and prints a summary:
+> - warn and error lines by target and count
+> - the state-change timeline
+> - reconnect times after the restart
+> - the shutdown report
+>
+> The AI runs it in group D and puts its output in the PR; the user can re-run it, for example after a Minecraft-version bump.
 
 ---
 
@@ -2367,7 +2481,7 @@ packet_liveness_timeout_secs = 30
 connect_timeout_secs = 30                # from connect() until the bot has joined (ADR-0011)
 max_abandoned_threads = 3                # hung host threads before the agent exits (ADR-0011)
 shutdown_timeout_secs = 10
-heartbeat_file = "/tmp/afkfleet-agent.alive"
+# heartbeat_file = "/tmp/afkfleet-agent.alive"   # an absolute path; default: the OS temp directory's afkfleet-agent.alive (/tmp in Docker)
 
 [retry]
 base_delay_secs = 5
@@ -2376,6 +2490,10 @@ stable_after_secs = 300
 circuit_failures = 8
 circuit_window_secs = 600
 circuit_cooldown_secs = 900
+
+[log]
+format = "json"                          # or "pretty": one colored line per event, for development
+filter = "info"                          # EnvFilter syntax; azalea stays at warn unless named, azalea_auth at info
 
 [control_plane]                          # managed mode (production)
 url = "https://fleet.example.com:7443"
@@ -2387,7 +2505,8 @@ key_file = "/data/agent.key"
 # [[standalone.bots]]
 # username = "AfkBot1"                   # offline-mode account
 # server = "localhost:25565"
-# mode = "afk"
+# mode = "afk"                           # "afk" or "farm"
+# conflict_texts = []                    # kick texts that count as a duplicate login; at most 16
 ```
 
 ### B. REST API v1 (initial)
