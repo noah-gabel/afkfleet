@@ -10,6 +10,8 @@
 //! - `sampling` covers the diagnostics: the abandoned-thread limit, the
 //!   sampling period and the metrics.
 //! - `signals` covers the graceful shutdown on a signal.
+//! - `heartbeat` covers when the run beats: from the start of its run until
+//!   its shutdown starts.
 // Integration tests are test code, but clippy only applies the test allowances
 // of clippy.toml (unwrap, panic, …) inside `#[cfg(test)]`; without this, the
 // helper functions would count as library code.
@@ -19,6 +21,7 @@
 mod common;
 mod fakes;
 mod harness;
+mod heartbeat;
 mod sampling;
 mod signals;
 mod startup;

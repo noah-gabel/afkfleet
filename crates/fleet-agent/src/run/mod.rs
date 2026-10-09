@@ -1,10 +1,11 @@
 //! The agent's run: fleet-mc's connector wired to fleet-runtime's fleet, for
 //! the bots of a standalone config (Plan.md P5.3, ADR-0014).
 //!
-//! [`run`] is generic over the connector, the diagnostics and the signals,
-//! so tests drive it with fleet-testkit's fakes and a signal channel on
-//! paused time; main.rs passes fleet-mc's `AzaleaConnector` for the first
-//! two and the OS's signals.
+//! [`run`] is generic over the connector, the diagnostics, the signals and
+//! the heartbeat, so tests drive it with fleet-testkit's fakes, a signal
+//! channel and a counting heartbeat on paused time; main.rs passes fleet-mc's
+//! `AzaleaConnector` for the first two, the OS's signals and the heartbeat
+//! file.
 //!
 //! 1. A `[control_plane]` config is refused until Phase 10.
 //! 2. Each standalone bot gets a fresh random v7 ID.
@@ -12,7 +13,9 @@
 //!    task the run owns, and one more task logs chat at `debug`.
 //! 4. Every bot is applied, each with one `info` line that ties its ID to
 //!    its username, server and mode.
-//! 5. The run watches the supervisor and the stop signals, and samples
+//! 5. The heartbeat starts: at once and every 10 s, while the supervisor
+//!    answers. It stops when the shutdown starts.
+//! 6. The run watches the supervisor and the stop signals, and samples
 //!    fleet-mc's diagnostics every 5 s. A signal or the abandoned-thread
 //!    limit shuts the fleet down; a later signal is only logged.
 //!
@@ -22,7 +25,10 @@
 
 mod events;
 mod finish;
+mod heartbeat;
 mod specs;
+#[cfg(test)]
+mod testing;
 mod watch;
 
 use core::fmt;
@@ -38,14 +44,16 @@ use tokio_util::sync::CancellationToken;
 use tracing::{Instrument as _, Span, error, info, info_span};
 
 use self::finish::{Timeouts, finish};
+use self::heartbeat::beat;
 use self::specs::{StartupError, os_random, standalone_specs};
 use self::watch::{Reason, watch};
 use crate::config::{AgentConfig, AgentMode, StandaloneBot};
 use crate::diagnostics::{self, HostDiagnostics};
+use crate::heartbeat::Heartbeat;
 use crate::signals::ShutdownSignals;
 
 /// Everything a run is built from.
-pub struct RunParts<C, D, S> {
+pub struct RunParts<C, D, S, H> {
     /// The validated config.
     pub config: AgentConfig,
     /// Starts every bot's sessions.
@@ -55,6 +63,9 @@ pub struct RunParts<C, D, S> {
     /// The signals that stop the agent. They're installed before the run
     /// starts, so an early signal isn't lost.
     pub signals: S,
+    /// Where the heartbeat goes while the fleet answers: the config's
+    /// `heartbeat_file` in the binary.
+    pub heartbeat: H,
     /// The wall time at which the run starts: the runtime's clock starts
     /// here, and the bot IDs carry it.
     pub anchor: DateTime<Utc>,
@@ -62,7 +73,7 @@ pub struct RunParts<C, D, S> {
     pub seed: u64,
 }
 
-impl<C, D, S> fmt::Debug for RunParts<C, D, S> {
+impl<C, D, S, H> fmt::Debug for RunParts<C, D, S, H> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("RunParts")
             .field("config", &self.config)
@@ -144,28 +155,31 @@ pub fn agent_span(name: &AgentName) -> Span {
 /// Startup errors are logged at `error` and end the run with
 /// [`Exit::StartupFailed`]; a bot the fleet refuses at startup shuts the
 /// fleet down first.
-pub async fn run<C, D, S>(parts: RunParts<C, D, S>) -> Outcome
+pub async fn run<C, D, S, H>(parts: RunParts<C, D, S, H>) -> Outcome
 where
     C: MinecraftConnector,
     D: HostDiagnostics,
     S: ShutdownSignals,
+    H: Heartbeat,
 {
     let span = agent_span(&parts.config.name);
     run_in_span(parts).instrument(span).await
 }
 
 /// The run, inside the agent's span.
-async fn run_in_span<C, D, S>(parts: RunParts<C, D, S>) -> Outcome
+async fn run_in_span<C, D, S, H>(parts: RunParts<C, D, S, H>) -> Outcome
 where
     C: MinecraftConnector,
     D: HostDiagnostics,
     S: ShutdownSignals,
+    H: Heartbeat,
 {
     let RunParts {
         config,
         connector,
         diagnostics,
         mut signals,
+        heartbeat,
         anchor,
         seed,
     } = parts;
@@ -191,13 +205,28 @@ where
 
     let reason = if apply_all(&fleet, bots, specs).await {
         info!(bots = bots.len(), "the agent is running");
-        watch(
+        let beats = cancel.child_token();
+        let mut heartbeat_task = JoinSet::new();
+        heartbeat_task.spawn(
+            beat(
+                fleet.clone(),
+                heartbeat,
+                config.heartbeat_file.clone(),
+                beats.clone(),
+            )
+            .in_current_span(),
+        );
+        let reason = watch(
             &mut supervisor_task,
             &mut signals,
             &diagnostics,
             config.mc.max_abandoned_threads,
         )
-        .await
+        .await;
+        // The shutdown starts: no beat from here on.
+        beats.cancel();
+        heartbeat_task.shutdown().await;
+        reason
     } else {
         Reason::StartupFailed
     };

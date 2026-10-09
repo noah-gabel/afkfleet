@@ -11,6 +11,10 @@
 //!    `AzaleaConnector` as the connector and the diagnostics. SIGTERM and
 //!    SIGINT (Ctrl+C and Ctrl+Break on Windows) shut it down gracefully.
 //! 4. Its last log line, "the agent stopped", carries the exit code.
+//!
+//! `afkfleet-agent healthcheck` loads the same config, checks its heartbeat
+//! file and prints one line, without logging; it exits only 0 or 1, since
+//! Docker reserves 2 for healthchecks.
 
 use core::fmt::Display;
 use core::time::Duration;
@@ -18,10 +22,13 @@ use std::io::Write as _;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::time::SystemTime;
 
 use clap::Parser as _;
-use fleet_agent::cli::{Cli, Command};
+use fleet_agent::cli::{self, Cli, Command};
 use fleet_agent::config::{self, AgentConfig};
+use fleet_agent::healthcheck;
+use fleet_agent::heartbeat::FileHeartbeat;
 use fleet_agent::run::{Exit, Outcome, RunParts, agent_span, run};
 use fleet_agent::signals::OsSignals;
 use fleet_agent::telemetry;
@@ -37,15 +44,31 @@ fn main() -> ExitCode {
     let cli = match Cli::try_parse() {
         Ok(cli) => cli,
         Err(error) => {
-            // clap's own output: usage errors exit 2, `--help` and
-            // `--version` 0. A failed write has nowhere to be reported.
+            // clap's own output: usage errors exit 2 (1 for `healthcheck`),
+            // `--help` and `--version` 0. A failed write has nowhere to be
+            // reported.
             let _ = error.print();
-            return ExitCode::from(u8::try_from(error.exit_code()).unwrap_or(2));
+            return ExitCode::from(cli::exit_code(&error, std::env::args_os()));
         }
     };
     match cli.command {
         Command::Run { config } => run_agent(&config),
+        Command::Healthcheck { config } => check_health(&config),
     }
+}
+
+/// `afkfleet-agent healthcheck`: one line on stdout, exit 0 or 1. A config
+/// that can't be loaded is reported as `run` reports it, with exit 1.
+fn check_health(path: &Path) -> ExitCode {
+    let config = match config::load(path) {
+        Ok(config) => config,
+        Err(error) => return fail_early(&error),
+    };
+    let health = healthcheck::check(&config.heartbeat_file, SystemTime::now());
+    // A failed write to stdout has nowhere else to go; the exit code still
+    // tells Docker.
+    let _ = writeln!(std::io::stdout().lock(), "{health}");
+    ExitCode::from(health.exit_code())
 }
 
 /// `afkfleet-agent run`.
@@ -103,6 +126,7 @@ fn start(config: AgentConfig, span: &Span) -> Outcome {
         }
     };
     let connector = AzaleaConnector::new(&config.mc);
+    let heartbeat = FileHeartbeat::new(config.heartbeat_file.clone());
     let outcome = runtime.block_on(async {
         // Inside the runtime, which tokio's signal handling needs, and before
         // the fleet starts, so an early signal isn't lost.
@@ -120,6 +144,7 @@ fn start(config: AgentConfig, span: &Span) -> Outcome {
             connector: Arc::new(connector.clone()),
             diagnostics: connector,
             signals,
+            heartbeat,
             anchor: chrono::Utc::now(),
             seed,
         })

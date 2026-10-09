@@ -1853,12 +1853,34 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - `tests/run/signals.rs`: a signal stops the bots with exit 0 and the report; a bot slower than the shutdown timeout is aborted at 10 s, still exit 0; a second signal is only logged and doesn't change the 8 s shutdown; a signal sent before the start is handled once the agent runs; a source that ends never stops the agent.
   >   - Unix only: `tests/signals.rs` (one test: `OsSignals` receives SIGTERM, then SIGINT, sent to its own process with `kill`) and `tests/cli.rs`'s SIGTERM test (the binary with one bot at `127.0.0.1:1`, `kill -TERM` after "the agent is running", exit 0 and "the agent stopped" with the report as the last line). Windows' Ctrl+C and Ctrl+Break can't be sent without unsafe code; `just dev-agent` exercises them.
   >   - The Unix tests were run red and green in a Linux container, since the dev machine is Windows.
-- [ ] **P5.5** 🔴 A `healthcheck` subcommand. The agent touches a heartbeat file every 10 s, and the check fails when the file is stale. This works in distroless images, which have no curl.
+- [x] **P5.5** 🔴 A `healthcheck` subcommand. The agent touches a heartbeat file every 10 s, and the check fails when the file is stale. This works in distroless images, which have no curl.
 
   > Note (P5.5, from the Phase 5 plan, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
   > - **Heartbeat.** The file is touched every 10 s, and only when `fleet.snapshot_all()` returns `Ok`. `Busy`, `TimedOut` and `ShuttingDown` never touch it: a hung supervisor's queue fills with timed-out calls, after which every call answers `Busy` at once. A test covers that case.
   > - **`healthcheck --config <path>`** loads the same config. The file is stale when it's missing or 30 s old or more.
   > - It exits only 0 or 1, since Docker reserves 2. clap usage errors for `healthcheck` map to 1 too.
+
+  > Note (P5.5, as built, group C) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md); the user answered group C's questions on 2026-10-09):
+  > - **Shape.**
+  >   - `fleet_agent::heartbeat` has `PERIOD` (10 s), `STALE_AFTER` (30 s), the `Heartbeat` port (`touch()`) and `FileHeartbeat`. A touch opens the file with `create(true).write(true).truncate(false)` and sets its modification time, in `spawn_blocking`. It never truncates or deletes the file, so a wrong path can't destroy data.
+  >   - `RunParts` gains `heartbeat: H`; main.rs passes `FileHeartbeat` on `heartbeat_file`, and tests pass a counting fake.
+  >   - `fleet_agent::healthcheck::check(path, now) -> Health` (`Fresh`, `Stale`, `Future`, `Missing` or `Unreadable`), with `exit_code()` and the one line it prints.
+  >   - `afkfleet-agent healthcheck --config <PATH>`. Its help lists codes 0 and 1. `cli::exit_code` turns clap's usage error into 1 when the first argument is `healthcheck`; `--help` and `--version` stay 0.
+  > - **The beat** is a task the run owns, with its own child token. It starts once "the agent is running" (a start that fails never beats) and is cancelled when the shutdown starts.
+  >   - It beats at once, then every 10 s, with missed ticks skipped. Each touch ends before the next beat.
+  >   - Logs, once per streak: `warn` "the fleet didn't answer the heartbeat" (`error`), then `info` "the fleet answers the heartbeat again"; `warn` "the heartbeat file can't be touched" (`file`, `error`), then `info` "the heartbeat file is touched again" (`file`). A wrong path shows up within a second of the start.
+  > - **The check** (the user's decisions):
+  >   - One line on stdout either way: `healthy: the heartbeat is N s old`, `unhealthy: the heartbeat file is N s old`, `unhealthy: no heartbeat file at <path>`, or `unhealthy: the heartbeat file at <path> can't be read: <error>`.
+  >   - stderr is left for errors that keep the check from running: a config that can't be loaded (the same text as `run`'s, exit 1) and usage errors.
+  >   - **A time in the future** counts as age 0 up to 30 s ahead, so a small clock correction never fails the check. Further ahead gives `unhealthy: the heartbeat file's time is N s in the future`: a healthy agent's next beat fixes it, and a hung agent can't look healthy for the length of a big backward jump.
+  > - **Tests**, red against stubs that compiled (a touch that did nothing, a beat that only waited for its token, a check that always answered healthy, clap's codes unchanged), then green:
+  >   - `healthcheck`'s unit tests: the 30 s limits in both directions, the lines and codes, a missing file, and on Unix a path through a file (`ENOTDIR`).
+  >   - The beat's unit tests, on a real `Fleet` and paused time: a beat at once and every 10 s; **no beat from a held supervisor through 70 beats, past the point where its full queue answers `Busy` at once**, with one `warn`; beats coming back with an `info`; a file streak; cancelling while a snapshot waits.
+  >   - `tests/run/heartbeat.rs`: the first beat right after "the agent is running", none once the shutdown starts, none after a failed start.
+  >   - `tests/heartbeat.rs`: `FileHeartbeat` on real files: it creates the file, moves an old time to now, keeps the content, and fails without its directory.
+  >   - `tests/cli.rs`: the binary's healthcheck for a fresh, a stale and a missing file, a missing config, a usage error (exit 1) and `--help` (exit 0). The Unix SIGTERM test also waits for its configured heartbeat file before it sends the signal, so the wiring is checked end to end.
+  >   - The Unix-only tests ran red and green in a Linux container.
+  >   - The shared test fleet of `run`'s unit tests moved into `run::testing`, used by `finish`'s tests and the beat's.
 - [ ] **P5.6** `deploy/docker/agent.Dockerfile`:
   - cargo-chef
   - a nightly builder

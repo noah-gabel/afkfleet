@@ -14,16 +14,21 @@
 //!   through `tracing`.
 //! - [`diagnostics`]: fleet-mc's numbers, sampled into metrics.
 //! - [`signals`]: the signals that stop the agent.
+//! - [`heartbeat`]: the file the agent touches while its fleet answers.
+//! - [`healthcheck`]: the `healthcheck` command's check of that file.
 //! - [`run`]: the fleet's run, from the first bot to the exit code.
 //!
 //! The binary (`src/main.rs`) only wires these together: it loads the
 //! config before the async runtime starts, installs the TLS provider and the
-//! metrics recorder, and passes fleet-mc's `AzaleaConnector` and the OS's
-//! signals to [`run::run`].
+//! metrics recorder, and passes fleet-mc's `AzaleaConnector`, the OS's
+//! signals and the heartbeat file to [`run::run`]. Its `healthcheck` command
+//! loads the same config and runs [`healthcheck::check`].
 
 pub mod cli;
 pub mod config;
 pub mod diagnostics;
+pub mod healthcheck;
+pub mod heartbeat;
 pub mod run;
 pub mod signals;
 pub mod telemetry;

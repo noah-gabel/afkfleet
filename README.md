@@ -65,6 +65,7 @@ There's no support, and I don't take feature requests. Security reports are welc
   - logging: JSON lines or a pretty format, a filter that keeps azalea quiet and its auth logs safe, and a panic hook that logs through it
   - the wiring of the azalea adapter to the bot runtime. Each bot gets a new ID at every start, logged with its name. The agent exports the adapter's numbers as metrics and exits so Docker can restart it when too many host threads hang
   - a graceful shutdown on SIGTERM or SIGINT (Ctrl+C or Ctrl+Break on Windows): every bot leaves the server within the shutdown timeout
+  - a heartbeat file, touched every 10 s while the fleet answers, and an `afkfleet-agent healthcheck` command that checks it without a shell or curl
 
   [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md) records Phase 5's decisions.
 
@@ -126,6 +127,13 @@ afkfleet-agent run --config agent.toml
   | 2 | Usage error |
   | 3 | Too many Minecraft host threads hung (the abandoned-thread limit); the agent shut its bots down first, so Docker can restart it |
   | 4 | The fleet's supervisor ended unasked, or didn't end when asked |
+- **Heartbeat:** while its fleet answers, the agent touches its heartbeat file right after it starts and then every 10 s. The file is `[runtime] heartbeat_file`, an absolute path; by default it's `afkfleet-agent.alive` in the OS's temp directory, which is `/tmp` on Linux. A hung fleet stops the beats even while the process lives on. The agent never truncates or deletes the file.
+- **Healthcheck:** `afkfleet-agent healthcheck --config agent.toml` loads the same config (environment variables included) and prints one line, such as `healthy: the heartbeat is 4 s old`. It works without a shell or curl, so it runs in the distroless image. Exit codes, also listed by `afkfleet-agent healthcheck --help`:
+
+  | Code | Meaning |
+  |---|---|
+  | 0 | Healthy: the heartbeat file was touched less than 30 s ago |
+  | 1 | Unhealthy: the file is missing, 30 s old or more, unreadable, or its time is more than 30 s in the future. Also a usage or config error, which goes to stderr as for `run`. Docker reserves 2, so it's never used |
 
 ## Development
 ```sh

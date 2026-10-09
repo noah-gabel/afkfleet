@@ -25,7 +25,7 @@ use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::layer::SubscriberExt as _;
 
 use crate::common::Capture;
-use crate::fakes::{FakeDiagnostics, FakeSignals};
+use crate::fakes::{FakeDiagnostics, FakeHeartbeat, FakeSignals};
 
 // --- Values ---
 
@@ -121,6 +121,7 @@ fn capture_logs() -> (Capture, DefaultGuard) {
 pub(crate) struct Agent {
     pub(crate) fake: FakeConnector,
     pub(crate) diagnostics: FakeDiagnostics,
+    pub(crate) heartbeat: FakeHeartbeat,
     pub(crate) capture: Capture,
     signals: Option<mpsc::Sender<Signal>>,
     task: JoinHandle<Outcome>,
@@ -139,6 +140,7 @@ impl Agent {
         let (capture, logs) = capture_logs();
         let fake = FakeConnector::new();
         let diagnostics = FakeDiagnostics::default();
+        let heartbeat = FakeHeartbeat::default();
         let (sender, signals) = FakeSignals::new();
         if let Some(signal) = early {
             sender.send(signal).await.unwrap();
@@ -148,6 +150,7 @@ impl Agent {
             connector: Arc::new(fake.clone()),
             diagnostics: diagnostics.clone(),
             signals,
+            heartbeat: heartbeat.clone(),
             anchor: anchor(),
             seed: 1,
         }));
@@ -155,6 +158,7 @@ impl Agent {
         Self {
             fake,
             diagnostics,
+            heartbeat,
             capture,
             signals: Some(sender),
             task,
