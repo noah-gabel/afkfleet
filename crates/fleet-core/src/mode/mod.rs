@@ -6,7 +6,8 @@
 //!   checks the limits (intervals, angles, how many steps) and returns a
 //!   [`ModeDefinition`], the only form the rest of the system runs.
 //! - [`ModeDefinition::afk`] and [`ModeDefinition::farm`] are the built-in
-//!   presets.
+//!   presets, and [`ModePreset`] names them (`afk`, `farm`), as the standalone
+//!   agent's config does.
 //! - [`ModePlan`] runs a definition: it decides when each step is due and
 //!   resolves it into [`PlannedAction`]s, a [`GameAction`] for the session
 //!   or a chat message for the chat queue. The runtime only sleeps until the
@@ -24,7 +25,9 @@ mod action;
 mod definition;
 mod millis;
 mod plan;
+mod preset;
 
 pub use action::{Action, HotbarSlot, HotbarSlotError};
 pub use definition::{Angle, LimitedStep, ModeDefinition, ModeDraft, ModeError, Schedule, Step};
 pub use plan::{GameAction, ModePlan, PlanTick, PlannedAction};
+pub use preset::{ModePreset, UnknownPresetError};

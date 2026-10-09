@@ -7,7 +7,8 @@
 //!
 //! # Modules
 //! - [`id`]: typed IDs for users, accounts, bots, agents and modes.
-//! - [`value`]: server addresses and the names of Minecraft accounts and users.
+//! - [`value`]: server addresses and the names of Minecraft accounts, users
+//!   and agents.
 //! - [`chat`]: the messages bots send, and sanitized messages they receive.
 //! - [`disconnect`]: why a session ended, and whether the bot retries.
 //! - [`resilience`]: retry backoff, failure windows and the circuit breaker.

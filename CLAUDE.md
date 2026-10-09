@@ -26,7 +26,7 @@ Where things are:
 2. **Pick the task.** Take the next unchecked task, or the one the user names (e.g. "do P4.3"). Before coding, restate its goal and acceptance criteria in 2–4 lines.
 3. **Branch.**
    - Start from an up-to-date `main`: `git switch main`, then `git pull`.
-   - Create the task branch `p<phase>/<task-id>-<slug>`, e.g. `p2/p2.6-bot-state-machine`. Phases 0 and 1 each use one branch for the whole phase: `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each, with one commit per task (Plan.md, the note under Phase 2). Phase 3 does the same with five group branches, plus one task branch for P3.9 (Plan.md, the note under Phase 3). Phase 4 uses five group branches (Plan.md, the note under Phase 4).
+   - Create the task branch `p<phase>/<task-id>-<slug>`, e.g. `p2/p2.6-bot-state-machine`. Phases 0 and 1 each use one branch for the whole phase: `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each, with one commit per task (Plan.md, the note under Phase 2). Phase 3 does the same with five group branches, plus one task branch for P3.9 (Plan.md, the note under Phase 3). Phase 4 uses five group branches (Plan.md, the note under Phase 4). Phase 5 uses four group branches (Plan.md, the note under Phase 5).
    - One task, or one Phase 2 group, per branch. If the previous PR isn't merged yet, stop and tell the user instead of stacking branches.
 4. **TDD.**
    1. Write the tests first.

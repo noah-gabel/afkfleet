@@ -1,14 +1,16 @@
 //! Validated value objects: where a bot connects, and the names of Minecraft
-//! accounts and app users.
+//! accounts, app users and agents.
 //!
 //! Each type has a fallible constructor (`TryFrom<&str>`), so code that holds
 //! one never has to check it again. serde goes through the same constructor,
 //! so stored or received values are validated too (ADR-0010).
 
+mod agent_name;
 mod mc_username;
 mod server_address;
 mod username;
 
+pub use agent_name::{AgentName, AgentNameError};
 pub use mc_username::{McUsername, McUsernameError};
 pub use server_address::{Host, ServerAddress, ServerAddressError};
 pub use username::{Username, UsernameError};
