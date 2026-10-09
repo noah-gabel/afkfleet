@@ -43,6 +43,9 @@ chrono = { version = "0.4.45", default-features = false }
 # and getrandom 0.3 into normal dependencies. fleet-runtime enables `std` and runs its
 # chat bucket on a tokio-backed clock (ADR-0013).
 governor = { version = "0.10.4", default-features = false }
+# metrics: the facade only, with no features; its one dependency is rapidhash. The agent
+# installs the Prometheus exporter (P5.3); fleet-runtime records into it (ADR-0013).
+metrics = "0.24.6"
 # rand: no `sys_rng`/`thread_rng`; fleet-core takes an RNG as a parameter (ADR-0010).
 rand = { version = "0.10.3", default-features = false }
 # reqwest: TLS is fixed here, `rustls` (aws-lc-rs + platform verifier), never native-tls.

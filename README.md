@@ -16,7 +16,7 @@ afkfleet is **a hobby project** I'm building for my friends with Claude Code. I 
 There's no support, and I don't take feature requests. Security reports are welcome, though: see [SECURITY.md](SECURITY.md).
 
 ## Status
-**Phase 3 (azalea adapter and test kit) is done.** The product itself isn't runnable yet. What exists:
+**Phase 4 (the bot runtime) is done.** The product itself isn't runnable yet. What exists:
 - **From Phase 0:**
   - the Cargo workspace with all lints and the pinned toolchain
   - the quality gates: formatting, clippy, docs, tests, coverage gates, cargo-deny, Biome
@@ -49,8 +49,19 @@ There's no support, and I don't take feature requests. Security reports are welc
   - the threat model's analysis of what a hostile Minecraft server can do, with the test behind each mitigation ([`docs/threat-model.md`](docs/threat-model.md), B4)
 
   [ADR-0011](docs/adr/0011-fleet-mc-and-fleet-testkit-conventions-and-phase-3-refinements.md) records Phase 3's decisions, and [ADR-0012](docs/adr/0012-azalea-advisory-and-license-exceptions.md) records azalea's accepted advisories and license exceptions.
+- **From Phase 4:** [`crates/fleet-runtime`](crates/fleet-runtime/), the bot runtime. It's written against the Minecraft ports, so its tests run it on the test kit's fakes with paused time, and it never reads the clock or the OS's randomness itself. It contains:
+  - one actor per bot that drives the bot state machine. It gets the session credentials, connects, runs the bot's mode and respawns it after a death. When a session ends it reconnects, waiting longer after each failure, and longer still while the circuit breaker is open
+  - pausing when a human logs into the bot's account, and failing on a kick that won't heal, so a bot never fights the human or keeps hitting a server that banned it
+  - the mode runner, which plays the bot's mode on its schedule
+  - the outbound chat queue, which user chat and mode chat share: bounded, rate-limited per bot, and answering at once when it's full instead of waiting
+  - the watchdog, which ends a session that stops ticking or stops getting packets, so the bot reconnects
+  - the supervisor and its `Fleet` API. It runs every bot's actor and restarts one that crashes without skipping the backoff. A bot that crashes 6 times in 10 minutes fails. Every call is answered at once, if only with "busy", and a shutdown stops every bot within a timeout
+  - four metrics: bots per state, reconnects, watchdog trips and actor restarts
+  - a chaos test: 500 random runs of kicks, failed connects, hangs, crashes and API calls, which check that bots heal, never reconnect in a storm, never connect while a human plays, and that the API always answers
 
-**Next:** Phase 4, the bot runtime: one supervised actor per bot that runs its mode, reconnects and heals itself.
+  [ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md) records Phase 4's decisions.
+
+**Next:** Phase 5, the standalone agent and the first runnable product: `afkfleet-agent run --config agent.toml` runs a few offline-mode bots against a local server.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 

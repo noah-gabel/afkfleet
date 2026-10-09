@@ -15,6 +15,7 @@ workspace = true
 chrono.workspace = true
 fleet-core.workspace = true
 governor = { workspace = true, features = ["std"] }
+metrics.workspace = true
 # `StdRng` only, seeded by the caller: never the OS's randomness (ADR-0013).
 rand = { workspace = true, features = ["std_rng"] }
 thiserror.workspace = true

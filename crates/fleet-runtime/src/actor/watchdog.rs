@@ -8,7 +8,7 @@ use fleet_core::mc::Liveness;
 
 /// How an online session stalled.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum Stall {
+pub(crate) enum Stall {
     /// No tick for the watchdog timeout: the session hung.
     Tick,
     /// No packet for the liveness timeout: the server froze or the link

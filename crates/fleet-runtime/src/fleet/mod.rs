@@ -16,6 +16,8 @@
 //! - Bots start and stop only through their spec's desired state.
 //! - A shutdown cancels every actor, waits for them up to a timeout, and
 //!   aborts the rest.
+//! - [`Fleet::new`] describes the runtime's metrics and registers every
+//!   series at 0 (P4.9).
 
 mod command;
 mod error;
@@ -40,6 +42,7 @@ use self::command::{Command, Lifecycle, Reply};
 use crate::chat::{ChatQuota, ChatTicket};
 use crate::config::RuntimeConfig;
 use crate::event::FleetEvent;
+use crate::metrics;
 
 /// Everything a fleet is built from (ADR-0013).
 #[derive(Debug)]
@@ -91,6 +94,9 @@ impl Fleet {
         // that's too large.
         check_capacities(&parts.config)?;
         let quota = ChatQuota::try_new(parts.config.chat_interval, parts.config.chat_burst)?;
+        // Into the recorder installed now; the agent installs its exporter
+        // first (P5.3).
+        metrics::register();
         let (commands, inbox) = mpsc::channel(parts.config.supervisor_queue.get());
         let (events, _) = broadcast::channel(parts.config.event_buffer.get());
         let fleet = Self {

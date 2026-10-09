@@ -5,96 +5,22 @@
 
 use core::num::{NonZeroU32, NonZeroUsize};
 use core::time::Duration;
-use std::sync::Arc;
 
-use chrono::{DateTime, Utc};
-use fleet_core::bot::{
-    BotAccount, BotNotification, BotSpec, BotState, DesiredRunState, FailReason, PauseReason,
-    StickyState,
-};
-use fleet_core::chat::ChatMessage;
-use fleet_core::disconnect::{ConflictKind, ConflictTexts, DisconnectReason};
+use fleet_core::bot::{BotNotification, BotState, FailReason, PauseReason, StickyState};
+use fleet_core::disconnect::ConflictKind;
 use fleet_core::id::BotId;
 use fleet_core::mc::{ConnectError, SessionEvent};
-use fleet_core::mode::{Action, ModeDefinition, ModeDraft, Schedule, Step};
-use fleet_core::resilience::{CircuitPolicy, RetryPolicy};
-use fleet_runtime::{
-    ChatError, Fleet, FleetError, FleetEvent, FleetEventKind, FleetParts, RuntimeConfig,
-    SendChatError, ShutdownReport,
-};
-use fleet_testkit::mc::{
-    EmitOutcome, FakeConnector, FakeCredentials, Performed, SessionController,
-};
-use tokio::sync::broadcast;
-use tokio::task::JoinHandle;
-use tokio_util::sync::CancellationToken;
+use fleet_core::mode::{Action, Schedule, Step};
+use fleet_runtime::{ChatError, Fleet, FleetError, FleetEventKind, SendChatError, ShutdownReport};
+use fleet_testkit::mc::Performed;
 use tracing::Level;
 
 use crate::common::Levels;
+use crate::harness::{
+    BOT, CRASH_LOOP, Harness, OTHER, Setup, advance, backoff, circuit, connecting, crash_loop,
+    emit, id, jumping, kick, message, mode, ms, n, policy, running, secs, settle, stopped,
+};
 use crate::panicky::{PanicOn, PanickyConnector};
-
-// --- Values ---
-
-const BOT: &str = "018bcfe5-6800-7bab-abab-abababababab";
-const OTHER: &str = "018bcfe5-6800-7cdc-8dcd-cdcdcdcdcdcd";
-
-const fn ms(ms: u64) -> Duration {
-    Duration::from_millis(ms)
-}
-
-const fn secs(secs: u64) -> Duration {
-    Duration::from_secs(secs)
-}
-
-fn n(attempt: u32) -> NonZeroU32 {
-    NonZeroU32::new(attempt).unwrap()
-}
-
-fn id(bot: &str) -> BotId {
-    bot.parse().unwrap()
-}
-
-/// The runtime clock starts here in every test.
-fn anchor() -> DateTime<Utc> {
-    DateTime::from_timestamp(1_700_000_000, 0).unwrap()
-}
-
-fn message(text: &str) -> ChatMessage {
-    text.parse().unwrap()
-}
-
-fn mode(steps: Vec<Step>) -> ModeDefinition {
-    ModeDraft { steps }.validate().unwrap()
-}
-
-fn spec(bot: &str, name: &str, desired: DesiredRunState) -> BotSpec {
-    BotSpec {
-        id: id(bot),
-        account: BotAccount::Offline(name.parse().unwrap()),
-        server: "localhost".try_into().unwrap(),
-        mode: mode(Vec::new()),
-        desired,
-        conflict_texts: ConflictTexts::default(),
-    }
-}
-
-fn running(bot: &str, name: &str) -> BotSpec {
-    spec(bot, name, DesiredRunState::Running)
-}
-
-fn stopped(bot: &str, name: &str) -> BotSpec {
-    spec(bot, name, DesiredRunState::Stopped)
-}
-
-/// The defaults of Appendix A: 5 s to 300 s, stable after 300 s.
-fn policy() -> RetryPolicy {
-    RetryPolicy::try_new(secs(5), secs(300), secs(300)).unwrap()
-}
-
-/// `threshold` failures within 600 s open the breaker for 900 s.
-fn circuit(threshold: usize) -> CircuitPolicy {
-    CircuitPolicy::try_new(NonZeroUsize::new(threshold).unwrap(), secs(600), secs(900)).unwrap()
-}
 
 const DUPLICATE_LOGIN: PauseReason = PauseReason::Conflict {
     kind: ConflictKind::DuplicateLogin,
@@ -104,199 +30,11 @@ const PAUSED: BotState = BotState::Paused {
     reason: DUPLICATE_LOGIN,
 };
 
-const CRASH_LOOP: BotState = BotState::Failed {
-    reason: FailReason::CrashLoop,
-};
-
 const fn awaiting(attempt: NonZeroU32) -> BotState {
     BotState::AwaitingSession {
         attempt,
         fresh: false,
     }
-}
-
-const fn connecting(attempt: NonZeroU32) -> BotState {
-    BotState::Connecting {
-        attempt,
-        auth_retried: false,
-    }
-}
-
-const fn backoff(attempt: NonZeroU32) -> BotState {
-    BotState::Backoff { attempt }
-}
-
-fn kick(key: &str) -> SessionEvent {
-    SessionEvent::Disconnected(DisconnectReason::kicked(Some(key), "Kicked"))
-}
-
-fn emit(controller: &SessionController, event: SessionEvent) {
-    assert_eq!(controller.emit(event), EmitOutcome::Queued);
-}
-
-// --- Time ---
-
-/// Lets every spawned task run until it waits.
-async fn settle() {
-    for _ in 0..64 {
-        tokio::task::yield_now().await;
-    }
-}
-
-/// Moves paused time forward by `duration` and lets the tasks run.
-async fn advance(duration: Duration) {
-    tokio::time::advance(duration).await;
-    settle().await;
-}
-
-/// Steps paused time forward one second at a time, so each timer fires at
-/// its own time and the next one is set from there.
-async fn step_seconds(seconds: u64) {
-    for _ in 0..seconds {
-        advance(secs(1)).await;
-    }
-}
-
-// --- The fleet under test ---
-
-/// What a test sets up before the fleet starts.
-struct Setup {
-    config: RuntimeConfig,
-    circuit: CircuitPolicy,
-    fake: FakeConnector,
-    credentials: FakeCredentials,
-}
-
-impl Setup {
-    fn new() -> Self {
-        Self {
-            config: RuntimeConfig::default(),
-            circuit: circuit(8),
-            fake: FakeConnector::new(),
-            credentials: FakeCredentials::new(),
-        }
-    }
-
-    fn parts(&self, connector: PanickyConnector) -> FleetParts<PanickyConnector, FakeCredentials> {
-        FleetParts {
-            connector: Arc::new(connector),
-            credentials: Arc::new(self.credentials.clone()),
-            retry: policy(),
-            circuit: self.circuit,
-            config: self.config,
-            anchor: anchor(),
-            seed: 1,
-        }
-    }
-
-    /// Builds the fleet and runs its supervisor.
-    async fn start(self) -> Harness {
-        let connector = PanickyConnector::new(self.fake.clone());
-        let (fleet, supervisor) = Fleet::new(self.parts(connector.clone())).unwrap();
-        let events = fleet.subscribe();
-        let cancel = CancellationToken::new();
-        let task = tokio::spawn(supervisor.run(cancel.clone()));
-        settle().await;
-        Harness {
-            fleet,
-            connector,
-            fake: self.fake,
-            credentials: self.credentials,
-            events,
-            cancel,
-            task,
-        }
-    }
-}
-
-/// A running fleet and the test's handles on it.
-struct Harness {
-    fleet: Fleet,
-    connector: PanickyConnector,
-    fake: FakeConnector,
-    credentials: FakeCredentials,
-    events: broadcast::Receiver<FleetEvent>,
-    cancel: CancellationToken,
-    task: JoinHandle<()>,
-}
-
-impl Harness {
-    async fn apply(&self, spec: BotSpec) {
-        self.fleet.apply(spec, None).await.unwrap();
-        settle().await;
-    }
-
-    async fn remove(&self, bot: &str) {
-        self.fleet.remove(id(bot)).await.unwrap();
-        settle().await;
-    }
-
-    async fn session(&self, index: usize) -> SessionController {
-        tokio::time::timeout(secs(1), self.fake.session(index))
-            .await
-            .expect("the session should have started")
-    }
-
-    /// Runs a new bot and joins it in the fake's session `index`.
-    async fn online(&self, bot: &str, name: &str, index: usize) -> SessionController {
-        self.apply(running(bot, name)).await;
-        let controller = self.session(index).await;
-        emit(&controller, SessionEvent::Joined);
-        settle().await;
-        assert!(matches!(self.state(bot).await, BotState::Online { .. }));
-        controller
-    }
-
-    async fn state(&self, bot: &str) -> BotState {
-        self.fleet.snapshot(id(bot)).await.unwrap().state
-    }
-
-    /// Every event published since the last call, in order.
-    fn drain(&mut self) -> Vec<FleetEvent> {
-        let mut events = Vec::new();
-        while let Ok(event) = self.events.try_recv() {
-            events.push(event);
-        }
-        events
-    }
-
-    /// The events of `bot` published since the last call, in order. The
-    /// other bots' events are dropped.
-    fn kinds_of(&mut self, bot: &str) -> Vec<FleetEventKind> {
-        self.drain()
-            .into_iter()
-            .filter(|event| event.bot_id == id(bot))
-            .map(|event| event.kind)
-            .collect()
-    }
-
-    /// The states `bot` went through since the last call, in order.
-    fn states_of(&mut self, bot: &str) -> Vec<BotState> {
-        self.kinds_of(bot)
-            .into_iter()
-            .filter_map(|kind| match kind {
-                FleetEventKind::StateChanged(snapshot) => Some(snapshot.state),
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// Waits for the supervisor to end.
-    async fn ended(self) {
-        tokio::time::timeout(secs(60), self.task)
-            .await
-            .expect("the supervisor should have ended")
-            .unwrap();
-    }
-}
-
-/// Runs a bot whose every connect panics until its 6th crash within 10 min.
-async fn crash_loop(harness: &mut Harness) {
-    harness.connector.panic_always(true);
-    harness.apply(running(BOT, "AfkBot1")).await;
-    step_seconds(400).await;
-    assert_eq!(harness.connector.attempts(), 6);
-    assert_eq!(harness.state(BOT).await, CRASH_LOOP);
 }
 
 // --- Bots come and go ---
@@ -662,6 +400,31 @@ async fn a_crashed_task_restarts_the_bot_like_a_panic() {
     assert!(controller.is_torn_down());
     assert_eq!(levels.of("it restarts from its last state"), [Level::WARN]);
     assert_eq!(fleet.connector.attempts(), 1);
+}
+
+// Found while planning P4.8: a crashing actor waited for its slow teardown
+// without reading its inbox, so `send_chat` timed out after 5 s, and a
+// Resume or Restart was answered `Ok`, then lost with the actor.
+#[tokio::test(start_paused = true)]
+async fn while_a_crashed_actor_tears_down_its_calls_are_busy_at_once() {
+    let fleet = Setup::new().start().await;
+    fleet.connector.sessions_panic_on(PanicOn::Jump);
+    fleet.apply(jumping(BOT, "AfkBot1")).await;
+    let controller = fleet.session(0).await;
+    controller.delay_disconnect(secs(20));
+    emit(&controller, SessionEvent::Joined);
+    settle().await;
+    assert!(controller.is_torn_down(), "the runner crashed at its jump");
+    let started = tokio::time::Instant::now();
+
+    let chat = fleet.fleet.send_chat(id(BOT), message("hi")).await;
+    let resume = fleet.fleet.resume(id(BOT)).await;
+    let restart = fleet.fleet.restart(id(BOT)).await;
+
+    assert_eq!(chat, Err(SendChatError::Fleet(FleetError::Busy)));
+    assert_eq!(resume, Err(FleetError::Busy));
+    assert_eq!(restart, Err(FleetError::Busy));
+    assert_eq!(started.elapsed(), Duration::ZERO);
 }
 
 #[tokio::test(start_paused = true)]
