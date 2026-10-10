@@ -20,6 +20,7 @@ env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: "0"
   JUST_VERSION: "1.58.0"
+  SQLX_CLI_VERSION: "0.9.0"
 
 jobs:
   fmt:
@@ -158,6 +159,34 @@ jobs:
           rustup toolchain install "$(just --evaluate stable)" --profile minimal
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - run: just stable-check
+
+  sqlx-offline:
+    name: sqlx-offline
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup install
+      # cache-bin (on by default) keeps the installed sqlx-cli between runs.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@${{ env.JUST_VERSION }}
+      # Pinned and SQLite-only, the same command as in the README (ADR-0015); a no-op when
+      # the cache already has this version.
+      - name: Install sqlx-cli
+        run: cargo install sqlx-cli --version "$SQLX_CLI_VERSION" --locked --no-default-features --features sqlite
+      # Only main's tip, for the migrations check; the explicit refspec creates origin/main.
+      - name: Fetch main
+        run: git fetch --depth=1 origin +refs/heads/main:refs/remotes/origin/main
+      - run: just migrations-check
+      - run: just db-check
 
   frontend:
     name: frontend

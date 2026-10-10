@@ -20,3 +20,6 @@
 *.exe   binary
 *.dll   binary
 *.db    binary
+
+# sqlx's offline query data, written by `just db-prepare`: collapsed in pull request diffs.
+**/.sqlx/*.json linguist-generated=true

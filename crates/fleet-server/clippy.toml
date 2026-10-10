@@ -51,3 +51,15 @@ disallowed-types = [
     { path = "rand::rngs::SysRng", reason = "draw random bytes through the SecureRandom port (ADR-0015)", allow-invalid = true },
     { path = "getrandom::SysRng", reason = "draw random bytes through the SecureRandom port (ADR-0015)", allow-invalid = true },
 ]
+
+# fleet-server depends on `log` only for sqlx's `LevelFilter`; all its logging goes
+# through tracing, so nothing logs through a second system whose records might not
+# reach the server's log layer (ADR-0015).
+disallowed-macros = [
+    { path = "log::error", reason = "log through tracing (ADR-0015)" },
+    { path = "log::warn", reason = "log through tracing (ADR-0015)" },
+    { path = "log::info", reason = "log through tracing (ADR-0015)" },
+    { path = "log::debug", reason = "log through tracing (ADR-0015)" },
+    { path = "log::trace", reason = "log through tracing (ADR-0015)" },
+    { path = "log::log", reason = "log through tracing (ADR-0015)" },
+]

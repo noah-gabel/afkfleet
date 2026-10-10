@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "PRAGMA query_only",
+  "describe": {
+    "columns": [
+      {
+        "name": "query_only",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "8f6b44a2ea2e79d74a05053d588178715daae05f43487de53375586de029ae4a"
+}

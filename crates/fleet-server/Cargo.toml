@@ -20,8 +20,14 @@ fleet-startup.workspace = true
 garde = { workspace = true, features = ["derive"] }
 # OsRandom's one read of the OS's randomness (ADR-0015).
 getrandom.workspace = true
+# Only `log::LevelFilter`, for sqlx's statement-logging levels; clippy.toml bans its
+# logging macros (ADR-0015).
+log.workspace = true
 serde = { workspace = true, features = ["derive"] }
+sqlx = { workspace = true, features = ["runtime-tokio", "sqlite-bundled", "macros", "migrate"] }
 thiserror.workspace = true
+# Creating the database file and checking its permissions without blocking (ADR-0015).
+tokio = { workspace = true, features = ["fs"] }
 tracing.workspace = true
 
 [dev-dependencies]
@@ -29,6 +35,9 @@ tracing.workspace = true
 figment = { workspace = true, features = ["test"] }
 fleet-testkit.workspace = true
 rstest.workspace = true
+# A fresh folder for each database test (ADR-0015).
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
 # A scoped subscriber around fleet-startup's layer, for the dev-mode warning's
 # test (ADR-0015).
 tracing-subscriber.workspace = true

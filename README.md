@@ -101,7 +101,9 @@ Further reading:
 - Cargo tools:
   ```sh
   cargo +stable install --locked cargo-nextest@0.9.146 cargo-llvm-cov@0.9.1 cargo-deny@0.20.2 cargo-insta@1.49.0
+  cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features sqlite
   ```
+  sqlx-cli is pinned and SQLite-only, exactly as CI installs it; `just check` needs it for `db-check`.
 
 ## Quickstart
 Run three bots against a local offline-mode server (needs Docker):
@@ -164,7 +166,9 @@ just stack-up  # build the agent's image and run the server and the agent in Doc
 just test-slow # pull the server image, build the agent's image, then the slow tests one at a time (needs Docker)
 just demo-agent # the Phase 5 demo: the Docker agent's five bots for an hour with one server restart
 just test-real-account # the real-account check: you only (see below)
+just db-prepare # after changing a query or adding a migration: refresh crates/fleet-server/.sqlx/
 ```
+**The server's database** (Phase 6 on): every build checks fleet-server's SQL against the offline query data committed in `crates/fleet-server/.sqlx/`, never against a live database (`SQLX_OFFLINE` in `.cargo/config.toml`). After changing a query or adding a migration, run `just db-prepare`, which rebuilds a throwaway database in `target/` from the migrations and regenerates that data, and commit it; `just check` and CI's `sqlx-offline` job fail while it's stale. A migration is never edited once it's on `main`, because sqlx checksums it: add a new one instead. `just migrations-check` and the `sqlx-offline` job enforce that.
 The test server runs in offline mode, so it's for local development only. RCON is enabled with a random password and isn't published; run commands with `docker compose --file deploy/compose.dev.yaml exec minecraft rcon-cli <command>`.
 
 The slow tests also run on GitHub weekly and on demand (the `Slow tests` workflow); it isn't a required check.

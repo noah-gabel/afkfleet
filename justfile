@@ -14,15 +14,19 @@ export RUSTDOCFLAGS := "-D warnings"
 stable := "1.99.0"
 stable_crates := "-p fleet-core -p fleet-testkit -p fleet-runtime -p fleet-startup -p fleet-server"
 
+# The throwaway database `cargo sqlx prepare` checks queries against. Absolute,
+# because rustc runs the query macros in the workspace root, not in the crate.
+sqlx_db := "sqlite:" + justfile_directory() / "target" / "sqlx-prepare.db"
+
 # List all recipes.
 default:
     @just --list
 
 # Formatting, lints, docs, tests and frontend checks: run before a task is done.
-check: fmt-check clippy docs test doctest testkit-check scripts-test ui-check
+check: fmt-check clippy docs test doctest db-check testkit-check scripts-test ui-check
 
 # Everything CI runs.
-ci: fmt-check clippy docs test-ci testkit-check scripts-test cov deny stable-check ui-check ui-audit
+ci: fmt-check clippy docs test-ci db-check migrations-check testkit-check scripts-test cov deny stable-check ui-check ui-audit
 
 # Run nextest for the workspace, or for one crate: `just test fleet-core`.
 test crate="":
@@ -64,8 +68,29 @@ fmt:
 # Export ts-rs types to packages/ui/src/generated/ and check proto codegen.
 gen: (_unavailable "gen" "P6")
 
-# Prepare sqlx offline query data in .sqlx/.
-db-prepare: (_unavailable "db-prepare" "P6")
+# Prepare sqlx's offline query data in crates/fleet-server/.sqlx/ (needs sqlx-cli 0.9.0).
+# Run it after changing a query or adding a migration; every build reads that data
+# (SQLX_OFFLINE in .cargo/config.toml), and `-- --all-targets` covers the tests' queries.
+[working-directory('crates/fleet-server')]
+db-prepare $DATABASE_URL=sqlx_db: _sqlx-db
+    cargo sqlx prepare -- --all-targets
+
+# Fail if crates/fleet-server/.sqlx/ is missing or differs from a query (the sqlx-offline job).
+[working-directory('crates/fleet-server')]
+db-check $DATABASE_URL=sqlx_db: _sqlx-db
+    cargo sqlx prepare --check -- --all-targets
+
+# Rebuild the throwaway database prepare checks queries against from the migrations.
+# Node creates target/ first, which a cold CI cache doesn't have yet.
+[working-directory('crates/fleet-server')]
+_sqlx-db $DATABASE_URL=sqlx_db:
+    node -e "require('node:fs').mkdirSync(process.argv[1], { recursive: true })" "{{ justfile_directory() / 'target' }}"
+    cargo sqlx database reset -y
+
+# Fail if a migration that exists on main was modified, deleted or renamed: merged
+# migrations are never edited (ADR-0015). Needs an up-to-date origin/main; CI fetches it.
+migrations-check:
+    git diff --exit-code --diff-filter=a --name-only origin/main HEAD -- crates/fleet-server/migrations/
 
 # Start the local offline-mode Minecraft server and wait until it's healthy (needs Docker).
 mc-up:

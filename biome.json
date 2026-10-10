@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!packages/ui/src/generated"]
+    "includes": ["**", "!packages/ui/src/generated", "!**/.sqlx"]
   },
   "formatter": {
     "enabled": true,

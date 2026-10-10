@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "CREATE TABLE debug_probe (x INTEGER)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "a3fd5ab740c194b59f83872ec1435334bef5a75fd9df3afb27a4165d2c92d9b8"
+}
