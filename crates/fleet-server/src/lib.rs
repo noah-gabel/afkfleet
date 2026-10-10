@@ -29,6 +29,7 @@
 //! - **`infra`** implements the ports. SQL lives only there, through sqlx's
 //!   checked macros with bind parameters.
 
+pub mod app;
 pub mod config;
 pub mod infra;
 pub mod ports;

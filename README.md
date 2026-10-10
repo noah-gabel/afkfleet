@@ -72,7 +72,13 @@ There's no support, and I don't take feature requests. Security reports are welc
 
   [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md) records Phase 5's decisions.
 
-**Next:** Phase 6, the server foundation: an HTTP service skeleton that is secure by default, with persistence, an error model and an audit trail, but no business endpoints yet.
+**In progress:** Phase 6, the server foundation: an HTTP service skeleton that is secure by default, with persistence, an error model and an audit trail, but no business endpoints yet. Done so far, in [`crates/fleet-server`](crates/fleet-server/) and [`crates/fleet-startup`](crates/fleet-startup/):
+- the binaries' shared start-up code (config loader, logging, panic hook), moved out of the agent
+- the server's config: `server.toml` plus `AFKFLEET_SERVER__…` environment variables, with every problem listed at once
+- the server's clock and secure randomness behind ports, so tests control both, and a lint that refuses any other read of either
+- the SQLite database: one write connection and four read-only ones, a database file only the server's user can read, migrations at startup, and SQL checked at compile time against committed offline data (`just db-prepare`)
+- the first tables, `users` and `audit_log`, with strict types and CHECKs, and a store whose every write transaction commits together with its audit entry
+- the audit service: entries stamped by the clock, with details that can't hold secrets
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 

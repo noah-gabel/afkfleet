@@ -139,6 +139,11 @@ The user answered group B's questions on 2026-10-10, one at a time; these are th
 - **The repository tests run with the production settings** *(the user's decision)*: `#[sqlx::test(migrations = false)]` hands each test the connect options of its own database file, and the test opens it with `Database::connect`, which applies `connect_options` (`trusted_schema=OFF`, `query_only` on reads, foreign keys) and runs the migrations, so CHECKs, foreign keys and transactions are tested as they run in production. One `open()`-based test writes a user and an audit entry that touch every checked column, metadata JSON included.
 - **Tests,** red against compiling stubs (repositories that stored and found nothing, conversions that read nothing back, a `PasswordHash` and an `AuditLimit` that accepted anything, value types that validated nothing): 37 of 144 fleet-server tests and about 50 of fleet-core's audit tests failed on assertions, and 24 of the 27 store tests failed against migrations without their CHECKs, STRICT, the Owner index and the foreign key. The migrations' checksum snapshot was read before accepting (versions 1 and 2, `users` and `audit log`, each checksum equal to the file's SHA-384). After the implementation, the coverage report showed error paths without a test; tests for them followed in their own commit and passed at once: every `Corrupt` column a row can reach past the CHECKs (a username the rules refuse, a time that isn't a date, a non-v7 actor or target ID, an IP that doesn't parse, an invalid target type), `Unstorable` for a time beyond the year 9999, and, on Unix, `open()`'s `Create` (a folder the server can't write to) and `Inspect` (a folder it can't look into).
 
+### The audit service (P6.8, group B)
+- **`app::audit::AuditService { clock, store }`** *(the user's choice)*: `entry(action, outcome)` stamps a `NewAuditEntry` with the `Clock` (milliseconds) and offers the builder methods `actor`, `ip`, `target` and `metadata`; `record(entry)` runs its own short write transaction (`write()`, then `commit(entry)`), for a failure or a denial whose change was rolled back; `list(page)` reads through the read pool. A use case that changes state builds its entry here and passes it to `WriteTx::commit`, so every timestamp comes from one place.
+- **Append-only** is the store's shape (P6.4 above): `AuditWrites::record` and `AuditReads::list` are the only operations on the log.
+- **Tests** (`tests/audit_service.rs`): `ManualClock` stamps, and IDs are minted from `SeededRandom` and only compared with each other. Red against a stub that stamped the epoch, recorded nothing and listed nothing: 5 of 6 failed (the sixth checks `mint` with `SeededRandom`, built in group B's first commit).
+
 ### stable-check
 fleet-startup and fleet-server join the justfile's `stable_crates` in group A, and fleet-api-types in group C, under P0.11's rule: the crates that don't depend on azalea or azalea-auth *(the user's decision)*. fleet-server leaves it in P9.3, when azalea-auth arrives.
 
@@ -164,15 +169,24 @@ No new external crate in group A. All of these are already in `[workspace.depend
 - **fleet-agent** gains fleet-startup and drops its normal figment dependency; its tests keep figment (`test`, `toml`).
 - **fleet-server** (group A): fleet-startup, garde (`derive`), serde (`derive`), thiserror, tracing. Dev: fleet-testkit, figment (`test`), rstest, and tracing-subscriber *(the user's approval during the build, beyond the plan's list)*, so the dev-mode test can check the warning's level through fleet-startup's layer.
 
+Group B *(the user's approval of the whole set)*:
+- **New in `[workspace.dependencies]`:** sqlx 0.9.0 (no default features), async-trait 0.1.92, and tempfile 3.27.0, which was already in the lockfile through figment and insta. `log` moves out of the test-only block. Cargo.lock gains only sqlx's tree; cargo deny passes, and no `ring` comes with it.
+- **fleet-server** gains fleet-core, async-trait, chrono (`now`), getrandom, log (only for sqlx's `LevelFilter`), secrecy, serde_json, sqlx (`runtime-tokio`, `sqlite-bundled`, `macros`, `migrate`, `uuid`), tokio (`fs`) and uuid. Dev: insta (no features), proptest (`std`), tempfile, tokio (`macros`, `rt`).
+- **fleet-testkit** gains chrono and rand (`std_rng`). **fleet-core** gains nothing.
+
 ## Consequences
 - **Easier:**
   - The server gets the agent's tested config errors and logging without a second implementation, so a fix to either reaches both binaries.
   - The `azalea_auth` cap and the panic passthrough are enforced in one place for both binaries.
   - Time and randomness are deterministic in every server test, and a direct clock or OS-randomness read in fleet-server fails clippy.
+  - Every table follows one set of storage conventions, enforced by CHECKs, and every state change commits together with its audit entry.
+  - Every build checks the server's SQL against committed offline data, exactly like CI, and a stale `.sqlx/` or an edited migration fails locally and in CI.
 - **Harder:**
   - One more crate, and fleet-agent's config types are aliases over generic ones.
   - fleet-testkit, still a dev-dependency only, carries figment's `Jail` and serde_json for its helpers.
   - The agent's tests read JSON lines through a `Result` (`.unwrap()`), since fleet-testkit can't panic.
+  - Changing a query or adding a migration needs `just db-prepare` (and sqlx-cli installed) before the build passes again.
+  - Database tests run in real time, since paused time can't work with sqlx's worker threads.
 
 ## Alternatives considered
 - **Copying the agent's code into fleet-server.** About 1,000 lines, including the error texts that must never echo a value and the panic sanitizing, would drift between two copies.
