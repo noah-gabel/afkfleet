@@ -25,6 +25,11 @@ use fleet_testkit::system::{ManualClock, SeededRandom};
 use secrecy::SecretString;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
+/// The acquire timeout of the tests that wait for it. It also bounds opening
+/// the database (the first connections and the migrations), so it leaves room
+/// for a slow CI runner: 50 ms once timed out `open()` itself on Windows.
+const SHORT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// The service over a fresh database, its clock, and the database itself.
 async fn service(
     options: SqliteConnectOptions,
@@ -209,7 +214,7 @@ async fn recording_while_another_transaction_holds_the_writer_is_busy(
 ) {
     let (service, _clock, db) = service(
         options,
-        DatabaseOptions::default().with_acquire_timeout(Duration::from_millis(50)),
+        DatabaseOptions::default().with_acquire_timeout(SHORT_ACQUIRE_TIMEOUT),
     )
     .await;
     let held = db.write().await.unwrap();

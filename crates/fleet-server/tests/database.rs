@@ -4,7 +4,7 @@
 //! Time isn't paused here: sqlx runs each SQLite connection on a worker
 //! thread, so the runtime looks idle while it waits for one, and paused time
 //! would jump ahead and fire the pools' timeouts early. The one test that
-//! waits for a timeout lowers it to 50 ms.
+//! waits for a timeout lowers it to 1 s.
 // Integration tests are test code, but clippy only applies the test allowances
 // of clippy.toml (unwrap, panic, …) inside `#[cfg(test)]`; without this, the
 // helper functions below would count as library code.
@@ -28,6 +28,11 @@ use fleet_server::ports::users::{NewUser, PasswordHash};
 use secrecy::SecretString;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use tempfile::TempDir;
+
+/// The acquire timeout of the tests that wait for it. It also bounds opening
+/// the database (the first connections and the migrations), so it leaves room
+/// for a slow CI runner: 50 ms once timed out `open()` itself on Windows.
+const SHORT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(1);
 
 fn config_in(dir: &TempDir) -> DatabaseConfig {
     DatabaseConfig {
@@ -393,7 +398,7 @@ async fn the_production_defaults_are_5_s_and_250_ms() {
 #[tokio::test]
 async fn a_held_write_connection_times_the_next_writer_out() {
     let dir = TempDir::new().unwrap();
-    let options = DatabaseOptions::default().with_acquire_timeout(Duration::from_millis(50));
+    let options = DatabaseOptions::default().with_acquire_timeout(SHORT_ACQUIRE_TIMEOUT);
     let db = open(&config_in(&dir), options).await.unwrap();
     let held = db.write_pool().acquire().await.unwrap();
 

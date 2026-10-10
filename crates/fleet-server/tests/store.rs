@@ -32,6 +32,11 @@ use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use uuid::Uuid;
 
+/// The acquire timeout of the tests that wait for it. It also bounds opening
+/// the database (the first connections and the migrations), so it leaves room
+/// for a slow CI runner: 50 ms once timed out `open()` itself on Windows.
+const SHORT_ACQUIRE_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// A valid Argon2id PHC string (not a real hash).
 const HASH: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g";
 /// A stored time.
@@ -465,7 +470,7 @@ async fn a_second_writer_gets_busy_while_the_first_holds_the_connection(
 ) {
     let db = Database::connect(
         options,
-        DatabaseOptions::default().with_acquire_timeout(Duration::from_millis(50)),
+        DatabaseOptions::default().with_acquire_timeout(SHORT_ACQUIRE_TIMEOUT),
     )
     .await
     .unwrap();
