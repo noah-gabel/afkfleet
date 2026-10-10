@@ -16,16 +16,17 @@
 //!   entry only has a `username`.
 //!
 //! Secrets never go in this file; Phase 10's keys only name files.
+//!
+//! The loader, the generic error types and the `[log]` types come from
+//! fleet-startup (ADR-0015); this module re-exports them under their old
+//! paths.
 
 mod error;
-mod log;
 mod raw;
 mod validate;
 
 use std::path::{Path, PathBuf};
 
-use figment::providers::{Env, Format, Toml};
-use figment::{Figment, Provider};
 use fleet_core::bot::BotAccount;
 use fleet_core::disconnect::ConflictTexts;
 use fleet_core::mode::ModePreset;
@@ -35,11 +36,11 @@ use fleet_mc::McConfig;
 use fleet_runtime::RuntimeConfig;
 use raw::RawConfig;
 
-pub use error::{
-    ConfigError, KeyPath, KeySegment, ParseError, ParseProblem, ParseSource, Problem, ProblemKind,
-    Problems,
+pub use error::{ConfigError, Problem, ProblemKind, Problems};
+pub use fleet_startup::config::{
+    KeyPath, KeySegment, LogConfig, LogFilter, LogFilterError, LogFormat, ParseError, ParseProblem,
+    ParseSource, UnknownLogFormatError,
 };
-pub use log::{LogConfig, LogFilter, LogFilterError, LogFormat, UnknownLogFormatError};
 
 /// The prefix of the environment variables that override config keys:
 /// `AFKFLEET_AGENT__` plus the key path in capitals, with `__` between the
@@ -125,25 +126,14 @@ pub struct ControlPlaneConfig {
 /// searched.
 ///
 /// # Errors
-/// - [`ConfigError::NotFound`] when there's no file at `path`.
-/// - [`ConfigError::Parse`] for the first thing that can't be read: bad
-///   TOML, a value of the wrong type, or an unknown key.
-/// - [`ConfigError::Invalid`] with every problem validation finds.
+/// - [`ConfigError::NotFound`](fleet_startup::config::ConfigError::NotFound)
+///   when there's no file at `path`.
+/// - [`ConfigError::Parse`](fleet_startup::config::ConfigError::Parse) for
+///   the first thing that can't be read: bad TOML, a value of the wrong
+///   type, or an unknown key.
+/// - [`ConfigError::Invalid`](fleet_startup::config::ConfigError::Invalid)
+///   with every problem validation finds.
 pub fn load(path: &Path) -> Result<AgentConfig, ConfigError> {
-    // figment treats a missing file as an empty one, so check first.
-    if !path.is_file() {
-        return Err(ConfigError::NotFound {
-            path: path.to_owned(),
-        });
-    }
-    let env = Env::prefixed(ENV_PREFIX).split("__");
-    let env_name = env.metadata().name.into_owned();
-    let raw: RawConfig = Figment::new()
-        .merge(Toml::file_exact(path))
-        .merge(env)
-        .extract()
-        .map_err(|error| {
-            ConfigError::Parse(Box::new(ParseError::from_figment(&error, &env_name)))
-        })?;
+    let raw = fleet_startup::config::extract::<RawConfig, ProblemKind>(path, ENV_PREFIX)?;
     validate::validate(&raw)
 }

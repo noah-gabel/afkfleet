@@ -1,6 +1,6 @@
 [package]
 name = "fleet-testkit"
-description = "Test doubles for afkfleet: scriptable fakes for the fleet-core ports. A dev-dependency only."
+description = "Test doubles and helpers for afkfleet: scriptable fakes for the fleet-core ports, log captures and figment's Jail. A dev-dependency only."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -11,9 +11,13 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# `Jail`, for every config test in the workspace (ADR-0015).
+figment = { workspace = true, features = ["test"] }
 fleet-core.workspace = true
+# The log buffer's JSON lines (ADR-0015).
+serde_json.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }
-# The log capture for redaction tests (ADR-0011).
+# The log capture for redaction tests (ADR-0011) and the log buffer.
 tracing.workspace = true
 tracing-subscriber.workspace = true
 

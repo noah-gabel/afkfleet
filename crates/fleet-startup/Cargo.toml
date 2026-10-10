@@ -1,0 +1,26 @@
+[package]
+name = "fleet-startup"
+description = "Start-up code shared by afkfleet's binaries: the config loader with key-path errors, the [log] section, and logging with the azalea_auth cap and a panic hook."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+figment = { workspace = true, features = ["env", "toml"] }
+# `text::sanitize_untrusted` for panic payloads.
+fleet-core.workspace = true
+# `DeserializeOwned`, the loader's bound.
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+
+[dev-dependencies]
+# The log buffer for the format tests.
+fleet-testkit.workspace = true
+rstest.workspace = true

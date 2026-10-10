@@ -144,6 +144,7 @@ afkfleet/
 │   ├── fleet-api-types/       # HTTP/WS DTOs shared by server, client and app (exported to TS via ts-rs)
 │   ├── fleet-server/          # server binary: HTTP API, auth, vault, persistence, gRPC control plane, CLI
 │   ├── fleet-client/          # typed HTTP + WS client (used by the Tauri backend and integration tests)
+│   ├── fleet-startup/         # the binaries' start-up code: config loader and errors, [log], log layer, panic hook
 │   └── fleet-testkit/         # fakes, fixtures, builders (dev-dependency only)
 ├── apps/
 │   └── desktop/               # Tauri app: src-tauri/ (Rust, workspace member) + thin TS entry and TauriApiClient
@@ -168,13 +169,16 @@ Crates are created in the phase that first needs them, not up front.
 | `fleet-mc` | `fleet-core`, **azalea** |
 | `fleet-proto` | `fleet-core` |
 | `fleet-api-types` | `fleet-core` |
-| `fleet-agent` (bin) | `fleet-core`, `fleet-runtime`, `fleet-mc`, `fleet-proto` |
-| `fleet-server` (bin) | `fleet-core`, `fleet-proto`, `fleet-api-types`, **azalea-auth** |
+| `fleet-startup` | `fleet-core` |
+| `fleet-agent` (bin) | `fleet-core`, `fleet-runtime`, `fleet-mc`, `fleet-proto`, `fleet-startup` |
+| `fleet-server` (bin) | `fleet-core`, `fleet-proto`, `fleet-api-types`, `fleet-startup`, **azalea-auth** |
 | `fleet-client` | `fleet-api-types` |
 | `apps/desktop/src-tauri` | `fleet-client`, `fleet-api-types` |
 | `fleet-testkit` | `fleet-core` (dev-dependency for everyone else) |
 
 Binaries stay thin: `main.rs` parses the CLI and config and wires adapters together, and all logic lives in the crate's library part.
+
+> Note (§4, Phase 6, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **`fleet-startup`** holds only the binaries' process start-up code: the config loader with its key-path errors, the `[log]` types, the log layer and the panic hook. It came out of fleet-agent in Phase 6, group A, so the server reuses it instead of a second copy. Its filter always caps `azalea_auth` at `info` and lets panic reports through; a binary only adds rules (the agent's azalea rules).
 
 ## 5. Crate & tool registry
 
@@ -197,10 +201,10 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | TTL cache / single-flight | `moka` | 0.12.16 | server | MC token cache, WS tickets |
 | Library errors | `thiserror` | 2.0.21 | all libraries | |
 | Binary error reporting | `anyhow` | 1.0.104 | `main.rs` only | Not declared yet: the agent's `main.rs` maps its typed errors to exit codes itself. It arrives with the first `main.rs` that uses it (ADR-0014) |
-| Serialization | `serde`, `serde_json` | 1.0.229, 1.0.151 | all | |
-| Configuration | `figment` | 0.10.19 | agent, server | TOML file + env; upstream is quiet but the crate is stable. It has no default features: the agent enables `toml` and `env`, and `test` (`Jail`) in its tests, whose one closure carries an approved `#[expect(clippy::result_large_err)]` (ADR-0014) |
+| Serialization | `serde`, `serde_json` | 1.0.229, 1.0.151 | all | fleet-testkit's log buffer parses JSON log lines with `serde_json` (ADR-0015) |
+| Configuration | `figment` | 0.10.19 | startup, testkit; agent and server tests | TOML file + env; upstream is quiet but the crate is stable. It has no default features: fleet-startup's loader enables `toml` and `env`, and fleet-testkit `test` for `jail::in_jail`, whose one closure carries the workspace's only approved `#[expect(clippy::result_large_err)]` (ADR-0014, ADR-0015) |
 | DTO & config validation | `garde` | 0.23.0 | api-types, agent, server | Domain value objects use hand-written constructors. It has no default features; members enable `derive` and the rules they use. The agent's config uses garde for its number ranges only and converts texts with the core constructors, so it reports every problem at once (ADR-0014) |
-| Logging / tracing | `tracing`, `tracing-subscriber` | 0.1.44, 0.3.23 | all | `env-filter`, `json`. fleet-testkit's log capture uses `tracing` and `tracing-subscriber`; the redaction tests use it (ADR-0011) |
+| Logging / tracing | `tracing`, `tracing-subscriber` | 0.1.44, 0.3.23 | all | `env-filter`, `json`. fleet-startup builds both binaries' log layer (ADR-0015). fleet-testkit's log capture uses `tracing` and `tracing-subscriber`; the redaction tests use it (ADR-0011). Its log buffer is the writer for format and filter tests (ADR-0015) |
 | Metrics | `metrics`, `metrics-exporter-prometheus` | 0.24.6, 0.18.3 (dfo) | runtime, agent, server | Internal port only. The exporter's default `push-gateway` brings its own TLS stack: enable `http-listener` only. Until P12.4 serves the endpoint, the agent enables no features and only installs the recorder. Its metrics-util dependency always enables `storage`, which brings rand 0.9 and getrandom 0.3 into normal dependencies (both already in the graph, neither used for secrets) (ADR-0014) |
 | IDs | `uuid` | 1.27.0, dfo | core, mc | v7, serde. fleet-mc only names `Uuid` in azalea's `AccountTrait` (ADR-0011) |
 | Time | `chrono` | 0.4.45, dfo | core, runtime, agent, server | Always UTC. No `clock` feature in core or runtime: time is passed in. The runtime derives `DateTime<Utc>` from tokio's clock, anchored at a wall time its caller passes in (ADR-0010, ADR-0013). The agent enables `now` only, for that one read at startup; `clock` would add local time zones (ADR-0014) |
@@ -520,7 +524,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Conventions**
 - Each task has an ID `P<phase>.<n>`. 🔴 means *the test comes first*, strictly. Tasks without 🔴 (scaffolding, config, wiring) are verified by `just check`, CI or the task's demo, but any logic they add still gets tests.
 - A phase is finished when every task is ticked **and** its Definition of Done (DoD) holds.
-- **Branches:** one branch per task, `p<phase>/<task-id>-<slug>` (e.g. `p2/p2.6-bot-state-machine`). Phases 0 and 1 each use a single branch, `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each (see the note under Phase 2). Phase 3 uses five group branches plus one task branch for P3.9 (see the note under Phase 3). Phase 4 uses five group branches (see the note under Phase 4). Phase 5 uses four group branches (see the note under Phase 5). Every branch ends in a PR that the user reviews and merges. The `Plan.md` checkbox is ticked in that same PR.
+- **Branches:** one branch per task, `p<phase>/<task-id>-<slug>` (e.g. `p2/p2.6-bot-state-machine`). Phases 0 and 1 each use a single branch, `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each (see the note under Phase 2). Phase 3 uses five group branches plus one task branch for P3.9 (see the note under Phase 3). Phase 4 uses five group branches (see the note under Phase 4). Phase 5 uses four group branches (see the note under Phase 5). Phase 6 uses five group branches (see the note under Phase 6). Every branch ends in a PR that the user reviews and merges. The `Plan.md` checkbox is ticked in that same PR.
 - Phases are vertical slices:
   - **0–5** produce a working standalone bot.
   - **6–11** build the fully managed system with the app.
@@ -2059,16 +2063,72 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** An HTTP service skeleton that is secure by default, with persistence, an error model and an audit trail, but no business endpoints yet.
 **Introduces:** `axum`, `axum-extra`, `tower`, `tower-http`, `sqlx`, `utoipa`, `utoipa-axum`, `ts-rs`, `serde_json`, `tokio-util`.
 
-- [ ] **P6.1** Module layout (see `CLAUDE.md`): `config`, `app` (services), `ports`, `infra/{sqlite,crypto}`, `http/{router,middleware,extractors,handlers,error}`, `grpc`, `cli`.
-- [ ] **P6.2** 🔴 Config:
+> Note (P6):
+> - **Five group branches.** At the user's request, Phase 6 is built in group PRs like Phases 2–5. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
+>
+>   | Group | Branch | Tasks |
+>   |---|---|---|
+>   | A | `p6/p6.1-p6.2-layout-and-config` | The fleet-startup extraction, P6.1, P6.2. fleet-server is a library only, without a binary |
+>   | B | `p6/p6.3-p6.8-persistence-and-audit` | P6.3, P6.4, P6.8, plus the time and randomness ports, the `sqlx-offline` job and `just db-prepare` |
+>   | C | `p6/p6.5-p6.9-api-types-and-errors` | P6.9 first (ApiError's body DTO lives in fleet-api-types), then P6.5; the `ts-types-fresh` job and `just gen` |
+>   | D | `p6/p6.6-p6.7-middleware-and-health` | P6.6, P6.7 |
+>   | E | `p6/p6.10-p6.12-cli-and-wrap-up` | P6.10, P6.11, P6.12, the DoD integration test and the phase wrap-up |
+>
+>   Each later group asks its own implementation-level questions in its session.
+> - **Decisions.** The user answered the Phase 6 plan's open questions on 2026-10-10. [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md) records them; the notes below summarize what changes a task.
+> - **fleet-startup** (the user's decision). A new crate holds the binaries' start-up code: the config loader with its key-path errors, the `[log]` types, the log layer and the panic hook (§4). Group A's first commit moves it out of fleet-agent with no change in behavior, and fleet-agent's tests pass with only import changes. Its filter always caps `azalea_auth` at `info` and lets panic reports through. A binary adds its own rules through `FilterRules`, which can't weaken those two; only the agent's `azalea=warn` rules stay in fleet-agent.
+> - **Time and randomness are injected ports** (the user's decision), from group B on. fleet-core gets `system::{Clock, SecureRandom, RandomError}`, fleet-testkit `ManualClock` and `SeededRandom`, and fleet-server's infra `SystemClock` and `OsRandom`:
+>   - The seeded fake exists only in fleet-testkit, a dev-dependency everywhere, and a script under `scripts/` checks that no workspace member has fleet-testkit as a normal dependency. `OsRandom` is the only other implementation, and main.rs always wires it. The port's docs say every implementation must be cryptographically secure (security rule 4).
+>   - `crates/fleet-server/clippy.toml` bans reading the clock or the OS's randomness directly; `SystemClock` and `OsRandom` each carry one approved `#[expect(clippy::disallowed_methods)]`.
+>   - Tests never hard-code `SeededRandom`'s bytes or the IDs made from them, and snapshots redact them: rand doesn't promise `StdRng`'s output across versions.
+> - **stable-check.** fleet-startup and fleet-server join `stable_crates` in group A, fleet-api-types in group C. P9.3 removes fleet-server when azalea-auth arrives.
+> - **Dependencies.** Group A adds no external crate. fleet-startup uses figment (`toml`, `env`), serde, thiserror, tracing and tracing-subscriber (`env-filter`, `json`); fleet-testkit gains figment (`test`) and serde_json; fleet-server uses fleet-startup, garde (`derive`), serde (`derive`), thiserror and tracing.
+
+- [x] **P6.1** Module layout (see `CLAUDE.md`): `config`, `app` (services), `ports`, `infra/{sqlite,crypto}`, `http/{router,middleware,extractors,handlers,error}`, `grpc`, `cli`.
+
+  > Note (P6.1, as built, group A) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **Deviation: modules arrive with their code** (the user's decision). `crates/fleet-server` starts as a library whose crate doc describes the whole layout, each module with the task that fills it, and the layering (`http` handlers → `app` services → `ports` → `infra`). Group A adds `config` (P6.2); every other module arrives with the group that first puts code in it, so the tree has no empty modules.
+  > - **No binary yet.** `afkfleet-server` arrives with the CLI in P6.11 (group E).
+  > - fleet-server joins the justfile's `stable_crates` (P9.3 takes it out again).
+- [x] **P6.2** 🔴 Config:
   - figment + garde
   - secrets only via `*_file` paths
   - fail fast with a clear message
+
+  > Note (P6.2, from the Phase 6 plan, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **The agent's rules,** through fleet-startup's loader: the file must exist at exactly the given path, `AFKFLEET_SERVER__…` variables override any key, unknown keys are errors in the file and in the environment, parse errors stop at the first, and validation lists every problem at once, sorted by key, without echoing a value.
+  > - **Only Phase 6's keys.** Each later phase adds its own, so a key of a later phase is still an unknown key until then (Appendix A's note).
+  >
+  >   | Key | Default | Rule |
+  >   |---|---|---|
+  >   | `dev_mode` | `false` | When it's on, the server logs one `warn` at startup |
+  >   | `[http] bind` | `127.0.0.1:8080` | An IP address and a port other than 0 |
+  >   | `[http] request_timeout_secs` | 15 | 1–300 |
+  >   | `[http] max_body_bytes` | 65536 | 1024–1048576 |
+  >   | `[database] path` | required | Absolute |
+  >   | `[log] format`, `filter` | `json`, `info` | As the agent's (P5.2) |
+  > - **Deviation: `bind` defaults to `127.0.0.1:8080`,** not Appendix A's `0.0.0.0:8080`, so a server started without it never listens on the network. The container config sets `0.0.0.0:8080` itself (P12).
+  > - **Port 0 is refused:** a server on a port the OS picks can't be reached by Caddy, and the healthcheck probes the configured port.
+  > - **`database.path` is required and absolute:** `/data/afkfleet.db` is a container path, and a relative path would resolve against wherever the server is started, so a start from another directory would silently create a fresh, empty database.
+  > - **The dev-mode warning:** "dev mode is on: development-only features are enabled; never run a production server in dev mode". It names no feature, so it stays true as later phases hang more on `dev_mode`.
+  > - **Secrets: the rule and a test now, the loader in P7.4.** A key whose name has a `_`-separated part `key`, `token`, `password`, `secret`, `passphrase`, `pepper` or `credential` (singular or plural) must end in `_file` or `_files`, or be on the test's allowlist with a reason. The test walks every key through serde's own field lists, so a new key can't escape it.
+  > - **`[log]`** is the agent's section from fleet-startup. The server's filter is `(EnvFilter ∧ azalea_auth cap) ∨ panic reports`, through fleet-startup's `NoRules`: no azalea default and no startup warning.
+
+  > Note (P6.2, as built, group A) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **Shape.** `fleet_server::config::load(path) -> Result<ServerConfig, ConfigError>`, with `ServerConfig { dev_mode, http: HttpConfig { bind, request_timeout, max_body_bytes }, database: DatabaseConfig { path }, log: LogConfig }`, `HttpConfig::DEFAULT_BIND`, `ENV_PREFIX` and `ServerConfig::warn_if_dev_mode()`.
+  >   - `ConfigError`, `Problems` and `Problem` are aliases of fleet-startup's generic types over the server's `ProblemKind`: `Missing`, `Empty`, `OutOfRange`, `NotAbsolute`, `SocketAddress`, `PortZero`, `LogFormat` and `LogFilter`. No message echoes a value.
+  >   - `fleet_startup::telemetry::NoRules` is the server's `FilterRules`: no defaults, a cap that lets everything through, no warning.
+  > - **A dependency edge beyond the plan's list** (the user's approval): `tracing-subscriber` as a fleet-server dev-dependency, so the dev-mode test checks the warning's level through fleet-startup's layer.
+  > - **Tests**, red against stubs that compiled (a `validate` that returned fixed defaults, a `warn_if_dev_mode` that did nothing, a `NoRules` cap that blocked everything, a key walker that found nothing): 40 of 106 failed on assertions, then all passed.
+  >   - `tests/config.rs` (31 cases, each through `fleet_testkit::jail::in_jail`): the defaults, every key, environment overrides, the bind forms, the dev-mode warning on and off, a missing file, unknown keys in the file and the environment, a later phase's section, a wrong type, the database path, bad binds and port 0, the range edges, bad log settings, and every problem at once without values.
+  >   - Unit tests: the secret-name rule (14 names), the walk finding every Phase 6 key, no key holding a secret, the allowlist's entries, and the problem list's text.
+  >   - fleet-startup: `NoRules` across 7 filters and 4 targets (`azalea_auth` stays at `info` under `trace`), panic reports under `off`, and no defaults or warning.
 - [ ] **P6.3** SQLite setup:
   - `journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON`, `busy_timeout=5s`
   - a **write pool with 1 connection** plus a read pool
   - migrations embedded with `sqlx::migrate!` and run at startup
   - offline data in `.sqlx/`, and a CI job running `cargo sqlx prepare --check`
+  > Note (P6.3, from group A, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **sqlx's statement logging is set explicitly** when the connection is configured: every statement at `debug`, slow statements at `warn`. sqlx has logged every statement at `info` in some versions, which the default `info` filter would let through on every request.
 - [ ] **P6.4** 🔴 First migration and repositories for `users` and `audit_log`, tested with `#[sqlx::test]`.
 - [ ] **P6.5** 🔴 `ApiError` maps each error to a status code and `{ "error": { "code", "message", "request_id", "fields"? } }`.
   - Internal errors are logged with the request ID and returned as a generic 500.
@@ -2093,6 +2153,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - CI job `ts-types-fresh` fails on any diff
 - [ ] **P6.10** OpenAPI via utoipa. `/api/openapi.json` is served only when `dev_mode = true`.
 - [ ] **P6.11** CLI skeleton: `serve`, `migrate`, `healthcheck`.
+
+  > Note (P6.11, from group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **The dev-mode warning.** `serve` calls `ServerConfig::warn_if_dev_mode()` right after logging starts.
+  > - **The healthcheck's address.** When `bind` is an unspecified address (`0.0.0.0` or `::`), as the container config will set, the healthcheck probes loopback (`127.0.0.1` or `::1`) on the same port instead: connecting to `0.0.0.0` only happens to work on Linux and fails on Windows.
+  > - **The dev config's database path must be absolute,** and a committed file can't hold one that works on every machine. How `just dev-server` provides it is group E's question, e.g. a `$`-parameter built from `justfile_directory()`.
 - [ ] **P6.12** 🔴 Graceful shutdown: axum's `with_graceful_shutdown` plus a `CancellationToken`.
 
 **Security:**
@@ -2128,6 +2193,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - TTLs
   - refresh rotation, and **family revocation when an old token is reused**
 - [ ] **P7.4** 🔴 Vault cipher: the envelope from §7.5 with `key_id` and AAD. TOTP secrets need it now; Phase 9 extends it. Tests cover tampering, the wrong key and the wrong AAD.
+
+  > Note (P7.4, from Phase 6, group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **The `*_file` loader comes here,** with its first user, the vault key: how a secret file is read into a `SecretBox` (a size cap, its permissions, a trailing newline) is decided and tested in this task.
+  > - **The secret-name test** (P6.2) already checks every config key: a name with a part `key`, `token`, `password`, `secret`, `passphrase`, `pepper` or `credential` must end in `_file` or `_files`. Keys that match but hold no secret, such as `[auth] access_token_ttl_secs`, go on the test's allowlist (`NOT_SECRETS` in fleet-server's `config/raw.rs`), each with its reason.
 - [ ] **P7.5** 🔴 CLI `user create-owner`: hidden prompt with `rpassword`; refuses when an Owner already exists.
 - [ ] **P7.6** 🔴 Endpoints:
   - `POST /auth/login`, `/auth/login/mfa`, `/auth/refresh`, `/auth/logout`, `/auth/register` (invite)
@@ -2158,6 +2227,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P7.10** 🔴 Rate limiting:
   - tower_governor per IP, globally and on auth routes, via `into_make_service_with_connect_info`
   - `trusted_proxies` CIDRs decide when `X-Forwarded-For` is honored
+
+  > Note (P7.10, from Phase 6, group A) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `[http] trusted_proxies` doesn't exist yet: the server's config has only Phase 6's keys, so this task adds it, with its validation.
   - a periodic `retain_recent()` clean-up
   - governor limits per user
   - a per-username lockout stored in the DB
@@ -2270,6 +2341,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **What it covers.** At `trace`, azalea-auth 0.16 logs the Microsoft access token, the whole token response (refresh token included), the Xbox Live and XSTS auth responses, the Minecraft auth, ownership and profile responses, and the account cache. At `debug` it logs nothing secret.
   > - **One rule for both binaries.** fleet-server's filter caps `azalea_auth` at `info`, whatever the configured filter says. The agent has the same cap (P5.2), because azalea logs the chat-signing private key at `trace` in every online session.
   > - **Tested.** P9's redaction test checks the cap: with the configured filter at `trace`, nothing from `azalea_auth` below `info` gets through (ADR-0011, threat model).
+
+  > Note (P9.3, from Phase 6, group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **The cap already exists.** fleet-server's log layer comes from fleet-startup, which caps `azalea_auth` at `info` for every binary, outside the rules a binary can add, since Phase 6. P9.3 adds no second cap; P9's redaction test still checks this one on the server.
+  > - **stable-check.** fleet-server is in the justfile's `stable_crates` since Phase 6, because it didn't depend on azalea-auth yet. When azalea-auth arrives here, fleet-server leaves `stable_crates`, as the rule says (P0.11).
 - [ ] **P9.4** 🔴 Device-code flow:
   - `POST /accounts/link` returns `{flow_id, user_code, verification_uri, expires_at}`.
   - A background poller runs bounded and cancellable, with per-user and total caps.
@@ -2629,6 +2704,10 @@ These are not scheduled. Each one needs an ADR before it starts.
 
 ### A. Example configuration
 Secrets **never** go in these files. They're referenced through `*_file` paths (Docker secrets). Environment variables override any key: `AFKFLEET_SERVER__AUTH__ACCESS_TOKEN_TTL_SECS=600`, `AFKFLEET_AGENT__RUNTIME__MAX_BOTS=20`.
+
+> Note (Appendix A, from Phase 6, group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **`server.toml` grows with the phases.** Unknown keys are errors, and Phase 6 defines only `dev_mode`, `[http] bind`, `request_timeout_secs` and `max_body_bytes`, `[database] path` and `[log]`. Each later key arrives with its task: `trusted_proxies` (P7.10), `[auth]` (P7), `[rate_limits]` (P7.10), `[vault]` (P7.4, P9), `[accounts]` (P9), `[grpc]` (P10), `[chat]` (P11) and the `backup_*` keys (P12.3). The example below shows the full set.
+> - `bind` defaults to `127.0.0.1:8080`, not the `0.0.0.0:8080` below, which is what a container sets.
+> - `[database] path` is required and must be absolute.
 
 `server.toml`
 ```toml

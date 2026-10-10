@@ -165,6 +165,7 @@ mod tests {
     use fleet_core::mc::SessionEvent;
     use fleet_core::mode::ModePreset;
     use fleet_runtime::ShutdownReport;
+    use fleet_testkit::log_buffer::LogBuffer;
     use fleet_testkit::mc::{EmitOutcome, FakeConnector};
     use serde_json::Value;
     use tokio::time::Instant;
@@ -173,7 +174,7 @@ mod tests {
     use crate::run::testing::{TestSupervisor, fleet, secs, settle};
     use crate::signals::Signal;
     use crate::signals::testing::ChannelSignals;
-    use crate::telemetry::capture::{Capture, json_on_this_thread};
+    use crate::telemetry::capture::json_on_this_thread;
 
     /// The defaults: 10 s to shut down, 5 s to reply.
     const TIMEOUTS: Timeouts = Timeouts {
@@ -328,9 +329,10 @@ mod tests {
         }
     }
 
-    fn levels_of(capture: &Capture, message: &str) -> Vec<String> {
+    fn levels_of(capture: &LogBuffer, message: &str) -> Vec<String> {
         capture
             .lines_with(message)
+            .unwrap()
             .iter()
             .map(|line| line["level"].as_str().unwrap().to_owned())
             .collect()
@@ -363,7 +365,9 @@ mod tests {
         assert_eq!(took, Duration::ZERO);
         assert!(setup.fake.try_session(0).unwrap().is_torn_down());
         assert!(supervisor.is_empty());
-        let limit = capture.lines_with("the abandoned-thread limit is reached; shutting down");
+        let limit = capture
+            .lines_with("the abandoned-thread limit is reached; shutting down")
+            .unwrap();
         assert_eq!(limit.len(), 1, "{}", capture.text());
         assert_eq!(limit[0]["level"], "ERROR");
         assert_eq!(limit[0]["abandoned"], 3);
@@ -387,7 +391,7 @@ mod tests {
         );
         assert_eq!(took, DEADLINE);
         assert!(setup.cancel.is_cancelled());
-        let warned = capture.lines_with(DIDNT_CONFIRM);
+        let warned = capture.lines_with(DIDNT_CONFIRM).unwrap();
         assert_eq!(warned.len(), 1, "{}", capture.text());
         assert_eq!(warned[0]["level"], "WARN");
         assert_eq!(warned[0]["error"], "the fleet didn't answer in time");
@@ -412,7 +416,7 @@ mod tests {
         );
         assert_eq!(took, Duration::ZERO);
         assert!(setup.cancel.is_cancelled());
-        let warned = capture.lines_with(DIDNT_CONFIRM);
+        let warned = capture.lines_with(DIDNT_CONFIRM).unwrap();
         assert_eq!(warned.len(), 1, "{}", capture.text());
         assert_eq!(warned[0]["error"], "the fleet is busy; try again");
         assert_eq!(levels_of(&capture, DIDNT_END), Vec::<String>::new());
@@ -455,7 +459,7 @@ mod tests {
             }
         );
         assert_eq!(took, Duration::ZERO);
-        let warned = capture.lines_with(DIDNT_CONFIRM);
+        let warned = capture.lines_with(DIDNT_CONFIRM).unwrap();
         assert_eq!(warned.len(), 1, "{}", capture.text());
         assert_eq!(warned[0]["error"], "the fleet is shutting down");
     }
@@ -478,7 +482,7 @@ mod tests {
             }
         );
         assert_eq!(took, Duration::ZERO);
-        let failed = capture.lines_with(FAILED);
+        let failed = capture.lines_with(FAILED).unwrap();
         assert_eq!(failed.len(), 1, "{}", capture.text());
         assert_eq!(failed[0]["level"], "ERROR");
         assert_eq!(failed[0]["panicked"], true);
@@ -543,7 +547,7 @@ mod tests {
             }
         );
         assert_eq!(took, Duration::ZERO);
-        let lines = capture.lines_with("shutting down");
+        let lines = capture.lines_with("shutting down").unwrap();
         assert_eq!(lines.len(), 1, "{}", capture.text());
         assert_eq!(lines[0]["level"], "INFO");
         assert_eq!(lines[0]["signal"], "SIGTERM");
@@ -621,11 +625,11 @@ mod tests {
 
         assert_eq!(outcome.exit, Exit::SupervisorFailed);
         assert_eq!(took, DEADLINE);
-        let repeated = capture.lines_with(ALREADY);
+        let repeated = capture.lines_with(ALREADY).unwrap();
         assert_eq!(repeated.len(), 1, "{}", capture.text());
         assert_eq!(repeated[0]["level"], "INFO");
         assert_eq!(repeated[0]["signal"], "SIGINT");
-        assert_eq!(capture.lines_with("shutting down").len(), 1);
+        assert_eq!(capture.lines_with("shutting down").unwrap().len(), 1);
     }
 
     #[tokio::test(start_paused = true)]
@@ -646,7 +650,7 @@ mod tests {
 
         assert_eq!(outcome.exit, Exit::SupervisorFailed);
         assert_eq!(took, DEADLINE);
-        let repeated = capture.lines_with(ALREADY);
+        let repeated = capture.lines_with(ALREADY).unwrap();
         assert_eq!(repeated.len(), 1, "{}", capture.text());
         assert_eq!(repeated[0]["signal"], "SIGTERM");
     }
@@ -675,10 +679,15 @@ mod tests {
         );
         assert_eq!(took, Duration::ZERO);
         assert!(setup.cancel.is_cancelled());
-        let ended = capture.lines_with("the fleet's supervisor ended unasked");
+        let ended = capture
+            .lines_with("the fleet's supervisor ended unasked")
+            .unwrap();
         assert_eq!(ended.len(), 1, "{}", capture.text());
         assert_eq!(ended[0]["level"], "ERROR");
         assert_eq!(ended[0]["panicked"], panicked);
-        assert_eq!(capture.lines_with(DIDNT_CONFIRM), Vec::<Value>::new());
+        assert_eq!(
+            capture.lines_with(DIDNT_CONFIRM).unwrap(),
+            Vec::<Value>::new()
+        );
     }
 }

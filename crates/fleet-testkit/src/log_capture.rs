@@ -12,6 +12,10 @@
 //! what it looked for, so a run with a real secret can't print the secret.
 //! nextest runs every test in a process of its own, so a test sees only its
 //! own logs.
+//!
+//! To test what a log layer prints (its format, its filter, the lines a
+//! component logs), use [`log_buffer`](crate::log_buffer) instead: it holds
+//! that one layer's filtered, formatted output.
 
 use core::fmt::{self, Write as _};
 use std::collections::BTreeMap;

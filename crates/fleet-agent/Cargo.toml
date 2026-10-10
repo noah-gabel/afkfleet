@@ -18,10 +18,11 @@ path = "src/main.rs"
 # `now` only: one wall-clock read at startup, for the runtime's anchor and the bot IDs.
 chrono = { workspace = true, features = ["now"] }
 clap = { workspace = true, features = ["derive"] }
-figment = { workspace = true, features = ["env", "toml"] }
 fleet-core.workspace = true
 fleet-mc.workspace = true
 fleet-runtime.workspace = true
+# The config loader and errors, the `[log]` types and the log layer (ADR-0015).
+fleet-startup.workspace = true
 garde = { workspace = true, features = ["derive"] }
 getrandom.workspace = true
 # The agent records fleet-mc's diagnostics itself.
@@ -36,8 +37,9 @@ tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 
 [dev-dependencies]
-# `figment::Jail`: a temporary directory and environment per test (ADR-0014).
-figment = { workspace = true, features = ["test"] }
+# `figment::Jail`, the type `in_jail` hands each test, and `Toml` for the
+# compose test's config reads (ADR-0014, ADR-0015).
+figment = { workspace = true, features = ["test", "toml"] }
 fleet-testkit.workspace = true
 # `log` records, to prove the bridge into tracing keeps their targets (ADR-0014).
 log.workspace = true

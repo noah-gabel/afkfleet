@@ -75,11 +75,12 @@ mod tests {
     use fleet_core::chat::{IncomingChat, PlayerChatKind};
     use fleet_core::id::BotId;
     use fleet_runtime::FleetEventKind;
+    use fleet_testkit::log_buffer::LogBuffer;
     use tracing_subscriber::layer::SubscriberExt as _;
 
     use super::*;
     use crate::config::{LogConfig, LogFilter, LogFormat};
-    use crate::telemetry::capture::{Capture, json_on_this_thread};
+    use crate::telemetry::capture::json_on_this_thread;
 
     const BOT: &str = "018bcfe5-6800-7bab-abab-abababababab";
 
@@ -119,7 +120,7 @@ mod tests {
 
         log_all(16, vec![event(FleetEventKind::ChatReceived(whisper))]).await;
 
-        let lines = capture.lines_with("the bot received chat");
+        let lines = capture.lines_with("the bot received chat").unwrap();
         assert_eq!(lines.len(), 1, "{}", capture.text());
         let line = &lines[0];
         assert_eq!(line["level"], "DEBUG");
@@ -136,7 +137,7 @@ mod tests {
 
         log_all(16, vec![chat("Server restarts in 5 minutes")]).await;
 
-        let line = &capture.lines_with("the bot received chat")[0];
+        let line = &capture.lines_with("the bot received chat").unwrap()[0];
         assert_eq!(line["kind"], "system");
         assert!(line.get("sender").is_none());
     }
@@ -148,7 +149,7 @@ mod tests {
 
         log_all(16, vec![event(FleetEventKind::ModeChatSent { message })]).await;
 
-        let lines = capture.lines_with("the bot's mode sent chat");
+        let lines = capture.lines_with("the bot's mode sent chat").unwrap();
         assert_eq!(lines.len(), 1, "{}", capture.text());
         assert_eq!(lines[0]["level"], "DEBUG");
         assert_eq!(lines[0]["bot_id"], BOT);
@@ -161,12 +162,15 @@ mod tests {
 
         log_all(1, vec![chat("one"), chat("two"), chat("three")]).await;
 
-        let lagged = capture.lines_with("the event log fell behind; events were skipped");
+        let lagged = capture
+            .lines_with("the event log fell behind; events were skipped")
+            .unwrap();
         assert_eq!(lagged.len(), 1, "{}", capture.text());
         assert_eq!(lagged[0]["level"], "DEBUG");
         assert_eq!(lagged[0]["skipped"], 2);
         let texts: Vec<_> = capture
             .lines_with("the bot received chat")
+            .unwrap()
             .iter()
             .map(|line| line["text"].as_str().unwrap().to_owned())
             .collect();
@@ -211,7 +215,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_chat_line_break_stays_on_one_pretty_line() {
-        let capture = Capture::default();
+        let capture = LogBuffer::default();
         let config = LogConfig {
             format: LogFormat::Pretty,
             filter: LogFilter::try_from("debug").unwrap(),

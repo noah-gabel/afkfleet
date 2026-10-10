@@ -17,8 +17,6 @@
 // helper functions would count as library code.
 #![cfg(test)]
 
-#[path = "../common/mod.rs"]
-mod common;
 mod fakes;
 mod harness;
 mod heartbeat;

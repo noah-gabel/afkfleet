@@ -26,7 +26,7 @@ Where things are:
 2. **Pick the task.** Take the next unchecked task, or the one the user names (e.g. "do P4.3"). Before coding, restate its goal and acceptance criteria in 2–4 lines.
 3. **Branch.**
    - Start from an up-to-date `main`: `git switch main`, then `git pull`.
-   - Create the task branch `p<phase>/<task-id>-<slug>`, e.g. `p2/p2.6-bot-state-machine`. Phases 0 and 1 each use one branch for the whole phase: `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each, with one commit per task (Plan.md, the note under Phase 2). Phase 3 does the same with five group branches, plus one task branch for P3.9 (Plan.md, the note under Phase 3). Phase 4 uses five group branches (Plan.md, the note under Phase 4). Phase 5 uses four group branches (Plan.md, the note under Phase 5).
+   - Create the task branch `p<phase>/<task-id>-<slug>`, e.g. `p2/p2.6-bot-state-machine`. Phases 0 and 1 each use one branch for the whole phase: `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each, with one commit per task (Plan.md, the note under Phase 2). Phase 3 does the same with five group branches, plus one task branch for P3.9 (Plan.md, the note under Phase 3). Phase 4 uses five group branches (Plan.md, the note under Phase 4). Phase 5 uses four group branches (Plan.md, the note under Phase 5). Phase 6 uses five group branches (Plan.md, the note under Phase 6).
    - One task, or one Phase 2 group, per branch. If the previous PR isn't merged yet, stop and tell the user instead of stacking branches.
 4. **TDD.**
    1. Write the tests first.
@@ -95,6 +95,7 @@ Recipes for tools that arrive in later phases (`gen`, `db-prepare`, `dev-server`
   - `fleet-mc` may use only `azalea::auth::sessionserver` and `azalea::auth::certs`, through azalea's re-export, to join with a server-issued Minecraft token.
   - The Microsoft flows (device code, Microsoft tokens, the account cache) belong to `fleet-server` alone. `fleet-mc`'s `clippy.toml` bans them (ADR-0011).
 - azalea code runs only on the MC host threads in `fleet-mc` (current-thread runtime + `LocalSet`). Never call azalea from a normal tokio task.
+- `fleet-startup` holds only the binaries' process start-up code: the config loader and its errors, the `[log]` types, the log layer and the panic hook. Internally it depends only on `fleet-core`. Its filter always caps `azalea_auth` at `info` and lets panic reports through; a binary only adds rules through `FilterRules` (ADR-0015).
 
 **Bot lifecycle:**
 - Every lifecycle change goes through `fleet_core::bot::transition()`. Actors execute the effects it returns and never decide state themselves.
@@ -310,6 +311,8 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 
 **Doubles and fixtures**
 - Fakes come from `fleet-testkit`. Use `mockall` only to assert interactions.
+- Config tests run inside figment's `Jail` through `fleet_testkit::jail::in_jail`, which carries the workspace's one approved `#[expect(clippy::result_large_err)]`. Don't write a second helper (ADR-0015).
+- Tests of what a log layer prints write into a `fleet_testkit::log_buffer::LogBuffer`. Checks that a secret never reaches a log use `fleet_testkit::log_capture` instead.
 - DB tests use `#[sqlx::test]`, which gives each test a fresh SQLite with migrations applied.
 - HTTP:
   - **Handler tests:** use `tower::ServiceExt::oneshot`.

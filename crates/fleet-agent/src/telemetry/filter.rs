@@ -15,66 +15,62 @@
 //!   azalea's kick rendering.
 //! - **The `azalea_auth` cap** keeps `azalea_auth` at `info` whatever the
 //!   filter says: its `trace` lines hold the chat-signing private key.
+//!   fleet-startup applies it to every binary's filter.
 //! - **Panic reports** always get through, since the default panic hook is
-//!   gone.
+//!   gone (fleet-startup too).
+//!
+//! [`AzaleaRules`] hands the first two to fleet-startup's layer
+//! (ADR-0015).
 
 use std::collections::BTreeMap;
 
-use tracing::Subscriber;
-use tracing_subscriber::EnvFilter;
-use tracing_subscriber::filter::combinator::{And, Or};
-use tracing_subscriber::filter::{FilterExt, LevelFilter, Targets};
-use tracing_subscriber::registry::LookupSpan;
+use fleet_startup::telemetry::FilterRules;
+use tracing_subscriber::filter::{LevelFilter, Targets};
 
-use super::panic::PANIC_TARGET;
 use crate::config::LogFilter;
 
 /// The prefix of every azalea crate's target.
 const AZALEA: &str = "azalea";
-/// azalea-auth's target, whose `trace` lines hold secrets.
-const AZALEA_AUTH: &str = "azalea_auth";
 
-/// The composed filter (see the module docs).
-pub(crate) type AgentFilter<S> = Or<And<And<EnvFilter, Targets, S>, Targets, S>, Targets, S>;
+/// The agent's additions to fleet-startup's filter: azalea's default in
+/// front of the operator's directives, the azalea cap, and the startup
+/// warning.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct AzaleaRules;
 
-/// Builds the layer's filter from the operator's filter.
-pub(crate) fn agent_filter<S>(filter: &LogFilter) -> AgentFilter<S>
-where
-    S: Subscriber + for<'a> LookupSpan<'a>,
-{
-    env_filter(filter)
-        .and(azalea_cap(filter))
-        .and(
-            Targets::new()
-                .with_default(LevelFilter::TRACE)
-                .with_target(AZALEA_AUTH, LevelFilter::INFO),
-        )
-        .or(Targets::new().with_target(PANIC_TARGET, LevelFilter::ERROR))
+impl FilterRules for AzaleaRules {
+    fn env_defaults(&self, filter: &LogFilter) -> Option<String> {
+        azalea_default(filter)
+    }
+
+    fn cap(&self, filter: &LogFilter) -> Targets {
+        azalea_cap(filter)
+    }
+
+    fn warn_at_startup(&self, filter: &LogFilter) {
+        warn_if_azalea_is_lifted(filter);
+    }
 }
 
-/// The operator's directives, with azalea's default in front unless one of
-/// them is a plain `azalea` directive.
-fn env_filter(filter: &LogFilter) -> EnvFilter {
+/// azalea's default, to go in front of the operator's directives, unless
+/// one of them is a plain `azalea` directive.
+fn azalea_default(filter: &LogFilter) -> Option<String> {
     let directives = filter.directives();
     let plain_azalea = directives
         .iter()
         .any(|directive| !directive.scoped && directive.target.as_deref() == Some(AZALEA));
-    let text = if plain_azalea {
-        filter.as_str().to_owned()
-    } else {
-        // The operator's global level: the last directive without a target,
-        // span or fields, as in EnvFilter. Without one, nothing else logs.
-        let global = directives
-            .iter()
-            .rev()
-            .find(|directive| directive.target.is_none() && !directive.scoped)
-            .map_or(LevelFilter::OFF, |directive| directive.level);
-        let default = global.min(LevelFilter::WARN);
-        format!("{AZALEA}={default},{}", filter.as_str())
-    };
-    // The text is already validated, so nothing is dropped (`parse_lossy`
-    // would print a dropped directive to stderr).
-    EnvFilter::builder().parse_lossy(text)
+    if plain_azalea {
+        return None;
+    }
+    // The operator's global level: the last directive without a target,
+    // span or fields, as in EnvFilter. Without one, nothing else logs.
+    let global = directives
+        .iter()
+        .rev()
+        .find(|directive| directive.target.is_none() && !directive.scoped)
+        .map_or(LevelFilter::OFF, |directive| directive.level);
+    let default = global.min(LevelFilter::WARN);
+    Some(format!("{AZALEA}={default}"))
 }
 
 /// `warn` for every azalea target, except the ones a directive names: they
@@ -122,13 +118,13 @@ pub(crate) fn warn_if_azalea_is_lifted(filter: &LogFilter) {
 
 #[cfg(test)]
 mod tests {
+    use fleet_testkit::log_buffer::LogBuffer;
     use rstest::rstest;
     use tracing_subscriber::layer::SubscriberExt;
 
     use super::*;
     use crate::config::{LogConfig, LogFormat};
-    use crate::telemetry::capture::Capture;
-    use crate::telemetry::layer;
+    use crate::telemetry::{PANIC_TARGET, layer};
 
     /// Logs one event at every level for `$target`.
     macro_rules! probe {
@@ -169,13 +165,13 @@ mod tests {
     /// most verbose level that got through for each probe target (`OFF` for
     /// none).
     fn most_verbose(filter: &str, emit: impl FnOnce()) -> [LevelFilter; 5] {
-        let capture = Capture::default();
+        let capture = LogBuffer::default();
         let subscriber =
             tracing_subscriber::registry().with(layer(&config(filter), false, capture.clone()));
         tracing::subscriber::with_default(subscriber, emit);
 
         let mut seen: BTreeMap<String, LevelFilter> = BTreeMap::new();
-        for line in capture.json_lines() {
+        for line in capture.json_lines().unwrap() {
             if line["message"] != "probe" {
                 continue;
             }
@@ -248,14 +244,14 @@ mod tests {
     #[case::panic_target_off("warn,afkfleet::panic=off")]
     #[case::no_global_level("azalea_client=debug")]
     fn panic_reports_always_get_through(#[case] filter: &str) {
-        let capture = Capture::default();
+        let capture = LogBuffer::default();
         let subscriber =
             tracing_subscriber::registry().with(layer(&config(filter), false, capture.clone()));
         tracing::subscriber::with_default(subscriber, || {
             tracing::error!(target: PANIC_TARGET, "probe");
         });
 
-        let lines = capture.json_lines();
+        let lines = capture.json_lines().unwrap();
         assert_eq!(lines.len(), 1, "{filter}");
         assert_eq!(lines[0]["target"], PANIC_TARGET);
     }
@@ -267,7 +263,7 @@ mod tests {
         #[case] filter: &str,
         #[case] warned: bool,
     ) {
-        let capture = Capture::default();
+        let capture = LogBuffer::default();
         let subscriber =
             tracing_subscriber::registry().with(layer(&config("info"), false, capture.clone()));
         tracing::subscriber::with_default(subscriber, || {
@@ -276,6 +272,7 @@ mod tests {
 
         let warnings: Vec<_> = capture
             .json_lines()
+            .unwrap()
             .into_iter()
             .filter(|line| line["level"] == "WARN")
             .collect();

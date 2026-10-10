@@ -1794,6 +1794,7 @@ dependencies = [
  "fleet-core",
  "fleet-mc",
  "fleet-runtime",
+ "fleet-startup",
  "fleet-testkit",
  "garde",
  "getrandom 0.4.3",
@@ -1867,11 +1868,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleet-server"
+version = "0.1.0"
+dependencies = [
+ "figment",
+ "fleet-startup",
+ "fleet-testkit",
+ "garde",
+ "rstest",
+ "serde",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
+name = "fleet-startup"
+version = "0.1.0"
+dependencies = [
+ "figment",
+ "fleet-core",
+ "fleet-testkit",
+ "rstest",
+ "serde",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "fleet-testkit"
 version = "0.1.0"
 dependencies = [
+ "figment",
  "fleet-core",
  "log",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

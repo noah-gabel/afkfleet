@@ -355,7 +355,7 @@ mod tests {
 
         outcome.log();
 
-        let lines = capture.lines_with("the agent stopped");
+        let lines = capture.lines_with("the agent stopped").unwrap();
         assert_eq!(lines.len(), 1, "{}", capture.text());
         let line = &lines[0];
         assert_eq!(line["level"], "INFO");
@@ -371,7 +371,7 @@ mod tests {
 
         Outcome::startup_failed().log();
 
-        let lines = capture.lines_with("the agent stopped");
+        let lines = capture.lines_with("the agent stopped").unwrap();
         assert_eq!(lines.len(), 1, "{}", capture.text());
         let line = &lines[0];
         assert_eq!(line["exit_code"], 1);
@@ -387,7 +387,7 @@ mod tests {
 
         agent_span(&name).in_scope(|| tracing::info!("inside"));
 
-        let line = &capture.lines_with("inside")[0];
+        let line = &capture.lines_with("inside").unwrap()[0];
         assert_eq!(line["span"]["name"], "agent");
         assert_eq!(line["span"]["agent"], "agent-1");
     }

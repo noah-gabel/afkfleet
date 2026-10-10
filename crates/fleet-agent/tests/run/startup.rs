@@ -70,6 +70,7 @@ async fn the_agent_logs_that_it_is_running_with_the_bot_count_after_every_bot_is
     let messages: Vec<String> = agent
         .capture
         .json_lines()
+        .unwrap()
         .iter()
         .filter_map(|line| line["message"].as_str().map(str::to_owned))
         .filter(|message| message == STARTING || message == RUNNING)

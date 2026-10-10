@@ -89,6 +89,7 @@ async fn a_signal_sent_before_the_start_is_handled_once_the_agent_runs() {
     assert_eq!(outcome, stopped(1, 0));
     let messages: Vec<String> = capture
         .json_lines()
+        .unwrap()
         .iter()
         .filter_map(|line| line["message"].as_str().map(str::to_owned))
         .filter(|message| message == "the agent is running" || message == SHUTTING_DOWN)
