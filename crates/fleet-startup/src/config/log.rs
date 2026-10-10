@@ -5,12 +5,13 @@ use core::str::FromStr;
 
 use tracing_subscriber::filter::{Directive, LevelFilter};
 
-/// `[log]`: how the agent logs. [`crate::telemetry::init`] installs it.
+/// `[log]`: how a binary logs. [`crate::telemetry::init_with`] installs it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct LogConfig {
     /// One JSON object per line, or human-readable lines.
     pub format: LogFormat,
-    /// The operator's filter. azalea's caps apply on top of it.
+    /// The operator's filter. The `azalea_auth` cap and the binary's own
+    /// rules apply on top of it.
     pub filter: LogFilter,
 }
 
@@ -95,17 +96,18 @@ pub struct LogFilter {
     directives: Vec<FilterDirective>,
 }
 
-/// What the telemetry needs to know about one directive of a [`LogFilter`].
+/// What a binary's [`FilterRules`](crate::telemetry::FilterRules) need to
+/// know about one directive of a [`LogFilter`].
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct FilterDirective {
+pub struct FilterDirective {
     /// The target it names, if any (`azalea_client` in
     /// `azalea_client=debug`).
-    pub(crate) target: Option<String>,
+    pub target: Option<String>,
     /// Whether it also names a span or fields, which makes it apply only
     /// there.
-    pub(crate) scoped: bool,
+    pub scoped: bool,
     /// The most verbose level it enables.
-    pub(crate) level: LevelFilter,
+    pub level: LevelFilter,
 }
 
 impl FilterDirective {
@@ -135,7 +137,9 @@ impl LogFilter {
         &self.text
     }
 
-    pub(crate) fn directives(&self) -> &[FilterDirective] {
+    /// The directives, in order.
+    #[must_use]
+    pub fn directives(&self) -> &[FilterDirective] {
         &self.directives
     }
 }

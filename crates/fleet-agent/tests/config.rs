@@ -23,11 +23,8 @@ use fleet_core::resilience::{CircuitPolicy, RetryPolicy, RetryPolicyError};
 use fleet_core::value::{AgentNameError, McUsernameError};
 use fleet_mc::McConfig;
 use fleet_runtime::RuntimeConfig;
-use jail::in_jail;
+use fleet_testkit::jail::in_jail;
 use rstest::rstest;
-
-#[path = "common/jail.rs"]
-mod jail;
 
 /// The smallest valid config: a name and one bot.
 const MINIMAL: &str = r#"

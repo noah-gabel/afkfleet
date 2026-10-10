@@ -144,6 +144,7 @@ afkfleet/
 │   ├── fleet-api-types/       # HTTP/WS DTOs shared by server, client and app (exported to TS via ts-rs)
 │   ├── fleet-server/          # server binary: HTTP API, auth, vault, persistence, gRPC control plane, CLI
 │   ├── fleet-client/          # typed HTTP + WS client (used by the Tauri backend and integration tests)
+│   ├── fleet-startup/         # the binaries' start-up code: config loader and errors, [log], log layer, panic hook
 │   └── fleet-testkit/         # fakes, fixtures, builders (dev-dependency only)
 ├── apps/
 │   └── desktop/               # Tauri app: src-tauri/ (Rust, workspace member) + thin TS entry and TauriApiClient
@@ -168,13 +169,16 @@ Crates are created in the phase that first needs them, not up front.
 | `fleet-mc` | `fleet-core`, **azalea** |
 | `fleet-proto` | `fleet-core` |
 | `fleet-api-types` | `fleet-core` |
-| `fleet-agent` (bin) | `fleet-core`, `fleet-runtime`, `fleet-mc`, `fleet-proto` |
-| `fleet-server` (bin) | `fleet-core`, `fleet-proto`, `fleet-api-types`, **azalea-auth** |
+| `fleet-startup` | `fleet-core` |
+| `fleet-agent` (bin) | `fleet-core`, `fleet-runtime`, `fleet-mc`, `fleet-proto`, `fleet-startup` |
+| `fleet-server` (bin) | `fleet-core`, `fleet-proto`, `fleet-api-types`, `fleet-startup`, **azalea-auth** |
 | `fleet-client` | `fleet-api-types` |
 | `apps/desktop/src-tauri` | `fleet-client`, `fleet-api-types` |
 | `fleet-testkit` | `fleet-core` (dev-dependency for everyone else) |
 
 Binaries stay thin: `main.rs` parses the CLI and config and wires adapters together, and all logic lives in the crate's library part.
+
+> Note (§4, Phase 6, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **`fleet-startup`** holds only the binaries' process start-up code: the config loader with its key-path errors, the `[log]` types, the log layer and the panic hook. It came out of fleet-agent in Phase 6, group A, so the server reuses it instead of a second copy. Its filter always caps `azalea_auth` at `info` and lets panic reports through; a binary only adds rules (the agent's azalea rules).
 
 ## 5. Crate & tool registry
 
@@ -197,10 +201,10 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | TTL cache / single-flight | `moka` | 0.12.16 | server | MC token cache, WS tickets |
 | Library errors | `thiserror` | 2.0.21 | all libraries | |
 | Binary error reporting | `anyhow` | 1.0.104 | `main.rs` only | Not declared yet: the agent's `main.rs` maps its typed errors to exit codes itself. It arrives with the first `main.rs` that uses it (ADR-0014) |
-| Serialization | `serde`, `serde_json` | 1.0.229, 1.0.151 | all | |
-| Configuration | `figment` | 0.10.19 | agent, server | TOML file + env; upstream is quiet but the crate is stable. It has no default features: the agent enables `toml` and `env`, and `test` (`Jail`) in its tests, whose one closure carries an approved `#[expect(clippy::result_large_err)]` (ADR-0014) |
+| Serialization | `serde`, `serde_json` | 1.0.229, 1.0.151 | all | fleet-testkit's log buffer parses JSON log lines with `serde_json` (ADR-0015) |
+| Configuration | `figment` | 0.10.19 | startup, testkit; agent and server tests | TOML file + env; upstream is quiet but the crate is stable. It has no default features: fleet-startup's loader enables `toml` and `env`, and fleet-testkit `test` for `jail::in_jail`, whose one closure carries the workspace's only approved `#[expect(clippy::result_large_err)]` (ADR-0014, ADR-0015) |
 | DTO & config validation | `garde` | 0.23.0 | api-types, agent, server | Domain value objects use hand-written constructors. It has no default features; members enable `derive` and the rules they use. The agent's config uses garde for its number ranges only and converts texts with the core constructors, so it reports every problem at once (ADR-0014) |
-| Logging / tracing | `tracing`, `tracing-subscriber` | 0.1.44, 0.3.23 | all | `env-filter`, `json`. fleet-testkit's log capture uses `tracing` and `tracing-subscriber`; the redaction tests use it (ADR-0011) |
+| Logging / tracing | `tracing`, `tracing-subscriber` | 0.1.44, 0.3.23 | all | `env-filter`, `json`. fleet-startup builds both binaries' log layer (ADR-0015). fleet-testkit's log capture uses `tracing` and `tracing-subscriber`; the redaction tests use it (ADR-0011). Its log buffer is the writer for format and filter tests (ADR-0015) |
 | Metrics | `metrics`, `metrics-exporter-prometheus` | 0.24.6, 0.18.3 (dfo) | runtime, agent, server | Internal port only. The exporter's default `push-gateway` brings its own TLS stack: enable `http-listener` only. Until P12.4 serves the endpoint, the agent enables no features and only installs the recorder. Its metrics-util dependency always enables `storage`, which brings rand 0.9 and getrandom 0.3 into normal dependencies (both already in the graph, neither used for secrets) (ADR-0014) |
 | IDs | `uuid` | 1.27.0, dfo | core, mc | v7, serde. fleet-mc only names `Uuid` in azalea's `AccountTrait` (ADR-0011) |
 | Time | `chrono` | 0.4.45, dfo | core, runtime, agent, server | Always UTC. No `clock` feature in core or runtime: time is passed in. The runtime derives `DateTime<Utc>` from tokio's clock, anchored at a wall time its caller passes in (ADR-0010, ADR-0013). The agent enables `now` only, for that one read at startup; `clock` would add local time zones (ADR-0014) |
@@ -520,7 +524,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Conventions**
 - Each task has an ID `P<phase>.<n>`. 🔴 means *the test comes first*, strictly. Tasks without 🔴 (scaffolding, config, wiring) are verified by `just check`, CI or the task's demo, but any logic they add still gets tests.
 - A phase is finished when every task is ticked **and** its Definition of Done (DoD) holds.
-- **Branches:** one branch per task, `p<phase>/<task-id>-<slug>` (e.g. `p2/p2.6-bot-state-machine`). Phases 0 and 1 each use a single branch, `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each (see the note under Phase 2). Phase 3 uses five group branches plus one task branch for P3.9 (see the note under Phase 3). Phase 4 uses five group branches (see the note under Phase 4). Phase 5 uses four group branches (see the note under Phase 5). Every branch ends in a PR that the user reviews and merges. The `Plan.md` checkbox is ticked in that same PR.
+- **Branches:** one branch per task, `p<phase>/<task-id>-<slug>` (e.g. `p2/p2.6-bot-state-machine`). Phases 0 and 1 each use a single branch, `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each (see the note under Phase 2). Phase 3 uses five group branches plus one task branch for P3.9 (see the note under Phase 3). Phase 4 uses five group branches (see the note under Phase 4). Phase 5 uses four group branches (see the note under Phase 5). Phase 6 uses five group branches (see the note under Phase 6). Every branch ends in a PR that the user reviews and merges. The `Plan.md` checkbox is ticked in that same PR.
 - Phases are vertical slices:
   - **0–5** produce a working standalone bot.
   - **6–11** build the fully managed system with the app.
@@ -2053,6 +2057,27 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** An HTTP service skeleton that is secure by default, with persistence, an error model and an audit trail, but no business endpoints yet.
 **Introduces:** `axum`, `axum-extra`, `tower`, `tower-http`, `sqlx`, `utoipa`, `utoipa-axum`, `ts-rs`, `serde_json`, `tokio-util`.
 
+> Note (P6):
+> - **Five group branches.** At the user's request, Phase 6 is built in group PRs like Phases 2–5. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
+>
+>   | Group | Branch | Tasks |
+>   |---|---|---|
+>   | A | `p6/p6.1-p6.2-layout-and-config` | The fleet-startup extraction, P6.1, P6.2. fleet-server is a library only, without a binary |
+>   | B | `p6/p6.3-p6.8-persistence-and-audit` | P6.3, P6.4, P6.8, plus the time and randomness ports, the `sqlx-offline` job and `just db-prepare` |
+>   | C | `p6/p6.5-p6.9-api-types-and-errors` | P6.9 first (ApiError's body DTO lives in fleet-api-types), then P6.5; the `ts-types-fresh` job and `just gen` |
+>   | D | `p6/p6.6-p6.7-middleware-and-health` | P6.6, P6.7 |
+>   | E | `p6/p6.10-p6.12-cli-and-wrap-up` | P6.10, P6.11, P6.12, the DoD integration test and the phase wrap-up |
+>
+>   Each later group asks its own implementation-level questions in its session.
+> - **Decisions.** The user answered the Phase 6 plan's open questions on 2026-10-10. [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md) records them; the notes below summarize what changes a task.
+> - **fleet-startup** (the user's decision). A new crate holds the binaries' start-up code: the config loader with its key-path errors, the `[log]` types, the log layer and the panic hook (§4). Group A's first commit moves it out of fleet-agent with no change in behavior, and fleet-agent's tests pass with only import changes. Its filter always caps `azalea_auth` at `info` and lets panic reports through. A binary adds its own rules through `FilterRules`, which can't weaken those two; only the agent's `azalea=warn` rules stay in fleet-agent.
+> - **Time and randomness are injected ports** (the user's decision), from group B on. fleet-core gets `system::{Clock, SecureRandom, RandomError}`, fleet-testkit `ManualClock` and `SeededRandom`, and fleet-server's infra `SystemClock` and `OsRandom`:
+>   - The seeded fake exists only in fleet-testkit, a dev-dependency everywhere, and a script under `scripts/` checks that no workspace member has fleet-testkit as a normal dependency. `OsRandom` is the only other implementation, and main.rs always wires it. The port's docs say every implementation must be cryptographically secure (security rule 4).
+>   - `crates/fleet-server/clippy.toml` bans reading the clock or the OS's randomness directly; `SystemClock` and `OsRandom` each carry one approved `#[expect(clippy::disallowed_methods)]`.
+>   - Tests never hard-code `SeededRandom`'s bytes or the IDs made from them, and snapshots redact them: rand doesn't promise `StdRng`'s output across versions.
+> - **stable-check.** fleet-startup and fleet-server join `stable_crates` in group A, fleet-api-types in group C. P9.3 removes fleet-server when azalea-auth arrives.
+> - **Dependencies.** Group A adds no external crate. fleet-startup uses figment (`toml`, `env`), serde, thiserror, tracing and tracing-subscriber (`env-filter`, `json`); fleet-testkit gains figment (`test`) and serde_json; fleet-server uses fleet-startup, garde (`derive`), serde (`derive`), thiserror and tracing.
+
 - [ ] **P6.1** Module layout (see `CLAUDE.md`): `config`, `app` (services), `ports`, `infra/{sqlite,crypto}`, `http/{router,middleware,extractors,handlers,error}`, `grpc`, `cli`.
 - [ ] **P6.2** 🔴 Config:
   - figment + garde
@@ -2264,6 +2289,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **What it covers.** At `trace`, azalea-auth 0.16 logs the Microsoft access token, the whole token response (refresh token included), the Xbox Live and XSTS auth responses, the Minecraft auth, ownership and profile responses, and the account cache. At `debug` it logs nothing secret.
   > - **One rule for both binaries.** fleet-server's filter caps `azalea_auth` at `info`, whatever the configured filter says. The agent has the same cap (P5.2), because azalea logs the chat-signing private key at `trace` in every online session.
   > - **Tested.** P9's redaction test checks the cap: with the configured filter at `trace`, nothing from `azalea_auth` below `info` gets through (ADR-0011, threat model).
+
+  > Note (P9.3, from Phase 6, group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **The cap already exists.** fleet-server's log layer comes from fleet-startup, which caps `azalea_auth` at `info` for every binary, outside the rules a binary can add, since Phase 6. P9.3 adds no second cap; P9's redaction test still checks this one on the server.
+  > - **stable-check.** fleet-server is in the justfile's `stable_crates` since Phase 6, because it didn't depend on azalea-auth yet. When azalea-auth arrives here, fleet-server leaves `stable_crates`, as the rule says (P0.11).
 - [ ] **P9.4** 🔴 Device-code flow:
   - `POST /accounts/link` returns `{flow_id, user_code, verification_uri, expires_at}`.
   - A background poller runs bounded and cancellable, with per-user and total caps.

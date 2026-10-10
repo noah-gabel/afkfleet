@@ -34,8 +34,9 @@ The business rules need to be testable without any of them. Two rules matter mos
 | `fleet-mc` | azalea adapter, the **only** crate that depends on `azalea` | `fleet-core`, `azalea` |
 | `fleet-proto` | `.proto` files, generated code, core ⇄ proto conversions | `fleet-core` |
 | `fleet-api-types` | HTTP/WS DTOs, exported to TypeScript | `fleet-core` |
-| `fleet-agent` (bin) | Agent: config, wiring, control-plane client | `fleet-core`, `fleet-runtime`, `fleet-mc`, `fleet-proto` |
-| `fleet-server` (bin) | HTTP API, auth, vault, persistence, gRPC control plane, CLI | `fleet-core`, `fleet-proto`, `fleet-api-types`, `azalea-auth` |
+| `fleet-startup` | The binaries' start-up code: config loader and errors, `[log]`, log layer, panic hook *(added in Phase 6, ADR-0015)* | `fleet-core` |
+| `fleet-agent` (bin) | Agent: config, wiring, control-plane client | `fleet-core`, `fleet-runtime`, `fleet-mc`, `fleet-proto`, `fleet-startup` |
+| `fleet-server` (bin) | HTTP API, auth, vault, persistence, gRPC control plane, CLI | `fleet-core`, `fleet-proto`, `fleet-api-types`, `fleet-startup`, `azalea-auth` |
 | `fleet-client` | Typed HTTP + WS client | `fleet-api-types` |
 | `apps/desktop/src-tauri` | Tauri backend | `fleet-client`, `fleet-api-types` |
 | `fleet-testkit` | Fakes, fixtures, builders (dev-dependency only) | `fleet-core` |

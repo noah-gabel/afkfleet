@@ -32,8 +32,6 @@
 
 mod checks;
 mod docker;
-#[path = "../common/jail.rs"]
-mod jail;
 mod logs;
 #[path = "../common/stack_checks.rs"]
 mod stack_checks;
@@ -47,6 +45,7 @@ use std::time::Instant;
 use chrono::{DateTime, TimeDelta, Utc};
 use fleet_agent::config::{AgentConfig, AgentMode, load};
 use fleet_core::resilience::{CircuitPolicy, RetryPolicy};
+use fleet_testkit::jail;
 
 use crate::checks::{
     MIN_COMPOSE, breaker_open_until, budget_problem, compose_version, first_join_deadline,

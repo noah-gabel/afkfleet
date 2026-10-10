@@ -25,6 +25,7 @@ repository = "https://github.com/noah-gabel/afkfleet"
 fleet-core = { path = "crates/fleet-core" }
 fleet-mc = { path = "crates/fleet-mc" }
 fleet-runtime = { path = "crates/fleet-runtime" }
+fleet-startup = { path = "crates/fleet-startup" }
 fleet-testkit = { path = "crates/fleet-testkit" }
 
 # azalea: exact pin (ADR-0003), fleet-mc only. Without default features: `log` would
@@ -45,9 +46,9 @@ backon = { version = "1.6.0", default-features = false }
 chrono = { version = "0.4.45", default-features = false }
 # clap: the agent's command line; the member enables `derive` (ADR-0014).
 clap = "4.6.7"
-# figment: the agent's config, TOML plus `AFKFLEET_AGENT__` env variables. No default
-# features exist; the agent enables `toml` and `env`, and `test` (`Jail`) in its tests
-# (ADR-0014).
+# figment: the binaries' configs, TOML plus prefixed env variables. No default features
+# exist; fleet-startup enables `toml` and `env`, and fleet-testkit `test` (`Jail`) for
+# every config test (ADR-0014, ADR-0015).
 figment = "0.10.19"
 # garde: range checks on the agent's config. No default features exist; the agent
 # enables `derive` (ADR-0014).
@@ -103,6 +104,7 @@ log = "0.4.34"
 # `std` keeps `PROPTEST_CASES` working.
 proptest = { version = "1.11.0", default-features = false }
 rstest = { version = "0.27.0", default-features = false }
+# serde_json: also fleet-testkit's log buffer, which parses JSON log lines (ADR-0015).
 serde_json = "1.0.151"
 # testcontainers: no default features, since `ring` turns on TLS for the Docker client,
 # which the local socket and named pipe don't need (and deny.toml bans ring). fleet-mc's

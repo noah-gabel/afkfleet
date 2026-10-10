@@ -22,11 +22,9 @@ use std::time::Duration;
 
 use fleet_agent::config::{AgentConfig, AgentMode, StandaloneBot, load};
 use fleet_agent::run::RUNTIME_SHUTDOWN;
-use jail::in_jail;
+use fleet_testkit::jail::in_jail;
 use stack_checks::{expected_restart_errors, expected_warnings, millis, stack_checks};
 
-#[path = "common/jail.rs"]
-mod jail;
 #[path = "common/stack_checks.rs"]
 mod stack_checks;
 
