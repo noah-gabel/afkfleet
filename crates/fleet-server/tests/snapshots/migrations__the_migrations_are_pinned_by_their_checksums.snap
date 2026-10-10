@@ -1,0 +1,6 @@
+---
+source: crates/fleet-server/tests/migrations.rs
+expression: lines
+---
+1 users 855a3b85c74bf7ab1e0a80761cfdec87736ddd222392f26d5285bc6839054fbc6bed7850473589bd2404d2dcf99eb02d
+2 audit log 4fe0384eac75b2ca1ca7ce31ce842bdf2200571138b3c670aba38fbd33558c1c457eb12121788167111ee6b3d7cc2498

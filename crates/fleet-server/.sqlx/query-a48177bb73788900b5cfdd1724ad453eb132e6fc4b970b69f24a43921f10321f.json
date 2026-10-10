@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "PRAGMA trusted_schema",
+  "describe": {
+    "columns": [
+      {
+        "name": "trusted_schema",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a48177bb73788900b5cfdd1724ad453eb132e6fc4b970b69f24a43921f10321f"
+}

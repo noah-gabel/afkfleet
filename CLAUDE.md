@@ -68,7 +68,7 @@ Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so 
 
 | Command | What it does |
 |---|---|
-| `just check` | `cargo fmt --check`, clippy (`--all-targets -D warnings`), `cargo doc --no-deps --workspace` with `RUSTDOCFLAGS="-D warnings"`, nextest default profile, doctests, the `scripts/` tests, and biome + `tsc --noEmit` once the frontend exists. **Run before saying a task is done.** |
+| `just check` | `cargo fmt --check`, clippy (`--all-targets -D warnings`), `cargo doc --no-deps --workspace` with `RUSTDOCFLAGS="-D warnings"`, nextest default profile, doctests, `db-check`, `testkit-check`, the `scripts/` tests, and biome + `tsc --noEmit` once the frontend exists. **Run before saying a task is done.** |
 | `just test [crate]` | nextest for the workspace or one crate |
 | `just test-slow` | Pulls the server image and builds the agent's image, then runs the nextest `slow` profile with fleet-mc's test-only `fault-injection` feature, one Minecraft container or compose stack at a time (needs Docker) |
 | `just test-real-account` | **The user only; the AI never runs it.** nextest `manual` profile: the user's real token from `secrets/p1.8-account.txt` joins a local online-mode container and sends signed chat (needs Docker) |
@@ -76,7 +76,9 @@ Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so 
 | `just deny` | `cargo deny check` |
 | `just fmt` | `cargo fmt` + biome format |
 | `just gen` | Export ts-rs types to `packages/ui/src/generated/`; proto codegen check |
-| `just db-prepare` | `cargo sqlx prepare` (offline query data in `.sqlx/`) |
+| `just db-prepare` | Rebuilds the throwaway `target/sqlx-prepare.db` from the migrations and runs `cargo sqlx prepare -- --all-targets` in `crates/fleet-server`, writing the offline query data to `crates/fleet-server/.sqlx/` (needs sqlx-cli 0.9.0). Run it after changing a query or adding a migration |
+| `just db-check` | The same database, then `cargo sqlx prepare --check`: fails if `.sqlx/` is missing or differs from a query (the `sqlx-offline` job) |
+| `just migrations-check` | Fails if a migration that exists on `origin/main` was modified, deleted or renamed. Needs an up-to-date `origin/main`; CI fetches it |
 | `just mc-up` / `just mc-down` | Local offline-mode Minecraft server (`itzg/minecraft-server`); `mc-down` stops the agent too and deletes the world |
 | `just stack-up` | Builds the agent's image and starts the local server plus the agent (`deploy/dev/agent.compose.toml`) in Docker, waiting until both are healthy |
 | `just dev-server` / `just dev-agent` | Run server / agent with the configs in `deploy/dev/` |
@@ -84,9 +86,10 @@ Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so 
 | `just dev-app` | `pnpm tauri dev` |
 | `just ui-test` / `just e2e` | Vitest / Playwright |
 | `just ci` | Everything CI runs |
-| `just fmt-check` · `clippy` · `docs` · `doctest` · `test-ci` · `stable-check` · `scripts-test` · `ui-check` · `ui-audit` | The building blocks of `check` and `ci`. Each CI job runs one of them, so local and CI runs can't drift apart |
+| `just testkit-check` | Fails if any workspace member depends on fleet-testkit outside its dev-dependencies (`cargo tree`, through `scripts/testkit-check.mjs`; ADR-0015) |
+| `just fmt-check` · `clippy` · `docs` · `doctest` · `test-ci` · `stable-check` · `db-check` · `migrations-check` · `testkit-check` · `scripts-test` · `ui-check` · `ui-audit` | The building blocks of `check` and `ci`. Each CI job runs one of them, so local and CI runs can't drift apart |
 
-Recipes for tools that arrive in later phases (`gen`, `db-prepare`, `dev-server`, `dev-app`, `ui-test`, `e2e`) print the phase they arrive in and exit with an error until then.
+Recipes for tools that arrive in later phases (`gen`, `dev-server`, `dev-app`, `ui-test`, `e2e`) print the phase they arrive in and exit with an error until then.
 
 ## Architecture rules
 **Crates and dependencies** (full table in Plan.md §4):
@@ -108,6 +111,7 @@ Recipes for tools that arrive in later phases (`gen`, `db-prepare`, `dev-server`
 **Server layering:** `http/handlers` → `app` services → `ports` → `infra`.
 - Handlers only parse input, authorize, call a service and map the result. No business logic, no SQL.
 - Services own use cases, transactions and audit entries.
+- Writes go through `Store::write()`, a `WriteTx` on the one write connection. Its `commit(entry)` takes the audit entry, so nothing commits unaudited. Keep it short: no password hashing, crypto or network calls while it's open (ADR-0015).
 
 **Shared types:**
 - Every API DTO lives in `fleet-api-types` (serde + garde + ts-rs).
@@ -183,7 +187,7 @@ fleet-server/src/
 | Desktop | Shell | `tauri` ≥ 2.11.1, `tauri-build` |
 | | Plugins | `tauri-plugin-opener`, `tauri-plugin-single-instance`, `tauri-plugin-updater` |
 | | Keychain | `keyring-core` + `windows-native-keyring-store` |
-| Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, tokio `test-util`, `log` (dev only: fleet-testkit's log capture and fleet-agent's telemetry, each to prove the `log` bridge) |
+| Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, tokio `test-util`, `log` (dev only: fleet-testkit's log capture and fleet-agent's telemetry, each to prove the `log` bridge; fleet-server's one normal use is sqlx's `LevelFilter`, and its logging macros are banned there), `tempfile` (fleet-server's database tests) |
 | | Fuzzing | `libfuzzer-sys`, `arbitrary` |
 
 **Frontend packages**
@@ -281,7 +285,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
    - Agents never receive Microsoft tokens.
    - They only receive short-lived Minecraft session tokens, and only for bots assigned to them.
 7. **Text from Minecraft servers is untrusted.** Sanitize it in core, store it as plain text, render it as text.
-8. **SQL** only through the `sqlx::query!` / `query_as!` macros with bind parameters. Never build SQL from strings.
+8. **SQL** only through the `sqlx::query!` / `query_as!` macros with bind parameters. Never build SQL from strings. The approved exceptions are fixed string literals, never formatted and without input (ADR-0015): `begin_with("BEGIN IMMEDIATE")` for write transactions, and, in tests, a pragma read sqlx's macros can't describe (`PRAGMA journal_mode`).
 9. **TLS**
    - Never turn off certificate checks; no `danger_*` APIs.
    - Use exactly one rustls provider (aws-lc-rs), installed at startup.
@@ -305,8 +309,10 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 - Names describe behavior, e.g. `login_with_wrong_password_returns_401_and_counts_attempt`.
 - Arrange / Act / Assert, one behavior per test. Use `rstest` `#[case]` for tables.
 - **Time:** `#[tokio::test(start_paused = true)]` plus `tokio::time::advance`. Never a real `sleep`.
+  - **Never paused time with sqlx.** It runs each SQLite connection on a worker thread, so the runtime looks idle while it waits, and paused time would jump ahead and fire its timeouts early. A test that waits for a pool timeout lowers it (`DatabaseOptions`) instead (ADR-0015).
   - `governor` (rate limits) and `moka` (caches with expiry) keep their own clocks, which paused tokio time doesn't control. Inject a clock for them (governor supports custom clocks), or ask the user before testing them another way.
 - **Randomness:** seeded `StdRng`.
+- **The server's time and randomness** come through fleet-core's `Clock` and `SecureRandom` ports. Tests use fleet-testkit's `ManualClock` and `SeededRandom` (`fail_next` for a failing source) and never hard-code `SeededRandom`'s bytes or the IDs made from them; snapshots redact them (ADR-0015).
 - **Property tests:** proptest's default is 256 cases. CI sets `PROPTEST_CASES=1000`.
 
 **Doubles and fixtures**
@@ -358,7 +364,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
   - Docker Desktop (WSL 2 backend) runs the Minecraft test server and the compose stack. It must be running for `just mc-up` and `just test-slow`; if Docker isn't reachable, ask the user to start it.
   - Tauri needs MSVC Build Tools ("Desktop development with C++") and WebView2 (built into Windows 11). Both are installed.
   - aws-lc-rs needs NASM, which is installed and on `PATH`. CMake isn't needed (it's only for FIPS builds).
-  - Installed: Git, GitHub CLI, PowerShell 7, `just`, rustup, Node 24 + pnpm, Docker Desktop. Cargo tools (nextest, llvm-cov, deny, insta) may still need installing in Phase 0; sqlx-cli comes in Phase 6.
+  - Installed: Git, GitHub CLI, PowerShell 7, `just`, rustup, Node 24 + pnpm, Docker Desktop. Cargo tools (nextest, llvm-cov, deny, insta) may still need installing in Phase 0. sqlx-cli 0.9.0 is installed SQLite-only: `cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features sqlite`.
 - **Toolchain:** `rust-toolchain.toml` pins a **dated nightly**, and rustup installs it automatically.
   - Change it only in a deliberate Minecraft-version bump.
   - That bump changes nightly, azalea and the test server's `VERSION` together, as in `docs/runbook.md`.

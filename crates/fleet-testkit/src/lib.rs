@@ -13,6 +13,10 @@
 //! - [`log_buffer`]: a writer for a log layer a test builds itself, for tests
 //!   of what that layer prints.
 //! - [`jail`]: figment's `Jail`, for the tests that load configs.
+//! - [`system`]: a [`Clock`](fleet_core::system::Clock) that only moves when
+//!   the test moves it, and a seeded
+//!   [`SecureRandom`](fleet_core::system::SecureRandom), which is why this
+//!   crate must never be more than a dev-dependency (`just testkit-check`).
 //!
 //! Fakes are preferred over mocks; `mockall` is only for checking interactions
 //! (CLAUDE.md, testing conventions).
@@ -21,3 +25,4 @@ pub mod jail;
 pub mod log_buffer;
 pub mod log_capture;
 pub mod mc;
+pub mod system;

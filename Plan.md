@@ -190,24 +190,24 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Minecraft protocol & client | `azalea` | `=0.16.0` (+mc26.1) | fleet-mc | Needs nightly (ADR-0003). Disable its `AutoReconnectPlugin` and `AutoRespawnPlugin`. Runs only inside a `LocalSet` |
 | Minecraft chat components & translations | `azalea-chat`, `azalea-language` | `=0.16.0` (+mc26.1) | fleet-mc | Already in azalea's graph at the same pin. Only for fleet-mc's bounded renderer of server text: it names `PrimitiveOrComponent`, which azalea doesn't re-export, and looks up translation templates, because azalea's own rendering grows exponentially (ADR-0011). Bumped together with azalea |
 | Microsoft / Minecraft auth | `azalea-auth` | `=0.16.0` (+mc26.1) | fleet-server | Device-code flow. Never use its file cache. fleet-mc reaches only `azalea::auth::sessionserver` and `certs`, through azalea's re-export, never the Microsoft flows; its clippy config bans them (ADR-0011) |
-| Async runtime | `tokio` | 1.53.2 | runtime, mc, testkit, agent, server, client | `test-util` feature in dev. Clippy bans `unbounded_channel`; azalea's two mandated channels are the only exceptions (ADR-0011). The agent builds a multi-threaded runtime after loading its config (ADR-0014) |
+| Async runtime | `tokio` | 1.53.2 | runtime, mc, testkit, agent, server, client | `test-util` feature in dev. Clippy bans `unbounded_channel`; azalea's two mandated channels are the only exceptions (ADR-0011). The agent builds a multi-threaded runtime after loading its config (ADR-0014). fleet-server enables `fs`, to create the database file and check its permissions (ADR-0015) |
 | Cancellation, task tracking | `tokio-util` | 0.7.19 | runtime, mc, agent, server | `CancellationToken`, `TaskTracker`. fleet-runtime and the agent enable no features: they use only `CancellationToken`, and their tasks live in tokio's `JoinSet`, which reports panics (ADR-0013, ADR-0014) |
 | Stream adapters | `tokio-stream` | 0.1.19 | proto, agent, server | gRPC streams, broadcast → stream |
 | Sink/Stream extension traits | `futures-util` | 0.3.34 | client, server | WebSocket split/send |
-| Async fns in `dyn` traits | `async-trait` | 0.1.92 | server | Only for `Arc<dyn Port>`. Use generics + RPITIT elsewhere |
+| Async fns in `dyn` traits | `async-trait` | 0.1.92 | server | Only for `Arc<dyn Port>`. Use generics + RPITIT elsewhere. First used by fleet-server's store ports (ADR-0015) |
 | Retry & backoff | `backon` | 1.6.0, dfo | core (policy), agent, client | Exponential backoff with jitter. The default features pull in a tokio sleeper |
 | Rate limiting (keyed / in-process) | `governor` | 0.10.4, dfo | runtime (chat), server (per user) | fleet-runtime enables `std` only. The defaults add `quanta`, `dashmap` and `jitter`, which pulls rand 0.9 and getrandom 0.3 into normal dependencies. Without `quanta` there's no `DefaultClock`: the chat queue uses `direct_with_clock` with a tokio-backed clock, so paused time controls it (ADR-0013) |
 | Rate limiting (HTTP middleware) | `tower_governor` | 0.8.0 | server | Per IP |
 | TTL cache / single-flight | `moka` | 0.12.16 | server | MC token cache, WS tickets |
 | Library errors | `thiserror` | 2.0.21 | all libraries | |
 | Binary error reporting | `anyhow` | 1.0.104 | `main.rs` only | Not declared yet: the agent's `main.rs` maps its typed errors to exit codes itself. It arrives with the first `main.rs` that uses it (ADR-0014) |
-| Serialization | `serde`, `serde_json` | 1.0.229, 1.0.151 | all | fleet-testkit's log buffer parses JSON log lines with `serde_json` (ADR-0015) |
+| Serialization | `serde`, `serde_json` | 1.0.229, 1.0.151 | all | fleet-testkit's log buffer parses JSON log lines with `serde_json`; fleet-server reads the audit log's metadata JSON back with it, while fleet-core's `AuditMetadata` writes its JSON itself, byte for byte as `serde_json` would (ADR-0015) |
 | Configuration | `figment` | 0.10.19 | startup, testkit; agent and server tests | TOML file + env; upstream is quiet but the crate is stable. It has no default features: fleet-startup's loader enables `toml` and `env`, and fleet-testkit `test` for `jail::in_jail`, whose one closure carries the workspace's only approved `#[expect(clippy::result_large_err)]` (ADR-0014, ADR-0015) |
 | DTO & config validation | `garde` | 0.23.0 | api-types, agent, server | Domain value objects use hand-written constructors. It has no default features; members enable `derive` and the rules they use. The agent's config uses garde for its number ranges only and converts texts with the core constructors, so it reports every problem at once (ADR-0014) |
 | Logging / tracing | `tracing`, `tracing-subscriber` | 0.1.44, 0.3.23 | all | `env-filter`, `json`. fleet-startup builds both binaries' log layer (ADR-0015). fleet-testkit's log capture uses `tracing` and `tracing-subscriber`; the redaction tests use it (ADR-0011). Its log buffer is the writer for format and filter tests (ADR-0015) |
 | Metrics | `metrics`, `metrics-exporter-prometheus` | 0.24.6, 0.18.3 (dfo) | runtime, agent, server | Internal port only. The exporter's default `push-gateway` brings its own TLS stack: enable `http-listener` only. Until P12.4 serves the endpoint, the agent enables no features and only installs the recorder. Its metrics-util dependency always enables `storage`, which brings rand 0.9 and getrandom 0.3 into normal dependencies (both already in the graph, neither used for secrets) (ADR-0014) |
-| IDs | `uuid` | 1.27.0, dfo | core, mc | v7, serde. fleet-mc only names `Uuid` in azalea's `AccountTrait` (ADR-0011) |
-| Time | `chrono` | 0.4.45, dfo | core, runtime, agent, server | Always UTC. No `clock` feature in core or runtime: time is passed in. The runtime derives `DateTime<Utc>` from tokio's clock, anchored at a wall time its caller passes in (ADR-0010, ADR-0013). The agent enables `now` only, for that one read at startup; `clock` would add local time zones (ADR-0014) |
+| IDs | `uuid` | 1.27.0, dfo | core, mc, server | v7, serde. fleet-mc only names `Uuid` in azalea's `AccountTrait` (ADR-0011). fleet-server binds IDs as `uuid::fmt::Hyphenated` text, never a plain `Uuid` (ADR-0015) |
+| Time | `chrono` | 0.4.45, dfo | core, runtime, agent, server | Always UTC. No `clock` feature in core or runtime: time is passed in. The runtime derives `DateTime<Utc>` from tokio's clock, anchored at a wall time its caller passes in (ADR-0010, ADR-0013). The agent enables `now` only, for that one read at startup; `clock` would add local time zones (ADR-0014). fleet-server enables `now` only, for its `SystemClock`, the one wall-clock read behind the `Clock` port (ADR-0015) |
 | CLI | `clap` | 4.6.7 | agent, server | derive |
 | Hidden password prompt | `rpassword` | 7.5.4 | server CLI | |
 
@@ -219,7 +219,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Service abstraction | `tower` | 0.5.3 | server, client | |
 | HTTP middleware | `tower-http` | 0.7.1 | server | request-id, trace, timeout, body limit, sensitive headers, set-header, catch-panic |
 | OpenAPI | `utoipa`, `utoipa-axum` | 6.0.0, 0.3.0 | server | P0 picked 6.x (ADR-0009): released 2026-09-22, re-check at P6 |
-| Database | `sqlx` | **0.9.0**, dfo | server | `runtime-tokio`, `sqlite`, `migrate`, `macros`, `chrono`, `uuid`; no TLS feature (SQLite); offline `.sqlx/` |
+| Database | `sqlx` | **0.9.0**, dfo | server | `runtime-tokio`, `sqlite-bundled`, `migrate`, `macros`, `uuid`; no TLS feature (SQLite); offline data in `crates/fleet-server/.sqlx/`. Not `sqlite`: in 0.9 it also turns on extension loading, deserialize and unlock-notify. Not `chrono`: it would turn on chrono's `clock` for the whole workspace build, so times are converted in fleet-server. Not `json` (ADR-0015) |
 | gRPC | `tonic`, `tonic-prost` | **0.14.6** | proto, agent, server | Features `tls-aws-lc`, `tls-connect-info`. Never `tls-ring` or `tls-webpki-roots` |
 | Protobuf | `prost` | 0.14.4 | proto | |
 | Protobuf codegen | `tonic-prost-build`, `protox` | 0.14.6, 0.9.1 | proto (`build.rs`) | Pure Rust, no system `protoc` |
@@ -237,10 +237,10 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Hashing | `sha2` | **0.11.0** | server | Token hashes, certificate fingerprints |
 | Constant-time comparison | `subtle` | 2.6.1 | server | |
 | Encoding | `base64` | 0.23.1 | server, client | URL-safe, no padding |
-| Secret wrappers | `secrecy` | 0.10.3 | core, mc, agent, server, client, desktop | Redacted `Debug` |
+| Secret wrappers | `secrecy` | 0.10.3 | core, mc, agent, server, client, desktop | Redacted `Debug`. fleet-server's `PasswordHash` holds the stored hash in a `SecretString` (ADR-0015) |
 | Memory zeroing | `zeroize` | 1.9.0 | server, agent | |
-| Secure randomness | `getrandom` | 0.4.3 | server, agent | Tokens, keys, nonces: **always** use this. The agent draws its runtime seed and its bot IDs' random bytes from it; no features (ADR-0014) |
-| Non-security randomness | `rand` | **0.10.3**, dfo | core, runtime | Jitter, random look angles; seeded `StdRng` in tests. No OS randomness in core |
+| Secure randomness | `getrandom` | 0.4.3 | server, agent | Tokens, keys, nonces: **always** use this. The agent draws its runtime seed and its bot IDs' random bytes from it; no features (ADR-0014). In fleet-server only `OsRandom` calls it, behind the `SecureRandom` port (ADR-0015) |
+| Non-security randomness | `rand` | **0.10.3**, dfo | core, runtime, testkit | Jitter, random look angles; seeded `StdRng` in tests. No OS randomness in core. fleet-testkit's `SeededRandom` uses `std_rng` (ADR-0015) |
 | TOTP 2FA | `totp-rs` | 6.0.0 | server | Feature `qr`. `gen_secret` uses rand's thread RNG, so P7 generates the secret bytes with `getrandom` instead (security rule 4) |
 | Password strength | `zxcvbn` | 3.1.1 | server | |
 
@@ -258,11 +258,12 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 |---|---|---|---|
 | Fixtures / parametrized tests | `rstest` | 0.27.0, dfo | `#[case]` tables. The default async-timeout and crate-renaming features aren't needed (ADR-0010) |
 | Property testing | `proptest` | 1.11.0, dfo | State machine, parsers. Only `std`, which reads `PROPTEST_CASES`; no fork or timeout mode (ADR-0010) |
-| Snapshot testing | `insta` | 1.49.0 | `json` and `redactions` features, enabled by the member that uses them (fleet-core: `json`) |
+| Snapshot testing | `insta` | 1.49.0 | `json` and `redactions` features, enabled by the member that uses them (fleet-core: `json`; fleet-server: none, for the migrations' checksum snapshot) |
 | Mocks | `mockall` | 0.15.0 | Only for interaction checks; put `#[automock]` above `#[async_trait]` |
 | Containers | `testcontainers` | 0.28.0, dfo | `itzg/minecraft-server`, for fleet-mc's slow tests (P3.7). The default `ring` feature turns on TLS for the Docker client, which the local socket and the Windows named pipe don't need; no feature is enabled |
 | Time control | `tokio` `test-util` | | `start_paused`, `advance` |
-| `log` records in tests | `log` | 0.4.34 | Dev-dependency only. fleet-testkit: its log capture's test emits a `log` record to prove that reqwest's and rustls's logs reach the redaction check through `tracing-log` (ADR-0011). fleet-agent: its telemetry test proves that the log filter and azalea's caps see a `log` record's real target (ADR-0014) |
+| Temporary files | `tempfile` | 3.27.0 | fleet-server's database tests: a fresh folder per test, removed on drop. Already in the lockfile through figment and insta (ADR-0015) |
+| `log` records in tests | `log` | 0.4.34 | fleet-server's one normal use: `log::LevelFilter`, which sqlx's statement-logging levels take; clippy bans its logging macros there, so all server logging stays on tracing (ADR-0015). Otherwise a dev-dependency. fleet-testkit: its log capture's test emits a `log` record to prove that reqwest's and rustls's logs reach the redaction check through `tracing-log` (ADR-0011). fleet-agent: its telemetry test proves that the log filter and azalea's caps see a `log` record's real target (ADR-0014) |
 | Fuzzing | `libfuzzer-sys`, `arbitrary` | 0.4.13, 1.4.2 | Driven by cargo-fuzz |
 
 ### Frontend (same one-library-per-concern rule)
@@ -292,7 +293,8 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
   - rustup with the dated nightly from `rust-toolchain.toml` (ADR-0003), plus stable 1.99.0 for the `stable-check` job
   - `just` 1.58.0
   - cargo-nextest 0.9.146, cargo-llvm-cov 0.9.1, cargo-deny 0.20.2, cargo-insta 1.49.0
-  - Later: sqlx-cli **0.9.0** (P6), cargo-chef 0.1.78 (P5), cargo-mutants 27.1.0 and cargo-fuzz 0.13.2 (P13)
+  - sqlx-cli **0.9.0** (P6), SQLite-only: `cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features sqlite`, the same in CI and the README
+  - Later: cargo-chef 0.1.78 (P5), cargo-mutants 27.1.0 and cargo-fuzz 0.13.2 (P13)
 - **Frontend tooling:** pnpm 12.9.1 (`packageManager`) and Biome 2.5.15 from P0.8; every other package is pinned in the phase that introduces it.
 - **Runtime & hosting:**
   - Docker + Docker Compose
@@ -2081,7 +2083,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   - The seeded fake exists only in fleet-testkit, a dev-dependency everywhere, and a script under `scripts/` checks that no workspace member has fleet-testkit as a normal dependency. `OsRandom` is the only other implementation, and main.rs always wires it. The port's docs say every implementation must be cryptographically secure (security rule 4).
 >   - `crates/fleet-server/clippy.toml` bans reading the clock or the OS's randomness directly; `SystemClock` and `OsRandom` each carry one approved `#[expect(clippy::disallowed_methods)]`.
 >   - Tests never hard-code `SeededRandom`'s bytes or the IDs made from them, and snapshots redact them: rand doesn't promise `StdRng`'s output across versions.
+>
+>   As built (group B, the user's decisions, [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+>   - **fleet-core `system`:** `Clock::now()` returns whole milliseconds (the precision the database stores and a v7 ID holds); `SecureRandom::fill`; `RandomError::{Os { code }, Unavailable}`; `random_bytes::<N>()`; and `mint::<I: V7Id>(at, random)`, where `define_id!` implements fleet-core's new `V7Id` trait for every ID type. The caller reads its clock once, so a record's creation time equals its ID's.
+>   - **fleet-testkit:** `ManualClock` (`new`, `set`, `advance`, all truncating to ms) and `SeededRandom` (`fail_next` queues one failure that doesn't move the stream).
+>   - **fleet-server `infra::system`:** `SystemClock` and `OsRandom`, each with its approved `#[expect]`.
+>   - **Deviation: the testkit guard is `just testkit-check`, not a TOML-parsing script** (the user's decision). It asks Cargo: `cargo tree --workspace -e normal,build --target all -i fleet-testkit` must list nothing but fleet-testkit, so `workspace = true`, renames, target-specific tables and members anywhere are covered with no parser to maintain. `scripts/testkit-check.mjs` reads cargo's output and fails on any line it can't read; `just check`, `just ci` and the `deny` CI job run it.
+>   - **The bans go further than planned** (the user's decision): uuid's self-minting functions and the `SysRng`/`ThreadRng` types too. A temporary probe, never committed, proved that all 28 entries fire with their reasons.
 > - **stable-check.** fleet-startup and fleet-server join `stable_crates` in group A, fleet-api-types in group C. P9.3 removes fleet-server when azalea-auth arrives.
+> - **Dependencies (group B, the user's approval).** New in `[workspace.dependencies]`: sqlx (0.9.0, no default features), async-trait (0.1.92) and tempfile (3.27.0, already in the lockfile). fleet-server gains fleet-core, async-trait, chrono (`now`), getrandom, log (only for sqlx's `LevelFilter`), secrecy, serde_json, sqlx (`runtime-tokio`, `sqlite-bundled`, `macros`, `migrate`, `uuid`), tokio (`fs`) and uuid; in dev, insta, proptest (`std`), tempfile and tokio (`macros`, `rt`). fleet-testkit gains chrono and rand (`std_rng`). fleet-core gains nothing.
 > - **Dependencies.** Group A adds no external crate. fleet-startup uses figment (`toml`, `env`), serde, thiserror, tracing and tracing-subscriber (`env-filter`, `json`); fleet-testkit gains figment (`test`) and serde_json; fleet-server uses fleet-startup, garde (`derive`), serde (`derive`), thiserror and tracing.
 
 - [x] **P6.1** Module layout (see `CLAUDE.md`): `config`, `app` (services), `ports`, `infra/{sqlite,crypto}`, `http/{router,middleware,extractors,handlers,error}`, `grpc`, `cli`.
@@ -2123,13 +2133,31 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - `tests/config.rs` (31 cases, each through `fleet_testkit::jail::in_jail`): the defaults, every key, environment overrides, the bind forms, the dev-mode warning on and off, a missing file, unknown keys in the file and the environment, a later phase's section, a wrong type, the database path, bad binds and port 0, the range edges, bad log settings, and every problem at once without values.
   >   - Unit tests: the secret-name rule (14 names), the walk finding every Phase 6 key, no key holding a secret, the allowlist's entries, and the problem list's text.
   >   - fleet-startup: `NoRules` across 7 filters and 4 targets (`azalea_auth` stays at `info` under `trace`), panic reports under `off`, and no defaults or warning.
-- [ ] **P6.3** SQLite setup:
+- [x] **P6.3** SQLite setup:
   - `journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON`, `busy_timeout=5s`
   - a **write pool with 1 connection** plus a read pool
   - migrations embedded with `sqlx::migrate!` and run at startup
   - offline data in `.sqlx/`, and a CI job running `cargo sqlx prepare --check`
   > Note (P6.3, from group A, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **sqlx's statement logging is set explicitly** when the connection is configured: every statement at `debug`, slow statements at `warn`. sqlx has logged every statement at `info` in some versions, which the default `info` filter would let through on every request.
-- [ ] **P6.4** 🔴 First migration and repositories for `users` and `audit_log`, tested with `#[sqlx::test]`.
+
+  > Note (P6.3, as built, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **Shape.** `infra::sqlite::open(&DatabaseConfig, DatabaseOptions) -> Result<Database, OpenError>` is the startup call: there's no binary yet, so "run at startup" means this function, which group E's `serve` and `migrate` call. It prepares the file, then `Database::connect` builds the write pool, runs every pending migration and builds the read pool.
+  > - **One function owns every per-connection setting,** `connect_options(base, PoolRole, &DatabaseOptions)`, for production and tests alike: `foreign_keys=ON`, `busy_timeout=5s`, `synchronous=NORMAL`, `trusted_schema=OFF` (the user's addition: no function with side effects runs from the schema), statements at `debug` and slow ones (from 250 ms) at `warn`, and `create_if_missing(false)`. The write connection adds WAL; the 4 read connections add `query_only=ON`, so a write through them fails instead of bypassing the single writer. Both pools wait at most 5 s for a connection.
+  > - **The file is open()'s job:** a missing folder stops startup (`MissingFolder`, nothing created); open() creates a missing file itself, `0600` on Unix, so sqlx never makes one with default permissions; and on Unix a database, `-wal` or `-shm` that group or others can use stops startup with the path, the fix (`chmod 600`) and the Docker Desktop bind-mount case in the message. That covers Phase 6's "only the service user reads the DB file".
+  > - **Migration errors** an operator must understand get their own variants: `EditedMigration { version }` and `NewerSchema { version }`.
+  > - **Timeouts** are documented in the module instead of a wrapper per query: the acquire timeout, `busy_timeout` and P6.6's request timeout bound every query; migrations are unbounded on purpose.
+  > - **Deviation: the offline data lives in `crates/fleet-server/.sqlx/`,** prepared from the crate without `--workspace`: only fleet-server uses sqlx, the Docker allowlist already includes `crates/`, and prepare compiles only fleet-server, never azalea. `SQLX_OFFLINE = "true"` in `.cargo/config.toml` pins every build to it. `just db-prepare` and `just db-check` (in `check` and `ci`) rebuild `target/sqlx-prepare.db` from the migrations, through an absolute URL, since rustc runs the macros in the workspace root.
+  > - **The `sqlx-offline` job** installs sqlx-cli pinned and SQLite-only, fetches `main`'s tip, and runs `just migrations-check` (a migration on `main` may never be modified, deleted or renamed) and `just db-check`.
+  > - **Tests** (`tests/database.rs`, `tests/database_logging.rs`, real time, never paused) were red against compiling stubs first: 15 of the 20 that run on Windows failed; the 3 Unix-only permission tests run in Linux CI.
+- [x] **P6.4** 🔴 First migration and repositories for `users` and `audit_log`, tested with `#[sqlx::test]`.
+
+  > Note (P6.4, as built, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **Schema conventions for every table:** STRICT; entity IDs as lowercase hyphenated v7 TEXT with a CHECK on the exact canonical form; times as `YYYY-MM-DDTHH:MM:SS.mmmZ` TEXT with a CHECK on the shape; CHECKs on closed sets only (`role`, `disabled`, `outcome`), never on sets later phases extend (`action`, `target_type`); append-only logs (`audit_log`, later `chat_messages`) keyed `INTEGER PRIMARY KEY AUTOINCREMENT` and ordered by ID only. IDs and times convert in one place (`infra/sqlite/convert.rs`); IDs are bound as `uuid::fmt::Hyphenated`, never as a plain `Uuid`, which sqlx would bind as a BLOB.
+  > - **Two migrations,** `0001_users.sql` (Appendix D in full, `username = lower(username)`, an algorithm-neutral PHC shape on `password_hash`, `password_changed_at` = `created_at` for a new user, and the partial unique index on `role` for `'owner'` from P7.1's note) and `0002_audit_log.sql` (`actor_user_id` references `users` without cascade, `actor_ip` canonical, target type and ID both set or both NULL, metadata NULL or a JSON object). No trigger blocks DELETE: P11.6 deletes old entries.
+  > - **The unit of work:** `ports::store::Store` hands out read handles (`users()`, `audit()`) and `write()`, a `WriteTx` started with `BEGIN IMMEDIATE`. Its `commit(entry)` records the audit entry and commits, so a change can't be committed unaudited; dropping it rolls back. There is no unaudited commit (P7 adds one with named exemptions, see P7.1's note). `StoreError::{Busy, Corrupt { table, column, rowid }, Unstorable { table, column }, Backend(source)}` names no sqlx type; `Corrupt` never carries the value.
+  > - **Users:** `insert`, `get` and `find_by_username`. `UsernameTaken` and `OwnerExists` are mapped from SQLite's code 2067 and its message, pinned by tests. `User` and `NewUser` live in `ports::users`; `PasswordHash` wraps a `SecretString` and checks the PHC shape the CHECK enforces.
+  > - **The audit vocabulary lives in fleet-core** (`audit`): `AuditAction` (a validated dotted name; each phase lists its constants in one `audit_actions!` block, group B none), `AuditOutcome`, `AuditTarget` with a tolerant `RecordedTarget`, and `AuditMetadata`, which never refuses an entry for its size: a text value is cut to the room left (ending in `…`), every free slot keeps room for the largest integer or boolean entry, and a `const` assertion checks that invariant, so the JSON never exceeds 4 KiB and recording never fails on metadata (the PR #25 review). `SECRET_WORDS` moved there from the config test, which now uses it too.
+  > - **Tests,** red first against compiling stubs (37 of 144 fleet-server tests failed, and 24 of the 27 store tests against migrations without their CHECKs): `tests/store.rs` (`#[sqlx::test]`, opened through `Database::connect` so the production settings apply), `tests/database.rs` (an edited migration, a full row through `open()`), `tests/migrations.rs` (the checksum snapshot) and the unit tests, including two property tests on the time conversion.
 - [ ] **P6.5** 🔴 `ApiError` maps each error to a status code and `{ "error": { "code", "message", "request_id", "fields"? } }`.
   - Internal errors are logged with the request ID and returned as a generic 500.
   - Every variant gets an insta snapshot.
@@ -2143,9 +2171,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   Rate limiting is added in P7.
 - [ ] **P6.7** 🔴 `GET /health/live` and `GET /health/ready` (DB ping), with no internal details in the response.
-- [ ] **P6.8** 🔴 Audit service:
+- [x] **P6.8** 🔴 Audit service:
   - append-only: the trait has only `record` and `list`
   - each entry: actor, IP, action, target, outcome, metadata (no secrets), timestamp
+
+  > Note (P6.8, as built, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **`app::audit::AuditService { clock, store }`:** `entry(action, outcome)` returns a `NewAuditEntry` stamped with the `Clock` (milliseconds), with the builder methods `actor`, `ip`, `target` and `metadata`; `record(entry)` runs its own short write transaction (`write()`, then `commit(entry)`), for a failure or denial whose change was rolled back; `list(page)` reads through the read pool. A use case that changes state builds its entry here and passes it to `WriteTx::commit`, so every timestamp comes from one clock.
+  > - **Append-only** means the store has exactly two operations for the log, `AuditWrites::record` inside a `WriteTx` and `AuditReads::list` (P6.4's note); nothing updates or deletes an entry, and no trigger blocks P11.6's retention.
+  > - **No secrets:** the metadata's rules live in fleet-core's `AuditMetadata` (P6.4's note), checked when it's built.
+  > - **Tests** (`tests/audit_service.rs`, `ManualClock`, IDs minted from `SeededRandom` and compared with each other), red against a stub that stamped the epoch, recorded nothing and listed nothing: 5 of 6 failed.
 - [ ] **P6.9** `fleet-api-types`:
   - DTOs with serde, garde and `ts-rs`
   - `#[serde(deny_unknown_fields)]` on request DTOs
@@ -2159,6 +2193,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The healthcheck's address.** When `bind` is an unspecified address (`0.0.0.0` or `::`), as the container config will set, the healthcheck probes loopback (`127.0.0.1` or `::1`) on the same port instead: connecting to `0.0.0.0` only happens to work on Linux and fails on Windows.
   > - **The dev config's database path must be absolute,** and a committed file can't hold one that works on every machine. How `just dev-server` provides it is group E's question, e.g. a `$`-parameter built from `justfile_directory()`.
 - [ ] **P6.12** 🔴 Graceful shutdown: axum's `with_graceful_shutdown` plus a `CancellationToken`.
+
+  > Note (P6.12, from group B) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `Database::close()` closes the read pool, then the write pool, and waits for every checked-out connection, so shutdown bounds it with a timeout.
 
 **Security:**
 - No CORS layer.
@@ -2178,6 +2214,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Introduces:** `argon2`, `getrandom`, `sha2`, `subtle`, `base64`, `zeroize`, `chacha20poly1305`, `totp-rs`, `zxcvbn`, `governor`, `tower_governor`, `rpassword`.
 
 - [ ] **P7.1** 🔴 Migrations and repositories: `sessions` (with token families), `invites`, `login_attempts`, `user_mfa`.
+
+  > Note (P7.1, from Phase 6, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **Follow the schema conventions** of P6.4's note: STRICT, canonical TEXT IDs and millisecond TEXT times with their CHECKs, CHECKs only on closed sets.
+  > - **Unaudited writes.** `WriteTx::commit` always records an audit entry. The first write that needs none (a session's `last_used_at`) adds `commit_unaudited(reason)`, whose reason is an enum of named exemptions (`SessionTouch`, later `EventBatch`), each with its own ADR note, never free text.
 
   > Note (P7.1, from the group A review): **IDs aren't secrets.** v7 IDs reveal their creation time. Invite codes and session tokens come from `getrandom`, never from an ID, and access is decided by `authorize()`, not by how hard an ID is to guess.
 
@@ -2251,6 +2291,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - role changes
   - invites created and used
   - token reuse
+
+  > Note (P7.13, from Phase 6, group B, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a failed login for an unknown username never stores the typed name raw in the audit log: people sometimes type their password into the username field. Each phase lists its actions in one `audit_actions!` block in fleet-core.
 
 **DoD:**
 - auth + vault coverage ≥ 90 %.
@@ -2546,6 +2588,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.5, from the group A review): The ticket comes from `getrandom`, never from a v7 ID, which reveals its creation time.
 - [ ] **P11.6** 🔴 Retention job: chat older than `chat.retention_days` is deleted. The audit log is kept longer (configurable).
+
+  > Note (P11.6, from Phase 6, group B) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): decide `secure_delete` here, so deleted chat and old audit entries are overwritten instead of lingering in free pages.
 - [ ] **P11.7** 🔴 Full-flow integration test: in-process server + in-process agent with `FakeConnector`.
   1. Start a bot via `fleet-client`.
   2. A WebSocket client sees `Online`.
@@ -2602,6 +2646,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     - `security_opt: [no-new-privileges:true]`
     - CPU and memory limits
     - `restart: unless-stopped`
+
+  > Note (P12.2, from Phase 6, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **The database lives on a named volume, never a bind mount from a Windows folder.** Docker Desktop shows Windows files as mode 777, chmod can't change that, and the server refuses a database others can read.
+  > - **A forgotten volume must fail a test, not lose data.** The image will likely pre-create the data folder so a named volume gets the nonroot owner, and then a missing mount is invisible to the server's folder check: the database would land in the container's throwaway layer. The compose setup and P12.7's smoke test prove the database survives a container restart.
 
   > Note (P12.2, from Phase 5, group C, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): Production is linux/arm64. The agent's memory and CPU limits come from group D's measured demo numbers, with headroom, not from the dev compose file's 512 MiB and 1 CPU.
 
@@ -2903,6 +2951,8 @@ message ServerMessage {
 | `enrollment_tokens` | token_hash, created_by, expires_at, used_at, agent_id |
 | `chat_messages` | id, bot_id, direction, kind, sender, text, at |
 | `audit_log` | id, at, actor_user_id, actor_ip, action, target_type, target_id, outcome, metadata_json |
+
+> Note (Appendix D, from Phase 6, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **How every table stores its values.** STRICT tables. Entity IDs are lowercase hyphenated version 7 UUID TEXT with a CHECK on the exact form; append-only logs (`audit_log`, `chat_messages`) use `INTEGER PRIMARY KEY AUTOINCREMENT` instead, ordered by ID. Times are `YYYY-MM-DDTHH:MM:SS.mmmZ` TEXT (UTC, milliseconds) with a CHECK on the shape. CHECKs pin only shapes and closed sets that never grow.
 
 ### E. Bot state machine (`fleet_core::bot`)
 **States:**

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "CREATE TABLE probe (x INTEGER)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "1c1558b1c089668597f6a23d8f5c92011ebdfec03c45e4be9bdbae3d50090b97"
+}

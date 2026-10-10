@@ -74,6 +74,18 @@ fn parse_v7(text: &str) -> Result<Uuid, IdError> {
         .and_then(check_v7)
 }
 
+/// An ID type that is minted from a creation time and 10 random bytes, so
+/// [`crate::system::mint`] can make any of them from the server's ports
+/// (ADR-0015). Every ID type here implements it.
+pub trait V7Id: Sized {
+    /// Mints an ID from its creation time and 10 random bytes.
+    ///
+    /// # Errors
+    /// [`IdError::TimestampOutOfRange`] if `created_at` is before 1970 or
+    /// beyond the range of a version 7 UUID.
+    fn new_v7(created_at: DateTime<Utc>, random: [u8; 10]) -> Result<Self, IdError>;
+}
+
 /// Defines one ID newtype with its constructors, conversions and formatting.
 macro_rules! define_id {
     ($(#[$meta:meta])* $name:ident) => {
@@ -99,6 +111,12 @@ macro_rules! define_id {
             #[must_use]
             pub const fn as_uuid(&self) -> &Uuid {
                 &self.0
+            }
+        }
+
+        impl V7Id for $name {
+            fn new_v7(created_at: DateTime<Utc>, random: [u8; 10]) -> Result<Self, IdError> {
+                Self::new_v7(created_at, random)
             }
         }
 
@@ -286,6 +304,31 @@ mod tests {
         let json = serde_json::to_string(&id).unwrap();
         assert_eq!(json, format!("\"{FIXED_TEXT}\""));
         assert_eq!(serde_json::from_str::<T>(&json).unwrap(), id);
+    }
+
+    /// Mints one ID type through [`V7Id`] and through its own constructor.
+    fn assert_trait_mints_like_the_constructor<T>(
+        constructor: fn(DateTime<Utc>, [u8; 10]) -> Result<T, IdError>,
+    ) where
+        T: V7Id + fmt::Debug + PartialEq,
+    {
+        assert_eq!(
+            <T as V7Id>::new_v7(at(FIXED_MILLIS), FIXED_RANDOM),
+            constructor(at(FIXED_MILLIS), FIXED_RANDOM)
+        );
+        assert_eq!(
+            <T as V7Id>::new_v7(at(-1), FIXED_RANDOM),
+            Err(IdError::TimestampOutOfRange)
+        );
+    }
+
+    #[test]
+    fn every_id_type_mints_through_the_trait() {
+        assert_trait_mints_like_the_constructor(UserId::new_v7);
+        assert_trait_mints_like_the_constructor(AccountId::new_v7);
+        assert_trait_mints_like_the_constructor(BotId::new_v7);
+        assert_trait_mints_like_the_constructor(AgentId::new_v7);
+        assert_trait_mints_like_the_constructor(ModeId::new_v7);
     }
 
     #[test]

@@ -38,11 +38,15 @@ azalea = { version = "=0.16.0", default-features = false }
 azalea-chat = "=0.16.0"
 azalea-language = "=0.16.0"
 
+# async-trait: fleet-server's ports, which services hold as `Arc<dyn …>`; generics and
+# `impl Future` everywhere else (ADR-0015).
+async-trait = "0.1.92"
 # backon: without default features only fastrand is left; the defaults pull in tokio.
 backon = { version = "1.6.0", default-features = false }
 # chrono: no `clock`/`now`, because fleet-core takes time as a parameter (ADR-0010).
-# Only the agent enables `now` (= `std`), for its one wall-clock read at startup;
-# `clock` would add local time zones, which nothing uses (ADR-0014).
+# Only the agent and fleet-server enable `now` (= `std`): the agent for its one wall-clock
+# read at startup, the server for its SystemClock. `clock` would add local time zones,
+# which nothing uses (ADR-0014, ADR-0015).
 chrono = { version = "0.4.45", default-features = false }
 # clap: the agent's command line; the member enables `derive` (ADR-0014).
 clap = "4.6.7"
@@ -53,13 +57,18 @@ figment = "0.10.19"
 # garde: range checks on the agent's config. No default features exist; the agent
 # enables `derive` (ADR-0014).
 garde = "0.23.0"
-# getrandom: every secret, and the agent's bot IDs and runtime seed. No features: `fill`
-# and `u64` need none (ADR-0014).
+# getrandom: every secret, the agent's bot IDs and runtime seed, and fleet-server's
+# OsRandom. No features: `fill` and `u64` need none (ADR-0014, ADR-0015).
 getrandom = "0.4.3"
 # governor: the defaults add `quanta`, `dashmap` and `jitter`, and `jitter` pulls rand 0.9
 # and getrandom 0.3 into normal dependencies. fleet-runtime enables `std` and runs its
 # chat bucket on a tokio-backed clock (ADR-0013).
 governor = { version = "0.10.4", default-features = false }
+# log: fleet-server names `log::LevelFilter` only, because sqlx's statement-logging
+# levels take it; its logging macros are banned there (ADR-0015). In tests, fleet-testkit's
+# log capture and fleet-agent's telemetry emit `log` records to prove the bridge
+# (ADR-0011, ADR-0014).
+log = "0.4.34"
 # metrics: the facade only, with no features; its one dependency is rapidhash. The agent
 # installs the Prometheus exporter (P5.3); fleet-runtime records into it (ADR-0013).
 metrics = "0.24.6"
@@ -84,6 +93,12 @@ rustls = "0.23.45"
 secrecy = "0.10.3"
 serde = "1.0.229"
 thiserror = "2.0.21"
+# sqlx: SQLite through the bundled library only (`sqlite-bundled`, not `sqlite`, which
+# adds extension loading, deserialize and unlock-notify), with `runtime-tokio`, `macros`
+# and `migrate`, plus `uuid` for binding IDs as `uuid::fmt::Hyphenated`. No TLS feature,
+# and no `chrono` (it would turn on chrono's `clock` for the whole workspace) or `json`:
+# times and JSON are converted in fleet-server (ADR-0015).
+sqlx = { version = "0.9.0", default-features = false }
 # tokio: no default features exist; members enable only what they use (`sync`,
 # `time`, …) and `test-util` in tests.
 tokio = "1.53.2"
@@ -98,14 +113,15 @@ uuid = { version = "1.27.0", default-features = false }
 
 # Tests
 insta = "1.49.0"
-# log: fleet-testkit's log capture test emits a `log` record to prove the bridge (ADR-0011).
-log = "0.4.34"
 # proptest and rstest: members enable only what they need (ADR-0010). proptest's
 # `std` keeps `PROPTEST_CASES` working.
 proptest = { version = "1.11.0", default-features = false }
 rstest = { version = "0.27.0", default-features = false }
 # serde_json: also fleet-testkit's log buffer, which parses JSON log lines (ADR-0015).
 serde_json = "1.0.151"
+# tempfile: fleet-server's database tests open real files in a fresh folder; already in
+# the lockfile through figment and insta (ADR-0015).
+tempfile = "3.27.0"
 # testcontainers: no default features, since `ring` turns on TLS for the Docker client,
 # which the local socket and named pipe don't need (and deny.toml bans ring). fleet-mc's
 # slow tests start itzg/minecraft-server with it (ADR-0011).

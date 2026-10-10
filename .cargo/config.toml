@@ -3,3 +3,8 @@
 # the `prebuilt-nasm` feature would silently fall back to when NASM isn't on
 # PATH (ADR-0009). Has no effect on other platforms.
 AWS_LC_SYS_PREBUILT_NASM = "0"
+# sqlx's query macros check every query against the committed offline data in
+# crates/fleet-server/.sqlx/, never against a database a DATABASE_URL (or a .env file)
+# happens to name, so every build compiles exactly like CI. Not forced: `cargo sqlx
+# prepare` sets SQLX_OFFLINE=false for its own build (`just db-prepare`, ADR-0015).
+SQLX_OFFLINE = "true"

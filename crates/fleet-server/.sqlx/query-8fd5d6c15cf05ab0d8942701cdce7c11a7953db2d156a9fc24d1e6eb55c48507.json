@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT metadata_json FROM audit_log WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "metadata_json",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit_log",
+            "name": "metadata_json"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "8fd5d6c15cf05ab0d8942701cdce7c11a7953db2d156a9fc24d1e6eb55c48507"
+}

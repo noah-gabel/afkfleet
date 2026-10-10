@@ -100,28 +100,15 @@ mod secret_names {
 
     use super::RawConfig;
 
-    /// Name parts that say a key holds a secret, singular or plural.
-    const SECRET_WORDS: [&str; 7] = [
-        "key",
-        "token",
-        "password",
-        "secret",
-        "passphrase",
-        "pepper",
-        "credential",
-    ];
-
-    /// Keys that match [`SECRET_WORDS`] but hold no secret, by their full
-    /// path, each with the reason. Empty in Phase 6.
+    /// Keys that match fleet-core's `SECRET_WORDS` but hold no secret, by
+    /// their full path, each with the reason. Empty in Phase 6.
     const NOT_SECRETS: &[(&str, &str)] = &[];
 
-    /// Whether one of the name's `_`-separated parts is a secret word.
+    /// Whether one of the name's `_`-separated parts is a secret word. The
+    /// list lives in fleet-core, shared with the audit log's metadata keys
+    /// (ADR-0015), so a word added there covers both.
     fn looks_secret(name: &str) -> bool {
-        name.split('_').any(|part| {
-            SECRET_WORDS
-                .iter()
-                .any(|word| part == *word || part.strip_suffix('s') == Some(word))
-        })
+        fleet_core::audit::has_secret_word(name)
     }
 
     /// Whether the name says the key holds a path to a file, or a map of

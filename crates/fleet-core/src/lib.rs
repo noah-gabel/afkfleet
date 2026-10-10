@@ -16,7 +16,10 @@
 //! - [`mode`]: what a bot does while it's online, and the presets.
 //! - [`mc`]: the Minecraft ports the runtime drives a session through.
 //! - [`authz`]: who may do what, decided by [`authz::authorize`].
+//! - [`audit`]: the vocabulary of the server's audit log.
 //! - [`time`]: saturating arithmetic on points in time and durations.
+//! - [`system`]: the clock and secure-randomness ports the server reads time
+//!   and random bytes through, and minting IDs from them.
 //! - [`text`]: sanitizing untrusted text for a log line.
 //!
 //! # How it fits together
@@ -40,6 +43,9 @@
 //! - **Randomness is passed in** as `&mut impl Rng`, and core types never
 //!   store a random number generator. IDs take 10 random bytes from the
 //!   caller instead.
+//! - **The server's ports.** The server reads the time and secure random
+//!   bytes through [`system::Clock`] and [`system::SecureRandom`], whose
+//!   implementations live outside core (ADR-0015). Core only names them.
 //! - **Errors.** Each module that can fail has its own error enum. Its
 //!   variants carry context, such as an index, a length or a limit, and never
 //!   the untrusted input, so an error message can't carry it into a log.
@@ -54,6 +60,7 @@
 //!   serde: their wire formats come with the proto and DTO conversions.
 //! - **Secrets** are `SecretString`s, whose `Debug` output is redacted.
 
+pub mod audit;
 pub mod authz;
 pub mod bot;
 pub mod chat;
@@ -62,6 +69,7 @@ pub mod id;
 pub mod mc;
 pub mod mode;
 pub mod resilience;
+pub mod system;
 pub mod text;
 pub mod time;
 pub mod value;

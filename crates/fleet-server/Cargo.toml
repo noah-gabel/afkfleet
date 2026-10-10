@@ -11,18 +11,45 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# The ports, which services hold as `Arc<dyn …>` (ADR-0015).
+async-trait.workspace = true
+# SystemClock's one wall-clock read (ADR-0015).
+chrono = { workspace = true, features = ["now"] }
+# The domain types and the Clock and SecureRandom ports (ADR-0015).
+fleet-core.workspace = true
 # The config loader and errors, the `[log]` types and the log layer (ADR-0015).
 fleet-startup.workspace = true
 garde = { workspace = true, features = ["derive"] }
+# OsRandom's one read of the OS's randomness (ADR-0015).
+getrandom.workspace = true
+# Only `log::LevelFilter`, for sqlx's statement-logging levels; clippy.toml bans its
+# logging macros (ADR-0015).
+log.workspace = true
+# PasswordHash holds the hash as a SecretString: redacted Debug, zeroized (ADR-0015).
+secrecy.workspace = true
 serde = { workspace = true, features = ["derive"] }
+# Reading the audit log's metadata JSON back (ADR-0015).
+serde_json.workspace = true
+sqlx = { workspace = true, features = ["runtime-tokio", "sqlite-bundled", "macros", "migrate", "uuid"] }
 thiserror.workspace = true
+# Creating the database file and checking its permissions without blocking (ADR-0015).
+tokio = { workspace = true, features = ["fs"] }
 tracing.workspace = true
+# IDs are bound and read as `uuid::fmt::Hyphenated` text (ADR-0015).
+uuid.workspace = true
 
 [dev-dependencies]
 # `figment::Jail`, the type `in_jail` hands each config test (ADR-0015).
 figment = { workspace = true, features = ["test"] }
 fleet-testkit.workspace = true
+# The migrations' checksum snapshot (ADR-0015).
+insta.workspace = true
+# The time conversion's round trip and order (ADR-0015).
+proptest = { workspace = true, features = ["std"] }
 rstest.workspace = true
+# A fresh folder for each database test (ADR-0015).
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt"] }
 # A scoped subscriber around fleet-startup's layer, for the dev-mode warning's
 # test (ADR-0015).
 tracing-subscriber.workspace = true

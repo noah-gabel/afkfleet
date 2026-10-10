@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "PRAGMA busy_timeout",
+  "describe": {
+    "columns": [
+      {
+        "name": "timeout",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "11321afeb9a7606f8fdbb21539bedab8349bff5e03c52ac1787dabcb8a3b88a4"
+}

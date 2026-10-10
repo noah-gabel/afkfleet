@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT actor_ip FROM audit_log WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "actor_ip",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit_log",
+            "name": "actor_ip"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "b563eefbc44bbdfc55757212235503795ea161ff31ee46f6a1c7484757ce39d9"
+}

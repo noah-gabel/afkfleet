@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "CREATE TABLE slow_probe (x INTEGER)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "441bc4579c6c85af2905ad0d5764084f79c9de169ac1a5ad78effa23b0ebe856"
+}
