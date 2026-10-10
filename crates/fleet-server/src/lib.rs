@@ -12,7 +12,7 @@
 //! | `cli` | the commands: `serve`, `migrate`, `healthcheck`, later `user create-owner`, `pki`, `vault rotate-key`, `backup` | P6.11 |
 //! | `app` | the services: one use case each, with its transaction and audit entry | P6.8 |
 //! | `ports` | the repository and provider traits the services depend on | P6.4 |
-//! | `infra` | the adapters: `sqlite` (sqlx repositories), `crypto` (vault, tokens, passwords), `msauth` (azalea-auth) | P6.3, P7, P9 |
+//! | `infra` | the adapters: `system` (the real clock and the OS's randomness), `sqlite` (sqlx repositories), `crypto` (vault, tokens, passwords), `msauth` (azalea-auth) | group B, P6.3, P7, P9 |
 //! | `http` | the router, middleware, extractors, handlers per resource, the error type and the WebSocket | P6.5 |
 //! | `grpc` | enrollment, the control stream, the agent registry, the scheduler and the reconciler | P10 |
 //!
@@ -30,3 +30,4 @@
 //!   checked macros with bind parameters.
 
 pub mod config;
+pub mod infra;

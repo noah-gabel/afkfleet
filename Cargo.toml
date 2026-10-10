@@ -41,8 +41,9 @@ azalea-language = "=0.16.0"
 # backon: without default features only fastrand is left; the defaults pull in tokio.
 backon = { version = "1.6.0", default-features = false }
 # chrono: no `clock`/`now`, because fleet-core takes time as a parameter (ADR-0010).
-# Only the agent enables `now` (= `std`), for its one wall-clock read at startup;
-# `clock` would add local time zones, which nothing uses (ADR-0014).
+# Only the agent and fleet-server enable `now` (= `std`): the agent for its one wall-clock
+# read at startup, the server for its SystemClock. `clock` would add local time zones,
+# which nothing uses (ADR-0014, ADR-0015).
 chrono = { version = "0.4.45", default-features = false }
 # clap: the agent's command line; the member enables `derive` (ADR-0014).
 clap = "4.6.7"
@@ -53,8 +54,8 @@ figment = "0.10.19"
 # garde: range checks on the agent's config. No default features exist; the agent
 # enables `derive` (ADR-0014).
 garde = "0.23.0"
-# getrandom: every secret, and the agent's bot IDs and runtime seed. No features: `fill`
-# and `u64` need none (ADR-0014).
+# getrandom: every secret, the agent's bot IDs and runtime seed, and fleet-server's
+# OsRandom. No features: `fill` and `u64` need none (ADR-0014, ADR-0015).
 getrandom = "0.4.3"
 # governor: the defaults add `quanta`, `dashmap` and `jitter`, and `jitter` pulls rand 0.9
 # and getrandom 0.3 into normal dependencies. fleet-runtime enables `std` and runs its

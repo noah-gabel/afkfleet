@@ -207,7 +207,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Logging / tracing | `tracing`, `tracing-subscriber` | 0.1.44, 0.3.23 | all | `env-filter`, `json`. fleet-startup builds both binaries' log layer (ADR-0015). fleet-testkit's log capture uses `tracing` and `tracing-subscriber`; the redaction tests use it (ADR-0011). Its log buffer is the writer for format and filter tests (ADR-0015) |
 | Metrics | `metrics`, `metrics-exporter-prometheus` | 0.24.6, 0.18.3 (dfo) | runtime, agent, server | Internal port only. The exporter's default `push-gateway` brings its own TLS stack: enable `http-listener` only. Until P12.4 serves the endpoint, the agent enables no features and only installs the recorder. Its metrics-util dependency always enables `storage`, which brings rand 0.9 and getrandom 0.3 into normal dependencies (both already in the graph, neither used for secrets) (ADR-0014) |
 | IDs | `uuid` | 1.27.0, dfo | core, mc | v7, serde. fleet-mc only names `Uuid` in azalea's `AccountTrait` (ADR-0011) |
-| Time | `chrono` | 0.4.45, dfo | core, runtime, agent, server | Always UTC. No `clock` feature in core or runtime: time is passed in. The runtime derives `DateTime<Utc>` from tokio's clock, anchored at a wall time its caller passes in (ADR-0010, ADR-0013). The agent enables `now` only, for that one read at startup; `clock` would add local time zones (ADR-0014) |
+| Time | `chrono` | 0.4.45, dfo | core, runtime, agent, server | Always UTC. No `clock` feature in core or runtime: time is passed in. The runtime derives `DateTime<Utc>` from tokio's clock, anchored at a wall time its caller passes in (ADR-0010, ADR-0013). The agent enables `now` only, for that one read at startup; `clock` would add local time zones (ADR-0014). fleet-server enables `now` only, for its `SystemClock`, the one wall-clock read behind the `Clock` port (ADR-0015) |
 | CLI | `clap` | 4.6.7 | agent, server | derive |
 | Hidden password prompt | `rpassword` | 7.5.4 | server CLI | |
 
@@ -239,8 +239,8 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Encoding | `base64` | 0.23.1 | server, client | URL-safe, no padding |
 | Secret wrappers | `secrecy` | 0.10.3 | core, mc, agent, server, client, desktop | Redacted `Debug` |
 | Memory zeroing | `zeroize` | 1.9.0 | server, agent | |
-| Secure randomness | `getrandom` | 0.4.3 | server, agent | Tokens, keys, nonces: **always** use this. The agent draws its runtime seed and its bot IDs' random bytes from it; no features (ADR-0014) |
-| Non-security randomness | `rand` | **0.10.3**, dfo | core, runtime | Jitter, random look angles; seeded `StdRng` in tests. No OS randomness in core |
+| Secure randomness | `getrandom` | 0.4.3 | server, agent | Tokens, keys, nonces: **always** use this. The agent draws its runtime seed and its bot IDs' random bytes from it; no features (ADR-0014). In fleet-server only `OsRandom` calls it, behind the `SecureRandom` port (ADR-0015) |
+| Non-security randomness | `rand` | **0.10.3**, dfo | core, runtime, testkit | Jitter, random look angles; seeded `StdRng` in tests. No OS randomness in core. fleet-testkit's `SeededRandom` uses `std_rng` (ADR-0015) |
 | TOTP 2FA | `totp-rs` | 6.0.0 | server | Feature `qr`. `gen_secret` uses rand's thread RNG, so P7 generates the secret bytes with `getrandom` instead (security rule 4) |
 | Password strength | `zxcvbn` | 3.1.1 | server | |
 
@@ -2081,6 +2081,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   - The seeded fake exists only in fleet-testkit, a dev-dependency everywhere, and a script under `scripts/` checks that no workspace member has fleet-testkit as a normal dependency. `OsRandom` is the only other implementation, and main.rs always wires it. The port's docs say every implementation must be cryptographically secure (security rule 4).
 >   - `crates/fleet-server/clippy.toml` bans reading the clock or the OS's randomness directly; `SystemClock` and `OsRandom` each carry one approved `#[expect(clippy::disallowed_methods)]`.
 >   - Tests never hard-code `SeededRandom`'s bytes or the IDs made from them, and snapshots redact them: rand doesn't promise `StdRng`'s output across versions.
+>
+>   As built (group B, the user's decisions, [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+>   - **fleet-core `system`:** `Clock::now()` returns whole milliseconds (the precision the database stores and a v7 ID holds); `SecureRandom::fill`; `RandomError::{Os { code }, Unavailable}`; `random_bytes::<N>()`; and `mint::<I: V7Id>(at, random)`, where `define_id!` implements fleet-core's new `V7Id` trait for every ID type. The caller reads its clock once, so a record's creation time equals its ID's.
+>   - **fleet-testkit:** `ManualClock` (`new`, `set`, `advance`, all truncating to ms) and `SeededRandom` (`fail_next` queues one failure that doesn't move the stream).
+>   - **fleet-server `infra::system`:** `SystemClock` and `OsRandom`, each with its approved `#[expect]`.
+>   - **Deviation: the testkit guard is `just testkit-check`, not a TOML-parsing script** (the user's decision). It asks Cargo: `cargo tree --workspace -e normal,build --target all -i fleet-testkit` must list nothing but fleet-testkit, so `workspace = true`, renames, target-specific tables and members anywhere are covered with no parser to maintain. `scripts/testkit-check.mjs` reads cargo's output and fails on any line it can't read; `just check`, `just ci` and the `deny` CI job run it.
+>   - **The bans go further than planned** (the user's decision): uuid's self-minting functions and the `SysRng`/`ThreadRng` types too. A temporary probe, never committed, proved that all 28 entries fire with their reasons.
 > - **stable-check.** fleet-startup and fleet-server join `stable_crates` in group A, fleet-api-types in group C. P9.3 removes fleet-server when azalea-auth arrives.
 > - **Dependencies.** Group A adds no external crate. fleet-startup uses figment (`toml`, `env`), serde, thiserror, tracing and tracing-subscriber (`env-filter`, `json`); fleet-testkit gains figment (`test`) and serde_json; fleet-server uses fleet-startup, garde (`derive`), serde (`derive`), thiserror and tracing.
 

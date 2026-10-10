@@ -11,9 +11,13 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# ManualClock's time (ADR-0015).
+chrono.workspace = true
 # `Jail`, for every config test in the workspace (ADR-0015).
 figment = { workspace = true, features = ["test"] }
 fleet-core.workspace = true
+# SeededRandom's seeded StdRng (ADR-0015).
+rand = { workspace = true, features = ["std_rng"] }
 # The log buffer's JSON lines (ADR-0015).
 serde_json.workspace = true
 tokio = { workspace = true, features = ["sync", "time"] }

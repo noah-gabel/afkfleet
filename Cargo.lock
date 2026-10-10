@@ -1871,10 +1871,13 @@ dependencies = [
 name = "fleet-server"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "figment",
+ "fleet-core",
  "fleet-startup",
  "fleet-testkit",
  "garde",
+ "getrandom 0.4.3",
  "rstest",
  "serde",
  "thiserror 2.0.21",
@@ -1900,9 +1903,11 @@ dependencies = [
 name = "fleet-testkit"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "figment",
  "fleet-core",
  "log",
+ "rand 0.10.3",
  "serde_json",
  "tokio",
  "tracing",

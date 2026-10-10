@@ -19,10 +19,10 @@ default:
     @just --list
 
 # Formatting, lints, docs, tests and frontend checks: run before a task is done.
-check: fmt-check clippy docs test doctest scripts-test ui-check
+check: fmt-check clippy docs test doctest testkit-check scripts-test ui-check
 
 # Everything CI runs.
-ci: fmt-check clippy docs test-ci scripts-test cov deny stable-check ui-check ui-audit
+ci: fmt-check clippy docs test-ci testkit-check scripts-test cov deny stable-check ui-check ui-audit
 
 # Run nextest for the workspace, or for one crate: `just test fleet-core`.
 test crate="":
@@ -131,6 +131,12 @@ test-ci:
 # The workspace crates that must also build on stable Rust.
 stable-check:
     cargo +{{ stable }} check {{ stable_crates }} --all-targets
+
+# No workspace member may depend on fleet-testkit outside its dev-dependencies,
+# because its SeededRandom isn't secure (ADR-0015). Cargo resolves the dependency
+# graph; the script fails on any other dependent and on output it can't read.
+testkit-check:
+    node scripts/testkit-check.mjs
 
 # Tests for the scripts in scripts/.
 scripts-test:

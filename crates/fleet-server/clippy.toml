@@ -1,0 +1,53 @@
+# fleet-server's own clippy configuration. Clippy reads the nearest clippy.toml
+# and doesn't merge it with the root one, so the root file's test allowances and
+# its ban on unbounded channels are repeated here. `just scripts-test` checks that
+# this file carries every root setting (scripts/clippy-config.mjs).
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-indexing-slicing-in-tests = true
+allow-print-in-tests = true
+
+# fleet-server reads the wall clock and the OS's randomness only through the
+# Clock and SecureRandom ports (ADR-0015): SystemClock and OsRandom in
+# `infra::system` are the one approved exception each, so tests control time and
+# randomness everywhere else. uuid's own minting reads the clock or the OS
+# itself; IDs are minted with `fleet_core::system::mint` instead. tokio's
+# `Instant::now` stays allowed: it's the runtime's clock for timeouts.
+# `allow-invalid` marks the paths that don't exist in fleet-server's own feature
+# set; a temporary probe proved that every entry fires (ADR-0015).
+disallowed-methods = [
+    { path = "std::time::Instant::now", reason = "read time through the Clock port (ADR-0015)" },
+    { path = "std::time::Instant::elapsed", reason = "it reads the real clock; read time through the Clock port (ADR-0015)" },
+    { path = "std::time::SystemTime::now", reason = "read time through the Clock port (ADR-0015)" },
+    { path = "std::time::SystemTime::elapsed", reason = "it reads the real clock; read time through the Clock port (ADR-0015)" },
+    { path = "chrono::Utc::now", reason = "read time through the Clock port (ADR-0015)" },
+    { path = "chrono::Local::now", reason = "read time through the Clock port (ADR-0015)", allow-invalid = true },
+    { path = "getrandom::fill", reason = "draw random bytes through the SecureRandom port (ADR-0015)" },
+    { path = "getrandom::fill_uninit", reason = "draw random bytes through the SecureRandom port (ADR-0015)" },
+    { path = "getrandom::u32", reason = "draw random bytes through the SecureRandom port (ADR-0015)" },
+    { path = "getrandom::u64", reason = "draw random bytes through the SecureRandom port (ADR-0015)" },
+    { path = "rand::rng", reason = "draw random bytes through the SecureRandom port (ADR-0015)", allow-invalid = true },
+    { path = "rand::random", reason = "draw random bytes through the SecureRandom port (ADR-0015)", allow-invalid = true },
+    { path = "rand::random_iter", reason = "draw random bytes through the SecureRandom port (ADR-0015)", allow-invalid = true },
+    { path = "rand::random_range", reason = "draw random bytes through the SecureRandom port (ADR-0015)", allow-invalid = true },
+    { path = "rand::random_bool", reason = "draw random bytes through the SecureRandom port (ADR-0015)", allow-invalid = true },
+    { path = "rand::random_ratio", reason = "draw random bytes through the SecureRandom port (ADR-0015)", allow-invalid = true },
+    { path = "rand::fill", reason = "draw random bytes through the SecureRandom port (ADR-0015)", allow-invalid = true },
+    { path = "rand::make_rng", reason = "draw random bytes through the SecureRandom port (ADR-0015)", allow-invalid = true },
+    { path = "uuid::Uuid::now_v1", reason = "mint IDs with fleet_core::system::mint from the ports (ADR-0015)", allow-invalid = true },
+    { path = "uuid::Uuid::now_v6", reason = "mint IDs with fleet_core::system::mint from the ports (ADR-0015)", allow-invalid = true },
+    { path = "uuid::Uuid::now_v7", reason = "mint IDs with fleet_core::system::mint from the ports (ADR-0015)", allow-invalid = true },
+    { path = "uuid::Uuid::new_v4", reason = "mint IDs with fleet_core::system::mint from the ports (ADR-0015)", allow-invalid = true },
+    { path = "uuid::Uuid::new_v7", reason = "mint IDs with fleet_core::system::mint from the ports (ADR-0015)", allow-invalid = true },
+    { path = "uuid::Timestamp::now", reason = "read time through the Clock port (ADR-0015)", allow-invalid = true },
+    # Repeated from the root clippy.toml: channels are always bounded (ADR-0011).
+    { path = "tokio::sync::mpsc::unbounded_channel", reason = "channels are always bounded; overload is an explicit error (CLAUDE.md, ADR-0011)", allow-invalid = true },
+]
+
+# The same guard for the types behind the OS's randomness.
+disallowed-types = [
+    { path = "rand::rngs::ThreadRng", reason = "draw random bytes through the SecureRandom port (ADR-0015)", allow-invalid = true },
+    { path = "rand::rngs::SysRng", reason = "draw random bytes through the SecureRandom port (ADR-0015)", allow-invalid = true },
+    { path = "getrandom::SysRng", reason = "draw random bytes through the SecureRandom port (ADR-0015)", allow-invalid = true },
+]
