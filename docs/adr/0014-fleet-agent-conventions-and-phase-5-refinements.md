@@ -265,6 +265,7 @@ Each later group asks its own implementation-level questions in its session: tok
   - **No vacuous pass** *(the user's addition)*. Every check asserts it saw data: five bots in the log, at least one wait per bot after the restart, a healthy probe, and the bots on RCON's list before the stop.
   - **Red first** *(the user's decision)*. The helpers' 52 unit tests, and the scenario on stub parsers, failed on assertions first. One uncommitted run with `stop_signal: SIGKILL` failed on exit code 137, which shows step 3 catches a real bad stop.
   - **Found in the runs:** the restart took about 3 s, and the bots saw `ConnectionClosed` rather than the "Server closed" kick, so azalea's "Got disconnect packet" didn't show. It stays in the list for a slower stop.
+  - **Connection resets** *(found by the demo's first run; the user's decisions)*. The whole-log check allows azalea's reset ERROR only during the restart, and no more often than sessions closed there. The rule and its reasons are under the demo below; the test and the script share it through `stack-checks.json`'s `expected_restart_errors`.
 
 - *(as built, group D: the demo; the user answered group D's questions on 2026-10-09)*:
   - **`scripts/demo-agent.mjs`** uses Node's built-ins only, like the other scripts. Its parsing and judging are exported pure functions tested in `scripts/demo-agent.test.mjs`. Driving Docker isn't unit-tested; a short run (`just demo-agent 8`) exercises it.

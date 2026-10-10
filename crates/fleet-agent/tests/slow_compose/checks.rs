@@ -14,7 +14,7 @@ use serde::Deserialize;
 
 use crate::docker::Probe;
 use crate::logs::{LogLine, State};
-use crate::stack_checks::ExpectedWarning;
+use crate::stack_checks::ExpectedLine;
 
 /// The oldest Compose that knows `!reset`, which compose.isolated.yaml uses.
 pub(crate) const MIN_COMPOSE: (u32, u32) = (2, 24);
@@ -190,12 +190,54 @@ pub(crate) fn healthy_since(probes: &[Probe], started_at: DateTime<Utc>) -> Opti
         .map(|probe| probe.end)
 }
 
-/// The lines of `log` nobody expects: every ERROR, and every WARN that no
-/// entry of `expected` matches by target and message prefix.
-pub(crate) fn unexpected<'a>(log: &'a [LogLine], expected: &[ExpectedWarning]) -> Vec<&'a LogLine> {
+/// The message of a session that ended by itself, as the bot logs it.
+const SESSION_ENDED: &str = "the session ended; the bot connects again";
+
+/// The ERRORs of `log` a server restart may cause: lines an entry of
+/// `restart_errors` matches, logged from `from` to `to`, and no more of them
+/// than bot sessions that ended there with `ConnectionClosed`. A server that
+/// closes a socket with unread client data sends a TCP reset, which can
+/// arrive before its kick, and each reset ends one live session. Any further
+/// ones are left out, so they stay unexpected.
+pub(crate) fn restart_errors<'a>(
+    log: &'a [LogLine],
+    restart_errors: &[ExpectedLine],
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+) -> Vec<&'a LogLine> {
+    let in_window = |line: &&LogLine| from <= line.timestamp && line.timestamp <= to;
+    let closed = log
+        .iter()
+        .filter(in_window)
+        .filter(|line| {
+            line.message == SESSION_ENDED
+                && line.span_bot_id.is_some()
+                && line.text("reason") == Some("ConnectionClosed")
+        })
+        .count();
+    log.iter()
+        .filter(in_window)
+        .filter(|line| {
+            line.level == "ERROR"
+                && restart_errors.iter().any(|error| {
+                    line.target == error.target && line.message.starts_with(&error.message_prefix)
+                })
+        })
+        .take(closed)
+        .collect()
+}
+
+/// The lines of `log` nobody expects: every ERROR that isn't in `allowed`,
+/// and every WARN that no entry of `expected` matches by target and message
+/// prefix.
+pub(crate) fn unexpected<'a>(
+    log: &'a [LogLine],
+    expected: &[ExpectedLine],
+    allowed: &[&LogLine],
+) -> Vec<&'a LogLine> {
     log.iter()
         .filter(|line| match line.level.as_str() {
-            "ERROR" => true,
+            "ERROR" => !allowed.iter().any(|allowed| core::ptr::eq(*allowed, *line)),
             "WARN" => !expected.iter().any(|warning| {
                 line.target == warning.target && line.message.starts_with(&warning.message_prefix)
             }),
@@ -479,8 +521,8 @@ mod tests {
         )
     }
 
-    fn expected() -> Vec<ExpectedWarning> {
-        vec![ExpectedWarning {
+    fn expected() -> Vec<ExpectedLine> {
+        vec![ExpectedLine {
             target: "azalea_client::plugins::join".to_owned(),
             message_prefix: "failed to create connection".to_owned(),
             why: "the server is down".to_owned(),
@@ -515,7 +557,7 @@ mod tests {
         .join("\n");
         let log = parse_log(&text);
 
-        let unexpected: Vec<&str> = unexpected(&log, &expected())
+        let unexpected: Vec<&str> = unexpected(&log, &expected(), &[])
             .into_iter()
             .map(|line| line.message.as_str())
             .collect();
@@ -528,5 +570,125 @@ mod tests {
                 "failed to create connection: an ERROR is never expected",
             ]
         );
+    }
+
+    fn reset(at: &str) -> String {
+        format!(
+            r#"{{"timestamp":"{at}","level":"ERROR","message":"Error reading packet from Client: IoError {{ source: Os {{ code: 104, kind: ConnectionReset, message: \"Connection reset by peer\" }} }}","target":"azalea_client::plugins::connection"}}"#
+        )
+    }
+
+    fn closed(at: &str, bot_id: &str) -> String {
+        format!(
+            r#"{{"timestamp":"{at}","level":"WARN","message":"the session ended; the bot connects again","reason":"ConnectionClosed","state":"Backoff {{ attempt: 1 }}","target":"fleet_runtime::actor::effects","span":{{"bot_id":"{bot_id}","name":"bot"}}}}"#
+        )
+    }
+
+    fn restart() -> Vec<ExpectedLine> {
+        vec![ExpectedLine {
+            target: "azalea_client::plugins::connection".to_owned(),
+            message_prefix: "Error reading packet from Client: IoError { source: Os { code: 104, kind: ConnectionReset".to_owned(),
+            why: "a reset during the server's shutdown".to_owned(),
+        }]
+    }
+
+    fn times(lines: &[&LogLine]) -> Vec<DateTime<Utc>> {
+        lines.iter().map(|line| line.timestamp).collect()
+    }
+
+    #[test]
+    fn a_reset_while_the_server_restarts_is_allowed_once_per_closed_session() {
+        let text = [
+            closed("2026-10-10T08:00:01Z", "b-4"),
+            reset("2026-10-10T08:00:01.5Z"),
+            closed("2026-10-10T08:00:02Z", "b-5"),
+            reset("2026-10-10T08:00:02.5Z"),
+            reset("2026-10-10T08:00:03Z"),
+        ]
+        .join(
+            "
+",
+        );
+        let log = parse_log(&text);
+
+        let allowed = restart_errors(
+            &log,
+            &restart(),
+            at("2026-10-10T08:00:00Z"),
+            at("2026-10-10T08:00:10Z"),
+        );
+
+        assert_eq!(
+            times(&allowed),
+            [at("2026-10-10T08:00:01.5Z"), at("2026-10-10T08:00:02.5Z")]
+        );
+    }
+
+    #[test]
+    fn a_reset_outside_the_restart_isnt_allowed() {
+        let text = [
+            closed("2026-10-10T08:00:01Z", "b-4"),
+            reset("2026-10-10T08:00:20Z"),
+        ]
+        .join(
+            "
+",
+        );
+        let log = parse_log(&text);
+
+        let allowed = restart_errors(
+            &log,
+            &restart(),
+            at("2026-10-10T08:00:00Z"),
+            at("2026-10-10T08:00:10Z"),
+        );
+
+        assert_eq!(allowed, Vec::<&LogLine>::new());
+    }
+
+    #[test]
+    fn another_error_while_the_server_restarts_isnt_allowed() {
+        let text = [
+            closed("2026-10-10T08:00:01Z", "b-4"),
+            line(
+                "ERROR",
+                "azalea_client::plugins::connection",
+                "Error reading packet from Client: Parse",
+            ),
+        ]
+        .join(
+            "
+",
+        );
+        let log = parse_log(&text);
+
+        let allowed = restart_errors(
+            &log,
+            &restart(),
+            at("2026-10-10T07:59:00Z"),
+            at("2026-10-10T08:00:10Z"),
+        );
+
+        assert_eq!(allowed, Vec::<&LogLine>::new());
+    }
+
+    #[test]
+    fn an_allowed_error_isnt_unexpected() {
+        let text = [
+            reset("2026-10-10T08:00:01Z"),
+            line("ERROR", "fleet_runtime::actor", "something broke"),
+        ]
+        .join(
+            "
+",
+        );
+        let log = parse_log(&text);
+
+        let unexpected: Vec<&str> = unexpected(&log, &[], &[&log[0]])
+            .into_iter()
+            .map(|line| line.message.as_str())
+            .collect();
+
+        assert_eq!(unexpected, ["something broke"]);
     }
 }

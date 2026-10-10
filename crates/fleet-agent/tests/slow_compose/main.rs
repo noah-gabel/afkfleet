@@ -12,9 +12,11 @@
 //!    no warning during the shutdown, and the server lets every bot go at
 //!    once.
 //!
-//! Then the whole log must hold no ERROR and only the warnings
-//! `deploy/dev/stack-checks.json` expects. Every check also asserts that it
-//! saw data, so a parser that reads nothing can't pass it.
+//! Then the whole log must hold only the warnings
+//! `deploy/dev/stack-checks.json` expects, and no ERROR but the connection
+//! resets it allows during the restart: vanilla's shutdown sometimes resets
+//! a socket before its kick, which azalea logs at ERROR. Every check also
+//! asserts that it saw data, so a parser that reads nothing can't pass it.
 //!
 //! It needs Docker and the agent's image built from this source: run it
 //! with `just test-slow`, which builds the image first and says so through
@@ -48,11 +50,12 @@ use fleet_core::resilience::{CircuitPolicy, RetryPolicy};
 
 use crate::checks::{
     MIN_COMPOSE, breaker_open_until, budget_problem, compose_version, first_join_deadline,
-    gap_problem, gaps, healthy_since, online_players, reconnect_deadline, slow_limit, unexpected,
+    gap_problem, gaps, healthy_since, online_players, reconnect_deadline, restart_errors,
+    slow_limit, unexpected,
 };
 use crate::docker::{IMAGE, LogFollower, QUICK, Stack, TEARDOWN, compose_ok, docker, logs, rcon};
 use crate::logs::{LogLine, State, parse_log, states, usernames, with_message};
-use crate::stack_checks::{expected_warnings, millis};
+use crate::stack_checks::{expected_restart_errors, expected_warnings, millis};
 
 const NEXTEST: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -269,11 +272,21 @@ impl Scenario {
     }
 
     /// Step 2: the server restarts; the agent isn't restarted, and the bots
-    /// reconnect within the retry policy.
-    fn the_bots_reconnect_after_a_server_restart(&self, names: &BTreeMap<String, String>) {
+    /// reconnect within the retry policy. Returns the restart's window in the
+    /// Docker VM's time: from the agent's last line before the restart to the
+    /// server's healthy moment.
+    fn the_bots_reconnect_after_a_server_restart(
+        &self,
+        names: &BTreeMap<String, String>,
+    ) -> (DateTime<Utc>, DateTime<Utc>) {
         let agent_before = docker::state("agent");
         let server_before = docker::state("minecraft");
-        let before_restart = agent_log().len();
+        let before = agent_log();
+        let before_restart = before.len();
+        let window_from = before
+            .last()
+            .expect("the agent should have logged")
+            .timestamp;
 
         compose_ok(&["restart", "--no-deps", "minecraft"], RESTART);
         // Docker keeps only the last five probes (25 s at the 5 s interval),
@@ -312,6 +325,7 @@ impl Scenario {
         );
         let running = with_message(&log, "the agent is running");
         assert_eq!(running.len(), 1, "{}", lines(&running));
+        (window_from, healthy)
     }
 
     /// Each bot's reconnect deadline from `healthy`, by the attempt of its
@@ -437,23 +451,27 @@ impl Scenario {
     }
 }
 
-/// The whole log holds no ERROR, and only the warnings stack-checks.json
-/// expects.
-fn assert_only_expected_lines(log: &[LogLine]) {
+/// The whole log holds only the warnings stack-checks.json expects, and no
+/// ERROR but the resets it allows while the server restarts, from `from` to
+/// `to`.
+fn assert_only_expected_lines(log: &[LogLine], (from, to): (DateTime<Utc>, DateTime<Utc>)) {
     let expected = expected_warnings();
-    let unexpected = unexpected(log, &expected);
+    let restart = expected_restart_errors();
+    let allowed = restart_errors(log, &restart, from, to);
+    let unexpected = unexpected(log, &expected, &allowed);
     let known: Vec<String> = expected
         .iter()
-        .map(|warning| {
+        .chain(&restart)
+        .map(|line| {
             format!(
                 "{} \"{}…\" ({})",
-                warning.target, warning.message_prefix, warning.why
+                line.target, line.message_prefix, line.why
             )
         })
         .collect();
     assert!(
         unexpected.is_empty(),
-        "lines nobody expects:\n{}\n\nthe expected warnings:\n{}",
+        "lines nobody expects:\n{}\n\nthe expected lines:\n{}",
         lines(&unexpected),
         known.join("\n")
     );
@@ -478,9 +496,9 @@ fn slow_compose_scenario() {
     let scenario = Scenario::new(started, &config);
 
     let names = scenario.every_bot_comes_online();
-    scenario.the_bots_reconnect_after_a_server_restart(&names);
+    let restart = scenario.the_bots_reconnect_after_a_server_restart(&names);
     let log = scenario.the_agent_stops_cleanly();
-    assert_only_expected_lines(&log);
+    assert_only_expected_lines(&log, restart);
 
     drop(scenario);
     drop(stack);

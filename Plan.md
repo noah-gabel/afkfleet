@@ -1965,6 +1965,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - The restart took about 3 s.
   >   - The bots saw `ConnectionClosed`, not the "Server closed" kick, so azalea's "Got disconnect packet" didn't appear. It stays expected, since a slower stop sends it.
   >   - The server took joins a few seconds before its first good probe.
+  > - **Connection resets** (found by the demo's first run, after the runs above; the user's decisions). vanilla's shutdown sometimes resets a bot's socket before its kick, and azalea logs that at ERROR. The whole-log check allows that one error:
+  >   - only between the agent's last line before the restart and the server's healthy moment
+  >   - no more often than bot sessions ended there with `ConnectionClosed`
+  >
+  >   It's `expected_restart_errors` in `stack-checks.json`, shared with the demo; the DoD note explains it. `tests/deploy.rs` checks that every expected line names its target, prefix and reason. The checks' new unit tests were red against a stub first.
   > - **Deviation:** the compose-file helpers stay in `tests/deploy.rs`, now for any service, since the scenario reads the agent's grace period from `stack-checks.json`. Only the `stack-checks.json` reader moved to `tests/common/`.
   > - **Tests:**
   >   - 52 fast unit tests of the helpers, red against stubs first.

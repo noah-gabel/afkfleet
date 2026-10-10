@@ -13,11 +13,11 @@ pub(crate) const STACK_CHECKS: &str = include_str!(concat!(
     "/../../deploy/dev/stack-checks.json"
 ));
 
-/// A warning the agent may log while its server restarts: a line whose
-/// target is `target` and whose message starts with `message_prefix`.
+/// A line the agent may log while its server restarts: one whose target is
+/// `target` and whose message starts with `message_prefix`.
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(crate) struct ExpectedWarning {
+pub(crate) struct ExpectedLine {
     pub(crate) target: String,
     pub(crate) message_prefix: String,
     /// Why it's expected, for the reader of the file and of a failure.
@@ -30,9 +30,16 @@ pub(crate) fn stack_checks() -> Value {
 }
 
 /// The file's `expected_warnings`.
-pub(crate) fn expected_warnings() -> Vec<ExpectedWarning> {
+pub(crate) fn expected_warnings() -> Vec<ExpectedLine> {
     serde_json::from_value(stack_checks()["expected_warnings"].clone())
         .expect("stack-checks.json's expected_warnings should be a list of warnings")
+}
+
+/// The file's `expected_restart_errors`: errors allowed only while the
+/// server restarts, and no more of them than sessions closed there.
+pub(crate) fn expected_restart_errors() -> Vec<ExpectedLine> {
+    serde_json::from_value(stack_checks()["expected_restart_errors"].clone())
+        .expect("stack-checks.json's expected_restart_errors should be a list of errors")
 }
 
 /// The file's number `key`, in milliseconds.

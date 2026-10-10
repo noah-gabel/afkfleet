@@ -23,7 +23,7 @@ use std::time::Duration;
 use fleet_agent::config::{AgentConfig, AgentMode, StandaloneBot, load};
 use fleet_agent::run::RUNTIME_SHUTDOWN;
 use jail::in_jail;
-use stack_checks::{expected_warnings, millis, stack_checks};
+use stack_checks::{expected_restart_errors, expected_warnings, millis, stack_checks};
 
 #[path = "common/jail.rs"]
 mod jail;
@@ -315,16 +315,14 @@ fn the_shared_stop_grace_period_is_the_compose_agents() {
 }
 
 #[test]
-fn every_expected_warning_names_its_target_a_message_prefix_and_why() {
-    let warnings = expected_warnings();
-
-    assert_ne!(warnings, []);
-    for warning in warnings {
-        assert!(
-            !warning.target.is_empty()
-                && !warning.message_prefix.is_empty()
-                && !warning.why.is_empty(),
-            "{warning:?}"
-        );
+fn every_expected_line_names_its_target_a_message_prefix_and_why() {
+    for lines in [expected_warnings(), expected_restart_errors()] {
+        assert_ne!(lines, []);
+        for line in lines {
+            assert!(
+                !line.target.is_empty() && !line.message_prefix.is_empty() && !line.why.is_empty(),
+                "{line:?}"
+            );
+        }
     }
 }
