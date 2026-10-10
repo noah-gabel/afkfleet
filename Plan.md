@@ -1921,7 +1921,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - Compose mounts the config at `/etc/afkfleet/agent.toml`, and the Dockerfile's `ENTRYPOINT`, `CMD` and `HEALTHCHECK` use that path.
   >   - The approved `in_jail` helper moved to `tests/common/jail.rs`; it's still one `#[expect]`.
   > - **Demo:** `just stack-up` brought both services up healthy (`healthy: the heartbeat is 5 s old`), and AfkBot4–6 came online. `docker compose stop agent` ended in 0.4 s with exit code 0 and "the agent stopped" (`stopped: 3`) last, with no `warn` or `error` line.
-- [ ] **P5.7** 🔴 Slow end-to-end test:
+- [x] **P5.7** 🔴 Slow end-to-end test:
   1. `compose up`, and all bots come Online.
   2. Restart the MC container; the bots reconnect within the policy.
   3. Stop the agent; the disconnect is clean.
@@ -1932,6 +1932,44 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Clean-up.** The test runs `down -v` for its own project before it starts, and in a guard that also runs when the test panics.
 
   > Note (P5.7, from group C, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): **No CI job builds the image on every PR.** Instead, group D's PR, and every later PR that changes the Dockerfile, `.dockerignore`, `Cargo.lock` or `rust-toolchain.toml`, runs the "Slow tests" workflow on its branch before it's merged. The user starts it under Actions → Slow tests → Run workflow, so the image build is checked in CI.
+
+  > Note (P5.7, as built, group D) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md); the user answered group D's questions on 2026-10-09):
+  > - **Shape.** `crates/fleet-agent/tests/slow_compose/` (`main.rs`, `docker.rs`, `logs.rs`, `checks.rs`) holds one `slow_compose_scenario`. It runs the dev stack as the project `afkfleet-e2e`, with the new `deploy/compose.isolated.yaml` on top (`ports: !reset []` on minecraft), so it can run beside `just mc-up`. `!reset` needs Compose 2.24, which the test checks first.
+  >   - Every docker call runs from the repository root with a deadline.
+  >   - A guard runs `down -v --timeout 10` when the test ends or panics, and the same runs before the start, which covers a run nextest killed.
+  > - **Five bots.** `agent.compose.toml` gains AfkBot7 and AfkBot8 on `afk` (AfkBot6 stays on `farm`), so `just stack-up`, the test and the demo run the same five.
+  > - **The image.** `just test-slow` pulls the server image and builds the agent's (`compose build agent`) first. It then sets `AFKFLEET_E2E_IMAGE_BUILT=1` through a `$`-parameter; without it, the test stops at once, so it never tests an old image. The stack starts with `up --wait --no-build`.
+  > - **The steps:**
+  >   1. Every bot is Online (state lines and RCON `list`) within connect + bounds(1).max + connect + 1 s of "the agent is running": 71 s with the defaults.
+  >   2. `restart --no-deps minecraft`.
+  >      - **The healthy moment** is the end of the first good probe after the server's new StartedAt. It's polled from `docker inspect` at once, since Docker keeps only five probes.
+  >      - **Every bot is Online again** by bounds(n).max + connect + bounds(n+1).max + connect + 1 s from that moment, where n is its last Backoff before then. That allows one more failed attempt, since an attempt in flight when the probe passes can still fail.
+  >      - **Every wait** from `Backoff { attempt: n }` to the next `AwaitingSession` in the whole log lies in bounds(n), with 100 ms of slack below and 1 s above. A failure says whether the breaker may have been open.
+  >      - **The agent didn't restart:** its StartedAt and restart count are unchanged, and "the agent is running" appears once.
+  >   3. `stop agent`:
+  >      - exit code 0
+  >      - the last line is "the agent stopped" with exit_code 0, stopped 5, aborted 0 and crashed 0
+  >      - no WARN or ERROR from "shutting down" on
+  >      - RCON's list drops every bot within 5 s
+  >
+  >   Then the whole log must hold no ERROR and only the expected warnings, and every offending line is printed in full. Every check also asserts that it saw data (5 bots, a wait per bot after the restart, a probe, the bots on RCON's list).
+  > - **Shared numbers.** `deploy/dev/stack-checks.json` is shared with the demo. It holds:
+  >   - the expected warnings (target, message prefix, why)
+  >   - the bounds(n) table up to the capped window
+  >   - the connect timeout and the agent's grace period
+  >
+  >   `tests/deploy.rs` checks every number against `agent.compose.toml` and `compose.dev.yaml`. It also checks that the override unpublishes the port, and that minecraft's `stop_grace_period` is at least 30 s. It's now 60 s, so a stop is graceful: Docker's default 10 s could kill the server, and the bots would see reset sockets.
+  > - **The budget.** Before each deadline, elapsed + deadline + the agent's grace period + 60 s of teardown must fit the slow profile's limit, 600 s, read from `.config/nextest.toml`.
+  > - **Clocks.** The test judges only by Docker-VM timestamps (the agent's log, StartedAt, the probes). Its waits wake on the agent's next line (a `logs --follow` child) or after 250 ms, and never sleep.
+  > - **Found in the runs:**
+  >   - The restart took about 3 s.
+  >   - The bots saw `ConnectionClosed`, not the "Server closed" kick, so azalea's "Got disconnect packet" didn't appear. It stays expected, since a slower stop sends it.
+  >   - The server took joins a few seconds before its first good probe.
+  > - **Deviation:** the compose-file helpers stay in `tests/deploy.rs`, now for any service, since the scenario reads the agent's grace period from `stack-checks.json`. Only the `stack-checks.json` reader moved to `tests/common/`.
+  > - **Tests:**
+  >   - 52 fast unit tests of the helpers, red against stubs first.
+  >   - 6 new tests in `deploy.rs`, red against placeholder data first.
+  >   - The scenario was red against stub parsers ("every bot Online within 71s; last seen: Online in the log: {}"), and once against `stop_signal: SIGKILL` (exit 137). Then it passed in about 45 s.
 
 **DoD:** Demo with 5 bots AFK on a local server for 1 h, with one server restart in between. The logs show no errors except the expected disconnect warnings.
 

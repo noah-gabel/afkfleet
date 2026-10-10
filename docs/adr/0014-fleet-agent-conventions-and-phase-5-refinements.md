@@ -231,6 +231,41 @@ Each later group asks its own implementation-level questions in its session: tok
 
   The AI runs it in group D and puts its output in the PR; the user can re-run it, for example after a Minecraft-version bump.
 
+- *(as built, group D: P5.7; the user answered group D's questions on 2026-10-09)*:
+  - **Isolation** *(the user's decision)*. `deploy/compose.dev.yaml` publishes the server on the fixed `127.0.0.1:25565`, so a second project would clash with `just mc-up`. The new `deploy/compose.isolated.yaml` removes that port (`ports: !reset []`); neither the test nor the demo needs it, since the agent reaches the server over the compose network and RCON goes through `exec`. `!reset` needs Compose 2.24, so both check `docker compose version` first and stop with a clear message rather than a YAML error.
+  - **Five bots** *(the user's decision)*. `agent.compose.toml` gains AfkBot7 and AfkBot8 on `afk`; AfkBot6 stays on `farm`. `just stack-up`, the test and the demo then run the same config, and the demo also runs the farm preset for an hour.
+  - **A graceful restart** *(the user's decisions)*:
+    - The restart is `docker compose restart --no-deps minecraft`. itzg's runner turns SIGTERM into `stop`.
+    - compose.dev.yaml gives the server `stop_grace_period: 60s`, since Docker's default 10 s could kill it mid-stop. The bots would then see reset sockets, which azalea logs as an ERROR. `tests/deploy.rs` asserts at least 30 s, so removing it fails `just check`, not only the weekly slow run.
+    - The final teardown uses `down -v --timeout 10`, so the 60 s don't eat the teardown allowance.
+    - The agent's `depends_on` has no `restart: true`, and the test asserts the agent wasn't restarted (its StartedAt and restart count, and one "the agent is running"). The reconnects must come from the agent's own retry logic.
+  - **"Within the policy"** *(the user's decisions)*:
+    - **Every wait** from `Backoff { attempt: n }` to the next `AwaitingSession` lies in `RetryPolicy::bounds(n)`, with 100 ms of slack below (the times are taken when lines are written, not when the timer starts) and 1 s above. A reconnect storm still misses the lower bound by seconds.
+    - **Every bot is Online again by a deadline** from the server's healthy moment: bounds(n).max for its current backoff, one more failed attempt with its backoff (connect + bounds(n+1).max), the attempt that works (connect), plus 1 s. Docker probes the health only every 5 s, so an attempt in flight then can still fail. The per-gap check already holds every wait to the policy; the deadline only proves each bot comes back.
+    - **The healthy moment** is the end of the first good probe after the server's new StartedAt. It's read from `docker inspect` as soon as it appears, because Docker keeps only five probes. It runs on the Docker VM's clock, like the agent's log, so no host clock enters a judgment.
+    - **Step 1's deadline** has the same shape from "the agent is running": connect + bounds(1).max + connect + 1 s.
+  - **The budget** *(the user's decisions)*. Before each deadline, the test asserts elapsed + deadline + the agent's stop_grace_period + 60 s of teardown ≤ the slow profile's limit. The limit is read from `.config/nextest.toml` (period × terminate-after), so nextest can't kill it mid-cleanup.
+  - **A clean stop** *(the user's decisions)*:
+    - exit code 0, and the report as the last line (stopped 5, aborted 0, crashed 0)
+    - no WARN or ERROR from "shutting down" on
+    - RCON's list empty within 5 s, polled, since the server drops a player on its next tick
+
+    It doesn't check the server's log: its wording can change with a version bump, and a socket closed with unread data gets a TCP reset on Linux.
+  - **The whole log** *(the user's decision)*. No ERROR, and every WARN must match an entry of `deploy/dev/stack-checks.json` by target and message prefix. Failures print every offending line in full.
+  - **`stack-checks.json`** *(the user's decisions)* is shared by the test (`include_str!`) and the demo script (`readFileSync`), so their lists and numbers can't drift. It holds:
+    - the expected warnings, each with a `why`
+    - the bounds(n) table up to the first capped window (the last entry applies to every later attempt), so the script never re-implements fleet-core's jitter formula
+    - the connect timeout and the agent's grace period
+
+    `tests/deploy.rs` compares every entry with `bounds(n)` of the loaded `agent.compose.toml`, and checks that the table ends at the cap.
+  - **The image** *(the user's decisions)*:
+    - `just test-slow` first pulls the server image (a cold pull would eat into a timed test), then runs `docker compose build agent`.
+    - It then sets `AFKFLEET_E2E_IMAGE_BUILT=1` through a `$`-parameter. The justfile's rule and CLAUDE.md's now allow `export` or `$`-parameters, since just exports both.
+    - Without the variable, the test stops at once, so it never tests an image left from another branch. It starts the stack with `up --wait --no-build`.
+  - **No vacuous pass** *(the user's addition)*. Every check asserts it saw data: five bots in the log, at least one wait per bot after the restart, a healthy probe, and the bots on RCON's list before the stop.
+  - **Red first** *(the user's decision)*. The helpers' 52 unit tests, and the scenario on stub parsers, failed on assertions first. One uncommitted run with `stop_signal: SIGKILL` failed on exit code 137, which shows step 3 catches a real bad stop.
+  - **Found in the runs:** the restart took about 3 s, and the bots saw `ConnectionClosed` rather than the "Server closed" kick, so azalea's "Got disconnect packet" didn't show. It stays in the list for a slower stop.
+
 ### Dependencies
 Approved by the user, all in Plan.md §5:
 - `figment` 0.10.19 with `toml` and `env`, and `test` (`Jail`) in tests. It brings `toml` 0.8 beside the graph's newer one, a duplicate-version warning only.
@@ -245,6 +280,7 @@ Approved by the user, all in Plan.md §5:
   - `rustls` 0.23.45 with its default features (aws-lc-rs), already in the lockfile through reqwest.
   - Already declared, newly used by the agent: tokio (`rt`, `rt-multi-thread`, `macros`, `sync`, `time`; `test-util` in tests), tokio-util (no features), chrono (`now`), the `metrics` facade (the agent records the diagnostics itself), and fleet-testkit as a dev-dependency.
 - *(group C)*: no new crates. The agent image's base images are `rust:1.99.0-slim-trixie` (builder) and `gcr.io/distroless/cc-debian13:nonroot` (runtime), both pinned by multi-arch index digest, and the builder installs cargo-chef 0.1.78 (§5's tools).
+- *(group D)*: no new crates. The compose e2e test uses only fleet-agent's existing dependencies and dev-dependencies (serde, serde_json, figment, chrono, rstest).
 - fleet-agent depends on fleet-core, fleet-runtime and fleet-mc (§4).
 - No crate-local `clippy.toml`: the root one applies.
 - **One lint exception in tests** *(the user's approval)*. figment's `Jail` fixes its closure's error type to `figment::Error`, which is larger than `clippy::result_large_err` allows. So every test goes through one helper, `in_jail`, whose closure carries `#[expect(clippy::result_large_err, reason = …)]`. Production code isn't affected: `load` converts figment's error into a small boxed one.

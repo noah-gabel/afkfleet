@@ -1,0 +1,16 @@
+# An override for deploy/compose.dev.yaml that keeps the Minecraft server off
+# the host: its published port (127.0.0.1:25565) is removed. The compose e2e
+# test (crates/fleet-agent/tests/slow_compose) and `just demo-agent` run the
+# stack with it under project names of their own, so they can run beside
+# `just mc-up`, `just stack-up` and `just dev-agent`. Neither needs the port:
+# the agent reaches the server over the compose network, and RCON goes
+# through `docker compose exec minecraft rcon-cli` (Plan.md P5.7, ADR-0014).
+#
+#   docker compose -p <project> --file deploy/compose.dev.yaml \
+#     --file deploy/compose.isolated.yaml up --detach --wait
+#
+# `!reset` needs Docker Compose 2.24 or newer; the test and the demo check the
+# version first. fleet-agent's tests/deploy.rs checks the reset.
+services:
+  minecraft:
+    ports: !reset []

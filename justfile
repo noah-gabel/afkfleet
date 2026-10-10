@@ -2,8 +2,8 @@
 #
 # Recipes run in PowerShell 7 on Windows and in sh on Linux CI, so every line
 # must work in both: one command per line, no `&&` or `||`, environment
-# variables only through just's `export`. Anything more complex goes into
-# scripts/.
+# variables only through just's `export` or `$`-parameters (just exports both,
+# so they work in pwsh and sh alike). Anything more complex goes into scripts/.
 
 set windows-shell := ["pwsh", "-NoLogo", "-NoProfile", "-Command"]
 
@@ -28,9 +28,14 @@ ci: fmt-check clippy docs test-ci scripts-test cov deny stable-check ui-check ui
 test crate="":
     cargo nextest run {{ if crate == "" { "--workspace" } else { "-p " + crate } }}
 
+# They need fleet-mc's test-only `fault-injection` feature (ADR-0011). The server
+# image is pulled and the agent's image built first, so neither eats into a timed
+# test; AFKFLEET_E2E_IMAGE_BUILT tells the compose e2e test that the image is
+# this source's (ADR-0014).
 # Slow tests: containers and a real Minecraft server (needs Docker), one at a time.
-# They need fleet-mc's test-only `fault-injection` feature (ADR-0011).
-test-slow:
+test-slow $AFKFLEET_E2E_IMAGE_BUILT="1":
+    docker compose --file deploy/compose.dev.yaml pull minecraft
+    docker compose --file deploy/compose.dev.yaml build agent
     cargo nextest run --workspace --profile slow --no-tests=warn --features fleet-mc/fault-injection
 
 # The user's real-account check (ADR-0011): a real token from

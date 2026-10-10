@@ -1,9 +1,13 @@
-//! The deployment files around the agent (Plan.md P5.6; ADR-0014):
+//! The deployment files around the agent (Plan.md P5.6, P5.7; ADR-0014):
 //! - both dev configs load
 //! - the compose agent's bots join the compose server, and none of them
 //!   clashes with `just dev-agent`'s, so both agents can run at once
-//! - Docker's grace period outlasts the compose agent's worst-case shutdown
+//! - Docker's grace period outlasts the compose agent's worst-case shutdown,
+//!   and the Minecraft server gets time to stop gracefully
 //! - `run` and the healthcheck read the same config in the container
+//! - `deploy/dev/stack-checks.json`'s numbers are the compose agent's, and
+//!   `deploy/compose.isolated.yaml` unpublishes the server's port, as the
+//!   compose e2e test and the demo assume
 //!
 //! The configs are loaded inside `figment::Jail` with an empty environment,
 //! so a developer's own `AFKFLEET_AGENT__…` variables can't change them.
@@ -12,17 +16,22 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
+use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use fleet_agent::config::{AgentConfig, AgentMode, StandaloneBot, load};
 use fleet_agent::run::RUNTIME_SHUTDOWN;
 use jail::in_jail;
+use stack_checks::{expected_warnings, millis, stack_checks};
 
 #[path = "common/jail.rs"]
 mod jail;
+#[path = "common/stack_checks.rs"]
+mod stack_checks;
 
 const COMPOSE: &str = include_str!("../../../deploy/compose.dev.yaml");
+const ISOLATED: &str = include_str!("../../../deploy/compose.isolated.yaml");
 const DOCKERFILE: &str = include_str!("../../../deploy/docker/agent.Dockerfile");
 
 /// Where the image's `run` and HEALTHCHECK read the config.
@@ -55,11 +64,12 @@ fn standalone_bots(config: &AgentConfig) -> &[StandaloneBot] {
     }
 }
 
-/// The lines of compose.dev.yaml's `agent` service.
-fn agent_service() -> Vec<&'static str> {
-    let lines: Vec<&str> = COMPOSE
+/// The lines of the compose file `compose`'s service `name`.
+fn service_lines(compose: &'static str, name: &str) -> Vec<&'static str> {
+    let header = format!("  {name}:");
+    let lines: Vec<&str> = compose
         .lines()
-        .skip_while(|line| *line != "  agent:")
+        .skip_while(|line| *line != header)
         .skip(1)
         .take_while(|line| {
             line.is_empty() || line.starts_with("    ") || line.trim_start().starts_with('#')
@@ -67,17 +77,29 @@ fn agent_service() -> Vec<&'static str> {
         .collect();
     assert!(
         !lines.is_empty(),
-        "compose.dev.yaml should have an agent service"
+        "the compose file should have a {name} service"
     );
     lines
 }
 
-/// The agent service's value of `key`, if it has one on its own line.
-fn agent_value(key: &str) -> Option<&'static str> {
-    agent_service().into_iter().find_map(|line| {
+/// compose.dev.yaml's value of `key` for the service `name`, if it has one on
+/// its own line.
+fn service_value(name: &str, key: &str) -> Option<&'static str> {
+    service_lines(COMPOSE, name).into_iter().find_map(|line| {
         let value = line.trim().strip_prefix(key)?.strip_prefix(':')?;
         Some(value.trim())
     })
+}
+
+/// compose.dev.yaml's `stop_grace_period` for the service `name`.
+fn stop_grace_period(name: &str) -> Duration {
+    service_value(name, "stop_grace_period")
+        .and_then(|value| value.strip_suffix('s'))
+        .and_then(|secs| secs.parse().ok())
+        .map_or_else(
+            || panic!("the {name} service should set stop_grace_period in seconds, e.g. `20s`"),
+            Duration::from_secs,
+        )
 }
 
 /// The Dockerfile's instructions, each on one line, without comments.
@@ -108,6 +130,35 @@ fn instruction(keyword: &str) -> String {
         .collect();
     assert_eq!(found.len(), 1, "one {keyword} expected: {found:#?}");
     found.into_iter().next().unwrap()
+}
+
+/// stack-checks.json's `retry_windows`, as (attempt, (min, max)).
+fn retry_windows() -> Vec<(u64, (Duration, Duration))> {
+    let checks = stack_checks();
+    let windows = checks["retry_windows"]
+        .as_array()
+        .expect("stack-checks.json should have the list retry_windows");
+    windows
+        .iter()
+        .map(|window| {
+            let number = |key: &str| {
+                window[key]
+                    .as_u64()
+                    .unwrap_or_else(|| panic!("every retry window should have the number {key}"))
+            };
+            (
+                number("attempt"),
+                (
+                    Duration::from_millis(number("min_ms")),
+                    Duration::from_millis(number("max_ms")),
+                ),
+            )
+        })
+        .collect()
+}
+
+fn attempt(number: usize) -> NonZeroU32 {
+    NonZeroU32::new(u32::try_from(number).unwrap()).unwrap()
 }
 
 #[test]
@@ -155,11 +206,7 @@ fn dockers_grace_period_outlasts_the_compose_agents_worst_case_shutdown() {
     let config = load_dev_config("agent.compose.toml");
     let worst = config.runtime.shutdown_timeout + config.runtime.reply_timeout + RUNTIME_SHUTDOWN;
 
-    let grace = agent_value("stop_grace_period")
-        .and_then(|value| value.strip_suffix('s'))
-        .and_then(|secs| secs.parse().ok())
-        .map(Duration::from_secs)
-        .expect("the agent service should set stop_grace_period in seconds, e.g. `20s`");
+    let grace = stop_grace_period("agent");
 
     assert!(
         grace > worst,
@@ -167,9 +214,18 @@ fn dockers_grace_period_outlasts_the_compose_agents_worst_case_shutdown() {
     );
 }
 
+/// Docker's default 10 s could kill the server before `stop` ends, so the
+/// bots would see a reset instead of the "Server closed" kick.
+#[test]
+fn the_minecraft_server_gets_at_least_30_s_to_stop_gracefully() {
+    let grace = stop_grace_period("minecraft");
+
+    assert!(grace >= Duration::from_secs(30), "{grace:?}");
+}
+
 #[test]
 fn compose_mounts_the_compose_agents_config_where_the_image_reads_it() {
-    let mount = agent_service()
+    let mount = service_lines(COMPOSE, "agent")
         .into_iter()
         .map(str::trim)
         .find(|line| line.contains("agent.compose.toml"))
@@ -200,4 +256,75 @@ fn the_images_run_and_healthcheck_read_the_same_config() {
         )),
         "{healthcheck}"
     );
+}
+
+#[test]
+fn the_isolated_override_unpublishes_the_minecraft_servers_port() {
+    let minecraft = service_lines(ISOLATED, "minecraft");
+
+    assert!(
+        minecraft
+            .iter()
+            .any(|line| line.trim() == "ports: !reset []"),
+        "{minecraft:#?}"
+    );
+}
+
+/// The windows run from attempt 1 to the first one the maximum delay caps,
+/// which then applies to every later attempt.
+#[test]
+fn the_shared_retry_windows_are_the_compose_agents_retry_policy() {
+    let policy = load_dev_config("agent.compose.toml").retry;
+    let windows = retry_windows();
+
+    assert_ne!(windows, []);
+    for (index, (number, window)) in windows.iter().enumerate() {
+        let current = attempt(index + 1);
+        assert_eq!(
+            *number,
+            u64::from(current.get()),
+            "the windows should be in order"
+        );
+        assert_eq!(*window, policy.bounds(current), "attempt {current}");
+        if index > 0 {
+            assert_ne!(
+                policy.bounds(current),
+                policy.bounds(attempt(index)),
+                "attempt {current} repeats the capped window before it; drop it"
+            );
+        }
+    }
+    let after = attempt(windows.len() + 1);
+    assert_eq!(
+        policy.bounds(after),
+        windows.last().unwrap().1,
+        "attempt {after} isn't capped yet; add its window"
+    );
+}
+
+#[test]
+fn the_shared_connect_timeout_is_the_compose_agents() {
+    let config = load_dev_config("agent.compose.toml");
+
+    assert_eq!(millis("connect_timeout_ms"), config.runtime.connect_timeout);
+}
+
+#[test]
+fn the_shared_stop_grace_period_is_the_compose_agents() {
+    assert_eq!(millis("stop_grace_period_ms"), stop_grace_period("agent"));
+}
+
+#[test]
+fn every_expected_warning_names_its_target_a_message_prefix_and_why() {
+    let warnings = expected_warnings();
+
+    assert_ne!(warnings, []);
+    for warning in warnings {
+        assert!(
+            !warning.target.is_empty()
+                && !warning.message_prefix.is_empty()
+                && !warning.why.is_empty(),
+            "{warning:?}"
+        );
+    }
 }

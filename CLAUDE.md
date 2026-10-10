@@ -63,14 +63,14 @@ Where things are:
 ## Commands (`justfile`, created in P0.7; keep this table in sync)
 Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so every recipe line must work in both:
 - one command per line; no `&&` or `||`
-- set environment variables with just's `export`, never with shell syntax (`$env:X` or `X=…`)
+- set environment variables with just's `export` or a `$`-parameter, never with shell syntax (`$env:X` or `X=…`)
 - anything more complex goes into a small script under `scripts/`
 
 | Command | What it does |
 |---|---|
 | `just check` | `cargo fmt --check`, clippy (`--all-targets -D warnings`), `cargo doc --no-deps --workspace` with `RUSTDOCFLAGS="-D warnings"`, nextest default profile, doctests, the `scripts/` tests, and biome + `tsc --noEmit` once the frontend exists. **Run before saying a task is done.** |
 | `just test [crate]` | nextest for the workspace or one crate |
-| `just test-slow` | nextest `slow` profile with fleet-mc's test-only `fault-injection` feature, one Minecraft container at a time (needs Docker) |
+| `just test-slow` | Pulls the server image and builds the agent's image, then runs the nextest `slow` profile with fleet-mc's test-only `fault-injection` feature, one Minecraft container or compose stack at a time (needs Docker) |
 | `just test-real-account` | **The user only; the AI never runs it.** nextest `manual` profile: the user's real token from `secrets/p1.8-account.txt` joins a local online-mode container and sends signed chat (needs Docker) |
 | `just cov` | cargo-llvm-cov with the coverage gates (per-crate and per-module gates are checked by a script over the JSON report) |
 | `just deny` | `cargo deny check` |
