@@ -4,5 +4,7 @@
 //!
 //! - [`audit`]: stamping audit entries, recording the ones that change
 //!   nothing, and listing the log.
+//! - [`health`]: whether the server is ready to serve requests.
 
 pub mod audit;
+pub mod health;

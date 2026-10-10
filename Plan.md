@@ -2213,7 +2213,23 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Tests**, red against compiling stubs: pass-through ID and trace layers, no safety net, no security or sensitive headers, no timeout or body limit, and tower-http's default panic response. 53 of 110 failed on assertions, then all passed.
   >   - `tests/middleware.rs` sends one request per error: 404, 405, 408, 413 by its length and when read, a panic, and a failed mint. It also sends one per bare status. Each gets a snapshot, 16 in all, read before accepting.
   >   - The timeout's tests run on paused time.
-- [ ] **P6.7** 🔴 `GET /health/live` and `GET /health/ready` (DB ping), with no internal details in the response.
+- [x] **P6.7** 🔴 `GET /health/live` and `GET /health/ready` (DB ping), with no internal details in the response.
+
+  > Note (P6.7, as built, group D, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **Shape.** `http::router::router(AppState, &HttpConfig, RequestIds)` holds the two routes, without the `/api/v1` prefix (Appendix B), behind P6.6's stack.
+  >   - The handlers live in `http::handlers::health`.
+  >   - `ready` calls `app::health::HealthService::ready()`, which calls the new `Store::ping()`.
+  >   - `ping()` is `SELECT 1` (`query_scalar!`) on the read pool, so it never competes with the one write connection.
+  > - **Answers.** Both checks answer `200` with an empty body.
+  >   - `live` checks nothing else.
+  >   - A failed `ready` answers like any store failure, through `From<StoreError>`. A busy database (no read connection within the acquire timeout) gives `busy`: 503, `Retry-After: 1`, logged at `warn`. Any other failure gives `internal`: 500, its source chain logged at `error` with the request ID.
+  >   - No response holds anything of the cause.
+  > - **Bounded like every query:** the pools' 5 s acquire timeout, `busy_timeout` and the request timeout. There's no extra timeout.
+  > - **Logging.** The trace layer logs both routes at `debug`, so a probe every few seconds doesn't flood the log. A failed check is still logged by `render_errors`.
+  > - **Tests**, red against a `ping` that always failed and handlers that answered 500: 10 of 44 failed on assertions, then all passed.
+  >   - `tests/health.rs` runs in real time against a database from `#[sqlx::test]`. It covers 200 and `HEAD` for both routes, 405 with `Allow`, `live` with a closed database, `ready` busy (every read connection held, a 1 s acquire timeout), and `ready` with a closed database.
+  >   - It has 4 snapshots, read before accepting.
+  >   - `tests/store.rs` checks the ping: it succeeds, it doesn't wait for a held write connection, it's busy while every read connection is taken, and it's a backend error on a closed database.
 - [x] **P6.8** 🔴 Audit service:
   - append-only: the trait has only `record` and `list`
   - each entry: actor, IP, action, target, outcome, metadata (no secrets), timestamp
@@ -2248,6 +2264,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The dev-mode warning.** `serve` calls `ServerConfig::warn_if_dev_mode()` right after logging starts.
   > - **The healthcheck's address.** When `bind` is an unspecified address (`0.0.0.0` or `::`), as the container config will set, the healthcheck probes loopback (`127.0.0.1` or `::1`) on the same port instead: connecting to `0.0.0.0` only happens to work on Linux and fails on Windows.
   > - **The dev config's database path must be absolute,** and a committed file can't hold one that works on every machine. How `just dev-server` provides it is group E's question, e.g. a `$`-parameter built from `justfile_directory()`.
+
+  > Note (P6.11, from group D) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `serve` builds `http::router::router` with `RequestIds` over `SystemClock` and `OsRandom` and the `Database` as the health service's store. The healthcheck probes `/health/ready`, whose only success is `200` with an empty body.
 - [ ] **P6.12** 🔴 Graceful shutdown: axum's `with_graceful_shutdown` plus a `CancellationToken`.
 
   > Note (P6.12, from group B) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `Database::close()` closes the read pool, then the write pool, and waits for every checked-out connection, so shutdown bounds it with a timeout.
@@ -2340,10 +2358,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `429` with `Retry-After`
 
   > Note (P7.10, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a limit answers with `ApiError::RateLimited { retry_after }`, the limiter's delay, which is sent in whole seconds, rounded up.
+
+  > Note (P7.10, from Phase 6, group D) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a 429 that tower_governor answers itself, without `ApiError`, still gets the envelope from `render_errors`' safety net and keeps its `Retry-After` and rate-limit headers, but it's logged at `error` as a wiring bug, so the limiter's error handler should return `ApiError::RateLimited`. Whether the health routes count against the global limit is this task's question.
 - [ ] **P7.11** 🔴 **Route-coverage test.**
   - Routes are registered only through `public_route(…)` or `authed_route(…)` helpers, which also record them in a registry.
   - The test calls every authed route without credentials and expects `401`.
   - It also checks that the public list is exactly the expected allowlist.
+
+  > Note (P7.11, from Phase 6, group D) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `GET /health/live` and `GET /health/ready` exist since P6.7, registered with plain `Router::route`. They move to `public_route` and belong on the public allowlist.
 - [ ] **P7.12** 🔴 Security tests:
   - **User enumeration:** an unknown user and a wrong password give the same status and body.
   - **Lockout.**

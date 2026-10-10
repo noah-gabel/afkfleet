@@ -82,6 +82,7 @@ There's no support, and I don't take feature requests. Security reports are welc
 - the API's shared types, [`crates/fleet-api-types`](crates/fleet-api-types/), exported to TypeScript for the app (`just gen`)
 - the error model: every failed request answers with one JSON envelope, a code with its status and a fixed message, and the request ID; an internal error's details go only to the log
 - the middleware stack: a request ID the server mints for every request, security headers on every response, one log line per request without headers or bodies, the request timeout and body limit from the config, and the error envelope for every error, a panic's included
+- the health endpoints, `GET /health/live` and `GET /health/ready` (a database ping): `200` with an empty body, revealing nothing about the server
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 

@@ -23,7 +23,7 @@ use fleet_core::audit::{
 use fleet_core::authz::Role;
 use fleet_core::id::{AccountId, AgentId, BotId, ModeId, UserId};
 use fleet_core::value::Username;
-use fleet_server::infra::sqlite::{Database, DatabaseOptions};
+use fleet_server::infra::sqlite::{Database, DatabaseOptions, READ_CONNECTIONS};
 use fleet_server::ports::audit::{AuditEntryId, AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
 use fleet_server::ports::store::{Store, StoreError};
 use fleet_server::ports::users::{InsertUserError, NewUser, PasswordHash, User};
@@ -1033,4 +1033,75 @@ async fn a_time_outside_the_years_0_to_9999_is_unstorable(
         "{record:?}"
     );
     db.close().await;
+}
+
+// --- The readiness ping --------------------------------------------------------
+
+#[sqlx::test(migrations = false)]
+async fn a_ping_succeeds_while_the_database_answers(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = connect(options).await;
+
+    let result = db.ping().await;
+
+    assert!(result.is_ok(), "{result:?}");
+    db.close().await;
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_ping_never_waits_for_the_write_connection(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = Database::connect(
+        options,
+        DatabaseOptions::default().with_acquire_timeout(SHORT_ACQUIRE_TIMEOUT),
+    )
+    .await
+    .unwrap();
+    let held = db.write().await.unwrap();
+
+    let result = db.ping().await;
+
+    assert!(result.is_ok(), "{result:?}");
+    drop(held);
+    db.close().await;
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_ping_is_busy_while_every_read_connection_is_taken(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = Database::connect(
+        options,
+        DatabaseOptions::default().with_acquire_timeout(SHORT_ACQUIRE_TIMEOUT),
+    )
+    .await
+    .unwrap();
+    let mut held = Vec::new();
+    for _ in 0..READ_CONNECTIONS {
+        held.push(db.read_pool().acquire().await.unwrap());
+    }
+
+    let result = db.ping().await;
+
+    assert!(matches!(result, Err(StoreError::Busy)), "{result:?}");
+    drop(held);
+    db.close().await;
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_ping_on_a_closed_database_is_a_backend_error(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = connect(options).await;
+    db.close().await;
+
+    let result = db.ping().await;
+
+    assert!(matches!(result, Err(StoreError::Backend(_))), "{result:?}");
 }

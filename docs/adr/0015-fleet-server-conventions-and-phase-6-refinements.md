@@ -272,6 +272,21 @@ The user answered group D's questions on 2026-10-10, one at a time; these are th
 - **Group C's test changed:** `a_response_without_an_api_error_passes_unchanged` sent a bare 418 and expected it unchanged, which contradicts the safety net. It now sends a 201 (`a_success_without_an_api_error_passes_unchanged`), and the 418 is one of the safety-net cases.
 - **Tests,** red against compiling stubs: pass-through ID and trace layers, no safety net, no security or sensitive headers, no timeout or body limit, and tower-http's default panic response. 53 of 110 failed on assertions, then all passed. The timeout's tests run on paused time; nothing in them touches sqlx.
 
+### The health endpoints (P6.7, group D)
+- **Answers** *(the user's choices)*: both routes answer `200` with an empty body, so they reveal nothing about the server.
+  - A failed readiness check answers like any store failure, through the existing `From<StoreError> for ApiError`.
+  - A busy database (no read connection within the acquire timeout, or SQLite's busy codes) gives `busy`: 503, `Retry-After: 1`, logged at `warn`.
+  - Any other failure gives `internal`: 500, its source chain logged at `error` with the request ID.
+  - Docker and Caddy treat both as unhealthy, and no new code or log path was needed.
+- **The ping** *(the user's choices)*: `Store::ping()` joins the existing store port, and `app::health::HealthService { store }` calls it from `ready()`. The handler calls the service, keeping the layering.
+  - The SQLite ping is `SELECT 1` through `query_scalar!` on the read pool, so it never competes with the one write connection.
+  - It's bounded like every query (the acquire timeout, `busy_timeout`, the request timeout), with no timeout of its own.
+- **Routes:** `http::router::router(AppState, &HttpConfig, RequestIds)`. The two routes are `/health/live` and `/health/ready`, without the `/api/v1` prefix (Appendix B), behind the middleware stack. The trace layer logs them at `debug`.
+- **Tests,** red against a `ping` that always failed and handlers that answered 500: 10 of 44 failed on assertions, then all passed.
+  - `tests/health.rs` runs in real time against a database from `#[sqlx::test]`, never on paused time. It has 4 snapshots, read before accepting.
+  - rstest's `#[case]` doesn't combine with `#[sqlx::test]`'s attributes, so each route has its own test over a shared helper.
+  - `tests/store.rs` checks that the ping succeeds, doesn't wait for a held write connection, is busy while every read connection is taken, and is a backend error on a closed database.
+
 ### stable-check
 fleet-startup and fleet-server join the justfile's `stable_crates` in group A, and fleet-api-types in group C, under P0.11's rule: the crates that don't depend on azalea or azalea-auth *(the user's decision)*. fleet-server leaves it in P9.3, when azalea-auth arrives.
 
@@ -296,6 +311,11 @@ fleet-startup and fleet-server join the justfile's `stable_crates` in group A, a
 - **P8.1** *(from group C, the user's decision)*: fleet-api-types caps each text a client reads, but not how many entries a response holds (a `fields` array with a million entries), so fleet-client sets a maximum response body size on its HTTP client, which bounds every response, not only errors.
 - **P8.5** *(from group C, the user's decision)*: UI code that branches on an error code always has a default branch that shows the message and the request ID, never an exhaustive switch that assumes the union is complete, since an older app can receive a code added later. The same applies to every `Open<…>` field in later phases. The generated folder holds only ts-rs's files, and `just gen` refuses to touch it otherwise.
 - **P10 and P11** *(from group C)*: response values a later version may extend (an agent's status, a bot's state, mode and disconnect reason) are `Open<…>` fields, and 64-bit numbers, such as the chat and audit cursors, are `SafeInt`s.
+- **Group E (P6.10–P6.12)** *(from group D)*: `serve` builds `http::router::router` with `RequestIds` over `SystemClock` and `OsRandom` and the `Database` as the health service's store; `apply` is the last step, so any route added later (P6.10's `/api/openapi.json`) goes into the routes before it. The healthcheck probes `/health/ready`, whose only success is `200` with an empty body.
+- **P7.6** *(from group D)*: axum's JSON rejections must become `ApiError`. A bare rejection status still gets the envelope from the safety net, but it's logged at `error` as a wiring bug.
+- **P7.10** *(from group D)*: the limiter's error handler returns `ApiError::RateLimited`. A bare 429 from tower_governor keeps its `Retry-After` and rate-limit headers under the safety net, but is logged as a wiring bug. Whether the health routes count against the global limit is P7.10's question.
+- **P7.11** *(from group D)*: `/health/live` and `/health/ready` are registered with plain `Router::route` since P6.7; they move to `public_route` and belong on the public allowlist.
+- **P11** *(from group D)*: the trace layer logs the route's template and never the query string, so `GET /events?ticket=` keeps the ticket out of the request log.
 
 ### Dependencies
 No new external crate in group A. All of these are already in `[workspace.dependencies]`:
