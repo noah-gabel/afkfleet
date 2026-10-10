@@ -334,8 +334,8 @@ impl IntoResponse for ApiError {
 }
 
 /// The code of an error response [`render_errors`] wrote, for the trace
-/// layer's line. It lives only in the response's extensions, and the trace
-/// layer takes it out, so it never reaches the wire.
+/// layer's line, which takes it out. Like the marker, it lives only in the
+/// response's extensions, which never reach the wire.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct RenderedCode(pub(crate) ErrorCode);
 
