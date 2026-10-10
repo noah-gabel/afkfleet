@@ -5,11 +5,9 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
-mod common;
-
-use common::Capture;
 use fleet_agent::config::{LogConfig, LogFilter, LogFormat};
 use fleet_agent::telemetry::{TelemetryError, init, layer};
+use fleet_testkit::log_buffer::LogBuffer;
 use tracing_subscriber::layer::SubscriberExt;
 
 fn config(filter: &str) -> LogConfig {
@@ -29,7 +27,7 @@ fn init_installs_once_and_log_records_are_filtered_by_their_targets() {
         Err(TelemetryError::AlreadyInstalled)
     );
 
-    let capture = Capture::default();
+    let capture = LogBuffer::default();
     let subscriber = tracing_subscriber::registry().with(layer(
         &config("trace,azalea_auth::certs=trace"),
         false,
@@ -43,6 +41,7 @@ fn init_installs_once_and_log_records_are_filtered_by_their_targets() {
 
     let messages: Vec<(String, String)> = capture
         .json_lines()
+        .unwrap()
         .into_iter()
         .map(|line| {
             (

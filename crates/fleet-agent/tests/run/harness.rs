@@ -17,6 +17,7 @@ use fleet_core::mode::ModePreset;
 use fleet_core::resilience::{CircuitPolicy, RetryPolicy};
 use fleet_mc::McConfig;
 use fleet_runtime::RuntimeConfig;
+use fleet_testkit::log_buffer::LogBuffer;
 use fleet_testkit::mc::{EmitOutcome, FakeConnector, SessionController};
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -24,7 +25,6 @@ use tokio::task::JoinHandle;
 use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::layer::SubscriberExt as _;
 
-use crate::common::Capture;
 use crate::fakes::{FakeDiagnostics, FakeHeartbeat, FakeSignals};
 
 // --- Values ---
@@ -95,9 +95,10 @@ pub(crate) async fn advance(duration: Duration) {
 // --- Logs ---
 
 /// Every JSON line in `capture` whose message is `message`.
-pub(crate) fn lines_with(capture: &Capture, message: &str) -> Vec<Value> {
+pub(crate) fn lines_with(capture: &LogBuffer, message: &str) -> Vec<Value> {
     capture
         .json_lines()
+        .unwrap()
         .into_iter()
         .filter(|line| line["message"] == message)
         .collect()
@@ -105,8 +106,8 @@ pub(crate) fn lines_with(capture: &Capture, message: &str) -> Vec<Value> {
 
 /// Captures this thread's events as the agent's JSON lines, `debug` and
 /// up, until the guard drops. The run's tasks run on this thread too.
-fn capture_logs() -> (Capture, DefaultGuard) {
-    let capture = Capture::default();
+fn capture_logs() -> (LogBuffer, DefaultGuard) {
+    let capture = LogBuffer::default();
     let config = LogConfig {
         format: LogFormat::Json,
         filter: LogFilter::try_from("debug").unwrap(),
@@ -122,7 +123,7 @@ pub(crate) struct Agent {
     pub(crate) fake: FakeConnector,
     pub(crate) diagnostics: FakeDiagnostics,
     pub(crate) heartbeat: FakeHeartbeat,
-    pub(crate) capture: Capture,
+    pub(crate) capture: LogBuffer,
     signals: Option<mpsc::Sender<Signal>>,
     task: JoinHandle<Outcome>,
     _logs: DefaultGuard,

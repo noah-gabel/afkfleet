@@ -239,7 +239,7 @@ mod tests {
         let answer = fleet.snapshot_all().await;
         assert!(matches!(answer, Err(FleetError::Busy)), "{answer:?}");
         assert_eq!(started.elapsed(), Duration::ZERO);
-        let warned = capture.lines_with(SILENT);
+        let warned = capture.lines_with(SILENT).unwrap();
         assert_eq!(warned.len(), 1, "{}", capture.text());
         assert_eq!(warned[0]["level"], "WARN");
         assert_eq!(warned[0]["error"], "the fleet didn't answer in time");
@@ -266,8 +266,13 @@ mod tests {
         settle().await;
 
         assert_eq!(heartbeat.beats(), 1, "{}", capture.text());
-        assert_eq!(capture.lines_with(SILENT).len(), 1, "{}", capture.text());
-        let back = capture.lines_with(ANSWERS_AGAIN);
+        assert_eq!(
+            capture.lines_with(SILENT).unwrap().len(),
+            1,
+            "{}",
+            capture.text()
+        );
+        let back = capture.lines_with(ANSWERS_AGAIN).unwrap();
         assert_eq!(back.len(), 1, "{}", capture.text());
         assert_eq!(back[0]["level"], "INFO");
     }
@@ -285,19 +290,19 @@ mod tests {
         advance(secs(10)).await;
 
         assert_eq!(heartbeat.beats(), 0);
-        let warned = capture.lines_with(CANT_TOUCH);
+        let warned = capture.lines_with(CANT_TOUCH).unwrap();
         assert_eq!(warned.len(), 1, "{}", capture.text());
         assert_eq!(warned[0]["level"], "WARN");
         assert_eq!(warned[0]["file"], FILE);
         assert_eq!(warned[0]["error"], "the disk is full");
-        assert_eq!(capture.lines_with(TOUCHED_AGAIN).len(), 0);
+        assert_eq!(capture.lines_with(TOUCHED_AGAIN).unwrap().len(), 0);
 
         heartbeat.fail(false);
         advance(secs(10)).await;
 
         assert_eq!(heartbeat.beats(), 1);
-        assert_eq!(capture.lines_with(CANT_TOUCH).len(), 1);
-        let back = capture.lines_with(TOUCHED_AGAIN);
+        assert_eq!(capture.lines_with(CANT_TOUCH).unwrap().len(), 1);
+        let back = capture.lines_with(TOUCHED_AGAIN).unwrap();
         assert_eq!(back.len(), 1, "{}", capture.text());
         assert_eq!(back[0]["level"], "INFO");
         assert_eq!(back[0]["file"], FILE);

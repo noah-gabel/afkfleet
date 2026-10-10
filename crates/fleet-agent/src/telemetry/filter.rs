@@ -118,12 +118,12 @@ pub(crate) fn warn_if_azalea_is_lifted(filter: &LogFilter) {
 
 #[cfg(test)]
 mod tests {
+    use fleet_testkit::log_buffer::LogBuffer;
     use rstest::rstest;
     use tracing_subscriber::layer::SubscriberExt;
 
     use super::*;
     use crate::config::{LogConfig, LogFormat};
-    use crate::telemetry::capture::Capture;
     use crate::telemetry::{PANIC_TARGET, layer};
 
     /// Logs one event at every level for `$target`.
@@ -165,13 +165,13 @@ mod tests {
     /// most verbose level that got through for each probe target (`OFF` for
     /// none).
     fn most_verbose(filter: &str, emit: impl FnOnce()) -> [LevelFilter; 5] {
-        let capture = Capture::default();
+        let capture = LogBuffer::default();
         let subscriber =
             tracing_subscriber::registry().with(layer(&config(filter), false, capture.clone()));
         tracing::subscriber::with_default(subscriber, emit);
 
         let mut seen: BTreeMap<String, LevelFilter> = BTreeMap::new();
-        for line in capture.json_lines() {
+        for line in capture.json_lines().unwrap() {
             if line["message"] != "probe" {
                 continue;
             }
@@ -244,14 +244,14 @@ mod tests {
     #[case::panic_target_off("warn,afkfleet::panic=off")]
     #[case::no_global_level("azalea_client=debug")]
     fn panic_reports_always_get_through(#[case] filter: &str) {
-        let capture = Capture::default();
+        let capture = LogBuffer::default();
         let subscriber =
             tracing_subscriber::registry().with(layer(&config(filter), false, capture.clone()));
         tracing::subscriber::with_default(subscriber, || {
             tracing::error!(target: PANIC_TARGET, "probe");
         });
 
-        let lines = capture.json_lines();
+        let lines = capture.json_lines().unwrap();
         assert_eq!(lines.len(), 1, "{filter}");
         assert_eq!(lines[0]["target"], PANIC_TARGET);
     }
@@ -263,7 +263,7 @@ mod tests {
         #[case] filter: &str,
         #[case] warned: bool,
     ) {
-        let capture = Capture::default();
+        let capture = LogBuffer::default();
         let subscriber =
             tracing_subscriber::registry().with(layer(&config("info"), false, capture.clone()));
         tracing::subscriber::with_default(subscriber, || {
@@ -272,6 +272,7 @@ mod tests {
 
         let warnings: Vec<_> = capture
             .json_lines()
+            .unwrap()
             .into_iter()
             .filter(|line| line["level"] == "WARN")
             .collect();

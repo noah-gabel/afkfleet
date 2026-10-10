@@ -5,17 +5,15 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
-mod common;
-
-use common::Capture;
 use fleet_agent::config::LogConfig;
 use fleet_agent::telemetry::{PANIC_TARGET, init, layer};
+use fleet_testkit::log_buffer::LogBuffer;
 use tracing_subscriber::layer::SubscriberExt;
 
 #[test]
 fn a_panic_is_logged_once_with_its_thread_location_and_clean_payload() {
     init(&LogConfig::default()).unwrap();
-    let capture = Capture::default();
+    let capture = LogBuffer::default();
     let subscriber =
         tracing_subscriber::registry().with(layer(&LogConfig::default(), false, capture.clone()));
 
@@ -30,7 +28,7 @@ fn a_panic_is_logged_once_with_its_thread_location_and_clean_payload() {
         .join();
 
     assert!(outcome.is_err());
-    let lines = capture.json_lines();
+    let lines = capture.json_lines().unwrap();
     assert_eq!(lines.len(), 1, "{lines:?}");
     let line = &lines[0];
     assert_eq!(line["level"], "ERROR");
