@@ -420,6 +420,26 @@ mod permissions {
         fs::metadata(path).unwrap().permissions().mode() & 0o777
     }
 
+    /// Whether this user is held to permission bits: it can't write into a
+    /// `0500` folder. Root ignores the bits, so under root the two tests that
+    /// need a folder the server can't use say so and skip, instead of failing
+    /// for a reason that has nothing to do with the server.
+    fn permission_bits_apply(dir: &TempDir) -> bool {
+        let probe = dir.path().join("probe");
+        fs::create_dir(&probe).unwrap();
+        fs::set_permissions(&probe, Permissions::from_mode(0o500)).unwrap();
+        let applies = fs::write(probe.join("file"), b"").is_err();
+        fs::set_permissions(&probe, Permissions::from_mode(0o700)).unwrap();
+        applies
+    }
+
+    /// The message a test prints when it skips under root.
+    fn skip(test: &str) {
+        eprintln!(
+            "skipped {test}: this user ignores permission bits (running as root?), so a folder the server can't use can't be made"
+        );
+    }
+
     #[tokio::test]
     async fn a_new_database_file_is_private() {
         let dir = TempDir::new().unwrap();
@@ -473,6 +493,10 @@ mod permissions {
     #[tokio::test]
     async fn a_folder_the_server_cant_write_to_is_a_create_error() {
         let dir = TempDir::new().unwrap();
+        if !permission_bits_apply(&dir) {
+            skip("a_folder_the_server_cant_write_to_is_a_create_error");
+            return;
+        }
         let folder = dir.path().join("read-only");
         fs::create_dir(&folder).unwrap();
         fs::set_permissions(&folder, Permissions::from_mode(0o500)).unwrap();
@@ -492,6 +516,10 @@ mod permissions {
     #[tokio::test]
     async fn a_folder_the_server_cant_look_into_is_an_inspect_error() {
         let dir = TempDir::new().unwrap();
+        if !permission_bits_apply(&dir) {
+            skip("a_folder_the_server_cant_look_into_is_an_inspect_error");
+            return;
+        }
         let locked = dir.path().join("locked");
         let folder = locked.join("data");
         fs::create_dir_all(&folder).unwrap();

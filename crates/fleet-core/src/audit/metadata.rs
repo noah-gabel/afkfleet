@@ -12,6 +12,7 @@ use crate::text::sanitize_untrusted;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MetadataValue {
     /// Sanitized text, at most [`AuditMetadata::MAX_TEXT_CHARS`] characters.
+    /// A value that was cut ends in `…`.
     Text(String),
     /// An integer within ±[`AuditMetadata::MAX_INT`].
     Int(i64),
@@ -21,8 +22,10 @@ pub enum MetadataValue {
 
 /// An entry's details, stored as a JSON object in `metadata_json`.
 ///
-/// Every limit is checked when an entry is added, so recording an entry
-/// can never fail because of its metadata (and lose the entry):
+/// Every limit holds the moment an entry is added, and no entry is ever
+/// refused for its size, so whoever controls a text value can't decide
+/// whether an entry gets recorded. Only a deterministic mistake fails: an
+/// invalid, secret or duplicate key, a 17th entry, an integer out of range.
 /// - at most [`AuditMetadata::MAX_ENTRIES`] entries;
 /// - keys of `a`–`z`, `0`–`9` and `_`, at most [`AuditMetadata::MAX_KEY_LEN`]
 ///   characters, never one that names a secret ([`super::SECRET_WORDS`]);
@@ -32,7 +35,12 @@ pub enum MetadataValue {
 ///   and booleans. A `SecretString` has no conversion, so a secret only gets
 ///   in through an explicit `expose_secret()`, which review sees;
 /// - at most [`AuditMetadata::MAX_JSON_BYTES`] bytes of JSON, measured on
-///   exactly the text [`AuditMetadata::to_json`] writes.
+///   exactly the text [`AuditMetadata::to_json`] writes. Every free entry
+///   slot keeps room for the largest integer or boolean entry, and a text
+///   value is cut to what's left (on a character boundary, measured after
+///   JSON escaping), so a later entry always fits.
+///
+/// A text value that was cut, for either limit, ends in `…`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AuditMetadata {
     entries: BTreeMap<String, MetadataValue>,
@@ -51,22 +59,37 @@ impl AuditMetadata {
     /// The longest JSON object, in bytes.
     pub const MAX_JSON_BYTES: usize = 4096;
 
+    /// The most bytes one integer or boolean entry adds to the JSON: a comma,
+    /// the longest key in quotes, a colon and the longest value (the most
+    /// negative integer, or `false`). Every free slot keeps this much room.
+    const SLOT_BYTES: usize =
+        1 + (Self::MAX_KEY_LEN + 2) + 1 + max(int_len(-Self::MAX_INT), "false".len());
+
     /// Empty metadata, stored as `NULL`.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Adds a text entry. The text is sanitized like any untrusted text and
-    /// cut to [`AuditMetadata::MAX_TEXT_CHARS`] characters.
+    /// Adds a text entry. The text is sanitized like any untrusted text, cut
+    /// to [`AuditMetadata::MAX_TEXT_CHARS`] characters, and cut further to
+    /// the room left in the JSON; a cut value ends in `…`. It never fails
+    /// because of the text.
     ///
     /// # Errors
     /// The key errors ([`AuditError::NameLength`], [`AuditError::NameChar`],
-    /// [`AuditError::SecretKey`], [`AuditError::DuplicateKey`]),
-    /// [`AuditError::TooManyEntries`] and [`AuditError::TooLarge`].
+    /// [`AuditError::SecretKey`], [`AuditError::DuplicateKey`]) and
+    /// [`AuditError::TooManyEntries`].
     pub fn text(self, key: &str, value: &str) -> Result<Self, AuditError> {
-        let text = sanitize_untrusted(value, Self::MAX_TEXT_CHARS).text;
-        self.insert(key, MetadataValue::Text(text))
+        self.check_key(key)?;
+        let sanitized = sanitize_untrusted(value, Self::MAX_TEXT_CHARS);
+        let mut text = sanitized.text;
+        if sanitized.truncated {
+            text.pop();
+            text.push(ELLIPSIS);
+        }
+        let text = cut_to(text, self.text_room(key));
+        Ok(self.with(key, MetadataValue::Text(text)))
     }
 
     /// Adds an integer entry.
@@ -78,7 +101,8 @@ impl AuditMetadata {
         if !(-Self::MAX_INT..=Self::MAX_INT).contains(&value) {
             return Err(AuditError::IntOutOfRange);
         }
-        self.insert(key, MetadataValue::Int(value))
+        self.check_key(key)?;
+        Ok(self.with(key, MetadataValue::Int(value)))
     }
 
     /// Adds a boolean entry.
@@ -86,11 +110,13 @@ impl AuditMetadata {
     /// # Errors
     /// The errors of [`AuditMetadata::text`].
     pub fn flag(self, key: &str, value: bool) -> Result<Self, AuditError> {
-        self.insert(key, MetadataValue::Bool(value))
+        self.check_key(key)?;
+        Ok(self.with(key, MetadataValue::Bool(value)))
     }
 
-    /// Adds one entry after checking the key and every limit.
-    fn insert(mut self, key: &str, value: MetadataValue) -> Result<Self, AuditError> {
+    /// Checks that `key` may be added: a valid name, no secret word, not
+    /// there yet, and a free slot.
+    fn check_key(&self, key: &str) -> Result<(), AuditError> {
         name::check(key, Self::MAX_KEY_LEN, Dots::Forbidden)?;
         if has_secret_word(key) {
             return Err(AuditError::SecretKey);
@@ -98,20 +124,36 @@ impl AuditMetadata {
         if self.entries.contains_key(key) {
             return Err(AuditError::DuplicateKey);
         }
-        if self.entries.len() == Self::MAX_ENTRIES {
+        if self.entries.len() >= Self::MAX_ENTRIES {
             return Err(AuditError::TooManyEntries {
                 max: Self::MAX_ENTRIES,
             });
         }
+        Ok(())
+    }
+
+    /// Adds an entry whose key passed [`AuditMetadata::check_key`].
+    fn with(mut self, key: &str, value: MetadataValue) -> Self {
         self.entries.insert(key.to_owned(), value);
-        let len = self.to_json().len();
-        if len > Self::MAX_JSON_BYTES {
-            return Err(AuditError::TooLarge {
-                len,
-                max: Self::MAX_JSON_BYTES,
-            });
-        }
-        Ok(self)
+        self
+    }
+
+    /// The bytes a text value under `key` may take once escaped: the limit,
+    /// less the JSON so far, less this entry's structure (`,"key":""`), less
+    /// the room every slot still free after it keeps.
+    ///
+    /// The JSON always fits its free slots (the assertion below proves the
+    /// start, and each entry keeps it), and an entry's structure takes at
+    /// most a slot, so the room left is never negative and always holds a
+    /// `…`.
+    fn text_room(&self, key: &str) -> usize {
+        let comma = usize::from(!self.entries.is_empty());
+        let structure = comma + key.len() + 2 + 1 + 2;
+        let free_after = Self::MAX_ENTRIES.saturating_sub(self.entries.len() + 1);
+        Self::MAX_JSON_BYTES
+            .saturating_sub(self.to_json().len())
+            .saturating_sub(structure)
+            .saturating_sub(free_after * Self::SLOT_BYTES)
     }
 
     /// Whether there are no entries.
@@ -150,29 +192,88 @@ impl AuditMetadata {
     }
 }
 
-/// Appends `text` as a JSON string, escaped exactly as `serde_json` escapes:
-/// `"` and `\` with a backslash, the short escapes for `\b`, `\f`, `\n`,
-/// `\r` and `\t`, other control characters as `\u00xx`, everything else as
-/// it is.
+// The guarantee that no entry is ever refused for its size: the empty
+// object with every slot holding the largest integer or boolean entry fits.
+// Raising `MAX_ENTRIES`, `MAX_KEY_LEN` or `MAX_INT` past that fails the build.
+const _: () = assert!(
+    2 + AuditMetadata::MAX_ENTRIES * AuditMetadata::SLOT_BYTES <= AuditMetadata::MAX_JSON_BYTES
+);
+
+/// What a cut text value ends in.
+const ELLIPSIS: char = '…';
+
+/// The number of characters `n` takes in decimal, with its sign.
+const fn int_len(n: i64) -> usize {
+    let mut magnitude = n.unsigned_abs();
+    let mut len = if n < 0 { 2 } else { 1 };
+    while magnitude >= 10 {
+        magnitude /= 10;
+        len += 1;
+    }
+    len
+}
+
+/// The larger of two lengths.
+const fn max(a: usize, b: usize) -> usize {
+    if a > b { a } else { b }
+}
+
+/// Cuts `text` so that, escaped, it takes at most `room` bytes: on a
+/// character boundary, ending in `…`. A text that fits is returned as it is.
+fn cut_to(text: String, room: usize) -> String {
+    if text.chars().map(escaped_len).sum::<usize>() <= room {
+        return text;
+    }
+    let room = room.saturating_sub(escaped_len(ELLIPSIS));
+    let mut used = 0;
+    let mut cut = String::new();
+    for c in text.chars() {
+        let len = escaped_len(c);
+        if used + len > room {
+            break;
+        }
+        used += len;
+        cut.push(c);
+    }
+    cut.push(ELLIPSIS);
+    cut
+}
+
+/// The bytes `c` takes in a JSON string.
+fn escaped_len(c: char) -> usize {
+    let mut escaped = String::new();
+    push_json_char(&mut escaped, c);
+    escaped.len()
+}
+
+/// Appends `text` as a JSON string, escaped exactly as `serde_json` escapes.
 fn push_json_string(json: &mut String, text: &str) {
     json.push('"');
     for c in text.chars() {
-        match c {
-            '"' => json.push_str("\\\""),
-            '\\' => json.push_str("\\\\"),
-            '\u{8}' => json.push_str("\\b"),
-            '\u{c}' => json.push_str("\\f"),
-            '\n' => json.push_str("\\n"),
-            '\r' => json.push_str("\\r"),
-            '\t' => json.push_str("\\t"),
-            c if u32::from(c) < 0x20 => {
-                // Writing to a String can't fail.
-                let _ = write!(json, "\\u{:04x}", u32::from(c));
-            }
-            c => json.push(c),
-        }
+        push_json_char(json, c);
     }
     json.push('"');
+}
+
+/// Appends one character of a JSON string, escaped exactly as `serde_json`
+/// escapes: `"` and `\` with a backslash, the short escapes for `\b`, `\f`,
+/// `\n`, `\r` and `\t`, other control characters as `\u00xx`, everything else
+/// as it is.
+fn push_json_char(json: &mut String, c: char) {
+    match c {
+        '"' => json.push_str("\\\""),
+        '\\' => json.push_str("\\\\"),
+        '\u{8}' => json.push_str("\\b"),
+        '\u{c}' => json.push_str("\\f"),
+        '\n' => json.push_str("\\n"),
+        '\r' => json.push_str("\\r"),
+        '\t' => json.push_str("\\t"),
+        c if u32::from(c) < 0x20 => {
+            // Writing to a String can't fail.
+            let _ = write!(json, "\\u{:04x}", u32::from(c));
+        }
+        c => json.push(c),
+    }
 }
 
 /// One metadata value as it reads back.
@@ -316,7 +417,10 @@ mod tests {
         assert_eq!(
             metadata.iter().collect::<Vec<_>>(),
             [
-                ("long", &MetadataValue::Text("x".repeat(256))),
+                (
+                    "long",
+                    &MetadataValue::Text(format!("{}…", "x".repeat(255)))
+                ),
                 (
                     "note",
                     &MetadataValue::Text("line one | line two".to_owned())
@@ -373,40 +477,107 @@ mod tests {
         }
     }
 
-    /// Three 1024-byte values of 4-byte characters, and a fourth that brings
-    /// the JSON to `bytes_over_limit` past 4096: `{"k0":"…","k1":"…",…}` is
-    /// 33 bytes of structure plus the values.
-    fn near_the_limit(fourth: &str) -> Result<AuditMetadata, AuditError> {
+    /// The text value stored under `key`.
+    fn text_of<'m>(metadata: &'m AuditMetadata, key: &str) -> &'m str {
+        match metadata.iter().find(|(k, _)| *k == key) {
+            Some((_, MetadataValue::Text(text))) => text,
+            other => panic!("no text under {key}: {other:?}"),
+        }
+    }
+
+    /// A 32-character key that names no secret: `k` and 31 digits.
+    fn long_key(n: usize) -> String {
+        format!("k{n:031}")
+    }
+
+    #[test]
+    fn four_long_texts_all_fit_and_only_the_last_is_cut() {
+        // 256 four-byte characters: 1024 bytes each, 4 KiB together.
         let full = "😀".repeat(256);
-        AuditMetadata::new()
-            .text("k0", &full)?
-            .text("k1", &full)?
-            .text("k2", &full)?
-            .text("k3", fourth)
+
+        let metadata = AuditMetadata::new()
+            .text("k0", &full)
+            .unwrap()
+            .text("k1", &full)
+            .unwrap()
+            .text("k2", &full)
+            .unwrap()
+            .text("k3", &full)
+            .unwrap();
+
+        assert!(metadata.to_json().len() <= AuditMetadata::MAX_JSON_BYTES);
+        for kept in ["k0", "k1", "k2"] {
+            assert_eq!(text_of(&metadata, kept), full, "{kept}");
+        }
+        let cut = text_of(&metadata, "k3");
+        let prefix = cut.strip_suffix('…').unwrap();
+        assert!(!prefix.is_empty() && full.starts_with(prefix), "{cut}");
     }
 
     #[test]
-    fn json_of_exactly_4096_bytes_is_accepted() {
-        // 247 four-byte characters and one three-byte one: 991 bytes.
-        let fourth = format!("{}€", "😀".repeat(247));
+    fn a_cut_is_measured_after_json_escaping() {
+        // 256 quotes: 256 characters, but 512 bytes once escaped.
+        let quotes = "\"".repeat(256);
+        let mut metadata = AuditMetadata::new();
 
-        let metadata = near_the_limit(&fourth).unwrap();
+        for n in 0..AuditMetadata::MAX_ENTRIES {
+            metadata = metadata.text(&format!("k{n}"), &quotes).unwrap();
+        }
 
-        assert_eq!(metadata.to_json().len(), 4096);
-    }
-
-    #[test]
-    fn one_byte_more_is_refused() {
-        // 247 four-byte characters and two two-byte ones: 992 bytes.
-        let fourth = format!("{}éé", "😀".repeat(247));
-
-        assert_eq!(
-            near_the_limit(&fourth),
-            Err(AuditError::TooLarge {
-                len: 4097,
-                max: 4096
-            })
+        let json = metadata.to_json();
+        assert!(
+            json.len() <= AuditMetadata::MAX_JSON_BYTES,
+            "{}",
+            json.len()
         );
+        assert!(serde_json::from_str::<serde_json::Value>(&json).is_ok());
+        let last = text_of(&metadata, "k9");
+        assert!(last.ends_with('…'), "{last}");
+        assert!(
+            last.trim_end_matches('…').chars().all(|c| c == '"'),
+            "{last}"
+        );
+    }
+
+    #[rstest]
+    #[case::zero(0, 1)]
+    #[case::minus_one(-1, 2)]
+    #[case::nine(9, 1)]
+    #[case::ten(10, 2)]
+    #[case::most_negative_metadata_int(-AuditMetadata::MAX_INT, 17)]
+    #[case::i64_min(i64::MIN, 20)]
+    fn int_len_counts_the_sign_and_every_digit(#[case] n: i64, #[case] len: usize) {
+        assert_eq!(int_len(n), len);
+        assert_eq!(n.to_string().len(), len);
+    }
+
+    #[test]
+    fn ints_and_bools_never_come_near_the_budget() {
+        let mut ints = AuditMetadata::new();
+        let mut flags = AuditMetadata::new();
+
+        for n in 0..AuditMetadata::MAX_ENTRIES {
+            ints = ints.int(&long_key(n), -AuditMetadata::MAX_INT).unwrap();
+            flags = flags.flag(&long_key(n), false).unwrap();
+        }
+
+        assert!(ints.to_json().len() < 1024, "{}", ints.to_json().len());
+        assert!(flags.to_json().len() < 1024, "{}", flags.to_json().len());
+    }
+
+    #[test]
+    fn ints_still_fit_after_texts_used_the_budget() {
+        let full = "😀".repeat(256);
+        let mut metadata = AuditMetadata::new();
+
+        for n in 0..12 {
+            metadata = metadata.text(&long_key(n), &full).unwrap();
+        }
+        for n in 12..AuditMetadata::MAX_ENTRIES {
+            metadata = metadata.int(&long_key(n), -AuditMetadata::MAX_INT).unwrap();
+        }
+
+        assert!(metadata.to_json().len() <= AuditMetadata::MAX_JSON_BYTES);
     }
 
     #[test]
@@ -492,6 +663,7 @@ mod tests {
     fn value() -> impl Strategy<Value = Value> {
         prop_oneof![
             any::<String>().prop_map(Value::Text),
+            "[\"\\\\é€😀a\\n]{200,300}".prop_map(Value::Text),
             (-AuditMetadata::MAX_INT..=AuditMetadata::MAX_INT).prop_map(Value::Int),
             any::<bool>().prop_map(Value::Bool),
         ]
@@ -499,7 +671,8 @@ mod tests {
 
     proptest! {
         /// The JSON writer agrees with serde_json byte for byte, so the size
-        /// it measures is the size stored.
+        /// it measures is the size stored, and with valid keys no entry is
+        /// ever refused: long texts are cut to fit.
         #[test]
         fn the_json_is_what_serde_json_writes(entries in proptest::collection::btree_map(key(), value(), 0..16)) {
             let mut metadata = AuditMetadata::new();
@@ -509,9 +682,7 @@ mod tests {
                     Value::Int(n) => metadata.clone().int(key, *n),
                     Value::Bool(b) => metadata.clone().flag(key, *b),
                 };
-                if let Ok(next) = next {
-                    metadata = next;
-                }
+                metadata = next.unwrap();
             }
 
             let mut expected = serde_json::Map::new();

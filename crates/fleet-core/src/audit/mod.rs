@@ -93,15 +93,6 @@ pub enum AuditError {
     /// An integer is beyond what JavaScript represents exactly.
     #[error("metadata integers are within ±(2^53 - 1)")]
     IntOutOfRange,
-    /// The entry would make the metadata's JSON longer than
-    /// [`AuditMetadata::MAX_JSON_BYTES`].
-    #[error("metadata is at most {max} bytes of JSON, not {len}")]
-    TooLarge {
-        /// The JSON's length with the entry, in bytes.
-        len: usize,
-        /// The limit.
-        max: usize,
-    },
 }
 
 #[cfg(test)]

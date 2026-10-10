@@ -187,8 +187,8 @@ pub trait AuditWrites: Send {
     /// Records `entry` and returns its ID.
     ///
     /// # Errors
-    /// [`StoreError`]. Never because of the metadata's size: that's checked
-    /// when the metadata is built.
+    /// [`StoreError`]. Never because of the metadata: `AuditMetadata` always
+    /// fits its column.
     async fn record(&mut self, entry: &NewAuditEntry) -> Result<AuditEntryId, StoreError>;
 }
 
