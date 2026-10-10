@@ -1136,6 +1136,12 @@ impl<'r> Chaos<'r> {
             self.check_connects();
             self.probe().await;
             let snapshots = answered(at_once(self.fleet.snapshot_all()).await, &[]).unwrap();
+            // A bot may have moved on while the probes and the snapshots
+            // were awaited, e.g. a retry due in the instant the loop woke
+            // up. The actor publishes each snapshot and its event in one
+            // synchronous step, so absorbing now takes in every state the
+            // snapshots show, before they're judged.
+            self.absorb();
             if self.settled(&snapshots) {
                 return snapshots;
             }
