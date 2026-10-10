@@ -89,6 +89,13 @@ dev-server: (_unavailable "dev-server" "P6")
 dev-agent:
     cargo run -p fleet-agent --bin afkfleet-agent -- run --config deploy/dev/agent.toml
 
+# No exit message: the script prints its own verdict and errors, and on Windows
+# Ctrl+C reaches just and PowerShell too. Its exit code: 0 PASS, 1 FAIL, 2 not judged.
+# The DoD demo: the compose agent's bots for `minutes` with one server restart, then a summary and a verdict.
+[no-exit-message]
+demo-agent minutes="60":
+    node scripts/demo-agent.mjs --minutes {{ minutes }}
+
 # Run the desktop app in development mode.
 dev-app: (_unavailable "dev-app" "P8")
 

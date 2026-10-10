@@ -17,6 +17,13 @@
       "why": "The bot actor logs every session that ends by itself, here the kick and each refused attempt, before it backs off."
     }
   ],
+  "expected_restart_errors": [
+    {
+      "target": "azalea_client::plugins::connection",
+      "message_prefix": "Error reading packet from Client: IoError { source: Os { code: 104, kind: ConnectionReset",
+      "why": "A server that closes a socket with unread client data sends a TCP reset, which can arrive before its \"Server closed\" kick, and azalea logs it at ERROR. Allowed only from the agent's last line before the restart to the server's healthy moment, and no more often than sessions ended there with ConnectionClosed, since each reset ends one."
+    }
+  ],
   "retry_windows": [
     { "attempt": 1, "min_ms": 5000, "max_ms": 10000 },
     { "attempt": 2, "min_ms": 10000, "max_ms": 20000 },

@@ -161,6 +161,7 @@ just mc-down   # stop it (and the Docker agent) and delete its world
 just dev-agent # run the agent with deploy/dev/agent.toml against that server
 just stack-up  # build the agent's image and run the server and the agent in Docker
 just test-slow # pull the server image, build the agent's image, then the slow tests one at a time (needs Docker)
+just demo-agent # the Phase 5 demo: the Docker agent's five bots for an hour with one server restart
 just test-real-account # the real-account check: you only (see below)
 ```
 The test server runs in offline mode, so it's for local development only. RCON is enabled with a random password and isn't published; run commands with `docker compose --file deploy/compose.dev.yaml exec minecraft rcon-cli <command>`.
@@ -168,6 +169,8 @@ The test server runs in offline mode, so it's for local development only. RCON i
 The slow tests also run on GitHub weekly and on demand (the `Slow tests` workflow); it isn't a required check.
 
 The compose e2e test runs the Docker stack under a project of its own, `afkfleet-e2e`, with [`deploy/compose.isolated.yaml`](deploy/compose.isolated.yaml) on top, which unpublishes the server's port, so it can run beside `just mc-up`. It judges the agent by [`deploy/dev/stack-checks.json`](deploy/dev/stack-checks.json): the retry windows and the warnings a server restart may cause. It needs the image `just test-slow` builds first; run on its own, it stops at once and says so. Its stack is removed when it ends, and a killed run's leftovers are removed by the next run, or by `docker compose -p afkfleet-e2e down -v`.
+
+**The demo** (`just demo-agent`, or `just demo-agent 8` for a short check) runs the same stack as the project `afkfleet-demo` for an hour and restarts the server at half time. It then prints a summary: the agent's memory and CPU (peak, mean and 95th percentile, from `docker stats`, with the machine they were measured on), the warnings and errors by target, every state change, each bot's reconnect, and the shutdown report. It ends with PASS, or FAIL and every failed criterion: an error, a warning [`stack-checks.json`](deploy/dev/stack-checks.json) doesn't expect, a bot not back by its deadline, an agent restart, or an unclean shutdown. The one error that file allows is a connection reset while the server restarts, at most one per session closed there: vanilla's shutdown sometimes resets a socket before its kick, and azalea logs that at ERROR. The raw logs and the summary are saved under `target/demo-agent/`; only `summary.txt` belongs in a pull request, since the server's log holds container IPs. Run it after a Minecraft-version bump (ADR-0003).
 
 **The real-account check** shows that a real Minecraft token joins a local online-mode server and sends signed chat, and that the token never reaches a log. It needs your real credentials, so only you run it; the AI never does.
 1. Right before running, create `secrets/p1.8-account.txt` (gitignored) with the archived spike's `fetch-token`: `cd spikes/azalea`, then `cargo run -- fetch-token`, and sign in with the code it shows. The file holds no expiry, and a token lasts about a day. If the session server rejects it, fetch a new one.

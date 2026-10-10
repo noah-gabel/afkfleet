@@ -1983,6 +1983,40 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 > Note (DoD, from group C, the user's decision): The demo also records the agent's peak memory and CPU (`docker stats`), so P12.2's limits come from a measured value with headroom, not a guess.
 
+> Note (DoD, as built, group D) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md); the user answered group D's questions on 2026-10-09):
+> - **`just demo-agent [minutes]`** runs `scripts/demo-agent.mjs`, which uses Node's built-ins only and is tested in `scripts/demo-agent.test.mjs`. It runs 60 minutes by default:
+>   - It builds the agent's image, then runs the stack as the project `afkfleet-demo`, with `compose.isolated.yaml` on top.
+>   - It restarts the server at half time (`restart --no-deps minecraft`) and stops the agent at the end.
+>   - Last, it removes the stack (`down -v --timeout 10`), also after Ctrl+C or an error, once the logs are saved.
+> - **The summary:**
+>   - where it was measured: `docker info`'s architecture, CPUs, OS and memory, plus the CPU model from `lscpu`, else `/proc/cpuinfo`, else "unknown"
+>   - the agent's memory and CPU from a streamed `docker stats`: the peak, with its time relative to the restart, the mean and the p95. These are never judged.
+>   - warn and error lines by target and count
+>   - the state-change timeline
+>   - each bot's reconnect after the restart
+>   - the shutdown report
+> - **The verdict** is PASS (exit 0) or FAIL (exit 1). A FAIL lists each failed criterion with its lines:
+>   - an ERROR line, except the connection resets a server restart may cause (below)
+>   - a warning `stack-checks.json` doesn't expect, or a line that isn't the agent's JSON
+>   - a bot not Online again by its deadline (the e2e test's formula, from the server's healthy moment)
+>   - an agent restart
+>   - a shutdown that isn't exit 0 with aborted 0 and crashed 0
+>
+>   A run under 60 minutes says "not the DoD run".
+> - **Too short to judge** (exit 2):
+>   - Before the start: the minimum comes from `stack-checks.json`. Half the run must hold attempt 3's reconnect deadline plus the agent's stop, which is 7 minutes with the defaults.
+>   - After the restart: if the deadlines it observes, plus the stop, don't fit in the time left, it saves the logs and stops.
+> - **Raw data** goes under `target/demo-agent/<UTC time>/`: `agent.log`, `minecraft.log`, `stats.jsonl` and `summary.txt`. Only `summary.txt` goes into a pull request, since `minecraft.log` holds the bots' container IPs.
+> - **Deviation, found in the first run** (the user's decisions): azalea logs a TCP reset at ERROR (`azalea_client::plugins::connection`, "Error reading packet from Client: IoError { … ConnectionReset …").
+>   - **Why it happens.** A server that closes a socket with unread client data sends a TCP reset, and during vanilla's shutdown that can arrive before the "Server closed" kick. In the 8-minute check run, 2 bots got the kick and 3 were closed without it, one of them with a reset.
+>   - **The agent recovers as designed:** `ConnectionClosed`, a backoff, and back Online in about 25 s.
+>   - **The allowance.** `stack-checks.json` gains `expected_restart_errors` with that one entry. The e2e test and the demo accept it only:
+>     - between the agent's last line before the restart and the server's healthy moment, both by the Docker VM's clock
+>     - no more often than bot sessions ended in that window with `ConnectionClosed`, since each reset ends one live session, and azalea's line carries no bot ID
+>
+>     Every other ERROR, and this one at any other time, still fails. The summary reports how many were allowed.
+> - **The Minecraft-version bump** runs it: ADR-0003's verify step gains `just demo-agent` (1 h), with its `summary.txt` in the bump's pull request, and P12.6's runbook carries the step.
+
 ---
 
 ### Phase 6: Server foundation (`fleet-server`, `fleet-api-types`)
@@ -2477,6 +2511,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - **Minecraft version upgrade** (azalea + nightly + test-server bump)
   - restore a backup
   - incident response: revoke sessions, disable users and agents
+
+  > Note (P12.6, from Phase 5, group D, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): The **Minecraft version upgrade** section carries ADR-0003's bump procedure, whose verify step now runs `just ci`, `just test-slow` and `just demo-agent` (1 h), with the demo's `summary.txt` in the bump's pull request.
 - [ ] **P12.7** 🔴 Compose smoke test in CI, run nightly:
   1. `up`
   2. health checks pass

@@ -266,6 +266,42 @@ Each later group asks its own implementation-level questions in its session: tok
   - **Red first** *(the user's decision)*. The helpers' 52 unit tests, and the scenario on stub parsers, failed on assertions first. One uncommitted run with `stop_signal: SIGKILL` failed on exit code 137, which shows step 3 catches a real bad stop.
   - **Found in the runs:** the restart took about 3 s, and the bots saw `ConnectionClosed` rather than the "Server closed" kick, so azalea's "Got disconnect packet" didn't show. It stays in the list for a slower stop.
 
+- *(as built, group D: the demo; the user answered group D's questions on 2026-10-09)*:
+  - **`scripts/demo-agent.mjs`** uses Node's built-ins only, like the other scripts. Its parsing and judging are exported pure functions tested in `scripts/demo-agent.test.mjs`. Driving Docker isn't unit-tested; a short run (`just demo-agent 8`) exercises it.
+  - **The same stack and the same numbers as the e2e test:**
+    - the project `afkfleet-demo` with `compose.isolated.yaml`
+    - the expected warnings and the retry windows from `stack-checks.json`
+    - the reconnect deadline's formula, from the server's healthy moment read from `docker inspect`
+    - `restart --no-deps minecraft`
+    - `down -v --timeout 10` at the end, also after Ctrl+C or an error, once the logs are saved
+  - **A verdict** *(the user's decision)*: PASS (0) or FAIL (1), listing each failed criterion with its offending lines:
+    - an ERROR, except the connection resets a server restart may cause (below)
+    - a warning nobody expects, or a line that isn't the agent's JSON
+    - a bot not Online again by its deadline
+    - an agent restart: its StartedAt, its restart count, or a second "the agent is running"
+    - a shutdown that isn't exit 0 with aborted 0 and crashed 0
+
+    A re-run after a version bump then gives a clear answer.
+  - **The stats** *(the user's decisions)*:
+    - One streamed `docker stats --format "{{json .}}"` gives the agent's peak, mean and p95 memory and CPU, with each peak's time relative to the restart. Each JSON object is cut out of its line, since the stream redraws the terminal even into a pipe.
+    - The numbers are reported, never judged: they're P12.2's measurement, and an OOM kill would already fail as a restart.
+    - The summary also says where they were measured: `docker info`'s architecture, CPUs, OS and memory. The CPU model comes from `lscpu` in the server's container, else from `/proc/cpuinfo`, else "unknown"; ARM has no "model name" in cpuinfo. Production runs on arm64, so memory carries over roughly, but CPU percentages don't.
+  - **Optional minutes** *(the user's decisions)*:
+    - `just demo-agent 8` checks the script before the hour.
+    - A run shorter than its own checks need fails with exit 2 before it starts: half the run must hold attempt 3's reconnect deadline plus the agent's stop, derived from `stack-checks.json` (7 minutes with the defaults).
+    - Once the real attempts are known after the restart, a run that can't hold them plus the stop ends as "too short to judge" (exit 2), not as a misleading FAIL.
+    - A run under 60 minutes is marked "not the DoD run".
+  - **Raw data** *(the user's decisions)* goes under `target/demo-agent/<UTC time>/`, which is gitignored: `agent.log`, `minecraft.log`, `stats.jsonl` and `summary.txt`. A pull request gets only `summary.txt`, never excerpts from the raw logs. `minecraft.log` carries each bot's container IP and port, and CLAUDE.md's rule against IP addresses in git applies to the public pull request too. The summary has no host path or host name.
+  - **The version bump** *(the user's decision)*: ADR-0003's verify step now runs `just demo-agent` (1 h), and the bump's pull request includes its `summary.txt`. P12.6's runbook carries the step.
+  - **Connection resets during a restart** *(found in the first run, the user's decisions)*:
+    - **What happens.** azalea logs a TCP reset at ERROR (`azalea_client::plugins::connection`, "Error reading packet from Client: IoError { … ConnectionReset …"). A server that closes a socket with unread client data sends a TCP reset, and in vanilla's shutdown that can arrive before the "Server closed" kick. In the 8-minute run, 2 bots got the kick, and 3 were closed without it, one of them with a reset. The agent recovered as designed: `ConnectionClosed`, a backoff, and back Online in about 25 s.
+    - **The rule.** It's random, so "no ERROR anywhere" would make the e2e test and the demo flaky. `stack-checks.json`'s new `expected_restart_errors` holds that one entry. Both accept it only:
+      - between the agent's last line before the restart and the server's healthy moment, by the Docker VM's clock, never the host's
+      - no more often than bot sessions ended there with `ConnectionClosed`. azalea's line carries no bot ID, but each reset ends one live session, and the bot logs that with its ID. Together with "every bot Online again by its deadline", a second reset for a bot, or a reset for a bot that doesn't come back, still fails.
+
+      Every other ERROR, and this one outside the restart, still fails.
+    - **Alternatives considered:** allowing it anywhere (a real network fault would pass), dropping the target in the agent's log filter (it would hide azalea's packet-decode errors too), and pairing each ERROR with the closest bot by time (it can mis-pair bots that disconnect in the same millisecond).
+
 ### Dependencies
 Approved by the user, all in Plan.md §5:
 - `figment` 0.10.19 with `toml` and `env`, and `test` (`Jail`) in tests. It brings `toml` 0.8 beside the graph's newer one, a duplicate-version warning only.
