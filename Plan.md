@@ -1895,7 +1895,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P5.6, from group B, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): The agent's worst-case shutdown is shutdown_timeout + reply_timeout, plus main.rs's 1 s runtime-shutdown bound. So `stop_grace_period` must be above that: **20 s** for the 10 s default, not the 15 s above. Otherwise Docker's SIGKILL replaces exit code 4 and the last line, "the agent stopped".
 
   > Note (P5.6, as built, group C) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md); the user answered group C's questions on 2026-10-09):
-  > - **Deviation: `gcr.io/distroless/cc-debian13:nonroot`, not `cc-debian12`.** distroless's README now lists only Debian 13 images and says other tags are no longer updated. The builder is Debian 13 too (`rust:1.99.0-slim-trixie`), so the binary's glibc matches.
+  > - **Deviation: `gcr.io/distroless/cc-debian13:nonroot`, not `cc-debian12`.** Under distroless's SUPPORT_POLICY.md, the Debian 12 `cc` images reached end of life in September 2026 (GoogleContainerTools/distroless#2129), so they get no more updates. Its README still has a Debian 12 table; group C wrongly gave the README as the reason, and group D corrected it. The builder is Debian 13 too (`rust:1.99.0-slim-trixie`), so the binary's glibc matches.
   > - **Production is linux/arm64** (the user's requirement).
   >   - Both base images are pinned by their multi-arch index digest, never by one platform's, and nothing in the Dockerfile names an architecture, so it builds natively on amd64 and arm64.
   >   - deny.toml's `[graph] targets` gains `aarch64-unknown-linux-gnu`. `cargo deny check` stays clean, with no `ring` on aarch64.
@@ -1921,7 +1921,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - Compose mounts the config at `/etc/afkfleet/agent.toml`, and the Dockerfile's `ENTRYPOINT`, `CMD` and `HEALTHCHECK` use that path.
   >   - The approved `in_jail` helper moved to `tests/common/jail.rs`; it's still one `#[expect]`.
   > - **Demo:** `just stack-up` brought both services up healthy (`healthy: the heartbeat is 5 s old`), and AfkBot4–6 came online. `docker compose stop agent` ended in 0.4 s with exit code 0 and "the agent stopped" (`stopped: 3`) last, with no `warn` or `error` line.
-- [ ] **P5.7** 🔴 Slow end-to-end test:
+- [x] **P5.7** 🔴 Slow end-to-end test:
   1. `compose up`, and all bots come Online.
   2. Restart the MC container; the bots reconnect within the policy.
   3. Stop the agent; the disconnect is clean.
@@ -1932,6 +1932,49 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Clean-up.** The test runs `down -v` for its own project before it starts, and in a guard that also runs when the test panics.
 
   > Note (P5.7, from group C, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): **No CI job builds the image on every PR.** Instead, group D's PR, and every later PR that changes the Dockerfile, `.dockerignore`, `Cargo.lock` or `rust-toolchain.toml`, runs the "Slow tests" workflow on its branch before it's merged. The user starts it under Actions → Slow tests → Run workflow, so the image build is checked in CI.
+
+  > Note (P5.7, as built, group D) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md); the user answered group D's questions on 2026-10-09):
+  > - **Shape.** `crates/fleet-agent/tests/slow_compose/` (`main.rs`, `docker.rs`, `logs.rs`, `checks.rs`) holds one `slow_compose_scenario`. It runs the dev stack as the project `afkfleet-e2e`, with the new `deploy/compose.isolated.yaml` on top (`ports: !reset []` on minecraft), so it can run beside `just mc-up`. `!reset` needs Compose 2.24, which the test checks first.
+  >   - Every docker call runs from the repository root with a deadline.
+  >   - A guard runs `down -v --timeout 10` when the test ends or panics, and the same runs before the start, which covers a run nextest killed.
+  > - **Five bots.** `agent.compose.toml` gains AfkBot7 and AfkBot8 on `afk` (AfkBot6 stays on `farm`), so `just stack-up`, the test and the demo run the same five.
+  > - **The image.** `just test-slow` pulls the server image and builds the agent's (`compose build agent`) first. It then sets `AFKFLEET_E2E_IMAGE_BUILT=1` through a `$`-parameter; without it, the test stops at once, so it never tests an old image. The stack starts with `up --wait --no-build`.
+  > - **The steps:**
+  >   1. Every bot is Online (state lines and RCON `list`) within connect + bounds(1).max + connect + 1 s of "the agent is running": 71 s with the defaults.
+  >   2. `restart --no-deps minecraft`.
+  >      - **The healthy moment** is the end of the first good probe after the server's new StartedAt. It's polled from `docker inspect` at once, since Docker keeps only five probes.
+  >      - **Every bot is Online again** by bounds(n).max + connect + bounds(n+1).max + connect + 1 s from that moment, where n is its last Backoff before then. That allows one more failed attempt, since an attempt in flight when the probe passes can still fail.
+  >      - **Every wait** from `Backoff { attempt: n }` to the next `AwaitingSession` in the whole log lies in bounds(n), with 100 ms of slack below and 1 s above. A failure says whether the breaker may have been open.
+  >      - **The agent didn't restart:** its StartedAt and restart count are unchanged, and "the agent is running" appears once.
+  >   3. `stop agent`:
+  >      - exit code 0
+  >      - the last line is "the agent stopped" with exit_code 0, stopped 5, aborted 0 and crashed 0
+  >      - no WARN or ERROR from "shutting down" on
+  >      - RCON's list drops every bot within 5 s
+  >
+  >   Then the whole log must hold no ERROR and only the expected warnings, and every offending line is printed in full. Every check also asserts that it saw data (5 bots, a wait per bot after the restart, a probe, the bots on RCON's list).
+  > - **Shared numbers.** `deploy/dev/stack-checks.json` is shared with the demo. It holds:
+  >   - the expected warnings (target, message prefix, why)
+  >   - the bounds(n) table up to the capped window
+  >   - the connect timeout and the agent's grace period
+  >
+  >   `tests/deploy.rs` checks every number against `agent.compose.toml` and `compose.dev.yaml`. It also checks that the override unpublishes the port, and that minecraft's `stop_grace_period` is at least 30 s. It's now 60 s, so a stop is graceful: Docker's default 10 s could kill the server, and the bots would see reset sockets.
+  > - **The budget.** Before each deadline, elapsed + deadline + the agent's grace period + 60 s of teardown must fit the slow profile's limit, 600 s, read from `.config/nextest.toml`.
+  > - **Clocks.** The test judges only by Docker-VM timestamps (the agent's log, StartedAt, the probes). Its waits wake on the agent's next line (a `logs --follow` child) or after 250 ms, and never sleep.
+  > - **Found in the runs:**
+  >   - The restart took about 3 s.
+  >   - The bots saw `ConnectionClosed`, not the "Server closed" kick, so azalea's "Got disconnect packet" didn't appear. It stays expected, since a slower stop sends it.
+  >   - The server took joins a few seconds before its first good probe.
+  > - **Connection resets** (found by the demo's first run, after the runs above; the user's decisions). vanilla's shutdown sometimes resets a bot's socket before its kick, and azalea logs that at ERROR. The whole-log check allows that one error:
+  >   - only between the agent's last line before the restart and the server's healthy moment
+  >   - no more often than bot sessions ended there with `ConnectionClosed`
+  >
+  >   It's `expected_restart_errors` in `stack-checks.json`, shared with the demo; the DoD note explains it. `tests/deploy.rs` checks that every expected line names its target, prefix and reason. The checks' new unit tests were red against a stub first.
+  > - **Deviation:** the compose-file helpers stay in `tests/deploy.rs`, now for any service, since the scenario reads the agent's grace period from `stack-checks.json`. Only the `stack-checks.json` reader moved to `tests/common/`.
+  > - **Tests:**
+  >   - 52 fast unit tests of the helpers, red against stubs first.
+  >   - 6 new tests in `deploy.rs`, red against placeholder data first.
+  >   - The scenario was red against stub parsers ("every bot Online within 71s; last seen: Online in the log: {}"), and once against `stop_signal: SIGKILL` (exit 137). Then it passed in about 45 s.
 
 **DoD:** Demo with 5 bots AFK on a local server for 1 h, with one server restart in between. The logs show no errors except the expected disconnect warnings.
 
@@ -1944,6 +1987,65 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 > The AI runs it in group D and puts its output in the PR; the user can re-run it, for example after a Minecraft-version bump.
 
 > Note (DoD, from group C, the user's decision): The demo also records the agent's peak memory and CPU (`docker stats`), so P12.2's limits come from a measured value with headroom, not a guess.
+
+> Note (DoD, as built, group D) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md); the user answered group D's questions on 2026-10-09):
+> - **`just demo-agent [minutes]`** runs `scripts/demo-agent.mjs`, which uses Node's built-ins only and is tested in `scripts/demo-agent.test.mjs`. It runs 60 minutes by default:
+>   - It builds the agent's image, then runs the stack as the project `afkfleet-demo`, with `compose.isolated.yaml` on top.
+>   - It restarts the server at half time (`restart --no-deps minecraft`) and stops the agent at the end.
+>   - Last, it removes the stack (`down -v --timeout 10`), also after Ctrl+C or an error, once the logs are saved.
+> - **The summary:**
+>   - where it was measured: `docker info`'s architecture, CPUs, OS and memory, plus the CPU model from `lscpu`, else `/proc/cpuinfo`, else "unknown"
+>   - the agent's memory and CPU from a streamed `docker stats`: the peak, with its time relative to the restart, the mean and the p95. These are never judged.
+>   - warn and error lines by target and count
+>   - the state-change timeline
+>   - each bot's reconnect after the restart
+>   - the shutdown report
+> - **The verdict** is PASS (exit 0) or FAIL (exit 1). A FAIL lists each failed criterion with its lines:
+>   - an ERROR line, except the connection resets a server restart may cause (below)
+>   - a warning `stack-checks.json` doesn't expect, or a line that isn't the agent's JSON
+>   - a bot not Online again by its deadline (the e2e test's formula, from the server's healthy moment)
+>   - an agent restart
+>   - a shutdown that isn't exit 0 with aborted 0 and crashed 0
+>
+>   A run under 60 minutes says "not the DoD run".
+> - **Too short to judge** (exit 2):
+>   - Before the start: the minimum comes from `stack-checks.json`. Half the run must hold attempt 3's reconnect deadline plus the agent's stop, which is 7 minutes with the defaults.
+>   - After the restart: if the deadlines it observes, plus the stop, don't fit in the time left, it saves the logs and stops.
+> - **Raw data** goes under `target/demo-agent/<UTC time>/`: `agent.log`, `minecraft.log`, `stats.jsonl` and `summary.txt`. Only `summary.txt` goes into a pull request, since `minecraft.log` holds the bots' container IPs.
+> - **Deviation, found in the first run** (the user's decisions): azalea logs a TCP reset at ERROR (`azalea_client::plugins::connection`, "Error reading packet from Client: IoError { … ConnectionReset …").
+>   - **Why it happens.** A server that closes a socket with unread client data sends a TCP reset, and during vanilla's shutdown that can arrive before the "Server closed" kick. In the 8-minute check run, 2 bots got the kick and 3 were closed without it, one of them with a reset.
+>   - **The agent recovers as designed:** `ConnectionClosed`, a backoff, and back Online in about 25 s.
+>   - **The allowance.** `stack-checks.json` gains `expected_restart_errors` with that one entry. The e2e test and the demo accept it only:
+>     - between the agent's last line before the restart and the server's healthy moment, both by the Docker VM's clock
+>     - no more often than bot sessions ended in that window with `ConnectionClosed`, since each reset ends one live session, and azalea's line carries no bot ID
+>
+>     Every other ERROR, and this one at any other time, still fails. The summary reports how many were allowed.
+> - **The Minecraft-version bump** runs it: ADR-0003's verify step gains `just demo-agent` (1 h), with its `summary.txt` in the bump's pull request, and P12.6's runbook carries the step.
+
+> Note (DoD, the run, group D): `just demo-agent` ran on 2026-10-10 with its default 60 minutes. Its `summary.txt` is in the PR. **PASS:**
+> - 5 bots (four on `afk`, AfkBot6 on `farm`) came Online within a second, and the server restarted once, at minute 30.
+> - Every bot got the "Server closed" kick, and every bot was Online again 8–21 s later, well inside its deadline (attempts 2 and 3).
+> - The log holds no ERROR, and only the 16 expected disconnect warnings:
+>   - 8 "the session ended; the bot connects again"
+>   - 5 of azalea's "Got disconnect packet"
+>   - 3 of azalea's "failed to create connection"
+> - The agent never restarted. Its stop gave exit code 0 and stopped 5, aborted 0, crashed 0.
+> - The agent's container peaked at 26.9 MiB and 6.59 % of one core (P12.2's note has the numbers).
+
+> Note (Phase 5 wrap-up, group D) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
+> - **The Phase 5 Goal, checked on 2026-10-10:**
+>   - **"`afkfleet-agent run --config agent.toml` runs a few dev bots (offline mode) against a local server":** `just dev-agent` runs three bots on the host (group B), and the compose agent runs five in Docker (`just stack-up`, group C; five since group D).
+>   - **"It survives server restarts":**
+>     - The e2e test restarts the server, holds every wait between attempts to the retry policy and every bot to its deadline, and checks that the agent itself didn't restart.
+>     - The hour-long demo did the same at minute 30.
+>   - **"It shuts down cleanly":** in the e2e test and the demo, the stop gave exit code 0 and the report (stopped 5, aborted 0, crashed 0), and the server dropped every bot at once.
+> - **The Phase 5 DoD:** the demo above. It ran 5 bots, four of them AFK and one farming (the user's decision), for an hour against the local server, with one restart. Its logs show no error, only the expected disconnect warnings.
+>   - **Deviation:** a restart can cause one error the DoD didn't foresee, azalea's connection reset. The e2e test and the demo accept it only during the restart, at most once per session closed there (the DoD note above). It didn't occur in this run.
+> - **Every task, P5.1–P5.7, is ticked.** The crates the phase introduces are in, except `anyhow`, which arrives with the first `main.rs` that needs it (ADR-0014).
+> - **Later phases inherit:**
+>   - P12.2: the measured memory and CPU, as a baseline per bot
+>   - P12.6: the demo in the Minecraft-version bump
+>   - the notes for P10, P11.1, P12.1 and P12.4 that ADR-0014 lists
 
 ---
 
@@ -2421,6 +2523,12 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     - `restart: unless-stopped`
 
   > Note (P12.2, from Phase 5, group C, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): Production is linux/arm64. The agent's memory and CPU limits come from group D's measured demo numbers, with headroom, not from the dev compose file's 512 MiB and 1 CPU.
+
+  > Note (P12.2, from Phase 5, group D, the DoD demo) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): The agent's container, measured with `docker stats` during the DoD demo on 2026-10-10. That's 7198 frames over the hour, with one server restart, for **5 bots** (four on `afk`, one on `farm`).
+  > - **Memory:** peak 26.9 MiB (25 s after the restart), mean 21.9 MiB, p95 22.3 MiB.
+  > - **CPU:** peak 6.59 % of one core, mean 4.06 %, p95 5.80 %.
+  > - **Where:** x86_64 under Docker Desktop (AMD Ryzen 7 9800X3D, 8 CPUs). Memory should carry over to arm64 roughly; CPU percentages don't.
+  > - **A baseline, not a total.** ADR-0008's measurement grew by about 4 MiB per bot (57 MiB at 10 bots, 222 MiB at 50). So P12.2 extrapolates from these numbers to the production bot count and adds headroom, rather than reading the 5-bot figures as limits.
 - [ ] **P12.3** 🔴 Backups:
   - a scheduled `VACUUM INTO` with retention, plus a `backup` CLI
   - a restore runbook
@@ -2439,6 +2547,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - **Minecraft version upgrade** (azalea + nightly + test-server bump)
   - restore a backup
   - incident response: revoke sessions, disable users and agents
+
+  > Note (P12.6, from Phase 5, group D, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): The **Minecraft version upgrade** section carries ADR-0003's bump procedure, whose verify step now runs `just ci`, `just test-slow` and `just demo-agent` (1 h), with the demo's `summary.txt` in the bump's pull request.
 - [ ] **P12.7** 🔴 Compose smoke test in CI, run nightly:
   1. `up`
   2. health checks pass

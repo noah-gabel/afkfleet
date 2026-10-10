@@ -1,5 +1,5 @@
 # The config of the agent in deploy/compose.dev.yaml, which mounts it at
-# /etc/afkfleet/agent.toml (`just stack-up`). It runs three offline-mode bots
+# /etc/afkfleet/agent.toml (`just stack-up`). It runs five offline-mode bots
 # against the compose server, which the agent reaches as minecraft:25565. They
 # aren't deploy/dev/agent.toml's bots, so `just dev-agent` can run at the same
 # time without logging them out.
@@ -13,6 +13,10 @@
 # container's tmpfs. compose.dev.yaml's stop_grace_period (20 s) must stay
 # above shutdown_timeout_secs + 6 s (the 5 s reply timeout and the 1 s
 # runtime shutdown); a fleet-agent test checks it.
+#
+# The compose e2e test and `just demo-agent` run these bots and judge them by
+# deploy/dev/stack-checks.json, which mirrors this config's retry windows and
+# connect timeout; a fleet-agent test fails when the two disagree.
 
 name = "compose-agent"
 
@@ -34,3 +38,13 @@ mode = "afk"
 username = "AfkBot6"
 server = "minecraft:25565"
 mode = "farm"
+
+[[standalone.bots]]
+username = "AfkBot7"
+server = "minecraft:25565"
+mode = "afk"
+
+[[standalone.bots]]
+username = "AfkBot8"
+server = "minecraft:25565"
+mode = "afk"

@@ -201,7 +201,7 @@ Each later group asks its own implementation-level questions in its session: tok
   - **The check's output** *(the user's decisions)*: one line on stdout, healthy or not. stderr is left for errors that keep the check from running, a config that can't be loaded (the same text and exit 1 as `run`) or a usage error. A usage error counts as `healthcheck`'s when the first argument is `healthcheck`.
   - **A time in the future** *(the user's decision)* counts as age 0 up to 30 s ahead, so small clock corrections never fail the check. Further ahead is unhealthy with a line of its own: a healthy agent's next beat fixes the time within 10 s and Docker's retries absorb that check, while a hung agent can't look healthy for the length of a big backward jump.
 - *(as built, group C: P5.6)*:
-  - **Debian 13, not 12** *(found in the plan's review, the user's decision)*. distroless's README now lists only Debian 13 images and calls every other tag deprecated and no longer updated, so the runtime is `gcr.io/distroless/cc-debian13:nonroot`. The builder is `rust:1.99.0-slim-trixie`, the same Debian, so the binary's glibc matches. Plan.md P5.6 keeps the original text, with a deviation note.
+  - **Debian 13, not 12** *(found in the plan's review, the user's decision)*. Under distroless's SUPPORT_POLICY.md, the Debian 12 `cc` images reached end of life in September 2026 (GoogleContainerTools/distroless#2129) and get no more updates, so the runtime is `gcr.io/distroless/cc-debian13:nonroot`. The builder is `rust:1.99.0-slim-trixie`, the same Debian, so the binary's glibc matches. Plan.md P5.6 keeps the original text, with a deviation note. *(Corrected in group D: group C gave distroless's README as the reason, but the README still has a Debian 12 table.)*
   - **Production runs on linux/arm64** *(the user's requirement)*; development and CI run on x86_64.
     - Both base images are pinned by tag and **multi-arch index digest**, the top-level digest of `docker buildx imagetools inspect`, never one platform's. Nothing in the Dockerfile names an architecture, so the same file builds natively on both.
     - deny.toml's `[graph] targets` gains `aarch64-unknown-linux-gnu`. That checks more of the graph and weakens nothing; `cargo deny check` stays clean, with no `ring` on aarch64.
@@ -231,6 +231,78 @@ Each later group asks its own implementation-level questions in its session: tok
 
   The AI runs it in group D and puts its output in the PR; the user can re-run it, for example after a Minecraft-version bump.
 
+- *(as built, group D: P5.7; the user answered group D's questions on 2026-10-09)*:
+  - **Isolation** *(the user's decision)*. `deploy/compose.dev.yaml` publishes the server on the fixed `127.0.0.1:25565`, so a second project would clash with `just mc-up`. The new `deploy/compose.isolated.yaml` removes that port (`ports: !reset []`); neither the test nor the demo needs it, since the agent reaches the server over the compose network and RCON goes through `exec`. `!reset` needs Compose 2.24, so both check `docker compose version` first and stop with a clear message rather than a YAML error.
+  - **Five bots** *(the user's decision)*. `agent.compose.toml` gains AfkBot7 and AfkBot8 on `afk`; AfkBot6 stays on `farm`. `just stack-up`, the test and the demo then run the same config, and the demo also runs the farm preset for an hour.
+  - **A graceful restart** *(the user's decisions)*:
+    - The restart is `docker compose restart --no-deps minecraft`. itzg's runner turns SIGTERM into `stop`.
+    - compose.dev.yaml gives the server `stop_grace_period: 60s`, since Docker's default 10 s could kill it mid-stop. The bots would then see reset sockets, which azalea logs as an ERROR. `tests/deploy.rs` asserts at least 30 s, so removing it fails `just check`, not only the weekly slow run.
+    - The final teardown uses `down -v --timeout 10`, so the 60 s don't eat the teardown allowance.
+    - The agent's `depends_on` has no `restart: true`, and the test asserts the agent wasn't restarted (its StartedAt and restart count, and one "the agent is running"). The reconnects must come from the agent's own retry logic.
+  - **"Within the policy"** *(the user's decisions)*:
+    - **Every wait** from `Backoff { attempt: n }` to the next `AwaitingSession` lies in `RetryPolicy::bounds(n)`, with 100 ms of slack below (the times are taken when lines are written, not when the timer starts) and 1 s above. A reconnect storm still misses the lower bound by seconds.
+    - **Every bot is Online again by a deadline** from the server's healthy moment: bounds(n).max for its current backoff, one more failed attempt with its backoff (connect + bounds(n+1).max), the attempt that works (connect), plus 1 s. Docker probes the health only every 5 s, so an attempt in flight then can still fail. The per-gap check already holds every wait to the policy; the deadline only proves each bot comes back.
+    - **The healthy moment** is the end of the first good probe after the server's new StartedAt. It's read from `docker inspect` as soon as it appears, because Docker keeps only five probes. It runs on the Docker VM's clock, like the agent's log, so no host clock enters a judgment.
+    - **Step 1's deadline** has the same shape from "the agent is running": connect + bounds(1).max + connect + 1 s.
+  - **The budget** *(the user's decisions)*. Before each deadline, the test asserts elapsed + deadline + the agent's stop_grace_period + 60 s of teardown ≤ the slow profile's limit. The limit is read from `.config/nextest.toml` (period × terminate-after), so nextest can't kill it mid-cleanup.
+  - **A clean stop** *(the user's decisions)*:
+    - exit code 0, and the report as the last line (stopped 5, aborted 0, crashed 0)
+    - no WARN or ERROR from "shutting down" on
+    - RCON's list empty within 5 s, polled, since the server drops a player on its next tick
+
+    It doesn't check the server's log: its wording can change with a version bump, and a socket closed with unread data gets a TCP reset on Linux.
+  - **The whole log** *(the user's decision)*. No ERROR, and every WARN must match an entry of `deploy/dev/stack-checks.json` by target and message prefix. Failures print every offending line in full.
+  - **`stack-checks.json`** *(the user's decisions)* is shared by the test (`include_str!`) and the demo script (`readFileSync`), so their lists and numbers can't drift. It holds:
+    - the expected warnings, each with a `why`
+    - the bounds(n) table up to the first capped window (the last entry applies to every later attempt), so the script never re-implements fleet-core's jitter formula
+    - the connect timeout and the agent's grace period
+
+    `tests/deploy.rs` compares every entry with `bounds(n)` of the loaded `agent.compose.toml`, and checks that the table ends at the cap.
+  - **The image** *(the user's decisions)*:
+    - `just test-slow` first pulls the server image (a cold pull would eat into a timed test), then runs `docker compose build agent`.
+    - It then sets `AFKFLEET_E2E_IMAGE_BUILT=1` through a `$`-parameter. The justfile's rule and CLAUDE.md's now allow `export` or `$`-parameters, since just exports both.
+    - Without the variable, the test stops at once, so it never tests an image left from another branch. It starts the stack with `up --wait --no-build`.
+  - **No vacuous pass** *(the user's addition)*. Every check asserts it saw data: five bots in the log, at least one wait per bot after the restart, a healthy probe, and the bots on RCON's list before the stop.
+  - **Red first** *(the user's decision)*. The helpers' 52 unit tests, and the scenario on stub parsers, failed on assertions first. One uncommitted run with `stop_signal: SIGKILL` failed on exit code 137, which shows step 3 catches a real bad stop.
+  - **Found in the runs:** the restart took about 3 s, and the bots saw `ConnectionClosed` rather than the "Server closed" kick, so azalea's "Got disconnect packet" didn't show. It stays in the list for a slower stop.
+  - **Connection resets** *(found by the demo's first run; the user's decisions)*. The whole-log check allows azalea's reset ERROR only during the restart, and no more often than sessions closed there. The rule and its reasons are under the demo below; the test and the script share it through `stack-checks.json`'s `expected_restart_errors`.
+
+- *(as built, group D: the demo; the user answered group D's questions on 2026-10-09)*:
+  - **`scripts/demo-agent.mjs`** uses Node's built-ins only, like the other scripts. Its parsing and judging are exported pure functions tested in `scripts/demo-agent.test.mjs`. Driving Docker isn't unit-tested; a short run (`just demo-agent 8`) exercises it.
+  - **The same stack and the same numbers as the e2e test:**
+    - the project `afkfleet-demo` with `compose.isolated.yaml`
+    - the expected warnings and the retry windows from `stack-checks.json`
+    - the reconnect deadline's formula, from the server's healthy moment read from `docker inspect`
+    - `restart --no-deps minecraft`
+    - `down -v --timeout 10` at the end, also after Ctrl+C or an error, once the logs are saved
+  - **A verdict** *(the user's decision)*: PASS (0) or FAIL (1), listing each failed criterion with its offending lines:
+    - an ERROR, except the connection resets a server restart may cause (below)
+    - a warning nobody expects, or a line that isn't the agent's JSON
+    - a bot not Online again by its deadline
+    - an agent restart: its StartedAt, its restart count, or a second "the agent is running"
+    - a shutdown that isn't exit 0 with aborted 0 and crashed 0
+
+    A re-run after a version bump then gives a clear answer.
+  - **The stats** *(the user's decisions)*:
+    - One streamed `docker stats --format "{{json .}}"` gives the agent's peak, mean and p95 memory and CPU, with each peak's time relative to the restart. Each JSON object is cut out of its line, since the stream redraws the terminal even into a pipe.
+    - The numbers are reported, never judged: they're P12.2's measurement, and an OOM kill would already fail as a restart.
+    - The summary also says where they were measured: `docker info`'s architecture, CPUs, OS and memory. The CPU model comes from `lscpu` in the server's container, else from `/proc/cpuinfo`, else "unknown"; ARM has no "model name" in cpuinfo. Production runs on arm64, so memory carries over roughly, but CPU percentages don't.
+  - **Optional minutes** *(the user's decisions)*:
+    - `just demo-agent 8` checks the script before the hour.
+    - A run shorter than its own checks need fails with exit 2 before it starts: half the run must hold attempt 3's reconnect deadline plus the agent's stop, derived from `stack-checks.json` (7 minutes with the defaults).
+    - Once the real attempts are known after the restart, a run that can't hold them plus the stop ends as "too short to judge" (exit 2), not as a misleading FAIL.
+    - A run under 60 minutes is marked "not the DoD run".
+  - **Raw data** *(the user's decisions)* goes under `target/demo-agent/<UTC time>/`, which is gitignored: `agent.log`, `minecraft.log`, `stats.jsonl` and `summary.txt`. A pull request gets only `summary.txt`, never excerpts from the raw logs. `minecraft.log` carries each bot's container IP and port, and CLAUDE.md's rule against IP addresses in git applies to the public pull request too. The summary has no host path or host name.
+  - **The version bump** *(the user's decision)*: ADR-0003's verify step now runs `just demo-agent` (1 h), and the bump's pull request includes its `summary.txt`. P12.6's runbook carries the step.
+  - **Connection resets during a restart** *(found in the first run, the user's decisions)*:
+    - **What happens.** azalea logs a TCP reset at ERROR (`azalea_client::plugins::connection`, "Error reading packet from Client: IoError { … ConnectionReset …"). A server that closes a socket with unread client data sends a TCP reset, and in vanilla's shutdown that can arrive before the "Server closed" kick. In the 8-minute run, 2 bots got the kick, and 3 were closed without it, one of them with a reset. The agent recovered as designed: `ConnectionClosed`, a backoff, and back Online in about 25 s.
+    - **The rule.** It's random, so "no ERROR anywhere" would make the e2e test and the demo flaky. `stack-checks.json`'s new `expected_restart_errors` holds that one entry. Both accept it only:
+      - between the agent's last line before the restart and the server's healthy moment, by the Docker VM's clock, never the host's
+      - no more often than bot sessions ended there with `ConnectionClosed`. azalea's line carries no bot ID, but each reset ends one live session, and the bot logs that with its ID. Together with "every bot Online again by its deadline", a second reset for a bot, or a reset for a bot that doesn't come back, still fails.
+
+      Every other ERROR, and this one outside the restart, still fails.
+    - **Alternatives considered:** allowing it anywhere (a real network fault would pass), dropping the target in the agent's log filter (it would hide azalea's packet-decode errors too), and pairing each ERROR with the closest bot by time (it can mis-pair bots that disconnect in the same millisecond).
+
 ### Dependencies
 Approved by the user, all in Plan.md §5:
 - `figment` 0.10.19 with `toml` and `env`, and `test` (`Jail`) in tests. It brings `toml` 0.8 beside the graph's newer one, a duplicate-version warning only.
@@ -245,6 +317,7 @@ Approved by the user, all in Plan.md §5:
   - `rustls` 0.23.45 with its default features (aws-lc-rs), already in the lockfile through reqwest.
   - Already declared, newly used by the agent: tokio (`rt`, `rt-multi-thread`, `macros`, `sync`, `time`; `test-util` in tests), tokio-util (no features), chrono (`now`), the `metrics` facade (the agent records the diagnostics itself), and fleet-testkit as a dev-dependency.
 - *(group C)*: no new crates. The agent image's base images are `rust:1.99.0-slim-trixie` (builder) and `gcr.io/distroless/cc-debian13:nonroot` (runtime), both pinned by multi-arch index digest, and the builder installs cargo-chef 0.1.78 (§5's tools).
+- *(group D)*: no new crates. The compose e2e test uses only fleet-agent's existing dependencies and dev-dependencies (serde, serde_json, figment, chrono, rstest).
 - fleet-agent depends on fleet-core, fleet-runtime and fleet-mc (§4).
 - No crate-local `clippy.toml`: the root one applies.
 - **One lint exception in tests** *(the user's approval)*. figment's `Jail` fixes its closure's error type to `figment::Error`, which is larger than `clippy::result_large_err` allows. So every test goes through one helper, `in_jail`, whose closure carries `#[expect(clippy::result_large_err, reason = …)]`. Production code isn't affected: `load` converts figment's error into a small boxed one.
@@ -263,7 +336,8 @@ Approved by the user, all in Plan.md §5:
   - **P11.1:** fixed IDs for `ModePreset`.
   - **P12.4:** the metrics endpoint and its key.
   - **P12.1** *(group C)*: build the agent image for linux/arm64, natively on the server or on GitHub's `ubuntu-24.04-arm` runner. The weekly audit scans the built image (e.g. Trivy), since `cargo deny` covers only crates. `created`, `revision` and `version` labels come through build args once CI publishes the image.
-  - **P12.2** *(group C)*: production is linux/arm64, and the agent's memory and CPU limits come from group D's measured demo numbers, not from the dev values.
+  - **P12.2** *(group C)*: production is linux/arm64, and the agent's memory and CPU limits come from group D's measured demo numbers, not from the dev values. *(group D)* The DoD demo measured the agent's container with 5 bots on x86_64 under Docker Desktop: memory peaked at 26.9 MiB (mean 21.9, p95 22.3), CPU at 6.59 % of one core (mean 4.06 %, p95 5.80 %). Memory carries over to arm64 roughly, CPU percentages don't, and the numbers are a per-bot baseline to extrapolate from (ADR-0008: about 4 MiB per bot), not limits.
+  - **P12.6** *(group D)*: the runbook's Minecraft-version upgrade carries ADR-0003's bump procedure, whose verify step runs `just demo-agent` (1 h) and puts its `summary.txt` in the bump's pull request.
 
 ## Alternatives considered
 - **More, smaller groups (5), or fewer, larger ones (3).** Five would split P5.3 from P5.4, which share the run loop. Three would put the healthcheck and Docker in one oversized PR.

@@ -16,7 +16,7 @@ afkfleet is **a hobby project** I'm building for my friends with Claude Code. I 
 There's no support, and I don't take feature requests. Security reports are welcome, though: see [SECURITY.md](SECURITY.md).
 
 ## Status
-**Phase 5 (the standalone agent) is in progress.** Its first runnable product, `afkfleet-agent`, runs a few offline-mode bots against a local server (see [Quickstart](#quickstart)). What exists:
+**Phase 5 (the standalone agent) is done.** Its first runnable product, `afkfleet-agent`, runs a few offline-mode bots against a local server (see [Quickstart](#quickstart)). What exists:
 - **From Phase 0:**
   - the Cargo workspace with all lints and the pinned toolchain
   - the quality gates: formatting, clippy, docs, tests, coverage gates, cargo-deny, Biome
@@ -60,17 +60,19 @@ There's no support, and I don't take feature requests. Security reports are welc
   - a chaos test: 500 random runs of kicks, failed connects, hangs, crashes and API calls, which check that bots heal, never reconnect in a storm, never connect while a human plays, and that the API always answers
 
   [ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md) records Phase 4's decisions.
-- **From Phase 5 so far:** [`crates/fleet-agent`](crates/fleet-agent/) and its `afkfleet-agent` binary:
+- **From Phase 5:** [`crates/fleet-agent`](crates/fleet-agent/) and its `afkfleet-agent` binary:
   - the config: `agent.toml` plus `AFKFLEET_AGENT__…` environment variables. A typo is an error with its key, and every problem is listed at once
   - logging: JSON lines or a pretty format, a filter that keeps azalea quiet and its auth logs safe, and a panic hook that logs through it
   - the wiring of the azalea adapter to the bot runtime. Each bot gets a new ID at every start, logged with its name. The agent exports the adapter's numbers as metrics and exits so Docker can restart it when too many host threads hang
   - a graceful shutdown on SIGTERM or SIGINT (Ctrl+C or Ctrl+Break on Windows): every bot leaves the server within the shutdown timeout
   - a heartbeat file, touched every 10 s while the fleet answers, and an `afkfleet-agent healthcheck` command that checks it without a shell or curl
   - a Docker image (distroless, nonroot, building natively on amd64 and arm64) with a `HEALTHCHECK`, and an agent in the dev compose stack: `just stack-up`
+  - an end-to-end test of the compose stack (`just test-slow`): every bot comes Online, reconnects within its retry policy after the server restarts, and leaves the server cleanly when the agent stops, with only the expected warnings in the log and no error but a connection reset during the restart
+  - a one-hour demo (`just demo-agent`): five bots and one server restart, with a summary, a verdict and the agent's measured memory and CPU
 
   [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md) records Phase 5's decisions.
 
-**Next:** the rest of Phase 5: an end-to-end test against a server restart, and a one-hour demo with five bots.
+**Next:** Phase 6, the server foundation: an HTTP service skeleton that is secure by default, with persistence, an error model and an audit trail, but no business endpoints yet.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 
@@ -146,8 +148,8 @@ docker compose --file deploy/compose.dev.yaml logs -f agent   # the agent's JSON
 just mc-down    # stop both and delete the server's world
 ```
 - **The config** belongs at `/etc/afkfleet/agent.toml`. The image runs `run --config /etc/afkfleet/agent.toml`, and its `HEALTHCHECK` (every 10 s) runs `healthcheck --config /etc/afkfleet/agent.toml`. If you run the agent with another `--config` path, override the `HEALTHCHECK` with the same path, or it checks another config's heartbeat file. `AFKFLEET_AGENT__…` variables apply to both either way.
-- **The compose agent** uses [`deploy/dev/agent.compose.toml`](deploy/dev/agent.compose.toml): AfkBot4–6 against the compose server at `minecraft:25565`, with JSON logs. They aren't `just dev-agent`'s bots, so both agents can run at once. It starts once the server is healthy.
-- **Stopping:** `docker stop` sends SIGTERM and kills the container once its grace period is over. The agent's worst-case shutdown is `shutdown_timeout_secs` plus 6 s (the reply timeout and the runtime's own shutdown), so the grace period must be longer: the compose file sets 20 s for the 10 s default. Otherwise Docker's kill replaces the exit code and the last line.
+- **The compose agent** uses [`deploy/dev/agent.compose.toml`](deploy/dev/agent.compose.toml): AfkBot4–8 (four on `afk`, AfkBot6 on `farm`) against the compose server at `minecraft:25565`, with JSON logs. They aren't `just dev-agent`'s bots, so both agents can run at once. It starts once the server is healthy.
+- **Stopping:** `docker stop` sends SIGTERM and kills the container once its grace period is over. The agent's worst-case shutdown is `shutdown_timeout_secs` plus 6 s (the reply timeout and the runtime's own shutdown), so the grace period must be longer: the compose file sets 20 s for the 10 s default. Otherwise Docker's kill replaces the exit code and the last line. The server gets 60 s: itzg's runner turns SIGTERM into `stop`, which saves the world, and Docker's default 10 s could kill it first.
 - **Hardening** in the compose file: the nonroot user, a read-only root filesystem with a 1 MiB tmpfs at `/tmp` for the heartbeat file, no capabilities, `no-new-privileges`, 512 MiB of memory and 1 CPU, and a restart after a non-zero exit (`on-failure`).
 
 ## Development
@@ -159,12 +161,17 @@ just mc-up     # local offline-mode Minecraft 26.1 test server on 127.0.0.1:2556
 just mc-down   # stop it (and the Docker agent) and delete its world
 just dev-agent # run the agent with deploy/dev/agent.toml against that server
 just stack-up  # build the agent's image and run the server and the agent in Docker
-just test-slow # slow tests against local Minecraft containers, one at a time (needs Docker)
+just test-slow # pull the server image, build the agent's image, then the slow tests one at a time (needs Docker)
+just demo-agent # the Phase 5 demo: the Docker agent's five bots for an hour with one server restart
 just test-real-account # the real-account check: you only (see below)
 ```
 The test server runs in offline mode, so it's for local development only. RCON is enabled with a random password and isn't published; run commands with `docker compose --file deploy/compose.dev.yaml exec minecraft rcon-cli <command>`.
 
 The slow tests also run on GitHub weekly and on demand (the `Slow tests` workflow); it isn't a required check.
+
+The compose e2e test runs the Docker stack under a project of its own, `afkfleet-e2e`, with [`deploy/compose.isolated.yaml`](deploy/compose.isolated.yaml) on top, which unpublishes the server's port, so it can run beside `just mc-up`. It judges the agent by [`deploy/dev/stack-checks.json`](deploy/dev/stack-checks.json): the retry windows, the warnings a server restart may cause, and the one error it may cause, a connection reset, allowed only during the restart. It needs the image `just test-slow` builds first; run on its own, it stops at once and says so. Its stack is removed when it ends, and a killed run's leftovers are removed by the next run, or by `docker compose -p afkfleet-e2e down -v`.
+
+**The demo** (`just demo-agent`, or `just demo-agent 8` for a short check) runs the same stack as the project `afkfleet-demo` for an hour and restarts the server at half time. It then prints a summary: the agent's memory and CPU (peak, mean and 95th percentile, from `docker stats`, with the machine they were measured on), the warnings and errors by target, every state change, each bot's reconnect, and the shutdown report. It ends with PASS, or FAIL and every failed criterion: an error, a warning [`stack-checks.json`](deploy/dev/stack-checks.json) doesn't expect, a bot not back by its deadline, an agent restart, or an unclean shutdown. The one error that file allows is a connection reset while the server restarts, at most one per session closed there: vanilla's shutdown sometimes resets a socket before its kick, and azalea logs that at ERROR. The raw logs and the summary are saved under `target/demo-agent/`; only `summary.txt` belongs in a pull request, since the server's log holds container IPs. Run it after a Minecraft-version bump (ADR-0003).
 
 **The real-account check** shows that a real Minecraft token joins a local online-mode server and sends signed chat, and that the token never reaches a log. It needs your real credentials, so only you run it; the AI never does.
 1. Right before running, create `secrets/p1.8-account.txt` (gitignored) with the archived spike's `fetch-token`: `cd spikes/azalea`, then `cargo run -- fetch-token`, and sign in with the code it shows. The file holds no expiry, and a token lasts about a day. If the session server rejects it, fetch a new one.

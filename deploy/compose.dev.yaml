@@ -1,6 +1,8 @@
 # Local development stack. `just mc-up` starts the Minecraft server alone,
 # `just stack-up` builds the agent's image and starts the server and the
-# agent, and `just mc-down` stops both and deletes the server's world.
+# agent, and `just mc-down` stops both and deletes the server's world. The
+# compose e2e test and `just demo-agent` run the same stack under project
+# names of their own, with compose.isolated.yaml on top.
 #
 # DEVELOPMENT ONLY. The Minecraft server runs in offline mode, so anyone who
 # can reach it can join under any name. It is bound to 127.0.0.1 and must
@@ -36,6 +38,12 @@ services:
       MEMORY: 2G
     ports:
       - "127.0.0.1:25565:25565"
+    # itzg's runner answers SIGTERM with `stop`, which saves the world and
+    # kicks every player with "Server closed". Docker's default 10 s could
+    # kill it first, and the bots would see a reset connection instead (the
+    # compose e2e test and the demo restart this server). A fleet-agent test
+    # checks it's at least 30 s.
+    stop_grace_period: 60s
     healthcheck:
       test: mc-health
       # The first start downloads the server jar.
@@ -43,7 +51,7 @@ services:
       interval: 5s
       retries: 20
 
-  # The standalone agent with deploy/dev/agent.compose.toml: AfkBot4-6 against
+  # The standalone agent with deploy/dev/agent.compose.toml: AfkBot4-8 against
   # the server above (Plan.md P5.6, ADR-0014). Its image's HEALTHCHECK runs
   # `afkfleet-agent healthcheck` with the same config.
   agent:

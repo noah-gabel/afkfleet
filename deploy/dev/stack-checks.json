@@ -1,0 +1,37 @@
+{
+  "about": "What the compose e2e test (crates/fleet-agent/tests/slow_compose) and the demo (scripts/demo-agent.mjs) judge the compose agent (deploy/dev/agent.compose.toml) by. fleet-agent's tests/deploy.rs checks every number against agent.compose.toml and compose.dev.yaml (Plan.md P5.7, ADR-0014).",
+  "expected_warnings": [
+    {
+      "target": "azalea_client::plugins::packet::game",
+      "message_prefix": "Got disconnect packet",
+      "why": "azalea logs the server's kick; a restarting server kicks every bot with \"Server closed\"."
+    },
+    {
+      "target": "azalea_client::plugins::join",
+      "message_prefix": "failed to create connection",
+      "why": "azalea logs each attempt that finds the server down or not yet listening."
+    },
+    {
+      "target": "fleet_runtime::actor::effects",
+      "message_prefix": "the session ended; the bot connects again",
+      "why": "The bot actor logs every session that ends by itself, here the kick and each refused attempt, before it backs off."
+    }
+  ],
+  "expected_restart_errors": [
+    {
+      "target": "azalea_client::plugins::connection",
+      "message_prefix": "Error reading packet from Client: IoError { source: Os { code: 104, kind: ConnectionReset",
+      "why": "A server that closes a socket with unread client data sends a TCP reset, which can arrive before its \"Server closed\" kick, and azalea logs it at ERROR. Allowed only from the agent's last line before the restart to the server's healthy moment, and no more often than sessions ended there with ConnectionClosed, since each reset ends one."
+    }
+  ],
+  "retry_windows": [
+    { "attempt": 1, "min_ms": 5000, "max_ms": 10000 },
+    { "attempt": 2, "min_ms": 10000, "max_ms": 20000 },
+    { "attempt": 3, "min_ms": 20000, "max_ms": 40000 },
+    { "attempt": 4, "min_ms": 40000, "max_ms": 80000 },
+    { "attempt": 5, "min_ms": 80000, "max_ms": 160000 },
+    { "attempt": 6, "min_ms": 150000, "max_ms": 300000 }
+  ],
+  "connect_timeout_ms": 30000,
+  "stop_grace_period_ms": 20000
+}
