@@ -1627,6 +1627,12 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - **`restore()` without `ScheduleRetry`:** "the fleet didn't settle within 5240s", shrunk to one bot with a crash burst of 1.
   > - **Time.** The chaos test takes about 7–7.7 s, and `just test fleet-runtime` (288 tests) about 7.9 s.
   > - **Helpers.** `awaiting`, `PAUSED` and `DUPLICATE_LOGIN` moved back from `harness.rs` to `supervisor.rs`, the only file that uses them.
+
+  > Note (P4.8, a bug found in Phase 6, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **The model missed a bot's last events.**
+  > - **Found.** CI's coverage job on PR #23 hit a case where `afkfleet_bot_reconnects_total` was 4 and the test's model 3. The case failed on Windows too, so it wasn't a platform difference.
+  > - **The cause was the test, not the runtime.** `settle()` absorbed the events first, then awaited the probes and `snapshot_all()`. In this case a bot's retry fell due in the instant the settle loop woke up. The bot then went `AwaitingSession{7}` → `Connecting{7}` → Online while the loop awaited, and the snapshots already showed Online, so `settle()` returned without the model ever seeing those three changes. Attempt 7 was a real reconnect, a connect the bot made on its own, so the counter's 4 was right; the model's storm checks had skipped those changes too.
+  > - **The fix.** `settle()` absorbs the events again right after `snapshot_all()`, before it judges the snapshots. The actor publishes each snapshot and its event in one synchronous step, so every state the snapshots show is absorbed. Neither the runtime nor what the metric counts changes.
+  > - **The regression test.** CI's seed is in `tests/fleet/chaos.proptest-regressions`, which proptest replays before the 500 new cases. The test failed on it (4 against 3) before the fix and passes after it.
 - [x] **P4.9** Metrics: bots per state, reconnects, watchdog trips, actor restarts.
 
   > Note (P4.9, from Phase 3): Also export fleet-mc's diagnostics: live and abandoned host threads, live Worlds, and dropped chat (ADR-0011).
