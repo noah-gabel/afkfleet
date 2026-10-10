@@ -214,9 +214,9 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 ### Rust: API, transport & persistence
 | Concern | Crate | Version | Used in | Notes |
 |---|---|---|---|---|
-| HTTP framework + WebSocket server | `axum` | 0.8.9 | server | `ws` feature |
+| HTTP framework + WebSocket server | `axum` | 0.8.9, dfo | server | `ws` feature. fleet-server enables only what it uses: none in Phase 6, group C, since `IntoResponse` and `middleware::from_fn` need none and the error body is written with serde_json (ADR-0015) |
 | Typed headers (and cookies later) | `axum-extra` | 0.12.6 | server | `TypedHeader<Authorization<Bearer>>` |
-| Service abstraction | `tower` | 0.5.3 | server, client | |
+| Service abstraction | `tower` | 0.5.3, dfo | server, client | fleet-server's tests enable `util` for `ServiceExt::oneshot` (ADR-0015) |
 | HTTP middleware | `tower-http` | 0.7.1 | server | request-id, trace, timeout, body limit, sensitive headers, set-header, catch-panic |
 | OpenAPI | `utoipa`, `utoipa-axum` | 6.0.0, 0.3.0 | server | P0 picked 6.x (ADR-0009): released 2026-09-22, re-check at P6 |
 | Database | `sqlx` | **0.9.0**, dfo | server | `runtime-tokio`, `sqlite-bundled`, `migrate`, `macros`, `uuid`; no TLS feature (SQLite); offline data in `crates/fleet-server/.sqlx/`. Not `sqlite`: in 0.9 it also turns on extension loading, deserialize and unlock-notify. Not `chrono`: it would turn on chrono's `clock` for the whole workspace build, so times are converted in fleet-server. Not `json` (ADR-0015) |
@@ -258,7 +258,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 |---|---|---|---|
 | Fixtures / parametrized tests | `rstest` | 0.27.0, dfo | `#[case]` tables. The default async-timeout and crate-renaming features aren't needed (ADR-0010) |
 | Property testing | `proptest` | 1.11.0, dfo | State machine, parsers. Only `std`, which reads `PROPTEST_CASES`; no fork or timeout mode (ADR-0010) |
-| Snapshot testing | `insta` | 1.49.0 | `json` and `redactions` features, enabled by the member that uses them (fleet-core: `json`; fleet-server: none, for the migrations' checksum snapshot) |
+| Snapshot testing | `insta` | 1.49.0 | `json` and `redactions` features, enabled by the member that uses them (fleet-core: `json`; fleet-server: `json`, for the error responses' snapshots, plus the migrations' checksum snapshot) |
 | Mocks | `mockall` | 0.15.0 | Only for interaction checks; put `#[automock]` above `#[async_trait]` |
 | Containers | `testcontainers` | 0.28.0, dfo | `itzg/minecraft-server`, for fleet-mc's slow tests (P3.7). The default `ring` feature turns on TLS for the Docker client, which the local socket and the Windows named pipe don't need; no feature is enabled |
 | Time control | `tokio` `test-util` | | `start_paused`, `advance` |
@@ -2092,7 +2092,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   - **The bans go further than planned** (the user's decision): uuid's self-minting functions and the `SysRng`/`ThreadRng` types too. A temporary probe, never committed, proved that all 28 entries fire with their reasons.
 > - **stable-check.** fleet-startup and fleet-server join `stable_crates` in group A, fleet-api-types in group C. P9.3 removes fleet-server when azalea-auth arrives.
 > - **Dependencies (group B, the user's approval).** New in `[workspace.dependencies]`: sqlx (0.9.0, no default features), async-trait (0.1.92) and tempfile (3.27.0, already in the lockfile). fleet-server gains fleet-core, async-trait, chrono (`now`), getrandom, log (only for sqlx's `LevelFilter`), secrecy, serde_json, sqlx (`runtime-tokio`, `sqlite-bundled`, `macros`, `migrate`, `uuid`), tokio (`fs`) and uuid; in dev, insta, proptest (`std`), tempfile and tokio (`macros`, `rt`). fleet-testkit gains chrono and rand (`std_rng`). fleet-core gains nothing.
-> - **Dependencies (group C, the user's approval).** New in `[workspace.dependencies]`: ts-rs (12.0.1, without default features) and fleet-api-types by path. fleet-api-types uses fleet-core, serde (`derive`), thiserror and ts-rs (`serde-compat`); in dev, rstest, serde_json and tempfile. Cargo.lock gains only ts-rs, ts-rs-macros and termcolor. ts-rs's `chrono-impl` and `uuid-impl` come with the first DTO that holds a time or an ID.
+> - **Dependencies (group C, the user's approval).** New in `[workspace.dependencies]`, each without default features: ts-rs (12.0.1), axum (0.8.9) and tower (0.5.3), plus fleet-api-types by path. fleet-api-types uses fleet-core, serde (`derive`), thiserror and ts-rs (`serde-compat`); in dev, rstest, serde_json and tempfile. fleet-server gains fleet-api-types and axum (no features); in dev, tower (`util`), and insta gains `json`. Cargo.lock gains only ts-rs, ts-rs-macros and termcolor. ts-rs's `chrono-impl` and `uuid-impl` come with the first DTO that holds a time or an ID.
 > - **Dependencies.** Group A adds no external crate. fleet-startup uses figment (`toml`, `env`), serde, thiserror, tracing and tracing-subscriber (`env-filter`, `json`); fleet-testkit gains figment (`test`) and serde_json; fleet-server uses fleet-startup, garde (`derive`), serde (`derive`), thiserror and tracing.
 
 - [x] **P6.1** Module layout (see `CLAUDE.md`): `config`, `app` (services), `ports`, `infra/{sqlite,crypto}`, `http/{router,middleware,extractors,handlers,error}`, `grpc`, `cli`.
@@ -2159,9 +2159,20 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Users:** `insert`, `get` and `find_by_username`. `UsernameTaken` and `OwnerExists` are mapped from SQLite's code 2067 and its message, pinned by tests. `User` and `NewUser` live in `ports::users`; `PasswordHash` wraps a `SecretString` and checks the PHC shape the CHECK enforces.
   > - **The audit vocabulary lives in fleet-core** (`audit`): `AuditAction` (a validated dotted name; each phase lists its constants in one `audit_actions!` block, group B none), `AuditOutcome`, `AuditTarget` with a tolerant `RecordedTarget`, and `AuditMetadata`, which never refuses an entry for its size: a text value is cut to the room left (ending in `…`), every free slot keeps room for the largest integer or boolean entry, and a `const` assertion checks that invariant, so the JSON never exceeds 4 KiB and recording never fails on metadata (the PR #25 review). `SECRET_WORDS` moved there from the config test, which now uses it too.
   > - **Tests,** red first against compiling stubs (37 of 144 fleet-server tests failed, and 24 of the 27 store tests against migrations without their CHECKs): `tests/store.rs` (`#[sqlx::test]`, opened through `Database::connect` so the production settings apply), `tests/database.rs` (an edited migration, a full row through `open()`), `tests/migrations.rs` (the checksum snapshot) and the unit tests, including two property tests on the time conversion.
-- [ ] **P6.5** 🔴 `ApiError` maps each error to a status code and `{ "error": { "code", "message", "request_id", "fields"? } }`.
+- [x] **P6.5** 🔴 `ApiError` maps each error to a status code and `{ "error": { "code", "message", "request_id", "fields"? } }`.
   - Internal errors are logged with the request ID and returned as a generic 500.
   - Every variant gets an insta snapshot.
+
+  > Note (P6.5, as built, group C, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **Thirteen codes,** one `ApiError` variant each, every code the plan names, so the envelope and the TypeScript union are complete in Phase 6; later phases add only domain-specific codes. `bad_request` 400, `unauthorized` 401, `forbidden` 403, `not_found` 404, `method_not_allowed` 405, `timeout` 408, `conflict` 409, `payload_too_large` 413, `unsupported_media_type` 415, `validation_failed` 422 (with `fields`), `rate_limited` 429, `internal` 500, `busy` 503.
+  > - **The message is a fixed sentence per code** (`ErrorCode::message()` in fleet-api-types, e.g. "The server is busy. Try again shortly."), never runtime data; a case that needs other words gets its own code.
+  > - **Headers:** a 401 always sends `WWW-Authenticate: Bearer`, with no realm and no error detail. A 429 sends `Retry-After` from the error's own delay, in whole seconds, rounded up. A 503 sends `Retry-After: 1` (`BUSY_RETRY_AFTER`), so the app has one retry rule for both.
+  > - **Conversions:** `StoreError::Busy` becomes `busy`, and `Corrupt`, `Unstorable` and `Backend` become `internal`. `AuthzError::NotFound` and `Forbidden` become 404 and 403, and `WrongResource` becomes `internal`, logged at `error` (P7.8's note). A garde `Report` becomes `validation_failed`, one field error per broken rule in garde's order and path notation (`steps[0].angle`).
+  > - **The request ID.** `IntoResponse` can't see the request, so `ApiError::into_response` sets the status and headers and leaves a private marker in the response's extensions, with an empty body. The `render_errors` middleware, which group D places inside the request-ID layer, reads the ID from the request's `x-request-id` (`REQUEST_ID_HEADER`) as a `BoundedText<64>`, takes the marker, logs, and writes the body with `serde_json::to_vec`. A response without a marker passes unchanged.
+  >   - A missing, empty or non-text ID is a wiring bug: the body says `"unknown"` and it's logged at `error`.
+  >   - If writing the body ever failed (it can't for these types), a fixed, hard-coded `internal` body with `request_id: "unknown"` is sent and the failure logged, never serde's text; a test checks that the fixed body equals what serde would write.
+  > - **Logging:** `internal` at `error`, with `request_id` and the whole source chain joined as "a: b: c" (e.g. "the database failed: disk I/O error"), cleaned by `sanitize_untrusted` and cut at 1024 characters; `busy` at `warn`, with `request_id`; 4xx codes not at all, since group D's trace layer logs every request's status.
+  > - **Tests**, red against stubs that compiled (every variant 500 and `internal`, conversions that all gave `internal`, a middleware that passed responses through): 51 of 57 failed on assertions, then all passed. 13 snapshots, one per variant, hold the status, the `content-type`, `retry-after` and `www-authenticate` headers and the body, through the middleware with a fixed request ID; they were read before accepting. A garde test struct (length and range rules) proves that the 422 body names rules, never values: `hunter2-secret`, `7654321` and `12345` appear nowhere in it, and garde's texts fit their caps uncut.
 - [ ] **P6.6** 🔴 Middleware stack, in this documented order:
   1. request-id (set and propagate)
   2. trace (no bodies, sensitive headers redacted)
@@ -2171,6 +2182,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   6. security headers
 
   Rate limiting is added in P7.
+
+  > Note (P6.6, from group C, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **`render_errors` goes inside the request-ID layer,** so every `ApiError` gets its ID. Errors that don't pass through `ApiError` (tower-http's timeout and body-limit responses, 405, the 404 fallback) must end up in the same `ErrorResponse` envelope with a `request_id`, e.g. by mapping them to `ApiError` or by having the middleware wrap any error status without a marker. A 405 keeps axum's `Allow` header. An integration test sends one request for each error the router can produce and asserts that every response has the JSON body with a `request_id`, so a missing body is caught, not just safe.
+  > - **The request ID is always generated by the server.** tower-http's `SetRequestIdLayer` keeps an `x-request-id` the client already sent, so the client's header is removed or overwritten before the ID is set; otherwise a client could choose the ID that gets logged and echoed back (fake or colliding IDs, log injection). The tests send a request with its own `x-request-id` and assert that the logged and returned ID is a fresh server-generated one. The ID fits `BoundedText<64>` unchanged: at most 64 characters, none that `sanitize_untrusted` strips.
 - [ ] **P6.7** 🔴 `GET /health/live` and `GET /health/ready` (DB ping), with no internal details in the response.
 - [x] **P6.8** 🔴 Audit service:
   - append-only: the trait has only `record` and `list`
@@ -2241,6 +2256,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - runs in `spawn_blocking` behind a semaphore
   - dummy hash for unknown users
   - password policy (length, zxcvbn)
+
+  > Note (P7.2, from Phase 6, group C, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a full argon2 queue answers `busy` (503, `Retry-After`), like a busy database (Plan.md §6's overload row).
 - [ ] **P7.3** 🔴 `TokenService`:
   - tokens from `getrandom`, with prefixes
   - SHA-256 hashing and constant-time comparison (`subtle`)
@@ -2256,6 +2273,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `POST /auth/login`, `/auth/login/mfa`, `/auth/refresh`, `/auth/logout`, `/auth/register` (invite)
   - `GET /me`, `POST /me/password` (step-up)
   - `GET /me/sessions`, `DELETE /me/sessions/{id}`
+
+  > Note (P7.6, from Phase 6, group C, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **The first request DTOs.** garde joins fleet-api-types here. Each request DTO derives `Deserialize`, `Validate` and `#[serde(deny_unknown_fields)]`, with tests for an unknown field and every rule; a handler turns garde's report into `validation_failed` with `?` (`From<garde::Report> for ApiError` exists).
+  > - **axum's JSON rejections** get their mapping here: which of `bad_request`, `unsupported_media_type` and `validation_failed` a malformed body, a wrong content type and an unknown or mistyped field answer with. axum's `json` feature arrives with them.
+  > - **A DTO that uses garde's `pattern` rule** (its `regex` feature) gets the test that a value breaking it appears nowhere in the 422 body.
 - [ ] **P7.7** 🔴 2FA:
   - enroll returns the otpauth URI and a QR code as PNG data
   - confirm, then reset (with step-up), which forces a fresh enrollment at the next login
@@ -2269,6 +2291,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Errors.** `AuthzError::NotFound` becomes 404 and `Forbidden` 403. `WrongResource` is a bug in the handler: 500, logged at `error`.
   > - **Self-service routes** (`/me/*`, `/me/sessions/{id}`, `/auth/logout`, `/events/ticket`) check `Permission::UsePersonal` on `ResourceContext::Personal{owner}`, so every authed handler calls `authorize()`. Someone else's session gives 404.
   > - **Step-up** (§7.2) is checked here or in the handler, not by `authorize()`.
+
+  > Note (P7.8, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `From<AuthzError> for ApiError` already exists, as the note above maps it, so `require(…)` returns `authorize()`'s error with `?`. The 401 answer, `ApiError::Unauthorized`, always sends `WWW-Authenticate: Bearer` with no error detail, so it never tells whether a token existed.
 - [ ] **P7.9** 🔴 Admin endpoints:
   - `GET /users`
   - `PATCH /users/{id}` (role, disabled). Changing either revokes all of that user's sessions.
@@ -2287,6 +2311,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - governor limits per user
   - a per-username lockout stored in the DB
   - `429` with `Retry-After`
+
+  > Note (P7.10, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a limit answers with `ApiError::RateLimited { retry_after }`, the limiter's delay, which is sent in whole seconds, rounded up.
 - [ ] **P7.11** 🔴 **Route-coverage test.**
   - Routes are registered only through `public_route(…)` or `authed_route(…)` helpers, which also record them in a registry.
   - The test calls every authed route without credentials and expects `401`.

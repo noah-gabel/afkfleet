@@ -1,0 +1,17 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 405,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "method_not_allowed",
+      "message": "This method isn't allowed here.",
+      "request_id": "test-request-id"
+    }
+  }
+}

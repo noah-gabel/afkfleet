@@ -1,0 +1,18 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 401,
+  "headers": {
+    "content-type": "application/json",
+    "www-authenticate": "Bearer"
+  },
+  "body": {
+    "error": {
+      "code": "unauthorized",
+      "message": "Authentication is required.",
+      "request_id": "test-request-id"
+    }
+  }
+}

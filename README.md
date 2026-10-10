@@ -80,6 +80,7 @@ There's no support, and I don't take feature requests. Security reports are welc
 - the first tables, `users` and `audit_log`, with strict types and CHECKs, and a store whose every write transaction commits together with its audit entry
 - the audit service: entries stamped by the clock, with details that can't hold secrets
 - the API's shared types, [`crates/fleet-api-types`](crates/fleet-api-types/), exported to TypeScript for the app (`just gen`)
+- the error model: every failed request answers with one JSON envelope, a code with its status and a fixed message, and the request ID; an internal error's details go only to the log
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 

@@ -42,6 +42,10 @@ azalea-language = "=0.16.0"
 # async-trait: fleet-server's ports, which services hold as `Arc<dyn …>`; generics and
 # `impl Future` everywhere else (ADR-0015).
 async-trait = "0.1.92"
+# axum: fleet-server's HTTP layer. Without default features; the server enables only
+# what it uses. Group C uses none: `IntoResponse` and `middleware::from_fn` need no
+# feature, and the error body is written with serde_json (ADR-0015).
+axum = { version = "0.8.9", default-features = false }
 # backon: without default features only fastrand is left; the defaults pull in tokio.
 backon = { version = "1.6.0", default-features = false }
 # chrono: no `clock`/`now`, because fleet-core takes time as a parameter (ADR-0010).
@@ -105,6 +109,8 @@ sqlx = { version = "0.9.0", default-features = false }
 tokio = "1.53.2"
 # tokio-util: fleet-runtime enables no features; it uses only `CancellationToken` (ADR-0013).
 tokio-util = { version = "0.7.19", default-features = false }
+# tower: fleet-server's handler tests enable `util` for `ServiceExt::oneshot` (ADR-0015).
+tower = { version = "0.5.3", default-features = false }
 tracing = "0.1.44"
 # tracing-subscriber: the default features include `tracing-log`, which bridges `log`
 # records into fleet-testkit's log capture for the redaction tests (ADR-0011).

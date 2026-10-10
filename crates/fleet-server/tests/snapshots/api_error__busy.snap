@@ -1,0 +1,18 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 503,
+  "headers": {
+    "content-type": "application/json",
+    "retry-after": "1"
+  },
+  "body": {
+    "error": {
+      "code": "busy",
+      "message": "The server is busy. Try again shortly.",
+      "request_id": "test-request-id"
+    }
+  }
+}

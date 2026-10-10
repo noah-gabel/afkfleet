@@ -1919,8 +1919,10 @@ name = "fleet-server"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "axum",
  "chrono",
  "figment",
+ "fleet-api-types",
  "fleet-core",
  "fleet-startup",
  "fleet-testkit",
@@ -1937,6 +1939,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "uuid",

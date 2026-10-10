@@ -1,0 +1,17 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 403,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "forbidden",
+      "message": "You don't have permission to do this.",
+      "request_id": "test-request-id"
+    }
+  }
+}

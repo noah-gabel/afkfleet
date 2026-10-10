@@ -1,0 +1,27 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 422,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "validation_failed",
+      "fields": [
+        {
+          "message": "length is lower than 3",
+          "path": "name"
+        },
+        {
+          "message": "greater than 90",
+          "path": "steps[0].angle"
+        }
+      ],
+      "message": "Some fields are invalid.",
+      "request_id": "test-request-id"
+    }
+  }
+}

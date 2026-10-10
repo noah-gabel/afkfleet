@@ -1,0 +1,17 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 404,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "not_found",
+      "message": "The resource doesn't exist.",
+      "request_id": "test-request-id"
+    }
+  }
+}

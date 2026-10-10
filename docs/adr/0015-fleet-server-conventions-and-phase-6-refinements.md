@@ -174,6 +174,47 @@ The user answered group C's questions on 2026-10-10, one at a time; these are th
 - **`packages/ui` before P8** *(the user's decision)*: `packages/ui/src/generated/` holds only the generated files, committed, until P8.2 scaffolds `packages/ui` around it. With no package.json there, pnpm ignores the folder (checked: `pnpm -r ls` lists only the root), Biome already skips it, and `.gitattributes` marks it `linguist-generated=true`, as `.sqlx/` is. The files aren't type-checked until P8 brings TypeScript.
 - **Tests,** red against stubs that compiled (a `SafeInt` that took any value, a `BoundedText` that copied its input, an `Open` that read everything as unknown, empty messages, names and `ALL`, and an export, comparison and sync that did nothing): 54 of 81 failed on assertions, then all passed. A manual check showed `just gen-check` naming an edited and a stray file, and `just gen` refusing the stray file and changing nothing.
 
+### The error model (P6.5, group C)
+- **Thirteen codes** *(the user's choice: the generic HTTP set the plan names, so the envelope and the TypeScript union are complete in Phase 6; later phases add only domain-specific codes)*, one `ApiError` variant each:
+
+  | Code | Status | Message |
+  |---|---|---|
+  | `bad_request` | 400 | The request couldn't be read. |
+  | `unauthorized` | 401 | Authentication is required. |
+  | `forbidden` | 403 | You don't have permission to do this. |
+  | `not_found` | 404 | The resource doesn't exist. |
+  | `method_not_allowed` | 405 | This method isn't allowed here. |
+  | `timeout` | 408 | The request took too long. |
+  | `conflict` | 409 | The request conflicts with the current state. |
+  | `payload_too_large` | 413 | The request body is too large. |
+  | `unsupported_media_type` | 415 | The request body must be JSON. |
+  | `validation_failed` | 422 | Some fields are invalid. |
+  | `rate_limited` | 429 | Too many requests. Try again later. |
+  | `internal` | 500 | Something went wrong on the server. Quote the request ID when reporting it. |
+  | `busy` | 503 | The server is busy. Try again shortly. |
+
+  `method_not_allowed` *(the user's addition)* is there because the router answers a wrong method with 405, which must reach the same envelope (group D below).
+- **The message is a fixed sentence per code** *(the user's choice of rule and of wording: sentences for display)*, from `ErrorCode::message()` in fleet-api-types, never runtime data. A case that needs other words gets its own code, which also lets the app tell the cases apart.
+- **`fields`** *(the user's choice)*: only on `validation_failed`, an array of `{ path, message }` in the order garde reports them, paths in garde's notation (`steps[0].angle`). The app turns paths into react-hook-form names in one helper.
+- **Headers:**
+  - A 401 always sends `WWW-Authenticate: Bearer` *(the user's choice)*, as HTTP requires, with no realm and no RFC 6750 error detail, which would tell an attacker whether a token existed.
+  - A 429 sends `Retry-After` from the error's own delay (`RateLimited { retry_after }`, the limiter's in P7.10), in whole seconds, rounded up.
+  - A 503 sends `Retry-After: 1` *(the user's addition and value)*, the constant `BUSY_RETRY_AFTER`, so the app has one retry rule for both retryable errors. That covers a busy database now and P7's full argon2 queue later (§6's overload row).
+- **Conversions:**
+  - `StoreError::Busy` becomes `busy`, the one store error a client should see differently, because it's retryable; `Corrupt`, `Unstorable` and `Backend` become `internal` *(the user's decision)*.
+  - `AuthzError` *(the user's choice to add it now, ahead of P7.8)*: `NotFound` becomes 404, `Forbidden` 403, and `WrongResource`, a bug in the handler, `internal`, logged at `error`.
+  - A garde `Report` becomes `validation_failed` *(the user's choice to add it now, so P7 only derives `Validate` and uses `?`)*. A test struct with a length rule, a range rule and a nested list proves that the 422 body names rules, never values *(the user's addition)*: `hunter2-secret`, `7654321` and `12345` appear nowhere in it. garde's `pattern` rule needs its `regex` feature, so it's left out of the test until a DTO uses it *(the user's choice)*.
+  - axum's JSON rejections get their mapping with P7's first request DTO.
+- **How the body gets the request ID: a marker and a middleware** *(the user's choice over a task-local ID or IDs passed through every handler)*. `IntoResponse` can't see the request, so `ApiError::into_response` sets the status and headers and puts a private marker (code, fields, the internal source) into the response's extensions, with an empty body. The marker lives only in the extensions, never on the wire. `render_errors`, a middleware group D places inside the request-ID layer, reads the ID from the request's `x-request-id` (`REQUEST_ID_HEADER`) as a `BoundedText<64>`, takes the marker, logs, and writes the body. A response without a marker passes unchanged.
+  - **A missing ID** *(the user's choice)*: if the request has no `x-request-id`, or it's empty or not text, that's a wiring bug. The body still comes, with `request_id: "unknown"`, the status stays the error's own, and the bug is logged at `error`.
+  - **The body is written with `serde_json::to_vec`** *(the user's choice over axum's `Json`, which needs the `json` feature and would answer a serialization failure with serde's message as the body)*. If writing it ever failed, which can't happen for these types, the middleware sends a fixed, hard-coded `internal` body with `request_id: "unknown"` and logs the failure. A test checks that the fixed body equals what serde would write.
+- **Logging** *(the user's choices)*:
+  - `internal` at `error`, with `request_id` and the whole source chain, each `source()` joined with `: ` (e.g. "the database failed: disk I/O error"), not only the top `Display` (group B's note). The chain goes through `sanitize_untrusted` and is cut at 1024 characters *(the user's choice)*, as the panic hook does with panic messages (ADR-0014), so a source's text can't start a fake log line in the `pretty` format either.
+  - `busy` at `warn`, with `request_id`: a moment of overload is normal, a stream of them points at a stuck transaction.
+  - 4xx codes not at all; group D's trace layer logs every request's status.
+- **Snapshots** *(the user's choice)*: one insta JSON snapshot per variant, through the middleware with a fixed test request ID: the status, the `content-type`, `retry-after` and `www-authenticate` headers, and the parsed body. The 13 were read before accepting.
+- **Tests,** red against stubs that compiled (every variant 500 and `internal`, conversions that all gave `internal`, a middleware that passed responses through, an encoder that wrote nothing): 51 of 57 failed on assertions, then all passed.
+
 ### stable-check
 fleet-startup and fleet-server join the justfile's `stable_crates` in group A, and fleet-api-types in group C, under P0.11's rule: the crates that don't depend on azalea or azalea-auth *(the user's decision)*. fleet-server leaves it in P9.3, when azalea-auth arrives.
 
@@ -191,6 +232,10 @@ fleet-startup and fleet-server join the justfile's `stable_crates` in group A, a
 - **P7.4:** the `*_file` loader (size cap, permissions, trailing newline) comes with its first user, and the secret-name test's allowlist takes P7's non-secret matches.
 - **P7.10:** adds `[http] trusted_proxies`.
 - **P9.3:** the `azalea_auth` cap already holds on the server; fleet-server leaves `stable_crates`.
+- **Group D (P6.6)** *(from group C, the user's decisions)*:
+  - `render_errors` goes inside the request-ID layer. Errors that don't pass through `ApiError` (tower-http's timeout and body-limit responses, 405, the 404 fallback) must end up in the same `ErrorResponse` envelope with a `request_id`, e.g. by mapping them to `ApiError` or by having the middleware wrap any error status that has no marker. A 405 keeps axum's `Allow` header. An integration test sends one request for each error the router can produce and asserts that every response has the JSON body with a `request_id`, so a missing body is caught, not just safe.
+  - The request ID is always generated by the server. tower-http's `SetRequestIdLayer` keeps an `x-request-id` the client already sent, so the client-supplied header is removed or overwritten before the ID is set; otherwise a client could choose the ID that gets logged and echoed back (fake or colliding IDs, log injection). The tests send a request with its own `x-request-id` and assert that the logged and returned ID is a fresh server-generated one. The ID fits `BoundedText<64>` unchanged.
+- **P7** *(from group C, the user's decisions)*: garde joins fleet-api-types with the first request DTO (P7.6), which also maps axum's JSON rejections to 400, 415 or 422; a DTO with garde's `pattern` rule gets the leak test; the argon2 queue answers `busy` (P7.2); P7.10's limiter fills `RateLimited { retry_after }`; P7.8 uses the existing `From<AuthzError>`.
 - **P8.1** *(from group C, the user's decision)*: fleet-api-types caps each text a client reads, but not how many entries a response holds (a `fields` array with a million entries), so fleet-client sets a maximum response body size on its HTTP client, which bounds every response, not only errors.
 - **P8.5** *(from group C, the user's decision)*: UI code that branches on an error code always has a default branch that shows the message and the request ID, never an exhaustive switch that assumes the union is complete, since an older app can receive a code added later. The same applies to every `Open<…>` field in later phases. The generated folder holds only ts-rs's files, and `just gen` refuses to touch it otherwise.
 - **P10 and P11** *(from group C)*: response values a later version may extend (an agent's status, a bot's state, mode and disconnect reason) are `Open<…>` fields, and 64-bit numbers, such as the chat and audit cursors, are `SafeInt`s.
@@ -205,6 +250,8 @@ No new external crate in group A. All of these are already in `[workspace.depend
 Group C *(the user's approval of the whole set)*:
 - **New in `[workspace.dependencies]`:** ts-rs 12.0.1 without default features, and fleet-api-types by path. Cargo.lock gains only ts-rs, ts-rs-macros and termcolor (ts-rs's `serde-compat`).
 - **fleet-api-types:** fleet-core, serde (`derive`), thiserror and ts-rs (`serde-compat`). Dev: rstest, serde_json and tempfile. ts-rs's `chrono-impl` and `uuid-impl` come with the first DTO that holds a time or an ID.
+- **New in `[workspace.dependencies]` for P6.5:** axum 0.8.9 and tower 0.5.3, both without default features and both already in the lockfile.
+- **fleet-server** gains fleet-api-types and axum, with no features: `IntoResponse` and `middleware::from_fn` need none. Dev: tower (`util`, for `ServiceExt::oneshot`), and insta gains `json`.
 
 Group B *(the user's approval of the whole set)*:
 - **New in `[workspace.dependencies]`:** sqlx 0.9.0 (no default features), async-trait 0.1.92, and tempfile 3.27.0, which was already in the lockfile through figment and insta. `log` moves out of the test-only block. Cargo.lock gains only sqlx's tree; cargo deny passes, and no `ring` comes with it.
@@ -218,6 +265,7 @@ Group B *(the user's approval of the whole set)*:
   - Time and randomness are deterministic in every server test, and a direct clock or OS-randomness read in fleet-server fails clippy.
   - Every table follows one set of storage conventions, enforced by CHECKs, and every state change commits together with its audit entry.
   - Every build checks the server's SQL against committed offline data, exactly like CI, and a stale `.sqlx/` or an edited migration fails locally and in CI.
+  - Every failed request answers with one envelope, with a status, headers and a fixed message per code, and an internal error's details reach only the log, with the request ID that names them.
   - The app's API types come from the Rust DTOs, and a stale export fails locally and in CI. No 64-bit field can reach the app as a `bigint`, a code a newer server adds doesn't break an older app, and no text a server sends reaches a client's output uncleaned or unbounded.
 - **Harder:**
   - One more crate, and fleet-agent's config types are aliases over generic ones.
@@ -243,4 +291,6 @@ Group B *(the user's approval of the whole set)*:
 - **A catch-all `Other(String)` variant in `ErrorCode`, or `code` as a validated string.** The variant could be built by server code; the string would lose the TypeScript union.
 - **ts-rs's `#[ts(export)]` tests.** Every test run would write files, nextest's parallel processes would write shared files at once, and the output would depend on the `TS_RS_*` variables.
 - **A freshness check by git diff, or by a Node script.** git diff works only in CI, on a clean tree; a Node script would duplicate what the Rust comparison does with tests next to the code.
+- **A task-local request ID, or the ID passed through every handler.** The first hides context that a response built outside its scope lacks; the second makes every handler and every service error carry it.
+- **axum's `Json` for the error body.** It needs the `json` feature now and would answer a serialization failure with serde's message as the body.
 - **A minimal TypeScript package in `packages/ui` now, or another folder until P8.** The first brings P8's TypeScript dependency forward; the second would move the folder, the recipe and the job again in P8.
