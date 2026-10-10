@@ -28,3 +28,5 @@
 //!   swap the adapters.
 //! - **`infra`** implements the ports. SQL lives only there, through sqlx's
 //!   checked macros with bind parameters.
+
+pub mod config;

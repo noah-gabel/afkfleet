@@ -31,7 +31,7 @@ use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::config::LogConfig;
 
-pub use filter::FilterRules;
+pub use filter::{FilterRules, NoRules};
 pub use format::layer_with;
 pub use panic::PANIC_TARGET;
 

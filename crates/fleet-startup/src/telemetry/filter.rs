@@ -69,3 +69,149 @@ where
         )
         .or(Targets::new().with_target(PANIC_TARGET, LevelFilter::ERROR))
 }
+
+/// Rules that add nothing: the operator's filter, with only the fixed
+/// `azalea_auth` cap and panic passthrough on top. fleet-server uses them.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoRules;
+
+impl FilterRules for NoRules {
+    fn env_defaults(&self, _filter: &LogFilter) -> Option<String> {
+        None
+    }
+
+    /// A cap that lets everything through.
+    fn cap(&self, _filter: &LogFilter) -> Targets {
+        Targets::new().with_default(LevelFilter::TRACE)
+    }
+
+    fn warn_at_startup(&self, _filter: &LogFilter) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use fleet_testkit::log_buffer::LogBuffer;
+    use rstest::rstest;
+    use tracing_subscriber::layer::SubscriberExt;
+
+    use super::*;
+    use crate::config::{LogConfig, LogFormat};
+    use crate::telemetry::layer_with;
+
+    /// Logs one event at every level for `$target`.
+    macro_rules! probe {
+        ($target:literal) => {
+            tracing::trace!(target: $target, "probe");
+            tracing::debug!(target: $target, "probe");
+            tracing::info!(target: $target, "probe");
+            tracing::warn!(target: $target, "probe");
+            tracing::error!(target: $target, "probe");
+        };
+    }
+
+    /// The targets every case is checked for, in this order.
+    const TARGETS: [&str; 4] = [
+        "fleet_server",
+        "sqlx::query",
+        "azalea_auth",
+        "azalea_auth::certs",
+    ];
+
+    fn probe_all() {
+        probe!("fleet_server");
+        probe!("sqlx::query");
+        probe!("azalea_auth");
+        probe!("azalea_auth::certs");
+    }
+
+    /// Runs `emit` under a layer with no rules and `filter`, and returns the
+    /// most verbose level that got through for each probe target (`OFF` for
+    /// none).
+    fn most_verbose(filter: &str, emit: impl FnOnce()) -> [LevelFilter; 4] {
+        let buffer = LogBuffer::default();
+        let config = LogConfig {
+            format: LogFormat::Json,
+            filter: LogFilter::try_from(filter).unwrap(),
+        };
+        let subscriber = tracing_subscriber::registry().with(layer_with(
+            &config,
+            &NoRules,
+            false,
+            buffer.clone(),
+        ));
+        tracing::subscriber::with_default(subscriber, emit);
+
+        let mut seen: BTreeMap<String, LevelFilter> = BTreeMap::new();
+        for line in buffer.lines_with("probe").unwrap() {
+            let target = line["target"].as_str().unwrap().to_owned();
+            let level: LevelFilter = line["level"].as_str().unwrap().parse().unwrap();
+            let entry = seen.entry(target).or_insert(LevelFilter::OFF);
+            *entry = (*entry).max(level);
+        }
+        TARGETS.map(|target| seen.get(target).copied().unwrap_or(LevelFilter::OFF))
+    }
+
+    const OFF: LevelFilter = LevelFilter::OFF;
+    const WARN: LevelFilter = LevelFilter::WARN;
+    const INFO: LevelFilter = LevelFilter::INFO;
+    const DEBUG: LevelFilter = LevelFilter::DEBUG;
+    const TRACE: LevelFilter = LevelFilter::TRACE;
+
+    #[rstest]
+    #[case::default("info", [INFO, INFO, INFO, INFO])]
+    #[case::broad_debug("debug", [DEBUG, DEBUG, INFO, INFO])]
+    #[case::everything_trace("trace", [TRACE, TRACE, INFO, INFO])]
+    #[case::one_target("warn,sqlx=debug", [WARN, DEBUG, WARN, WARN])]
+    #[case::auth_trace("azalea_auth=trace", [OFF, OFF, INFO, INFO])]
+    #[case::certs_trace("info,azalea_auth::certs=trace", [INFO, INFO, INFO, INFO])]
+    #[case::everything_off("off", [OFF, OFF, OFF, OFF])]
+    fn no_rules_leave_the_filter_to_the_operator_but_cap_azalea_auth(
+        #[case] filter: &str,
+        #[case] expected: [LevelFilter; 4],
+    ) {
+        assert_eq!(most_verbose(filter, probe_all), expected, "{filter}");
+    }
+
+    #[rstest]
+    #[case::everything_off("off")]
+    #[case::panic_target_off("warn,afkfleet::panic=off")]
+    #[case::no_global_level("sqlx=debug")]
+    fn panic_reports_get_through_with_no_rules(#[case] filter: &str) {
+        let buffer = LogBuffer::default();
+        let config = LogConfig {
+            format: LogFormat::Json,
+            filter: LogFilter::try_from(filter).unwrap(),
+        };
+        let subscriber = tracing_subscriber::registry().with(layer_with(
+            &config,
+            &NoRules,
+            false,
+            buffer.clone(),
+        ));
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::error!(target: PANIC_TARGET, "probe");
+        });
+
+        let lines = buffer.json_lines().unwrap();
+        assert_eq!(lines.len(), 1, "{filter}");
+        assert_eq!(lines[0]["target"], PANIC_TARGET);
+    }
+
+    #[test]
+    fn no_rules_add_no_defaults_and_no_warning() {
+        let filter = LogFilter::default();
+        let buffer = LogBuffer::default();
+        let subscriber = tracing_subscriber::registry().with(layer_with(
+            &LogConfig::default(),
+            &NoRules,
+            false,
+            buffer.clone(),
+        ));
+        tracing::subscriber::with_default(subscriber, || NoRules.warn_at_startup(&filter));
+
+        assert_eq!(NoRules.env_defaults(&filter), None);
+        assert_eq!(buffer.text(), "");
+    }
+}

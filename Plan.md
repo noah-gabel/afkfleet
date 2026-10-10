@@ -2084,15 +2084,45 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Deviation: modules arrive with their code** (the user's decision). `crates/fleet-server` starts as a library whose crate doc describes the whole layout, each module with the task that fills it, and the layering (`http` handlers → `app` services → `ports` → `infra`). Group A adds `config` (P6.2); every other module arrives with the group that first puts code in it, so the tree has no empty modules.
   > - **No binary yet.** `afkfleet-server` arrives with the CLI in P6.11 (group E).
   > - fleet-server joins the justfile's `stable_crates` (P9.3 takes it out again).
-- [ ] **P6.2** 🔴 Config:
+- [x] **P6.2** 🔴 Config:
   - figment + garde
   - secrets only via `*_file` paths
   - fail fast with a clear message
+
+  > Note (P6.2, from the Phase 6 plan, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **The agent's rules,** through fleet-startup's loader: the file must exist at exactly the given path, `AFKFLEET_SERVER__…` variables override any key, unknown keys are errors in the file and in the environment, parse errors stop at the first, and validation lists every problem at once, sorted by key, without echoing a value.
+  > - **Only Phase 6's keys.** Each later phase adds its own, so a key of a later phase is still an unknown key until then (Appendix A's note).
+  >
+  >   | Key | Default | Rule |
+  >   |---|---|---|
+  >   | `dev_mode` | `false` | When it's on, the server logs one `warn` at startup |
+  >   | `[http] bind` | `127.0.0.1:8080` | An IP address and a port other than 0 |
+  >   | `[http] request_timeout_secs` | 15 | 1–300 |
+  >   | `[http] max_body_bytes` | 65536 | 1024–1048576 |
+  >   | `[database] path` | required | Absolute |
+  >   | `[log] format`, `filter` | `json`, `info` | As the agent's (P5.2) |
+  > - **Deviation: `bind` defaults to `127.0.0.1:8080`,** not Appendix A's `0.0.0.0:8080`, so a server started without it never listens on the network. The container config sets `0.0.0.0:8080` itself (P12).
+  > - **Port 0 is refused:** a server on a port the OS picks can't be reached by Caddy, and the healthcheck probes the configured port.
+  > - **`database.path` is required and absolute:** `/data/afkfleet.db` is a container path, and a relative path would resolve against wherever the server is started, so a start from another directory would silently create a fresh, empty database.
+  > - **The dev-mode warning:** "dev mode is on: development-only features are enabled; never run a production server in dev mode". It names no feature, so it stays true as later phases hang more on `dev_mode`.
+  > - **Secrets: the rule and a test now, the loader in P7.4.** A key whose name has a `_`-separated part `key`, `token`, `password`, `secret`, `passphrase`, `pepper` or `credential` (singular or plural) must end in `_file` or `_files`, or be on the test's allowlist with a reason. The test walks every key through serde's own field lists, so a new key can't escape it.
+  > - **`[log]`** is the agent's section from fleet-startup. The server's filter is `(EnvFilter ∧ azalea_auth cap) ∨ panic reports`, through fleet-startup's `NoRules`: no azalea default and no startup warning.
+
+  > Note (P6.2, as built, group A) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **Shape.** `fleet_server::config::load(path) -> Result<ServerConfig, ConfigError>`, with `ServerConfig { dev_mode, http: HttpConfig { bind, request_timeout, max_body_bytes }, database: DatabaseConfig { path }, log: LogConfig }`, `HttpConfig::DEFAULT_BIND`, `ENV_PREFIX` and `ServerConfig::warn_if_dev_mode()`.
+  >   - `ConfigError`, `Problems` and `Problem` are aliases of fleet-startup's generic types over the server's `ProblemKind`: `Missing`, `Empty`, `OutOfRange`, `NotAbsolute`, `SocketAddress`, `PortZero`, `LogFormat` and `LogFilter`. No message echoes a value.
+  >   - `fleet_startup::telemetry::NoRules` is the server's `FilterRules`: no defaults, a cap that lets everything through, no warning.
+  > - **A dependency edge beyond the plan's list** (the user's approval): `tracing-subscriber` as a fleet-server dev-dependency, so the dev-mode test checks the warning's level through fleet-startup's layer.
+  > - **Tests**, red against stubs that compiled (a `validate` that returned fixed defaults, a `warn_if_dev_mode` that did nothing, a `NoRules` cap that blocked everything, a key walker that found nothing): 40 of 106 failed on assertions, then all passed.
+  >   - `tests/config.rs` (31 cases, each through `fleet_testkit::jail::in_jail`): the defaults, every key, environment overrides, the bind forms, the dev-mode warning on and off, a missing file, unknown keys in the file and the environment, a later phase's section, a wrong type, the database path, bad binds and port 0, the range edges, bad log settings, and every problem at once without values.
+  >   - Unit tests: the secret-name rule (14 names), the walk finding every Phase 6 key, no key holding a secret, the allowlist's entries, and the problem list's text.
+  >   - fleet-startup: `NoRules` across 7 filters and 4 targets (`azalea_auth` stays at `info` under `trace`), panic reports under `off`, and no defaults or warning.
 - [ ] **P6.3** SQLite setup:
   - `journal_mode=WAL`, `synchronous=NORMAL`, `foreign_keys=ON`, `busy_timeout=5s`
   - a **write pool with 1 connection** plus a read pool
   - migrations embedded with `sqlx::migrate!` and run at startup
   - offline data in `.sqlx/`, and a CI job running `cargo sqlx prepare --check`
+  > Note (P6.3, from group A, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **sqlx's statement logging is set explicitly** when the connection is configured: every statement at `debug`, slow statements at `warn`. sqlx has logged every statement at `info` in some versions, which the default `info` filter would let through on every request.
 - [ ] **P6.4** 🔴 First migration and repositories for `users` and `audit_log`, tested with `#[sqlx::test]`.
 - [ ] **P6.5** 🔴 `ApiError` maps each error to a status code and `{ "error": { "code", "message", "request_id", "fields"? } }`.
   - Internal errors are logged with the request ID and returned as a generic 500.
@@ -2117,6 +2147,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - CI job `ts-types-fresh` fails on any diff
 - [ ] **P6.10** OpenAPI via utoipa. `/api/openapi.json` is served only when `dev_mode = true`.
 - [ ] **P6.11** CLI skeleton: `serve`, `migrate`, `healthcheck`.
+
+  > Note (P6.11, from group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **The dev-mode warning.** `serve` calls `ServerConfig::warn_if_dev_mode()` right after logging starts.
+  > - **The healthcheck's address.** When `bind` is an unspecified address (`0.0.0.0` or `::`), as the container config will set, the healthcheck probes loopback (`127.0.0.1` or `::1`) on the same port instead: connecting to `0.0.0.0` only happens to work on Linux and fails on Windows.
+  > - **The dev config's database path must be absolute,** and a committed file can't hold one that works on every machine. How `just dev-server` provides it is group E's question, e.g. a `$`-parameter built from `justfile_directory()`.
 - [ ] **P6.12** 🔴 Graceful shutdown: axum's `with_graceful_shutdown` plus a `CancellationToken`.
 
 **Security:**
@@ -2152,6 +2187,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - TTLs
   - refresh rotation, and **family revocation when an old token is reused**
 - [ ] **P7.4** 🔴 Vault cipher: the envelope from §7.5 with `key_id` and AAD. TOTP secrets need it now; Phase 9 extends it. Tests cover tampering, the wrong key and the wrong AAD.
+
+  > Note (P7.4, from Phase 6, group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **The `*_file` loader comes here,** with its first user, the vault key: how a secret file is read into a `SecretBox` (a size cap, its permissions, a trailing newline) is decided and tested in this task.
+  > - **The secret-name test** (P6.2) already checks every config key: a name with a part `key`, `token`, `password`, `secret`, `passphrase`, `pepper` or `credential` must end in `_file` or `_files`. Keys that match but hold no secret, such as `[auth] access_token_ttl_secs`, go on the test's allowlist (`NOT_SECRETS` in fleet-server's `config/raw.rs`), each with its reason.
 - [ ] **P7.5** 🔴 CLI `user create-owner`: hidden prompt with `rpassword`; refuses when an Owner already exists.
 - [ ] **P7.6** 🔴 Endpoints:
   - `POST /auth/login`, `/auth/login/mfa`, `/auth/refresh`, `/auth/logout`, `/auth/register` (invite)
@@ -2182,6 +2221,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P7.10** 🔴 Rate limiting:
   - tower_governor per IP, globally and on auth routes, via `into_make_service_with_connect_info`
   - `trusted_proxies` CIDRs decide when `X-Forwarded-For` is honored
+
+  > Note (P7.10, from Phase 6, group A) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `[http] trusted_proxies` doesn't exist yet: the server's config has only Phase 6's keys, so this task adds it, with its validation.
   - a periodic `retain_recent()` clean-up
   - governor limits per user
   - a per-username lockout stored in the DB
@@ -2657,6 +2698,10 @@ These are not scheduled. Each one needs an ADR before it starts.
 
 ### A. Example configuration
 Secrets **never** go in these files. They're referenced through `*_file` paths (Docker secrets). Environment variables override any key: `AFKFLEET_SERVER__AUTH__ACCESS_TOKEN_TTL_SECS=600`, `AFKFLEET_AGENT__RUNTIME__MAX_BOTS=20`.
+
+> Note (Appendix A, from Phase 6, group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **`server.toml` grows with the phases.** Unknown keys are errors, and Phase 6 defines only `dev_mode`, `[http] bind`, `request_timeout_secs` and `max_body_bytes`, `[database] path` and `[log]`. Each later key arrives with its task: `trusted_proxies` (P7.10), `[auth]` (P7), `[rate_limits]` (P7.10), `[vault]` (P7.4, P9), `[accounts]` (P9), `[grpc]` (P10), `[chat]` (P11) and the `backup_*` keys (P12.3). The example below shows the full set.
+> - `bind` defaults to `127.0.0.1:8080`, not the `0.0.0.0:8080` below, which is what a container sets.
+> - `[database] path` is required and must be absolute.
 
 `server.toml`
 ```toml

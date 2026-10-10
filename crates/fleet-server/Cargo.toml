@@ -9,3 +9,20 @@ repository.workspace = true
 
 [lints]
 workspace = true
+
+[dependencies]
+# The config loader and errors, the `[log]` types and the log layer (ADR-0015).
+fleet-startup.workspace = true
+garde = { workspace = true, features = ["derive"] }
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+# `figment::Jail`, the type `in_jail` hands each config test (ADR-0015).
+figment = { workspace = true, features = ["test"] }
+fleet-testkit.workspace = true
+rstest.workspace = true
+# A scoped subscriber around fleet-startup's layer, for the dev-mode warning's
+# test (ADR-0015).
+tracing-subscriber.workspace = true
