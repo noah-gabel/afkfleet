@@ -469,4 +469,43 @@ mod permissions {
             "{result:?}"
         );
     }
+
+    #[tokio::test]
+    async fn a_folder_the_server_cant_write_to_is_a_create_error() {
+        let dir = TempDir::new().unwrap();
+        let folder = dir.path().join("read-only");
+        fs::create_dir(&folder).unwrap();
+        fs::set_permissions(&folder, Permissions::from_mode(0o500)).unwrap();
+        let config = DatabaseConfig {
+            path: folder.join("afkfleet.db"),
+        };
+
+        let result = open(&config, DatabaseOptions::default()).await;
+
+        fs::set_permissions(&folder, Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            matches!(&result, Err(OpenError::Create { file, .. }) if *file == config.path),
+            "{result:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_folder_the_server_cant_look_into_is_an_inspect_error() {
+        let dir = TempDir::new().unwrap();
+        let locked = dir.path().join("locked");
+        let folder = locked.join("data");
+        fs::create_dir_all(&folder).unwrap();
+        fs::set_permissions(&locked, Permissions::from_mode(0o000)).unwrap();
+        let config = DatabaseConfig {
+            path: folder.join("afkfleet.db"),
+        };
+
+        let result = open(&config, DatabaseOptions::default()).await;
+
+        fs::set_permissions(&locked, Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            matches!(&result, Err(OpenError::Inspect { file, .. }) if *file == folder),
+            "{result:?}"
+        );
+    }
 }

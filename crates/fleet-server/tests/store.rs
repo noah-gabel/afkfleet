@@ -15,7 +15,7 @@
 use core::time::Duration;
 use std::net::IpAddr;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, TimeZone, Utc};
 use fleet_core::audit::{
     AuditAction, AuditMetadata, AuditOutcome, AuditTarget, RecordedMetadata, RecordedTarget,
     RecordedValue, TargetKind,
@@ -838,5 +838,194 @@ async fn a_database_errors_source_chain_reaches_sqlx(
 
     let source = std::error::Error::source(&error).unwrap();
     assert!(source.downcast_ref::<sqlx::Error>().is_some(), "{source}");
+    db.close().await;
+}
+
+// --- Values that don't read back, and values that can't be stored -----------
+
+/// A row that passes every CHECK but holds a value the Rust types refuse.
+async fn corrupt_user(pool: &SqlitePool, username: &str, created_at: &str, changed_at: &str) {
+    let id = user_id(1).to_string();
+    sqlx::query!(
+        "INSERT INTO users (id, username, password_hash, role, disabled, created_at, password_changed_at) VALUES (?, ?, ?, 'member', 0, ?, ?)",
+        id,
+        username,
+        HASH,
+        created_at,
+        changed_at
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_stored_username_the_rules_refuse_is_corrupt(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = connect(options).await;
+    corrupt_user(db.write_pool(), "two words", STORED_AT, STORED_AT).await;
+
+    let result = db.users().get(user_id(1)).await;
+
+    assert!(
+        matches!(
+            result,
+            Err(StoreError::Corrupt {
+                table: "users",
+                column: "username",
+                rowid: 1
+            })
+        ),
+        "{result:?}"
+    );
+    db.close().await;
+}
+
+#[sqlx::test(migrations = false)]
+async fn stored_times_that_arent_dates_are_corrupt(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = connect(options).await;
+    // The shape CHECK passes; February has no 30th.
+    corrupt_user(
+        db.write_pool(),
+        "afkbot1",
+        STORED_AT,
+        "2026-02-30T12:00:00.000Z",
+    )
+    .await;
+
+    let result = db.users().get(user_id(1)).await;
+
+    assert!(
+        matches!(
+            result,
+            Err(StoreError::Corrupt {
+                table: "users",
+                column: "password_changed_at",
+                rowid: 1
+            })
+        ),
+        "{result:?}"
+    );
+    db.close().await;
+}
+
+/// An audit row with the given columns, the rest valid.
+async fn corrupt_entry(
+    pool: &SqlitePool,
+    at: &str,
+    actor: Option<&str>,
+    ip: Option<&str>,
+    target: (Option<&str>, Option<&str>),
+) -> i64 {
+    let (target_type, target_id) = target;
+    sqlx::query!(
+        "INSERT INTO audit_log (at, actor_user_id, actor_ip, action, target_type, target_id, outcome) VALUES (?, ?, ?, 'x.y', ?, ?, 'success')",
+        at,
+        actor,
+        ip,
+        target_type,
+        target_id
+    )
+    .execute(pool)
+    .await
+    .unwrap()
+    .last_insert_rowid()
+}
+
+#[sqlx::test(migrations = false)]
+async fn every_audit_column_that_doesnt_read_back_names_itself(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = connect(options).await;
+    let pool = db.write_pool();
+    let v4 = "550e8400-e29b-41d4-a716-446655440000";
+    raw_user(pool, v4, "oldid", HASH, "member").await.unwrap();
+    let v7 = user_id(3).to_string();
+    let cases = [
+        (
+            "at",
+            corrupt_entry(pool, "2026-02-30T12:00:00.000Z", None, None, (None, None)).await,
+        ),
+        (
+            "actor_user_id",
+            corrupt_entry(pool, STORED_AT, Some(v4), None, (None, None)).await,
+        ),
+        (
+            "actor_ip",
+            corrupt_entry(pool, STORED_AT, None, Some("not-an-ip"), (None, None)).await,
+        ),
+        (
+            "target_type",
+            corrupt_entry(pool, STORED_AT, None, None, (Some("Session"), Some(&v7))).await,
+        ),
+        (
+            "target_type",
+            corrupt_entry(pool, STORED_AT, None, None, (Some("user"), Some(v4))).await,
+        ),
+    ];
+
+    // Each row is listed alone, newest first, so its own error shows.
+    for (column, id) in cases {
+        let page = AuditPage {
+            before: Some(AuditEntryId::new(id + 1)),
+            limit: AuditLimit::new(1).unwrap(),
+        };
+        let result = db.audit().list(page).await;
+        assert!(
+            matches!(&result, Err(StoreError::Corrupt { table: "audit_log", column: c, rowid }) if *c == column && *rowid == id),
+            "{column}: {result:?}"
+        );
+    }
+    db.close().await;
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_time_outside_the_years_0_to_9999_is_unstorable(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = connect(options).await;
+    let far = Utc.with_ymd_and_hms(10_000, 1, 1, 0, 0, 0).unwrap();
+    let mut user = new_user(1, "afkbot1", Role::Member);
+    user.created_at = far;
+
+    let mut tx = db.write().await.unwrap();
+    let insert = tx.users().insert(&user).await;
+    let record = tx
+        .audit()
+        .record(&NewAuditEntry::new(
+            far,
+            action("x.y"),
+            AuditOutcome::Success,
+        ))
+        .await;
+    drop(tx);
+
+    assert!(
+        matches!(
+            insert,
+            Err(InsertUserError::Store(StoreError::Unstorable {
+                table: "users",
+                column: "created_at"
+            }))
+        ),
+        "{insert:?}"
+    );
+    assert!(
+        matches!(
+            record,
+            Err(StoreError::Unstorable {
+                table: "audit_log",
+                column: "at"
+            })
+        ),
+        "{record:?}"
+    );
     db.close().await;
 }
