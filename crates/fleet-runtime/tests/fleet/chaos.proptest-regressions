@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c536f42df29c8bb7f54c27b6ce7c8334b754324c9780cfb9f456c184a5d23948 # settle() returned before absorbing a final reconnect: the counter said 4, the model 3 (CI on PR #23)
