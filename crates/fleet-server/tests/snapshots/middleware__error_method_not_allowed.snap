@@ -1,0 +1,25 @@
+---
+source: crates/fleet-server/tests/middleware.rs
+expression: redacted(seen)
+---
+{
+  "status": 405,
+  "headers": {
+    "allow": "GET,HEAD",
+    "cache-control": "no-store",
+    "content-length": "135",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "[request_id]"
+  },
+  "body": {
+    "error": {
+      "code": "method_not_allowed",
+      "message": "This method isn't allowed here.",
+      "request_id": "[request_id]"
+    }
+  }
+}

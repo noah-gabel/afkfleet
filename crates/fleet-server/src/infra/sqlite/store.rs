@@ -105,4 +105,12 @@ impl Store for Database {
     fn audit(&self) -> &dyn AuditReads {
         &self.reads
     }
+
+    async fn ping(&self) -> Result<(), StoreError> {
+        sqlx::query_scalar!("SELECT 1")
+            .fetch_one(&self.read)
+            .await
+            .map(drop)
+            .map_err(store_error)
+    }
 }

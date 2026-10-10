@@ -59,6 +59,15 @@ pub trait Store: Send + Sync + fmt::Debug {
 
     /// The audit log, read through the read connections.
     fn audit(&self) -> &dyn AuditReads;
+
+    /// Checks that the database answers: one trivial query through a read
+    /// connection, for the readiness check (P6.7). It never competes with the
+    /// one write connection.
+    ///
+    /// # Errors
+    /// [`StoreError::Busy`] when no read connection is free within the
+    /// acquire timeout, or [`StoreError::Backend`] when the database fails.
+    async fn ping(&self) -> Result<(), StoreError>;
 }
 
 /// One write transaction. Dropping it without [`WriteTx::commit`] rolls

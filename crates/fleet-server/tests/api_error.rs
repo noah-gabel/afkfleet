@@ -259,14 +259,14 @@ async fn without_a_request_id_the_body_says_unknown_and_the_wiring_bug_is_logged
 }
 
 #[tokio::test]
-async fn a_response_without_an_api_error_passes_unchanged() {
+async fn a_success_without_an_api_error_passes_unchanged() {
     let app = Router::new()
-        .route("/", get(|| async { (StatusCode::IM_A_TEAPOT, "tea") }))
+        .route("/", get(|| async { (StatusCode::CREATED, "tea") }))
         .layer(from_fn(render_errors));
 
     let seen = send(app, Some(test_request_id())).await;
 
-    assert_eq!(seen.status, 418);
+    assert_eq!(seen.status, 201);
     assert_eq!(seen.text, "tea");
     assert_eq!(
         seen.headers.get("content-type").unwrap(),

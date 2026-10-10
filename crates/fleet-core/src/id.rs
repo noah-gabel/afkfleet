@@ -1,4 +1,5 @@
-//! Typed IDs for the domain's entities.
+//! Typed IDs for the domain's entities, and [`RequestId`], which names one HTTP
+//! request to the server rather than an entity.
 //!
 //! Every entity has its own ID type, so a [`BotId`] can't be passed where a
 //! [`UserId`] is expected:
@@ -176,6 +177,12 @@ define_id!(
     /// Identifies a mode (built-in or custom).
     ModeId
 );
+define_id!(
+    /// Identifies one HTTP request to the server: minted by its request-ID
+    /// layer for every request, sent back in `x-request-id` and in every error
+    /// body, and logged with the request. It names no entity.
+    RequestId
+);
 
 #[cfg(test)]
 mod tests {
@@ -329,6 +336,7 @@ mod tests {
         assert_trait_mints_like_the_constructor(BotId::new_v7);
         assert_trait_mints_like_the_constructor(AgentId::new_v7);
         assert_trait_mints_like_the_constructor(ModeId::new_v7);
+        assert_trait_mints_like_the_constructor(RequestId::new_v7);
     }
 
     #[test]
@@ -338,6 +346,7 @@ mod tests {
         assert_round_trips(BotId::new_v7);
         assert_round_trips(AgentId::new_v7);
         assert_round_trips(ModeId::new_v7);
+        assert_round_trips(RequestId::new_v7);
     }
 
     #[test]

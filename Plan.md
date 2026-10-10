@@ -190,7 +190,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Minecraft protocol & client | `azalea` | `=0.16.0` (+mc26.1) | fleet-mc | Needs nightly (ADR-0003). Disable its `AutoReconnectPlugin` and `AutoRespawnPlugin`. Runs only inside a `LocalSet` |
 | Minecraft chat components & translations | `azalea-chat`, `azalea-language` | `=0.16.0` (+mc26.1) | fleet-mc | Already in azalea's graph at the same pin. Only for fleet-mc's bounded renderer of server text: it names `PrimitiveOrComponent`, which azalea doesn't re-export, and looks up translation templates, because azalea's own rendering grows exponentially (ADR-0011). Bumped together with azalea |
 | Microsoft / Minecraft auth | `azalea-auth` | `=0.16.0` (+mc26.1) | fleet-server | Device-code flow. Never use its file cache. fleet-mc reaches only `azalea::auth::sessionserver` and `certs`, through azalea's re-export, never the Microsoft flows; its clippy config bans them (ADR-0011) |
-| Async runtime | `tokio` | 1.53.2 | runtime, mc, testkit, agent, server, client | `test-util` feature in dev. Clippy bans `unbounded_channel`; azalea's two mandated channels are the only exceptions (ADR-0011). The agent builds a multi-threaded runtime after loading its config (ADR-0014). fleet-server enables `fs`, to create the database file and check its permissions (ADR-0015) |
+| Async runtime | `tokio` | 1.53.2 | runtime, mc, testkit, agent, server, client | `test-util` feature in dev. Clippy bans `unbounded_channel`; azalea's two mandated channels are the only exceptions (ADR-0011). The agent builds a multi-threaded runtime after loading its config (ADR-0014). fleet-server enables `fs`, to create the database file and check its permissions, and `time`, for the trace layer's latency from tokio's clock (ADR-0015) |
 | Cancellation, task tracking | `tokio-util` | 0.7.19 | runtime, mc, agent, server | `CancellationToken`, `TaskTracker`. fleet-runtime and the agent enable no features: they use only `CancellationToken`, and their tasks live in tokio's `JoinSet`, which reports panics (ADR-0013, ADR-0014) |
 | Stream adapters | `tokio-stream` | 0.1.19 | proto, agent, server | gRPC streams, broadcast → stream |
 | Sink/Stream extension traits | `futures-util` | 0.3.34 | client, server | WebSocket split/send |
@@ -214,10 +214,10 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 ### Rust: API, transport & persistence
 | Concern | Crate | Version | Used in | Notes |
 |---|---|---|---|---|
-| HTTP framework + WebSocket server | `axum` | 0.8.9, dfo | server | `ws` feature. fleet-server enables only what it uses: none in Phase 6, group C, since `IntoResponse` and `middleware::from_fn` need none and the error body is written with serde_json (ADR-0015) |
+| HTTP framework + WebSocket server | `axum` | 0.8.9, dfo | server | `ws` feature. fleet-server enables only what it uses: `matched-path` (P6.6), so the trace layer logs the route's template, never the path a client sent; the error body is written with serde_json (ADR-0015) |
 | Typed headers (and cookies later) | `axum-extra` | 0.12.6 | server | `TypedHeader<Authorization<Bearer>>` |
-| Service abstraction | `tower` | 0.5.3, dfo | server, client | fleet-server's tests enable `util` for `ServiceExt::oneshot` (ADR-0015) |
-| HTTP middleware | `tower-http` | 0.7.1 | server | request-id, trace, timeout, body limit, sensitive headers, set-header, catch-panic |
+| Service abstraction | `tower` | 0.5.3, dfo | server, client | fleet-server lists its middleware stack with `ServiceBuilder` (no feature); its tests enable `util` for `ServiceExt::oneshot` (ADR-0015) |
+| HTTP middleware | `tower-http` | 0.7.1 | server | fleet-server enables `catch-panic`, `timeout`, `limit`, `sensitive-headers` and `set-header`. Never `request-id`, which turns on uuid's `v4` and with it `rng`, nor `trace`, whose response hook can't see the route: the request-ID and trace layers are the server's own (P6.6). reqwest keeps its own 0.6.11 (ADR-0015) |
 | OpenAPI | `utoipa`, `utoipa-axum` | 6.0.0, 0.3.0 | server | P0 picked 6.x (ADR-0009): released 2026-09-22, re-check at P6 |
 | Database | `sqlx` | **0.9.0**, dfo | server | `runtime-tokio`, `sqlite-bundled`, `migrate`, `macros`, `uuid`; no TLS feature (SQLite); offline data in `crates/fleet-server/.sqlx/`. Not `sqlite`: in 0.9 it also turns on extension loading, deserialize and unlock-notify. Not `chrono`: it would turn on chrono's `clock` for the whole workspace build, so times are converted in fleet-server. Not `json` (ADR-0015) |
 | gRPC | `tonic`, `tonic-prost` | **0.14.6** | proto, agent, server | Features `tls-aws-lc`, `tls-connect-info`. Never `tls-ring` or `tls-webpki-roots` |
@@ -467,7 +467,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - A clippy deny-list (see P0.3).
   - Release builds use `overflow-checks = true` and `panic = "unwind"`, never `abort`.
 - **HTTP:**
-  - Security headers: `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, and HSTS at Caddy.
+  - Security headers: `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` and `X-Frame-Options: DENY` (the last two added in P6.6), on every response; HSTS at Caddy.
   - 64 KiB body limit and 15 s timeout.
   - **No CORS layer.** The app proxies every call through Rust, and the future website will be served from the same origin.
 - **Tauri:**
@@ -2093,6 +2093,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 > - **stable-check.** fleet-startup and fleet-server join `stable_crates` in group A, fleet-api-types in group C. P9.3 removes fleet-server when azalea-auth arrives.
 > - **Dependencies (group B, the user's approval).** New in `[workspace.dependencies]`: sqlx (0.9.0, no default features), async-trait (0.1.92) and tempfile (3.27.0, already in the lockfile). fleet-server gains fleet-core, async-trait, chrono (`now`), getrandom, log (only for sqlx's `LevelFilter`), secrecy, serde_json, sqlx (`runtime-tokio`, `sqlite-bundled`, `macros`, `migrate`, `uuid`), tokio (`fs`) and uuid; in dev, insta, proptest (`std`), tempfile and tokio (`macros`, `rt`). fleet-testkit gains chrono and rand (`std_rng`). fleet-core gains nothing.
 > - **Dependencies (group C, the user's approval).** New in `[workspace.dependencies]`, each without default features: ts-rs (12.0.1), axum (0.8.9) and tower (0.5.3), plus fleet-api-types by path. fleet-api-types uses fleet-core, serde (`derive`), thiserror and ts-rs (`serde-compat`); in dev, rstest, serde_json and tempfile. fleet-server gains fleet-api-types and axum (no features); in dev, tower (`util`), and insta gains `json`. Cargo.lock gains only ts-rs, ts-rs-macros and termcolor. ts-rs's `chrono-impl` and `uuid-impl` come with the first DTO that holds a time or an ID.
+> - **Dependencies (group D, the user's approval).** New in `[workspace.dependencies]`: tower-http (0.7.1; it has no default features). fleet-server gains tower-http (`catch-panic`, `timeout`, `limit`, `sensitive-headers`, `set-header`), tower as a normal dependency (no features, for `ServiceBuilder`), axum's `matched-path` and tokio's `time`; in dev, tokio's `test-util`. fleet-core gains the `RequestId` type, no dependency. Cargo.lock gains only tower-http 0.7.1, next to reqwest's 0.6.11.
 > - **Dependencies.** Group A adds no external crate. fleet-startup uses figment (`toml`, `env`), serde, thiserror, tracing and tracing-subscriber (`env-filter`, `json`); fleet-testkit gains figment (`test`) and serde_json; fleet-server uses fleet-startup, garde (`derive`), serde (`derive`), thiserror and tracing.
 
 - [x] **P6.1** Module layout (see `CLAUDE.md`): `config`, `app` (services), `ports`, `infra/{sqlite,crypto}`, `http/{router,middleware,extractors,handlers,error}`, `grpc`, `cli`.
@@ -2173,7 +2174,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - If writing the body ever failed (it can't for these types), a fixed, hard-coded `internal` body with `request_id: "unknown"` is sent and the failure logged, never serde's text; a test checks that the fixed body equals what serde would write.
   > - **Logging:** `internal` at `error`, with `request_id` and the whole source chain joined as "a: b: c" (e.g. "the database failed: disk I/O error"), cleaned by `sanitize_untrusted` and cut at 1024 characters; `busy` at `warn`, with `request_id`; 4xx codes not at all, since group D's trace layer logs every request's status.
   > - **Tests**, red against stubs that compiled (every variant 500 and `internal`, conversions that all gave `internal`, a middleware that passed responses through): 51 of 57 failed on assertions, then all passed. 13 snapshots, one per variant, hold the status, the `content-type`, `retry-after` and `www-authenticate` headers and the body, through the middleware with a fixed request ID; they were read before accepting. A garde test struct (length and range rules) proves that the 422 body names rules, never values: `hunter2-secret`, `7654321` and `12345` appear nowhere in it, and garde's texts fit their caps uncut.
-- [ ] **P6.6** 🔴 Middleware stack, in this documented order:
+- [x] **P6.6** 🔴 Middleware stack, in this documented order:
   1. request-id (set and propagate)
   2. trace (no bodies, sensitive headers redacted)
   3. `CatchPanicLayer`, which turns a panic into a 500
@@ -2186,7 +2187,49 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P6.6, from group C, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
   > - **`render_errors` goes inside the request-ID layer,** so every `ApiError` gets its ID. Errors that don't pass through `ApiError` (tower-http's timeout and body-limit responses, 405, the 404 fallback) must end up in the same `ErrorResponse` envelope with a `request_id`, e.g. by mapping them to `ApiError` or by having the middleware wrap any error status without a marker. A 405 keeps axum's `Allow` header. An integration test sends one request for each error the router can produce and asserts that every response has the JSON body with a `request_id`, so a missing body is caught, not just safe.
   > - **The request ID is always generated by the server.** tower-http's `SetRequestIdLayer` keeps an `x-request-id` the client already sent, so the client's header is removed or overwritten before the ID is set; otherwise a client could choose the ID that gets logged and echoed back (fake or colliding IDs, log injection). The tests send a request with its own `x-request-id` and assert that the logged and returned ID is a fresh server-generated one. The ID fits `BoundedText<64>` unchanged: at most 64 characters, none that `sanitize_untrusted` strips.
-- [ ] **P6.7** 🔴 `GET /health/live` and `GET /health/ready` (DB ping), with no internal details in the response.
+
+  > Note (P6.6, as built, group D, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **Deviation: the order.** The security headers sit outermost, so every response gets them, including those the layers below make themselves: a refused request, a timeout, a body-limit 413, a panic.
+  >   - **The stack, outermost first:** sensitive headers, security headers, request ID, trace, `render_errors`, catch-panic, timeout (`[http] request_timeout_secs`, 408), body limit (`[http] max_body_bytes`), then the router with its 404 and 405 fallbacks.
+  >   - `http::middleware::apply(routes, &HttpConfig, RequestIds)` adds them, and its module docs give each layer's reason.
+  > - **The request ID** is a version 7 `RequestId` (a new `define_id!` in fleet-core), minted with `system::mint` from the `Clock` and `SecureRandom` ports: lowercase hyphenated, 36 characters.
+  >   - **Deviation: the layer is the server's own,** not tower-http's `request-id`, which turns on uuid's `v4` and `rng`.
+  >   - It removes every `x-request-id` the client sent, then sets the new ID on the request and on the response, replacing any value a handler set.
+  >   - If minting fails, the request is refused with the internal error (`request_id: "unknown"`) and the cause is logged at `error`; the handler never runs.
+  > - **Deviation: two security headers more than §7.6 listed.** Every response carries `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` and `X-Frame-Options: DENY`. They're set with `overriding`, so a handler can't weaken them.
+  > - **Sensitive headers:** `Authorization`, `Proxy-Authorization` and `Cookie` on requests, and `Set-Cookie` on responses, are marked before anything else runs.
+  > - **Deviation: the trace layer is the server's own,** not tower-http's `trace`, whose response hook can't see the route.
+  >   - An `info` span `request` carries `request_id`, `method` and `route`. `method` is one of the nine standard methods or `"<other>"`. `route` is axum's `MatchedPath` template or `"<unmatched>"`, never the path a client sent or its query string.
+  >   - One line, "request finished", carries `status`, `latency_ms` (a float, to the microsecond) and, for an error, `code`. It's logged at `info`, or at `debug` for `/health/…`.
+  >   - It logs no header and no body. A test sends credentials and a JSON body with marker values, and no marker appears in any line at `debug`.
+  > - **The safety net:** `render_errors` gives every 4xx or 5xx without a marker the envelope.
+  >   - The code comes from the status. A status without a code of its own keeps its status and says `bad_request` (4xx) or `internal` (5xx). A bare 422 has `fields: []`.
+  >   - The old body is replaced, and `Content-Length` and `Content-Encoding` are removed. Every other header stays, such as axum's `Allow` and a limiter's `Retry-After`.
+  >   - A missing `WWW-Authenticate: Bearer` (401) or `Retry-After: 1` (503) is added.
+  >   - Every bare error status is logged at `error` as a wiring bug, except the timeout's 408 and the body limit's 413.
+  >   - The 404 and 405 fallbacks and the panic handler return `ApiError` themselves.
+  > - **A panic** answers with the internal error, whose source is the fixed "a request handler panicked". The payload reaches the log only through fleet-startup's panic hook, whose line carries the request span. That's tested with a stand-in hook in a test binary of its own, since the hook is process-wide.
+  > - **Group C's test changed:** `a_response_without_an_api_error_passes_unchanged` sent a bare 418 and expected it unchanged. The safety net now wraps a 418, so the test sends a 201 (`a_success_without_an_api_error_passes_unchanged`), and the 418 is one of the safety-net cases.
+  > - **Tests**, red against compiling stubs: pass-through ID and trace layers, no safety net, no security or sensitive headers, no timeout or body limit, and tower-http's default panic response. 53 of 110 failed on assertions, then all passed.
+  >   - `tests/middleware.rs` sends one request per error: 404, 405, 408, 413 by its length and when read, a panic, and a failed mint. It also sends one per bare status. Each gets a snapshot, 16 in all, read before accepting.
+  >   - The timeout's tests run on paused time.
+- [x] **P6.7** 🔴 `GET /health/live` and `GET /health/ready` (DB ping), with no internal details in the response.
+
+  > Note (P6.7, as built, group D, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **Shape.** `http::router::router(AppState, &HttpConfig, RequestIds)` holds the two routes, without the `/api/v1` prefix (Appendix B), behind P6.6's stack.
+  >   - The handlers live in `http::handlers::health`.
+  >   - `ready` calls `app::health::HealthService::ready()`, which calls the new `Store::ping()`.
+  >   - `ping()` is `SELECT 1` (`query_scalar!`) on the read pool, so it never competes with the one write connection.
+  > - **Answers.** Both checks answer `200` with an empty body.
+  >   - `live` checks nothing else.
+  >   - A failed `ready` answers like any store failure, through `From<StoreError>`. A busy database (no read connection within the acquire timeout) gives `busy`: 503, `Retry-After: 1`, logged at `warn`. Any other failure gives `internal`: 500, its source chain logged at `error` with the request ID.
+  >   - No response holds anything of the cause.
+  > - **Bounded like every query:** the pools' 5 s acquire timeout, `busy_timeout` and the request timeout. There's no extra timeout.
+  > - **Logging.** The trace layer logs both routes at `debug`, so a probe every few seconds doesn't flood the log. A failed check is still logged by `render_errors`.
+  > - **Tests**, red against a `ping` that always failed and handlers that answered 500: 10 of 44 failed on assertions, then all passed.
+  >   - `tests/health.rs` runs in real time against a database from `#[sqlx::test]`. It covers 200 and `HEAD` for both routes, 405 with `Allow`, `live` with a closed database, `ready` busy (every read connection held, a 1 s acquire timeout), and `ready` with a closed database.
+  >   - It has 4 snapshots, read before accepting.
+  >   - `tests/store.rs` checks the ping: it succeeds, it doesn't wait for a held write connection, it's busy while every read connection is taken, and it's a backend error on a closed database.
 - [x] **P6.8** 🔴 Audit service:
   - append-only: the trait has only `record` and `list`
   - each entry: actor, IP, action, target, outcome, metadata (no secrets), timestamp
@@ -2221,6 +2264,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The dev-mode warning.** `serve` calls `ServerConfig::warn_if_dev_mode()` right after logging starts.
   > - **The healthcheck's address.** When `bind` is an unspecified address (`0.0.0.0` or `::`), as the container config will set, the healthcheck probes loopback (`127.0.0.1` or `::1`) on the same port instead: connecting to `0.0.0.0` only happens to work on Linux and fails on Windows.
   > - **The dev config's database path must be absolute,** and a committed file can't hold one that works on every machine. How `just dev-server` provides it is group E's question, e.g. a `$`-parameter built from `justfile_directory()`.
+
+  > Note (P6.11, from group D) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `serve` builds `http::router::router` with `RequestIds` over `SystemClock` and `OsRandom` and the `Database` as the health service's store. The healthcheck probes `/health/ready`, whose only success is `200` with an empty body.
 - [ ] **P6.12** 🔴 Graceful shutdown: axum's `with_graceful_shutdown` plus a `CancellationToken`.
 
   > Note (P6.12, from group B) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `Database::close()` closes the read pool, then the write pool, and waits for every checked-out connection, so shutdown bounds it with a timeout.
@@ -2313,10 +2358,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `429` with `Retry-After`
 
   > Note (P7.10, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a limit answers with `ApiError::RateLimited { retry_after }`, the limiter's delay, which is sent in whole seconds, rounded up.
+
+  > Note (P7.10, from Phase 6, group D) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a 429 that tower_governor answers itself, without `ApiError`, still gets the envelope from `render_errors`' safety net and keeps its `Retry-After` and rate-limit headers, but it's logged at `error` as a wiring bug, so the limiter's error handler should return `ApiError::RateLimited`. Whether the health routes count against the global limit is this task's question.
 - [ ] **P7.11** 🔴 **Route-coverage test.**
   - Routes are registered only through `public_route(…)` or `authed_route(…)` helpers, which also record them in a registry.
   - The test calls every authed route without credentials and expects `401`.
   - It also checks that the public list is exactly the expected allowlist.
+
+  > Note (P7.11, from Phase 6, group D) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `GET /health/live` and `GET /health/ready` exist since P6.7, registered with plain `Router::route`. They move to `public_route` and belong on the public allowlist.
 - [ ] **P7.12** 🔴 Security tests:
   - **User enumeration:** an unknown user and a wrong password give the same status and body.
   - **Lockout.**

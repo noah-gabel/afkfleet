@@ -109,8 +109,13 @@ sqlx = { version = "0.9.0", default-features = false }
 tokio = "1.53.2"
 # tokio-util: fleet-runtime enables no features; it uses only `CancellationToken` (ADR-0013).
 tokio-util = { version = "0.7.19", default-features = false }
-# tower: fleet-server's handler tests enable `util` for `ServiceExt::oneshot` (ADR-0015).
+# tower: fleet-server builds its middleware stack with `ServiceBuilder` (no feature); its
+# handler tests enable `util` for `ServiceExt::oneshot` (ADR-0015).
 tower = { version = "0.5.3", default-features = false }
+# tower-http: fleet-server's middleware. It has no default features; the server enables
+# only the layers it uses. Never `request-id` (it turns on uuid's `v4`, and with it `rng`)
+# or `trace`: the server's request-ID and trace layers are its own (ADR-0015).
+tower-http = "0.7.1"
 tracing = "0.1.44"
 # tracing-subscriber: the default features include `tracing-log`, which bridges `log`
 # records into fleet-testkit's log capture for the redaction tests (ADR-0011).

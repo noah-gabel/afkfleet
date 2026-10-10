@@ -1,0 +1,23 @@
+---
+source: crates/fleet-server/tests/middleware.rs
+expression: seen
+---
+{
+  "status": 500,
+  "headers": {
+    "cache-control": "no-store",
+    "content-length": "140",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY"
+  },
+  "body": {
+    "error": {
+      "code": "internal",
+      "message": "Something went wrong on the server. Quote the request ID when reporting it.",
+      "request_id": "unknown"
+    }
+  }
+}

@@ -1,4 +1,5 @@
-//! [`ApiError`]: how every failed request answers (Plan.md P6.5, ADR-0015).
+//! [`ApiError`]: how every failed request answers (Plan.md P6.5, P6.6,
+//! ADR-0015).
 //!
 //! # Rendering
 //! A handler returns `Result<_, ApiError>`. `IntoResponse` can't see the
@@ -6,24 +7,44 @@
 //! sets the status and the headers (`Retry-After`, `WWW-Authenticate`) and
 //! puts a private marker into the response's extensions, with an empty
 //! body. [`render_errors`], a middleware that runs inside the request-ID
-//! layer (group D), reads the ID from the request's [`REQUEST_ID_HEADER`],
-//! takes the marker, logs, and writes the JSON body: an [`ErrorResponse`].
-//! The marker never reaches the wire, and a response without one passes
-//! unchanged.
+//! layer ([`middleware`](super::middleware)), reads the ID from the
+//! request's [`REQUEST_ID_HEADER`], takes the marker, logs, and writes the
+//! JSON body: an [`ErrorResponse`]. The marker never reaches the wire.
+//!
+//! # The safety net
+//! Some errors don't come from an `ApiError`: tower-http's timeout (408) and
+//! body limit (413), and axum's own 413 when a handler reads past the limit.
+//! [`render_errors`] gives every 4xx or 5xx response without a marker the
+//! same envelope, so no error reaches a client without it:
+//! - The code comes from the status. A status without a code of its own
+//!   keeps its status and says `bad_request` (4xx) or `internal` (5xx); a
+//!   bare 422 says `validation_failed` with no fields.
+//! - The old body is replaced, and the headers that describe it
+//!   (`Content-Length`, `Content-Encoding`) are removed. Every other header
+//!   stays, such as axum's `Allow` and a rate limiter's `Retry-After`.
+//! - A 401 gets `WWW-Authenticate: Bearer` and a 503 `Retry-After: 1` when
+//!   they're missing, as an `ApiError` would send them.
+//!
+//! A success, or anything else that isn't an error, passes unchanged.
 //!
 //! # What a client sees
 //! Only the code's fixed message ([`ErrorCode::message`]), the request ID
 //! and, for `validation_failed`, the broken rules. Never an internal
-//! error's text: that goes to the log.
+//! error's text, nor the body a bare error status came with.
 //!
 //! # Logging
 //! - `internal`: at `error`, with `request_id` and the whole source chain
 //!   (`the database failed: disk I/O error`), cleaned by fleet-core's
 //!   `sanitize_untrusted` and cut at 1024 characters.
 //! - `busy`: at `warn`, with `request_id`.
-//! - Every other code: not here; the trace layer logs each request's status.
+//! - Every other code: not here; the trace layer logs each request's status
+//!   and code, which this middleware leaves in the response's extensions for
+//!   it, never on the wire.
 //! - A marker without a request ID is a wiring bug: the body says
 //!   `"unknown"` and it's logged at `error`.
+//! - A bare error status is a wiring bug too, logged at `error` with its
+//!   status: its source should return an `ApiError`. Only the timeout's 408
+//!   and the body limit's 413 come bare by design and aren't logged.
 
 use core::time::Duration;
 use std::error::Error;
@@ -31,8 +52,10 @@ use std::sync::Arc;
 
 use axum::body::Body;
 use axum::extract::Request;
-use axum::http::header::{CONTENT_TYPE, RETRY_AFTER, WWW_AUTHENTICATE};
-use axum::http::{HeaderName, HeaderValue, StatusCode};
+use axum::http::header::{
+    CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, RETRY_AFTER, WWW_AUTHENTICATE,
+};
+use axum::http::{HeaderMap, HeaderName, HeaderValue, StatusCode};
 use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use fleet_api_types::error::REQUEST_ID_MAX_CHARS;
@@ -46,8 +69,9 @@ use tracing::{error, warn};
 
 use crate::ports::store::StoreError;
 
-/// The request header that carries the request's ID. Group D's request-ID
-/// layer sets it on every request, always with a server-generated ID.
+/// The header that carries the request's ID. The request-ID layer
+/// ([`middleware`](super::middleware)) sets it on every request and every
+/// response, always with a server-generated ID.
 pub const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 
 /// How long a `busy` response asks the client to wait: a busy database
@@ -217,17 +241,56 @@ struct Marker {
     source: Option<Arc<dyn Error + Send + Sync>>,
 }
 
-/// Sets the status and headers and leaves the marker for [`render_errors`],
-/// with an empty body.
-impl IntoResponse for ApiError {
-    fn into_response(self) -> Response {
+impl Marker {
+    /// The marker of an error status that came without one: the status's
+    /// code, and no fields for a bare 422.
+    fn for_bare(status: StatusCode) -> Self {
+        let code = bare_code(status);
+        Self {
+            code,
+            fields: (code == ErrorCode::ValidationFailed).then(Vec::new),
+            source: None,
+        }
+    }
+}
+
+/// The code of an error status without a marker. A status without a code of
+/// its own gets `bad_request` (4xx) or `internal` (5xx). Only 4xx and 5xx
+/// statuses come here.
+const fn bare_code(status: StatusCode) -> ErrorCode {
+    match status.as_u16() {
+        401 => ErrorCode::Unauthorized,
+        403 => ErrorCode::Forbidden,
+        404 => ErrorCode::NotFound,
+        405 => ErrorCode::MethodNotAllowed,
+        408 => ErrorCode::Timeout,
+        409 => ErrorCode::Conflict,
+        413 => ErrorCode::PayloadTooLarge,
+        415 => ErrorCode::UnsupportedMediaType,
+        422 => ErrorCode::ValidationFailed,
+        429 => ErrorCode::RateLimited,
+        503 => ErrorCode::Busy,
+        500..=599 => ErrorCode::Internal,
+        // 400 itself, and every other 4xx.
+        _ => ErrorCode::BadRequest,
+    }
+}
+
+/// The value of `WWW-Authenticate` on every 401: the scheme, with no realm
+/// and no error detail.
+const BEARER: HeaderValue = HeaderValue::from_static("Bearer");
+
+impl ApiError {
+    /// The response's status and headers, with an empty body, and the marker
+    /// that [`render_errors`] needs to write the body.
+    fn into_parts(self) -> (Response, Marker) {
         let code = self.code();
         let mut response = Response::new(Body::empty());
         *response.status_mut() = status(code);
         let headers = response.headers_mut();
         let (fields, source) = match self {
             Self::Unauthorized => {
-                headers.insert(WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
+                headers.insert(WWW_AUTHENTICATE, BEARER);
                 (None, None)
             }
             Self::RateLimited { retry_after } => {
@@ -249,14 +312,32 @@ impl IntoResponse for ApiError {
             | Self::PayloadTooLarge
             | Self::UnsupportedMediaType => (None, None),
         };
-        response.extensions_mut().insert(Marker {
-            code,
-            fields,
-            source,
-        });
+        (
+            response,
+            Marker {
+                code,
+                fields,
+                source,
+            },
+        )
+    }
+}
+
+/// Sets the status and headers and leaves the marker for [`render_errors`],
+/// with an empty body.
+impl IntoResponse for ApiError {
+    fn into_response(self) -> Response {
+        let (mut response, marker) = self.into_parts();
+        response.extensions_mut().insert(marker);
         response
     }
 }
+
+/// The code of an error response [`render_errors`] wrote, for the trace
+/// layer's line, which takes it out. Like the marker, it lives only in the
+/// response's extensions, which never reach the wire.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RenderedCode(pub(crate) ErrorCode);
 
 /// `Retry-After` for `delay`: whole seconds, rounded up.
 fn retry_after_seconds(delay: Duration) -> HeaderValue {
@@ -266,13 +347,19 @@ fn retry_after_seconds(delay: Duration) -> HeaderValue {
     HeaderValue::from(seconds)
 }
 
-/// The middleware that writes every [`ApiError`]'s body; see the
+/// The middleware that writes every error response's body: an [`ApiError`]'s,
+/// and through the safety net any other 4xx or 5xx; see the
 /// [module docs](self). It must run inside the request-ID layer.
 pub async fn render_errors(request: Request, next: Next) -> Response {
     let request_id = request_id(&request);
     let mut response = next.run(request).await;
-    let Some(marker) = response.extensions_mut().remove::<Marker>() else {
-        return response;
+    let status = response.status();
+    let (marker, bare) = match response.extensions_mut().remove::<Marker>() {
+        Some(marker) => (marker, false),
+        None if status.is_client_error() || status.is_server_error() => {
+            (Marker::for_bare(status), true)
+        }
+        None => return response,
     };
     let request_id = request_id.unwrap_or_else(|| {
         error!(
@@ -281,18 +368,83 @@ pub async fn render_errors(request: Request, next: Next) -> Response {
         );
         BoundedText::new(UNKNOWN_REQUEST_ID)
     });
-    log(&marker, &request_id);
+    if bare {
+        add_missing_headers(response.headers_mut(), marker.code);
+        log_bare(status, &request_id);
+    } else {
+        log(&marker, &request_id);
+    }
+    write(response, marker, request_id)
+}
+
+/// The response for `error` when no request ID exists, with `"unknown"` in
+/// its body. Nothing is logged: the caller, the request-ID layer, logs why.
+pub(crate) fn render_without_id(error: ApiError) -> Response {
+    let (response, marker) = error.into_parts();
+    write(response, marker, BoundedText::new(UNKNOWN_REQUEST_ID))
+}
+
+/// Writes the envelope into `response`, replacing its body and removing the
+/// headers that described the old one, and leaves the code for the trace
+/// layer.
+fn write(
+    mut response: Response,
+    marker: Marker,
+    request_id: BoundedText<REQUEST_ID_MAX_CHARS>,
+) -> Response {
+    let code = marker.code;
     let body = ErrorResponse {
-        error: ErrorBody::new(marker.code, request_id, marker.fields),
+        error: ErrorBody::new(code, request_id, marker.fields),
     };
     let Some(bytes) = encode(&body) else {
         return fallback();
     };
-    response
-        .headers_mut()
-        .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    let headers = response.headers_mut();
+    headers.remove(CONTENT_LENGTH);
+    headers.remove(CONTENT_ENCODING);
+    headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
     *response.body_mut() = Body::from(bytes);
+    response.extensions_mut().insert(RenderedCode(code));
     response
+}
+
+/// Adds the headers an [`ApiError`] with `code` always sends, when a bare
+/// error status lacks them; a header that's there already stays as it is.
+fn add_missing_headers(headers: &mut HeaderMap, code: ErrorCode) {
+    match code {
+        ErrorCode::Unauthorized => {
+            headers.entry(WWW_AUTHENTICATE).or_insert(BEARER);
+        }
+        ErrorCode::Busy => {
+            headers
+                .entry(RETRY_AFTER)
+                .or_insert_with(|| retry_after_seconds(BUSY_RETRY_AFTER));
+        }
+        ErrorCode::BadRequest
+        | ErrorCode::Forbidden
+        | ErrorCode::NotFound
+        | ErrorCode::MethodNotAllowed
+        | ErrorCode::Timeout
+        | ErrorCode::Conflict
+        | ErrorCode::PayloadTooLarge
+        | ErrorCode::UnsupportedMediaType
+        | ErrorCode::ValidationFailed
+        | ErrorCode::RateLimited
+        | ErrorCode::Internal => {}
+    }
+}
+
+/// Logs a bare error status as a wiring bug, except the two that come bare
+/// by design: the timeout's 408 and the body limit's 413.
+fn log_bare(status: StatusCode, request_id: &BoundedText<REQUEST_ID_MAX_CHARS>) {
+    if status == StatusCode::REQUEST_TIMEOUT || status == StatusCode::PAYLOAD_TOO_LARGE {
+        return;
+    }
+    error!(
+        status = status.as_u16(),
+        request_id = %request_id,
+        "an error response came without an ApiError: its source must return one"
+    );
 }
 
 /// The request's ID from [`REQUEST_ID_HEADER`], cleaned and capped; `None`
@@ -322,7 +474,7 @@ fn log(marker: &Marker, request_id: &BoundedText<REQUEST_ID_MAX_CHARS>) {
 
 /// `error` and every source below it, joined with `: `, cleaned and cut at
 /// [`CHAIN_MAX_CHARS`] characters for one log line.
-fn chain(error: &(dyn Error + 'static)) -> String {
+pub(crate) fn chain(error: &(dyn Error + 'static)) -> String {
     let mut text = error.to_string();
     let mut source = error.source();
     while let Some(cause) = source {
@@ -353,6 +505,9 @@ fn fallback() -> Response {
     response
         .headers_mut()
         .insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
+    response
+        .extensions_mut()
+        .insert(RenderedCode(ErrorCode::Internal));
     response
 }
 
@@ -428,6 +583,51 @@ mod tests {
         let response = app.oneshot(request).await.unwrap();
 
         assert!(response.extensions().get::<Marker>().is_none());
+    }
+
+    #[test]
+    fn the_fallback_names_its_code_for_the_trace_layer() {
+        let response = fallback();
+
+        assert_eq!(
+            response.extensions().get::<RenderedCode>(),
+            Some(&RenderedCode(ErrorCode::Internal))
+        );
+    }
+
+    #[test]
+    fn every_codes_status_maps_back_to_the_code_when_it_comes_bare() {
+        for code in ErrorCode::ALL {
+            assert_eq!(bare_code(status(*code)), *code, "{code:?}");
+        }
+    }
+
+    #[rstest::rstest]
+    #[case::client_status_without_a_code(StatusCode::IM_A_TEAPOT, ErrorCode::BadRequest)]
+    #[case::header_fields_too_large(
+        StatusCode::REQUEST_HEADER_FIELDS_TOO_LARGE,
+        ErrorCode::BadRequest
+    )]
+    #[case::length_required(StatusCode::LENGTH_REQUIRED, ErrorCode::BadRequest)]
+    #[case::the_last_client_status(StatusCode::from_u16(499).unwrap(), ErrorCode::BadRequest)]
+    #[case::not_implemented(StatusCode::NOT_IMPLEMENTED, ErrorCode::Internal)]
+    #[case::bad_gateway(StatusCode::BAD_GATEWAY, ErrorCode::Internal)]
+    #[case::gateway_timeout(StatusCode::GATEWAY_TIMEOUT, ErrorCode::Internal)]
+    #[case::the_last_server_status(StatusCode::from_u16(599).unwrap(), ErrorCode::Internal)]
+    fn a_bare_status_without_a_code_gets_the_generic_code_of_its_class(
+        #[case] status: StatusCode,
+        #[case] code: ErrorCode,
+    ) {
+        assert_eq!(bare_code(status), code);
+    }
+
+    #[test]
+    fn only_a_bare_422_has_an_empty_field_list() {
+        assert_eq!(
+            Marker::for_bare(StatusCode::UNPROCESSABLE_ENTITY).fields,
+            Some(Vec::new())
+        );
+        assert_eq!(Marker::for_bare(StatusCode::BAD_REQUEST).fields, None);
     }
 
     #[test]
