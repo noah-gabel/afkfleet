@@ -148,9 +148,10 @@ pub fn compare(scratch: &Path, dir: &Path) -> Result<Vec<Difference>, TypeScript
 /// files the export no longer has, and writes the new and changed ones. A
 /// missing `dir` is created.
 ///
-/// It first checks every entry in `dir`, and anything but a `.ts` file that
-/// starts with [`TS_RS_HEADER`] stops it before anything is deleted, so a
-/// wrong path can never wipe a folder.
+/// It first checks every entry in `dir` and in `scratch`: in `dir`, anything
+/// but a `.ts` file that starts with [`TS_RS_HEADER`], and in `scratch`,
+/// anything but a file, stops it before anything is changed, so a wrong path
+/// can never wipe a folder or leave it half synced.
 ///
 /// # Errors
 /// [`TypeScriptError::Foreign`] for the first such entry, by name, or
@@ -165,7 +166,16 @@ pub fn sync(scratch: &Path, dir: &Path) -> Result<(), TypeScriptError> {
             path: dir.join(name),
         });
     }
-    let fresh = entries(scratch)?.unwrap_or_default();
+    // Every check comes before the first change: the export holds only files.
+    let mut fresh = BTreeMap::new();
+    for (name, entry) in entries(scratch)?.unwrap_or_default() {
+        let Entry::File(contents) = entry else {
+            return Err(TypeScriptError::Foreign {
+                path: scratch.join(name),
+            });
+        };
+        fresh.insert(name, contents);
+    }
     std::fs::create_dir_all(dir).map_err(|source| TypeScriptError::Io {
         path: dir.to_path_buf(),
         source,
@@ -174,13 +184,10 @@ pub fn sync(scratch: &Path, dir: &Path) -> Result<(), TypeScriptError> {
         let path = dir.join(name);
         std::fs::remove_file(&path).map_err(|source| TypeScriptError::Io { path, source })?;
     }
-    for (name, entry) in &fresh {
-        let Entry::File(contents) = entry else {
-            return Err(TypeScriptError::Foreign {
-                path: scratch.join(name),
-            });
-        };
-        if committed.get(name) != Some(entry) {
+    for (name, contents) in &fresh {
+        let unchanged =
+            matches!(committed.get(name), Some(Entry::File(current)) if current == contents);
+        if !unchanged {
             let path = dir.join(name);
             std::fs::write(&path, contents)
                 .map_err(|source| TypeScriptError::Io { path, source })?;
@@ -447,5 +454,61 @@ mod tests {
             matches!(&error, TypeScriptError::Io { path, .. } if *path == scratch),
             "{error:?}"
         );
+    }
+
+    #[test]
+    fn write_exports_and_syncs_the_folder() {
+        let scratch = TempDir::new().unwrap();
+        let dir = folder(&[("Old.ts", &generated("o"))]);
+
+        write(scratch.path(), dir.path()).unwrap();
+
+        assert_eq!(contents(dir.path()), contents(scratch.path()));
+        assert!(dir.path().join("ErrorResponse.ts").exists());
+        assert!(!dir.path().join("Old.ts").exists());
+    }
+
+    #[test]
+    fn a_file_where_a_folder_should_be_is_an_io_error() {
+        let scratch = folder(&[("A.ts", "a")]);
+        let parent = folder(&[("generated", "not a folder")]);
+        let file = parent.path().join("generated");
+
+        let error = compare(scratch.path(), &file).unwrap_err();
+
+        assert!(
+            matches!(&error, TypeScriptError::Io { path, .. } if *path == file),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn a_folder_sync_cant_create_is_an_io_error() {
+        let scratch = folder(&[("A.ts", &generated("a"))]);
+        let parent = folder(&[("file", "not a folder")]);
+        let dir = parent.path().join("file").join("generated");
+
+        let error = sync(scratch.path(), &dir).unwrap_err();
+
+        assert!(
+            matches!(&error, TypeScriptError::Io { path, .. } if *path == dir),
+            "{error:?}"
+        );
+    }
+
+    #[test]
+    fn sync_stops_at_a_subfolder_in_the_scratch_folder_and_deletes_nothing() {
+        let scratch = folder(&[("New.ts", &generated("n"))]);
+        fs::create_dir(scratch.path().join("nested")).unwrap();
+        let dir = folder(&[("Old.ts", &generated("o"))]);
+        let before = contents(dir.path());
+
+        let error = sync(scratch.path(), dir.path()).unwrap_err();
+
+        assert!(
+            matches!(&error, TypeScriptError::Foreign { path } if *path == scratch.path().join("nested")),
+            "{error:?}"
+        );
+        assert_eq!(contents(dir.path()), before);
     }
 }
