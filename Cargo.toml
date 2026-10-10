@@ -22,6 +22,7 @@ repository = "https://github.com/noah-gabel/afkfleet"
 # by the member that uses the crate.
 [workspace.dependencies]
 # Workspace crates, by path (unpublished, so no version).
+fleet-api-types = { path = "crates/fleet-api-types" }
 fleet-core = { path = "crates/fleet-core" }
 fleet-mc = { path = "crates/fleet-mc" }
 fleet-runtime = { path = "crates/fleet-runtime" }
@@ -41,6 +42,10 @@ azalea-language = "=0.16.0"
 # async-trait: fleet-server's ports, which services hold as `Arc<dyn …>`; generics and
 # `impl Future` everywhere else (ADR-0015).
 async-trait = "0.1.92"
+# axum: fleet-server's HTTP layer. Without default features; the server enables only
+# what it uses. Group C uses none: `IntoResponse` and `middleware::from_fn` need no
+# feature, and the error body is written with serde_json (ADR-0015).
+axum = { version = "0.8.9", default-features = false }
 # backon: without default features only fastrand is left; the defaults pull in tokio.
 backon = { version = "1.6.0", default-features = false }
 # chrono: no `clock`/`now`, because fleet-core takes time as a parameter (ADR-0010).
@@ -104,10 +109,16 @@ sqlx = { version = "0.9.0", default-features = false }
 tokio = "1.53.2"
 # tokio-util: fleet-runtime enables no features; it uses only `CancellationToken` (ADR-0013).
 tokio-util = { version = "0.7.19", default-features = false }
+# tower: fleet-server's handler tests enable `util` for `ServiceExt::oneshot` (ADR-0015).
+tower = { version = "0.5.3", default-features = false }
 tracing = "0.1.44"
 # tracing-subscriber: the default features include `tracing-log`, which bridges `log`
 # records into fleet-testkit's log capture for the redaction tests (ADR-0011).
 tracing-subscriber = "0.3.23"
+# ts-rs: fleet-api-types' TypeScript export. Without default features; the member enables
+# `serde-compat`, so serde's renames reach the TypeScript. `chrono-impl` and `uuid-impl`
+# come with the first DTO that holds a time or an ID (ADR-0015).
+ts-rs = { version = "12.0.1", default-features = false }
 # uuid: never `v4`/`v7`/`rng`, which pull in getrandom; IDs are minted from caller data (ADR-0010).
 uuid = { version = "1.27.0", default-features = false }
 

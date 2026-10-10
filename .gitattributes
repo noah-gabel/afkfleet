@@ -23,3 +23,6 @@
 
 # sqlx's offline query data, written by `just db-prepare`: collapsed in pull request diffs.
 **/.sqlx/*.json linguist-generated=true
+
+# The API's TypeScript types, written by `just gen` (ts-rs): collapsed in pull request diffs.
+packages/ui/src/generated/** linguist-generated=true

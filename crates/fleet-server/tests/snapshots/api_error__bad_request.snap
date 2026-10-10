@@ -1,0 +1,17 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 400,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "bad_request",
+      "message": "The request couldn't be read.",
+      "request_id": "test-request-id"
+    }
+  }
+}

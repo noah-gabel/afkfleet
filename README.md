@@ -79,6 +79,8 @@ There's no support, and I don't take feature requests. Security reports are welc
 - the SQLite database: one write connection and four read-only ones, a database file only the server's user can read, migrations at startup, and SQL checked at compile time against committed offline data (`just db-prepare`)
 - the first tables, `users` and `audit_log`, with strict types and CHECKs, and a store whose every write transaction commits together with its audit entry
 - the audit service: entries stamped by the clock, with details that can't hold secrets
+- the API's shared types, [`crates/fleet-api-types`](crates/fleet-api-types/), exported to TypeScript for the app (`just gen`)
+- the error model: every failed request answers with one JSON envelope, a code with its status and a fixed message, and the request ID; an internal error's details go only to the log
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 
@@ -173,7 +175,9 @@ just test-slow # pull the server image, build the agent's image, then the slow t
 just demo-agent # the Phase 5 demo: the Docker agent's five bots for an hour with one server restart
 just test-real-account # the real-account check: you only (see below)
 just db-prepare # after changing a query or adding a migration: refresh crates/fleet-server/.sqlx/
+just gen       # after changing an API type: refresh packages/ui/src/generated/
 ```
+**The API's TypeScript types** (Phase 6 on) are generated from the Rust DTOs in `crates/fleet-api-types` with ts-rs and committed in `packages/ui/src/generated/`; never edit them by hand. After changing a DTO, run `just gen` and commit the result; `just check` (`gen-check`) and CI's `ts-types-fresh` job fail while they're stale. `just gen` exports into a fresh folder in `target/` first and deletes only files ts-rs generated: if the folder holds anything else, it stops and changes nothing.
 **The server's database** (Phase 6 on): every build checks fleet-server's SQL against the offline query data committed in `crates/fleet-server/.sqlx/`, never against a live database (`SQLX_OFFLINE` in `.cargo/config.toml`). After changing a query or adding a migration, run `just db-prepare`, which rebuilds a throwaway database in `target/` from the migrations and regenerates that data, and commit it; `just check` and CI's `sqlx-offline` job fail while it's stale. A migration is never edited once it's on `main`, because sqlx checksums it: add a new one instead. `just migrations-check` and the `sqlx-offline` job enforce that.
 The test server runs in offline mode, so it's for local development only. RCON is enabled with a random password and isn't published; run commands with `docker compose --file deploy/compose.dev.yaml exec minecraft rcon-cli <command>`.
 

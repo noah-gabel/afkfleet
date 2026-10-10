@@ -1,0 +1,17 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 413,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "payload_too_large",
+      "message": "The request body is too large.",
+      "request_id": "test-request-id"
+    }
+  }
+}

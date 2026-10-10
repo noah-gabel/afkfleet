@@ -1,0 +1,17 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 500,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "internal",
+      "message": "Something went wrong on the server. Quote the request ID when reporting it.",
+      "request_id": "test-request-id"
+    }
+  }
+}

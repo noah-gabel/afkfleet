@@ -12,7 +12,7 @@ export RUSTDOCFLAGS := "-D warnings"
 # The stable toolchain for `stable-check`, and the crates it checks: every crate
 # that doesn't depend on azalea or azalea-auth.
 stable := "1.99.0"
-stable_crates := "-p fleet-core -p fleet-testkit -p fleet-runtime -p fleet-startup -p fleet-server"
+stable_crates := "-p fleet-core -p fleet-testkit -p fleet-runtime -p fleet-startup -p fleet-server -p fleet-api-types"
 
 # The throwaway database `cargo sqlx prepare` checks queries against. Absolute,
 # because rustc runs the query macros in the workspace root, not in the crate.
@@ -23,10 +23,10 @@ default:
     @just --list
 
 # Formatting, lints, docs, tests and frontend checks: run before a task is done.
-check: fmt-check clippy docs test doctest db-check testkit-check scripts-test ui-check
+check: fmt-check clippy docs test doctest db-check gen-check testkit-check scripts-test ui-check
 
 # Everything CI runs.
-ci: fmt-check clippy docs test-ci db-check migrations-check testkit-check scripts-test cov deny stable-check ui-check ui-audit
+ci: fmt-check clippy docs test-ci db-check migrations-check gen-check testkit-check scripts-test cov deny stable-check ui-check ui-audit
 
 # Run nextest for the workspace, or for one crate: `just test fleet-core`.
 test crate="":
@@ -65,8 +65,12 @@ fmt:
     cargo fmt --all
     pnpm exec biome format --write .
 
-# Export ts-rs types to packages/ui/src/generated/ and check proto codegen.
-gen: (_unavailable "gen" "P6")
+# Each run exports into a fresh folder in target/gen/, and only files ts-rs generated
+# are ever deleted from packages/ui/src/generated/ (ADR-0015). P10 adds the proto
+# codegen check.
+# Export the API's TypeScript types (fleet-api-types) to packages/ui/src/generated/.
+gen:
+    cargo run -p fleet-api-types --example typescript -- write packages/ui/src/generated
 
 # Prepare sqlx's offline query data in crates/fleet-server/.sqlx/ (needs sqlx-cli 0.9.0).
 # Run it after changing a query or adding a migration; every build reads that data
@@ -86,6 +90,10 @@ db-check $DATABASE_URL=sqlx_db: _sqlx-db
 _sqlx-db $DATABASE_URL=sqlx_db:
     node -e "require('node:fs').mkdirSync(process.argv[1], { recursive: true })" "{{ justfile_directory() / 'target' }}"
     cargo sqlx database reset -y
+
+# Fail if packages/ui/src/generated/ isn't exactly a fresh export (the ts-types-fresh job).
+gen-check:
+    cargo run -p fleet-api-types --example typescript -- check packages/ui/src/generated
 
 # Fail if a migration that exists on main was modified, deleted or renamed: merged
 # migrations are never edited (ADR-0015). Needs an up-to-date origin/main; CI fetches it.

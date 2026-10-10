@@ -1,0 +1,18 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 429,
+  "headers": {
+    "content-type": "application/json",
+    "retry-after": "2"
+  },
+  "body": {
+    "error": {
+      "code": "rate_limited",
+      "message": "Too many requests. Try again later.",
+      "request_id": "test-request-id"
+    }
+  }
+}

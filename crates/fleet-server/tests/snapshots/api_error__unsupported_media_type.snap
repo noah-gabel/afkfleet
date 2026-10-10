@@ -1,0 +1,17 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 415,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "unsupported_media_type",
+      "message": "The request body must be JSON.",
+      "request_id": "test-request-id"
+    }
+  }
+}
