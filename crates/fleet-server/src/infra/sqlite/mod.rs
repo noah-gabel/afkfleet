@@ -45,8 +45,13 @@
 //! worse. [`Database::close`] waits for every checked-out connection, so its
 //! caller bounds it (group E's shutdown).
 
+mod audit;
 mod connect;
+mod convert;
+mod error;
 mod file;
+mod store;
+mod users;
 
 use std::path::PathBuf;
 
@@ -56,6 +61,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 pub use self::connect::{
     BUSY_TIMEOUT, DatabaseOptions, PoolRole, READ_CONNECTIONS, connect_options,
 };
+pub use self::store::SqliteWriteTx;
 use crate::config::DatabaseConfig;
 
 /// Every migration under `crates/fleet-server/migrations/`, embedded in the
@@ -128,11 +134,13 @@ pub enum OpenError {
 }
 
 /// The open database: one write connection and a pool of read connections.
-/// Clones share the pools.
+/// It's the server's [`Store`](crate::ports::store::Store). Clones share the
+/// pools.
 #[derive(Debug, Clone)]
 pub struct Database {
     write: SqlitePool,
     read: SqlitePool,
+    reads: store::Reads,
 }
 
 impl Database {
@@ -165,7 +173,11 @@ impl Database {
             .connect_with(connect_options(base, PoolRole::Read, &options))
             .await
             .map_err(OpenError::Connect)?;
-        Ok(Self { write, read })
+        Ok(Self {
+            write,
+            reads: store::Reads { pool: read.clone() },
+            read,
+        })
     }
 
     /// The write pool: exactly one connection.

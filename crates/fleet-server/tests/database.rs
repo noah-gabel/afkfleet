@@ -13,10 +13,19 @@
 use core::time::Duration;
 use std::path::{Path, PathBuf};
 
+use chrono::DateTime;
+use fleet_core::audit::{AuditAction, AuditMetadata, AuditOutcome, AuditTarget, RecordedMetadata};
+use fleet_core::authz::Role;
+use fleet_core::id::UserId;
+use fleet_core::value::Username;
 use fleet_server::config::DatabaseConfig;
 use fleet_server::infra::sqlite::{
     Database, DatabaseOptions, MIGRATOR, OpenError, READ_CONNECTIONS, open,
 };
+use fleet_server::ports::audit::{AuditLimit, AuditPage, NewAuditEntry};
+use fleet_server::ports::store::Store;
+use fleet_server::ports::users::{NewUser, PasswordHash};
+use secrecy::SecretString;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool};
 use tempfile::TempDir;
 
@@ -203,6 +212,77 @@ async fn closing_checkpoints_and_removes_the_wal() {
     let path = config_in(&dir).path;
     assert!(!sibling(&path, "-wal").exists());
     assert!(!sibling(&path, "-shm").exists());
+}
+
+#[tokio::test]
+async fn an_edited_migration_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let db = open_in(&dir).await;
+    sqlx::query!("UPDATE _sqlx_migrations SET checksum = x'00' WHERE version = 1")
+        .execute(db.write_pool())
+        .await
+        .unwrap();
+    db.close().await;
+
+    let result = open(&config_in(&dir), DatabaseOptions::default()).await;
+
+    assert!(
+        matches!(result, Err(OpenError::EditedMigration { version: 1 })),
+        "{result:?}"
+    );
+}
+
+/// A user and an audit entry that touch every column with a CHECK, metadata JSON
+/// included, through the real `open()`: every CHECK holds up with
+/// `trusted_schema=OFF`.
+#[tokio::test]
+async fn a_full_row_passes_every_check_with_the_production_settings() {
+    let dir = TempDir::new().unwrap();
+    let db = open_in(&dir).await;
+    let created = DateTime::from_timestamp_millis(1_800_000_000_123).unwrap();
+    let user = NewUser {
+        id: UserId::new_v7(created, [1; 10]).unwrap(),
+        username: Username::try_from("afkowner").unwrap(),
+        password_hash: PasswordHash::new(SecretString::from(
+            "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g",
+        ))
+        .unwrap(),
+        role: Role::Owner,
+        created_at: created,
+    };
+    let metadata = AuditMetadata::new()
+        .text("reason", "a \"quoted\" note")
+        .unwrap()
+        .int("attempts", 2)
+        .unwrap()
+        .flag("locked", false)
+        .unwrap();
+    let entry = NewAuditEntry::new(
+        created,
+        AuditAction::try_from("user.create").unwrap(),
+        AuditOutcome::Success,
+    )
+    .actor(user.id)
+    .ip("2001:db8::7".parse().unwrap())
+    .target(AuditTarget::User(user.id))
+    .metadata(metadata.clone());
+
+    let mut tx = db.write().await.unwrap();
+    tx.users().insert(&user).await.unwrap();
+    let id = tx.commit(entry).await.unwrap();
+
+    let stored = db.users().get(user.id).await.unwrap().unwrap();
+    assert_eq!(stored.role, Role::Owner);
+    assert_eq!(stored.password_changed_at, created);
+    let page = AuditPage {
+        before: None,
+        limit: AuditLimit::new(10).unwrap(),
+    };
+    let records = db.audit().list(page).await.unwrap();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].id, id);
+    assert_eq!(records[0].metadata, RecordedMetadata::from(&metadata));
+    db.close().await;
 }
 
 // --- Connections -----------------------------------------------------------

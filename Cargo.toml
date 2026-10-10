@@ -38,6 +38,9 @@ azalea = { version = "=0.16.0", default-features = false }
 azalea-chat = "=0.16.0"
 azalea-language = "=0.16.0"
 
+# async-trait: fleet-server's ports, which services hold as `Arc<dyn …>`; generics and
+# `impl Future` everywhere else (ADR-0015).
+async-trait = "0.1.92"
 # backon: without default features only fastrand is left; the defaults pull in tokio.
 backon = { version = "1.6.0", default-features = false }
 # chrono: no `clock`/`now`, because fleet-core takes time as a parameter (ADR-0010).
@@ -92,8 +95,9 @@ serde = "1.0.229"
 thiserror = "2.0.21"
 # sqlx: SQLite through the bundled library only (`sqlite-bundled`, not `sqlite`, which
 # adds extension loading, deserialize and unlock-notify), with `runtime-tokio`, `macros`
-# and `migrate`. No TLS feature, and no `chrono` (it would turn on chrono's `clock` for the
-# whole workspace) or `json`: times and JSON are converted in fleet-server (ADR-0015).
+# and `migrate`, plus `uuid` for binding IDs as `uuid::fmt::Hyphenated`. No TLS feature,
+# and no `chrono` (it would turn on chrono's `clock` for the whole workspace) or `json`:
+# times and JSON are converted in fleet-server (ADR-0015).
 sqlx = { version = "0.9.0", default-features = false }
 # tokio: no default features exist; members enable only what they use (`sync`,
 # `time`, …) and `test-util` in tests.

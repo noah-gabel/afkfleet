@@ -111,6 +111,7 @@ Recipes for tools that arrive in later phases (`gen`, `dev-server`, `dev-app`, `
 **Server layering:** `http/handlers` → `app` services → `ports` → `infra`.
 - Handlers only parse input, authorize, call a service and map the result. No business logic, no SQL.
 - Services own use cases, transactions and audit entries.
+- Writes go through `Store::write()`, a `WriteTx` on the one write connection. Its `commit(entry)` takes the audit entry, so nothing commits unaudited. Keep it short: no password hashing, crypto or network calls while it's open (ADR-0015).
 
 **Shared types:**
 - Every API DTO lives in `fleet-api-types` (serde + garde + ts-rs).
@@ -284,7 +285,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
    - Agents never receive Microsoft tokens.
    - They only receive short-lived Minecraft session tokens, and only for bots assigned to them.
 7. **Text from Minecraft servers is untrusted.** Sanitize it in core, store it as plain text, render it as text.
-8. **SQL** only through the `sqlx::query!` / `query_as!` macros with bind parameters. Never build SQL from strings. The approved exceptions are fixed string literals, never formatted and without input (ADR-0015): in tests, a pragma read sqlx's macros can't describe (`PRAGMA journal_mode`).
+8. **SQL** only through the `sqlx::query!` / `query_as!` macros with bind parameters. Never build SQL from strings. The approved exceptions are fixed string literals, never formatted and without input (ADR-0015): `begin_with("BEGIN IMMEDIATE")` for write transactions, and, in tests, a pragma read sqlx's macros can't describe (`PRAGMA journal_mode`).
 9. **TLS**
    - Never turn off certificate checks; no `danger_*` APIs.
    - Use exactly one rustls provider (aws-lc-rs), installed at startup.
