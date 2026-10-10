@@ -16,7 +16,7 @@ afkfleet is **a hobby project** I'm building for my friends with Claude Code. I 
 There's no support, and I don't take feature requests. Security reports are welcome, though: see [SECURITY.md](SECURITY.md).
 
 ## Status
-**Phase 5 (the standalone agent) is in progress.** Its first runnable product, `afkfleet-agent`, runs a few offline-mode bots against a local server (see [Quickstart](#quickstart)). What exists:
+**Phase 5 (the standalone agent) is done.** Its first runnable product, `afkfleet-agent`, runs a few offline-mode bots against a local server (see [Quickstart](#quickstart)). What exists:
 - **From Phase 0:**
   - the Cargo workspace with all lints and the pinned toolchain
   - the quality gates: formatting, clippy, docs, tests, coverage gates, cargo-deny, Biome
@@ -60,18 +60,19 @@ There's no support, and I don't take feature requests. Security reports are welc
   - a chaos test: 500 random runs of kicks, failed connects, hangs, crashes and API calls, which check that bots heal, never reconnect in a storm, never connect while a human plays, and that the API always answers
 
   [ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md) records Phase 4's decisions.
-- **From Phase 5 so far:** [`crates/fleet-agent`](crates/fleet-agent/) and its `afkfleet-agent` binary:
+- **From Phase 5:** [`crates/fleet-agent`](crates/fleet-agent/) and its `afkfleet-agent` binary:
   - the config: `agent.toml` plus `AFKFLEET_AGENT__…` environment variables. A typo is an error with its key, and every problem is listed at once
   - logging: JSON lines or a pretty format, a filter that keeps azalea quiet and its auth logs safe, and a panic hook that logs through it
   - the wiring of the azalea adapter to the bot runtime. Each bot gets a new ID at every start, logged with its name. The agent exports the adapter's numbers as metrics and exits so Docker can restart it when too many host threads hang
   - a graceful shutdown on SIGTERM or SIGINT (Ctrl+C or Ctrl+Break on Windows): every bot leaves the server within the shutdown timeout
   - a heartbeat file, touched every 10 s while the fleet answers, and an `afkfleet-agent healthcheck` command that checks it without a shell or curl
   - a Docker image (distroless, nonroot, building natively on amd64 and arm64) with a `HEALTHCHECK`, and an agent in the dev compose stack: `just stack-up`
-  - an end-to-end test of the compose stack (`just test-slow`): every bot comes Online, reconnects within its retry policy after the server restarts, and leaves the server cleanly when the agent stops, with no error and only the expected warnings in the log
+  - an end-to-end test of the compose stack (`just test-slow`): every bot comes Online, reconnects within its retry policy after the server restarts, and leaves the server cleanly when the agent stops, with only the expected warnings in the log and no error but a connection reset during the restart
+  - a one-hour demo (`just demo-agent`): five bots and one server restart, with a summary, a verdict and the agent's measured memory and CPU
 
   [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md) records Phase 5's decisions.
 
-**Next:** the rest of Phase 5: a one-hour demo with five bots and one server restart.
+**Next:** Phase 6, the server foundation: an HTTP service skeleton that is secure by default, with persistence, an error model and an audit trail, but no business endpoints yet.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 

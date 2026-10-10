@@ -336,7 +336,8 @@ Approved by the user, all in Plan.md §5:
   - **P11.1:** fixed IDs for `ModePreset`.
   - **P12.4:** the metrics endpoint and its key.
   - **P12.1** *(group C)*: build the agent image for linux/arm64, natively on the server or on GitHub's `ubuntu-24.04-arm` runner. The weekly audit scans the built image (e.g. Trivy), since `cargo deny` covers only crates. `created`, `revision` and `version` labels come through build args once CI publishes the image.
-  - **P12.2** *(group C)*: production is linux/arm64, and the agent's memory and CPU limits come from group D's measured demo numbers, not from the dev values.
+  - **P12.2** *(group C)*: production is linux/arm64, and the agent's memory and CPU limits come from group D's measured demo numbers, not from the dev values. *(group D)* The DoD demo measured the agent's container with 5 bots on x86_64 under Docker Desktop: memory peaked at 26.9 MiB (mean 21.9, p95 22.3), CPU at 6.59 % of one core (mean 4.06 %, p95 5.80 %). Memory carries over to arm64 roughly, CPU percentages don't, and the numbers are a per-bot baseline to extrapolate from (ADR-0008: about 4 MiB per bot), not limits.
+  - **P12.6** *(group D)*: the runbook's Minecraft-version upgrade carries ADR-0003's bump procedure, whose verify step runs `just demo-agent` (1 h) and puts its `summary.txt` in the bump's pull request.
 
 ## Alternatives considered
 - **More, smaller groups (5), or fewer, larger ones (3).** Five would split P5.3 from P5.4, which share the run loop. Three would put the healthcheck and Docker in one oversized PR.

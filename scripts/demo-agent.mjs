@@ -567,8 +567,9 @@ export function formatSummary(report) {
     const took = ((reconnect.onlineAt - reconnect.leftAt) / 1000).toFixed(1);
     const deadline = reconnect.deadlineAt === null ? "none" : since(reconnect.deadlineAt);
     const status = reconnect.problem === null ? "in time" : reconnect.problem;
+    const attempts = `${reconnect.attempts} attempt${reconnect.attempts === 1 ? "" : "s"}`;
     out.push(
-      `  ${name}  left at ${since(reconnect.leftAt)}, Online again at ${since(reconnect.onlineAt)} (${took} s, ${reconnect.attempts} attempts); deadline ${deadline}: ${status}`,
+      `  ${name}  left at ${since(reconnect.leftAt)}, Online again at ${since(reconnect.onlineAt)} (${took} s, ${attempts}); deadline ${deadline}: ${status}`,
     );
   }
   out.push("");

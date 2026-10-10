@@ -585,6 +585,15 @@ describe("formatSummary", () => {
     }
   });
 
+  it("counts a single attempt in the singular", () => {
+    const text = formatSummary({
+      ...report,
+      reconnects: [{ ...report.reconnects[0], attempts: 1 }],
+    });
+
+    assert.match(text, /\(10\.0 s, 1 attempt\)/);
+  });
+
   it("marks a run under an hour as not the DoD run", () => {
     assert.match(formatSummary(report), /not the DoD run/);
     assert.doesNotMatch(formatSummary({ ...report, minutes: 60 }), /not the DoD run/);

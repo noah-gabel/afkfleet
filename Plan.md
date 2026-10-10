@@ -2022,6 +2022,31 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >     Every other ERROR, and this one at any other time, still fails. The summary reports how many were allowed.
 > - **The Minecraft-version bump** runs it: ADR-0003's verify step gains `just demo-agent` (1 h), with its `summary.txt` in the bump's pull request, and P12.6's runbook carries the step.
 
+> Note (DoD, the run, group D): `just demo-agent` ran on 2026-10-10 with its default 60 minutes. Its `summary.txt` is in the PR. **PASS:**
+> - 5 bots (four on `afk`, AfkBot6 on `farm`) came Online within a second, and the server restarted once, at minute 30.
+> - Every bot got the "Server closed" kick, and every bot was Online again 8–21 s later, well inside its deadline (attempts 2 and 3).
+> - The log holds no ERROR, and only the 16 expected disconnect warnings:
+>   - 8 "the session ended; the bot connects again"
+>   - 5 of azalea's "Got disconnect packet"
+>   - 3 of azalea's "failed to create connection"
+> - The agent never restarted. Its stop gave exit code 0 and stopped 5, aborted 0, crashed 0.
+> - The agent's container peaked at 26.9 MiB and 6.59 % of one core (P12.2's note has the numbers).
+
+> Note (Phase 5 wrap-up, group D) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
+> - **The Phase 5 Goal, checked on 2026-10-10:**
+>   - **"`afkfleet-agent run --config agent.toml` runs a few dev bots (offline mode) against a local server":** `just dev-agent` runs three bots on the host (group B), and the compose agent runs five in Docker (`just stack-up`, group C; five since group D).
+>   - **"It survives server restarts":**
+>     - The e2e test restarts the server, holds every wait between attempts to the retry policy and every bot to its deadline, and checks that the agent itself didn't restart.
+>     - The hour-long demo did the same at minute 30.
+>   - **"It shuts down cleanly":** in the e2e test and the demo, the stop gave exit code 0 and the report (stopped 5, aborted 0, crashed 0), and the server dropped every bot at once.
+> - **The Phase 5 DoD:** the demo above. It ran 5 bots, four of them AFK and one farming (the user's decision), for an hour against the local server, with one restart. Its logs show no error, only the expected disconnect warnings.
+>   - **Deviation:** a restart can cause one error the DoD didn't foresee, azalea's connection reset. The e2e test and the demo accept it only during the restart, at most once per session closed there (the DoD note above). It didn't occur in this run.
+> - **Every task, P5.1–P5.7, is ticked.** The crates the phase introduces are in, except `anyhow`, which arrives with the first `main.rs` that needs it (ADR-0014).
+> - **Later phases inherit:**
+>   - P12.2: the measured memory and CPU, as a baseline per bot
+>   - P12.6: the demo in the Minecraft-version bump
+>   - the notes for P10, P11.1, P12.1 and P12.4 that ADR-0014 lists
+
 ---
 
 ### Phase 6: Server foundation (`fleet-server`, `fleet-api-types`)
@@ -2498,6 +2523,12 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     - `restart: unless-stopped`
 
   > Note (P12.2, from Phase 5, group C, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): Production is linux/arm64. The agent's memory and CPU limits come from group D's measured demo numbers, with headroom, not from the dev compose file's 512 MiB and 1 CPU.
+
+  > Note (P12.2, from Phase 5, group D, the DoD demo) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): The agent's container, measured with `docker stats` during the DoD demo on 2026-10-10. That's 7198 frames over the hour, with one server restart, for **5 bots** (four on `afk`, one on `farm`).
+  > - **Memory:** peak 26.9 MiB (25 s after the restart), mean 21.9 MiB, p95 22.3 MiB.
+  > - **CPU:** peak 6.59 % of one core, mean 4.06 %, p95 5.80 %.
+  > - **Where:** x86_64 under Docker Desktop (AMD Ryzen 7 9800X3D, 8 CPUs). Memory should carry over to arm64 roughly; CPU percentages don't.
+  > - **A baseline, not a total.** ADR-0008's measurement grew by about 4 MiB per bot (57 MiB at 10 bots, 222 MiB at 50). So P12.2 extrapolates from these numbers to the production bot count and adds headroom, rather than reading the 5-bot figures as limits.
 - [ ] **P12.3** 🔴 Backups:
   - a scheduled `VACUUM INTO` with retention, plus a `backup` CLI
   - a restore runbook
