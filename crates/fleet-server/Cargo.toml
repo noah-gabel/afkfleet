@@ -13,9 +13,9 @@ workspace = true
 [dependencies]
 # The ports, which services hold as `Arc<dyn …>` (ADR-0015).
 async-trait.workspace = true
-# The HTTP layer. No features yet: `IntoResponse` and `middleware::from_fn` need
-# none, and the error body is written with serde_json (ADR-0015).
-axum.workspace = true
+# The HTTP layer. Only `matched-path`: the trace layer logs the route's template,
+# never the path a client sent; the error body is written with serde_json (ADR-0015).
+axum = { workspace = true, features = ["matched-path"] }
 # SystemClock's one wall-clock read (ADR-0015).
 chrono = { workspace = true, features = ["now"] }
 # The error envelope's DTOs (ADR-0015).
@@ -37,8 +37,14 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sqlx = { workspace = true, features = ["runtime-tokio", "sqlite-bundled", "macros", "migrate", "uuid"] }
 thiserror.workspace = true
-# Creating the database file and checking its permissions without blocking (ADR-0015).
-tokio = { workspace = true, features = ["fs"] }
+# Creating the database file and checking its permissions without blocking, and the
+# trace layer's latency from tokio's clock (ADR-0015).
+tokio = { workspace = true, features = ["fs", "time"] }
+# `ServiceBuilder`, which lists the middleware stack outermost first (ADR-0015).
+tower.workspace = true
+# The middleware stack's tower-http layers; the request-ID and trace layers are
+# the server's own (ADR-0015).
+tower-http = { workspace = true, features = ["catch-panic", "limit", "sensitive-headers", "set-header", "timeout"] }
 tracing.workspace = true
 # IDs are bound and read as `uuid::fmt::Hyphenated` text (ADR-0015).
 uuid.workspace = true
@@ -54,7 +60,8 @@ proptest = { workspace = true, features = ["std"] }
 rstest.workspace = true
 # A fresh folder for each database test (ADR-0015).
 tempfile.workspace = true
-tokio = { workspace = true, features = ["macros", "rt"] }
+# `test-util`: the request timeout's test runs on paused time (ADR-0015).
+tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 # `ServiceExt::oneshot`, for requests through a router in tests (ADR-0015).
 tower = { workspace = true, features = ["util"] }
 # A scoped subscriber around fleet-startup's layer, for the dev-mode warning's

@@ -4,9 +4,13 @@
 //!
 //! - [`error`]: [`ApiError`](error::ApiError), how every failed request
 //!   answers, and [`render_errors`](error::render_errors), the middleware
-//!   that writes its body.
+//!   that writes the body of every error response.
+//! - [`middleware`]: the stack every request passes through, from the
+//!   request ID and the security headers to the timeout and the body limit
+//!   (P6.6).
 //!
-//! The router and the middleware stack arrive with P6.6 and P6.7, the
-//! handlers with the endpoints from P7 on.
+//! The router arrives with P6.7, the other handlers with the endpoints from
+//! P7 on.
 
 pub mod error;
+pub mod middleware;

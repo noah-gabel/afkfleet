@@ -66,7 +66,7 @@ Ranked by impact if compromised:
 | Malicious chat / XSS | Chat is sanitized plain text (control characters, format codes, bidi controls and invisible characters stripped, length capped); React escaping; no `dangerouslySetInnerHTML`; strict CSP | P2.3, P8.3, P11.9 |
 | DoS | Rate limits, body-size limits, timeouts, bounded queues, an argon2 semaphore, WebSocket connection caps | P6.6, P7.10, P11.5, P13.4 |
 | Supply chain | `cargo deny` (advisories, licenses, sources, bans incl. a single TLS provider), `pnpm audit`, committed lockfiles, minimal crate registry, actions pinned to commit SHAs, weekly audit run (ADR-0009) | P0.5, P0.11 |
-| Information leakage | Generic error messages with request IDs; no stack traces; uniform login responses plus a dummy hash against username enumeration; secrets redacted from logs | P6.5, P7.12, P9 |
+| Information leakage | Generic error messages with server-generated request IDs (a client's `x-request-id` never survives), also for errors a layer or a panic produces; no stack traces and no panic text in responses; security headers on every response (`nosniff`, `no-referrer`, `no-store`, a CSP and `X-Frame-Options: DENY` against framing); uniform login responses plus a dummy hash against username enumeration; secrets redacted from logs: credentials marked sensitive, and the request log holds no headers, no bodies, no client paths and no query strings | P6.5, P6.6, P7.12, P9 |
 
 ## Per-boundary analysis
 To be written per boundary (STRIDE: spoofing, tampering, repudiation, information disclosure, denial of service, elevation of privilege) in the phase listed under "Expanded in" above.

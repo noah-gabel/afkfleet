@@ -1,0 +1,26 @@
+---
+source: crates/fleet-server/tests/middleware.rs
+expression: redacted(seen)
+---
+{
+  "status": 401,
+  "headers": {
+    "cache-control": "no-store",
+    "content-length": "125",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "no-referrer",
+    "www-authenticate": "Bearer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "[request_id]",
+    "x-test-handler": "kept"
+  },
+  "body": {
+    "error": {
+      "code": "unauthorized",
+      "message": "Authentication is required.",
+      "request_id": "[request_id]"
+    }
+  }
+}

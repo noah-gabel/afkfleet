@@ -1,0 +1,25 @@
+---
+source: crates/fleet-server/tests/middleware.rs
+expression: redacted(seen)
+---
+{
+  "status": 431,
+  "headers": {
+    "cache-control": "no-store",
+    "content-length": "126",
+    "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
+    "content-type": "application/json",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "x-frame-options": "DENY",
+    "x-request-id": "[request_id]",
+    "x-test-handler": "kept"
+  },
+  "body": {
+    "error": {
+      "code": "bad_request",
+      "message": "The request couldn't be read.",
+      "request_id": "[request_id]"
+    }
+  }
+}

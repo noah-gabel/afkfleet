@@ -23,7 +23,7 @@ One branch and one PR per group, one commit per task, in this order *(the user's
 | D | `p6/p6.6-p6.7-middleware-and-health` | P6.6, P6.7 |
 | E | `p6/p6.10-p6.12-cli-and-wrap-up` | P6.10, P6.11, P6.12, the DoD integration test and the phase wrap-up |
 
-Each later group asks its own implementation-level questions in its session. Known ones: anyhow in the server's `main.rs` and the HTTP client for the healthcheck and the DoD test (E), the request-ID format (D), how ts-rs exports while `packages/ui` doesn't exist yet (C), and sqlx's offline data in every CI job that compiles the server, and Biome against `.sqlx/*.json` (B).
+Each later group asks its own implementation-level questions in its session. Known ones: anyhow in the server's `main.rs` and the HTTP client for the healthcheck and the DoD test (E), the request-ID format (D, answered: a version 7 UUID), how ts-rs exports while `packages/ui` doesn't exist yet (C), and sqlx's offline data in every CI job that compiles the server, and Biome against `.sqlx/*.json` (B).
 
 ### fleet-startup, the binaries' shared start-up code
 - **A new crate** *(the user's decision)*, `crates/fleet-startup`, holds only what a process needs to start:
@@ -215,6 +215,63 @@ The user answered group C's questions on 2026-10-10, one at a time; these are th
 - **Snapshots** *(the user's choice)*: one insta JSON snapshot per variant, through the middleware with a fixed test request ID: the status, the `content-type`, `retry-after` and `www-authenticate` headers, and the parsed body. The 13 were read before accepting.
 - **Tests,** red against stubs that compiled (every variant 500 and `internal`, conversions that all gave `internal`, a middleware that passed responses through, an encoder that wrote nothing): 51 of 57 failed on assertions, then all passed.
 
+### The middleware stack (P6.6, group D)
+The user answered group D's questions on 2026-10-10, one at a time; these are the answers.
+- **The order** *(the user's decision; a deviation from P6.6's documented order, which put the security headers innermost)*. `http::middleware::apply(routes, &HttpConfig, RequestIds)` adds the router's fallbacks, then the stack. Outermost first:
+
+  | # | Layer | From |
+  |---|---|---|
+  | 1 | sensitive headers | tower-http `sensitive-headers` |
+  | 2 | security headers | tower-http `set-header`, `overriding` |
+  | 3 | request ID | the server's own |
+  | 4 | trace | the server's own |
+  | 5 | `render_errors` | group C, with the safety net below |
+  | 6 | catch-panic | tower-http, `CatchPanicLayer::custom` |
+  | 7 | timeout | tower-http, `TimeoutLayer::with_status_code(408, [http] request_timeout_secs)` |
+  | 8 | body limit | tower-http, `RequestBodyLimitLayer::new([http] max_body_bytes)` |
+
+  - With the security headers innermost, a response made by an outer layer would lack them: the timeout's 408, the body limit's 413, a caught panic's 500, and a refused request's 500.
+  - `render_errors` sits inside the request-ID layer, so every body names the ID. It sits inside the trace span, so its lines carry the span. It sits outside catch-panic, the timeout and the body limit, so it renders their answers.
+  - It's applied with `Router::layer` after the routes and both fallbacks, so the fallbacks run through it too. axum's `MethodRouter` adds `Allow` around the layered 405 fallback (axum 0.8.9's `set_allow_header`).
+- **The request ID: a version 7 UUID minted through the ports** *(the user's choice)*. fleet-core gets `id::RequestId` *(the user's choice: one more `define_id!`, so it shares every ID's rules and code)*. The layer mints it with `system::mint` from the `Clock` and `SecureRandom` ports, lowercase hyphenated, 36 characters. It fits `BoundedText<64>` unchanged, and in tests it comes from `ManualClock` and `SeededRandom` and is only compared with itself.
+- **The request-ID layer is the server's own** *(the user's decision)*: tower-http's `request-id` feature always turns on uuid's `v4`, and with it `rng`, against the workspace's uuid rule. Its `SetRequestIdLayer` also keeps a client's ID.
+  - The layer removes every `x-request-id` the client sent and mints the ID.
+  - It sets the ID on the request (the header `render_errors` reads, and an extension for the trace span) and on the response, replacing any value a handler set.
+  - A client can't choose the ID that is logged and echoed back.
+- **A failed mint refuses the request** *(the user's choice)*: the OS's randomness failed, or the clock is outside a version 7 ID's range.
+  - The client gets the internal envelope with `request_id: "unknown"`, rendered by `render_without_id`, which doesn't log the wiring-bug message.
+  - The cause, with its source chain, is logged at `error`, since a human must act.
+  - The handler never runs.
+- **Security headers** *(the user's choice: §7.6's three plus two)*: `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, `Cache-Control: no-store`, `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` and `X-Frame-Options: DENY`.
+  - The last two keep a JSON response opened in a browser from loading anything or being framed (OWASP's REST guidance).
+  - All five are set with `SetResponseHeaderLayer::overriding`, so a handler can't weaken one; a test tries.
+  - Caddy adds HSTS. There's still no CORS layer.
+- **Sensitive headers, outermost** *(the user's choice)*: `Authorization`, `Proxy-Authorization` and `Cookie` on requests, and `Set-Cookie` on responses (§7.5). A marked value prints as `Sensitive` in `Debug`, so a later debug print can't leak it. A test checks a handler's `Debug` of the request headers.
+- **Errors that don't come from `ApiError`: explicit where possible, plus a safety net** *(the user's decisions)*.
+  - The 404 fallback, the 405 fallback (`method_not_allowed_fallback`) and the panic handler return `ApiError`.
+  - tower-http's timeout (an empty 408) and body limit (a text 413 "length limit exceeded"), and axum's 413 when a handler reads past the limit, have no hook.
+  - So `render_errors` gives every 4xx or 5xx response without a marker the envelope:
+    - **The code comes from the status.** A status without a code of its own keeps its status and says `bad_request` (4xx) or `internal` (5xx) *(the user's choice)*. A bare 422 says `validation_failed` with `fields: []` *(the user's choice)*.
+    - **The old body is replaced** *(the user's addition)*, and the headers that describe it go: `Content-Length` and `Content-Encoding`. A stale `Content-Length` would otherwise break the JSON body. `content-type: application/json` is set. The marker path uses the same writer.
+    - **Every other header stays** *(the user's addition)*: axum's `Allow`, and from P7.10 a limiter's `Retry-After` and rate-limit headers.
+    - **The headers its code always sends are added when missing** *(the user's choice)*: `WWW-Authenticate: Bearer` on a 401, `Retry-After: 1` on a 503. A 429 without `Retry-After` gets none, since the delay is unknown.
+    - **A bare error status is a wiring bug**, logged at `error` with its status and request ID *(the user's choice)*. The exceptions are the timeout's 408 and the body limit's 413, which come bare by design; the trace line logs them.
+  - Tests check each wrapped response's `Content-Length` (right, or absent), that its body parses, and that a 405 keeps `Allow`.
+- **A panic** *(the user's choice)*: the handler `ApiError::internal(HandlerPanicked)` has the fixed source "a request handler panicked". `render_errors` logs that at `error` with the request ID. The payload is logged only by fleet-startup's panic hook, cleaned, while the request span is entered. A test with a stand-in hook, in a test binary of its own because the hook is process-wide, checks that the hook's line carries the span's `request_id`.
+- **The trace layer is the server's own** *(the user's decision)*: tower-http's `on_response` sees only the response, the latency and the span, not the route, so "health at `debug`" would need a workaround.
+  - **The span** is `request` at `info`, so its fields reach the default filter, and the inner layers and the handler run inside it. It carries:
+    - `request_id`
+    - `method`: one of the nine standard methods by name, any extension method as `"<other>"` *(the user's choice)*
+    - `route`: axum's `MatchedPath` template, or `"<unmatched>"` *(the user's choice)*. Never the path a client sent, and never the query string, which will carry P11's WebSocket ticket. That needs axum's `matched-path` feature.
+  - **One line per request** *(the user's choice)*, "request finished", with `status`, `latency_ms` and, for an error, `code`.
+    - `latency_ms` is a float to the microsecond, from tokio's `Instant` *(the user's choice)*.
+    - `code` comes from a private response extension `render_errors` leaves, which the trace layer takes out again *(the user's choice)*.
+    - The line is at `info`, or at `debug` for `/health/…` *(the user's choice)*. There's no "started" line.
+  - **It logs no header and no body** *(the user's addition)*. A test sends `Authorization`, `Cookie`, a client `x-request-id` and a JSON body, each with a marker value, and no marker appears in any line at `debug`.
+- **Snapshots** *(the user's choice)*: one insta JSON snapshot per response, holding the status, the headers that matter and the body. The test first checks the request ID (a canonical version 7 ID, equal in header, body and log, never the client's), then replaces it with `"[request_id]"`, so no insta feature is added. There are 16: 404, 405, 408, 413 by its length and when read, panic, refused request, and nine bare statuses. All were read before accepting.
+- **Group C's test changed:** `a_response_without_an_api_error_passes_unchanged` sent a bare 418 and expected it unchanged, which contradicts the safety net. It now sends a 201 (`a_success_without_an_api_error_passes_unchanged`), and the 418 is one of the safety-net cases.
+- **Tests,** red against compiling stubs: pass-through ID and trace layers, no safety net, no security or sensitive headers, no timeout or body limit, and tower-http's default panic response. 53 of 110 failed on assertions, then all passed. The timeout's tests run on paused time; nothing in them touches sqlx.
+
 ### stable-check
 fleet-startup and fleet-server join the justfile's `stable_crates` in group A, and fleet-api-types in group C, under P0.11's rule: the crates that don't depend on azalea or azalea-auth *(the user's decision)*. fleet-server leaves it in P9.3, when azalea-auth arrives.
 
@@ -232,7 +289,7 @@ fleet-startup and fleet-server join the justfile's `stable_crates` in group A, a
 - **P7.4:** the `*_file` loader (size cap, permissions, trailing newline) comes with its first user, and the secret-name test's allowlist takes P7's non-secret matches.
 - **P7.10:** adds `[http] trusted_proxies`.
 - **P9.3:** the `azalea_auth` cap already holds on the server; fleet-server leaves `stable_crates`.
-- **Group D (P6.6)** *(from group C, the user's decisions)*:
+- **Group D (P6.6)** *(from group C, the user's decisions; done, see above)*:
   - `render_errors` goes inside the request-ID layer. Errors that don't pass through `ApiError` (tower-http's timeout and body-limit responses, 405, the 404 fallback) must end up in the same `ErrorResponse` envelope with a `request_id`, e.g. by mapping them to `ApiError` or by having the middleware wrap any error status that has no marker. A 405 keeps axum's `Allow` header. An integration test sends one request for each error the router can produce and asserts that every response has the JSON body with a `request_id`, so a missing body is caught, not just safe.
   - The request ID is always generated by the server. tower-http's `SetRequestIdLayer` keeps an `x-request-id` the client already sent, so the client-supplied header is removed or overwritten before the ID is set; otherwise a client could choose the ID that gets logged and echoed back (fake or colliding IDs, log injection). The tests send a request with its own `x-request-id` and assert that the logged and returned ID is a fresh server-generated one. The ID fits `BoundedText<64>` unchanged.
 - **P7** *(from group C, the user's decisions)*: garde joins fleet-api-types with the first request DTO (P7.6), which also maps axum's JSON rejections to 400, 415 or 422; a DTO with garde's `pattern` rule gets the leak test; the argon2 queue answers `busy` (P7.2); P7.10's limiter fills `RateLimited { retry_after }`; P7.8 uses the existing `From<AuthzError>`.
@@ -253,6 +310,11 @@ Group C *(the user's approval of the whole set)*:
 - **New in `[workspace.dependencies]` for P6.5:** axum 0.8.9 and tower 0.5.3, both without default features and both already in the lockfile.
 - **fleet-server** gains fleet-api-types and axum, with no features: `IntoResponse` and `middleware::from_fn` need none. Dev: tower (`util`, for `ServiceExt::oneshot`), and insta gains `json`.
 
+Group D *(the user's approval of the whole set)*:
+- **New in `[workspace.dependencies]`:** tower-http 0.7.1, as §5 pinned; it has no default features. Cargo.lock gains only tower-http 0.7.1, next to the 0.6.11 that reqwest uses (cargo deny's `multiple-versions` only warns).
+- **fleet-server** gains tower-http with `catch-panic`, `timeout`, `limit`, `sensitive-headers` and `set-header`, never `request-id` or `trace`; tower as a normal dependency with no features, for `ServiceBuilder`; axum's `matched-path`; and tokio's `time`, for the trace layer's latency. Dev: tokio's `test-util`, for the timeout's tests on paused time.
+- **fleet-core** gains the `RequestId` type, no dependency.
+
 Group B *(the user's approval of the whole set)*:
 - **New in `[workspace.dependencies]`:** sqlx 0.9.0 (no default features), async-trait 0.1.92, and tempfile 3.27.0, which was already in the lockfile through figment and insta. `log` moves out of the test-only block. Cargo.lock gains only sqlx's tree; cargo deny passes, and no `ring` comes with it.
 - **fleet-server** gains fleet-core, async-trait, chrono (`now`), getrandom, log (only for sqlx's `LevelFilter`), secrecy, serde_json, sqlx (`runtime-tokio`, `sqlite-bundled`, `macros`, `migrate`, `uuid`), tokio (`fs`) and uuid. Dev: insta (no features), proptest (`std`), tempfile, tokio (`macros`, `rt`).
@@ -266,6 +328,7 @@ Group B *(the user's approval of the whole set)*:
   - Every table follows one set of storage conventions, enforced by CHECKs, and every state change commits together with its audit entry.
   - Every build checks the server's SQL against committed offline data, exactly like CI, and a stale `.sqlx/` or an edited migration fails locally and in CI.
   - Every failed request answers with one envelope, with a status, headers and a fixed message per code, and an internal error's details reach only the log, with the request ID that names them.
+  - Every response carries the security headers and a request ID the server minted, and every error response, whatever produced it, has the envelope; a missing mapping shows up as a wiring bug in the log.
   - The app's API types come from the Rust DTOs, and a stale export fails locally and in CI. No 64-bit field can reach the app as a `bigint`, a code a newer server adds doesn't break an older app, and no text a server sends reaches a client's output uncleaned or unbounded.
 - **Harder:**
   - One more crate, and fleet-agent's config types are aliases over generic ones.
@@ -293,4 +356,8 @@ Group B *(the user's approval of the whole set)*:
 - **A freshness check by git diff, or by a Node script.** git diff works only in CI, on a clean tree; a Node script would duplicate what the Rust comparison does with tests next to the code.
 - **A task-local request ID, or the ID passed through every handler.** The first hides context that a response built outside its scope lacks; the second makes every handler and every service error carry it.
 - **axum's `Json` for the error body.** It needs the `json` feature now and would answer a serialization failure with serde's message as the body.
+- **tower-http's request-ID layers.** The `request-id` feature turns on uuid's `v4` and `rng`, and `SetRequestIdLayer` keeps a client's ID, so a strip step would be needed anyway.
+- **tower-http's `TraceLayer`.** Its `on_response` can't see the route, so logging the health routes at `debug` would need a marker from the health handlers, putting a logging concern into them.
+- **P6.6's documented order, with the security headers innermost.** The responses the outer layers make (timeout, body limit, panic, refused request) would lack them.
+- **Explicit mapping only, with our own timeout and body-limit layers.** Nothing would catch a future layer's or rejection's bare error status except a test that knows about it.
 - **A minimal TypeScript package in `packages/ui` now, or another folder until P8.** The first brings P8's TypeScript dependency forward; the second would move the folder, the recipe and the job again in P8.
