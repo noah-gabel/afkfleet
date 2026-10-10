@@ -1868,6 +1868,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleet-server"
+version = "0.1.0"
+
+[[package]]
 name = "fleet-startup"
 version = "0.1.0"
 dependencies = [

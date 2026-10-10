@@ -2078,7 +2078,12 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 > - **stable-check.** fleet-startup and fleet-server join `stable_crates` in group A, fleet-api-types in group C. P9.3 removes fleet-server when azalea-auth arrives.
 > - **Dependencies.** Group A adds no external crate. fleet-startup uses figment (`toml`, `env`), serde, thiserror, tracing and tracing-subscriber (`env-filter`, `json`); fleet-testkit gains figment (`test`) and serde_json; fleet-server uses fleet-startup, garde (`derive`), serde (`derive`), thiserror and tracing.
 
-- [ ] **P6.1** Module layout (see `CLAUDE.md`): `config`, `app` (services), `ports`, `infra/{sqlite,crypto}`, `http/{router,middleware,extractors,handlers,error}`, `grpc`, `cli`.
+- [x] **P6.1** Module layout (see `CLAUDE.md`): `config`, `app` (services), `ports`, `infra/{sqlite,crypto}`, `http/{router,middleware,extractors,handlers,error}`, `grpc`, `cli`.
+
+  > Note (P6.1, as built, group A) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **Deviation: modules arrive with their code** (the user's decision). `crates/fleet-server` starts as a library whose crate doc describes the whole layout, each module with the task that fills it, and the layering (`http` handlers → `app` services → `ports` → `infra`). Group A adds `config` (P6.2); every other module arrives with the group that first puts code in it, so the tree has no empty modules.
+  > - **No binary yet.** `afkfleet-server` arrives with the CLI in P6.11 (group E).
+  > - fleet-server joins the justfile's `stable_crates` (P9.3 takes it out again).
 - [ ] **P6.2** 🔴 Config:
   - figment + garde
   - secrets only via `*_file` paths

@@ -1,0 +1,11 @@
+[package]
+name = "fleet-server"
+description = "The afkfleet server: the HTTP API, authentication, the vault, persistence and the agents' control plane. A library until the afkfleet-server binary arrives in P6.11."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
