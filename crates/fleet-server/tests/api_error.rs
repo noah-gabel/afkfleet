@@ -391,7 +391,7 @@ fn garde_texts_fit_their_caps_uncut() {
 }
 
 #[test]
-fn every_code_is_some_variants_code() {
+fn every_code_is_some_variants_code_with_its_status() {
     let variants = [
         ApiError::BadRequest,
         ApiError::Unauthorized,
@@ -413,4 +413,7 @@ fn every_code_is_some_variants_code() {
     let codes: Vec<&str> = variants.iter().map(|error| error.code().as_str()).collect();
     let all: Vec<&str> = ErrorCode::ALL.iter().map(|code| code.as_str()).collect();
     assert_eq!(codes, all);
+    for error in &variants {
+        assert_eq!(error.status(), status(error.code()), "{error:?}");
+    }
 }
