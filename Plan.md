@@ -227,7 +227,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | X.509 / CSR | `rcgen` | 0.14.10, dfo | server (CA, signing), agent (CSR) | `aws_lc_rs`, `pem`, `x509-parser`. The default is ring |
 | HTTP client | `reqwest` | **0.13.5**, dfo | client, server, desktop, mc | Feature `rustls` (aws-lc-rs + platform verifier), no native-tls. fleet-mc enables no features: it only names `reqwest::Proxy` in azalea's `AccountTrait` (ADR-0011) |
 | WebSocket client | `tokio-tungstenite` | 0.29.0, dfo | client | `connect`, `rustls-tls-native-roots`. 0.29 matches axum 0.8.9's `ws`, so only one tungstenite is built |
-| Rust → TypeScript types | `ts-rs` | 12.0.1 | api-types | `chrono-impl`, `uuid-impl` |
+| Rust → TypeScript types | `ts-rs` | 12.0.1, dfo | api-types | `serde-compat` only, so serde's renames reach the TypeScript; `chrono-impl` and `uuid-impl` come with the first DTO that holds a time or an ID. The export runs through `Config::new()`, never `#[ts(export)]` or the `TS_RS_*` variables (ADR-0015) |
 
 ### Rust: security
 | Concern | Crate | Version | Used in | Notes |
@@ -2092,6 +2092,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   - **The bans go further than planned** (the user's decision): uuid's self-minting functions and the `SysRng`/`ThreadRng` types too. A temporary probe, never committed, proved that all 28 entries fire with their reasons.
 > - **stable-check.** fleet-startup and fleet-server join `stable_crates` in group A, fleet-api-types in group C. P9.3 removes fleet-server when azalea-auth arrives.
 > - **Dependencies (group B, the user's approval).** New in `[workspace.dependencies]`: sqlx (0.9.0, no default features), async-trait (0.1.92) and tempfile (3.27.0, already in the lockfile). fleet-server gains fleet-core, async-trait, chrono (`now`), getrandom, log (only for sqlx's `LevelFilter`), secrecy, serde_json, sqlx (`runtime-tokio`, `sqlite-bundled`, `macros`, `migrate`, `uuid`), tokio (`fs`) and uuid; in dev, insta, proptest (`std`), tempfile and tokio (`macros`, `rt`). fleet-testkit gains chrono and rand (`std_rng`). fleet-core gains nothing.
+> - **Dependencies (group C, the user's approval).** New in `[workspace.dependencies]`: ts-rs (12.0.1, without default features) and fleet-api-types by path. fleet-api-types uses fleet-core, serde (`derive`), thiserror and ts-rs (`serde-compat`); in dev, rstest, serde_json and tempfile. Cargo.lock gains only ts-rs, ts-rs-macros and termcolor. ts-rs's `chrono-impl` and `uuid-impl` come with the first DTO that holds a time or an ID.
 > - **Dependencies.** Group A adds no external crate. fleet-startup uses figment (`toml`, `env`), serde, thiserror, tracing and tracing-subscriber (`env-filter`, `json`); fleet-testkit gains figment (`test`) and serde_json; fleet-server uses fleet-startup, garde (`derive`), serde (`derive`), thiserror and tracing.
 
 - [x] **P6.1** Module layout (see `CLAUDE.md`): `config`, `app` (services), `ports`, `infra/{sqlite,crypto}`, `http/{router,middleware,extractors,handlers,error}`, `grpc`, `cli`.
@@ -2180,11 +2181,24 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Append-only** means the store has exactly two operations for the log, `AuditWrites::record` inside a `WriteTx` and `AuditReads::list` (P6.4's note); nothing updates or deletes an entry, and no trigger blocks P11.6's retention.
   > - **No secrets:** the metadata's rules live in fleet-core's `AuditMetadata` (P6.4's note), checked when it's built.
   > - **Tests** (`tests/audit_service.rs`, `ManualClock`, IDs minted from `SeededRandom` and compared with each other), red against a stub that stamped the epoch, recorded nothing and listed nothing: 5 of 6 failed.
-- [ ] **P6.9** `fleet-api-types`:
+- [x] **P6.9** `fleet-api-types`:
   - DTOs with serde, garde and `ts-rs`
   - `#[serde(deny_unknown_fields)]` on request DTOs
   - `just gen` exports them to `packages/ui/src/generated/`
   - CI job `ts-types-fresh` fails on any diff
+
+  > Note (P6.9, as built, group C, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **What's in it.** The error envelope's DTOs (`ErrorResponse`, `ErrorBody`, `FieldError`, `ErrorCode`; P6.5) and three building blocks for every later DTO:
+  >   - **`SafeInt`**: the only way a 64-bit integer crosses the API. It's a range-checked `i64` within ±(2^53 − 1), the integers JavaScript reads exactly; reading a number outside that range fails. In TypeScript it's `export type SafeInt = number;`. `SafeInt::MAX` is the crate's own constant, and a test checks that it equals `AuditMetadata::MAX_INT`. Its serde is written by hand, since ts-rs can't read serde's `try_from`/`into` and warns about them on every build.
+  >   - **`Open<E>`**: a response value a later version may extend, such as `ErrorCode`. A value this version doesn't know still reads back, as text cleaned by `sanitize_untrusted` and cut at 64 characters; only a non-string fails. The server can build one only from a known value. `E` implements `OpenEnum` (`ALL`, `as_str`), and a field holding one carries `#[ts(as = "E")]`, so the TypeScript union lists exactly the known values.
+  >   - **`BoundedText<MAX>`**: response text, cleaned by `sanitize_untrusted` and cut at `MAX` characters both when built and when read, never failing on content. It has no TypeScript type of its own, so a field without `#[ts(type = "string")]` doesn't compile.
+  > - **Requests and responses.** Responses derive `Serialize` and `Deserialize` without `deny_unknown_fields`, so `fleet-client` reads them and a newer server's extra field doesn't break an older app; each round-trips in a test. Requests are `Deserialize` + garde + `deny_unknown_fields`, which the crate docs state. **Deviation:** Phase 6 has no request DTO, so garde joins fleet-api-types with P7's first one.
+  > - **The export.** `typescript::export(scratch)` writes the root DTOs through ts-rs's `export_all` with `Config::new()` (which ignores the `TS_RS_*` variables) into an empty scratch folder, and refuses one that isn't empty. No DTO carries `#[ts(export)]`, so tests never write files. One file per type, no index file.
+  >   - `just gen` (`typescript::write`) exports into a fresh temp folder inside `target/gen/`, then syncs `packages/ui/src/generated/` with it. The sync deletes only `.ts` files that start with ts-rs 12.0.1's exact header, and stops before deleting anything, naming the entry, if the folder holds any other file or a subfolder.
+  >   - `just gen-check` (`typescript::check`), in `just check` and `just ci`, compares the folder with a fresh export and names every missing, extra or changed file. CI's `ts-types-fresh` job (ubuntu, Rust only) runs it.
+  > - **`packages/ui/src/generated/`** holds only the generated files until P8.2 scaffolds `packages/ui` around it. With no package.json there, pnpm ignores it (checked: `pnpm -r ls` lists only the root). Biome already skips it, and `.gitattributes` marks it `linguist-generated`.
+  > - fleet-api-types joins `stable_crates`.
+  > - **Tests**, red against stubs that compiled (a `SafeInt` that took any value, text that wasn't cleaned, an `Open` that knew nothing, empty messages and names, an export, comparison and sync that did nothing): 54 of 81 failed on assertions, then all passed. Among them: a sync over a previous real ts-rs export (a stale `Probe.ts` included) proves that it recognizes ts-rs's real header, and every generated file is checked for `bigint`.
 - [ ] **P6.10** OpenAPI via utoipa. `/api/openapi.json` is served only when `dev_mode = true`.
 - [ ] **P6.11** CLI skeleton: `serve`, `migrate`, `healthcheck`.
 
@@ -2312,6 +2326,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - one automatic, single-flight refresh on `401`
   - typed errors
   - integration tests against the in-process server
+
+  > Note (P8.1, from Phase 6, group C, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **A maximum response body size.** fleet-api-types caps each text a client reads (`BoundedText`, `Open`), but not how many entries a response holds (a `fields` array with a million entries), so fleet-client sets a maximum body size on its HTTP client, which bounds every response, not only errors.
 - [ ] **P8.2** Scaffold:
   - `apps/desktop` (Tauri v2; `src-tauri` is a workspace member)
   - `packages/ui` (Vite + React + strict TypeScript + Tailwind + shadcn/ui)
@@ -2332,6 +2348,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `TauriApiClient` lives in `apps/desktop/src/` and is injected into `<App apiClient={…} />`.
   - `FakeApiClient` is for tests.
   - DTO types come only from `src/generated`.
+
+  > Note (P8.5, from Phase 6, group C, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **Error codes.** UI code that branches on an error code always has a default branch that shows the message and the request ID, never an exhaustive switch that assumes the union is complete: an older app can receive a code added later. The same applies to every `Open<…>` field.
+  > - **The generated folder** holds only ts-rs's files: `just gen` refuses to touch it if it holds anything else. Import each type from its own file (`../generated/ErrorResponse`); there's no index file.
 - [ ] **P8.6** 🔴 App shell:
   - TanStack Router with an auth guard
   - role-aware navigation
@@ -2502,6 +2522,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - **Server restart:** agents resync.
 - [ ] **P10.10** Admin endpoints: `GET /agents`, and `POST /agents/{id}/disable`, which revokes the fingerprint and drops the stream.
 
+  > Note (P10.10, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a response value that a later version may extend, such as an agent's status, is an `Open<…>` in its DTO, and a 64-bit number is a `SafeInt`.
+
 **Security:**
 - A client certificate is required for `Connect`.
 - An agent only gets session tokens for its own bots.
@@ -2533,6 +2555,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   Every call is authorized, audited and reconciled.
 
+  > Note (P11.2, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): the bot's state, mode and disconnect reason in a response are values a later version may extend, so their DTO fields are `Open<…>`.
+
   > Note (P11.2, from the group A review): **SSRF.** `ServerAddress` allows loopback and private addresses (ADR-0010). An SSRF policy for the server address must check the resolved IP addresses, not the host string.
 
   > Note (P11.2, from group B): `start`, `stop` and `restart` change nothing for a Paused or Failed bot: the state machine ignores `Start` and `Stop` there (ADR-0010). Decide here what the API answers in that case.
@@ -2548,6 +2572,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     - rate-limited per bot and per user
     - audited
   - `GET /bots/{id}/chat?before=&limit=` with cursor pagination.
+
+  > Note (P11.3, from Phase 6, group C, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): the cursors (chat's `before`, and `GET /audit`'s) are `INTEGER` row IDs, so they cross the API as `SafeInt`, never a plain `i64`.
 
   > Note (P11.3, from group D): The handler checks `SendChat(allowlist.check(&message))` and then sends that same message. An allowlisted command passes with any arguments (threat model). Reading the history needs `ViewBot` (ADR-0010).
 

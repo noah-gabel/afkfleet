@@ -149,6 +149,31 @@ The user answered group B's questions on 2026-10-10, one at a time; these are th
 - **Append-only** is the store's shape (P6.4 above): `AuditWrites::record` and `AuditReads::list` are the only operations on the log.
 - **Tests** (`tests/audit_service.rs`): `ManualClock` stamps, and IDs are minted from `SeededRandom` and only compared with each other. Red against a stub that stamped the epoch, recorded nothing and listed nothing: 5 of 6 failed (the sixth checks `mint` with `SeededRandom`, built in group B's first commit).
 
+### API types (P6.9, group C)
+The user answered group C's questions on 2026-10-10, one at a time; these are the answers.
+- **`fleet-api-types`** holds every API DTO, shared by the server, `fleet-client` and the app, and depends only on fleet-core (§4), for `sanitize_untrusted`. Its crate docs state the rules below for every later DTO.
+- **64-bit integers cross the API only as `SafeInt`** *(the user's decision)*. JavaScript reads a JSON number exactly only within ±(2^53 − 1), and ts-rs exports a plain `i64`/`u64` as `bigint`, which `JSON.parse` never produces, so a 64-bit field would get the wrong TypeScript type and could arrive changed without an error.
+  - `SafeInt` is a range-checked `i64` within ±(2^53 − 1). `try_new` and reading refuse anything outside, so the type can't hold a value the app would misread. It's built now, with its tests, before its first user *(the user's choice)*; 32-bit integers and smaller are `number`s already.
+  - `SafeInt::MAX` is the crate's own constant, with JavaScript as its reason, and a test asserts that it equals `AuditMetadata::MAX_INT` *(the user's choice)*, so the two can't drift when P11 sends audit metadata.
+  - The exporter keeps ts-rs's `bigint` default, and a test fails if any generated file contains `bigint`, so a plain 64-bit field can't slip in.
+  - *(as built)* ts-rs gives `SafeInt` a file of its own, `export type SafeInt = number;`, and fields name it (`count: SafeInt`). Its serde is written by hand: ts-rs can't read serde's `try_from`/`into` and prints a warning about them on every build.
+- **Requests and responses** *(the user's decision)*. Responses derive `Serialize` and `Deserialize` without `deny_unknown_fields`, so `fleet-client` (P8.1) reads them and a field a newer server adds doesn't break an older app; each round-trips in a test, and a test shows an extra field being tolerated. Requests derive `Deserialize`, garde's `Validate` and `deny_unknown_fields`. Phase 6 has no request DTO, so garde joins fleet-api-types with P7's first one; until then the rule is in the crate docs.
+- **Growable values are read tolerantly, through `Open<E>`** *(the user's decisions)*. A value a later version may extend, starting with the error body's `code`, must still read back when a newer server sends one this version doesn't know, so an older app still shows the message and the request ID instead of failing to read the error.
+  - `Open<E>` is an opaque struct holding a known `E` or the received text. It's built only from a known value (the server) or by deserializing (the client), so the server can't send a made-up value. `known()` and `as_str()` read it.
+  - An unknown string is accepted, so reading never fails on it, but it's kept cleaned and capped: through `sanitize_untrusted`, at most 64 characters *(the user's decision)*. A buggy or hostile server then can't put control characters, a fake log line or megabytes into a client's error text or logs; it's the audit log's rule for tolerant reading. A non-string still fails, as a wrong type. A known value matches only exactly.
+  - `E` implements `OpenEnum { const ALL; fn as_str }` *(the user's choice over a round trip through serde_json, which would need serde_json as a normal dependency)*. A test checks that every `as_str` equals serde's name and, through an exhaustive match, that `ALL` holds every variant exactly once.
+  - A field holding one carries `#[ts(as = "E")]`, so the TypeScript type lists exactly the values this version knows and never a made-up "unknown" variant *(the user's requirement)*. `ErrorCode`'s doc comment, which ts-rs copies into the TypeScript, says that the union lists the codes this version knows and that a newer server may send others.
+- **Every other response text is a `BoundedText<MAX>`** *(the user's decision)*: cleaned by `sanitize_untrusted` and cut at `MAX` characters both when built and when read, and never failing on content. The error body's caps are message 256, request ID 64, field path 128 and field message 256 *(the user's choice)*, and a test checks that every fixed message fits uncut *(the user's addition; P6.5 checks the texts the server builds)*. `BoundedText` has no TypeScript type of its own, so a field without `#[ts(type = "string")]` doesn't compile.
+- **The export is explicit** *(the user's decisions)*:
+  - `typescript::export(scratch)` lists the root DTOs in one place and calls ts-rs's `export_all` with `Config::new().with_out_dir(scratch)`. `Config::new()` ignores the `TS_RS_*` environment variables, so a developer's `TS_RS_LARGE_INT=number` can't change the output. No DTO carries `#[ts(export)]`, so `cargo test` never writes files. A DTO a listed one uses is exported with it; a new root DTO must be added to the list.
+  - The library holds the logic (`export`, `compare`, `sync`, and `write` and `check`, which combine them), with unit tests; `examples/typescript.rs` is a thin `main` (`write <dir>`, `check <dir>`), so nothing of it ships in a binary.
+  - **Always a fresh scratch folder** *(the user's addition)*: each run exports into a new temp folder inside the workspace's `target/gen/` (tempfile, a dev-dependency examples can use), removed afterwards, and `export` refuses a scratch folder that isn't empty, so a file from an earlier run can never reach the committed folder.
+  - **Deleting only what ts-rs generated** *(the user's addition)*: `sync` first checks every entry of the committed folder. Only `.ts` files that start with ts-rs 12.0.1's exact header, `// This file was generated by [ts-rs](https://github.com/Aleph-Alpha/ts-rs). Do not edit this file manually.` and its newline, count as generated. Any other file or a subfolder stops it with an error naming that entry before anything is deleted, so a wrong path can never wipe a folder. Then it deletes the generated files the export no longer has and writes the new and changed ones; a missing folder is created. A test syncs over a previous real ts-rs export, a stale real file included, so the header check is proven against ts-rs's actual output, not against a copy of our constant *(the user's addition)*; a ts-rs upgrade that changed the header would fail there.
+  - One file per type, as ts-rs writes them, and no index file *(the user's choice)*.
+- **The freshness check** *(the user's decisions)*: `just gen-check` runs `check`, which compares the committed folder with a fresh export (std::fs only) and names every missing, extra or changed file, then says to run `just gen`. It's in `just check` and `just ci`, and CI's `ts-types-fresh` job runs it on ubuntu, with Rust only *(the user's choice)*. The user adds the job as a required check after its first run.
+- **`packages/ui` before P8** *(the user's decision)*: `packages/ui/src/generated/` holds only the generated files, committed, until P8.2 scaffolds `packages/ui` around it. With no package.json there, pnpm ignores the folder (checked: `pnpm -r ls` lists only the root), Biome already skips it, and `.gitattributes` marks it `linguist-generated=true`, as `.sqlx/` is. The files aren't type-checked until P8 brings TypeScript.
+- **Tests,** red against stubs that compiled (a `SafeInt` that took any value, a `BoundedText` that copied its input, an `Open` that read everything as unknown, empty messages, names and `ALL`, and an export, comparison and sync that did nothing): 54 of 81 failed on assertions, then all passed. A manual check showed `just gen-check` naming an edited and a stray file, and `just gen` refusing the stray file and changing nothing.
+
 ### stable-check
 fleet-startup and fleet-server join the justfile's `stable_crates` in group A, and fleet-api-types in group C, under P0.11's rule: the crates that don't depend on azalea or azalea-auth *(the user's decision)*. fleet-server leaves it in P9.3, when azalea-auth arrives.
 
@@ -166,6 +191,9 @@ fleet-startup and fleet-server join the justfile's `stable_crates` in group A, a
 - **P7.4:** the `*_file` loader (size cap, permissions, trailing newline) comes with its first user, and the secret-name test's allowlist takes P7's non-secret matches.
 - **P7.10:** adds `[http] trusted_proxies`.
 - **P9.3:** the `azalea_auth` cap already holds on the server; fleet-server leaves `stable_crates`.
+- **P8.1** *(from group C, the user's decision)*: fleet-api-types caps each text a client reads, but not how many entries a response holds (a `fields` array with a million entries), so fleet-client sets a maximum response body size on its HTTP client, which bounds every response, not only errors.
+- **P8.5** *(from group C, the user's decision)*: UI code that branches on an error code always has a default branch that shows the message and the request ID, never an exhaustive switch that assumes the union is complete, since an older app can receive a code added later. The same applies to every `Open<…>` field in later phases. The generated folder holds only ts-rs's files, and `just gen` refuses to touch it otherwise.
+- **P10 and P11** *(from group C)*: response values a later version may extend (an agent's status, a bot's state, mode and disconnect reason) are `Open<…>` fields, and 64-bit numbers, such as the chat and audit cursors, are `SafeInt`s.
 
 ### Dependencies
 No new external crate in group A. All of these are already in `[workspace.dependencies]`:
@@ -173,6 +201,10 @@ No new external crate in group A. All of these are already in `[workspace.depend
 - **fleet-testkit** gains figment (`test`) and serde_json.
 - **fleet-agent** gains fleet-startup and drops its normal figment dependency; its tests keep figment (`test`, `toml`).
 - **fleet-server** (group A): fleet-startup, garde (`derive`), serde (`derive`), thiserror, tracing. Dev: fleet-testkit, figment (`test`), rstest, and tracing-subscriber *(the user's approval during the build, beyond the plan's list)*, so the dev-mode test can check the warning's level through fleet-startup's layer.
+
+Group C *(the user's approval of the whole set)*:
+- **New in `[workspace.dependencies]`:** ts-rs 12.0.1 without default features, and fleet-api-types by path. Cargo.lock gains only ts-rs, ts-rs-macros and termcolor (ts-rs's `serde-compat`).
+- **fleet-api-types:** fleet-core, serde (`derive`), thiserror and ts-rs (`serde-compat`). Dev: rstest, serde_json and tempfile. ts-rs's `chrono-impl` and `uuid-impl` come with the first DTO that holds a time or an ID.
 
 Group B *(the user's approval of the whole set)*:
 - **New in `[workspace.dependencies]`:** sqlx 0.9.0 (no default features), async-trait 0.1.92, and tempfile 3.27.0, which was already in the lockfile through figment and insta. `log` moves out of the test-only block. Cargo.lock gains only sqlx's tree; cargo deny passes, and no `ring` comes with it.
@@ -186,12 +218,15 @@ Group B *(the user's approval of the whole set)*:
   - Time and randomness are deterministic in every server test, and a direct clock or OS-randomness read in fleet-server fails clippy.
   - Every table follows one set of storage conventions, enforced by CHECKs, and every state change commits together with its audit entry.
   - Every build checks the server's SQL against committed offline data, exactly like CI, and a stale `.sqlx/` or an edited migration fails locally and in CI.
+  - The app's API types come from the Rust DTOs, and a stale export fails locally and in CI. No 64-bit field can reach the app as a `bigint`, a code a newer server adds doesn't break an older app, and no text a server sends reaches a client's output uncleaned or unbounded.
 - **Harder:**
   - One more crate, and fleet-agent's config types are aliases over generic ones.
   - fleet-testkit, still a dev-dependency only, carries figment's `Jail` and serde_json for its helpers.
   - The agent's tests read JSON lines through a `Result` (`.unwrap()`), since fleet-testkit can't panic.
   - Changing a query or adding a migration needs `just db-prepare` (and sqlx-cli installed) before the build passes again.
   - Database tests run in real time, since paused time can't work with sqlx's worker threads.
+  - Changing a DTO needs `just gen` before the build passes again, and a new root DTO must be added to the exporter's list by hand.
+  - DTO fields use `SafeInt`, `Open<…>` and `BoundedText<…>` instead of plain integers, enums and strings, with a `#[ts(…)]` attribute on each `Open` and `BoundedText` field.
 
 ## Alternatives considered
 - **Copying the agent's code into fleet-server.** About 1,000 lines, including the error texts that must never echo a value and the panic sanitizing, would drift between two copies.
@@ -204,3 +239,8 @@ Group B *(the user's approval of the whole set)*:
 - **The ports in fleet-server, with fleet-testkit depending on it.** A dev-dependency cycle in which fleet-server's own unit tests would see a second copy of the traits.
 - **No lint, or the adapters in fleet-startup.** Review alone misses a stray `Utc::now()`; adapters in fleet-startup would give the agent's start-up crate the server's clock and getrandom.
 - **fleet-server outside stable-check until P9.** Nightly-only code could creep into the server for three phases.
+- **64-bit integers as ts-rs's `number` everywhere (`with_large_int`), as strings, or with a `#[ts(type = "number")]` on each field.** The first silently loses precision beyond 2^53, the second makes every client parse numbers, and the third relies on every field remembering both the attribute and a range check.
+- **A catch-all `Other(String)` variant in `ErrorCode`, or `code` as a validated string.** The variant could be built by server code; the string would lose the TypeScript union.
+- **ts-rs's `#[ts(export)]` tests.** Every test run would write files, nextest's parallel processes would write shared files at once, and the output would depend on the `TS_RS_*` variables.
+- **A freshness check by git diff, or by a Node script.** git diff works only in CI, on a clean tree; a Node script would duplicate what the Rust comparison does with tests next to the code.
+- **A minimal TypeScript package in `packages/ui` now, or another folder until P8.** The first brings P8's TypeScript dependency forward; the second would move the folder, the recipe and the job again in P8.

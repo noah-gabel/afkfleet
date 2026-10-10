@@ -68,14 +68,15 @@ Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so 
 
 | Command | What it does |
 |---|---|
-| `just check` | `cargo fmt --check`, clippy (`--all-targets -D warnings`), `cargo doc --no-deps --workspace` with `RUSTDOCFLAGS="-D warnings"`, nextest default profile, doctests, `db-check`, `testkit-check`, the `scripts/` tests, and biome + `tsc --noEmit` once the frontend exists. **Run before saying a task is done.** |
+| `just check` | `cargo fmt --check`, clippy (`--all-targets -D warnings`), `cargo doc --no-deps --workspace` with `RUSTDOCFLAGS="-D warnings"`, nextest default profile, doctests, `db-check`, `gen-check`, `testkit-check`, the `scripts/` tests, and biome + `tsc --noEmit` once the frontend exists. **Run before saying a task is done.** |
 | `just test [crate]` | nextest for the workspace or one crate |
 | `just test-slow` | Pulls the server image and builds the agent's image, then runs the nextest `slow` profile with fleet-mc's test-only `fault-injection` feature, one Minecraft container or compose stack at a time (needs Docker) |
 | `just test-real-account` | **The user only; the AI never runs it.** nextest `manual` profile: the user's real token from `secrets/p1.8-account.txt` joins a local online-mode container and sends signed chat (needs Docker) |
 | `just cov` | cargo-llvm-cov with the coverage gates (per-crate and per-module gates are checked by a script over the JSON report) |
 | `just deny` | `cargo deny check` |
 | `just fmt` | `cargo fmt` + biome format |
-| `just gen` | Export ts-rs types to `packages/ui/src/generated/`; proto codegen check |
+| `just gen` | Exports fleet-api-types' TypeScript types (ts-rs) to `packages/ui/src/generated/`, from a fresh export in `target/gen/`. It deletes only files ts-rs generated and stops on anything else in the folder. Run it after changing a DTO, and commit the result. P10 adds the proto codegen check |
+| `just gen-check` | Fails if `packages/ui/src/generated/` isn't exactly a fresh export (the `ts-types-fresh` job) |
 | `just db-prepare` | Rebuilds the throwaway `target/sqlx-prepare.db` from the migrations and runs `cargo sqlx prepare -- --all-targets` in `crates/fleet-server`, writing the offline query data to `crates/fleet-server/.sqlx/` (needs sqlx-cli 0.9.0). Run it after changing a query or adding a migration |
 | `just db-check` | The same database, then `cargo sqlx prepare --check`: fails if `.sqlx/` is missing or differs from a query (the `sqlx-offline` job) |
 | `just migrations-check` | Fails if a migration that exists on `origin/main` was modified, deleted or renamed. Needs an up-to-date `origin/main`; CI fetches it |
@@ -87,9 +88,9 @@ Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so 
 | `just ui-test` / `just e2e` | Vitest / Playwright |
 | `just ci` | Everything CI runs |
 | `just testkit-check` | Fails if any workspace member depends on fleet-testkit outside its dev-dependencies (`cargo tree`, through `scripts/testkit-check.mjs`; ADR-0015) |
-| `just fmt-check` · `clippy` · `docs` · `doctest` · `test-ci` · `stable-check` · `db-check` · `migrations-check` · `testkit-check` · `scripts-test` · `ui-check` · `ui-audit` | The building blocks of `check` and `ci`. Each CI job runs one of them, so local and CI runs can't drift apart |
+| `just fmt-check` · `clippy` · `docs` · `doctest` · `test-ci` · `stable-check` · `db-check` · `migrations-check` · `gen-check` · `testkit-check` · `scripts-test` · `ui-check` · `ui-audit` | The building blocks of `check` and `ci`. Each CI job runs one of them, so local and CI runs can't drift apart |
 
-Recipes for tools that arrive in later phases (`gen`, `dev-server`, `dev-app`, `ui-test`, `e2e`) print the phase they arrive in and exit with an error until then.
+Recipes for tools that arrive in later phases (`dev-server`, `dev-app`, `ui-test`, `e2e`) print the phase they arrive in and exit with an error until then.
 
 ## Architecture rules
 **Crates and dependencies** (full table in Plan.md §4):

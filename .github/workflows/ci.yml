@@ -188,6 +188,24 @@ jobs:
       - run: just migrations-check
       - run: just db-check
 
+  # The committed TypeScript types must be exactly a fresh export of fleet-api-types
+  # (ADR-0015). Rust only: the export is a cargo example.
+  ts-types-fresh:
+    name: ts-types-fresh
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install the pinned toolchain
+        run: rustup install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
+        with:
+          tool: just@${{ env.JUST_VERSION }}
+      - run: just gen-check
+
   frontend:
     name: frontend
     runs-on: ubuntu-latest

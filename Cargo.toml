@@ -22,6 +22,7 @@ repository = "https://github.com/noah-gabel/afkfleet"
 # by the member that uses the crate.
 [workspace.dependencies]
 # Workspace crates, by path (unpublished, so no version).
+fleet-api-types = { path = "crates/fleet-api-types" }
 fleet-core = { path = "crates/fleet-core" }
 fleet-mc = { path = "crates/fleet-mc" }
 fleet-runtime = { path = "crates/fleet-runtime" }
@@ -108,6 +109,10 @@ tracing = "0.1.44"
 # tracing-subscriber: the default features include `tracing-log`, which bridges `log`
 # records into fleet-testkit's log capture for the redaction tests (ADR-0011).
 tracing-subscriber = "0.3.23"
+# ts-rs: fleet-api-types' TypeScript export. Without default features; the member enables
+# `serde-compat`, so serde's renames reach the TypeScript. `chrono-impl` and `uuid-impl`
+# come with the first DTO that holds a time or an ID (ADR-0015).
+ts-rs = { version = "12.0.1", default-features = false }
 # uuid: never `v4`/`v7`/`rng`, which pull in getrandom; IDs are minted from caller data (ADR-0010).
 uuid = { version = "1.27.0", default-features = false }
 
