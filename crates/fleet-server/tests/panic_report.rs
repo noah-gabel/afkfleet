@@ -10,16 +10,19 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
 use axum::body::Body;
 use axum::extract::Request;
+use axum::extract::connect_info::MockConnectInfo;
 use axum::routing::get;
 use chrono::DateTime;
-use fleet_server::config::{HttpConfig, LogConfig};
+use fleet_server::config::{HttpConfig, LogConfig, RateLimitConfig};
 use fleet_server::http::error::REQUEST_ID_HEADER;
 use fleet_server::http::middleware::{self, RequestIds};
+use fleet_server::http::rate_limit::{RateLimits, TrustedProxies};
 use fleet_startup::telemetry::{NoRules, PANIC_TARGET, layer_with};
 use fleet_testkit::log_buffer::LogBuffer;
 use fleet_testkit::system::{ManualClock, SeededRandom};
@@ -38,12 +41,18 @@ async fn the_panic_hooks_line_carries_the_requests_id() {
             bind: HttpConfig::DEFAULT_BIND,
             request_timeout: core::time::Duration::from_secs(15),
             max_body_bytes: 65_536,
+            trusted_proxies: TrustedProxies::default(),
         },
         RequestIds::new(
             Arc::new(ManualClock::new(DateTime::UNIX_EPOCH)),
             Arc::new(SeededRandom::new(3)),
         ),
-    );
+        &RateLimits::new(
+            &RateLimitConfig::default(),
+            Arc::new(ManualClock::new(DateTime::UNIX_EPOCH)),
+        ),
+    )
+    .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))));
     let buffer = LogBuffer::default();
     let subscriber = tracing_subscriber::registry().with(layer_with(
         &LogConfig::default(),

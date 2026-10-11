@@ -9,16 +9,30 @@ use std::io::{Read, Write as _};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread;
 
+use axum::Router;
+use chrono::DateTime;
+use fleet_core::auth::LockoutPolicy;
+use fleet_core::system::Clock;
+use fleet_server::app::lockout::LockoutService;
+use fleet_server::cli::housekeeping::Housekeeping;
+use fleet_server::cli::serve::App;
 use fleet_server::config::{
-    AuthConfig, DatabaseConfig, HttpConfig, LogConfig, LogFormat, ServerConfig, VaultConfig,
+    AuthConfig, DatabaseConfig, HttpConfig, LogConfig, LogFormat, RateLimitConfig, ServerConfig,
+    VaultConfig,
 };
+use fleet_server::http::rate_limit::RateLimits;
+use fleet_server::http::rate_limit::TrustedProxies;
+use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
 use fleet_server::infra::crypto::vault::VaultKeys;
+use fleet_server::infra::sqlite::Database;
 use fleet_startup::signals::{ShutdownSignals, Signal};
 use fleet_startup::telemetry::{NoRules, layer_with};
 use fleet_testkit::log_buffer::LogBuffer;
+use fleet_testkit::system::ManualClock;
+use secrecy::SecretBox;
 use serde_json::Value;
 use tokio::net::TcpListener;
 use tracing_subscriber::layer::SubscriberExt as _;
@@ -100,6 +114,7 @@ pub(crate) fn server_config(dir: &Path, bind: SocketAddr, dev_mode: bool) -> Ser
             bind,
             request_timeout: Duration::from_secs(15),
             max_body_bytes: 65_536,
+            trusted_proxies: TrustedProxies::default(),
         },
         database: DatabaseConfig {
             path: dir.join("afkfleet.db"),
@@ -109,6 +124,7 @@ pub(crate) fn server_config(dir: &Path, bind: SocketAddr, dev_mode: bool) -> Ser
             filter: "info".parse().unwrap(),
         },
         auth: AuthConfig::default(),
+        rate_limits: RateLimitConfig::default(),
         vault: VaultConfig {
             key_files: BTreeMap::from([(1, vault_key(dir))]),
             active_key_id: 1,
@@ -291,6 +307,28 @@ pub(crate) fn capture() -> (LogBuffer, tracing::subscriber::DefaultGuard) {
         tracing_subscriber::registry().with(layer_with(&config, &NoRules, false, buffer.clone()));
     let guard = tracing::subscriber::set_default(subscriber);
     (buffer, guard)
+}
+
+/// `router` with the housekeeping `serve` runs beside it: the default
+/// limits and a lockout over `database`, on a clock that never moves, with
+/// a fixed lockout key.
+pub(crate) fn app_of(router: Router, database: &Database) -> App {
+    let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(
+        DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+    ));
+    let lockout = LockoutService::new(
+        Arc::clone(&clock),
+        Arc::new(database.clone()),
+        Arc::new(HmacAttemptKeys::new(SecretBox::new(Box::new([7; 32])))),
+        LockoutPolicy::default(),
+    );
+    App {
+        router,
+        housekeeping: Housekeeping::new(
+            RateLimits::new(&RateLimitConfig::default(), clock),
+            lockout,
+        ),
+    }
 }
 
 /// Aborts an in-process task when the test ends, however it ends.

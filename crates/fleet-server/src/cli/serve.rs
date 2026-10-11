@@ -4,11 +4,25 @@
 //! main.rs loads the config, starts logging, logs the dev-mode warning,
 //! loads the vault's keys (plain file reads, before any runtime exists),
 //! builds a multi-threaded runtime, installs the stop signals and binds
-//! `[http] bind`; [`run`] opens the database (running every pending
-//! migration), builds the router over the real clock, the OS's randomness,
-//! the vault and the database, and serves. Every startup failure is one `error` event,
-//! "the server can't start", with the error's whole chain, and exit 1. The
-//! last line, "the server stopped", carries the exit code.
+//! `[http] bind`; [`run`] derives the lockout's key from the vault's, opens
+//! the database (running every pending migration), builds the app over the
+//! real clock, the OS's randomness, the vault and the database, and serves.
+//! Every startup failure is one `error` event, "the server can't start",
+//! with the error's whole chain, and exit 1. The last line, "the server
+//! stopped", carries the exit code.
+//!
+//! # The app
+//! [`app`] builds the router and its [`Housekeeping`] (ADR-0016):
+//! - **Two clocks:** the rate limiters run on a [`MonotonicClock`], so a
+//!   step of the wall clock can't make them refuse everyone; everything
+//!   stored or audited (sessions, the lockout, audit entries) runs on the
+//!   [`SystemClock`].
+//! - **Every connection carries its peer's address** (axum's
+//!   `into_make_service_with_connect_info`): the per-IP limits need it, and a
+//!   request without it is refused as a wiring bug.
+//! - **The housekeeping** is the server's one long-lived background task,
+//!   owned by [`serve`]'s `JoinSet`, and stops at the first signal through a
+//!   child of the shutdown token.
 //!
 //! # Shutdown
 //! The first signal starts it, and one deadline bounds it,
@@ -21,9 +35,10 @@
 //!    runs at its limit. A connection still open then (a slow reader) is
 //!    logged at `warn` and left: axum owns its connection tasks, and the
 //!    runtime's shutdown ends them right after.
-//! 3. The database closes with the rest of the deadline, at least
-//!    [`DATABASE_CLOSE`]. If it doesn't close in time, that's an `error` and
-//!    exit 4.
+//! 3. The housekeeping ends (it stopped at the signal, or after its current
+//!    purge batch), then the database closes, both with the rest of the
+//!    deadline, at least [`DATABASE_CLOSE`]. If that doesn't finish in time,
+//!    that's an `error` and exit 4.
 //!
 //! A later signal is only logged: the shutdown is already running.
 //!
@@ -39,23 +54,30 @@ use std::sync::Arc;
 use axum::Router;
 use fleet_core::system::{Clock, SecureRandom};
 use fleet_startup::signals::ShutdownSignals;
+use secrecy::SecretBox;
 use tokio::net::TcpListener;
+use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
 use tracing::{error, info, warn};
 
 use super::DATABASE_CLOSE;
+use super::housekeeping::Housekeeping;
 use crate::app::auth::TokenService;
 use crate::app::health::HealthService;
+use crate::app::lockout::LockoutService;
 use crate::config::{HttpConfig, ServerConfig};
 use crate::http::error::chain;
 use crate::http::middleware::RequestIds;
 use crate::http::openapi::ApiDocs;
+use crate::http::rate_limit::RateLimits;
 use crate::http::router::{AppState, router};
+use crate::infra::crypto::attempt_keys::HmacAttemptKeys;
 use crate::infra::crypto::tokens::Sha256Tokens;
-use crate::infra::crypto::vault::{VaultKeyError, VaultKeys, XChaChaVault};
+use crate::infra::crypto::vault::{DerivedKey, VaultKeyError, VaultKeys, XChaChaVault};
 use crate::infra::sqlite::{self, Database, DatabaseOptions, OpenError};
-use crate::infra::system::{OsRandom, SystemClock};
+use crate::infra::system::{MonotonicClock, OsRandom, SystemClock};
+use crate::ports::store::Store;
 
 /// How long main.rs's runtime waits for its tasks once [`run`] returned;
 /// the connections axum still serves end then. Docker's `stop_grace_period`
@@ -157,34 +179,63 @@ pub fn cant_start(error: &StartError) -> Exit {
     Exit::StartupFailed
 }
 
-/// The router `serve` runs: the routes over `database`, sessions with
-/// `[auth]`'s lifetimes, request IDs and tokens from the real clock and the
-/// OS's randomness, and the `OpenAPI` document in dev mode. `serve` and
-/// `user create-owner` are the only places the real clock and randomness are
-/// built.
+/// What [`serve`] runs: the router, and its periodic housekeeping.
+#[derive(Debug)]
+pub struct App {
+    /// Every route behind the middleware stack.
+    pub router: Router,
+    /// The background task that looks after the rate limits and the
+    /// lockout.
+    pub housekeeping: Housekeeping,
+}
+
+/// The app `serve` runs: the routes over `database`, sessions with
+/// `[auth]`'s lifetimes, the lockout with its threshold and `lockout_key`,
+/// the `[rate_limits]` on a monotonic clock, request IDs and tokens from the
+/// real clock and the OS's randomness, and the `OpenAPI` document in dev
+/// mode; see the [module docs](self). `serve` and `user create-owner` are
+/// the only places the real clocks and randomness are built.
 ///
 /// It builds the vault from `keys` too. Nothing reads it until group D's
 /// 2FA service, which takes it into the app's state; until then it's built,
 /// which proves the keys make one, and dropped, wiping them (ADR-0016).
-pub fn app(config: &ServerConfig, database: &Database, keys: VaultKeys) -> Router {
+#[must_use]
+pub fn app(
+    config: &ServerConfig,
+    database: &Database,
+    keys: VaultKeys,
+    lockout_key: SecretBox<[u8; 32]>,
+) -> App {
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let limiter_clock: Arc<dyn Clock> = Arc::new(MonotonicClock::start());
     let random: Arc<dyn SecureRandom> = Arc::new(OsRandom);
+    let store: Arc<dyn Store> = Arc::new(database.clone());
     let _vault = XChaChaVault::new(keys, Arc::clone(&random));
     let tokens = TokenService::new(
         Arc::clone(&clock),
         Arc::clone(&random),
-        Arc::new(database.clone()),
+        Arc::clone(&store),
         Arc::new(Sha256Tokens::new(Arc::clone(&random))),
         config.auth.sessions,
     );
+    let limits = RateLimits::new(&config.rate_limits, limiter_clock);
+    let lockout = LockoutService::new(
+        Arc::clone(&clock),
+        Arc::clone(&store),
+        Arc::new(HmacAttemptKeys::new(lockout_key)),
+        config.auth.lockout,
+    );
     let ids = RequestIds::new(clock, random);
-    let state = AppState::new(HealthService::new(Arc::new(database.clone())), tokens);
-    router(
-        state,
-        &config.http,
-        ids,
-        ApiDocs::for_dev_mode(config.dev_mode),
-    )
+    let state = AppState::new(HealthService::new(store), tokens, limits.clone());
+    App {
+        router: router(
+            state,
+            &config.http,
+            ids,
+            ApiDocs::for_dev_mode(config.dev_mode),
+        ),
+        housekeeping: Housekeeping::new(limits, lockout),
+    }
 }
 
 /// Opens the database `config` names and serves the API on `listener`
@@ -205,11 +256,15 @@ pub async fn run<S: ShutdownSignals>(
             });
         }
     };
+    let lockout_key = match keys.derive_key(DerivedKey::LoginAttempts) {
+        Ok(key) => key,
+        Err(error) => return cant_start(&StartError::VaultKeys(error)),
+    };
     let database = match sqlite::open(&config.database, DatabaseOptions::default()).await {
         Ok(database) => database,
         Err(error) => return cant_start(&StartError::Database(error)),
     };
-    let app = app(config, &database, keys);
+    let app = app(config, &database, keys, lockout_key);
     info!(%address, "the server is listening");
     serve(
         listener,
@@ -221,20 +276,36 @@ pub async fn run<S: ShutdownSignals>(
     .await
 }
 
-/// Serves `app` on `listener` until a signal from `signals` stops it, then
-/// shuts down within `timeouts` and closes `database`.
+/// Serves `app` on `listener`, every connection with its peer's address,
+/// and runs its housekeeping, until a signal from `signals` stops both; then
+/// shuts down within `timeouts`, waits for the housekeeping and closes
+/// `database`.
 pub async fn serve<S: ShutdownSignals>(
     listener: TcpListener,
-    app: Router,
+    app: App,
     database: &Database,
     signals: S,
     timeouts: ShutdownTimeouts,
 ) -> Exit {
     let shutdown = CancellationToken::new();
-    let server = axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown.clone().cancelled_owned())
-        .into_future();
-    drive(server, &shutdown, database.close(), signals, timeouts).await
+    let mut background = JoinSet::new();
+    background.spawn(app.housekeeping.run(shutdown.child_token()));
+    let server = axum::serve(
+        listener,
+        app.router
+            .into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown.clone().cancelled_owned())
+    .into_future();
+    let close = async move {
+        while let Some(ended) = background.join_next().await {
+            if let Err(error) = ended {
+                error!(%error, "the housekeeping task failed");
+            }
+        }
+        database.close().await;
+    };
+    drive(server, &shutdown, close, signals, timeouts).await
 }
 
 /// The shutdown sequence of the [module docs](self): runs `server` until a
@@ -329,6 +400,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::rate_limit::TrustedProxies;
 
     #[test]
     fn each_exit_has_its_code() {
@@ -367,6 +439,7 @@ mod tests {
             bind: HttpConfig::DEFAULT_BIND,
             request_timeout: Duration::from_secs(15),
             max_body_bytes: 65_536,
+            trusted_proxies: TrustedProxies::default(),
         };
 
         let timeouts = ShutdownTimeouts::of(&http);

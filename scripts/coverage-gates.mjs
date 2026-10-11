@@ -39,6 +39,10 @@ export const GATES = [
       "crates/fleet-server/src/infra/crypto/tokens.rs",
       "crates/fleet-server/src/ports/tokens.rs",
       "crates/fleet-server/src/http/routes.rs",
+      "crates/fleet-server/src/http/rate_limit/",
+      "crates/fleet-server/src/app/lockout.rs",
+      "crates/fleet-server/src/infra/crypto/attempt_keys.rs",
+      "crates/fleet-server/src/ports/login_attempts.rs",
     ],
   },
   {

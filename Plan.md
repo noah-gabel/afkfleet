@@ -198,8 +198,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Sink/Stream extension traits | `futures-util` | 0.3.34 | client, server | WebSocket split/send |
 | Async fns in `dyn` traits | `async-trait` | 0.1.92 | server | Only for `Arc<dyn Port>`. Use generics + RPITIT elsewhere. First used by fleet-server's store ports (ADR-0015) |
 | Retry & backoff | `backon` | 1.6.0, dfo | core (policy), agent, client | Exponential backoff with jitter. The default features pull in a tokio sleeper |
-| Rate limiting (keyed / in-process) | `governor` | 0.10.4, dfo | runtime (chat), server (per user) | fleet-runtime enables `std` only. The defaults add `quanta`, `dashmap` and `jitter`, which pulls rand 0.9 and getrandom 0.3 into normal dependencies. Without `quanta` there's no `DefaultClock`: the chat queue uses `direct_with_clock` with a tokio-backed clock, so paused time controls it (ADR-0013) |
-| Rate limiting (HTTP middleware) | `tower_governor` | 0.8.0 | server | Per IP |
+| Rate limiting (keyed / in-process) | `governor` | 0.10.4, dfo | runtime (chat), server (HTTP: per IP, per route class, per user) | fleet-runtime and fleet-server enable `std` only. The defaults add `quanta`, `dashmap` and `jitter`, which pulls rand 0.9 and getrandom 0.3 into normal dependencies. Without `quanta` there's no `DefaultClock`: the chat queue uses `direct_with_clock` with a tokio-backed clock, so paused time controls it (ADR-0013); the server's keyed `hashmap_with_clock` limiters run on its `Clock` port, a monotonic clock in production and `ManualClock` in tests, behind its own axum middleware (ADR-0016) |
 | TTL cache / single-flight | `moka` | 0.12.16 | server | MC token cache, WS tickets |
 | Library errors | `thiserror` | 2.0.21 | all libraries | |
 | Binary error reporting | `anyhow` | 1.0.104 | `main.rs` only | Not declared yet: the agent's and the server's `main.rs` map their typed errors to exit codes themselves (the user's decision for the server, P6.11). It arrives with the first `main.rs` that uses it (ADR-0014, ADR-0015) |
@@ -237,6 +236,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Password hashing | `argon2` | **0.6.0**, dfo | server | Argon2id, in `spawn_blocking` behind a semaphore. `alloc`, `password-hash`, `zeroize`; without the default `getrandom`, so salts come from the `SecureRandom` port through `hash_password_with_salt`. The dev profile compiles it and `blake2` at `opt-level = 3`: about 10 ms per hash instead of 228 ms, so every test hashes at the real baseline (ADR-0016) |
 | Authenticated encryption | `chacha20poly1305` | **0.11.0**, dfo | server (vault) | XChaCha20-Poly1305. `alloc`, `zeroize`; without the default `getrandom`, so nonces come from the `SecureRandom` port (ADR-0016) |
 | Hashing | `sha2` | **0.11.0** | server | Token hashes, certificate fingerprints |
+| Keyed hashing (HMAC) | `hmac` | 0.13.0 | server | HMAC-SHA256 keys of the lockout's `login_attempts` rows, so no row holds a typed name, and the derivation of their key from the vault's active key. `zeroize` wipes the keyed state. RustCrypto like sha2 0.11; already in Cargo.lock (ADR-0016) |
 | Constant-time comparison | `subtle` | 2.6.1 | server | First used for the vault's duplicate-key check (ADR-0016) |
 | Encoding | `base64` | 0.23.1, dfo | server, client | URL-safe, no padding for tokens; standard with padding for the vault's key files (ADR-0016). Without default features: `simd-unsafe`, its only unsafe code, stays off |
 | Secret wrappers | `secrecy` | 0.10.3 | core, mc, agent, server, client, desktop, startup | Redacted `Debug`. fleet-server's `PasswordHash` holds the stored hash in a `SecretString` (ADR-0015); fleet-startup's secret-file loader returns secrets in it (ADR-0016) |
@@ -264,6 +264,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Mocks | `mockall` | 0.15.0 | Only for interaction checks; put `#[automock]` above `#[async_trait]` |
 | Containers | `testcontainers` | 0.28.0, dfo | `itzg/minecraft-server`, for fleet-mc's slow tests (P3.7). The default `ring` feature turns on TLS for the Docker client, which the local socket and the Windows named pipe don't need; no feature is enabled |
 | Time control | `tokio` `test-util` | | `start_paused`, `advance` |
+| Independent IP-network check | `ipnet` | 2.12.2 | Dev only: fleet-server's property test compares its own `IpNet` (`[http] trusted_proxies`) and the /64 limiter key with it. Production code never uses it. Already in Cargo.lock through reqwest (ADR-0016) |
 | Temporary files | `tempfile` | 3.27.0 | fleet-server's database tests: a fresh folder per test, removed on drop. Already in the lockfile through figment and insta (ADR-0015) |
 | `log` records in tests | `log` | 0.4.34 | fleet-server's one normal use: `log::LevelFilter`, which sqlx's statement-logging levels take; clippy bans its logging macros there, so all server logging stays on tracing (ADR-0015). Otherwise a dev-dependency. fleet-testkit: its log capture's test emits a `log` record to prove that reqwest's and rustls's logs reach the redaction check through `tracing-log` (ADR-0011). fleet-agent: its telemetry test proves that the log filter and azalea's caps see a `log` record's real target (ADR-0014) |
 | Fuzzing | `libfuzzer-sys`, `arbitrary` | 0.4.13, 1.4.2 | Driven by cargo-fuzz |
@@ -445,6 +446,14 @@ The full analysis lives in `docs/threat-model.md`.
 | gRPC enrollment | 5/min | IP |
 
 Responses use `429` with a `Retry-After` header. The client IP is the socket peer address. `X-Forwarded-For` is honored only when the peer is in `trusted_proxies` (Caddy).
+
+> Note (§7.4, Phase 7, group C, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+> - **"All requests"** includes the health checks and unmatched paths.
+> - **Keys:** an IPv6 client is counted by its /64.
+> - **The trusted proxies:** behind them, the client is the right-most `X-Forwarded-For` address that isn't itself a trusted proxy.
+> - **The login routes share one bucket.**
+> - **The lockout:** a locked login answers 429 before any password check and isn't counted. A streak is forgotten 24 h after its last failure. Unknown usernames lock exactly like real ones, and the typed name is never stored.
+> - **Refusals:** a refused request is logged at `debug`, and the server logs one summary of refusals a minute.
 
 ### 7.5 Secrets & cryptography
 - **Vault**
@@ -2321,7 +2330,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 ### Phase 7: Authentication & authorization
 **Goal:** Invite-only login with 2FA, rotating tokens, central authorization and layered rate limits, all backed by adversarial tests.
-**Introduces:** `argon2`, `getrandom`, `sha2`, `subtle`, `base64`, `zeroize`, `chacha20poly1305`, `totp-rs`, `zxcvbn`, `governor`, `tower_governor`, `rpassword`.
+**Introduces:** `argon2`, `getrandom`, `sha2`, `subtle`, `base64`, `zeroize`, `chacha20poly1305`, `totp-rs`, `zxcvbn`, `governor`, `hmac`, `rpassword`; no `tower_governor` (group C, the user's decision).
 
 > Note (P7):
 > - **Five group branches.** At the user's request, Phase 7 is built in group PRs like Phases 2–6. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
@@ -2379,6 +2388,9 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   - **fleet-server:** all of them, plus tokio's `sync`.
 >   - **fleet-startup:** secrecy and zeroize, and tempfile in dev.
 >   - **The profile:** `[profile.dev.package]` compiles argon2, blake2 and zxcvbn at `opt-level = 3`.
+> - **Dependencies (group C, the user's approval).**
+>   - **No tower_governor:** 0.8.0 hard-codes governor's quanta clock, forces governor's and axum's default features on the workspace, and rounds its wait down. fleet-server uses the workspace's governor with `std` only, behind its own middleware.
+>   - **New in `[workspace.dependencies]`:** hmac 0.13.0 (fleet-server enables `zeroize`), and ipnet 2.12.2, a fleet-server dev-dependency only. Both were already in Cargo.lock, which gains only the direct edges.
 
 - [ ] **P7.1** 🔴 Migrations and repositories: `sessions` (with token families), `invites`, `login_attempts`, `user_mfa`.
 
@@ -2551,6 +2563,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Open for D: re-hashing.** A stored hash made with older `argon2_*` parameters verifies with different timing than the dummy hash. Whether a successful login re-hashes it with the current parameters, and which audit action that write records, is group D's question.
   > - **Open for D: an oversized login.** Login's request DTO gets a generous upper bound on the password field, so an oversized login is refused before any hashing. The bound itself is D's question.
   > - **Open for D and E: the 422 for weak passwords.** `HashError::Weak` carries `WeakWarning` and `WeakSuggestion`; how a 422 exposes them is D's and E's question.
+
+  > Note (P7.6, from group C, for group D) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **Login and the lockout:**
+  >   - Login parses the typed name as a `Username` at the boundary; how an invalid name answers is D's question.
+  >   - It calls `LockoutService::begin` before the dummy or the real verify, holds the `Attempt` through its transaction, puts `record_failure` into the `auth.login` failure commit and `clear` into the success commit, and maps `LockoutError` to `ApiError` with `?`.
+  >   - Step-up's wrong password counts the same way.
+  > - **Routes and the client:** handlers take `ClientIp` for their audit entries; the login routes register with `RateClass::Login`, refresh with `Refresh` (E's register with `Register`).
+  > - **Open: refresh without the write connection.** `/auth/refresh` could check on the read pool whether the presented refresh hash exists at all (current or rotated) before opening the write transaction, so an unknown token is a 401 without taking the one write connection. That's safe because a token reaches a client only after its commit, so the check never misses one; only known tokens take the race-safe path inside the transaction. D's question (the user's note).
 - [ ] **P7.7** 🔴 2FA:
   - enroll returns the otpauth URI and a QR code as PNG data
   - confirm, then reset (with step-up), which forces a fresh enrollment at the next login
@@ -2558,6 +2578,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - replay protection
   - mandatory for **every** user, not configurable: until they enroll, login returns `mfa_setup_required` plus a single-use setup token that only works for enroll and confirm (§7.2). That includes users who just registered with an invite.
   - tests: the setup token is rejected on every other endpoint, expires after 10 min and can't be reused
+
+  > Note (P7.7, from group C, open for D; the user's note) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **2FA codes and the lockout.** Whether wrong 2FA codes (and recovery codes) count toward the per-username lockout, and how many code attempts one `mfa_token` allows, are D's questions. Per-IP limits alone don't stop code guessing from many addresses; `Attempt::record_failure` can count a wrong code like a wrong password.
 - [x] **P7.8** 🔴 The `AuthUser` extractor (Bearer token via `axum-extra`) loads session and user and rejects disabled users. A `require(permission, resource)` helper calls `fleet_core::authz::authorize`.
 
   > Note (P7.8, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
@@ -2587,7 +2609,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Roles** change only through the Owner (`SetRole`, Member ↔ Admin), never on the Owner themselves or another Owner. Admins only disable and enable Members (`SetDisabled`), so Appendix B's "Admin+" for `PATCH /users/{id}` means the `disabled` field for Admins.
   > - **Ownership transfer** has no permission yet. It gets one together with a route.
   > - **Invites.** Admins create and revoke Member invites; Admin invites are the Owner's (`CreateInvite{role}` on `Global`, `RevokeInvite` on `ResourceContext::Invite{role}`). Admins list all invites.
-- [ ] **P7.10** 🔴 Rate limiting:
+- [x] **P7.10** 🔴 Rate limiting:
   - tower_governor per IP, globally and on auth routes, via `into_make_service_with_connect_info`
   - `trusted_proxies` CIDRs decide when `X-Forwarded-For` is honored
 
@@ -2604,6 +2626,44 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P7.10, from Phase 6, group E) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): the dev-only `GET /api/openapi.json` needs a rate-limit class too, like every route. The limiter needs the client's address: `serve` passes the router to `axum::serve` directly, so this task switches to `into_make_service_with_connect_info` there.
 
   > Note (P7.10, from the Phase 7 plan, the user's decision; open for group C) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): the one real-socket test sends a request over a real connection to a route with the per-IP limit, and fails if the peer address doesn't reach the limiter. `oneshot` sets `ConnectInfo` itself, so it can't catch a missing `into_make_service_with_connect_info`.
+
+  > Note (P7.10, group C, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **Deviation: governor without tower_governor.** tower_governor 0.8.0 hard-codes governor's quanta clock, forces governor's and axum's default features, and rounds its wait down. The server's own middleware runs governor's keyed limiters, and every refusal is `ApiError::RateLimited` with the limiter's wait, rounded up to whole seconds.
+  > - **The limits:**
+  >   - **Per IP:** every request, health checks and unmatched paths included, in the middleware stack right inside `render_errors`.
+  >   - **Per route class,** given at registration (P7.11): `Login` (one bucket shared by `/auth/login` and `/auth/login/mfa`), `Refresh`, `Register`; `Standard` spends nothing more. A route layer, so a 404 or 405 spends none.
+  >   - **Per user:** every authed request, in `AuthUser`, right after authentication.
+  >   - **Keys:** an IPv4 client by its address, an IPv6 client by its /64; only the key is masked, the audit log keeps the full address.
+  > - **The client** (`ClientIp`, a request extension and an extractor for D's handlers): the canonical peer address. Only when it's in `[http] trusted_proxies` is `X-Forwarded-For` read: all its headers as one list, walked from the right past trusted proxies to the first untrusted address. A bad entry stops at the last trusted hop; all trusted means the left-most. No `Forwarded`, no `X-Real-IP`. A request without `ConnectInfo` is a 500, logged as a wiring bug.
+  > - **The limiters' clock** is the server's `Clock` port: a new `MonotonicClock` in production, only for the limiters, and the same `ManualClock` as everything else in tests. Stored and audited times keep `SystemClock`.
+  > - **The lockout** (`app::lockout::LockoutService`):
+  >   - **The rule** (`fleet_core::auth::lockout`): 5 failures (`[auth] lockout_threshold`, 3–20) lock for 1 min, each further one doubles the lock up to 1 h, and a streak expires 24 h after its last failure.
+  >   - **While locked:** 429 with the rest of the lock, before any password check, not counted. One attempt per name in flight; a concurrent one gets 429 with `Retry-After: 1`.
+  >   - **Keys:** rows keyed by HMAC-SHA256 of the normalized `Username` under a key derived from the vault's active key; unknown names take exactly the same path.
+  >   - **`security.lockout`:** recorded in the failing attempt's transaction at each lock, with an `info` line.
+  > - **The housekeeping** (`cli::housekeeping`), the server's first long-lived background task: every 60 s it runs `retain_recent()`, purges expired streaks in batches of 1000 (each committed with `UnauditedWrite::LoginAttemptsPurge`), and logs one `info` summary of the refusals since its last run. A refused request's own line is at `debug`. It belongs to `serve`'s `JoinSet` and stops at the first signal.
+  > - **Config:** `[http] trusted_proxies` (at most 32 strict CIDRs: host bits zero, no bare addresses, no duplicates, no IPv4-mapped networks) and every `[rate_limits]` key but chat's and `ws_connections_per_user`:
+  >
+  >   | Key | Default | Range |
+  >   |---|---|---|
+  >   | `per_ip_per_sec` / `per_ip_burst` | 20 / 40 | 1–1000 / 1–10000 |
+  >   | `login_per_ip_per_min` | 5 | 1–60 |
+  >   | `refresh_per_ip_per_min` | 30 | 1–600 |
+  >   | `register_per_ip_per_hour` | 5 | 1–100 |
+  >   | `per_user_per_sec` / `per_user_burst` | 10 / 30 | 1–1000 / 1–10000 |
+  > - **Tests,** each written first and red against compiling stubs:
+  >   - the lockout rule: 25 of 40
+  >   - `IpNet`: 33 of 46
+  >   - config: 19 of 21
+  >   - the limiter and the client's address: 19 of 33
+  >   - the router-level limits: 13 of 16
+  >   - the HMAC, the derivation and `MonotonicClock`: 9 of 13
+  >   - the lockout service, P7.12's lockout counting: 16 of 19
+  >   - the housekeeping: 5 of 8
+  >   - the real-socket test, with `serve` stripped of `into_make_service_with_connect_info`: it saw a 500
+  >   - the housekeeping's stop, with a token the shutdown never cancels: it hit its 30 s bound
+  >
+  >   Then all passed. The ones that passed against the stubs check allowances, refusals or `Debug` that a do-nothing stub satisfies too. A proptest cross-checks `IpNet` and the /64 key with `ipnet`. The 429 response and the audit-action names have snapshots, read before accepting.
 - [x] **P7.11** 🔴 **Route-coverage test.**
   - Routes are registered only through `public_route(…)` or `authed_route(…)` helpers, which also record them in a registry.
   - The test calls every authed route without credentials and expects `401`.
@@ -2644,6 +2704,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - E: escalation; disabling through `PATCH /users/{id}`; invite reuse and expiry
   >
   > E names each item with its test and ticks the task.
+
+  > Note (P7.12, from group C, for E and the threat model; the user's note) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **Lockout counting** is `tests/lockout_service.rs` (group C): the fifth failure locks for a minute, each further one doubles the lock up to an hour, a locked name is refused without being counted, and an unknown name locks exactly like a real one.
+  > - **An accepted residual risk the threat model names:** the lockout lets an attacker keep one account locked by failing once per lock (one failure an hour, once the lock reached its cap), while existing sessions keep working.
 - [ ] **P7.13** Audit events for:
   - login success and failure, logout
   - password and 2FA changes
@@ -2668,6 +2732,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - The outcome is never part of the name.
   >   - Metadata values come from closed enums.
   >   - A snapshot of every name keeps merged names from being renamed or dropped.
+
+  > Note (P7.13, as built, group C) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`security.lockout`**, recorded in the failing attempt's own transaction each time a failure starts a lock. Outcome Failure; no actor; the client's IP; target the user when the name is a user's, none otherwise (the typed name is never stored); metadata `failures` and `locked_until`. The names snapshot gained it, read before accepting.
 
 **DoD:**
 - auth + vault coverage ≥ 90 %.
@@ -3090,6 +3156,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P12.7, from Phase 7, group A, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): the smoke test creates the Owner with `docker compose run -T … user create-owner --username … --password-stdin`, since CI has no terminal for the prompt.
 
+  > Note (P12.7, from Phase 7, group C, the user's note) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): the smoke test checks that a request through Caddy reaches the server with the client's real address (`[http] trusted_proxies` honored), so a missing or wrong `trusted_proxies` can't put every client into Caddy's one bucket unnoticed.
+
 **DoD:** A fresh VPS gets to a running system by following only the runbook.
 
 ---
@@ -3177,6 +3245,12 @@ Secrets **never** go in these files. They're referenced through `*_file` paths (
 >   - **The files:** each holds standard padded base64 of exactly 32 bytes, owner-only on Unix.
 >   - **Who reads them:** only `serve`.
 >   - **The environment:** a key file can be given as `AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=/path`.
+
+> Note (Appendix A, Phase 7, group C, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+> - **`[http] trusted_proxies`** is empty by default and holds at most 32 CIDR networks, each its first address with a prefix length: a bare address, host bits, a duplicate or an IPv4-mapped IPv6 network is refused.
+> - **`[auth] lockout_threshold`** takes 3–20.
+> - **`[rate_limits]`** arrives with every key below but the chat ones and `ws_connections_per_user` (P11). The ranges are in P7.10's note; each is at least 1.
+> - None of them needs a place on the secret-name test's allowlist.
 
 `server.toml`
 ```toml

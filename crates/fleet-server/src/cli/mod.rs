@@ -7,6 +7,8 @@
 //! healthchecks. Each command lists its exit codes in its own help.
 //!
 //! - [`serve`]: runs the HTTP API until a signal stops it.
+//! - [`housekeeping`]: `serve`'s periodic background task: the rate
+//!   limiters' memory, the lockout's purge and the refusals' summary (P7.10).
 //! - [`migrate`]: applies every pending migration and exits.
 //! - [`healthcheck`]: asks a running server's `GET /health/ready`, for
 //!   Docker's HEALTHCHECK.
@@ -21,6 +23,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand};
 
 pub mod healthcheck;
+pub mod housekeeping;
 pub mod migrate;
 pub mod serve;
 pub mod user;

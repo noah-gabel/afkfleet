@@ -21,20 +21,23 @@
 
 use core::time::Duration;
 use std::collections::BTreeSet;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::Request;
+use axum::extract::connect_info::MockConnectInfo;
 use axum::http::Method;
 use chrono::DateTime;
 use fleet_core::auth::SessionPolicy;
 use fleet_server::app::auth::TokenService;
 use fleet_server::app::health::HealthService;
-use fleet_server::config::HttpConfig;
+use fleet_server::config::{HttpConfig, RateLimitConfig};
 use fleet_server::http::extractors::AuthUser;
 use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::openapi::{ApiDocs, OPENAPI_PATH};
+use fleet_server::http::rate_limit::{RateLimits, TrustedProxies};
 use fleet_server::http::router::{AppState, api_routes};
 use fleet_server::http::routes::{Access, RateClass, RouteEntry, Routes};
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
@@ -79,7 +82,12 @@ fn clock() -> ManualClock {
     ManualClock::new(DateTime::from_timestamp_millis(1_700_000_000_000).unwrap())
 }
 
-fn state(db: &Database) -> AppState {
+/// The default limits, on the tests' clock.
+fn limits() -> RateLimits {
+    RateLimits::new(&RateLimitConfig::default(), Arc::new(clock()))
+}
+
+fn state(db: &Database, limits: &RateLimits) -> AppState {
     let random = SeededRandom::new(13);
     let tokens = TokenService::new(
         Arc::new(clock()),
@@ -88,7 +96,11 @@ fn state(db: &Database) -> AppState {
         Arc::new(Sha256Tokens::new(Arc::new(random))),
         SessionPolicy::default(),
     );
-    AppState::new(HealthService::new(Arc::new(db.clone())), tokens)
+    AppState::new(
+        HealthService::new(Arc::new(db.clone())),
+        tokens,
+        limits.clone(),
+    )
 }
 
 fn http() -> HttpConfig {
@@ -96,6 +108,7 @@ fn http() -> HttpConfig {
         bind: HttpConfig::DEFAULT_BIND,
         request_timeout: Duration::from_secs(15),
         max_body_bytes: 65_536,
+        trusted_proxies: TrustedProxies::default(),
     }
 }
 
@@ -106,7 +119,13 @@ fn build(
     extra: impl FnOnce(Routes) -> Routes,
 ) -> (Router, Vec<RouteEntry>) {
     let ids = RequestIds::new(Arc::new(clock()), Arc::new(SeededRandom::new(5)));
-    extra(api_routes(Routes::new())).finish(state(db), &http(), ids, docs)
+    let limits = limits();
+    let (app, entries) =
+        extra(api_routes(Routes::new(&limits))).finish(state(db, &limits), &http(), ids, docs);
+    (
+        app.layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711)))),
+        entries,
+    )
 }
 
 /// The routes with `access`, as (method, path, class).

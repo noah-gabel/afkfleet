@@ -11,6 +11,8 @@
 //!   request ID and the security headers to the timeout and the body limit
 //!   (P6.6).
 //! - [`openapi`]: the `OpenAPI` document, served only in dev mode (P6.10).
+//! - [`rate_limit`]: §7.4's request limits per client IP, route class and
+//!   user, and who a request comes from behind the trusted proxies (P7.10).
 //! - [`router`]: the server's routes behind that stack (P6.7 on).
 //! - [`routes`]: the route registry, the only way a route gets into the
 //!   router: public or authed, each with its rate-limit class (P7.11).
@@ -22,5 +24,6 @@ pub mod extractors;
 mod handlers;
 pub mod middleware;
 pub mod openapi;
+pub mod rate_limit;
 pub mod router;
 pub mod routes;

@@ -17,12 +17,15 @@
 //! - `method` is one of the nine standard methods, or `"<other>"`.
 //! - No header and no body is ever logged.
 //!
-//! The health routes (`/health/…`) log their line at `debug`, so a probe
-//! every few seconds doesn't flood the log; a failed readiness check is
-//! still logged by `render_errors`.
+//! Two kinds of request log their line at `debug`, so they can't flood the
+//! log: the health routes (`/health/…`), which a probe asks every few
+//! seconds (a failed readiness check is still logged by `render_errors`),
+//! and a request a rate limit refused (429), which a flood would otherwise
+//! turn into thousands of lines a second; the limiters count their
+//! refusals for the server's periodic summary instead (ADR-0016).
 
 use axum::extract::{MatchedPath, Request};
-use axum::http::Method;
+use axum::http::{Method, StatusCode};
 use axum::middleware::Next;
 use axum::response::Response;
 use fleet_api_types::OpenEnum as _;
@@ -74,7 +77,7 @@ pub(super) async fn trace(request: Request, next: Next) -> Response {
         .map(|RenderedCode(code)| code.as_str());
     let status = response.status().as_u16();
     span.in_scope(|| {
-        if is_quiet(route) {
+        if is_quiet(route) || status == StatusCode::TOO_MANY_REQUESTS.as_u16() {
             debug!(status, code, latency_ms, "request finished");
         } else {
             info!(status, code, latency_ms, "request finished");

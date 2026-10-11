@@ -13,6 +13,7 @@ use core::fmt;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use fleet_core::value::Username;
 use subtle::ConstantTimeEq as _;
 
 use super::store::StoreError;
@@ -78,6 +79,15 @@ impl fmt::Debug for AttemptKey {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("AttemptKey(..)")
     }
+}
+
+/// Making a row's key from a username (P7.10). The only implementation is
+/// infra's `HmacAttemptKeys`, an HMAC under a key derived from the vault's;
+/// it takes microseconds, so it's synchronous.
+pub trait AttemptKeys: Send + Sync + fmt::Debug {
+    /// The key of `username`'s row: the same for every spelling that
+    /// `Username` normalizes alike, whether or not a user has the name.
+    fn key(&self, username: &Username) -> AttemptKey;
 }
 
 /// A username's running failure streak, as stored.

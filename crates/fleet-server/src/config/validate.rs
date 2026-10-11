@@ -1,20 +1,23 @@
 //! Validation: from [`RawConfig`] to [`ServerConfig`], reporting every
 //! problem at once.
 
+use core::num::NonZeroU32;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::raw::{RawAuth, RawConfig, RawLog, RawVault};
+use super::raw::{RawAuth, RawConfig, RawLog, RawRateLimits, RawVault};
 use super::{
     Argon2Params, AuthConfig, Bounds, ConfigError, DatabaseConfig, HttpConfig, KeyPath, LogConfig,
-    LogFilter, LogFormat, ProblemKind, Problems, ServerConfig, VaultConfig,
+    LogFilter, LogFormat, ProblemKind, Problems, Rate, RateLimitConfig, ServerConfig, VaultConfig,
 };
-use fleet_core::auth::SessionPolicy;
+use fleet_core::auth::{LockoutPolicy, SessionPolicy};
 
-/// Validates `raw`: garde's ranges first, then each text key and `[auth]`'s
-/// ranges.
+use crate::http::rate_limit::{IpNet, TrustedProxies};
+
+/// Validates `raw`: garde's ranges first (`[http]`'s and `[rate_limits]`'s),
+/// then each text key, `[auth]`'s ranges and the trusted proxies.
 ///
 /// # Errors
 /// [`ConfigError::Invalid`](fleet_startup::config::ConfigError::Invalid)
@@ -42,16 +45,34 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
     let argon2 = argon2(&raw.auth, &mut problems);
     let sessions = sessions(&raw.auth, &mut problems);
     let vault = vault(&raw.vault, &mut problems);
+    let trusted_proxies = trusted_proxies(&raw.http.trusted_proxies, &mut problems);
+    let lockout = lockout(&raw.auth, &mut problems);
+    let rate_limits = rate_limits(&raw.rate_limits);
 
-    let (true, Some(bind), Some(path), Some(log), Some(argon2), Some(sessions), Some(vault)) = (
+    let (
+        true,
+        Some(bind),
+        Some(trusted_proxies),
+        Some(path),
+        Some(log),
+        Some(argon2),
+        Some(sessions),
+        Some(lockout),
+        Some(vault),
+        Some(rate_limits),
+    ) = (
         problems.is_empty(),
         bind,
+        trusted_proxies,
         path,
         log,
         argon2,
         sessions,
+        lockout,
         vault,
-    ) else {
+        rate_limits,
+    )
+    else {
         return Err(ConfigError::Invalid(problems.sorted()));
     };
     Ok(ServerConfig {
@@ -62,11 +83,17 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
             // garde has checked it's at most 1 MiB, which fits any usize
             // afkfleet builds for.
             max_body_bytes: usize::try_from(raw.http.max_body_bytes).unwrap_or(usize::MAX),
+            trusted_proxies,
         },
         database: DatabaseConfig { path },
         log,
-        auth: AuthConfig { argon2, sessions },
+        auth: AuthConfig {
+            argon2,
+            sessions,
+            lockout,
+        },
         vault,
+        rate_limits,
     })
 }
 
@@ -268,6 +295,65 @@ fn argon2(raw: &RawAuth, problems: &mut Problems) -> Option<Argon2Params> {
         raw.max_concurrent,
     )
     .ok()
+}
+
+/// `[http] trusted_proxies`: at most [`TrustedProxies::MAX`] networks in
+/// strict CIDR form, none listed twice. Every problem is reported at once,
+/// each entry's under its index; none echoes the text.
+fn trusted_proxies(raw: &[String], problems: &mut Problems) -> Option<TrustedProxies> {
+    let key = KeyPath::root().key("http").key("trusted_proxies");
+    let mut valid = true;
+    if raw.len() > TrustedProxies::MAX {
+        problems.push(
+            key.clone(),
+            ProblemKind::TooManyEntries {
+                max: TrustedProxies::MAX,
+            },
+        );
+        valid = false;
+    }
+    let mut networks = Vec::with_capacity(raw.len());
+    for (index, text) in raw.iter().enumerate() {
+        match text.parse::<IpNet>() {
+            Ok(network) if networks.contains(&network) => {
+                problems.push(key.index(index), ProblemKind::Duplicate);
+                valid = false;
+            }
+            Ok(network) => networks.push(network),
+            Err(error) => {
+                problems.push(key.index(index), ProblemKind::IpNet(error));
+                valid = false;
+            }
+        }
+    }
+    valid.then(|| TrustedProxies::new(networks))
+}
+
+/// `[auth] lockout_threshold`, in garde's words like the other `[auth]`
+/// keys.
+fn lockout(raw: &RawAuth, problems: &mut Problems) -> Option<LockoutPolicy> {
+    check_ranges(
+        [(
+            "lockout_threshold",
+            raw.lockout_threshold,
+            AuthConfig::LOCKOUT_THRESHOLD,
+        )],
+        problems,
+    );
+    LockoutPolicy::try_new(raw.lockout_threshold).ok()
+}
+
+/// `[rate_limits]`, whose ranges garde has checked: none is 0, so only an
+/// error that can't happen remains.
+fn rate_limits(raw: &RawRateLimits) -> Option<RateLimitConfig> {
+    let count = NonZeroU32::new;
+    Some(RateLimitConfig {
+        per_ip: Rate::per_second(count(raw.per_ip_per_sec)?, count(raw.per_ip_burst)?),
+        login: Rate::per_minute(count(raw.login_per_ip_per_min)?),
+        refresh: Rate::per_minute(count(raw.refresh_per_ip_per_min)?),
+        register: Rate::per_hour(count(raw.register_per_ip_per_hour)?),
+        per_user: Rate::per_second(count(raw.per_user_per_sec)?, count(raw.per_user_burst)?),
+    })
 }
 
 /// `[http] bind`: an IP address and a port other than 0; missing means

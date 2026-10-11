@@ -36,6 +36,7 @@ use secrecy::{ExposeSecret as _, ExposeSecretMut as _, SecretBox};
 use subtle::ConstantTimeEq as _;
 use uuid::Uuid;
 
+use super::attempt_keys::hmac_sha256;
 use crate::config::VaultConfig;
 use crate::ports::vault::{Vault, VaultError, VaultPurpose};
 
@@ -166,6 +167,48 @@ impl VaultKeys {
     #[must_use]
     pub const fn active(&self) -> u32 {
         self.active
+    }
+
+    /// The key for `purpose`, derived from the active key as
+    /// HMAC-SHA256(active key, the purpose's label) (ADR-0016). It's never
+    /// stored: `serve` derives it at startup, so rotating the active key
+    /// changes it.
+    ///
+    /// # Errors
+    /// [`VaultKeyError::ActiveMissing`] when the active key has no key,
+    /// which [`VaultKeys::load`] already refuses.
+    pub fn derive_key(&self, purpose: DerivedKey) -> Result<SecretBox<[u8; 32]>, VaultKeyError> {
+        let active = self
+            .keys
+            .get(&self.active)
+            .ok_or(VaultKeyError::ActiveMissing {
+                key_id: self.active,
+            })?;
+        let mut derived = SecretBox::new(Box::new([0_u8; 32]));
+        hmac_sha256(
+            active.expose_secret(),
+            purpose.label().as_bytes(),
+            derived.expose_secret_mut(),
+        );
+        Ok(derived)
+    }
+}
+
+/// A key the vault's keys derive for another use (ADR-0016). Each label is
+/// fixed: renaming one would change every key derived from it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DerivedKey {
+    /// The key of the `login_attempts` rows' HMAC (P7.10).
+    LoginAttempts,
+}
+
+impl DerivedKey {
+    /// The label the key is derived from.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::LoginAttempts => "afkfleet login_attempts v1",
+        }
     }
 }
 
@@ -791,6 +834,61 @@ mod tests {
 
         assert!(
             matches!(result, Err(VaultKeyError::ActiveMissing { key_id: 2 })),
+            "{result:?}"
+        );
+    }
+
+    /// HMAC-SHA256(`[0x42; 32]`, `"afkfleet login_attempts v1"`), computed with
+    /// Python's `hmac` and Node's `crypto`.
+    const DERIVED_LOGIN_ATTEMPTS: &str =
+        "b1712d4846d39fd7e27355abfc46370f5074be7dc4174ba670db7da2186194e0";
+
+    #[test]
+    fn the_lockout_key_is_the_hmac_of_its_label_under_the_active_key() {
+        let keys = Keys::new().key(1, &[5; 32]).key(2, &[0x42; 32]);
+
+        let derived = keys
+            .load(2)
+            .unwrap()
+            .derive_key(DerivedKey::LoginAttempts)
+            .unwrap();
+
+        assert_eq!(
+            derived.expose_secret().as_slice(),
+            hex(DERIVED_LOGIN_ATTEMPTS)
+        );
+    }
+
+    #[test]
+    fn another_active_key_derives_another_lockout_key() {
+        let keys = Keys::new().key(1, &[5; 32]).key(2, &[0x42; 32]);
+
+        let first = keys.load(1).unwrap().derive_key(DerivedKey::LoginAttempts);
+        let second = keys.load(2).unwrap().derive_key(DerivedKey::LoginAttempts);
+
+        assert_ne!(
+            first.unwrap().expose_secret(),
+            second.unwrap().expose_secret()
+        );
+    }
+
+    #[test]
+    fn the_derived_keys_labels_are_pinned() {
+        assert_eq!(
+            DerivedKey::LoginAttempts.label(),
+            "afkfleet login_attempts v1"
+        );
+    }
+
+    #[test]
+    fn deriving_without_the_active_key_is_refused() {
+        let mut keys = Keys::new().key(1, &[5; 32]).load(1).unwrap();
+        keys.active = 9;
+
+        let result = keys.derive_key(DerivedKey::LoginAttempts);
+
+        assert!(
+            matches!(result, Err(VaultKeyError::ActiveMissing { key_id: 9 })),
             "{result:?}"
         );
     }

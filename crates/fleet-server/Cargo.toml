@@ -42,6 +42,10 @@ fleet-startup.workspace = true
 garde = { workspace = true, features = ["derive"] }
 # OsRandom's one read of the OS's randomness (ADR-0015).
 getrandom.workspace = true
+# The HTTP rate limits: keyed limiters on an injected clock, `std` only (ADR-0016).
+governor = { workspace = true, features = ["std"] }
+# HMAC-SHA256 keys of the lockout's rows; `zeroize` wipes the keyed state (ADR-0016).
+hmac = { workspace = true, features = ["zeroize"] }
 # Only `log::LevelFilter`, for sqlx's statement-logging levels; clippy.toml bans its
 # logging macros (ADR-0015).
 log.workspace = true
@@ -88,6 +92,8 @@ figment = { workspace = true, features = ["test"] }
 fleet-testkit.workspace = true
 # The migrations' checksum snapshot, and the error responses' JSON snapshots (ADR-0015).
 insta = { workspace = true, features = ["json"] }
+# The property test that checks IpNet against an independent implementation (ADR-0016).
+ipnet.workspace = true
 # The time conversion's round trip and order (ADR-0015).
 proptest = { workspace = true, features = ["std"] }
 rstest.workspace = true

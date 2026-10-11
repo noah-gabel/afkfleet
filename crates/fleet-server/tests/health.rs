@@ -13,20 +13,23 @@
 
 use core::time::Duration;
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::Request;
+use axum::extract::connect_info::MockConnectInfo;
 use axum::http::Method;
 use chrono::DateTime;
 use fleet_core::auth::SessionPolicy;
 use fleet_core::id::RequestId;
 use fleet_server::app::auth::TokenService;
 use fleet_server::app::health::HealthService;
-use fleet_server::config::{HttpConfig, LogConfig, LogFormat};
+use fleet_server::config::{HttpConfig, LogConfig, LogFormat, RateLimitConfig};
 use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::openapi::ApiDocs;
+use fleet_server::http::rate_limit::{RateLimits, TrustedProxies};
 use fleet_server::http::router::{AppState, router};
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions, READ_CONNECTIONS};
@@ -84,9 +87,17 @@ fn app(db: &Database) -> Router {
         bind: HttpConfig::DEFAULT_BIND,
         request_timeout: Duration::from_secs(15),
         max_body_bytes: 65_536,
+        trusted_proxies: TrustedProxies::default(),
     };
-    let state = AppState::new(HealthService::new(Arc::new(db.clone())), tokens(db));
+    let limits = RateLimits::new(
+        &RateLimitConfig::default(),
+        Arc::new(ManualClock::new(
+            DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
+        )),
+    );
+    let state = AppState::new(HealthService::new(Arc::new(db.clone())), tokens(db), limits);
     router(state, &http, ids, ApiDocs::Hidden)
+        .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))))
 }
 
 async fn open(options: SqliteConnectOptions, database: DatabaseOptions) -> Database {

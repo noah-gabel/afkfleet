@@ -67,6 +67,7 @@ use fleet_core::text::sanitize_untrusted;
 use serde::Serialize;
 use tracing::{error, warn};
 
+use crate::app::lockout::{IN_FLIGHT_RETRY, LockoutError};
 use crate::ports::store::StoreError;
 
 /// The header that carries the request's ID. The request-ID layer
@@ -213,6 +214,20 @@ impl From<AuthzError> for ApiError {
             AuthzError::NotFound => Self::NotFound,
             AuthzError::Forbidden => Self::Forbidden,
             AuthzError::WrongResource => Self::internal(error),
+        }
+    }
+}
+
+/// `rate_limited` for a lockout, with its rest as `Retry-After`, or 1 s for
+/// an attempt already in flight; a database failure as any store failure.
+impl From<LockoutError> for ApiError {
+    fn from(error: LockoutError) -> Self {
+        match error {
+            LockoutError::Locked { retry_after } => Self::RateLimited { retry_after },
+            LockoutError::InFlight => Self::RateLimited {
+                retry_after: IN_FLIGHT_RETRY,
+            },
+            LockoutError::Store(error) => Self::from(error),
         }
     }
 }

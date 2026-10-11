@@ -234,6 +234,8 @@ mod tests {
     use rstest::rstest;
     use tokio::net::TcpListener;
 
+    use crate::http::rate_limit::TrustedProxies;
+
     use super::*;
 
     #[rstest]
@@ -439,6 +441,7 @@ mod tests {
             bind: address,
             request_timeout: Duration::from_secs(15),
             max_body_bytes: 65_536,
+            trusted_proxies: TrustedProxies::default(),
         }
     }
 

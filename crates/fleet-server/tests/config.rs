@@ -6,18 +6,20 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
+use core::num::NonZeroU32;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use figment::Jail;
-use fleet_core::auth::SessionPolicy;
+use fleet_core::auth::{LockoutPolicy, SessionPolicy};
 use fleet_server::config::{
     Argon2Params, AuthConfig, ConfigError, DatabaseConfig, HttpConfig, LogConfig, LogFilterError,
-    LogFormat, ParseError, ParseProblem, ParseSource, ProblemKind, Problems, ServerConfig,
-    UnknownLogFormatError, VaultConfig, load,
+    LogFormat, ParseError, ParseProblem, ParseSource, ProblemKind, Problems, Rate, RateLimitConfig,
+    ServerConfig, UnknownLogFormatError, VaultConfig, load,
 };
+use fleet_server::http::rate_limit::{IpNet, IpNetError, TrustedProxies};
 use fleet_startup::telemetry::{NoRules, layer_with};
 use fleet_testkit::jail::in_jail;
 use fleet_testkit::log_buffer::LogBuffer;
@@ -108,6 +110,14 @@ fn addr(text: &str) -> SocketAddr {
     text.parse().unwrap()
 }
 
+fn net(text: &str) -> IpNet {
+    text.parse().unwrap()
+}
+
+fn nonzero(n: u32) -> NonZeroU32 {
+    NonZeroU32::new(n).unwrap()
+}
+
 fn is_the_file(source: &ParseSource) -> bool {
     matches!(source, ParseSource::File { path } if path.ends_with("server.toml"))
 }
@@ -142,6 +152,7 @@ fn only_the_database_path_and_the_vault_are_required() {
                     bind: addr("127.0.0.1:8080"),
                     request_timeout: Duration::from_secs(15),
                     max_body_bytes: 65_536,
+                    trusted_proxies: TrustedProxies::default(),
                 },
                 database: DatabaseConfig {
                     path: db_path(jail),
@@ -150,8 +161,10 @@ fn only_the_database_path_and_the_vault_are_required() {
                 auth: AuthConfig {
                     argon2: Argon2Params::default(),
                     sessions: SessionPolicy::default(),
+                    lockout: LockoutPolicy::default(),
                 },
                 vault: vault_config(jail),
+                rate_limits: RateLimitConfig::default(),
             }
         );
     });
@@ -168,6 +181,7 @@ dev_mode = true
 bind = "0.0.0.0:9090"
 request_timeout_secs = 30
 max_body_bytes = 131072
+trusted_proxies = ["192.0.2.0/24", "2001:db8::/32"]
 
 [database]
 path = {}
@@ -184,6 +198,16 @@ argon2_max_concurrent = 8
 access_token_ttl_secs = 600
 refresh_token_idle_days = 14
 refresh_token_absolute_days = 60
+lockout_threshold = 7
+
+[rate_limits]
+per_ip_per_sec = 50
+per_ip_burst = 100
+login_per_ip_per_min = 10
+refresh_per_ip_per_min = 60
+register_per_ip_per_hour = 2
+per_user_per_sec = 20
+per_user_burst = 60
 
 [vault]
 master_key_files = {{ 3 = {} }}
@@ -199,6 +223,10 @@ active_key_id = 3
         assert_eq!(config.http.bind, addr("0.0.0.0:9090"));
         assert_eq!(config.http.request_timeout, Duration::from_secs(30));
         assert_eq!(config.http.max_body_bytes, 131_072);
+        assert_eq!(
+            config.http.trusted_proxies,
+            TrustedProxies::new(vec![net("192.0.2.0/24"), net("2001:db8::/32")])
+        );
         assert_eq!(config.database.path, db_path(jail));
         assert_eq!(config.log.format, LogFormat::Pretty);
         assert_eq!(config.log.filter.as_str(), "debug,sqlx=warn");
@@ -222,6 +250,17 @@ active_key_id = 3
                 active_key_id: 3,
             }
         );
+        assert_eq!(config.auth.lockout, LockoutPolicy::try_new(7).unwrap());
+        assert_eq!(
+            config.rate_limits,
+            RateLimitConfig {
+                per_ip: Rate::per_second(nonzero(50), nonzero(100)),
+                login: Rate::per_minute(nonzero(10)),
+                refresh: Rate::per_minute(nonzero(60)),
+                register: Rate::per_hour(nonzero(2)),
+                per_user: Rate::per_second(nonzero(20), nonzero(60)),
+            }
+        );
     });
 }
 
@@ -236,6 +275,12 @@ fn environment_variables_override_the_file() {
         jail.set_env("AFKFLEET_SERVER__LOG__FORMAT", "pretty");
         jail.set_env("AFKFLEET_SERVER__AUTH__ARGON2_ITERATIONS", 5);
         jail.set_env("AFKFLEET_SERVER__AUTH__ACCESS_TOKEN_TTL_SECS", 600);
+        jail.set_env(
+            "AFKFLEET_SERVER__HTTP__TRUSTED_PROXIES",
+            r#"["192.0.2.0/24", "2001:db8::/32"]"#,
+        );
+        jail.set_env("AFKFLEET_SERVER__AUTH__LOCKOUT_THRESHOLD", 9);
+        jail.set_env("AFKFLEET_SERVER__RATE_LIMITS__PER_IP_BURST", 80);
         let toml = minimal(jail);
 
         let config = load_toml(jail, &toml).unwrap();
@@ -247,6 +292,12 @@ fn environment_variables_override_the_file() {
         assert_eq!(config.log.format, LogFormat::Pretty);
         assert_eq!(config.auth.argon2.iterations(), 5);
         assert_eq!(config.auth.sessions.access_ttl(), Duration::from_secs(600));
+        assert_eq!(
+            config.http.trusted_proxies,
+            TrustedProxies::new(vec![net("192.0.2.0/24"), net("2001:db8::/32")])
+        );
+        assert_eq!(config.auth.lockout.threshold(), 9);
+        assert_eq!(config.rate_limits.per_ip.burst().get(), 80);
     });
 }
 
@@ -345,7 +396,15 @@ fn a_section_of_a_later_phase_is_unknown_until_that_phase() {
         assert_eq!(
             error.problem(),
             &ParseProblem::UnknownKey {
-                expected: &["dev_mode", "http", "database", "log", "auth", "vault"]
+                expected: &[
+                    "dev_mode",
+                    "http",
+                    "database",
+                    "log",
+                    "auth",
+                    "vault",
+                    "rate_limits"
+                ]
             }
         );
     });
@@ -843,6 +902,160 @@ fn the_dev_config_holds_neither_the_database_path_nor_the_vault_key_file() {
         assert_eq!(
             kinds(&problems),
             [ProblemKind::Missing, ProblemKind::Missing]
+        );
+    });
+}
+
+// --- Rate limits, the lockout threshold and trusted proxies (P7.10) --------------------
+
+/// A `[rate_limits]` key, and its lowest and highest valid values (ADR-0016).
+#[rstest]
+#[case::per_ip("per_ip_per_sec", 1, 1000)]
+#[case::per_ip_burst("per_ip_burst", 1, 10_000)]
+#[case::login("login_per_ip_per_min", 1, 60)]
+#[case::refresh("refresh_per_ip_per_min", 1, 600)]
+#[case::register("register_per_ip_per_hour", 1, 100)]
+#[case::per_user("per_user_per_sec", 1, 1000)]
+#[case::per_user_burst("per_user_burst", 1, 10_000)]
+fn rate_limit_keys_are_checked_against_their_range(
+    #[case] key: &str,
+    #[case] min: u64,
+    #[case] max: u64,
+) {
+    in_jail(|jail| {
+        let base = minimal(jail);
+        let with = |value: u64| format!("{base}\n[rate_limits]\n{key} = {value}\n");
+
+        for value in [min, max] {
+            assert!(load_toml(jail, &with(value)).is_ok(), "{key} = {value}");
+        }
+        for value in [min - 1, max + 1] {
+            let problems = invalid(load_toml(jail, &with(value)));
+            assert_eq!(
+                keys(&problems),
+                [format!("rate_limits.{key}")],
+                "{key} = {value}"
+            );
+            assert!(
+                matches!(
+                    problems.iter().next().unwrap().kind(),
+                    ProblemKind::OutOfRange { .. }
+                ),
+                "{key} = {value}"
+            );
+        }
+    });
+}
+
+#[test]
+fn the_lockout_threshold_is_3_to_20() {
+    in_jail(|jail| {
+        let base = minimal(jail);
+        let with = |value: u32| format!("{base}\n[auth]\nlockout_threshold = {value}\n");
+
+        for value in [3, 20] {
+            let config = load_toml(jail, &with(value)).unwrap();
+            assert_eq!(config.auth.lockout.threshold(), value);
+        }
+        for (value, message) in [(2, "lower than 3"), (21, "greater than 20")] {
+            let problems = invalid(load_toml(jail, &with(value)));
+            assert_eq!(keys(&problems), ["auth.lockout_threshold"]);
+            assert_eq!(
+                kinds(&problems),
+                [ProblemKind::OutOfRange {
+                    message: message.to_owned()
+                }]
+            );
+        }
+    });
+}
+
+#[test]
+fn an_empty_list_of_trusted_proxies_trusts_nobody() {
+    in_jail(|jail| {
+        let toml = format!("{}\n[http]\ntrusted_proxies = []\n", minimal(jail));
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(config.http.trusted_proxies, TrustedProxies::default());
+    });
+}
+
+#[rstest]
+#[case::bare_address("192.0.2.10", IpNetError::Shape)]
+#[case::host_name("proxy.example.com/24", IpNetError::Shape)]
+#[case::too_long("192.0.2.0/33", IpNetError::PrefixLength { max: 32 })]
+#[case::host_bits("192.0.2.5/24", IpNetError::HostBits)]
+#[case::ipv6_host_bits("2001:db8::1/32", IpNetError::HostBits)]
+#[case::mapped("::ffff:192.0.2.0/120", IpNetError::MappedIpv4)]
+fn a_trusted_proxy_that_isnt_strict_cidr_is_refused_at_its_index(
+    #[case] entry: &str,
+    #[case] error: IpNetError,
+) {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}\n[http]\ntrusted_proxies = [\"198.51.100.0/24\", \"{entry}\"]\n",
+            minimal(jail)
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["http.trusted_proxies[1]"]);
+        assert_eq!(kinds(&problems), [ProblemKind::IpNet(error)]);
+        let shown = problems.iter().next().unwrap().kind().to_string();
+        assert!(!shown.contains(entry), "{shown}");
+    });
+}
+
+#[test]
+fn a_trusted_proxy_listed_twice_is_refused_at_its_second_index() {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}\n[http]\ntrusted_proxies = [\"192.0.2.0/24\", \"198.51.100.0/24\", \"192.0.2.0/24\"]\n",
+            minimal(jail)
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["http.trusted_proxies[2]"]);
+        assert_eq!(kinds(&problems), [ProblemKind::Duplicate]);
+    });
+}
+
+/// `n` different /32 networks in 198.51.100.0/24, as a TOML list.
+fn proxies(n: u8) -> String {
+    let entries: Vec<String> = (0..n).map(|i| format!("\"198.51.100.{i}/32\"")).collect();
+    format!("[{}]", entries.join(", "))
+}
+
+#[test]
+fn at_most_32_trusted_proxies_are_allowed() {
+    in_jail(|jail| {
+        let base = minimal(jail);
+        let with = |n: u8| format!("{base}\n[http]\ntrusted_proxies = {}\n", proxies(n));
+
+        let most = load_toml(jail, &with(32)).unwrap();
+        let problems = invalid(load_toml(jail, &with(33)));
+
+        assert_eq!(most.http.trusted_proxies.networks().len(), 32);
+        assert_eq!(keys(&problems), ["http.trusted_proxies"]);
+        assert_eq!(kinds(&problems), [ProblemKind::TooManyEntries { max: 32 }]);
+    });
+}
+
+#[test]
+fn every_bad_trusted_proxy_is_reported_at_once() {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}\n[http]\ntrusted_proxies = [\"192.0.2.10\", \"192.0.2.0/24\", \"2001:db8::1/32\"]\n",
+            minimal(jail)
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(
+            keys(&problems),
+            ["http.trusted_proxies[0]", "http.trusted_proxies[2]"]
         );
     });
 }

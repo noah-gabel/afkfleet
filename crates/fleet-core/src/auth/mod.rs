@@ -17,8 +17,12 @@
 //! - [`access_decision`], [`touch_due`] and [`is_stepped_up`]: whether a
 //!   request's access token counts, when it notes its session's use, and
 //!   whether a step-up action is allowed (group B).
+//! - [`LockoutPolicy`], [`check_lock`] and [`after_failure`]: when a
+//!   username's failed logins lock it, for how long, and when its streak
+//!   is forgotten (group C).
 
 mod access;
+mod lockout;
 mod password;
 mod session;
 mod strength;
@@ -26,6 +30,10 @@ mod strength;
 pub use access::{
     AccessFacts, AccessRejection, STEP_UP_WINDOW, TOUCH_INTERVAL, access_decision, is_stepped_up,
     touch_due, touch_stale_since,
+};
+pub use lockout::{
+    FAILURE_MEMORY, FIRST_LOCK, FailureOutcome, FailureStreak, Locked, LockoutPolicy,
+    LockoutPolicyError, MAX_LOCK, after_failure, check_lock, expired_failed_by, is_expired,
 };
 pub use password::{NewPassword, NewPasswordError};
 pub use session::{

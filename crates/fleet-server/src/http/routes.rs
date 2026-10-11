@@ -9,7 +9,8 @@
 //!   request without valid credentials gets 401.
 //!
 //! Both take the route's [`RateClass`], so no route can exist without one,
-//! and both record every method and path the route serves as a
+//! and add its limit as a route layer (only a matched route spends it, never
+//! a 404 or 405), and both record every method and path the route serves as a
 //! [`RouteEntry`]. The route-coverage test reads the entries: it calls every
 //! authed route without credentials and expects 401, and checks that the
 //! public routes are exactly the allowlist, in dev mode and outside it.
@@ -22,12 +23,14 @@ use std::sync::Arc;
 
 use axum::Router;
 use axum::http::Method;
+use axum::middleware::from_fn_with_state;
 use axum::routing::get;
 use utoipa::openapi::path::PathItem;
 use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouter};
 
 use super::middleware::{self, RequestIds};
 use super::openapi::{self, ApiDocs, OPENAPI_PATH};
+use super::rate_limit::{self, ClassLayer, RateLimits};
 use super::router::AppState;
 use crate::config::HttpConfig;
 
@@ -76,6 +79,7 @@ pub struct RouteEntry {
 pub struct Routes {
     router: OpenApiRouter<AppState>,
     entries: Vec<RouteEntry>,
+    limits: RateLimits,
 }
 
 /// The entries; utoipa-axum's router has no `Debug`.
@@ -87,19 +91,15 @@ impl fmt::Debug for Routes {
     }
 }
 
-impl Default for Routes {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
 impl Routes {
-    /// No routes yet, over the `OpenAPI` document's fixed part.
+    /// No routes yet, over the `OpenAPI` document's fixed part; each route
+    /// will spend its class's limit of `limits`.
     #[must_use]
-    pub fn new() -> Self {
+    pub fn new(limits: &RateLimits) -> Self {
         Self {
             router: OpenApiRouter::with_openapi(openapi::base()),
             entries: Vec::new(),
+            limits: limits.clone(),
         }
     }
 
@@ -124,7 +124,8 @@ impl Routes {
     /// The router: every registered route with `state`, the `OpenAPI`
     /// document's route when `docs` says so, behind the middleware stack
     /// with the timeout and the body limit from `http` and request IDs from
-    /// `ids`. Also every entry, the document's route included.
+    /// `ids`, and the per-IP limit of the limits [`Routes::new`] got. Also
+    /// every entry, the document's route included.
     pub fn finish(
         self,
         state: AppState,
@@ -135,6 +136,7 @@ impl Routes {
         let Self {
             router,
             mut entries,
+            limits,
         } = self;
         let (routes, document) = router.with_state(state).split_for_parts();
         let routes = match docs {
@@ -153,17 +155,18 @@ impl Routes {
             }
             ApiDocs::Hidden => routes,
         };
-        (middleware::apply(routes, http, ids), entries)
+        (middleware::apply(routes, http, ids, &limits), entries)
     }
 
-    /// Records every method and path of `route` and adds it.
+    /// Records every method and path of `route` and adds it, behind its
+    /// class's limit.
     fn register(
         mut self,
         access: Access,
         class: RateClass,
         route: UtoipaMethodRouter<AppState>,
     ) -> Self {
-        let (_, paths, _) = &route;
+        let (schemas, paths, method_router) = route;
         for (path, item) in &paths.paths {
             self.entries
                 .extend(methods(item).into_iter().map(|method| RouteEntry {
@@ -173,7 +176,15 @@ impl Routes {
                     class,
                 }));
         }
-        self.router = self.router.routes(route);
+        let method_router = match class {
+            RateClass::Standard => method_router,
+            RateClass::Login | RateClass::Refresh | RateClass::Register => method_router
+                .route_layer(from_fn_with_state(
+                    ClassLayer::new(class, self.limits.clone()),
+                    rate_limit::per_class,
+                )),
+        };
+        self.router = self.router.routes((schemas, paths, method_router));
         self
     }
 }

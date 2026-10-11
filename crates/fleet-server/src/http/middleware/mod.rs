@@ -11,9 +11,10 @@
 //! | 3 | request ID | [`request_id`]: the server mints every ID; a client's never survives |
 //! | 4 | trace | One span and one line per request, with the ID; it logs no header and no body |
 //! | 5 | [`render_errors`] | Inside the request-ID layer, so every error body names the ID, and inside the trace span, so its lines carry it too |
-//! | 6 | catch-panic | A panicking handler answers with the fixed internal error, which `render_errors` renders |
-//! | 7 | timeout | `[http] request_timeout_secs`; it answers 408, which `render_errors` renders |
-//! | 8 | body limit | `[http] max_body_bytes`; it answers 413 when the `Content-Length` is too large, and fails a body read past the limit |
+//! | 6 | per-IP limit | [`rate_limit::per_ip`](super::rate_limit): resolves the client's address and spends its global per-IP request, before the timeout, the body or the router, so every request counts, matched or not; its refusal is an `ApiError` that `render_errors` renders |
+//! | 7 | catch-panic | A panicking handler answers with the fixed internal error, which `render_errors` renders |
+//! | 8 | timeout | `[http] request_timeout_secs`; it answers 408, which `render_errors` renders |
+//! | 9 | body limit | `[http] max_body_bytes`; it answers 413 when the `Content-Length` is too large, and fails a body read past the limit |
 //!
 //! Inside them, the router answers a path no route matches with
 //! `not_found`, and a method the matched path doesn't take with
@@ -23,7 +24,8 @@
 //! `Referrer-Policy: no-referrer`, `Cache-Control: no-store`,
 //! `Content-Security-Policy: default-src 'none'; frame-ancestors 'none'` and
 //! `X-Frame-Options: DENY`; Caddy adds HSTS. There is no CORS layer (§7.6).
-//! Rate limiting arrives in P7.10.
+//! A route's rate-limit class adds its own limit as a route layer
+//! ([`routes`](super::routes)).
 
 use core::any::Any;
 
@@ -45,6 +47,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::timeout::TimeoutLayer;
 
 use super::error::{ApiError, render_errors};
+use super::rate_limit::{self, PerIpLayer, RateLimits};
 use crate::config::HttpConfig;
 
 pub mod request_id;
@@ -70,11 +73,12 @@ const SECURITY_HEADERS: [(HeaderName, HeaderValue); 5] = [
     (X_FRAME_OPTIONS, HeaderValue::from_static("DENY")),
 ];
 
-/// Adds the fallbacks and the middleware stack to `routes`, with the timeout
-/// and the body limit from `http` and request IDs minted by `ids`; see the
-/// [module docs](self). It's the last step of building a router: routes
-/// added afterwards would bypass the stack.
-pub fn apply(routes: Router, http: &HttpConfig, ids: RequestIds) -> Router {
+/// Adds the fallbacks and the middleware stack to `routes`, with the timeout,
+/// the body limit and the trusted proxies from `http`, request IDs minted by
+/// `ids` and the per-IP limit of `limits`; see the [module docs](self).
+/// It's the last step of building a router: routes added afterwards would
+/// bypass the stack.
+pub fn apply(routes: Router, http: &HttpConfig, ids: RequestIds, limits: &RateLimits) -> Router {
     let [nosniff, referrer, cache, csp, frame] = SECURITY_HEADERS;
     routes
         .fallback(not_found)
@@ -95,6 +99,10 @@ pub fn apply(routes: Router, http: &HttpConfig, ids: RequestIds) -> Router {
                 .layer(from_fn_with_state(ids, request_id::set_request_id))
                 .layer(from_fn(trace::trace))
                 .layer(from_fn(render_errors))
+                .layer(from_fn_with_state(
+                    PerIpLayer::new(&http.trusted_proxies, limits.clone()),
+                    rate_limit::per_ip,
+                ))
                 .layer(CatchPanicLayer::custom(panic_response))
                 .layer(TimeoutLayer::with_status_code(
                     StatusCode::REQUEST_TIMEOUT,

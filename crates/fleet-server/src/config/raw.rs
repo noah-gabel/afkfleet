@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use garde::Validate;
 use serde::Deserialize;
 
-use super::Argon2Params;
+use super::{Argon2Params, RateLimitConfig};
 
 /// A range of a numeric key, inclusive at both ends.
 pub(crate) struct Range {
@@ -55,6 +55,9 @@ pub(crate) struct RawConfig {
     #[serde(default)]
     #[garde(skip)]
     pub(crate) vault: RawVault,
+    #[serde(default)]
+    #[garde(dive)]
+    pub(crate) rate_limits: RawRateLimits,
 }
 
 /// `[vault]`. Both keys are required; validation checks the key IDs, the
@@ -91,12 +94,15 @@ pub(crate) struct RawAuth {
     pub(crate) access_token_ttl_secs: u32,
     pub(crate) refresh_token_idle_days: u32,
     pub(crate) refresh_token_absolute_days: u32,
+    pub(crate) lockout_threshold: u32,
 }
 
 /// Appendix A's token lifetimes, §7.2's.
 const DEFAULT_ACCESS_TOKEN_TTL_SECS: u32 = 900;
 const DEFAULT_REFRESH_TOKEN_IDLE_DAYS: u32 = 7;
 const DEFAULT_REFRESH_TOKEN_ABSOLUTE_DAYS: u32 = 30;
+/// §7.4's lockout threshold.
+const DEFAULT_LOCKOUT_THRESHOLD: u32 = 5;
 
 impl Default for RawAuth {
     fn default() -> Self {
@@ -109,6 +115,7 @@ impl Default for RawAuth {
             access_token_ttl_secs: DEFAULT_ACCESS_TOKEN_TTL_SECS,
             refresh_token_idle_days: DEFAULT_REFRESH_TOKEN_IDLE_DAYS,
             refresh_token_absolute_days: DEFAULT_REFRESH_TOKEN_ABSOLUTE_DAYS,
+            lockout_threshold: DEFAULT_LOCKOUT_THRESHOLD,
         }
     }
 }
@@ -124,6 +131,9 @@ pub(crate) struct RawHttp {
     pub(crate) request_timeout_secs: u64,
     #[garde(range(min = MAX_BODY_BYTES.min, max = MAX_BODY_BYTES.max))]
     pub(crate) max_body_bytes: u64,
+    /// Checked entry by entry in validation.
+    #[garde(skip)]
+    pub(crate) trusted_proxies: Vec<String>,
 }
 
 impl Default for RawHttp {
@@ -132,6 +142,46 @@ impl Default for RawHttp {
             bind: None,
             request_timeout_secs: DEFAULT_REQUEST_TIMEOUT_SECS,
             max_body_bytes: DEFAULT_MAX_BODY_BYTES,
+            trusted_proxies: Vec::new(),
+        }
+    }
+}
+
+/// `[rate_limits]`. Missing keys take Appendix A's defaults; the keys are
+/// the field names, so garde's report names them.
+#[derive(Debug, Deserialize, Validate)]
+#[serde(
+    default,
+    deny_unknown_fields,
+    expecting = "a table of rate-limit settings"
+)]
+pub(crate) struct RawRateLimits {
+    #[garde(range(min = RateLimitConfig::PER_IP_PER_SEC.min, max = RateLimitConfig::PER_IP_PER_SEC.max))]
+    pub(crate) per_ip_per_sec: u32,
+    #[garde(range(min = RateLimitConfig::PER_IP_BURST.min, max = RateLimitConfig::PER_IP_BURST.max))]
+    pub(crate) per_ip_burst: u32,
+    #[garde(range(min = RateLimitConfig::LOGIN_PER_IP_PER_MIN.min, max = RateLimitConfig::LOGIN_PER_IP_PER_MIN.max))]
+    pub(crate) login_per_ip_per_min: u32,
+    #[garde(range(min = RateLimitConfig::REFRESH_PER_IP_PER_MIN.min, max = RateLimitConfig::REFRESH_PER_IP_PER_MIN.max))]
+    pub(crate) refresh_per_ip_per_min: u32,
+    #[garde(range(min = RateLimitConfig::REGISTER_PER_IP_PER_HOUR.min, max = RateLimitConfig::REGISTER_PER_IP_PER_HOUR.max))]
+    pub(crate) register_per_ip_per_hour: u32,
+    #[garde(range(min = RateLimitConfig::PER_USER_PER_SEC.min, max = RateLimitConfig::PER_USER_PER_SEC.max))]
+    pub(crate) per_user_per_sec: u32,
+    #[garde(range(min = RateLimitConfig::PER_USER_BURST.min, max = RateLimitConfig::PER_USER_BURST.max))]
+    pub(crate) per_user_burst: u32,
+}
+
+impl Default for RawRateLimits {
+    fn default() -> Self {
+        Self {
+            per_ip_per_sec: 20,
+            per_ip_burst: 40,
+            login_per_ip_per_min: 5,
+            refresh_per_ip_per_min: 30,
+            register_per_ip_per_hour: 5,
+            per_user_per_sec: 10,
+            per_user_burst: 30,
         }
     }
 }
@@ -433,6 +483,7 @@ mod secret_names {
             "http.bind",
             "http.request_timeout_secs",
             "http.max_body_bytes",
+            "http.trusted_proxies",
             "database",
             "database.path",
             "log",
@@ -446,9 +497,18 @@ mod secret_names {
             "auth.access_token_ttl_secs",
             "auth.refresh_token_idle_days",
             "auth.refresh_token_absolute_days",
+            "auth.lockout_threshold",
             "vault",
             "vault.master_key_files",
             "vault.active_key_id",
+            "rate_limits",
+            "rate_limits.per_ip_per_sec",
+            "rate_limits.per_ip_burst",
+            "rate_limits.login_per_ip_per_min",
+            "rate_limits.refresh_per_ip_per_min",
+            "rate_limits.register_per_ip_per_hour",
+            "rate_limits.per_user_per_sec",
+            "rate_limits.per_user_burst",
         ] {
             assert!(keys.iter().any(|found| found == key), "{key} in {keys:?}");
         }

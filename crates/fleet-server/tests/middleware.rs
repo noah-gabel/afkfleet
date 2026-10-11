@@ -15,10 +15,12 @@
 
 use core::time::Duration;
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
 use axum::body::{Body, Bytes, to_bytes};
+use axum::extract::connect_info::MockConnectInfo;
 use axum::extract::{Path, Request};
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_ENCODING, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, PROXY_AUTHORIZATION,
@@ -32,9 +34,10 @@ use fleet_api_types::BoundedText;
 use fleet_api_types::error::REQUEST_ID_MAX_CHARS;
 use fleet_core::id::RequestId;
 use fleet_core::system::RandomError;
-use fleet_server::config::{HttpConfig, LogConfig, LogFormat};
+use fleet_server::config::{HttpConfig, LogConfig, LogFormat, RateLimitConfig};
 use fleet_server::http::error::REQUEST_ID_HEADER;
 use fleet_server::http::middleware::{self, RequestIds};
+use fleet_server::http::rate_limit::{RateLimits, TrustedProxies};
 use fleet_startup::telemetry::{NoRules, layer_with};
 use fleet_testkit::log_buffer::LogBuffer;
 use fleet_testkit::system::{ManualClock, SeededRandom};
@@ -95,7 +98,22 @@ fn http_config() -> HttpConfig {
         bind: HttpConfig::DEFAULT_BIND,
         request_timeout: TIMEOUT,
         max_body_bytes: MAX_BODY,
+        trusted_proxies: TrustedProxies::default(),
     }
+}
+
+/// Generous rate limits on a clock that never moves: no test here comes near
+/// them; `tests/rate_limits.rs` tests them.
+fn limits() -> RateLimits {
+    RateLimits::new(
+        &RateLimitConfig::default(),
+        Arc::new(ManualClock::new(DateTime::UNIX_EPOCH)),
+    )
+}
+
+/// Every request's peer address, as `serve`'s connections carry it.
+fn peer() -> MockConnectInfo<SocketAddr> {
+    MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711)))
 }
 
 /// The test routes behind the server's stack, and the random source its IDs
@@ -110,7 +128,7 @@ fn stack() -> Stack {
     let random = SeededRandom::new(7);
     let ids = RequestIds::new(Arc::new(clock), Arc::new(random.clone()));
     Stack {
-        app: middleware::apply(routes(), &http_config(), ids),
+        app: middleware::apply(routes(), &http_config(), ids, &limits()).layer(peer()),
         random,
     }
 }
@@ -465,7 +483,9 @@ async fn a_request_within_the_timeout_is_answered() {
             Arc::new(ManualClock::new(DateTime::UNIX_EPOCH)),
             Arc::new(SeededRandom::new(1)),
         ),
-    );
+        &limits(),
+    )
+    .layer(peer());
 
     let seen = send(&app, get_request("/")).await;
 
