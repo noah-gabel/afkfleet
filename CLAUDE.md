@@ -26,7 +26,7 @@ Where things are:
 2. **Pick the task.** Take the next unchecked task, or the one the user names (e.g. "do P4.3"). Before coding, restate its goal and acceptance criteria in 2–4 lines.
 3. **Branch.**
    - Start from an up-to-date `main`: `git switch main`, then `git pull`.
-   - Create the task branch `p<phase>/<task-id>-<slug>`, e.g. `p2/p2.6-bot-state-machine`. Phases 0 and 1 each use one branch for the whole phase: `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each, with one commit per task (Plan.md, the note under Phase 2). Phase 3 does the same with five group branches, plus one task branch for P3.9 (Plan.md, the note under Phase 3). Phase 4 uses five group branches (Plan.md, the note under Phase 4). Phase 5 uses four group branches (Plan.md, the note under Phase 5). Phase 6 uses five group branches (Plan.md, the note under Phase 6).
+   - Create the task branch `p<phase>/<task-id>-<slug>`, e.g. `p2/p2.6-bot-state-machine`. Phases 0 and 1 each use one branch for the whole phase: `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each, with one commit per task (Plan.md, the note under Phase 2). Phase 3 does the same with five group branches, plus one task branch for P3.9 (Plan.md, the note under Phase 3). Phase 4 uses five group branches (Plan.md, the note under Phase 4). Phase 5 uses four group branches (Plan.md, the note under Phase 5). Phase 6 uses five group branches (Plan.md, the note under Phase 6). Phase 7 uses five group branches (Plan.md, the note under Phase 7).
    - One task, or one Phase 2 group, per branch. If the previous PR isn't merged yet, stop and tell the user instead of stacking branches.
 4. **TDD.**
    1. Write the tests first.
@@ -99,7 +99,7 @@ Recipes for tools that arrive in later phases (`dev-app`, `ui-test`, `e2e`) prin
   - `fleet-mc` may use only `azalea::auth::sessionserver` and `azalea::auth::certs`, through azalea's re-export, to join with a server-issued Minecraft token.
   - The Microsoft flows (device code, Microsoft tokens, the account cache) belong to `fleet-server` alone. `fleet-mc`'s `clippy.toml` bans them (ADR-0011).
 - azalea code runs only on the MC host threads in `fleet-mc` (current-thread runtime + `LocalSet`). Never call azalea from a normal tokio task.
-- `fleet-startup` holds only the binaries' process start-up and lifecycle code: the config loader and its errors, the `[log]` types, the log layer, the panic hook and the stop signals (`OsSignals`). Internally it depends only on `fleet-core`. Its filter always caps `azalea_auth` at `info` and lets panic reports through; a binary only adds rules through `FilterRules` (ADR-0015).
+- `fleet-startup` holds only the binaries' process start-up and lifecycle code: the config loader and its errors, the `[log]` types, the log layer, the panic hook, the stop signals (`OsSignals`) and the secret-file loader (`secret_file`, which reads every `*_file` secret of both binaries with one set of rules; ADR-0016). Internally it depends only on `fleet-core`. Its filter always caps `azalea_auth` at `info` and lets panic reports through; a binary only adds rules through `FilterRules` (ADR-0015).
 
 **Bot lifecycle:**
 - Every lifecycle change goes through `fleet_core::bot::transition()`. Actors execute the effects it returns and never decide state themselves.
@@ -297,7 +297,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
     - Never commit personal data either: real names, email addresses, Windows usernames or home paths (`C:\Users\…`), IP addresses, real server addresses or domains, Minecraft account names or UUIDs.
     - Examples and tests use placeholders: `example.com`, `192.0.2.10`, `AfkBot1`, `C:\path\to\afkfleet`.
     - The one exception is the repository's own GitHub URL (e.g. `repository` in `Cargo.toml`). It's public anyway.
-12. **Never read secret files:** `secrets/`, `.env*`, `*.pem` or `*.key`. When development needs a secret file (e.g. a dev vault key), write a `just` recipe that generates it into the gitignored `secrets/` folder and ask the user to run it.
+12. **Never read secret files:** `secrets/`, `.env*`, `*.pem`, `*.key` or `target/dev-server/vault-key-*`. When development needs a secret file, a `just` recipe generates it into a gitignored folder; never write or print one yourself. The dev vault key, for example, is created by `just dev-server` itself as `target/dev-server/vault-key-1`, next to the dev database it encrypts (ADR-0016). Any other one goes into the gitignored `secrets/` folder, through a recipe the user runs.
 
 ## Testing conventions
 **Where tests go**
