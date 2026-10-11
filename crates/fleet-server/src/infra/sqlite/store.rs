@@ -10,9 +10,12 @@ use fleet_core::value::Username;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use super::error::store_error;
-use super::{Database, audit, sessions, users};
+use super::{Database, audit, login_attempts, sessions, users};
 use crate::ports::audit::{
     AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, NewAuditEntry,
+};
+use crate::ports::login_attempts::{
+    AttemptKey, LoginAttempt, LoginAttemptReads, LoginAttemptWrites,
 };
 use crate::ports::sessions::{
     NewSession, RefreshLookup, Rotation, SessionReads, SessionWithUser, SessionWrites,
@@ -26,7 +29,8 @@ use crate::ports::users::{InsertUserError, NewUser, User, UserReads, UserWrites}
 /// (ADR-0015).
 const BEGIN_IMMEDIATE: &str = "BEGIN IMMEDIATE";
 
-/// The read handles: users, sessions and the audit log over the read pool.
+/// The read handles: users, sessions, login failures and the audit log over
+/// the read pool.
 #[derive(Debug, Clone)]
 pub(super) struct Reads {
     pub(super) pool: SqlitePool,
@@ -58,6 +62,13 @@ impl SessionReads for Reads {
 }
 
 #[async_trait]
+impl LoginAttemptReads for Reads {
+    async fn find(&self, key: &AttemptKey) -> Result<Option<LoginAttempt>, StoreError> {
+        login_attempts::find(&self.pool, key).await
+    }
+}
+
+#[async_trait]
 impl AuditReads for Reads {
     async fn list(&self, page: AuditPage) -> Result<Vec<AuditRecord>, StoreError> {
         audit::list(&self.pool, page).await
@@ -82,6 +93,10 @@ impl WriteTx for SqliteWriteTx {
     }
 
     fn sessions(&mut self) -> &mut dyn SessionWrites {
+        self
+    }
+
+    fn login_attempts(&mut self) -> &mut dyn LoginAttemptWrites {
         self
     }
 
@@ -133,6 +148,30 @@ impl SessionWrites for SqliteWriteTx {
 }
 
 #[async_trait]
+impl LoginAttemptWrites for SqliteWriteTx {
+    async fn find(&mut self, key: &AttemptKey) -> Result<Option<LoginAttempt>, StoreError> {
+        login_attempts::find(&mut *self.tx, key).await
+    }
+
+    async fn upsert(&mut self, key: &AttemptKey, attempt: &LoginAttempt) -> Result<(), StoreError> {
+        login_attempts::upsert(&mut self.tx, key, attempt).await
+    }
+
+    async fn delete(&mut self, key: &AttemptKey) -> Result<bool, StoreError> {
+        login_attempts::delete(&mut self.tx, key).await
+    }
+
+    async fn purge_stale(
+        &mut self,
+        failed_by: DateTime<Utc>,
+        now: DateTime<Utc>,
+        limit: u32,
+    ) -> Result<u64, StoreError> {
+        login_attempts::purge_stale(&mut self.tx, failed_by, now, limit).await
+    }
+}
+
+#[async_trait]
 impl UserWrites for SqliteWriteTx {
     async fn insert(&mut self, user: &NewUser) -> Result<(), InsertUserError> {
         users::insert(&mut self.tx, user).await
@@ -162,6 +201,10 @@ impl Store for Database {
     }
 
     fn sessions(&self) -> &dyn SessionReads {
+        &self.reads
+    }
+
+    fn login_attempts(&self) -> &dyn LoginAttemptReads {
         &self.reads
     }
 

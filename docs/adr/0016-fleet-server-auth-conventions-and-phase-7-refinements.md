@@ -366,6 +366,82 @@ The user answered group B's questions on 2026-10-11, one at a time.
 - **P7.8, tests,** through a test-only router behind the real middleware stack, red against compiling stubs (an extractor that didn't count the headers, a service that skipped the decision and the touch): 7 of 15 failed on assertions, then all passed. The held-write-connection test passed against the stub too, which never touched. fleet-core's access rules: 9 of 18 failed against stubs, then all passed.
 - **P7.3, tests,** red against compiling stubs (rules that allowed everything, typed metadata that added nothing, an adapter that minted nothing, config that ignored the keys, a service that refused every refresh): fleet-core 20 of 25 rule tests, 5 metadata tests and the names snapshot; fleet-server 11 adapter tests, 8 config tests and 13 of 21 service tests failed on assertions. The ones that passed against the stubs check refusals and `Debug`. Then all passed.
 
+### Group C: `login_attempts`, the route registry, rate limits and the lockout (P7.1's `login_attempts`, P7.11, P7.10)
+The user answered group C's questions on 2026-10-11, one at a time.
+
+- **No tower_governor** *(the user's choice)*. tower_governor 0.8.0 (checked in its source on docs.rs):
+  - hard-codes governor's quanta clock, so no clock can be injected and its limits can't be tested deterministically
+  - depends on governor with its default features, which turns on `quanta`, `dashmap` and `jitter` (rand 0.9, getrandom 0.3) for the whole workspace
+  - turns on axum's default features through its `axum` feature
+  - reports its wait in whole seconds, rounded down
+
+  fleet-server uses the workspace's governor with `std` only (already fleet-runtime's): keyed `RateLimiter::hashmap_with_clock` limiters behind the server's own axum middleware. Every refusal is `ApiError::RateLimited { retry_after }` with governor's `NotUntil::wait_time_from`, which the error model rounds up. tower_governor leaves §5 and CLAUDE.md's registry. The middleware keeps tower_governor's useful part: `retain_recent()` on a timer.
+- **The limiters' clock** *(the user's choice and boundary)*. The limiters run on the server's `Clock` port, as nanoseconds since its first reading (saturating at 0 if it goes back).
+  - **In production:** a new `infra::system::MonotonicClock` drives **only** the limiters. It's one `SystemClock` reading as the anchor plus tokio's `Instant` elapsed, in whole milliseconds, so a wall-clock step back can't refuse every client until the clock catches up.
+  - **Everything stored or audited** (sessions, `login_attempts` and the lockout, audit entries, the touch) keeps `SystemClock`. A monotonic clock ignores NTP corrections and, on Linux, the time a VM spent suspended, so stored times would drift from real time over a long uptime; the limiters only measure intervals.
+  - `serve` wires both clocks explicitly. Tests pass the same `ManualClock` to both, so one `advance` moves sessions, the lockout and the limiters together.
+- **Health counts against the global per-IP limit** *(the user's choice)*. The global per-IP limit sits in the middleware stack and covers every request, matched or not, so 404 scans count too. Docker's and Caddy's probes stay far below 20/s, and `/health/ready` pings the database.
+- **The classes** *(the user's choices)*. C defines every HTTP limit of §7.4 now, each with its `[rate_limits]` keys, so D and E only register routes with an existing class:
+  - `Standard`: only the global per-IP limit
+  - `Login`: 5/min per IP, **one bucket shared by `/auth/login` and `/auth/login/mfa`**
+  - `Refresh`: 30/min per IP
+  - `Register`: 5/h per IP
+  - the per-user limit on every authed route
+
+  Class limits are a `route_layer`, so a 404 or 405 spends none of them. The per-user limit runs in `AuthUser`, right after authentication. The chat keys and `ws_connections_per_user` come with P11.
+- **The client's address** *(the user's choices and additions)*:
+  - **The peer:** `ConnectInfo<SocketAddr>` from `into_make_service_with_connect_info`, canonicalized, so an IPv4 peer that a dual-stack `[::]` listener reports as `::ffff:a.b.c.d` still matches an IPv4 CIDR. Without that, Caddy would count as untrusted and every client would land in Caddy's one bucket.
+  - **X-Forwarded-For** counts only when the peer is in `[http] trusted_proxies`:
+    - all XFF headers form one list, in order, each entry trimmed and canonicalized
+    - the list is walked from the right past trusted proxies, and the first untrusted address is the client, never the left-most one, which the client controls
+    - an entry that isn't a plain IP address (garbage, `unknown`, a port) stops the walk at the last trusted hop
+    - if every entry is trusted, the left-most is the client
+    - `Forwarded` and `X-Real-IP` are never read
+  - **A request without `ConnectInfo`** is a wiring bug: 500, logged at `error`.
+  - **The limiter key:** an IPv4 client by its address, an IPv6 client by its /64, since one host usually gets a whole /64. Only the key is masked; audit entries record the full address.
+- **`IpNet`, our own** *(the user's choice)*: a small value type with `addr/len` parsing, `contains` and the /64 masking, no new crate.
+  - **`[http] trusted_proxies` rules:** at most 32 CIDRs, default empty; host bits must be zero; a bare address is refused; duplicates are refused. Each problem names the key, never the value.
+  - **The cross-check** *(the user's addition)*: a property test compares `contains` and the /64 masking with `ipnet` 2.12.2, a fleet-server **dev-only** dependency, already in Cargo.lock through reqwest. Production code doesn't use it.
+- **The lockout's key** *(the user's choice)*: a `login_attempts` row is keyed by HMAC-SHA256(lockout key, normalized `Username`), a 32-byte BLOB, never the name: people type their password into that field (P7.13's note), and a database or backup leak mustn't let anyone test guesses offline.
+  - **The lockout key** is derived at startup from the vault's active key as HMAC(key, `"afkfleet login_attempts v1"`). It's never in the database or a backup, and there's nothing new to configure. Rotating the active vault key resets every streak, which is harmless.
+  - **New direct dependency:** `hmac` 0.13.0, RustCrypto like sha2 0.11, already in Cargo.lock.
+- **Unknown names lock exactly like real ones** *(the user's rule)*. Rows hold no user ID and are the same for any name, and every lookup takes the same path. Only the audit entry's target differs, and the audit log is Admin+.
+- **The schedule** in `fleet_core::auth` *(the user's choices)*:
+  - **Locks:** the threshold's failure (5) locks for 1 min, and each further failure doubles the lock, capped at 1 h.
+  - **Streak expiry:** a streak expires 24 h after its last failure (D's successful login clears it too). A steady attacker gets about 30 guesses on the first day and about 24 a day after; waiting for an expiry buys 5 a day.
+  - **Configuration:** `[auth] lockout_threshold` (default 5, 3–20) is the only key. The first lock, the cap and the 24 h expiry are constants, as §7.4 fixes them.
+- **While locked** *(the user's choice)*: 429 `rate_limited` with `Retry-After` = the rest of the lock, before any password check. The refusal isn't counted, so hammering can't extend the lock.
+- **One attempt per name in flight** *(the user's choice)*. An in-memory guard (a std `Mutex<HashSet>`, never held across `.await`, released on drop) lets one attempt per key run; a concurrent one gets 429 with `Retry-After: 1`. Without it, parallel attempts from many addresses could all pass the check before the first failure is written.
+- **`security.lockout`** *(the user's choice)*:
+  - **When:** recorded in the failing attempt's own transaction each time a failure starts a lock (the 5th, 6th, …).
+  - **The entry:** outcome Failure; no actor; the client's IP; target `User(id)` when the name is a user's, none otherwise; metadata `failures` (an integer) and `locked_until` (a time).
+  - **The log:** one `info` line with `user_id` when known, never the name. `warn` is for recovered faults, and users who mistype are common.
+- **Purging expired streaks** *(the user's choice and refinement)*. The server's periodic housekeeping deletes rows whose last failure is at least 24 h old and that have no running lock:
+  - in batches of 1000, each batch its own short transaction, repeating until a batch comes back short, so an attacker spraying names can't outgrow it
+  - each batch is committed with a new named exemption, **`UnauditedWrite::LoginAttemptsPurge`**: it removes only rows the rule already treats as absent, so an entry per batch would say nothing
+  - separate transactions keep the one write connection free for logins and touches between batches
+  - the run stops at shutdown between batches
+- **The housekeeping task** is the server's first long-lived background task. It runs every 60 s:
+  - the limiters' `retain_recent()`
+  - the purge
+  - a summary of the refusals since the last run (below)
+
+  It belongs to `serve`'s `JoinSet` and stops with a child of the shutdown token at the first signal. The close stage waits for it before closing the database, within the same deadline.
+- **Refusals don't flood the log** *(the user's addition)*. The trace layer logs a 429's "request finished" line at `debug`, like the health routes. The limiters count their refusals per class in atomic counters, and the housekeeping logs one `info` line with the counts since its last run, only when any is non-zero, then resets them. Under a flood, the log grows by one line a minute, not thousands a second (Docker's default log driver doesn't rotate).
+- **The route registry** *(P7.11)*:
+  - **The only way in:** `public_route(class, routes!(…))` and `authed_route(class, routes!(…))` on the `Routes` builder, which wraps utoipa-axum's `OpenApiRouter`, so every route keeps its OpenAPI entry and gets its class and its registry entry at registration.
+  - **The health routes** move to `public_route`. The dev-only `GET /api/openapi.json` is recorded as public with the `Standard` class, and stays out of the document.
+  - **The route-coverage test** builds the production routes plus a **test-only authed route** whose handler takes `AuthUser`, so the authed list is never empty. It then calls every authed route without credentials and expects 401; D's and E's routes join automatically. It checks the public allowlist in dev and normal mode, and that the registry equals the document's operations, so a route added past the helpers fails.
+
+### As built (group C)
+- **P7.1's `login_attempts`** (`0004_login_attempts.sql`):
+  - **Columns:** `username_key` (a 32-byte BLOB, the primary key), `failures` (`>= 1`), `last_failure_at` and `locked_until` (NULL until a lock), with the time shapes of 0001–0003.
+  - **Index:** on `last_failure_at`, for the purge.
+  - **No `user_id`, no name:** a real user's row and an unknown name's look alike.
+  - **The repository:** `find` on the read pool and in the transaction, `upsert`, `delete`, and `purge_stale(failed_by, now, limit)`, which chooses its rows through a `rowid IN (SELECT … LIMIT ?)` subquery, since the bundled SQLite has no `DELETE … LIMIT`.
+  - **`AttemptKey`** has `ct_eq` and no `PartialEq`, and its `Debug` shows no byte, like `TokenHash`.
+  - **Tests,** red against compiling stubs (a repository that stored and found nothing, a key that compared and read back nothing): 14 of 18 failed, the migrations' snapshot among them. The four that passed check the redacted `Debug`, that nothing is found (twice), and the table's CHECKs, which the real migration already enforces. Then all passed. The snapshot gained line 4, read before accepting.
+
 ## Consequences
 - **Easier:**
   - Every rule of the phase is a pure function in fleet-core, tested exhaustively on fixed times without a database.

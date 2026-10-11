@@ -2403,6 +2403,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The repository** has what B uses: insert, the joined lookup by access hash, and inside the write transaction the lookup by refresh hash (current or rotated), rotate, revoke and the conditional touch. `WriteTx::commit_unaudited(UnauditedWrite)` arrives with its first exemption, `SessionTouch`.
   > - **Tests,** red against compiling stubs: 21 of 26 repository tests and 3 of 8 `TokenHash` tests failed on assertions, then all passed.
 
+  > Note (P7.1, group C, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`0004_login_attempts.sql`.**
+  > - **One row per username with a running failure streak,** keyed by `username_key`: HMAC-SHA256 of the normalized `Username` under a lockout key derived from the vault's active key (P7.10's note), a 32-byte BLOB. Never the name, since people type their password into that field.
+  > - **Columns:** `failures` (`>= 1`), `last_failure_at`, `locked_until` (NULL until a lock). No `user_id`, so an unknown name's row looks exactly like a real user's.
+  > - **Index** on `last_failure_at`, for the purge of expired streaks.
+  > - **The repository:** `find` (read pool and transaction), `upsert`, `delete`, and `purge_stale(failed_by, now, limit)` (a `rowid IN (SELECT … LIMIT ?)` subquery). Purge batches commit with the new exemption `UnauditedWrite::LoginAttemptsPurge`.
+  > - **Tests,** red against compiling stubs: 14 of 18 failed, then all passed.
+
   > Note (P7.1, from group D): **One Owner.** The `users` migration adds a partial unique index on `role` for `'owner'`. `authorize()` also refuses to act on any other user with the Owner role (ADR-0010).
 - [x] **P7.2** 🔴 `PasswordService`:
   - Argon2id with the configured parameters

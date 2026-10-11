@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM login_attempts WHERE username_key = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "f4a02779a86d28206b571ca1e46b21969dffbcab53833a06bbe8bc1638033f03"
+}

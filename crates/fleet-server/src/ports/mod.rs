@@ -8,6 +8,8 @@
 //!   whose commit always records an audit entry.
 //! - [`users`]: the users.
 //! - [`sessions`]: the sessions, one per login's token family (P7.1, P7.3).
+//! - [`login_attempts`]: the failed logins per username, keyed so the name
+//!   itself is never stored (P7.1, P7.10).
 //! - [`tokens`]: the tokens' hashes, the only form of a token the database
 //!   holds (P7.3).
 //! - [`passwords`]: hashing and checking passwords (P7.2).
@@ -16,6 +18,7 @@
 //!   recording (inside a write transaction) and listing.
 
 pub mod audit;
+pub mod login_attempts;
 pub mod passwords;
 pub mod sessions;
 pub mod store;
