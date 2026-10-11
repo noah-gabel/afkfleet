@@ -12,8 +12,9 @@ use std::time::Duration;
 
 use figment::Jail;
 use fleet_server::config::{
-    ConfigError, DatabaseConfig, HttpConfig, LogConfig, LogFilterError, LogFormat, ParseError,
-    ParseProblem, ParseSource, ProblemKind, Problems, ServerConfig, UnknownLogFormatError, load,
+    Argon2Params, AuthConfig, ConfigError, DatabaseConfig, HttpConfig, LogConfig, LogFilterError,
+    LogFormat, ParseError, ParseProblem, ParseSource, ProblemKind, Problems, ServerConfig,
+    UnknownLogFormatError, load,
 };
 use fleet_startup::telemetry::{NoRules, layer_with};
 use fleet_testkit::jail::in_jail;
@@ -115,6 +116,9 @@ fn only_the_database_path_is_required() {
                     path: db_path(jail),
                 },
                 log: LogConfig::default(),
+                auth: AuthConfig {
+                    argon2: Argon2Params::default(),
+                },
             }
         );
     });
@@ -138,6 +142,12 @@ path = {}
 [log]
 format = "pretty"
 filter = "debug,sqlx=warn"
+
+[auth]
+argon2_memory_kib = 65536
+argon2_iterations = 3
+argon2_parallelism = 4
+argon2_max_concurrent = 8
 "#,
             toml_path(&db_path(jail))
         );
@@ -151,6 +161,10 @@ filter = "debug,sqlx=warn"
         assert_eq!(config.database.path, db_path(jail));
         assert_eq!(config.log.format, LogFormat::Pretty);
         assert_eq!(config.log.filter.as_str(), "debug,sqlx=warn");
+        assert_eq!(
+            config.auth.argon2,
+            Argon2Params::try_new(65_536, 3, 4, 8).unwrap()
+        );
     });
 }
 
@@ -163,6 +177,7 @@ fn environment_variables_override_the_file() {
         jail.set_env("AFKFLEET_SERVER__HTTP__MAX_BODY_BYTES", 2048);
         jail.set_env("AFKFLEET_SERVER__DATABASE__PATH", other.display());
         jail.set_env("AFKFLEET_SERVER__LOG__FORMAT", "pretty");
+        jail.set_env("AFKFLEET_SERVER__AUTH__ARGON2_ITERATIONS", 5);
         let toml = minimal(jail);
 
         let config = load_toml(jail, &toml).unwrap();
@@ -172,6 +187,7 @@ fn environment_variables_override_the_file() {
         assert_eq!(config.http.max_body_bytes, 2048);
         assert_eq!(config.database.path, other);
         assert_eq!(config.log.format, LogFormat::Pretty);
+        assert_eq!(config.auth.argon2.iterations(), 5);
     });
 }
 
@@ -270,7 +286,7 @@ fn a_section_of_a_later_phase_is_unknown_until_that_phase() {
         assert_eq!(
             error.problem(),
             &ParseProblem::UnknownKey {
-                expected: &["dev_mode", "http", "database", "log"]
+                expected: &["dev_mode", "http", "database", "log", "auth"]
             }
         );
     });
@@ -357,6 +373,61 @@ fn numbers_are_checked_against_their_range(#[case] key: &str, #[case] min: u64, 
                 "{key} = {value}"
             );
         }
+    });
+}
+
+/// An `[auth]` key, and its lowest and highest valid values: nothing below
+/// §7.2's baseline (ADR-0016).
+#[rstest]
+#[case::memory("argon2_memory_kib", 19_456, 1_048_576)]
+#[case::iterations("argon2_iterations", 2, 10)]
+#[case::parallelism("argon2_parallelism", 1, 16)]
+#[case::max_concurrent("argon2_max_concurrent", 1, 64)]
+fn argon2_keys_are_checked_against_their_range(
+    #[case] key: &str,
+    #[case] min: u64,
+    #[case] max: u64,
+) {
+    in_jail(|jail| {
+        let base = minimal(jail);
+        let with = |value: u64| format!("{base}\n[auth]\n{key} = {value}\n");
+
+        for value in [min, max] {
+            assert!(load_toml(jail, &with(value)).is_ok(), "{key} = {value}");
+        }
+        for value in [min - 1, max + 1] {
+            let problems = invalid(load_toml(jail, &with(value)));
+            assert_eq!(keys(&problems), [format!("auth.{key}")], "{key} = {value}");
+            assert!(
+                matches!(
+                    problems.iter().next().unwrap().kind(),
+                    ProblemKind::OutOfRange { .. }
+                ),
+                "{key} = {value}"
+            );
+        }
+    });
+}
+
+#[test]
+fn every_argon2_key_out_of_range_is_reported_at_once() {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}\n[auth]\nargon2_memory_kib = 1024\nargon2_iterations = 1\nargon2_parallelism = 0\nargon2_max_concurrent = 0\n",
+            minimal(jail)
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(
+            keys(&problems),
+            [
+                "auth.argon2_iterations",
+                "auth.argon2_max_concurrent",
+                "auth.argon2_memory_kib",
+                "auth.argon2_parallelism",
+            ]
+        );
     });
 }
 

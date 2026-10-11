@@ -11,7 +11,9 @@ use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use fleet_server::config::{DatabaseConfig, HttpConfig, LogConfig, LogFormat, ServerConfig};
+use fleet_server::config::{
+    AuthConfig, DatabaseConfig, HttpConfig, LogConfig, LogFormat, ServerConfig,
+};
 use fleet_startup::signals::{ShutdownSignals, Signal};
 use fleet_startup::telemetry::{NoRules, layer_with};
 use fleet_testkit::log_buffer::LogBuffer;
@@ -73,6 +75,7 @@ pub(crate) fn server_config(dir: &Path, bind: SocketAddr, dev_mode: bool) -> Ser
             format: LogFormat::Json,
             filter: "info".parse().unwrap(),
         },
+        auth: AuthConfig::default(),
     }
 }
 

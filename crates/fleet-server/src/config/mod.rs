@@ -12,12 +12,13 @@
 //!   key): nothing can be checked after them.
 //! - **Validation reports every problem at once,** each with its key path
 //!   (`http.bind`), and never echoes a value.
-//! - **Only Phase 6's keys exist.** Each later phase adds its own, so a key
-//!   of a later phase is still an unknown key (Appendix A).
+//! - **Each phase adds its own keys,** so a key of a later phase is still an
+//!   unknown key (Appendix A). Phase 7 adds `[auth]` (ADR-0016).
 //! - **Secrets never go in this file.** A key for a secret names the file
 //!   that holds it and ends in `_file` or `_files`; a test checks every
 //!   key's name (security rule 4). P7.4 builds the loader for those files.
 
+mod auth;
 mod error;
 mod raw;
 mod validate;
@@ -28,6 +29,7 @@ use std::time::Duration;
 
 use raw::RawConfig;
 
+pub use auth::{Argon2Params, Argon2ParamsError, AuthConfig, Bounds};
 pub use error::{ConfigError, Problem, ProblemKind, Problems};
 pub use fleet_startup::config::{
     KeyPath, KeySegment, LogConfig, LogFilter, LogFilterError, LogFormat, ParseError, ParseProblem,
@@ -49,6 +51,8 @@ pub struct ServerConfig {
     pub http: HttpConfig,
     /// Where the server keeps its data (`[database]`).
     pub database: DatabaseConfig,
+    /// How the server authenticates users (`[auth]`).
+    pub auth: AuthConfig,
     /// How the server logs (`[log]`).
     pub log: LogConfig,
 }

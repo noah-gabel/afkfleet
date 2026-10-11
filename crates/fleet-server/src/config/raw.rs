@@ -10,6 +10,8 @@
 use garde::Validate;
 use serde::Deserialize;
 
+use super::Argon2Params;
+
 /// A range of a numeric key, inclusive at both ends.
 pub(crate) struct Range {
     pub(crate) min: u64,
@@ -45,6 +47,44 @@ pub(crate) struct RawConfig {
     #[serde(default)]
     #[garde(skip)]
     pub(crate) log: RawLog,
+    #[serde(default)]
+    #[garde(skip)]
+    pub(crate) auth: RawAuth,
+}
+
+/// `[auth]`. Missing keys take Appendix A's defaults, §7.2's baseline.
+///
+/// Every key starts with `argon2_`, so the fields drop the prefix and serde
+/// names the key. Their ranges are checked in validation against
+/// `Argon2Params`' bounds, not by garde, whose report would name the field
+/// instead of the key (garde 0.23 parses `rename` but never applies it).
+#[derive(Debug, Deserialize)]
+#[serde(
+    default,
+    deny_unknown_fields,
+    expecting = "a table of authentication settings"
+)]
+pub(crate) struct RawAuth {
+    #[serde(rename = "argon2_memory_kib")]
+    pub(crate) memory_kib: u32,
+    #[serde(rename = "argon2_iterations")]
+    pub(crate) iterations: u32,
+    #[serde(rename = "argon2_parallelism")]
+    pub(crate) parallelism: u32,
+    #[serde(rename = "argon2_max_concurrent")]
+    pub(crate) max_concurrent: u32,
+}
+
+impl Default for RawAuth {
+    fn default() -> Self {
+        let baseline = Argon2Params::default();
+        Self {
+            memory_kib: baseline.memory_kib(),
+            iterations: baseline.iterations(),
+            parallelism: baseline.parallelism(),
+            max_concurrent: baseline.max_concurrent(),
+        }
+    }
 }
 
 /// `[http]`. Missing keys take Appendix A's defaults; a missing `bind` is
@@ -101,7 +141,7 @@ mod secret_names {
     use super::RawConfig;
 
     /// Keys that match fleet-core's `SECRET_WORDS` but hold no secret, by
-    /// their full path, each with the reason. Empty in Phase 6.
+    /// their full path, each with the reason.
     const NOT_SECRETS: &[(&str, &str)] = &[];
 
     /// Whether one of the name's `_`-separated parts is a secret word. The
@@ -341,7 +381,7 @@ mod secret_names {
     }
 
     #[test]
-    fn the_walk_finds_every_phase_6_key() {
+    fn the_walk_finds_every_key() {
         let keys = every_key();
 
         for key in [
@@ -355,6 +395,11 @@ mod secret_names {
             "log",
             "log.format",
             "log.filter",
+            "auth",
+            "auth.argon2_memory_kib",
+            "auth.argon2_iterations",
+            "auth.argon2_parallelism",
+            "auth.argon2_max_concurrent",
         ] {
             assert!(keys.iter().any(|found| found == key), "{key} in {keys:?}");
         }

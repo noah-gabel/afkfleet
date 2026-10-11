@@ -2397,7 +2397,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P7.1, from the group A review): **IDs aren't secrets.** v7 IDs reveal their creation time. Invite codes and session tokens come from `getrandom`, never from an ID, and access is decided by `authorize()`, not by how hard an ID is to guess.
 
   > Note (P7.1, from group D): **One Owner.** The `users` migration adds a partial unique index on `role` for `'owner'`. `authorize()` also refuses to act on any other user with the Owner role (ADR-0010).
-- [ ] **P7.2** 🔴 `PasswordService`:
+- [x] **P7.2** 🔴 `PasswordService`:
   - Argon2id with the configured parameters
   - runs in `spawn_blocking` behind a semaphore
   - dummy hash for unknown users
@@ -2425,6 +2425,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The hash format:** argon2id v19 with the configured m/t/p, a 16-byte salt from `SecureRandom` and a 32-byte output.
   >   - **What `verify` accepts:** argon2id v19 with in-range parameters.
   >   - **`VerifyError::Corrupt`** covers anything else: another algorithm or version, a string that doesn't parse, or m/t/p above the config's upper bounds.
+
+  > Note (P7.2, as built, group A) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **`[auth]`'s ranges are checked in validation, not by garde.** `RawAuth`'s fields drop the `argon2_` prefix (clippy's `struct_field_names`) and serde names the keys. garde would report the field's name instead of the key: 0.23 parses `rename` but never applies it. So validation checks each value against `Argon2Params`' bounds, reports every problem under its key in garde's words ("lower than …", "greater than …"), and then builds `Argon2Params::try_new`, the type's only checked constructor besides `Default`.
+  > - **Tests,** red against compiling stubs (a `NewPassword` that accepted anything, empty texts and `ALL` lists, a `try_new` without checks, config that ignored the keys, a service that hashed nothing, a queue that was always busy, mappings to one variant):
+  >   - fleet-core: 19 of 29 failed on assertions
+  >   - fleet-server: 68 of 77 failed on assertions
+  >
+  >   Then all passed. The queue's tests use a blocking stand-in and bound every wait at 10 s.
 - [ ] **P7.3** 🔴 `TokenService`:
   - tokens from `getrandom`, with prefixes
   - SHA-256 hashing and constant-time comparison (`subtle`)

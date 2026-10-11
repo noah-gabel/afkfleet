@@ -5,13 +5,14 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::raw::{RawConfig, RawLog};
+use super::raw::{RawAuth, RawConfig, RawLog};
 use super::{
-    ConfigError, DatabaseConfig, HttpConfig, KeyPath, LogConfig, LogFilter, LogFormat, ProblemKind,
-    Problems, ServerConfig,
+    Argon2Params, AuthConfig, ConfigError, DatabaseConfig, HttpConfig, KeyPath, LogConfig,
+    LogFilter, LogFormat, ProblemKind, Problems, ServerConfig,
 };
 
-/// Validates `raw`: garde's ranges first, then each text key.
+/// Validates `raw`: garde's ranges first, then each text key and `[auth]`'s
+/// ranges.
 ///
 /// # Errors
 /// [`ConfigError::Invalid`](fleet_startup::config::ConfigError::Invalid)
@@ -36,8 +37,11 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
     let bind = bind(raw.http.bind.as_deref(), &mut problems);
     let path = database_path(raw.database.path.as_deref(), &mut problems);
     let log = log_config(&raw.log, &mut problems);
+    let argon2 = argon2(&raw.auth, &mut problems);
 
-    let (true, Some(bind), Some(path), Some(log)) = (problems.is_empty(), bind, path, log) else {
+    let (true, Some(bind), Some(path), Some(log), Some(argon2)) =
+        (problems.is_empty(), bind, path, log, argon2)
+    else {
         return Err(ConfigError::Invalid(problems.sorted()));
     };
     Ok(ServerConfig {
@@ -51,7 +55,53 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         },
         database: DatabaseConfig { path },
         log,
+        auth: AuthConfig { argon2 },
     })
+}
+
+/// `[auth] argon2_*`: each value against its range in `Argon2Params`, with
+/// every problem reported under its key, in garde's words ("lower than",
+/// "greater than"), like the other numeric keys.
+fn argon2(raw: &RawAuth, problems: &mut Problems) -> Option<Argon2Params> {
+    let section = KeyPath::root().key("auth");
+    for (key, value, bounds) in [
+        (
+            "argon2_memory_kib",
+            raw.memory_kib,
+            Argon2Params::MEMORY_KIB,
+        ),
+        (
+            "argon2_iterations",
+            raw.iterations,
+            Argon2Params::ITERATIONS,
+        ),
+        (
+            "argon2_parallelism",
+            raw.parallelism,
+            Argon2Params::PARALLELISM,
+        ),
+        (
+            "argon2_max_concurrent",
+            raw.max_concurrent,
+            Argon2Params::MAX_CONCURRENT,
+        ),
+    ] {
+        let message = if value < bounds.min {
+            format!("lower than {}", bounds.min)
+        } else if value > bounds.max {
+            format!("greater than {}", bounds.max)
+        } else {
+            continue;
+        };
+        problems.push(section.key(key), ProblemKind::OutOfRange { message });
+    }
+    Argon2Params::try_new(
+        raw.memory_kib,
+        raw.iterations,
+        raw.parallelism,
+        raw.max_concurrent,
+    )
+    .ok()
 }
 
 /// `[http] bind`: an IP address and a port other than 0; missing means

@@ -39,6 +39,10 @@ azalea = { version = "=0.16.0", default-features = false }
 azalea-chat = "=0.16.0"
 azalea-language = "=0.16.0"
 
+# argon2: fleet-server's password service (Argon2id). Without default features, so its
+# `getrandom` is off and salts come from the SecureRandom port through
+# `hash_password_with_salt`; `zeroize` wipes its memory blocks (ADR-0016).
+argon2 = { version = "0.6.0", default-features = false }
 # async-trait: fleet-server's ports, which services hold as `Arc<dyn …>`; generics and
 # `impl Future` everywhere else (ADR-0015).
 async-trait = "0.1.92"
@@ -134,6 +138,9 @@ utoipa = { version = "6.0.0", default-features = false }
 utoipa-axum = "0.3.0"
 # uuid: never `v4`/`v7`/`rng`, which pull in getrandom; IDs are minted from caller data (ADR-0010).
 uuid = { version = "1.27.0", default-features = false }
+# zxcvbn: the strength check of new passwords. Without default features (that drops
+# `derive_builder`). It reads the wall clock itself for its "recent years" rule (ADR-0016).
+zxcvbn = { version = "3.1.1", default-features = false }
 
 # Tests
 insta = "1.49.0"
@@ -170,6 +177,18 @@ print_stderr = "deny"
 indexing_slicing = "deny"
 await_holding_lock = "deny"
 large_futures = "warn"
+
+# Every test hashes passwords at §7.2's real baseline (no cheaper parameters exist), so
+# argon2, its blake2 and zxcvbn are optimized in dev builds, which tests inherit: about
+# 10 ms per hash instead of 228 ms, measured (ADR-0016).
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
+
+[profile.dev.package.zxcvbn]
+opt-level = 3
 
 [profile.release]
 panic = "unwind"

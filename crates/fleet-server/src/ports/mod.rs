@@ -7,9 +7,11 @@
 //!   read handles and one write transaction at a time, [`store::WriteTx`],
 //!   whose commit always records an audit entry.
 //! - [`users`]: the users.
+//! - [`passwords`]: hashing and checking passwords (P7.2).
 //! - [`audit`]: the audit log. It's append-only: the only operations are
 //!   recording (inside a write transaction) and listing.
 
 pub mod audit;
+pub mod passwords;
 pub mod store;
 pub mod users;
