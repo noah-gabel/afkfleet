@@ -476,6 +476,7 @@ The user answered group C's questions on 2026-10-11, one at a time.
 
   Then all passed. The ones that passed against the stubs check allowances, refusals, `Debug` or labels that a do-nothing stub satisfies too. The router-level tests went red against stubs swapped back in after the checks existed, since they were written once the limiter was. Two new snapshots, the 429 response and the audit-action names with `security.lockout` added, were read before accepting. One existing test changed on purpose: the list of known config sections gained `rate_limits`.
 - **Tests that could block** bound their waits (this ADR's rule): the housekeeping's paused-time tests wait for its task at most 10 s of paused time. A first version without that bound hung against the stub and was stopped.
+- **Amended in group D (from the group C review): no /0 proxy.** `[http] trusted_proxies` accepted `0.0.0.0/0` and `::/0`, and trusting every address lets any client choose its own address through `X-Forwarded-For`: past every per-IP limit, login's included, and into the audit log's IPs. `IpNet` refuses a prefix length of 0 for both families (`IpNetError::Everything`, "a prefix length of 0 would trust every address; list only your proxies' own networks"). The unit tests that had used /0 as a valid network now use /1 networks, and the proptests draw lengths from 1.
 - **Open for later groups** *(the user's notes, recorded under their tasks)*:
   - P7.6, refresh checked on the read pool first
   - P7.7, 2FA codes and the lockout

@@ -16,8 +16,9 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 /// `[http] trusted_proxies` lists them.
 ///
 /// Parsing is strict, so a typo can't silently trust the wrong addresses:
-/// the prefix length is required, the address must be the network's first
-/// (no host bits set), and an IPv4 network must be written in IPv4 form.
+/// the prefix length is required and at least 1 (a /0 would trust every
+/// address), the address must be the network's first (no host bits set),
+/// and an IPv4 network must be written in IPv4 form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct IpNet {
     address: IpAddr,
@@ -43,6 +44,12 @@ pub enum IpNetError {
     /// canonical address would ever match.
     #[error("an IPv4 network must be written in IPv4 form, like 172.30.0.0/24")]
     MappedIpv4,
+    /// A prefix length of 0 (`0.0.0.0/0`, `::/0`): every address of its
+    /// family. Trusting every address would let any client choose its own
+    /// address through `X-Forwarded-For`, past every per-IP limit and into
+    /// the audit log.
+    #[error("a prefix length of 0 would trust every address; list only your proxies' own networks")]
+    Everything,
 }
 
 impl IpNet {
@@ -101,6 +108,9 @@ impl FromStr for IpNet {
             .ok()
             .filter(|length| *length <= max)
             .ok_or(IpNetError::PrefixLength { max })?;
+        if prefix_len == 0 {
+            return Err(IpNetError::Everything);
+        }
         let host_mask = match address {
             IpAddr::V4(_) => !mask::<32>(prefix_len) & mask::<32>(32),
             IpAddr::V6(_) => !mask::<128>(prefix_len),
@@ -191,10 +201,10 @@ mod tests {
     #[rstest]
     #[case::ipv4("192.0.2.0/24", "192.0.2.0", 24)]
     #[case::ipv4_host("198.51.100.7/32", "198.51.100.7", 32)]
-    #[case::ipv4_everything("0.0.0.0/0", "0.0.0.0", 0)]
+    #[case::ipv4_shortest("128.0.0.0/1", "128.0.0.0", 1)]
     #[case::ipv6("2001:db8::/32", "2001:db8::", 32)]
     #[case::ipv6_host("2001:db8::1/128", "2001:db8::1", 128)]
-    #[case::ipv6_everything("::/0", "::", 0)]
+    #[case::ipv6_shortest("8000::/1", "8000::", 1)]
     fn a_network_in_cidr_form_is_read(#[case] text: &str, #[case] address: &str, #[case] len: u8) {
         let parsed = net(text);
 
@@ -220,6 +230,8 @@ mod tests {
     #[case::ipv6_host_bits("2001:db8::1/64", IpNetError::HostBits)]
     #[case::mapped("::ffff:192.0.2.0/120", IpNetError::MappedIpv4)]
     #[case::mapped_host("::ffff:192.0.2.10/128", IpNetError::MappedIpv4)]
+    #[case::ipv4_everything("0.0.0.0/0", IpNetError::Everything)]
+    #[case::ipv6_everything("::/0", IpNetError::Everything)]
     fn a_network_that_isnt_strict_cidr_is_refused(#[case] text: &str, #[case] error: IpNetError) {
         assert_eq!(text.parse::<IpNet>(), Err(error), "{text}");
     }
@@ -231,6 +243,8 @@ mod tests {
             "192.0.2.0/33",
             "192.0.2.5/24",
             "::ffff:192.0.2.0/120",
+            "0.0.0.0/0",
+            "::/0",
         ] {
             let message = text.parse::<IpNet>().unwrap_err().to_string();
 
@@ -245,14 +259,15 @@ mod tests {
     #[case::before("192.0.2.0/24", "192.0.1.255", false)]
     #[case::host("198.51.100.7/32", "198.51.100.7", true)]
     #[case::host_neighbour("198.51.100.7/32", "198.51.100.8", false)]
-    #[case::everything_v4("0.0.0.0/0", "203.0.113.9", true)]
+    #[case::upper_half_v4("128.0.0.0/1", "203.0.113.9", true)]
+    #[case::lower_half_v4("0.0.0.0/1", "203.0.113.9", false)]
     #[case::v6_inside("2001:db8::/32", "2001:db8:ffff::1", true)]
     #[case::v6_outside("2001:db8::/32", "2001:db9::", false)]
-    #[case::other_family_v4_in_v6("::/0", "192.0.2.10", false)]
-    #[case::other_family_v6_in_v4("0.0.0.0/0", "2001:db8::1", false)]
+    #[case::other_family_v4_in_v6("::/1", "192.0.2.10", false)]
+    #[case::other_family_v6_in_v4("0.0.0.0/1", "2001:db8::1", false)]
     #[case::mapped_peer_in_v4("192.0.2.0/24", "::ffff:192.0.2.10", true)]
     #[case::mapped_peer_outside_v4("192.0.2.0/24", "::ffff:198.51.100.10", false)]
-    #[case::mapped_peer_isnt_v6("::/0", "::ffff:192.0.2.10", false)]
+    #[case::mapped_peer_isnt_v6("::/1", "::ffff:192.0.2.10", false)]
     fn a_network_contains_its_addresses_in_canonical_form(
         #[case] network: &str,
         #[case] address: &str,
@@ -316,7 +331,7 @@ mod tests {
             #[test]
             fn ipv4_networks_contain_what_ipnet_says(
                 network: u32,
-                prefix_len in 0_u8..=32,
+                prefix_len in 1_u8..=32,
                 address: u32,
             ) {
                 let theirs = Ipv4Net::new(Ipv4Addr::from(network), prefix_len).unwrap().trunc();
@@ -332,7 +347,7 @@ mod tests {
             #[test]
             fn ipv6_networks_contain_what_ipnet_says(
                 network: u128,
-                prefix_len in 0_u8..=128,
+                prefix_len in 1_u8..=128,
                 address: u128,
             ) {
                 let theirs = Ipv6Net::new(Ipv6Addr::from(network), prefix_len).unwrap().trunc();
@@ -360,6 +375,15 @@ mod tests {
 
                 prop_assert_eq!(limiter_key(address), address);
             }
+        }
+    }
+
+    #[test]
+    fn a_zero_prefix_says_it_would_trust_every_address() {
+        for text in ["0.0.0.0/0", "::/0"] {
+            let message = text.parse::<IpNet>().unwrap_err().to_string();
+
+            assert!(message.contains("would trust every address"), "{message}");
         }
     }
 

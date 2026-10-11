@@ -2642,7 +2642,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - **Keys:** rows keyed by HMAC-SHA256 of the normalized `Username` under a key derived from the vault's active key; unknown names take exactly the same path.
   >   - **`security.lockout`:** recorded in the failing attempt's transaction at each lock, with an `info` line.
   > - **The housekeeping** (`cli::housekeeping`), the server's first long-lived background task: every 60 s it runs `retain_recent()`, purges expired streaks in batches of 1000 (each committed with `UnauditedWrite::LoginAttemptsPurge`), and logs one `info` summary of the refusals since its last run. A refused request's own line is at `debug`. It belongs to `serve`'s `JoinSet` and stops at the first signal.
-  > - **Config:** `[http] trusted_proxies` (at most 32 strict CIDRs: host bits zero, no bare addresses, no duplicates, no IPv4-mapped networks) and every `[rate_limits]` key but chat's and `ws_connections_per_user`:
+  > - **Config:** `[http] trusted_proxies` (at most 32 strict CIDRs: host bits zero, no bare addresses, no duplicates, no IPv4-mapped networks, no /0 since group D) and every `[rate_limits]` key but chat's and `ws_connections_per_user`:
   >
   >   | Key | Default | Range |
   >   |---|---|---|
@@ -2664,6 +2664,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - the housekeeping's stop, with a token the shutdown never cancels: it hit its 30 s bound
   >
   >   Then all passed. The ones that passed against the stubs check allowances, refusals or `Debug` that a do-nothing stub satisfies too. A proptest cross-checks `IpNet` and the /64 key with `ipnet`. The 429 response and the audit-action names have snapshots, read before accepting.
+
+  > Note (P7.10, from the group C review, fixed in group D's first commit) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **no /0 proxy.** `[http] trusted_proxies` accepted `0.0.0.0/0` and `::/0`. Trusting every address lets any client choose its own address through `X-Forwarded-For`, which bypasses every per-IP limit (login's included) and forges the audit log's IPs. `IpNet` now refuses a prefix length of 0 for both families with `IpNetError::Everything` ("a prefix length of 0 would trust every address; list only your proxies' own networks"). The unit tests that had used /0 as a valid network moved to the refusal table or to /1 networks, and the proptests draw lengths from 1. Tests, red first: 6 failed (two parse cases, the message test, the no-echo test and one config case per family), then all passed.
 - [x] **P7.11** 🔴 **Route-coverage test.**
   - Routes are registered only through `public_route(…)` or `authed_route(…)` helpers, which also record them in a registry.
   - The test calls every authed route without credentials and expects `401`.
@@ -3247,7 +3249,7 @@ Secrets **never** go in these files. They're referenced through `*_file` paths (
 >   - **The environment:** a key file can be given as `AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=/path`.
 
 > Note (Appendix A, Phase 7, group C, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
-> - **`[http] trusted_proxies`** is empty by default and holds at most 32 CIDR networks, each its first address with a prefix length: a bare address, host bits, a duplicate or an IPv4-mapped IPv6 network is refused.
+> - **`[http] trusted_proxies`** is empty by default and holds at most 32 CIDR networks, each its first address with a prefix length: a bare address, host bits, a duplicate, an IPv4-mapped IPv6 network or a prefix length of 0 is refused.
 > - **`[auth] lockout_threshold`** takes 3–20.
 > - **`[rate_limits]`** arrives with every key below but the chat ones and `ws_connections_per_user` (P11). The ranges are in P7.10's note; each is at least 1.
 > - None of them needs a place on the secret-name test's allowlist.

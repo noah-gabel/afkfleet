@@ -988,6 +988,8 @@ fn an_empty_list_of_trusted_proxies_trusts_nobody() {
 #[case::host_bits("192.0.2.5/24", IpNetError::HostBits)]
 #[case::ipv6_host_bits("2001:db8::1/32", IpNetError::HostBits)]
 #[case::mapped("::ffff:192.0.2.0/120", IpNetError::MappedIpv4)]
+#[case::ipv4_everything("0.0.0.0/0", IpNetError::Everything)]
+#[case::ipv6_everything("::/0", IpNetError::Everything)]
 fn a_trusted_proxy_that_isnt_strict_cidr_is_refused_at_its_index(
     #[case] entry: &str,
     #[case] error: IpNetError,
