@@ -13,11 +13,14 @@
 //!   and a panic hook that logs through it.
 //! - [`signals`]: the signals that stop a binary (SIGTERM and SIGINT, or
 //!   Ctrl+C and Ctrl+Break), behind a trait tests can feed.
+//! - [`secret_file`]: reading a secret from a `*_file` key's file, owner-only,
+//!   capped, with errors that never show its content (ADR-0016).
 //!
 //! The filter always caps `azalea_auth` at `info` and always lets panic
 //! reports through. A binary can only add rules on top, through
 //! [`telemetry::FilterRules`]: the agent adds azalea's.
 
 pub mod config;
+pub mod secret_file;
 pub mod signals;
 pub mod telemetry;

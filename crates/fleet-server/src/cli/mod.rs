@@ -10,9 +10,9 @@
 //! - [`migrate`]: applies every pending migration and exits.
 //! - [`healthcheck`]: asks a running server's `GET /health/ready`, for
 //!   Docker's HEALTHCHECK.
+//! - [`user`]: `user create-owner`, the bootstrap of the Owner (P7.5).
 //!
-//! Later phases add `user create-owner` (P7.5), `pki` (P10), `vault
-//! rotate-key` (P9) and `backup` (P12).
+//! Later phases add `pki` (P10), `vault rotate-key` (P9) and `backup` (P12).
 
 use core::time::Duration;
 use std::ffi::OsString;
@@ -23,6 +23,7 @@ use clap::{Parser, Subcommand};
 pub mod healthcheck;
 pub mod migrate;
 pub mod serve;
+pub mod user;
 
 /// How long closing the database may take once nothing uses it any more,
 /// the pools' acquire timeout: `migrate` waits this long, and `serve` at
@@ -98,6 +99,36 @@ pub enum Command {
         /// for `serve`.
         #[arg(long, value_name = "PATH")]
         config: PathBuf,
+    },
+    /// Manages users from the command line.
+    User {
+        /// What to do.
+        #[command(subcommand)]
+        command: UserCommand,
+    },
+}
+
+/// `afkfleet-server user …`.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum UserCommand {
+    /// Creates the Owner, the one user with every right. It refuses when an
+    /// Owner exists. The password is typed twice at the terminal, or read
+    /// once from stdin with --password-stdin; there's no password flag.
+    #[command(after_help = user::CREATE_OWNER_EXIT_CODES)]
+    CreateOwner {
+        /// The config file (TOML): the command reads `[database] path`,
+        /// `[auth]` and `[log]`, never the vault's keys.
+        /// `AFKFLEET_SERVER__…` environment variables override its keys, as
+        /// for `serve`.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+        /// The Owner's username: 3 to 32 letters, digits, `_`, `.` and `-`.
+        #[arg(long, value_name = "NAME")]
+        username: String,
+        /// Reads the password from stdin (one line, at most 1 KiB) instead of
+        /// asking at the terminal, for scripts.
+        #[arg(long)]
+        password_stdin: bool,
     },
 }
 
@@ -186,6 +217,66 @@ mod tests {
         let error = Cli::try_parse_from(&args).unwrap_err();
 
         assert_eq!(exit_code(&error, args), code, "{error}");
+    }
+
+    #[rstest]
+    #[case::prompt(&[], false)]
+    #[case::stdin(&["--password-stdin"], true)]
+    fn create_owner_takes_the_config_the_username_and_where_the_password_comes_from(
+        #[case] extra: &[&str],
+        #[case] password_stdin: bool,
+    ) {
+        let args = [
+            "afkfleet-server",
+            "user",
+            "create-owner",
+            "--config",
+            "server.toml",
+            "--username",
+            "alice",
+        ];
+
+        let cli = Cli::try_parse_from(args.iter().chain(extra)).unwrap();
+
+        assert_eq!(
+            cli.command,
+            Command::User {
+                command: UserCommand::CreateOwner {
+                    config: PathBuf::from("server.toml"),
+                    username: "alice".to_owned(),
+                    password_stdin,
+                }
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::no_config(&["user", "create-owner", "--username", "alice"])]
+    #[case::no_username(&["user", "create-owner", "--config", "server.toml"])]
+    #[case::a_password_flag(&["user", "create-owner", "--config", "a.toml", "--username", "alice", "--password", "x"])]
+    #[case::no_user_command(&["user"])]
+    fn create_owner_usage_errors_exit_2(#[case] args: &[&str]) {
+        let args: Vec<OsString> = core::iter::once("afkfleet-server")
+            .chain(args.iter().copied())
+            .map(OsString::from)
+            .collect();
+        let error = Cli::try_parse_from(&args).unwrap_err();
+
+        assert_eq!(exit_code(&error, args), 2, "{error}");
+    }
+
+    #[test]
+    fn create_owner_s_help_lists_its_exit_codes() {
+        let mut command = Cli::command();
+        let create_owner = command
+            .find_subcommand_mut("user")
+            .unwrap()
+            .find_subcommand_mut("create-owner")
+            .unwrap();
+
+        let help = create_owner.render_help().to_string();
+
+        assert!(help.contains(user::CREATE_OWNER_EXIT_CODES), "{help}");
     }
 
     #[test]

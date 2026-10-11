@@ -5,9 +5,10 @@
 //! logged yet: they go to stderr as plain text, and the process exits with
 //! 1. Then, by command:
 //!
-//! - `serve` starts logging, warns once if dev mode is on, builds a
-//!   multi-threaded runtime, installs the stop signals, binds `[http] bind`
-//!   and runs [`serve::run`] until a signal stops it. Every startup error
+//! - `serve` starts logging, warns once if dev mode is on, loads the vault's
+//!   keys (ADR-0016), builds a multi-threaded runtime, installs the stop
+//!   signals, binds `[http] bind` and runs [`serve::run`] until a signal
+//!   stops it. Every startup error
 //!   from here on is one `error` event, "the server can't start", and the
 //!   last line, "the server stopped", carries the exit code.
 //! - `migrate` starts logging and runs [`migrate::run`] on a current-thread
@@ -15,18 +16,23 @@
 //! - `healthcheck` runs [`healthcheck::check`] on a current-thread runtime
 //!   without logging, prints one line on stdout and exits only 0 or 1, since
 //!   Docker reserves 2 for healthchecks.
+//! - `user create-owner` starts logging and runs [`user::create_owner`] on a
+//!   current-thread runtime, with the terminal or stdin as the password's
+//!   source.
 //!
 //! The library holds the logic; this file only wires it together.
 
 use core::fmt::Display;
-use std::io::{self, Write as _};
+use std::io::{self, IsTerminal as _, Write as _};
 use std::path::Path;
 use std::process::ExitCode;
 
 use clap::Parser as _;
 use fleet_server::cli::serve::StartError;
-use fleet_server::cli::{self, Cli, Command, healthcheck, migrate, serve};
+use fleet_server::cli::user::{self, PasswordInput, TerminalPrompt};
+use fleet_server::cli::{self, Cli, Command, UserCommand, healthcheck, migrate, serve};
 use fleet_server::config::{self, ServerConfig};
+use fleet_server::infra::crypto::vault::VaultKeys;
 use fleet_startup::signals::OsSignals;
 use fleet_startup::telemetry::{NoRules, init_with};
 use tokio::net::TcpListener;
@@ -45,6 +51,14 @@ fn main() -> ExitCode {
         Command::Serve { config } => run_server(&config),
         Command::Migrate { config } => migrate_database(&config),
         Command::Healthcheck { config } => check_health(&config),
+        Command::User {
+            command:
+                UserCommand::CreateOwner {
+                    config,
+                    username,
+                    password_stdin,
+                },
+        } => create_owner(&config, &username, password_stdin),
     }
 }
 
@@ -58,14 +72,18 @@ fn run_server(path: &Path) -> ExitCode {
         return fail_early(&error);
     }
     config.warn_if_dev_mode();
-    let exit = start(&config);
+    // Plain file reads, before any runtime exists: a bad key stops startup.
+    let exit = match VaultKeys::load(&config.vault) {
+        Ok(keys) => start(&config, keys),
+        Err(error) => serve::cant_start(&StartError::VaultKeys(error)),
+    };
     exit.log();
     ExitCode::from(exit.code())
 }
 
 /// Builds the runtime, installs the stop signals, binds the address and
-/// runs the server.
-fn start(config: &ServerConfig) -> serve::Exit {
+/// runs the server with the vault's `keys`.
+fn start(config: &ServerConfig, keys: VaultKeys) -> serve::Exit {
     let runtime = match Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => return serve::cant_start(&StartError::Runtime(error)),
@@ -87,7 +105,7 @@ fn start(config: &ServerConfig) -> serve::Exit {
                 });
             }
         };
-        serve::run(config, listener, signals).await
+        serve::run(config, listener, signals, keys).await
     });
     runtime.shutdown_timeout(serve::RUNTIME_SHUTDOWN);
     exit
@@ -123,6 +141,41 @@ fn check_health(path: &Path) -> ExitCode {
     // A failed write leaves the exit code to tell the result.
     let _ = writeln!(io::stdout().lock(), "{health}");
     ExitCode::from(health.exit_code())
+}
+
+/// `afkfleet-server user create-owner`: the password from the terminal, or
+/// from stdin with `--password-stdin`.
+fn create_owner(path: &Path, username: &str, password_stdin: bool) -> ExitCode {
+    let config = match config::load(path) {
+        Ok(config) => config,
+        Err(error) => return fail_early(&error),
+    };
+    if let Err(error) = init_with(&config.log, &NoRules) {
+        return fail_early(&error);
+    }
+    let runtime = match current_thread() {
+        Ok(runtime) => runtime,
+        Err(error) => return fail_early(&StartError::Runtime(error)),
+    };
+    let mut stdin = io::stdin();
+    let is_terminal = stdin.is_terminal();
+    let mut prompt = TerminalPrompt;
+    let input = if password_stdin {
+        PasswordInput::Stdin {
+            reader: &mut stdin,
+            is_terminal,
+        }
+    } else {
+        PasswordInput::Prompt(&mut prompt)
+    };
+    let exit = runtime.block_on(user::create_owner(
+        &config,
+        username,
+        input,
+        &mut io::stdout(),
+        &mut io::stderr(),
+    ));
+    ExitCode::from(exit.code())
 }
 
 /// A runtime for one task: `migrate` and `healthcheck` do one thing.

@@ -88,7 +88,12 @@ There's no support, and I don't take feature requests. Security reports are welc
 
   [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md) records Phase 6's decisions.
 
-**Next:** Phase 7, authentication and authorization: invite-only login with 2FA, rotating tokens, central authorization and layered rate limits.
+**In progress:** Phase 7, authentication and authorization (invite-only login with 2FA, rotating tokens, central authorization and layered rate limits), built in five groups ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)). Group A adds:
+- the password service: Argon2id at OWASP's baseline or above, with a zxcvbn strength check (score ≥ 3, the username and the app's words count against a password), behind a bounded queue
+- the vault's cipher (XChaCha20-Poly1305, bound to its record and purpose), with the keys read at startup from owner-only files
+- `afkfleet-server user create-owner`, which creates the one Owner
+
+Sessions, login, 2FA and the rate limits follow in groups B–E.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 
@@ -175,8 +180,15 @@ just mc-down    # stop both and delete the server's world
 afkfleet-server serve --config server.toml
 afkfleet-server migrate --config server.toml       # migrate and exit; serve migrates at startup too
 afkfleet-server healthcheck --config server.toml   # ask a running server whether it's ready
+afkfleet-server user create-owner --config server.toml --username alice   # create the Owner
 ```
-- **The config** is a TOML file ([`deploy/dev/server.toml`](deploy/dev/server.toml) is the development one; Plan.md's P6.2 note lists Phase 6's keys). `AFKFLEET_SERVER__…` environment variables override any key, e.g. `AFKFLEET_SERVER__LOG__FILTER=debug`. `[database] path` is required and must be absolute; `[http] bind` defaults to `127.0.0.1:8080` and can't use port 0. Unknown keys are errors, and every problem is listed at once.
+- **The config** is a TOML file ([`deploy/dev/server.toml`](deploy/dev/server.toml) is the development one; Plan.md's P6.2 note and Appendix A list the keys). `AFKFLEET_SERVER__…` environment variables override any key, e.g. `AFKFLEET_SERVER__LOG__FILTER=debug`. Unknown keys are errors, and every problem is listed at once.
+  - `[database] path` is required and must be absolute.
+  - `[http] bind` defaults to `127.0.0.1:8080` and can't use port 0.
+  - `[auth]`'s `argon2_memory_kib`, `argon2_iterations`, `argon2_parallelism` and `argon2_max_concurrent` default to 19456, 2, 1 and 4, and can't go below that baseline.
+  - `[vault]` is required: `master_key_files = { 1 = "/run/secrets/vault_key_1" }` (1 to 16 key IDs, absolute paths) and `active_key_id = 1`. A key file can also come from the environment, as `AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=/path`.
+- **The vault's keys** are read by `serve` at startup, before anything else: each file holds 32 random bytes as standard base64 with padding (`openssl rand -base64 32`). On Unix it must be readable only by the server's user (`chmod 600`). A bad key file, two IDs with the same key or an active key without a file stops the server with exit 1, naming the file but never its content. `migrate`, `healthcheck` and `user create-owner` never read the keys. Back them up separately: the database holds only ciphertext.
+- **The Owner** is created once, from the command line: `user create-owner` refuses at once when an Owner exists. Otherwise it asks for the password twice at the terminal (hidden; at most three tries), or reads it once from stdin with `--password-stdin`, for scripts (`afkfleet-server user create-owner … --password-stdin < owner-password.txt`). A password has 12 to 128 characters and must pass the strength check; a weak one is refused with hints. There's no password flag or variable. Exit codes, also listed by `afkfleet-server user create-owner --help`: 0 created, 1 refused or failed, 2 usage error.
 - **Dev mode** (`dev_mode = true`) serves the OpenAPI document at `GET /api/openapi.json` and logs a warning at startup. Never run a production server in dev mode. Outside it, that path answers 404 like any unknown route.
 - **The database** opens at startup: its folder must exist, a missing file is created (readable only by the server's user on Unix), and every pending migration runs. `migrate` does just that and exits 0, or 1 with the reason in the log, so you can migrate before starting a new version. On Unix, the server refuses a database, `-wal` or `-shm` file other users can read.
 - **Logs** go to stdout, as JSON lines by default or as one readable line per event with `[log] format = "pretty"`. A config error is printed to stderr before logging starts.
@@ -195,7 +207,7 @@ afkfleet-server healthcheck --config server.toml   # ask a running server whethe
   |---|---|
   | 0 | Healthy: `/health/ready` answered 200 with an empty body |
   | 1 | Unhealthy: another answer, no answer within 3 s, or none at all. Also a usage or config error, which goes to stderr. Docker reserves 2, so it's never used |
-- **In development,** `just dev-server` runs it with `deploy/dev/server.toml` (dev mode, pretty logs, `127.0.0.1:8080`) and its database at `target/dev-server/afkfleet.db`; `just dev-server C:\path\to\afkfleet\other.db` uses another absolute path. To run the healthcheck against it, set `AFKFLEET_SERVER__DATABASE__PATH` to the same path.
+- **In development,** `just dev-server` runs it with `deploy/dev/server.toml` (dev mode, pretty logs, `127.0.0.1:8080`), its database at `target/dev-server/afkfleet.db` and its vault key at `target/dev-server/vault-key-1`, which it creates on the first run and never overwrites. `just dev-server C:\path\to\afkfleet\other.db C:\path\to\afkfleet\other-key` uses other absolute paths. `just dev-owner alice` creates the dev database's Owner. To run the healthcheck against it, set `AFKFLEET_SERVER__DATABASE__PATH` and `AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1` to the same paths.
 
 The server has no TLS of its own: Caddy fronts it (Phase 12).
 
@@ -207,7 +219,8 @@ just ci        # everything CI runs
 just mc-up     # local offline-mode Minecraft 26.1 test server on 127.0.0.1:25565 (needs Docker)
 just mc-down   # stop it (and the Docker agent) and delete its world
 just dev-agent # run the agent with deploy/dev/agent.toml against that server
-just dev-server # run the server with deploy/dev/server.toml (dev mode), its database in target/dev-server/
+just dev-server # run the server with deploy/dev/server.toml (dev mode), its database and vault key in target/dev-server/
+just dev-owner alice # create the dev database's Owner, the password typed at the terminal
 just stack-up  # build the agent's image and run the server and the agent in Docker
 just test-slow # pull the server image, build the agent's image, then the slow tests one at a time (needs Docker)
 just demo-agent # the Phase 5 demo: the Docker agent's five bots for an hour with one server restart

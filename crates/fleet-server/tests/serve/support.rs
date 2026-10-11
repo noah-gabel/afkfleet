@@ -3,15 +3,19 @@
 //! feeds, and the server's log layer writing into a buffer.
 
 use core::time::Duration;
+use std::collections::BTreeMap;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write as _};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
 use std::thread;
 
-use fleet_server::config::{DatabaseConfig, HttpConfig, LogConfig, LogFormat, ServerConfig};
+use fleet_server::config::{
+    AuthConfig, DatabaseConfig, HttpConfig, LogConfig, LogFormat, ServerConfig, VaultConfig,
+};
+use fleet_server::infra::crypto::vault::VaultKeys;
 use fleet_startup::signals::{ShutdownSignals, Signal};
 use fleet_startup::telemetry::{NoRules, layer_with};
 use fleet_testkit::log_buffer::LogBuffer;
@@ -47,13 +51,44 @@ pub(crate) fn write_config(dir: &Path, body: &str) -> PathBuf {
     path
 }
 
-/// A config for a server bound to `bind` with its database in `dir`, JSON
-/// logs at `info`.
+/// The tests' vault key: 32 bytes of 0x5A as standard base64 with padding
+/// (`Buffer.alloc(32, 0x5a).toString("base64")` in Node).
+pub(crate) const TEST_VAULT_KEY: &str = "WlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlpaWlo=";
+
+/// Writes the vault key `vault-key-1` into `dir` (32 bytes of 0x5A as
+/// standard base64, owner-only on Unix) and returns its path.
+pub(crate) fn vault_key(dir: &Path) -> PathBuf {
+    let path = dir.join("vault-key-1");
+    fs::write(&path, format!("{TEST_VAULT_KEY}\n")).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    path
+}
+
+/// The `[vault]` section naming `dir`'s vault key, which it writes.
+pub(crate) fn vault_section(dir: &Path) -> String {
+    format!(
+        "[vault]\nmaster_key_files = {{ 1 = {} }}\nactive_key_id = 1\n",
+        toml_path(&vault_key(dir))
+    )
+}
+
+/// A config for a server bound to `bind` with its database and vault key in
+/// `dir`, JSON logs at `info`.
 pub(crate) fn config_body(dir: &Path, bind: SocketAddr) -> String {
     format!(
-        "[http]\nbind = \"{bind}\"\n[database]\npath = {}\n[log]\nformat = \"json\"\n",
-        toml_path(&dir.join("afkfleet.db"))
+        "[http]\nbind = \"{bind}\"\n[database]\npath = {}\n[log]\nformat = \"json\"\n{}",
+        toml_path(&dir.join("afkfleet.db")),
+        vault_section(dir)
     )
+}
+
+/// The keys of the vault [`server_config`] names, loaded as main.rs does.
+pub(crate) fn vault_keys(config: &ServerConfig) -> VaultKeys {
+    VaultKeys::load(&config.vault).unwrap()
 }
 
 /// The in-process equivalent of [`config_body`]: `bind` is only what the
@@ -72,6 +107,11 @@ pub(crate) fn server_config(dir: &Path, bind: SocketAddr, dev_mode: bool) -> Ser
         log: LogConfig {
             format: LogFormat::Json,
             filter: "info".parse().unwrap(),
+        },
+        auth: AuthConfig::default(),
+        vault: VaultConfig {
+            key_files: BTreeMap::from([(1, vault_key(dir))]),
+            active_key_id: 1,
         },
     }
 }
@@ -167,6 +207,32 @@ pub(crate) fn finish(args: &[&str]) -> Finished {
         .expect("the binary should exit before the deadline");
     let stderr = stderr.recv_timeout(DEADLINE).unwrap();
     let status = running.0.take().unwrap().wait().unwrap();
+    Finished {
+        status,
+        stdout,
+        stderr,
+    }
+}
+
+/// Runs the binary with `args` until it exits, within the deadline, with
+/// `stdin` piped in and closed, or, with `None`, a stdin that stays open and
+/// unwritten until the binary has exited: a binary that read it would hang
+/// until the deadline and fail the test.
+pub(crate) fn finish_with_stdin(args: &[&str], stdin: Option<&[u8]>) -> Finished {
+    let mut child = server(args).stdin(Stdio::piped()).spawn().unwrap();
+    let mut pipe = child.stdin.take();
+    if let Some(bytes) = stdin {
+        pipe.take().unwrap().write_all(bytes).unwrap();
+    }
+    let stdout = drain(child.stdout.take().unwrap());
+    let stderr = drain(child.stderr.take().unwrap());
+    let mut running = Running(Some(child));
+    let stdout = stdout
+        .recv_timeout(DEADLINE)
+        .expect("the binary should exit before the deadline");
+    let stderr = stderr.recv_timeout(DEADLINE).unwrap();
+    let status = running.0.take().unwrap().wait().unwrap();
+    drop(pipe);
     Finished {
         status,
         stdout,

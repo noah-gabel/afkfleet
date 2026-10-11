@@ -6,14 +6,16 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use figment::Jail;
 use fleet_server::config::{
-    ConfigError, DatabaseConfig, HttpConfig, LogConfig, LogFilterError, LogFormat, ParseError,
-    ParseProblem, ParseSource, ProblemKind, Problems, ServerConfig, UnknownLogFormatError, load,
+    Argon2Params, AuthConfig, ConfigError, DatabaseConfig, HttpConfig, LogConfig, LogFilterError,
+    LogFormat, ParseError, ParseProblem, ParseSource, ProblemKind, Problems, ServerConfig,
+    UnknownLogFormatError, VaultConfig, load,
 };
 use fleet_startup::telemetry::{NoRules, layer_with};
 use fleet_testkit::jail::in_jail;
@@ -36,7 +38,33 @@ fn toml_path(path: &Path) -> String {
 
 /// The smallest valid config: only the database path.
 fn minimal(jail: &Jail) -> String {
-    format!("[database]\npath = {}\n", toml_path(&db_path(jail)))
+    format!(
+        "[database]\npath = {}\n{}",
+        toml_path(&db_path(jail)),
+        vault(jail)
+    )
+}
+
+/// An absolute path for vault key `id`, inside the jail. Loading the config
+/// never reads it, so the file doesn't exist.
+fn key_path(jail: &Jail, id: u32) -> PathBuf {
+    jail.directory().join(format!("vault-key-{id}"))
+}
+
+/// The smallest valid `[vault]`: key 1, active.
+fn vault(jail: &Jail) -> String {
+    format!(
+        "[vault]\nmaster_key_files = {{ 1 = {} }}\nactive_key_id = 1\n",
+        toml_path(&key_path(jail, 1))
+    )
+}
+
+/// The config of [`vault`].
+fn vault_config(jail: &Jail) -> VaultConfig {
+    VaultConfig {
+        key_files: BTreeMap::from([(1, key_path(jail, 1))]),
+        active_key_id: 1,
+    }
 }
 
 fn load_toml(jail: &mut Jail, toml: &str) -> Result<ServerConfig, ConfigError> {
@@ -96,7 +124,7 @@ fn dev_mode_lines(config: &ServerConfig) -> LogBuffer {
 // --- Valid configs ---------------------------------------------------------
 
 #[test]
-fn only_the_database_path_is_required() {
+fn only_the_database_path_and_the_vault_are_required() {
     in_jail(|jail| {
         let toml = minimal(jail);
 
@@ -115,6 +143,10 @@ fn only_the_database_path_is_required() {
                     path: db_path(jail),
                 },
                 log: LogConfig::default(),
+                auth: AuthConfig {
+                    argon2: Argon2Params::default(),
+                },
+                vault: vault_config(jail),
             }
         );
     });
@@ -138,8 +170,19 @@ path = {}
 [log]
 format = "pretty"
 filter = "debug,sqlx=warn"
+
+[auth]
+argon2_memory_kib = 65536
+argon2_iterations = 3
+argon2_parallelism = 4
+argon2_max_concurrent = 8
+
+[vault]
+master_key_files = {{ 3 = {} }}
+active_key_id = 3
 "#,
-            toml_path(&db_path(jail))
+            toml_path(&db_path(jail)),
+            toml_path(&key_path(jail, 3))
         );
 
         let config = load_toml(jail, &toml).unwrap();
@@ -151,6 +194,17 @@ filter = "debug,sqlx=warn"
         assert_eq!(config.database.path, db_path(jail));
         assert_eq!(config.log.format, LogFormat::Pretty);
         assert_eq!(config.log.filter.as_str(), "debug,sqlx=warn");
+        assert_eq!(
+            config.auth.argon2,
+            Argon2Params::try_new(65_536, 3, 4, 8).unwrap()
+        );
+        assert_eq!(
+            config.vault,
+            VaultConfig {
+                key_files: BTreeMap::from([(3, key_path(jail, 3))]),
+                active_key_id: 3,
+            }
+        );
     });
 }
 
@@ -163,6 +217,7 @@ fn environment_variables_override_the_file() {
         jail.set_env("AFKFLEET_SERVER__HTTP__MAX_BODY_BYTES", 2048);
         jail.set_env("AFKFLEET_SERVER__DATABASE__PATH", other.display());
         jail.set_env("AFKFLEET_SERVER__LOG__FORMAT", "pretty");
+        jail.set_env("AFKFLEET_SERVER__AUTH__ARGON2_ITERATIONS", 5);
         let toml = minimal(jail);
 
         let config = load_toml(jail, &toml).unwrap();
@@ -172,6 +227,7 @@ fn environment_variables_override_the_file() {
         assert_eq!(config.http.max_body_bytes, 2048);
         assert_eq!(config.database.path, other);
         assert_eq!(config.log.format, LogFormat::Pretty);
+        assert_eq!(config.auth.argon2.iterations(), 5);
     });
 }
 
@@ -270,7 +326,7 @@ fn a_section_of_a_later_phase_is_unknown_until_that_phase() {
         assert_eq!(
             error.problem(),
             &ParseProblem::UnknownKey {
-                expected: &["dev_mode", "http", "database", "log"]
+                expected: &["dev_mode", "http", "database", "log", "auth", "vault"]
             }
         );
     });
@@ -295,7 +351,8 @@ fn a_value_of_the_wrong_type_names_the_key_and_the_file() {
 #[case::no_key("[database]\n")]
 fn the_database_path_is_required(#[case] toml: &str) {
     in_jail(|jail| {
-        let problems = invalid(load_toml(jail, toml));
+        let toml = format!("{toml}{}", vault(jail));
+        let problems = invalid(load_toml(jail, &toml));
 
         assert_eq!(keys(&problems), ["database.path"]);
         assert_eq!(kinds(&problems), [ProblemKind::Missing]);
@@ -309,7 +366,8 @@ fn the_database_path_is_required(#[case] toml: &str) {
 #[case::parent_relative("../afkfleet.db", ProblemKind::NotAbsolute)]
 fn the_database_path_must_be_absolute(#[case] path: &str, #[case] kind: ProblemKind) {
     in_jail(|jail| {
-        let problems = invalid(load_toml(jail, &format!("[database]\npath = '{path}'\n")));
+        let toml = format!("[database]\npath = '{path}'\n{}", vault(jail));
+        let problems = invalid(load_toml(jail, &toml));
 
         assert_eq!(keys(&problems), ["database.path"]);
         assert_eq!(kinds(&problems), [kind]);
@@ -360,6 +418,61 @@ fn numbers_are_checked_against_their_range(#[case] key: &str, #[case] min: u64, 
     });
 }
 
+/// An `[auth]` key, and its lowest and highest valid values: nothing below
+/// §7.2's baseline (ADR-0016).
+#[rstest]
+#[case::memory("argon2_memory_kib", 19_456, 1_048_576)]
+#[case::iterations("argon2_iterations", 2, 10)]
+#[case::parallelism("argon2_parallelism", 1, 16)]
+#[case::max_concurrent("argon2_max_concurrent", 1, 64)]
+fn argon2_keys_are_checked_against_their_range(
+    #[case] key: &str,
+    #[case] min: u64,
+    #[case] max: u64,
+) {
+    in_jail(|jail| {
+        let base = minimal(jail);
+        let with = |value: u64| format!("{base}\n[auth]\n{key} = {value}\n");
+
+        for value in [min, max] {
+            assert!(load_toml(jail, &with(value)).is_ok(), "{key} = {value}");
+        }
+        for value in [min - 1, max + 1] {
+            let problems = invalid(load_toml(jail, &with(value)));
+            assert_eq!(keys(&problems), [format!("auth.{key}")], "{key} = {value}");
+            assert!(
+                matches!(
+                    problems.iter().next().unwrap().kind(),
+                    ProblemKind::OutOfRange { .. }
+                ),
+                "{key} = {value}"
+            );
+        }
+    });
+}
+
+#[test]
+fn every_argon2_key_out_of_range_is_reported_at_once() {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}\n[auth]\nargon2_memory_kib = 1024\nargon2_iterations = 1\nargon2_parallelism = 0\nargon2_max_concurrent = 0\n",
+            minimal(jail)
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(
+            keys(&problems),
+            [
+                "auth.argon2_iterations",
+                "auth.argon2_max_concurrent",
+                "auth.argon2_memory_kib",
+                "auth.argon2_parallelism",
+            ]
+        );
+    });
+}
+
 #[test]
 fn bad_log_settings_are_refused() {
     in_jail(|jail| {
@@ -398,6 +511,10 @@ path = "marker2.db"
 [log]
 format = "marker3"
 filter = "marker4=loud"
+
+[vault]
+master_key_files = { 1 = "marker5" }
+active_key_id = 7
 "#,
         ));
 
@@ -410,10 +527,176 @@ filter = "marker4=loud"
                 "http.request_timeout_secs",
                 "log.filter",
                 "log.format",
+                "vault.master_key_files.1",
             ]
         );
         let shown = ConfigError::Invalid(problems).to_string();
         assert!(!shown.contains("marker"), "{shown}");
+    });
+}
+
+// --- [vault] -------------------------------------------------------------------------
+
+#[test]
+fn the_vault_s_key_files_map_their_ids_to_absolute_paths() {
+    in_jail(|jail| {
+        let toml = format!(
+            "[database]\npath = {}\n[vault]\nmaster_key_files = {{ 1 = {}, 4294967295 = {} }}\nactive_key_id = 4294967295\n",
+            toml_path(&db_path(jail)),
+            toml_path(&key_path(jail, 1)),
+            toml_path(&key_path(jail, 2)),
+        );
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(
+            config.vault,
+            VaultConfig {
+                key_files: BTreeMap::from([
+                    (1, key_path(jail, 1)),
+                    (4_294_967_295, key_path(jail, 2)),
+                ]),
+                active_key_id: 4_294_967_295,
+            }
+        );
+    });
+}
+
+#[test]
+fn a_key_file_can_come_from_the_environment() {
+    in_jail(|jail| {
+        jail.set_env(
+            "AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__2",
+            key_path(jail, 2).display(),
+        );
+        let toml = format!(
+            "[database]\npath = {}\n[vault]\nactive_key_id = 2\n",
+            toml_path(&db_path(jail))
+        );
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(
+            config.vault.key_files,
+            BTreeMap::from([(2, key_path(jail, 2))])
+        );
+        assert_eq!(config.vault.active_key_id, 2);
+    });
+}
+
+#[test]
+fn the_vault_section_is_required() {
+    in_jail(|jail| {
+        let toml = format!("[database]\npath = {}\n", toml_path(&db_path(jail)));
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(
+            keys(&problems),
+            ["vault.active_key_id", "vault.master_key_files"]
+        );
+        assert_eq!(
+            kinds(&problems),
+            [ProblemKind::Missing, ProblemKind::Missing]
+        );
+    });
+}
+
+#[rstest]
+#[case::zero("0")]
+#[case::too_large("4294967296")]
+#[case::leading_zero("01")]
+#[case::plus_sign("+1")]
+#[case::negative("-1")]
+#[case::not_a_number("one")]
+fn a_key_file_s_id_must_be_a_canonical_u32_from_1(#[case] id: &str) {
+    in_jail(|jail| {
+        let toml = format!(
+            "[database]\npath = {}\n[vault]\nmaster_key_files = {{ \"{id}\" = {} }}\nactive_key_id = 1\n",
+            toml_path(&db_path(jail)),
+            toml_path(&key_path(jail, 1)),
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), [format!("vault.master_key_files.{id}")]);
+        assert_eq!(kinds(&problems), [ProblemKind::KeyId]);
+    });
+}
+
+#[rstest]
+#[case::none(0)]
+#[case::seventeen(17)]
+fn the_vault_lists_1_to_16_key_files(#[case] count: u32) {
+    in_jail(|jail| {
+        let entries: Vec<String> = (1..=count)
+            .map(|id| format!("{id} = {}", toml_path(&key_path(jail, id))))
+            .collect();
+        let toml = format!(
+            "[database]\npath = {}\n[vault]\nmaster_key_files = {{ {} }}\nactive_key_id = 1\n",
+            toml_path(&db_path(jail)),
+            entries.join(", ")
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["vault.master_key_files"]);
+        assert_eq!(kinds(&problems), [ProblemKind::KeyCount { max: 16 }]);
+    });
+}
+
+#[test]
+fn sixteen_key_files_are_allowed() {
+    in_jail(|jail| {
+        let entries: Vec<String> = (1..=16)
+            .map(|id| format!("{id} = {}", toml_path(&key_path(jail, id))))
+            .collect();
+        let toml = format!(
+            "[database]\npath = {}\n[vault]\nmaster_key_files = {{ {} }}\nactive_key_id = 16\n",
+            toml_path(&db_path(jail)),
+            entries.join(", ")
+        );
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(config.vault.key_files.len(), 16);
+    });
+}
+
+#[rstest]
+#[case::empty("", ProblemKind::Empty)]
+#[case::file_name("vault-key-1", ProblemKind::NotAbsolute)]
+#[case::relative("./secrets/vault-key-1", ProblemKind::NotAbsolute)]
+fn a_key_file_s_path_must_be_absolute(#[case] path: &str, #[case] kind: ProblemKind) {
+    in_jail(|jail| {
+        let toml = format!(
+            "[database]\npath = {}\n[vault]\nmaster_key_files = {{ 1 = '{path}' }}\nactive_key_id = 1\n",
+            toml_path(&db_path(jail)),
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["vault.master_key_files.1"]);
+        assert_eq!(kinds(&problems), [kind]);
+    });
+}
+
+#[rstest]
+#[case::zero(0, ProblemKind::KeyId)]
+#[case::too_large(4_294_967_296, ProblemKind::KeyId)]
+#[case::not_listed(2, ProblemKind::UnknownKeyId)]
+fn the_active_key_must_be_one_of_the_key_files(#[case] active: u64, #[case] kind: ProblemKind) {
+    in_jail(|jail| {
+        let toml = format!(
+            "[database]\npath = {}\n[vault]\nmaster_key_files = {{ 1 = {} }}\nactive_key_id = {active}\n",
+            toml_path(&db_path(jail)),
+            toml_path(&key_path(jail, 1)),
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["vault.active_key_id"]);
+        assert_eq!(kinds(&problems), [kind]);
     });
 }
 
@@ -423,10 +706,14 @@ fn dev_config() -> PathBuf {
 }
 
 #[test]
-fn the_dev_config_runs_in_dev_mode_with_the_database_path_from_the_environment() {
+fn the_dev_config_runs_in_dev_mode_with_the_database_and_vault_key_from_the_environment() {
     in_jail(|jail| {
         let path = db_path(jail);
         jail.set_env("AFKFLEET_SERVER__DATABASE__PATH", path.display());
+        jail.set_env(
+            "AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1",
+            key_path(jail, 1).display(),
+        );
 
         let config = load(&dev_config()).unwrap();
 
@@ -434,15 +721,19 @@ fn the_dev_config_runs_in_dev_mode_with_the_database_path_from_the_environment()
         assert_eq!(config.http.bind, HttpConfig::DEFAULT_BIND);
         assert_eq!(config.database.path, path);
         assert_eq!(config.log.format, LogFormat::Pretty);
+        assert_eq!(config.vault, vault_config(jail));
     });
 }
 
 #[test]
-fn the_dev_config_holds_no_database_path() {
+fn the_dev_config_holds_neither_the_database_path_nor_the_vault_key_file() {
     in_jail(|_jail| {
         let problems = invalid(load(&dev_config()));
 
-        assert_eq!(keys(&problems), ["database.path"]);
-        assert_eq!(kinds(&problems), [ProblemKind::Missing]);
+        assert_eq!(keys(&problems), ["database.path", "vault.master_key_files"]);
+        assert_eq!(
+            kinds(&problems),
+            [ProblemKind::Missing, ProblemKind::Missing]
+        );
     });
 }

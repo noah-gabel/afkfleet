@@ -4,12 +4,14 @@
 # OpenAPI document at /api/openapi.json, and the server warns about it at
 # startup. Never run a production server with this file.
 #
-# The database path must be absolute, and a committed file can't hold one
-# that works on every machine, so it isn't set here: `just dev-server` passes
-# AFKFLEET_SERVER__DATABASE__PATH, by default target/dev-server/afkfleet.db in
-# the repository. Keys left out take Plan.md P6.2's defaults;
-# AFKFLEET_SERVER__… environment variables override any key, e.g.
-# AFKFLEET_SERVER__LOG__FILTER=debug.
+# The database path and the vault key file's path must be absolute, and a
+# committed file can't hold ones that work on every machine, so they aren't set
+# here: `just dev-server` passes AFKFLEET_SERVER__DATABASE__PATH, by default
+# target/dev-server/afkfleet.db in the repository, and
+# AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1, target/dev-server/vault-key-1,
+# which it creates when it's missing (ADR-0016). Keys left out take their
+# defaults (Plan.md P6.2, Appendix A); AFKFLEET_SERVER__… environment variables
+# override any key, e.g. AFKFLEET_SERVER__LOG__FILTER=debug.
 
 dev_mode = true
 
@@ -21,3 +23,6 @@ dev_mode = true
 [log]
 format = "pretty"
 filter = "info"                          # EnvFilter syntax; azalea_auth stays at info
+
+[vault]
+active_key_id = 1                        # the key in master_key_files.1, from just dev-server

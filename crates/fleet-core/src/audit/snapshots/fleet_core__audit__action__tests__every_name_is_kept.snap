@@ -1,0 +1,7 @@
+---
+source: crates/fleet-core/src/audit/action.rs
+expression: names
+---
+[
+  "user.create"
+]

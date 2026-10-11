@@ -17,6 +17,8 @@
 //! - [`mc`]: the Minecraft ports the runtime drives a session through.
 //! - [`authz`]: who may do what, decided by [`authz::authorize`].
 //! - [`audit`]: the vocabulary of the server's audit log.
+//! - [`auth`]: the rules of authentication, such as what a new password
+//!   must be.
 //! - [`time`]: saturating arithmetic on points in time and durations.
 //! - [`system`]: the clock and secure-randomness ports the server reads time
 //!   and random bytes through, and minting IDs from them.
@@ -61,6 +63,7 @@
 //! - **Secrets** are `SecretString`s, whose `Debug` output is redacted.
 
 pub mod audit;
+pub mod auth;
 pub mod authz;
 pub mod bot;
 pub mod chat;

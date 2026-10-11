@@ -15,8 +15,14 @@ name = "afkfleet-server"
 path = "src/main.rs"
 
 [dependencies]
+# The password service: Argon2id with salts from the SecureRandom port (ADR-0016).
+argon2 = { workspace = true, features = ["alloc", "password-hash", "zeroize"] }
 # The ports, which services hold as `Arc<dyn …>` (ADR-0015).
 async-trait.workspace = true
+# The vault's key files: standard base64, decoded into a fixed buffer (ADR-0016).
+base64.workspace = true
+# The vault's XChaCha20-Poly1305, with nonces from the SecureRandom port (ADR-0016).
+chacha20poly1305 = { workspace = true, features = ["alloc", "zeroize"] }
 # The HTTP layer: `matched-path`, so the trace layer logs the route's template, never
 # the path a client sent; `tokio` and `http1` for `axum::serve` (Caddy speaks HTTP/1.1 to
 # it). The error body is written with serde_json (ADR-0015).
@@ -37,17 +43,21 @@ getrandom.workspace = true
 # Only `log::LevelFilter`, for sqlx's statement-logging levels; clippy.toml bans its
 # logging macros (ADR-0015).
 log.workspace = true
+# `user create-owner`'s hidden password prompt (ADR-0016).
+rpassword.workspace = true
 # PasswordHash holds the hash as a SecretString: redacted Debug, zeroized (ADR-0015).
 secrecy.workspace = true
 serde = { workspace = true, features = ["derive"] }
 # Reading the audit log's metadata JSON back (ADR-0015).
 serde_json.workspace = true
+# Constant-time comparison of secrets, first the vault's duplicate-key check (ADR-0016).
+subtle.workspace = true
 sqlx = { workspace = true, features = ["runtime-tokio", "sqlite-bundled", "macros", "migrate", "uuid"] }
 thiserror.workspace = true
 # Creating the database file and checking its permissions without blocking, the trace
 # layer's latency from tokio's clock, the binary's runtimes, the listener and the
-# healthcheck's TCP probe (ADR-0015).
-tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "time"] }
+# healthcheck's TCP probe (ADR-0015), and the password service's semaphores (ADR-0016).
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 # `ServiceBuilder`, which lists the middleware stack outermost first (ADR-0015).
 tower.workspace = true
 # `CancellationToken`, which asks axum's server to shut down gracefully (ADR-0015).
@@ -62,6 +72,10 @@ utoipa = { workspace = true, features = ["macros"] }
 utoipa-axum.workspace = true
 # IDs are bound and read as `uuid::fmt::Hyphenated` text (ADR-0015).
 uuid.workspace = true
+# `Zeroizing` buffers for passwords read from stdin, and wiping a typed one (ADR-0016).
+zeroize.workspace = true
+# The strength check of new passwords, run with the hashing (ADR-0016).
+zxcvbn.workspace = true
 
 [dev-dependencies]
 # `figment::Jail`, the type `in_jail` hands each config test (ADR-0015).

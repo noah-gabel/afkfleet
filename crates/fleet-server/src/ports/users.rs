@@ -127,6 +127,13 @@ pub trait UserReads: Send + Sync + fmt::Debug {
     /// # Errors
     /// [`StoreError`].
     async fn find_by_username(&self, username: &Username) -> Result<Option<User>, StoreError>;
+
+    /// Whether there's an Owner. `user create-owner` asks before any
+    /// password is typed; the unique index still decides at insert.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn owner_exists(&self) -> Result<bool, StoreError>;
 }
 
 /// Writing users, inside a [`super::store::WriteTx`].

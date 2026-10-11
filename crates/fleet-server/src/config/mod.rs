@@ -12,22 +12,26 @@
 //!   key): nothing can be checked after them.
 //! - **Validation reports every problem at once,** each with its key path
 //!   (`http.bind`), and never echoes a value.
-//! - **Only Phase 6's keys exist.** Each later phase adds its own, so a key
-//!   of a later phase is still an unknown key (Appendix A).
+//! - **Each phase adds its own keys,** so a key of a later phase is still an
+//!   unknown key (Appendix A). Phase 7 adds `[auth]` and `[vault]` (ADR-0016).
 //! - **Secrets never go in this file.** A key for a secret names the file
 //!   that holds it and ends in `_file` or `_files`; a test checks every
-//!   key's name (security rule 4). P7.4 builds the loader for those files.
+//!   key's name (security rule 4). fleet-startup's `secret_file` reads those
+//!   files, and only `serve` reads them (ADR-0016).
 
+mod auth;
 mod error;
 mod raw;
 mod validate;
 
+use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use raw::RawConfig;
 
+pub use auth::{Argon2Params, Argon2ParamsError, AuthConfig, Bounds};
 pub use error::{ConfigError, Problem, ProblemKind, Problems};
 pub use fleet_startup::config::{
     KeyPath, KeySegment, LogConfig, LogFilter, LogFilterError, LogFormat, ParseError, ParseProblem,
@@ -49,6 +53,10 @@ pub struct ServerConfig {
     pub http: HttpConfig,
     /// Where the server keeps its data (`[database]`).
     pub database: DatabaseConfig,
+    /// How the server authenticates users (`[auth]`).
+    pub auth: AuthConfig,
+    /// The vault's keys (`[vault]`).
+    pub vault: VaultConfig,
     /// How the server logs (`[log]`).
     pub log: LogConfig,
 }
@@ -72,6 +80,23 @@ impl HttpConfig {
     /// this machine. A container sets `0.0.0.0:8080` itself.
     pub const DEFAULT_BIND: SocketAddr =
         SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 8080));
+}
+
+/// `[vault]`: the files holding the vault's keys (ADR-0016). Required; only
+/// `serve` reads the files.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VaultConfig {
+    /// `master_key_files`: each key ID (1 to 4294967295) and the absolute path
+    /// of the file holding its key; 1 to [`VaultConfig::MAX_KEY_FILES`] of them.
+    pub key_files: BTreeMap<u32, PathBuf>,
+    /// `active_key_id`: the key new secrets are sealed with, one of
+    /// `key_files`.
+    pub active_key_id: u32,
+}
+
+impl VaultConfig {
+    /// The most key files `master_key_files` may list.
+    pub const MAX_KEY_FILES: usize = 16;
 }
 
 /// `[database]`.

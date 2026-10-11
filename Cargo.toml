@@ -39,6 +39,10 @@ azalea = { version = "=0.16.0", default-features = false }
 azalea-chat = "=0.16.0"
 azalea-language = "=0.16.0"
 
+# argon2: fleet-server's password service (Argon2id). Without default features, so its
+# `getrandom` is off and salts come from the SecureRandom port through
+# `hash_password_with_salt`; `zeroize` wipes its memory blocks (ADR-0016).
+argon2 = { version = "0.6.0", default-features = false }
 # async-trait: fleet-server's ports, which services hold as `Arc<dyn …>`; generics and
 # `impl Future` everywhere else (ADR-0015).
 async-trait = "0.1.92"
@@ -46,6 +50,10 @@ async-trait = "0.1.92"
 # what it uses. Group C uses none: `IntoResponse` and `middleware::from_fn` need no
 # feature, and the error body is written with serde_json (ADR-0015).
 axum = { version = "0.8.9", default-features = false }
+# base64: the vault's key files (standard alphabet, padded), decoded with `decode_slice`
+# into a fixed buffer. Without default features: `simd-unsafe`, its only unsafe code, stays
+# off, so the crate is `forbid(unsafe_code)` (ADR-0016).
+base64 = { version = "0.23.1", default-features = false }
 # backon: without default features only fastrand is left; the defaults pull in tokio.
 backon = { version = "1.6.0", default-features = false }
 # chrono: no `clock`/`now`, because fleet-core takes time as a parameter (ADR-0010).
@@ -53,6 +61,9 @@ backon = { version = "1.6.0", default-features = false }
 # read at startup, the server for its SystemClock. `clock` would add local time zones,
 # which nothing uses (ADR-0014, ADR-0015).
 chrono = { version = "0.4.45", default-features = false }
+# chacha20poly1305: the vault's XChaCha20-Poly1305. Without default features, so its
+# `getrandom` is off and nonces come from the SecureRandom port (ADR-0016).
+chacha20poly1305 = { version = "0.11.0", default-features = false }
 # clap: the agent's command line; the member enables `derive` (ADR-0014).
 clap = "4.6.7"
 # figment: the binaries' configs, TOML plus prefixed env variables. No default features
@@ -86,6 +97,8 @@ metrics = "0.24.6"
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 # rand: no `sys_rng`/`thread_rng`; fleet-core takes an RNG as a parameter (ADR-0010).
 rand = { version = "0.10.3", default-features = false }
+# rpassword: `user create-owner`'s hidden password prompt at the terminal (ADR-0016).
+rpassword = "7.5.4"
 # reqwest: TLS is fixed here, `rustls` (aws-lc-rs + platform verifier), never native-tls.
 # fleet-mc enables nothing else: it only names `reqwest::Proxy` in azalea's `AccountTrait`,
 # and azalea-auth already builds reqwest with `rustls` (ADR-0011).
@@ -97,6 +110,9 @@ rustls = "0.23.45"
 # pulls in zeroize (alloc).
 secrecy = "0.10.3"
 serde = "1.0.229"
+# subtle: constant-time comparison of secrets, first the vault's duplicate-key check
+# (ADR-0016).
+subtle = "2.6.1"
 thiserror = "2.0.21"
 # sqlx: SQLite through the bundled library only (`sqlite-bundled`, not `sqlite`, which
 # adds extension loading, deserialize and unlock-notify), with `runtime-tokio`, `macros`
@@ -134,6 +150,12 @@ utoipa = { version = "6.0.0", default-features = false }
 utoipa-axum = "0.3.0"
 # uuid: never `v4`/`v7`/`rng`, which pull in getrandom; IDs are minted from caller data (ADR-0010).
 uuid = { version = "1.27.0", default-features = false }
+# zeroize: `Zeroizing` buffers for secret files and passwords read from stdin; secrecy
+# already depends on it (ADR-0016).
+zeroize = "1.9.0"
+# zxcvbn: the strength check of new passwords. Without default features (that drops
+# `derive_builder`). It reads the wall clock itself for its "recent years" rule (ADR-0016).
+zxcvbn = { version = "3.1.1", default-features = false }
 
 # Tests
 insta = "1.49.0"
@@ -170,6 +192,18 @@ print_stderr = "deny"
 indexing_slicing = "deny"
 await_holding_lock = "deny"
 large_futures = "warn"
+
+# Every test hashes passwords at §7.2's real baseline (no cheaper parameters exist), so
+# argon2, its blake2 and zxcvbn are optimized in dev builds, which tests inherit: about
+# 10 ms per hash instead of 228 ms, measured (ADR-0016).
+[profile.dev.package.argon2]
+opt-level = 3
+
+[profile.dev.package.blake2]
+opt-level = 3
+
+[profile.dev.package.zxcvbn]
+opt-level = 3
 
 [profile.release]
 panic = "unwind"
