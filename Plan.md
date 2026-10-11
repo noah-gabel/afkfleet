@@ -2604,7 +2604,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P7.10, from Phase 6, group E) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): the dev-only `GET /api/openapi.json` needs a rate-limit class too, like every route. The limiter needs the client's address: `serve` passes the router to `axum::serve` directly, so this task switches to `into_make_service_with_connect_info` there.
 
   > Note (P7.10, from the Phase 7 plan, the user's decision; open for group C) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): the one real-socket test sends a request over a real connection to a route with the per-IP limit, and fails if the peer address doesn't reach the limiter. `oneshot` sets `ConnectInfo` itself, so it can't catch a missing `into_make_service_with_connect_info`.
-- [ ] **P7.11** 🔴 **Route-coverage test.**
+- [x] **P7.11** 🔴 **Route-coverage test.**
   - Routes are registered only through `public_route(…)` or `authed_route(…)` helpers, which also record them in a registry.
   - The test calls every authed route without credentials and expects `401`.
   - It also checks that the public list is exactly the expected allowlist.
@@ -2614,6 +2614,17 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P7.11, from Phase 6, group E) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): routes are registered through utoipa-axum's `OpenApiRouter` (`routes!` with `#[utoipa::path]`), so `public_route` and `authed_route` wrap it and every route keeps its `OpenAPI` entry. `GET /api/openapi.json` exists only in dev mode: it's public, and the allowlist test checks both modes.
 
   > Note (P7.11, from the Phase 7 plan, the user's decision; open for group C) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): the route-coverage test must not pass while the authed list is empty. One way: a test-only authed route proves the 401 check, and D's and E's routes join the test automatically.
+
+  > Note (P7.11, as built, group C) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **`http::routes`:** `Routes` wraps utoipa-axum's `OpenApiRouter`. Its only ways in are `public_route(class, routes!(…))` and `authed_route(class, routes!(…))`, each taking the route's `RateClass` (`Standard`, `Login`, `Refresh`, `Register`) and recording every method and path as a `RouteEntry { method, path, access, class }`.
+  > - **The router:** `http::router::api_routes` registers the production routes (health live and ready, public, `Standard`), and `Routes::finish` adds the dev-only `GET /api/openapi.json` (public, `Standard`, recorded, not in the document) and the middleware stack. `router()` is `api_routes(Routes::new()).finish(…)`.
+  > - **`tests/routes.rs`:**
+  >   - The public routes are exactly the allowlist outside dev mode and in it.
+  >   - A test-only authed route whose handler takes `AuthUser` keeps the authed list from being empty, and every authed route answers 401 with `WWW-Authenticate: Bearer` without credentials.
+  >   - An authed route whose handler forgets `AuthUser` is caught.
+  >   - The registry equals the document's operations.
+  > - **Tests,** red against a registry that recorded nothing: 8 of 9 failed, then all passed.
+  > - **For D and E:** a handler takes `AuthUser` before any body extractor, or its request without credentials isn't a 401 and the route-coverage test fails.
 - [ ] **P7.12** 🔴 Security tests:
   - **User enumeration:** an unknown user and a wrong password give the same status and body.
   - **Lockout.**

@@ -441,6 +441,10 @@ The user answered group C's questions on 2026-10-11, one at a time.
   - **The repository:** `find` on the read pool and in the transaction, `upsert`, `delete`, and `purge_stale(failed_by, now, limit)`, which chooses its rows through a `rowid IN (SELECT … LIMIT ?)` subquery, since the bundled SQLite has no `DELETE … LIMIT`.
   - **`AttemptKey`** has `ct_eq` and no `PartialEq`, and its `Debug` shows no byte, like `TokenHash`.
   - **Tests,** red against compiling stubs (a repository that stored and found nothing, a key that compared and read back nothing): 14 of 18 failed, the migrations' snapshot among them. The four that passed check the redacted `Debug`, that nothing is found (twice), and the table's CHECKs, which the real migration already enforces. Then all passed. The snapshot gained line 4, read before accepting.
+- **P7.11, the registry** (`http::routes`):
+  - **Recording:** `Routes::register` reads each route's methods and paths from the `OpenAPI` path items its `routes!` call carries: GET, PUT, POST, DELETE, OPTIONS, HEAD, PATCH and TRACE. utoipa 6's `query` and additional operations aren't methods axum routes; one would differ from the document, which the registry's test compares.
+  - **`Debug`:** `Routes` shows its entries only, since utoipa-axum's router has none.
+  - **Tests,** red against a registry that recorded nothing: 8 of 9 failed (only the path-parameter helper passed), then all passed. The existing health and `OpenAPI` tests stayed green through the new builder, the document's snapshot unchanged.
 
 ## Consequences
 - **Easier:**
