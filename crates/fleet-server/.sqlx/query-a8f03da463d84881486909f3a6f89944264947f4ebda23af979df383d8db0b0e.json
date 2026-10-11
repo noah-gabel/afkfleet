@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rowid AS \"rowid!: i64\", failures AS \"failures!: i64\",\n                  last_failure_at AS \"last_failure_at!\", locked_until AS \"locked_until?\"\n           FROM login_attempts WHERE username_key = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "login_attempts",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "failures!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "login_attempts",
+            "name": "failures"
+          }
+        }
+      },
+      {
+        "name": "last_failure_at!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "login_attempts",
+            "name": "last_failure_at"
+          }
+        }
+      },
+      {
+        "name": "locked_until?",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "login_attempts",
+            "name": "locked_until"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "a8f03da463d84881486909f3a6f89944264947f4ebda23af979df383d8db0b0e"
+}

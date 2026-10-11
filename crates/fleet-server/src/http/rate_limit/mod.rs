@@ -1,0 +1,609 @@
+//! Rate limits (Plan.md P7.10, §7.4, ADR-0016): §7.4's request limits, each
+//! a keyed governor limiter on an injected clock.
+//!
+//! - **Every request spends its client's per-IP limit**, in the
+//!   middleware stack, before the timeout, the body or the router, so a 404
+//!   scan and the health checks count too. The layer resolves the client's
+//!   address once ([`client_ip`]) and puts it into the request as
+//!   [`ClientIp`].
+//! - **A route spends its class's limit** ([`RateClass`]): the login routes
+//!   share one per-IP bucket, refresh and register have their own, and
+//!   `Standard` spends nothing more. It's a route layer, so a
+//!   404 or 405 spends no class token.
+//! - **Every authed request spends its user's limit,** in `AuthUser`, right
+//!   after authentication ([`RateLimits::check_user`]).
+//! - **Keys:** an IPv4 client by its address, an IPv6 client by its /64
+//!   ([`limiter_key`]); a user by their ID.
+//! - **A refusal** is `ApiError::RateLimited` with governor's wait, which
+//!   the error model sends as `Retry-After` in whole seconds, rounded up.
+//!   The trace layer logs a refused request's line at `debug`, and each
+//!   limit counts its refusals ([`RateLimits::take_refusals`]) for the
+//!   server's periodic summary, so a flood doesn't flood the log.
+//! - **The clock** is the server's `Clock` port ([`LimiterClock`]): in
+//!   production a monotonic one, so a step of the wall clock can't refuse
+//!   every client, and in tests the `ManualClock` everything else uses.
+//! - **Memory:** a limiter keeps one entry per key it has seen;
+//!   [`RateLimits::retain_recent`], run periodically by the server, drops
+//!   every entry whose bucket has been full again for one interval.
+
+mod client_ip;
+mod net;
+
+use core::fmt;
+use core::num::NonZeroU32;
+use core::sync::atomic::{AtomicU64, Ordering};
+use core::time::Duration;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
+
+use axum::extract::{ConnectInfo, FromRequestParts as _, Request, State};
+use axum::middleware::Next;
+use axum::response::{IntoResponse as _, Response};
+use chrono::{DateTime, Utc};
+use fleet_core::id::UserId;
+use fleet_core::system::Clock;
+use fleet_core::time::elapsed;
+use governor::middleware::NoOpMiddleware;
+use governor::nanos::Nanos;
+use governor::state::keyed::HashMapStateStore;
+use governor::{Quota, RateLimiter};
+
+pub use client_ip::{ClientIp, MissingClientIp, MissingPeerAddress, X_FORWARDED_FOR, client_ip};
+pub use net::{IpNet, IpNetError, TrustedProxies, limiter_key};
+
+use super::error::ApiError;
+use super::routes::RateClass;
+use crate::config::{Rate, RateLimitConfig};
+
+/// governor's clock over the server's [`Clock`] port: the time since its
+/// first reading. A reading before that (a clock that went back) counts as
+/// that first reading, so it never panics; production passes a monotonic
+/// clock, which never goes back.
+#[derive(Clone)]
+pub struct LimiterClock {
+    clock: Arc<dyn Clock>,
+    start: DateTime<Utc>,
+}
+
+impl LimiterClock {
+    /// A clock that reads `clock`, starting now.
+    #[must_use]
+    pub fn new(clock: Arc<dyn Clock>) -> Self {
+        let start = clock.now();
+        Self { clock, start }
+    }
+}
+
+impl fmt::Debug for LimiterClock {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("LimiterClock")
+            .field("start", &self.start)
+            .finish_non_exhaustive()
+    }
+}
+
+impl governor::clock::Clock for LimiterClock {
+    type Instant = Nanos;
+
+    fn now(&self) -> Nanos {
+        Nanos::from(elapsed(self.start, self.clock.now()))
+    }
+}
+
+/// A keyed limiter on the [`LimiterClock`].
+type Limiter<K> = RateLimiter<K, HashMapStateStore<K>, LimiterClock, NoOpMiddleware<Nanos>>;
+
+/// A refused request: when its client may try again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Refused {
+    /// The limiter's wait until one more request is allowed.
+    pub retry_after: Duration,
+}
+
+/// `rate_limited`, with the wait as `Retry-After`.
+impl From<Refused> for ApiError {
+    fn from(refused: Refused) -> Self {
+        Self::RateLimited {
+            retry_after: refused.retry_after,
+        }
+    }
+}
+
+/// How many requests each limit refused since the last
+/// [`RateLimits::take_refusals`].
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct Refusals {
+    /// The global per-IP limit.
+    pub per_ip: u64,
+    /// The login routes' shared per-IP limit.
+    pub login: u64,
+    /// The refresh route's per-IP limit.
+    pub refresh: u64,
+    /// The register route's per-IP limit.
+    pub register: u64,
+    /// The per-user limit of authed requests.
+    pub per_user: u64,
+}
+
+impl Refusals {
+    /// Whether no limit refused anything.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.per_ip == 0
+            && self.login == 0
+            && self.refresh == 0
+            && self.register == 0
+            && self.per_user == 0
+    }
+}
+
+/// The refusal counters, one per limit.
+#[derive(Debug, Default)]
+struct Counters {
+    per_ip: AtomicU64,
+    login: AtomicU64,
+    refresh: AtomicU64,
+    register: AtomicU64,
+    per_user: AtomicU64,
+}
+
+/// Every limiter, built from `[rate_limits]`.
+struct Limiters {
+    clock: LimiterClock,
+    per_ip: Limiter<IpAddr>,
+    login: Limiter<IpAddr>,
+    refresh: Limiter<IpAddr>,
+    register: Limiter<IpAddr>,
+    per_user: Limiter<UserId>,
+    refused: Counters,
+}
+
+/// §7.4's request limits; clones share them. See the [module docs](self).
+#[derive(Clone)]
+pub struct RateLimits(Arc<Limiters>);
+
+impl fmt::Debug for RateLimits {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RateLimits")
+            .field("clock", &self.0.clock)
+            .field("tracked", &self.tracked())
+            .finish_non_exhaustive()
+    }
+}
+
+/// The limiter for `rate`. A zero interval can't come from the config's
+/// ranges; it would allow everything at once instead of panicking.
+fn limiter<K: core::hash::Hash + Eq + Clone>(rate: Rate, clock: &LimiterClock) -> Limiter<K> {
+    let quota = Quota::with_period(rate.interval())
+        .unwrap_or_else(|| Quota::per_second(NonZeroU32::MAX))
+        .allow_burst(rate.burst());
+    RateLimiter::hashmap_with_clock(quota, clock.clone())
+}
+
+impl RateLimits {
+    /// The limits of `config`, on `clock`.
+    #[must_use]
+    pub fn new(config: &RateLimitConfig, clock: Arc<dyn Clock>) -> Self {
+        let clock = LimiterClock::new(clock);
+        Self(Arc::new(Limiters {
+            per_ip: limiter(config.per_ip, &clock),
+            login: limiter(config.login, &clock),
+            refresh: limiter(config.refresh, &clock),
+            register: limiter(config.register, &clock),
+            per_user: limiter(config.per_user, &clock),
+            refused: Counters::default(),
+            clock,
+        }))
+    }
+
+    /// Spends one of `ip`'s global per-IP requests.
+    ///
+    /// # Errors
+    /// [`Refused`] when its bucket is empty.
+    pub fn check_ip(&self, ip: IpAddr) -> Result<(), Refused> {
+        let limits = &self.0;
+        spend(
+            &limits.per_ip,
+            &limits.clock,
+            &limiter_key(ip),
+            &limits.refused.per_ip,
+        )
+    }
+
+    /// Spends one of `ip`'s requests of `class`; `Standard` spends nothing.
+    ///
+    /// # Errors
+    /// [`Refused`] when its bucket is empty.
+    pub fn check_class(&self, class: RateClass, ip: IpAddr) -> Result<(), Refused> {
+        let limits = &self.0;
+        let (limiter, refused) = match class {
+            RateClass::Standard => return Ok(()),
+            RateClass::Login => (&limits.login, &limits.refused.login),
+            RateClass::Refresh => (&limits.refresh, &limits.refused.refresh),
+            RateClass::Register => (&limits.register, &limits.refused.register),
+        };
+        spend(limiter, &limits.clock, &limiter_key(ip), refused)
+    }
+
+    /// Spends one of `user`'s authed requests.
+    ///
+    /// # Errors
+    /// [`Refused`] when their bucket is empty.
+    pub fn check_user(&self, user: UserId) -> Result<(), Refused> {
+        let limits = &self.0;
+        spend(
+            &limits.per_user,
+            &limits.clock,
+            &user,
+            &limits.refused.per_user,
+        )
+    }
+
+    /// Drops every key whose bucket has been full again for one interval:
+    /// governor keeps one entry per key it has seen until then.
+    pub fn retain_recent(&self) {
+        let limits = &self.0;
+        limits.per_ip.retain_recent();
+        limits.login.retain_recent();
+        limits.refresh.retain_recent();
+        limits.register.retain_recent();
+        limits.per_user.retain_recent();
+    }
+
+    /// How many keys the limiters hold.
+    #[must_use]
+    pub fn tracked(&self) -> usize {
+        let limits = &self.0;
+        limits.per_ip.len()
+            + limits.login.len()
+            + limits.refresh.len()
+            + limits.register.len()
+            + limits.per_user.len()
+    }
+
+    /// The refusals since the last call, and starts counting again.
+    #[must_use]
+    pub fn take_refusals(&self) -> Refusals {
+        let refused = &self.0.refused;
+        let take = |counter: &AtomicU64| counter.swap(0, Ordering::Relaxed);
+        Refusals {
+            per_ip: take(&refused.per_ip),
+            login: take(&refused.login),
+            refresh: take(&refused.refresh),
+            register: take(&refused.register),
+            per_user: take(&refused.per_user),
+        }
+    }
+}
+
+/// What the stack's per-IP layer needs: the trusted proxies and the limits.
+#[derive(Debug, Clone)]
+pub(crate) struct PerIpLayer {
+    proxies: Arc<TrustedProxies>,
+    limits: RateLimits,
+}
+
+impl PerIpLayer {
+    /// The layer's state over `proxies` and `limits`.
+    pub(crate) fn new(proxies: &TrustedProxies, limits: RateLimits) -> Self {
+        Self {
+            proxies: Arc::new(proxies.clone()),
+            limits,
+        }
+    }
+}
+
+/// The stack's per-IP layer: resolves the client's address, puts it into
+/// the request as [`ClientIp`] and spends one of its per-IP requests. The
+/// peer comes from axum's `ConnectInfo` extractor (which a test's
+/// `MockConnectInfo` feeds too); a request without it is a wiring bug: an
+/// internal error.
+pub(crate) async fn per_ip(
+    State(layer): State<PerIpLayer>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let (mut parts, body) = request.into_parts();
+    let Ok(ConnectInfo(peer)) =
+        ConnectInfo::<SocketAddr>::from_request_parts(&mut parts, &()).await
+    else {
+        return ApiError::internal(MissingPeerAddress).into_response();
+    };
+    let client = client_ip(peer.ip(), &parts.headers, &layer.proxies);
+    parts.extensions.insert(ClientIp(client));
+    let request = Request::from_parts(parts, body);
+    if let Err(refused) = layer.limits.check_ip(client) {
+        return ApiError::from(refused).into_response();
+    }
+    next.run(request).await
+}
+
+/// What a route's class layer needs.
+#[derive(Debug, Clone)]
+pub(crate) struct ClassLayer {
+    class: RateClass,
+    limits: RateLimits,
+}
+
+impl ClassLayer {
+    /// The layer's state for `class` over `limits`.
+    pub(crate) const fn new(class: RateClass, limits: RateLimits) -> Self {
+        Self { class, limits }
+    }
+}
+
+/// A route's class layer: spends one of the client's requests of the
+/// route's class. The client's address comes from the stack's per-IP
+/// layer; without it, the route was served outside the stack, a wiring bug.
+pub(crate) async fn per_class(
+    State(layer): State<ClassLayer>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let Some(ClientIp(client)) = request.extensions().get::<ClientIp>().copied() else {
+        return ApiError::internal(MissingClientIp).into_response();
+    };
+    if let Err(refused) = layer.limits.check_class(layer.class, client) {
+        return ApiError::from(refused).into_response();
+    }
+    next.run(request).await
+}
+
+/// Takes one key's request from `limiter`, counting a refusal in `refused`.
+fn spend<K: core::hash::Hash + Eq + Clone>(
+    limiter: &Limiter<K>,
+    clock: &LimiterClock,
+    key: &K,
+    refused: &AtomicU64,
+) -> Result<(), Refused> {
+    use governor::clock::Clock as _;
+
+    limiter.check_key(key).map_err(|not_until| {
+        refused.fetch_add(1, Ordering::Relaxed);
+        Refused {
+            retry_after: not_until.wait_time_from(clock.now()),
+        }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone as _;
+    use fleet_testkit::system::ManualClock;
+    use governor::clock::Clock as _;
+
+    use super::*;
+
+    fn start() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2027, 1, 15, 8, 0, 0).unwrap()
+    }
+
+    fn nonzero(n: u32) -> NonZeroU32 {
+        NonZeroU32::new(n).unwrap()
+    }
+
+    /// Two requests a second with a burst of 2 for every limit.
+    fn tight() -> RateLimitConfig {
+        let rate = Rate::per_second(nonzero(2), nonzero(2));
+        RateLimitConfig {
+            per_ip: rate,
+            login: rate,
+            refresh: rate,
+            register: rate,
+            per_user: rate,
+        }
+    }
+
+    fn ip(text: &str) -> IpAddr {
+        text.parse().unwrap()
+    }
+
+    fn user(n: u8) -> UserId {
+        UserId::new_v7(start(), [n; 10]).unwrap()
+    }
+
+    #[test]
+    fn the_limiter_clock_measures_from_its_first_reading() {
+        let clock = ManualClock::new(start());
+        let limiter = LimiterClock::new(Arc::new(clock.clone()));
+
+        clock.advance(Duration::from_millis(1500));
+
+        assert_eq!(Duration::from(limiter.now()), Duration::from_millis(1500));
+    }
+
+    #[test]
+    fn a_clock_that_went_back_reads_as_the_first_reading() {
+        let clock = ManualClock::new(start());
+        let limiter = LimiterClock::new(Arc::new(clock.clone()));
+
+        clock.set(start() - chrono::TimeDelta::seconds(30));
+
+        assert_eq!(Duration::from(limiter.now()), Duration::ZERO);
+    }
+
+    #[test]
+    fn a_refusal_is_rate_limited_with_its_wait() {
+        let error = ApiError::from(Refused {
+            retry_after: Duration::from_millis(1200),
+        });
+
+        assert!(matches!(
+            error,
+            ApiError::RateLimited { retry_after } if retry_after == Duration::from_millis(1200)
+        ));
+    }
+
+    #[test]
+    fn a_burst_is_allowed_then_refused_with_the_wait_until_the_next_request() {
+        let clock = ManualClock::new(start());
+        let limits = RateLimits::new(&tight(), Arc::new(clock.clone()));
+
+        assert_eq!(limits.check_ip(ip("192.0.2.10")), Ok(()));
+        assert_eq!(limits.check_ip(ip("192.0.2.10")), Ok(()));
+        assert_eq!(
+            limits.check_ip(ip("192.0.2.10")),
+            Err(Refused {
+                retry_after: Duration::from_millis(500)
+            })
+        );
+        clock.advance(Duration::from_millis(500));
+        assert_eq!(limits.check_ip(ip("192.0.2.10")), Ok(()));
+    }
+
+    #[test]
+    fn each_limit_has_its_own_buckets() {
+        let limits = RateLimits::new(&tight(), Arc::new(ManualClock::new(start())));
+        for _ in 0..2 {
+            limits.check_ip(ip("192.0.2.10")).unwrap();
+        }
+
+        assert!(limits.check_ip(ip("192.0.2.10")).is_err());
+        assert_eq!(limits.check_ip(ip("198.51.100.10")), Ok(()));
+        for class in [RateClass::Login, RateClass::Refresh, RateClass::Register] {
+            assert_eq!(
+                limits.check_class(class, ip("192.0.2.10")),
+                Ok(()),
+                "{class:?}"
+            );
+        }
+        assert_eq!(limits.check_user(user(1)), Ok(()));
+    }
+
+    #[test]
+    fn the_standard_class_spends_nothing() {
+        let limits = RateLimits::new(&tight(), Arc::new(ManualClock::new(start())));
+
+        for _ in 0..10 {
+            assert_eq!(
+                limits.check_class(RateClass::Standard, ip("192.0.2.10")),
+                Ok(())
+            );
+        }
+        assert_eq!(limits.tracked(), 0);
+    }
+
+    #[test]
+    fn a_class_and_a_user_are_refused_past_their_burst() {
+        let limits = RateLimits::new(&tight(), Arc::new(ManualClock::new(start())));
+        for class in [RateClass::Login, RateClass::Refresh, RateClass::Register] {
+            for _ in 0..2 {
+                limits.check_class(class, ip("192.0.2.10")).unwrap();
+            }
+            assert!(
+                limits.check_class(class, ip("192.0.2.10")).is_err(),
+                "{class:?}"
+            );
+        }
+        for _ in 0..2 {
+            limits.check_user(user(1)).unwrap();
+        }
+
+        assert!(limits.check_user(user(1)).is_err());
+        assert_eq!(limits.check_user(user(2)), Ok(()));
+    }
+
+    #[test]
+    fn an_ipv6_client_is_counted_by_its_64() {
+        let limits = RateLimits::new(&tight(), Arc::new(ManualClock::new(start())));
+        limits.check_ip(ip("2001:db8:0:1::1")).unwrap();
+        limits.check_ip(ip("2001:db8:0:1::2")).unwrap();
+
+        assert!(limits.check_ip(ip("2001:db8:0:1:ffff::9")).is_err());
+        assert_eq!(limits.check_ip(ip("2001:db8:0:2::1")), Ok(()));
+    }
+
+    #[test]
+    fn refusals_are_counted_per_limit_and_taken_once() {
+        let limits = RateLimits::new(&tight(), Arc::new(ManualClock::new(start())));
+        for _ in 0..5 {
+            let _ = limits.check_ip(ip("192.0.2.10"));
+            let _ = limits.check_class(RateClass::Login, ip("192.0.2.10"));
+        }
+        for _ in 0..3 {
+            let _ = limits.check_user(user(1));
+        }
+        let _ = limits.check_class(RateClass::Refresh, ip("192.0.2.10"));
+
+        assert_eq!(
+            limits.take_refusals(),
+            Refusals {
+                per_ip: 3,
+                login: 3,
+                refresh: 0,
+                register: 0,
+                per_user: 1,
+            }
+        );
+        assert_eq!(limits.take_refusals(), Refusals::default());
+    }
+
+    #[test]
+    fn refusals_are_empty_only_when_every_count_is_zero() {
+        assert!(Refusals::default().is_empty());
+        for refusals in [
+            Refusals {
+                per_ip: 1,
+                ..Refusals::default()
+            },
+            Refusals {
+                login: 1,
+                ..Refusals::default()
+            },
+            Refusals {
+                refresh: 1,
+                ..Refusals::default()
+            },
+            Refusals {
+                register: 1,
+                ..Refusals::default()
+            },
+            Refusals {
+                per_user: 1,
+                ..Refusals::default()
+            },
+        ] {
+            assert!(!refusals.is_empty(), "{refusals:?}");
+        }
+    }
+
+    #[test]
+    fn retain_recent_forgets_a_client_one_interval_after_its_bucket_is_full_again() {
+        let clock = ManualClock::new(start());
+        let limits = RateLimits::new(&tight(), Arc::new(clock.clone()));
+        limits.check_ip(ip("192.0.2.10")).unwrap();
+        limits
+            .check_class(RateClass::Login, ip("192.0.2.10"))
+            .unwrap();
+        limits.check_user(user(1)).unwrap();
+        clock.advance(Duration::from_millis(400));
+        limits.check_ip(ip("198.51.100.10")).unwrap();
+        assert_eq!(limits.tracked(), 4);
+        // The first three are full again at 500 ms, the later one at 900 ms;
+        // each is dropped one 500 ms interval after that.
+        clock.advance(Duration::from_millis(599));
+        limits.retain_recent();
+        assert_eq!(limits.tracked(), 4, "a millisecond short");
+
+        clock.advance(Duration::from_millis(1));
+        limits.retain_recent();
+
+        assert_eq!(limits.tracked(), 1, "only the later client is kept");
+        clock.advance(Duration::from_millis(400));
+        limits.retain_recent();
+        assert_eq!(limits.tracked(), 0);
+    }
+
+    #[test]
+    fn the_debug_form_names_the_clock_and_the_count() {
+        let limits = RateLimits::new(&tight(), Arc::new(ManualClock::new(start())));
+
+        let shown = format!("{limits:?}");
+
+        assert!(
+            shown.starts_with("RateLimits { clock: LimiterClock"),
+            "{shown}"
+        );
+        assert!(shown.contains("tracked: 0"), "{shown}");
+    }
+}

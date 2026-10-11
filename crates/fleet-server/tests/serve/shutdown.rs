@@ -30,7 +30,7 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use crate::support::{ChannelSignals, capture, listener};
+use crate::support::{ChannelSignals, app_of, capture, listener};
 
 /// The server's defaults: a 15 s request timeout and the 5 s close.
 const TIMEOUTS: ShutdownTimeouts = ShutdownTimeouts {
@@ -369,7 +369,16 @@ async fn an_in_flight_request_finishes_after_the_signal_while_new_connections_ar
     let (sender, signals) = ChannelSignals::new();
     let server = tokio::spawn({
         let database = database.clone();
-        async move { serve::serve(listener, app, &database, signals, TIMEOUTS).await }
+        async move {
+            serve::serve(
+                listener,
+                app_of(app, &database),
+                &database,
+                signals,
+                TIMEOUTS,
+            )
+            .await
+        }
     });
     let request = tokio::spawn(healthcheck::get(address, "/held", PATIENCE));
     within(
@@ -392,6 +401,43 @@ async fn an_in_flight_request_finishes_after_the_signal_while_new_connections_ar
     assert!(!dir.path().join("afkfleet.db-wal").exists());
 }
 
+/// The housekeeping (ADR-0016), the server's one long-lived background task,
+/// stops at the first signal. The drain and close limits are far beyond the
+/// test's own wait, so a housekeeping that kept running would hold up the
+/// close until the test fails.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_housekeeping_stops_at_the_first_signal() {
+    let (_dir, database) = database().await;
+    let app = Router::new().route("/ok", get(|| async { "ok" }));
+    let (listener, _address) = listener().await;
+    let (sender, signals) = ChannelSignals::new();
+    let timeouts = ShutdownTimeouts {
+        drain: secs(600),
+        close: secs(600),
+    };
+    let server = tokio::spawn({
+        let database = database.clone();
+        async move {
+            serve::serve(
+                listener,
+                app_of(app, &database),
+                &database,
+                signals,
+                timeouts,
+            )
+            .await
+        }
+    });
+
+    sender.send(Signal::Terminate).await.unwrap();
+
+    let exit = within("the server should stop with its housekeeping", server)
+        .await
+        .unwrap();
+    assert_eq!(exit, Exit::Stopped);
+    assert!(database.write_pool().is_closed());
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn an_idle_keep_alive_connection_doesnt_hold_up_the_shutdown() {
     let (_dir, database) = database().await;
@@ -405,7 +451,16 @@ async fn an_idle_keep_alive_connection_doesnt_hold_up_the_shutdown() {
     };
     let server = tokio::spawn({
         let database = database.clone();
-        async move { serve::serve(listener, app, &database, signals, timeouts).await }
+        async move {
+            serve::serve(
+                listener,
+                app_of(app, &database),
+                &database,
+                signals,
+                timeouts,
+            )
+            .await
+        }
     });
     let mut stream = TcpStream::connect(address).await.unwrap();
     stream
@@ -452,7 +507,16 @@ async fn a_connection_the_database_never_gets_back_fails_the_shutdown_at_the_dea
     };
     let server = tokio::spawn({
         let database = database.clone();
-        async move { serve::serve(listener, app, &database, signals, timeouts).await }
+        async move {
+            serve::serve(
+                listener,
+                app_of(app, &database),
+                &database,
+                signals,
+                timeouts,
+            )
+            .await
+        }
     });
     let started = Instant::now();
 

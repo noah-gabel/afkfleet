@@ -1,0 +1,21 @@
+---
+source: crates/fleet-server/tests/rate_limits.rs
+expression: redacted(refused)
+---
+{
+  "status": 429,
+  "headers": {
+    "cache-control": "no-store",
+    "content-type": "application/json",
+    "retry-after": "1",
+    "x-content-type-options": "nosniff",
+    "x-request-id": "[request_id]"
+  },
+  "body": {
+    "error": {
+      "code": "rate_limited",
+      "message": "Too many requests. Try again later.",
+      "request_id": "[request_id]"
+    }
+  }
+}

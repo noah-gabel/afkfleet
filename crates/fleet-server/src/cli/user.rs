@@ -388,6 +388,9 @@ fn fail(err: &mut dyn Write, what: &str, error: &(dyn std::error::Error + 'stati
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, VecDeque};
+
+    use crate::config::RateLimitConfig;
+    use crate::http::rate_limit::TrustedProxies;
     use std::io::Cursor;
     use std::path::Path;
     use std::sync::Arc;
@@ -418,12 +421,14 @@ mod tests {
                 bind: HttpConfig::DEFAULT_BIND,
                 request_timeout: Duration::from_secs(15),
                 max_body_bytes: 65_536,
+                trusted_proxies: TrustedProxies::default(),
             },
             database: DatabaseConfig {
                 path: dir.join("afkfleet.db"),
             },
             log: LogConfig::default(),
             auth: AuthConfig::default(),
+            rate_limits: RateLimitConfig::default(),
             vault: VaultConfig {
                 key_files: BTreeMap::from([(1, dir.join("never-read"))]),
                 active_key_id: 1,

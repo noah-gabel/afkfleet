@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM login_attempts WHERE rowid IN (\n             SELECT rowid FROM login_attempts\n             WHERE last_failure_at <= ? AND (locked_until IS NULL OR locked_until <= ?)\n             LIMIT ?\n         )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "0ec67e252ace0e168f8bc5eb13118c502dcfe84e212f46bd8780137a5d202082"
+}

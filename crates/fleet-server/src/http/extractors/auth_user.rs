@@ -14,6 +14,8 @@
 //!   `debug` line, with the session's and the user's IDs where they're
 //!   known; no token, hash or header value is ever logged.
 //! - **A database failure isn't a refusal:** busy is 503, anything else 500.
+//! - **Every authed request spends its user's rate limit** (§7.4), right after
+//!   authentication: past it, 429 with `Retry-After`.
 //! - **Authorizing:** [`AuthUser::require`] asks `fleet_core::authz::authorize`
 //!   for the actor, so every authed handler decides through the one
 //!   function. Step-up is checked by the step-up actions themselves, with
@@ -104,11 +106,17 @@ impl FromRequestParts<AppState> for AuthUser {
         let presented = SecretString::from(bearer.token());
         drop(bearer);
         match state.tokens.authenticate(&presented).await {
-            Ok(authenticated) => Ok(Self {
-                actor: authenticated.actor,
-                session_id: authenticated.session_id,
-                stepped_up_at: authenticated.stepped_up_at,
-            }),
+            Ok(authenticated) => {
+                state
+                    .limits
+                    .check_user(authenticated.actor.id)
+                    .map_err(ApiError::from)?;
+                Ok(Self {
+                    actor: authenticated.actor,
+                    session_id: authenticated.session_id,
+                    stepped_up_at: authenticated.stepped_up_at,
+                })
+            }
             Err(AuthenticateError::Rejected(rejected)) => Err(refuse(&rejected)),
             Err(AuthenticateError::Store(error)) => Err(ApiError::from(error)),
         }

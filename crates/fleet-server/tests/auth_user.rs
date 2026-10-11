@@ -1,7 +1,8 @@
 //! Tests for the `AuthUser` extractor and `require()` (Plan.md P7.8, §7.2,
 //! ADR-0006, ADR-0010, ADR-0016), through a test-only router behind the
-//! server's middleware stack: no endpoint uses `AuthUser` before group D,
-//! and the route registry arrives in group C.
+//! server's middleware stack: no endpoint uses `AuthUser` before group D.
+//! The route registry's own test, with an authed route, is
+//! `tests/routes.rs`; the per-user limit's is `tests/rate_limits.rs`.
 //!
 //! - A live session's access token reaches the handler as the actor.
 //! - Every refusal is the same 401 with a bare `WWW-Authenticate: Bearer`,
@@ -19,12 +20,13 @@
 #![cfg(test)]
 
 use core::time::Duration;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 
 use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::Request;
+use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{StatusCode, header};
 use axum::routing::get;
 use chrono::{DateTime, TimeZone as _, Utc};
@@ -36,10 +38,11 @@ use fleet_core::system::Clock as _;
 use fleet_core::value::Username;
 use fleet_server::app::auth::{IssuedTokens, TokenService};
 use fleet_server::app::health::HealthService;
-use fleet_server::config::HttpConfig;
+use fleet_server::config::{HttpConfig, RateLimitConfig};
 use fleet_server::http::error::ApiError;
 use fleet_server::http::extractors::AuthUser;
 use fleet_server::http::middleware::{self, RequestIds};
+use fleet_server::http::rate_limit::{RateLimits, TrustedProxies};
 use fleet_server::http::router::AppState;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions, READ_CONNECTIONS};
@@ -145,14 +148,21 @@ async fn setup_with(options: SqliteConnectOptions, database: DatabaseOptions) ->
         .await
         .unwrap();
     tx.commit(setup_entry()).await.unwrap();
-    let state = AppState::new(HealthService::new(Arc::new(db.clone())), service.clone());
+    let limits = RateLimits::new(&RateLimitConfig::default(), Arc::new(clock.clone()));
+    let state = AppState::new(
+        HealthService::new(Arc::new(db.clone())),
+        service.clone(),
+        limits.clone(),
+    );
     let http = HttpConfig {
         bind: HttpConfig::DEFAULT_BIND,
         request_timeout: Duration::from_secs(15),
         max_body_bytes: 65_536,
+        trusted_proxies: TrustedProxies::default(),
     };
     let ids = RequestIds::new(Arc::new(clock.clone()), Arc::new(SeededRandom::new(5)));
-    let app = middleware::apply(routes(state), &http, ids);
+    let app = middleware::apply(routes(state), &http, ids, &limits)
+        .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))));
     Setup {
         app,
         service,

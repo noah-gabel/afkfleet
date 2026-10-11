@@ -1,10 +1,10 @@
 //! `[auth]`: how the server authenticates users (Plan.md Appendix A,
 //! ADR-0016).
 //!
-//! Group A adds the argon2 keys, group B the token lifetimes. Groups C and E
-//! add the lockout threshold and the invite lifetime with their tasks.
+//! Group A adds the argon2 keys, group B the token lifetimes, group C the
+//! lockout threshold. Group E adds the invite lifetime.
 
-use fleet_core::auth::SessionPolicy;
+use fleet_core::auth::{LockoutPolicy, SessionPolicy};
 
 /// The inclusive range of a numeric key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -31,6 +31,8 @@ pub struct AuthConfig {
     /// How long sessions and their tokens live (`access_token_ttl_secs`,
     /// `refresh_token_idle_days`, `refresh_token_absolute_days`).
     pub sessions: SessionPolicy,
+    /// How many failed logins lock a username (`lockout_threshold`).
+    pub lockout: LockoutPolicy,
 }
 
 impl AuthConfig {
@@ -41,6 +43,11 @@ impl AuthConfig {
     pub const REFRESH_TOKEN_IDLE_DAYS: Bounds = Bounds { min: 1, max: 90 };
     /// `refresh_token_absolute_days`: 1 to 365 days. Default 30.
     pub const REFRESH_TOKEN_ABSOLUTE_DAYS: Bounds = Bounds { min: 1, max: 365 };
+    /// `lockout_threshold`: 3 to 20 failures. Default 5 (§7.4).
+    pub const LOCKOUT_THRESHOLD: Bounds = Bounds {
+        min: LockoutPolicy::MIN_THRESHOLD,
+        max: LockoutPolicy::MAX_THRESHOLD,
+    };
 }
 
 /// The password service's argon2 parameters (`[auth] argon2_*`), never below

@@ -1,5 +1,6 @@
 //! [`SystemClock`] and [`OsRandom`]: the server's real [`Clock`] and
-//! [`SecureRandom`] (ADR-0015).
+//! [`SecureRandom`] (ADR-0015), and [`MonotonicClock`], the rate limiters'
+//! clock (ADR-0016).
 //!
 //! They're the only code in fleet-server that reads the wall clock or the
 //! OS's randomness: `clippy.toml` bans every direct read, and each of the two
@@ -8,6 +9,8 @@
 
 use chrono::{DateTime, SubsecRound, Utc};
 use fleet_core::system::{Clock, RandomError, SecureRandom};
+use fleet_core::time::add;
+use tokio::time::Instant;
 
 /// The wall clock, in UTC and whole milliseconds.
 #[derive(Debug, Clone, Copy, Default)]
@@ -20,6 +23,43 @@ impl Clock for SystemClock {
     )]
     fn now(&self) -> DateTime<Utc> {
         Utc::now().trunc_subsecs(3)
+    }
+}
+
+/// A clock that never goes back, for the rate limiters only (ADR-0016): one
+/// [`SystemClock`] reading as its anchor, plus the time tokio's monotonic
+/// clock has measured since, in whole milliseconds. A step of the wall clock
+/// can't move it, so it can't make every limiter refuse until the wall clock
+/// catches up.
+///
+/// It ignores NTP corrections and, on Linux, the time a VM spent suspended,
+/// so it drifts from real time over a long uptime: nothing stored or audited
+/// may read it, only interval measurements like the limiters'.
+#[derive(Debug, Clone, Copy)]
+pub struct MonotonicClock {
+    anchor: DateTime<Utc>,
+    start: Instant,
+}
+
+impl MonotonicClock {
+    /// A clock that starts at the wall clock's time now.
+    #[must_use]
+    pub fn start() -> Self {
+        Self::anchored(SystemClock.now())
+    }
+
+    /// A clock that reads `anchor` now and moves with tokio's clock.
+    fn anchored(anchor: DateTime<Utc>) -> Self {
+        Self {
+            anchor,
+            start: Instant::now(),
+        }
+    }
+}
+
+impl Clock for MonotonicClock {
+    fn now(&self) -> DateTime<Utc> {
+        add(self.anchor, self.start.elapsed()).trunc_subsecs(3)
     }
 }
 
@@ -45,9 +85,50 @@ fn random_error(raw_os_error: Option<i32>) -> RandomError {
 
 #[cfg(test)]
 mod tests {
-    use chrono::{Datelike, Timelike};
+    use core::time::Duration;
+
+    use chrono::{Datelike, TimeDelta, TimeZone as _, Timelike};
 
     use super::*;
+
+    fn anchor() -> DateTime<Utc> {
+        Utc.with_ymd_and_hms(2027, 1, 15, 8, 0, 0).unwrap()
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_monotonic_clock_moves_with_tokios_clock_in_whole_milliseconds() {
+        let clock = MonotonicClock::anchored(anchor());
+
+        tokio::time::advance(Duration::from_micros(1_500_700)).await;
+
+        assert_eq!(clock.now(), anchor() + TimeDelta::milliseconds(1500));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_monotonic_clock_never_goes_back() {
+        let clock = MonotonicClock::anchored(anchor());
+        let mut last = clock.now();
+
+        for _ in 0..5 {
+            tokio::time::advance(Duration::from_millis(250)).await;
+            let now = clock.now();
+            assert!(now > last, "{now} after {last}");
+            last = now;
+        }
+    }
+
+    #[tokio::test]
+    async fn the_monotonic_clock_starts_at_the_wall_clocks_time() {
+        let before = SystemClock.now();
+
+        let started = MonotonicClock::start().now();
+
+        let after = SystemClock.now();
+        assert!(
+            started >= before && started <= after,
+            "{before} {started} {after}"
+        );
+    }
 
     #[test]
     fn the_system_clock_reads_a_current_time_in_milliseconds() {

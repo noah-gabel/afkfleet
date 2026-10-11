@@ -3,6 +3,8 @@
 
 use fleet_startup::config::{LogFilterError, UnknownLogFormatError};
 
+use crate::http::rate_limit::IpNetError;
+
 /// Why [`load`](super::load) failed.
 pub type ConfigError = fleet_startup::config::ConfigError<ProblemKind>;
 
@@ -62,6 +64,18 @@ pub enum ProblemKind {
         /// The other key, without its section.
         key: &'static str,
     },
+    /// Not an IP network in strict CIDR form (`[http] trusted_proxies`).
+    #[error(transparent)]
+    IpNet(IpNetError),
+    /// A list with more entries than allowed.
+    #[error("must list at most {max} entries")]
+    TooManyEntries {
+        /// The most allowed.
+        max: usize,
+    },
+    /// An entry that an earlier one of the same list already names.
+    #[error("is listed twice")]
+    Duplicate,
 }
 
 #[cfg(test)]

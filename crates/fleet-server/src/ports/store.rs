@@ -6,6 +6,7 @@ use core::fmt;
 use async_trait::async_trait;
 
 use super::audit::{AuditEntryId, AuditReads, AuditWrites, NewAuditEntry};
+use super::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
 use super::sessions::{SessionReads, SessionWrites};
 use super::users::{UserReads, UserWrites};
 
@@ -61,6 +62,9 @@ pub trait Store: Send + Sync + fmt::Debug {
     /// The sessions, read through the read connections.
     fn sessions(&self) -> &dyn SessionReads;
 
+    /// The failed logins per username, read through the read connections.
+    fn login_attempts(&self) -> &dyn LoginAttemptReads;
+
     /// The audit log, read through the read connections.
     fn audit(&self) -> &dyn AuditReads;
 
@@ -94,6 +98,10 @@ pub trait WriteTx: Send {
     /// The sessions, read and written in this transaction.
     fn sessions(&mut self) -> &mut dyn SessionWrites;
 
+    /// The failed logins per username, read and written in this
+    /// transaction.
+    fn login_attempts(&mut self) -> &mut dyn LoginAttemptWrites;
+
     /// The audit log, for a second entry in this transaction.
     fn audit(&mut self) -> &mut dyn AuditWrites;
 
@@ -126,4 +134,10 @@ pub enum UnauditedWrite {
     /// session's creation and its end (logout, reuse, disabling, a role
     /// change) are audited.
     SessionRotate,
+    /// One batch of the purge of expired login failure streaks (at most
+    /// 1000 rows), run by the server's periodic housekeeping. It deletes
+    /// only rows the lockout rule already treats as absent (their last
+    /// failure is 24 h old and no lock runs), so an entry per batch would say
+    /// nothing; no client asks for it.
+    LoginAttemptsPurge,
 }

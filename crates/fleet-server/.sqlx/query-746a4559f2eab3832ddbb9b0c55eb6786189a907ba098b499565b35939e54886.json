@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO login_attempts (username_key, failures, last_failure_at, locked_until)\n         VALUES (?, ?, ?, ?)\n         ON CONFLICT (username_key) DO UPDATE SET\n             failures = excluded.failures,\n             last_failure_at = excluded.last_failure_at,\n             locked_until = excluded.locked_until",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "746a4559f2eab3832ddbb9b0c55eb6786189a907ba098b499565b35939e54886"
+}

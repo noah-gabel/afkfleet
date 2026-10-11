@@ -1,5 +1,8 @@
 //! The crypto adapters (Plan.md §7.2, §7.5, ADR-0016).
 //!
+//! - [`attempt_keys`]: [`attempt_keys::HmacAttemptKeys`], the keys of the
+//!   `login_attempts` rows: an HMAC of the normalized username, never the
+//!   name (P7.10).
 //! - [`passwords`]: [`passwords::Argon2Passwords`], the password service:
 //!   Argon2id with zxcvbn's strength check, in blocking tasks behind one
 //!   bounded queue.
@@ -9,6 +12,7 @@
 //!   configured keys, and [`vault::VaultKeys`], the keys as loaded from their
 //!   files.
 
+pub mod attempt_keys;
 pub mod passwords;
 pub mod tokens;
 pub mod vault;

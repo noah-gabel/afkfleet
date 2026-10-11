@@ -1,32 +1,30 @@
-//! The server's router (Plan.md P6.7, Appendix B): every route, behind the
+//! The server's router (Plan.md P6.7, P7.11, Appendix B): every route,
+//! registered through the route registry ([`super::routes`]), behind the
 //! middleware stack.
 //!
-//! | Route | Handler |
-//! |---|---|
-//! | `GET /health/live` | always 200: the process runs and answers |
-//! | `GET /health/ready` | 200 when the database answers ([`HealthService::ready`]) |
-//! | `GET /api/openapi.json` | the `OpenAPI` document, only in dev mode ([`openapi`]) |
+//! | Route | Access | Handler |
+//! |---|---|---|
+//! | `GET /health/live` | public | always 200: the process runs and answers |
+//! | `GET /health/ready` | public | 200 when the database answers ([`HealthService::ready`]) |
+//! | `GET /api/openapi.json` | public | the `OpenAPI` document, only in dev mode ([`openapi`](super::openapi)) |
 //!
 //! The health routes have no `/api/v1` prefix. Both answer `200` with an
 //! empty body; a failed readiness check answers like any store failure:
 //! `busy` (503) when the database is busy, `internal` (500) otherwise, with
-//! nothing of the cause in the response. P7.11 registers them as public
-//! routes.
+//! nothing of the cause in the response.
 //!
-//! Every API route is registered through utoipa-axum's `OpenApiRouter`, so
-//! it can't exist without its entry in the `OpenAPI` document. The document's
-//! own route isn't listed in it.
-
-use std::sync::Arc;
+//! Every API route is registered through the registry, so it can't exist
+//! without its access, its rate-limit class and its entry in the `OpenAPI`
+//! document. The document's own route isn't listed in it.
 
 use axum::Router;
-use axum::routing::get;
-use utoipa_axum::router::OpenApiRouter;
 use utoipa_axum::routes;
 
 use super::handlers::health;
-use super::middleware::{self, RequestIds};
-use super::openapi::{self, ApiDocs, OPENAPI_PATH};
+use super::middleware::RequestIds;
+use super::openapi::ApiDocs;
+use super::rate_limit::RateLimits;
+use super::routes::{RateClass, Routes};
 use crate::app::auth::TokenService;
 use crate::app::health::HealthService;
 use crate::config::HttpConfig;
@@ -39,34 +37,36 @@ pub struct AppState {
     /// Sessions and their tokens: `AuthUser` authenticates every authed
     /// request through it.
     pub(crate) tokens: TokenService,
+    /// The request limits: `AuthUser` spends each authed request's per-user
+    /// limit, and the router's layers the others.
+    pub(crate) limits: RateLimits,
 }
 
 impl AppState {
-    /// The state over the server's services.
+    /// The state over the server's services and its request `limits`.
     #[must_use]
-    pub fn new(health: HealthService, tokens: TokenService) -> Self {
-        Self { health, tokens }
+    pub fn new(health: HealthService, tokens: TokenService, limits: RateLimits) -> Self {
+        Self {
+            health,
+            tokens,
+            limits,
+        }
     }
 }
 
-/// Every route with `state`, behind the middleware stack with the timeout and
-/// the body limit from `http` and request IDs from `ids`. `docs` says
+/// Adds every route of the API to `routes`; see the [module docs](self).
+#[must_use]
+pub fn api_routes(routes: Routes) -> Routes {
+    routes
+        .public_route(RateClass::Standard, routes!(health::live))
+        .public_route(RateClass::Standard, routes!(health::ready))
+}
+
+/// Every route with `state`, behind the middleware stack with the timeout,
+/// the body limit and the trusted proxies from `http`, request IDs from `ids`
+/// and the limits `state` carries. `docs` says
 /// whether `GET /api/openapi.json` exists: only in dev mode.
 pub fn router(state: AppState, http: &HttpConfig, ids: RequestIds, docs: ApiDocs) -> Router {
-    let (routes, document) = OpenApiRouter::with_openapi(openapi::base())
-        .routes(routes!(health::live))
-        .routes(routes!(health::ready))
-        .with_state(state)
-        .split_for_parts();
-    let routes = match docs {
-        ApiDocs::Served => {
-            let document = Arc::new(document);
-            routes.route(
-                OPENAPI_PATH,
-                get(move || core::future::ready(openapi::document(&document))),
-            )
-        }
-        ApiDocs::Hidden => routes,
-    };
-    middleware::apply(routes, http, ids)
+    let routes = Routes::new(&state.limits);
+    api_routes(routes).finish(state, http, ids, docs).0
 }

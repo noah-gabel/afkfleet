@@ -13,7 +13,8 @@
 //! - **Validation reports every problem at once,** each with its key path
 //!   (`http.bind`), and never echoes a value.
 //! - **Each phase adds its own keys,** so a key of a later phase is still an
-//!   unknown key (Appendix A). Phase 7 adds `[auth]` and `[vault]` (ADR-0016).
+//!   unknown key (Appendix A). Phase 7 adds `[auth]`, `[vault]`,
+//!   `[rate_limits]` and `[http] trusted_proxies` (ADR-0016).
 //! - **Secrets never go in this file.** A key for a secret names the file
 //!   that holds it and ends in `_file` or `_files`; a test checks every
 //!   key's name (security rule 4). fleet-startup's `secret_file` reads those
@@ -21,6 +22,7 @@
 
 mod auth;
 mod error;
+mod rate_limits;
 mod raw;
 mod validate;
 
@@ -31,12 +33,15 @@ use std::time::Duration;
 
 use raw::RawConfig;
 
+use crate::http::rate_limit::TrustedProxies;
+
 pub use auth::{Argon2Params, Argon2ParamsError, AuthConfig, Bounds};
 pub use error::{ConfigError, Problem, ProblemKind, Problems};
 pub use fleet_startup::config::{
     KeyPath, KeySegment, LogConfig, LogFilter, LogFilterError, LogFormat, ParseError, ParseProblem,
     ParseSource, UnknownLogFormatError,
 };
+pub use rate_limits::{Rate, RateLimitConfig};
 
 /// The prefix of the environment variables that override config keys:
 /// `AFKFLEET_SERVER__` plus the key path in capitals, with `__` between the
@@ -57,6 +62,8 @@ pub struct ServerConfig {
     pub auth: AuthConfig,
     /// The vault's keys (`[vault]`).
     pub vault: VaultConfig,
+    /// The request limits (`[rate_limits]`).
+    pub rate_limits: RateLimitConfig,
     /// How the server logs (`[log]`).
     pub log: LogConfig,
 }
@@ -73,6 +80,10 @@ pub struct HttpConfig {
     /// The largest request body the server reads (`max_body_bytes`,
     /// 1 KiB–1 MiB, default 64 KiB).
     pub max_body_bytes: usize,
+    /// The proxies whose `X-Forwarded-For` the server believes
+    /// (`trusted_proxies`): at most [`TrustedProxies::MAX`] CIDR networks,
+    /// none by default.
+    pub trusted_proxies: TrustedProxies,
 }
 
 impl HttpConfig {

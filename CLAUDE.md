@@ -113,7 +113,7 @@ Recipes for tools that arrive in later phases (`dev-app`, `ui-test`, `e2e`) prin
 **Server layering:** `http/handlers` → `app` services → `ports` → `infra`.
 - Handlers only parse input, authorize, call a service and map the result. No business logic, no SQL.
 - Services own use cases, transactions and audit entries.
-- Writes go through `Store::write()`, a `WriteTx` on the one write connection. Its `commit(entry)` takes the audit entry, so nothing commits unaudited, except through `commit_unaudited(UnauditedWrite)`, whose named exemptions (`SessionTouch`, `SessionRotate`) each have an ADR note; a new one needs the user's approval and its own note (ADR-0015, ADR-0016). Keep it short: no password hashing, crypto or network calls while it's open (ADR-0015).
+- Writes go through `Store::write()`, a `WriteTx` on the one write connection. Its `commit(entry)` takes the audit entry, so nothing commits unaudited, except through `commit_unaudited(UnauditedWrite)`, whose named exemptions (`SessionTouch`, `SessionRotate`, `LoginAttemptsPurge`) each have an ADR note; a new one needs the user's approval and its own note (ADR-0015, ADR-0016). Keep it short: no password hashing, crypto or network calls while it's open (ADR-0015).
 
 **Shared types:**
 - Every API DTO lives in `fleet-api-types` (serde + garde + ts-rs + utoipa). A test keeps its `OpenAPI` schemas equal to the TypeScript export.
@@ -155,7 +155,7 @@ fleet-server/src/
 | | Sink/Stream traits | `futures-util` |
 | | dyn async ports | `async-trait` |
 | | Retry | `backon` |
-| | Rate limits | `governor`, `tower_governor` |
+| | Rate limits | `governor` (fleet-server's HTTP limits too, behind its own middleware; no `tower_governor`, ADR-0016) |
 | | Cache / single-flight | `moka` |
 | Errors, config, observability | Errors | `thiserror` (libraries), `anyhow` (`main.rs` only) |
 | | Serialization | `serde`, `serde_json` |
@@ -179,6 +179,7 @@ fleet-server/src/
 | Security | Password hashing | `argon2` |
 | | Encryption | `chacha20poly1305` |
 | | Hashing | `sha2` |
+| | Keyed hashing (HMAC) | `hmac` |
 | | Constant-time | `subtle` |
 | | Encoding | `base64` |
 | | Secrets | `secrecy`, `zeroize` |
@@ -189,7 +190,7 @@ fleet-server/src/
 | Desktop | Shell | `tauri` ≥ 2.11.1, `tauri-build` |
 | | Plugins | `tauri-plugin-opener`, `tauri-plugin-single-instance`, `tauri-plugin-updater` |
 | | Keychain | `keyring-core` + `windows-native-keyring-store` |
-| Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, tokio `test-util`, `log` (dev only: fleet-testkit's log capture and fleet-agent's telemetry, each to prove the `log` bridge; fleet-server's one normal use is sqlx's `LevelFilter`, and its logging macros are banned there), `tempfile` (fleet-server's database tests) |
+| Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, tokio `test-util`, `log` (dev only: fleet-testkit's log capture and fleet-agent's telemetry, each to prove the `log` bridge; fleet-server's one normal use is sqlx's `LevelFilter`, and its logging macros are banned there), `tempfile` (fleet-server's database tests), `ipnet` (dev only: fleet-server's property test of its own `IpNet`) |
 | | Fuzzing | `libfuzzer-sys`, `arbitrary` |
 
 **Frontend packages**

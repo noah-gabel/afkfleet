@@ -70,6 +70,14 @@ audit_actions! {
     /// user. Metadata: `session_id` (the revoked session) and `rotated_at`
     /// (when the presented token was replaced).
     SECURITY_REFRESH_TOKEN_REUSE = "security.refresh_token_reuse";
+
+    /// A failed login started a lock of its username (§7.4): the threshold's
+    /// failure, and each one after it, whose lock doubles up to an hour.
+    /// Recorded in the failing attempt's own transaction. Outcome: Failure.
+    /// No actor; the client's IP. Target: the user, when the name is a
+    /// user's; none otherwise, since the typed name is never stored.
+    /// Metadata: `failures` (the streak's count) and `locked_until`.
+    SECURITY_LOCKOUT = "security.lockout";
 }
 
 /// For reading rows back. Code that records an entry uses the listed
