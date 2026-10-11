@@ -78,6 +78,41 @@ audit_actions! {
     /// user's; none otherwise, since the typed name is never stored.
     /// Metadata: `failures` (the streak's count) and `locked_until`.
     SECURITY_LOCKOUT = "security.lockout";
+
+    /// A user without 2FA confirmed their first TOTP authenticator with a
+    /// setup token from the password step (§7.2): its secret and 10
+    /// recovery codes are stored. Outcome: Success. Actor and target: the
+    /// user; the client's IP.
+    MFA_ENROLL = "mfa.enroll";
+
+    /// A user replaced their TOTP authenticator: started with step-up, it's
+    /// confirmed with the new authenticator's code, which swaps the secret
+    /// and the recovery codes and revokes every other session of the user
+    /// in the same commit. Outcome: Success. Actor and target: the user; the
+    /// client's IP. Metadata: `sessions_revoked`.
+    MFA_RESET = "mfa.reset";
+
+    /// A login (§7.2). Success when its code step issues the session's
+    /// tokens: actor and target the user, the client's IP, metadata
+    /// `session_id`, `method` (`totp` or `recovery_code`) and, only when the
+    /// stored password hash was re-hashed with the current parameters,
+    /// `rehashed`. Failure for every counted refusal, in the lockout's
+    /// commit, and for a code step refused because the password or the
+    /// authenticator changed meanwhile: no actor, the client's IP, target
+    /// the user (none for an unknown name, which is never stored), metadata
+    /// `step` (`password` or `code`) and `reason` (`wrong_password`,
+    /// `wrong_code`, `disabled`, `password_changed` or `mfa_changed`).
+    AUTH_LOGIN = "auth.login";
+
+    /// A user ended their session. Outcome: Success. Actor: the user; target:
+    /// the session; the client's IP.
+    AUTH_LOGOUT = "auth.logout";
+
+    /// A user entered their password again, which allows step-up actions in
+    /// this session for 5 minutes (§7.2). Actor: the user; target: the
+    /// session; the client's IP. Failure: metadata `reason`
+    /// (`wrong_password`, counted toward the lockout, or `password_changed`).
+    AUTH_STEP_UP = "auth.step_up";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

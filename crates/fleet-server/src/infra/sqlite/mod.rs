@@ -52,6 +52,7 @@ mod convert;
 mod error;
 mod file;
 mod login_attempts;
+mod mfa;
 mod sessions;
 mod store;
 mod users;

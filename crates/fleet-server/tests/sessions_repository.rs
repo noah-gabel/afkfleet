@@ -401,6 +401,193 @@ async fn revoking_an_unknown_session_changes_nothing(
     assert!(!revoked);
 }
 
+// --- Group D: the refresh pre-check, revoking a user's sessions, step-up -----------
+
+async fn refresh_exists(db: &Database, hash: &TokenHash) -> bool {
+    db.sessions().refresh_hash_exists(hash).await.unwrap()
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_current_or_replaced_refresh_hash_exists_and_nothing_else_does(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let (_, session) = one_session(&db).await;
+    assert!(rotate(&db, &rotation(&session, 1, hash(21), at(T0) + secs(900))).await);
+
+    assert!(
+        refresh_exists(&db, &hash(41)).await,
+        "the current refresh hash"
+    );
+    assert!(
+        refresh_exists(&db, &hash(21)).await,
+        "a replaced refresh hash"
+    );
+    assert!(!refresh_exists(&db, &hash(31)).await, "an access hash");
+    assert!(!refresh_exists(&db, &hash(99)).await, "an unknown hash");
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_revoked_sessions_refresh_hash_still_exists(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let (_, session) = one_session(&db).await;
+    let mut tx = db.write().await.unwrap();
+    assert!(tx.sessions().revoke(session.id, at(T0)).await.unwrap());
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert!(refresh_exists(&db, &hash(21)).await);
+}
+
+/// Revokes `user`'s sessions but `except` at `when`, committed.
+async fn revoke_all(
+    db: &Database,
+    user: UserId,
+    except: Option<SessionId>,
+    when: DateTime<Utc>,
+) -> u64 {
+    let mut tx = db.write().await.unwrap();
+    let revoked = tx
+        .sessions()
+        .revoke_all_for_user(user, except, when)
+        .await
+        .unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+    revoked
+}
+
+#[sqlx::test(migrations = false)]
+async fn revoking_a_users_sessions_spares_the_one_that_asked_and_other_users(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let user = add_user(&db, 1, Role::Member).await;
+    let other = add_user(&db, 2, Role::Member).await;
+    let asking = new_session(1, user, at(T0));
+    let second = new_session(2, user, at(T0));
+    let third = new_session(3, user, at(T0));
+    let others = new_session(4, other, at(T0));
+    for session in [&asking, &second, &third, &others] {
+        add_session(&db, session).await.unwrap();
+    }
+    let when = at(T0) + secs(60);
+
+    let revoked = revoke_all(&db, user, Some(asking.id), when).await;
+
+    assert_eq!(revoked, 2);
+    let revoked_at = |n: u8| {
+        let db = &db;
+        async move {
+            by_access(db, &hash(10 + n))
+                .await
+                .unwrap()
+                .session
+                .revoked_at
+        }
+    };
+    assert_eq!(revoked_at(1).await, None, "the session that asked");
+    assert_eq!(revoked_at(2).await, Some(when));
+    assert_eq!(revoked_at(3).await, Some(when));
+    assert_eq!(revoked_at(4).await, None, "another user's session");
+}
+
+#[sqlx::test(migrations = false)]
+async fn revoking_all_without_an_exception_revokes_every_live_session_once(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let user = add_user(&db, 1, Role::Member).await;
+    let first = new_session(1, user, at(T0));
+    let second = new_session(2, user, at(T0));
+    add_session(&db, &first).await.unwrap();
+    add_session(&db, &second).await.unwrap();
+    let mut tx = db.write().await.unwrap();
+    assert!(tx.sessions().revoke(first.id, at(T0)).await.unwrap());
+    tx.commit(setup_entry()).await.unwrap();
+
+    let revoked = revoke_all(&db, user, None, at(T0) + secs(60)).await;
+    let again = revoke_all(&db, user, None, at(T0) + secs(120)).await;
+
+    assert_eq!(revoked, 1, "the already revoked one isn't counted");
+    assert_eq!(again, 0);
+    assert_eq!(
+        by_access(&db, &hash(11)).await.unwrap().session.revoked_at,
+        Some(at(T0)),
+        "an earlier revocation keeps its time"
+    );
+    assert_eq!(
+        by_access(&db, &hash(12)).await.unwrap().session.revoked_at,
+        Some(at(T0) + secs(60))
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_session_is_found_by_id_in_a_transaction(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let (user, session) = one_session(&db).await;
+    let unknown = SessionId::new_v7(at(T0), [9; 10]).unwrap();
+
+    let mut tx = db.write().await.unwrap();
+    let found = tx.sessions().find(session.id).await.unwrap().unwrap();
+    let missing = tx.sessions().find(unknown).await.unwrap();
+
+    assert_eq!(found.session.id, session.id);
+    assert_eq!(found.session.user_id, user);
+    assert_eq!(found.role, Role::Member);
+    assert!(!found.disabled);
+    assert!(missing.is_none());
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_live_session_is_stamped_and_a_revoked_or_unknown_one_isnt(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let user = add_user(&db, 1, Role::Member).await;
+    let live = new_session(1, user, at(T0));
+    let revoked = new_session(2, user, at(T0));
+    add_session(&db, &live).await.unwrap();
+    add_session(&db, &revoked).await.unwrap();
+    let unknown = SessionId::new_v7(at(T0), [9; 10]).unwrap();
+    let when = at(T0) + secs(30);
+
+    let mut tx = db.write().await.unwrap();
+    assert!(tx.sessions().revoke(revoked.id, at(T0)).await.unwrap());
+    let stamped_live = tx.sessions().stamp_step_up(live.id, when).await.unwrap();
+    let stamped_revoked = tx.sessions().stamp_step_up(revoked.id, when).await.unwrap();
+    let stamped_unknown = tx.sessions().stamp_step_up(unknown, when).await.unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert!(stamped_live);
+    assert!(!stamped_revoked);
+    assert!(!stamped_unknown);
+    assert_eq!(
+        by_access(&db, &hash(11))
+            .await
+            .unwrap()
+            .session
+            .stepped_up_at,
+        Some(when)
+    );
+    assert_eq!(
+        by_access(&db, &hash(12))
+            .await
+            .unwrap()
+            .session
+            .stepped_up_at,
+        None
+    );
+}
+
 // --- The touch and the unaudited commit -------------------------------------------
 
 /// Touches `session` at `when` if its `last_used_at` is at or before

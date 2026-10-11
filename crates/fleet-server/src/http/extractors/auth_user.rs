@@ -22,17 +22,13 @@
 //!   [`AuthUser::stepped_up_at`] and `fleet_core::auth::is_stepped_up`.
 
 use axum::extract::FromRequestParts;
-use axum::http::header::AUTHORIZATION;
 use axum::http::request::Parts;
-use axum_extra::TypedHeader;
-use axum_extra::headers::Authorization;
-use axum_extra::headers::authorization::Bearer;
 use chrono::{DateTime, Utc};
 use fleet_core::authz::{Actor, AuthzError, Permission, ResourceContext, authorize};
 use fleet_core::id::SessionId;
-use secrecy::SecretString;
 use tracing::debug;
 
+use super::bearer::bearer;
 use crate::app::auth::{AuthenticateError, RejectedAccess};
 use crate::http::error::ApiError;
 use crate::http::router::AppState;
@@ -87,24 +83,9 @@ impl FromRequestParts<AppState> for AuthUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, ApiError> {
-        match parts.headers.get_all(AUTHORIZATION).iter().count() {
-            0 => return Err(refuse(&RejectedAccess::reason("no Authorization header"))),
-            1 => {}
-            _ => {
-                return Err(refuse(&RejectedAccess::reason(
-                    "more than one Authorization header",
-                )));
-            }
-        }
-        let Ok(TypedHeader(Authorization(bearer))) =
-            TypedHeader::<Authorization<Bearer>>::from_request_parts(parts, state).await
-        else {
-            return Err(refuse(&RejectedAccess::reason("not a Bearer credential")));
-        };
-        // headers' `Bearer` shows the token in its `Debug`, so it's never
-        // formatted: only its text goes on, as a secret.
-        let presented = SecretString::from(bearer.token());
-        drop(bearer);
+        let presented = bearer(parts, state)
+            .await
+            .map_err(|reason| refuse(&RejectedAccess::reason(reason)))?;
         match state.tokens.authenticate(&presented).await {
             Ok(authenticated) => {
                 state

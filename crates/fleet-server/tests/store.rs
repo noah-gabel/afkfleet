@@ -21,7 +21,7 @@ use fleet_core::audit::{
     RecordedValue, TargetKind,
 };
 use fleet_core::authz::Role;
-use fleet_core::id::{AccountId, AgentId, BotId, ModeId, UserId};
+use fleet_core::id::{AccountId, AgentId, BotId, ModeId, SessionId, UserId};
 use fleet_core::value::Username;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions, READ_CONNECTIONS};
 use fleet_server::ports::audit::{AuditEntryId, AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
@@ -421,6 +421,70 @@ async fn a_stored_id_that_isnt_v7_is_corrupt(
     db.close().await;
 }
 
+#[sqlx::test(migrations = false)]
+async fn a_user_is_read_in_a_transaction(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
+    let db = connect(options).await;
+    let user = new_user(1, "afkbot1", Role::Member);
+    insert(&db, &user).await.unwrap();
+
+    let mut tx = db.write().await.unwrap();
+    let found = tx.users().get(user.id).await.unwrap().unwrap();
+    let missing = tx.users().get(user_id(9)).await.unwrap();
+    drop(tx);
+
+    assert_eq!(
+        summary(&found),
+        (
+            user.id,
+            "afkbot1".to_owned(),
+            HASH.to_owned(),
+            Role::Member,
+            false,
+            user.created_at,
+            user.created_at,
+        )
+    );
+    assert!(missing.is_none());
+    db.close().await;
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_rehash_replaces_the_hash_and_keeps_password_changed_at(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = connect(options).await;
+    let user = new_user(1, "afkbot1", Role::Member);
+    insert(&db, &user).await.unwrap();
+    let rehashed = "$argon2id$v=19$m=19456,t=3,p=1$bmV3c2FsdA$bmV3aGFzaA";
+
+    let mut tx = db.write().await.unwrap();
+    let set = tx
+        .users()
+        .set_password_hash(
+            user.id,
+            &PasswordHash::new(SecretString::from(rehashed)).unwrap(),
+        )
+        .await
+        .unwrap();
+    let unknown = tx
+        .users()
+        .set_password_hash(
+            user_id(9),
+            &PasswordHash::new(SecretString::from(rehashed)).unwrap(),
+        )
+        .await
+        .unwrap();
+    tx.commit(entry("test.rehash")).await.unwrap();
+
+    assert!(set);
+    assert!(!unknown);
+    let stored = db.users().get(user.id).await.unwrap().unwrap();
+    assert_eq!(stored.password_hash.expose_secret(), rehashed);
+    assert_eq!(stored.password_changed_at, user.created_at);
+    db.close().await;
+}
+
 // --- Write transactions ------------------------------------------------------
 
 #[sqlx::test(migrations = false)]
@@ -543,6 +607,7 @@ async fn every_target_reads_back(_pool: SqlitePoolOptions, options: SqliteConnec
         AuditTarget::Agent(AgentId::new_v7(created, [4; 10]).unwrap()),
         AuditTarget::Mode(ModeId::new_v7(created, [5; 10]).unwrap()),
         AuditTarget::User(user_id(6)),
+        AuditTarget::Session(SessionId::new_v7(created, [7; 10]).unwrap()),
     ];
 
     for target in targets {
@@ -577,7 +642,7 @@ async fn an_unknown_target_type_reads_back_as_unrecognized(
     raw_entry(
         db.write_pool(),
         "x.y",
-        (Some("session"), Some(&id)),
+        (Some("nonexistent_kind"), Some(&id)),
         "success",
         None,
     )
@@ -589,7 +654,7 @@ async fn an_unknown_target_type_reads_back_as_unrecognized(
     assert_eq!(
         entries[0].target,
         Some(RecordedTarget::Unrecognized {
-            kind: TargetKind::try_from("session").unwrap(),
+            kind: TargetKind::try_from("nonexistent_kind").unwrap(),
             id: Uuid::parse_str(&id).unwrap(),
         })
     );

@@ -27,6 +27,11 @@
 //!   without the strength check. [`Passwords::verify_unknown_user`] checks
 //!   against it along exactly the path of a real check, so an unknown
 //!   username costs the same time (§7.2).
+//! - **Re-hashing** (group D): [`Passwords::needs_rehash`] flags a stored
+//!   hash whose variant, version, m, t or p differ from today's, and
+//!   [`Passwords::rehash_verified`] hashes a password that just verified
+//!   against one again, through the dummy hash's path without the strength
+//!   check, in the same queue.
 //! - **Verifying** reads m, t and p from the stored string, so hashes made
 //!   under older parameters still verify. It refuses anything this server
 //!   doesn't write as [`VerifyError::Corrupt`], before running argon2:
@@ -160,6 +165,29 @@ impl Passwords for Argon2Passwords {
         // The same work as a real check; whatever it finds, an unknown user
         // never matches.
         self.check(password, dummy).await.map(|_| false)
+    }
+
+    fn needs_rehash(&self, hash: &PasswordHash) -> bool {
+        let Ok(stored) = Phc::new(hash.expose_secret()) else {
+            return true;
+        };
+        let Ok(params) = Params::try_from(&stored) else {
+            return true;
+        };
+        stored.algorithm.as_str() != ARGON2ID
+            || stored.version != Some(VERSION_19)
+            || params.m_cost() != self.params.m_cost()
+            || params.t_cost() != self.params.t_cost()
+            || params.p_cost() != self.params.p_cost()
+    }
+
+    async fn rehash_verified(&self, password: &SecretString) -> Result<PasswordHash, HashError> {
+        let salt = random_bytes::<SALT_BYTES>(self.random.as_ref())?;
+        let password = SecretString::from(password.expose_secret());
+        let params = self.params.clone();
+        self.limiter
+            .run(move || hash_with_salt(&params, password.expose_secret().as_bytes(), &salt))
+            .await?
     }
 }
 
@@ -564,6 +592,81 @@ mod tests {
             Arc::new(random.clone()),
         ))
         .await;
+
+        assert!(
+            matches!(result, Err(HashError::Random(RandomError::Os { code: 5 }))),
+            "{result:?}"
+        );
+    }
+
+    // --- Re-hashing (group D) -----------------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_hash_this_service_would_write_needs_no_rehash() {
+        let passwords = service(1).await;
+        let hash = within(passwords.hash(&new_password(STRONG), &username("alice")))
+            .await
+            .unwrap();
+
+        assert!(!passwords.needs_rehash(&hash));
+        assert!(!passwords.needs_rehash(&made_with(
+            Algorithm::Argon2id,
+            Version::V0x13,
+            (19_456, 2, 1),
+            STRONG
+        )));
+    }
+
+    #[rstest]
+    #[case::more_memory(Algorithm::Argon2id, Version::V0x13, (19_457, 2, 1))]
+    #[case::fewer_iterations(Algorithm::Argon2id, Version::V0x13, (19_456, 1, 1))]
+    #[case::more_iterations(Algorithm::Argon2id, Version::V0x13, (19_456, 3, 1))]
+    #[case::more_lanes(Algorithm::Argon2id, Version::V0x13, (19_456, 2, 2))]
+    #[case::less_memory(Algorithm::Argon2id, Version::V0x13, (8_192, 2, 1))]
+    #[case::argon2i(Algorithm::Argon2i, Version::V0x13, (19_456, 2, 1))]
+    #[case::version_16(Algorithm::Argon2id, Version::V0x10, (19_456, 2, 1))]
+    #[tokio::test(flavor = "multi_thread")]
+    async fn any_difference_up_or_down_needs_a_rehash(
+        #[case] algorithm: Algorithm,
+        #[case] version: Version,
+        #[case] params: (u32, u32, u32),
+    ) {
+        let passwords = service(1).await;
+
+        assert!(passwords.needs_rehash(&made_with(algorithm, version, params, STRONG)));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_hash_that_doesnt_parse_needs_a_rehash() {
+        let passwords = service(1).await;
+
+        assert!(passwords.needs_rehash(&PasswordHash::new(secret("$argon2id$garbage")).unwrap()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_rehash_has_the_current_parameters_and_verifies_the_same_password() {
+        let passwords = service(1).await;
+        // Weak by today's check: a re-hash never checks the strength again.
+        let typed = secret("password1234");
+
+        let rehashed = within(passwords.rehash_verified(&typed)).await.unwrap();
+
+        assert!(!passwords.needs_rehash(&rehashed));
+        assert!(within(passwords.verify(&typed, &rehashed)).await.unwrap());
+        assert!(
+            !within(passwords.verify(&secret("password1235"), &rehashed))
+                .await
+                .unwrap()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_failing_random_source_fails_the_rehash() {
+        let random = SeededRandom::new(1);
+        let passwords = service_with(Argon2Params::default(), &random).await;
+        random.fail_next(RandomError::Os { code: 5 });
+
+        let result = within(passwords.rehash_verified(&secret(STRONG))).await;
 
         assert!(
             matches!(result, Err(HashError::Random(RandomError::Os { code: 5 }))),

@@ -24,6 +24,10 @@ use utoipa::openapi::RefOr;
 use utoipa::openapi::schema::Schema;
 
 use crate::ErrorResponse;
+use crate::auth::{
+    LoginMfaRequest, LoginRequest, LoginResponse, RefreshRequest, StepUpRequest, TokenResponse,
+};
+use crate::mfa::{MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse};
 
 /// Every named schema of the API, by name: the root DTOs and every schema
 /// they refer to.
@@ -33,6 +37,16 @@ pub fn components() -> BTreeMap<String, RefOr<Schema>> {
     // The root DTOs, as in `typescript::export`: each adds every schema it
     // refers to. A DTO no listed type uses goes here.
     add::<ErrorResponse>(&mut schemas);
+    add::<MfaEnrollResponse>(&mut schemas);
+    add::<MfaConfirmRequest>(&mut schemas);
+    add::<MfaConfirmResponse>(&mut schemas);
+    add::<MfaResetResponse>(&mut schemas);
+    add::<LoginRequest>(&mut schemas);
+    add::<LoginResponse>(&mut schemas);
+    add::<LoginMfaRequest>(&mut schemas);
+    add::<TokenResponse>(&mut schemas);
+    add::<RefreshRequest>(&mut schemas);
+    add::<StepUpRequest>(&mut schemas);
     schemas.into_iter().collect()
 }
 

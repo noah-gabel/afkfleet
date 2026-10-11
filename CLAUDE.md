@@ -186,6 +186,7 @@ fleet-server/src/
 | | Secure randomness | `getrandom` |
 | | Non-security randomness | `rand` |
 | | 2FA | `totp-rs` |
+| | QR code | `qrcodegen` (fleet-server writes the SVG itself) |
 | | Password strength | `zxcvbn` |
 | Desktop | Shell | `tauri` ≥ 2.11.1, `tauri-build` |
 | | Plugins | `tauri-plugin-opener`, `tauri-plugin-single-instance`, `tauri-plugin-updater` |
@@ -269,7 +270,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 - **Overload is an explicit error.** When a queue is full or a rate limit is hit, return `QueueFull`, `RateLimited` or `429`. Never wait forever.
 
 ## Security rules (non-negotiable)
-1. **Every HTTP route** is registered with `public_route` (allowlist) or `authed_route`. Authed handlers call `authorize()`. If the actor can't View a resource, answer **404**.
+1. **Every HTTP route** is registered with `public_route` (allowlist), `authed_route`, `step_up_route` (an authed route that needs the password entered again within 5 minutes; its handler takes `SteppedUpUser`) or `setup_route` (TOTP enrollment with a setup token; its handler takes `SetupToken`). A route that needs a fresh step-up registers with `step_up_route`, never `authed_route`. Authed handlers call `authorize()`. If the actor can't View a resource, answer **404**.
 2. **Validate at the boundary.**
    - DTOs: garde + `#[serde(deny_unknown_fields)]`.
    - Domain values: `fleet-core` constructors.

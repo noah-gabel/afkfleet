@@ -40,8 +40,15 @@ pub enum ErrorCode {
     BadRequest,
     /// No valid credentials came with the request (401).
     Unauthorized,
+    /// The username, the password or the code was wrong, or the login's
+    /// token is no longer valid; nothing tells which (401). Unlike
+    /// `unauthorized`, it never means the session is over.
+    InvalidCredentials,
     /// The caller may see the resource, but not do this (403).
     Forbidden,
+    /// The action needs the password entered again within the last 5
+    /// minutes: `POST /auth/step-up`, then retry (403).
+    StepUpRequired,
     /// The resource doesn't exist, or the caller may not see it (404).
     NotFound,
     /// The path doesn't take this method (405).
@@ -74,7 +81,9 @@ impl ErrorCode {
         match self {
             Self::BadRequest => "The request couldn't be read.",
             Self::Unauthorized => "Authentication is required.",
+            Self::InvalidCredentials => "The username, password or code is wrong.",
             Self::Forbidden => "You don't have permission to do this.",
+            Self::StepUpRequired => "Enter your password again to do this.",
             Self::NotFound => "The resource doesn't exist.",
             Self::MethodNotAllowed => "This method isn't allowed here.",
             Self::Timeout => "The request took too long.",
@@ -95,7 +104,9 @@ impl OpenEnum for ErrorCode {
     const ALL: &'static [Self] = &[
         Self::BadRequest,
         Self::Unauthorized,
+        Self::InvalidCredentials,
         Self::Forbidden,
+        Self::StepUpRequired,
         Self::NotFound,
         Self::MethodNotAllowed,
         Self::Timeout,
@@ -112,7 +123,9 @@ impl OpenEnum for ErrorCode {
         match self {
             Self::BadRequest => "bad_request",
             Self::Unauthorized => "unauthorized",
+            Self::InvalidCredentials => "invalid_credentials",
             Self::Forbidden => "forbidden",
+            Self::StepUpRequired => "step_up_required",
             Self::NotFound => "not_found",
             Self::MethodNotAllowed => "method_not_allowed",
             Self::Timeout => "timeout",
@@ -211,21 +224,23 @@ mod tests {
         match code {
             ErrorCode::BadRequest => 0,
             ErrorCode::Unauthorized => 1,
-            ErrorCode::Forbidden => 2,
-            ErrorCode::NotFound => 3,
-            ErrorCode::MethodNotAllowed => 4,
-            ErrorCode::Timeout => 5,
-            ErrorCode::Conflict => 6,
-            ErrorCode::PayloadTooLarge => 7,
-            ErrorCode::UnsupportedMediaType => 8,
-            ErrorCode::ValidationFailed => 9,
-            ErrorCode::RateLimited => 10,
-            ErrorCode::Internal => 11,
-            ErrorCode::Busy => 12,
+            ErrorCode::InvalidCredentials => 2,
+            ErrorCode::Forbidden => 3,
+            ErrorCode::StepUpRequired => 4,
+            ErrorCode::NotFound => 5,
+            ErrorCode::MethodNotAllowed => 6,
+            ErrorCode::Timeout => 7,
+            ErrorCode::Conflict => 8,
+            ErrorCode::PayloadTooLarge => 9,
+            ErrorCode::UnsupportedMediaType => 10,
+            ErrorCode::ValidationFailed => 11,
+            ErrorCode::RateLimited => 12,
+            ErrorCode::Internal => 13,
+            ErrorCode::Busy => 14,
         }
     }
 
-    const CODES: usize = 13;
+    const CODES: usize = 15;
 
     #[test]
     fn all_lists_every_code_exactly_once() {
@@ -251,9 +266,19 @@ mod tests {
     #[case(ErrorCode::BadRequest, "bad_request", "The request couldn't be read.")]
     #[case(ErrorCode::Unauthorized, "unauthorized", "Authentication is required.")]
     #[case(
+        ErrorCode::InvalidCredentials,
+        "invalid_credentials",
+        "The username, password or code is wrong."
+    )]
+    #[case(
         ErrorCode::Forbidden,
         "forbidden",
         "You don't have permission to do this."
+    )]
+    #[case(
+        ErrorCode::StepUpRequired,
+        "step_up_required",
+        "Enter your password again to do this."
     )]
     #[case(ErrorCode::NotFound, "not_found", "The resource doesn't exist.")]
     #[case(

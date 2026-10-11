@@ -23,7 +23,10 @@
 //!   (`Content-Length`, `Content-Encoding`) are removed. Every other header
 //!   stays, such as axum's `Allow` and a rate limiter's `Retry-After`.
 //! - A 401 gets `WWW-Authenticate: Bearer` and a 503 `Retry-After: 1` when
-//!   they're missing, as an `ApiError` would send them.
+//!   they're missing, as an `ApiError` would send them. The header comes
+//!   with every 401, whatever its code (`unauthorized`,
+//!   `invalid_credentials`), as RFC 9110 requires, and with no other
+//!   status.
 //!
 //! A success, or anything else that isn't an error, passes unchanged.
 //!
@@ -100,9 +103,17 @@ pub enum ApiError {
     /// No valid credentials came with the request (401).
     #[error("no valid credentials came with the request")]
     Unauthorized,
+    /// The login's username, password or code was wrong, or its token is no
+    /// longer valid (401); never a sign that a session is over.
+    #[error("the credentials are wrong")]
+    InvalidCredentials,
     /// The caller may see the resource, but not do this (403).
     #[error("the caller may not do this")]
     Forbidden,
+    /// The action needs the password entered again within the last 5
+    /// minutes (403).
+    #[error("the action needs a fresh step-up")]
+    StepUpRequired,
     /// The resource doesn't exist, or the caller may not see it (404).
     #[error("the resource doesn't exist")]
     NotFound,
@@ -153,7 +164,9 @@ impl ApiError {
         match self {
             Self::BadRequest => ErrorCode::BadRequest,
             Self::Unauthorized => ErrorCode::Unauthorized,
+            Self::InvalidCredentials => ErrorCode::InvalidCredentials,
             Self::Forbidden => ErrorCode::Forbidden,
+            Self::StepUpRequired => ErrorCode::StepUpRequired,
             Self::NotFound => ErrorCode::NotFound,
             Self::MethodNotAllowed => ErrorCode::MethodNotAllowed,
             Self::Timeout => ErrorCode::Timeout,
@@ -179,8 +192,8 @@ impl ApiError {
 pub const fn status(code: ErrorCode) -> StatusCode {
     match code {
         ErrorCode::BadRequest => StatusCode::BAD_REQUEST,
-        ErrorCode::Unauthorized => StatusCode::UNAUTHORIZED,
-        ErrorCode::Forbidden => StatusCode::FORBIDDEN,
+        ErrorCode::Unauthorized | ErrorCode::InvalidCredentials => StatusCode::UNAUTHORIZED,
+        ErrorCode::Forbidden | ErrorCode::StepUpRequired => StatusCode::FORBIDDEN,
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
         ErrorCode::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
         ErrorCode::Timeout => StatusCode::REQUEST_TIMEOUT,
@@ -303,11 +316,10 @@ impl ApiError {
         let mut response = Response::new(Body::empty());
         *response.status_mut() = status(code);
         let headers = response.headers_mut();
+        if status(code) == StatusCode::UNAUTHORIZED {
+            headers.insert(WWW_AUTHENTICATE, BEARER);
+        }
         let (fields, source) = match self {
-            Self::Unauthorized => {
-                headers.insert(WWW_AUTHENTICATE, BEARER);
-                (None, None)
-            }
             Self::RateLimited { retry_after } => {
                 headers.insert(RETRY_AFTER, retry_after_seconds(retry_after));
                 (None, None)
@@ -319,7 +331,10 @@ impl ApiError {
             Self::Validation(fields) => (Some(fields), None),
             Self::Internal(source) => (None, Some(Arc::from(source))),
             Self::BadRequest
+            | Self::Unauthorized
+            | Self::InvalidCredentials
             | Self::Forbidden
+            | Self::StepUpRequired
             | Self::NotFound
             | Self::MethodNotAllowed
             | Self::Timeout
@@ -424,28 +439,16 @@ fn write(
 }
 
 /// Adds the headers an [`ApiError`] with `code` always sends, when a bare
-/// error status lacks them; a header that's there already stays as it is.
+/// error status lacks them: `WWW-Authenticate` on every 401, `Retry-After`
+/// on `busy`. A header that's there already stays as it is.
 fn add_missing_headers(headers: &mut HeaderMap, code: ErrorCode) {
-    match code {
-        ErrorCode::Unauthorized => {
-            headers.entry(WWW_AUTHENTICATE).or_insert(BEARER);
-        }
-        ErrorCode::Busy => {
-            headers
-                .entry(RETRY_AFTER)
-                .or_insert_with(|| retry_after_seconds(BUSY_RETRY_AFTER));
-        }
-        ErrorCode::BadRequest
-        | ErrorCode::Forbidden
-        | ErrorCode::NotFound
-        | ErrorCode::MethodNotAllowed
-        | ErrorCode::Timeout
-        | ErrorCode::Conflict
-        | ErrorCode::PayloadTooLarge
-        | ErrorCode::UnsupportedMediaType
-        | ErrorCode::ValidationFailed
-        | ErrorCode::RateLimited
-        | ErrorCode::Internal => {}
+    if status(code) == StatusCode::UNAUTHORIZED {
+        headers.entry(WWW_AUTHENTICATE).or_insert(BEARER);
+    }
+    if code == ErrorCode::Busy {
+        headers
+            .entry(RETRY_AFTER)
+            .or_insert_with(|| retry_after_seconds(BUSY_RETRY_AFTER));
     }
 }
 
@@ -610,10 +613,36 @@ mod tests {
         );
     }
 
+    /// The code a bare status of `code`'s comes back as: its own, except a
+    /// code that shares its status with a more general one, which only an
+    /// `ApiError` ever sends.
+    const fn bare_of(code: ErrorCode) -> ErrorCode {
+        match code {
+            ErrorCode::InvalidCredentials => ErrorCode::Unauthorized,
+            ErrorCode::StepUpRequired => ErrorCode::Forbidden,
+            other => other,
+        }
+    }
+
+    #[test]
+    fn a_bare_401_gets_the_bearer_challenge_and_no_other_status_does() {
+        for code in ErrorCode::ALL {
+            let mut headers = HeaderMap::new();
+
+            add_missing_headers(&mut headers, *code);
+
+            assert_eq!(
+                headers.get(WWW_AUTHENTICATE),
+                (status(*code) == StatusCode::UNAUTHORIZED).then_some(&BEARER),
+                "{code:?}"
+            );
+        }
+    }
+
     #[test]
     fn every_codes_status_maps_back_to_the_code_when_it_comes_bare() {
         for code in ErrorCode::ALL {
-            assert_eq!(bare_code(status(*code)), *code, "{code:?}");
+            assert_eq!(bare_code(status(*code)), bare_of(*code), "{code:?}");
         }
     }
 

@@ -2,9 +2,10 @@
 //! makes and recognizes them, and [`TokenHash`], the only form of a token
 //! the database ever holds.
 //!
-//! A session's tokens are opaque: 256 random bits from the `SecureRandom`
-//! port, base64url without padding, behind the prefix `afk_at_` or `afk_rt_`
-//! ([`TokenKind`]), so secret scanners spot them. Only their SHA-256 hash is
+//! A token is opaque: 256 random bits from the `SecureRandom` port,
+//! base64url without padding, behind its kind's prefix ([`TokenKind`]): a
+//! session's `afk_at_` and `afk_rt_`, and the login's challenges `afk_mt_`
+//! and `afk_st_`, so secret scanners spot them. Only their SHA-256 hash is
 //! stored, and a presented token is compared with a stored hash in constant
 //! time ([`TokenHash::ct_eq`]). The hash isn't a secret a client could use,
 //! but its `Debug` shows none of its bytes all the same, and no type here
@@ -16,13 +17,19 @@ use fleet_core::system::RandomError;
 use secrecy::SecretString;
 use subtle::ConstantTimeEq as _;
 
-/// Which of a session's two tokens.
+/// Which kind of token: a session's two, or one of the login's challenges
+/// (group D).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
     /// The access token, sent with every request: `afk_at_…`.
     Access,
     /// The refresh token, sent only to refresh: `afk_rt_…`.
     Refresh,
+    /// The password step's single-use token for the code step: `afk_mt_…`.
+    Mfa,
+    /// The token for enrolling or replacing a TOTP authenticator:
+    /// `afk_st_…`.
+    Setup,
 }
 
 impl TokenKind {
@@ -32,6 +39,8 @@ impl TokenKind {
         match self {
             Self::Access => "afk_at_",
             Self::Refresh => "afk_rt_",
+            Self::Mfa => "afk_mt_",
+            Self::Setup => "afk_st_",
         }
     }
 }
@@ -58,8 +67,8 @@ pub enum MintTokenError {
     Encoding,
 }
 
-/// Making and recognizing session tokens (§7.2). The only implementation is
-/// infra's `Sha256Tokens`; it takes microseconds, so it's synchronous.
+/// Making and recognizing tokens (§7.2). The only implementation is infra's
+/// `Sha256Tokens`; it takes microseconds, so it's synchronous.
 pub trait Tokens: Send + Sync + fmt::Debug {
     /// Mints a new token of `kind` from 256 random bits.
     ///
@@ -186,6 +195,8 @@ mod tests {
     fn the_prefixes_are_pinned() {
         assert_eq!(TokenKind::Access.prefix(), "afk_at_");
         assert_eq!(TokenKind::Refresh.prefix(), "afk_rt_");
+        assert_eq!(TokenKind::Mfa.prefix(), "afk_mt_");
+        assert_eq!(TokenKind::Setup.prefix(), "afk_st_");
     }
 
     #[test]

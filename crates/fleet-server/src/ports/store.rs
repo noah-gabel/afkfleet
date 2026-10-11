@@ -7,6 +7,7 @@ use async_trait::async_trait;
 
 use super::audit::{AuditEntryId, AuditReads, AuditWrites, NewAuditEntry};
 use super::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
+use super::mfa::{MfaReads, MfaWrites};
 use super::sessions::{SessionReads, SessionWrites};
 use super::users::{UserReads, UserWrites};
 
@@ -65,6 +66,9 @@ pub trait Store: Send + Sync + fmt::Debug {
     /// The failed logins per username, read through the read connections.
     fn login_attempts(&self) -> &dyn LoginAttemptReads;
 
+    /// The users' second factors, read through the read connections.
+    fn mfa(&self) -> &dyn MfaReads;
+
     /// The audit log, read through the read connections.
     fn audit(&self) -> &dyn AuditReads;
 
@@ -101,6 +105,9 @@ pub trait WriteTx: Send {
     /// The failed logins per username, read and written in this
     /// transaction.
     fn login_attempts(&mut self) -> &mut dyn LoginAttemptWrites;
+
+    /// The users' second factors, read and written in this transaction.
+    fn mfa(&mut self) -> &mut dyn MfaWrites;
 
     /// The audit log, for a second entry in this transaction.
     fn audit(&mut self) -> &mut dyn AuditWrites;

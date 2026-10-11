@@ -10,19 +10,21 @@ use fleet_core::value::Username;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use super::error::store_error;
-use super::{Database, audit, login_attempts, sessions, users};
+use super::{Database, audit, login_attempts, mfa, sessions, users};
 use crate::ports::audit::{
     AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, NewAuditEntry,
 };
 use crate::ports::login_attempts::{
     AttemptKey, LoginAttempt, LoginAttemptReads, LoginAttemptWrites,
 };
+use crate::ports::mfa::{InsertMfaError, MfaReads, MfaWrites, UserMfa};
+use crate::ports::recovery_codes::RecoveryCodeHash;
 use crate::ports::sessions::{
     NewSession, RefreshLookup, Rotation, SessionReads, SessionWithUser, SessionWrites,
 };
 use crate::ports::store::{Store, StoreError, UnauditedWrite, WriteTx};
 use crate::ports::tokens::TokenHash;
-use crate::ports::users::{InsertUserError, NewUser, User, UserReads, UserWrites};
+use crate::ports::users::{InsertUserError, NewUser, PasswordHash, User, UserReads, UserWrites};
 
 /// The statement that starts a write transaction: it takes the write lock at
 /// once. A fixed literal with no input, the one non-macro SQL in production
@@ -58,6 +60,25 @@ impl SessionReads for Reads {
         hash: &TokenHash,
     ) -> Result<Option<SessionWithUser>, StoreError> {
         sessions::find_by_access_hash(&self.pool, hash).await
+    }
+
+    async fn refresh_hash_exists(&self, hash: &TokenHash) -> Result<bool, StoreError> {
+        sessions::refresh_hash_exists(&self.pool, hash).await
+    }
+}
+
+#[async_trait]
+impl MfaReads for Reads {
+    async fn find(&self, user: UserId) -> Result<Option<UserMfa>, StoreError> {
+        mfa::find(&self.pool, user).await
+    }
+
+    async fn find_unused_code(
+        &self,
+        user: UserId,
+        hash: &RecoveryCodeHash,
+    ) -> Result<Option<RecoveryCodeHash>, StoreError> {
+        mfa::find_unused_code(&self.pool, user, hash).await
     }
 }
 
@@ -97,6 +118,10 @@ impl WriteTx for SqliteWriteTx {
     }
 
     fn login_attempts(&mut self) -> &mut dyn LoginAttemptWrites {
+        self
+    }
+
+    fn mfa(&mut self) -> &mut dyn MfaWrites {
         self
     }
 
@@ -145,6 +170,68 @@ impl SessionWrites for SqliteWriteTx {
     ) -> Result<bool, StoreError> {
         sessions::touch(&mut self.tx, id, at, stale_since).await
     }
+
+    async fn revoke_all_for_user(
+        &mut self,
+        user: UserId,
+        except: Option<SessionId>,
+        at: DateTime<Utc>,
+    ) -> Result<u64, StoreError> {
+        sessions::revoke_all_for_user(&mut self.tx, user, except, at).await
+    }
+
+    async fn find(&mut self, id: SessionId) -> Result<Option<SessionWithUser>, StoreError> {
+        sessions::find_by_id(&mut self.tx, id).await
+    }
+
+    async fn stamp_step_up(
+        &mut self,
+        id: SessionId,
+        at: DateTime<Utc>,
+    ) -> Result<bool, StoreError> {
+        sessions::stamp_step_up(&mut self.tx, id, at).await
+    }
+}
+
+#[async_trait]
+impl MfaWrites for SqliteWriteTx {
+    async fn find(&mut self, user: UserId) -> Result<Option<UserMfa>, StoreError> {
+        mfa::find(&mut *self.tx, user).await
+    }
+
+    async fn insert(&mut self, mfa: &UserMfa) -> Result<(), InsertMfaError> {
+        mfa::insert(&mut self.tx, mfa).await
+    }
+
+    async fn replace(&mut self, mfa: &UserMfa) -> Result<bool, StoreError> {
+        mfa::replace(&mut self.tx, mfa).await
+    }
+
+    async fn advance_step(
+        &mut self,
+        user: UserId,
+        step: u64,
+        confirmed_at: DateTime<Utc>,
+    ) -> Result<bool, StoreError> {
+        mfa::advance_step(&mut self.tx, user, step, confirmed_at).await
+    }
+
+    async fn replace_codes(
+        &mut self,
+        user: UserId,
+        hashes: &[RecoveryCodeHash],
+    ) -> Result<(), StoreError> {
+        mfa::replace_codes(&mut self.tx, user, hashes).await
+    }
+
+    async fn use_code(
+        &mut self,
+        user: UserId,
+        hash: &RecoveryCodeHash,
+        at: DateTime<Utc>,
+    ) -> Result<bool, StoreError> {
+        mfa::use_code(&mut self.tx, user, hash, at).await
+    }
 }
 
 #[async_trait]
@@ -176,6 +263,18 @@ impl UserWrites for SqliteWriteTx {
     async fn insert(&mut self, user: &NewUser) -> Result<(), InsertUserError> {
         users::insert(&mut self.tx, user).await
     }
+
+    async fn get(&mut self, id: UserId) -> Result<Option<User>, StoreError> {
+        users::get_in(&mut self.tx, id).await
+    }
+
+    async fn set_password_hash(
+        &mut self,
+        id: UserId,
+        hash: &PasswordHash,
+    ) -> Result<bool, StoreError> {
+        users::set_password_hash(&mut self.tx, id, hash).await
+    }
 }
 
 #[async_trait]
@@ -205,6 +304,10 @@ impl Store for Database {
     }
 
     fn login_attempts(&self) -> &dyn LoginAttemptReads {
+        &self.reads
+    }
+
+    fn mfa(&self) -> &dyn MfaReads {
         &self.reads
     }
 

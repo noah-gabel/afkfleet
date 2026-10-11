@@ -7,7 +7,9 @@
 //!    (`retain_recent`), so their memory stays bounded;
 //! 2. the lockout's expired streaks are purged, in batches that stop at the
 //!    shutdown; a failure is a `warn`, and the next run tries again;
-//! 3. one `info` line sums up the requests the limits and the lockout
+//! 3. the login's expired challenges (mfa and setup tokens) are dropped from
+//!    memory;
+//! 4. one `info` line sums up the requests the limits and the lockout
 //!    refused since the last run, only if they refused any. A refused
 //!    request's own line is at `debug`, so a flood adds one line a minute to
 //!    the log, not thousands a second.
@@ -21,6 +23,7 @@ use tokio::time::{Instant, MissedTickBehavior, interval_at};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
+use crate::app::challenges::Challenges;
 use crate::app::lockout::LockoutService;
 use crate::http::error::chain;
 use crate::http::rate_limit::RateLimits;
@@ -28,18 +31,24 @@ use crate::http::rate_limit::RateLimits;
 /// How often the housekeeping runs.
 pub const INTERVAL: Duration = Duration::from_mins(1);
 
-/// What the housekeeping looks after: the rate limits and the lockout.
+/// What the housekeeping looks after: the rate limits, the lockout and the
+/// login's challenges.
 #[derive(Debug, Clone)]
 pub struct Housekeeping {
     limits: RateLimits,
     lockout: LockoutService,
+    challenges: Challenges,
 }
 
 impl Housekeeping {
-    /// The housekeeping of `limits` and `lockout`.
+    /// The housekeeping of `limits`, `lockout` and `challenges`.
     #[must_use]
-    pub const fn new(limits: RateLimits, lockout: LockoutService) -> Self {
-        Self { limits, lockout }
+    pub const fn new(limits: RateLimits, lockout: LockoutService, challenges: Challenges) -> Self {
+        Self {
+            limits,
+            lockout,
+            challenges,
+        }
     }
 
     /// Runs every [`INTERVAL`] until `stop` is cancelled.
@@ -58,6 +67,10 @@ impl Housekeeping {
                 error = %chain(&error),
                 "the purge of expired login failure streaks failed; the next run tries again"
             ),
+        }
+        match self.challenges.purge_expired() {
+            0 => {}
+            dropped => debug!(dropped, "expired login challenges were dropped"),
         }
         let limits = self.limits.take_refusals();
         let lockout = self.lockout.take_refusals();

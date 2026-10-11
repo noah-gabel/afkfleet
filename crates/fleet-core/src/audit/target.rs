@@ -5,12 +5,12 @@ use uuid::Uuid;
 
 use super::AuditError;
 use super::name::{self, Dots};
-use crate::id::{AccountId, AgentId, BotId, ModeId, UserId};
+use crate::id::{AccountId, AgentId, BotId, ModeId, SessionId, UserId};
 
 /// What an entry touched, stored as `target_type` and `target_id`. Each
 /// variant holds its typed ID, so the type and the ID can never disagree.
-/// Later phases add variants when their ID types arrive (sessions and
-/// invites in P7).
+/// Later phases add variants when their ID types arrive (invites in P7's
+/// group E).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuditTarget {
     /// A user.
@@ -23,6 +23,8 @@ pub enum AuditTarget {
     Agent(AgentId),
     /// A mode.
     Mode(ModeId),
+    /// A session: one login's token family (P7, group D).
+    Session(SessionId),
 }
 
 impl AuditTarget {
@@ -35,6 +37,7 @@ impl AuditTarget {
             Self::Bot(_) => "bot",
             Self::Agent(_) => "agent",
             Self::Mode(_) => "mode",
+            Self::Session(_) => "session",
         }
     }
 
@@ -47,6 +50,7 @@ impl AuditTarget {
             Self::Bot(id) => *id.as_uuid(),
             Self::Agent(id) => *id.as_uuid(),
             Self::Mode(id) => *id.as_uuid(),
+            Self::Session(id) => *id.as_uuid(),
         }
     }
 }
@@ -105,6 +109,7 @@ impl RecordedTarget {
             "bot" => BotId::try_from(id).map(AuditTarget::Bot),
             "agent" => AgentId::try_from(id).map(AuditTarget::Agent),
             "mode" => ModeId::try_from(id).map(AuditTarget::Mode),
+            "session" => SessionId::try_from(id).map(AuditTarget::Session),
             _ => return TargetKind::try_from(kind).map(|kind| Self::Unrecognized { kind, id }),
         };
         known.map(Self::Known).map_err(|_| AuditError::TargetId)
@@ -125,7 +130,7 @@ mod tests {
         )
     }
 
-    fn every_target() -> [AuditTarget; 5] {
+    fn every_target() -> [AuditTarget; 6] {
         let (random, at) = bytes();
         [
             AuditTarget::User(UserId::new_v7(at, random).unwrap()),
@@ -133,6 +138,7 @@ mod tests {
             AuditTarget::Bot(BotId::new_v7(at, random).unwrap()),
             AuditTarget::Agent(AgentId::new_v7(at, random).unwrap()),
             AuditTarget::Mode(ModeId::new_v7(at, random).unwrap()),
+            AuditTarget::Session(SessionId::new_v7(at, random).unwrap()),
         ]
     }
 
@@ -140,7 +146,10 @@ mod tests {
     fn the_stored_type_names_are_pinned() {
         let kinds = every_target().map(|target| target.kind());
 
-        assert_eq!(kinds, ["user", "account", "bot", "agent", "mode"]);
+        assert_eq!(
+            kinds,
+            ["user", "account", "bot", "agent", "mode", "session"]
+        );
     }
 
     #[test]
@@ -166,12 +175,12 @@ mod tests {
     fn an_unknown_type_reads_back_as_unrecognized() {
         let id = Uuid::from_u128(0x018b_cfe5_6800_7bab_abab_abab_abab_abab);
 
-        let target = RecordedTarget::from_parts("session", id).unwrap();
+        let target = RecordedTarget::from_parts("nonexistent_kind", id).unwrap();
 
         assert_eq!(
             target,
             RecordedTarget::Unrecognized {
-                kind: TargetKind::try_from("session").unwrap(),
+                kind: TargetKind::try_from("nonexistent_kind").unwrap(),
                 id,
             }
         );

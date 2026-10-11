@@ -25,13 +25,22 @@ use chrono::DateTime;
 use fleet_core::auth::SessionPolicy;
 use fleet_core::id::RequestId;
 use fleet_server::app::auth::TokenService;
+use fleet_server::app::challenges::Challenges;
 use fleet_server::app::health::HealthService;
+use fleet_server::app::login::LoginService;
+use fleet_server::app::mfa::{MfaPorts, MfaService};
 use fleet_server::config::{HttpConfig, LogConfig, LogFormat, RateLimitConfig};
 use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::openapi::ApiDocs;
 use fleet_server::http::rate_limit::{RateLimits, TrustedProxies};
 use fleet_server::http::router::{AppState, router};
+use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
+use fleet_server::infra::crypto::passwords::Argon2Passwords;
+use fleet_server::infra::crypto::recovery_codes::Sha256RecoveryCodes;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
+use fleet_server::infra::crypto::totp::TotpRs;
+use fleet_server::infra::crypto::vault::{VaultKeys, XChaChaVault};
+use fleet_server::infra::qr::SvgQr;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions, READ_CONNECTIONS};
 use fleet_startup::telemetry::{NoRules, layer_with};
 use fleet_testkit::log_buffer::LogBuffer;
@@ -75,8 +84,64 @@ fn tokens(db: &Database) -> TokenService {
     )
 }
 
+/// The 2FA service over `db`, its vault on an in-memory key. No test here
+/// enrolls, but the state carries it.
+fn mfa(db: &Database) -> MfaService {
+    let clock = Arc::new(ManualClock::new(
+        chrono::DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
+    ));
+    let random = SeededRandom::new(17);
+    let keys = VaultKeys::from_keys(
+        std::collections::BTreeMap::from([(1, secrecy::SecretBox::new(Box::new([0x42; 32])))]),
+        1,
+    )
+    .unwrap();
+    MfaService::new(
+        clock.clone(),
+        Arc::new(random.clone()),
+        Arc::new(db.clone()),
+        Arc::new(XChaChaVault::new(keys, Arc::new(random.clone()))),
+        MfaPorts {
+            totp: Arc::new(TotpRs::new()),
+            recovery: Arc::new(Sha256RecoveryCodes::new()),
+            qr: Arc::new(SvgQr::new()),
+        },
+        Challenges::new(clock, Arc::new(Sha256Tokens::new(Arc::new(random)))),
+    )
+}
+
+/// The login over `db`, with `tokens` and `mfa`. No test here logs in, but
+/// the state carries it.
+async fn login(db: &Database, tokens: &TokenService, mfa: &MfaService) -> LoginService {
+    let clock = Arc::new(ManualClock::new(
+        chrono::DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
+    ));
+    let passwords = Argon2Passwords::new(
+        fleet_server::config::Argon2Params::default(),
+        Arc::new(SeededRandom::new(19)),
+    )
+    .await
+    .unwrap();
+    let lockout = fleet_server::app::lockout::LockoutService::new(
+        clock.clone(),
+        Arc::new(db.clone()),
+        Arc::new(HmacAttemptKeys::new(secrecy::SecretBox::new(Box::new(
+            [7; 32],
+        )))),
+        fleet_core::auth::LockoutPolicy::default(),
+    );
+    LoginService::new(
+        clock,
+        Arc::new(db.clone()),
+        Arc::new(passwords),
+        lockout,
+        tokens.clone(),
+        mfa.clone(),
+    )
+}
+
 /// The server's router over `db`.
-fn app(db: &Database) -> Router {
+async fn app(db: &Database) -> Router {
     let ids = RequestIds::new(
         Arc::new(ManualClock::new(
             DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
@@ -95,7 +160,16 @@ fn app(db: &Database) -> Router {
             DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
         )),
     );
-    let state = AppState::new(HealthService::new(Arc::new(db.clone())), tokens(db), limits);
+    let tokens = tokens(db);
+    let mfa = mfa(db);
+    let login = login(db, &tokens, &mfa).await;
+    let state = AppState::new(
+        HealthService::new(Arc::new(db.clone())),
+        tokens,
+        limits,
+        mfa,
+        login,
+    );
     router(state, &http, ids, ApiDocs::Hidden)
         .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))))
 }
@@ -184,7 +258,7 @@ async fn assert_answers_200_with_an_empty_body(
 ) {
     let db = open(options, DatabaseOptions::default()).await;
 
-    let (seen, logs) = send(&app(&db), Method::GET, path).await;
+    let (seen, logs) = send(&app(&db).await, Method::GET, path).await;
 
     assert_eq!(seen.status, 200);
     assert_eq!(seen.text, "");
@@ -198,7 +272,7 @@ async fn assert_answers_200_with_an_empty_body(
 async fn assert_answers_head_without_a_body(options: SqliteConnectOptions, path: &str) {
     let db = open(options, DatabaseOptions::default()).await;
 
-    let (seen, _logs) = send(&app(&db), Method::HEAD, path).await;
+    let (seen, _logs) = send(&app(&db).await, Method::HEAD, path).await;
 
     assert_eq!(seen.status, 200);
     assert_eq!(seen.text, "");
@@ -209,7 +283,7 @@ async fn assert_answers_head_without_a_body(options: SqliteConnectOptions, path:
 async fn assert_takes_only_get_and_head(options: SqliteConnectOptions, path: &str) {
     let db = open(options, DatabaseOptions::default()).await;
 
-    let (seen, _logs) = send(&app(&db), Method::POST, path).await;
+    let (seen, _logs) = send(&app(&db).await, Method::POST, path).await;
 
     assert_eq!(seen.status, 405);
     assert_eq!(seen.body["error"]["code"], "method_not_allowed");
@@ -270,7 +344,7 @@ async fn liveness_answers_even_when_the_database_is_closed(
     let db = open(options, DatabaseOptions::default()).await;
     db.close().await;
 
-    let (seen, _logs) = send(&app(&db), Method::GET, "/health/live").await;
+    let (seen, _logs) = send(&app(&db).await, Method::GET, "/health/live").await;
 
     assert_eq!(seen.status, 200);
 }
@@ -290,7 +364,7 @@ async fn readiness_is_busy_while_no_read_connection_is_free(
         held.push(db.read_pool().acquire().await.unwrap());
     }
 
-    let (seen, logs) = send(&app(&db), Method::GET, "/health/ready").await;
+    let (seen, logs) = send(&app(&db).await, Method::GET, "/health/ready").await;
 
     assert_eq!(seen.status, 503);
     assert_eq!(seen.body["error"]["code"], "busy");
@@ -315,7 +389,7 @@ async fn readiness_fails_with_the_internal_error_when_the_database_fails(
     let db = open(options, DatabaseOptions::default()).await;
     db.close().await;
 
-    let (seen, logs) = send(&app(&db), Method::GET, "/health/ready").await;
+    let (seen, logs) = send(&app(&db).await, Method::GET, "/health/ready").await;
 
     assert_eq!(seen.status, 500);
     assert_eq!(seen.body["error"]["code"], "internal");

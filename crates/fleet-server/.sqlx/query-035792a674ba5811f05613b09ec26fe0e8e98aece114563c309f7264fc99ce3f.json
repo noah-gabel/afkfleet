@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rowid AS \"rowid!: i64\", user_id AS \"user_id!\",\n                  secret_envelope AS \"secret_envelope!: Vec<u8>\",\n                  last_used_step AS \"last_used_step!: i64\", confirmed_at AS \"confirmed_at!\"\n           FROM user_mfa WHERE user_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "user_mfa",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "user_id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "user_mfa",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "secret_envelope!: Vec<u8>",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "user_mfa",
+            "name": "secret_envelope"
+          }
+        }
+      },
+      {
+        "name": "last_used_step!: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "user_mfa",
+            "name": "last_used_step"
+          }
+        }
+      },
+      {
+        "name": "confirmed_at!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "user_mfa",
+            "name": "confirmed_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "035792a674ba5811f05613b09ec26fe0e8e98aece114563c309f7264fc99ce3f"
+}

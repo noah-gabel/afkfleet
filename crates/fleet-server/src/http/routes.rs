@@ -2,18 +2,32 @@
 //! way a route gets into the router.
 //!
 //! [`Routes`] wraps utoipa-axum's `OpenApiRouter`, so every route keeps its
-//! entry in the `OpenAPI` document, and offers exactly two ways in:
+//! entry in the `OpenAPI` document, and offers exactly four ways in, one per
+//! [`Access`]:
 //! - [`Routes::public_route`]: a route anyone may call, such as the health
-//!   checks;
+//!   checks and the login's steps;
 //! - [`Routes::authed_route`]: a route whose handler takes `AuthUser`, so a
-//!   request without valid credentials gets 401.
+//!   request without a valid access token gets 401;
+//! - [`Routes::step_up_route`]: an authed route that also needs the password
+//!   entered again within 5 minutes; its handler takes `SteppedUpUser`, so
+//!   a session without a fresh stamp gets 403 `step_up_required` (§7.2);
+//! - [`Routes::setup_route`]: a route for enrolling a TOTP authenticator,
+//!   whose handler takes `SetupToken`, so anything but a live setup token
+//!   gets 401.
 //!
-//! Both take the route's [`RateClass`], so no route can exist without one,
-//! and add its limit as a route layer (only a matched route spends it, never
-//! a 404 or 405), and both record every method and path the route serves as a
-//! [`RouteEntry`]. The route-coverage test reads the entries: it calls every
-//! authed route without credentials and expects 401, and checks that the
-//! public routes are exactly the allowlist, in dev mode and outside it.
+//! Each takes the route's [`RateClass`], so no route can exist without one,
+//! and adds its limit as a route layer (only a matched route spends it,
+//! never a 404 or 405), and each records every method and path the route
+//! serves as a [`RouteEntry`]. The route-coverage test reads the entries: it
+//! calls every route that needs credentials without them and expects 401,
+//! every step-up route with a live session but no stamp and expects 403,
+//! and checks that the public routes are exactly the allowlist, in dev mode
+//! and outside it.
+//!
+//! The registration also writes who may call each operation into the
+//! document: the `access_token` or `setup_token` bearer scheme, and
+//! `x-step-up: true` on a step-up route, from the [`Access`] alone, so the
+//! document can't disagree with the router.
 //!
 //! [`Routes::finish`] adds the dev-only `GET /api/openapi.json` (public,
 //! recorded, not in the document) and the middleware stack.
@@ -25,7 +39,9 @@ use axum::Router;
 use axum::http::Method;
 use axum::middleware::from_fn_with_state;
 use axum::routing::get;
-use utoipa::openapi::path::PathItem;
+use utoipa::openapi::extensions::Extensions;
+use utoipa::openapi::path::{Operation, PathItem};
+use utoipa::openapi::security::SecurityRequirement;
 use utoipa_axum::router::{OpenApiRouter, UtoipaMethodRouter};
 
 use super::middleware::{self, RequestIds};
@@ -39,10 +55,38 @@ use crate::config::HttpConfig;
 pub enum Access {
     /// Anyone: no credentials are needed.
     Public,
-    /// Only a request with valid credentials: the handler takes `AuthUser`,
-    /// so anything else gets 401.
+    /// Only a request with a valid access token: the handler takes
+    /// `AuthUser`, so anything else gets 401.
     Authed,
+    /// Only a request with a valid access token whose session stepped up
+    /// within 5 minutes: the handler takes `SteppedUpUser`, so anything else
+    /// gets 401, or 403 `step_up_required` without a fresh stamp.
+    AuthedStepUp,
+    /// Only a request with a live setup token: the handler takes
+    /// `SetupToken`, so anything else gets 401.
+    Setup,
 }
+
+impl Access {
+    /// The bearer scheme the document names for it, if it needs one.
+    #[must_use]
+    pub const fn scheme(self) -> Option<&'static str> {
+        match self {
+            Self::Public => None,
+            Self::Authed | Self::AuthedStepUp => Some(ACCESS_TOKEN_SCHEME),
+            Self::Setup => Some(SETUP_TOKEN_SCHEME),
+        }
+    }
+}
+
+/// The document's name for the access token's bearer scheme.
+pub const ACCESS_TOKEN_SCHEME: &str = "access_token";
+
+/// The document's name for the setup token's bearer scheme.
+pub const SETUP_TOKEN_SCHEME: &str = "setup_token";
+
+/// The extension that marks a step-up route's operations in the document.
+pub const STEP_UP_EXTENSION: &str = "x-step-up";
 
 /// Which of §7.4's request limits a route spends, besides the global
 /// per-IP limit every request spends (Plan.md P7.10). Every authed route
@@ -115,6 +159,18 @@ impl Routes {
         self.register(Access::Authed, class, route)
     }
 
+    /// Adds `route`, whose handler takes `SteppedUpUser`, spending `class`.
+    #[must_use]
+    pub fn step_up_route(self, class: RateClass, route: UtoipaMethodRouter<AppState>) -> Self {
+        self.register(Access::AuthedStepUp, class, route)
+    }
+
+    /// Adds `route`, whose handler takes `SetupToken`, spending `class`.
+    #[must_use]
+    pub fn setup_route(self, class: RateClass, route: UtoipaMethodRouter<AppState>) -> Self {
+        self.register(Access::Setup, class, route)
+    }
+
     /// The entries recorded so far.
     #[must_use]
     pub fn entries(&self) -> &[RouteEntry] {
@@ -158,15 +214,20 @@ impl Routes {
         (middleware::apply(routes, http, ids, &limits), entries)
     }
 
-    /// Records every method and path of `route` and adds it, behind its
-    /// class's limit.
+    /// Records every method and path of `route`, writes `access` into its
+    /// operations in the document, and adds it, behind its class's limit.
     fn register(
         mut self,
         access: Access,
         class: RateClass,
         route: UtoipaMethodRouter<AppState>,
     ) -> Self {
-        let (schemas, paths, method_router) = route;
+        let (schemas, mut paths, method_router) = route;
+        for item in paths.paths.values_mut() {
+            for operation in operations(item) {
+                document_access(operation, access);
+            }
+        }
         for (path, item) in &paths.paths {
             self.entries
                 .extend(methods(item).into_iter().map(|method| RouteEntry {
@@ -186,6 +247,36 @@ impl Routes {
         };
         self.router = self.router.routes((schemas, paths, method_router));
         self
+    }
+}
+
+/// Every operation `item` has, for the methods [`methods`] lists.
+fn operations(item: &mut PathItem) -> impl Iterator<Item = &mut Operation> {
+    [
+        &mut item.get,
+        &mut item.put,
+        &mut item.post,
+        &mut item.delete,
+        &mut item.options,
+        &mut item.head,
+        &mut item.patch,
+        &mut item.trace,
+    ]
+    .into_iter()
+    .filter_map(Option::as_mut)
+}
+
+/// Writes who may call `operation` into the document: its bearer scheme,
+/// and the step-up mark.
+fn document_access(operation: &mut Operation, access: Access) {
+    operation.security = access
+        .scheme()
+        .map(|scheme| vec![SecurityRequirement::new(scheme, Vec::<String>::new())]);
+    if access == Access::AuthedStepUp {
+        operation
+            .extensions
+            .get_or_insert_with(Extensions::default)
+            .merge(Extensions::from_iter([(STEP_UP_EXTENSION, true)]));
     }
 }
 
@@ -245,6 +336,42 @@ mod tests {
                 Method::TRACE,
             ]
         );
+    }
+
+    #[test]
+    fn each_access_names_its_scheme() {
+        assert_eq!(Access::Public.scheme(), None);
+        assert_eq!(Access::Authed.scheme(), Some("access_token"));
+        assert_eq!(Access::AuthedStepUp.scheme(), Some("access_token"));
+        assert_eq!(Access::Setup.scheme(), Some("setup_token"));
+    }
+
+    #[test]
+    fn an_operation_is_marked_with_its_access() {
+        for (access, scheme, step_up) in [
+            (Access::Public, None, false),
+            (Access::Authed, Some("access_token"), false),
+            (Access::AuthedStepUp, Some("access_token"), true),
+            (Access::Setup, Some("setup_token"), false),
+        ] {
+            let mut operation = Operation::new();
+
+            document_access(&mut operation, access);
+
+            let json = serde_json::to_value(&operation).unwrap();
+            assert_eq!(
+                json.get("security"),
+                scheme
+                    .map(|scheme| serde_json::json!([{ scheme: [] }]))
+                    .as_ref(),
+                "{access:?}"
+            );
+            assert_eq!(
+                json.get("x-step-up"),
+                step_up.then_some(&serde_json::json!(true)),
+                "{access:?}"
+            );
+        }
     }
 
     #[test]

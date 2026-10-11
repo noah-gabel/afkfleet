@@ -46,7 +46,18 @@ fn the_export_writes_one_file_per_type() {
             "ErrorBody.ts",
             "ErrorCode.ts",
             "ErrorResponse.ts",
-            "FieldError.ts"
+            "FieldError.ts",
+            "LoginMfaRequest.ts",
+            "LoginRequest.ts",
+            "LoginResponse.ts",
+            "LoginStatus.ts",
+            "MfaConfirmRequest.ts",
+            "MfaConfirmResponse.ts",
+            "MfaEnrollResponse.ts",
+            "MfaResetResponse.ts",
+            "RefreshRequest.ts",
+            "StepUpRequest.ts",
+            "TokenResponse.ts",
         ]
     );
 }

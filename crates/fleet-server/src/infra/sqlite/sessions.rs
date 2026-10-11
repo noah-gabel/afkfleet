@@ -5,7 +5,7 @@
 //! bound as their 32 bytes.
 
 use chrono::{DateTime, Utc};
-use fleet_core::id::SessionId;
+use fleet_core::id::{SessionId, UserId};
 use sqlx::{SqliteConnection, SqlitePool};
 
 use super::convert::{id_text, parse_id, parse_time, time_text};
@@ -166,8 +166,68 @@ pub(super) async fn find_by_refresh_hash(
     }))
 }
 
+/// Whether `hash` is a current or replaced refresh token.
+pub(super) async fn refresh_hash_exists(
+    pool: &SqlitePool,
+    hash: &TokenHash,
+) -> Result<bool, StoreError> {
+    let hash = hash.as_bytes().as_slice();
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM sessions WHERE refresh_hash = ?)
+               OR EXISTS (SELECT 1 FROM rotated_refresh_tokens WHERE hash = ?) AS "exists!: bool""#,
+        hash,
+        hash
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(store_error)
+}
+
+/// Revokes every live session of `user` but `except`.
+pub(super) async fn revoke_all_for_user(
+    conn: &mut SqliteConnection,
+    user: UserId,
+    except: Option<SessionId>,
+    at: DateTime<Utc>,
+) -> Result<u64, StoreError> {
+    let user = id_text(user);
+    let except = except.map(id_text);
+    let at = stored_time(at, SESSIONS, "revoked_at")?;
+    let done = sqlx::query!(
+        "UPDATE sessions SET revoked_at = ?
+         WHERE user_id = ? AND revoked_at IS NULL AND (? IS NULL OR id <> ?)",
+        at,
+        user,
+        except,
+        except
+    )
+    .execute(conn)
+    .await
+    .map_err(store_error)?;
+    Ok(done.rows_affected())
+}
+
+/// Stamps `stepped_up_at` on a session that isn't revoked.
+pub(super) async fn stamp_step_up(
+    conn: &mut SqliteConnection,
+    id: SessionId,
+    at: DateTime<Utc>,
+) -> Result<bool, StoreError> {
+    let id = id_text(id);
+    let at = stored_time(at, SESSIONS, "stepped_up_at")?;
+    let done = sqlx::query!(
+        "UPDATE sessions SET stepped_up_at = ? WHERE id = ? AND revoked_at IS NULL",
+        at,
+        id
+    )
+    .execute(conn)
+    .await
+    .map_err(store_error)?;
+    Ok(done.rows_affected() == 1)
+}
+
 /// The session with this ID, with its user.
-async fn find_by_id(
+pub(super) async fn find_by_id(
     conn: &mut SqliteConnection,
     id: SessionId,
 ) -> Result<Option<SessionWithUser>, StoreError> {

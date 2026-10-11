@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO user_mfa (user_id, secret_envelope, last_used_step, confirmed_at)\n             VALUES (?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "864a2dce826d26e60dd171d08fc3085891bd863578dc315a01044b8368982fe1"
+}

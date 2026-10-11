@@ -9,6 +9,10 @@
 //!   itself.
 //! - **Schemas** come from fleet-api-types' [`components`], whose test keeps
 //!   them equal to the TypeScript export.
+//! - **Security:** two HTTP bearer schemes, `access_token` and `setup_token`.
+//!   The route registry names one on each operation that needs it, and marks
+//!   a step-up route's operations with `x-step-up: true`, from the route's
+//!   access alone (P7, group D).
 //! - **Info:** the title "afkfleet", the crate's version and its license;
 //!   no contact and no servers.
 //!
@@ -22,8 +26,10 @@ use axum::http::HeaderValue;
 use axum::http::header::CONTENT_TYPE;
 use axum::response::{IntoResponse as _, Response};
 use utoipa::OpenApi;
+use utoipa::openapi::security::{Http, HttpAuthScheme, SecurityScheme};
 
 use super::error::ApiError;
+use super::routes::{ACCESS_TOKEN_SCHEME, SETUP_TOKEN_SCHEME};
 
 /// Where dev mode serves the document.
 pub const OPENAPI_PATH: &str = "/api/openapi.json";
@@ -54,14 +60,21 @@ impl ApiDocs {
 ))]
 struct ApiDoc;
 
-/// The document without paths: the info and every schema of the API.
+/// The document without paths: the info, every schema of the API, and the
+/// two bearer schemes the route registry names on each operation (the
+/// access token, and the setup token of a TOTP enrollment).
 pub(crate) fn base() -> utoipa::openapi::OpenApi {
     let mut document = ApiDoc::openapi();
-    document
-        .components
-        .get_or_insert_with(Default::default)
+    let components = document.components.get_or_insert_with(Default::default);
+    components
         .schemas
         .extend(fleet_api_types::openapi::components());
+    for scheme in [ACCESS_TOKEN_SCHEME, SETUP_TOKEN_SCHEME] {
+        components.add_security_scheme(
+            scheme,
+            SecurityScheme::Http(Http::new(HttpAuthScheme::Bearer)),
+        );
+    }
     document
 }
 

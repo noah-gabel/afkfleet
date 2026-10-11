@@ -120,6 +120,15 @@ pub trait SessionReads: Send + Sync + fmt::Debug {
         &self,
         hash: &TokenHash,
     ) -> Result<Option<SessionWithUser>, StoreError>;
+
+    /// Whether `hash` is any session's current refresh token or one it
+    /// already replaced. A refresh asks this first, so an unknown token is
+    /// refused without taking the one write connection; a token reaches a
+    /// client only after its commit, so this never misses a real one.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn refresh_hash_exists(&self, hash: &TokenHash) -> Result<bool, StoreError>;
 }
 
 /// Reading and writing sessions inside a [`super::store::WriteTx`]. A
@@ -159,6 +168,34 @@ pub trait SessionWrites: Send {
     /// # Errors
     /// [`StoreError`].
     async fn revoke(&mut self, id: SessionId, at: DateTime<Utc>) -> Result<bool, StoreError>;
+
+    /// Revokes every session of `user` that isn't revoked yet at `at`, all
+    /// but `except` when it's given (the session that asked). How many it
+    /// revoked.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn revoke_all_for_user(
+        &mut self,
+        user: UserId,
+        except: Option<SessionId>,
+        at: DateTime<Utc>,
+    ) -> Result<u64, StoreError>;
+
+    /// The session with this ID and its user, read in this transaction, so a
+    /// commit that acts for a session can check it's still live.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn find(&mut self, id: SessionId) -> Result<Option<SessionWithUser>, StoreError>;
+
+    /// Stamps `stepped_up_at` = `at` on the session, if it isn't revoked.
+    /// Whether exactly that one row changed.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn stamp_step_up(&mut self, id: SessionId, at: DateTime<Utc>)
+    -> Result<bool, StoreError>;
 
     /// Sets `last_used_at` to `at`, but only when the stored value is at or
     /// before `stale_since`, so two requests that both found it stale write
