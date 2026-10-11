@@ -5,5 +5,7 @@ expression: names
 [
   "user.create",
   "security.refresh_token_reuse",
-  "security.lockout"
+  "security.lockout",
+  "mfa.enroll",
+  "mfa.reset"
 ]

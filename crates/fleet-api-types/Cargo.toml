@@ -13,6 +13,10 @@ workspace = true
 [dependencies]
 # `text::sanitize_untrusted`, which cleans every text a client reads (ADR-0015).
 fleet-core.workspace = true
+# The request DTOs' rules, checked at the server's boundary (ADR-0016).
+garde = { workspace = true, features = ["derive"] }
+# `SecretText::into_secret`, which hands a secret field to the server (ADR-0016).
+secrecy.workspace = true
 serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 # The TypeScript export; `serde-compat` carries serde's renames into it (ADR-0015).
@@ -21,6 +25,8 @@ ts-rs = { workspace = true, features = ["serde-compat"] }
 # `preserve_order`, properties keep the struct's field order, as ts-rs's output does, so
 # a test compares the two directly (ADR-0015).
 utoipa = { workspace = true, features = ["macros", "preserve_order"] }
+# `SecretText` wipes its text on drop (ADR-0016).
+zeroize.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true

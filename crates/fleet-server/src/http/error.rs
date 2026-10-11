@@ -103,6 +103,10 @@ pub enum ApiError {
     /// The caller may see the resource, but not do this (403).
     #[error("the caller may not do this")]
     Forbidden,
+    /// The action needs the password entered again within the last 5
+    /// minutes (403).
+    #[error("the action needs a fresh step-up")]
+    StepUpRequired,
     /// The resource doesn't exist, or the caller may not see it (404).
     #[error("the resource doesn't exist")]
     NotFound,
@@ -154,6 +158,7 @@ impl ApiError {
             Self::BadRequest => ErrorCode::BadRequest,
             Self::Unauthorized => ErrorCode::Unauthorized,
             Self::Forbidden => ErrorCode::Forbidden,
+            Self::StepUpRequired => ErrorCode::StepUpRequired,
             Self::NotFound => ErrorCode::NotFound,
             Self::MethodNotAllowed => ErrorCode::MethodNotAllowed,
             Self::Timeout => ErrorCode::Timeout,
@@ -180,7 +185,7 @@ pub const fn status(code: ErrorCode) -> StatusCode {
     match code {
         ErrorCode::BadRequest => StatusCode::BAD_REQUEST,
         ErrorCode::Unauthorized => StatusCode::UNAUTHORIZED,
-        ErrorCode::Forbidden => StatusCode::FORBIDDEN,
+        ErrorCode::Forbidden | ErrorCode::StepUpRequired => StatusCode::FORBIDDEN,
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
         ErrorCode::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
         ErrorCode::Timeout => StatusCode::REQUEST_TIMEOUT,
@@ -320,6 +325,7 @@ impl ApiError {
             Self::Internal(source) => (None, Some(Arc::from(source))),
             Self::BadRequest
             | Self::Forbidden
+            | Self::StepUpRequired
             | Self::NotFound
             | Self::MethodNotAllowed
             | Self::Timeout
@@ -437,6 +443,7 @@ fn add_missing_headers(headers: &mut HeaderMap, code: ErrorCode) {
         }
         ErrorCode::BadRequest
         | ErrorCode::Forbidden
+        | ErrorCode::StepUpRequired
         | ErrorCode::NotFound
         | ErrorCode::MethodNotAllowed
         | ErrorCode::Timeout
@@ -610,10 +617,20 @@ mod tests {
         );
     }
 
+    /// The code a bare status of `code`'s comes back as: its own, except a
+    /// code that shares its status with a more general one, which only an
+    /// `ApiError` ever sends.
+    const fn bare_of(code: ErrorCode) -> ErrorCode {
+        match code {
+            ErrorCode::StepUpRequired => ErrorCode::Forbidden,
+            other => other,
+        }
+    }
+
     #[test]
     fn every_codes_status_maps_back_to_the_code_when_it_comes_bare() {
         for code in ErrorCode::ALL {
-            assert_eq!(bare_code(status(*code)), *code, "{code:?}");
+            assert_eq!(bare_code(status(*code)), bare_of(*code), "{code:?}");
         }
     }
 

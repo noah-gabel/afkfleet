@@ -41,6 +41,7 @@ expression: answer.json()
           "bad_request",
           "unauthorized",
           "forbidden",
+          "step_up_required",
           "not_found",
           "method_not_allowed",
           "timeout",
@@ -84,6 +85,88 @@ expression: answer.json()
           "message"
         ],
         "type": "object"
+      },
+      "MfaConfirmRequest": {
+        "additionalProperties": false,
+        "description": "`POST /me/mfa/confirm`: the first code the authenticator app shows, which\nproves it holds the secret.",
+        "properties": {
+          "code": {
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "code"
+        ],
+        "type": "object"
+      },
+      "MfaConfirmResponse": {
+        "description": "The confirmed authenticator's recovery codes: shown once, each usable\nonce instead of a code from the app.",
+        "properties": {
+          "recovery_codes": {
+            "items": {
+              "maxLength": 24,
+              "type": "string"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "recovery_codes"
+        ],
+        "type": "object"
+      },
+      "MfaEnrollResponse": {
+        "description": "`POST /me/mfa/enroll`: a new TOTP secret for the authenticator app.\nEach call replaces the pending one; nothing is stored until confirm.",
+        "properties": {
+          "otpauth_uri": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "qr_svg": {
+            "maxLength": 32768,
+            "type": "string"
+          },
+          "secret": {
+            "maxLength": 32,
+            "type": "string"
+          }
+        },
+        "required": [
+          "otpauth_uri",
+          "qr_svg",
+          "secret"
+        ],
+        "type": "object"
+      },
+      "MfaResetResponse": {
+        "description": "`POST /me/mfa/reset`: a setup token for replacing the authenticator.\nUntil confirm, the current one keeps working.",
+        "properties": {
+          "expires_in": {
+            "maximum": 600,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "setup_token": {
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "setup_token",
+          "expires_in"
+        ],
+        "type": "object"
+      }
+    },
+    "securitySchemes": {
+      "access_token": {
+        "scheme": "bearer",
+        "type": "http"
+      },
+      "setup_token": {
+        "scheme": "bearer",
+        "type": "http"
       }
     }
   },
@@ -98,6 +181,225 @@ expression: answer.json()
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/me/mfa/confirm": {
+      "post": {
+        "operationId": "confirm",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MfaConfirmRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaConfirmResponse"
+                }
+              }
+            },
+            "description": "The authenticator is confirmed; its recovery codes, shown once."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No live setup token."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Enroll first, or 2FA is already set up."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The code isn't 6 digits, or doesn't match."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "setup_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/me/mfa/confirm`: the new authenticator's first code; the\nanswer holds the recovery codes, shown once.",
+        "tags": [
+          "mfa"
+        ]
+      }
+    },
+    "/api/v1/me/mfa/enroll": {
+      "post": {
+        "operationId": "enroll",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaEnrollResponse"
+                }
+              }
+            },
+            "description": "A new secret, waiting for confirm."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No live setup token."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "setup_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/me/mfa/enroll`: a new TOTP secret for the authenticator\napp; each call replaces the pending one.",
+        "tags": [
+          "mfa"
+        ]
+      }
+    },
+    "/api/v1/me/mfa/reset": {
+      "post": {
+        "operationId": "reset",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MfaResetResponse"
+                }
+              }
+            },
+            "description": "A setup token for enroll and confirm."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The user has no 2FA to replace."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/me/mfa/reset`: a setup token that replaces the\nauthenticator once confirmed; until then, the current one keeps\nworking. Needs a step-up.",
+        "tags": [
+          "mfa"
+        ],
+        "x-step-up": true
+      }
+    },
     "/health/live": {
       "get": {
         "operationId": "live",

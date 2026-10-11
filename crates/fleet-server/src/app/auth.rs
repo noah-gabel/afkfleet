@@ -37,7 +37,7 @@ use chrono::{DateTime, Utc};
 use fleet_core::audit::{AuditAction, AuditError, AuditMetadata, AuditOutcome, AuditTarget};
 use fleet_core::auth::{
     AccessFacts, RefreshDecision, RefreshFacts, RefreshMatch, SessionPolicy, SessionTimes,
-    access_decision, refresh_decision, touch_due, touch_stale_since,
+    access_decision, is_stepped_up, refresh_decision, touch_due, touch_stale_since,
 };
 use fleet_core::authz::Actor;
 use fleet_core::id::{SessionId, UserId};
@@ -330,6 +330,13 @@ impl TokenService {
             // Refused: dropping the transaction rolls back nothing written.
             _ => Err(RefreshError::Rejected),
         }
+    }
+
+    /// Whether `stamp`, when the session's password was last entered again,
+    /// allows a step-up action now (`fleet_core::auth::is_stepped_up`).
+    #[must_use]
+    pub fn is_stepped_up(&self, stamp: Option<DateTime<Utc>>) -> bool {
+        is_stepped_up(stamp, self.clock.now())
     }
 
     /// The session a request's access token belongs to, as the actor it

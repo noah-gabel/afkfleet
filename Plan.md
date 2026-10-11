@@ -243,7 +243,8 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Memory zeroing | `zeroize` | 1.9.0 | server, agent, startup | `Zeroizing` buffers for key files and passwords read from stdin (ADR-0016) |
 | Secure randomness | `getrandom` | 0.4.3 | server, agent | Tokens, keys, nonces: **always** use this. The agent draws its runtime seed and its bot IDs' random bytes from it; no features (ADR-0014). In fleet-server only `OsRandom` calls it, behind the `SecureRandom` port (ADR-0015) |
 | Non-security randomness | `rand` | **0.10.3**, dfo | core, runtime, testkit | Jitter, random look angles; seeded `StdRng` in tests. No OS randomness in core. fleet-testkit's `SeededRandom` uses `std_rng` (ADR-0015) |
-| TOTP 2FA | `totp-rs` | 6.0.0 | server | Feature `qr`. `gen_secret` uses rand's thread RNG, so P7 generates the secret bytes with `getrandom` instead (security rule 4) |
+| TOTP 2FA | `totp-rs` | 6.0.0 | server | No default features; `otpauth` and `zeroize`. No `qr` (its image codecs; group D, the user's choice), no `std` (wall-clock reads), no `gen_secret` (rand's thread RNG): the secret's bytes come from the `SecureRandom` port (security rule 4). `zeroize` adds the `zeroize_derive` proc macro (ADR-0016) |
+| QR code | `qrcodegen` | 1.8.0 | server | The enrollment's QR code: its module grid, which fleet-server writes as an SVG itself (group D, the user's choice). No dependencies (ADR-0016) |
 | Password strength | `zxcvbn` | 3.1.1, dfo | server | Without `derive_builder`. Runs inside the password service's blocking task; its hints map to fleet-core's own enums. It reads the wall clock itself for its "recent years" rule. The dev profile compiles it at `opt-level = 3` (ADR-0016) |
 
 ### Rust: desktop
@@ -384,6 +385,7 @@ The full analysis lives in `docs/threat-model.md`.
   - Users get 10 single-use recovery codes, stored hashed.
   - **2FA is mandatory for every user**, Owner and Admins included, and it can't be switched off by configuration.
   - Until a user has enrolled, the password step returns `mfa_setup_required` together with a single-use **setup token** (10 min). The setup token only works for `POST /me/mfa/enroll` and `POST /me/mfa/confirm`; after confirming, the user logs in normally. The password step never returns real tokens on its own.
+  - **2FA is replaced, never removed** (group D, the user's decision): `POST /me/mfa/reset` (step-up) answers a setup token, and confirming a new authenticator with it swaps the secret and the recovery codes and revokes every other session of the user. Until then the old authenticator keeps working, so an account never stands without 2FA.
   - Login is two steps: the password returns a single-use `mfa_token` (5 min), and that token plus the code returns the real tokens.
 - **Registration only by invite**
   - Admins and above create invites; each is single-use and expires (default 72 h).
@@ -391,7 +393,7 @@ The full analysis lives in `docs/threat-model.md`.
 - **Bootstrap.** `afkfleet-server user create-owner` (CLI, hidden password prompt). It refuses if an Owner already exists.
 - **Step-up.** These actions require re-entering the password within the last 5 min:
   - changing the password
-  - resetting 2FA (the user has to enroll again at the next login)
+  - replacing 2FA (`POST /me/mfa/reset`, group D: the new authenticator replaces the old one at confirm)
   - deleting an MC account
   - changing a role
   - rotating keys
@@ -2571,6 +2573,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Open for D: an oversized login.** Login's request DTO gets a generous upper bound on the password field, so an oversized login is refused before any hashing. The bound itself is D's question.
   > - **Open for D and E: the 422 for weak passwords.** `HashError::Weak` carries `WeakWarning` and `WeakSuggestion`; how a 422 exposes them is D's and E's question.
 
+  > Note (P7.6, from group D, for E; the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **a credential change revokes every other session.** A 2FA replacement does (D), and E's `/me/password` must too, through `SessionWrites::revoke_all_for_user(user, except)`, which `PATCH /users/{id}` reuses for all of a user's sessions.
+
   > Note (P7.6, from group C, for group D) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
   > - **Login and the lockout:**
   >   - Login parses the typed name as a `Username` at the boundary; how an invalid name answers is D's question.
@@ -2578,7 +2582,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - Step-up's wrong password counts the same way.
   > - **Routes and the client:** handlers take `ClientIp` for their audit entries; the login routes register with `RateClass::Login`, refresh with `Refresh` (E's register with `Register`).
   > - **Open: refresh without the write connection.** `/auth/refresh` could check on the read pool whether the presented refresh hash exists at all (current or rotated) before opening the write transaction, so an unknown token is a 401 without taking the one write connection. That's safe because a token reaches a client only after its commit, so the check never misses one; only known tokens take the race-safe path inside the transaction. D's question (the user's note).
-- [ ] **P7.7** 🔴 2FA:
+- [x] **P7.7** 🔴 2FA:
   - enroll returns the otpauth URI and a QR code as PNG data
   - confirm, then reset (with step-up), which forces a fresh enrollment at the next login
   - recovery codes
@@ -2587,6 +2591,19 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - tests: the setup token is rejected on every other endpoint, expires after 10 min and can't be reused
 
   > Note (P7.7, from group C, open for D; the user's note) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **2FA codes and the lockout.** Whether wrong 2FA codes (and recovery codes) count toward the per-username lockout, and how many code attempts one `mfa_token` allows, are D's questions. Per-IP limits alone don't stop code guessing from many addresses; `Attempt::record_failure` can count a wrong code like a wrong password.
+
+  > Note (P7.7, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **Deviation: the QR code is SVG, not PNG.** totp-rs's `qr` feature brings image codecs (image, moxcms, png and more, some with SIMD and unsafe code). qrcodegen builds the module grid, and the server writes it as an SVG with nothing but a white background path and one black path of unit squares (ECC Medium, a 4-module quiet zone), sent as `data:image/svg+xml;base64,…`. The app shows it only through an `<img>`.
+  > - **Setup tokens only** for enroll and confirm (`Authorization: Bearer afk_st_…`), under a new registry kind `Access::Setup`. Enroll may be repeated (each call replaces the pending secret, which waits in memory); confirm before enroll is 409; a wrong or malformed code is 422 on `code` and keeps the token; confirm takes the token once the code matched, so a second concurrent confirm gets 401. The response of enroll: `{otpauth_uri, qr_svg, secret}`.
+  > - **TOTP:** SHA-1, 6 digits, 30 s steps, ±1 step, a 20-byte secret from `SecureRandom`, issuer "afkfleet", label `afkfleet:<username>`. A code is accepted only for a step strictly after `last_used_step`; confirm stores its own step, so the confirming code can't log in afterwards.
+  > - **Recovery codes:** 10, each 20 base32 characters (100 bits), shown once as `abcd-efgh-ijkl-mnop-qrst`, typed back in any case with or without `-` and spaces, stored as plain SHA-256.
+  > - **Replace, never reset:** `POST /me/mfa/reset` (step-up) answers 200 `{setup_token, expires_in}`, bound to the session that asked; nothing changes until its confirm, which swaps the authenticator and the codes, revokes the user's other sessions (`mfa.reset` with `sessions_revoked`) and re-checks that this session is live, the user enabled and the password unchanged. `DELETE /me/mfa` doesn't exist.
+  > - **The vault** joins `AppState` through the 2FA service; the secret's AAD names the user's ID and `totp_secret`.
+
+  > Note (P7.7, as built, group D) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **The pieces:** `fleet_core::auth::{totp, recovery, challenge}` (the window and the replay rule, `RecoveryCode`, `SecondFactor`, the lifetimes); `ports::{totp, qr, recovery_codes}` with `infra::crypto::{totp::TotpRs, recovery_codes::Sha256RecoveryCodes}` and `infra::qr::SvgQr`; `app::challenges::Challenges` and `app::mfa::MfaService`; the extractors `SetupToken`, `SteppedUpUser` and `ValidJson`; `Routes::{setup_route, step_up_route}` with the security schemes and `x-step-up`; `ErrorCode::StepUpRequired`; fleet-api-types' `SecretText` and the 2FA DTOs; `VaultKeys::from_keys`, the in-memory half of `load`.
+  > - **The registry test** calls every authed, step-up and setup route without credentials (401), every authed and step-up route with a live setup token (401), every setup route with an access token (401), and every step-up route with a live session that never stepped up (403 `step_up_required`); a step-up route whose handler forgets the check is caught. Each operation's security and `x-step-up` match its access.
+  > - **Tests,** red against compiling stubs (a store that found no challenge, a service that refused everything, adapters that matched, drew and hashed nothing, an extractor that skipped the stamp, a body extractor that answered 400 to everything, a registry that documented nothing): 68 of the 88 new server tests, 37 of the 74 new rule tests in fleet-core, and 8 of the 13 new tests in fleet-api-types failed on assertions. The ones that passed check refusals, pinned values and registration, which the stubs satisfy too. Then all passed. New snapshots, read before accepting: the audit-action names (`mfa.enroll`, `mfa.reset`), the 403 `step_up_required` envelope, the OpenAPI document and the SVG of the test URI.
 - [x] **P7.8** 🔴 The `AuthUser` extractor (Bearer token via `axum-extra`) loads session and user and rejects disabled users. A `require(permission, resource)` helper calls `fleet_core::authz::authorize`.
 
   > Note (P7.8, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
@@ -2804,6 +2821,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - register with an invite
   - 2FA enrollment (QR code from the server), shown right after the first login, since 2FA is mandatory
   - profile: change password, list and revoke sessions
+
+  > Note (P8.7, from Phase 7, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **The QR code is an SVG `data:` URI.** The app shows it only through `<img src="data:…">`, never by inserting the SVG as HTML, so nothing in it could ever run. P8.3's CSP already allows `img-src data:`.
+  > - **After setup, the app asks for the next code:** the code that confirmed the authenticator can't log in.
+  > - **Replacing the authenticator** goes from the profile through step-up and `POST /me/mfa/reset` straight into enroll and confirm with the setup token it answers, in the same session; until confirm, the old authenticator keeps working.
 - [ ] **P8.8** 🔴 Admin screens:
   - users: change role, disable
   - invites: the code is shown **once**, with a copy button
@@ -3376,7 +3398,7 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 | `POST /auth/logout` | user | Revoke the current session |
 | `POST /auth/register` | public (invite) | Create an account from an invite |
 | `GET /me` · `POST /me/password` | user (step-up) | Profile, password change |
-| `POST /me/mfa/enroll` · `/confirm` · `DELETE /me/mfa` | user or setup token (enroll/confirm); user + step-up (`DELETE`) | 2FA (`DELETE` resets it; enrollment is required again at the next login) |
+| `POST /me/mfa/enroll` · `/confirm` · `/reset` | setup token (enroll, confirm); user + step-up (reset) | 2FA: enroll answers a new secret, confirm stores it with 10 recovery codes; reset answers a setup token whose confirm replaces the authenticator and revokes the user's other sessions (group D) |
 | `GET /me/sessions` · `DELETE /me/sessions/{id}` | user | Session management |
 | `GET /users` · `PATCH /users/{id}` | Admin+ | Role, disable |
 | `POST /invites` · `GET /invites` · `DELETE /invites/{id}` | Admin+ | Invites |

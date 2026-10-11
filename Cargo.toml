@@ -47,8 +47,8 @@ argon2 = { version = "0.6.0", default-features = false }
 # `impl Future` everywhere else (ADR-0015).
 async-trait = "0.1.92"
 # axum: fleet-server's HTTP layer. Without default features; the server enables only
-# what it uses. Group C uses none: `IntoResponse` and `middleware::from_fn` need no
-# feature, and the error body is written with serde_json (ADR-0015).
+# what it uses: `json` arrives with the first request DTOs (P7, group D), and brings
+# serde_path_to_error (ADR-0015, ADR-0016).
 axum = { version = "0.8.9", default-features = false }
 # axum-extra: `TypedHeader<Authorization<Bearer>>` for the server's AuthUser extractor.
 # Without default features (no `tracing`); fleet-server enables only `typed-header`,
@@ -74,8 +74,8 @@ clap = "4.6.7"
 # exist; fleet-startup enables `toml` and `env`, and fleet-testkit `test` (`Jail`) for
 # every config test (ADR-0014, ADR-0015).
 figment = "0.10.19"
-# garde: range checks on the agent's config. No default features exist; the agent
-# enables `derive` (ADR-0014).
+# garde: range checks on the agent's config, and the rules of fleet-api-types' request
+# DTOs. No default features exist; the members enable `derive` (ADR-0014, ADR-0016).
 garde = "0.23.0"
 # getrandom: every secret, the agent's bot IDs and runtime seed, and fleet-server's
 # OsRandom. No features: `fill` and `u64` need none (ADR-0014, ADR-0015).
@@ -106,6 +106,10 @@ metrics = "0.24.6"
 # lockfile, and nothing uses them for secrets. One `metrics` 0.24.x in the tree keeps
 # the runtime and the exporter on the same recorder (ADR-0014).
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
+# qrcodegen: the QR code of a TOTP enrollment's otpauth URI; fleet-server writes its
+# modules as an SVG itself, so no image codec joins the tree. It has no dependencies
+# (ADR-0016).
+qrcodegen = "1.8.0"
 # rand: no `sys_rng`/`thread_rng`; fleet-core takes an RNG as a parameter (ADR-0010).
 rand = { version = "0.10.3", default-features = false }
 # rpassword: `user create-owner`'s hidden password prompt at the terminal (ADR-0016).
@@ -135,6 +139,11 @@ thiserror = "2.0.21"
 # and no `chrono` (it would turn on chrono's `clock` for the whole workspace) or `json`:
 # times and JSON are converted in fleet-server (ADR-0015).
 sqlx = { version = "0.9.0", default-features = false }
+# totp-rs: one time step's TOTP code and the otpauth URI of an enrollment. Without
+# default features: no `std` (wall-clock `*_current`), no `gen_secret` (rand's thread RNG;
+# the secret comes from the SecureRandom port), no `serde`, no `qr` (image codecs).
+# fleet-server enables `otpauth` and `zeroize`, which wipes its Secret on drop (ADR-0016).
+totp-rs = { version = "6.0.0", default-features = false }
 # tokio: no default features exist; members enable only what they use (`sync`,
 # `time`, …) and `test-util` in tests.
 tokio = "1.53.2"

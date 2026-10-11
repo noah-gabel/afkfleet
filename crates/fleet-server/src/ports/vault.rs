@@ -42,9 +42,13 @@ pub enum VaultError {
     #[error("the envelope is malformed")]
     Malformed,
     /// Authentication failed: the envelope was changed, or opened with the
-    /// wrong key, record or purpose. These look the same on purpose.
-    #[error("the envelope doesn't authenticate")]
-    Rejected,
+    /// wrong key, record or purpose. These look the same on purpose; the
+    /// key ID the envelope names is kept for the operator's log.
+    #[error("the envelope doesn't authenticate under key {key_id}")]
+    Rejected {
+        /// The key ID in the envelope.
+        key_id: u32,
+    },
     /// The OS's randomness failed while drawing the nonce.
     #[error("no nonce could be drawn")]
     Random(#[from] RandomError),

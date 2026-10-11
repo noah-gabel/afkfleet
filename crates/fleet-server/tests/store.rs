@@ -21,7 +21,7 @@ use fleet_core::audit::{
     RecordedValue, TargetKind,
 };
 use fleet_core::authz::Role;
-use fleet_core::id::{AccountId, AgentId, BotId, ModeId, UserId};
+use fleet_core::id::{AccountId, AgentId, BotId, ModeId, SessionId, UserId};
 use fleet_core::value::Username;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions, READ_CONNECTIONS};
 use fleet_server::ports::audit::{AuditEntryId, AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
@@ -607,6 +607,7 @@ async fn every_target_reads_back(_pool: SqlitePoolOptions, options: SqliteConnec
         AuditTarget::Agent(AgentId::new_v7(created, [4; 10]).unwrap()),
         AuditTarget::Mode(ModeId::new_v7(created, [5; 10]).unwrap()),
         AuditTarget::User(user_id(6)),
+        AuditTarget::Session(SessionId::new_v7(created, [7; 10]).unwrap()),
     ];
 
     for target in targets {
@@ -641,7 +642,7 @@ async fn an_unknown_target_type_reads_back_as_unrecognized(
     raw_entry(
         db.write_pool(),
         "x.y",
-        (Some("session"), Some(&id)),
+        (Some("nonexistent_kind"), Some(&id)),
         "success",
         None,
     )
@@ -653,7 +654,7 @@ async fn an_unknown_target_type_reads_back_as_unrecognized(
     assert_eq!(
         entries[0].target,
         Some(RecordedTarget::Unrecognized {
-            kind: TargetKind::try_from("session").unwrap(),
+            kind: TargetKind::try_from("nonexistent_kind").unwrap(),
             id: Uuid::parse_str(&id).unwrap(),
         })
     );

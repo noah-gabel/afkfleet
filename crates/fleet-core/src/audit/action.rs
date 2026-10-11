@@ -78,6 +78,19 @@ audit_actions! {
     /// user's; none otherwise, since the typed name is never stored.
     /// Metadata: `failures` (the streak's count) and `locked_until`.
     SECURITY_LOCKOUT = "security.lockout";
+
+    /// A user without 2FA confirmed their first TOTP authenticator with a
+    /// setup token from the password step (§7.2): its secret and 10
+    /// recovery codes are stored. Outcome: Success. Actor and target: the
+    /// user; the client's IP.
+    MFA_ENROLL = "mfa.enroll";
+
+    /// A user replaced their TOTP authenticator: started with step-up, it's
+    /// confirmed with the new authenticator's code, which swaps the secret
+    /// and the recovery codes and revokes every other session of the user
+    /// in the same commit. Outcome: Success. Actor and target: the user; the
+    /// client's IP. Metadata: `sessions_revoked`.
+    MFA_RESET = "mfa.reset";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

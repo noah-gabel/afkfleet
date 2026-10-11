@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use ts_rs::{Config, ExportError, TS};
 
 use crate::error::ErrorResponse;
+use crate::mfa::{MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse};
 
 /// The first line of every file ts-rs 12.0.1 writes. [`sync`] deletes only
 /// `.ts` files that start with it.
@@ -115,7 +116,11 @@ pub fn export(scratch: &Path) -> Result<(), TypeScriptError> {
     let config = Config::new().with_out_dir(scratch);
     // The root DTOs: `export_all` also writes every type they use. A DTO no
     // listed type uses goes here.
-    ErrorResponse::export_all(&config).map_err(TypeScriptError::Export)
+    ErrorResponse::export_all(&config).map_err(TypeScriptError::Export)?;
+    MfaEnrollResponse::export_all(&config).map_err(TypeScriptError::Export)?;
+    MfaConfirmRequest::export_all(&config).map_err(TypeScriptError::Export)?;
+    MfaConfirmResponse::export_all(&config).map_err(TypeScriptError::Export)?;
+    MfaResetResponse::export_all(&config).map_err(TypeScriptError::Export)
 }
 
 /// Lists how `dir` differs from the export in `scratch`, by file name. A missing

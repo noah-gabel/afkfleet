@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE users SET password_changed_at = '2027-01-15T08:00:00.000Z'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "a2c58d22f75b3b516450afb75ebb1ad0f4fd6aa6efefb7fed3227ec8a86fc73b"
+}

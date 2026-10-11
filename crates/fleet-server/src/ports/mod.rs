@@ -17,6 +17,8 @@
 //! - [`tokens`]: the tokens' hashes, the only form of a token the database
 //!   holds (P7.3).
 //! - [`passwords`]: hashing and checking passwords (P7.2).
+//! - [`totp`]: TOTP's crypto, a time step's code and the otpauth URI (P7.7).
+//! - [`qr`]: drawing the enrollment's QR code (P7.7).
 //! - [`vault`]: encrypting stored secrets (P7.4).
 //! - [`audit`]: the audit log. It's append-only: the only operations are
 //!   recording (inside a write transaction) and listing.
@@ -25,9 +27,11 @@ pub mod audit;
 pub mod login_attempts;
 pub mod mfa;
 pub mod passwords;
+pub mod qr;
 pub mod recovery_codes;
 pub mod sessions;
 pub mod store;
 pub mod tokens;
+pub mod totp;
 pub mod users;
 pub mod vault;

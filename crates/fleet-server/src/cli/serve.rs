@@ -64,8 +64,10 @@ use tracing::{error, info, warn};
 use super::DATABASE_CLOSE;
 use super::housekeeping::Housekeeping;
 use crate::app::auth::TokenService;
+use crate::app::challenges::Challenges;
 use crate::app::health::HealthService;
 use crate::app::lockout::LockoutService;
+use crate::app::mfa::{MfaPorts, MfaService};
 use crate::config::{HttpConfig, ServerConfig};
 use crate::http::error::chain;
 use crate::http::middleware::RequestIds;
@@ -73,11 +75,16 @@ use crate::http::openapi::ApiDocs;
 use crate::http::rate_limit::RateLimits;
 use crate::http::router::{AppState, router};
 use crate::infra::crypto::attempt_keys::HmacAttemptKeys;
+use crate::infra::crypto::recovery_codes::Sha256RecoveryCodes;
 use crate::infra::crypto::tokens::Sha256Tokens;
+use crate::infra::crypto::totp::TotpRs;
 use crate::infra::crypto::vault::{DerivedKey, VaultKeyError, VaultKeys, XChaChaVault};
+use crate::infra::qr::SvgQr;
 use crate::infra::sqlite::{self, Database, DatabaseOptions, OpenError};
 use crate::infra::system::{MonotonicClock, OsRandom, SystemClock};
 use crate::ports::store::Store;
+use crate::ports::tokens::Tokens;
+use crate::ports::vault::Vault;
 
 /// How long main.rs's runtime waits for its tasks once [`run`] returned;
 /// the connections axum still serves end then. Docker's `stop_grace_period`
@@ -196,9 +203,8 @@ pub struct App {
 /// mode; see the [module docs](self). `serve` and `user create-owner` are
 /// the only places the real clocks and randomness are built.
 ///
-/// It builds the vault from `keys` too. Nothing reads it until group D's
-/// 2FA service, which takes it into the app's state; until then it's built,
-/// which proves the keys make one, and dropped, wiping them (ADR-0016).
+/// It builds the vault from `keys` too, for the 2FA service, which seals and
+/// opens the users' TOTP secrets with it (ADR-0016).
 #[must_use]
 pub fn app(
     config: &ServerConfig,
@@ -210,13 +216,27 @@ pub fn app(
     let limiter_clock: Arc<dyn Clock> = Arc::new(MonotonicClock::start());
     let random: Arc<dyn SecureRandom> = Arc::new(OsRandom);
     let store: Arc<dyn Store> = Arc::new(database.clone());
-    let _vault = XChaChaVault::new(keys, Arc::clone(&random));
+    let vault: Arc<dyn Vault> = Arc::new(XChaChaVault::new(keys, Arc::clone(&random)));
+    let token_port: Arc<dyn Tokens> = Arc::new(Sha256Tokens::new(Arc::clone(&random)));
     let tokens = TokenService::new(
         Arc::clone(&clock),
         Arc::clone(&random),
         Arc::clone(&store),
-        Arc::new(Sha256Tokens::new(Arc::clone(&random))),
+        Arc::clone(&token_port),
         config.auth.sessions,
+    );
+    let challenges = Challenges::new(Arc::clone(&clock), token_port);
+    let mfa = MfaService::new(
+        Arc::clone(&clock),
+        Arc::clone(&random),
+        Arc::clone(&store),
+        vault,
+        MfaPorts {
+            totp: Arc::new(TotpRs::new()),
+            recovery: Arc::new(Sha256RecoveryCodes::new()),
+            qr: Arc::new(SvgQr::new()),
+        },
+        challenges.clone(),
     );
     let limits = RateLimits::new(&config.rate_limits, limiter_clock);
     let lockout = LockoutService::new(
@@ -226,7 +246,7 @@ pub fn app(
         config.auth.lockout,
     );
     let ids = RequestIds::new(clock, random);
-    let state = AppState::new(HealthService::new(store), tokens, limits.clone());
+    let state = AppState::new(HealthService::new(store), tokens, limits.clone(), mfa);
     App {
         router: router(
             state,
@@ -234,7 +254,7 @@ pub fn app(
             ids,
             ApiDocs::for_dev_mode(config.dev_mode),
         ),
-        housekeeping: Housekeeping::new(limits, lockout),
+        housekeeping: Housekeeping::new(limits, lockout, challenges),
     }
 }
 

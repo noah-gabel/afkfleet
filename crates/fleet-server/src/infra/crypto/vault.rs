@@ -141,10 +141,22 @@ impl VaultKeys {
                 secret_file::read(path).map_err(|source| VaultKeyError::File { key_id, source })?;
             keys.insert(key_id, decode(key_id, path, text.expose_secret())?);
         }
-        if !keys.contains_key(&config.active_key_id) {
-            return Err(VaultKeyError::ActiveMissing {
-                key_id: config.active_key_id,
-            });
+        Self::from_keys(keys, config.active_key_id)
+    }
+
+    /// The keys `keys`, by ID, with `active` as the active one, checked as
+    /// [`VaultKeys::load`] checks the ones it read: the active key must be
+    /// there, and no key may appear under two IDs. `load` reads the files;
+    /// this takes keys that are already in memory, such as a test's.
+    ///
+    /// # Errors
+    /// [`VaultKeyError::ActiveMissing`] or [`VaultKeyError::Duplicate`].
+    pub fn from_keys(
+        keys: BTreeMap<u32, SecretBox<[u8; KEY_BYTES]>>,
+        active: u32,
+    ) -> Result<Self, VaultKeyError> {
+        if !keys.contains_key(&active) {
+            return Err(VaultKeyError::ActiveMissing { key_id: active });
         }
         let entries: Vec<_> = keys.iter().collect();
         for (index, (first, key)) in entries.iter().enumerate() {
@@ -157,10 +169,7 @@ impl VaultKeys {
                 }
             }
         }
-        Ok(Self {
-            keys,
-            active: config.active_key_id,
-        })
+        Ok(Self { keys, active })
     }
 
     /// The active key's ID.
@@ -370,7 +379,7 @@ impl Vault for XChaChaVault {
                     aad: &aad(key_id, record, purpose),
                 },
             )
-            .map_err(|_| VaultError::Rejected)?;
+            .map_err(|_| VaultError::Rejected { key_id })?;
         Ok(SecretBox::new(Box::new(plaintext)))
     }
 }
@@ -489,6 +498,51 @@ mod tests {
         )
     }
 
+    fn in_memory(id: u32, byte: u8) -> (u32, SecretBox<[u8; KEY_BYTES]>) {
+        (id, SecretBox::new(Box::new([byte; KEY_BYTES])))
+    }
+
+    #[test]
+    fn keys_in_memory_make_the_same_vault_as_loaded_ones() {
+        let keys = VaultKeys::from_keys(
+            BTreeMap::from([in_memory(GOLDEN_KEY_ID, 0x42)]),
+            GOLDEN_KEY_ID,
+        )
+        .unwrap();
+        let vault = XChaChaVault::new(keys, Arc::new(SeededRandom::new(1)));
+
+        let opened = vault
+            .open(
+                VaultPurpose::TotpSecret,
+                golden_record(),
+                &hex(GOLDEN_ENVELOPE),
+            )
+            .unwrap();
+
+        assert_eq!(opened.expose_secret().as_slice(), GOLDEN_PLAINTEXT);
+    }
+
+    #[test]
+    fn keys_in_memory_are_checked_like_loaded_ones() {
+        let missing = VaultKeys::from_keys(BTreeMap::from([in_memory(1, 1)]), 2);
+        let twice = VaultKeys::from_keys(BTreeMap::from([in_memory(1, 7), in_memory(2, 7)]), 1);
+
+        assert!(
+            matches!(missing, Err(VaultKeyError::ActiveMissing { key_id: 2 })),
+            "{missing:?}"
+        );
+        assert!(
+            matches!(
+                twice,
+                Err(VaultKeyError::Duplicate {
+                    first: 1,
+                    second: 2
+                })
+            ),
+            "{twice:?}"
+        );
+    }
+
     // --- The format ------------------------------------------------------------
 
     #[test]
@@ -603,7 +657,10 @@ mod tests {
                     matches!(result, Err(VaultError::UnknownKey { .. })),
                     "byte {at}"
                 ),
-                _ => assert!(matches!(result, Err(VaultError::Rejected)), "byte {at}"),
+                _ => assert!(
+                    matches!(result, Err(VaultError::Rejected { .. })),
+                    "byte {at}"
+                ),
             }
         }
     }
@@ -622,7 +679,15 @@ mod tests {
 
         let result = other.open(VaultPurpose::TotpSecret, record(1), &envelope);
 
-        assert!(matches!(result, Err(VaultError::Rejected)), "{result:?}");
+        assert!(
+            matches!(
+                result,
+                Err(VaultError::Rejected {
+                    key_id: GOLDEN_KEY_ID
+                })
+            ),
+            "{result:?}"
+        );
     }
 
     #[test]
@@ -634,7 +699,15 @@ mod tests {
 
         let result = vault.open(VaultPurpose::TotpSecret, record(2), &envelope);
 
-        assert!(matches!(result, Err(VaultError::Rejected)), "{result:?}");
+        assert!(
+            matches!(
+                result,
+                Err(VaultError::Rejected {
+                    key_id: GOLDEN_KEY_ID
+                })
+            ),
+            "{result:?}"
+        );
     }
 
     #[test]

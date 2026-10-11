@@ -1,7 +1,7 @@
 //! One run of the server's housekeeping (Plan.md P7.10, ADR-0016): the rate
 //! limiters forget clients whose buckets are full again, the lockout's
-//! expired streaks are purged, and one `info` line sums up the refusals,
-//! only when there were any. Its timing and its stop are tested on paused
+//! expired streaks are purged, the login's expired challenges are dropped,
+//! and one `info` line sums up the refusals, only when there were any. Its timing and its stop are tested on paused
 //! time next to it; this needs a real database from `#[sqlx::test]`, so it
 //! runs in real time with a `ManualClock` (CLAUDE.md).
 // Integration tests are test code, but clippy only applies the test allowances
@@ -17,21 +17,25 @@ use std::sync::Arc;
 use chrono::{TimeZone as _, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::auth::LockoutPolicy;
+use fleet_core::authz::Role;
+use fleet_core::id::UserId;
 use fleet_core::system::Clock as _;
 use fleet_core::value::Username;
+use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
 use fleet_server::app::lockout::LockoutService;
 use fleet_server::cli::housekeeping::Housekeeping;
 use fleet_server::config::{LogConfig, LogFormat, Rate, RateLimitConfig};
 use fleet_server::http::rate_limit::RateLimits;
 use fleet_server::http::routes::RateClass;
 use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
+use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::audit::NewAuditEntry;
 use fleet_server::ports::login_attempts::{AttemptKeys as _, LoginAttempt};
 use fleet_server::ports::store::Store as _;
 use fleet_startup::telemetry::{NoRules, layer_with};
 use fleet_testkit::log_buffer::LogBuffer;
-use fleet_testkit::system::ManualClock;
+use fleet_testkit::system::{ManualClock, SeededRandom};
 use secrecy::SecretBox;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio_util::sync::CancellationToken;
@@ -63,6 +67,7 @@ struct Setup {
     housekeeping: Housekeeping,
     limits: RateLimits,
     lockout: LockoutService,
+    challenges: Challenges,
     clock: ManualClock,
     db: Database,
 }
@@ -89,10 +94,15 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
         Arc::new(keys()),
         LockoutPolicy::default(),
     );
+    let challenges = Challenges::new(
+        Arc::new(clock.clone()),
+        Arc::new(Sha256Tokens::new(Arc::new(SeededRandom::new(3)))),
+    );
     Setup {
-        housekeeping: Housekeeping::new(limits.clone(), lockout.clone()),
+        housekeeping: Housekeeping::new(limits.clone(), lockout.clone(), challenges.clone()),
         limits,
         lockout,
+        challenges,
         clock,
         db,
     }
@@ -179,6 +189,44 @@ async fn a_run_sums_up_the_refusals_since_the_last_one_in_one_line(
     assert_eq!(line["in_flight"], 1);
     let again = setup.run_once().await;
     assert_eq!(again.text(), "", "nothing was refused since");
+}
+
+/// A user for a challenge; no row is needed, since the store is in memory.
+fn challenge_user(n: u8) -> ChallengeUser {
+    ChallengeUser {
+        id: UserId::new_v7(Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap(), [n; 10]).unwrap(),
+        role: Role::Member,
+        password_changed_at: Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap(),
+    }
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_run_drops_the_expired_challenges_and_keeps_the_live_ones(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    setup.challenges.issue_mfa(challenge_user(1), None).unwrap();
+    setup
+        .challenges
+        .issue_setup(challenge_user(2), SetupPurpose::FirstEnrollment)
+        .unwrap();
+    setup.clock.advance(Duration::from_mins(5));
+    setup
+        .challenges
+        .issue_setup(challenge_user(3), SetupPurpose::FirstEnrollment)
+        .unwrap();
+
+    setup.run_once().await;
+
+    assert_eq!(
+        setup.challenges.held(),
+        2,
+        "the 5-minute mfa token is over, both setup tokens are live"
+    );
+    setup.clock.advance(Duration::from_mins(5));
+    setup.run_once().await;
+    assert_eq!(setup.challenges.held(), 1, "the first setup token is over");
 }
 
 #[sqlx::test(migrations = false)]

@@ -37,14 +37,20 @@ use fleet_core::id::UserId;
 use fleet_core::system::Clock as _;
 use fleet_core::value::Username;
 use fleet_server::app::auth::{IssuedTokens, TokenService};
+use fleet_server::app::challenges::Challenges;
 use fleet_server::app::health::HealthService;
+use fleet_server::app::mfa::{MfaPorts, MfaService};
 use fleet_server::config::{HttpConfig, RateLimitConfig};
 use fleet_server::http::error::ApiError;
 use fleet_server::http::extractors::AuthUser;
 use fleet_server::http::middleware::{self, RequestIds};
 use fleet_server::http::rate_limit::{RateLimits, TrustedProxies};
 use fleet_server::http::router::AppState;
+use fleet_server::infra::crypto::recovery_codes::Sha256RecoveryCodes;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
+use fleet_server::infra::crypto::totp::TotpRs;
+use fleet_server::infra::crypto::vault::{VaultKeys, XChaChaVault};
+use fleet_server::infra::qr::SvgQr;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions, READ_CONNECTIONS};
 use fleet_server::ports::audit::NewAuditEntry;
 use fleet_server::ports::store::Store as _;
@@ -123,6 +129,32 @@ async fn users(user: AuthUser) -> Result<&'static str, ApiError> {
     Ok("ok")
 }
 
+/// The 2FA service over `db`, its vault on an in-memory key. No test here
+/// enrolls, but the state carries it.
+fn mfa(db: &Database) -> MfaService {
+    let clock = Arc::new(ManualClock::new(
+        chrono::DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
+    ));
+    let random = SeededRandom::new(17);
+    let keys = VaultKeys::from_keys(
+        std::collections::BTreeMap::from([(1, secrecy::SecretBox::new(Box::new([0x42; 32])))]),
+        1,
+    )
+    .unwrap();
+    MfaService::new(
+        clock.clone(),
+        Arc::new(random.clone()),
+        Arc::new(db.clone()),
+        Arc::new(XChaChaVault::new(keys, Arc::new(random.clone()))),
+        MfaPorts {
+            totp: Arc::new(TotpRs::new()),
+            recovery: Arc::new(Sha256RecoveryCodes::new()),
+            qr: Arc::new(SvgQr::new()),
+        },
+        Challenges::new(clock, Arc::new(Sha256Tokens::new(Arc::new(random)))),
+    )
+}
+
 async fn setup_with(options: SqliteConnectOptions, database: DatabaseOptions) -> Setup {
     let db = Database::connect(options, database).await.unwrap();
     let clock = ManualClock::new(start());
@@ -153,6 +185,7 @@ async fn setup_with(options: SqliteConnectOptions, database: DatabaseOptions) ->
         HealthService::new(Arc::new(db.clone())),
         service.clone(),
         limits.clone(),
+        mfa(&db),
     );
     let http = HttpConfig {
         bind: HttpConfig::DEFAULT_BIND,

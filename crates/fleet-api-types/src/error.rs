@@ -42,6 +42,9 @@ pub enum ErrorCode {
     Unauthorized,
     /// The caller may see the resource, but not do this (403).
     Forbidden,
+    /// The action needs the password entered again within the last 5
+    /// minutes: `POST /auth/step-up`, then retry (403).
+    StepUpRequired,
     /// The resource doesn't exist, or the caller may not see it (404).
     NotFound,
     /// The path doesn't take this method (405).
@@ -75,6 +78,7 @@ impl ErrorCode {
             Self::BadRequest => "The request couldn't be read.",
             Self::Unauthorized => "Authentication is required.",
             Self::Forbidden => "You don't have permission to do this.",
+            Self::StepUpRequired => "Enter your password again to do this.",
             Self::NotFound => "The resource doesn't exist.",
             Self::MethodNotAllowed => "This method isn't allowed here.",
             Self::Timeout => "The request took too long.",
@@ -96,6 +100,7 @@ impl OpenEnum for ErrorCode {
         Self::BadRequest,
         Self::Unauthorized,
         Self::Forbidden,
+        Self::StepUpRequired,
         Self::NotFound,
         Self::MethodNotAllowed,
         Self::Timeout,
@@ -113,6 +118,7 @@ impl OpenEnum for ErrorCode {
             Self::BadRequest => "bad_request",
             Self::Unauthorized => "unauthorized",
             Self::Forbidden => "forbidden",
+            Self::StepUpRequired => "step_up_required",
             Self::NotFound => "not_found",
             Self::MethodNotAllowed => "method_not_allowed",
             Self::Timeout => "timeout",
@@ -212,20 +218,21 @@ mod tests {
             ErrorCode::BadRequest => 0,
             ErrorCode::Unauthorized => 1,
             ErrorCode::Forbidden => 2,
-            ErrorCode::NotFound => 3,
-            ErrorCode::MethodNotAllowed => 4,
-            ErrorCode::Timeout => 5,
-            ErrorCode::Conflict => 6,
-            ErrorCode::PayloadTooLarge => 7,
-            ErrorCode::UnsupportedMediaType => 8,
-            ErrorCode::ValidationFailed => 9,
-            ErrorCode::RateLimited => 10,
-            ErrorCode::Internal => 11,
-            ErrorCode::Busy => 12,
+            ErrorCode::StepUpRequired => 3,
+            ErrorCode::NotFound => 4,
+            ErrorCode::MethodNotAllowed => 5,
+            ErrorCode::Timeout => 6,
+            ErrorCode::Conflict => 7,
+            ErrorCode::PayloadTooLarge => 8,
+            ErrorCode::UnsupportedMediaType => 9,
+            ErrorCode::ValidationFailed => 10,
+            ErrorCode::RateLimited => 11,
+            ErrorCode::Internal => 12,
+            ErrorCode::Busy => 13,
         }
     }
 
-    const CODES: usize = 13;
+    const CODES: usize = 14;
 
     #[test]
     fn all_lists_every_code_exactly_once() {
@@ -254,6 +261,11 @@ mod tests {
         ErrorCode::Forbidden,
         "forbidden",
         "You don't have permission to do this."
+    )]
+    #[case(
+        ErrorCode::StepUpRequired,
+        "step_up_required",
+        "Enter your password again to do this."
     )]
     #[case(ErrorCode::NotFound, "not_found", "The resource doesn't exist.")]
     #[case(

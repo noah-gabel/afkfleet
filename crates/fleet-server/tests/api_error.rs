@@ -115,6 +115,7 @@ fn test_request_id() -> HeaderValue {
 #[case::bad_request("bad_request", || ApiError::BadRequest)]
 #[case::unauthorized("unauthorized", || ApiError::Unauthorized)]
 #[case::forbidden("forbidden", || ApiError::Forbidden)]
+#[case::step_up_required("step_up_required", || ApiError::StepUpRequired)]
 #[case::not_found("not_found", || ApiError::NotFound)]
 #[case::method_not_allowed("method_not_allowed", || ApiError::MethodNotAllowed)]
 #[case::timeout("timeout", || ApiError::Timeout)]
@@ -147,6 +148,7 @@ async fn every_variant_answers_with_its_status_headers_and_envelope(
 #[case(ErrorCode::BadRequest, StatusCode::BAD_REQUEST)]
 #[case(ErrorCode::Unauthorized, StatusCode::UNAUTHORIZED)]
 #[case(ErrorCode::Forbidden, StatusCode::FORBIDDEN)]
+#[case(ErrorCode::StepUpRequired, StatusCode::FORBIDDEN)]
 #[case(ErrorCode::NotFound, StatusCode::NOT_FOUND)]
 #[case(ErrorCode::MethodNotAllowed, StatusCode::METHOD_NOT_ALLOWED)]
 #[case(ErrorCode::Timeout, StatusCode::REQUEST_TIMEOUT)]
@@ -396,6 +398,7 @@ fn every_code_is_some_variants_code_with_its_status() {
         ApiError::BadRequest,
         ApiError::Unauthorized,
         ApiError::Forbidden,
+        ApiError::StepUpRequired,
         ApiError::NotFound,
         ApiError::MethodNotAllowed,
         ApiError::Timeout,

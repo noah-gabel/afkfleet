@@ -101,6 +101,19 @@ impl PartialSchema for SafeInt {
 
 impl ToSchema for SafeInt {}
 
+/// The schema of a 32-bit field within `MIN..=MAX`, such as a token's
+/// seconds left: an integer with its range and no `format`, written inline
+/// by the field's `#[schema(schema_with = integer_schema::<MIN, MAX>)]`.
+/// ts-rs exports such a field as `number` already.
+#[must_use]
+pub fn integer_schema<const MIN: u32, const MAX: u32>() -> RefOr<Schema> {
+    ObjectBuilder::new()
+        .schema_type(Type::Integer)
+        .minimum(Some(MIN))
+        .maximum(Some(MAX))
+        .into()
+}
+
 #[cfg(test)]
 mod tests {
     use fleet_core::audit::AuditMetadata;

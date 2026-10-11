@@ -8,8 +8,7 @@
 //!   the generated files are stale.
 //! - **Requests** derive `Deserialize`, garde's `Validate` and
 //!   `#[serde(deny_unknown_fields)]`, and each has tests for an unknown field
-//!   and for every rule. garde joins this crate with the first request DTO
-//!   (P7).
+//!   and for every rule. A rule's message names the rule, never the value.
 //! - **Responses** derive `Serialize` and `Deserialize`, without
 //!   `deny_unknown_fields`, so `fleet-client` reads them and a field a newer
 //!   server adds doesn't break an older app. Each one round-trips in a test.
@@ -24,25 +23,34 @@
 //! - **Text a client reads** is a [`BoundedText`]: cleaned and capped when it's
 //!   read, so a buggy or hostile server can't put control characters, a fake
 //!   log line or megabytes into a client's output.
+//! - **Secrets** (passwords, tokens, codes, TOTP secrets) are a
+//!   [`SecretText`]: never in `Debug`, wiped on drop, read only through
+//!   `expose()` or `into_secret()`. A test formats every DTO that holds one.
 //!
 //! # Modules
 //! - [`error`]: the error envelope that every failed request answers with.
-//! - [`int`]: the 64-bit integer type, [`SafeInt`].
+//! - [`int`]: the 64-bit integer type, [`SafeInt`], and the schema of a
+//!   bounded 32-bit field.
+//! - [`mfa`]: enrolling, confirming and replacing a TOTP authenticator.
 //! - [`open`]: tolerant values, [`Open`] and [`OpenEnum`].
 //! - [`openapi`]: the `OpenAPI` schemas, which the server's dev-only document
 //!   serves and which a test keeps equal to the TypeScript.
+//! - [`secret`]: secrets in requests and responses, [`SecretText`].
 //! - [`text`]: cleaned and capped text, [`BoundedText`].
 //! - [`typescript`]: the export to TypeScript, behind `just gen` and
 //!   `just gen-check`.
 
 pub mod error;
 pub mod int;
+pub mod mfa;
 pub mod open;
 pub mod openapi;
+pub mod secret;
 pub mod text;
 pub mod typescript;
 
 pub use error::{ErrorBody, ErrorCode, ErrorResponse, FieldError};
 pub use int::{SafeInt, SafeIntError};
 pub use open::{Open, OpenEnum};
+pub use secret::SecretText;
 pub use text::BoundedText;

@@ -1,5 +1,6 @@
 //! The recovery codes (Plan.md P7.7, §7.2, ADR-0016): [`RecoveryCodeHash`],
-//! the only form of a recovery code the database holds.
+//! the only form of a recovery code the database holds, and
+//! [`RecoveryCodes`], which makes it.
 //!
 //! A recovery code is 20 base32 characters (100 bits) from the
 //! `SecureRandom` port, shown once. Only the SHA-256 of its normalized text
@@ -9,7 +10,16 @@
 
 use core::fmt;
 
+use fleet_core::auth::RecoveryCode;
 use subtle::ConstantTimeEq as _;
+
+/// Hashing recovery codes: plain SHA-256 of the normalized text, which is
+/// safe only because each code carries 100 random bits (ADR-0016). The only
+/// implementation is infra's `Sha256RecoveryCodes`.
+pub trait RecoveryCodes: Send + Sync + fmt::Debug {
+    /// The hash of `code`'s normalized text.
+    fn hash(&self, code: &RecoveryCode) -> RecoveryCodeHash;
+}
 
 /// The SHA-256 hash of a recovery code's normalized text.
 ///

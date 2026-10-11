@@ -16,6 +16,7 @@ use axum::Router;
 use chrono::DateTime;
 use fleet_core::auth::LockoutPolicy;
 use fleet_core::system::Clock;
+use fleet_server::app::challenges::Challenges;
 use fleet_server::app::lockout::LockoutService;
 use fleet_server::cli::housekeeping::Housekeeping;
 use fleet_server::cli::serve::App;
@@ -26,12 +27,13 @@ use fleet_server::config::{
 use fleet_server::http::rate_limit::RateLimits;
 use fleet_server::http::rate_limit::TrustedProxies;
 use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
+use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::crypto::vault::VaultKeys;
 use fleet_server::infra::sqlite::Database;
 use fleet_startup::signals::{ShutdownSignals, Signal};
 use fleet_startup::telemetry::{NoRules, layer_with};
 use fleet_testkit::log_buffer::LogBuffer;
-use fleet_testkit::system::ManualClock;
+use fleet_testkit::system::{ManualClock, SeededRandom};
 use secrecy::SecretBox;
 use serde_json::Value;
 use tokio::net::TcpListener;
@@ -310,8 +312,8 @@ pub(crate) fn capture() -> (LogBuffer, tracing::subscriber::DefaultGuard) {
 }
 
 /// `router` with the housekeeping `serve` runs beside it: the default
-/// limits and a lockout over `database`, on a clock that never moves, with
-/// a fixed lockout key.
+/// limits, a lockout over `database` and an empty challenge store, on a
+/// clock that never moves, with a fixed lockout key.
 pub(crate) fn app_of(router: Router, database: &Database) -> App {
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(
         DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
@@ -322,11 +324,16 @@ pub(crate) fn app_of(router: Router, database: &Database) -> App {
         Arc::new(HmacAttemptKeys::new(SecretBox::new(Box::new([7; 32])))),
         LockoutPolicy::default(),
     );
+    let challenges = Challenges::new(
+        Arc::clone(&clock),
+        Arc::new(Sha256Tokens::new(Arc::new(SeededRandom::new(9)))),
+    );
     App {
         router,
         housekeeping: Housekeeping::new(
             RateLimits::new(&RateLimitConfig::default(), clock),
             lockout,
+            challenges,
         ),
     }
 }
