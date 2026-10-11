@@ -7,6 +7,9 @@
 //!   read handles and one write transaction at a time, [`store::WriteTx`],
 //!   whose commit always records an audit entry.
 //! - [`users`]: the users.
+//! - [`sessions`]: the sessions, one per login's token family (P7.1, P7.3).
+//! - [`tokens`]: the tokens' hashes, the only form of a token the database
+//!   holds (P7.3).
 //! - [`passwords`]: hashing and checking passwords (P7.2).
 //! - [`vault`]: encrypting stored secrets (P7.4).
 //! - [`audit`]: the audit log. It's append-only: the only operations are
@@ -14,6 +17,8 @@
 
 pub mod audit;
 pub mod passwords;
+pub mod sessions;
 pub mod store;
+pub mod tokens;
 pub mod users;
 pub mod vault;

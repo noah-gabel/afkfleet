@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rowid AS \"rowid!: i64\", hash AS \"hash!: Vec<u8>\", session_id AS \"session_id!\",\n                  rotated_at AS \"rotated_at!\"\n           FROM rotated_refresh_tokens WHERE hash = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "rotated_refresh_tokens",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "hash!: Vec<u8>",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "rotated_refresh_tokens",
+            "name": "hash"
+          }
+        }
+      },
+      {
+        "name": "session_id!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "rotated_refresh_tokens",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "rotated_at!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "rotated_refresh_tokens",
+            "name": "rotated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "adb719911b5cfe524819eafb467127cb0e68f451fcb2af24b325d524dce3258f"
+}

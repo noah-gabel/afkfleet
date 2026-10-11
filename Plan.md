@@ -2396,6 +2396,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P7.1, from the group A review): **IDs aren't secrets.** v7 IDs reveal their creation time. Invite codes and session tokens come from `getrandom`, never from an ID, and access is decided by `authorize()`, not by how hard an ID is to guess.
 
+  > Note (P7.1, as built, group B) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`0003_sessions.sql`.**
+  > - **`sessions`**, one row per login's token family, its ID (`SessionId`) the same across every refresh: `user_id` (references `users`, no cascade), `access_hash` and `refresh_hash` (32-byte BLOBs, UNIQUE), `created_at`, `refreshed_at`, `last_used_at`, `stepped_up_at` and `revoked_at` (NULL until set). No expiry columns: `fleet_core::auth` computes them from `created_at` and `refreshed_at` with the running config. No IP address or user agent.
+  > - **`rotated_refresh_tokens`** `(hash, session_id, rotated_at)`: every refresh token a session replaced, ON DELETE CASCADE, so reuse of any of them is recognized while the session exists.
+  > - **Indexes:** `sessions(user_id)`, `sessions(created_at)` (P11.6's cleanup), `rotated_refresh_tokens(session_id)`.
+  > - **The repository** has what B uses: insert, the joined lookup by access hash, and inside the write transaction the lookup by refresh hash (current or rotated), rotate, revoke and the conditional touch. `WriteTx::commit_unaudited(UnauditedWrite)` arrives with its first exemption, `SessionTouch`.
+  > - **Tests,** red against compiling stubs: 21 of 26 repository tests and 3 of 8 `TokenHash` tests failed on assertions, then all passed.
+
   > Note (P7.1, from group D): **One Owner.** The `users` migration adds a partial unique index on `role` for `'owner'`. `authorize()` also refuses to act on any other user with the Owner role (ADR-0010).
 - [x] **P7.2** 🔴 `PasswordService`:
   - Argon2id with the configured parameters
@@ -2433,11 +2440,23 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - fleet-server: 68 of 77 failed on assertions
   >
   >   Then all passed. The queue's tests use a blocking stand-in and bound every wait at 10 s.
-- [ ] **P7.3** 🔴 `TokenService`:
+- [x] **P7.3** 🔴 `TokenService`:
   - tokens from `getrandom`, with prefixes
   - SHA-256 hashing and constant-time comparison (`subtle`)
   - TTLs
   - refresh rotation, and **family revocation when an old token is reused**
+
+  > Note (P7.3, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **One `sessions` row per family,** with the current access and refresh hashes; every replaced refresh hash stays in `rotated_refresh_tokens`, so reuse of any of them is caught. A refresh replaces the access token too.
+  > - **The tokens:** 32 bytes from `SecureRandom`, base64url without padding, behind `afk_at_` or `afk_rt_`. Stored as SHA-256 of the whole text (a 32-byte BLOB). A presented token must be its prefix plus 43 base64url characters before it's hashed; after the indexed lookup, `TokenHash::ct_eq` confirms the match.
+  > - **Expiry from anchors:** access = `refreshed_at` + `access_token_ttl_secs`, idle = `refreshed_at` + `refresh_token_idle_days`, both capped at `created_at` + `refresh_token_absolute_days`, from the running config. Expired at `now >= expiry`.
+  > - **The refresh rule** (`fleet_core::auth::refresh_decision`), inside the write transaction: unknown, revoked or expired → 401; a replaced token of a live session → reuse (revoke + `security.refresh_token_reuse` in the same commit, one `warn`); the current token of a disabled user → 401; otherwise rotate (`commit_unaudited(SessionRotate)`). No grace window; reuse in a dead session records nothing.
+  > - **The reuse entry:** Failure, no actor, the client's IP, target the session's user, metadata `session_id` and `rotated_at` (fleet-core's new typed `AuditMetadata::id` and `time`).
+  > - **`TokenService::prepare`** makes a session before any transaction; D's login inserts it and commits with `auth.login`.
+
+  > Note (P7.3, as built, group B) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **The pieces:** `fleet_core::auth::{SessionPolicy, SessionTimes, refresh_decision}`; `ports::tokens::{Tokens, TokenKind, MintedToken}` and `infra::crypto::tokens::Sha256Tokens` (sha2 with `zeroize`); `app::auth::TokenService` with `prepare` and `refresh`; `[auth]`'s three token keys.
+  > - **Tests,** red against compiling stubs (rules that allowed everything, typed metadata that added nothing, an adapter that minted nothing, config that ignored the keys, a service that refused every refresh): fleet-core 20 of 25 rule tests and 5 metadata tests plus the names snapshot; fleet-server 11 adapter, 8 config and 13 of 21 service tests failed on assertions. The tests that passed against the stubs check refusals and `Debug`. Then all passed.
 - [x] **P7.4** 🔴 Vault cipher: the envelope from §7.5 with `key_id` and AAD. TOTP secrets need it now; Phase 9 extends it. Tests cover tampering, the wrong key and the wrong AAD.
 
   > Note (P7.4, from Phase 6, group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
@@ -2505,6 +2524,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Tests,** red against compiling stubs (no Owner check, a service that refused everything, a command that did nothing): 26 failed on assertions, then all passed.
   >   - In-crate: the rounds through a stand-in prompt, `--password-stdin` through a stand-in stdin, and prompts and stdin that fail the test when they're used.
   >   - The real binary: `--password-stdin` creates the Owner with one audit entry, and a second run exits 1 with its stdin still open and unwritten.
+
+  > Note (P7.5, from the group A review, fixed in group B) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **the reads never block the runtime.** The prompt and the `--password-stdin` read run in `spawn_blocking`, each moving its owned source onto the blocking thread and back; the Owner check still comes first. Two current-thread tests failed (the reads blocked the runtime for their 5 s bound), then passed.
 - [ ] **P7.6** 🔴 Endpoints:
   - `POST /auth/login`, `/auth/login/mfa`, `/auth/refresh`, `/auth/logout`, `/auth/register` (invite)
   - `GET /me`, `POST /me/password` (step-up)
@@ -2530,7 +2551,19 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - replay protection
   - mandatory for **every** user, not configurable: until they enroll, login returns `mfa_setup_required` plus a single-use setup token that only works for enroll and confirm (§7.2). That includes users who just registered with an invite.
   - tests: the setup token is rejected on every other endpoint, expires after 10 min and can't be reused
-- [ ] **P7.8** 🔴 The `AuthUser` extractor (Bearer token via `axum-extra`) loads session and user and rejects disabled users. A `require(permission, resource)` helper calls `fleet_core::authz::authorize`.
+- [x] **P7.8** 🔴 The `AuthUser` extractor (Bearer token via `axum-extra`) loads session and user and rejects disabled users. A `require(permission, resource)` helper calls `fleet_core::authz::authorize`.
+
+  > Note (P7.8, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **Every refusal is the same 401** (`ApiError::Unauthorized`, a bare `WWW-Authenticate: Bearer`): no header, more than one `Authorization` header, another scheme, a malformed, unknown or expired token, a revoked session, a disabled user. A database failure isn't a refusal: 503 or 500.
+  > - **One lookup per request:** the session joined with its user on the read pool, decided by `fleet_core::auth::access_decision` (revoked, then expired, then disabled).
+  > - **The touch:** `last_used_at` at most once a minute (`touch_due`), a conditional write committed with `commit_unaudited(SessionTouch)`. Only the wait for the write connection is bounded (250 ms); the touch never fails a request, and a skipped one is logged at `debug`.
+  > - **Logging:** each refusal is one `debug` line with its reason (and the session's and user's IDs once found); no token, hash or header value is ever logged.
+  > - **Step-up:** `AuthUser::stepped_up_at` and `fleet_core::auth::is_stepped_up` (5 minutes); D adds `step_up_required` with its first step-up route.
+  > - **Wiring:** `AppState` carries the `TokenService`, built by `serve` from `[auth]`.
+
+  > Note (P7.8, as built, group B) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **The scheme:** headers 0.4's `Authorization<Bearer>` matches `Bearer` in any case and trims the spaces after it, as RFC 6750's `"Bearer" 1*SP b64token` allows (the user's decision during the build); the token's own shape check does the rest.
+  > - **Tests,** through a test-only router behind the real middleware stack, red against compiling stubs (an extractor that didn't count the headers, a service that skipped the decision and the touch): 7 of 15 failed on assertions, then all passed. The test that the held write connection doesn't hold up a request passed against the stub too, which never touched.
 
   > Note (P7.8, from group D) (ADR-0010):
   > - **Errors.** `AuthzError::NotFound` becomes 404 and `Forbidden` 403. `WrongResource` is a bug in the handler: 500, logged at `error`.
@@ -2636,6 +2669,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - one automatic, single-flight refresh on `401`
   - typed errors
   - integration tests against the in-process server
+
+  > Note (P8.1, from Phase 7, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **A refresh replaces the access token at once.** A request sent with an access token that a refresh has since replaced gets a 401. fleet-client's single-flight refresh checks whether the token it used is still the current one: if a refresh already replaced it, it retries once with the current token instead of refreshing again (no needless second rotation). Only a 401 for the current token triggers a refresh.
+  > - **No grace window.** A refresh whose response got lost leaves the client with a replaced refresh token; sending it again is reuse, which revokes the session, so the user logs in again.
 
   > Note (P8.1, from Phase 6, group C, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **A maximum response body size.** fleet-api-types caps each text a client reads (`BoundedText`, `Open`), but not how many entries a response holds (a `fields` array with a million entries), so fleet-client sets a maximum body size on its HTTP client, which bounds every response, not only errors.
 - [ ] **P8.2** Scaffold:
@@ -2927,6 +2964,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P11.5, from Phase 6, group E, the user's addition) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **a WebSocket must close itself on shutdown.** Once upgraded, it isn't bound by the request timeout, and the graceful shutdown waits for every open connection, so each WebSocket handler watches the shutdown `CancellationToken` and closes its connection with a close frame when it fires. Otherwise one open app makes every shutdown wait the full deadline.
 - [ ] **P11.6** 🔴 Retention job: chat older than `chat.retention_days` is deleted. The audit log is kept longer (configurable).
 
+  > Note (P11.6, from Phase 7, group B, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **sessions are cleaned up here too.** A session, with its `rotated_refresh_tokens` rows (ON DELETE CASCADE), is deleted once `created_at` + the current `refresh_token_absolute_days` has passed, whether it was revoked or not. A revoked session is unusable anyway, and keeping its rotation history until then lets an investigation after a reuse see the family's timeline. `sessions(created_at)` is indexed for it.
+
   > Note (P11.6, from Phase 6, group B) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): decide `secure_delete` here, so deleted chat and old audit entries are overwritten instead of lingering in free pages.
 - [ ] **P11.7** 🔴 Full-flow integration test: in-process server + in-process agent with `FakeConnector`.
   1. Start a bot via `fleet-client`.
@@ -3007,6 +3046,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - a restore runbook
   - Backups contain only ciphertext. **Back up the vault key separately and securely.**
 - [ ] **P12.4** A Prometheus metrics endpoint on an internal port, with the key metrics documented.
+
+  > Note (P12.4, from Phase 7, group B, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): a counter of detected refresh-token reuses belongs among the key metrics, so alerting can pick up possible token theft without anyone reading `/audit` or the logs.
 - [ ] **P12.5** Tauri release:
   - NSIS installer.
   - Updater key pair; the private key is kept **offline**.
@@ -3102,6 +3143,8 @@ Secrets **never** go in these files. They're referenced through `*_file` paths (
 > Note (Appendix A, from Phase 6, group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **`server.toml` grows with the phases.** Unknown keys are errors, and Phase 6 defines only `dev_mode`, `[http] bind`, `request_timeout_secs` and `max_body_bytes`, `[database] path` and `[log]`. Each later key arrives with its task: `trusted_proxies` (P7.10), `[auth]` (P7), `[rate_limits]` (P7.10), `[vault]` (P7.4, P9), `[accounts]` (P9), `[grpc]` (P10), `[chat]` (P11) and the `backup_*` keys (P12.3). The example below shows the full set.
 > - `bind` defaults to `127.0.0.1:8080`, not the `0.0.0.0:8080` below, which is what a container sets.
 > - `[database] path` is required and must be absolute.
+
+> Note (Appendix A, Phase 7, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`[auth]`'s token keys** take the defaults below, within these ranges: `access_token_ttl_secs` 60–3600, `refresh_token_idle_days` 1–90, `refresh_token_absolute_days` 1–365, and the idle lifetime may not exceed the absolute one. They apply to existing sessions too: expiry is computed from each session's anchors with the running config. All three are on the secret-name test's allowlist.
 
 > Note (Appendix A, Phase 7, group A, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
 > - **`[auth]`'s argon2 keys** take the defaults below, within these ranges:
@@ -3316,6 +3359,8 @@ message ServerMessage {
 | `audit_log` | id, at, actor_user_id, actor_ip, action, target_type, target_id, outcome, metadata_json |
 
 > Note (Appendix D, from Phase 6, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **How every table stores its values.** STRICT tables. Entity IDs are lowercase hyphenated version 7 UUID TEXT with a CHECK on the exact form; append-only logs (`audit_log`, `chat_messages`) use `INTEGER PRIMARY KEY AUTOINCREMENT` instead, ordered by ID. Times are `YYYY-MM-DDTHH:MM:SS.mmmZ` TEXT (UTC, milliseconds) with a CHECK on the shape. CHECKs pin only shapes and closed sets that never grow.
+
+> Note (Appendix D, Phase 7, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`sessions` as built** has no `family_id`, `access_expires_at`, `refresh_expires_at`, `ip` or `user_agent`: a row is one family, expiry is computed from `created_at` and `refreshed_at`, and no client data is stored. It adds `refreshed_at`, `last_used_at`, `stepped_up_at` and `created_at`, and the replaced refresh tokens live in `rotated_refresh_tokens(hash, session_id, rotated_at)`.
 
 > Note (Appendix D, Phase 7, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): Phase 7's tables arrive with their first user, each in its own migration: `sessions` in group B, with an extra `stepped_up_at` for step-up (§7.2); `login_attempts` in C; `user_mfa` in D, whose `secret_ciphertext` holds a vault envelope v1; `invites` in E. Each group designs the columns with its feature.
 

@@ -8,9 +8,10 @@ use std::time::Duration;
 
 use super::raw::{RawAuth, RawConfig, RawLog, RawVault};
 use super::{
-    Argon2Params, AuthConfig, ConfigError, DatabaseConfig, HttpConfig, KeyPath, LogConfig,
+    Argon2Params, AuthConfig, Bounds, ConfigError, DatabaseConfig, HttpConfig, KeyPath, LogConfig,
     LogFilter, LogFormat, ProblemKind, Problems, ServerConfig, VaultConfig,
 };
+use fleet_core::auth::SessionPolicy;
 
 /// Validates `raw`: garde's ranges first, then each text key and `[auth]`'s
 /// ranges.
@@ -39,11 +40,18 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
     let path = database_path(raw.database.path.as_deref(), &mut problems);
     let log = log_config(&raw.log, &mut problems);
     let argon2 = argon2(&raw.auth, &mut problems);
+    let sessions = sessions(&raw.auth, &mut problems);
     let vault = vault(&raw.vault, &mut problems);
 
-    let (true, Some(bind), Some(path), Some(log), Some(argon2), Some(vault)) =
-        (problems.is_empty(), bind, path, log, argon2, vault)
-    else {
+    let (true, Some(bind), Some(path), Some(log), Some(argon2), Some(sessions), Some(vault)) = (
+        problems.is_empty(),
+        bind,
+        path,
+        log,
+        argon2,
+        sessions,
+        vault,
+    ) else {
         return Err(ConfigError::Invalid(problems.sorted()));
     };
     Ok(ServerConfig {
@@ -57,7 +65,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         },
         database: DatabaseConfig { path },
         log,
-        auth: AuthConfig { argon2 },
+        auth: AuthConfig { argon2, sessions },
         vault,
     })
 }
@@ -150,33 +158,16 @@ fn key_id(text: &str) -> Option<u32> {
     (id >= 1 && id.to_string() == text).then_some(id)
 }
 
-/// `[auth] argon2_*`: each value against its range in `Argon2Params`, with
-/// every problem reported under its key, in garde's words ("lower than",
-/// "greater than"), like the other numeric keys.
-fn argon2(raw: &RawAuth, problems: &mut Problems) -> Option<Argon2Params> {
+/// Checks each `(key, value, bounds)` of `[auth]` against its range and
+/// reports every problem under its key, in garde's words ("lower than",
+/// "greater than"), like the other numeric keys. Whether all were in range.
+fn check_ranges<const N: usize>(
+    checks: [(&'static str, u32, Bounds); N],
+    problems: &mut Problems,
+) -> bool {
     let section = KeyPath::root().key("auth");
-    for (key, value, bounds) in [
-        (
-            "argon2_memory_kib",
-            raw.memory_kib,
-            Argon2Params::MEMORY_KIB,
-        ),
-        (
-            "argon2_iterations",
-            raw.iterations,
-            Argon2Params::ITERATIONS,
-        ),
-        (
-            "argon2_parallelism",
-            raw.parallelism,
-            Argon2Params::PARALLELISM,
-        ),
-        (
-            "argon2_max_concurrent",
-            raw.max_concurrent,
-            Argon2Params::MAX_CONCURRENT,
-        ),
-    ] {
+    let mut valid = true;
+    for (key, value, bounds) in checks {
         let message = if value < bounds.min {
             format!("lower than {}", bounds.min)
         } else if value > bounds.max {
@@ -185,7 +176,91 @@ fn argon2(raw: &RawAuth, problems: &mut Problems) -> Option<Argon2Params> {
             continue;
         };
         problems.push(section.key(key), ProblemKind::OutOfRange { message });
+        valid = false;
     }
+    valid
+}
+
+/// `[auth]`'s token lifetimes: each against its range, then the idle
+/// lifetime against the absolute one, which is checked only when both are
+/// in range, so one mistake isn't reported twice.
+fn sessions(raw: &RawAuth, problems: &mut Problems) -> Option<SessionPolicy> {
+    let in_range = check_ranges(
+        [
+            (
+                "access_token_ttl_secs",
+                raw.access_token_ttl_secs,
+                AuthConfig::ACCESS_TOKEN_TTL_SECS,
+            ),
+            (
+                "refresh_token_idle_days",
+                raw.refresh_token_idle_days,
+                AuthConfig::REFRESH_TOKEN_IDLE_DAYS,
+            ),
+            (
+                "refresh_token_absolute_days",
+                raw.refresh_token_absolute_days,
+                AuthConfig::REFRESH_TOKEN_ABSOLUTE_DAYS,
+            ),
+        ],
+        problems,
+    );
+    if !in_range {
+        return None;
+    }
+    if raw.refresh_token_idle_days > raw.refresh_token_absolute_days {
+        problems.push(
+            KeyPath::root().key("auth").key("refresh_token_idle_days"),
+            ProblemKind::GreaterThanKey {
+                key: "refresh_token_absolute_days",
+            },
+        );
+        return None;
+    }
+    // In range, an hour is always shorter than a day, so only an error that
+    // can't happen remains.
+    SessionPolicy::try_new(
+        Duration::from_secs(u64::from(raw.access_token_ttl_secs)),
+        days(raw.refresh_token_idle_days),
+        days(raw.refresh_token_absolute_days),
+    )
+    .ok()
+}
+
+/// `n` days.
+fn days(n: u32) -> Duration {
+    Duration::from_hours(u64::from(n) * 24)
+}
+
+/// `[auth] argon2_*`: each value against its range in `Argon2Params`, with
+/// every problem reported under its key, in garde's words ("lower than",
+/// "greater than"), like the other numeric keys.
+fn argon2(raw: &RawAuth, problems: &mut Problems) -> Option<Argon2Params> {
+    check_ranges(
+        [
+            (
+                "argon2_memory_kib",
+                raw.memory_kib,
+                Argon2Params::MEMORY_KIB,
+            ),
+            (
+                "argon2_iterations",
+                raw.iterations,
+                Argon2Params::ITERATIONS,
+            ),
+            (
+                "argon2_parallelism",
+                raw.parallelism,
+                Argon2Params::PARALLELISM,
+            ),
+            (
+                "argon2_max_concurrent",
+                raw.max_concurrent,
+                Argon2Params::MAX_CONCURRENT,
+            ),
+        ],
+        problems,
+    );
     Argon2Params::try_new(
         raw.memory_kib,
         raw.iterations,

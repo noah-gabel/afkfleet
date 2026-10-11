@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-11
-- **Related:** Plan.md Phase 7 (P7.1–P7.13), §4, §5, §7.2, §7.4, §7.5, §8, Appendix A, Appendix B, P12.2, P12.7; ADR-0006, ADR-0010, ADR-0011, ADR-0015
+- **Related:** Plan.md Phase 7 (P7.1–P7.13), §4, §5, §7.2, §7.4, §7.5, §8, Appendix A, Appendix B, Appendix D, P8.1, P11.6, P12.2, P12.4, P12.7; ADR-0006, ADR-0010, ADR-0011, ADR-0015
 
 ## Context
 Phase 7 builds the server's authentication and authorization:
@@ -100,7 +100,8 @@ Before writing any code, the Phase 7 plan listed every question the plan left op
 - **The argon2 queue** *(the user's choice and rule)*:
   - **Admission:** a waiting semaphore admits at most 4 × `argon2_max_concurrent` callers (a constant) with `try_acquire`. Past it, the answer is `busy` at once (503, `Retry-After: 1`; ADR-0015).
   - **Hashing permit:** an admitted caller takes it with `acquire_owned()` and moves the `OwnedSemaphorePermit` into the `spawn_blocking` closure. So the permit is released only when the hash really finishes, and a request cancelled by the timeout layer or a client disconnect never frees a slot while its argon2 work still runs. More than `argon2_max_concurrent` hashes can never run at once, which is what bounds the memory.
-  - **Ownership:** a blocking task can't be aborted. The permit and the caller's `JoinHandle` own it, and the runtime's shutdown waits for blocking tasks within `RUNTIME_SHUTDOWN`. That's how the hash meets CLAUDE.md's "every task has an owner".
+  - **Ownership:** a blocking task can't be aborted. The permit and the caller's `JoinHandle` own it. That's how the hash meets CLAUDE.md's "every task has an owner".
+  - **At shutdown:** `serve`'s runtime waits at most `RUNTIME_SHUTDOWN` (1 s) for a running hash (about 10 ms); past that the process exits and the OS ends the blocking task.
   - **Wait bound:** the waiting itself is bounded by the request timeout layer.
 - **The dummy hash** *(the user's choice and additions)*:
   - **When it's made:** once at startup, when `Argon2Passwords` is built, from 32 random bytes and a random salt, with the configured parameters. Its parameters always equal real hashes', so an unknown username costs the same argon2 work as a real one.
@@ -226,6 +227,7 @@ Before writing any code, the Phase 7 plan listed every question the plan left op
 - **Each error's chain names everything once.** The manual check of a missing key file showed "the secret file … can't be read" twice, because the errors printed their source in their own message and also returned it from `source()`, which the server's `chain()` joins. `SecretFileError` now says "the secret file … can't be read" with the OS's error as its source, and `VaultKeyError::File` says only "vault key 1". The log reads "the vault's keys can't be loaded: vault key 1: the secret file … can't be read: <the OS's reason>". Regression tests in both crates check the chain.
 - **`VaultError::TooLarge`** joins the port's errors: XChaCha20-Poly1305 refuses plaintexts beyond about 256 GiB, and `seal` returns a `Result`, so nothing may panic there. No stored secret comes near it.
 - **base64 stays without `alloc` in tests too:** the tests encode with `encode_slice` into a fixed buffer, and the serve tests' key is a constant, checked with Node.
+- **Password reads off the runtime** (from the group A review, fixed in group B's first commit). The prompt and the `--password-stdin` read ran as blocking IO inside async code, against CLAUDE.md. Both now run in `spawn_blocking`: `PasswordInput` owns its source (`Box<dyn PasswordPrompt + Send>`, `Box<dyn Read + Send>`), and each read moves it onto the blocking thread and hands it back. A failed blocking task is refused like a missing terminal (the prompt) or as unreadable (stdin). The Owner check still runs before any read. Two tests on a current-thread runtime prove it: the stand-in source answers only once another task on the same runtime has seen it start reading, bounded at 5 s; read inline, that task never runs.
 - **`user create-owner`'s output:**
   - **Success:** "the Owner "alice" is created" on stdout, and `info` "the Owner is created" with the user's ID.
   - **A final refusal:** one `afkfleet-server: …` line on stderr.
@@ -256,6 +258,10 @@ Any test that could block on a read (the FIFO case, a pipe, a child process) run
   - `POST /auth/step-up` lives in D.
 - **P7.10 (C)** *(the user's addition)*: the one real-socket test sends a request over a real connection to a route with the per-IP limit, and fails if the peer address doesn't reach the limiter. `oneshot` sets `ConnectInfo` itself, so it can't catch a missing `into_make_service_with_connect_info`.
 - **P7.11 (C)** *(the user's addition)*: the route-coverage test must not pass while the authed list is empty. For example, a test-only authed route proves the 401 check, and D's and E's routes join it automatically.
+- **D** *(group B)*: `fleet_core::audit::target`'s test of an unknown target type uses `"session"`, which becomes a known type when `AuditTarget::Session` arrives with `auth.logout`; that test needs another name then. Handlers put `AuthUser` before any body extractor, so a request without credentials is refused before its body is read.
+- **P8.1** *(group B, the user's decisions)*: a request with an access token a refresh has since replaced gets 401. fleet-client's single-flight refresh retries once with the current token when a refresh already replaced the one it used, and refreshes only on a 401 for the current token. A lost refresh response means logging in again.
+- **P11.6** *(group B, the user's decision)*: a session and its history rows are deleted once `created_at` + the current absolute lifetime has passed, revoked or not.
+- **P12.4** *(group B, the user's decision)*: a counter of detected refresh-token reuses among the key metrics.
 - **P12.2** *(the user's decision)*: every secret file is `chown 65532:65532` and `chmod 600` in the compose setup and the runbook (P12.6), and P12.7's smoke test runs with them that way.
 - **P12.7** *(the user's decision)*: the smoke test creates the Owner with `docker compose run -T … user create-owner --username … --password-stdin`.
 
@@ -273,6 +279,92 @@ Any test that could block on a read (the FIFO case, a pipe, a child process) run
   - **fleet-startup:** secrecy and zeroize; tempfile in dev.
 - **The profile:** `[profile.dev.package.argon2]`, `blake2` and `zxcvbn` with `opt-level = 3`.
 - **zxcvbn's tree** (`cargo tree`, no default features): fancy-regex, regex, itertools, lazy_static and time.
+
+### Group B: sessions, tokens and `AuthUser` (P7.1's `sessions`, P7.3, P7.8)
+The user answered group B's questions on 2026-10-11, one at a time.
+
+- **Dependencies** *(the user's approval)*:
+  - sha2 0.11.0, no default features (no `alloc`, no `oid`), with `zeroize`, so the hasher's block buffer, which holds the tail of the token it just hashed, is wiped on drop. It was already in Cargo.lock through sqlx and azalea.
+  - axum-extra 0.12.6, no default features (no `tracing`), only `typed-header`, for `TypedHeader<Authorization<Bearer>>`. It adds axum-extra, headers 0.4, headers-core 0.3 and sha1 0.10 to the lockfile; base64 0.22, mime, httpdate and digest 0.10 were already there.
+  - base64 stays without `alloc`: tokens are encoded with `encode_slice` into a fixed buffer.
+- **One row per family** *(the user's choice)*. A `sessions` row is one login's token family; its ID (`fleet_core::id::SessionId`) stays the same across every refresh, so E's `/me/sessions` and `DELETE /me/sessions/{id}` address it. The row holds the hashes of the current access and refresh tokens. Every refresh token it replaced moves into `rotated_refresh_tokens(hash, session_id, rotated_at)`, kept until the session is deleted, so reusing any rotated token is recognized while the family exists.
+- **Access tokens live in the session row** *(the user's choice)*. A refresh replaces both hashes, so the previous access token stops working the moment the refresh commits. A request still in flight with it gets 401; P8.1's client handles that (a note there).
+- **What is hashed** *(the user's choice)*: SHA-256 of the whole token text, prefix included, stored as a 32-byte BLOB (`CHECK (length(…) = 32)`).
+  - A strict shape check comes first: the prefix, then exactly 43 base64url characters. Anything else is refused before any lookup, so a refresh token sent as a Bearer token never reaches the database.
+  - After the indexed lookup, the stored hash is compared with the computed one by `TokenHash::ct_eq` (`subtle`). The index lookup itself can't be constant-time; that's harmless, since a hash of 256 random bits can't be inverted.
+  - `TokenHash` has no `PartialEq`, and its `Debug` shows no byte.
+- **Expiry from anchors and the running config** *(the user's choice)*. Only `created_at` (the absolute anchor) and `refreshed_at` (when the current pair was issued) are stored. `fleet_core::auth` computes:
+  - access expiry = `refreshed_at` + access TTL
+  - idle expiry = `refreshed_at` + idle lifetime *(the user's choice: idle counts from the last refresh, not the last request)*
+  - absolute expiry = `created_at` + absolute lifetime
+
+  Access and idle expiry are capped at the absolute expiry; a time is expired when `now >= expiry`. Lowering a TTL shortens every existing session at the next restart; raising one lengthens them.
+- **`[auth]`'s token keys** *(the user's choice)*: `access_token_ttl_secs` 900 (60–3600), `refresh_token_idle_days` 7 (1–90), `refresh_token_absolute_days` 30 (1–365). Validation refuses idle > absolute. All three are on `NOT_SECRETS` with their reasons. Problems are reported under the key in garde's words, like the argon2 keys.
+- **No client data** *(the user's choice)*: a session stores no IP address and no user agent. The login's IP is in D's `auth.login` entry. A nullable column can be added by a later migration.
+- **`last_used_at`, the touch** *(the user's choices)*:
+  - **Display only:** expiry never depends on it.
+  - **At most once a minute:** `TOUCH_INTERVAL` = 60 s, decided by the pure rule `touch_due`.
+  - **Conditional:** `UPDATE … SET last_used_at = ? WHERE id = ? AND last_used_at <= ?` (now − 60 s), so two concurrent requests that both read a stale value write it once, and a clock that went back never moves it backwards.
+  - **Bounded:** only `Store::write()` (the wait for the write connection and `BEGIN IMMEDIATE`) runs under a 250 ms timeout. Once the transaction is open, the UPDATE and the commit take milliseconds and run to the end; a future dropped there would leave the outcome and the connection's cleanup to sqlx's cancellation handling.
+  - **Never fails a request:** past the bound, or on any error, the touch is skipped and logged at `debug`, and the request goes on. The next due request writes it.
+- **Unaudited writes** *(the user's choices; ADR-0015's rule)*: `WriteTx::commit_unaudited(UnauditedWrite)` commits without an entry, for named exemptions only:
+  - `SessionTouch`: the touch above. An entry per request would bury the log, and it's display data.
+  - `SessionRotate`: a successful refresh. It happens about every 15 minutes per active client and says nothing new: the session's creation is audited by D's `auth.login`, and its end by logout, reuse, disabling or a role change.
+- **The refresh rule** *(the user's choices)*, a pure function in `fleet_core::auth`, checked in this order inside the write transaction, whose lookup joins `users`:
+  1. an unknown token: 401
+  2. a revoked family: 401
+  3. an expired family (idle or absolute): 401
+  4. a rotated token of a live family: **reuse**. The family is revoked and the entry recorded in the same commit, even for a disabled user.
+  5. the current token of a disabled user: 401, nothing rotates (a session whose user row is gone isn't found at all: step 1)
+  6. otherwise the tokens rotate
+
+  There's no grace window: a client whose refresh response got lost retries with the old token, which is reuse, so it must log in again (a note under P8.1). Reuse in a revoked or expired family is a plain 401 with no entry, so replays can't flood the log. The lookup runs inside the write transaction, so two refreshes with the same token take turns (`BEGIN IMMEDIATE`) and the second finds it rotated. New tokens are minted before `Store::write()`, since no crypto runs while a `WriteTx` is open.
+- **`security.refresh_token_reuse`** *(the user's choices)*:
+  - outcome Failure (ADR-0015)
+  - no actor: whoever presented the old token isn't authenticated and may be the thief
+  - `actor_ip`: the presenting client's, passed in by D's `/auth/refresh`
+  - target `User(the session's user)`: the lasting link is whose account was attacked, and it survives the session row's cleanup
+  - metadata `session_id` (the revoked family) and `rotated_at` (when the presented token was replaced), so an investigation sees which session was hit and whether the thief or the real app used the old token first
+
+  `AuditTarget::Session` arrives with D's `auth.logout`, where the actor is the session's own user.
+- **Typed metadata values** *(the user's choice)*: `AuditMetadata::id(key, impl Into<Uuid>)` (lowercase hyphenated) and `time(key, DateTime<Utc>)` (UTC milliseconds, the database's form), stored as JSON strings. **The naming rule's metadata clause is clarified:** values are closed-enum names or typed values the server made (IDs, timestamps), never text a client sent.
+- **Issuing a session** *(the user's choice)*: `TokenService::prepare(user_id)` mints both tokens, their hashes, the session's ID and its times before any transaction. The caller inserts it with `tx.sessions().insert(…)` and commits with its own entry: D's login with `auth.login`, in the same transaction as its other writes. B's tests commit with a test-only action built through `AuditAction::try_from`, never listed in `audit_actions!`, so it can't enter `AuditAction::ALL` or the names snapshot *(the user's addition)*.
+- **Step-up in B** *(the user's choice)*: the `stepped_up_at` column, `STEP_UP_WINDOW` (5 minutes, a constant: §7.2 fixes it and Appendix A has no key) and the pure `is_stepped_up(stamp, now)`: a stamp at most 5 minutes old counts, a stamp in the future (a clock that went back) doesn't. `AuthUser` carries the stamp. D adds `ErrorCode::StepUpRequired` with its first step-up route.
+- **`AuthUser`** *(the user's choices)*:
+  - It looks up the session and its user on every request, through one join on the read pool, so revocation, disabling and role changes count on the very next request.
+  - **Every rejection is `ApiError::Unauthorized`** with a bare `WWW-Authenticate: Bearer`: no header, more than one `Authorization` header (it isn't a list header, and a proxy and the server must not disagree about which one counts), another scheme, a malformed token, an unknown one, an expired access token, a revoked session, a disabled user.
+  - **A database failure isn't a rejection:** busy is 503 and anything else 500, through `From<StoreError>`. A 401 would make the app throw its tokens away over a database hiccup.
+  - `require(permission, resource)` returns `authorize()`'s `AuthzError`, which a handler turns into `ApiError` with `?`.
+- **Logging** *(the user's choice)*: a detected reuse is one `warn` with `user_id` and `session_id`. Each `AuthUser` rejection is one `debug` line naming its reason, with `session_id` and `user_id` where known. No token, hash or header value is ever logged, at any level, and the reason never reaches the client.
+- **Repository scope** *(the user's choice)*: only what B uses: insert; the joined lookup by access hash on the read pool; inside the transaction, the lookup by refresh hash (current or rotated), rotate and revoke; the conditional touch. Logout reuses revoke in D; revoking all of a user's sessions and listing them arrive with E.
+- **Layout** *(the user's choice)*:
+  - `ports::tokens`: `TokenKind`, `TokenHash` and the synchronous `Tokens` trait. It's on the auth gate, since `ct_eq` is security code.
+  - `infra::crypto::tokens::Sha256Tokens`.
+  - `ports::sessions` and `infra::sqlite::sessions`: the repository, under the workspace gate like every repository.
+  - `app::auth::TokenService`, where D's login joins it.
+  - `http::extractors`: `AuthUser`.
+  - New auth-gate entries: `ports/tokens.rs`, `infra/crypto/tokens.rs`, `app/auth.rs`, `http/extractors/`.
+- **Wiring** *(the user's choice)*: `AppState::new(health, tokens)`; `serve` builds `TokenService` from `[auth]`'s lifetimes, `SystemClock`, `OsRandom` and the database.
+- **Cleanup comes with P11.6** *(the user's choice)*: a session, with its history rows (ON DELETE CASCADE), is deleted once `created_at` + the current absolute lifetime has passed, whether it was revoked or not. A revoked session is unusable anyway, and keeping its history until then lets an investigation after a reuse see the family's timeline. The migration has the indexes this needs: `sessions(created_at)` for the cleanup, `sessions(user_id)` for revoking and listing a user's sessions, `rotated_refresh_tokens(session_id)` for the cascade.
+
+### As built (group B)
+- **P7.1's `sessions`** (`0003_sessions.sql`): the conventions of 0001 and 0002 (STRICT, ID and time shapes); hashes as BLOBs with a length CHECK; no ordering CHECKs. `user_id` references `users` without cascade, like the audit log's actor. Every lookup joins `users`, so a session whose user row is gone isn't found.
+- **`SessionId`** joins fleet-core's IDs, and the `serialized_ids` snapshot gains it.
+- **Tests,** red against compiling stubs (a migration without CHECKs or cascade, a repository that found and wrote nothing, a `TokenHash` that compared nothing and read nothing back, a `commit_unaudited` that rolled back): 21 of 26 repository tests and 3 of 8 `TokenHash` tests failed on assertions. The 5 repository tests that passed assert that nothing is found or that a row is refused. Then all passed.
+- **P7.3, the pieces:**
+  - `fleet_core::auth::{SessionPolicy, SessionTimes, RefreshFacts, refresh_decision}`. `SessionPolicy::try_new` refuses a zero lifetime, an access lifetime not shorter than the idle one, and an idle lifetime longer than the absolute one; its `Default` is §7.2's.
+  - `ports::tokens::{Tokens, TokenKind, MintedToken, MintTokenError}` and `infra::crypto::tokens::Sha256Tokens`. The token is built in `Zeroizing` buffers of fixed size and copied once into a `SecretString` of exactly its length. A known-answer test pins the hash (computed with Python's hashlib and Node's crypto).
+  - `app::auth::TokenService::{prepare, refresh}`. `refresh` mints the new pair before `Store::write()`, confirms the indexed match with `ct_eq`, and matches the rule's decision together with the lookup, so no impossible combination is handled by hand.
+  - **The slot for typed metadata.** `AuditMetadata`'s reserved room per free slot grows from the largest integer to the largest ID or time in quotes, so an ID or a time is never cut, whatever came before.
+  - **`[auth]`'s ranges** are checked by one helper for the argon2 and the token keys, in garde's words; idle > absolute is the new `ProblemKind::GreaterThanKey`, checked only when both are in range.
+- **P7.8, the pieces:**
+  - `fleet_core::auth::{access_decision, AccessFacts, AccessRejection, touch_due, touch_stale_since, TOUCH_INTERVAL, is_stepped_up, STEP_UP_WINDOW}`.
+  - `TokenService::authenticate` and its touch (`TOUCH_WAIT` = 250 ms around `Store::write()` only), with `RejectedAccess` naming the reason for the log.
+  - `http::extractors::AuthUser` (`FromRequestParts<AppState>`, `Rejection = ApiError`) with `actor()`, `session_id()`, `stepped_up_at()` and `require()`. It counts the `Authorization` headers first, then reads `TypedHeader<Authorization<Bearer>>`, whose `Debug` would show the token, so only its text goes on, as a `SecretString`.
+  - `AppState::new(health, tokens)`; `serve::app` builds `Sha256Tokens` and `TokenService` over the real clock and randomness.
+- **The scheme's spaces** *(the user's decision during the build)*: the plan described headers 0.4 as allowing exactly one space after `Bearer`. Its `Bearer::token()` trims them (`["Bearer ".len()..].trim_start()`), as RFC 6750's `"Bearer" 1*SP b64token` allows, so one or more spaces are accepted; the token's shape check does the rest.
+- **P7.8, tests,** through a test-only router behind the real middleware stack, red against compiling stubs (an extractor that didn't count the headers, a service that skipped the decision and the touch): 7 of 15 failed on assertions, then all passed. The held-write-connection test passed against the stub too, which never touched. fleet-core's access rules: 9 of 18 failed against stubs, then all passed.
+- **P7.3, tests,** red against compiling stubs (rules that allowed everything, typed metadata that added nothing, an adapter that minted nothing, config that ignored the keys, a service that refused every refresh): fleet-core 20 of 25 rule tests, 5 metadata tests and the names snapshot; fleet-server 11 adapter tests, 8 config tests and 13 of 21 service tests failed on assertions. The ones that passed against the stubs check refusals and `Debug`. Then all passed.
 
 ## Consequences
 - **Easier:**

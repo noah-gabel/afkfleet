@@ -113,7 +113,7 @@ Recipes for tools that arrive in later phases (`dev-app`, `ui-test`, `e2e`) prin
 **Server layering:** `http/handlers` → `app` services → `ports` → `infra`.
 - Handlers only parse input, authorize, call a service and map the result. No business logic, no SQL.
 - Services own use cases, transactions and audit entries.
-- Writes go through `Store::write()`, a `WriteTx` on the one write connection. Its `commit(entry)` takes the audit entry, so nothing commits unaudited. Keep it short: no password hashing, crypto or network calls while it's open (ADR-0015).
+- Writes go through `Store::write()`, a `WriteTx` on the one write connection. Its `commit(entry)` takes the audit entry, so nothing commits unaudited, except through `commit_unaudited(UnauditedWrite)`, whose named exemptions (`SessionTouch`, `SessionRotate`) each have an ADR note; a new one needs the user's approval and its own note (ADR-0015, ADR-0016). Keep it short: no password hashing, crypto or network calls while it's open (ADR-0015).
 
 **Shared types:**
 - Every API DTO lives in `fleet-api-types` (serde + garde + ts-rs + utoipa). A test keeps its `OpenAPI` schemas equal to the TypeScript export.

@@ -18,8 +18,10 @@
 //!   request cancelled by the timeout layer or a client disconnect can't
 //!   free a slot early, and no more than `argon2_max_concurrent` hashes ever
 //!   run at once, which bounds the memory. A blocking task can't be
-//!   aborted; its permit and the caller's `JoinHandle` own it, and the
-//!   runtime's shutdown waits for it.
+//!   aborted; its permit and the caller's `JoinHandle` own it. `serve`'s
+//!   runtime waits at most `RUNTIME_SHUTDOWN` (1 s) for a running hash
+//!   (about 10 ms); past that the process exits and the OS ends the
+//!   blocking task.
 //! - **The dummy hash** is made once, when the service is built, from 32
 //!   random bytes with the configured parameters, through a private path
 //!   without the strength check. [`Passwords::verify_unknown_user`] checks
@@ -365,7 +367,9 @@ impl Limiter {
             .map_err(|error| Overload::Failed(Box::new(error)))?;
         drop(place);
         // The blocking task can't be aborted: its permit and this handle
-        // own it, and the runtime's shutdown waits for it (ADR-0016).
+        // own it. `serve`'s runtime waits at most RUNTIME_SHUTDOWN (1 s) for
+        // a running hash (about 10 ms); past that the process exits and the
+        // OS ends the blocking task (ADR-0016).
         tokio::task::spawn_blocking(move || {
             let _permit = permit;
             work()

@@ -21,8 +21,9 @@ use super::name::{self, Dots};
 /// - **Things the server detects** are `security.<what>` as a noun:
 ///   `security.refresh_token_reuse`.
 /// - **Success or failure is the outcome column,** never part of the name.
-/// - **Details** such as `via` and `role` go into the metadata, with values
-///   from closed enums, never free text.
+/// - **Details** such as `via` and `role` go into the metadata. Their values
+///   are names from closed enums, or typed values the server made (IDs,
+///   timestamps), never text a client sent.
 /// - **A merged name is never renamed or dropped:** it's stored in rows
 ///   forever. A snapshot of every name makes any change show in review.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -60,6 +61,15 @@ audit_actions! {
     /// (`via` = `cli`), later a registration through an invite (`via` =
     /// `invite`). Target: the new user. Metadata: `role` and `via`.
     USER_CREATE = "user.create";
+
+    /// A refresh token that its session had already replaced was presented
+    /// again while the session was live: someone else holds a copy, so the
+    /// whole session (the token family) is revoked in the same commit
+    /// (§7.2). Outcome: Failure. No actor (whoever presented it isn't
+    /// authenticated); the presenting client's IP. Target: the session's
+    /// user. Metadata: `session_id` (the revoked session) and `rotated_at`
+    /// (when the presented token was replaced).
+    SECURITY_REFRESH_TOKEN_REUSE = "security.refresh_token_reuse";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

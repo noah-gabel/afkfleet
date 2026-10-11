@@ -51,6 +51,7 @@ mod connect;
 mod convert;
 mod error;
 mod file;
+mod sessions;
 mod store;
 mod users;
 

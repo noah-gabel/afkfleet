@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use figment::Jail;
+use fleet_core::auth::SessionPolicy;
 use fleet_server::config::{
     Argon2Params, AuthConfig, ConfigError, DatabaseConfig, HttpConfig, LogConfig, LogFilterError,
     LogFormat, ParseError, ParseProblem, ParseSource, ProblemKind, Problems, ServerConfig,
@@ -22,6 +23,9 @@ use fleet_testkit::jail::in_jail;
 use fleet_testkit::log_buffer::LogBuffer;
 use rstest::rstest;
 use tracing_subscriber::layer::SubscriberExt as _;
+
+/// A day in seconds.
+const DAY: u64 = 24 * 60 * 60;
 
 /// The dev-mode warning, word for word.
 const DEV_MODE_WARNING: &str = "dev mode is on: development-only features are enabled; never run a production server in dev mode";
@@ -145,6 +149,7 @@ fn only_the_database_path_and_the_vault_are_required() {
                 log: LogConfig::default(),
                 auth: AuthConfig {
                     argon2: Argon2Params::default(),
+                    sessions: SessionPolicy::default(),
                 },
                 vault: vault_config(jail),
             }
@@ -176,6 +181,9 @@ argon2_memory_kib = 65536
 argon2_iterations = 3
 argon2_parallelism = 4
 argon2_max_concurrent = 8
+access_token_ttl_secs = 600
+refresh_token_idle_days = 14
+refresh_token_absolute_days = 60
 
 [vault]
 master_key_files = {{ 3 = {} }}
@@ -199,6 +207,15 @@ active_key_id = 3
             Argon2Params::try_new(65_536, 3, 4, 8).unwrap()
         );
         assert_eq!(
+            config.auth.sessions,
+            SessionPolicy::try_new(
+                Duration::from_secs(600),
+                Duration::from_secs(14 * DAY),
+                Duration::from_secs(60 * DAY)
+            )
+            .unwrap()
+        );
+        assert_eq!(
             config.vault,
             VaultConfig {
                 key_files: BTreeMap::from([(3, key_path(jail, 3))]),
@@ -218,6 +235,7 @@ fn environment_variables_override_the_file() {
         jail.set_env("AFKFLEET_SERVER__DATABASE__PATH", other.display());
         jail.set_env("AFKFLEET_SERVER__LOG__FORMAT", "pretty");
         jail.set_env("AFKFLEET_SERVER__AUTH__ARGON2_ITERATIONS", 5);
+        jail.set_env("AFKFLEET_SERVER__AUTH__ACCESS_TOKEN_TTL_SECS", 600);
         let toml = minimal(jail);
 
         let config = load_toml(jail, &toml).unwrap();
@@ -228,6 +246,7 @@ fn environment_variables_override_the_file() {
         assert_eq!(config.database.path, other);
         assert_eq!(config.log.format, LogFormat::Pretty);
         assert_eq!(config.auth.argon2.iterations(), 5);
+        assert_eq!(config.auth.sessions.access_ttl(), Duration::from_secs(600));
     });
 }
 
@@ -448,6 +467,96 @@ fn argon2_keys_are_checked_against_their_range(
                 "{key} = {value}"
             );
         }
+    });
+}
+
+/// A token lifetime key, its lowest and highest valid values, and a setting
+/// that keeps the idle lifetime within the absolute one at both ends
+/// (ADR-0016).
+#[rstest]
+#[case::access("access_token_ttl_secs", 60, 3600, "")]
+#[case::idle("refresh_token_idle_days", 1, 90, "refresh_token_absolute_days = 365")]
+#[case::absolute("refresh_token_absolute_days", 1, 365, "refresh_token_idle_days = 1")]
+fn token_lifetimes_are_checked_against_their_range(
+    #[case] key: &str,
+    #[case] min: u64,
+    #[case] max: u64,
+    #[case] other: &str,
+) {
+    in_jail(|jail| {
+        let base = minimal(jail);
+        let with = |value: u64| format!("{base}\n[auth]\n{other}\n{key} = {value}\n");
+
+        for value in [min, max] {
+            assert!(load_toml(jail, &with(value)).is_ok(), "{key} = {value}");
+        }
+        for value in [min - 1, max + 1] {
+            let problems = invalid(load_toml(jail, &with(value)));
+            assert_eq!(keys(&problems), [format!("auth.{key}")], "{key} = {value}");
+            assert!(
+                matches!(
+                    problems.iter().next().unwrap().kind(),
+                    ProblemKind::OutOfRange { .. }
+                ),
+                "{key} = {value}"
+            );
+        }
+    });
+}
+
+#[test]
+fn an_idle_lifetime_longer_than_the_absolute_one_is_refused() {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}\n[auth]\nrefresh_token_idle_days = 31\nrefresh_token_absolute_days = 30\n",
+            minimal(jail)
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["auth.refresh_token_idle_days"]);
+        assert_eq!(
+            kinds(&problems),
+            [ProblemKind::GreaterThanKey {
+                key: "refresh_token_absolute_days"
+            }]
+        );
+        assert_eq!(
+            problems.iter().next().unwrap().kind().to_string(),
+            "greater than `refresh_token_absolute_days`"
+        );
+    });
+}
+
+#[test]
+fn an_idle_lifetime_equal_to_the_absolute_one_is_accepted() {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}\n[auth]\nrefresh_token_idle_days = 30\nrefresh_token_absolute_days = 30\n",
+            minimal(jail)
+        );
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(config.auth.sessions.idle(), config.auth.sessions.absolute());
+    });
+}
+
+#[test]
+fn a_lifetime_out_of_range_isnt_also_compared_with_the_other() {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}\n[auth]\nrefresh_token_idle_days = 91\nrefresh_token_absolute_days = 30\n",
+            minimal(jail)
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["auth.refresh_token_idle_days"]);
+        assert!(matches!(
+            problems.iter().next().unwrap().kind(),
+            ProblemKind::OutOfRange { .. }
+        ));
     });
 }
 

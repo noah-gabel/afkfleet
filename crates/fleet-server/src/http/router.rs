@@ -27,6 +27,7 @@ use utoipa_axum::routes;
 use super::handlers::health;
 use super::middleware::{self, RequestIds};
 use super::openapi::{self, ApiDocs, OPENAPI_PATH};
+use crate::app::auth::TokenService;
 use crate::app::health::HealthService;
 use crate::config::HttpConfig;
 
@@ -35,13 +36,16 @@ use crate::config::HttpConfig;
 pub struct AppState {
     /// The readiness check.
     pub(crate) health: HealthService,
+    /// Sessions and their tokens: `AuthUser` authenticates every authed
+    /// request through it.
+    pub(crate) tokens: TokenService,
 }
 
 impl AppState {
     /// The state over the server's services.
     #[must_use]
-    pub fn new(health: HealthService) -> Self {
-        Self { health }
+    pub fn new(health: HealthService, tokens: TokenService) -> Self {
+        Self { health, tokens }
     }
 }
 

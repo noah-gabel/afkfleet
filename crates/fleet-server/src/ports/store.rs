@@ -6,6 +6,7 @@ use core::fmt;
 use async_trait::async_trait;
 
 use super::audit::{AuditEntryId, AuditReads, AuditWrites, NewAuditEntry};
+use super::sessions::{SessionReads, SessionWrites};
 use super::users::{UserReads, UserWrites};
 
 /// Why the database couldn't do what was asked.
@@ -57,6 +58,9 @@ pub trait Store: Send + Sync + fmt::Debug {
     /// The users, read through the read connections.
     fn users(&self) -> &dyn UserReads;
 
+    /// The sessions, read through the read connections.
+    fn sessions(&self) -> &dyn SessionReads;
+
     /// The audit log, read through the read connections.
     fn audit(&self) -> &dyn AuditReads;
 
@@ -79,11 +83,16 @@ pub trait Store: Send + Sync + fmt::Debug {
 /// [`Store::write`].
 ///
 /// **Every commit is audited.** [`WriteTx::commit`] takes the entry that
-/// describes the change, so a change can't be committed without one.
+/// describes the change, so a change can't be committed without one. The
+/// only exceptions are the named [`UnauditedWrite`]s, committed with
+/// [`WriteTx::commit_unaudited`].
 #[async_trait]
 pub trait WriteTx: Send {
     /// The users, written in this transaction.
     fn users(&mut self) -> &mut dyn UserWrites;
+
+    /// The sessions, read and written in this transaction.
+    fn sessions(&mut self) -> &mut dyn SessionWrites;
 
     /// The audit log, for a second entry in this transaction.
     fn audit(&mut self) -> &mut dyn AuditWrites;
@@ -94,4 +103,27 @@ pub trait WriteTx: Send {
     /// [`StoreError`] when the entry can't be recorded or the commit fails;
     /// nothing is committed then.
     async fn commit(self: Box<Self>, entry: NewAuditEntry) -> Result<AuditEntryId, StoreError>;
+
+    /// Commits everything without an audit entry, for one of the named
+    /// exemptions only.
+    ///
+    /// # Errors
+    /// [`StoreError`] when the commit fails; nothing is committed then.
+    async fn commit_unaudited(self: Box<Self>, reason: UnauditedWrite) -> Result<(), StoreError>;
+}
+
+/// A write that commits without an audit entry. Each variant is a named
+/// exemption with its own ADR note (ADR-0015, ADR-0016), never free text, so
+/// review sees every new one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnauditedWrite {
+    /// A session's `last_used_at`, written by an authenticated request at
+    /// most once a minute. It's for display only (expiry counts from the
+    /// last refresh), and an entry per request would bury the log.
+    SessionTouch,
+    /// A successful refresh: the session's new token pair. It happens about
+    /// every 15 minutes per active client and says nothing new: the
+    /// session's creation and its end (logout, reuse, disabling, a role
+    /// change) are audited.
+    SessionRotate,
 }

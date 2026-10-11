@@ -5,6 +5,8 @@
 //! - [`error`]: [`ApiError`](error::ApiError), how every failed request
 //!   answers, and [`render_errors`](error::render_errors), the middleware
 //!   that writes the body of every error response.
+//! - [`extractors`]: [`AuthUser`](extractors::AuthUser), who a request comes
+//!   from, looked up on every request (P7.8).
 //! - [`middleware`]: the stack every request passes through, from the
 //!   request ID and the security headers to the timeout and the body limit
 //!   (P6.6).
@@ -14,6 +16,7 @@
 //!   (P6.7); the other handlers arrive with the endpoints from P7 on.
 
 pub mod error;
+pub mod extractors;
 mod handlers;
 pub mod middleware;
 pub mod openapi;

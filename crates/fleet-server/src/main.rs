@@ -157,16 +157,15 @@ fn create_owner(path: &Path, username: &str, password_stdin: bool) -> ExitCode {
         Ok(runtime) => runtime,
         Err(error) => return fail_early(&StartError::Runtime(error)),
     };
-    let mut stdin = io::stdin();
+    let stdin = io::stdin();
     let is_terminal = stdin.is_terminal();
-    let mut prompt = TerminalPrompt;
     let input = if password_stdin {
         PasswordInput::Stdin {
-            reader: &mut stdin,
+            reader: Box::new(stdin),
             is_terminal,
         }
     } else {
-        PasswordInput::Prompt(&mut prompt)
+        PasswordInput::Prompt(Box::new(TerminalPrompt))
     };
     let exit = runtime.block_on(user::create_owner(
         &config,

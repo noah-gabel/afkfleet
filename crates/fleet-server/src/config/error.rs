@@ -55,6 +55,13 @@ pub enum ProblemKind {
     /// The active key ID has no key file.
     #[error("must be one of the key IDs in `master_key_files`")]
     UnknownKeyId,
+    /// A number greater than another key of its section allows, like an
+    /// idle lifetime longer than the absolute one.
+    #[error("greater than `{key}`")]
+    GreaterThanKey {
+        /// The other key, without its section.
+        key: &'static str,
+    },
 }
 
 #[cfg(test)]

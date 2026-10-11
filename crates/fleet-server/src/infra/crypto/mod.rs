@@ -3,11 +3,12 @@
 //! - [`passwords`]: [`passwords::Argon2Passwords`], the password service:
 //!   Argon2id with zxcvbn's strength check, in blocking tasks behind one
 //!   bounded queue.
+//! - [`tokens`]: [`tokens::Sha256Tokens`], the session tokens: minted from
+//!   the `SecureRandom` port, stored only as their SHA-256 (P7.3).
 //! - [`vault`]: [`vault::XChaChaVault`], XChaCha20-Poly1305 over the
 //!   configured keys, and [`vault::VaultKeys`], the keys as loaded from their
 //!   files.
-//!
-//! The tokens arrive with P7.3.
 
 pub mod passwords;
+pub mod tokens;
 pub mod vault;

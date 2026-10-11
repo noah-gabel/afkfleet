@@ -27,6 +27,8 @@ chacha20poly1305 = { workspace = true, features = ["alloc", "zeroize"] }
 # the path a client sent; `tokio` and `http1` for `axum::serve` (Caddy speaks HTTP/1.1 to
 # it). The error body is written with serde_json (ADR-0015).
 axum = { workspace = true, features = ["http1", "matched-path", "tokio"] }
+# `TypedHeader<Authorization<Bearer>>` for AuthUser (ADR-0016).
+axum-extra = { workspace = true, features = ["typed-header"] }
 # SystemClock's one wall-clock read (ADR-0015).
 chrono = { workspace = true, features = ["now"] }
 # The afkfleet-server command line (ADR-0015).
@@ -48,6 +50,9 @@ rpassword.workspace = true
 # PasswordHash holds the hash as a SecretString: redacted Debug, zeroized (ADR-0015).
 secrecy.workspace = true
 serde = { workspace = true, features = ["derive"] }
+# SHA-256 of the session tokens, the only form the database holds; `zeroize` wipes the
+# hasher's buffer, which held the token's tail (ADR-0016).
+sha2 = { workspace = true, features = ["zeroize"] }
 # Reading the audit log's metadata JSON back (ADR-0015).
 serde_json.workspace = true
 # Constant-time comparison of secrets, first the vault's duplicate-key check (ADR-0016).
