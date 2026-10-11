@@ -69,10 +69,10 @@ pub(crate) struct RawVault {
 
 /// `[auth]`. Missing keys take Appendix A's defaults, §7.2's baseline.
 ///
-/// Every key starts with `argon2_`, so the fields drop the prefix and serde
-/// names the key. Their ranges are checked in validation against
-/// `Argon2Params`' bounds, not by garde, whose report would name the field
-/// instead of the key (garde 0.23 parses `rename` but never applies it).
+/// The argon2 fields drop the keys' `argon2_` prefix (clippy's
+/// `struct_field_names`), and serde names the key. Every range is checked in
+/// validation, not by garde, whose report would name the field instead of
+/// the key (garde 0.23 parses `rename` but never applies it).
 #[derive(Debug, Deserialize)]
 #[serde(
     default,
@@ -88,7 +88,15 @@ pub(crate) struct RawAuth {
     pub(crate) parallelism: u32,
     #[serde(rename = "argon2_max_concurrent")]
     pub(crate) max_concurrent: u32,
+    pub(crate) access_token_ttl_secs: u32,
+    pub(crate) refresh_token_idle_days: u32,
+    pub(crate) refresh_token_absolute_days: u32,
 }
+
+/// Appendix A's token lifetimes, §7.2's.
+const DEFAULT_ACCESS_TOKEN_TTL_SECS: u32 = 900;
+const DEFAULT_REFRESH_TOKEN_IDLE_DAYS: u32 = 7;
+const DEFAULT_REFRESH_TOKEN_ABSOLUTE_DAYS: u32 = 30;
 
 impl Default for RawAuth {
     fn default() -> Self {
@@ -98,6 +106,9 @@ impl Default for RawAuth {
             iterations: baseline.iterations(),
             parallelism: baseline.parallelism(),
             max_concurrent: baseline.max_concurrent(),
+            access_token_ttl_secs: DEFAULT_ACCESS_TOKEN_TTL_SECS,
+            refresh_token_idle_days: DEFAULT_REFRESH_TOKEN_IDLE_DAYS,
+            refresh_token_absolute_days: DEFAULT_REFRESH_TOKEN_ABSOLUTE_DAYS,
         }
     }
 }
@@ -157,10 +168,24 @@ mod secret_names {
 
     /// Keys that match fleet-core's `SECRET_WORDS` but hold no secret, by
     /// their full path, each with the reason.
-    const NOT_SECRETS: &[(&str, &str)] = &[(
-        "vault.active_key_id",
-        "the ID of the key new secrets are sealed with, an integer; the keys are in master_key_files",
-    )];
+    const NOT_SECRETS: &[(&str, &str)] = &[
+        (
+            "vault.active_key_id",
+            "the ID of the key new secrets are sealed with, an integer; the keys are in master_key_files",
+        ),
+        (
+            "auth.access_token_ttl_secs",
+            "how long an access token lives, a number of seconds; tokens are minted at runtime and never configured",
+        ),
+        (
+            "auth.refresh_token_idle_days",
+            "how long a refresh token lives unused, a number of days; tokens are never configured",
+        ),
+        (
+            "auth.refresh_token_absolute_days",
+            "how long a session lives at most, a number of days; tokens are never configured",
+        ),
+    ];
 
     /// Whether one of the name's `_`-separated parts is a secret word. The
     /// list lives in fleet-core, shared with the audit log's metadata keys
@@ -418,6 +443,9 @@ mod secret_names {
             "auth.argon2_iterations",
             "auth.argon2_parallelism",
             "auth.argon2_max_concurrent",
+            "auth.access_token_ttl_secs",
+            "auth.refresh_token_idle_days",
+            "auth.refresh_token_absolute_days",
             "vault",
             "vault.master_key_files",
             "vault.active_key_id",

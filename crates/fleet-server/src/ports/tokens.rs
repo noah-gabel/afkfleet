@@ -1,15 +1,78 @@
-//! The tokens (Plan.md P7.3, §7.2, ADR-0006, ADR-0016): [`TokenHash`], the
-//! only form of a token the database ever holds.
+//! The tokens (Plan.md P7.3, §7.2, ADR-0006, ADR-0016): [`Tokens`], which
+//! makes and recognizes them, and [`TokenHash`], the only form of a token
+//! the database ever holds.
 //!
-//! A session's tokens are opaque: 256 random bits, base64url, behind the
-//! prefix `afk_at_` or `afk_rt_`. Only their SHA-256 hash is stored, and a
-//! presented token is compared with a stored hash in constant time
-//! ([`TokenHash::ct_eq`]). The hash isn't a secret a client could use, but
-//! its `Debug` shows none of its bytes all the same.
+//! A session's tokens are opaque: 256 random bits from the `SecureRandom`
+//! port, base64url without padding, behind the prefix `afk_at_` or `afk_rt_`
+//! ([`TokenKind`]), so secret scanners spot them. Only their SHA-256 hash is
+//! stored, and a presented token is compared with a stored hash in constant
+//! time ([`TokenHash::ct_eq`]). The hash isn't a secret a client could use,
+//! but its `Debug` shows none of its bytes all the same, and no type here
+//! shows a token.
 
 use core::fmt;
 
+use fleet_core::system::RandomError;
+use secrecy::SecretString;
 use subtle::ConstantTimeEq as _;
+
+/// Which of a session's two tokens.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TokenKind {
+    /// The access token, sent with every request: `afk_at_…`.
+    Access,
+    /// The refresh token, sent only to refresh: `afk_rt_…`.
+    Refresh,
+}
+
+impl TokenKind {
+    /// The prefix the token's text starts with.
+    #[must_use]
+    pub const fn prefix(self) -> &'static str {
+        match self {
+            Self::Access => "afk_at_",
+            Self::Refresh => "afk_rt_",
+        }
+    }
+}
+
+/// A freshly minted token and its hash. Its `Debug` shows neither: the
+/// token is a [`SecretString`], the hash a [`TokenHash`].
+#[derive(Debug)]
+pub struct MintedToken {
+    /// The token's text, for the client only.
+    pub token: SecretString,
+    /// Its hash, for the database.
+    pub hash: TokenHash,
+}
+
+/// Why a token couldn't be minted.
+#[derive(Debug, thiserror::Error)]
+pub enum MintTokenError {
+    /// The random source failed.
+    #[error("no random bytes for the token")]
+    Random(#[source] RandomError),
+    /// The token's text couldn't be written. It can't happen: the buffer
+    /// always fits 32 bytes in base64url, and the text is ASCII.
+    #[error("the token's text can't be written")]
+    Encoding,
+}
+
+/// Making and recognizing session tokens (§7.2). The only implementation is
+/// infra's `Sha256Tokens`; it takes microseconds, so it's synchronous.
+pub trait Tokens: Send + Sync + fmt::Debug {
+    /// Mints a new token of `kind` from 256 random bits.
+    ///
+    /// # Errors
+    /// [`MintTokenError::Random`] when the random source fails, and
+    /// [`MintTokenError::Encoding`], which can't happen.
+    fn mint(&self, kind: TokenKind) -> Result<MintedToken, MintTokenError>;
+
+    /// The hash of a presented token of `kind`, or `None` when it isn't
+    /// shaped like one (its prefix, then exactly 43 base64url characters), so
+    /// it's refused before any lookup.
+    fn hash_presented(&self, kind: TokenKind, presented: &str) -> Option<TokenHash>;
+}
 
 /// The SHA-256 hash of a token's text, prefix included.
 ///
@@ -117,6 +180,12 @@ mod tests {
             TokenHash::try_from(bytes.as_slice()).err(),
             Some(TokenHashLengthError { len, expected: 32 })
         );
+    }
+
+    #[test]
+    fn the_prefixes_are_pinned() {
+        assert_eq!(TokenKind::Access.prefix(), "afk_at_");
+        assert_eq!(TokenKind::Refresh.prefix(), "afk_rt_");
     }
 
     #[test]

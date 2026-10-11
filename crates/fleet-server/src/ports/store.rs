@@ -121,4 +121,9 @@ pub enum UnauditedWrite {
     /// most once a minute. It's for display only (expiry counts from the
     /// last refresh), and an entry per request would bury the log.
     SessionTouch,
+    /// A successful refresh: the session's new token pair. It happens about
+    /// every 15 minutes per active client and says nothing new: the
+    /// session's creation and its end (logout, reuse, disabling, a role
+    /// change) are audited.
+    SessionRotate,
 }

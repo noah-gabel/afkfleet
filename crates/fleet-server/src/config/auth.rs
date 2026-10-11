@@ -1,8 +1,10 @@
 //! `[auth]`: how the server authenticates users (Plan.md Appendix A,
 //! ADR-0016).
 //!
-//! Group A adds the argon2 keys. Groups B, C and E add the token lifetimes,
-//! the lockout threshold and the invite lifetime with their tasks.
+//! Group A adds the argon2 keys, group B the token lifetimes. Groups C and E
+//! add the lockout threshold and the invite lifetime with their tasks.
+
+use fleet_core::auth::SessionPolicy;
 
 /// The inclusive range of a numeric key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -26,6 +28,19 @@ impl Bounds {
 pub struct AuthConfig {
     /// How passwords are hashed (`argon2_*`).
     pub argon2: Argon2Params,
+    /// How long sessions and their tokens live (`access_token_ttl_secs`,
+    /// `refresh_token_idle_days`, `refresh_token_absolute_days`).
+    pub sessions: SessionPolicy,
+}
+
+impl AuthConfig {
+    /// `access_token_ttl_secs`: 1 minute to 1 hour. Default 900 (§7.2).
+    pub const ACCESS_TOKEN_TTL_SECS: Bounds = Bounds { min: 60, max: 3600 };
+    /// `refresh_token_idle_days`: 1 to 90 days, at most the absolute
+    /// lifetime. Default 7.
+    pub const REFRESH_TOKEN_IDLE_DAYS: Bounds = Bounds { min: 1, max: 90 };
+    /// `refresh_token_absolute_days`: 1 to 365 days. Default 30.
+    pub const REFRESH_TOKEN_ABSOLUTE_DAYS: Bounds = Bounds { min: 1, max: 365 };
 }
 
 /// The password service's argon2 parameters (`[auth] argon2_*`), never below

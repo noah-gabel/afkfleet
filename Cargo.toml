@@ -110,6 +110,10 @@ rustls = "0.23.45"
 # pulls in zeroize (alloc).
 secrecy = "0.10.3"
 serde = "1.0.229"
+# sha2: SHA-256 of the session tokens; only the hash is stored (ADR-0006). Without
+# default features (no `alloc`, no `oid`); fleet-server enables `zeroize`, which wipes
+# the hasher's block buffer (ADR-0016). Already in Cargo.lock through sqlx and azalea.
+sha2 = { version = "0.11.0", default-features = false }
 # subtle: constant-time comparison of secrets, first the vault's duplicate-key check
 # (ADR-0016).
 subtle = "2.6.1"

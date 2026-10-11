@@ -2440,11 +2440,23 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - fleet-server: 68 of 77 failed on assertions
   >
   >   Then all passed. The queue's tests use a blocking stand-in and bound every wait at 10 s.
-- [ ] **P7.3** 🔴 `TokenService`:
+- [x] **P7.3** 🔴 `TokenService`:
   - tokens from `getrandom`, with prefixes
   - SHA-256 hashing and constant-time comparison (`subtle`)
   - TTLs
   - refresh rotation, and **family revocation when an old token is reused**
+
+  > Note (P7.3, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **One `sessions` row per family,** with the current access and refresh hashes; every replaced refresh hash stays in `rotated_refresh_tokens`, so reuse of any of them is caught. A refresh replaces the access token too.
+  > - **The tokens:** 32 bytes from `SecureRandom`, base64url without padding, behind `afk_at_` or `afk_rt_`. Stored as SHA-256 of the whole text (a 32-byte BLOB). A presented token must be its prefix plus 43 base64url characters before it's hashed; after the indexed lookup, `TokenHash::ct_eq` confirms the match.
+  > - **Expiry from anchors:** access = `refreshed_at` + `access_token_ttl_secs`, idle = `refreshed_at` + `refresh_token_idle_days`, both capped at `created_at` + `refresh_token_absolute_days`, from the running config. Expired at `now >= expiry`.
+  > - **The refresh rule** (`fleet_core::auth::refresh_decision`), inside the write transaction: unknown, revoked or expired → 401; a replaced token of a live session → reuse (revoke + `security.refresh_token_reuse` in the same commit, one `warn`); the current token of a disabled user → 401; otherwise rotate (`commit_unaudited(SessionRotate)`). No grace window; reuse in a dead session records nothing.
+  > - **The reuse entry:** Failure, no actor, the client's IP, target the session's user, metadata `session_id` and `rotated_at` (fleet-core's new typed `AuditMetadata::id` and `time`).
+  > - **`TokenService::prepare`** makes a session before any transaction; D's login inserts it and commits with `auth.login`.
+
+  > Note (P7.3, as built, group B) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **The pieces:** `fleet_core::auth::{SessionPolicy, SessionTimes, refresh_decision}`; `ports::tokens::{Tokens, TokenKind, MintedToken}` and `infra::crypto::tokens::Sha256Tokens` (sha2 with `zeroize`); `app::auth::TokenService` with `prepare` and `refresh`; `[auth]`'s three token keys.
+  > - **Tests,** red against compiling stubs (rules that allowed everything, typed metadata that added nothing, an adapter that minted nothing, config that ignored the keys, a service that refused every refresh): fleet-core 20 of 25 rule tests and 5 metadata tests plus the names snapshot; fleet-server 11 adapter, 8 config and 13 of 21 service tests failed on assertions. The tests that passed against the stubs check refusals and `Debug`. Then all passed.
 - [x] **P7.4** 🔴 Vault cipher: the envelope from §7.5 with `key_id` and AAD. TOTP secrets need it now; Phase 9 extends it. Tests cover tampering, the wrong key and the wrong AAD.
 
   > Note (P7.4, from Phase 6, group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
@@ -2645,6 +2657,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - one automatic, single-flight refresh on `401`
   - typed errors
   - integration tests against the in-process server
+
+  > Note (P8.1, from Phase 7, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **A refresh replaces the access token at once.** A request sent with an access token that a refresh has since replaced gets a 401. fleet-client's single-flight refresh checks whether the token it used is still the current one: if a refresh already replaced it, it retries once with the current token instead of refreshing again (no needless second rotation). Only a 401 for the current token triggers a refresh.
+  > - **No grace window.** A refresh whose response got lost leaves the client with a replaced refresh token; sending it again is reuse, which revokes the session, so the user logs in again.
 
   > Note (P8.1, from Phase 6, group C, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **A maximum response body size.** fleet-api-types caps each text a client reads (`BoundedText`, `Open`), but not how many entries a response holds (a `fields` array with a million entries), so fleet-client sets a maximum body size on its HTTP client, which bounds every response, not only errors.
 - [ ] **P8.2** Scaffold:
@@ -2936,6 +2952,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P11.5, from Phase 6, group E, the user's addition) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **a WebSocket must close itself on shutdown.** Once upgraded, it isn't bound by the request timeout, and the graceful shutdown waits for every open connection, so each WebSocket handler watches the shutdown `CancellationToken` and closes its connection with a close frame when it fires. Otherwise one open app makes every shutdown wait the full deadline.
 - [ ] **P11.6** 🔴 Retention job: chat older than `chat.retention_days` is deleted. The audit log is kept longer (configurable).
 
+  > Note (P11.6, from Phase 7, group B, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **sessions are cleaned up here too.** A session, with its `rotated_refresh_tokens` rows (ON DELETE CASCADE), is deleted once `created_at` + the current `refresh_token_absolute_days` has passed, whether it was revoked or not. A revoked session is unusable anyway, and keeping its rotation history until then lets an investigation after a reuse see the family's timeline. `sessions(created_at)` is indexed for it.
+
   > Note (P11.6, from Phase 6, group B) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): decide `secure_delete` here, so deleted chat and old audit entries are overwritten instead of lingering in free pages.
 - [ ] **P11.7** 🔴 Full-flow integration test: in-process server + in-process agent with `FakeConnector`.
   1. Start a bot via `fleet-client`.
@@ -3016,6 +3034,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - a restore runbook
   - Backups contain only ciphertext. **Back up the vault key separately and securely.**
 - [ ] **P12.4** A Prometheus metrics endpoint on an internal port, with the key metrics documented.
+
+  > Note (P12.4, from Phase 7, group B, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): a counter of detected refresh-token reuses belongs among the key metrics, so alerting can pick up possible token theft without anyone reading `/audit` or the logs.
 - [ ] **P12.5** Tauri release:
   - NSIS installer.
   - Updater key pair; the private key is kept **offline**.
@@ -3111,6 +3131,8 @@ Secrets **never** go in these files. They're referenced through `*_file` paths (
 > Note (Appendix A, from Phase 6, group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **`server.toml` grows with the phases.** Unknown keys are errors, and Phase 6 defines only `dev_mode`, `[http] bind`, `request_timeout_secs` and `max_body_bytes`, `[database] path` and `[log]`. Each later key arrives with its task: `trusted_proxies` (P7.10), `[auth]` (P7), `[rate_limits]` (P7.10), `[vault]` (P7.4, P9), `[accounts]` (P9), `[grpc]` (P10), `[chat]` (P11) and the `backup_*` keys (P12.3). The example below shows the full set.
 > - `bind` defaults to `127.0.0.1:8080`, not the `0.0.0.0:8080` below, which is what a container sets.
 > - `[database] path` is required and must be absolute.
+
+> Note (Appendix A, Phase 7, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`[auth]`'s token keys** take the defaults below, within these ranges: `access_token_ttl_secs` 60–3600, `refresh_token_idle_days` 1–90, `refresh_token_absolute_days` 1–365, and the idle lifetime may not exceed the absolute one. They apply to existing sessions too: expiry is computed from each session's anchors with the running config. All three are on the secret-name test's allowlist.
 
 > Note (Appendix A, Phase 7, group A, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
 > - **`[auth]`'s argon2 keys** take the defaults below, within these ranges:

@@ -4,6 +4,9 @@
 use core::fmt::Write as _;
 use std::collections::BTreeMap;
 
+use chrono::{DateTime, Datelike as _, Timelike as _, Utc};
+use uuid::Uuid;
+
 use super::name::{self, Dots};
 use super::{AuditError, has_secret_word};
 use crate::text::sanitize_untrusted;
@@ -31,14 +34,17 @@ pub enum MetadataValue {
 ///   characters, never one that names a secret ([`super::SECRET_WORDS`]);
 /// - values only from plain text (sanitized and cut to
 ///   [`AuditMetadata::MAX_TEXT_CHARS`] characters), integers within
-///   ±[`AuditMetadata::MAX_INT`] (so the TypeScript app reads them exactly)
-///   and booleans. A `SecretString` has no conversion, so a secret only gets
-///   in through an explicit `expose_secret()`, which review sees;
+///   ±[`AuditMetadata::MAX_INT`] (so the TypeScript app reads them exactly),
+///   booleans, and IDs and times the server made ([`AuditMetadata::id`],
+///   [`AuditMetadata::time`]), stored as JSON strings. A `SecretString` has
+///   no conversion, so a secret only gets in through an explicit
+///   `expose_secret()`, which review sees;
 /// - at most [`AuditMetadata::MAX_JSON_BYTES`] bytes of JSON, measured on
 ///   exactly the text [`AuditMetadata::to_json`] writes. Every free entry
-///   slot keeps room for the largest integer or boolean entry, and a text
-///   value is cut to what's left (on a character boundary, measured after
-///   JSON escaping), so a later entry always fits.
+///   slot keeps room for the largest integer, boolean, ID or time entry, and
+///   a text value is cut to what's left (on a character boundary, measured
+///   after JSON escaping), so a later entry always fits. IDs and times are
+///   never cut.
 ///
 /// A text value that was cut, for either limit, ends in `…`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -59,11 +65,17 @@ impl AuditMetadata {
     /// The longest JSON object, in bytes.
     pub const MAX_JSON_BYTES: usize = 4096;
 
-    /// The most bytes one integer or boolean entry adds to the JSON: a comma,
-    /// the longest key in quotes, a colon and the longest value (the most
-    /// negative integer, or `false`). Every free slot keeps this much room.
-    const SLOT_BYTES: usize =
-        1 + (Self::MAX_KEY_LEN + 2) + 1 + max(int_len(-Self::MAX_INT), "false".len());
+    /// The most bytes one integer, boolean, ID or time entry adds to the
+    /// JSON: a comma, the longest key in quotes, a colon and the longest
+    /// value (the most negative integer, `false`, an ID or a time in
+    /// quotes). Every free slot keeps this much room.
+    const SLOT_BYTES: usize = 1
+        + (Self::MAX_KEY_LEN + 2)
+        + 1
+        + max(
+            max(int_len(-Self::MAX_INT), "false".len()),
+            max(ID_CHARS + 2, TIME_MAX_CHARS + 2),
+        );
 
     /// Empty metadata, stored as `NULL`.
     #[must_use]
@@ -112,6 +124,28 @@ impl AuditMetadata {
     pub fn flag(self, key: &str, value: bool) -> Result<Self, AuditError> {
         self.check_key(key)?;
         Ok(self.with(key, MetadataValue::Bool(value)))
+    }
+
+    /// Adds an ID the server made, as its lowercase hyphenated text (a JSON
+    /// string). It's never cut: every free slot keeps room for it.
+    ///
+    /// # Errors
+    /// The errors of [`AuditMetadata::text`].
+    pub fn id(self, key: &str, id: impl Into<Uuid>) -> Result<Self, AuditError> {
+        self.check_key(key)?;
+        let text = id.into().hyphenated().to_string();
+        Ok(self.with(key, MetadataValue::Text(text)))
+    }
+
+    /// Adds a time the server read from its clock, in UTC with milliseconds
+    /// (`YYYY-MM-DDTHH:MM:SS.mmmZ`, the database's form; a JSON string). It's
+    /// never cut: every free slot keeps room for it.
+    ///
+    /// # Errors
+    /// The errors of [`AuditMetadata::text`].
+    pub fn time(self, key: &str, at: DateTime<Utc>) -> Result<Self, AuditError> {
+        self.check_key(key)?;
+        Ok(self.with(key, MetadataValue::Text(time_text(at))))
     }
 
     /// Checks that `key` may be added: a valid name, no secret word, not
@@ -201,6 +235,29 @@ const _: () = assert!(
 
 /// What a cut text value ends in.
 const ELLIPSIS: char = '…';
+
+/// The characters of an ID's hyphenated text.
+const ID_CHARS: usize = 36;
+
+/// The most characters of [`time_text`]: chrono's earliest year has a sign
+/// and 6 digits (7), then `-MM-DDTHH:MM:SS.mmmZ` (20).
+const TIME_MAX_CHARS: usize = 27;
+
+/// `at` in UTC with milliseconds: `YYYY-MM-DDTHH:MM:SS.mmmZ`, the form the
+/// database stores times in (a year outside 0 to 9999 has more digits or a
+/// sign). A leap second's extra milliseconds stay within `.999`.
+fn time_text(at: DateTime<Utc>) -> String {
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}.{:03}Z",
+        at.year(),
+        at.month(),
+        at.day(),
+        at.hour(),
+        at.minute(),
+        at.second(),
+        at.timestamp_subsec_millis().min(999)
+    )
+}
 
 /// The number of characters `n` takes in decimal, with its sign.
 const fn int_len(n: i64) -> usize {
@@ -580,6 +637,128 @@ mod tests {
         assert!(metadata.to_json().len() <= AuditMetadata::MAX_JSON_BYTES);
     }
 
+    /// A version 7 ID's UUID, made from id.rs's fixed parts, whose text is
+    /// worked out there.
+    fn session_uuid() -> Uuid {
+        *crate::id::SessionId::new_v7(at(1_700_000_000_000), [0xAB; 10])
+            .unwrap()
+            .as_uuid()
+    }
+
+    fn at(millis: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp_millis(millis).unwrap()
+    }
+
+    #[test]
+    fn an_id_is_written_as_lowercase_hyphenated_text() {
+        let metadata = AuditMetadata::new()
+            .id("session_id", session_uuid())
+            .unwrap();
+
+        assert_eq!(
+            metadata.to_json(),
+            r#"{"session_id":"018bcfe5-6800-7bab-abab-abababababab"}"#
+        );
+    }
+
+    #[test]
+    fn a_time_is_written_in_utc_with_milliseconds() {
+        let when = at(1_800_000_000_123) + chrono::TimeDelta::nanoseconds(456_789);
+
+        let metadata = AuditMetadata::new().time("rotated_at", when).unwrap();
+
+        assert_eq!(
+            metadata.to_json(),
+            r#"{"rotated_at":"2027-01-15T08:00:00.123Z"}"#
+        );
+    }
+
+    #[test]
+    fn a_leap_second_keeps_three_digits_of_milliseconds() {
+        let leap = chrono::NaiveDate::from_ymd_opt(2016, 12, 31)
+            .unwrap()
+            .and_hms_milli_opt(23, 59, 59, 1_500)
+            .unwrap()
+            .and_utc();
+
+        let metadata = AuditMetadata::new().time("at", leap).unwrap();
+
+        assert_eq!(metadata.to_json(), r#"{"at":"2016-12-31T23:59:59.999Z"}"#);
+    }
+
+    #[rstest]
+    #[case::earliest(DateTime::<Utc>::MIN_UTC)]
+    #[case::latest(DateTime::<Utc>::MAX_UTC)]
+    fn every_time_fits_its_slot(#[case] when: DateTime<Utc>) {
+        assert!(
+            time_text(when).len() <= TIME_MAX_CHARS,
+            "{}",
+            time_text(when)
+        );
+    }
+
+    #[test]
+    fn typed_keys_follow_the_key_rules() {
+        let id = AuditMetadata::new().id("session_token", session_uuid());
+        let time = AuditMetadata::new()
+            .flag("at", true)
+            .unwrap()
+            .time("at", at(0));
+
+        assert_eq!(id, Err(AuditError::SecretKey));
+        assert_eq!(time, Err(AuditError::DuplicateKey));
+    }
+
+    #[test]
+    fn ids_and_times_are_never_cut_after_texts_used_the_budget() {
+        let full = "😀".repeat(256);
+        let mut metadata = AuditMetadata::new();
+        for n in 0..14 {
+            metadata = metadata.text(&long_key(n), &full).unwrap();
+        }
+
+        let metadata = metadata
+            .id(&long_key(14), session_uuid())
+            .unwrap()
+            .time(&long_key(15), at(1_800_000_000_123))
+            .unwrap();
+
+        assert!(metadata.to_json().len() <= AuditMetadata::MAX_JSON_BYTES);
+        assert_eq!(
+            text_of(&metadata, &long_key(14)),
+            "018bcfe5-6800-7bab-abab-abababababab"
+        );
+        assert_eq!(
+            text_of(&metadata, &long_key(15)),
+            "2027-01-15T08:00:00.123Z"
+        );
+    }
+
+    #[test]
+    fn ids_and_times_read_back_as_text() {
+        let metadata = AuditMetadata::new()
+            .id("session_id", session_uuid())
+            .unwrap()
+            .time("rotated_at", at(1_800_000_000_123))
+            .unwrap();
+
+        let recorded = RecordedMetadata::from(&metadata);
+
+        assert_eq!(
+            recorded.entries(),
+            [
+                (
+                    "rotated_at".to_owned(),
+                    RecordedValue::Text("2027-01-15T08:00:00.123Z".to_owned())
+                ),
+                (
+                    "session_id".to_owned(),
+                    RecordedValue::Text("018bcfe5-6800-7bab-abab-abababababab".to_owned())
+                ),
+            ]
+        );
+    }
+
     #[test]
     fn written_metadata_reads_back_as_the_same_values() {
         let metadata = AuditMetadata::new()
@@ -658,6 +837,8 @@ mod tests {
         Text(String),
         Int(i64),
         Bool(bool),
+        Id(u128),
+        Time(i64),
     }
 
     fn value() -> impl Strategy<Value = Value> {
@@ -666,13 +847,17 @@ mod tests {
             "[\"\\\\é€😀a\\n]{200,300}".prop_map(Value::Text),
             (-AuditMetadata::MAX_INT..=AuditMetadata::MAX_INT).prop_map(Value::Int),
             any::<bool>().prop_map(Value::Bool),
+            any::<u128>().prop_map(Value::Id),
+            (DateTime::<Utc>::MIN_UTC.timestamp_millis()
+                ..=DateTime::<Utc>::MAX_UTC.timestamp_millis())
+                .prop_map(Value::Time),
         ]
     }
 
     proptest! {
         /// The JSON writer agrees with serde_json byte for byte, so the size
         /// it measures is the size stored, and with valid keys no entry is
-        /// ever refused: long texts are cut to fit.
+        /// ever refused: long texts are cut to fit, IDs and times never.
         #[test]
         fn the_json_is_what_serde_json_writes(entries in proptest::collection::btree_map(key(), value(), 0..16)) {
             let mut metadata = AuditMetadata::new();
@@ -681,6 +866,8 @@ mod tests {
                     Value::Text(text) => metadata.clone().text(key, text),
                     Value::Int(n) => metadata.clone().int(key, *n),
                     Value::Bool(b) => metadata.clone().flag(key, *b),
+                    Value::Id(n) => metadata.clone().id(key, Uuid::from_u128(*n)),
+                    Value::Time(millis) => metadata.clone().time(key, at(*millis)),
                 };
                 metadata = next.unwrap();
             }

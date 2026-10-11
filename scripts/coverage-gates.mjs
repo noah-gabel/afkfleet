@@ -32,8 +32,10 @@ export const GATES = [
     required: true,
     prefixes: [
       "crates/fleet-core/src/auth/",
+      "crates/fleet-server/src/app/auth.rs",
       "crates/fleet-server/src/app/users.rs",
       "crates/fleet-server/src/infra/crypto/passwords.rs",
+      "crates/fleet-server/src/infra/crypto/tokens.rs",
       "crates/fleet-server/src/ports/tokens.rs",
     ],
   },

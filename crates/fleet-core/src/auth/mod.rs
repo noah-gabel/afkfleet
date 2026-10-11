@@ -12,9 +12,16 @@
 //!   strength check ever sees it.
 //! - [`WeakWarning`] and [`WeakSuggestion`]: why the server's strength check
 //!   refused a password, in our own words, so its port names no crate's type.
+//! - [`SessionPolicy`] and [`refresh_decision`]: a session's lifetimes, when
+//!   its tokens expire, and what a refresh comes to (group B).
 
 mod password;
+mod session;
 mod strength;
 
 pub use password::{NewPassword, NewPasswordError};
+pub use session::{
+    RefreshDecision, RefreshFacts, RefreshMatch, SessionPolicy, SessionPolicyError, SessionTimes,
+    refresh_decision,
+};
 pub use strength::{WeakSuggestion, WeakWarning};

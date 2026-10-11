@@ -48,6 +48,9 @@ rpassword.workspace = true
 # PasswordHash holds the hash as a SecretString: redacted Debug, zeroized (ADR-0015).
 secrecy.workspace = true
 serde = { workspace = true, features = ["derive"] }
+# SHA-256 of the session tokens, the only form the database holds; `zeroize` wipes the
+# hasher's buffer, which held the token's tail (ADR-0016).
+sha2 = { workspace = true, features = ["zeroize"] }
 # Reading the audit log's metadata JSON back (ADR-0015).
 serde_json.workspace = true
 # Constant-time comparison of secrets, first the vault's duplicate-key check (ADR-0016).

@@ -3,5 +3,6 @@ source: crates/fleet-core/src/audit/action.rs
 expression: names
 ---
 [
-  "user.create"
+  "user.create",
+  "security.refresh_token_reuse"
 ]

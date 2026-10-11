@@ -258,6 +258,9 @@ Any test that could block on a read (the FIFO case, a pipe, a child process) run
   - `POST /auth/step-up` lives in D.
 - **P7.10 (C)** *(the user's addition)*: the one real-socket test sends a request over a real connection to a route with the per-IP limit, and fails if the peer address doesn't reach the limiter. `oneshot` sets `ConnectInfo` itself, so it can't catch a missing `into_make_service_with_connect_info`.
 - **P7.11 (C)** *(the user's addition)*: the route-coverage test must not pass while the authed list is empty. For example, a test-only authed route proves the 401 check, and D's and E's routes join it automatically.
+- **P8.1** *(group B, the user's decisions)*: a request with an access token a refresh has since replaced gets 401. fleet-client's single-flight refresh retries once with the current token when a refresh already replaced the one it used, and refreshes only on a 401 for the current token. A lost refresh response means logging in again.
+- **P11.6** *(group B, the user's decision)*: a session and its history rows are deleted once `created_at` + the current absolute lifetime has passed, revoked or not.
+- **P12.4** *(group B, the user's decision)*: a counter of detected refresh-token reuses among the key metrics.
 - **P12.2** *(the user's decision)*: every secret file is `chown 65532:65532` and `chmod 600` in the compose setup and the runbook (P12.6), and P12.7's smoke test runs with them that way.
 - **P12.7** *(the user's decision)*: the smoke test creates the Owner with `docker compose run -T … user create-owner --username … --password-stdin`.
 
@@ -347,6 +350,13 @@ The user answered group B's questions on 2026-10-11, one at a time.
 - **P7.1's `sessions`** (`0003_sessions.sql`): the conventions of 0001 and 0002 (STRICT, ID and time shapes); hashes as BLOBs with a length CHECK; no ordering CHECKs. `user_id` references `users` without cascade, like the audit log's actor. Every lookup joins `users`, so a session whose user row is gone isn't found.
 - **`SessionId`** joins fleet-core's IDs, and the `serialized_ids` snapshot gains it.
 - **Tests,** red against compiling stubs (a migration without CHECKs or cascade, a repository that found and wrote nothing, a `TokenHash` that compared nothing and read nothing back, a `commit_unaudited` that rolled back): 21 of 26 repository tests and 3 of 8 `TokenHash` tests failed on assertions. The 5 repository tests that passed assert that nothing is found or that a row is refused. Then all passed.
+- **P7.3, the pieces:**
+  - `fleet_core::auth::{SessionPolicy, SessionTimes, RefreshFacts, refresh_decision}`. `SessionPolicy::try_new` refuses a zero lifetime, an access lifetime not shorter than the idle one, and an idle lifetime longer than the absolute one; its `Default` is §7.2's.
+  - `ports::tokens::{Tokens, TokenKind, MintedToken, MintTokenError}` and `infra::crypto::tokens::Sha256Tokens`. The token is built in `Zeroizing` buffers of fixed size and copied once into a `SecretString` of exactly its length. A known-answer test pins the hash (computed with Python's hashlib and Node's crypto).
+  - `app::auth::TokenService::{prepare, refresh}`. `refresh` mints the new pair before `Store::write()`, confirms the indexed match with `ct_eq`, and matches the rule's decision together with the lookup, so no impossible combination is handled by hand.
+  - **The slot for typed metadata.** `AuditMetadata`'s reserved room per free slot grows from the largest integer to the largest ID or time in quotes, so an ID or a time is never cut, whatever came before.
+  - **`[auth]`'s ranges** are checked by one helper for the argon2 and the token keys, in garde's words; idle > absolute is the new `ProblemKind::GreaterThanKey`, checked only when both are in range.
+- **P7.3, tests,** red against compiling stubs (rules that allowed everything, typed metadata that added nothing, an adapter that minted nothing, config that ignored the keys, a service that refused every refresh): fleet-core 20 of 25 rule tests, 5 metadata tests and the names snapshot; fleet-server 11 adapter tests, 8 config tests and 13 of 21 service tests failed on assertions. The ones that passed against the stubs check refusals and `Debug`. Then all passed.
 
 ## Consequences
 - **Easier:**
