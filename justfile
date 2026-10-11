@@ -112,8 +112,16 @@ stack-up:
 mc-down:
     docker compose --file deploy/compose.dev.yaml down --volumes
 
-# Run the server with deploy/dev/ configs.
-dev-server: (_unavailable "dev-server" "P6")
+# The database path must be absolute, which a committed config can't hold for every
+# machine, so the recipe passes it: target/dev-server/afkfleet.db by default, or the
+# absolute path given. The server refuses a missing folder, so Node creates it first.
+# No exit message: on Windows, Ctrl+C reaches just and PowerShell too, so just would
+# call a clean stop a failure. The server logs its own errors and exit code.
+# Run the server with deploy/dev/server.toml (dev mode) and a database in target/dev-server/.
+[no-exit-message]
+dev-server $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dev-server" / "afkfleet.db"):
+    node -e "require('node:fs').mkdirSync(require('node:path').dirname(process.argv[1]), { recursive: true })" "{{ AFKFLEET_SERVER__DATABASE__PATH }}"
+    cargo run -p fleet-server --bin afkfleet-server -- serve --config deploy/dev/server.toml
 
 # No exit message: on Windows, Ctrl+C reaches just and PowerShell too, so just
 # would call a clean stop a failure. The agent logs its own errors and exit code.

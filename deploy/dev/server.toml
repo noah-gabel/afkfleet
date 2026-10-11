@@ -1,0 +1,23 @@
+# The server's development config, for `just dev-server` on the host only.
+#
+# DEVELOPMENT ONLY: dev mode serves development-only features, such as the
+# OpenAPI document at /api/openapi.json, and the server warns about it at
+# startup. Never run a production server with this file.
+#
+# The database path must be absolute, and a committed file can't hold one
+# that works on every machine, so it isn't set here: `just dev-server` passes
+# AFKFLEET_SERVER__DATABASE__PATH, by default target/dev-server/afkfleet.db in
+# the repository. Keys left out take Plan.md P6.2's defaults;
+# AFKFLEET_SERVER__… environment variables override any key, e.g.
+# AFKFLEET_SERVER__LOG__FILTER=debug.
+
+dev_mode = true
+
+# [http]
+# bind = "127.0.0.1:8080"                # an IP address and a port other than 0
+# request_timeout_secs = 15              # 1–300; the shutdown waits this long for requests, plus 5 s for the database
+# max_body_bytes = 65536                 # 1024–1048576
+
+[log]
+format = "pretty"
+filter = "info"                          # EnvFilter syntax; azalea_auth stays at info

@@ -43,7 +43,8 @@
 //! could still finish after a timeout. Migrations at startup are unbounded on
 //! purpose: they must finish or fail, and a half-applied migration would be
 //! worse. [`Database::close`] waits for every checked-out connection, so its
-//! caller bounds it (group E's shutdown).
+//! callers bound it: `migrate` through [`Database::close_within`], `serve`
+//! within its shutdown deadline.
 
 mod audit;
 mod connect;
@@ -53,6 +54,7 @@ mod file;
 mod store;
 mod users;
 
+use core::time::Duration;
 use std::path::PathBuf;
 
 use sqlx::migrate::{MigrateError, Migrator};
@@ -133,6 +135,15 @@ pub enum OpenError {
     Migrate(#[source] MigrateError),
 }
 
+/// [`Database::close_within`] ran out of time: a connection was still
+/// checked out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the database didn't close within {} ms", .limit.as_millis())]
+pub struct CloseTimedOut {
+    /// How long it waited.
+    pub limit: Duration,
+}
+
 /// The open database: one write connection and a pool of read connections.
 /// It's the server's [`Store`](crate::ports::store::Store). Clones share the
 /// pools.
@@ -198,6 +209,18 @@ impl Database {
     pub async fn close(&self) {
         self.read.close().await;
         self.write.close().await;
+    }
+
+    /// [`Database::close`], waiting at most `limit` for checked-out
+    /// connections to come back. The pools refuse new connections either
+    /// way.
+    ///
+    /// # Errors
+    /// [`CloseTimedOut`] if a connection was still checked out at `limit`.
+    pub async fn close_within(&self, limit: Duration) -> Result<(), CloseTimedOut> {
+        tokio::time::timeout(limit, self.close())
+            .await
+            .map_err(|_elapsed| CloseTimedOut { limit })
     }
 }
 
