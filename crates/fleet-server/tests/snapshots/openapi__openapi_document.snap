@@ -40,6 +40,7 @@ expression: answer.json()
         "enum": [
           "bad_request",
           "unauthorized",
+          "invalid_credentials",
           "forbidden",
           "step_up_required",
           "not_found",
@@ -85,6 +86,76 @@ expression: answer.json()
           "message"
         ],
         "type": "object"
+      },
+      "LoginMfaRequest": {
+        "additionalProperties": false,
+        "description": "`POST /auth/login/mfa`: the code step.",
+        "properties": {
+          "code": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "mfa_token": {
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "mfa_token",
+          "code"
+        ],
+        "type": "object"
+      },
+      "LoginRequest": {
+        "additionalProperties": false,
+        "description": "`POST /auth/login`: the password step.",
+        "properties": {
+          "password": {
+            "maxLength": 1024,
+            "type": "string"
+          },
+          "username": {
+            "maxLength": 32,
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "type": "object"
+      },
+      "LoginResponse": {
+        "description": "The password step's answer: never real tokens.",
+        "properties": {
+          "expires_in": {
+            "maximum": 600,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "status": {
+            "$ref": "#/components/schemas/LoginStatus",
+            "description": "What comes next."
+          },
+          "token": {
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "status",
+          "token",
+          "expires_in"
+        ],
+        "type": "object"
+      },
+      "LoginStatus": {
+        "description": "What the password step leads to.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "mfa_required",
+          "mfa_setup_required"
+        ],
+        "type": "string"
       },
       "MfaConfirmRequest": {
         "additionalProperties": false,
@@ -157,6 +228,64 @@ expression: answer.json()
           "expires_in"
         ],
         "type": "object"
+      },
+      "RefreshRequest": {
+        "additionalProperties": false,
+        "description": "`POST /auth/refresh`: a new token pair for the refresh token.",
+        "properties": {
+          "refresh_token": {
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "refresh_token"
+        ],
+        "type": "object"
+      },
+      "StepUpRequest": {
+        "additionalProperties": false,
+        "description": "`POST /auth/step-up`: the password again, which allows step-up actions\nin this session for 5 minutes.",
+        "properties": {
+          "password": {
+            "maxLength": 1024,
+            "type": "string"
+          }
+        },
+        "required": [
+          "password"
+        ],
+        "type": "object"
+      },
+      "TokenResponse": {
+        "description": "A session's tokens: the code step's and a refresh's answer.",
+        "properties": {
+          "access_expires_in": {
+            "maximum": 3600,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "access_token": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "refresh_expires_in": {
+            "maximum": 31536000,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "refresh_token": {
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token",
+          "refresh_token",
+          "access_expires_in",
+          "refresh_expires_in"
+        ],
+        "type": "object"
       }
     },
     "securitySchemes": {
@@ -181,6 +310,377 @@ expression: answer.json()
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/auth/login": {
+      "post": {
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            },
+            "description": "An mfa token for the code step, or a setup token for enrolling first."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The username or the password is wrong; nothing tells which."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The username isn't a valid one, or the password is too long."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many logins from this address, or the username is locked.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "summary": "`POST /api/v1/auth/login`: the password step; never real tokens.",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/login/mfa": {
+      "post": {
+        "operationId": "login_mfa",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginMfaRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            },
+            "description": "The session's tokens."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The code is wrong, or the mfa token is no longer valid; nothing tells which."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The code is neither 6 digits nor a recovery code, or a field is too long."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many logins from this address, or the username is locked.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "summary": "`POST /api/v1/auth/login/mfa`: the code step; the session's tokens.",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/logout": {
+      "post": {
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": "The session is over."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/auth/logout`: ends this session.",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/refresh": {
+      "post": {
+        "operationId": "refresh",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefreshRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            },
+            "description": "The session's new tokens; the old ones stop working."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The session is over: log in again."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The token field is too long."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many refreshes from this address."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "summary": "`POST /api/v1/auth/refresh`: a new token pair for the refresh token.",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/v1/auth/step-up": {
+      "post": {
+        "operationId": "step_up",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StepUpRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Step-up actions are allowed for 5 minutes."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The password is wrong."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The password is too long."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many attempts from this address or for this user, or the username is locked.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/auth/step-up`: the password again; step-up actions are\nallowed in this session for 5 minutes.",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
     "/api/v1/me/mfa/confirm": {
       "post": {
         "operationId": "confirm",

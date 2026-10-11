@@ -45,6 +45,7 @@ export const GATES = [
       "crates/fleet-server/src/ports/login_attempts.rs",
       "crates/fleet-server/src/app/challenges.rs",
       "crates/fleet-server/src/app/mfa.rs",
+      "crates/fleet-server/src/app/login.rs",
       "crates/fleet-server/src/infra/crypto/totp.rs",
       "crates/fleet-server/src/infra/crypto/recovery_codes.rs",
       "crates/fleet-server/src/ports/totp.rs",

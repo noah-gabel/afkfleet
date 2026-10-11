@@ -43,6 +43,7 @@ use fleet_core::value::Username;
 use fleet_server::app::auth::TokenService;
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
 use fleet_server::app::health::HealthService;
+use fleet_server::app::login::LoginService;
 use fleet_server::app::mfa::{MfaPorts, MfaService};
 use fleet_server::config::{HttpConfig, RateLimitConfig};
 use fleet_server::http::extractors::AuthUser;
@@ -51,6 +52,8 @@ use fleet_server::http::openapi::{ApiDocs, OPENAPI_PATH};
 use fleet_server::http::rate_limit::{RateLimits, TrustedProxies};
 use fleet_server::http::router::{AppState, api_routes};
 use fleet_server::http::routes::{Access, RateClass, RouteEntry, Routes};
+use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
+use fleet_server::infra::crypto::passwords::Argon2Passwords;
 use fleet_server::infra::crypto::recovery_codes::Sha256RecoveryCodes;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::crypto::totp::TotpRs;
@@ -143,7 +146,37 @@ fn http() -> HttpConfig {
 }
 
 /// The production routes, plus whatever `extra` adds, finished.
-fn build(db: &Database, docs: ApiDocs, extra: impl FnOnce(Routes) -> Routes) -> Built {
+/// The login over `db`, with `tokens` and `mfa`. No test here logs in, but
+/// the state carries it.
+async fn login(db: &Database, tokens: &TokenService, mfa: &MfaService) -> LoginService {
+    let clock = Arc::new(ManualClock::new(
+        chrono::DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
+    ));
+    let passwords = Argon2Passwords::new(
+        fleet_server::config::Argon2Params::default(),
+        Arc::new(SeededRandom::new(19)),
+    )
+    .await
+    .unwrap();
+    let lockout = fleet_server::app::lockout::LockoutService::new(
+        clock.clone(),
+        Arc::new(db.clone()),
+        Arc::new(HmacAttemptKeys::new(secrecy::SecretBox::new(Box::new(
+            [7; 32],
+        )))),
+        fleet_core::auth::LockoutPolicy::default(),
+    );
+    LoginService::new(
+        clock,
+        Arc::new(db.clone()),
+        Arc::new(passwords),
+        lockout,
+        tokens.clone(),
+        mfa.clone(),
+    )
+}
+
+async fn build(db: &Database, docs: ApiDocs, extra: impl FnOnce(Routes) -> Routes) -> Built {
     let random = SeededRandom::new(13);
     let token_port = Arc::new(Sha256Tokens::new(Arc::new(random.clone())));
     let tokens = TokenService::new(
@@ -172,11 +205,13 @@ fn build(db: &Database, docs: ApiDocs, extra: impl FnOnce(Routes) -> Routes) -> 
         challenges.clone(),
     );
     let limits = limits();
+    let login = login(db, &tokens, &mfa).await;
     let state = AppState::new(
         HealthService::new(Arc::new(db.clone())),
         tokens.clone(),
         limits.clone(),
         mfa,
+        login,
     );
     let ids = RequestIds::new(Arc::new(clock()), Arc::new(SeededRandom::new(5)));
     let (app, entries) = extra(api_routes(Routes::new(&limits))).finish(state, &http(), ids, docs);
@@ -337,13 +372,16 @@ async fn outside_dev_mode_the_public_routes_are_exactly_the_allowlist(
 ) {
     let db = open(options).await;
 
-    let built = build(&db, ApiDocs::Hidden, |routes| routes);
+    let built = build(&db, ApiDocs::Hidden, |routes| routes).await;
 
     assert_eq!(
         with_access(&built.entries, Access::Public),
         BTreeSet::from([
             entry(Method::GET, "/health/live", RateClass::Standard),
             entry(Method::GET, "/health/ready", RateClass::Standard),
+            entry(Method::POST, "/api/v1/auth/login", RateClass::Login),
+            entry(Method::POST, "/api/v1/auth/login/mfa", RateClass::Login),
+            entry(Method::POST, "/api/v1/auth/refresh", RateClass::Refresh),
         ])
     );
     db.close().await;
@@ -356,13 +394,16 @@ async fn dev_mode_adds_only_the_document_to_the_public_routes(
 ) {
     let db = open(options).await;
 
-    let built = build(&db, ApiDocs::Served, |routes| routes);
+    let built = build(&db, ApiDocs::Served, |routes| routes).await;
 
     assert_eq!(
         with_access(&built.entries, Access::Public),
         BTreeSet::from([
             entry(Method::GET, "/health/live", RateClass::Standard),
             entry(Method::GET, "/health/ready", RateClass::Standard),
+            entry(Method::POST, "/api/v1/auth/login", RateClass::Login),
+            entry(Method::POST, "/api/v1/auth/login/mfa", RateClass::Login),
+            entry(Method::POST, "/api/v1/auth/refresh", RateClass::Refresh),
             entry(Method::GET, OPENAPI_PATH, RateClass::Standard),
         ])
     );
@@ -376,7 +417,7 @@ async fn the_2fa_routes_are_registered_with_their_access_and_class(
 ) {
     let db = open(options).await;
 
-    let built = build(&db, ApiDocs::Hidden, |routes| routes);
+    let built = build(&db, ApiDocs::Hidden, |routes| routes).await;
 
     assert_eq!(
         with_access(&built.entries, Access::Setup),
@@ -397,6 +438,25 @@ async fn the_2fa_routes_are_registered_with_their_access_and_class(
 }
 
 #[sqlx::test(migrations = false)]
+async fn the_session_routes_are_authed_with_their_class(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = open(options).await;
+
+    let built = build(&db, ApiDocs::Hidden, |routes| routes).await;
+
+    assert_eq!(
+        with_access(&built.entries, Access::Authed),
+        BTreeSet::from([
+            entry(Method::POST, "/api/v1/auth/logout", RateClass::Standard),
+            entry(Method::POST, "/api/v1/auth/step-up", RateClass::Login),
+        ])
+    );
+    db.close().await;
+}
+
+#[sqlx::test(migrations = false)]
 async fn every_route_that_needs_credentials_answers_401_without_them(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
@@ -405,7 +465,8 @@ async fn every_route_that_needs_credentials_answers_401_without_them(
     for docs in [ApiDocs::Hidden, ApiDocs::Served] {
         let built = build(&db, docs, |routes| {
             routes.authed_route(RateClass::Standard, routes!(whoami))
-        });
+        })
+        .await;
 
         for access in NEEDS_CREDENTIALS {
             assert!(
@@ -431,7 +492,8 @@ async fn the_check_catches_an_authed_route_that_doesnt_ask_for_credentials(
         routes
             .authed_route(RateClass::Standard, routes!(whoami))
             .authed_route(RateClass::Standard, routes!(forgot_auth_user))
-    });
+    })
+    .await;
 
     let offenders = routes_without_401(&built.app, &built.entries, &NEEDS_CREDENTIALS, None).await;
 
@@ -452,7 +514,8 @@ async fn a_setup_token_is_refused_on_every_route_an_access_token_is_for(
     let user = add_user(&db).await;
     let built = build(&db, ApiDocs::Hidden, |routes| {
         routes.authed_route(RateClass::Standard, routes!(whoami))
-    });
+    })
+    .await;
     let token = setup_token(&built.challenges, user);
 
     let offenders = routes_without_401(
@@ -467,6 +530,41 @@ async fn a_setup_token_is_refused_on_every_route_an_access_token_is_for(
     db.close().await;
 }
 
+/// A live mfa token of `user`.
+fn mfa_token(challenges: &Challenges, user: UserId) -> SecretString {
+    challenges
+        .issue_mfa(
+            ChallengeUser {
+                id: user,
+                role: Role::Member,
+                password_changed_at: start(),
+            },
+            None,
+        )
+        .unwrap()
+        .token
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_mfa_token_is_refused_on_every_route_that_needs_credentials(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = open(options).await;
+    let user = add_user(&db).await;
+    let built = build(&db, ApiDocs::Hidden, |routes| {
+        routes.authed_route(RateClass::Standard, routes!(whoami))
+    })
+    .await;
+    let token = mfa_token(&built.challenges, user);
+
+    let offenders =
+        routes_without_401(&built.app, &built.entries, &NEEDS_CREDENTIALS, Some(&token)).await;
+
+    assert_eq!(offenders, Vec::<String>::new());
+    db.close().await;
+}
+
 #[sqlx::test(migrations = false)]
 async fn an_access_token_is_refused_on_every_setup_route(
     _pool: SqlitePoolOptions,
@@ -474,7 +572,7 @@ async fn an_access_token_is_refused_on_every_setup_route(
 ) {
     let db = open(options).await;
     let user = add_user(&db).await;
-    let built = build(&db, ApiDocs::Hidden, |routes| routes);
+    let built = build(&db, ApiDocs::Hidden, |routes| routes).await;
     let token = access_token(&db, &built.tokens, user).await;
 
     let offenders =
@@ -514,7 +612,7 @@ async fn every_step_up_route_answers_403_without_a_fresh_step_up(
 ) {
     let db = open(options).await;
     let user = add_user(&db).await;
-    let built = build(&db, ApiDocs::Hidden, |routes| routes);
+    let built = build(&db, ApiDocs::Hidden, |routes| routes).await;
     let token = access_token(&db, &built.tokens, user).await;
 
     assert!(!with_access(&built.entries, Access::AuthedStepUp).is_empty());
@@ -534,7 +632,8 @@ async fn the_check_catches_a_step_up_route_that_doesnt_check_the_stamp(
     let user = add_user(&db).await;
     let built = build(&db, ApiDocs::Hidden, |routes| {
         routes.step_up_route(RateClass::Standard, routes!(forgot_step_up))
-    });
+    })
+    .await;
     let token = access_token(&db, &built.tokens, user).await;
 
     let offenders = step_up_routes_without_403(&built.app, &built.entries, &token).await;
@@ -558,7 +657,8 @@ async fn each_registration_records_its_class(
         routes
             .authed_route(RateClass::Login, routes!(whoami))
             .public_route(RateClass::Register, routes!(forgot_auth_user))
-    });
+    })
+    .await;
 
     assert!(built.entries.contains(&RouteEntry {
         method: Method::GET,
@@ -592,7 +692,7 @@ async fn the_registry_lists_exactly_the_documents_operations(
     options: SqliteConnectOptions,
 ) {
     let db = open(options).await;
-    let built = build(&db, ApiDocs::Served, |routes| routes);
+    let built = build(&db, ApiDocs::Served, |routes| routes).await;
     let document = document(&built.app).await;
 
     let documented: BTreeSet<(String, String)> = document["paths"]
@@ -627,7 +727,8 @@ async fn each_operation_names_its_access_in_the_document(
     let db = open(options).await;
     let built = build(&db, ApiDocs::Served, |routes| {
         routes.authed_route(RateClass::Standard, routes!(whoami))
-    });
+    })
+    .await;
     let document = document(&built.app).await;
 
     for route in built

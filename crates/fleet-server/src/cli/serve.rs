@@ -67,6 +67,7 @@ use crate::app::auth::TokenService;
 use crate::app::challenges::Challenges;
 use crate::app::health::HealthService;
 use crate::app::lockout::LockoutService;
+use crate::app::login::LoginService;
 use crate::app::mfa::{MfaPorts, MfaService};
 use crate::config::{HttpConfig, ServerConfig};
 use crate::http::error::chain;
@@ -75,6 +76,7 @@ use crate::http::openapi::ApiDocs;
 use crate::http::rate_limit::RateLimits;
 use crate::http::router::{AppState, router};
 use crate::infra::crypto::attempt_keys::HmacAttemptKeys;
+use crate::infra::crypto::passwords::Argon2Passwords;
 use crate::infra::crypto::recovery_codes::Sha256RecoveryCodes;
 use crate::infra::crypto::tokens::Sha256Tokens;
 use crate::infra::crypto::totp::TotpRs;
@@ -82,6 +84,7 @@ use crate::infra::crypto::vault::{DerivedKey, VaultKeyError, VaultKeys, XChaChaV
 use crate::infra::qr::SvgQr;
 use crate::infra::sqlite::{self, Database, DatabaseOptions, OpenError};
 use crate::infra::system::{MonotonicClock, OsRandom, SystemClock};
+use crate::ports::passwords::{HashError, Passwords};
 use crate::ports::store::Store;
 use crate::ports::tokens::Tokens;
 use crate::ports::vault::Vault;
@@ -177,6 +180,9 @@ pub enum StartError {
     /// A vault key file can't be used.
     #[error("the vault's keys can't be loaded")]
     VaultKeys(#[source] VaultKeyError),
+    /// The password service couldn't make its dummy hash.
+    #[error("the password service can't start")]
+    Passwords(#[source] HashError),
 }
 
 /// Logs `error` with its whole chain as "the server can't start" and
@@ -204,13 +210,15 @@ pub struct App {
 /// the only places the real clocks and randomness are built.
 ///
 /// It builds the vault from `keys` too, for the 2FA service, which seals and
-/// opens the users' TOTP secrets with it (ADR-0016).
+/// opens the users' TOTP secrets with it (ADR-0016), and logs in through
+/// `passwords`, which [`run`] builds (its dummy hash is async work).
 #[must_use]
 pub fn app(
     config: &ServerConfig,
     database: &Database,
     keys: VaultKeys,
     lockout_key: SecretBox<[u8; 32]>,
+    passwords: Arc<dyn Passwords>,
 ) -> App {
     let clock: Arc<dyn Clock> = Arc::new(SystemClock);
     let limiter_clock: Arc<dyn Clock> = Arc::new(MonotonicClock::start());
@@ -245,8 +253,22 @@ pub fn app(
         Arc::new(HmacAttemptKeys::new(lockout_key)),
         config.auth.lockout,
     );
+    let login = LoginService::new(
+        Arc::clone(&clock),
+        Arc::clone(&store),
+        passwords,
+        lockout.clone(),
+        tokens.clone(),
+        mfa.clone(),
+    );
     let ids = RequestIds::new(clock, random);
-    let state = AppState::new(HealthService::new(store), tokens, limits.clone(), mfa);
+    let state = AppState::new(
+        HealthService::new(store),
+        tokens,
+        limits.clone(),
+        mfa,
+        login,
+    );
     App {
         router: router(
             state,
@@ -284,7 +306,12 @@ pub async fn run<S: ShutdownSignals>(
         Ok(database) => database,
         Err(error) => return cant_start(&StartError::Database(error)),
     };
-    let app = app(config, &database, keys, lockout_key);
+    let passwords: Arc<dyn Passwords> =
+        match Argon2Passwords::new(config.auth.argon2, Arc::new(OsRandom)).await {
+            Ok(passwords) => Arc::new(passwords),
+            Err(error) => return cant_start(&StartError::Passwords(error)),
+        };
+    let app = app(config, &database, keys, lockout_key, passwords);
     info!(%address, "the server is listening");
     serve(
         listener,

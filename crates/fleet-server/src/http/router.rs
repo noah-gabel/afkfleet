@@ -6,6 +6,11 @@
 //! |---|---|---|
 //! | `GET /health/live` | public | always 200: the process runs and answers |
 //! | `GET /health/ready` | public | 200 when the database answers ([`HealthService::ready`]) |
+//! | `POST /api/v1/auth/login` | public (Login) | the password step: an mfa or setup token, never real tokens |
+//! | `POST /api/v1/auth/login/mfa` | public (Login) | the code step: the session's tokens |
+//! | `POST /api/v1/auth/refresh` | public (Refresh) | a new token pair |
+//! | `POST /api/v1/auth/logout` | user | ends this session |
+//! | `POST /api/v1/auth/step-up` | user (Login) | the password again: step-up actions for 5 minutes |
 //! | `POST /api/v1/me/mfa/enroll` | setup token | a new TOTP secret, waiting for confirm |
 //! | `POST /api/v1/me/mfa/confirm` | setup token | confirms it; answers the recovery codes |
 //! | `POST /api/v1/me/mfa/reset` | user + step-up | a setup token that replaces the authenticator |
@@ -23,13 +28,14 @@
 use axum::Router;
 use utoipa_axum::routes;
 
-use super::handlers::{health, mfa};
+use super::handlers::{auth, health, mfa};
 use super::middleware::RequestIds;
 use super::openapi::ApiDocs;
 use super::rate_limit::RateLimits;
 use super::routes::{RateClass, Routes};
 use crate::app::auth::TokenService;
 use crate::app::health::HealthService;
+use crate::app::login::LoginService;
 use crate::app::mfa::MfaService;
 use crate::config::HttpConfig;
 
@@ -47,6 +53,8 @@ pub struct AppState {
     /// The second factor, and the login's challenges, which `SetupToken`
     /// reads.
     pub(crate) mfa: MfaService,
+    /// Logging in and stepping up.
+    pub(crate) login: LoginService,
 }
 
 impl AppState {
@@ -57,12 +65,14 @@ impl AppState {
         tokens: TokenService,
         limits: RateLimits,
         mfa: MfaService,
+        login: LoginService,
     ) -> Self {
         Self {
             health,
             tokens,
             limits,
             mfa,
+            login,
         }
     }
 }
@@ -73,6 +83,11 @@ pub fn api_routes(routes: Routes) -> Routes {
     routes
         .public_route(RateClass::Standard, routes!(health::live))
         .public_route(RateClass::Standard, routes!(health::ready))
+        .public_route(RateClass::Login, routes!(auth::login))
+        .public_route(RateClass::Login, routes!(auth::login_mfa))
+        .public_route(RateClass::Refresh, routes!(auth::refresh))
+        .authed_route(RateClass::Standard, routes!(auth::logout))
+        .authed_route(RateClass::Login, routes!(auth::step_up))
         .setup_route(RateClass::Standard, routes!(mfa::enroll))
         .setup_route(RateClass::Standard, routes!(mfa::confirm))
         .step_up_route(RateClass::Standard, routes!(mfa::reset))

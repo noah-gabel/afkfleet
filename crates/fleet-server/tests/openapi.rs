@@ -24,12 +24,15 @@ use fleet_core::auth::SessionPolicy;
 use fleet_server::app::auth::TokenService;
 use fleet_server::app::challenges::Challenges;
 use fleet_server::app::health::HealthService;
+use fleet_server::app::login::LoginService;
 use fleet_server::app::mfa::{MfaPorts, MfaService};
 use fleet_server::config::{HttpConfig, RateLimitConfig};
 use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::openapi::{ApiDocs, OPENAPI_PATH};
 use fleet_server::http::rate_limit::{RateLimits, TrustedProxies};
 use fleet_server::http::router::{AppState, router};
+use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
+use fleet_server::infra::crypto::passwords::Argon2Passwords;
 use fleet_server::infra::crypto::recovery_codes::Sha256RecoveryCodes;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::crypto::totp::TotpRs;
@@ -82,8 +85,38 @@ fn mfa(db: &Database) -> MfaService {
     )
 }
 
+/// The login over `db`, with `tokens` and `mfa`. No test here logs in, but
+/// the state carries it.
+async fn login(db: &Database, tokens: &TokenService, mfa: &MfaService) -> LoginService {
+    let clock = Arc::new(ManualClock::new(
+        chrono::DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
+    ));
+    let passwords = Argon2Passwords::new(
+        fleet_server::config::Argon2Params::default(),
+        Arc::new(SeededRandom::new(19)),
+    )
+    .await
+    .unwrap();
+    let lockout = fleet_server::app::lockout::LockoutService::new(
+        clock.clone(),
+        Arc::new(db.clone()),
+        Arc::new(HmacAttemptKeys::new(secrecy::SecretBox::new(Box::new(
+            [7; 32],
+        )))),
+        fleet_core::auth::LockoutPolicy::default(),
+    );
+    LoginService::new(
+        clock,
+        Arc::new(db.clone()),
+        Arc::new(passwords),
+        lockout,
+        tokens.clone(),
+        mfa.clone(),
+    )
+}
+
 /// The server's router over `db`, with or without the document.
-fn app(db: &Database, docs: ApiDocs) -> Router {
+async fn app(db: &Database, docs: ApiDocs) -> Router {
     let ids = RequestIds::new(
         Arc::new(ManualClock::new(
             DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
@@ -102,11 +135,15 @@ fn app(db: &Database, docs: ApiDocs) -> Router {
             DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
         )),
     );
+    let tokens = tokens(db);
+    let mfa = mfa(db);
+    let login = login(db, &tokens, &mfa).await;
     let state = AppState::new(
         HealthService::new(Arc::new(db.clone())),
-        tokens(db),
+        tokens,
         limits,
-        mfa(db),
+        mfa,
+        login,
     );
     router(state, &http, ids, docs)
         .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))))
@@ -160,7 +197,7 @@ async fn send(app: &Router, method: Method, path: &str) -> Answer {
 /// The document dev mode serves.
 async fn document(options: SqliteConnectOptions) -> Value {
     let db = open(options).await;
-    let answer = send(&app(&db, ApiDocs::Served), Method::GET, OPENAPI_PATH).await;
+    let answer = send(&app(&db, ApiDocs::Served).await, Method::GET, OPENAPI_PATH).await;
     db.close().await;
     answer.json()
 }
@@ -178,7 +215,7 @@ async fn dev_mode_serves_the_document_as_json_with_the_security_headers(
 ) {
     let db = open(options).await;
 
-    let answer = send(&app(&db, ApiDocs::Served), Method::GET, OPENAPI_PATH).await;
+    let answer = send(&app(&db, ApiDocs::Served).await, Method::GET, OPENAPI_PATH).await;
 
     assert_eq!(answer.status, 200);
     assert_eq!(answer.header("content-type"), Some("application/json"));
@@ -200,7 +237,7 @@ async fn head_on_the_document_answers_200_without_a_body(
 ) {
     let db = open(options).await;
 
-    let answer = send(&app(&db, ApiDocs::Served), Method::HEAD, OPENAPI_PATH).await;
+    let answer = send(&app(&db, ApiDocs::Served).await, Method::HEAD, OPENAPI_PATH).await;
 
     assert_eq!(answer.status, 200);
     assert_eq!(answer.body, Vec::<u8>::new());
@@ -214,7 +251,7 @@ async fn the_document_takes_only_get_and_head(
 ) {
     let db = open(options).await;
 
-    let answer = send(&app(&db, ApiDocs::Served), Method::POST, OPENAPI_PATH).await;
+    let answer = send(&app(&db, ApiDocs::Served).await, Method::POST, OPENAPI_PATH).await;
 
     assert_eq!(answer.status, 405);
     assert_eq!(answer.header("allow"), Some("GET,HEAD"));
@@ -241,7 +278,7 @@ async fn outside_dev_mode_the_path_answers_like_an_unknown_route(
     options: SqliteConnectOptions,
 ) {
     let db = open(options).await;
-    let app = app(&db, ApiDocs::Hidden);
+    let app = app(&db, ApiDocs::Hidden).await;
 
     for method in [Method::GET, Method::POST] {
         let hidden = send(&app, method.clone(), OPENAPI_PATH).await;
@@ -288,6 +325,11 @@ async fn the_document_lists_exactly_the_api_routes(
     assert_eq!(
         paths,
         BTreeSet::from([
+            ("/api/v1/auth/login", "post"),
+            ("/api/v1/auth/login/mfa", "post"),
+            ("/api/v1/auth/logout", "post"),
+            ("/api/v1/auth/refresh", "post"),
+            ("/api/v1/auth/step-up", "post"),
             ("/api/v1/me/mfa/confirm", "post"),
             ("/api/v1/me/mfa/enroll", "post"),
             ("/api/v1/me/mfa/reset", "post"),

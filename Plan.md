@@ -400,6 +400,8 @@ The full analysis lives in `docs/threat-model.md`.
 
 > Note (§7.2, Phase 7, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **step-up is a session stamp.** `POST /auth/step-up {password}` sets the session's `stepped_up_at`; a step-up action needs it at most 5 min old, otherwise it answers 403 `step_up_required`. A wrong password counts toward the lockout. No request body carries the current password.
 
+> Note (§7.2, Phase 7, group D, the user's rule) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **every commit that acts on a verified password re-checks it.** Inside its own write transaction it re-reads the user's `password_changed_at` (and `disabled`), and the session where there is one, and refuses when they changed since the password was verified: login's code step, a 2FA confirm, step-up, and E's `/me/password` and anything later that verifies a password. A re-hash with the current parameters writes only the hash, never `password_changed_at`: it isn't a password change.
+
 ### 7.3 Authorization
 - **Global roles**
   - **Owner:** exactly one; can do everything.
@@ -2573,6 +2575,22 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Open for D: an oversized login.** Login's request DTO gets a generous upper bound on the password field, so an oversized login is refused before any hashing. The bound itself is D's question.
   > - **Open for D and E: the 422 for weak passwords.** `HashError::Weak` carries `WeakWarning` and `WeakSuggestion`; how a 422 exposes them is D's and E's question.
 
+  > Note (P7.6, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **The password step** never hands out real tokens: `{status: "mfa_required" | "mfa_setup_required", token, expires_in}`, an mfa token (`afk_mt_`, 5 min, 3 wrong codes) or a setup token (`afk_st_`, 10 min). An unknown name, a wrong password and a disabled user are one 401 `invalid_credentials`, counted toward the lockout and audited (`auth.login` Failure; no target for an unknown name, which is never stored). A name that isn't a valid `Username` is 422 before the lockout or any hashing; the password field is capped at 1024 characters.
+  > - **The code step** takes one `code` field: 6 digits are a TOTP code, 20 base32 characters a recovery code. Wrong codes count toward the lockout; the streak is cleared only when tokens are issued. Its commit re-reads the user (disabled: counted; password changed: not counted) and accepts the step or uses the code conditionally (an authenticator replaced meanwhile: `mfa_changed`, not counted). Answer: `{access_token, refresh_token, access_expires_in, refresh_expires_in}`.
+  > - **Re-hashing** a stored hash whose variant, version, m, t or p differ from today's: best-effort at the password step, written in the `auth.login` success commit (`rehashed`), never touching `password_changed_at`.
+  > - **Refresh** checks the read pool first, so an unknown token never takes the write connection; a refusal is 401 `unauthorized`.
+  > - **Logout** revokes the request's session (`auth.logout`, target the session), 204.
+  > - **Step-up** is a plain authed route on the Login bucket: a wrong password is 403 `forbidden`, counted; its commit re-reads the session and the user (401 when gone or disabled, 403 uncounted when the password changed), stamps exactly that session and clears the streak (`auth.step_up`), 204.
+  > - **`invalid_credentials`** (401) joins the error codes; every 401 carries `WWW-Authenticate: Bearer`, whatever its code.
+
+  > Note (P7.6, as built, group D) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **The pieces:** `app::login::LoginService` (`password_step`, `code_step`, `step_up`); `TokenService::logout` and the refresh's read-pool check; `IssuedTokens` with the seconds left; `Passwords::{needs_rehash, rehash_verified}`; the handlers in `http::handlers::auth`; fleet-api-types' `auth` DTOs (`LoginRequest`, `LoginResponse` with the open `LoginStatus`, `LoginMfaRequest`, `TokenResponse`, `RefreshRequest`, `StepUpRequest`); the actions `auth.login`, `auth.logout`, `auth.step_up`. `serve` builds the password service before the app (its dummy hash is async work); a failure is a new start error.
+  > - **Deviation, one test (the user's decision during the build):** "two concurrent stale logins of the same user both succeed" can't happen: the lockout's in-flight guard holds the name from a step's `begin` to its commit (a second login gets 429), and a password step between another's two steps replaces its challenge. The test that pins the property instead runs across flows: a 2FA replacement's confirm still succeeds after a login re-hashed the password meanwhile; and a second attempt while one is in flight is 429.
+  > - **Tests,** the login tests in `tests/auth/` (one binary: login, refresh, logout, step-up), red against compiling stubs (a login service that refused everything, a logout that revoked nothing, a refresh without the read-pool check, a re-hash that never ran, a 401 header for `unauthorized` only, DTO rules that accepted anything, tokens without their lifetimes): 51 of the 73 new tests failed on assertions. The ones that passed check 422s, shapes, `Debug`, registrations, limits and refusals a do-nothing stub satisfies too. Then all passed. Changes landing between a step's checks and its commit come from a store wrapper that applies a queued change right before the next write transaction opens.
+
+  > Note (P7.6, from group D, for E; to ask the user): **failed code attempts on `/me`.** A wrong code means someone has the password, so `/me` could show the failed code attempts (`auth.login` Failure, `step` = `code`) since the user's last login, and P8 show them as a warning.
+
   > Note (P7.6, from group D, for E; the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **a credential change revokes every other session.** A 2FA replacement does (D), and E's `/me/password` must too, through `SessionWrites::revoke_all_for_user(user, except)`, which `PATCH /users/{id}` reuses for all of a user's sessions.
 
   > Note (P7.6, from group C, for group D) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
@@ -2734,6 +2752,18 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P7.12, from group C, for E and the threat model; the user's note) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
   > - **Lockout counting** is `tests/lockout_service.rs` (group C): the fifth failure locks for a minute, each further one doubles the lock up to an hour, a locked name is refused without being counted, and an unknown name locks exactly like a real one.
   > - **An accepted residual risk the threat model names:** the lockout lets an attacker keep one account locked by failing once per lock (one failure an hour, once the lock reached its cap), while existing sessions keep working.
+
+  > Note (P7.12, group D, for E's naming of each item) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **Enumeration:** `tests/auth/login.rs`'s `an_unknown_name_a_wrong_password_and_a_disabled_user_answer_alike` (same status, headers and body but the request ID) and `the_typed_name_is_stored_nowhere`.
+  > - **Lockout through login:** `the_fifth_wrong_password_locks_the_name_and_the_right_one_waits` and `wrong_codes_count_toward_the_lockout` there, and `step_up.rs`'s `wrong_step_up_passwords_lock_the_name_for_login_too`.
+  > - **Expired sessions and refresh reuse through `/auth/refresh`:** `tests/auth/refresh.rs`'s `reusing_a_replaced_refresh_token_revokes_the_whole_session`, `a_session_idle_for_seven_days_cant_refresh` and `a_session_past_thirty_days_cant_refresh_however_often_it_did`.
+  > - **TOTP replay:** `tests/mfa_service.rs`'s `a_totp_code_is_accepted_once_and_no_older_code_after_it` and `the_confirming_code_cant_log_in_afterwards`, and `tests/mfa_repository.rs`'s conditional-write tests.
+
+  > Note (P7.12, from group D, for E's threat model; the user's notes) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **accepted residual risks** to list next to the lockout DoS:
+  > - **Stale hashes:** after an `argon2_*` change, users who don't log in keep their old hashes, so their names stay distinguishable by timing until they do.
+  > - **TOTP guessing by a password holder:** at the default threshold of 5, about 33 wrong codes a day get through (5 free, then locks of 1, 2, 4, 8, 16 and 32 minutes, then one an hour). Each guess hits one of about 3 in 10^6 codes (the window's three steps), so about 1e-4 a day and 3.5 % a year for an attacker who has the password and never stops, while the real user stays locked out nearly all the time.
+  > - **An account without 2FA** (an invitee who abandons setup) belongs to whoever first enrolls with its password.
+  > - **Displacing a login:** a password holder can replace the user's live login challenge with a password step of their own (the same class as the lockout DoS).
 - [ ] **P7.13** Audit events for:
   - login success and failure, logout
   - password and 2FA changes
@@ -2759,6 +2789,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - Metadata values come from closed enums.
   >   - A snapshot of every name keeps merged names from being renamed or dropped.
 
+  > Note (P7.13, as built, group D) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`auth.login`, `auth.logout`, `auth.step_up`, `mfa.enroll` and `mfa.reset`.** `auth.login` Success when tokens are issued (actor and target the user, `session_id`, `method`, `rehashed` only when true); Failure on every counted refusal and on a code step refused because the password or the authenticator changed (no actor, target the user or none, `step` and `reason`). `auth.logout` and `auth.step_up` target the new `AuditTarget::Session`; a step-up's Failure carries `reason`. `mfa.enroll` records a first confirm, `mfa.reset` a replacement's with `sessions_revoked`. Starting a replacement, 422s and 429s record nothing. The names snapshot gained all five, read before accepting.
+
   > Note (P7.13, as built, group C) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`security.lockout`**, recorded in the failing attempt's own transaction each time a failure starts a lock. Outcome Failure; no actor; the client's IP; target the user when the name is a user's, none otherwise (the typed name is never stored); metadata `failures` and `locked_until`. The names snapshot gained it, read before accepting.
 
 **DoD:**
@@ -2783,6 +2815,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P8.1, from Phase 7, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
   > - **A refresh replaces the access token at once.** A request sent with an access token that a refresh has since replaced gets a 401. fleet-client's single-flight refresh checks whether the token it used is still the current one: if a refresh already replaced it, it retries once with the current token instead of refreshing again (no needless second rotation). Only a 401 for the current token triggers a refresh.
   > - **No grace window.** A refresh whose response got lost leaves the client with a replaced refresh token; sending it again is reuse, which revokes the session, so the user logs in again.
+
+  > Note (P8.1, from Phase 7, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **Which 401 refreshes:** the client refreshes only on a 401 with the code `unauthorized` from an authenticated route. A 401 `invalid_credentials` from login or login/mfa never triggers a refresh or a logout, and a 403 `forbidden` from step-up means a wrong password, not a lost session. A refused refresh (401 `unauthorized` from `/auth/refresh`) means logging in again.
+  > - **`expires_in`:** the app uses it on the mfa and setup tokens to restart a timed-out step itself (an expired token answers like a wrong code). Refreshing stays on a 401 only, never on a timer.
 
   > Note (P8.1, from Phase 6, group C, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **A maximum response body size.** fleet-api-types caps each text a client reads (`BoundedText`, `Open`), but not how many entries a response holds (a `fields` array with a million entries), so fleet-client sets a maximum body size on its HTTP client, which bounds every response, not only errors.
 - [ ] **P8.2** Scaffold:

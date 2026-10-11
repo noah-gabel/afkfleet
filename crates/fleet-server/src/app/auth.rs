@@ -5,9 +5,13 @@
 //!   pair, its ID and its times before any transaction opens (no crypto
 //!   while a `WriteTx` holds the write connection). The caller inserts it
 //!   and commits with its own audit entry: D's login, with `auth.login`.
-//! - **Refreshing:** [`TokenService::refresh`] looks the presented token up
+//! - **Refreshing:** [`TokenService::refresh`] first asks the read
+//!   connections whether the presented token's hash exists at all, current
+//!   or replaced (group D): an unknown token is refused without taking the
+//!   one write connection, and a token reaches a client only after its
+//!   commit, so this never misses a real one. A known one is looked up again
 //!   inside the write transaction, so two refreshes with the same token take
-//!   turns and the second finds it replaced, and decides with
+//!   turns and the second finds it replaced, and decided with
 //!   `fleet_core::auth::refresh_decision`:
 //!   - a rotation commits without an entry ([`UnauditedWrite::SessionRotate`]);
 //!   - a reused token revokes its whole session and records
@@ -16,6 +20,8 @@
 //!
 //!   Every refusal is the same [`RefreshError::Rejected`], so the API can't
 //!   tell a client why.
+//! - **Logging out** (group D): [`TokenService::logout`] revokes the
+//!   request's own session and records `auth.logout`.
 //! - **Authenticating** (P7.8): [`TokenService::authenticate`] finds the
 //!   session of a request's access token, with its user, through the read
 //!   connections, and decides with `fleet_core::auth::access_decision`, so a
@@ -42,8 +48,9 @@ use fleet_core::auth::{
 use fleet_core::authz::Actor;
 use fleet_core::id::{SessionId, UserId};
 use fleet_core::system::{Clock, MintError, SecureRandom, mint};
+use fleet_core::time::elapsed;
 use secrecy::{ExposeSecret as _, SecretString};
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use super::audit::AuditService;
 use crate::ports::sessions::{NewSession, RefreshLookup, Rotation, Session};
@@ -65,6 +72,10 @@ pub struct IssuedTokens {
     /// When the refresh token expires, unless it's used before: idle, or
     /// the session's absolute end.
     pub refresh_expires_at: DateTime<Utc>,
+    /// The access token's whole seconds left when it was issued.
+    pub access_expires_in: u64,
+    /// The refresh token's whole seconds left when it was issued.
+    pub refresh_expires_in: u64,
 }
 
 /// A new session, ready to insert, and its tokens for the client. Its
@@ -101,6 +112,17 @@ pub enum RefreshError {
     #[error("the new tokens can't be minted")]
     Token(#[source] MintTokenError),
     /// The reuse entry couldn't be built.
+    #[error("the audit entry can't be built")]
+    Audit(#[from] AuditError),
+    /// The database failed.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
+
+/// Why a logout failed: the server's fault, never the client's.
+#[derive(Debug, thiserror::Error)]
+pub enum LogoutError {
+    /// The entry couldn't be built.
     #[error("the audit entry can't be built")]
     Audit(#[from] AuditError),
     /// The database failed.
@@ -259,6 +281,11 @@ impl TokenService {
         else {
             return Err(RefreshError::Rejected);
         };
+        // An unknown token never takes the write connection. A token reaches
+        // a client only after its commit, so this never misses a real one.
+        if !self.store.sessions().refresh_hash_exists(&hash).await? {
+            return Err(RefreshError::Rejected);
+        }
         // Minted before the transaction (no crypto while it's open), and
         // wiped unused if the token is refused.
         let access = self
@@ -330,6 +357,34 @@ impl TokenService {
             // Refused: dropping the transaction rolls back nothing written.
             _ => Err(RefreshError::Rejected),
         }
+    }
+
+    /// Revokes `session_id`, the session of `user_id`'s request from `ip`,
+    /// and records `auth.logout`. A session revoked meanwhile is left as it
+    /// is, without an entry: it's over either way.
+    ///
+    /// # Errors
+    /// [`LogoutError`]: the server's failures.
+    pub async fn logout(
+        &self,
+        user_id: UserId,
+        session_id: SessionId,
+        ip: IpAddr,
+    ) -> Result<(), LogoutError> {
+        let now = self.clock.now();
+        let mut tx = self.store.write().await?;
+        if !tx.sessions().revoke(session_id, now).await? {
+            return Ok(());
+        }
+        let entry = self
+            .audit
+            .entry(AuditAction::AUTH_LOGOUT, AuditOutcome::Success)
+            .actor(user_id)
+            .ip(ip)
+            .target(AuditTarget::Session(session_id));
+        tx.commit(entry).await?;
+        info!(user_id = %user_id, session_id = %session_id, "a user logged out");
+        Ok(())
     }
 
     /// Whether `stamp`, when the session's password was last entered again,
@@ -428,12 +483,16 @@ impl TokenService {
         access: MintedToken,
         refresh: MintedToken,
     ) -> IssuedTokens {
+        let access_expires_at = self.policy.access_expiry(times);
+        let refresh_expires_at = self.policy.refresh_expiry(times);
         IssuedTokens {
             session_id: id,
             access_token: access.token,
             refresh_token: refresh.token,
-            access_expires_at: self.policy.access_expiry(times),
-            refresh_expires_at: self.policy.refresh_expiry(times),
+            access_expires_at,
+            refresh_expires_at,
+            access_expires_in: elapsed(times.refreshed_at, access_expires_at).as_secs(),
+            refresh_expires_in: elapsed(times.refreshed_at, refresh_expires_at).as_secs(),
         }
     }
 }

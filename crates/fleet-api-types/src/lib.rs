@@ -28,6 +28,7 @@
 //!   `expose()` or `into_secret()`. A test formats every DTO that holds one.
 //!
 //! # Modules
+//! - [`auth`]: logging in, refreshing and stepping up.
 //! - [`error`]: the error envelope that every failed request answers with.
 //! - [`int`]: the 64-bit integer type, [`SafeInt`], and the schema of a
 //!   bounded 32-bit field.
@@ -40,6 +41,7 @@
 //! - [`typescript`]: the export to TypeScript, behind `just gen` and
 //!   `just gen-check`.
 
+pub mod auth;
 pub mod error;
 pub mod int;
 pub mod mfa;

@@ -24,6 +24,9 @@ use std::path::{Path, PathBuf};
 
 use ts_rs::{Config, ExportError, TS};
 
+use crate::auth::{
+    LoginMfaRequest, LoginRequest, LoginResponse, RefreshRequest, StepUpRequest, TokenResponse,
+};
 use crate::error::ErrorResponse;
 use crate::mfa::{MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse};
 
@@ -120,7 +123,13 @@ pub fn export(scratch: &Path) -> Result<(), TypeScriptError> {
     MfaEnrollResponse::export_all(&config).map_err(TypeScriptError::Export)?;
     MfaConfirmRequest::export_all(&config).map_err(TypeScriptError::Export)?;
     MfaConfirmResponse::export_all(&config).map_err(TypeScriptError::Export)?;
-    MfaResetResponse::export_all(&config).map_err(TypeScriptError::Export)
+    MfaResetResponse::export_all(&config).map_err(TypeScriptError::Export)?;
+    LoginRequest::export_all(&config).map_err(TypeScriptError::Export)?;
+    LoginResponse::export_all(&config).map_err(TypeScriptError::Export)?;
+    LoginMfaRequest::export_all(&config).map_err(TypeScriptError::Export)?;
+    TokenResponse::export_all(&config).map_err(TypeScriptError::Export)?;
+    RefreshRequest::export_all(&config).map_err(TypeScriptError::Export)?;
+    StepUpRequest::export_all(&config).map_err(TypeScriptError::Export)
 }
 
 /// Lists how `dir` differs from the export in `scratch`, by file name. A missing

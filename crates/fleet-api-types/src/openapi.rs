@@ -24,6 +24,9 @@ use utoipa::openapi::RefOr;
 use utoipa::openapi::schema::Schema;
 
 use crate::ErrorResponse;
+use crate::auth::{
+    LoginMfaRequest, LoginRequest, LoginResponse, RefreshRequest, StepUpRequest, TokenResponse,
+};
 use crate::mfa::{MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse};
 
 /// Every named schema of the API, by name: the root DTOs and every schema
@@ -38,6 +41,12 @@ pub fn components() -> BTreeMap<String, RefOr<Schema>> {
     add::<MfaConfirmRequest>(&mut schemas);
     add::<MfaConfirmResponse>(&mut schemas);
     add::<MfaResetResponse>(&mut schemas);
+    add::<LoginRequest>(&mut schemas);
+    add::<LoginResponse>(&mut schemas);
+    add::<LoginMfaRequest>(&mut schemas);
+    add::<TokenResponse>(&mut schemas);
+    add::<RefreshRequest>(&mut schemas);
+    add::<StepUpRequest>(&mut schemas);
     schemas.into_iter().collect()
 }
 

@@ -95,4 +95,20 @@ pub trait Passwords: Send + Sync + fmt::Debug {
     /// [`VerifyError::Busy`] or [`VerifyError::Failed`], like
     /// [`Passwords::verify`].
     async fn verify_unknown_user(&self, password: &SecretString) -> Result<bool, VerifyError>;
+
+    /// Whether `hash` differs from what [`Passwords::hash`] would write now:
+    /// another variant or version, or other m, t or p, up or down. Such a
+    /// hash verifies with other timing than the dummy hash, so login
+    /// re-hashes it (ADR-0016). A hash that doesn't parse needs one too.
+    fn needs_rehash(&self, hash: &PasswordHash) -> bool;
+
+    /// Hashes `password` again with the current parameters, in the same
+    /// queue. Only for a password that just verified against a hash
+    /// [`Passwords::needs_rehash`] flagged: it skips the strength check,
+    /// since the password was accepted under its own rules. Never for a new
+    /// password, which goes through [`Passwords::hash`].
+    ///
+    /// # Errors
+    /// [`HashError::Busy`], [`HashError::Random`] or [`HashError::Failed`].
+    async fn rehash_verified(&self, password: &SecretString) -> Result<PasswordHash, HashError>;
 }

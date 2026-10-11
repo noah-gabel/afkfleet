@@ -550,6 +550,17 @@ The user answered group D's questions on 2026-10-11, one at a time, and amended 
   - **Lockfile:** totp-rs, base32, constant_time_eq, qrcodegen, serde_path_to_error (axum's `json`) and zeroize_derive. zeroize_derive comes with totp-rs's `zeroize` feature, which derives `ZeroizeOnDrop` on its secret; the plan's list missed it, and the user approved it during the build.
   - **Tests,** red against compiling stubs (a store that found no challenge, a service that refused everything, adapters that matched, drew and hashed nothing, an extractor that skipped the stamp, a body extractor that answered 400 to everything, a registry that documented nothing): 68 of the 88 new server tests, 37 of the 74 new rule tests in fleet-core and 8 of the 13 new tests in fleet-api-types failed on assertions. The ones that passed check refusals, pinned values and registration, which the stubs satisfy too. Then all passed. New snapshots, read before accepting: the audit-action names, the 403 `step_up_required` envelope, the OpenAPI document and the SVG of the test URI.
   - **Coverage:** the auth gate gains `app/challenges.rs`, `app/mfa.rs`, `infra/crypto/totp.rs`, `infra/crypto/recovery_codes.rs`, `ports/totp.rs`, `ports/recovery_codes.rs` and fleet-api-types' `secret.rs`; `infra/qr.rs` and the repositories stay under the workspace gate.
+- **P7.6, the pieces:**
+  - **`app::login::LoginService`:** `password_step` (the lockout's `begin`, the verify against the user's or the dummy hash, a refusal recorded with `record_failure` and `auth.login` in one commit, a best-effort re-hash, an mfa or setup challenge), `code_step` (the challenge, `begin` on its user, `MfaService::check_code`, a wrong code counted against the token and the lockout, then the commit with its re-checks) and `step_up`.
+  - **`TokenService`:** `logout`, the read-pool check before a refresh's transaction, and `IssuedTokens::{access_expires_in, refresh_expires_in}`.
+  - **`Passwords::{needs_rehash, rehash_verified}`** in `Argon2Passwords`; the re-hash goes through the queue like a hash, without the strength check.
+  - **HTTP:** `http::handlers::auth`; `ApiError::InvalidCredentials`; `WWW-Authenticate: Bearer` keyed on the 401 status in `into_parts` and in the safety net, with a test over every code and a bare one.
+  - **fleet-api-types:** `auth::{LoginRequest, LoginStatus, LoginResponse, LoginMfaRequest, TokenResponse, RefreshRequest, StepUpRequest}`. `LoginStatus` is read through `Open`, like `ErrorCode`, so a status a newer server adds still reads. The username's garde rule is a custom one calling `Username::try_from` with one fixed message.
+  - **`serve`** builds `Argon2Passwords` before the app, since its dummy hash is async work; a failure is `StartError::Passwords`.
+- **The concurrent re-hash test** *(the user's decision during the build)*: the plan's "two concurrent stale logins of the same user both succeed" can't happen, since the in-flight guard holds the name through a step's commit and a password step replaces the user's other live login challenge. A cross-flow test pins the property instead (a 2FA replacement's confirm still succeeds after a login re-hashed meanwhile), next to a test that a second attempt in flight is 429.
+- **Changes between a step's checks and its commit** are tested deterministically: the login tests' store wrapper applies a queued change (a revoked session, a changed password, a disabled user, a replaced authenticator) right before the login service's next write transaction opens.
+- **P7.6, tests,** red against compiling stubs (a login service that refused everything, a logout that revoked nothing, a refresh without the read-pool check, a re-hash that never ran, a 401 header for `unauthorized` only, DTO rules that accepted anything, tokens without their lifetimes): 51 of the 73 new tests failed on assertions. The ones that passed check 422s, shapes, `Debug`, registrations, limits and refusals a do-nothing stub satisfies too. Then all passed. New snapshots, read before accepting: the audit-action names (`auth.login`, `auth.logout`, `auth.step_up`), the 401 `invalid_credentials` envelope and the OpenAPI document.
+- **Coverage:** the auth gate gains `app/login.rs`.
 
 ## Consequences
 - **Easier:**
@@ -574,6 +585,15 @@ The user answered group D's questions on 2026-10-11, one at a time, and amended 
   - The server owns its rate-limit middleware instead of a library's.
   - An attacker can keep one account locked (P7.12's note).
   - Behind a reverse proxy, a missing `trusted_proxies` puts every client into the proxy's one bucket, which P12.7's smoke test must catch.
+- **Group D, easier:**
+  - The password step never hands out real tokens, and every login refusal is one answer; a typed name is never stored.
+  - An account never stands without 2FA once it has it: replacing an authenticator keeps the old one until the new one is confirmed.
+  - A code, a recovery code and a setup token each count once, even under a race, through conditional writes and taking the token before the commit.
+  - Every commit that acts on a verified password re-checks it in its own transaction.
+- **Group D, harder:**
+  - A restart drops every live login challenge, so a user mid-login starts over.
+  - The QR code is our own SVG writer, which its own tests must keep correct.
+  - The accepted residual risks P7.12's note lists for E's threat model.
 
 ## Alternatives considered
 - **P7.1 whole in group A,** or four larger groups. All four tables would be fixed before the token, 2FA and invite designs exist, and a merged migration can't be edited.
@@ -613,3 +633,14 @@ The user answered group D's questions on 2026-10-11, one at a time, and amended 
   - **The lockout entry only on the first lock of a streak.** **Keys for the first lock, the cap and the expiry:** knobs §7.4 fixes.
   - **Leaving the purge to P11.6:** unbounded growth until then. **One purge batch per run:** can fall behind a spraying attacker. **Deleting stale rows on read:** sprayed names never come back.
   - **One bucket per login route,** or only the classes C's own routes use.
+- **Group D:**
+  - **totp-rs's `qr` feature:** image codecs (image, moxcms, png and more, some with SIMD and unsafe code) for one PNG. **Our own PNG encoder:** format code with its own checksums to get right.
+  - **The challenges in a table:** a write and an audit entry or a new exemption for every password step, for tokens that live minutes.
+  - **A keyed hash for recovery codes:** unusable after a vault key rotation.
+  - **`DELETE /me/mfa`:** an account without 2FA until the next login, which anyone with the password could take over.
+  - **Wrong codes not counted:** code guessing bounded only by per-IP limits.
+  - **A 401 for every failure:** the app would take a wrong step-up password for a lost session.
+  - **Re-hashing at the password step in its own commit:** a write before the second factor passed.
+  - **Expiry as RFC 3339 times, or none:** a time type in the API types now, or no way for the app to restart a timed-out step.
+  - **Secrets as plain `String`s with hand-written `Debug`s:** one forgotten `Debug` leaks.
+  - **422 with a path for a wrong JSON shape:** serde can't name the kind, and an unknown field only has the path `.`.

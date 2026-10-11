@@ -40,6 +40,10 @@ pub enum ErrorCode {
     BadRequest,
     /// No valid credentials came with the request (401).
     Unauthorized,
+    /// The username, the password or the code was wrong, or the login's
+    /// token is no longer valid; nothing tells which (401). Unlike
+    /// `unauthorized`, it never means the session is over.
+    InvalidCredentials,
     /// The caller may see the resource, but not do this (403).
     Forbidden,
     /// The action needs the password entered again within the last 5
@@ -77,6 +81,7 @@ impl ErrorCode {
         match self {
             Self::BadRequest => "The request couldn't be read.",
             Self::Unauthorized => "Authentication is required.",
+            Self::InvalidCredentials => "The username, password or code is wrong.",
             Self::Forbidden => "You don't have permission to do this.",
             Self::StepUpRequired => "Enter your password again to do this.",
             Self::NotFound => "The resource doesn't exist.",
@@ -99,6 +104,7 @@ impl OpenEnum for ErrorCode {
     const ALL: &'static [Self] = &[
         Self::BadRequest,
         Self::Unauthorized,
+        Self::InvalidCredentials,
         Self::Forbidden,
         Self::StepUpRequired,
         Self::NotFound,
@@ -117,6 +123,7 @@ impl OpenEnum for ErrorCode {
         match self {
             Self::BadRequest => "bad_request",
             Self::Unauthorized => "unauthorized",
+            Self::InvalidCredentials => "invalid_credentials",
             Self::Forbidden => "forbidden",
             Self::StepUpRequired => "step_up_required",
             Self::NotFound => "not_found",
@@ -217,22 +224,23 @@ mod tests {
         match code {
             ErrorCode::BadRequest => 0,
             ErrorCode::Unauthorized => 1,
-            ErrorCode::Forbidden => 2,
-            ErrorCode::StepUpRequired => 3,
-            ErrorCode::NotFound => 4,
-            ErrorCode::MethodNotAllowed => 5,
-            ErrorCode::Timeout => 6,
-            ErrorCode::Conflict => 7,
-            ErrorCode::PayloadTooLarge => 8,
-            ErrorCode::UnsupportedMediaType => 9,
-            ErrorCode::ValidationFailed => 10,
-            ErrorCode::RateLimited => 11,
-            ErrorCode::Internal => 12,
-            ErrorCode::Busy => 13,
+            ErrorCode::InvalidCredentials => 2,
+            ErrorCode::Forbidden => 3,
+            ErrorCode::StepUpRequired => 4,
+            ErrorCode::NotFound => 5,
+            ErrorCode::MethodNotAllowed => 6,
+            ErrorCode::Timeout => 7,
+            ErrorCode::Conflict => 8,
+            ErrorCode::PayloadTooLarge => 9,
+            ErrorCode::UnsupportedMediaType => 10,
+            ErrorCode::ValidationFailed => 11,
+            ErrorCode::RateLimited => 12,
+            ErrorCode::Internal => 13,
+            ErrorCode::Busy => 14,
         }
     }
 
-    const CODES: usize = 14;
+    const CODES: usize = 15;
 
     #[test]
     fn all_lists_every_code_exactly_once() {
@@ -257,6 +265,11 @@ mod tests {
     #[rstest]
     #[case(ErrorCode::BadRequest, "bad_request", "The request couldn't be read.")]
     #[case(ErrorCode::Unauthorized, "unauthorized", "Authentication is required.")]
+    #[case(
+        ErrorCode::InvalidCredentials,
+        "invalid_credentials",
+        "The username, password or code is wrong."
+    )]
     #[case(
         ErrorCode::Forbidden,
         "forbidden",

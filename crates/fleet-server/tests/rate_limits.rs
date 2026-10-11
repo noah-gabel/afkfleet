@@ -33,6 +33,7 @@ use fleet_core::value::Username;
 use fleet_server::app::auth::TokenService;
 use fleet_server::app::challenges::Challenges;
 use fleet_server::app::health::HealthService;
+use fleet_server::app::login::LoginService;
 use fleet_server::app::mfa::{MfaPorts, MfaService};
 use fleet_server::config::{HttpConfig, LogConfig, LogFormat, Rate, RateLimitConfig};
 use fleet_server::http::extractors::AuthUser;
@@ -41,6 +42,8 @@ use fleet_server::http::openapi::ApiDocs;
 use fleet_server::http::rate_limit::{ClientIp, RateLimits, Refusals, TrustedProxies};
 use fleet_server::http::router::{AppState, api_routes};
 use fleet_server::http::routes::{RateClass, Routes};
+use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
+use fleet_server::infra::crypto::passwords::Argon2Passwords;
 use fleet_server::infra::crypto::recovery_codes::Sha256RecoveryCodes;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::crypto::totp::TotpRs;
@@ -164,6 +167,36 @@ fn mfa(db: &Database) -> MfaService {
     )
 }
 
+/// The login over `db`, with `tokens` and `mfa`. No test here logs in, but
+/// the state carries it.
+async fn login_service(db: &Database, tokens: &TokenService, mfa: &MfaService) -> LoginService {
+    let clock = Arc::new(ManualClock::new(
+        chrono::DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
+    ));
+    let passwords = Argon2Passwords::new(
+        fleet_server::config::Argon2Params::default(),
+        Arc::new(SeededRandom::new(19)),
+    )
+    .await
+    .unwrap();
+    let lockout = fleet_server::app::lockout::LockoutService::new(
+        clock.clone(),
+        Arc::new(db.clone()),
+        Arc::new(HmacAttemptKeys::new(secrecy::SecretBox::new(Box::new(
+            [7; 32],
+        )))),
+        fleet_core::auth::LockoutPolicy::default(),
+    );
+    LoginService::new(
+        clock,
+        Arc::new(db.clone()),
+        Arc::new(passwords),
+        lockout,
+        tokens.clone(),
+        mfa.clone(),
+    )
+}
+
 async fn setup(options: SqliteConnectOptions, config: RateLimitConfig, proxies: &[&str]) -> Setup {
     let db = Database::connect(options, DatabaseOptions::default())
         .await
@@ -178,11 +211,14 @@ async fn setup(options: SqliteConnectOptions, config: RateLimitConfig, proxies: 
         SessionPolicy::default(),
     );
     let limits = RateLimits::new(&config, Arc::new(clock.clone()));
+    let mfa = mfa(&db);
+    let logins = login_service(&db, &service, &mfa).await;
     let state = AppState::new(
         HealthService::new(Arc::new(db.clone())),
         service.clone(),
         limits.clone(),
-        mfa(&db),
+        mfa,
+        logins,
     );
     let http = HttpConfig {
         bind: HttpConfig::DEFAULT_BIND,

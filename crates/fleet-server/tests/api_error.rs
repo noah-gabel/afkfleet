@@ -114,6 +114,7 @@ fn test_request_id() -> HeaderValue {
 #[rstest]
 #[case::bad_request("bad_request", || ApiError::BadRequest)]
 #[case::unauthorized("unauthorized", || ApiError::Unauthorized)]
+#[case::invalid_credentials("invalid_credentials", || ApiError::InvalidCredentials)]
 #[case::forbidden("forbidden", || ApiError::Forbidden)]
 #[case::step_up_required("step_up_required", || ApiError::StepUpRequired)]
 #[case::not_found("not_found", || ApiError::NotFound)]
@@ -147,6 +148,7 @@ async fn every_variant_answers_with_its_status_headers_and_envelope(
 #[rstest]
 #[case(ErrorCode::BadRequest, StatusCode::BAD_REQUEST)]
 #[case(ErrorCode::Unauthorized, StatusCode::UNAUTHORIZED)]
+#[case(ErrorCode::InvalidCredentials, StatusCode::UNAUTHORIZED)]
 #[case(ErrorCode::Forbidden, StatusCode::FORBIDDEN)]
 #[case(ErrorCode::StepUpRequired, StatusCode::FORBIDDEN)]
 #[case(ErrorCode::NotFound, StatusCode::NOT_FOUND)]
@@ -162,6 +164,44 @@ async fn every_variant_answers_with_its_status_headers_and_envelope(
 fn every_code_has_its_status(#[case] code: ErrorCode, #[case] expected: StatusCode) {
     assert_eq!(status(code), expected);
 }
+
+/// RFC 9110: every 401 carries a challenge, whatever its code; the app
+/// tells `unauthorized` from `invalid_credentials` by the code.
+#[tokio::test]
+async fn every_401_carries_the_bearer_challenge_and_no_other_status_does() {
+    for make in MAKERS {
+        let seen = send(app(make), Some(test_request_id())).await;
+
+        let challenge = seen.headers.get("www-authenticate").map(String::as_str);
+        assert_eq!(
+            challenge,
+            (seen.status == 401).then_some("Bearer"),
+            "{}",
+            make().code().as_str()
+        );
+    }
+}
+
+/// One constructor per code, in `ErrorCode::ALL`'s order.
+const MAKERS: [fn() -> ApiError; 15] = [
+    || ApiError::BadRequest,
+    || ApiError::Unauthorized,
+    || ApiError::InvalidCredentials,
+    || ApiError::Forbidden,
+    || ApiError::StepUpRequired,
+    || ApiError::NotFound,
+    || ApiError::MethodNotAllowed,
+    || ApiError::Timeout,
+    || ApiError::Conflict,
+    || ApiError::PayloadTooLarge,
+    || ApiError::UnsupportedMediaType,
+    || ApiError::Validation(Vec::new()),
+    || ApiError::RateLimited {
+        retry_after: Duration::ZERO,
+    },
+    || ApiError::internal("test"),
+    || ApiError::Busy,
+];
 
 #[rstest]
 #[case::a_second_and_a_half(Duration::from_millis(1500), "2")]
@@ -392,26 +432,14 @@ fn garde_texts_fit_their_caps_uncut() {
     }
 }
 
+/// One variant per code, in `ErrorCode::ALL`'s order.
+fn every_variant() -> Vec<ApiError> {
+    MAKERS.iter().map(|make| make()).collect()
+}
+
 #[test]
 fn every_code_is_some_variants_code_with_its_status() {
-    let variants = [
-        ApiError::BadRequest,
-        ApiError::Unauthorized,
-        ApiError::Forbidden,
-        ApiError::StepUpRequired,
-        ApiError::NotFound,
-        ApiError::MethodNotAllowed,
-        ApiError::Timeout,
-        ApiError::Conflict,
-        ApiError::PayloadTooLarge,
-        ApiError::UnsupportedMediaType,
-        ApiError::Validation(Vec::new()),
-        ApiError::RateLimited {
-            retry_after: Duration::ZERO,
-        },
-        ApiError::internal("test"),
-        ApiError::Busy,
-    ];
+    let variants = every_variant();
 
     let codes: Vec<&str> = variants.iter().map(|error| error.code().as_str()).collect();
     let all: Vec<&str> = ErrorCode::ALL.iter().map(|code| code.as_str()).collect();

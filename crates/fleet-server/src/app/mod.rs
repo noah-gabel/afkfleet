@@ -9,6 +9,8 @@
 //! - [`challenges`]: the login's mfa and setup tokens, held in memory
 //!   (P7.6, P7.7).
 //! - [`health`]: whether the server is ready to serve requests.
+//! - [`login`]: logging in (the password step and the code step) and
+//!   stepping up (P7.6).
 //! - [`lockout`]: the per-username lockout: when failed logins lock a name,
 //!   and its periodic purge (P7.10).
 //! - [`mfa`]: the second factor: enrolling and confirming a TOTP
@@ -21,5 +23,6 @@ pub mod auth;
 pub mod challenges;
 pub mod health;
 pub mod lockout;
+pub mod login;
 pub mod mfa;
 pub mod users;

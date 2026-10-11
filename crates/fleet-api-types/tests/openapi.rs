@@ -16,6 +16,11 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
 
+use fleet_api_types::auth::{
+    ACCESS_TOKEN_MAX_SECS, LoginMfaRequest, LoginRequest, LoginResponse, LoginStatus,
+    PASSWORD_MAX_CHARS, REFRESH_TOKEN_MAX_SECS, RefreshRequest, StepUpRequest, TokenResponse,
+    USERNAME_MAX_CHARS,
+};
 use fleet_api_types::error::{
     FIELD_MESSAGE_MAX_CHARS, FIELD_PATH_MAX_CHARS, MESSAGE_MAX_CHARS, REQUEST_ID_MAX_CHARS,
 };
@@ -47,10 +52,17 @@ fn declarations() -> BTreeMap<String, String> {
         ("ErrorCode", ErrorCode::decl(&config)),
         ("ErrorResponse", ErrorResponse::decl(&config)),
         ("FieldError", FieldError::decl(&config)),
+        ("LoginMfaRequest", LoginMfaRequest::decl(&config)),
+        ("LoginRequest", LoginRequest::decl(&config)),
+        ("LoginResponse", LoginResponse::decl(&config)),
+        ("LoginStatus", LoginStatus::decl(&config)),
         ("MfaConfirmRequest", MfaConfirmRequest::decl(&config)),
         ("MfaConfirmResponse", MfaConfirmResponse::decl(&config)),
         ("MfaEnrollResponse", MfaEnrollResponse::decl(&config)),
         ("MfaResetResponse", MfaResetResponse::decl(&config)),
+        ("RefreshRequest", RefreshRequest::decl(&config)),
+        ("StepUpRequest", StepUpRequest::decl(&config)),
+        ("TokenResponse", TokenResponse::decl(&config)),
     ]
     .into_iter()
     .map(|(name, declaration)| (name.to_owned(), declaration))
@@ -260,6 +272,15 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::totp_secret("MfaEnrollResponse", "secret", TOTP_SECRET_MAX_CHARS)]
 #[case::confirm_code("MfaConfirmRequest", "code", CODE_MAX_CHARS)]
 #[case::setup_token("MfaResetResponse", "setup_token", TOKEN_MAX_CHARS)]
+#[case::login_username("LoginRequest", "username", USERNAME_MAX_CHARS)]
+#[case::login_password("LoginRequest", "password", PASSWORD_MAX_CHARS)]
+#[case::login_token("LoginResponse", "token", TOKEN_MAX_CHARS)]
+#[case::mfa_token("LoginMfaRequest", "mfa_token", TOKEN_MAX_CHARS)]
+#[case::mfa_code("LoginMfaRequest", "code", CODE_MAX_CHARS)]
+#[case::access_token("TokenResponse", "access_token", TOKEN_MAX_CHARS)]
+#[case::refresh_token("TokenResponse", "refresh_token", TOKEN_MAX_CHARS)]
+#[case::refresh_request("RefreshRequest", "refresh_token", TOKEN_MAX_CHARS)]
+#[case::step_up_password("StepUpRequest", "password", PASSWORD_MAX_CHARS)]
 fn a_text_field_is_capped_at_its_constant(
     #[case] component: &str,
     #[case] field: &str,
@@ -286,6 +307,15 @@ fn every_text_field_has_its_cap_checked() {
         ("MfaEnrollResponse", "secret"),
         ("MfaConfirmRequest", "code"),
         ("MfaResetResponse", "setup_token"),
+        ("LoginRequest", "username"),
+        ("LoginRequest", "password"),
+        ("LoginResponse", "token"),
+        ("LoginMfaRequest", "mfa_token"),
+        ("LoginMfaRequest", "code"),
+        ("TokenResponse", "access_token"),
+        ("TokenResponse", "refresh_token"),
+        ("RefreshRequest", "refresh_token"),
+        ("StepUpRequest", "password"),
     ]);
     let components = components_json();
 
@@ -309,7 +339,13 @@ fn every_text_field_has_its_cap_checked() {
 /// `deny_unknown_fields` does. A new request DTO must be added here.
 #[test]
 fn a_request_schema_refuses_unknown_fields_and_responses_dont() {
-    let requests = BTreeSet::from(["MfaConfirmRequest"]);
+    let requests = BTreeSet::from([
+        "LoginMfaRequest",
+        "LoginRequest",
+        "MfaConfirmRequest",
+        "RefreshRequest",
+        "StepUpRequest",
+    ]);
     let components = components_json();
 
     for (name, schema) in &components {
@@ -337,6 +373,38 @@ fn seconds_left_are_an_integer_with_their_range() {
         property(&components, "MfaResetResponse", "expires_in"),
         &json!({ "type": "integer", "minimum": 0, "maximum": SETUP_TOKEN_MAX_SECS })
     );
+}
+
+#[rstest]
+#[case::login("LoginResponse", "expires_in", SETUP_TOKEN_MAX_SECS)]
+#[case::access("TokenResponse", "access_expires_in", ACCESS_TOKEN_MAX_SECS)]
+#[case::refresh("TokenResponse", "refresh_expires_in", REFRESH_TOKEN_MAX_SECS)]
+fn every_lifetime_is_an_integer_with_its_range(
+    #[case] component: &str,
+    #[case] field: &str,
+    #[case] max: u32,
+) {
+    let components = components_json();
+
+    assert_eq!(
+        property(&components, component, field),
+        &json!({ "type": "integer", "minimum": 0, "maximum": max })
+    );
+}
+
+#[test]
+fn the_login_status_lists_exactly_its_known_values() {
+    let components = components_json();
+    let known: Vec<&str> = LoginStatus::ALL
+        .iter()
+        .map(|status| status.as_str())
+        .collect();
+
+    assert_eq!(
+        property(&components, "LoginResponse", "status")["$ref"],
+        "#/components/schemas/LoginStatus"
+    );
+    assert_eq!(components["LoginStatus"]["enum"], json!(known));
 }
 
 #[test]
