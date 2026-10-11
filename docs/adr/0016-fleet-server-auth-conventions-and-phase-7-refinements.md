@@ -209,6 +209,43 @@ Before writing any code, the Phase 7 plan listed every question the plan left op
   - Details like `via` and `role` go into metadata, with values from closed enums, never free text.
   - Names are stored in rows forever, so a merged name is never renamed or dropped. An insta snapshot of every name in `AuditAction::ALL` makes any rename or removal show up in review.
 
+### As built (group A)
+- **`[auth]`'s ranges are checked in validation, not by garde.**
+  - **Why:** clippy's `struct_field_names` refuses four fields sharing the `argon2_` prefix, so `RawAuth`'s fields drop it and serde names the keys. garde would then report the field's name instead of the key: 0.23 parses its `rename` attribute but never applies it (checked in its source).
+  - **What validation does:** it checks each value against `Argon2Params`' bounds and reports every problem under its key, in garde's words ("lower than …", "greater than …"). It then builds `Argon2Params::try_new`, the type's only checked constructor besides `Default`, whose bounds the password service also uses for the stored-hash limits.
+- **Characters before length in the key files** *(the user's decision during the build)*.
+  - **The problem:** base64 0.23.1's `decode_slice` checks that the whole input fits before it looks at any character (`decode.rs` line 213), so a 45-character text with a stray space would have been "the wrong length".
+  - **The order now:**
+    1. A byte-order mark (UTF-8 `EF BB BF`, UTF-16 `FF FE` or `FE FF`) gets its own error, "starts with a byte-order mark; save it as plain text without BOM". Windows editors and Windows PowerShell 5.1's `>` add one, and it's invisible.
+    2. Any byte outside the standard alphabet and `=` is "not base64".
+    3. Then `decode_slice` decides the padding, the trailing bits and the length; a 33-byte key is still `WrongLength` through `OutputSliceTooSmall`.
+- **No copy of a key or a password is left unwiped:**
+  - **Vault keys** decode straight into their `SecretBox<[u8; 32]>`, with no intermediate buffer. `XChaChaVault::new` consumes the loaded keys: each goes into its cipher by reference (hybrid-array's `From<&[u8; 32]> for &Array`), which chacha20poly1305's `zeroize` feature wipes on drop, and the loaded copy is dropped (wiped) right after.
+  - **The secret-file loader and `--password-stdin`** allocate their buffers once at full size (`Zeroizing`), so reading never reallocates and leaves a copy behind.
+  - **A typed password** is copied into a `SecretString` of exactly its length, so boxing it never reallocates, and the original `String` is zeroized.
+- **Each error's chain names everything once.** The manual check of a missing key file showed "the secret file … can't be read" twice, because the errors printed their source in their own message and also returned it from `source()`, which the server's `chain()` joins. `SecretFileError` now says "the secret file … can't be read" with the OS's error as its source, and `VaultKeyError::File` says only "vault key 1". The log reads "the vault's keys can't be loaded: vault key 1: the secret file … can't be read: <the OS's reason>". Regression tests in both crates check the chain.
+- **`VaultError::TooLarge`** joins the port's errors: XChaCha20-Poly1305 refuses plaintexts beyond about 256 GiB, and `seal` returns a `Result`, so nothing may panic there. No stored secret comes near it.
+- **base64 stays without `alloc` in tests too:** the tests encode with `encode_slice` into a fixed buffer, and the serve tests' key is a constant, checked with Node.
+- **`user create-owner`'s output:**
+  - **Success:** "the Owner "alice" is created" on stdout, and `info` "the Owner is created" with the user's ID.
+  - **A final refusal:** one `afkfleet-server: …` line on stderr.
+  - **A round's refusal at the prompt** (a mismatch, the length rule, a weak password with its hints): a plain line before the next prompt.
+  - **A failure of the database or the password service:** one `error` with its chain as well.
+- **Coverage gates:**
+  - **The entries,** each a file llvm-cov's report lists (`infra/crypto/mod.rs` holds only `mod` lines, and `ports/passwords.rs` only a trait and error types, so neither is listed):
+    - auth: `crates/fleet-core/src/auth/`, `crates/fleet-server/src/{app/users.rs, infra/crypto/passwords.rs}`
+    - vault: `crates/fleet-server/src/{infra/crypto/vault.rs, ports/vault.rs}`, `crates/fleet-startup/src/secret_file.rs`
+  - **The other gates keep their regex.**
+  - **Reporting:** a gate's result names its missing prefixes, and the script prints them.
+- **Lockfile:** Cargo.lock gained argon2, password-hash, phc, blake2, chacha20poly1305, aead, cipher, inout, poly1305, universal-hash, zxcvbn, fancy-regex, bit-set, bit-vec, rpassword and rtoolbox. base64 0.23.1, subtle, zeroize, chacha20, time, regex, itertools and lazy_static were already there.
+- **Tests,** each task red against compiling stubs first:
+  - P7.2: fleet-core 19 of 29 and fleet-server 68 of 77 failed on assertions.
+  - P7.4: fleet-startup 15 of 16 failed on Windows (the Unix-only cases run in Linux CI), fleet-server 49, and the dev script's 7 of 8. The BOM and alphabet rule added 4 more.
+  - P7.5: 26 failed.
+  - The coverage gate script: 7 of 15.
+
+  Then all passed. One test was vacuous against a stub: the byte-flip test looped over an empty envelope. It now asserts the envelope's length first.
+
 ### Tests that could block
 Any test that could block on a read (the FIFO case, a pipe, a child process) runs that part on a thread or under a timeout and fails with a clear message after a few seconds *(the user's rule)*. nextest's default profile has no terminate-after, so a hang would otherwise run until CI's job timeout without naming the test.
 
