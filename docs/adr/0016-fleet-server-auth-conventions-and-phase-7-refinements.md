@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-11
-- **Related:** Plan.md Phase 7 (P7.1–P7.13), §4, §5, §7.2, §7.4, §7.5, §8, Appendix A, Appendix B, P12.2, P12.7; ADR-0006, ADR-0010, ADR-0011, ADR-0015
+- **Related:** Plan.md Phase 7 (P7.1–P7.13), §4, §5, §7.2, §7.4, §7.5, §8, Appendix A, Appendix B, Appendix D, P8.1, P11.6, P12.2, P12.4, P12.7; ADR-0006, ADR-0010, ADR-0011, ADR-0015
 
 ## Context
 Phase 7 builds the server's authentication and authorization:
@@ -275,6 +275,78 @@ Any test that could block on a read (the FIFO case, a pipe, a child process) run
   - **fleet-startup:** secrecy and zeroize; tempfile in dev.
 - **The profile:** `[profile.dev.package.argon2]`, `blake2` and `zxcvbn` with `opt-level = 3`.
 - **zxcvbn's tree** (`cargo tree`, no default features): fancy-regex, regex, itertools, lazy_static and time.
+
+### Group B: sessions, tokens and `AuthUser` (P7.1's `sessions`, P7.3, P7.8)
+The user answered group B's questions on 2026-10-11, one at a time.
+
+- **Dependencies** *(the user's approval)*:
+  - sha2 0.11.0, no default features (no `alloc`, no `oid`), with `zeroize`, so the hasher's block buffer, which holds the tail of the token it just hashed, is wiped on drop. It was already in Cargo.lock through sqlx and azalea.
+  - axum-extra 0.12.6, no default features (no `tracing`), only `typed-header`, for `TypedHeader<Authorization<Bearer>>`. It adds axum-extra, headers 0.4, headers-core 0.3 and sha1 0.10 to the lockfile; base64 0.22, mime, httpdate and digest 0.10 were already there.
+  - base64 stays without `alloc`: tokens are encoded with `encode_slice` into a fixed buffer.
+- **One row per family** *(the user's choice)*. A `sessions` row is one login's token family; its ID (`fleet_core::id::SessionId`) stays the same across every refresh, so E's `/me/sessions` and `DELETE /me/sessions/{id}` address it. The row holds the hashes of the current access and refresh tokens. Every refresh token it replaced moves into `rotated_refresh_tokens(hash, session_id, rotated_at)`, kept until the session is deleted, so reusing any rotated token is recognized while the family exists.
+- **Access tokens live in the session row** *(the user's choice)*. A refresh replaces both hashes, so the previous access token stops working the moment the refresh commits. A request still in flight with it gets 401; P8.1's client handles that (a note there).
+- **What is hashed** *(the user's choice)*: SHA-256 of the whole token text, prefix included, stored as a 32-byte BLOB (`CHECK (length(…) = 32)`).
+  - A strict shape check comes first: the prefix, then exactly 43 base64url characters. Anything else is refused before any lookup, so a refresh token sent as a Bearer token never reaches the database.
+  - After the indexed lookup, the stored hash is compared with the computed one by `TokenHash::ct_eq` (`subtle`). The index lookup itself can't be constant-time; that's harmless, since a hash of 256 random bits can't be inverted.
+  - `TokenHash` has no `PartialEq`, and its `Debug` shows no byte.
+- **Expiry from anchors and the running config** *(the user's choice)*. Only `created_at` (the absolute anchor) and `refreshed_at` (when the current pair was issued) are stored. `fleet_core::auth` computes:
+  - access expiry = `refreshed_at` + access TTL
+  - idle expiry = `refreshed_at` + idle lifetime *(the user's choice: idle counts from the last refresh, not the last request)*
+  - absolute expiry = `created_at` + absolute lifetime
+
+  Access and idle expiry are capped at the absolute expiry; a time is expired when `now >= expiry`. Lowering a TTL shortens every existing session at the next restart; raising one lengthens them.
+- **`[auth]`'s token keys** *(the user's choice)*: `access_token_ttl_secs` 900 (60–3600), `refresh_token_idle_days` 7 (1–90), `refresh_token_absolute_days` 30 (1–365). Validation refuses idle > absolute. All three are on `NOT_SECRETS` with their reasons. Problems are reported under the key in garde's words, like the argon2 keys.
+- **No client data** *(the user's choice)*: a session stores no IP address and no user agent. The login's IP is in D's `auth.login` entry. A nullable column can be added by a later migration.
+- **`last_used_at`, the touch** *(the user's choices)*:
+  - **Display only:** expiry never depends on it.
+  - **At most once a minute:** `TOUCH_INTERVAL` = 60 s, decided by the pure rule `touch_due`.
+  - **Conditional:** `UPDATE … SET last_used_at = ? WHERE id = ? AND last_used_at <= ?` (now − 60 s), so two concurrent requests that both read a stale value write it once, and a clock that went back never moves it backwards.
+  - **Bounded:** only `Store::write()` (the wait for the write connection and `BEGIN IMMEDIATE`) runs under a 250 ms timeout. Once the transaction is open, the UPDATE and the commit take milliseconds and run to the end; a future dropped there would leave the outcome and the connection's cleanup to sqlx's cancellation handling.
+  - **Never fails a request:** past the bound, or on any error, the touch is skipped and logged at `debug`, and the request goes on. The next due request writes it.
+- **Unaudited writes** *(the user's choices; ADR-0015's rule)*: `WriteTx::commit_unaudited(UnauditedWrite)` commits without an entry, for named exemptions only:
+  - `SessionTouch`: the touch above. An entry per request would bury the log, and it's display data.
+  - `SessionRotate`: a successful refresh. It happens about every 15 minutes per active client and says nothing new: the session's creation is audited by D's `auth.login`, and its end by logout, reuse, disabling or a role change.
+- **The refresh rule** *(the user's choices)*, a pure function in `fleet_core::auth`, checked in this order inside the write transaction, whose lookup joins `users`:
+  1. an unknown token: 401
+  2. a revoked family: 401
+  3. an expired family (idle or absolute): 401
+  4. a rotated token of a live family: **reuse**. The family is revoked and the entry recorded in the same commit, even for a disabled user.
+  5. the current token of a disabled user: 401, nothing rotates (a session whose user row is gone isn't found at all: step 1)
+  6. otherwise the tokens rotate
+
+  There's no grace window: a client whose refresh response got lost retries with the old token, which is reuse, so it must log in again (a note under P8.1). Reuse in a revoked or expired family is a plain 401 with no entry, so replays can't flood the log. The lookup runs inside the write transaction, so two refreshes with the same token take turns (`BEGIN IMMEDIATE`) and the second finds it rotated. New tokens are minted before `Store::write()`, since no crypto runs while a `WriteTx` is open.
+- **`security.refresh_token_reuse`** *(the user's choices)*:
+  - outcome Failure (ADR-0015)
+  - no actor: whoever presented the old token isn't authenticated and may be the thief
+  - `actor_ip`: the presenting client's, passed in by D's `/auth/refresh`
+  - target `User(the session's user)`: the lasting link is whose account was attacked, and it survives the session row's cleanup
+  - metadata `session_id` (the revoked family) and `rotated_at` (when the presented token was replaced), so an investigation sees which session was hit and whether the thief or the real app used the old token first
+
+  `AuditTarget::Session` arrives with D's `auth.logout`, where the actor is the session's own user.
+- **Typed metadata values** *(the user's choice)*: `AuditMetadata::id(key, impl Into<Uuid>)` (lowercase hyphenated) and `time(key, DateTime<Utc>)` (UTC milliseconds, the database's form), stored as JSON strings. **The naming rule's metadata clause is clarified:** values are closed-enum names or typed values the server made (IDs, timestamps), never text a client sent.
+- **Issuing a session** *(the user's choice)*: `TokenService::prepare(user_id)` mints both tokens, their hashes, the session's ID and its times before any transaction. The caller inserts it with `tx.sessions().insert(…)` and commits with its own entry: D's login with `auth.login`, in the same transaction as its other writes. B's tests commit with a test-only action built through `AuditAction::try_from`, never listed in `audit_actions!`, so it can't enter `AuditAction::ALL` or the names snapshot *(the user's addition)*.
+- **Step-up in B** *(the user's choice)*: the `stepped_up_at` column, `STEP_UP_WINDOW` (5 minutes, a constant: §7.2 fixes it and Appendix A has no key) and the pure `is_stepped_up(stamp, now)`: a stamp at most 5 minutes old counts, a stamp in the future (a clock that went back) doesn't. `AuthUser` carries the stamp. D adds `ErrorCode::StepUpRequired` with its first step-up route.
+- **`AuthUser`** *(the user's choices)*:
+  - It looks up the session and its user on every request, through one join on the read pool, so revocation, disabling and role changes count on the very next request.
+  - **Every rejection is `ApiError::Unauthorized`** with a bare `WWW-Authenticate: Bearer`: no header, more than one `Authorization` header (it isn't a list header, and a proxy and the server must not disagree about which one counts), another scheme, a malformed token, an unknown one, an expired access token, a revoked session, a disabled user.
+  - **A database failure isn't a rejection:** busy is 503 and anything else 500, through `From<StoreError>`. A 401 would make the app throw its tokens away over a database hiccup.
+  - `require(permission, resource)` returns `authorize()`'s `AuthzError`, which a handler turns into `ApiError` with `?`.
+- **Logging** *(the user's choice)*: a detected reuse is one `warn` with `user_id` and `session_id`. Each `AuthUser` rejection is one `debug` line naming its reason, with `session_id` and `user_id` where known. No token, hash or header value is ever logged, at any level, and the reason never reaches the client.
+- **Repository scope** *(the user's choice)*: only what B uses: insert; the joined lookup by access hash on the read pool; inside the transaction, the lookup by refresh hash (current or rotated), rotate and revoke; the conditional touch. Logout reuses revoke in D; revoking all of a user's sessions and listing them arrive with E.
+- **Layout** *(the user's choice)*:
+  - `ports::tokens`: `TokenKind`, `TokenHash` and the synchronous `Tokens` trait. It's on the auth gate, since `ct_eq` is security code.
+  - `infra::crypto::tokens::Sha256Tokens`.
+  - `ports::sessions` and `infra::sqlite::sessions`: the repository, under the workspace gate like every repository.
+  - `app::auth::TokenService`, where D's login joins it.
+  - `http::extractors`: `AuthUser`.
+  - New auth-gate entries: `ports/tokens.rs`, `infra/crypto/tokens.rs`, `app/auth.rs`, `http/extractors/`.
+- **Wiring** *(the user's choice)*: `AppState::new(health, tokens)`; `serve` builds `TokenService` from `[auth]`'s lifetimes, `SystemClock`, `OsRandom` and the database.
+- **Cleanup comes with P11.6** *(the user's choice)*: a session, with its history rows (ON DELETE CASCADE), is deleted once `created_at` + the current absolute lifetime has passed, whether it was revoked or not. A revoked session is unusable anyway, and keeping its history until then lets an investigation after a reuse see the family's timeline. The migration has the indexes this needs: `sessions(created_at)` for the cleanup, `sessions(user_id)` for revoking and listing a user's sessions, `rotated_refresh_tokens(session_id)` for the cascade.
+
+### As built (group B)
+- **P7.1's `sessions`** (`0003_sessions.sql`): the conventions of 0001 and 0002 (STRICT, ID and time shapes); hashes as BLOBs with a length CHECK; no ordering CHECKs. `user_id` references `users` without cascade, like the audit log's actor. Every lookup joins `users`, so a session whose user row is gone isn't found.
+- **`SessionId`** joins fleet-core's IDs, and the `serialized_ids` snapshot gains it.
+- **Tests,** red against compiling stubs (a migration without CHECKs or cascade, a repository that found and wrote nothing, a `TokenHash` that compared nothing and read nothing back, a `commit_unaudited` that rolled back): 21 of 26 repository tests and 3 of 8 `TokenHash` tests failed on assertions. The 5 repository tests that passed assert that nothing is found or that a row is refused. Then all passed.
 
 ## Consequences
 - **Easier:**

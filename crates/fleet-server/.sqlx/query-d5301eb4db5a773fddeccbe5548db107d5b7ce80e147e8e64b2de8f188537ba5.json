@@ -1,0 +1,170 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT s.rowid AS \"rowid!: i64\", s.id AS \"id!\", s.user_id AS \"user_id!\",\n                  s.access_hash AS \"access_hash!: Vec<u8>\",\n                  s.refresh_hash AS \"refresh_hash!: Vec<u8>\",\n                  s.created_at AS \"created_at!\", s.refreshed_at AS \"refreshed_at!\",\n                  s.last_used_at AS \"last_used_at!\", s.stepped_up_at AS \"stepped_up_at?\",\n                  s.revoked_at AS \"revoked_at?\", u.rowid AS \"user_rowid!: i64\",\n                  u.role AS \"role!\", u.disabled AS \"disabled!: i64\"\n           FROM sessions s JOIN users u ON u.id = s.user_id\n           WHERE s.access_hash = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "user_id!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "access_hash!: Vec<u8>",
+        "ordinal": 3,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "access_hash"
+          }
+        }
+      },
+      {
+        "name": "refresh_hash!: Vec<u8>",
+        "ordinal": 4,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "refresh_hash"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "refreshed_at!",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "refreshed_at"
+          }
+        }
+      },
+      {
+        "name": "last_used_at!",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "last_used_at"
+          }
+        }
+      },
+      {
+        "name": "stepped_up_at?",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "stepped_up_at"
+          }
+        }
+      },
+      {
+        "name": "revoked_at?",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "sessions",
+            "name": "revoked_at"
+          }
+        }
+      },
+      {
+        "name": "user_rowid!: i64",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "role!",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "name": "disabled!: i64",
+        "ordinal": 12,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "disabled"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "d5301eb4db5a773fddeccbe5548db107d5b7ce80e147e8e64b2de8f188537ba5"
+}

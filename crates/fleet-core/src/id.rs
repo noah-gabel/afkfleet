@@ -178,6 +178,12 @@ define_id!(
     ModeId
 );
 define_id!(
+    /// Identifies a session: one login's token family, the same across every
+    /// refresh (Plan.md P7.1, P7.3). Like every ID it isn't a secret; the
+    /// session's tokens are.
+    SessionId
+);
+define_id!(
     /// Identifies one HTTP request to the server: minted by its request-ID
     /// layer for every request, sent back in `x-request-id` and in every error
     /// body, and logged with the request. It names no entity.
@@ -336,6 +342,7 @@ mod tests {
         assert_trait_mints_like_the_constructor(BotId::new_v7);
         assert_trait_mints_like_the_constructor(AgentId::new_v7);
         assert_trait_mints_like_the_constructor(ModeId::new_v7);
+        assert_trait_mints_like_the_constructor(SessionId::new_v7);
         assert_trait_mints_like_the_constructor(RequestId::new_v7);
     }
 
@@ -346,6 +353,7 @@ mod tests {
         assert_round_trips(BotId::new_v7);
         assert_round_trips(AgentId::new_v7);
         assert_round_trips(ModeId::new_v7);
+        assert_round_trips(SessionId::new_v7);
         assert_round_trips(RequestId::new_v7);
     }
 
@@ -358,6 +366,7 @@ mod tests {
             bot: BotId,
             agent: AgentId,
             mode: ModeId,
+            session: SessionId,
         }
         let t = at(FIXED_MILLIS);
         let ids = AllIds {
@@ -366,6 +375,7 @@ mod tests {
             bot: BotId::new_v7(t, [0x03; 10]).unwrap(),
             agent: AgentId::new_v7(t, [0x04; 10]).unwrap(),
             mode: ModeId::new_v7(t, [0x05; 10]).unwrap(),
+            session: SessionId::new_v7(t, [0x06; 10]).unwrap(),
         };
 
         insta::assert_json_snapshot!("serialized_ids", ids);

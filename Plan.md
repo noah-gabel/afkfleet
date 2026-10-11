@@ -2396,6 +2396,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P7.1, from the group A review): **IDs aren't secrets.** v7 IDs reveal their creation time. Invite codes and session tokens come from `getrandom`, never from an ID, and access is decided by `authorize()`, not by how hard an ID is to guess.
 
+  > Note (P7.1, as built, group B) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`0003_sessions.sql`.**
+  > - **`sessions`**, one row per login's token family, its ID (`SessionId`) the same across every refresh: `user_id` (references `users`, no cascade), `access_hash` and `refresh_hash` (32-byte BLOBs, UNIQUE), `created_at`, `refreshed_at`, `last_used_at`, `stepped_up_at` and `revoked_at` (NULL until set). No expiry columns: `fleet_core::auth` computes them from `created_at` and `refreshed_at` with the running config. No IP address or user agent.
+  > - **`rotated_refresh_tokens`** `(hash, session_id, rotated_at)`: every refresh token a session replaced, ON DELETE CASCADE, so reuse of any of them is recognized while the session exists.
+  > - **Indexes:** `sessions(user_id)`, `sessions(created_at)` (P11.6's cleanup), `rotated_refresh_tokens(session_id)`.
+  > - **The repository** has what B uses: insert, the joined lookup by access hash, and inside the write transaction the lookup by refresh hash (current or rotated), rotate, revoke and the conditional touch. `WriteTx::commit_unaudited(UnauditedWrite)` arrives with its first exemption, `SessionTouch`.
+  > - **Tests,** red against compiling stubs: 21 of 26 repository tests and 3 of 8 `TokenHash` tests failed on assertions, then all passed.
+
   > Note (P7.1, from group D): **One Owner.** The `users` migration adds a partial unique index on `role` for `'owner'`. `authorize()` also refuses to act on any other user with the Owner role (ADR-0010).
 - [x] **P7.2** 🔴 `PasswordService`:
   - Argon2id with the configured parameters
@@ -3318,6 +3325,8 @@ message ServerMessage {
 | `audit_log` | id, at, actor_user_id, actor_ip, action, target_type, target_id, outcome, metadata_json |
 
 > Note (Appendix D, from Phase 6, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **How every table stores its values.** STRICT tables. Entity IDs are lowercase hyphenated version 7 UUID TEXT with a CHECK on the exact form; append-only logs (`audit_log`, `chat_messages`) use `INTEGER PRIMARY KEY AUTOINCREMENT` instead, ordered by ID. Times are `YYYY-MM-DDTHH:MM:SS.mmmZ` TEXT (UTC, milliseconds) with a CHECK on the shape. CHECKs pin only shapes and closed sets that never grow.
+
+> Note (Appendix D, Phase 7, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`sessions` as built** has no `family_id`, `access_expires_at`, `refresh_expires_at`, `ip` or `user_agent`: a row is one family, expiry is computed from `created_at` and `refreshed_at`, and no client data is stored. It adds `refreshed_at`, `last_used_at`, `stepped_up_at` and `created_at`, and the replaced refresh tokens live in `rotated_refresh_tokens(hash, session_id, rotated_at)`.
 
 > Note (Appendix D, Phase 7, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): Phase 7's tables arrive with their first user, each in its own migration: `sessions` in group B, with an extra `stepped_up_at` for step-up (§7.2); `login_attempts` in C; `user_mfa` in D, whose `secret_ciphertext` holds a vault envelope v1; `invites` in E. Each group designs the columns with its feature.
 
