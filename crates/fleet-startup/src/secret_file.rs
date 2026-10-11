@@ -25,6 +25,8 @@
 //!   allocated once at its full size, so reading never leaves an unwiped
 //!   copy behind.
 
+use core::fmt;
+use std::error::Error;
 use std::fs::{self, File, Metadata};
 use std::io::{self, Read as _};
 use std::mem;
@@ -38,14 +40,33 @@ pub const MAX_BYTES: usize = 64 * 1024;
 
 /// Why a secret file can't be used. Every message names the file, never any
 /// of its bytes.
-#[derive(Debug, thiserror::Error)]
-#[error("the secret file {} {problem}", path.display())]
+///
+/// The message holds the file and the problem; the source is the OS's error,
+/// if there is one, so a log line that joins an error's chain says each
+/// once ("the secret file … can't be read: <the OS's reason>").
+#[derive(Debug)]
 pub struct SecretFileError {
     /// The file.
     pub path: PathBuf,
     /// What's wrong with it.
-    #[source]
     pub problem: SecretFileProblem,
+}
+
+impl fmt::Display for SecretFileError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "the secret file {} {}",
+            self.path.display(),
+            self.problem
+        )
+    }
+}
+
+impl Error for SecretFileError {
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        self.problem.source()
+    }
 }
 
 /// What's wrong with a secret file.
@@ -244,6 +265,25 @@ mod tests {
         assert!(
             matches!(&problem, SecretFileProblem::Unreadable(error) if error.kind() == io::ErrorKind::NotFound),
             "{problem:?}"
+        );
+    }
+
+    /// The OS's error is the source, so a log line that joins an error's
+    /// chain names the file and the reason once each.
+    #[test]
+    fn an_unreadable_file_s_source_is_the_os_error_and_nothing_repeats() {
+        let dir = folder();
+        let error = read(&dir.path().join("missing")).unwrap_err();
+
+        let source = std::error::Error::source(&error).expect("the OS's error");
+
+        assert!(source.downcast_ref::<io::Error>().is_some(), "{source:?}");
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "the secret file {} can't be read",
+                dir.path().join("missing").display()
+            )
         );
     }
 

@@ -56,8 +56,9 @@ const NONCE_BYTES: usize = 24;
 /// key file.
 #[derive(Debug, thiserror::Error)]
 pub enum VaultKeyError {
-    /// The file can't be used (fleet-startup's loader).
-    #[error("vault key {key_id}: {source}")]
+    /// The file can't be used (fleet-startup's loader). The source names the
+    /// file and the reason.
+    #[error("vault key {key_id}")]
     File {
         /// The key ID it's configured for.
         key_id: u32,
@@ -806,7 +807,17 @@ mod tests {
             matches!(error, VaultKeyError::File { key_id: 2, .. }),
             "{error:?}"
         );
-        assert!(error.to_string().contains("missing"), "{error}");
+        // A log line joins the chain: the key, the file and the reason, once
+        // each.
+        let shown = crate::http::error::chain(&error);
+        assert!(
+            shown.starts_with(&format!(
+                "vault key 2: the secret file {} can't be read: ",
+                keys.dir.path().join("missing").display()
+            )),
+            "{shown}"
+        );
+        assert_eq!(shown.matches("can't be read").count(), 1, "{shown}");
     }
 
     #[test]
