@@ -14,11 +14,19 @@
 //!   refused a password, in our own words, so its port names no crate's type.
 //! - [`SessionPolicy`] and [`refresh_decision`]: a session's lifetimes, when
 //!   its tokens expire, and what a refresh comes to (group B).
+//! - [`access_decision`], [`touch_due`] and [`is_stepped_up`]: whether a
+//!   request's access token counts, when it notes its session's use, and
+//!   whether a step-up action is allowed (group B).
 
+mod access;
 mod password;
 mod session;
 mod strength;
 
+pub use access::{
+    AccessFacts, AccessRejection, STEP_UP_WINDOW, TOUCH_INTERVAL, access_decision, is_stepped_up,
+    touch_due, touch_stale_since,
+};
 pub use password::{NewPassword, NewPasswordError};
 pub use session::{
     RefreshDecision, RefreshFacts, RefreshMatch, SessionPolicy, SessionPolicyError, SessionTimes,

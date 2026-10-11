@@ -2551,7 +2551,19 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - replay protection
   - mandatory for **every** user, not configurable: until they enroll, login returns `mfa_setup_required` plus a single-use setup token that only works for enroll and confirm (§7.2). That includes users who just registered with an invite.
   - tests: the setup token is rejected on every other endpoint, expires after 10 min and can't be reused
-- [ ] **P7.8** 🔴 The `AuthUser` extractor (Bearer token via `axum-extra`) loads session and user and rejects disabled users. A `require(permission, resource)` helper calls `fleet_core::authz::authorize`.
+- [x] **P7.8** 🔴 The `AuthUser` extractor (Bearer token via `axum-extra`) loads session and user and rejects disabled users. A `require(permission, resource)` helper calls `fleet_core::authz::authorize`.
+
+  > Note (P7.8, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **Every refusal is the same 401** (`ApiError::Unauthorized`, a bare `WWW-Authenticate: Bearer`): no header, more than one `Authorization` header, another scheme, a malformed, unknown or expired token, a revoked session, a disabled user. A database failure isn't a refusal: 503 or 500.
+  > - **One lookup per request:** the session joined with its user on the read pool, decided by `fleet_core::auth::access_decision` (revoked, then expired, then disabled).
+  > - **The touch:** `last_used_at` at most once a minute (`touch_due`), a conditional write committed with `commit_unaudited(SessionTouch)`. Only the wait for the write connection is bounded (250 ms); the touch never fails a request, and a skipped one is logged at `debug`.
+  > - **Logging:** each refusal is one `debug` line with its reason (and the session's and user's IDs once found); no token, hash or header value is ever logged.
+  > - **Step-up:** `AuthUser::stepped_up_at` and `fleet_core::auth::is_stepped_up` (5 minutes); D adds `step_up_required` with its first step-up route.
+  > - **Wiring:** `AppState` carries the `TokenService`, built by `serve` from `[auth]`.
+
+  > Note (P7.8, as built, group B) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **The scheme:** headers 0.4's `Authorization<Bearer>` matches `Bearer` in any case and trims the spaces after it, as RFC 6750's `"Bearer" 1*SP b64token` allows (the user's decision during the build); the token's own shape check does the rest.
+  > - **Tests,** through a test-only router behind the real middleware stack, red against compiling stubs (an extractor that didn't count the headers, a service that skipped the decision and the touch): 7 of 15 failed on assertions, then all passed. The test that the held write connection doesn't hold up a request passed against the stub too, which never touched.
 
   > Note (P7.8, from group D) (ADR-0010):
   > - **Errors.** `AuthzError::NotFound` becomes 404 and `Forbidden` 403. `WrongResource` is a bug in the handler: 500, logged at `error`.

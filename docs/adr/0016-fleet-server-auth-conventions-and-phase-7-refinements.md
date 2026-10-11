@@ -258,6 +258,7 @@ Any test that could block on a read (the FIFO case, a pipe, a child process) run
   - `POST /auth/step-up` lives in D.
 - **P7.10 (C)** *(the user's addition)*: the one real-socket test sends a request over a real connection to a route with the per-IP limit, and fails if the peer address doesn't reach the limiter. `oneshot` sets `ConnectInfo` itself, so it can't catch a missing `into_make_service_with_connect_info`.
 - **P7.11 (C)** *(the user's addition)*: the route-coverage test must not pass while the authed list is empty. For example, a test-only authed route proves the 401 check, and D's and E's routes join it automatically.
+- **D** *(group B)*: `fleet_core::audit::target`'s test of an unknown target type uses `"session"`, which becomes a known type when `AuditTarget::Session` arrives with `auth.logout`; that test needs another name then. Handlers put `AuthUser` before any body extractor, so a request without credentials is refused before its body is read.
 - **P8.1** *(group B, the user's decisions)*: a request with an access token a refresh has since replaced gets 401. fleet-client's single-flight refresh retries once with the current token when a refresh already replaced the one it used, and refreshes only on a 401 for the current token. A lost refresh response means logging in again.
 - **P11.6** *(group B, the user's decision)*: a session and its history rows are deleted once `created_at` + the current absolute lifetime has passed, revoked or not.
 - **P12.4** *(group B, the user's decision)*: a counter of detected refresh-token reuses among the key metrics.
@@ -356,6 +357,13 @@ The user answered group B's questions on 2026-10-11, one at a time.
   - `app::auth::TokenService::{prepare, refresh}`. `refresh` mints the new pair before `Store::write()`, confirms the indexed match with `ct_eq`, and matches the rule's decision together with the lookup, so no impossible combination is handled by hand.
   - **The slot for typed metadata.** `AuditMetadata`'s reserved room per free slot grows from the largest integer to the largest ID or time in quotes, so an ID or a time is never cut, whatever came before.
   - **`[auth]`'s ranges** are checked by one helper for the argon2 and the token keys, in garde's words; idle > absolute is the new `ProblemKind::GreaterThanKey`, checked only when both are in range.
+- **P7.8, the pieces:**
+  - `fleet_core::auth::{access_decision, AccessFacts, AccessRejection, touch_due, touch_stale_since, TOUCH_INTERVAL, is_stepped_up, STEP_UP_WINDOW}`.
+  - `TokenService::authenticate` and its touch (`TOUCH_WAIT` = 250 ms around `Store::write()` only), with `RejectedAccess` naming the reason for the log.
+  - `http::extractors::AuthUser` (`FromRequestParts<AppState>`, `Rejection = ApiError`) with `actor()`, `session_id()`, `stepped_up_at()` and `require()`. It counts the `Authorization` headers first, then reads `TypedHeader<Authorization<Bearer>>`, whose `Debug` would show the token, so only its text goes on, as a `SecretString`.
+  - `AppState::new(health, tokens)`; `serve::app` builds `Sha256Tokens` and `TokenService` over the real clock and randomness.
+- **The scheme's spaces** *(the user's decision during the build)*: the plan described headers 0.4 as allowing exactly one space after `Bearer`. Its `Bearer::token()` trims them (`["Bearer ".len()..].trim_start()`), as RFC 6750's `"Bearer" 1*SP b64token` allows, so one or more spaces are accepted; the token's shape check does the rest.
+- **P7.8, tests,** through a test-only router behind the real middleware stack, red against compiling stubs (an extractor that didn't count the headers, a service that skipped the decision and the touch): 7 of 15 failed on assertions, then all passed. The held-write-connection test passed against the stub too, which never touched. fleet-core's access rules: 9 of 18 failed against stubs, then all passed.
 - **P7.3, tests,** red against compiling stubs (rules that allowed everything, typed metadata that added nothing, an adapter that minted nothing, config that ignored the keys, a service that refused every refresh): fleet-core 20 of 25 rule tests, 5 metadata tests and the names snapshot; fleet-server 11 adapter tests, 8 config tests and 13 of 21 service tests failed on assertions. The ones that passed against the stubs check refusals and `Debug`. Then all passed.
 
 ## Consequences

@@ -16,19 +16,34 @@
 //!
 //!   Every refusal is the same [`RefreshError::Rejected`], so the API can't
 //!   tell a client why.
+//! - **Authenticating** (P7.8): [`TokenService::authenticate`] finds the
+//!   session of a request's access token, with its user, through the read
+//!   connections, and decides with `fleet_core::auth::access_decision`, so a
+//!   revocation, a disabled user or a role change counts on the very next
+//!   request.
+//! - **The touch:** a request notes its session's use (`last_used_at`) at
+//!   most once a minute (`fleet_core::auth::touch_due`), with a conditional
+//!   write committed without an entry ([`UnauditedWrite::SessionTouch`]). It
+//!   never fails or holds up the request: only the wait for the write
+//!   connection is bounded, by [`TOUCH_WAIT`]; once the transaction is open,
+//!   the write and the commit take milliseconds and run to the end. Past the
+//!   bound, or on any error, the touch is skipped and logged at `debug`.
 
+use core::time::Duration;
 use std::net::IpAddr;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use fleet_core::audit::{AuditAction, AuditError, AuditMetadata, AuditOutcome, AuditTarget};
 use fleet_core::auth::{
-    RefreshDecision, RefreshFacts, RefreshMatch, SessionPolicy, SessionTimes, refresh_decision,
+    AccessFacts, RefreshDecision, RefreshFacts, RefreshMatch, SessionPolicy, SessionTimes,
+    access_decision, refresh_decision, touch_due, touch_stale_since,
 };
+use fleet_core::authz::Actor;
 use fleet_core::id::{SessionId, UserId};
 use fleet_core::system::{Clock, MintError, SecureRandom, mint};
 use secrecy::{ExposeSecret as _, SecretString};
-use tracing::warn;
+use tracing::{debug, warn};
 
 use super::audit::AuditService;
 use crate::ports::sessions::{NewSession, RefreshLookup, Rotation, Session};
@@ -88,6 +103,68 @@ pub enum RefreshError {
     /// The reuse entry couldn't be built.
     #[error("the audit entry can't be built")]
     Audit(#[from] AuditError),
+    /// The database failed.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
+
+/// How long a request waits for the write connection to note its session's
+/// use; past it, the touch is skipped (see the [module docs](self)).
+pub const TOUCH_WAIT: Duration = Duration::from_millis(250);
+
+/// Who a request's access token says it comes from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Authenticated {
+    /// The user's ID and their role as it is now.
+    pub actor: Actor,
+    /// The session the token belongs to.
+    pub session_id: SessionId,
+    /// When the user last entered their password again in this session.
+    pub stepped_up_at: Option<DateTime<Utc>>,
+}
+
+/// Why a request's credentials were refused, for the log only: the API
+/// answers every refusal alike.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RejectedAccess {
+    /// The reason as the log names it: `malformed`, `unknown`, `revoked`,
+    /// `expired`, `disabled`, or one the extractor found in the headers.
+    pub reason: &'static str,
+    /// The session, once one was found.
+    pub session_id: Option<SessionId>,
+    /// The session's user, once a session was found.
+    pub user_id: Option<UserId>,
+}
+
+impl RejectedAccess {
+    /// A refusal before any session was found.
+    #[must_use]
+    pub const fn reason(reason: &'static str) -> Self {
+        Self {
+            reason,
+            session_id: None,
+            user_id: None,
+        }
+    }
+}
+
+/// Why a request couldn't be authenticated.
+#[derive(Debug, thiserror::Error)]
+pub enum AuthenticateError {
+    /// The access token was refused; the reason is only logged.
+    #[error("the access token was refused ({})", .0.reason)]
+    Rejected(RejectedAccess),
+    /// The database failed: not a refusal.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
+
+/// Why a touch was skipped.
+#[derive(Debug, thiserror::Error)]
+enum TouchError {
+    /// The write connection stayed taken past [`TOUCH_WAIT`].
+    #[error("the write connection stayed taken for {} ms", TOUCH_WAIT.as_millis())]
+    TimedOut,
     /// The database failed.
     #[error(transparent)]
     Store(#[from] StoreError),
@@ -253,6 +330,86 @@ impl TokenService {
             // Refused: dropping the transaction rolls back nothing written.
             _ => Err(RefreshError::Rejected),
         }
+    }
+
+    /// The session a request's access token belongs to, as the actor it
+    /// comes from; see the [module docs](self). A due touch is written on
+    /// the way, and never fails the request.
+    ///
+    /// # Errors
+    /// [`AuthenticateError::Rejected`] for every refused token, and
+    /// [`AuthenticateError::Store`] when the database fails.
+    pub async fn authenticate(
+        &self,
+        presented: &SecretString,
+    ) -> Result<Authenticated, AuthenticateError> {
+        let Some(hash) = self
+            .tokens
+            .hash_presented(TokenKind::Access, presented.expose_secret())
+        else {
+            return Err(AuthenticateError::Rejected(RejectedAccess::reason(
+                "malformed",
+            )));
+        };
+        let Some(found) = self
+            .store
+            .sessions()
+            .find_by_access_hash(&hash)
+            .await?
+            .filter(|found| found.session.access_hash.ct_eq(&hash))
+        else {
+            return Err(AuthenticateError::Rejected(RejectedAccess::reason(
+                "unknown",
+            )));
+        };
+        let session = &found.session;
+        let now = self.clock.now();
+        access_decision(
+            &self.policy,
+            AccessFacts {
+                times: times(session),
+                revoked: session.revoked_at.is_some(),
+                user_disabled: found.disabled,
+            },
+            now,
+        )
+        .map_err(|rejection| {
+            AuthenticateError::Rejected(RejectedAccess {
+                reason: rejection.as_str(),
+                session_id: Some(session.id),
+                user_id: Some(session.user_id),
+            })
+        })?;
+        if touch_due(session.last_used_at, now) {
+            self.touch(session.id, now).await;
+        }
+        Ok(Authenticated {
+            actor: Actor {
+                id: session.user_id,
+                role: found.role,
+            },
+            session_id: session.id,
+            stepped_up_at: session.stepped_up_at,
+        })
+    }
+
+    /// Notes session `id`'s use at `now`; a failure is only logged.
+    async fn touch(&self, id: SessionId, now: DateTime<Utc>) {
+        if let Err(error) = self.try_touch(id, now).await {
+            debug!(session_id = %id, %error, "the session's last use wasn't written");
+        }
+    }
+
+    /// The touch: the wait for the write connection is bounded by
+    /// [`TOUCH_WAIT`]; the conditional write and the commit then run to the
+    /// end.
+    async fn try_touch(&self, id: SessionId, now: DateTime<Utc>) -> Result<(), TouchError> {
+        let mut tx = tokio::time::timeout(TOUCH_WAIT, self.store.write())
+            .await
+            .map_err(|_elapsed| TouchError::TimedOut)??;
+        tx.sessions().touch(id, now, touch_stale_since(now)).await?;
+        tx.commit_unaudited(UnauditedWrite::SessionTouch).await?;
+        Ok(())
     }
 
     /// The tokens of session `id` as the client gets them, with their

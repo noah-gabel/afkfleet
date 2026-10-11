@@ -50,6 +50,10 @@ async-trait = "0.1.92"
 # what it uses. Group C uses none: `IntoResponse` and `middleware::from_fn` need no
 # feature, and the error body is written with serde_json (ADR-0015).
 axum = { version = "0.8.9", default-features = false }
+# axum-extra: `TypedHeader<Authorization<Bearer>>` for the server's AuthUser extractor.
+# Without default features (no `tracing`); fleet-server enables only `typed-header`,
+# which brings headers 0.4 (ADR-0016).
+axum-extra = { version = "0.12.6", default-features = false }
 # base64: the vault's key files (standard alphabet, padded), decoded with `decode_slice`
 # into a fixed buffer. Without default features: `simd-unsafe`, its only unsafe code, stays
 # off, so the crate is `forbid(unsafe_code)` (ADR-0016).

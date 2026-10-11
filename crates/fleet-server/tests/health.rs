@@ -20,12 +20,15 @@ use axum::body::{Body, to_bytes};
 use axum::extract::Request;
 use axum::http::Method;
 use chrono::DateTime;
+use fleet_core::auth::SessionPolicy;
 use fleet_core::id::RequestId;
+use fleet_server::app::auth::TokenService;
 use fleet_server::app::health::HealthService;
 use fleet_server::config::{HttpConfig, LogConfig, LogFormat};
 use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::openapi::ApiDocs;
 use fleet_server::http::router::{AppState, router};
+use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions, READ_CONNECTIONS};
 use fleet_startup::telemetry::{NoRules, layer_with};
 use fleet_testkit::log_buffer::LogBuffer;
@@ -54,6 +57,21 @@ const SEEN_HEADERS: [&str; 10] = [
     "allow",
 ];
 
+/// The session tokens over `db`, at §7.2's lifetimes. No test here
+/// authenticates, but the state carries them.
+fn tokens(db: &Database) -> TokenService {
+    let random = SeededRandom::new(13);
+    TokenService::new(
+        Arc::new(ManualClock::new(
+            DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
+        )),
+        Arc::new(random.clone()),
+        Arc::new(db.clone()),
+        Arc::new(Sha256Tokens::new(Arc::new(random))),
+        SessionPolicy::default(),
+    )
+}
+
 /// The server's router over `db`.
 fn app(db: &Database) -> Router {
     let ids = RequestIds::new(
@@ -67,7 +85,7 @@ fn app(db: &Database) -> Router {
         request_timeout: Duration::from_secs(15),
         max_body_bytes: 65_536,
     };
-    let state = AppState::new(HealthService::new(Arc::new(db.clone())));
+    let state = AppState::new(HealthService::new(Arc::new(db.clone())), tokens(db));
     router(state, &http, ids, ApiDocs::Hidden)
 }
 

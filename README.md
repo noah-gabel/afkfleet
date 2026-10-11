@@ -93,7 +93,11 @@ There's no support, and I don't take feature requests. Security reports are welc
 - the vault's cipher (XChaCha20-Poly1305, bound to its record and purpose), with the keys read at startup from owner-only files
 - `afkfleet-server user create-owner`, which creates the one Owner
 
-Sessions, login, 2FA and the rate limits follow in groups B–E.
+Group B adds:
+- sessions: one per login, with opaque access tokens (15 minutes) and rotating refresh tokens (7 days idle, 30 days at most), stored only as SHA-256 hashes; reusing a replaced refresh token revokes the whole session and is recorded in the audit log
+- the `AuthUser` extractor, which looks up the session and its user on every request, so a revocation, a disabled user or a role change counts at once, and `require()`, which authorizes through the one `authorize()`
+
+The route registry, the rate limits, login, 2FA and the account endpoints follow in groups C–E.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 
