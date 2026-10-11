@@ -145,6 +145,26 @@ pub trait UserWrites: Send {
     /// [`InsertUserError::UsernameTaken`], [`InsertUserError::OwnerExists`] or
     /// [`InsertUserError::Store`].
     async fn insert(&mut self, user: &NewUser) -> Result<(), InsertUserError>;
+
+    /// The user with this ID, read in this transaction, so a commit that
+    /// acts on a verified password can check that it's unchanged and the
+    /// user isn't disabled.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn get(&mut self, id: UserId) -> Result<Option<User>, StoreError>;
+
+    /// Replaces the user's password hash with `hash`, the same password
+    /// re-hashed with the current parameters. `password_changed_at` stays:
+    /// it isn't a password change. Whether the user exists.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn set_password_hash(
+        &mut self,
+        id: UserId,
+        hash: &PasswordHash,
+    ) -> Result<bool, StoreError>;
 }
 
 #[cfg(test)]

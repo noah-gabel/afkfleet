@@ -95,6 +95,41 @@ pub(super) async fn find_by_username(
     .transpose()
 }
 
+/// The user with this ID, read in a write transaction.
+pub(super) async fn get_in(
+    conn: &mut SqliteConnection,
+    id: UserId,
+) -> Result<Option<User>, StoreError> {
+    let id = id_text(id);
+    sqlx::query_as!(
+        UserRow,
+        r#"SELECT rowid AS "rowid!: i64", id, username, password_hash, role, disabled,
+                  created_at, password_changed_at
+           FROM users WHERE id = ?"#,
+        id
+    )
+    .fetch_optional(conn)
+    .await
+    .map_err(store_error)?
+    .map(user_from_row)
+    .transpose()
+}
+
+/// Replaces the user's password hash; `password_changed_at` stays.
+pub(super) async fn set_password_hash(
+    conn: &mut SqliteConnection,
+    id: UserId,
+    hash: &PasswordHash,
+) -> Result<bool, StoreError> {
+    let id = id_text(id);
+    let hash = hash.expose_secret();
+    let done = sqlx::query!("UPDATE users SET password_hash = ? WHERE id = ?", hash, id)
+        .execute(conn)
+        .await
+        .map_err(store_error)?;
+    Ok(done.rows_affected() == 1)
+}
+
 /// Whether a user has the Owner role.
 pub(super) async fn owner_exists(pool: &SqlitePool) -> Result<bool, StoreError> {
     sqlx::query_scalar!(

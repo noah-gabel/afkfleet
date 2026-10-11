@@ -3,8 +3,10 @@
 
 use crate::ports::store::StoreError;
 
-/// SQLite's extended code for a UNIQUE constraint violation.
-const SQLITE_CONSTRAINT_UNIQUE: &str = "2067";
+/// SQLite's extended codes for a UNIQUE constraint violation: a UNIQUE
+/// column or index (`SQLITE_CONSTRAINT_UNIQUE`), and a PRIMARY KEY
+/// (`SQLITE_CONSTRAINT_PRIMARYKEY`). Both name `table.column` the same way.
+const UNIQUE_CODES: [&str; 2] = ["2067", "1555"];
 
 /// `SQLITE_BUSY` and `SQLITE_LOCKED`, the primary codes of a lock wait that ran
 /// out.
@@ -26,12 +28,15 @@ pub(super) fn store_error(error: sqlx::Error) -> StoreError {
     }
 }
 
-/// The `table.column` a UNIQUE violation names (SQLite's message is
-/// `UNIQUE constraint failed: users.username`), or `None` when `error` isn't
-/// a UNIQUE violation.
+/// The `table.column` a UNIQUE or PRIMARY KEY violation names (SQLite's
+/// message is `UNIQUE constraint failed: users.username` for both), or `None`
+/// when `error` isn't one.
 pub(super) fn unique_violation(error: &sqlx::Error) -> Option<String> {
     let database = error.as_database_error()?;
-    if database.code().as_deref() != Some(SQLITE_CONSTRAINT_UNIQUE) {
+    if !database
+        .code()
+        .is_some_and(|code| UNIQUE_CODES.contains(&code.as_ref()))
+    {
         return None;
     }
     database

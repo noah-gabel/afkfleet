@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE sessions SET stepped_up_at = ? WHERE id = ? AND revoked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "341921e789ab536f8b0eb285a1a515fff0b2f9958ffb2817d19de3998ffeafde"
+}

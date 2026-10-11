@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE user_mfa SET last_used_step = ?\n         WHERE user_id = ? AND last_used_step < ? AND confirmed_at = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "21245eeecdddb6295372eebdde0422dad3c094ed772f869752365becc8e04bea"
+}

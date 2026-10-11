@@ -10,6 +10,10 @@
 //! - [`sessions`]: the sessions, one per login's token family (P7.1, P7.3).
 //! - [`login_attempts`]: the failed logins per username, keyed so the name
 //!   itself is never stored (P7.1, P7.10).
+//! - [`mfa`]: the users' second factor, a confirmed TOTP authenticator and
+//!   its recovery codes (P7.1, P7.7).
+//! - [`recovery_codes`]: the recovery codes' hashes, the only form of a
+//!   recovery code the database holds (P7.7).
 //! - [`tokens`]: the tokens' hashes, the only form of a token the database
 //!   holds (P7.3).
 //! - [`passwords`]: hashing and checking passwords (P7.2).
@@ -19,7 +23,9 @@
 
 pub mod audit;
 pub mod login_attempts;
+pub mod mfa;
 pub mod passwords;
+pub mod recovery_codes;
 pub mod sessions;
 pub mod store;
 pub mod tokens;

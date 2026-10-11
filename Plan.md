@@ -2423,6 +2423,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Tests,** red against compiling stubs: 14 of 18 failed, then all passed.
 
   > Note (P7.1, from group D): **One Owner.** The `users` migration adds a partial unique index on `role` for `'owner'`. `authorize()` also refuses to act on any other user with the Owner role (ADR-0010).
+
+  > Note (P7.1, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`0005_user_mfa.sql`.**
+  > - **The login challenges live in memory,** not in a table: the mfa token and the setup token are held as SHA-256 hashes, at most one login challenge and one replace token per user, and a restart drops them (P7.7's note).
+  > - **`user_mfa`** holds confirmed enrollments only, so a user has 2FA exactly when their row exists: `user_id` (the key, references `users`, no cascade), `secret_envelope` (a vault envelope v1 of the 20-byte TOTP secret, 65 bytes, bound by its AAD to the user's ID and `totp_secret`), `last_used_step` (`>= 0`) and `confirmed_at`. No `key_id` column: the envelope's header carries it.
+  > - **`recovery_codes`** `(hash, user_id, used_at)`: plain SHA-256 of the normalized code, safe only because each code has at least 80 bits from `SecureRandom` (100 in fact). Not keyed, since a key derived from the vault's active key would make every code unusable after P9's key rotation. A used code keeps its row; indexed on `user_id`.
+  > - **The repository:** `find` (read pool and transaction), `find_unused_code`, `insert` (a second first enrollment is refused), `replace`, the conditional `advance_step` (only a later step, and only while `confirmed_at` is unchanged), `replace_codes` and the conditional `use_code`. The sessions gain `refresh_hash_exists`, `revoke_all_for_user(user, except)`, `find` and `stamp_step_up`; the users `get` in a transaction and `set_password_hash`, which never touches `password_changed_at`.
+  > - **Tests,** red against compiling stubs: 27 of 39 failed, then all passed. The migrations' snapshot gained line 5.
 - [x] **P7.2** 🔴 `PasswordService`:
   - Argon2id with the configured parameters
   - runs in `spawn_blocking` behind a semaphore
@@ -3457,6 +3464,8 @@ message ServerMessage {
 > Note (Appendix D, Phase 7, group B, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`sessions` as built** has no `family_id`, `access_expires_at`, `refresh_expires_at`, `ip` or `user_agent`: a row is one family, expiry is computed from `created_at` and `refreshed_at`, and no client data is stored. It adds `refreshed_at`, `last_used_at`, `stepped_up_at` and `created_at`, and the replaced refresh tokens live in `rotated_refresh_tokens(hash, session_id, rotated_at)`.
 
 > Note (Appendix D, Phase 7, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): Phase 7's tables arrive with their first user, each in its own migration: `sessions` in group B, with an extra `stepped_up_at` for step-up (§7.2); `login_attempts` in C; `user_mfa` in D, whose `secret_ciphertext` holds a vault envelope v1; `invites` in E. Each group designs the columns with its feature.
+
+> Note (Appendix D, Phase 7, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`user_mfa` as built** is `user_id, secret_envelope, last_used_step, confirmed_at`: no `key_id` (the envelope's header has it) and no `enabled_at` (`confirmed_at`), and a row exists only for a confirmed enrollment. The recovery codes live in their own table, `recovery_codes(hash, user_id, used_at)`, instead of a `recovery_code_hashes` column. The login challenges (mfa and setup tokens) live in the server's memory, not in a table.
 
 ### E. Bot state machine (`fleet_core::bot`)
 **States:**

@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (SELECT 1 FROM sessions WHERE refresh_hash = ?)\n               OR EXISTS (SELECT 1 FROM rotated_refresh_tokens WHERE hash = ?) AS \"exists!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "exists!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "a3a6547e7e95bd0f058a85c8f173a9d5c305b53734690c74573a75428d357d7b"
+}

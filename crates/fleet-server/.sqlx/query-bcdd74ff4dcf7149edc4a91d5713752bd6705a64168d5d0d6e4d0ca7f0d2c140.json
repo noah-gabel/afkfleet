@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT used_at AS \"used_at?\" FROM recovery_codes WHERE hash = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "used_at?",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "recovery_codes",
+            "name": "used_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "bcdd74ff4dcf7149edc4a91d5713752bd6705a64168d5d0d6e4d0ca7f0d2c140"
+}
