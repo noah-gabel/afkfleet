@@ -15,7 +15,8 @@ use rstest::rstest;
 
 use crate::support::{
     AbortOnDrop, ChannelSignals, closed_port, config_body, finish, finish_beside, json_lines,
-    lines_with, listener, path_arg, server_config, test_dir, toml_path, write_config,
+    lines_with, listener, path_arg, server_config, test_dir, toml_path, vault_keys, vault_section,
+    write_config,
 };
 
 #[rstest]
@@ -40,7 +41,10 @@ fn an_invalid_config_lists_every_problem_on_stderr_and_exits_1() {
     let dir = test_dir("invalid_config");
     let config = write_config(
         &dir,
-        "[http]\nbind = \"127.0.0.1:0\"\n[database]\npath = \"relative.db\"\n",
+        &format!(
+            "[http]\nbind = \"127.0.0.1:0\"\n[database]\npath = \"relative.db\"\n{}",
+            vault_section(&dir)
+        ),
     );
 
     let finished = finish(&["serve", "--config", path_arg(&config)]);
@@ -132,8 +136,9 @@ fn migrate_into_a_missing_folder_logs_the_error_and_exits_1() {
     let config = write_config(
         &dir,
         &format!(
-            "[database]\npath = {}\n[log]\nformat = \"json\"\n",
-            toml_path(&database)
+            "[database]\npath = {}\n[log]\nformat = \"json\"\n{}",
+            toml_path(&database),
+            vault_section(&dir)
         ),
     );
 
@@ -154,6 +159,42 @@ fn migrate_into_a_missing_folder_logs_the_error_and_exits_1() {
         finished.stdout
     );
     assert!(!database.parent().unwrap().exists());
+}
+
+/// The vault's keys are read before anything else starts, so a bad key file
+/// stops `serve` with exit 1 and an error naming the file, never its content
+/// (ADR-0016).
+#[test]
+fn serve_with_a_bad_vault_key_file_logs_the_file_and_exits_1() {
+    let dir = test_dir("serve_bad_vault_key");
+    let config = write_config(&dir, &config_body(&dir, closed_port()));
+    let key = dir.join("vault-key-1");
+    std::fs::write(&key, "not-a-key-marker\n").unwrap();
+
+    let finished = finish(&["serve", "--config", path_arg(&config)]);
+
+    assert_eq!(finished.status.code(), Some(1), "{}", finished.stdout);
+    assert_eq!(finished.stderr, "");
+    let lines = json_lines(&finished.stdout);
+    let failed = lines_with(&lines, "the server can't start");
+    assert_eq!(failed.len(), 1, "{}", finished.stdout);
+    let error = failed[0]["error"].as_str().unwrap();
+    assert!(
+        error.starts_with("the vault's keys can't be loaded: vault key 1: the file "),
+        "{error}"
+    );
+    assert!(error.contains("vault-key-1"), "{error}");
+    assert!(
+        !finished.stdout.contains("not-a-key-marker"),
+        "{}",
+        finished.stdout
+    );
+    assert!(
+        lines_with(&lines, "the server is listening").is_empty(),
+        "{}",
+        finished.stdout
+    );
+    assert!(!dir.join("afkfleet.db").exists(), "nothing was opened");
 }
 
 #[test]
@@ -178,8 +219,11 @@ fn a_healthcheck_with_nothing_listening_is_unhealthy_with_exit_1() {
 async fn running_server(dir: &Path) -> (u16, AbortOnDrop<serve::Exit>) {
     let (listener, address) = listener().await;
     let config = server_config(dir, address, false);
+    let keys = vault_keys(&config);
     let task =
-        tokio::spawn(async move { serve::run(&config, listener, ChannelSignals::silent()).await });
+        tokio::spawn(
+            async move { serve::run(&config, listener, ChannelSignals::silent(), keys).await },
+        );
     (address.port(), AbortOnDrop(task))
 }
 

@@ -1,14 +1,15 @@
 //! Validation: from [`RawConfig`] to [`ServerConfig`], reporting every
 //! problem at once.
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::raw::{RawAuth, RawConfig, RawLog};
+use super::raw::{RawAuth, RawConfig, RawLog, RawVault};
 use super::{
     Argon2Params, AuthConfig, ConfigError, DatabaseConfig, HttpConfig, KeyPath, LogConfig,
-    LogFilter, LogFormat, ProblemKind, Problems, ServerConfig,
+    LogFilter, LogFormat, ProblemKind, Problems, ServerConfig, VaultConfig,
 };
 
 /// Validates `raw`: garde's ranges first, then each text key and `[auth]`'s
@@ -38,9 +39,10 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
     let path = database_path(raw.database.path.as_deref(), &mut problems);
     let log = log_config(&raw.log, &mut problems);
     let argon2 = argon2(&raw.auth, &mut problems);
+    let vault = vault(&raw.vault, &mut problems);
 
-    let (true, Some(bind), Some(path), Some(log), Some(argon2)) =
-        (problems.is_empty(), bind, path, log, argon2)
+    let (true, Some(bind), Some(path), Some(log), Some(argon2), Some(vault)) =
+        (problems.is_empty(), bind, path, log, argon2, vault)
     else {
         return Err(ConfigError::Invalid(problems.sorted()));
     };
@@ -56,7 +58,96 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         database: DatabaseConfig { path },
         log,
         auth: AuthConfig { argon2 },
+        vault,
     })
+}
+
+/// `[vault]`: both keys required; 1 to 16 key files, each under a key ID
+/// from 1 to 4294967295 written without leading zeros, with an absolute
+/// path; the active key ID among them. Whether the active key is listed is
+/// checked only when the list itself is valid, so one mistake isn't
+/// reported twice.
+fn vault(raw: &RawVault, problems: &mut Problems) -> Option<VaultConfig> {
+    let section = KeyPath::root().key("vault");
+    let files_key = section.key("master_key_files");
+    let active_key = section.key("active_key_id");
+    let key_files = match &raw.master_key_files {
+        None => {
+            problems.push(files_key, ProblemKind::Missing);
+            None
+        }
+        Some(entries) => key_files(entries, &files_key, problems),
+    };
+    let active = match raw.active_key_id {
+        None => {
+            problems.push(active_key.clone(), ProblemKind::Missing);
+            None
+        }
+        Some(id) => {
+            let id = u32::try_from(id).ok().filter(|id| *id >= 1);
+            if id.is_none() {
+                problems.push(active_key.clone(), ProblemKind::KeyId);
+            }
+            id
+        }
+    };
+    let (Some(key_files), Some(active_key_id)) = (key_files, active) else {
+        return None;
+    };
+    if !key_files.contains_key(&active_key_id) {
+        problems.push(active_key, ProblemKind::UnknownKeyId);
+        return None;
+    }
+    Some(VaultConfig {
+        key_files,
+        active_key_id,
+    })
+}
+
+/// `[vault] master_key_files`: every entry is checked, so every problem is
+/// reported at once.
+fn key_files(
+    entries: &BTreeMap<String, String>,
+    key: &KeyPath,
+    problems: &mut Problems,
+) -> Option<BTreeMap<u32, PathBuf>> {
+    let mut valid = true;
+    if entries.is_empty() || entries.len() > VaultConfig::MAX_KEY_FILES {
+        problems.push(
+            key.clone(),
+            ProblemKind::KeyCount {
+                max: VaultConfig::MAX_KEY_FILES,
+            },
+        );
+        valid = false;
+    }
+    let mut files = BTreeMap::new();
+    for (id, path) in entries {
+        let entry = key.key(id);
+        let Some(id) = key_id(id) else {
+            problems.push(entry, ProblemKind::KeyId);
+            valid = false;
+            continue;
+        };
+        match absolute_path(path) {
+            Ok(path) => {
+                files.insert(id, path);
+            }
+            Err(kind) => {
+                problems.push(entry, kind);
+                valid = false;
+            }
+        }
+    }
+    valid.then_some(files)
+}
+
+/// A key ID as written in the config: a whole number from 1 to 4294967295,
+/// in its one canonical form (no sign, no leading zeros), so two entries
+/// can't name the same key.
+fn key_id(text: &str) -> Option<u32> {
+    let id: u32 = text.parse().ok()?;
+    (id >= 1 && id.to_string() == text).then_some(id)
 }
 
 /// `[auth] argon2_*`: each value against its range in `Argon2Params`, with
@@ -129,16 +220,22 @@ fn database_path(raw: Option<&str>, problems: &mut Problems) -> Option<PathBuf> 
         problems.push(key, ProblemKind::Missing);
         return None;
     };
+    absolute_path(text)
+        .map_err(|kind| problems.push(key, kind))
+        .ok()
+}
+
+/// A path that must be absolute: not empty, not relative.
+fn absolute_path(text: &str) -> Result<PathBuf, ProblemKind> {
     if text.is_empty() {
-        problems.push(key, ProblemKind::Empty);
-        return None;
+        return Err(ProblemKind::Empty);
     }
     let path = Path::new(text);
-    if !path.is_absolute() {
-        problems.push(key, ProblemKind::NotAbsolute);
-        return None;
+    if path.is_absolute() {
+        Ok(path.to_owned())
+    } else {
+        Err(ProblemKind::NotAbsolute)
     }
-    Some(path.to_owned())
 }
 
 /// `[log]`: a missing key takes its default.

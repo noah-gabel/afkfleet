@@ -42,6 +42,19 @@ pub enum ProblemKind {
     /// An invalid log filter.
     #[error(transparent)]
     LogFilter(LogFilterError),
+    /// Not a key ID: a whole number from 1 to 4294967295, without leading
+    /// zeros.
+    #[error("must be a key ID from 1 to 4294967295, without leading zeros")]
+    KeyId,
+    /// Too few or too many key files.
+    #[error("must list 1 to {max} key files")]
+    KeyCount {
+        /// The most allowed.
+        max: usize,
+    },
+    /// The active key ID has no key file.
+    #[error("must be one of the key IDs in `master_key_files`")]
+    UnknownKeyId,
 }
 
 #[cfg(test)]

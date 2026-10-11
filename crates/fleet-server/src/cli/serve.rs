@@ -2,10 +2,11 @@
 //! until a signal stops it.
 //!
 //! main.rs loads the config, starts logging, logs the dev-mode warning,
+//! loads the vault's keys (plain file reads, before any runtime exists),
 //! builds a multi-threaded runtime, installs the stop signals and binds
 //! `[http] bind`; [`run`] opens the database (running every pending
-//! migration), builds the router over the real clock, the OS's randomness
-//! and the database, and serves. Every startup failure is one `error` event,
+//! migration), builds the router over the real clock, the OS's randomness,
+//! the vault and the database, and serves. Every startup failure is one `error` event,
 //! "the server can't start", with the error's whole chain, and exit 1. The
 //! last line, "the server stopped", carries the exit code.
 //!
@@ -36,6 +37,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
+use fleet_core::system::SecureRandom;
 use fleet_startup::signals::ShutdownSignals;
 use tokio::net::TcpListener;
 use tokio::time::{Instant, sleep_until};
@@ -49,6 +51,7 @@ use crate::http::error::chain;
 use crate::http::middleware::RequestIds;
 use crate::http::openapi::ApiDocs;
 use crate::http::router::{AppState, router};
+use crate::infra::crypto::vault::{VaultKeyError, VaultKeys, XChaChaVault};
 use crate::infra::sqlite::{self, Database, DatabaseOptions, OpenError};
 use crate::infra::system::{OsRandom, SystemClock};
 
@@ -140,6 +143,9 @@ pub enum StartError {
     /// The database couldn't be opened or migrated.
     #[error("the database can't be opened")]
     Database(#[source] OpenError),
+    /// A vault key file can't be used.
+    #[error("the vault's keys can't be loaded")]
+    VaultKeys(#[source] VaultKeyError),
 }
 
 /// Logs `error` with its whole chain as "the server can't start" and
@@ -150,10 +156,17 @@ pub fn cant_start(error: &StartError) -> Exit {
 }
 
 /// The router `serve` runs: the routes over `database`, request IDs from the
-/// real clock and the OS's randomness (the only place either is built), and
-/// the `OpenAPI` document in dev mode.
-pub fn app(config: &ServerConfig, database: &Database) -> Router {
-    let ids = RequestIds::new(Arc::new(SystemClock), Arc::new(OsRandom));
+/// real clock and the OS's randomness, and the `OpenAPI` document in dev
+/// mode. `serve` and `user create-owner` are the only places the real clock
+/// and randomness are built.
+///
+/// It builds the vault from `keys` too. Nothing reads it until group D's
+/// 2FA service, which takes it into the app's state; until then it's built,
+/// which proves the keys make one, and dropped, wiping them (ADR-0016).
+pub fn app(config: &ServerConfig, database: &Database, keys: VaultKeys) -> Router {
+    let random: Arc<dyn SecureRandom> = Arc::new(OsRandom);
+    let _vault = XChaChaVault::new(keys, Arc::clone(&random));
+    let ids = RequestIds::new(Arc::new(SystemClock), random);
     let state = AppState::new(HealthService::new(Arc::new(database.clone())));
     router(
         state,
@@ -164,11 +177,13 @@ pub fn app(config: &ServerConfig, database: &Database) -> Router {
 }
 
 /// Opens the database `config` names and serves the API on `listener`
-/// until a signal from `signals` stops it.
+/// until a signal from `signals` stops it. `keys` are the vault's, which
+/// main.rs loads before the runtime starts.
 pub async fn run<S: ShutdownSignals>(
     config: &ServerConfig,
     listener: TcpListener,
     signals: S,
+    keys: VaultKeys,
 ) -> Exit {
     let address = match listener.local_addr() {
         Ok(address) => address,
@@ -183,7 +198,7 @@ pub async fn run<S: ShutdownSignals>(
         Ok(database) => database,
         Err(error) => return cant_start(&StartError::Database(error)),
     };
-    let app = app(config, &database);
+    let app = app(config, &database, keys);
     info!(%address, "the server is listening");
     serve(
         listener,

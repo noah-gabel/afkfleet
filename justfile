@@ -112,15 +112,18 @@ stack-up:
 mc-down:
     docker compose --file deploy/compose.dev.yaml down --volumes
 
-# The database path must be absolute, which a committed config can't hold for every
-# machine, so the recipe passes it: target/dev-server/afkfleet.db by default, or the
-# absolute path given. The server refuses a missing folder, so Node creates it first.
+# The database path and the vault key's path must be absolute, which a committed config
+# can't hold for every machine, so the recipe passes them: target/dev-server/afkfleet.db
+# and target/dev-server/vault-key-1 by default, or the absolute paths given. The server
+# refuses a missing folder, so Node creates it first, and the vault key when it's missing
+# (never overwritten, never printed; ADR-0016). Never read the key file.
 # No exit message: on Windows, Ctrl+C reaches just and PowerShell too, so just would
 # call a clean stop a failure. The server logs its own errors and exit code.
-# Run the server with deploy/dev/server.toml (dev mode) and a database in target/dev-server/.
+# Run the server with deploy/dev/server.toml (dev mode), a database and a vault key in target/dev-server/.
 [no-exit-message]
-dev-server $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dev-server" / "afkfleet.db"):
+dev-server $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dev-server" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dev-server" / "vault-key-1"):
     node -e "require('node:fs').mkdirSync(require('node:path').dirname(process.argv[1]), { recursive: true })" "{{ AFKFLEET_SERVER__DATABASE__PATH }}"
+    node scripts/dev-vault-key.mjs "{{ AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1 }}"
     cargo run -p fleet-server --bin afkfleet-server -- serve --config deploy/dev/server.toml
 
 # No exit message: on Windows, Ctrl+C reaches just and PowerShell too, so just

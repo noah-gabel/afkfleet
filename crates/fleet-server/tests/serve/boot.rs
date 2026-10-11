@@ -9,7 +9,7 @@ use fleet_server::cli::serve::{self, Exit};
 use fleet_server::infra::sqlite::{self, DatabaseOptions, MIGRATOR};
 use fleet_startup::signals::Signal;
 
-use crate::support::{ChannelSignals, capture, listener, server_config, test_dir};
+use crate::support::{ChannelSignals, capture, listener, server_config, test_dir, vault_keys};
 
 #[tokio::test]
 async fn a_missing_database_folder_fails_the_start_before_listening() {
@@ -19,7 +19,8 @@ async fn a_missing_database_folder_fails_the_start_before_listening() {
     config.database.path = dir.join("no-such-folder").join("afkfleet.db");
     let (logs, _guard) = capture();
 
-    let exit = serve::run(&config, listener, ChannelSignals::silent()).await;
+    let keys = vault_keys(&config);
+    let exit = serve::run(&config, listener, ChannelSignals::silent(), keys).await;
 
     assert_eq!(exit, Exit::StartupFailed);
     assert_eq!(exit.code(), 1);
@@ -53,9 +54,10 @@ async fn the_app_boots_on_a_fresh_database_passes_the_health_checks_and_stops_cl
     let (listener, address) = listener().await;
     let config = server_config(&dir, address, false);
     let (sender, signals) = ChannelSignals::new();
+    let keys = vault_keys(&config);
     let server = tokio::spawn({
         let config = config.clone();
-        async move { serve::run(&config, listener, signals).await }
+        async move { serve::run(&config, listener, signals, keys).await }
     });
 
     for path in ["/health/live", "/health/ready"] {

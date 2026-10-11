@@ -2438,7 +2438,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - SHA-256 hashing and constant-time comparison (`subtle`)
   - TTLs
   - refresh rotation, and **family revocation when an old token is reused**
-- [ ] **P7.4** 🔴 Vault cipher: the envelope from §7.5 with `key_id` and AAD. TOTP secrets need it now; Phase 9 extends it. Tests cover tampering, the wrong key and the wrong AAD.
+- [x] **P7.4** 🔴 Vault cipher: the envelope from §7.5 with `key_id` and AAD. TOTP secrets need it now; Phase 9 extends it. Tests cover tampering, the wrong key and the wrong AAD.
 
   > Note (P7.4, from Phase 6, group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
   > - **The `*_file` loader comes here,** with its first user, the vault key: how a secret file is read into a `SecretBox` (a size cap, its permissions, a trailing newline) is decided and tested in this task.
@@ -2461,6 +2461,21 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - **Trailing newline:** one trailing `\n` or `\r\n` is removed.
   >   - **Errors** name the file, its mode and the fix, never the content.
   > - **The dev key:** `just dev-server` creates `target/dev-server/vault-key-1` when it's missing and passes it through `AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1`. CLAUDE.md's rule 12 lists it among the files never to read.
+
+  > Note (P7.4, as built, group A) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **Characters before length** (the user's decision during the build). base64 0.23.1's `decode_slice` checks that the whole input fits before it looks at any character, so a 45-character text with a stray space would have been "the wrong length". So the key decoding checks the characters first:
+  >   - **A byte-order mark** (UTF-8 `EF BB BF`, UTF-16 `FF FE` or `FE FF`) gets its own error, "starts with a byte-order mark; save it as plain text without BOM". Windows editors and Windows PowerShell 5.1's `>` add one.
+  >   - **Any byte outside the standard alphabet and `=`** is "not base64".
+  >   - **Then `decode_slice`** decides the padding, the trailing bits and the length; a 33-byte key is still `WrongLength`.
+  > - **No copy of a key.** The key decodes straight into its `SecretBox<[u8; 32]>`, and `XChaChaVault::new` consumes the loaded keys: each goes into its cipher (wiped on drop through chacha20poly1305's `zeroize` feature) by reference, and the loaded copy is dropped (wiped) right after. The loader allocates its buffer once at full size, so reading never leaves a copy behind.
+  > - **`VaultError::TooLarge`** joins the port's errors: XChaCha20-Poly1305 refuses plaintexts beyond about 256 GiB, and `seal` returns a `Result`, so nothing may panic there. No stored secret comes near it.
+  > - **base64 stays without `alloc`.** The tests encode with `encode_slice` into a fixed buffer, and the serve tests' key is a constant (checked with Node).
+  > - **Tests,** red against compiling stubs (a loader that returned nothing, keys that loaded nothing, a vault that sealed nothing and opened nothing, validation that accepted anything):
+  >   - fleet-startup: 15 of 16 failed on Windows; the Unix-only cases (modes, a symlink, a FIFO read on its own thread with a 5 s bound) run in Linux CI
+  >   - fleet-server: 49 failed, including the real binary refusing a bad key file
+  >   - the dev script's tests: 7 of 8 (the mode case is Unix-only)
+  >
+  >   Then all passed. The byte-flip test asserts the envelope's length first, so it can't pass on an empty one. The golden envelope was made once by a temporary test, never committed.
 - [ ] **P7.5** 🔴 CLI `user create-owner`: hidden prompt with `rpassword`; refuses when an Owner already exists.
 
   > Note (P7.5, group A, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):

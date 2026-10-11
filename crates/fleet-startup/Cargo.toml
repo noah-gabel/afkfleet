@@ -1,6 +1,6 @@
 [package]
 name = "fleet-startup"
-description = "Process start-up and lifecycle code shared by afkfleet's binaries: the config loader with key-path errors, the [log] section, logging with the azalea_auth cap and a panic hook, and the stop signals."
+description = "Process start-up and lifecycle code shared by afkfleet's binaries: the config loader with key-path errors, the [log] section, logging with the azalea_auth cap and a panic hook, the stop signals, and the secret-file loader."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -14,6 +14,9 @@ workspace = true
 figment = { workspace = true, features = ["env", "toml"] }
 # `text::sanitize_untrusted` for panic payloads.
 fleet-core.workspace = true
+# The secret-file loader hands its bytes over in a SecretBox: redacted Debug, zeroized
+# (ADR-0016).
+secrecy.workspace = true
 # `DeserializeOwned`, the loader's bound.
 serde.workspace = true
 thiserror.workspace = true
@@ -21,10 +24,14 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "signal"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
+# The secret-file loader's buffer is wiped on every path (ADR-0016).
+zeroize.workspace = true
 
 [dev-dependencies]
 # The log buffer for the format tests.
 fleet-testkit.workspace = true
 rstest.workspace = true
+# The secret-file loader's tests write real files in a fresh folder (ADR-0016).
+tempfile.workspace = true
 # The signal tests: channels, paused time and the OS-signal test's runtime.
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time", "test-util"] }

@@ -5,9 +5,10 @@
 //! logged yet: they go to stderr as plain text, and the process exits with
 //! 1. Then, by command:
 //!
-//! - `serve` starts logging, warns once if dev mode is on, builds a
-//!   multi-threaded runtime, installs the stop signals, binds `[http] bind`
-//!   and runs [`serve::run`] until a signal stops it. Every startup error
+//! - `serve` starts logging, warns once if dev mode is on, loads the vault's
+//!   keys (ADR-0016), builds a multi-threaded runtime, installs the stop
+//!   signals, binds `[http] bind` and runs [`serve::run`] until a signal
+//!   stops it. Every startup error
 //!   from here on is one `error` event, "the server can't start", and the
 //!   last line, "the server stopped", carries the exit code.
 //! - `migrate` starts logging and runs [`migrate::run`] on a current-thread
@@ -27,6 +28,7 @@ use clap::Parser as _;
 use fleet_server::cli::serve::StartError;
 use fleet_server::cli::{self, Cli, Command, healthcheck, migrate, serve};
 use fleet_server::config::{self, ServerConfig};
+use fleet_server::infra::crypto::vault::VaultKeys;
 use fleet_startup::signals::OsSignals;
 use fleet_startup::telemetry::{NoRules, init_with};
 use tokio::net::TcpListener;
@@ -58,14 +60,18 @@ fn run_server(path: &Path) -> ExitCode {
         return fail_early(&error);
     }
     config.warn_if_dev_mode();
-    let exit = start(&config);
+    // Plain file reads, before any runtime exists: a bad key stops startup.
+    let exit = match VaultKeys::load(&config.vault) {
+        Ok(keys) => start(&config, keys),
+        Err(error) => serve::cant_start(&StartError::VaultKeys(error)),
+    };
     exit.log();
     ExitCode::from(exit.code())
 }
 
 /// Builds the runtime, installs the stop signals, binds the address and
-/// runs the server.
-fn start(config: &ServerConfig) -> serve::Exit {
+/// runs the server with the vault's `keys`.
+fn start(config: &ServerConfig, keys: VaultKeys) -> serve::Exit {
     let runtime = match Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => return serve::cant_start(&StartError::Runtime(error)),
@@ -87,7 +93,7 @@ fn start(config: &ServerConfig) -> serve::Exit {
                 });
             }
         };
-        serve::run(config, listener, signals).await
+        serve::run(config, listener, signals, keys).await
     });
     runtime.shutdown_timeout(serve::RUNTIME_SHUTDOWN);
     exit
