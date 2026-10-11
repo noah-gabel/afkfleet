@@ -82,7 +82,7 @@ Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so 
 | `just migrations-check` | Fails if a migration that exists on `origin/main` was modified, deleted or renamed. Needs an up-to-date `origin/main`; CI fetches it |
 | `just mc-up` / `just mc-down` | Local offline-mode Minecraft server (`itzg/minecraft-server`); `mc-down` stops the agent too and deletes the world |
 | `just stack-up` | Builds the agent's image and starts the local server plus the agent (`deploy/dev/agent.compose.toml`) in Docker, waiting until both are healthy |
-| `just dev-server` / `just dev-agent` | Run server / agent with the configs in `deploy/dev/` |
+| `just dev-server` / `just dev-agent` | Run the server with `deploy/dev/server.toml` (dev mode; its database in `target/dev-server/`, or the absolute path given) / the agent with `deploy/dev/agent.toml` |
 | `just demo-agent [minutes]` | Phase 5's demo: the compose stack (project `afkfleet-demo`) for 60 minutes, or `minutes`, with one server restart at half time; prints a summary and a verdict, saves its logs under `target/demo-agent/` (needs Docker) |
 | `just dev-app` | `pnpm tauri dev` |
 | `just ui-test` / `just e2e` | Vitest / Playwright |
@@ -90,7 +90,7 @@ Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so 
 | `just testkit-check` | Fails if any workspace member depends on fleet-testkit outside its dev-dependencies (`cargo tree`, through `scripts/testkit-check.mjs`; ADR-0015) |
 | `just fmt-check` · `clippy` · `docs` · `doctest` · `test-ci` · `stable-check` · `db-check` · `migrations-check` · `gen-check` · `testkit-check` · `scripts-test` · `ui-check` · `ui-audit` | The building blocks of `check` and `ci`. Each CI job runs one of them, so local and CI runs can't drift apart |
 
-Recipes for tools that arrive in later phases (`dev-server`, `dev-app`, `ui-test`, `e2e`) print the phase they arrive in and exit with an error until then.
+Recipes for tools that arrive in later phases (`dev-app`, `ui-test`, `e2e`) print the phase they arrive in and exit with an error until then.
 
 ## Architecture rules
 **Crates and dependencies** (full table in Plan.md §4):
@@ -99,7 +99,7 @@ Recipes for tools that arrive in later phases (`dev-server`, `dev-app`, `ui-test
   - `fleet-mc` may use only `azalea::auth::sessionserver` and `azalea::auth::certs`, through azalea's re-export, to join with a server-issued Minecraft token.
   - The Microsoft flows (device code, Microsoft tokens, the account cache) belong to `fleet-server` alone. `fleet-mc`'s `clippy.toml` bans them (ADR-0011).
 - azalea code runs only on the MC host threads in `fleet-mc` (current-thread runtime + `LocalSet`). Never call azalea from a normal tokio task.
-- `fleet-startup` holds only the binaries' process start-up code: the config loader and its errors, the `[log]` types, the log layer and the panic hook. Internally it depends only on `fleet-core`. Its filter always caps `azalea_auth` at `info` and lets panic reports through; a binary only adds rules through `FilterRules` (ADR-0015).
+- `fleet-startup` holds only the binaries' process start-up and lifecycle code: the config loader and its errors, the `[log]` types, the log layer, the panic hook and the stop signals (`OsSignals`). Internally it depends only on `fleet-core`. Its filter always caps `azalea_auth` at `info` and lets panic reports through; a binary only adds rules through `FilterRules` (ADR-0015).
 
 **Bot lifecycle:**
 - Every lifecycle change goes through `fleet_core::bot::transition()`. Actors execute the effects it returns and never decide state themselves.
@@ -115,7 +115,7 @@ Recipes for tools that arrive in later phases (`dev-server`, `dev-app`, `ui-test
 - Writes go through `Store::write()`, a `WriteTx` on the one write connection. Its `commit(entry)` takes the audit entry, so nothing commits unaudited. Keep it short: no password hashing, crypto or network calls while it's open (ADR-0015).
 
 **Shared types:**
-- Every API DTO lives in `fleet-api-types` (serde + garde + ts-rs).
+- Every API DTO lives in `fleet-api-types` (serde + garde + ts-rs + utoipa). A test keeps its `OpenAPI` schemas equal to the TypeScript export.
 - Never hand-write a TypeScript type that mirrors a Rust DTO.
 
 **Config:**
@@ -130,7 +130,7 @@ fleet-server/src/
   app/        # services: auth, users, accounts, bots, modes, agents, audit, events
   ports/      # repository and provider traits
   infra/      # sqlite/ (sqlx repos), crypto/ (vault, tokens, passwords), msauth/ (azalea-auth adapter)
-  http/       # router.rs, middleware/, extractors/, handlers/<resource>.rs, error.rs, ws.rs
+  http/       # router.rs, middleware/, extractors/, handlers/<resource>.rs, error.rs, openapi.rs, ws.rs
   grpc/       # enrollment.rs, control.rs, registry.rs, scheduler.rs, reconciler.rs
 ```
 
