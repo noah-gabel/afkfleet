@@ -2,7 +2,7 @@
 //! process, so it's one test in its own binary: under plain `cargo test`, a
 //! second test in the same process would receive this one's signals too.
 //! Unix only; Windows' Ctrl+C and Ctrl+Break can't be sent without unsafe
-//! code, so `just dev-agent` exercises them.
+//! code, so `just dev-agent` and `just dev-server` exercise them.
 // Integration tests are test code, but clippy only applies the test allowances
 // of clippy.toml (unwrap, panic, …) inside `#[cfg(test)]`.
 #![cfg(test)]
@@ -11,7 +11,7 @@
 use std::process::Command;
 use std::time::Duration;
 
-use fleet_agent::signals::{OsSignals, ShutdownSignals, Signal};
+use fleet_startup::signals::{OsSignals, ShutdownSignals, Signal};
 
 #[tokio::test]
 async fn os_signals_receive_sigterm_then_sigint_sent_to_this_process() {
