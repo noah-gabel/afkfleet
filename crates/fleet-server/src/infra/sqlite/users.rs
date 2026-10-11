@@ -95,6 +95,16 @@ pub(super) async fn find_by_username(
     .transpose()
 }
 
+/// Whether a user has the Owner role.
+pub(super) async fn owner_exists(pool: &SqlitePool) -> Result<bool, StoreError> {
+    sqlx::query_scalar!(
+        r#"SELECT EXISTS (SELECT 1 FROM users WHERE role = 'owner') AS "exists!: bool""#
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(store_error)
+}
+
 /// Checks every value of a stored row; one that doesn't read back is
 /// [`StoreError::Corrupt`], naming the column and the rowid but never the
 /// value.

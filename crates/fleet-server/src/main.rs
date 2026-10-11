@@ -16,17 +16,21 @@
 //! - `healthcheck` runs [`healthcheck::check`] on a current-thread runtime
 //!   without logging, prints one line on stdout and exits only 0 or 1, since
 //!   Docker reserves 2 for healthchecks.
+//! - `user create-owner` starts logging and runs [`user::create_owner`] on a
+//!   current-thread runtime, with the terminal or stdin as the password's
+//!   source.
 //!
 //! The library holds the logic; this file only wires it together.
 
 use core::fmt::Display;
-use std::io::{self, Write as _};
+use std::io::{self, IsTerminal as _, Write as _};
 use std::path::Path;
 use std::process::ExitCode;
 
 use clap::Parser as _;
 use fleet_server::cli::serve::StartError;
-use fleet_server::cli::{self, Cli, Command, healthcheck, migrate, serve};
+use fleet_server::cli::user::{self, PasswordInput, TerminalPrompt};
+use fleet_server::cli::{self, Cli, Command, UserCommand, healthcheck, migrate, serve};
 use fleet_server::config::{self, ServerConfig};
 use fleet_server::infra::crypto::vault::VaultKeys;
 use fleet_startup::signals::OsSignals;
@@ -47,6 +51,14 @@ fn main() -> ExitCode {
         Command::Serve { config } => run_server(&config),
         Command::Migrate { config } => migrate_database(&config),
         Command::Healthcheck { config } => check_health(&config),
+        Command::User {
+            command:
+                UserCommand::CreateOwner {
+                    config,
+                    username,
+                    password_stdin,
+                },
+        } => create_owner(&config, &username, password_stdin),
     }
 }
 
@@ -129,6 +141,41 @@ fn check_health(path: &Path) -> ExitCode {
     // A failed write leaves the exit code to tell the result.
     let _ = writeln!(io::stdout().lock(), "{health}");
     ExitCode::from(health.exit_code())
+}
+
+/// `afkfleet-server user create-owner`: the password from the terminal, or
+/// from stdin with `--password-stdin`.
+fn create_owner(path: &Path, username: &str, password_stdin: bool) -> ExitCode {
+    let config = match config::load(path) {
+        Ok(config) => config,
+        Err(error) => return fail_early(&error),
+    };
+    if let Err(error) = init_with(&config.log, &NoRules) {
+        return fail_early(&error);
+    }
+    let runtime = match current_thread() {
+        Ok(runtime) => runtime,
+        Err(error) => return fail_early(&StartError::Runtime(error)),
+    };
+    let mut stdin = io::stdin();
+    let is_terminal = stdin.is_terminal();
+    let mut prompt = TerminalPrompt;
+    let input = if password_stdin {
+        PasswordInput::Stdin {
+            reader: &mut stdin,
+            is_terminal,
+        }
+    } else {
+        PasswordInput::Prompt(&mut prompt)
+    };
+    let exit = runtime.block_on(user::create_owner(
+        &config,
+        username,
+        input,
+        &mut io::stdout(),
+        &mut io::stderr(),
+    ));
+    ExitCode::from(exit.code())
 }
 
 /// A runtime for one task: `migrate` and `healthcheck` do one thing.

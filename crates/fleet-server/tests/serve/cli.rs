@@ -9,14 +9,22 @@
 
 use std::path::Path;
 
+use fleet_core::audit::AuditAction;
+use fleet_core::authz::Role;
+use fleet_core::value::Username;
 use fleet_server::cli::serve;
+use fleet_server::cli::user::CREATE_OWNER_EXIT_CODES;
 use fleet_server::cli::{HEALTHCHECK_EXIT_CODES, MIGRATE_EXIT_CODES, SERVE_EXIT_CODES};
+use fleet_server::config::DatabaseConfig;
+use fleet_server::infra::sqlite::{self, DatabaseOptions};
+use fleet_server::ports::audit::{AuditLimit, AuditPage};
+use fleet_server::ports::store::Store as _;
 use rstest::rstest;
 
 use crate::support::{
-    AbortOnDrop, ChannelSignals, closed_port, config_body, finish, finish_beside, json_lines,
-    lines_with, listener, path_arg, server_config, test_dir, toml_path, vault_keys, vault_section,
-    write_config,
+    AbortOnDrop, ChannelSignals, closed_port, config_body, finish, finish_beside,
+    finish_with_stdin, json_lines, lines_with, listener, path_arg, server_config, test_dir,
+    toml_path, vault_keys, vault_section, write_config,
 };
 
 #[rstest]
@@ -195,6 +203,97 @@ fn serve_with_a_bad_vault_key_file_logs_the_file_and_exits_1() {
         finished.stdout
     );
     assert!(!dir.join("afkfleet.db").exists(), "nothing was opened");
+}
+
+/// `user create-owner --password-stdin`, as P12.7's smoke test runs it.
+fn create_owner(config: &Path, stdin: Option<&[u8]>) -> crate::support::Finished {
+    finish_with_stdin(
+        &[
+            "user",
+            "create-owner",
+            "--config",
+            path_arg(config),
+            "--username",
+            "alice",
+            "--password-stdin",
+        ],
+        stdin,
+    )
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn create_owner_with_password_stdin_creates_the_owner_and_audits_it() {
+    let dir = test_dir("create_owner");
+    let config = write_config(&dir, &config_body(&dir, closed_port()));
+
+    let finished = tokio::task::spawn_blocking({
+        let config = config.clone();
+        move || create_owner(&config, Some(b"correct horse battery staple\n"))
+    })
+    .await
+    .unwrap();
+
+    assert_eq!(finished.status.code(), Some(0), "{}", finished.stderr);
+    assert_eq!(finished.stderr, "");
+    assert!(
+        finished.stdout.contains("the Owner \"alice\" is created\n"),
+        "{}",
+        finished.stdout
+    );
+    let lines = json_lines(&finished.stdout);
+    let created = lines_with(&lines, "the Owner is created");
+    assert_eq!(created.len(), 1, "{}", finished.stdout);
+    let database = sqlite::open(
+        &DatabaseConfig {
+            path: dir.join("afkfleet.db"),
+        },
+        DatabaseOptions::default(),
+    )
+    .await
+    .unwrap();
+    let owner = database
+        .users()
+        .find_by_username(&Username::try_from("alice").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(owner.role, Role::Owner);
+    let entries = database
+        .audit()
+        .list(AuditPage {
+            before: None,
+            limit: AuditLimit::new(10).unwrap(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].action, AuditAction::USER_CREATE);
+    database.close().await;
+}
+
+#[test]
+fn a_second_create_owner_exits_1_before_reading_stdin() {
+    let dir = test_dir("create_owner_twice");
+    let config = write_config(&dir, &config_body(&dir, closed_port()));
+    let first = create_owner(&config, Some(b"correct horse battery staple\n"));
+    assert_eq!(first.status.code(), Some(0), "{}", first.stderr);
+
+    let second = create_owner(&config, None);
+
+    assert_eq!(second.status.code(), Some(1), "{}", second.stdout);
+    assert_eq!(second.stderr, "afkfleet-server: an Owner already exists\n");
+}
+
+#[test]
+fn create_owner_s_help_lists_its_exit_codes() {
+    let finished = finish(&["user", "create-owner", "--help"]);
+
+    assert_eq!(finished.status.code(), Some(0));
+    assert!(
+        finished.stdout.contains(CREATE_OWNER_EXIT_CODES),
+        "{}",
+        finished.stdout
+    );
 }
 
 #[test]

@@ -13,7 +13,18 @@ use super::name::{self, Dots};
 /// Code that records an entry uses only the constants each phase lists in
 /// one `audit_actions!` block, and [`AuditAction::ALL`] holds them all, so
 /// one test checks that every action is valid and that no two share a name.
-/// Group B lists none yet; P7.13, P9 and P11 add theirs.
+///
+/// # Naming (ADR-0016)
+/// - **Actions someone performs** are `area.verb` in the imperative:
+///   `user.create`, `auth.login`, `user.set_role`, `invite.create`,
+///   `invite.use`.
+/// - **Things the server detects** are `security.<what>` as a noun:
+///   `security.refresh_token_reuse`.
+/// - **Success or failure is the outcome column,** never part of the name.
+/// - **Details** such as `via` and `role` go into the metadata, with values
+///   from closed enums, never free text.
+/// - **A merged name is never renamed or dropped:** it's stored in rows
+///   forever. A snapshot of every name makes any change show in review.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AuditAction(Cow<'static, str>);
 
@@ -44,7 +55,12 @@ macro_rules! audit_actions {
     };
 }
 
-audit_actions! {}
+audit_actions! {
+    /// A user came to exist: the Owner through `user create-owner`
+    /// (`via` = `cli`), later a registration through an invite (`via` =
+    /// `invite`). Target: the new user. Metadata: `role` and `via`.
+    USER_CREATE = "user.create";
+}
 
 /// For reading rows back. Code that records an entry uses the listed
 /// constants instead.
@@ -85,6 +101,15 @@ mod tests {
             }
         }
         problems
+    }
+
+    /// Names are stored in rows forever, so the snapshot makes any rename or
+    /// removal show in review (ADR-0016).
+    #[test]
+    fn every_name_is_kept() {
+        let names: Vec<&str> = AuditAction::ALL.iter().map(AuditAction::as_str).collect();
+
+        insta::assert_json_snapshot!(names);
     }
 
     #[test]

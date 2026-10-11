@@ -97,6 +97,8 @@ metrics = "0.24.6"
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
 # rand: no `sys_rng`/`thread_rng`; fleet-core takes an RNG as a parameter (ADR-0010).
 rand = { version = "0.10.3", default-features = false }
+# rpassword: `user create-owner`'s hidden password prompt at the terminal (ADR-0016).
+rpassword = "7.5.4"
 # reqwest: TLS is fixed here, `rustls` (aws-lc-rs + platform verifier), never native-tls.
 # fleet-mc enables nothing else: it only names `reqwest::Proxy` in azalea's `AccountTrait`,
 # and azalea-auth already builds reqwest with `rustls` (ADR-0011).

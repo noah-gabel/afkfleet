@@ -126,6 +126,16 @@ dev-server $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "
     node scripts/dev-vault-key.mjs "{{ AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1 }}"
     cargo run -p fleet-server --bin afkfleet-server -- serve --config deploy/dev/server.toml
 
+# The dev database's Owner, through `user create-owner` with the password typed twice
+# at the terminal. It passes the same paths as dev-server: the dev config's validation
+# needs the vault key's path too, though create-owner never reads the key (ADR-0016).
+# No exit message: the command prints its own error line and exit code.
+# Create the Owner `username` in dev-server's database.
+[no-exit-message]
+dev-owner username $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dev-server" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dev-server" / "vault-key-1"):
+    node -e "require('node:fs').mkdirSync(require('node:path').dirname(process.argv[1]), { recursive: true })" "{{ AFKFLEET_SERVER__DATABASE__PATH }}"
+    cargo run -p fleet-server --bin afkfleet-server -- user create-owner --config deploy/dev/server.toml --username "{{ username }}"
+
 # No exit message: on Windows, Ctrl+C reaches just and PowerShell too, so just
 # would call a clean stop a failure. The agent logs its own errors and exit code.
 # Run the agent with deploy/dev/agent.toml: three bots against `just mc-up`'s server.

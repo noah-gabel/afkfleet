@@ -36,6 +36,10 @@ impl UserReads for Reads {
     async fn find_by_username(&self, username: &Username) -> Result<Option<User>, StoreError> {
         users::find_by_username(&self.pool, username).await
     }
+
+    async fn owner_exists(&self) -> Result<bool, StoreError> {
+        users::owner_exists(&self.pool).await
+    }
 }
 
 #[async_trait]

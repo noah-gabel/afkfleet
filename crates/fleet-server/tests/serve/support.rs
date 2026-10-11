@@ -5,7 +5,7 @@
 use core::time::Duration;
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Read;
+use std::io::{Read, Write as _};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
@@ -207,6 +207,32 @@ pub(crate) fn finish(args: &[&str]) -> Finished {
         .expect("the binary should exit before the deadline");
     let stderr = stderr.recv_timeout(DEADLINE).unwrap();
     let status = running.0.take().unwrap().wait().unwrap();
+    Finished {
+        status,
+        stdout,
+        stderr,
+    }
+}
+
+/// Runs the binary with `args` until it exits, within the deadline, with
+/// `stdin` piped in and closed, or, with `None`, a stdin that stays open and
+/// unwritten until the binary has exited: a binary that read it would hang
+/// until the deadline and fail the test.
+pub(crate) fn finish_with_stdin(args: &[&str], stdin: Option<&[u8]>) -> Finished {
+    let mut child = server(args).stdin(Stdio::piped()).spawn().unwrap();
+    let mut pipe = child.stdin.take();
+    if let Some(bytes) = stdin {
+        pipe.take().unwrap().write_all(bytes).unwrap();
+    }
+    let stdout = drain(child.stdout.take().unwrap());
+    let stderr = drain(child.stderr.take().unwrap());
+    let mut running = Running(Some(child));
+    let stdout = stdout
+        .recv_timeout(DEADLINE)
+        .expect("the binary should exit before the deadline");
+    let stderr = stderr.recv_timeout(DEADLINE).unwrap();
+    let status = running.0.take().unwrap().wait().unwrap();
+    drop(pipe);
     Finished {
         status,
         stdout,

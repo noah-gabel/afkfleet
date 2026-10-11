@@ -43,6 +43,8 @@ getrandom.workspace = true
 # Only `log::LevelFilter`, for sqlx's statement-logging levels; clippy.toml bans its
 # logging macros (ADR-0015).
 log.workspace = true
+# `user create-owner`'s hidden password prompt (ADR-0016).
+rpassword.workspace = true
 # PasswordHash holds the hash as a SecretString: redacted Debug, zeroized (ADR-0015).
 secrecy.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -70,6 +72,8 @@ utoipa = { workspace = true, features = ["macros"] }
 utoipa-axum.workspace = true
 # IDs are bound and read as `uuid::fmt::Hyphenated` text (ADR-0015).
 uuid.workspace = true
+# `Zeroizing` buffers for passwords read from stdin, and wiping a typed one (ADR-0016).
+zeroize.workspace = true
 # The strength check of new passwords, run with the hashing (ADR-0016).
 zxcvbn.workspace = true
 

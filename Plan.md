@@ -2476,7 +2476,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - the dev script's tests: 7 of 8 (the mode case is Unix-only)
   >
   >   Then all passed. The byte-flip test asserts the envelope's length first, so it can't pass on an empty one. The golden envelope was made once by a temporary test, never committed.
-- [ ] **P7.5** 🔴 CLI `user create-owner`: hidden prompt with `rpassword`; refuses when an Owner already exists.
+- [x] **P7.5** 🔴 CLI `user create-owner`: hidden prompt with `rpassword`; refuses when an Owner already exists.
 
   > Note (P7.5, group A, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
   > - **The command:** `user create-owner --config <PATH> --username <NAME> [--password-stdin]`.
@@ -2492,6 +2492,19 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - Things the server detects are `security.<noun>`.
   >   - The outcome never goes into the name.
   >   - An insta snapshot of every name keeps merged names from being renamed.
+
+  > Note (P7.5, as built, group A) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **The pieces:**
+  >   - `UserReads::owner_exists`, an `EXISTS` query
+  >   - `app::users::UserService::create_owner`: the hash first, outside the transaction, then the insert and its `user.create` entry in one commit
+  >   - `CreatedVia::Cli` for `via`
+  >   - `cli::user` with a `PasswordPrompt` trait (rpassword's terminal, a stand-in in tests) and a `PasswordInput` of the prompt or stdin
+  > - **No unwiped copies of a password:** a typed password is copied into a `SecretString` of exactly its length (so boxing it never reallocates) and the original is zeroized; stdin is read into a `Zeroizing` buffer allocated once at full size.
+  > - **The output:** "the Owner "alice" is created" on stdout. Every refusal is one `afkfleet-server: …` line on stderr. A round's refusal (a mismatch, the length rule, a weak password with its hints) is a plain line before the next prompt.
+  > - **The log:** `info` "the Owner is created" with the user's ID; a failure of the database or the password service is one `error` with its chain.
+  > - **Tests,** red against compiling stubs (no Owner check, a service that refused everything, a command that did nothing): 26 failed on assertions, then all passed.
+  >   - In-crate: the rounds through a stand-in prompt, `--password-stdin` through a stand-in stdin, and prompts and stdin that fail the test when they're used.
+  >   - The real binary: `--password-stdin` creates the Owner with one audit entry, and a second run exits 1 with its stdin still open and unwritten.
 - [ ] **P7.6** 🔴 Endpoints:
   - `POST /auth/login`, `/auth/login/mfa`, `/auth/refresh`, `/auth/logout`, `/auth/register` (invite)
   - `GET /me`, `POST /me/password` (step-up)
