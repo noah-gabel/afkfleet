@@ -20,7 +20,7 @@ use fleet_core::id::UserId;
 use fleet_core::value::Username;
 use fleet_server::config::DatabaseConfig;
 use fleet_server::infra::sqlite::{
-    Database, DatabaseOptions, MIGRATOR, OpenError, READ_CONNECTIONS, open,
+    CloseTimedOut, Database, DatabaseOptions, MIGRATOR, OpenError, READ_CONNECTIONS, open,
 };
 use fleet_server::ports::audit::{AuditLimit, AuditPage, NewAuditEntry};
 use fleet_server::ports::store::Store;
@@ -407,6 +407,42 @@ async fn a_held_write_connection_times_the_next_writer_out() {
     assert!(
         matches!(result, Err(sqlx::Error::PoolTimedOut)),
         "{result:?}"
+    );
+    drop(held);
+    db.close().await;
+}
+
+#[tokio::test]
+async fn closing_within_a_limit_closes_an_idle_database() {
+    let dir = TempDir::new().unwrap();
+    let db = open_in(&dir).await;
+    create_probe_table(db.write_pool()).await.unwrap();
+
+    let closed = db.close_within(Duration::from_secs(5)).await;
+
+    assert_eq!(closed, Ok(()));
+    assert!(db.read_pool().is_closed());
+    assert!(db.write_pool().is_closed());
+    assert!(!sibling(&config_in(&dir).path, "-wal").exists());
+}
+
+#[tokio::test]
+async fn closing_within_a_limit_gives_up_while_a_connection_is_checked_out() {
+    let dir = TempDir::new().unwrap();
+    let db = open_in(&dir).await;
+    let held = db.read_pool().acquire().await.unwrap();
+    let limit = Duration::from_millis(300);
+
+    let closed = db.close_within(limit).await;
+
+    assert_eq!(closed, Err(CloseTimedOut { limit }));
+    assert_eq!(
+        closed.unwrap_err().to_string(),
+        "the database didn't close within 300 ms"
+    );
+    assert!(
+        db.read_pool().is_closed(),
+        "no new connection is handed out"
     );
     drop(held);
     db.close().await;

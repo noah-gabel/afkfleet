@@ -1,0 +1,237 @@
+//! What the tests share: test directories and configs, the binary run as a
+//! child process, the server run in-process with a signal source the test
+//! feeds, and the server's log layer writing into a buffer.
+
+use core::time::Duration;
+use std::fs;
+use std::io::Read;
+use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::mpsc;
+use std::thread;
+
+use fleet_server::config::{DatabaseConfig, HttpConfig, LogConfig, LogFormat, ServerConfig};
+use fleet_startup::signals::{ShutdownSignals, Signal};
+use fleet_startup::telemetry::{NoRules, layer_with};
+use fleet_testkit::log_buffer::LogBuffer;
+use serde_json::Value;
+use tokio::net::TcpListener;
+use tracing_subscriber::layer::SubscriberExt as _;
+
+pub(crate) const BINARY: &str = env!("CARGO_BIN_EXE_afkfleet-server");
+
+/// How long any one run of the binary may take.
+pub(crate) const DEADLINE: Duration = Duration::from_secs(30);
+
+/// An empty directory of its own for the test `name`, under Cargo's temp
+/// directory for tests.
+pub(crate) fn test_dir(name: &str) -> PathBuf {
+    let dir = Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join("serve")
+        .join(name);
+    let _ = fs::remove_dir_all(&dir);
+    fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+/// A TOML literal string for `path`, so Windows backslashes stay.
+pub(crate) fn toml_path(path: &Path) -> String {
+    format!("'{}'", path.display())
+}
+
+/// Writes `body` as `server.toml` in `dir` and returns its path.
+pub(crate) fn write_config(dir: &Path, body: &str) -> PathBuf {
+    let path = dir.join("server.toml");
+    fs::write(&path, body).unwrap();
+    path
+}
+
+/// A config for a server bound to `bind` with its database in `dir`, JSON
+/// logs at `info`.
+pub(crate) fn config_body(dir: &Path, bind: SocketAddr) -> String {
+    format!(
+        "[http]\nbind = \"{bind}\"\n[database]\npath = {}\n[log]\nformat = \"json\"\n",
+        toml_path(&dir.join("afkfleet.db"))
+    )
+}
+
+/// The in-process equivalent of [`config_body`]: `bind` is only what the
+/// healthcheck would ask, since tests hand `run` a bound listener.
+pub(crate) fn server_config(dir: &Path, bind: SocketAddr, dev_mode: bool) -> ServerConfig {
+    ServerConfig {
+        dev_mode,
+        http: HttpConfig {
+            bind,
+            request_timeout: Duration::from_secs(15),
+            max_body_bytes: 65_536,
+        },
+        database: DatabaseConfig {
+            path: dir.join("afkfleet.db"),
+        },
+        log: LogConfig {
+            format: LogFormat::Json,
+            filter: "info".parse().unwrap(),
+        },
+    }
+}
+
+pub(crate) fn path_arg(path: &Path) -> &str {
+    path.to_str().unwrap()
+}
+
+/// A listener on a free loopback port, and its address.
+pub(crate) async fn listener() -> (TcpListener, SocketAddr) {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    (listener, address)
+}
+
+/// A loopback address nothing listens on: a free port, released again.
+pub(crate) fn closed_port() -> SocketAddr {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.local_addr().unwrap()
+}
+
+/// Every line of `text` that's a JSON object, parsed.
+pub(crate) fn json_lines(text: &str) -> Vec<Value> {
+    text.lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter(Value::is_object)
+        .collect()
+}
+
+/// The JSON log lines of `text` whose message is `message`.
+pub(crate) fn lines_with<'a>(lines: &'a [Value], message: &str) -> Vec<&'a Value> {
+    lines
+        .iter()
+        .filter(|line| line["message"] == message)
+        .collect()
+}
+
+/// Kills the binary unless the test took it out first.
+pub(crate) struct Running(pub(crate) Option<Child>);
+
+impl Drop for Running {
+    fn drop(&mut self) {
+        if let Some(child) = &mut self.0 {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// The binary with `args`, its pipes captured, and none of the test's own
+/// `AFKFLEET_SERVER__…` variables.
+pub(crate) fn server(args: &[&str]) -> Command {
+    let mut command = Command::new(BINARY);
+    command
+        .args(args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    for (key, _) in std::env::vars_os() {
+        if key.to_string_lossy().starts_with("AFKFLEET_SERVER__") {
+            command.env_remove(key);
+        }
+    }
+    command
+}
+
+/// Reads `pipe` to its end on a thread; the text arrives once it closes.
+pub(crate) fn drain(mut pipe: impl Read + Send + 'static) -> mpsc::Receiver<String> {
+    let (sender, receiver) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let mut text = String::new();
+        let _ = pipe.read_to_string(&mut text);
+        let _ = sender.send(text);
+    });
+    receiver
+}
+
+/// How a finished run of the binary ended.
+pub(crate) struct Finished {
+    pub(crate) status: ExitStatus,
+    pub(crate) stdout: String,
+    pub(crate) stderr: String,
+}
+
+/// Runs the binary with `args` until it exits, within the deadline.
+pub(crate) fn finish(args: &[&str]) -> Finished {
+    let mut child = server(args).spawn().unwrap();
+    let stdout = drain(child.stdout.take().unwrap());
+    let stderr = drain(child.stderr.take().unwrap());
+    let mut running = Running(Some(child));
+    let stdout = stdout
+        .recv_timeout(DEADLINE)
+        .expect("the binary should exit before the deadline");
+    let stderr = stderr.recv_timeout(DEADLINE).unwrap();
+    let status = running.0.take().unwrap().wait().unwrap();
+    Finished {
+        status,
+        stdout,
+        stderr,
+    }
+}
+
+/// [`finish`] on a blocking thread, for a test whose runtime also runs an
+/// in-process server.
+pub(crate) async fn finish_beside(args: Vec<String>) -> Finished {
+    tokio::task::spawn_blocking(move || {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        finish(&args)
+    })
+    .await
+    .unwrap()
+}
+
+/// Delivers the signals the test sends; waits forever once the sender is
+/// gone, like a real source whose streams ended.
+#[derive(Debug)]
+pub(crate) struct ChannelSignals(tokio::sync::mpsc::Receiver<Signal>);
+
+impl ChannelSignals {
+    /// A source and the sender that feeds it.
+    pub(crate) fn new() -> (tokio::sync::mpsc::Sender<Signal>, Self) {
+        let (sender, receiver) = tokio::sync::mpsc::channel(4);
+        (sender, Self(receiver))
+    }
+
+    /// A source that never delivers a signal.
+    pub(crate) fn silent() -> Self {
+        Self::new().1
+    }
+}
+
+impl ShutdownSignals for ChannelSignals {
+    async fn recv(&mut self) -> Signal {
+        match self.0.recv().await {
+            Some(signal) => signal,
+            None => core::future::pending().await,
+        }
+    }
+}
+
+/// The server's log layer at `info`, writing into a buffer, as the default
+/// subscriber of this thread. A test on tokio's current-thread runtime sees
+/// everything the server logs.
+pub(crate) fn capture() -> (LogBuffer, tracing::subscriber::DefaultGuard) {
+    let buffer = LogBuffer::default();
+    let config = LogConfig {
+        format: LogFormat::Json,
+        filter: "info".parse().unwrap(),
+    };
+    let subscriber =
+        tracing_subscriber::registry().with(layer_with(&config, &NoRules, false, buffer.clone()));
+    let guard = tracing::subscriber::set_default(subscriber);
+    (buffer, guard)
+}
+
+/// Aborts an in-process task when the test ends, however it ends.
+pub(crate) struct AbortOnDrop<T>(pub(crate) tokio::task::JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}

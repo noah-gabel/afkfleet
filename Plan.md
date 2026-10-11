@@ -144,7 +144,7 @@ afkfleet/
 │   ├── fleet-api-types/       # HTTP/WS DTOs shared by server, client and app (exported to TS via ts-rs)
 │   ├── fleet-server/          # server binary: HTTP API, auth, vault, persistence, gRPC control plane, CLI
 │   ├── fleet-client/          # typed HTTP + WS client (used by the Tauri backend and integration tests)
-│   ├── fleet-startup/         # the binaries' start-up code: config loader and errors, [log], log layer, panic hook
+│   ├── fleet-startup/         # the binaries' start-up code: config loader and errors, [log], log layer, panic hook, stop signals
 │   └── fleet-testkit/         # fakes, fixtures, builders (dev-dependency only)
 ├── apps/
 │   └── desktop/               # Tauri app: src-tauri/ (Rust, workspace member) + thin TS entry and TauriApiClient
@@ -178,7 +178,7 @@ Crates are created in the phase that first needs them, not up front.
 
 Binaries stay thin: `main.rs` parses the CLI and config and wires adapters together, and all logic lives in the crate's library part.
 
-> Note (§4, Phase 6, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **`fleet-startup`** holds only the binaries' process start-up code: the config loader with its key-path errors, the `[log]` types, the log layer and the panic hook. It came out of fleet-agent in Phase 6, group A, so the server reuses it instead of a second copy. Its filter always caps `azalea_auth` at `info` and lets panic reports through; a binary only adds rules (the agent's azalea rules).
+> Note (§4, Phase 6, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **`fleet-startup`** holds only the binaries' process start-up code: the config loader with its key-path errors, the `[log]` types, the log layer and the panic hook. It came out of fleet-agent in Phase 6, group A, so the server reuses it instead of a second copy. Its filter always caps `azalea_auth` at `info` and lets panic reports through; a binary only adds rules (the agent's azalea rules). **Group E moved the stop signals there too** (the user's decision): `signals::{Signal, ShutdownSignals, OsSignals}` (SIGTERM and SIGINT, or Ctrl+C and Ctrl+Break), so both binaries share one implementation, and the crate's scope is now the binaries' process start-up and lifecycle.
 
 ## 5. Crate & tool registry
 
@@ -190,8 +190,8 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Minecraft protocol & client | `azalea` | `=0.16.0` (+mc26.1) | fleet-mc | Needs nightly (ADR-0003). Disable its `AutoReconnectPlugin` and `AutoRespawnPlugin`. Runs only inside a `LocalSet` |
 | Minecraft chat components & translations | `azalea-chat`, `azalea-language` | `=0.16.0` (+mc26.1) | fleet-mc | Already in azalea's graph at the same pin. Only for fleet-mc's bounded renderer of server text: it names `PrimitiveOrComponent`, which azalea doesn't re-export, and looks up translation templates, because azalea's own rendering grows exponentially (ADR-0011). Bumped together with azalea |
 | Microsoft / Minecraft auth | `azalea-auth` | `=0.16.0` (+mc26.1) | fleet-server | Device-code flow. Never use its file cache. fleet-mc reaches only `azalea::auth::sessionserver` and `certs`, through azalea's re-export, never the Microsoft flows; its clippy config bans them (ADR-0011) |
-| Async runtime | `tokio` | 1.53.2 | runtime, mc, testkit, agent, server, client | `test-util` feature in dev. Clippy bans `unbounded_channel`; azalea's two mandated channels are the only exceptions (ADR-0011). The agent builds a multi-threaded runtime after loading its config (ADR-0014). fleet-server enables `fs`, to create the database file and check its permissions, and `time`, for the trace layer's latency from tokio's clock (ADR-0015) |
-| Cancellation, task tracking | `tokio-util` | 0.7.19 | runtime, mc, agent, server | `CancellationToken`, `TaskTracker`. fleet-runtime and the agent enable no features: they use only `CancellationToken`, and their tasks live in tokio's `JoinSet`, which reports panics (ADR-0013, ADR-0014) |
+| Async runtime | `tokio` | 1.53.2 | runtime, mc, testkit, agent, server, client | `test-util` feature in dev. Clippy bans `unbounded_channel`; azalea's two mandated channels are the only exceptions (ADR-0011). The agent builds a multi-threaded runtime after loading its config (ADR-0014). fleet-server enables `fs`, to create the database file and check its permissions, `time`, for the trace layer's latency from tokio's clock, and from P6.11 `rt`, `rt-multi-thread`, `macros`, `net` and `io-util`, for its runtimes, the listener and the healthcheck's TCP probe; fleet-startup enables `signal` and `macros` for the stop signals (ADR-0015) |
+| Cancellation, task tracking | `tokio-util` | 0.7.19 | runtime, mc, agent, server | `CancellationToken`, `TaskTracker`. fleet-runtime and the agent enable no features: they use only `CancellationToken`, and their tasks live in tokio's `JoinSet`, which reports panics (ADR-0013, ADR-0014). fleet-server neither: its token asks axum's server for the graceful shutdown (P6.12, ADR-0015) |
 | Stream adapters | `tokio-stream` | 0.1.19 | proto, agent, server | gRPC streams, broadcast → stream |
 | Sink/Stream extension traits | `futures-util` | 0.3.34 | client, server | WebSocket split/send |
 | Async fns in `dyn` traits | `async-trait` | 0.1.92 | server | Only for `Arc<dyn Port>`. Use generics + RPITIT elsewhere. First used by fleet-server's store ports (ADR-0015) |
@@ -200,7 +200,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Rate limiting (HTTP middleware) | `tower_governor` | 0.8.0 | server | Per IP |
 | TTL cache / single-flight | `moka` | 0.12.16 | server | MC token cache, WS tickets |
 | Library errors | `thiserror` | 2.0.21 | all libraries | |
-| Binary error reporting | `anyhow` | 1.0.104 | `main.rs` only | Not declared yet: the agent's `main.rs` maps its typed errors to exit codes itself. It arrives with the first `main.rs` that uses it (ADR-0014) |
+| Binary error reporting | `anyhow` | 1.0.104 | `main.rs` only | Not declared yet: the agent's and the server's `main.rs` map their typed errors to exit codes themselves (the user's decision for the server, P6.11). It arrives with the first `main.rs` that uses it (ADR-0014, ADR-0015) |
 | Serialization | `serde`, `serde_json` | 1.0.229, 1.0.151 | all | fleet-testkit's log buffer parses JSON log lines with `serde_json`; fleet-server reads the audit log's metadata JSON back with it, while fleet-core's `AuditMetadata` writes its JSON itself, byte for byte as `serde_json` would (ADR-0015) |
 | Configuration | `figment` | 0.10.19 | startup, testkit; agent and server tests | TOML file + env; upstream is quiet but the crate is stable. It has no default features: fleet-startup's loader enables `toml` and `env`, and fleet-testkit `test` for `jail::in_jail`, whose one closure carries the workspace's only approved `#[expect(clippy::result_large_err)]` (ADR-0014, ADR-0015) |
 | DTO & config validation | `garde` | 0.23.0 | api-types, agent, server | Domain value objects use hand-written constructors. It has no default features; members enable `derive` and the rules they use. The agent's config uses garde for its number ranges only and converts texts with the core constructors, so it reports every problem at once (ADR-0014) |
@@ -208,17 +208,17 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Metrics | `metrics`, `metrics-exporter-prometheus` | 0.24.6, 0.18.3 (dfo) | runtime, agent, server | Internal port only. The exporter's default `push-gateway` brings its own TLS stack: enable `http-listener` only. Until P12.4 serves the endpoint, the agent enables no features and only installs the recorder. Its metrics-util dependency always enables `storage`, which brings rand 0.9 and getrandom 0.3 into normal dependencies (both already in the graph, neither used for secrets) (ADR-0014) |
 | IDs | `uuid` | 1.27.0, dfo | core, mc, server | v7, serde. fleet-mc only names `Uuid` in azalea's `AccountTrait` (ADR-0011). fleet-server binds IDs as `uuid::fmt::Hyphenated` text, never a plain `Uuid` (ADR-0015) |
 | Time | `chrono` | 0.4.45, dfo | core, runtime, agent, server | Always UTC. No `clock` feature in core or runtime: time is passed in. The runtime derives `DateTime<Utc>` from tokio's clock, anchored at a wall time its caller passes in (ADR-0010, ADR-0013). The agent enables `now` only, for that one read at startup; `clock` would add local time zones (ADR-0014). fleet-server enables `now` only, for its `SystemClock`, the one wall-clock read behind the `Clock` port (ADR-0015) |
-| CLI | `clap` | 4.6.7 | agent, server | derive |
+| CLI | `clap` | 4.6.7 | agent, server | derive. Both binaries handle clap's errors themselves, so `healthcheck`'s usage errors exit 1 (ADR-0014, ADR-0015) |
 | Hidden password prompt | `rpassword` | 7.5.4 | server CLI | |
 
 ### Rust: API, transport & persistence
 | Concern | Crate | Version | Used in | Notes |
 |---|---|---|---|---|
-| HTTP framework + WebSocket server | `axum` | 0.8.9, dfo | server | `ws` feature. fleet-server enables only what it uses: `matched-path` (P6.6), so the trace layer logs the route's template, never the path a client sent; the error body is written with serde_json (ADR-0015) |
+| HTTP framework + WebSocket server | `axum` | 0.8.9, dfo | server | `ws` feature. fleet-server enables only what it uses: `matched-path` (P6.6), so the trace layer logs the route's template, never the path a client sent, and `tokio` and `http1` (P6.11) for `axum::serve`; the error body is written with serde_json (ADR-0015) |
 | Typed headers (and cookies later) | `axum-extra` | 0.12.6 | server | `TypedHeader<Authorization<Bearer>>` |
 | Service abstraction | `tower` | 0.5.3, dfo | server, client | fleet-server lists its middleware stack with `ServiceBuilder` (no feature); its tests enable `util` for `ServiceExt::oneshot` (ADR-0015) |
 | HTTP middleware | `tower-http` | 0.7.1 | server | fleet-server enables `catch-panic`, `timeout`, `limit`, `sensitive-headers` and `set-header`. Never `request-id`, which turns on uuid's `v4` and with it `rng`, nor `trace`, whose response hook can't see the route: the request-ID and trace layers are the server's own (P6.6). reqwest keeps its own 0.6.11 (ADR-0015) |
-| OpenAPI | `utoipa`, `utoipa-axum` | 6.0.0, 0.3.0 | server | P0 picked 6.x (ADR-0009): released 2026-09-22, re-check at P6 |
+| OpenAPI | `utoipa`, `utoipa-axum` | 6.0.0, 0.3.0 | api-types, server | P0 picked 6.x (ADR-0009); re-checked in P6.10 (2026-10-11): still the newest, MIT/Apache-2.0. utoipa without default features: fleet-api-types and fleet-server enable `macros`, and fleet-api-types `preserve_order`, so properties keep the field order ts-rs writes and a test compares the two. utoipa-axum takes axum without default features. Cargo.lock gained only utoipa, utoipa-gen, utoipa-axum and its macro helper pastey (ADR-0015) |
 | Database | `sqlx` | **0.9.0**, dfo | server | `runtime-tokio`, `sqlite-bundled`, `migrate`, `macros`, `uuid`; no TLS feature (SQLite); offline data in `crates/fleet-server/.sqlx/`. Not `sqlite`: in 0.9 it also turns on extension loading, deserialize and unlock-notify. Not `chrono`: it would turn on chrono's `clock` for the whole workspace build, so times are converted in fleet-server. Not `json` (ADR-0015) |
 | gRPC | `tonic`, `tonic-prost` | **0.14.6** | proto, agent, server | Features `tls-aws-lc`, `tls-connect-info`. Never `tls-ring` or `tls-webpki-roots` |
 | Protobuf | `prost` | 0.14.4 | proto | |
@@ -2094,6 +2094,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 > - **Dependencies (group B, the user's approval).** New in `[workspace.dependencies]`: sqlx (0.9.0, no default features), async-trait (0.1.92) and tempfile (3.27.0, already in the lockfile). fleet-server gains fleet-core, async-trait, chrono (`now`), getrandom, log (only for sqlx's `LevelFilter`), secrecy, serde_json, sqlx (`runtime-tokio`, `sqlite-bundled`, `macros`, `migrate`, `uuid`), tokio (`fs`) and uuid; in dev, insta, proptest (`std`), tempfile and tokio (`macros`, `rt`). fleet-testkit gains chrono and rand (`std_rng`). fleet-core gains nothing.
 > - **Dependencies (group C, the user's approval).** New in `[workspace.dependencies]`, each without default features: ts-rs (12.0.1), axum (0.8.9) and tower (0.5.3), plus fleet-api-types by path. fleet-api-types uses fleet-core, serde (`derive`), thiserror and ts-rs (`serde-compat`); in dev, rstest, serde_json and tempfile. fleet-server gains fleet-api-types and axum (no features); in dev, tower (`util`), and insta gains `json`. Cargo.lock gains only ts-rs, ts-rs-macros and termcolor. ts-rs's `chrono-impl` and `uuid-impl` come with the first DTO that holds a time or an ID.
 > - **Dependencies (group D, the user's approval).** New in `[workspace.dependencies]`: tower-http (0.7.1; it has no default features). fleet-server gains tower-http (`catch-panic`, `timeout`, `limit`, `sensitive-headers`, `set-header`), tower as a normal dependency (no features, for `ServiceBuilder`), axum's `matched-path` and tokio's `time`; in dev, tokio's `test-util`. fleet-core gains the `RequestId` type, no dependency. Cargo.lock gains only tower-http 0.7.1, next to reqwest's 0.6.11.
+> - **Dependencies (group E, the user's approval).** New in `[workspace.dependencies]`: utoipa (6.0.0, without default features) and utoipa-axum (0.3.0). fleet-api-types gains utoipa (`macros`, and `preserve_order`, the user's approval during the build); fleet-server gains utoipa (`macros`), utoipa-axum, clap (`derive`) and tokio-util, axum's `tokio` and `http1`, and tokio's `rt`, `rt-multi-thread`, `macros`, `net` and `io-util`; fleet-startup gains tokio (`signal`, `macros`; in dev `rt`, `sync`, `time`, `test-util`), and fleet-agent drops tokio's `signal`, which fleet-startup now enables. Cargo.lock gains only utoipa, utoipa-gen, utoipa-axum and its macro helper pastey. No anyhow, and no hyper, hyper-util or reqwest as a direct dependency.
 > - **Dependencies.** Group A adds no external crate. fleet-startup uses figment (`toml`, `env`), serde, thiserror, tracing and tracing-subscriber (`env-filter`, `json`); fleet-testkit gains figment (`test`) and serde_json; fleet-server uses fleet-startup, garde (`derive`), serde (`derive`), thiserror and tracing.
 
 - [x] **P6.1** Module layout (see `CLAUDE.md`): `config`, `app` (services), `ports`, `infra/{sqlite,crypto}`, `http/{router,middleware,extractors,handlers,error}`, `grpc`, `cli`.
@@ -2257,8 +2258,16 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **`packages/ui/src/generated/`** holds only the generated files until P8.2 scaffolds `packages/ui` around it. With no package.json there, pnpm ignores it (checked: `pnpm -r ls` lists only the root). Biome already skips it, and `.gitattributes` marks it `linguist-generated`.
   > - fleet-api-types joins `stable_crates`.
   > - **Tests**, red against stubs that compiled (a `SafeInt` that took any value, text that wasn't cleaned, an `Open` that knew nothing, empty messages and names, an export, comparison and sync that did nothing): 54 of 81 failed on assertions, then all passed. Among them: a sync over a previous real ts-rs export (a stale `Probe.ts` included) proves that it recognizes ts-rs's real header, and every generated file is checked for `bigint`. After the implementation, the coverage report showed error paths without a test; their tests followed in their own commit, and one found a bug: `sync` noticed a subfolder in the scratch folder only after it had deleted and written files. It now checks both folders before changing anything.
-- [ ] **P6.10** OpenAPI via utoipa. `/api/openapi.json` is served only when `dev_mode = true`.
-- [ ] **P6.11** CLI skeleton: `serve`, `migrate`, `healthcheck`.
+- [x] **P6.10** OpenAPI via utoipa. `/api/openapi.json` is served only when `dev_mode = true`.
+
+  > Note (P6.10, as built, group E, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **The schemas live in fleet-api-types,** always on like ts-rs: the DTOs derive `ToSchema` next to `TS`. `SafeInt` is a component of its own (an integer within ±(2^53 − 1)), as it's a type of its own in TypeScript. A `BoundedText<MAX>` field carries `#[schema(schema_with = BoundedText::<MAX>::schema)]` (a string with `maxLength` MAX; utoipa's derive can't read a const generic, so a field without it doesn't compile), an `Open<E>` field `#[schema(value_type = E)]`, and an optional field `#[schema(nullable = false)]`. `openapi::components()` lists the root DTOs, like the TypeScript export.
+  > - **Deviation: four fields lose their description.** utoipa doesn't carry a doc comment onto a `schema_with` field, so the text fields have no description in the document; the TypeScript keeps it.
+  > - **A test keeps the two exports equal:** a test-only renderer turns every component into the TypeScript declaration ts-rs writes and compares them (comments stripped, whitespace collapsed); the component names must equal the exported files; and what TypeScript can't express is checked directly: `SafeInt`'s range, every text field's cap against its constant, an open field's enum against `E::ALL`. The renderer fails on any construct it doesn't handle, and a test proves it on 15 of them. **Deviation: utoipa's `preserve_order`** (the user's approval during the build), since utoipa wrote properties alphabetically and ts-rs in field order.
+  > - **The document:** routes are registered through utoipa-axum's `OpenApiRouter` with `#[utoipa::path]` on each handler, so a route can't exist without its entry. Each operation lists its own statuses (`live` 200; `ready` 200, 500, and 503 with `Retry-After`) plus a `default` response with `ErrorResponse`. `info`: title "afkfleet", the crate's version, GPL-3.0-or-later, no contact and no servers. The document doesn't list itself.
+  > - **Serving:** `router()` takes `ApiDocs::{Served, Hidden}` (`ApiDocs::for_dev_mode`). In dev mode `GET /api/openapi.json` answers the document as JSON, written per request, behind the whole middleware stack; otherwise the route doesn't exist and the path answers exactly like an unknown one.
+  > - **Tests,** red against compiling stubs: in fleet-api-types 9 of 26 failed (an empty component list, `SafeInt` without its range, text without its cap); in fleet-server 8 of 9 (no route in dev mode, no schemas). One snapshot holds the whole document, read before accepting.
+- [x] **P6.11** CLI skeleton: `serve`, `migrate`, `healthcheck`.
 
   > Note (P6.11, from group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
   > - **The dev-mode warning.** `serve` calls `ServerConfig::warn_if_dev_mode()` right after logging starts.
@@ -2266,9 +2275,26 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The dev config's database path must be absolute,** and a committed file can't hold one that works on every machine. How `just dev-server` provides it is group E's question, e.g. a `$`-parameter built from `justfile_directory()`.
 
   > Note (P6.11, from group D) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `serve` builds `http::router::router` with `RequestIds` over `SystemClock` and `OsRandom` and the `Database` as the health service's store. The healthcheck probes `/health/ready`, whose only success is `200` with an empty body.
-- [ ] **P6.12** 🔴 Graceful shutdown: axum's `with_graceful_shutdown` plus a `CancellationToken`.
+
+  > Note (P6.11, as built, group E, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **The agent's shape** (ADR-0014): `afkfleet-server`; `fleet_server::cli` holds the clap structs and each command's logic; main.rs handles clap's errors (a `healthcheck` usage error exits 1), loads the config before any runtime, writes errors from before logging to stderr as one line, and **uses no anyhow**. `--config <PATH>` is required on every command.
+  > - **`serve`:** logging, `warn_if_dev_mode()`, a multi-threaded runtime, then inside it the stop signals and the bound listener, then `serve::run`, which opens the database (with its migrations) and serves `serve::app` over `SystemClock`, `OsRandom` and the database. Startup errors are one `error`, "the server can't start", with the whole chain; the last line, "the server stopped", carries the exit code.
+  > - **A free port without weakening the config:** `serve::run` takes an already-bound tokio `TcpListener`. main.rs binds `[http] bind`; tests bind `127.0.0.1:0`. The port-0 rule is unchanged.
+  > - **`migrate`** logs like `serve`: "the database is migrated" (`info`, with `path`) or "the database can't be migrated" (`error`). It opens the database through `open()` and closes it with the new `Database::close_within(DATABASE_CLOSE)` (5 s). Exit codes 0, 1, 2.
+  > - **`healthcheck`:** our own HTTP/1.1 GET over tokio's `TcpStream` on a current-thread runtime, `Connection: close`, one 3 s timeout for the whole exchange, at most 16 KiB read, no TLS. Healthy only on `HTTP/1.1 200` with an empty body; an unspecified bind is asked on loopback on its port. One line on stdout, exit 0 or 1; no logging. It loads the whole config, like the agent's, so it needs the server's environment variables too. The tests reuse `healthcheck::get` as their HTTP client.
+  > - **`just dev-server`** runs `deploy/dev/server.toml` (dev mode, pretty logs, default bind, no database path) with `$AFKFLEET_SERVER__DATABASE__PATH`, a `$`-parameter defaulting to `target/dev-server/afkfleet.db` under `justfile_directory()`; Node creates the folder first.
+  > - **Tests,** red against compiling stubs (35 of 185 failed): the command line, the probe and its parser, `close_within`, the dev config, and the real binary: missing and invalid configs, usage errors, each command's help, the version, `migrate` twice and into a missing folder, `healthcheck` with nothing listening, against an in-process server, and through an unspecified bind.
+- [x] **P6.12** 🔴 Graceful shutdown: axum's `with_graceful_shutdown` plus a `CancellationToken`.
 
   > Note (P6.12, from group B) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `Database::close()` closes the read pool, then the write pool, and waits for every checked-out connection, so shutdown bounds it with a timeout.
+
+  > Note (P6.12, as built, group E, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
+  > - **The signals moved to fleet-startup** (§4) in a pure-move commit: `Signal`, `ShutdownSignals`, `OsSignals` and their tests. fleet-agent re-exports them and keeps its own test sources; fleet-server's tests have their own `ChannelSignals`.
+  > - **One deadline, `request_timeout + 5 s`, from the first signal; no new key.** The drain may take up to `[http] request_timeout_secs`, which the timeout layer already enforces per request; the database closes with the rest, at least `DATABASE_CLOSE` (5 s). A later signal is only logged.
+  > - **Connections:** `axum::serve(…).with_graceful_shutdown(token.cancelled_owned())`. axum spawns each connection itself and never aborts them, so at the drain limit the server stops waiting, logs one `warn` and closes the database; by then the timeout layer has cut every handler, so a leftover connection holds no database connection, and the runtime's 1 s shutdown ends it.
+  > - **Exit codes, as the agent's:** 0 stopped by a signal (even with connections cut at the drain limit), 1 startup error, 2 usage error, 4 the server ended unasked or the database didn't close by the deadline; 3 is unused.
+  > - **`serve::drive`** holds the sequence, generic over the server's and the close's futures, with biased `select!`s whose cancel-safety is commented.
+  > - **Tests,** red against a `drive` that returned at once (13 of 29 failed): its timing on paused time with stand-in futures; `serve` in real time over sockets and SQLite (an in-flight request finishing while new connections are refused, an idle keep-alive connection, a held database connection failing at the deadline); and on Unix the real binary stopping on SIGTERM with exit 0, "the server stopped" last. That test finds a free port, then binds it, and retries only when the server exits 1 with the bind error for that port before listening, at most 3 times (the user's addition).
 
 **Security:**
 - No CORS layer.
@@ -2280,6 +2306,12 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - An integration test boots the app in-process on a temporary DB and passes the health checks.
 - Snapshots reviewed.
 - `just ci` green.
+
+> Note (DoD, group E): checked point by point.
+> - **The integration test** (`tests/serve/boot.rs`) runs `serve::run` with the binary's wiring on a fresh temporary database and a `127.0.0.1:0` listener: `GET /health/live` and `/health/ready` answer 200 with an empty body over a real connection, the healthcheck reports healthy, and a signal stops it with exit 0, the database closed and every migration applied. A temporary break in the wiring, never committed, made it fail.
+> - **Snapshots:** every snapshot of the phase was read before accepting: the migrations' checksums (group B), 13 error responses (group C), 16 middleware and 4 health responses (group D), and the OpenAPI document (group E).
+> - **`just ci`:** CI runs every recipe of `just ci`, one per job, on the group E PR.
+> - **Security:** no CORS layer; `Cache-Control: no-store` on every response; no secret in any committed TOML (Phase 6's config has none, and the secret-name test guards every key); the database file is owner-only on Unix, and the server refuses one others can read.
 
 ---
 
@@ -2360,12 +2392,16 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P7.10, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a limit answers with `ApiError::RateLimited { retry_after }`, the limiter's delay, which is sent in whole seconds, rounded up.
 
   > Note (P7.10, from Phase 6, group D) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a 429 that tower_governor answers itself, without `ApiError`, still gets the envelope from `render_errors`' safety net and keeps its `Retry-After` and rate-limit headers, but it's logged at `error` as a wiring bug, so the limiter's error handler should return `ApiError::RateLimited`. Whether the health routes count against the global limit is this task's question.
+
+  > Note (P7.10, from Phase 6, group E) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): the dev-only `GET /api/openapi.json` needs a rate-limit class too, like every route. The limiter needs the client's address: `serve` passes the router to `axum::serve` directly, so this task switches to `into_make_service_with_connect_info` there.
 - [ ] **P7.11** 🔴 **Route-coverage test.**
   - Routes are registered only through `public_route(…)` or `authed_route(…)` helpers, which also record them in a registry.
   - The test calls every authed route without credentials and expects `401`.
   - It also checks that the public list is exactly the expected allowlist.
 
   > Note (P7.11, from Phase 6, group D) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): `GET /health/live` and `GET /health/ready` exist since P6.7, registered with plain `Router::route`. They move to `public_route` and belong on the public allowlist.
+
+  > Note (P7.11, from Phase 6, group E) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): routes are registered through utoipa-axum's `OpenApiRouter` (`routes!` with `#[utoipa::path]`), so `public_route` and `authed_route` wrap it and every route keeps its `OpenAPI` entry. `GET /api/openapi.json` exists only in dev mode: it's public, and the allowlist test checks both modes.
 - [ ] **P7.12** 🔴 Security tests:
   - **User enumeration:** an unknown user and a wrong password give the same status and body.
   - **Lockout.**
@@ -2688,6 +2724,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   4. Limits: per-user connection cap, `Resync` on `Lagged`, ping/pong with an idle timeout, maximum frame size.
 
   > Note (P11.5, from the group A review): The ticket comes from `getrandom`, never from a v7 ID, which reveals its creation time.
+
+  > Note (P11.5, from Phase 6, group E, the user's addition) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **a WebSocket must close itself on shutdown.** Once upgraded, it isn't bound by the request timeout, and the graceful shutdown waits for every open connection, so each WebSocket handler watches the shutdown `CancellationToken` and closes its connection with a close frame when it fires. Otherwise one open app makes every shutdown wait the full deadline.
 - [ ] **P11.6** 🔴 Retention job: chat older than `chat.retention_days` is deleted. The audit log is kept longer (configurable).
 
   > Note (P11.6, from Phase 6, group B) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): decide `secure_delete` here, so deleted chat and old audit entries are overwritten instead of lingering in free pages.
@@ -2731,6 +2769,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - distroless non-root runtime
   - `HEALTHCHECK` through the `healthcheck` subcommand
 
+  > Note (P12.1, from Phase 6, group E) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): the server's `HEALTHCHECK` runs `afkfleet-server healthcheck --config <the same file>`. It loads the whole config, so the container's `AFKFLEET_SERVER__…` variables apply to it too; it asks loopback when `bind` is `0.0.0.0`, and its own 3 s timeout fits a 5 s `--timeout`.
+
   > Note (P12.1, from Phase 5, group C, the user's decisions) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)):
   > - **Production is linux/arm64.** P12.1 builds the image for arm64, natively on the server or on GitHub's `ubuntu-24.04-arm` runner. The base images stay pinned by multi-arch index digest, and the Dockerfile names no architecture.
   > - **An image scan.** There's no Dependabot, and `cargo deny` covers only crates, so the weekly scheduled audit also scans the built agent image (e.g. Trivy). OS-level CVEs in the pinned base images then surface. Digest bumps stay deliberate PRs.
@@ -2751,6 +2791,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P12.2, from Phase 6, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
   > - **The database lives on a named volume, never a bind mount from a Windows folder.** Docker Desktop shows Windows files as mode 777, chmod can't change that, and the server refuses a database others can read.
   > - **A forgotten volume must fail a test, not lose data.** The image will likely pre-create the data folder so a named volume gets the nonroot owner, and then a missing mount is invisible to the server's folder check: the database would land in the container's throwaway layer. The compose setup and P12.7's smoke test prove the database survives a container restart.
+
+  > Note (P12.2, from Phase 6, group E, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **the server's `stop_grace_period` must exceed its shutdown deadline plus the 1 s runtime shutdown:** `request_timeout_secs` + 5 s + 1 s, so more than 21 s for the default 15 s request timeout. Otherwise Docker's SIGKILL replaces exit code 4 and the last line, "the server stopped".
 
   > Note (P12.2, from Phase 5, group C, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): Production is linux/arm64. The agent's memory and CPU limits come from group D's measured demo numbers, with headroom, not from the dev compose file's 512 MiB and 1 CPU.
 
@@ -2988,6 +3030,7 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 | `GET /audit` | Admin+ | Audit log (cursor-paginated) |
 | `POST /events/ticket` · `GET /events?ticket=` | user | WebSocket live events |
 | `GET /health/live` · `GET /health/ready` | public (no prefix) | Health |
+| `GET /api/openapi.json` | public, **only in dev mode** (no `/api/v1` prefix) | The OpenAPI document (P6.10); outside dev mode the path answers like any unknown route |
 
 > Note (P2.9): `authorize()` refines these levels (ADR-0010):
 > - `POST /agents/enrollment-tokens` is Owner-only.

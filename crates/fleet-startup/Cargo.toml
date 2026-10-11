@@ -1,6 +1,6 @@
 [package]
 name = "fleet-startup"
-description = "Start-up code shared by afkfleet's binaries: the config loader with key-path errors, the [log] section, and logging with the azalea_auth cap and a panic hook."
+description = "Process start-up and lifecycle code shared by afkfleet's binaries: the config loader with key-path errors, the [log] section, logging with the azalea_auth cap and a panic hook, and the stop signals."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -17,6 +17,8 @@ fleet-core.workspace = true
 # `DeserializeOwned`, the loader's bound.
 serde.workspace = true
 thiserror.workspace = true
+# The stop signals: SIGTERM and SIGINT, or Ctrl+C and Ctrl+Break (ADR-0015).
+tokio = { workspace = true, features = ["macros", "signal"] }
 tracing.workspace = true
 tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 
@@ -24,3 +26,5 @@ tracing-subscriber = { workspace = true, features = ["env-filter", "json"] }
 # The log buffer for the format tests.
 fleet-testkit.workspace = true
 rstest.workspace = true
+# The signal tests: channels, paused time and the OS-signal test's runtime.
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time", "test-util"] }

@@ -3,8 +3,9 @@
 //! chat history, the audit log, and the agents' control plane.
 //!
 //! # Layout
-//! The library holds all the logic; `main.rs` (P6.11) only parses the
-//! command line and the config and wires the adapters together.
+//! The library holds all the logic; `main.rs`, the `afkfleet-server`
+//! binary, only parses the command line, loads the config, starts logging
+//! and the async runtime, and runs a command from [`cli`].
 //!
 //! | Module | Holds | From |
 //! |---|---|---|
@@ -30,6 +31,7 @@
 //!   checked macros with bind parameters.
 
 pub mod app;
+pub mod cli;
 pub mod config;
 pub mod http;
 pub mod infra;

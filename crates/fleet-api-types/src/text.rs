@@ -12,12 +12,18 @@
 //!
 //! `BoundedText` has no TypeScript type of its own: every DTO field holding
 //! one carries `#[ts(type = "string")]`, and a field without it doesn't
-//! compile.
+//! compile. Likewise its `OpenAPI` schema, a string of at most `MAX`
+//! characters, has no name of its own: every field holding one carries
+//! `#[schema(schema_with = BoundedText::<MAX>::schema)]`, which writes it
+//! inline, and a field without it doesn't compile.
 
 use core::fmt;
 
 use fleet_core::text::sanitize_untrusted;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use utoipa::PartialSchema;
+use utoipa::openapi::RefOr;
+use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
 
 /// Text of at most `MAX` characters, cleaned with fleet-core's
 /// `sanitize_untrusted`. It's a plain JSON string on the wire.
@@ -54,6 +60,16 @@ impl<'de, const MAX: usize> Deserialize<'de> for BoundedText<MAX> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = String::deserialize(deserializer)?;
         Ok(Self::new(&raw))
+    }
+}
+
+/// A string of at most `MAX` characters.
+impl<const MAX: usize> PartialSchema for BoundedText<MAX> {
+    fn schema() -> RefOr<Schema> {
+        ObjectBuilder::new()
+            .schema_type(Type::String)
+            .max_length(Some(MAX))
+            .into()
     }
 }
 

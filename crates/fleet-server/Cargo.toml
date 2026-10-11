@@ -1,6 +1,6 @@
 [package]
 name = "fleet-server"
-description = "The afkfleet server: the HTTP API, authentication, the vault, persistence and the agents' control plane. A library until the afkfleet-server binary arrives in P6.11."
+description = "The afkfleet server: the HTTP API, authentication, the vault, persistence and the agents' control plane. The afkfleet-server binary runs it."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,14 +10,21 @@ repository.workspace = true
 [lints]
 workspace = true
 
+[[bin]]
+name = "afkfleet-server"
+path = "src/main.rs"
+
 [dependencies]
 # The ports, which services hold as `Arc<dyn …>` (ADR-0015).
 async-trait.workspace = true
-# The HTTP layer. Only `matched-path`: the trace layer logs the route's template,
-# never the path a client sent; the error body is written with serde_json (ADR-0015).
-axum = { workspace = true, features = ["matched-path"] }
+# The HTTP layer: `matched-path`, so the trace layer logs the route's template, never
+# the path a client sent; `tokio` and `http1` for `axum::serve` (Caddy speaks HTTP/1.1 to
+# it). The error body is written with serde_json (ADR-0015).
+axum = { workspace = true, features = ["http1", "matched-path", "tokio"] }
 # SystemClock's one wall-clock read (ADR-0015).
 chrono = { workspace = true, features = ["now"] }
+# The afkfleet-server command line (ADR-0015).
+clap = { workspace = true, features = ["derive"] }
 # The error envelope's DTOs (ADR-0015).
 fleet-api-types.workspace = true
 # The domain types and the Clock and SecureRandom ports (ADR-0015).
@@ -37,15 +44,22 @@ serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sqlx = { workspace = true, features = ["runtime-tokio", "sqlite-bundled", "macros", "migrate", "uuid"] }
 thiserror.workspace = true
-# Creating the database file and checking its permissions without blocking, and the
-# trace layer's latency from tokio's clock (ADR-0015).
-tokio = { workspace = true, features = ["fs", "time"] }
+# Creating the database file and checking its permissions without blocking, the trace
+# layer's latency from tokio's clock, the binary's runtimes, the listener and the
+# healthcheck's TCP probe (ADR-0015).
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "time"] }
 # `ServiceBuilder`, which lists the middleware stack outermost first (ADR-0015).
 tower.workspace = true
+# `CancellationToken`, which asks axum's server to shut down gracefully (ADR-0015).
+tokio-util.workspace = true
 # The middleware stack's tower-http layers; the request-ID and trace layers are
 # the server's own (ADR-0015).
 tower-http = { workspace = true, features = ["catch-panic", "limit", "sensitive-headers", "set-header", "timeout"] }
 tracing.workspace = true
+# The OpenAPI document, served only in dev mode (P6.10): `OpenApi` and `#[utoipa::path]`,
+# with utoipa-axum's `OpenApiRouter`, so every route carries its entry (ADR-0015).
+utoipa = { workspace = true, features = ["macros"] }
+utoipa-axum.workspace = true
 # IDs are bound and read as `uuid::fmt::Hyphenated` text (ADR-0015).
 uuid.workspace = true
 

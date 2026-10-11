@@ -24,6 +24,7 @@ use fleet_core::id::RequestId;
 use fleet_server::app::health::HealthService;
 use fleet_server::config::{HttpConfig, LogConfig, LogFormat};
 use fleet_server::http::middleware::RequestIds;
+use fleet_server::http::openapi::ApiDocs;
 use fleet_server::http::router::{AppState, router};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions, READ_CONNECTIONS};
 use fleet_startup::telemetry::{NoRules, layer_with};
@@ -67,7 +68,7 @@ fn app(db: &Database) -> Router {
         max_body_bytes: 65_536,
     };
     let state = AppState::new(HealthService::new(Arc::new(db.clone())));
-    router(state, &http, ids)
+    router(state, &http, ids, ApiDocs::Hidden)
 }
 
 async fn open(options: SqliteConnectOptions, database: DatabaseOptions) -> Database {

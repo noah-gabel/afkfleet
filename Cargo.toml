@@ -124,6 +124,14 @@ tracing-subscriber = "0.3.23"
 # `serde-compat`, so serde's renames reach the TypeScript. `chrono-impl` and `uuid-impl`
 # come with the first DTO that holds a time or an ID (ADR-0015).
 ts-rs = { version = "12.0.1", default-features = false }
+# utoipa: the OpenAPI document, served only in dev mode (P6.10). Without default features;
+# fleet-api-types and fleet-server enable `macros` (`ToSchema`, `OpenApi`, `path`). It
+# describes what the DTOs put on the wire, and a test keeps it equal to the ts-rs export
+# (ADR-0015).
+utoipa = { version = "6.0.0", default-features = false }
+# utoipa-axum: fleet-server registers its routes through `OpenApiRouter`, so a route can't
+# exist without its OpenAPI entry. It takes axum without default features (ADR-0015).
+utoipa-axum = "0.3.0"
 # uuid: never `v4`/`v7`/`rng`, which pull in getrandom; IDs are minted from caller data (ADR-0010).
 uuid = { version = "1.27.0", default-features = false }
 

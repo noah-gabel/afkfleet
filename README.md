@@ -16,7 +16,7 @@ afkfleet is **a hobby project** I'm building for my friends with Claude Code. I 
 There's no support, and I don't take feature requests. Security reports are welcome, though: see [SECURITY.md](SECURITY.md).
 
 ## Status
-**Phase 5 (the standalone agent) is done.** Its first runnable product, `afkfleet-agent`, runs a few offline-mode bots against a local server (see [Quickstart](#quickstart)). What exists:
+**Phase 6 (the server foundation) is done.** The agent, `afkfleet-agent`, runs a few offline-mode bots against a local server (see [Quickstart](#quickstart)), and the server, `afkfleet-server`, runs the secure HTTP skeleton every later phase builds on (see [Running the server](#running-the-server)). What exists:
 - **From Phase 0:**
   - the Cargo workspace with all lints and the pinned toolchain
   - the quality gates: formatting, clippy, docs, tests, coverage gates, cargo-deny, Biome
@@ -72,17 +72,23 @@ There's no support, and I don't take feature requests. Security reports are welc
 
   [ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md) records Phase 5's decisions.
 
-**In progress:** Phase 6, the server foundation: an HTTP service skeleton that is secure by default, with persistence, an error model and an audit trail, but no business endpoints yet. Done so far, in [`crates/fleet-server`](crates/fleet-server/) and [`crates/fleet-startup`](crates/fleet-startup/):
-- the binaries' shared start-up code (config loader, logging, panic hook), moved out of the agent
-- the server's config: `server.toml` plus `AFKFLEET_SERVER__…` environment variables, with every problem listed at once
-- the server's clock and secure randomness behind ports, so tests control both, and a lint that refuses any other read of either
-- the SQLite database: one write connection and four read-only ones, a database file only the server's user can read, migrations at startup, and SQL checked at compile time against committed offline data (`just db-prepare`)
-- the first tables, `users` and `audit_log`, with strict types and CHECKs, and a store whose every write transaction commits together with its audit entry
-- the audit service: entries stamped by the clock, with details that can't hold secrets
-- the API's shared types, [`crates/fleet-api-types`](crates/fleet-api-types/), exported to TypeScript for the app (`just gen`)
-- the error model: every failed request answers with one JSON envelope, a code with its status and a fixed message, and the request ID; an internal error's details go only to the log
-- the middleware stack: a request ID the server mints for every request, security headers on every response, one log line per request without headers or bodies, the request timeout and body limit from the config, and the error envelope for every error, a panic's included
-- the health endpoints, `GET /health/live` and `GET /health/ready` (a database ping): `200` with an empty body, revealing nothing about the server
+- **From Phase 6:** [`crates/fleet-server`](crates/fleet-server/) and its `afkfleet-server` binary, an HTTP service skeleton that is secure by default, with persistence, an error model and an audit trail, but no business endpoints yet, plus [`crates/fleet-startup`](crates/fleet-startup/) and [`crates/fleet-api-types`](crates/fleet-api-types/):
+  - the binaries' shared start-up code (config loader, logging, panic hook, stop signals), moved out of the agent
+  - the server's config: `server.toml` plus `AFKFLEET_SERVER__…` environment variables, with every problem listed at once
+  - the server's clock and secure randomness behind ports, so tests control both, and a lint that refuses any other read of either
+  - the SQLite database: one write connection and four read-only ones, a database file only the server's user can read, migrations at startup or through `afkfleet-server migrate`, and SQL checked at compile time against committed offline data (`just db-prepare`)
+  - the first tables, `users` and `audit_log`, with strict types and CHECKs, and a store whose every write transaction commits together with its audit entry
+  - the audit service: entries stamped by the clock, with details that can't hold secrets
+  - the API's shared types, exported to TypeScript for the app (`just gen`), and described by an OpenAPI document that only dev mode serves, which a test keeps equal to the TypeScript
+  - the error model: every failed request answers with one JSON envelope, a code with its status and a fixed message, and the request ID; an internal error's details go only to the log
+  - the middleware stack: a request ID the server mints for every request, security headers on every response, one log line per request without headers or bodies, the request timeout and body limit from the config, and the error envelope for every error, a panic's included
+  - the health endpoints, `GET /health/live` and `GET /health/ready` (a database ping): `200` with an empty body, revealing nothing about the server, and an `afkfleet-server healthcheck` command that asks the second without a shell or curl
+  - a graceful shutdown on SIGTERM or SIGINT (Ctrl+C or Ctrl+Break on Windows): in-flight requests finish and the database closes within one deadline
+  - an integration test that boots the server in-process on a fresh database, passes both health checks over a real connection and stops it cleanly
+
+  [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md) records Phase 6's decisions.
+
+**Next:** Phase 7, authentication and authorization: invite-only login with 2FA, rotating tokens, central authorization and layered rate limits.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 
@@ -164,6 +170,35 @@ just mc-down    # stop both and delete the server's world
 - **Stopping:** `docker stop` sends SIGTERM and kills the container once its grace period is over. The agent's worst-case shutdown is `shutdown_timeout_secs` plus 6 s (the reply timeout and the runtime's own shutdown), so the grace period must be longer: the compose file sets 20 s for the 10 s default. Otherwise Docker's kill replaces the exit code and the last line. The server gets 60 s: itzg's runner turns SIGTERM into `stop`, which saves the world, and Docker's default 10 s could kill it first.
 - **Hardening** in the compose file: the nonroot user, a read-only root filesystem with a 1 MiB tmpfs at `/tmp` for the heartbeat file, no capabilities, `no-new-privileges`, 512 MiB of memory and 1 CPU, and a restart after a non-zero exit (`on-failure`).
 
+### Running the server
+```sh
+afkfleet-server serve --config server.toml
+afkfleet-server migrate --config server.toml       # migrate and exit; serve migrates at startup too
+afkfleet-server healthcheck --config server.toml   # ask a running server whether it's ready
+```
+- **The config** is a TOML file ([`deploy/dev/server.toml`](deploy/dev/server.toml) is the development one; Plan.md's P6.2 note lists Phase 6's keys). `AFKFLEET_SERVER__…` environment variables override any key, e.g. `AFKFLEET_SERVER__LOG__FILTER=debug`. `[database] path` is required and must be absolute; `[http] bind` defaults to `127.0.0.1:8080` and can't use port 0. Unknown keys are errors, and every problem is listed at once.
+- **Dev mode** (`dev_mode = true`) serves the OpenAPI document at `GET /api/openapi.json` and logs a warning at startup. Never run a production server in dev mode. Outside it, that path answers 404 like any unknown route.
+- **The database** opens at startup: its folder must exist, a missing file is created (readable only by the server's user on Unix), and every pending migration runs. `migrate` does just that and exits 0, or 1 with the reason in the log, so you can migrate before starting a new version. On Unix, the server refuses a database, `-wal` or `-shm` file other users can read.
+- **Logs** go to stdout, as JSON lines by default or as one readable line per event with `[log] format = "pretty"`. A config error is printed to stderr before logging starts.
+- **Stopping:** SIGTERM or SIGINT (Ctrl+C or Ctrl+Break on Windows) starts a graceful shutdown with one deadline, `[http] request_timeout_secs` plus 5 s (20 s by default). The server stops accepting connections and lets in-flight requests finish within the request timeout, then closes the database within the rest. A second signal changes nothing. In Docker, the grace period must be longer than the deadline plus 1 s (more than 21 s by default), or Docker's kill replaces the exit code and the last line, "the server stopped".
+- **Exit codes** of `serve`, also listed by `afkfleet-server serve --help`:
+
+  | Code | Meaning |
+  |---|---|
+  | 0 | Stopped by a signal |
+  | 1 | Startup error: the config, logging, the address or the database |
+  | 2 | Usage error |
+  | 4 | The server ended unasked, or didn't finish its shutdown by the deadline (the database didn't close) |
+- **Healthcheck:** `afkfleet-server healthcheck --config server.toml` loads the same config, environment variables included, so give it the server's variables too. It asks `GET /health/ready` on `[http] bind`, or on loopback with the same port when the bind is `0.0.0.0` or `::`, and prints one line, such as `healthy: /health/ready on 127.0.0.1:8080 answered 200`. It needs no shell or curl. Exit codes:
+
+  | Code | Meaning |
+  |---|---|
+  | 0 | Healthy: `/health/ready` answered 200 with an empty body |
+  | 1 | Unhealthy: another answer, no answer within 3 s, or none at all. Also a usage or config error, which goes to stderr. Docker reserves 2, so it's never used |
+- **In development,** `just dev-server` runs it with `deploy/dev/server.toml` (dev mode, pretty logs, `127.0.0.1:8080`) and its database at `target/dev-server/afkfleet.db`; `just dev-server C:\path\to\afkfleet\other.db` uses another absolute path. To run the healthcheck against it, set `AFKFLEET_SERVER__DATABASE__PATH` to the same path.
+
+The server has no TLS of its own: Caddy fronts it (Phase 12).
+
 ## Development
 ```sh
 pnpm install   # frontend tooling (Biome)
@@ -172,6 +207,7 @@ just ci        # everything CI runs
 just mc-up     # local offline-mode Minecraft 26.1 test server on 127.0.0.1:25565 (needs Docker)
 just mc-down   # stop it (and the Docker agent) and delete its world
 just dev-agent # run the agent with deploy/dev/agent.toml against that server
+just dev-server # run the server with deploy/dev/server.toml (dev mode), its database in target/dev-server/
 just stack-up  # build the agent's image and run the server and the agent in Docker
 just test-slow # pull the server image, build the agent's image, then the slow tests one at a time (needs Docker)
 just demo-agent # the Phase 5 demo: the Docker agent's five bots for an hour with one server restart

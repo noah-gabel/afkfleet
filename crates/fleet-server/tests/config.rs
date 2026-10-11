@@ -416,3 +416,33 @@ filter = "marker4=loud"
         assert!(!shown.contains("marker"), "{shown}");
     });
 }
+
+/// `deploy/dev/server.toml`, the config `just dev-server` runs.
+fn dev_config() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/dev/server.toml")
+}
+
+#[test]
+fn the_dev_config_runs_in_dev_mode_with_the_database_path_from_the_environment() {
+    in_jail(|jail| {
+        let path = db_path(jail);
+        jail.set_env("AFKFLEET_SERVER__DATABASE__PATH", path.display());
+
+        let config = load(&dev_config()).unwrap();
+
+        assert!(config.dev_mode);
+        assert_eq!(config.http.bind, HttpConfig::DEFAULT_BIND);
+        assert_eq!(config.database.path, path);
+        assert_eq!(config.log.format, LogFormat::Pretty);
+    });
+}
+
+#[test]
+fn the_dev_config_holds_no_database_path() {
+    in_jail(|_jail| {
+        let problems = invalid(load(&dev_config()));
+
+        assert_eq!(keys(&problems), ["database.path"]);
+        assert_eq!(kinds(&problems), [ProblemKind::Missing]);
+    });
+}

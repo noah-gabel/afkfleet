@@ -29,6 +29,8 @@
 //! - [`error`]: the error envelope that every failed request answers with.
 //! - [`int`]: the 64-bit integer type, [`SafeInt`].
 //! - [`open`]: tolerant values, [`Open`] and [`OpenEnum`].
+//! - [`openapi`]: the `OpenAPI` schemas, which the server's dev-only document
+//!   serves and which a test keeps equal to the TypeScript.
 //! - [`text`]: cleaned and capped text, [`BoundedText`].
 //! - [`typescript`]: the export to TypeScript, behind `just gen` and
 //!   `just gen-check`.
@@ -36,6 +38,7 @@
 pub mod error;
 pub mod int;
 pub mod open;
+pub mod openapi;
 pub mod text;
 pub mod typescript;
 
