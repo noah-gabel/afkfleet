@@ -13,6 +13,9 @@
 //!   the typed password would show. Scripts and P12.7's smoke test use it.
 //! - **No other way in:** no password flag and no environment variable,
 //!   which `ps`, shell history and `docker inspect` would show.
+//! - **Reads never block the runtime.** The prompt and the stdin read run in
+//!   `spawn_blocking`; each moves its source onto the blocking thread and
+//!   gets it back.
 //!
 //! It opens the database like `migrate` (pending migrations run), never
 //! loads the vault's keys, and builds the real clock and randomness itself,
@@ -132,13 +135,27 @@ enum StdinError {
     NotUtf8,
 }
 
-/// Reads one password from `reader`: at most [`STDIN_MAX_BYTES`], one
-/// trailing `\n` or `\r\n` removed. The buffer is allocated once at its full
-/// size and wiped when it's dropped.
-fn read_stdin(reader: &mut dyn Read, is_terminal: bool) -> Result<SecretString, StdinError> {
+/// Reads one password from `reader` on a blocking thread, so the read never
+/// blocks the async runtime; a terminal is refused unread. The read has no
+/// timeout: it ends at the pipe's end or after [`STDIN_MAX_BYTES`], and the
+/// Owner check has already run. A blocking read can't be aborted; the
+/// awaited handle owns it.
+async fn read_stdin_blocking(
+    mut reader: Box<dyn Read + Send>,
+    is_terminal: bool,
+) -> Result<SecretString, StdinError> {
     if is_terminal {
         return Err(StdinError::Terminal);
     }
+    tokio::task::spawn_blocking(move || read_stdin(&mut *reader))
+        .await
+        .map_err(|_| StdinError::Unreadable(io::Error::other("the reading thread failed")))?
+}
+
+/// Reads one password from `reader`: at most [`STDIN_MAX_BYTES`], one
+/// trailing `\n` or `\r\n` removed. The buffer is allocated once at its full
+/// size and wiped when it's dropped.
+fn read_stdin(reader: &mut dyn Read) -> Result<SecretString, StdinError> {
     let mut bytes = Zeroizing::new(Vec::with_capacity(STDIN_MAX_BYTES + 1));
     reader
         .take(u64::try_from(STDIN_MAX_BYTES + 1).unwrap_or(u64::MAX))
@@ -160,20 +177,41 @@ fn read_stdin(reader: &mut dyn Read, is_terminal: bool) -> Result<SecretString, 
     Ok(exact_secret(text))
 }
 
-/// Where the password comes from.
-pub enum PasswordInput<'a> {
+/// A prompt that can move onto a blocking thread.
+type OwnedPrompt = Box<dyn PasswordPrompt + Send>;
+
+/// Reads one password with `prompt` on a blocking thread, so waiting for the
+/// terminal never blocks the async runtime, and hands the prompt back.
+/// `None` when the blocking task failed (it panicked); the prompt is lost
+/// then. No timeout: a person is typing. A blocking read can't be aborted;
+/// the awaited handle owns it.
+async fn prompt_blocking(
+    mut prompt: OwnedPrompt,
+    text: String,
+) -> Option<(OwnedPrompt, io::Result<SecretString>)> {
+    tokio::task::spawn_blocking(move || {
+        let read = prompt.read(&text);
+        (prompt, read)
+    })
+    .await
+    .ok()
+}
+
+/// Where the password comes from. Both sources are owned, so each blocking
+/// read can move its source onto a blocking thread and get it back.
+pub enum PasswordInput {
     /// Typed twice at the terminal.
-    Prompt(&'a mut dyn PasswordPrompt),
+    Prompt(OwnedPrompt),
     /// One password from stdin (`--password-stdin`).
     Stdin {
         /// The process's stdin.
-        reader: &'a mut dyn Read,
+        reader: Box<dyn Read + Send>,
         /// Whether stdin is a terminal, which is refused.
         is_terminal: bool,
     },
 }
 
-impl core::fmt::Debug for PasswordInput<'_> {
+impl core::fmt::Debug for PasswordInput {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::Prompt(_) => f.write_str("Prompt"),
@@ -190,7 +228,7 @@ impl core::fmt::Debug for PasswordInput<'_> {
 pub async fn create_owner(
     config: &ServerConfig,
     username: &str,
-    input: PasswordInput<'_>,
+    input: PasswordInput,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Exit {
@@ -235,7 +273,7 @@ enum Attempt {
 async fn create(
     service: &UserService,
     username: &Username,
-    input: PasswordInput<'_>,
+    input: PasswordInput,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> Exit {
@@ -249,7 +287,7 @@ async fn create(
             reader,
             is_terminal,
         } => {
-            let password = match read_stdin(reader, is_terminal) {
+            let password = match read_stdin_blocking(reader, is_terminal).await {
                 Ok(password) => password,
                 Err(error) => return refuse(err, &error.to_string()),
             };
@@ -259,15 +297,19 @@ async fn create(
                 Attempt::Stop(exit) => exit,
             }
         }
-        PasswordInput::Prompt(prompt) => {
+        PasswordInput::Prompt(mut prompt) => {
             let first = format!("Password for the Owner \"{}\": ", username.as_str());
             for _ in 0..ROUNDS {
-                let Ok(password) = prompt.read(&first) else {
+                let Some((returned, Ok(password))) = prompt_blocking(prompt, first.clone()).await
+                else {
                     return refuse(err, NO_TERMINAL);
                 };
-                let Ok(again) = prompt.read("Repeat the password: ") else {
+                let Some((returned, Ok(again))) =
+                    prompt_blocking(returned, "Repeat the password: ".to_owned()).await
+                else {
                     return refuse(err, NO_TERMINAL);
                 };
+                prompt = returned;
                 if password.expose_secret() != again.expose_secret() {
                     let _ = writeln!(err, "the passwords don't match");
                     continue;
@@ -442,7 +484,7 @@ mod tests {
         err: String,
     }
 
-    async fn run(dir: &Path, username: &str, input: PasswordInput<'_>) -> Run {
+    async fn run(dir: &Path, username: &str, input: PasswordInput) -> Run {
         let mut out = Vec::new();
         let mut err = Vec::new();
         let exit = create_owner(&config(dir), username, input, &mut out, &mut err).await;
@@ -454,16 +496,20 @@ mod tests {
     }
 
     async fn prompted(dir: &Path, typed: &[&'static str]) -> Run {
-        run(dir, "alice", PasswordInput::Prompt(&mut Typed::new(typed))).await
+        run(
+            dir,
+            "alice",
+            PasswordInput::Prompt(Box::new(Typed::new(typed))),
+        )
+        .await
     }
 
     async fn piped(dir: &Path, stdin: &[u8]) -> Run {
-        let mut reader = Cursor::new(stdin.to_vec());
         run(
             dir,
             "alice",
             PasswordInput::Stdin {
-                reader: &mut reader,
+                reader: Box::new(Cursor::new(stdin.to_vec())),
                 is_terminal: false,
             },
         )
@@ -587,10 +633,124 @@ mod tests {
     async fn without_a_terminal_the_prompt_says_how_to_pass_the_password() {
         let dir = TempDir::new().unwrap();
 
-        let run = run(dir.path(), "alice", PasswordInput::Prompt(&mut NoTerminal)).await;
+        let run = run(
+            dir.path(),
+            "alice",
+            PasswordInput::Prompt(Box::new(NoTerminal)),
+        )
+        .await;
 
         assert_eq!(run.exit, Exit::Failed);
         assert_eq!(run.err, format!("afkfleet-server: {NO_TERMINAL}\n"));
+    }
+
+    /// A prompt that answers only once another task on the same runtime has
+    /// seen it start reading. Read inline on a current-thread runtime, that
+    /// task never runs, so the wait is bounded at 5 s.
+    struct NeedsTheRuntime {
+        reading: tokio::sync::mpsc::Sender<()>,
+        answer: std::sync::mpsc::Receiver<()>,
+    }
+
+    impl PasswordPrompt for NeedsTheRuntime {
+        fn read(&mut self, _prompt: &str) -> io::Result<SecretString> {
+            self.reading.try_send(()).map_err(io::Error::other)?;
+            self.answer
+                .recv_timeout(Duration::from_secs(5))
+                .map_err(|_| io::Error::other("the prompt blocked the runtime for 5 s"))?;
+            Ok(SecretString::from(STRONG))
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_prompt_never_blocks_the_runtime() {
+        let dir = TempDir::new().unwrap();
+        let (reading, mut started) = tokio::sync::mpsc::channel(2);
+        let (answer, answers) = std::sync::mpsc::sync_channel(2);
+        let prompt = NeedsTheRuntime {
+            reading,
+            answer: answers,
+        };
+        // Ends when the prompt is dropped and its channel closes. A prompt
+        // that already gave up has dropped its receiver; the assertion below
+        // reports that.
+        let answerer = async move {
+            while started.recv().await.is_some() {
+                let _ = answer.try_send(());
+            }
+        };
+
+        let (run, ()) = tokio::join!(
+            run(dir.path(), "alice", PasswordInput::Prompt(Box::new(prompt))),
+            answerer
+        );
+
+        assert_eq!(
+            run.exit,
+            Exit::Created,
+            "the prompt ran on the runtime's own thread: {}",
+            run.err
+        );
+    }
+
+    /// A stdin that delivers its password only once another task on the same
+    /// runtime has seen it start reading, bounded at 5 s like the prompt.
+    struct StdinNeedsTheRuntime {
+        reading: tokio::sync::mpsc::Sender<()>,
+        answer: std::sync::mpsc::Receiver<()>,
+        rest: Cursor<Vec<u8>>,
+        waited: bool,
+    }
+
+    impl Read for StdinNeedsTheRuntime {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if !self.waited {
+                self.waited = true;
+                self.reading.try_send(()).map_err(io::Error::other)?;
+                self.answer
+                    .recv_timeout(Duration::from_secs(5))
+                    .map_err(|_| io::Error::other("the stdin read blocked the runtime for 5 s"))?;
+            }
+            self.rest.read(buf)
+        }
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn a_stdin_read_never_blocks_the_runtime() {
+        let dir = TempDir::new().unwrap();
+        let (reading, mut started) = tokio::sync::mpsc::channel(1);
+        let (answer, answers) = std::sync::mpsc::sync_channel(1);
+        let reader = StdinNeedsTheRuntime {
+            reading,
+            answer: answers,
+            rest: Cursor::new(STRONG.as_bytes().to_vec()),
+            waited: false,
+        };
+        // Ends when the reader is dropped and its channel closes, as above.
+        let answerer = async move {
+            while started.recv().await.is_some() {
+                let _ = answer.try_send(());
+            }
+        };
+
+        let (run, ()) = tokio::join!(
+            run(
+                dir.path(),
+                "alice",
+                PasswordInput::Stdin {
+                    reader: Box::new(reader),
+                    is_terminal: false,
+                },
+            ),
+            answerer
+        );
+
+        assert_eq!(
+            run.exit,
+            Exit::Created,
+            "stdin was read on the runtime's own thread: {}",
+            run.err
+        );
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -601,7 +761,12 @@ mod tests {
             Exit::Created
         );
 
-        let again = run(dir.path(), "bob", PasswordInput::Prompt(&mut NeverAsked)).await;
+        let again = run(
+            dir.path(),
+            "bob",
+            PasswordInput::Prompt(Box::new(NeverAsked)),
+        )
+        .await;
 
         assert_eq!(again.exit, Exit::Failed);
         assert_eq!(again.err, "afkfleet-server: an Owner already exists\n");
@@ -619,7 +784,7 @@ mod tests {
             dir.path(),
             "bob",
             PasswordInput::Stdin {
-                reader: &mut NeverRead,
+                reader: Box::new(NeverRead),
                 is_terminal: false,
             },
         )
@@ -633,7 +798,12 @@ mod tests {
     async fn an_invalid_username_is_refused_before_anything_else() {
         let dir = TempDir::new().unwrap();
 
-        let run = run(dir.path(), "a!", PasswordInput::Prompt(&mut NeverAsked)).await;
+        let run = run(
+            dir.path(),
+            "a!",
+            PasswordInput::Prompt(Box::new(NeverAsked)),
+        )
+        .await;
 
         assert_eq!(run.exit, Exit::Failed);
         assert!(
@@ -728,7 +898,7 @@ mod tests {
             dir.path(),
             "alice",
             PasswordInput::Stdin {
-                reader: &mut NeverRead,
+                reader: Box::new(NeverRead),
                 is_terminal: true,
             },
         )

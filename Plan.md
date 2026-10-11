@@ -2505,6 +2505,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Tests,** red against compiling stubs (no Owner check, a service that refused everything, a command that did nothing): 26 failed on assertions, then all passed.
   >   - In-crate: the rounds through a stand-in prompt, `--password-stdin` through a stand-in stdin, and prompts and stdin that fail the test when they're used.
   >   - The real binary: `--password-stdin` creates the Owner with one audit entry, and a second run exits 1 with its stdin still open and unwritten.
+
+  > Note (P7.5, from the group A review, fixed in group B) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **the reads never block the runtime.** The prompt and the `--password-stdin` read run in `spawn_blocking`, each moving its owned source onto the blocking thread and back; the Owner check still comes first. Two current-thread tests failed (the reads blocked the runtime for their 5 s bound), then passed.
 - [ ] **P7.6** 🔴 Endpoints:
   - `POST /auth/login`, `/auth/login/mfa`, `/auth/refresh`, `/auth/logout`, `/auth/register` (invite)
   - `GET /me`, `POST /me/password` (step-up)

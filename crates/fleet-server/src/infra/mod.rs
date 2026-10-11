@@ -3,7 +3,8 @@
 //!
 //! - [`system`]: the real clock and the OS's secure randomness.
 //! - [`sqlite`]: the SQLite database, its pools and its migrations.
-//! - [`crypto`]: the password service (P7.2), and later the vault and the tokens.
+//! - [`crypto`]: the password service (P7.2), the vault (P7.4), and later the
+//!   tokens (P7.3).
 //!
 //! P9 adds `msauth`.
 
