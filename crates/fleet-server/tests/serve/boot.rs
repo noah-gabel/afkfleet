@@ -1,8 +1,13 @@
-//! `serve::run` in-process (Plan.md P6.11, ADR-0015): the wiring `serve`
-//! runs, on a listener the test binds itself. Real time, since the database
-//! runs on sqlx's worker threads (CLAUDE.md).
+//! `serve::run` in-process (Plan.md P6.11 and Phase 6's Definition of Done,
+//! ADR-0015): the wiring `serve` runs, on a listener the test binds itself.
+//! Real time, since the database runs on sqlx's worker threads (CLAUDE.md).
 
+use core::time::Duration;
+
+use fleet_server::cli::healthcheck::{self, HttpResponse};
 use fleet_server::cli::serve::{self, Exit};
+use fleet_server::infra::sqlite::{self, DatabaseOptions, MIGRATOR};
+use fleet_startup::signals::Signal;
 
 use crate::support::{ChannelSignals, capture, listener, server_config, test_dir};
 
@@ -34,4 +39,56 @@ async fn a_missing_database_folder_fails_the_start_before_listening() {
         "{}",
         logs.text()
     );
+}
+
+/// The longest the boot test waits for anything.
+const PATIENCE: Duration = Duration::from_secs(30);
+
+/// Phase 6's Definition of Done: the app boots in-process on a fresh
+/// temporary database, with the wiring `serve` uses, passes both health
+/// checks over a real connection, and stops cleanly on a signal.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_app_boots_on_a_fresh_database_passes_the_health_checks_and_stops_cleanly() {
+    let dir = test_dir("boot_dod");
+    let (listener, address) = listener().await;
+    let config = server_config(&dir, address, false);
+    let (sender, signals) = ChannelSignals::new();
+    let server = tokio::spawn({
+        let config = config.clone();
+        async move { serve::run(&config, listener, signals).await }
+    });
+
+    for path in ["/health/live", "/health/ready"] {
+        let answer = healthcheck::get(address, path, PATIENCE).await.unwrap();
+        assert_eq!(
+            answer,
+            HttpResponse {
+                status: 200,
+                body: Vec::new()
+            },
+            "{path}"
+        );
+    }
+    let health = healthcheck::check(&config.http).await;
+    assert!(health.is_healthy(), "{health}");
+
+    sender.send(Signal::Terminate).await.unwrap();
+    let exit = tokio::time::timeout(PATIENCE, server)
+        .await
+        .expect("the server should stop within its deadline")
+        .unwrap();
+
+    assert_eq!(exit, Exit::Stopped);
+    assert!(!dir.join("afkfleet.db-wal").exists(), "closed cleanly");
+    let database = sqlite::open(&config.database, DatabaseOptions::default())
+        .await
+        .unwrap();
+    let applied: i64 = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "count!: i64" FROM _sqlx_migrations WHERE success"#
+    )
+    .fetch_one(database.read_pool())
+    .await
+    .unwrap();
+    assert_eq!(usize::try_from(applied).unwrap(), MIGRATOR.iter().count());
+    database.close().await;
 }
