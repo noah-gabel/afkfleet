@@ -312,6 +312,30 @@ mod tests {
     }
 
     #[test]
+    fn the_last_line_carries_the_exit_code() {
+        use fleet_startup::config::{LogConfig, LogFormat};
+        use fleet_startup::telemetry::{NoRules, layer_with};
+        use fleet_testkit::log_buffer::LogBuffer;
+        use tracing_subscriber::layer::SubscriberExt as _;
+
+        let logs = LogBuffer::default();
+        let config = LogConfig {
+            format: LogFormat::Json,
+            filter: "info".parse().unwrap(),
+        };
+        let subscriber =
+            tracing_subscriber::registry().with(layer_with(&config, &NoRules, false, logs.clone()));
+        let _guard = tracing::subscriber::set_default(subscriber);
+
+        Exit::ServerFailed.log();
+
+        let lines = logs.lines_with("the server stopped").unwrap();
+        assert_eq!(lines.len(), 1, "{}", logs.text());
+        assert_eq!(lines[0]["level"], "INFO");
+        assert_eq!(lines[0]["exit_code"], 4);
+    }
+
+    #[test]
     fn the_drain_gets_the_request_timeout_and_the_close_at_least_5_s() {
         let http = HttpConfig {
             bind: HttpConfig::DEFAULT_BIND,
