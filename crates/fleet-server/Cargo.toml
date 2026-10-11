@@ -46,6 +46,10 @@ tower.workspace = true
 # the server's own (ADR-0015).
 tower-http = { workspace = true, features = ["catch-panic", "limit", "sensitive-headers", "set-header", "timeout"] }
 tracing.workspace = true
+# The OpenAPI document, served only in dev mode (P6.10): `OpenApi` and `#[utoipa::path]`,
+# with utoipa-axum's `OpenApiRouter`, so every route carries its entry (ADR-0015).
+utoipa = { workspace = true, features = ["macros"] }
+utoipa-axum.workspace = true
 # IDs are bound and read as `uuid::fmt::Hyphenated` text (ADR-0015).
 uuid.workspace = true
 

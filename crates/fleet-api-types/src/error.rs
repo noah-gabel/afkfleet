@@ -15,6 +15,7 @@
 
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+use utoipa::{PartialSchema as _, ToSchema};
 
 use crate::open::{Open, OpenEnum};
 use crate::text::BoundedText;
@@ -32,7 +33,7 @@ pub const FIELD_MESSAGE_MAX_CHARS: usize = 256;
 /// This union lists the codes this version knows; a newer server may send
 /// others, so code that branches on a code always keeps a default branch that
 /// shows the message and the request ID.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, ToSchema)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorCode {
     /// The request couldn't be read (400).
@@ -127,27 +128,31 @@ impl OpenEnum for ErrorCode {
 }
 
 /// The body of every error response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct ErrorResponse {
     /// The error.
     pub error: ErrorBody,
 }
 
 /// What went wrong, for the caller.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct ErrorBody {
     /// What went wrong.
     #[ts(as = "ErrorCode")]
+    #[schema(value_type = ErrorCode)]
     pub code: Open<ErrorCode>,
     /// The code's fixed sentence.
     #[ts(type = "string")]
+    #[schema(schema_with = BoundedText::<MESSAGE_MAX_CHARS>::schema)]
     pub message: BoundedText<MESSAGE_MAX_CHARS>,
     /// The request's ID, which names it in the server's log.
     #[ts(type = "string")]
+    #[schema(schema_with = BoundedText::<REQUEST_ID_MAX_CHARS>::schema)]
     pub request_id: BoundedText<REQUEST_ID_MAX_CHARS>,
     /// Every broken rule; only for `validation_failed`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
+    #[schema(nullable = false)]
     pub fields: Option<Vec<FieldError>>,
 }
 
@@ -169,13 +174,15 @@ impl ErrorBody {
 }
 
 /// A field that broke a rule.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct FieldError {
     /// Where the field is, in garde's notation: `name`, `steps[0].angle`.
     #[ts(type = "string")]
+    #[schema(schema_with = BoundedText::<FIELD_PATH_MAX_CHARS>::schema)]
     pub path: BoundedText<FIELD_PATH_MAX_CHARS>,
     /// Which rule it broke. It names the rule, never the value.
     #[ts(type = "string")]
+    #[schema(schema_with = BoundedText::<FIELD_MESSAGE_MAX_CHARS>::schema)]
     pub message: BoundedText<FIELD_MESSAGE_MAX_CHARS>,
 }
 

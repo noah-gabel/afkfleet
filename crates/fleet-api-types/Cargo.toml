@@ -17,6 +17,10 @@ serde = { workspace = true, features = ["derive"] }
 thiserror.workspace = true
 # The TypeScript export; `serde-compat` carries serde's renames into it (ADR-0015).
 ts-rs = { workspace = true, features = ["serde-compat"] }
+# The OpenAPI schemas, which describe the same wire types as the TypeScript. With
+# `preserve_order`, properties keep the struct's field order, as ts-rs's output does, so
+# a test compares the two directly (ADR-0015).
+utoipa = { workspace = true, features = ["macros", "preserve_order"] }
 
 [dev-dependencies]
 rstest.workspace = true

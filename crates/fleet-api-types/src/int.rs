@@ -7,9 +7,16 @@
 //! it as `bigint`, which `JSON.parse` never produces): it holds a `SafeInt`,
 //! which can't hold a value outside that range and is a `number` in
 //! TypeScript. 32-bit integers and smaller are `number`s already.
+//!
+//! Its `OpenAPI` schema is a component of its own, `SafeInt`, an integer with
+//! that range, which fields refer to, as the TypeScript fields name the
+//! `SafeInt` type.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use ts_rs::TS;
+use utoipa::openapi::RefOr;
+use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
+use utoipa::{PartialSchema, ToSchema};
 
 /// An integer within ±(2^53 − 1), which JavaScript reads exactly. It's a
 /// plain JSON number on the wire and `number` in TypeScript; reading a number
@@ -80,6 +87,19 @@ impl<'de> Deserialize<'de> for SafeInt {
         Self::try_new(value).map_err(serde::de::Error::custom)
     }
 }
+
+/// An integer within ±(2^53 − 1), like the TypeScript `number` it is.
+impl PartialSchema for SafeInt {
+    fn schema() -> RefOr<Schema> {
+        ObjectBuilder::new()
+            .schema_type(Type::Integer)
+            .minimum(Some(Self::MIN))
+            .maximum(Some(Self::MAX))
+            .into()
+    }
+}
+
+impl ToSchema for SafeInt {}
 
 #[cfg(test)]
 mod tests {

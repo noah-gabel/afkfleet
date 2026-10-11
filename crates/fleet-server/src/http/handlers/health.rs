@@ -10,24 +10,44 @@
 
 use axum::extract::State;
 use axum::http::StatusCode;
+use fleet_api_types::ErrorResponse;
 
 use crate::http::error::ApiError;
 use crate::http::router::AppState;
 
-/// The liveness check's path.
-pub(crate) const LIVE: &str = "/health/live";
-
-/// The readiness check's path.
-pub(crate) const READY: &str = "/health/ready";
-
 /// `GET /health/live`: the process runs and answers requests. It checks
 /// nothing else, so it never fails while the server can answer at all.
+#[utoipa::path(
+    get,
+    path = "/health/live",
+    tag = "health",
+    responses(
+        (status = 200, description = "The server runs and answers requests. The body is empty."),
+        (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
+    ),
+)]
 pub(crate) async fn live() -> StatusCode {
     StatusCode::OK
 }
 
 /// `GET /health/ready`: the server can serve requests, which means the
 /// database answers.
+#[utoipa::path(
+    get,
+    path = "/health/ready",
+    tag = "health",
+    responses(
+        (status = 200, description = "The database answers. The body is empty."),
+        (status = 500, description = "The database failed; the server's log holds the cause under the request ID.", body = ErrorResponse),
+        (
+            status = 503,
+            description = "The database is busy.",
+            body = ErrorResponse,
+            headers(("Retry-After" = u32, description = "Seconds to wait before trying again: always 1.")),
+        ),
+        (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
+    ),
+)]
 pub(crate) async fn ready(State(state): State<AppState>) -> Result<StatusCode, ApiError> {
     state.health.ready().await?;
     Ok(StatusCode::OK)
