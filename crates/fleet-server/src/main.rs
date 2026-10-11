@@ -6,10 +6,10 @@
 //! 1. Then, by command:
 //!
 //! - `serve` starts logging, warns once if dev mode is on, builds a
-//!   multi-threaded runtime, binds `[http] bind` and runs
-//!   [`serve::run`]. Every startup error from here on is one `error` event,
-//!   "the server can't start", and the last line, "the server stopped",
-//!   carries the exit code.
+//!   multi-threaded runtime, installs the stop signals, binds `[http] bind`
+//!   and runs [`serve::run`] until a signal stops it. Every startup error
+//!   from here on is one `error` event, "the server can't start", and the
+//!   last line, "the server stopped", carries the exit code.
 //! - `migrate` starts logging and runs [`migrate::run`] on a current-thread
 //!   runtime.
 //! - `healthcheck` runs [`healthcheck::check`] on a current-thread runtime
@@ -27,6 +27,7 @@ use clap::Parser as _;
 use fleet_server::cli::serve::StartError;
 use fleet_server::cli::{self, Cli, Command, healthcheck, migrate, serve};
 use fleet_server::config::{self, ServerConfig};
+use fleet_startup::signals::OsSignals;
 use fleet_startup::telemetry::{NoRules, init_with};
 use tokio::net::TcpListener;
 use tokio::runtime::{Builder, Runtime};
@@ -62,13 +63,20 @@ fn run_server(path: &Path) -> ExitCode {
     ExitCode::from(exit.code())
 }
 
-/// Builds the runtime, binds the address and runs the server.
+/// Builds the runtime, installs the stop signals, binds the address and
+/// runs the server.
 fn start(config: &ServerConfig) -> serve::Exit {
     let runtime = match Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => return serve::cant_start(&StartError::Runtime(error)),
     };
     let exit = runtime.block_on(async {
+        // Inside the runtime, which tokio's signal handling needs, and before
+        // anything else, so an early signal isn't lost.
+        let signals = match OsSignals::install() {
+            Ok(signals) => signals,
+            Err(error) => return serve::cant_start(&StartError::Signals(error)),
+        };
         // Binding a local address doesn't wait on anything remote.
         let listener = match TcpListener::bind(config.http.bind).await {
             Ok(listener) => listener,
@@ -79,7 +87,7 @@ fn start(config: &ServerConfig) -> serve::Exit {
                 });
             }
         };
-        serve::run(config, listener).await
+        serve::run(config, listener, signals).await
     });
     runtime.shutdown_timeout(serve::RUNTIME_SHUTDOWN);
     exit

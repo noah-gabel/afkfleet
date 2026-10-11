@@ -50,6 +50,8 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "time"] }
 # `ServiceBuilder`, which lists the middleware stack outermost first (ADR-0015).
 tower.workspace = true
+# `CancellationToken`, which asks axum's server to shut down gracefully (ADR-0015).
+tokio-util.workspace = true
 # The middleware stack's tower-http layers; the request-ID and trace layers are
 # the server's own (ADR-0015).
 tower-http = { workspace = true, features = ["catch-panic", "limit", "sensitive-headers", "set-header", "timeout"] }

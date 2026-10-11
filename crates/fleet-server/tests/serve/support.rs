@@ -1,5 +1,6 @@
 //! What the tests share: test directories and configs, the binary run as a
-//! child process, and the server run in-process.
+//! child process, the server run in-process with a signal source the test
+//! feeds, and the server's log layer writing into a buffer.
 
 use core::time::Duration;
 use std::fs;
@@ -11,8 +12,12 @@ use std::sync::mpsc;
 use std::thread;
 
 use fleet_server::config::{DatabaseConfig, HttpConfig, LogConfig, LogFormat, ServerConfig};
+use fleet_startup::signals::{ShutdownSignals, Signal};
+use fleet_startup::telemetry::{NoRules, layer_with};
+use fleet_testkit::log_buffer::LogBuffer;
 use serde_json::Value;
 use tokio::net::TcpListener;
+use tracing_subscriber::layer::SubscriberExt as _;
 
 pub(crate) const BINARY: &str = env!("CARGO_BIN_EXE_afkfleet-server");
 
@@ -178,6 +183,48 @@ pub(crate) async fn finish_beside(args: Vec<String>) -> Finished {
     })
     .await
     .unwrap()
+}
+
+/// Delivers the signals the test sends; waits forever once the sender is
+/// gone, like a real source whose streams ended.
+#[derive(Debug)]
+pub(crate) struct ChannelSignals(tokio::sync::mpsc::Receiver<Signal>);
+
+impl ChannelSignals {
+    /// A source and the sender that feeds it.
+    pub(crate) fn new() -> (tokio::sync::mpsc::Sender<Signal>, Self) {
+        let (sender, receiver) = tokio::sync::mpsc::channel(4);
+        (sender, Self(receiver))
+    }
+
+    /// A source that never delivers a signal.
+    pub(crate) fn silent() -> Self {
+        Self::new().1
+    }
+}
+
+impl ShutdownSignals for ChannelSignals {
+    async fn recv(&mut self) -> Signal {
+        match self.0.recv().await {
+            Some(signal) => signal,
+            None => core::future::pending().await,
+        }
+    }
+}
+
+/// The server's log layer at `info`, writing into a buffer, as the default
+/// subscriber of this thread. A test on tokio's current-thread runtime sees
+/// everything the server logs.
+pub(crate) fn capture() -> (LogBuffer, tracing::subscriber::DefaultGuard) {
+    let buffer = LogBuffer::default();
+    let config = LogConfig {
+        format: LogFormat::Json,
+        filter: "info".parse().unwrap(),
+    };
+    let subscriber =
+        tracing_subscriber::registry().with(layer_with(&config, &NoRules, false, buffer.clone()));
+    let guard = tracing::subscriber::set_default(subscriber);
+    (buffer, guard)
 }
 
 /// Aborts an in-process task when the test ends, however it ends.

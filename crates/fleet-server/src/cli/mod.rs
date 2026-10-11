@@ -6,7 +6,7 @@
 //! usage errors: `healthcheck`'s exit 1, since Docker reserves 2 for
 //! healthchecks. Each command lists its exit codes in its own help.
 //!
-//! - [`serve`]: runs the HTTP API until the process ends.
+//! - [`serve`]: runs the HTTP API until a signal stops it.
 //! - [`migrate`]: applies every pending migration and exits.
 //! - [`healthcheck`]: asks a running server's `GET /health/ready`, for
 //!   Docker's HEALTHCHECK.
@@ -32,9 +32,10 @@ pub const DATABASE_CLOSE: Duration = Duration::from_secs(5);
 /// The exit codes of `afkfleet-server serve`, shown in its help.
 pub const SERVE_EXIT_CODES: &str = "\
 Exit codes:
+  0  stopped by a signal (SIGTERM or SIGINT; Ctrl+C or Ctrl+Break on Windows)
   1  startup error: the config, logging, the address or the database
   2  usage error
-  4  the server ended unasked";
+  4  the server ended unasked, or didn't finish its shutdown by the deadline";
 
 /// The exit codes of `afkfleet-server migrate`, shown in its help.
 pub const MIGRATE_EXIT_CODES: &str = "\
@@ -68,7 +69,8 @@ pub struct Cli {
 /// The server's commands.
 #[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
 pub enum Command {
-    /// Runs the HTTP API. It migrates the database first.
+    /// Runs the HTTP API until a signal stops it. It migrates the database
+    /// first.
     #[command(after_help = SERVE_EXIT_CODES)]
     Serve {
         /// The config file (TOML). `AFKFLEET_SERVER__…` environment variables

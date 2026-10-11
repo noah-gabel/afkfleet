@@ -3,27 +3,8 @@
 //! runs on sqlx's worker threads (CLAUDE.md).
 
 use fleet_server::cli::serve::{self, Exit};
-use fleet_server::config::LogConfig;
-use fleet_startup::telemetry::{NoRules, layer_with};
-use fleet_testkit::log_buffer::LogBuffer;
-use tracing_subscriber::layer::SubscriberExt as _;
 
-use crate::support::{listener, server_config, test_dir};
-
-/// The server's log layer at `info`, writing into a buffer, as the default
-/// subscriber of this thread. The tests run on tokio's current-thread
-/// runtime, so everything `run` logs goes there.
-fn capture() -> (LogBuffer, tracing::subscriber::DefaultGuard) {
-    let buffer = LogBuffer::default();
-    let config = LogConfig {
-        format: fleet_server::config::LogFormat::Json,
-        filter: "info".parse().unwrap(),
-    };
-    let subscriber =
-        tracing_subscriber::registry().with(layer_with(&config, &NoRules, false, buffer.clone()));
-    let guard = tracing::subscriber::set_default(subscriber);
-    (buffer, guard)
-}
+use crate::support::{ChannelSignals, capture, listener, server_config, test_dir};
 
 #[tokio::test]
 async fn a_missing_database_folder_fails_the_start_before_listening() {
@@ -33,7 +14,7 @@ async fn a_missing_database_folder_fails_the_start_before_listening() {
     config.database.path = dir.join("no-such-folder").join("afkfleet.db");
     let (logs, _guard) = capture();
 
-    let exit = serve::run(&config, listener).await;
+    let exit = serve::run(&config, listener, ChannelSignals::silent()).await;
 
     assert_eq!(exit, Exit::StartupFailed);
     assert_eq!(exit.code(), 1);

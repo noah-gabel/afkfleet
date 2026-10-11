@@ -14,8 +14,8 @@ use fleet_server::cli::{HEALTHCHECK_EXIT_CODES, MIGRATE_EXIT_CODES, SERVE_EXIT_C
 use rstest::rstest;
 
 use crate::support::{
-    AbortOnDrop, closed_port, config_body, finish, finish_beside, json_lines, lines_with, listener,
-    path_arg, server_config, test_dir, toml_path, write_config,
+    AbortOnDrop, ChannelSignals, closed_port, config_body, finish, finish_beside, json_lines,
+    lines_with, listener, path_arg, server_config, test_dir, toml_path, write_config,
 };
 
 #[rstest]
@@ -178,7 +178,8 @@ fn a_healthcheck_with_nothing_listening_is_unhealthy_with_exit_1() {
 async fn running_server(dir: &Path) -> (u16, AbortOnDrop<serve::Exit>) {
     let (listener, address) = listener().await;
     let config = server_config(dir, address, false);
-    let task = tokio::spawn(async move { serve::run(&config, listener).await });
+    let task =
+        tokio::spawn(async move { serve::run(&config, listener, ChannelSignals::silent()).await });
     (address.port(), AbortOnDrop(task))
 }
 
@@ -227,4 +228,162 @@ async fn a_healthcheck_of_an_unspecified_bind_asks_loopback_on_its_port() {
         finished.stdout,
         format!("healthy: /health/ready on 127.0.0.1:{port} answered 200\n")
     );
+}
+
+#[cfg(unix)]
+mod sigterm {
+    use core::time::Duration;
+    use std::io::{BufRead, BufReader, Read};
+    use std::process::Command;
+    use std::sync::mpsc;
+    use std::thread;
+
+    use fleet_server::cli::healthcheck;
+    use serde_json::Value;
+    use tokio::time::Instant;
+
+    use super::*;
+    use crate::support::{DEADLINE, Running, drain, server};
+
+    /// How many free ports the test tries: another process can take the one
+    /// it found before the server binds it.
+    const ATTEMPTS: usize = 3;
+
+    /// The dev-mode warning, word for word.
+    const DEV_MODE_WARNING: &str = "dev mode is on: development-only features are enabled; never run a production server in dev mode";
+
+    /// Sends each line of `pipe` on a thread, then `None` once it closes.
+    fn lines_of(pipe: impl Read + Send + 'static) -> mpsc::Receiver<Option<String>> {
+        let (sender, receiver) = mpsc::sync_channel(256);
+        thread::spawn(move || {
+            for line in BufReader::new(pipe).lines() {
+                let Ok(line) = line else { break };
+                if sender.send(Some(line)).is_err() {
+                    return;
+                }
+            }
+            let _ = sender.send(None);
+        });
+        receiver
+    }
+
+    /// A server that logged "the server is listening".
+    struct Listening {
+        running: Running,
+        lines: mpsc::Receiver<Option<String>>,
+        stderr: mpsc::Receiver<String>,
+        seen: Vec<String>,
+        port: u16,
+    }
+
+    /// Starts `serve` in dev mode on a port that was free a moment ago.
+    /// `None` if the server exited 1 because that port was taken by then;
+    /// any other early end fails the test.
+    fn start(attempt: usize) -> Option<Listening> {
+        let port = closed_port().port();
+        let dir = test_dir(&format!("sigterm_{attempt}"));
+        let address = format!("127.0.0.1:{port}").parse().unwrap();
+        let config = write_config(
+            &dir,
+            &format!("dev_mode = true\n{}", config_body(&dir, address)),
+        );
+        let mut child = server(&["serve", "--config", path_arg(&config)])
+            .spawn()
+            .unwrap();
+        let lines = lines_of(child.stdout.take().unwrap());
+        let stderr = drain(child.stderr.take().unwrap());
+        let mut running = Running(Some(child));
+        let mut seen = Vec::new();
+        loop {
+            let line = lines
+                .recv_timeout(DEADLINE)
+                .expect("the server should log before the deadline");
+            let Some(line) = line else { break };
+            let listening = line.contains("\"the server is listening\"");
+            seen.push(line);
+            if listening {
+                return Some(Listening {
+                    running,
+                    lines,
+                    stderr,
+                    seen,
+                    port,
+                });
+            }
+        }
+        // The output ended before the server listened.
+        let status = running.0.take().unwrap().wait().unwrap();
+        let stderr = stderr.recv_timeout(DEADLINE).unwrap();
+        let taken = status.code() == Some(1)
+            && seen.iter().any(|line| {
+                let line: Value = serde_json::from_str(line).unwrap_or_default();
+                let error = line["error"].as_str().unwrap_or_default();
+                line["message"] == "the server can't start"
+                    && error.starts_with(&format!("can't listen on {address}: "))
+                    && error.contains("Address already in use")
+            });
+        assert!(
+            taken,
+            "the server ended before listening ({status}): {seen:#?}\nstderr: {stderr}"
+        );
+        None
+    }
+
+    #[test]
+    fn sigterm_stops_the_server_with_exit_0_and_logs_the_stop_last() {
+        let Listening {
+            mut running,
+            lines,
+            stderr,
+            mut seen,
+            port,
+        } = (1..=ATTEMPTS)
+            .find_map(start)
+            .expect("a free port within the attempts");
+        let address = format!("127.0.0.1:{port}").parse().unwrap();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let ready = runtime
+            .block_on(healthcheck::get(
+                address,
+                healthcheck::PATH,
+                Duration::from_secs(10),
+            ))
+            .unwrap();
+        assert_eq!(ready.status, 200);
+
+        let pid = running.0.as_ref().unwrap().id().to_string();
+        let killed = Command::new("kill").args(["-TERM", &pid]).status().unwrap();
+        assert!(killed.success());
+        let deadline = Instant::now() + DEADLINE;
+        while let Some(line) = lines
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .expect("the server should stop before the deadline")
+        {
+            seen.push(line);
+        }
+        let status = running.0.take().unwrap().wait().unwrap();
+
+        let stderr = stderr.recv_timeout(DEADLINE).unwrap();
+        assert_eq!(status.code(), Some(0), "stderr: {stderr}");
+        let lines: Vec<Value> = seen
+            .iter()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+        let last = lines.last().unwrap();
+        assert_eq!(last["message"], "the server stopped", "{seen:#?}");
+        assert_eq!(last["exit_code"], 0);
+        let position = |message: &str| {
+            lines
+                .iter()
+                .position(|line| line["message"] == message)
+                .unwrap_or_else(|| panic!("no line {message:?}: {seen:#?}"))
+        };
+        assert!(position(DEV_MODE_WARNING) < position("the server is listening"));
+        let shutting_down = &lines[position("shutting down")];
+        assert_eq!(shutting_down["signal"], "SIGTERM");
+        assert_eq!(lines[position(DEV_MODE_WARNING)]["level"], "WARN");
+    }
 }
