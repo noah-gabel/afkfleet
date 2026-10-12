@@ -172,7 +172,7 @@ Crates are created in the phase that first needs them, not up front.
 | `fleet-startup` | `fleet-core` |
 | `fleet-agent` (bin) | `fleet-core`, `fleet-runtime`, `fleet-mc`, `fleet-proto`, `fleet-startup` |
 | `fleet-server` (bin) | `fleet-core`, `fleet-proto`, `fleet-api-types`, `fleet-startup`, **azalea-auth** |
-| `fleet-client` | `fleet-api-types` |
+| `fleet-client` | `fleet-api-types` (its tests: `fleet-server`, `fleet-startup`, `fleet-core` and `fleet-testkit`, as dev-dependencies) |
 | `apps/desktop/src-tauri` | `fleet-client`, `fleet-api-types` |
 | `fleet-testkit` | `fleet-core` (dev-dependency for everyone else) |
 
@@ -225,8 +225,8 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Protobuf | `prost` | 0.14.4 | proto | |
 | Protobuf codegen | `tonic-prost-build`, `protox` | 0.14.6, 0.9.1 | proto (`build.rs`) | Pure Rust, no system `protoc` |
 | TLS | `rustls` | 0.23.45 | agent, server, client, desktop | **Only the aws-lc-rs provider**, installed explicitly at startup. The default features select it. The agent's `main.rs` installs it before anything else runs (ADR-0014) |
-| X.509 / CSR | `rcgen` | 0.14.10, dfo | server (CA, signing), agent (CSR) | `aws_lc_rs`, `pem`, `x509-parser`. The default is ring |
-| HTTP client | `reqwest` | **0.13.5**, dfo | client, server, desktop, mc | Feature `rustls` (aws-lc-rs + platform verifier), no native-tls. fleet-mc enables no features: it only names `reqwest::Proxy` in azalea's `AccountTrait` (ADR-0011) |
+| X.509 / CSR | `rcgen` | 0.14.10, dfo | server (CA, signing), agent (CSR), client (dev: test certificates) | `aws_lc_rs`, `pem`, `x509-parser`. The default is ring. fleet-client's TLS tests make their CA and server certificates with it at run time (`aws_lc_rs`, `pem`), since no key is ever committed ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
+| HTTP client | `reqwest` | **0.13.5**, dfo | client, server, desktop, mc | Feature `rustls` (aws-lc-rs + platform verifier), no native-tls. fleet-mc enables no features: it only names `reqwest::Proxy` in azalea's `AccountTrait` (ADR-0011). fleet-client enables none either, and builds its client with no redirects, no proxies, a 5 s connect and 20 s request timeout, and `tls_certs_only` for a custom CA; it reads each body itself, capped at 1 MiB ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 | WebSocket client | `tokio-tungstenite` | 0.29.0, dfo | client | `connect`, `rustls-tls-native-roots`. 0.29 matches axum 0.8.9's `ws`, so only one tungstenite is built |
 | Rust → TypeScript types | `ts-rs` | 12.0.1, dfo | api-types | `serde-compat` only, so serde's renames reach the TypeScript; `chrono-impl` and `uuid-impl` come with the first DTO that holds a time or an ID. The export runs through `Config::new()`, never `#[ts(export)]` or the `TS_RS_*` variables (ADR-0015) |
 
@@ -529,7 +529,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - **Fakes over mocks.** Fakes live in `fleet-testkit`; `mockall` is only for checking interactions.
 - **Snapshots.** API JSON and error bodies are covered by insta snapshots. Never accept them blindly: the assistant reads each new snapshot before accepting it and lists it in the PR description, and the user reviews it in the PR diff.
 - **Property tests** for state machines, parsers and conversions. CI runs them with `PROPTEST_CASES=1000`.
-- **Coverage gates** (cargo-llvm-cov): `fleet-core` ≥ 90 %, `fleet-runtime` ≥ 85 %, auth and vault modules ≥ 90 %, workspace ≥ 80 %. Per-crate and per-module gates are checked by a small script over the llvm-cov JSON report.
+- **Coverage gates** (cargo-llvm-cov): `fleet-core` ≥ 90 %, `fleet-runtime` ≥ 85 %, auth and vault modules ≥ 90 %, `fleet-client` ≥ 90 % (P8.1, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)), workspace ≥ 80 %. Per-crate and per-module gates are checked by a small script over the llvm-cov JSON report.
 - **Mutation testing** (cargo-mutants) on `fleet-core` and auth in Phase 13.
 - **nextest profiles:**
   - `default`: fast, under ~60 s.
@@ -543,7 +543,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Conventions**
 - Each task has an ID `P<phase>.<n>`. 🔴 means *the test comes first*, strictly. Tasks without 🔴 (scaffolding, config, wiring) are verified by `just check`, CI or the task's demo, but any logic they add still gets tests.
 - A phase is finished when every task is ticked **and** its Definition of Done (DoD) holds.
-- **Branches:** one branch per task, `p<phase>/<task-id>-<slug>` (e.g. `p2/p2.6-bot-state-machine`). Phases 0 and 1 each use a single branch, `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each (see the note under Phase 2). Phase 3 uses five group branches plus one task branch for P3.9 (see the note under Phase 3). Phase 4 uses five group branches (see the note under Phase 4). Phase 5 uses four group branches (see the note under Phase 5). Phase 6 uses five group branches (see the note under Phase 6). Phase 7 uses five group branches (see the note under Phase 7). Every branch ends in a PR that the user reviews and merges. The `Plan.md` checkbox is ticked in that same PR.
+- **Branches:** one branch per task, `p<phase>/<task-id>-<slug>` (e.g. `p2/p2.6-bot-state-machine`). Phases 0 and 1 each use a single branch, `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each (see the note under Phase 2). Phase 3 uses five group branches plus one task branch for P3.9 (see the note under Phase 3). Phase 4 uses five group branches (see the note under Phase 4). Phase 5 uses four group branches (see the note under Phase 5). Phase 6 uses five group branches (see the note under Phase 6). Phase 7 uses five group branches (see the note under Phase 7). Phase 8 uses five group branches (see the note under Phase 8). Every branch ends in a PR that the user reviews and merges. The `Plan.md` checkbox is ticked in that same PR.
 - Phases are vertical slices:
   - **0–5** produce a working standalone bot.
   - **6–11** build the fully managed system with the app.
@@ -2133,7 +2133,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   |---|---|---|
   >   | `dev_mode` | `false` | When it's on, the server logs one `warn` at startup |
   >   | `[http] bind` | `127.0.0.1:8080` | An IP address and a port other than 0 |
-  >   | `[http] request_timeout_secs` | 15 | 1–300 |
+  >   | `[http] request_timeout_secs` | 15 | 1–300 (1–19 since P8.1, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
   >   | `[http] max_body_bytes` | 65536 | 1024–1048576 |
   >   | `[database] path` | required | Absolute |
   >   | `[log] format`, `filter` | `json`, `info` | As the agent's (P5.2) |
@@ -2846,7 +2846,23 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - **Rust:** `tauri` (≥ 2.11.1), `tauri-plugin-single-instance`, `keyring-core` + `windows-native-keyring-store`, `reqwest`, `rustls`.
 - **npm:** react, vite, typescript, TanStack Query & Router, zustand, zod, react-hook-form, tailwindcss, shadcn/ui, lucide-react, sonner, vitest, Testing Library, msw, `@tauri-apps/api`, biome.
 
-- [ ] **P8.1** 🔴 `fleet-client`:
+> Note (P8):
+> - **Five group branches.** At the user's request, Phase 8 is built in group PRs like Phases 2–7. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
+>
+>   | Group | Branch | Tasks |
+>   |---|---|---|
+>   | A | `p8/p8.1-fleet-client` | P8.1 |
+>   | B | `p8/p8.2-p8.3-scaffold-and-hardening` | P8.2, P8.3 |
+>   | C | `p8/p8.4-p8.5-bridge` | P8.4, P8.5 |
+>   | D | `p8/p8.6-p8.7-shell-and-auth-screens` | P8.6; P8.7's server setup, login with 2FA, register and enrollment |
+>   | E | `p8/p8.7-p8.9-profile-admin-wrap-up` | P8.7's profile; P8.8; P8.9; the DoD, threat model B2/B7 and README |
+>
+>   - **P8.7 is spread over D and E** and ticked in E.
+>   - **Hands-on checks:** where only the user can check something on Windows (the window, the keychain, the phone's authenticator, an installed dev build), the group's plan names the exact steps.
+>   - Each later group asks its own implementation questions in its session.
+> - **Decisions.** The user answered group A's questions on 2026-10-12, one at a time, and amended its plan in review. [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md) records them; the notes below summarize what changes a task.
+
+- [x] **P8.1** 🔴 `fleet-client`:
   - typed async methods for every endpoint (reqwest + rustls, timeouts)
   - one automatic, single-flight refresh on `401`
   - typed errors
@@ -2861,6 +2877,38 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **`expires_in`:** the app uses it on the mfa and setup tokens to restart a timed-out step itself (an expired token answers like a wrong code). Refreshing stays on a 401 only, never on a timer.
 
   > Note (P8.1, from Phase 6, group C, the user's decision) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): **A maximum response body size.** fleet-api-types caps each text a client reads (`BoundedText`, `Open`), but not how many entries a response holds (a `fields` array with a million entries), so fleet-client sets a maximum body size on its HTTP client, which bounds every response, not only errors.
+
+  > Note (P8.1, group A, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
+  > - **The API types:** request DTOs derive `Serialize` too, leaving an empty `Option` out (an amendment of ADR-0015's request rule), and fleet-api-types re-exports the IDs its DTOs carry, so §4's table holds.
+  > - **The tokens:**
+  >   - The refresh token lives only in a `SessionStore` port (`MemoryStore` here, the keychain in P8.4); a failed save clears it.
+  >   - The access token lives only in memory; a request without one refreshes first.
+  >   - The password step's and a 2FA replacement's tokens stay inside the client, whose methods take only codes.
+  >   - `login` with a session held is `AlreadyLoggedIn`.
+  > - **The session ends** on a refused refresh, a 401 after the retry, an empty store, and every logout, even an unreachable server's; never on a transient failure. **An end never races a save:** an epoch under a store gate drops, and revokes on the server, any save that started before an end. Logout ends locally first, then revokes with the tokens it took.
+  > - **The server and its certificates:**
+  >   - `ServerUrl` is an origin; plain http works only for a literal loopback address.
+  >   - No redirects, no proxies.
+  >   - `Trust::System`, or `Trust::CustomCa` alone (`tls_certs_only`), read strictly by `CustomCa::from_pem`.
+  > - **Bounds:**
+  >   - 5 s to connect, 20 s per request and 5 s per store call.
+  >   - A 1 MiB body cap.
+  >   - No automatic retries: the error carries `retry_after`.
+  >   - **The server's `[http] request_timeout_secs` is capped at 19 s** (Appendix A's note).
+  > - **Tests:**
+  >   - `serve::app_with` runs the production wiring over a `ManualClock` and `SeededRandom`.
+  >   - The interleavings run through a crate-private transport seam.
+  >   - A required `fleet-client` coverage gate at 90 %.
+
+  > Note (P8.1, as built, group A) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
+  > - **The pieces:**
+  >   - The client: `fleet_client::{Client, ClientConfig, LoginStep, ServerUrl, Trust, CustomCa, SessionStore, MemoryStore, ClientError, ApiFailure}`, every `/api/v1` route plus `health_live` and `health_ready`.
+  >   - fleet-server: `serve::{ServerPorts, app_with}`.
+  >   - fleet-api-types: the request DTOs' `Serialize` and the ID re-exports.
+  > - **Tests,** red against compiling stubs first: fleet-api-types 2 of 3, the config's range case, fleet-client 101 of 132, the gates script's new check. Then all passed.
+  >   - The integration tests run the real server on 127.0.0.1:0: every route; the refresh rules (a transparent refresh, eight requests and one rotation, no grace window, the idle expiry); logout after a restart.
+  >   - The TLS tests use rcgen certificates and a rustls server on a thread.
+  > - **Lockfile:** the build gains rcgen, pem and yasna. Cargo.lock also lists x509-parser and its parsing crates, the optional dependency behind rcgen's weak feature `x509-parser?/verify-aws`, which nothing enables or builds; `cargo deny check` passes.
 - [ ] **P8.2** Scaffold:
   - `apps/desktop` (Tauri v2; `src-tauri` is a workspace member)
   - `packages/ui` (Vite + React + strict TypeScript + Tailwind + shadcn/ui)
@@ -2876,6 +2924,12 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - The **refresh token lives in the OS keychain**; the access token only in memory.
   - Typed commands are grouped per feature (`commands/auth.rs` …) and return `Result<T, CommandError { code, message }>`.
   - Server profile: a URL plus an optional custom CA PEM, validated. **Never accept invalid certificates.**
+  > Note (P8.4, from group A) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
+  > - **The keychain implements fleet-client's `SessionStore`**, doing its blocking calls off the runtime.
+  > - **The server profile reuses `ServerUrl` and `CustomCa::from_pem`.**
+  > - **`main` installs the aws-lc-rs provider** before building the client.
+  > - **`CommandError` maps `ClientError`** with a default branch (`ApiFailure::code` is `Open`).
+  > - **No token reaches `AppState`:** fleet-client holds the access token and the step tokens itself.
 - [ ] **P8.5** 🔴 TypeScript side:
   - The `ApiClient` interface lives in `packages/ui/src/api/`.
   - `TauriApiClient` lives in `apps/desktop/src/` and is injected into `<App apiClient={…} />`.
@@ -2891,6 +2945,12 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - an error boundary
   - toasts
   - a banner when the server is unreachable
+  > Note (P8.6, P8.7, from group A) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
+  > - The banner shows on `Unreachable` and `TimedOut`.
+  > - Server setup explains `Certificate`.
+  > - A 429 or 503 shows its `retry_after`.
+  > - `expires_in` restarts a timed-out login or setup step.
+  > - Registering holds no session, so the login right after it never meets `AlreadyLoggedIn`.
 - [ ] **P8.7** 🔴 Screens:
   - server setup
   - login, including the 2FA step
@@ -2950,6 +3010,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P9.3, from Phase 6, group A, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
   > - **The cap already exists.** fleet-server's log layer comes from fleet-startup, which caps `azalea_auth` at `info` for every binary, outside the rules a binary can add, since Phase 6. P9.3 adds no second cap; P9's redaction test still checks this one on the server.
   > - **stable-check.** fleet-server is in the justfile's `stable_crates` since Phase 6, because it didn't depend on azalea-auth yet. When azalea-auth arrives here, fleet-server leaves `stable_crates`, as the rule says (P0.11).
+  > Note (P9.3, from Phase 8, group A) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **fleet-client leaves `stable_crates` with fleet-server,** since fleet-server is its dev-dependency and `stable-check` builds `--all-targets`.
 - [ ] **P9.4** 🔴 Device-code flow:
   - `POST /accounts/link` returns `{flow_id, user_code, verification_uri, expires_at}`.
   - A background poller runs bounded and cancellable, with per-user and total caps.
@@ -3364,6 +3425,8 @@ Secrets **never** go in these files. They're referenced through `*_file` paths (
 > - **`[rate_limits]`** arrives with every key below but the chat ones and `ws_connections_per_user` (P11). The ranges are in P7.10's note; each is at least 1.
 > - None of them needs a place on the secret-name test's allowlist.
 
+> Note (Appendix A, Phase 8, group A, the user's decision) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **`[http] request_timeout_secs` is at most 19 s.** The desktop app's client gives up on a request after 20 s, so the server's request timeout must stay below that: a slower server answer could let a refresh commit after the client gave up, and the client's next refresh would then send the replaced token, which is reuse and ends the session. Validation refuses anything above 19.
+
 `server.toml`
 ```toml
 dev_mode = false
@@ -3371,7 +3434,7 @@ dev_mode = false
 [http]
 bind = "0.0.0.0:8080"
 trusted_proxies = ["172.30.0.0/24"]     # Caddy network; X-Forwarded-For is only trusted from here
-request_timeout_secs = 15
+request_timeout_secs = 15                # 1–19: below the desktop client's 20 s
 max_body_bytes = 65536
 
 [grpc]

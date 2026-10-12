@@ -75,7 +75,7 @@ pub struct MeResponse {
 
 /// `POST /me/password`: a new password, after stepping up. Every other
 /// session of the user ends, and so does this session's step-up.
-#[derive(Debug, Deserialize, Validate, TS, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Validate, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PasswordChangeRequest {
     /// The new password: 12 to 128 characters, no control characters,

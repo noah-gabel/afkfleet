@@ -12,7 +12,11 @@
 //! stopped", carries the exit code.
 //!
 //! # The app
-//! [`app`] builds the router and its [`Housekeeping`] (ADR-0016):
+//! [`app`] builds the router and its [`Housekeeping`] (ADR-0016) through
+//! [`app_with`], over the real clocks and randomness of
+//! [`ServerPorts::system`]. Tests that run the whole server over a socket,
+//! `fleet-client`'s among them, call [`app_with`] with a manual clock and
+//! seeded randomness instead (ADR-0017):
 //! - **Two clocks:** the rate limiters run on a [`MonotonicClock`], so a
 //!   step of the wall clock can't make them refuse everyone; everything
 //!   stored or audited (sessions, the lockout, audit entries) runs on the
@@ -204,16 +208,34 @@ pub struct App {
     pub housekeeping: Housekeeping,
 }
 
-/// The app `serve` runs: the routes over `database`, sessions with
-/// `[auth]`'s lifetimes, the lockout with its threshold and `lockout_key`,
-/// the `[rate_limits]` on a monotonic clock, request IDs and tokens from the
-/// real clock and the OS's randomness, and the `OpenAPI` document in dev
-/// mode; see the [module docs](self). `serve` and `user create-owner` are
-/// the only places the real clocks and randomness are built.
-///
-/// It builds the vault from `keys` too, for the 2FA service, which seals and
-/// opens the users' TOTP secrets with it (ADR-0016), and logs in through
-/// `passwords`, which [`run`] builds (its dummy hash is async work).
+/// The clocks and the randomness the app runs on.
+#[derive(Debug, Clone)]
+pub struct ServerPorts {
+    /// Everything stored or audited: sessions, the lockout, audit entries,
+    /// request IDs, TOTP steps.
+    pub clock: Arc<dyn Clock>,
+    /// The rate limiters' clock, which only measures intervals.
+    pub limiter_clock: Arc<dyn Clock>,
+    /// Tokens, IDs, nonces and secrets.
+    pub random: Arc<dyn SecureRandom>,
+}
+
+impl ServerPorts {
+    /// The real ones: [`SystemClock`], a [`MonotonicClock`] for the
+    /// limiters, and [`OsRandom`]. Only [`app`] calls it, so `serve` and
+    /// `user create-owner` stay the only places they're built.
+    #[must_use]
+    pub fn system() -> Self {
+        Self {
+            clock: Arc::new(SystemClock),
+            limiter_clock: Arc::new(MonotonicClock::start()),
+            random: Arc::new(OsRandom),
+        }
+    }
+}
+
+/// The app `serve` runs: [`app_with`] over [`ServerPorts::system`], the
+/// real clocks and the OS's randomness; see the [module docs](self).
 #[must_use]
 pub fn app(
     config: &ServerConfig,
@@ -222,9 +244,38 @@ pub fn app(
     lockout_key: SecretBox<[u8; 32]>,
     passwords: Arc<dyn Passwords>,
 ) -> App {
-    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let limiter_clock: Arc<dyn Clock> = Arc::new(MonotonicClock::start());
-    let random: Arc<dyn SecureRandom> = Arc::new(OsRandom);
+    app_with(
+        config,
+        database,
+        keys,
+        lockout_key,
+        passwords,
+        ServerPorts::system(),
+    )
+}
+
+/// The app over `ports`: the routes over `database`, sessions with
+/// `[auth]`'s lifetimes, the lockout with its threshold and `lockout_key`,
+/// the `[rate_limits]` on the limiters' clock, request IDs and tokens from
+/// the clock and the randomness, and the `OpenAPI` document in dev mode.
+///
+/// It builds the vault from `keys` too, for the 2FA service, which seals and
+/// opens the users' TOTP secrets with it (ADR-0016), and logs in through
+/// `passwords`, which [`run`] builds (its dummy hash is async work).
+#[must_use]
+pub fn app_with(
+    config: &ServerConfig,
+    database: &Database,
+    keys: VaultKeys,
+    lockout_key: SecretBox<[u8; 32]>,
+    passwords: Arc<dyn Passwords>,
+    ports: ServerPorts,
+) -> App {
+    let ServerPorts {
+        clock,
+        limiter_clock,
+        random,
+    } = ports;
     let store: Arc<dyn Store> = Arc::new(database.clone());
     let vault: Arc<dyn Vault> = Arc::new(XChaChaVault::new(keys, Arc::clone(&random)));
     let token_port: Arc<dyn Tokens> = Arc::new(Sha256Tokens::new(Arc::clone(&random)));

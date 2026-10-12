@@ -20,7 +20,8 @@ import { fileURLToPath, pathToFileURL } from "node:url";
  *   fails the gate, so a typo or a rename can't drop a module to the workspace gate. Each
  *   Phase 7 group adds the modules it creates; a file without executable lines (a plain
  *   `mod` list) never appears in the report, so it isn't listed. ADR-0016 confirms these
- *   paths for the auth and vault gates, required from Phase 7's group A on.
+ *   paths for the auth and vault gates, required from Phase 7's group A on, and ADR-0017
+ *   the fleet-client gate's, required from Phase 8's group A on.
  */
 export const GATES = [
   { name: "workspace", min: 80, pattern: /^/, required: true },
@@ -63,6 +64,14 @@ export const GATES = [
       "crates/fleet-server/src/ports/vault.rs",
       "crates/fleet-startup/src/secret_file.rs",
     ],
+  },
+  {
+    // The desktop app's client: the refresh, the session's end and the
+    // certificate checks are security code (ADR-0017).
+    name: "fleet-client",
+    min: 90,
+    required: true,
+    prefixes: ["crates/fleet-client/src/"],
   },
 ];
 

@@ -52,7 +52,7 @@ Each later group asks its own implementation-level questions in its session. Kno
   |---|---|---|
   | `dev_mode` | `false` | When it's on, one `warn` at startup *(the user's addition)* |
   | `[http] bind` | `127.0.0.1:8080` *(the user's decision)* | An IP address and a port other than 0 *(the user's decision)* |
-  | `[http] request_timeout_secs` | 15 | 1–300 |
+  | `[http] request_timeout_secs` | 15 | 1–300 (1–19 since P8.1, ADR-0017) |
   | `[http] max_body_bytes` | 65536 | 1024–1048576, so the limit stays a guard when raised |
   | `[database] path` | none: required *(the user's decision)* | Absolute *(the user's addition)* |
   | `[log] format`, `filter` | `json`, `info` | As the agent's (ADR-0014) |

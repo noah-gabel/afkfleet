@@ -17,7 +17,7 @@ dev_mode = true
 
 # [http]
 # bind = "127.0.0.1:8080"                # an IP address and a port other than 0
-# request_timeout_secs = 15              # 1–300; the shutdown waits this long for requests, plus 5 s for the database
+# request_timeout_secs = 15              # 1–19, below the desktop client's 20 s; the shutdown waits this long for requests, plus 5 s for the database
 # max_body_bytes = 65536                 # 1024–1048576
 # trusted_proxies = []                   # CIDR networks of reverse proxies whose X-Forwarded-For counts; none in dev
 

@@ -47,7 +47,7 @@ pub const INVALID_INVITE: &str =
     "isn't valid: it's unknown, used, revoked or expired; ask for a new invite";
 
 /// `POST /auth/login`: the password step.
-#[derive(Debug, Deserialize, Validate, TS, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Validate, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LoginRequest {
     /// The username, in any case.
@@ -105,7 +105,7 @@ pub struct LoginResponse {
 }
 
 /// `POST /auth/login/mfa`: the code step.
-#[derive(Debug, Deserialize, Validate, TS, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Validate, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct LoginMfaRequest {
     /// The password step's mfa token.
@@ -141,7 +141,7 @@ pub struct TokenResponse {
 }
 
 /// `POST /auth/refresh`: a new token pair for the refresh token.
-#[derive(Debug, Deserialize, Validate, TS, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Validate, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RefreshRequest {
     /// The current refresh token.
@@ -153,7 +153,7 @@ pub struct RefreshRequest {
 
 /// `POST /auth/step-up`: the password again, which allows step-up actions
 /// in this session for 5 minutes.
-#[derive(Debug, Deserialize, Validate, TS, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Validate, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StepUpRequest {
     /// The password.
@@ -165,7 +165,7 @@ pub struct StepUpRequest {
 
 /// `POST /auth/register`: an account from an invite. The invite decides
 /// the role; the account has no 2FA until its first login's setup.
-#[derive(Debug, Deserialize, Validate, TS, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Validate, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RegisterRequest {
     /// The invite's code (`afk_iv_…`), as its creator sent it.

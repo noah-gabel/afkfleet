@@ -107,6 +107,14 @@ There's no support, and I don't take feature requests. Security reports are welc
   - the threat model's analysis of the API's authentication and authorization, with the tests behind each mitigation and the accepted risks ([`docs/threat-model.md`](docs/threat-model.md), B1); a script checks that every test it cites exists
 
   [ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md) records Phase 7's decisions.
+- **From Phase 8 (the desktop app, in progress):** group A's [`crates/fleet-client`](crates/fleet-client/), the typed client of the API that the app's Rust side will use:
+  - one method per endpoint, sending and reading exactly the shared DTOs
+  - the session kept out of every caller's hands: the access token in memory, the refresh token in a store (the OS keychain in the app), the login's step tokens in memory
+  - the server's refresh rules: one refresh at a time and only on a 401, no grace window, and a session that ends on a refused refresh, a revoked session or a logout, which never races a refresh in flight
+  - certificates always checked, against the system's roots or only a configured CA; plain HTTP only to this computer's loopback address
+  - every request bounded (5 s to connect, 20 s in all), every answer capped at 1 MiB
+
+  [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md) records Phase 8's decisions so far.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 
@@ -198,6 +206,7 @@ afkfleet-server user create-owner --config server.toml --username alice   # crea
 - **The config** is a TOML file ([`deploy/dev/server.toml`](deploy/dev/server.toml) is the development one; Plan.md's P6.2 note and Appendix A list the keys). `AFKFLEET_SERVER__…` environment variables override any key, e.g. `AFKFLEET_SERVER__LOG__FILTER=debug`. Unknown keys are errors, and every problem is listed at once.
   - `[database] path` is required and must be absolute.
   - `[http] bind` defaults to `127.0.0.1:8080` and can't use port 0.
+  - `[http] request_timeout_secs` is 15 by default, at most 19: the desktop app gives up on a request after 20 s, so the server must answer first, or a refresh could go through after the app gave up and end the session at its next refresh.
   - `[http] trusted_proxies` lists the proxies whose `X-Forwarded-For` the server believes, as CIDR networks (`["172.30.0.0/24"]`, at most 32): none by default. Each network is written as its first address with a prefix length; a bare address or one with host bits set is refused. A prefix length of 0 (`0.0.0.0/0`, `::/0`) is refused too: trusting every address would let any client pick its own address through `X-Forwarded-For`, past every per-IP limit (login's included) and into the audit log. In the environment, it's a list: `AFKFLEET_SERVER__HTTP__TRUSTED_PROXIES='["172.30.0.0/24"]'`.
   - `[auth]`'s `argon2_memory_kib`, `argon2_iterations`, `argon2_parallelism` and `argon2_max_concurrent` default to 19456, 2, 1 and 4, and can't go below that baseline.
   - `[auth]`'s session lifetimes: `access_token_ttl_secs` 900 (60 to 3600), `refresh_token_idle_days` 7 (1 to 90) and `refresh_token_absolute_days` 30 (1 to 365), with idle at most absolute. A change applies to existing sessions too, at the next restart.
