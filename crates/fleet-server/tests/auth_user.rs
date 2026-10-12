@@ -188,6 +188,42 @@ async fn login(db: &Database, tokens: &TokenService, mfa: &MfaService) -> LoginS
     )
 }
 
+/// The users' and invites' services over `db`. No test here uses them, but
+/// the state carries them.
+async fn accounts(
+    db: &Database,
+) -> (
+    fleet_server::app::users::UserService,
+    fleet_server::app::invites::InviteService,
+) {
+    let clock = Arc::new(ManualClock::new(
+        chrono::DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
+    ));
+    let random = Arc::new(SeededRandom::new(23));
+    let passwords = Argon2Passwords::new(
+        fleet_server::config::Argon2Params::default(),
+        random.clone(),
+    )
+    .await
+    .unwrap();
+    let users = fleet_server::app::users::UserService::new(
+        clock.clone(),
+        random.clone(),
+        Arc::new(db.clone()),
+        Arc::new(passwords),
+    );
+    let invites = fleet_server::app::invites::InviteService::new(
+        clock,
+        random.clone(),
+        Arc::new(db.clone()),
+        Arc::new(fleet_server::infra::crypto::tokens::Sha256Tokens::new(
+            random,
+        )),
+        fleet_core::auth::InviteTtl::default(),
+    );
+    (users, invites)
+}
+
 async fn setup_with(options: SqliteConnectOptions, database: DatabaseOptions) -> Setup {
     let db = Database::connect(options, database).await.unwrap();
     let clock = ManualClock::new(start());
@@ -216,12 +252,15 @@ async fn setup_with(options: SqliteConnectOptions, database: DatabaseOptions) ->
     let limits = RateLimits::new(&RateLimitConfig::default(), Arc::new(clock.clone()));
     let mfa = mfa(&db);
     let login = login(&db, &service, &mfa).await;
+    let (users, invites) = accounts(&db).await;
     let state = AppState::new(
         HealthService::new(Arc::new(db.clone())),
         service.clone(),
         limits.clone(),
         mfa,
         login,
+        users,
+        invites,
     );
     let http = HttpConfig {
         bind: HttpConfig::DEFAULT_BIND,

@@ -28,7 +28,9 @@ use crate::auth::{
     LoginMfaRequest, LoginRequest, LoginResponse, RefreshRequest, StepUpRequest, TokenResponse,
 };
 use crate::error::ErrorResponse;
+use crate::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use crate::mfa::{MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse};
+use crate::users::{UserPage, UserPatchRequest, UserResponse};
 
 /// The first line of every file ts-rs 12.0.1 writes. [`sync`] deletes only
 /// `.ts` files that start with it.
@@ -129,7 +131,13 @@ pub fn export(scratch: &Path) -> Result<(), TypeScriptError> {
     LoginMfaRequest::export_all(&config).map_err(TypeScriptError::Export)?;
     TokenResponse::export_all(&config).map_err(TypeScriptError::Export)?;
     RefreshRequest::export_all(&config).map_err(TypeScriptError::Export)?;
-    StepUpRequest::export_all(&config).map_err(TypeScriptError::Export)
+    StepUpRequest::export_all(&config).map_err(TypeScriptError::Export)?;
+    UserPage::export_all(&config).map_err(TypeScriptError::Export)?;
+    UserResponse::export_all(&config).map_err(TypeScriptError::Export)?;
+    UserPatchRequest::export_all(&config).map_err(TypeScriptError::Export)?;
+    InvitePage::export_all(&config).map_err(TypeScriptError::Export)?;
+    CreateInviteRequest::export_all(&config).map_err(TypeScriptError::Export)?;
+    CreatedInviteResponse::export_all(&config).map_err(TypeScriptError::Export)
 }
 
 /// Lists how `dir` differs from the export in `scratch`, by file name. A missing

@@ -1,0 +1,53 @@
+---
+source: crates/fleet-server/tests/auth/users.rs
+expression: "redacted(&seen.body, &names(&cast))"
+---
+{
+  "items": [
+    {
+      "created_at": "[T0-60s]",
+      "disabled": false,
+      "id": "[alice]",
+      "last_seen_at": "[T0]",
+      "mfa_enrolled": true,
+      "role": "member",
+      "username": "alice"
+    },
+    {
+      "created_at": "[T0-60s]",
+      "disabled": false,
+      "id": "[bob]",
+      "last_seen_at": "[T0]",
+      "mfa_enrolled": false,
+      "role": "member",
+      "username": "bob"
+    },
+    {
+      "created_at": "[T0-60s]",
+      "disabled": false,
+      "id": "[other_admin]",
+      "last_seen_at": "[T0]",
+      "mfa_enrolled": false,
+      "role": "admin",
+      "username": "other-admin"
+    },
+    {
+      "created_at": "[T0-60s]",
+      "disabled": false,
+      "id": "[admin]",
+      "last_seen_at": "[T0]",
+      "mfa_enrolled": false,
+      "role": "admin",
+      "username": "admin"
+    },
+    {
+      "created_at": "[T0-60s]",
+      "disabled": false,
+      "id": "[owner]",
+      "last_seen_at": "[T0]",
+      "mfa_enrolled": false,
+      "role": "owner",
+      "username": "owner"
+    }
+  ]
+}

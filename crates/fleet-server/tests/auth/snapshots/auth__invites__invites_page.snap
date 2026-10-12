@@ -1,0 +1,58 @@
+---
+source: crates/fleet-server/tests/auth/invites.rs
+expression: "redacted(&seen.body, &names(&cast))"
+---
+{
+  "items": [
+    {
+      "created_at": "[T0-1s]",
+      "created_by": {
+        "id": "[owner]",
+        "username": "owner"
+      },
+      "expires_at": "[T0+259199s]",
+      "id": "[id]",
+      "role": "admin",
+      "state": "pending"
+    },
+    {
+      "created_at": "[T0-2s]",
+      "created_by": {
+        "id": "[admin]",
+        "username": "admin"
+      },
+      "expires_at": "[T0+259198s]",
+      "id": "[id]",
+      "revoked_at": "[T0]",
+      "role": "member",
+      "state": "revoked"
+    },
+    {
+      "created_at": "[T0-3s]",
+      "created_by": {
+        "id": "[admin]",
+        "username": "admin"
+      },
+      "expires_at": "[T0+259197s]",
+      "id": "[id]",
+      "role": "member",
+      "state": "used",
+      "used_at": "[T0]",
+      "used_by": {
+        "id": "[bob]",
+        "username": "bob"
+      }
+    },
+    {
+      "created_at": "[T0-259200s]",
+      "created_by": {
+        "id": "[other_admin]",
+        "username": "other-admin"
+      },
+      "expires_at": "[T0]",
+      "id": "[id]",
+      "role": "member",
+      "state": "expired"
+    }
+  ]
+}

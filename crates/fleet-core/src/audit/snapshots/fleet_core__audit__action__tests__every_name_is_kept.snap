@@ -10,5 +10,9 @@ expression: names
   "mfa.reset",
   "auth.login",
   "auth.logout",
-  "auth.step_up"
+  "auth.step_up",
+  "user.set_role",
+  "user.set_disabled",
+  "invite.create",
+  "invite.revoke"
 ]

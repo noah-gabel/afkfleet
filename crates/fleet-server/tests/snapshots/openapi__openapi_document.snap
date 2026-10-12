@@ -5,6 +5,38 @@ expression: answer.json()
 {
   "components": {
     "schemas": {
+      "CreateInviteRequest": {
+        "additionalProperties": false,
+        "description": "`POST /invites`: a new invite for `role`.",
+        "properties": {
+          "role": {
+            "$ref": "#/components/schemas/UserRole",
+            "description": "The role the new user gets: `member` (Admins and the Owner) or\n`admin` (the Owner only)."
+          }
+        },
+        "required": [
+          "role"
+        ],
+        "type": "object"
+      },
+      "CreatedInviteResponse": {
+        "description": "The new invite, with its code: shown this once.",
+        "properties": {
+          "code": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "invite": {
+            "$ref": "#/components/schemas/InviteResponse",
+            "description": "The invite as `GET /invites` lists it."
+          }
+        },
+        "required": [
+          "code",
+          "invite"
+        ],
+        "type": "object"
+      },
       "ErrorBody": {
         "description": "What went wrong, for the caller.",
         "properties": {
@@ -86,6 +118,86 @@ expression: answer.json()
           "message"
         ],
         "type": "object"
+      },
+      "InvitePage": {
+        "description": "`GET /invites`: one page of invites, newest first, in every state.",
+        "properties": {
+          "items": {
+            "description": "The invites.",
+            "items": {
+              "$ref": "#/components/schemas/InviteResponse"
+            },
+            "type": "array"
+          },
+          "next": {
+            "maxLength": 36,
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "InviteResponse": {
+        "description": "An invite as `GET /invites` lists it.",
+        "properties": {
+          "created_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "created_by": {
+            "$ref": "#/components/schemas/UserLabel",
+            "description": "Who created it."
+          },
+          "expires_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "revoked_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "role": {
+            "$ref": "#/components/schemas/UserRole",
+            "description": "The role the new user gets."
+          },
+          "state": {
+            "$ref": "#/components/schemas/InviteState",
+            "description": "What it is now."
+          },
+          "used_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "used_by": {
+            "$ref": "#/components/schemas/UserLabel",
+            "description": "The user it registered, once used."
+          }
+        },
+        "required": [
+          "id",
+          "role",
+          "state",
+          "created_by",
+          "created_at",
+          "expires_at"
+        ],
+        "type": "object"
+      },
+      "InviteState": {
+        "description": "What an invite is now.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "pending",
+          "used",
+          "revoked",
+          "expired"
+        ],
+        "type": "string"
       },
       "LoginMfaRequest": {
         "additionalProperties": false,
@@ -286,6 +398,110 @@ expression: answer.json()
           "refresh_expires_in"
         ],
         "type": "object"
+      },
+      "UserLabel": {
+        "description": "A user named next to something else, such as an invite's creator.",
+        "properties": {
+          "id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "username": {
+            "maxLength": 32,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username"
+        ],
+        "type": "object"
+      },
+      "UserPage": {
+        "description": "`GET /users`: one page of users, newest first.",
+        "properties": {
+          "items": {
+            "description": "The users.",
+            "items": {
+              "$ref": "#/components/schemas/UserResponse"
+            },
+            "type": "array"
+          },
+          "next": {
+            "maxLength": 36,
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "UserPatchRequest": {
+        "additionalProperties": false,
+        "description": "`PATCH /users/{id}`: exactly one change, a role or `disabled`.",
+        "properties": {
+          "disabled": {
+            "description": "Whether the user is disabled. Changing it, or the role, ends every\nsession of the user.",
+            "type": "boolean"
+          },
+          "role": {
+            "$ref": "#/components/schemas/UserRole",
+            "description": "The new role: `member` or `admin`, and only the Owner changes it."
+          }
+        },
+        "type": "object"
+      },
+      "UserResponse": {
+        "description": "A user as `GET /users` lists them, and as `PATCH /users/{id}` answers.",
+        "properties": {
+          "created_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "disabled": {
+            "description": "Whether the user is disabled: they can't log in, and every request\nof theirs is refused.",
+            "type": "boolean"
+          },
+          "id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "last_seen_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "mfa_enrolled": {
+            "description": "Whether the user has confirmed an authenticator. An invitee who never\nfinished the 2FA setup has none, and whoever first enrolls with their\npassword owns the account: disable such an account.",
+            "type": "boolean"
+          },
+          "role": {
+            "$ref": "#/components/schemas/UserRole",
+            "description": "The global role."
+          },
+          "username": {
+            "maxLength": 32,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "role",
+          "disabled",
+          "created_at",
+          "mfa_enrolled"
+        ],
+        "type": "object"
+      },
+      "UserRole": {
+        "description": "A user's global role.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "member",
+          "admin",
+          "owner"
+        ],
+        "type": "string"
       }
     },
     "securitySchemes": {
@@ -681,6 +897,329 @@ expression: answer.json()
         ]
       }
     },
+    "/api/v1/invites": {
+      "get": {
+        "operationId": "list_invites",
+        "parameters": [
+          {
+            "description": "Only items older than this ID: the `next` of the page before.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maxLength": 36,
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many items at most; 50 by default.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InvitePage"
+                }
+              }
+            },
+            "description": "One page of invites, newest first."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A query that doesn't parse."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Only Admins and the Owner list invites."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A `limit` outside 1 to 100."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/invites`: one page of invites, newest first, in every\nstate.",
+        "tags": [
+          "invites"
+        ]
+      },
+      "post": {
+        "operationId": "create_invite",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateInviteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedInviteResponse"
+                }
+              }
+            },
+            "description": "The invite and its code: send the code to the invitee."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A body of the wrong shape."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The role isn't the caller's to invite."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller already holds 20 pending invites."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/invites`: a new invite and its code, shown this once.",
+        "tags": [
+          "invites"
+        ]
+      }
+    },
+    "/api/v1/invites/{id}": {
+      "delete": {
+        "operationId": "revoke_invite",
+        "parameters": [
+          {
+            "description": "The invite's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The invite can't be used any more."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The invite isn't the caller's to revoke."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such invite, or one the caller can't see."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The invite was used: it's history."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`DELETE /api/v1/invites/{id}`: revokes a pending invite.",
+        "tags": [
+          "invites"
+        ]
+      }
+    },
     "/api/v1/me/mfa/confirm": {
       "post": {
         "operationId": "confirm",
@@ -898,6 +1437,252 @@ expression: answer.json()
           "mfa"
         ],
         "x-step-up": true
+      }
+    },
+    "/api/v1/users": {
+      "get": {
+        "operationId": "list_users",
+        "parameters": [
+          {
+            "description": "Only items older than this ID: the `next` of the page before.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maxLength": 36,
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many items at most; 50 by default.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserPage"
+                }
+              }
+            },
+            "description": "One page of users, newest first."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A query that doesn't parse."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Only Admins and the Owner list users."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A `limit` outside 1 to 100."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/users`: one page of users, newest first.",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/v1/users/{id}": {
+      "patch": {
+        "operationId": "patch_user",
+        "parameters": [
+          {
+            "description": "The user's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UserPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserResponse"
+                }
+              }
+            },
+            "description": "The user after the change."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A body of the wrong shape."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The change isn't the caller's to make."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such user, or one the caller can't see."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not exactly one of `role` and `disabled`."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`PATCH /api/v1/users/{id}`: one change, a role or `disabled`; either\nends every session of the user.",
+        "tags": [
+          "users"
+        ]
       }
     },
     "/health/live": {

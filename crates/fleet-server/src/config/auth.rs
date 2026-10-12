@@ -2,9 +2,9 @@
 //! ADR-0016).
 //!
 //! Group A adds the argon2 keys, group B the token lifetimes, group C the
-//! lockout threshold. Group E adds the invite lifetime.
+//! lockout threshold, group E the invite lifetime.
 
-use fleet_core::auth::{LockoutPolicy, SessionPolicy};
+use fleet_core::auth::{InviteTtl, LockoutPolicy, SessionPolicy};
 
 /// The inclusive range of a numeric key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +33,8 @@ pub struct AuthConfig {
     pub sessions: SessionPolicy,
     /// How many failed logins lock a username (`lockout_threshold`).
     pub lockout: LockoutPolicy,
+    /// How long an invite lives (`invite_ttl_hours`).
+    pub invites: InviteTtl,
 }
 
 impl AuthConfig {
@@ -47,6 +49,11 @@ impl AuthConfig {
     pub const LOCKOUT_THRESHOLD: Bounds = Bounds {
         min: LockoutPolicy::MIN_THRESHOLD,
         max: LockoutPolicy::MAX_THRESHOLD,
+    };
+    /// `invite_ttl_hours`: 1 hour to 30 days. Default 72 (§7.2).
+    pub const INVITE_TTL_HOURS: Bounds = Bounds {
+        min: InviteTtl::MIN_HOURS,
+        max: InviteTtl::MAX_HOURS,
     };
 }
 

@@ -14,6 +14,11 @@
 //! | `POST /api/v1/me/mfa/enroll` | setup token | a new TOTP secret, waiting for confirm |
 //! | `POST /api/v1/me/mfa/confirm` | setup token | confirms it; answers the recovery codes |
 //! | `POST /api/v1/me/mfa/reset` | user + step-up | a setup token that replaces the authenticator |
+//! | `GET /api/v1/users` | user (Admin+) | one page of users |
+//! | `PATCH /api/v1/users/{id}` | user (the Owner; Admins for a Member's `disabled`) | one change: a role or `disabled` |
+//! | `POST /api/v1/invites` | user (Admin+; Admin invites the Owner) | a new invite and its code |
+//! | `GET /api/v1/invites` | user (Admin+) | one page of invites |
+//! | `DELETE /api/v1/invites/{id}` | user (as creating) | revokes a pending invite |
 //! | `GET /api/openapi.json` | public | the `OpenAPI` document, only in dev mode ([`openapi`](super::openapi)) |
 //!
 //! The health routes have no `/api/v1` prefix. Both answer `200` with an
@@ -28,15 +33,17 @@
 use axum::Router;
 use utoipa_axum::routes;
 
-use super::handlers::{auth, health, mfa};
+use super::handlers::{auth, health, invites, mfa, users};
 use super::middleware::RequestIds;
 use super::openapi::ApiDocs;
 use super::rate_limit::RateLimits;
 use super::routes::{RateClass, Routes};
 use crate::app::auth::TokenService;
 use crate::app::health::HealthService;
+use crate::app::invites::InviteService;
 use crate::app::login::LoginService;
 use crate::app::mfa::MfaService;
+use crate::app::users::UserService;
 use crate::config::HttpConfig;
 
 /// What the handlers share: the services.
@@ -55,6 +62,10 @@ pub struct AppState {
     pub(crate) mfa: MfaService,
     /// Logging in and stepping up.
     pub(crate) login: LoginService,
+    /// The users: the admins' list and changes.
+    pub(crate) users: UserService,
+    /// The invites to register.
+    pub(crate) invites: InviteService,
 }
 
 impl AppState {
@@ -66,6 +77,8 @@ impl AppState {
         limits: RateLimits,
         mfa: MfaService,
         login: LoginService,
+        users: UserService,
+        invites: InviteService,
     ) -> Self {
         Self {
             health,
@@ -73,6 +86,8 @@ impl AppState {
             limits,
             mfa,
             login,
+            users,
+            invites,
         }
     }
 }
@@ -91,6 +106,11 @@ pub fn api_routes(routes: Routes) -> Routes {
         .setup_route(RateClass::Standard, routes!(mfa::enroll))
         .setup_route(RateClass::Standard, routes!(mfa::confirm))
         .step_up_route(RateClass::Standard, routes!(mfa::reset))
+        .authed_route(RateClass::Standard, routes!(users::list))
+        .authed_route(RateClass::Standard, routes!(users::patch))
+        .authed_route(RateClass::Standard, routes!(invites::create))
+        .authed_route(RateClass::Standard, routes!(invites::list))
+        .authed_route(RateClass::Standard, routes!(invites::revoke))
 }
 
 /// Every route with `state`, behind the middleware stack with the timeout,

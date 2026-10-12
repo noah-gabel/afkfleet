@@ -5,6 +5,7 @@ use core::fmt;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use fleet_core::authz::Role;
 use fleet_core::id::{InviteId, SessionId, UserId};
 use fleet_core::value::Username;
 use sqlx::{Sqlite, SqlitePool, Transaction};
@@ -28,7 +29,9 @@ use crate::ports::sessions::{
 };
 use crate::ports::store::{Store, StoreError, UnauditedWrite, WriteTx};
 use crate::ports::tokens::TokenHash;
-use crate::ports::users::{InsertUserError, NewUser, PasswordHash, User, UserReads, UserWrites};
+use crate::ports::users::{
+    InsertUserError, ListedUser, NewUser, PasswordHash, User, UserReads, UserWrites,
+};
 
 /// The statement that starts a write transaction: it takes the write lock at
 /// once. A fixed literal with no input, the one non-macro SQL in production
@@ -54,6 +57,14 @@ impl UserReads for Reads {
 
     async fn owner_exists(&self) -> Result<bool, StoreError> {
         users::owner_exists(&self.pool).await
+    }
+
+    async fn list(&self, page: Page<UserId>) -> Result<Vec<ListedUser>, StoreError> {
+        users::list(&self.pool, page).await
+    }
+
+    async fn listed(&self, id: UserId) -> Result<Option<ListedUser>, StoreError> {
+        users::listed(&self.pool, id).await
     }
 }
 
@@ -341,6 +352,14 @@ impl UserWrites for SqliteWriteTx {
         hash: &PasswordHash,
     ) -> Result<bool, StoreError> {
         users::set_password_hash(&mut self.tx, id, hash).await
+    }
+
+    async fn set_role(&mut self, id: UserId, role: Role) -> Result<bool, StoreError> {
+        users::set_role(&mut self.tx, id, role).await
+    }
+
+    async fn set_disabled(&mut self, id: UserId, disabled: bool) -> Result<bool, StoreError> {
+        users::set_disabled(&mut self.tx, id, disabled).await
     }
 }
 

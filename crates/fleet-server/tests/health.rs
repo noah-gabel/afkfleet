@@ -140,6 +140,42 @@ async fn login(db: &Database, tokens: &TokenService, mfa: &MfaService) -> LoginS
     )
 }
 
+/// The users' and invites' services over `db`. No test here uses them, but
+/// the state carries them.
+async fn accounts(
+    db: &Database,
+) -> (
+    fleet_server::app::users::UserService,
+    fleet_server::app::invites::InviteService,
+) {
+    let clock = Arc::new(ManualClock::new(
+        chrono::DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
+    ));
+    let random = Arc::new(SeededRandom::new(23));
+    let passwords = Argon2Passwords::new(
+        fleet_server::config::Argon2Params::default(),
+        random.clone(),
+    )
+    .await
+    .unwrap();
+    let users = fleet_server::app::users::UserService::new(
+        clock.clone(),
+        random.clone(),
+        Arc::new(db.clone()),
+        Arc::new(passwords),
+    );
+    let invites = fleet_server::app::invites::InviteService::new(
+        clock,
+        random.clone(),
+        Arc::new(db.clone()),
+        Arc::new(fleet_server::infra::crypto::tokens::Sha256Tokens::new(
+            random,
+        )),
+        fleet_core::auth::InviteTtl::default(),
+    );
+    (users, invites)
+}
+
 /// The server's router over `db`.
 async fn app(db: &Database) -> Router {
     let ids = RequestIds::new(
@@ -163,12 +199,15 @@ async fn app(db: &Database) -> Router {
     let tokens = tokens(db);
     let mfa = mfa(db);
     let login = login(db, &tokens, &mfa).await;
+    let (users, invites) = accounts(db).await;
     let state = AppState::new(
         HealthService::new(Arc::new(db.clone())),
         tokens,
         limits,
         mfa,
         login,
+        users,
+        invites,
     );
     router(state, &http, ids, ApiDocs::Hidden)
         .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))))

@@ -1,0 +1,100 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT users.rowid AS \"rowid!: i64\", users.id AS \"id!\", users.username AS \"username!\",\n                  users.role AS \"role!\", users.disabled AS \"disabled!: i64\",\n                  users.created_at AS \"created_at!\",\n                  EXISTS (SELECT 1 FROM user_mfa WHERE user_mfa.user_id = users.id)\n                      AS \"mfa_enrolled!: bool\",\n                  (SELECT max(sessions.last_used_at) FROM sessions\n                   WHERE sessions.user_id = users.id) AS \"last_seen_at?: String\"\n           FROM users\n           WHERE ? IS NULL OR users.id < ?\n           ORDER BY users.id DESC\n           LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "username!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "name": "role!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "name": "disabled!: i64",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "disabled"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "mfa_enrolled!: bool",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "last_seen_at?: String",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "f93281d7bd288cb3b0df6ca155d9d36c58a0084eabf5e9e81d15ccba93b0bc84"
+}

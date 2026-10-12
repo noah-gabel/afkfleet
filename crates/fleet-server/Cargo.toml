@@ -25,9 +25,10 @@ base64.workspace = true
 chacha20poly1305 = { workspace = true, features = ["alloc", "zeroize"] }
 # The HTTP layer: `matched-path`, so the trace layer logs the route's template, never
 # the path a client sent; `tokio` and `http1` for `axum::serve` (Caddy speaks HTTP/1.1 to
-# it); `json` for the request bodies, whose rejections the server maps itself. The error
-# body is written with serde_json (ADR-0015, ADR-0016).
-axum = { workspace = true, features = ["http1", "json", "matched-path", "tokio"] }
+# it); `json` for the request bodies and `query` for the lists' query strings, whose
+# rejections the server maps itself. The error body is written with serde_json (ADR-0015,
+# ADR-0016).
+axum = { workspace = true, features = ["http1", "json", "matched-path", "query", "tokio"] }
 # `TypedHeader<Authorization<Bearer>>` for AuthUser (ADR-0016).
 axum-extra = { workspace = true, features = ["typed-header"] }
 # SystemClock's one wall-clock read (ADR-0015).

@@ -66,9 +66,11 @@ use super::housekeeping::Housekeeping;
 use crate::app::auth::TokenService;
 use crate::app::challenges::Challenges;
 use crate::app::health::HealthService;
+use crate::app::invites::InviteService;
 use crate::app::lockout::LockoutService;
 use crate::app::login::LoginService;
 use crate::app::mfa::{MfaPorts, MfaService};
+use crate::app::users::UserService;
 use crate::config::{HttpConfig, ServerConfig};
 use crate::http::error::chain;
 use crate::http::middleware::RequestIds;
@@ -233,6 +235,13 @@ pub fn app(
         Arc::clone(&token_port),
         config.auth.sessions,
     );
+    let invites = InviteService::new(
+        Arc::clone(&clock),
+        Arc::clone(&random),
+        Arc::clone(&store),
+        Arc::clone(&token_port),
+        config.auth.invites,
+    );
     let challenges = Challenges::new(Arc::clone(&clock), token_port);
     let mfa = MfaService::new(
         Arc::clone(&clock),
@@ -253,6 +262,12 @@ pub fn app(
         Arc::new(HmacAttemptKeys::new(lockout_key)),
         config.auth.lockout,
     );
+    let users = UserService::new(
+        Arc::clone(&clock),
+        Arc::clone(&random),
+        Arc::clone(&store),
+        Arc::clone(&passwords),
+    );
     let login = LoginService::new(
         Arc::clone(&clock),
         Arc::clone(&store),
@@ -268,6 +283,8 @@ pub fn app(
         limits.clone(),
         mfa,
         login,
+        users,
+        invites,
     );
     App {
         router: router(

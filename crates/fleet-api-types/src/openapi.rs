@@ -27,7 +27,9 @@ use crate::ErrorResponse;
 use crate::auth::{
     LoginMfaRequest, LoginRequest, LoginResponse, RefreshRequest, StepUpRequest, TokenResponse,
 };
+use crate::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use crate::mfa::{MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse};
+use crate::users::{UserPage, UserPatchRequest, UserResponse};
 
 /// Every named schema of the API, by name: the root DTOs and every schema
 /// they refer to.
@@ -47,6 +49,12 @@ pub fn components() -> BTreeMap<String, RefOr<Schema>> {
     add::<TokenResponse>(&mut schemas);
     add::<RefreshRequest>(&mut schemas);
     add::<StepUpRequest>(&mut schemas);
+    add::<UserPage>(&mut schemas);
+    add::<UserResponse>(&mut schemas);
+    add::<UserPatchRequest>(&mut schemas);
+    add::<InvitePage>(&mut schemas);
+    add::<CreateInviteRequest>(&mut schemas);
+    add::<CreatedInviteResponse>(&mut schemas);
     schemas.into_iter().collect()
 }
 

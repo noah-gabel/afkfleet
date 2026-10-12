@@ -95,6 +95,7 @@ pub(crate) struct RawAuth {
     pub(crate) refresh_token_idle_days: u32,
     pub(crate) refresh_token_absolute_days: u32,
     pub(crate) lockout_threshold: u32,
+    pub(crate) invite_ttl_hours: u32,
 }
 
 /// Appendix A's token lifetimes, §7.2's.
@@ -103,6 +104,8 @@ const DEFAULT_REFRESH_TOKEN_IDLE_DAYS: u32 = 7;
 const DEFAULT_REFRESH_TOKEN_ABSOLUTE_DAYS: u32 = 30;
 /// §7.4's lockout threshold.
 const DEFAULT_LOCKOUT_THRESHOLD: u32 = 5;
+/// §7.2's invite lifetime.
+const DEFAULT_INVITE_TTL_HOURS: u32 = 72;
 
 impl Default for RawAuth {
     fn default() -> Self {
@@ -116,6 +119,7 @@ impl Default for RawAuth {
             refresh_token_idle_days: DEFAULT_REFRESH_TOKEN_IDLE_DAYS,
             refresh_token_absolute_days: DEFAULT_REFRESH_TOKEN_ABSOLUTE_DAYS,
             lockout_threshold: DEFAULT_LOCKOUT_THRESHOLD,
+            invite_ttl_hours: DEFAULT_INVITE_TTL_HOURS,
         }
     }
 }
@@ -498,6 +502,7 @@ mod secret_names {
             "auth.refresh_token_idle_days",
             "auth.refresh_token_absolute_days",
             "auth.lockout_threshold",
+            "auth.invite_ttl_hours",
             "vault",
             "vault.master_key_files",
             "vault.active_key_id",

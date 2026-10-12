@@ -115,6 +115,42 @@ async fn login(db: &Database, tokens: &TokenService, mfa: &MfaService) -> LoginS
     )
 }
 
+/// The users' and invites' services over `db`. No test here uses them, but
+/// the state carries them.
+async fn accounts(
+    db: &Database,
+) -> (
+    fleet_server::app::users::UserService,
+    fleet_server::app::invites::InviteService,
+) {
+    let clock = Arc::new(ManualClock::new(
+        chrono::DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
+    ));
+    let random = Arc::new(SeededRandom::new(23));
+    let passwords = Argon2Passwords::new(
+        fleet_server::config::Argon2Params::default(),
+        random.clone(),
+    )
+    .await
+    .unwrap();
+    let users = fleet_server::app::users::UserService::new(
+        clock.clone(),
+        random.clone(),
+        Arc::new(db.clone()),
+        Arc::new(passwords),
+    );
+    let invites = fleet_server::app::invites::InviteService::new(
+        clock,
+        random.clone(),
+        Arc::new(db.clone()),
+        Arc::new(fleet_server::infra::crypto::tokens::Sha256Tokens::new(
+            random,
+        )),
+        fleet_core::auth::InviteTtl::default(),
+    );
+    (users, invites)
+}
+
 /// The server's router over `db`, with or without the document.
 async fn app(db: &Database, docs: ApiDocs) -> Router {
     let ids = RequestIds::new(
@@ -138,12 +174,15 @@ async fn app(db: &Database, docs: ApiDocs) -> Router {
     let tokens = tokens(db);
     let mfa = mfa(db);
     let login = login(db, &tokens, &mfa).await;
+    let (users, invites) = accounts(db).await;
     let state = AppState::new(
         HealthService::new(Arc::new(db.clone())),
         tokens,
         limits,
         mfa,
         login,
+        users,
+        invites,
     );
     router(state, &http, ids, docs)
         .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))))
@@ -330,13 +369,34 @@ async fn the_document_lists_exactly_the_api_routes(
             ("/api/v1/auth/logout", "post"),
             ("/api/v1/auth/refresh", "post"),
             ("/api/v1/auth/step-up", "post"),
+            ("/api/v1/invites", "get"),
+            ("/api/v1/invites", "post"),
+            ("/api/v1/invites/{id}", "delete"),
             ("/api/v1/me/mfa/confirm", "post"),
             ("/api/v1/me/mfa/enroll", "post"),
             ("/api/v1/me/mfa/reset", "post"),
+            ("/api/v1/users", "get"),
+            ("/api/v1/users/{id}", "patch"),
             ("/health/live", "get"),
             ("/health/ready", "get"),
         ])
     );
+}
+
+#[sqlx::test(migrations = false)]
+async fn every_operation_id_is_unique(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
+    let document = document(options).await;
+
+    let ids: Vec<&str> = document["paths"]
+        .as_object()
+        .unwrap()
+        .values()
+        .flat_map(|operations| operations.as_object().unwrap().values())
+        .map(|operation| operation["operationId"].as_str().unwrap())
+        .collect();
+    let unique: BTreeSet<&str> = ids.iter().copied().collect();
+
+    assert_eq!(unique.len(), ids.len(), "{ids:?}");
 }
 
 #[sqlx::test(migrations = false)]
