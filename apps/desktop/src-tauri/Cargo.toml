@@ -1,0 +1,28 @@
+[package]
+name = "afkfleet-desktop"
+description = "The afkfleet desktop app's Rust side: the Tauri shell around the React UI."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+# The library holds the logic; the binary only calls `run`. They share a name, so only the
+# library is documented (`cargo doc` would otherwise write both to the same place).
+[[bin]]
+name = "afkfleet-desktop"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+# The shell. The workspace entry has no default features; these are the only ones this
+# crate enables (ADR-0017): the WebView2 runtime, compressed embedded assets, and Windows'
+# Common Controls v6.
+tauri = { workspace = true, features = ["wry", "compression", "common-controls-v6"] }
+
+[build-dependencies]
+# Embeds the Windows icon and resolves the capabilities at build time.
+tauri-build.workspace = true

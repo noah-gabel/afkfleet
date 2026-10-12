@@ -140,6 +140,64 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
 
   Then all passed. The 31 that passed against the stubs check refusals, fixed texts and `Debug`, which a do-nothing stub satisfies too. No snapshot is new or changed. The review of PR #34 added three tests, each red first (see above).
 
+### Group B: the desktop crate, Windows only *(the user's choices, 2026-10-12)*
+- **The workspace member.** `apps/desktop/src-tauri` is the crate `afkfleet-desktop`. Its library holds the logic; the binary only calls `run()` and has `doc = false`, since the two share a name.
+- **Linux leaves it out.** The app ships only for Windows, and on Linux Tauri needs WebKitGTK and GTK3. So the justfile adds `--exclude afkfleet-desktop` to every workspace-wide Rust recipe when `os()` is linux:
+  - clippy, docs, doctest, test, test-ci, test-slow and cov
+  - CI's Linux jobs keep their YAML unchanged
+
+  Windows covers it in three places:
+  - clippy and test on windows-latest
+  - stable-check, which includes it off Linux
+  - a new `tauri-build` job on windows-latest: `just docs`, `just stable-check` and `just app-build`
+
+  Coverage never measures it, since `cov` runs on Linux only. Its logic is tested on Windows but not counted toward the gates.
+- **Doctests leave it out everywhere** (found when `just check` ran). tauri-build links the VC++ runtime statically, so friends need no redistributable: it writes a stub `msvcrt.lib` into its build output and adds that folder to the link path. Cargo hands every build script's link paths to every doctest in a run, so fleet-core's doctests linked against the stub and failed. `doctest` and `test-ci` therefore run `cargo test --workspace --exclude afkfleet-desktop --doc` on every platform. The desktop crate has no doctests; its own tests link through its own build script as usual.
+- **cargo deny in two passes** *(the user's choice over ignores)*. With tauri 2.12.3, tauri-build 2.7.2 and single-instance 2.5.3, the repo's `deny.toml` on all three targets reported three errors, all from the Linux GTK3 stack:
+  - `unsound` RUSTSEC-2024-0429: glib 0.18.5, fixed only in ≥ 0.20, which the GTK3 bindings don't use
+  - `unmaintained` RUSTSEC-2024-0370: proc-macro-error 1.0.4, through glib-macros and gtk3-macros
+  - license: target-lexicon 0.12.16, `Apache-2.0 WITH LLVM-exception`, through system-deps, a build dependency of the GTK sys crates
+
+  With `--target x86_64-pc-windows-msvc` alone, every check passed. So `just deny` runs two passes with the same `deny.toml`:
+  1. the workspace with `--exclude afkfleet-desktop`, on every target, rules unchanged
+  2. the desktop crate alone (`--manifest-path apps/desktop/src-tauri/Cargo.toml`) with `--target x86_64-pc-windows-msvc`
+
+  Both were tested in a throwaway workspace first. There are no ignores and no exceptions, and the ring, openssl-sys and native-tls bans stay.
+
+  **This narrows deny's targets for one crate, and holds only while the desktop app ships only for Windows: any new desktop target joins the second pass.** Gating Tauri behind `cfg(windows)` wouldn't help: cargo-deny filters each dependency edge against all its targets at once, so tauri's Linux-only edges stay in its combined graph (tested).
+- **Docker.** The agent's image copies `apps/desktop/src-tauri` in both stages, and `.dockerignore`'s allowlist admits it (minus its `target` and `gen`), because cargo can't load the workspace without a member. Nothing in the image builds it.
+- **Identity** *(the user's choice)*:
+  - identifier `io.github.noah-gabel.afkfleet`, derived from the repository's own URL
+  - productName and window title `afkfleet`
+  - npm packages `@afkfleet/ui` and `@afkfleet/desktop`
+
+  The identifier names the app's data folder, its WebView2 profile and the single-instance mutex, so it never changes.
+- **The icon** *(the user's choice)*. An original placeholder, `icons/icon.svg`: a rounded square with three white dots, no text, no third-party logo. `just icons` (`scripts/icons.mjs`) renders `icon.ico` from it with `tauri icon` into a fresh folder under `target/`, keeps only `icon.ico` and removes that folder. Only the SVG and the ICO are committed; tauri-build embeds the ICO in the exe, and a Windows build fails without it.
+
+### Group B: the frontend *(the user's choices and approvals)*
+- **Layout.**
+  - `packages/ui` exports its sources (`.` → `src/index.ts`, `./styles.css`); there is no build step in between.
+  - Its own `index.html` and Vite config are the web entry for development and, from P8.9, the Playwright build.
+  - `apps/desktop` is a thin entry (`index.html`, `src/main.tsx`) that renders `<App />` from `@afkfleet/ui`. Its Vite dev server runs on `localhost:1420` with `strictPort`, matching `devUrl`.
+  - Tailwind scans `packages/ui/src` (`@import "tailwindcss" source(".")`), so the desktop bundle finds the UI's classes.
+- **TypeScript 7.0.2** *(the user's choice over 6.0.3 or both side by side)*. This is the Go port, with a native `tsc` about 10× faster. It has no JavaScript compiler API until 7.1, so no tool that needs one (typescript-eslint, ts-node, vite-plugin-checker) can join until then; Biome, Vite 8, Vitest and `tsc --noEmit` need none. Since `types` now defaults to `[]`, each tsconfig lists `vite/client`. Editor diagnostics come from VS Code's TypeScript or the "TypeScript Native Preview" extension, and can differ slightly from CI's `tsc`.
+- **shadcn/ui: configuration and theme only** *(the user's choice)*. `packages/ui/components.json` is set up with:
+  - style `radix-nova`, Radix per §5
+  - base color neutral
+  - aliases through package.json `#` subpath imports (`#components/*`, `#lib/*`, `#hooks/*`), since TS 7 has no `baseUrl`
+
+  Its theme tokens are in `src/styles.css`. No shadcn package is installed. `cn` (shadcn's own replacement for clsx + tailwind-merge), class-variance-authority, radix-ui, tw-animate-css, lucide-react and the `shadcn` package's tailwind.css arrive with the first component, with the user's approval there. The CLI only ever runs as `pnpm dlx shadcn@4.21.4`, never as a dependency, since that package pulls in ts-morph, an MCP SDK and dotenvx.
+- **Vitest now** *(the user's choice)*, so the frontend job's `pnpm -r run test` covers `packages/ui` from the start with a smoke test. Its setup file unmounts after each test: Vitest runs without globals, and Testing Library's automatic cleanup needs a global `afterEach`. jsdom stays at 29.1.1 because jsdom 30 needs Node ^24.15.
+- **The Tauri CLI** is the npm `@tauri-apps/cli` *(the user's choice over `cargo install`)*. It ships prebuilt binaries through per-platform packages with integrity hashes in `pnpm-lock.yaml`, and pnpm audit covers it.
+- **Biome** sets `security.noDangerouslySetInnerHtml` and `noDangerouslySetInnerHtmlWithChildren` to `error` explicitly, so the preset can't lower them. `css.parser.tailwindDirectives` lets it parse Tailwind 4's at-rules.
+- **Dependencies** *(the user's approval)*, all pinned exactly (no `^`), with `pnpm-lock.yaml` as the lock:
+  - Rust: tauri 2.12.3, with no default features at workspace level; the desktop crate enables `wry`, `compression` and `common-controls-v6`. tauri-build 2.7.2.
+  - npm build: typescript 7.0.2, vite 8.3.4, react and react-dom 19.3.0, tailwindcss 4.3.3.
+  - Off the Introduces list, approved: `@vitejs/plugin-react` 6.1.2 (oxc on Vite 8, no Babel), `@tailwindcss/vite` 4.3.3, `@types/react` and `@types/react-dom` 19.3.0, `@tauri-apps/cli` 2.12.2.
+  - Tests: vitest 5.0.3 (5.0.4 was a day old), jsdom 29.1.1, `@testing-library/react` 16.3.3 and its peer `@testing-library/dom` 10.4.2.
+
+  No dependency runs an install script.
+
 ### Notes for later groups
 - **P8.4 (C):**
   - The keychain implements `SessionStore`, doing its blocking calls off the runtime.

@@ -7,6 +7,11 @@
 # (server, agent). Production runs on linux/arm64, development and CI on
 # x86_64 (ADR-0014). Mobile-only dependencies, such as tauri's ring on iOS and
 # Android, don't count.
+#
+# `just deny` runs two passes with this file (ADR-0017): the workspace without the
+# desktop crate on these targets, then the desktop crate alone with
+# `--target x86_64-pc-windows-msvc`. The desktop app ships only for Windows, and its
+# Linux GTK3 stack is never built or shipped. A new desktop target joins that second pass.
 targets = ["x86_64-pc-windows-msvc", "x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"]
 all-features = true
 

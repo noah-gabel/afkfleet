@@ -114,6 +114,8 @@ There's no support, and I don't take feature requests. Security reports are welc
   - certificates always checked, against the system's roots or only a configured CA; plain HTTP only to this computer's loopback address
   - every request bounded (5 s to connect, 20 s in all), every answer capped at 1 MiB
 
+  Group B's desktop app scaffold: [`apps/desktop`](apps/desktop/) (Tauri v2, its Rust side a workspace member, Windows only) around [`packages/ui`](packages/ui/) (React 19, Vite, strict TypeScript 7, Tailwind CSS 4 and shadcn/ui's theme). For now the window shows only the app's name; `just dev-app` runs it with hot reload and `just app-build` builds the exe.
+
   [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md) records Phase 8's decisions so far.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
@@ -138,7 +140,8 @@ Further reading:
 - [rustup](https://rustup.rs). Run `rustup install` once in the repository to install the nightly pinned in `rust-toolchain.toml`. Don't set a `rustup override` for this directory: it would take precedence over the pinned toolchain.
 - MSVC Build Tools ("Desktop development with C++")
 - [NASM](https://www.nasm.us) on `PATH`, needed to build `aws-lc-rs` (the TLS crypto provider). CMake isn't needed.
-- Node 24 and pnpm
+- Node 24 and pnpm (the version in `package.json`'s `packageManager`)
+- The WebView2 Runtime, for the desktop app (built into Windows 11). The desktop app builds only on Windows; on Linux every workspace-wide recipe leaves it out.
 - Docker Desktop (WSL 2 backend), for the Minecraft test server and slow tests
 - Cargo tools:
   ```sh
@@ -250,7 +253,7 @@ The server has no TLS of its own: Caddy fronts it (Phase 12).
 
 ## Development
 ```sh
-pnpm install   # frontend tooling (Biome)
+pnpm install   # the frontend packages and tools (Biome, Vite, the Tauri CLI)
 just check     # format, lints, docs, tests: run before every commit
 just ci        # everything CI runs
 just mc-up     # local offline-mode Minecraft 26.1 test server on 127.0.0.1:25565 (needs Docker)
@@ -264,7 +267,12 @@ just demo-agent # the Phase 5 demo: the Docker agent's five bots for an hour wit
 just test-real-account # the real-account check: you only (see below)
 just db-prepare # after changing a query or adding a migration: refresh crates/fleet-server/.sqlx/
 just gen       # after changing an API type: refresh packages/ui/src/generated/
+just dev-app   # run the desktop app with Vite's dev server (hot reload)
+just app-build # build the desktop app's exe: target/release/afkfleet-desktop.exe
+just ui-test   # the frontend's Vitest tests
+just icons     # after changing apps/desktop/src-tauri/icons/icon.svg: render icon.ico
 ```
+**The desktop app** (Phase 8 on): `apps/desktop` is the Tauri app, with its Rust side in `apps/desktop/src-tauri` (a workspace member, Windows only) and a thin frontend entry that renders the UI from `packages/ui`. `just dev-app` starts Vite's dev server on `localhost:1420` and opens the window; frontend changes reload at once, and Rust changes rebuild the app. `just app-build` builds the release exe with the frontend embedded (no installer yet); `just app-build --debug` builds a debug exe the same way, with devtools. The app's icon is rendered from `icons/icon.svg`, an original placeholder: change the SVG, then run `just icons`.
 **The API's TypeScript types** (Phase 6 on) are generated from the Rust DTOs in `crates/fleet-api-types` with ts-rs and committed in `packages/ui/src/generated/`; never edit them by hand. After changing a DTO, run `just gen` and commit the result; `just check` (`gen-check`) and CI's `ts-types-fresh` job fail while they're stale. `just gen` exports into a fresh folder in `target/` first and deletes only files ts-rs generated: if the folder holds anything else, it stops and changes nothing.
 **The server's database** (Phase 6 on): every build checks fleet-server's SQL against the offline query data committed in `crates/fleet-server/.sqlx/`, never against a live database (`SQLX_OFFLINE` in `.cargo/config.toml`). After changing a query or adding a migration, run `just db-prepare`, which rebuilds a throwaway database in `target/` from the migrations and regenerates that data, and commit it; `just check` and CI's `sqlx-offline` job fail while it's stale. A migration is never edited once it's on `main`, because sqlx checksums it: add a new one instead. `just migrations-check` and the `sqlx-offline` job enforce that.
 The test server runs in offline mode, so it's for local development only. RCON is enabled with a random password and isn't published; run commands with `docker compose --file deploy/compose.dev.yaml exec minecraft rcon-cli <command>`.

@@ -1,19 +1,23 @@
 # The Docker build context is the repository root (deploy/docker/agent.Dockerfile).
 # This is an allowlist: only what the Rust build needs gets in, so nothing
 # secret (secrets/, .env files, keys, databases) can enter the context, even a
-# file added later (ADR-0014).
+# file added later (ADR-0014). The desktop app's Rust side is a workspace member, so
+# cargo needs it to load the workspace, though the agent never builds it (ADR-0017).
 *
 !Cargo.toml
 !Cargo.lock
 !rust-toolchain.toml
 !.cargo/config.toml
 !crates/
+!apps/desktop/src-tauri/
 
-# Build output inside a crate, if any.
+# Build output inside a crate, if any, and tauri-build's generated schemas.
 crates/**/target
+apps/desktop/src-tauri/target
+apps/desktop/src-tauri/gen
 
 # .gitignore's secret patterns again, at any depth: the last matching rule
-# wins, and crates/ is allowed as a whole.
+# wins, and crates/ and src-tauri/ are allowed as a whole.
 **/.env*
 **/*.pem
 **/*.key

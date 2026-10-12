@@ -66,6 +66,8 @@ Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so 
 - set environment variables with just's `export` or a `$`-parameter, never with shell syntax (`$env:X` or `X=…`)
 - anything more complex goes into a small script under `scripts/`
 
+On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: the desktop app ships only for Windows and would need WebKitGTK there. Windows covers it: clippy and test on windows-latest and CI's `tauri-build` job (ADR-0017). Doctests leave it out on every platform: tauri-build's static VC++ runtime stub breaks the other crates' doctest links, and it has no doctests.
+
 | Command | What it does |
 |---|---|
 | `just check` | `cargo fmt --check`, clippy (`--all-targets -D warnings`), `cargo doc --no-deps --workspace` with `RUSTDOCFLAGS="-D warnings"`, nextest default profile, doctests, `db-check`, `gen-check`, `testkit-check`, the `scripts/` tests, and biome + `tsc --noEmit` once the frontend exists. **Run before saying a task is done.** |
@@ -73,7 +75,7 @@ Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so 
 | `just test-slow` | Pulls the server image and builds the agent's image, then runs the nextest `slow` profile with fleet-mc's test-only `fault-injection` feature, one Minecraft container or compose stack at a time (needs Docker) |
 | `just test-real-account` | **The user only; the AI never runs it.** nextest `manual` profile: the user's real token from `secrets/p1.8-account.txt` joins a local online-mode container and sends signed chat (needs Docker) |
 | `just cov` | cargo-llvm-cov with the coverage gates (per-crate and per-module gates are checked by a script over the JSON report) |
-| `just deny` | `cargo deny check` |
+| `just deny` | `cargo deny check` in two passes with the same `deny.toml`: the workspace without the desktop crate on every target, then the desktop crate alone on Windows (ADR-0017) |
 | `just fmt` | `cargo fmt` + biome format |
 | `just gen` | Exports fleet-api-types' TypeScript types (ts-rs) to `packages/ui/src/generated/`, from a fresh export in `target/gen/`. It deletes only files ts-rs generated and stops on anything else in the folder. Run it after changing a DTO, and commit the result. P10 adds the proto codegen check |
 | `just gen-check` | Fails if `packages/ui/src/generated/` isn't exactly a fresh export (the `ts-types-fresh` job) |
@@ -85,13 +87,15 @@ Recipes run in **PowerShell 7** (`pwsh`) on Windows and in `sh` on Linux CI, so 
 | `just dev-server` / `just dev-agent` | Run the server with `deploy/dev/server.toml` (dev mode; its database and its vault key in `target/dev-server/`, or the absolute paths given; it creates the key when it's missing and never overwrites it) / the agent with `deploy/dev/agent.toml` |
 | `just dev-owner username` | Create the Owner `username` in `dev-server`'s database with `user create-owner`, the password typed twice at the terminal (same paths as `dev-server`) |
 | `just demo-agent [minutes]` | Phase 5's demo: the compose stack (project `afkfleet-demo`) for 60 minutes, or `minutes`, with one server restart at half time; prints a summary and a verdict, saves its logs under `target/demo-agent/` (needs Docker) |
-| `just dev-app` | `pnpm tauri dev` |
-| `just ui-test` / `just e2e` | Vitest / Playwright |
+| `just dev-app` | `tauri dev` in `apps/desktop`: Vite's dev server on `localhost:1420` and the app, with hot reload |
+| `just app-build [args]` | `tauri build` in `apps/desktop`: the frontend, then the exe with it embedded (`target/release/`; `--debug` for a debug exe with devtools). No installer yet |
+| `just icons` | Renders `apps/desktop/src-tauri/icons/icon.ico` from `icon.svg` with `tauri icon`, through a fresh folder in `target/`, keeping only `icon.ico` (`scripts/icons.mjs`) |
+| `just ui-test` / `just e2e` | Vitest in every frontend package / Playwright |
 | `just ci` | Everything CI runs |
 | `just testkit-check` | Fails if any workspace member depends on fleet-testkit outside its dev-dependencies (`cargo tree`, through `scripts/testkit-check.mjs`; ADR-0015) |
 | `just fmt-check` · `clippy` · `docs` · `doctest` · `test-ci` · `stable-check` · `db-check` · `migrations-check` · `gen-check` · `testkit-check` · `scripts-test` · `ui-check` · `ui-audit` | The building blocks of `check` and `ci`. Each CI job runs one of them, so local and CI runs can't drift apart |
 
-Recipes for tools that arrive in later phases (`dev-app`, `ui-test`, `e2e`) print the phase they arrive in and exit with an error until then.
+Recipes for tools that arrive in later phases (`e2e`) print the phase they arrive in and exit with an error until then.
 
 ## Architecture rules
 **Crates and dependencies** (full table in Plan.md §4):
@@ -199,21 +203,22 @@ fleet-server/src/
 | Concern | Package |
 |---|---|
 | Package manager | pnpm |
-| Build | `vite` |
-| UI framework | `react` 19 |
-| Language | `typescript` (strict) |
+| Build | `vite`, `@vitejs/plugin-react` |
+| UI framework | `react` 19 (+ `@types/react`, `@types/react-dom`) |
+| Language | `typescript` 7 (strict) |
 | Server state | `@tanstack/react-query` |
 | Routing | `@tanstack/react-router` |
 | UI state | `zustand` |
 | Validation | `zod` |
 | Forms | `react-hook-form` + `@hookform/resolvers` |
-| Styling | `tailwindcss` |
+| Styling | `tailwindcss`, `@tailwindcss/vite` |
 | Components | shadcn/ui |
 | Icons | `lucide-react` |
 | Toasts | `sonner` |
-| Tests | `vitest`, `@testing-library/react`, `msw`, `@playwright/test` |
+| Tests | `vitest`, `jsdom`, `@testing-library/react` (+ its peer `@testing-library/dom`), `msw`, `@playwright/test` |
 | Lint & format | `@biomejs/biome` |
 | Tauri bridge | `@tauri-apps/api` (`apps/desktop` only) |
+| Tauri CLI | `@tauri-apps/cli` (`apps/desktop` dev only) |
 
 ## Rust rules
 **Idioms**

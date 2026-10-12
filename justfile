@@ -9,10 +9,16 @@ set windows-shell := ["pwsh", "-NoLogo", "-NoProfile", "-Command"]
 
 export RUSTDOCFLAGS := "-D warnings"
 
+# The desktop app's crate. It ships only for Windows, and on Linux it would need
+# WebKitGTK and GTK3, so every workspace-wide Rust recipe leaves it out there. Windows
+# covers it: clippy and test on windows-latest, and CI's tauri-build job (ADR-0017).
+desktop := "afkfleet-desktop"
+linux_exclude := if os() == "linux" { "--exclude " + desktop } else { "" }
+
 # The stable toolchain for `stable-check`, and the crates it checks: every crate
-# that doesn't depend on azalea or azalea-auth.
+# that doesn't depend on azalea or azalea-auth (the desktop crate only off Linux).
 stable := "1.99.0"
-stable_crates := "-p fleet-core -p fleet-testkit -p fleet-runtime -p fleet-startup -p fleet-server -p fleet-api-types -p fleet-client"
+stable_crates := "-p fleet-core -p fleet-testkit -p fleet-runtime -p fleet-startup -p fleet-server -p fleet-api-types -p fleet-client" + (if os() == "linux" { "" } else { " -p " + desktop })
 
 # The throwaway database `cargo sqlx prepare` checks queries against. Absolute,
 # because rustc runs the query macros in the workspace root, not in the crate.
@@ -30,7 +36,7 @@ ci: fmt-check clippy docs test-ci db-check migrations-check gen-check testkit-ch
 
 # Run nextest for the workspace, or for one crate: `just test fleet-core`.
 test crate="":
-    cargo nextest run {{ if crate == "" { "--workspace" } else { "-p " + crate } }}
+    cargo nextest run {{ if crate == "" { "--workspace " + linux_exclude } else { "-p " + crate } }}
 
 # They need fleet-mc's test-only `fault-injection` feature (ADR-0011). The server
 # image is pulled and the agent's image built first, so neither eats into a timed
@@ -40,7 +46,7 @@ test crate="":
 test-slow $AFKFLEET_E2E_IMAGE_BUILT="1":
     docker compose --file deploy/compose.dev.yaml pull minecraft
     docker compose --file deploy/compose.dev.yaml build agent
-    cargo nextest run --workspace --profile slow --no-tests=warn --features fleet-mc/fault-injection
+    cargo nextest run --workspace {{ linux_exclude }} --profile slow --no-tests=warn --features fleet-mc/fault-injection
 
 # The user's real-account check (ADR-0011): a real token from
 # secrets/p1.8-account.txt joins a local online-mode container (needs Docker).
@@ -51,14 +57,19 @@ test-real-account:
 
 # Coverage, checked against the gates from Plan.md §8.
 cov:
-    cargo llvm-cov nextest --workspace --no-report
+    cargo llvm-cov nextest --workspace {{ linux_exclude }} --no-report
     cargo llvm-cov report --summary-only
     cargo llvm-cov report --json --output-path target/coverage.json
     node scripts/coverage-gates.mjs target/coverage.json
 
+# Two passes with the same deny.toml (ADR-0017): the workspace without the desktop
+# crate on every target in deny.toml, then the desktop crate alone on Windows, the only
+# platform it ships for. Its Linux GTK3 stack is never built or shipped. A new desktop
+# target joins the second pass.
 # cargo-deny: advisories, licenses, bans and sources.
 deny:
-    cargo deny check
+    cargo deny --exclude {{ desktop }} check
+    cargo deny --manifest-path apps/desktop/src-tauri/Cargo.toml --target x86_64-pc-windows-msvc check
 
 # Format Rust and frontend code.
 fmt:
@@ -150,14 +161,29 @@ dev-agent:
 demo-agent minutes="60":
     node scripts/demo-agent.mjs --minutes {{ minutes }}
 
-# Run the desktop app in development mode.
-dev-app: (_unavailable "dev-app" "P8")
+# No exit message: on Windows, Ctrl+C reaches just and PowerShell too, so just would
+# call a clean stop a failure.
+# Run the desktop app in development mode: Vite's dev server and the app, with hot reload.
+[no-exit-message]
+dev-app:
+    pnpm --filter @afkfleet/desktop tauri dev
 
-# Frontend unit and component tests (Vitest).
-ui-test: (_unavailable "ui-test" "P8")
+# The release exe lands in target/release/; `just app-build --debug` builds a debug exe
+# with the embedded frontend and the release CSP, plus devtools, in target/debug/.
+# Build the desktop app's exe (no installer): the frontend, then the Rust side.
+app-build *args:
+    pnpm --filter @afkfleet/desktop tauri build {{ args }}
+
+# Render the desktop app's icon.ico from apps/desktop/src-tauri/icons/icon.svg (needs pnpm install).
+icons:
+    node scripts/icons.mjs
+
+# Frontend unit and component tests (Vitest), in every package that has them.
+ui-test:
+    pnpm -r --if-present run test
 
 # End-to-end tests (Playwright).
-e2e: (_unavailable "e2e" "P8")
+e2e: (_unavailable "e2e" "P8.9")
 
 # --- Building blocks of `check` and `ci` (CI runs them as separate jobs) ---
 
@@ -167,20 +193,25 @@ fmt-check:
 
 # Clippy with all workspace lints, warnings denied.
 clippy:
-    cargo clippy --workspace --all-targets --all-features -- -D warnings
+    cargo clippy --workspace {{ linux_exclude }} --all-targets --all-features -- -D warnings
 
 # Build the docs with warnings denied (RUSTDOCFLAGS above).
 docs:
-    cargo doc --no-deps --workspace
+    cargo doc --no-deps --workspace {{ linux_exclude }}
 
+# The desktop crate stays out of every doctest run, on Windows too: tauri-build links the
+# VC++ runtime statically by putting a stub msvcrt.lib in its build output, and cargo
+# hands every build script's link paths to every doctest, which then can't link. It has
+# no doctests (ADR-0017).
 # Doctests; nextest doesn't run them.
 doctest:
-    cargo test --workspace --doc
+    cargo test --workspace --exclude {{ desktop }} --doc
 
+# Doctests leave the desktop crate out everywhere (see `doctest`).
 # Tests with the CI profile (JUnit, no retries), then doctests.
 test-ci:
-    cargo nextest run --workspace --profile ci
-    cargo test --workspace --doc
+    cargo nextest run --workspace {{ linux_exclude }} --profile ci
+    cargo test --workspace --exclude {{ desktop }} --doc
 
 # The workspace crates that must also build on stable Rust.
 stable-check:
@@ -196,7 +227,7 @@ testkit-check:
 scripts-test:
     node --test "scripts/*.test.mjs"
 
-# Biome, then each package's typecheck and tests (the frontend packages arrive in P8).
+# Biome, then each package's typecheck and tests.
 ui-check:
     pnpm exec biome ci .
     pnpm -r --if-present run typecheck
