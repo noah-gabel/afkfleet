@@ -338,17 +338,69 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
 
   Cargo.lock gains only keyring-core and windows-native-keyring-store; byteorder, zeroize, windows-sys 0.61 and log were already in it.
 
+### Group C: the bridge's TypeScript side (P8.5) *(the user's choices)*
+- **`ApiClient`** (`packages/ui/src/api/ApiClient.ts`) has 20 camelCase methods, typed only by the generated types, one import per file. `API_METHODS` lists them in build.rs's order. The list methods take plain optional parameters (`sessions(before?, limit?)`).
+- **Errors.** Every method rejects with `ApiError extends Error { error: CommandError }` *(the user's choice)*.
+  - `toApiError` keeps a rejection that parses as a `CommandError`, checked by a zod schema whose app codes come from a `Record<CommandErrorCode, true>`, so the compiler fails when the Rust enum changes.
+  - It turns anything else into `ipc` with its fixed sentence, Tauri's own text dropped. Tauri rejects with plain strings when the ACL refuses or an argument doesn't deserialize.
+  - `describeError` switches exhaustively on `code` (a `never` default) and keeps a default branch on `api.code` that shows the server's message and the request ID (ADR-0015). Group D builds its texts on it.
+- **A validating wrapper** *(the user's choice)*. `validated(client)` parses every input with its zod schema (`schemas.ts`) before the inner client is called.
+  - A failure rejects with `invalid_input`, fields named the way garde names them (`username`, `limit`, `""` for the whole request), the shape the Rust side answers.
+  - `App` wraps whatever client it's given, so fakes go through the same checks.
+  - The schemas mirror the server's rules: lengths in code points, the profile's caps in UTF-8 bytes, a username's characters, a version 7 ID, a page size, a patch with exactly one change, invites and patches without `owner`, and no unknown fields.
+- **The limits can't drift** *(the user's choice)*. `packages/ui/src/api/limits.ts` holds only `export const NAME = <number>;` lines, named like the Rust constants. fleet-api-types' `tests/limits.rs` parses it and requires exactly the expected names and values.
+- **`FakeApiClient`** *(the user's choice)* takes per-method handlers and records every call with its arguments. An unscripted method rejects with an `ApiError` naming it, and `fakeApiError(code, { api, fields })` builds errors for handlers.
+- **`UnavailableApiClient`** *(the user's choice)* is the web entry's client until P8.9: every method rejects with `ipc` and "The web build has no server connection.", the one text for `ipc` that isn't the fixed sentence, since nothing in that build is the app's.
+- **`TauriApiClient(invoke)`** *(the user's choice)* lives in `apps/desktop/src`. `invoke` is injected, so `main.tsx` passes `@tauri-apps/api/core`'s and tests a recording fake. Every method sends an args object, `{}` without arguments.
+  - Vitest runs in apps/desktop (Node environment) over `ipc-contract.json`: each `method(...inputs)` must send exactly the entry's `command` and `args`, and the contract's methods must equal `API_METHODS`.
+  - With the Rust test of the same fixture, a renamed command or argument key can't pass both suites.
+- **Import rules, enforced** *(the user's choice)*. biome.json's `style/noRestrictedImports` refuses every `@tauri-apps/*` import in packages/ui. In apps/desktop it refuses everything but `@tauri-apps/api/core`: the bare `@tauri-apps/api`, `/event` and `/mocks` were refused when probed. So no API that needs a grant can slip in, and `withGlobalTauri` stays false with no core permission.
+- **The frozen prototype.** One Vitest file freezes `Object.prototype`, as the webview does (`freezePrototype`), then runs the validating wrapper with zod. zod 4.6.5 works there.
+- **Dependencies** *(the user's approval)*: `@tauri-apps/api` 2.12.1 in apps/desktop, zod 4.6.5 in packages/ui, vitest 5.0.3 as an apps/desktop dev-dependency, all exact. None has an install script; `pnpm audit` is clean. packages/ui exports `./generated/*`, so apps/desktop imports each type from its own file.
+
+### As built (group C)
+- **Layout:**
+  - fleet-api-types: `app`; `typescript::{export_api, export_app}`.
+  - fleet-client: `CustomCa::{to_pem, fingerprints}`, `Client::discard_session`.
+  - The desktop crate:
+    - `configure`, `run`
+    - `keychain::{KeychainFactory, KeychainStore, KeychainError, StoreFactory}`
+    - `profile::{ServerProfile, Loaded, load, save, fingerprint}`
+    - `state::AppState`
+    - `startup::{install_crypto_provider, StartError}`
+    - crate-private: `commands`, `endpoints` (the methods of `AppState`), `error`
+  - packages/ui: `api/{ApiClient, ApiError, schemas, limits, validated, context, FakeApiClient, UnavailableApiClient, describeError}`.
+  - apps/desktop: `TauriApiClient`.
+- **The spike** linked the desktop crate's tests with aws-lc-sys and the bundled SQLite next to tauri-build's msvcrt stub without trouble. It found the coverage wrapper gap above.
+- **Tests,** red first against compiling stubs that returned wrong values:
+  - fleet-api-types' `app`: 1 of 14, on the stub's empty messages; a second failure was the test's own field-order mistake, fixed.
+  - `tests/limits.rs`: red on a missing constant.
+  - fleet-client: 7 of 7 `CustomCa` tests and 4 of 4 `discard` tests.
+  - The desktop crate: 94 of 129. The 35 that passed are the existing `navigation`, `focus` and probe tests, plus checks a stub satisfies too: both sides of an equality returning the stub's `store`, the fake slot over the real ordering code, the fixed texts. The ordering test also failed against a std mutex taken inside the blocking call.
+  - `tauri-hardening`: 10 of 34.
+  - `coverage-gates`: 7 of 23.
+  - The UI: 25 of 31.
+  - `TauriApiClient`: 4 of 24, against a renamed command, a dropped argument and no rejection mapping.
+
+  Then all passed. No snapshot is new or changed.
+- **Coverage:** the desktop gate measured 94.95 % on the dev machine; CI's `tauri-build` job measures it on every push.
+- **Lockfile:**
+  - Cargo.lock gains only keyring-core 1.0.0 and windows-native-keyring-store 1.1.0.
+  - pnpm-lock.yaml gains `@tauri-apps/api` 2.12.1 and zod 4.6.5.
+- **Not yet checked live:** the user's hands-on steps in the PR (the Credential Manager entry appearing and going away, `just dev-server` over loopback HTTP).
+
 ### Notes for later groups
-- **P8.4 (C):**
-  - The keychain implements `SessionStore`, doing its blocking calls off the runtime.
-  - The server profile reuses `ServerUrl` and `CustomCa::from_pem`.
-  - `main` installs the aws-lc-rs provider before building the client.
-  - `CommandError` maps `ClientError` with a default branch, since `ApiFailure::code` is `Open`.
-  - The step tokens never reach the Rust side's own state either: the client holds them.
-- **P8.4/P8.5 (C), from group B:**
-  - Each command goes into build.rs's `COMMANDS` and into `COMMANDS` in `scripts/tauri-hardening.mjs`, and its `allow-<command>` (underscores become hyphens) into `capabilities/main.json`.
-  - Whether tauri-build's generated `permissions/autogenerated/` files are committed is decided there.
-  - `@tauri-apps/api` arrives with `TauriApiClient`. Its `invoke` needs no core permission; anything else (events, windows) needs a grant and an ADR line.
+- **P8.6/P8.7 (D), from group C:**
+  - Components take the client with `useApiClient()`, and TanStack Query's hooks wrap its methods. A failure is an `ApiError`: build texts on `describeError`, show `invalid_input`'s, `invalid_server_url`'s and `invalid_ca`'s `fields` next to their inputs, and keep the default branch on `api.code`.
+  - Forms reuse `schemas.ts` (`@hookform/resolvers` arrives with the first form, with the user's approval).
+  - **Server setup:**
+    - `server_profile`'s `unreadable` asks for the server again.
+    - Warn before `set_server_profile` while logged in, since any change but an identical profile logs out.
+    - `change: "none"` kept the session.
+    - `change: "switched"` carries the old session's logout.
+    - A custom CA's fingerprints are for the user to compare with what the server's admin gave them.
+  - **A logout's `unconfirmed`** says the server's session may live until it expires.
+  - **The banner** retries with `check_server` (`health_ready`), so a 503 `busy` with `retry_after_secs` reads differently from `unreachable`.
 - **P8.6/P8.7 (D):**
   - The unreachable banner shows on `Unreachable` and `TimedOut`.
   - Server setup explains `Certificate`.
@@ -356,7 +408,7 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   - `expires_in` restarts a timed-out login or setup step.
   - Register-then-log-in never meets `AlreadyLoggedIn`, since registering holds no session.
   - From group B: shadcn's packages (`cn`, class-variance-authority, radix-ui, tw-animate-css, lucide-react, and the `shadcn` package's tailwind.css or a copy of it) arrive with the first component, with the user's approval. Radix's dialogs insert `<style>` elements, which `style-src 'self'` blocks: check them in a debug build.
-- **E, from group B:** `scripts/threat-model-citations.mjs` walks only `crates/`, so it must also walk `apps/desktop/src-tauri` (skipping `node_modules`, `gen` and `target`) before B2 cites the desktop tests. A friend's dev build needs `bundle.active` and the installer's icons (P12.5 at the latest).
+- **E, from group B:** `scripts/threat-model-citations.mjs` walks only `crates/`, so it must also walk `apps/desktop/src-tauri` (skipping `node_modules`, `gen` and `target`) before B2 cites the desktop tests (group C's are in `tests/bridge/`, `tests/acl.rs` and the in-crate `keychain`, `profile` and `error` tests). A friend's dev build needs `bundle.active` and the installer's icons (P12.5 at the latest).
 - **P9.3:** fleet-server leaves `stable_crates` when azalea-auth arrives; fleet-client leaves with it, since fleet-server is its dev-dependency and `--all-targets` builds it.
 - **P11:** the WebSocket client joins fleet-client, with tokio-tungstenite and futures-util (§5).
 
@@ -369,15 +421,23 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
 - **Easier (group B):**
   - The desktop shell is hardened before any command exists: a new command is refused until it's listed and granted, and `just tauri-check` fails on any change to the CSP, the capabilities, the global API or tauri's features.
   - The webview can't be steered to another site, and a second launch can't open a second window.
+- **Easier (group C):**
+  - The UI talks to the server through one typed client whose every command, argument and error is generated or pinned. A renamed command or argument fails the contract fixture on both sides, a new error code fails to compile, and a new command fails `just tauri-check` until it's listed, granted and in the fixture.
+  - A refresh token can only ever be sent to the server it came from, and a session resumes only under the exact profile it was created with.
+  - A broken profile file or keychain never stops the app from starting; the UI is told why.
 - **Harder:**
   - The refresh and the code step outlive their caller in a task the client spawns, an exception to the task-ownership rule.
   - fleet-client's tests build the whole server (and argon2 at the baseline), so they take a few seconds.
   - A server can't be configured with a request timeout above 19 s.
   - Requests serialize, so a field added to a request must serialize correctly too (the round-trip test covers it).
-  - (Group B) The desktop crate builds only on Windows. Linux CI never compiles it, coverage never measures it, and its cargo deny pass covers Windows only.
+  - (Group B) The desktop crate builds only on Windows. Linux CI never compiles it, Linux coverage never measures it (group C adds a Windows gate), and its cargo deny pass covers Windows only.
   - (Group B) Doctests can't include the desktop crate.
   - (Group B) Every hardening change also changes `scripts/tauri-hardening.mjs`.
   - (Group B) No tool that needs TypeScript's compiler API can join before TypeScript 7.1.
+  - (Group C) A keychain call that outlives the client's timeout keeps running in its thread, a fourth exception to the task-ownership rule.
+  - (Group C) Switching servers always logs out, even when only the CA changed, and a reinstall loses the session.
+  - (Group C) Every new command touches build.rs, the capability, the hardening script, the contract fixture, `ApiClient`, `TauriApiClient` and `FakeApiClient`.
+  - (Group C) The desktop coverage build instruments every crate through RUSTFLAGS (`--no-rustc-wrapper`), so it's slower than the wrapper's.
 
 ## Alternatives considered
 - **Client-side request structs:** a second definition of every request.
@@ -406,3 +466,8 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
 - **(Group B) TypeScript 6.0.3, or 7 and 6 side by side:** slower checks, or two compilers to keep in step. **A full `shadcn init`, or clsx + tailwind-merge:** packages before anything uses them, or components that need editing. **Vitest in group C, jsdom 30, the cargo-installed Tauri CLI:** uncovered packages, a Node upgrade, or a from-source build in CI.
 - **(Group B) A generated icon or one the user provides:** more code for a placeholder, or a wait. **`afkfleet.desktop` as the identifier:** no domain behind it. **Only the script as the pin:** the ACL's behaviour untested until group C.
 - **(Group B) A dynamic VC++ runtime instead of excluding the desktop crate from doctests:** friends would need the redistributable.
+- **(Group C) Only group D's commands now:** ACL and hardening changes in every later group. **IPC types in the desktop crate with a second ts-rs export, or a UI-side error model:** two writers to the generated folder, or a hand-written mirror. **A flat error code namespace, or only `{ code, message }`:** a closed and an open set mixed, or no `retry_after` and fields for D. **Logout as an error when the server can't confirm:** every caller would have to know that error means success.
+- **(Group C) Refusing a profile change while logged in:** a check-then-swap race and a new fleet-client API. **Resuming a stored token after a reinstall or a broken file:** a session under certificates that can't be compared. **A shared keychain entry for every server:** a token one race away from another server. **Roaming or Enterprise persistence:** the token on other machines. **The raw pasted PEM, or base64 DER in the file:** the user's text stored as is, or a second parser.
+- **(Group C) Plain `spawn_blocking` for the keychain, or a std mutex inside it:** a timed-out save could land after the clear that followed it (the test proved it). **A dedicated keychain thread:** one more long-lived thread with its own shutdown.
+- **(Group C) Unit tests only, or a stub HTTP server, for the commands:** the switch rules untested, or a hand-written server that drifts. **Gitignoring the generated permissions:** a stale grant would stay local and unseen. **The default rustc wrapper for coverage:** the in-crate tests would count 0 % on Windows.
+- **(Group C) A stateful fake server for the UI's tests:** the server's rules re-implemented. **zod inside TauriApiClient only:** fakes would skip the checks. **Tauri's `mockIPC`:** an import the rule would need to allow. **Review only for the import rules:** an event or window API could slip in unnoticed.

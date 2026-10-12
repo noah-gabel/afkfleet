@@ -354,13 +354,16 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 ## Frontend rules
 **Structure**
 - `packages/ui` doesn't know about the platform: it **never imports `@tauri-apps/*`**.
-- `apps/desktop` implements `ApiClient` as `TauriApiClient` and injects it.
+- `apps/desktop` implements `ApiClient` as `TauriApiClient`, with `invoke` injected, and passes it to `<App apiClient={…} />`. It imports only `@tauri-apps/api/core`: any other Tauri API needs a capability grant and an ADR. Biome's `noRestrictedImports` enforces both rules (ADR-0017).
+- A new command changes build.rs's `COMMANDS`, `capabilities/main.json`, `scripts/tauri-hardening.mjs`, `src-tauri/tests/ipc-contract.json`, `ApiClient`, `TauriApiClient` and `FakeApiClient` together.
 - Organize by feature: `src/features/<feature>/{components,hooks,routes}` with tests alongside. Shared primitives go in `src/components/ui` (shadcn).
 
 **Data and state**
 - Components use hooks (`useBots()`, …) built on TanStack Query over the injected `ApiClient`. **Never call `fetch` or `invoke` inside a component.**
 - TanStack Query holds server state; small `zustand` stores hold UI-only state.
-- Forms use react-hook-form with zod schemas that mirror the server's limits. The server stays authoritative.
+- Forms use react-hook-form with zod schemas that mirror the server's limits (`src/api/schemas.ts`). The server stays authoritative.
+- `App` wraps its client in `validated()`, so every input passes its zod schema before any call. `src/api/limits.ts` holds only numeric constants named like the Rust ones; fleet-api-types' `tests/limits.rs` keeps them equal.
+- Every API call rejects with an `ApiError` holding a `CommandError`. A switch on its `code` is exhaustive (it's closed: the Rust side ships with the UI); a switch on `api.code`, or on any other open value, always has a default branch that shows the message and the request ID (`describeError`).
 - API types come only from `src/generated/` (ts-rs). **Never edit generated files**; run `just gen`. Biome ignores `src/generated/`.
 
 **Safety**

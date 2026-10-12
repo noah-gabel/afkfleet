@@ -129,6 +129,8 @@ There's no support, and I don't take feature requests. Security reports are welc
   - the refresh token in the Windows Credential Manager, one entry per server. A switch to another server logs out first and never carries a session over
   - no token ever reaches the UI; every error has a code the UI handles
 
+  And its TypeScript side: the UI's `ApiClient` (in `packages/ui`), which checks every input against the server's limits before sending it, the desktop app's `TauriApiClient` behind it, and a `FakeApiClient` for tests. One contract file lists every command's exact arguments, and both sides test against it.
+
   [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md) records Phase 8's decisions so far.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.

@@ -280,13 +280,13 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Server state & caching | `@tanstack/react-query` | |
 | Routing | `@tanstack/react-router` | Type-safe routes |
 | UI-only state | `zustand` | Small stores only |
-| Schema validation | `zod` 4 | Forms |
+| Schema validation | `zod` 4 | 4.6.5 (approved in P8.5): the input checks every API call passes (`validated`), and the forms' schemas from P8.6 on ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 | Forms | `react-hook-form`, `@hookform/resolvers` | |
 | Styling | `tailwindcss` 4 | 4.3.3, with `@tailwindcss/vite` 4.3.3 (approved in P8.2) |
 | Components | shadcn/ui (Radix UI primitives, copied into the repo) | Style `radix-nova`, base color neutral, aliases through `packages/ui`'s package.json `#` imports. P8.2 has only `components.json` and the theme tokens; `cn`, class-variance-authority, radix-ui, tw-animate-css and lucide-react arrive with the first component. The CLI only runs as `pnpm dlx shadcn@4.21.4`, never as a dependency ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 | Icons | `lucide-react` | |
 | Toasts | `sonner` | |
-| Tauri bridge | `@tauri-apps/api` 2 | Only in `apps/desktop` |
+| Tauri bridge | `@tauri-apps/api` 2 | 2.12.1 (approved in P8.5). Only in `apps/desktop`, and only `@tauri-apps/api/core`'s `invoke`, injected into `TauriApiClient`; Biome refuses every other Tauri import ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 | Unit / component tests | `vitest`, `@testing-library/react`, `@testing-library/user-event`, `jsdom` | vitest 5.0.3, jsdom 29.1.1 (jsdom 30 needs Node ^24.15), @testing-library/react 16.3.3 with its peer `@testing-library/dom` 10.4.2 (approved in P8.2); user-event arrives with the first test that types |
 | API mocking | `msw` | |
 | E2E | `@playwright/test` | |
@@ -3017,7 +3017,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   The keychain's ordering test also failed against a std mutex taken inside the blocking call, as the user predicted. Then all passed.
   > - **Coverage:** 94.95 % of the desktop gate's lines on the dev machine.
   > - **Lockfile:** it gains only keyring-core and windows-native-keyring-store.
-- [ ] **P8.5** 🔴 TypeScript side:
+- [x] **P8.5** 🔴 TypeScript side:
   - The `ApiClient` interface lives in `packages/ui/src/api/`.
   - `TauriApiClient` lives in `apps/desktop/src/` and is injected into `<App apiClient={…} />`.
   - `FakeApiClient` is for tests.
@@ -3026,6 +3026,23 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P8.5, from Phase 6, group C, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
   > - **Error codes.** UI code that branches on an error code always has a default branch that shows the message and the request ID, never an exhaustive switch that assumes the union is complete: an older app can receive a code added later. The same applies to every `Open<…>` field.
   > - **The generated folder** holds only ts-rs's files: `just gen` refuses to touch it if it holds anything else. Import each type from its own file (`../generated/ErrorResponse`); there's no index file.
+
+  > Note (P8.5, group C, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
+  > - **`ApiClient`:** 20 methods typed by the generated types. Failures are `ApiError { error: CommandError }`; a rejection that isn't a `CommandError` (Tauri's own refusals) becomes `ipc`. `describeError` switches exhaustively on `code` and keeps a default branch on `api.code`.
+  > - **zod in a `validated(client)` wrapper,** which `App` applies: every input is checked before `invoke`, and a failure is `invalid_input` with garde-style fields. `limits.ts` mirrors the Rust constants, and a fleet-api-types test keeps them equal.
+  > - **`FakeApiClient`** is scripted per method and records calls; `UnavailableApiClient` serves the web entry until P8.9.
+  > - **`TauriApiClient(invoke)`** has `invoke` injected and is tested with Vitest in apps/desktop against `ipc-contract.json`, the same fixture the Rust ACL test uses.
+  > - **Biome's `noRestrictedImports`:** no `@tauri-apps/*` in packages/ui, and only `@tauri-apps/api/core` in apps/desktop.
+  > - **Dependencies:** `@tauri-apps/api` 2.12.1, zod 4.6.5, vitest 5.0.3 (apps/desktop dev), all exact.
+
+  > Note (P8.5, as built, group C) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
+  > - **Tests,** red first:
+  >   - the UI: 25 of 31 against stubs
+  >   - `TauriApiClient`: 4 of 24, against a renamed command, a dropped argument and no rejection mapping
+  >   - `tests/limits.rs`: on a missing constant
+  >
+  >   Then all passed. One test runs the validating wrapper with `Object.prototype` frozen, as the webview does.
+  > - **packages/ui** exports `./generated/*`, so apps/desktop imports each type from its own file.
 - [ ] **P8.6** 🔴 App shell:
   - TanStack Router with an auth guard
   - role-aware navigation
