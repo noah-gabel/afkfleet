@@ -14,25 +14,30 @@
 //!   changes; a used one is refused, a revoked or expired one is left as it
 //!   is without a second entry.
 //!
-//! Registering with an invite arrives with `POST /auth/register` (P7.6).
+//! - **Registering's part** ([`InviteService::check`],
+//!   [`InviteService::check_in`]): what a presented code is, on the read pool
+//!   before any hashing and again inside the registration's transaction. A
+//!   pending invite still needs its creator: enabled, and still allowed to
+//!   create an invite of its role; otherwise it can't be used either.
 
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use fleet_core::audit::{AuditAction, AuditError, AuditMetadata, AuditOutcome, AuditTarget};
 use fleet_core::auth::{InviteState, InviteTtl, invite_state, pending_cap_reached};
-use fleet_core::authz::{AuthzError, Permission, ResourceContext, Role, authorize};
+use fleet_core::authz::{Actor, AuthzError, Permission, ResourceContext, Role, authorize};
 use fleet_core::id::InviteId;
 use fleet_core::system::{Clock, MintError, SecureRandom, mint};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret as _, SecretString};
 use tracing::{debug, info};
 
 use super::audit::AuditService;
 use super::users::{ActingUser, recheck};
 use crate::ports::invites::{Invite, ListedInvite, NewInvite};
 use crate::ports::page::{Page, Paged};
-use crate::ports::store::{Store, StoreError};
-use crate::ports::tokens::{MintTokenError, TokenKind, Tokens};
+use crate::ports::store::{Store, StoreError, WriteTx};
+use crate::ports::tokens::{MintTokenError, TokenHash, TokenKind, Tokens};
+use crate::ports::users::User;
 
 /// An invite with its state at the time it was read.
 #[derive(Debug, Clone)]
@@ -50,6 +55,50 @@ pub struct CreatedInvite {
     pub code: SecretString,
     /// The invite, pending.
     pub view: InviteView,
+}
+
+/// Why a real invite can't register anyone, recorded as `reason` in the
+/// registration's `user.create` Failure entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unusable {
+    /// It registered someone already.
+    Used,
+    /// It was revoked.
+    Revoked,
+    /// It expired.
+    Expired,
+    /// Its creator is gone, disabled, or no longer allowed to invite its
+    /// role.
+    CreatorUnauthorized,
+}
+
+impl Unusable {
+    /// The value stored in the metadata.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Used => "used",
+            Self::Revoked => "revoked",
+            Self::Expired => "expired",
+            Self::CreatorUnauthorized => "creator_unauthorized",
+        }
+    }
+}
+
+/// What a presented code is, for registering.
+#[derive(Debug)]
+pub enum InviteCheck {
+    /// No invite has it.
+    Unknown,
+    /// A real invite that can't register anyone.
+    Unusable {
+        /// The invite.
+        id: InviteId,
+        /// Why.
+        reason: Unusable,
+    },
+    /// An invite that can register one user.
+    Usable(Invite),
 }
 
 /// Why an invite wasn't created.
@@ -232,6 +281,56 @@ impl InviteService {
         }))
     }
 
+    /// The hash of a presented code, or `None` when it doesn't have an
+    /// invite code's shape (which no invite has).
+    #[must_use]
+    pub fn code_hash(&self, code: &SecretString) -> Option<TokenHash> {
+        self.tokens
+            .hash_presented(TokenKind::Invite, code.expose_secret())
+    }
+
+    /// What the code hashing to `hash` is now, read on the read pool, so a
+    /// bad code is refused before any password hashing.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    pub async fn check(&self, hash: &TokenHash) -> Result<InviteCheck, StoreError> {
+        let Some(invite) = self
+            .store
+            .invites()
+            .find_by_code_hash(hash)
+            .await?
+            .filter(|invite| invite.code_hash.ct_eq(hash))
+        else {
+            return Ok(InviteCheck::Unknown);
+        };
+        let creator = self.store.users().get(invite.created_by).await?;
+        Ok(decide(invite, creator.as_ref(), self.clock.now()))
+    }
+
+    /// What the code hashing to `hash` is at `now`, read in `tx`: the
+    /// registration's own check, which decides.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    pub async fn check_in(
+        &self,
+        tx: &mut dyn WriteTx,
+        hash: &TokenHash,
+        now: DateTime<Utc>,
+    ) -> Result<InviteCheck, StoreError> {
+        let Some(invite) = tx
+            .invites()
+            .find_by_code_hash(hash)
+            .await?
+            .filter(|invite| invite.code_hash.ct_eq(hash))
+        else {
+            return Ok(InviteCheck::Unknown);
+        };
+        let creator = tx.users().get(invite.created_by).await?;
+        Ok(decide(invite, creator.as_ref(), now))
+    }
+
     /// The role of invite `id`, for the handler's check before
     /// [`InviteService::revoke`].
     ///
@@ -293,6 +392,38 @@ impl InviteService {
                 Ok(())
             }
         }
+    }
+}
+
+/// What `invite`, created by `creator`, is at `now`.
+fn decide(invite: Invite, creator: Option<&User>, now: DateTime<Utc>) -> InviteCheck {
+    let reason = match invite_state(&invite.facts(), now) {
+        InviteState::Used => Unusable::Used,
+        InviteState::Revoked => Unusable::Revoked,
+        InviteState::Expired => Unusable::Expired,
+        InviteState::Pending => {
+            let allowed = creator
+                .filter(|creator| !creator.disabled)
+                .is_some_and(|creator| {
+                    authorize(
+                        &Actor {
+                            id: creator.id,
+                            role: creator.role,
+                        },
+                        Permission::CreateInvite { role: invite.role },
+                        &ResourceContext::Global,
+                    )
+                    .is_ok()
+                });
+            if allowed {
+                return InviteCheck::Usable(invite);
+            }
+            Unusable::CreatorUnauthorized
+        }
+    };
+    InviteCheck::Unusable {
+        id: invite.id,
+        reason,
     }
 }
 

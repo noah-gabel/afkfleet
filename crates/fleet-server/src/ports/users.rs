@@ -201,6 +201,19 @@ pub trait UserWrites: Send {
         hash: &PasswordHash,
     ) -> Result<bool, StoreError>;
 
+    /// Sets the user's new password: its hash, and `password_changed_at` =
+    /// `at`, so every commit that acts on the old password refuses.
+    /// Whether the user exists.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn change_password(
+        &mut self,
+        id: UserId,
+        hash: &PasswordHash,
+        at: DateTime<Utc>,
+    ) -> Result<bool, StoreError>;
+
     /// Sets the user's role. Whether the user exists.
     ///
     /// # Errors

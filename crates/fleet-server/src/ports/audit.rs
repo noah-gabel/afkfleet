@@ -170,6 +170,18 @@ pub struct AuditRecord {
     pub metadata: RecordedMetadata,
 }
 
+/// The wrong 2FA codes typed for a user after their previous successful
+/// login (the `auth.login` Success before the newest), or since their
+/// account was created when they logged in once or never: `auth.login`
+/// Failure entries with `step` = `code` whose target is the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FailedCodeAttempts {
+    /// How many.
+    pub count: u64,
+    /// When the newest was recorded.
+    pub last_at: Option<DateTime<Utc>>,
+}
+
 /// Reading the audit log.
 #[async_trait]
 pub trait AuditReads: Send + Sync + fmt::Debug {
@@ -179,6 +191,13 @@ pub trait AuditReads: Send + Sync + fmt::Debug {
     /// [`StoreError::Corrupt`] for a row that doesn't read back, naming its
     /// ID, and the other [`StoreError`]s.
     async fn list(&self, page: AuditPage) -> Result<Vec<AuditRecord>, StoreError>;
+
+    /// The wrong 2FA codes typed for `user` since their previous login.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`] for a time that
+    /// doesn't read back.
+    async fn failed_code_attempts(&self, user: UserId) -> Result<FailedCodeAttempts, StoreError>;
 }
 
 /// Recording in the audit log, inside a [`super::store::WriteTx`].

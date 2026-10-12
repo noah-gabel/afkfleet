@@ -3,13 +3,16 @@
 use std::net::IpAddr;
 
 use fleet_core::audit::{AuditAction, RecordedMetadata, RecordedTarget};
+use fleet_core::id::UserId;
 use serde_json::Value;
 use sqlx::{SqliteConnection, SqlitePool};
 use uuid::Uuid;
 
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::store_error;
-use crate::ports::audit::{AuditEntryId, AuditPage, AuditRecord, NewAuditEntry};
+use crate::ports::audit::{
+    AuditEntryId, AuditPage, AuditRecord, FailedCodeAttempts, NewAuditEntry,
+};
 use crate::ports::store::StoreError;
 
 /// The table, as errors name it.
@@ -85,6 +88,52 @@ pub(super) async fn list(
     .iter()
     .map(record_from_row)
     .collect()
+}
+
+/// The wrong 2FA codes typed for `user` since their previous successful
+/// login: `auth.login` Failure entries with `step` = `code` targeting the
+/// user, after the second-newest `auth.login` Success (or all of them). The
+/// literals are fixed names, never input (`AuditTarget::User`'s kind, the
+/// action, the outcome and the step).
+pub(super) async fn failed_code_attempts(
+    pool: &SqlitePool,
+    user: UserId,
+) -> Result<FailedCodeAttempts, StoreError> {
+    let user = id_text(user);
+    let row = sqlx::query!(
+        r#"WITH previous AS (
+               SELECT id FROM audit_log
+               WHERE target_type = 'user' AND target_id = ?1 AND action = 'auth.login'
+                     AND outcome = 'success'
+               ORDER BY id DESC LIMIT 1 OFFSET 1
+           ),
+           failures AS (
+               SELECT id, at FROM audit_log
+               WHERE target_type = 'user' AND target_id = ?1 AND action = 'auth.login'
+                     AND outcome = 'failure'
+                     AND json_extract(metadata_json, '$.step') = 'code'
+                     AND id > coalesce((SELECT id FROM previous), 0)
+           )
+           SELECT (SELECT count(*) FROM failures) AS "count!: i64",
+                  (SELECT id FROM failures ORDER BY id DESC LIMIT 1) AS "last_id?: i64",
+                  (SELECT at FROM failures ORDER BY id DESC LIMIT 1) AS "last_at?: String""#,
+        user
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(store_error)?;
+    let corrupt = |column| StoreError::Corrupt {
+        table: TABLE,
+        column,
+        rowid: row.last_id.unwrap_or_default(),
+    };
+    Ok(FailedCodeAttempts {
+        count: u64::try_from(row.count).map_err(|_| corrupt("id"))?,
+        last_at: row
+            .last_at
+            .map(|text| parse_time(&text).ok_or_else(|| corrupt("at")))
+            .transpose()?,
+    })
 }
 
 /// Checks every value of a stored row. Reading is tolerant of a target type

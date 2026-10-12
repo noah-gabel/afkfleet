@@ -12,6 +12,11 @@
 //!   disabling, and the re-check in the transaction.
 //! - [`invites`]: who may invite whom, the code shown once, the cap, the
 //!   list, revoking, and the re-check in the transaction.
+//! - [`register`]: an invite registers one user; reuse, expiry and every
+//!   other unusable invite; the checks' order and the races.
+//! - [`me`]: the profile and the wrong codes since the previous login.
+//! - [`password`]: a new password after stepping up, and its re-checks.
+//! - [`sessions`]: the live sessions, and ending another one.
 //!
 //! Each test gets a fresh database from `#[sqlx::test]`; time is a
 //! `ManualClock`, never paused (CLAUDE.md). Every hash is a real Argon2id
@@ -24,7 +29,11 @@
 mod invites;
 mod login;
 mod logout;
+mod me;
+mod password;
 mod refresh;
+mod register;
+mod sessions;
 mod step_up;
 mod support;
 mod users;

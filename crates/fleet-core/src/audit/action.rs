@@ -58,8 +58,14 @@ macro_rules! audit_actions {
 
 audit_actions! {
     /// A user came to exist: the Owner through `user create-owner`
-    /// (`via` = `cli`), later a registration through an invite (`via` =
-    /// `invite`). Target: the new user. Metadata: `role` and `via`.
+    /// (`via` = `cli`; no actor or IP), or a registration through an invite
+    /// (`via` = `invite`; actor the new user, the client's IP, metadata
+    /// `invite_id` too, next to the invite's `invite.use`). Target: the new
+    /// user. Metadata: `role` and `via`. Failure: a registration with a real
+    /// invite that can't be used, a sign the code leaked: no actor, the
+    /// client's IP, target the invite, metadata `reason` (`used`,
+    /// `revoked`, `expired` or `creator_unauthorized`). An unknown code is
+    /// never recorded.
     USER_CREATE = "user.create";
 
     /// A refresh token that its session had already replaced was presented
@@ -143,6 +149,23 @@ audit_actions! {
     /// and, when the creator's change revoked it, `reason`
     /// (`creator_disabled` or `creator_demoted`).
     INVITE_REVOKE = "invite.revoke";
+
+    /// An invite registered a user, in the same commit as their
+    /// `user.create`. Outcome: Success. Actor: the new user; target: the
+    /// invite; the client's IP. Metadata: `user_id` and `role`.
+    INVITE_USE = "invite.use";
+
+    /// A user changed their password, after stepping up. Every other session
+    /// of the user is revoked in the same commit, and this session's step-up
+    /// ends. Outcome: Success. Actor and target: the user; the client's IP.
+    /// Metadata: `sessions_revoked`.
+    USER_CHANGE_PASSWORD = "user.change_password";
+
+    /// A user ended another of their own sessions (`DELETE
+    /// /me/sessions/{id}`; their current one ends with `auth.logout`).
+    /// Outcome: Success. Actor: the user; target: the session; the client's
+    /// IP.
+    SESSION_REVOKE = "session.revoke";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

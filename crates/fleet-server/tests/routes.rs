@@ -421,6 +421,7 @@ async fn outside_dev_mode_the_public_routes_are_exactly_the_allowlist(
             entry(Method::POST, "/api/v1/auth/login", RateClass::Login),
             entry(Method::POST, "/api/v1/auth/login/mfa", RateClass::Login),
             entry(Method::POST, "/api/v1/auth/refresh", RateClass::Refresh),
+            entry(Method::POST, "/api/v1/auth/register", RateClass::Register),
         ])
     );
     db.close().await;
@@ -443,6 +444,7 @@ async fn dev_mode_adds_only_the_document_to_the_public_routes(
             entry(Method::POST, "/api/v1/auth/login", RateClass::Login),
             entry(Method::POST, "/api/v1/auth/login/mfa", RateClass::Login),
             entry(Method::POST, "/api/v1/auth/refresh", RateClass::Refresh),
+            entry(Method::POST, "/api/v1/auth/register", RateClass::Register),
             entry(Method::GET, OPENAPI_PATH, RateClass::Standard),
         ])
     );
@@ -467,11 +469,10 @@ async fn the_2fa_routes_are_registered_with_their_access_and_class(
     );
     assert_eq!(
         with_access(&built.entries, Access::AuthedStepUp),
-        BTreeSet::from([entry(
-            Method::POST,
-            "/api/v1/me/mfa/reset",
-            RateClass::Standard
-        )])
+        BTreeSet::from([
+            entry(Method::POST, "/api/v1/me/mfa/reset", RateClass::Standard),
+            entry(Method::POST, "/api/v1/me/password", RateClass::Login),
+        ])
     );
     db.close().await;
 }
@@ -490,6 +491,13 @@ async fn the_authed_routes_are_registered_with_their_class(
         BTreeSet::from([
             entry(Method::POST, "/api/v1/auth/logout", RateClass::Standard),
             entry(Method::POST, "/api/v1/auth/step-up", RateClass::Login),
+            entry(Method::GET, "/api/v1/me", RateClass::Standard),
+            entry(Method::GET, "/api/v1/me/sessions", RateClass::Standard),
+            entry(
+                Method::DELETE,
+                "/api/v1/me/sessions/{id}",
+                RateClass::Standard
+            ),
             entry(Method::GET, "/api/v1/users", RateClass::Standard),
             entry(Method::PATCH, "/api/v1/users/{id}", RateClass::Standard),
             entry(Method::POST, "/api/v1/invites", RateClass::Standard),

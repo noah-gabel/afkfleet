@@ -11,9 +11,14 @@
 //! | `POST /api/v1/auth/refresh` | public (Refresh) | a new token pair |
 //! | `POST /api/v1/auth/logout` | user | ends this session |
 //! | `POST /api/v1/auth/step-up` | user (Login) | the password again: step-up actions for 5 minutes |
+//! | `POST /api/v1/auth/register` | public (Register) | an account from an invite; no tokens |
 //! | `POST /api/v1/me/mfa/enroll` | setup token | a new TOTP secret, waiting for confirm |
 //! | `POST /api/v1/me/mfa/confirm` | setup token | confirms it; answers the recovery codes |
 //! | `POST /api/v1/me/mfa/reset` | user + step-up | a setup token that replaces the authenticator |
+//! | `GET /api/v1/me` | user | the user's profile and the wrong codes since the previous login |
+//! | `POST /api/v1/me/password` | user + step-up (Login) | a new password; every other session ends |
+//! | `GET /api/v1/me/sessions` | user | one page of the user's live sessions |
+//! | `DELETE /api/v1/me/sessions/{id}` | user | ends another of the user's sessions |
 //! | `GET /api/v1/users` | user (Admin+) | one page of users |
 //! | `PATCH /api/v1/users/{id}` | user (the Owner; Admins for a Member's `disabled`) | one change: a role or `disabled` |
 //! | `POST /api/v1/invites` | user (Admin+; Admin invites the Owner) | a new invite and its code |
@@ -33,7 +38,7 @@
 use axum::Router;
 use utoipa_axum::routes;
 
-use super::handlers::{auth, health, invites, mfa, users};
+use super::handlers::{auth, health, invites, me, mfa, users};
 use super::middleware::RequestIds;
 use super::openapi::ApiDocs;
 use super::rate_limit::RateLimits;
@@ -106,6 +111,11 @@ pub fn api_routes(routes: Routes) -> Routes {
         .setup_route(RateClass::Standard, routes!(mfa::enroll))
         .setup_route(RateClass::Standard, routes!(mfa::confirm))
         .step_up_route(RateClass::Standard, routes!(mfa::reset))
+        .public_route(RateClass::Register, routes!(auth::register))
+        .authed_route(RateClass::Standard, routes!(me::me))
+        .step_up_route(RateClass::Login, routes!(me::change_password))
+        .authed_route(RateClass::Standard, routes!(me::list_sessions))
+        .authed_route(RateClass::Standard, routes!(me::revoke_session))
         .authed_route(RateClass::Standard, routes!(users::list))
         .authed_route(RateClass::Standard, routes!(users::patch))
         .authed_route(RateClass::Standard, routes!(invites::create))

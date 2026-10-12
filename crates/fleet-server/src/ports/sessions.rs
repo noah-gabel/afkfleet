@@ -19,6 +19,7 @@ use chrono::{DateTime, Utc};
 use fleet_core::authz::Role;
 use fleet_core::id::{SessionId, UserId};
 
+use super::page::Page;
 use super::store::StoreError;
 use super::tokens::TokenHash;
 
@@ -107,6 +108,17 @@ pub struct Rotation {
     pub at: DateTime<Utc>,
 }
 
+/// What makes a session live at a time: not revoked, and both its idle and
+/// its absolute expiry still ahead (`fleet_core::auth::SessionPolicy`'s
+/// refresh expiry).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveSince {
+    /// Only sessions refreshed after this: now minus the idle lifetime.
+    pub refreshed_after: DateTime<Utc>,
+    /// Only sessions created after this: now minus the absolute lifetime.
+    pub created_after: DateTime<Utc>,
+}
+
 /// Reading sessions through the read connections.
 #[async_trait]
 pub trait SessionReads: Send + Sync + fmt::Debug {
@@ -129,6 +141,18 @@ pub trait SessionReads: Send + Sync + fmt::Debug {
     /// # Errors
     /// [`StoreError`].
     async fn refresh_hash_exists(&self, hash: &TokenHash) -> Result<bool, StoreError>;
+
+    /// The user's live sessions of `page`, newest first: up to
+    /// `page.limit.fetch()` of them, one more than the page holds.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn list_live(
+        &self,
+        user: UserId,
+        live: LiveSince,
+        page: Page<SessionId>,
+    ) -> Result<Vec<Session>, StoreError>;
 }
 
 /// Reading and writing sessions inside a [`super::store::WriteTx`]. A
@@ -137,6 +161,13 @@ pub trait SessionReads: Send + Sync + fmt::Debug {
 /// the token already replaced.
 #[async_trait]
 pub trait SessionWrites: Send {
+    /// Ends session `id`'s step-up: its next step-up action needs the
+    /// password again. Whether the session exists.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn clear_step_up(&mut self, id: SessionId) -> Result<bool, StoreError>;
+
     /// Inserts `session`.
     ///
     /// # Errors

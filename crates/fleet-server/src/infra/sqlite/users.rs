@@ -1,5 +1,6 @@
 //! The `users` table's SQL.
 
+use chrono::{DateTime, Utc};
 use fleet_core::authz::Role;
 use fleet_core::id::UserId;
 use fleet_core::value::Username;
@@ -188,6 +189,31 @@ pub(super) async fn listed(
     .map_err(store_error)?
     .map(listed_from_row)
     .transpose()
+}
+
+/// Sets a new password: the hash and `password_changed_at`.
+pub(super) async fn change_password(
+    conn: &mut SqliteConnection,
+    id: UserId,
+    hash: &PasswordHash,
+    at: DateTime<Utc>,
+) -> Result<bool, StoreError> {
+    let id = id_text(id);
+    let hash = hash.expose_secret();
+    let at = time_text(at).ok_or(StoreError::Unstorable {
+        table: TABLE,
+        column: "password_changed_at",
+    })?;
+    let done = sqlx::query!(
+        "UPDATE users SET password_hash = ?, password_changed_at = ? WHERE id = ?",
+        hash,
+        at,
+        id
+    )
+    .execute(conn)
+    .await
+    .map_err(store_error)?;
+    Ok(done.rows_affected() == 1)
 }
 
 /// Sets the user's role.

@@ -14,5 +14,8 @@ expression: names
   "user.set_role",
   "user.set_disabled",
   "invite.create",
-  "invite.revoke"
+  "invite.revoke",
+  "invite.use",
+  "user.change_password",
+  "session.revoke"
 ]

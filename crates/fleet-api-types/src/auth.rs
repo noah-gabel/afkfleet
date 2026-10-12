@@ -1,23 +1,30 @@
 //! The login's DTOs (Plan.md P7.6, §7.2, ADR-0016): the password step, the
-//! code step, refreshing, and stepping up.
+//! code step, refreshing, stepping up, and registering with an invite.
 //!
 //! Logging in takes two steps, and the first never hands out real tokens:
 //! the password step answers an mfa token for the code step, or, for a
 //! user without 2FA, a setup token for enrolling first ([`LoginStatus`]).
 //! The code step answers the session's tokens ([`TokenResponse`]), as a
-//! refresh does. Every secret here is a [`SecretText`].
+//! refresh does. Registering ([`RegisterRequest`]) answers no tokens at all:
+//! the new user logs in, and the password step answers
+//! `mfa_setup_required`. Every secret here is a [`SecretText`].
 
-use fleet_core::auth::SecondFactor;
+use fleet_core::auth::{NewPassword, SecondFactor};
+use fleet_core::id::UserId;
 use fleet_core::value::Username;
 use garde::Validate;
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use utoipa::{PartialSchema as _, ToSchema};
 
+use crate::ids::id_schema;
 use crate::int::integer_schema;
 use crate::mfa::{CODE_MAX_CHARS, SETUP_TOKEN_MAX_SECS, TOKEN_MAX_CHARS};
 use crate::open::{Open, OpenEnum};
 use crate::secret::SecretText;
+use crate::text::BoundedText;
+use crate::users::UserRole;
 
 /// The most characters of a username field: a `Username`'s longest.
 pub const USERNAME_MAX_CHARS: usize = 32;
@@ -31,6 +38,13 @@ pub const ACCESS_TOKEN_MAX_SECS: u32 = 3600;
 /// The longest a refresh token lives, in seconds (`[auth]
 /// refresh_token_absolute_days`' maximum of 365 days).
 pub const REFRESH_TOKEN_MAX_SECS: u32 = 31_536_000;
+/// The most characters of a new password: `NewPassword`'s longest.
+pub const NEW_PASSWORD_MAX_CHARS: usize = NewPassword::MAX_CHARS;
+/// The one message for an invite that can't register anyone, whatever the
+/// reason: unknown or malformed, used, revoked, expired, or its creator
+/// lost the right to it.
+pub const INVALID_INVITE: &str =
+    "isn't valid: it's unknown, used, revoked or expired; ask for a new invite";
 
 /// `POST /auth/login`: the password step.
 #[derive(Debug, Deserialize, Validate, TS, ToSchema)]
@@ -147,6 +161,67 @@ pub struct StepUpRequest {
     #[ts(type = "string")]
     #[schema(schema_with = SecretText::<PASSWORD_MAX_CHARS>::schema)]
     pub password: SecretText<PASSWORD_MAX_CHARS>,
+}
+
+/// `POST /auth/register`: an account from an invite. The invite decides
+/// the role; the account has no 2FA until its first login's setup.
+#[derive(Debug, Deserialize, Validate, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RegisterRequest {
+    /// The invite's code (`afk_iv_…`), as its creator sent it.
+    #[garde(custom(invite_code))]
+    #[ts(type = "string")]
+    #[schema(schema_with = SecretText::<TOKEN_MAX_CHARS>::schema)]
+    pub invite: SecretText<TOKEN_MAX_CHARS>,
+    /// The username, in any case; it's stored lowercase.
+    #[garde(custom(valid_username))]
+    #[ts(type = "string")]
+    #[schema(schema_with = SecretText::<USERNAME_MAX_CHARS>::schema)]
+    pub username: SecretText<USERNAME_MAX_CHARS>,
+    /// The password: 12 to 128 characters, no control characters, and
+    /// strong enough for the server's strength check.
+    #[garde(custom(new_password_rule))]
+    #[ts(type = "string")]
+    #[schema(schema_with = SecretText::<NEW_PASSWORD_MAX_CHARS>::schema)]
+    pub password: SecretText<NEW_PASSWORD_MAX_CHARS>,
+}
+
+/// The new account: log in with it next, and set up 2FA there.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct RegisterResponse {
+    /// The new user's ID.
+    #[ts(type = "string")]
+    #[schema(schema_with = id_schema)]
+    pub id: UserId,
+    /// The username as stored: lowercase.
+    #[ts(type = "string")]
+    #[schema(schema_with = BoundedText::<USERNAME_MAX_CHARS>::schema)]
+    pub username: BoundedText<USERNAME_MAX_CHARS>,
+    /// The role the invite gave.
+    #[ts(as = "UserRole")]
+    #[schema(value_type = UserRole)]
+    pub role: Open<UserRole>,
+}
+
+/// The garde rule of an invite code: at most [`TOKEN_MAX_CHARS`]
+/// characters, refused with the same message as any invite the server
+/// can't use, so a client can't tell a malformed code from an unknown one.
+fn invite_code<C>(code: &SecretText<TOKEN_MAX_CHARS>, _context: &C) -> garde::Result {
+    if code.expose().chars().nth(TOKEN_MAX_CHARS).is_some() {
+        return Err(garde::Error::new(INVALID_INVITE));
+    }
+    Ok(())
+}
+
+/// The garde rule of a new password: `NewPassword`'s, with its message,
+/// which names only the limits.
+pub(crate) fn new_password_rule<const MAX: usize, C>(
+    password: &SecretText<MAX>,
+    _context: &C,
+) -> garde::Result {
+    NewPassword::try_from(SecretString::from(password.expose()))
+        .map(drop)
+        .map_err(|error| garde::Error::new(error.to_string()))
 }
 
 /// The garde rule of a username: a valid `Username`. The message names the
@@ -382,5 +457,111 @@ mod tests {
                 json!(status.as_str())
             );
         }
+    }
+
+    fn register(invite: &str, username: &str, password: &str) -> RegisterRequest {
+        read(json!({ "invite": invite, "username": username, "password": password })).unwrap()
+    }
+
+    const INVITE: &str = "afk_iv_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
+
+    #[test]
+    fn a_registration_with_a_code_a_name_and_a_new_password_is_valid() {
+        let request = register(INVITE, "Alice", "correct horse battery staple");
+
+        assert_eq!(problems(&request), []);
+    }
+
+    #[test]
+    fn a_code_longer_than_a_token_breaks_the_invite_rule_without_showing_it() {
+        let long = format!("afk_iv_{}", "x".repeat(TOKEN_MAX_CHARS));
+        let request = register(&long, "alice", "correct horse battery staple");
+
+        let found = problems(&request);
+
+        assert_eq!(found, [("invite".to_owned(), INVALID_INVITE.to_owned())]);
+        assert!(found.iter().all(|(_, message)| !message.contains("xxxx")));
+    }
+
+    #[test]
+    fn a_new_password_breaks_its_rule_with_its_own_words() {
+        let cases = [
+            ("short", "a password has at least 12 characters"),
+            (
+                &"x".repeat(129) as &str,
+                "a password has at most 128 characters",
+            ),
+            (
+                "correct horse\nbattery",
+                "a password can't contain control characters, such as a line break or a tab",
+            ),
+        ];
+
+        for (password, message) in cases {
+            let request = register(INVITE, "alice", password);
+
+            let found = problems(&request);
+
+            assert_eq!(
+                found,
+                [("password".to_owned(), message.to_owned())],
+                "{password}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_registration_checks_the_username_like_login() {
+        let request = register(INVITE, "-alice", "correct horse battery staple");
+
+        assert_eq!(
+            problems(&request),
+            [("username".to_owned(), USERNAME_RULE.to_owned())]
+        );
+    }
+
+    #[test]
+    fn a_registration_refuses_unknown_missing_and_mistyped_fields() {
+        let body = json!({ "invite": INVITE, "username": "alice", "password": "correct horse battery staple" });
+        let mut extra = body.clone();
+        extra["role"] = json!("admin");
+        let mut missing = body.clone();
+        missing.as_object_mut().unwrap().remove("invite");
+        let mut mistyped = body;
+        mistyped["password"] = json!(12);
+
+        for json in [extra, missing, mistyped] {
+            assert!(read::<RegisterRequest>(json).is_err());
+        }
+    }
+
+    #[test]
+    fn a_registration_shows_no_secret_in_debug() {
+        let request = register(INVITE, "alice", "correct horse battery staple");
+        let answer: RegisterResponse = read(json!({
+            "id": "018bcfe5-6800-7101-8101-010101010101",
+            "username": "alice",
+            "role": "member"
+        }))
+        .unwrap();
+
+        let shown = format!("{request:?} {answer:?}");
+
+        assert!(!shown.contains("AAAA"), "{shown}");
+        assert!(!shown.contains("horse"), "{shown}");
+    }
+
+    #[test]
+    fn the_registration_answer_round_trips() {
+        let answer = json!({
+            "id": "018bcfe5-6800-7101-8101-010101010101",
+            "username": "alice",
+            "role": "admin"
+        });
+
+        let back: RegisterResponse = read(answer.clone()).unwrap();
+
+        assert_eq!(back.role.known(), Some(UserRole::Admin));
+        assert_eq!(serde_json::to_value(back).unwrap(), answer);
     }
 }

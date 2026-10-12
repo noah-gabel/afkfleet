@@ -73,6 +73,10 @@ pub(crate) const ENROLL: &str = "/api/v1/me/mfa/enroll";
 pub(crate) const CONFIRM: &str = "/api/v1/me/mfa/confirm";
 pub(crate) const USERS: &str = "/api/v1/users";
 pub(crate) const INVITES: &str = "/api/v1/invites";
+pub(crate) const REGISTER: &str = "/api/v1/auth/register";
+pub(crate) const ME: &str = "/api/v1/me";
+pub(crate) const ME_PASSWORD: &str = "/api/v1/me/password";
+pub(crate) const ME_SESSIONS: &str = "/api/v1/me/sessions";
 
 /// A valid Argon2id PHC string (not a real hash), for users who never log
 /// in with a password.
@@ -176,6 +180,8 @@ pub(crate) enum Meanwhile {
     DisableUser(UserId),
     /// An invite is used by a user.
     UseInvite(InviteId, UserId),
+    /// Another user takes this username.
+    AddUser(&'static str),
 }
 
 /// The database, with a change queued to land right before the next write
@@ -240,6 +246,20 @@ impl HookedStore {
             Meanwhile::UseInvite(invite, user) => {
                 let mut tx = self.inner.write().await.unwrap();
                 assert!(tx.invites().use_invite(invite, user, now).await.unwrap());
+                tx.commit(setup_entry()).await.unwrap();
+            }
+            Meanwhile::AddUser(name) => {
+                let mut tx = self.inner.write().await.unwrap();
+                tx.users()
+                    .insert(&NewUser {
+                        id: UserId::new_v7(now, [0xEE; 10]).unwrap(),
+                        username: Username::try_from(name).unwrap(),
+                        password_hash: PasswordHash::new(SecretString::from(PHC)).unwrap(),
+                        role: Role::Member,
+                        created_at: now,
+                    })
+                    .await
+                    .unwrap();
                 tx.commit(setup_entry()).await.unwrap();
             }
         }
@@ -666,6 +686,63 @@ impl Setup {
             session,
             token,
         }
+    }
+
+    /// Stamps `session`'s step-up now, as `POST /auth/step-up` does.
+    pub(crate) async fn stamp(&self, session: SessionId) {
+        let mut tx = self.db.write().await.unwrap();
+        assert!(
+            tx.sessions()
+                .stamp_step_up(session, self.clock.now())
+                .await
+                .unwrap()
+        );
+        tx.commit(setup_entry()).await.unwrap();
+    }
+
+    /// A session of `user` whose login was `millis` from `T0` (in the past
+    /// for an expired one): its ID and its access token.
+    pub(crate) async fn session_since(
+        &self,
+        user: UserId,
+        millis: i64,
+    ) -> (SessionId, SecretString) {
+        let mut prepared = self.tokens.prepare(user).unwrap();
+        prepared.new_session.created_at = at(T0 + millis);
+        let mut tx = self.db.write().await.unwrap();
+        tx.sessions().insert(&prepared.new_session).await.unwrap();
+        tx.commit(setup_entry()).await.unwrap();
+        (prepared.new_session.id, prepared.tokens.access_token)
+    }
+
+    /// Adds an invite by `creator` for `role` with a real code, created
+    /// `millis` after `T0` and living 72 hours: its ID and its code.
+    pub(crate) async fn invite_code(
+        &self,
+        n: u8,
+        creator: UserId,
+        role: Role,
+        millis: i64,
+    ) -> (InviteId, SecretString) {
+        use fleet_server::ports::tokens::{TokenKind, Tokens as _};
+        let minted = Sha256Tokens::new(Arc::new(SeededRandom::new(u64::from(n) + 1_000)))
+            .mint(TokenKind::Invite)
+            .unwrap();
+        let id = InviteId::new_v7(at(T0 + millis), [n; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.invites()
+            .insert(&NewInvite {
+                id,
+                code_hash: minted.hash,
+                role,
+                created_by: creator,
+                created_at: at(T0 + millis),
+                expires_at: at(T0 + millis + INVITE_TTL),
+            })
+            .await
+            .unwrap();
+        tx.commit(setup_entry()).await.unwrap();
+        (id, minted.token)
     }
 
     /// Adds user `name` with `role`, its ID minted from `n`, created a minute

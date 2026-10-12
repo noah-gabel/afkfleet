@@ -18,8 +18,8 @@ use std::fs;
 
 use fleet_api_types::auth::{
     ACCESS_TOKEN_MAX_SECS, LoginMfaRequest, LoginRequest, LoginResponse, LoginStatus,
-    PASSWORD_MAX_CHARS, REFRESH_TOKEN_MAX_SECS, RefreshRequest, StepUpRequest, TokenResponse,
-    USERNAME_MAX_CHARS,
+    NEW_PASSWORD_MAX_CHARS, PASSWORD_MAX_CHARS, REFRESH_TOKEN_MAX_SECS, RefreshRequest,
+    RegisterRequest, RegisterResponse, StepUpRequest, TokenResponse, USERNAME_MAX_CHARS,
 };
 use fleet_api_types::error::{
     FIELD_MESSAGE_MAX_CHARS, FIELD_PATH_MAX_CHARS, MESSAGE_MAX_CHARS, REQUEST_ID_MAX_CHARS,
@@ -28,11 +28,13 @@ use fleet_api_types::ids::ID_CHARS;
 use fleet_api_types::invites::{
     CreateInviteRequest, CreatedInviteResponse, InvitePage, InviteResponse, InviteState,
 };
+use fleet_api_types::me::{FailedCodeAttempts, MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{
     CODE_MAX_CHARS, MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse,
     OTPAUTH_URI_MAX_CHARS, QR_SVG_MAX_CHARS, RECOVERY_CODE_MAX_CHARS, SETUP_TOKEN_MAX_SECS,
     TOKEN_MAX_CHARS, TOTP_SECRET_MAX_CHARS,
 };
+use fleet_api_types::sessions::{SessionPage, SessionResponse};
 use fleet_api_types::time::TIMESTAMP_CHARS;
 use fleet_api_types::users::{UserLabel, UserPage, UserPatchRequest, UserResponse, UserRole};
 use fleet_api_types::{
@@ -62,6 +64,7 @@ fn declarations() -> BTreeMap<String, String> {
         ("ErrorBody", ErrorBody::decl(&config)),
         ("ErrorCode", ErrorCode::decl(&config)),
         ("ErrorResponse", ErrorResponse::decl(&config)),
+        ("FailedCodeAttempts", FailedCodeAttempts::decl(&config)),
         ("FieldError", FieldError::decl(&config)),
         ("InvitePage", InvitePage::decl(&config)),
         ("InviteResponse", InviteResponse::decl(&config)),
@@ -70,11 +73,20 @@ fn declarations() -> BTreeMap<String, String> {
         ("LoginRequest", LoginRequest::decl(&config)),
         ("LoginResponse", LoginResponse::decl(&config)),
         ("LoginStatus", LoginStatus::decl(&config)),
+        ("MeResponse", MeResponse::decl(&config)),
         ("MfaConfirmRequest", MfaConfirmRequest::decl(&config)),
         ("MfaConfirmResponse", MfaConfirmResponse::decl(&config)),
         ("MfaEnrollResponse", MfaEnrollResponse::decl(&config)),
         ("MfaResetResponse", MfaResetResponse::decl(&config)),
+        (
+            "PasswordChangeRequest",
+            PasswordChangeRequest::decl(&config),
+        ),
         ("RefreshRequest", RefreshRequest::decl(&config)),
+        ("RegisterRequest", RegisterRequest::decl(&config)),
+        ("RegisterResponse", RegisterResponse::decl(&config)),
+        ("SessionPage", SessionPage::decl(&config)),
+        ("SessionResponse", SessionResponse::decl(&config)),
         ("StepUpRequest", StepUpRequest::decl(&config)),
         ("TokenResponse", TokenResponse::decl(&config)),
         ("UserLabel", UserLabel::decl(&config)),
@@ -318,6 +330,23 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::invite_revoked_at("InviteResponse", "revoked_at", TIMESTAMP_CHARS)]
 #[case::invite_page_next("InvitePage", "next", ID_CHARS)]
 #[case::invite_code("CreatedInviteResponse", "code", TOKEN_MAX_CHARS)]
+#[case::register_invite("RegisterRequest", "invite", TOKEN_MAX_CHARS)]
+#[case::register_username("RegisterRequest", "username", USERNAME_MAX_CHARS)]
+#[case::register_password("RegisterRequest", "password", NEW_PASSWORD_MAX_CHARS)]
+#[case::registered_id("RegisterResponse", "id", ID_CHARS)]
+#[case::registered_username("RegisterResponse", "username", USERNAME_MAX_CHARS)]
+#[case::me_id("MeResponse", "id", ID_CHARS)]
+#[case::me_username("MeResponse", "username", USERNAME_MAX_CHARS)]
+#[case::me_created_at("MeResponse", "created_at", TIMESTAMP_CHARS)]
+#[case::me_password_changed_at("MeResponse", "password_changed_at", TIMESTAMP_CHARS)]
+#[case::me_mfa_confirmed_at("MeResponse", "mfa_confirmed_at", TIMESTAMP_CHARS)]
+#[case::failed_last_at("FailedCodeAttempts", "last_at", TIMESTAMP_CHARS)]
+#[case::new_password("PasswordChangeRequest", "new_password", NEW_PASSWORD_MAX_CHARS)]
+#[case::session_id("SessionResponse", "id", ID_CHARS)]
+#[case::session_created_at("SessionResponse", "created_at", TIMESTAMP_CHARS)]
+#[case::session_last_used_at("SessionResponse", "last_used_at", TIMESTAMP_CHARS)]
+#[case::session_expires_at("SessionResponse", "expires_at", TIMESTAMP_CHARS)]
+#[case::session_page_next("SessionPage", "next", ID_CHARS)]
 fn a_text_field_is_capped_at_its_constant(
     #[case] component: &str,
     #[case] field: &str,
@@ -367,6 +396,23 @@ fn every_text_field_has_its_cap_checked() {
         ("InviteResponse", "revoked_at"),
         ("InvitePage", "next"),
         ("CreatedInviteResponse", "code"),
+        ("RegisterRequest", "invite"),
+        ("RegisterRequest", "username"),
+        ("RegisterRequest", "password"),
+        ("RegisterResponse", "id"),
+        ("RegisterResponse", "username"),
+        ("MeResponse", "id"),
+        ("MeResponse", "username"),
+        ("MeResponse", "created_at"),
+        ("MeResponse", "password_changed_at"),
+        ("MeResponse", "mfa_confirmed_at"),
+        ("FailedCodeAttempts", "last_at"),
+        ("PasswordChangeRequest", "new_password"),
+        ("SessionResponse", "id"),
+        ("SessionResponse", "created_at"),
+        ("SessionResponse", "last_used_at"),
+        ("SessionResponse", "expires_at"),
+        ("SessionPage", "next"),
     ]);
     let components = components_json();
 
@@ -395,7 +441,9 @@ fn a_request_schema_refuses_unknown_fields_and_responses_dont() {
         "LoginMfaRequest",
         "LoginRequest",
         "MfaConfirmRequest",
+        "PasswordChangeRequest",
         "RefreshRequest",
+        "RegisterRequest",
         "StepUpRequest",
         "UserPatchRequest",
     ]);
@@ -481,6 +529,9 @@ fn an_open_field_lists_exactly_its_enums_known_values() {
 #[case::invite_page_next("InvitePage", "next")]
 #[case::patch_role("UserPatchRequest", "role")]
 #[case::patch_disabled("UserPatchRequest", "disabled")]
+#[case::mfa_confirmed_at("MeResponse", "mfa_confirmed_at")]
+#[case::failed_last_at("FailedCodeAttempts", "last_at")]
+#[case::session_page_next("SessionPage", "next")]
 fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[case] field: &str) {
     let components = components_json();
     let schema = property(&components, component, field);
@@ -506,6 +557,8 @@ fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[ca
 #[case::user("UserResponse", "role", "UserRole")]
 #[case::invite_role("InviteResponse", "role", "UserRole")]
 #[case::invite_state("InviteResponse", "state", "InviteState")]
+#[case::registered_role("RegisterResponse", "role", "UserRole")]
+#[case::me_role("MeResponse", "role", "UserRole")]
 fn the_new_open_fields_list_exactly_their_known_values(
     #[case] component: &str,
     #[case] field: &str,

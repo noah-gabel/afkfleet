@@ -22,6 +22,10 @@
 //!   tell a client why.
 //! - **Logging out** (group D): [`TokenService::logout`] revokes the
 //!   request's own session and records `auth.logout`.
+//! - **The user's sessions** (group E): [`TokenService::list_sessions`]
+//!   lists the live ones (not revoked, refresh not expired), newest first,
+//!   and [`TokenService::revoke_own`] ends another one of them with
+//!   `session.revoke`; the current one ends through logout.
 //! - **Authenticating** (P7.8): [`TokenService::authenticate`] finds the
 //!   session of a request's access token, with its user, through the read
 //!   connections, and decides with `fleet_core::auth::access_decision`, so a
@@ -53,7 +57,8 @@ use secrecy::{ExposeSecret as _, SecretString};
 use tracing::{debug, info, warn};
 
 use super::audit::AuditService;
-use crate::ports::sessions::{NewSession, RefreshLookup, Rotation, Session};
+use crate::ports::page::{Page, Paged};
+use crate::ports::sessions::{LiveSince, NewSession, RefreshLookup, Rotation, Session};
 use crate::ports::store::{Store, StoreError, UnauditedWrite};
 use crate::ports::tokens::{MintTokenError, MintedToken, TokenHash, TokenKind, Tokens};
 
@@ -122,6 +127,34 @@ pub enum RefreshError {
 /// Why a logout failed: the server's fault, never the client's.
 #[derive(Debug, thiserror::Error)]
 pub enum LogoutError {
+    /// The entry couldn't be built.
+    #[error("the audit entry can't be built")]
+    Audit(#[from] AuditError),
+    /// The database failed.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
+
+/// A live session as the user's list shows it.
+#[derive(Debug, Clone)]
+pub struct SessionView {
+    /// The session.
+    pub session: Session,
+    /// When its refresh token expires unless it's used first.
+    pub expires_at: DateTime<Utc>,
+    /// Whether it's the session of the request that asked.
+    pub current: bool,
+}
+
+/// Why a session of the user's wasn't revoked.
+#[derive(Debug, thiserror::Error)]
+pub enum RevokeSessionError {
+    /// It's the request's own session: logout ends that one.
+    #[error("the current session ends through logout")]
+    Current,
+    /// The user has no live session with that ID.
+    #[error("no such live session")]
+    NotFound,
     /// The entry couldn't be built.
     #[error("the audit entry can't be built")]
     Audit(#[from] AuditError),
@@ -387,6 +420,72 @@ impl TokenService {
         Ok(())
     }
 
+    /// The live sessions of `user_id` in `page`, newest first, with the
+    /// next page's cursor; `current` is the asking request's.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    pub async fn list_sessions(
+        &self,
+        user_id: UserId,
+        current: SessionId,
+        page: Page<SessionId>,
+    ) -> Result<Paged<SessionView, SessionId>, StoreError> {
+        let now = self.clock.now();
+        let live = LiveSince {
+            refreshed_after: before(now, self.policy.idle()),
+            created_after: before(now, self.policy.absolute()),
+        };
+        let rows = self.store.sessions().list_live(user_id, live, page).await?;
+        let views = rows
+            .into_iter()
+            .map(|session| SessionView {
+                expires_at: self.policy.refresh_expiry(times(&session)),
+                current: session.id == current,
+                session,
+            })
+            .collect();
+        Ok(Paged::split(views, page.limit, |view| view.session.id))
+    }
+
+    /// Revokes `user_id`'s live session `id` for the request of session
+    /// `current` from `ip`, and records `session.revoke`.
+    ///
+    /// # Errors
+    /// [`RevokeSessionError::Current`] for the request's own session,
+    /// [`RevokeSessionError::NotFound`] for any other that isn't a live
+    /// session of the user's, and the server's failures.
+    pub async fn revoke_own(
+        &self,
+        user_id: UserId,
+        current: SessionId,
+        id: SessionId,
+        ip: IpAddr,
+    ) -> Result<(), RevokeSessionError> {
+        if id == current {
+            return Err(RevokeSessionError::Current);
+        }
+        let now = self.clock.now();
+        let mut tx = self.store.write().await?;
+        let live = tx.sessions().find(id).await?.is_some_and(|found| {
+            found.session.user_id == user_id
+                && found.session.revoked_at.is_none()
+                && self.policy.refresh_valid(times(&found.session), now)
+        });
+        if !live || !tx.sessions().revoke(id, now).await? {
+            return Err(RevokeSessionError::NotFound);
+        }
+        let entry = self
+            .audit
+            .entry(AuditAction::SESSION_REVOKE, AuditOutcome::Success)
+            .actor(user_id)
+            .ip(ip)
+            .target(AuditTarget::Session(id));
+        tx.commit(entry).await?;
+        info!(user_id = %user_id, session_id = %id, "a user ended another session");
+        Ok(())
+    }
+
     /// Whether `stamp`, when the session's password was last entered again,
     /// allows a step-up action now (`fleet_core::auth::is_stepped_up`).
     #[must_use]
@@ -521,6 +620,15 @@ fn facts(found: &RefreshLookup) -> RefreshFacts {
 }
 
 /// A stored session's anchors.
+/// `duration` before `now`, or the epoch, before every stored time, if
+/// that's out of range.
+fn before(now: DateTime<Utc>, duration: Duration) -> DateTime<Utc> {
+    chrono::TimeDelta::from_std(duration)
+        .ok()
+        .and_then(|delta| now.checked_sub_signed(delta))
+        .unwrap_or(DateTime::UNIX_EPOCH)
+}
+
 const fn times(session: &Session) -> SessionTimes {
     SessionTimes {
         created_at: session.created_at,

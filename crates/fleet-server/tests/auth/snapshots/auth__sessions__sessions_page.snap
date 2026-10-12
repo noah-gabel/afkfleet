@@ -1,0 +1,22 @@
+---
+source: crates/fleet-server/tests/auth/sessions.rs
+expression: "redacted(&seen.body,\n&[(current.to_string(), \"current\"), (first.to_string(), \"first\")])"
+---
+{
+  "items": [
+    {
+      "created_at": "[T0+3s]",
+      "current": true,
+      "expires_at": "[T0+604803s]",
+      "id": "[current]",
+      "last_used_at": "[T0+3s]"
+    },
+    {
+      "created_at": "[T0+1s]",
+      "current": false,
+      "expires_at": "[T0+604801s]",
+      "id": "[first]",
+      "last_used_at": "[T0+1s]"
+    }
+  ]
+}

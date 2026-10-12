@@ -1,0 +1,24 @@
+---
+source: crates/fleet-server/tests/auth/register.rs
+expression: seen.body_without_request_id()
+---
+{
+  "error": {
+    "code": "validation_failed",
+    "fields": [
+      {
+        "message": "is too weak",
+        "path": "password"
+      },
+      {
+        "message": "This is a very common password.",
+        "path": "password"
+      },
+      {
+        "message": "Add another word or two. Uncommon words are better.",
+        "path": "password"
+      }
+    ],
+    "message": "Some fields are invalid."
+  }
+}
