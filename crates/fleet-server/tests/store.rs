@@ -21,7 +21,7 @@ use fleet_core::audit::{
     RecordedValue, TargetKind,
 };
 use fleet_core::authz::Role;
-use fleet_core::id::{AccountId, AgentId, BotId, ModeId, SessionId, UserId};
+use fleet_core::id::{AccountId, AgentId, BotId, InviteId, ModeId, SessionId, UserId};
 use fleet_core::value::Username;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions, READ_CONNECTIONS};
 use fleet_server::ports::audit::{AuditEntryId, AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
@@ -608,6 +608,7 @@ async fn every_target_reads_back(_pool: SqlitePoolOptions, options: SqliteConnec
         AuditTarget::Mode(ModeId::new_v7(created, [5; 10]).unwrap()),
         AuditTarget::User(user_id(6)),
         AuditTarget::Session(SessionId::new_v7(created, [7; 10]).unwrap()),
+        AuditTarget::Invite(InviteId::new_v7(created, [8; 10]).unwrap()),
     ];
 
     for target in targets {

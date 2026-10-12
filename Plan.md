@@ -2396,7 +2396,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   - **No tower_governor:** 0.8.0 hard-codes governor's quanta clock, forces governor's and axum's default features on the workspace, and rounds its wait down. fleet-server uses the workspace's governor with `std` only, behind its own middleware.
 >   - **New in `[workspace.dependencies]`:** hmac 0.13.0 (fleet-server enables `zeroize`), and ipnet 2.12.2, a fleet-server dev-dependency only. Both were already in Cargo.lock, which gains only the direct edges.
 
-- [ ] **P7.1** 🔴 Migrations and repositories: `sessions` (with token families), `invites`, `login_attempts`, `user_mfa`.
+- [x] **P7.1** 🔴 Migrations and repositories: `sessions` (with token families), `invites`, `login_attempts`, `user_mfa`.
 
   > Note (P7.1, from the Phase 7 plan, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **each table arrives with its first user,** in its own migration, so its columns are designed together with the feature:
   > - `sessions` with `stepped_up_at` (B)
@@ -2434,6 +2434,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **`recovery_codes`** `(hash, user_id, used_at)`: plain SHA-256 of the normalized code, safe only because each code has at least 80 bits from `SecureRandom` (100 in fact). Not keyed, since a key derived from the vault's active key would make every code unusable after P9's key rotation. A used code keeps its row; indexed on `user_id`.
   > - **The repository:** `find` (read pool and transaction), `find_unused_code`, `insert` (a second first enrollment is refused), `replace`, the conditional `advance_step` (only a later step, and only while `confirmed_at` is unchanged), `replace_codes` and the conditional `use_code`. The sessions gain `refresh_hash_exists`, `revoke_all_for_user(user, except)`, `find` and `stamp_step_up`; the users `get` in a transaction and `set_password_hash`, which never touches `password_changed_at`.
   > - **Tests,** red against compiling stubs: 27 of 39 failed, then all passed. The migrations' snapshot gained line 5.
+
+  > Note (P7.1, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`0006_invites.sql`**, the last of the four tables.
+  > - **Columns:** `id`; `code_hash` (SHA-256 of the `afk_iv_…` code, a 32-byte BLOB, UNIQUE); `role` (`member` or `admin` only: an Owner invite can't exist); `created_by` and `used_by` referencing `users` without cascade, `used_by` UNIQUE (one invite per user); `created_at` and `expires_at` (stored at creation from `[auth] invite_ttl_hours`, so a config change doesn't move it); `used_by`, `used_at` and `revoked_at` NULL until set. A used or revoked invite keeps its row.
+  > - **Belt CHECKs behind the services:** a user and the time of the use come together; an invite is never both used and revoked; it expires after its creation (the fixed time form compares as text). Each has a refusal test.
+  > - **Indexes** on `created_by` (the cap and revoking a creator's pending invites) and `expires_at` (P11.6's cleanup).
+  > - **The repository** (`ports::invites`, `infra::sqlite::invites`): `find` and `find_by_code_hash` on the read pool and in the transaction, `list` (newest first, every state, joined with the people's names, one row more than the page), `insert`, `count_pending_by`, and the conditional `use_invite`, `revoke` and `revoke_pending_by` (each only while unused, unrevoked and unexpired; the last with `RETURNING`). `ports::page` holds the shared `PageLimit` (1–100, 50 by default), `Page` and `Paged::split`.
+  > - **fleet-core:** `InviteId`, `AuditTarget::Invite` (`invite`) and `auth::invite` (`InviteTtl` 1–720 h, 72 by default; `invite_state`: used, then revoked, then expired at `now >= expires_at`; `MAX_PENDING_INVITES` = 20 and `pending_cap_reached`).
+  > - **Tests,** red against compiling stubs (a rule that kept every invite pending and accepted every lifetime, a target named like a session, a page that never split, a repository that found and wrote nothing): fleet-core 18 of 25 rule tests and the two target tests, fleet-server 6 of 11 page tests and 13 of 20 repository tests failed on assertions. The repository tests that passed check the table's CHECKs and foreign keys, which the real migration already enforces, and an unknown lookup. Then all passed. Snapshots, read before accepting: the serialized IDs gained `invite`, the migrations' line 6.
 - [x] **P7.2** 🔴 `PasswordService`:
   - Argon2id with the configured parameters
   - runs in `spawn_blocking` behind a semaphore

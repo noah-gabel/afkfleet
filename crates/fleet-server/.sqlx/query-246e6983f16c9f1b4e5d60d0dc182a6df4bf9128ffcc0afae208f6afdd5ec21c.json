@@ -1,0 +1,182 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT invites.rowid AS \"rowid!: i64\", invites.id AS \"id!\",\n                  invites.code_hash AS \"code_hash!: Vec<u8>\", invites.role AS \"role!\",\n                  invites.created_by AS \"created_by!\", invites.created_at AS \"created_at!\",\n                  invites.expires_at AS \"expires_at!\", invites.used_by AS \"used_by?\",\n                  invites.used_at AS \"used_at?\", invites.revoked_at AS \"revoked_at?\",\n                  creator.username AS \"created_by_name!\", creator.rowid AS \"creator_rowid!: i64\",\n                  invitee.username AS \"used_by_name?\", invitee.rowid AS \"invitee_rowid?: i64\"\n           FROM invites\n           JOIN users AS creator ON creator.id = invites.created_by\n           LEFT JOIN users AS invitee ON invitee.id = invites.used_by\n           WHERE ? IS NULL OR invites.id < ?\n           ORDER BY invites.id DESC\n           LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "code_hash!: Vec<u8>",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "code_hash"
+          }
+        }
+      },
+      {
+        "name": "role!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "name": "created_by!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "expires_at!",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "name": "used_by?",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "used_by"
+          }
+        }
+      },
+      {
+        "name": "used_at?",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "used_at"
+          }
+        }
+      },
+      {
+        "name": "revoked_at?",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "invites",
+            "name": "revoked_at"
+          }
+        }
+      },
+      {
+        "name": "created_by_name!",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "name": "creator_rowid!: i64",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "used_by_name?",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "name": "invitee_rowid?: i64",
+        "ordinal": 13,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "rowid"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "246e6983f16c9f1b4e5d60d0dc182a6df4bf9128ffcc0afae208f6afdd5ec21c"
+}
