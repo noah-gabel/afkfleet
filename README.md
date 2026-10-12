@@ -16,7 +16,7 @@ afkfleet is **a hobby project** I'm building for my friends with Claude Code. I 
 There's no support, and I don't take feature requests. Security reports are welcome, though: see [SECURITY.md](SECURITY.md).
 
 ## Status
-**Phase 6 (the server foundation) is done.** The agent, `afkfleet-agent`, runs a few offline-mode bots against a local server (see [Quickstart](#quickstart)), and the server, `afkfleet-server`, runs the secure HTTP skeleton every later phase builds on (see [Running the server](#running-the-server)). What exists:
+**Phase 7 (authentication and authorization) is done.** The agent, `afkfleet-agent`, runs a few offline-mode bots against a local server (see [Quickstart](#quickstart)), and the server, `afkfleet-server`, runs the secure HTTP API with invite-only accounts, mandatory 2FA and central authorization that every later phase builds on (see [Running the server](#running-the-server)). What exists:
 - **From Phase 0:**
   - the Cargo workspace with all lints and the pinned toolchain
   - the quality gates: formatting, clippy, docs, tests, coverage gates, cargo-deny, Biome
@@ -88,27 +88,25 @@ There's no support, and I don't take feature requests. Security reports are welc
 
   [ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md) records Phase 6's decisions.
 
-**In progress:** Phase 7, authentication and authorization (invite-only login with 2FA, rotating tokens, central authorization and layered rate limits), built in five groups ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)). Group A adds:
-- the password service: Argon2id at OWASP's baseline or above, with a zxcvbn strength check (score ≥ 3, the username and the app's words count against a password), behind a bounded queue
-- the vault's cipher (XChaCha20-Poly1305, bound to its record and purpose), with the keys read at startup from owner-only files
-- `afkfleet-server user create-owner`, which creates the one Owner
+- **From Phase 7:** authentication and authorization in the server: invite-only accounts, mandatory 2FA, rotating tokens, one central `authorize()` and layered rate limits:
+  - the password service: Argon2id at OWASP's baseline or above, with a zxcvbn strength check (score ≥ 3, the username and the app's words count against a password), behind a bounded queue
+  - the vault's cipher (XChaCha20-Poly1305, bound to its record and purpose), with the keys read at startup from owner-only files
+  - `afkfleet-server user create-owner`, which creates the one Owner
+  - sessions: one per login, with opaque access tokens (15 minutes) and rotating refresh tokens (7 days idle, 30 days at most), stored only as SHA-256 hashes; reusing a replaced refresh token revokes the whole session and is recorded in the audit log
+  - the `AuthUser` extractor, which looks up the session and its user on every request, so a revocation, a disabled user or a role change counts at once, and `require()`, which authorizes through the one `authorize()`
+  - the route registry: every route is registered as public, authed, step-up or setup, with its rate-limit class, and a test calls every route that needs credentials without them expecting 401
+  - rate limits per client IP (every request, health checks and unknown paths included), per route class (login, refresh, register) and per user, answered with 429 and `Retry-After`; behind a trusted proxy, the client is the right-most untrusted `X-Forwarded-For` address
+  - the per-username lockout: 5 failed logins lock a name for a minute, doubling up to an hour, the same for names that belong to no user; the name itself is never stored
+  - the server's housekeeping task, which keeps the limiters' memory bounded, purges expired lockout rows and logs one summary of refused requests a minute
+  - login in two steps: the password, then a code from an authenticator app or a recovery code; the password step never hands out real tokens, a user without 2FA gets a setup token for enrolling first, and every refusal is the same answer
+  - 2FA (TOTP), mandatory for every user: enrollment with a QR code, 10 single-use recovery codes, replay protection, and replacing an authenticator without ever standing without one
+  - refreshing, logging out, and stepping up (the password again, for sensitive actions within 5 minutes)
+  - registration only by invite: Admins and the Owner create single-use invites that expire, a friend registers with one and sets up 2FA at the first login, and an attempt with an invite that was already used is recorded
+  - the user's own routes: the profile, with the wrong 2FA codes typed since the last login; a new password after stepping up, which ends every other session; the list of live sessions, and ending one
+  - the admins' routes: the list of users; changing a role (only the Owner) or disabling a user, which ends every session of theirs; the list of invites and revoking one. Each of these writes is authorized again inside its own transaction
+  - the threat model's analysis of the API's authentication and authorization, with the tests behind each mitigation and the accepted risks ([`docs/threat-model.md`](docs/threat-model.md), B1); a script checks that every test it cites exists
 
-Group B adds:
-- sessions: one per login, with opaque access tokens (15 minutes) and rotating refresh tokens (7 days idle, 30 days at most), stored only as SHA-256 hashes; reusing a replaced refresh token revokes the whole session and is recorded in the audit log
-- the `AuthUser` extractor, which looks up the session and its user on every request, so a revocation, a disabled user or a role change counts at once, and `require()`, which authorizes through the one `authorize()`
-
-Group C adds:
-- the route registry: every route is registered as public or authed, with its rate-limit class, and a test calls every authed route without credentials expecting 401
-- rate limits per client IP (every request, health checks and unknown paths included), per route class (login, refresh, register) and per user, answered with 429 and `Retry-After`; behind a trusted proxy, the client is the right-most untrusted `X-Forwarded-For` address
-- the per-username lockout: 5 failed logins lock a name for a minute, doubling up to an hour, the same for names that belong to no user; the name itself is never stored
-- the server's housekeeping task, which keeps the limiters' memory bounded, purges expired lockout rows and logs one summary of refused requests a minute
-
-Group D adds:
-- login in two steps: the password, then a code from an authenticator app or a recovery code; the password step never hands out real tokens, a user without 2FA gets a setup token for enrolling first, and every refusal is the same answer
-- 2FA (TOTP), mandatory for every user: enrollment with a QR code, 10 single-use recovery codes, replay protection, and replacing an authenticator without ever standing without one
-- refreshing, logging out, and stepping up (the password again, for sensitive actions within 5 minutes)
-
-The account endpoints follow in group E.
+  [ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md) records Phase 7's decisions.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 
@@ -204,6 +202,7 @@ afkfleet-server user create-owner --config server.toml --username alice   # crea
   - `[auth]`'s `argon2_memory_kib`, `argon2_iterations`, `argon2_parallelism` and `argon2_max_concurrent` default to 19456, 2, 1 and 4, and can't go below that baseline.
   - `[auth]`'s session lifetimes: `access_token_ttl_secs` 900 (60 to 3600), `refresh_token_idle_days` 7 (1 to 90) and `refresh_token_absolute_days` 30 (1 to 365), with idle at most absolute. A change applies to existing sessions too, at the next restart.
   - `[auth] lockout_threshold`: how many failed logins lock a username, 5 by default (3 to 20).
+  - `[auth] invite_ttl_hours`: how long an invite lives, 72 by default (1 to 720). An invite's expiry is fixed when it's created, so a change doesn't move existing invites.
   - `[rate_limits]`: `per_ip_per_sec` 20 and `per_ip_burst` 40 for every request per client IP, `login_per_ip_per_min` 5 (login and its 2FA step together), `refresh_per_ip_per_min` 30, `register_per_ip_per_hour` 5, and `per_user_per_sec` 10 with `per_user_burst` 30 for every authed request per user. Each is at least 1; Plan.md's P7.10 note lists the upper bounds.
   - `[vault]` is required: `master_key_files = { 1 = "/run/secrets/vault_key_1" }` (1 to 16 key IDs, absolute paths) and `active_key_id = 1`. A key file can also come from the environment, as `AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=/path`.
 - **The vault's keys** are read by `serve` at startup, before anything else: each file holds 32 random bytes as standard base64 with padding (`openssl rand -base64 32`). On Unix it must be readable only by the server's user (`chmod 600`). A bad key file, two IDs with the same key or an active key without a file stops the server with exit 1, naming the file but never its content. `migrate`, `healthcheck` and `user create-owner` never read the keys. Back them up separately: the database holds only ciphertext.
@@ -213,6 +212,10 @@ afkfleet-server user create-owner --config server.toml --username alice   # crea
 - **Sessions:** `POST /api/v1/auth/refresh {"refresh_token"}` answers a new pair and ends the old one (a refused refresh is 401 `unauthorized`: log in again), and `POST /api/v1/auth/logout` ends the request's session. `POST /api/v1/auth/step-up {"password"}` allows sensitive actions, such as replacing 2FA, in this session for 5 minutes; a wrong password is 403 and counts toward the lockout.
 - **The lockout:** after `lockout_threshold` failed logins for one username, it's locked for a minute, and each further failure doubles the lock up to an hour. A locked login answers 429 before the password is checked, and that doesn't count as a failure. A streak is forgotten 24 h after its last failure. Rows are keyed by an HMAC of the name under a key derived from the vault's, so the database never holds a typed name.
 - **2FA** (TOTP) is mandatory for every user, the Owner included, and can't be switched off. A setup token (`Authorization: Bearer afk_st_…`, 10 minutes) works only for `POST /api/v1/me/mfa/enroll`, which answers a new secret as an otpauth URI, a QR code (an SVG `data:` URI) and base32 for typing in, and `POST /api/v1/me/mfa/confirm {"code"}`, which stores it and answers 10 recovery codes, shown once. Enroll may be repeated; a wrong code is 422 and the token stays usable. Authenticator apps get SHA-1, 6 digits and 30-second steps. To replace an authenticator, step up and call `POST /api/v1/me/mfa/reset`: it answers a setup token, the current authenticator keeps working until that token's confirm, and the confirm revokes every other session.
+- **Invites and registration:** an Admin creates a Member invite and the Owner an Admin invite with `POST /api/v1/invites {"role"}`, which answers its code (`afk_iv_…`) this one time; a creator holds at most 20 pending invites. `GET /api/v1/invites` lists every invite in its state, and `DELETE /api/v1/invites/{id}` revokes a pending one. The invitee calls `POST /api/v1/auth/register {"invite", "username", "password"}`, which answers 201 with the new user and no tokens: their first login answers `mfa_setup_required`. Every invite that can't be used gets the same 422 on `invite`; a taken name is 422 on `username`; a weak password is 422 with zxcvbn's hints, one field entry each. Disabling or demoting an invite's creator revokes their pending invites.
+- **The user's own routes:** `GET /api/v1/me` answers the profile, the recovery codes left and the wrong 2FA codes typed since the previous login. `POST /api/v1/me/password {"new_password"}` needs a step-up within 5 minutes; it ends every other session and this session's step-up. `GET /api/v1/me/sessions` lists the live sessions, and `DELETE /api/v1/me/sessions/{id}` ends another one (the current one ends through logout).
+- **The admins' routes:** `GET /api/v1/users` lists the users, with whether each has 2FA and when they were last seen. `PATCH /api/v1/users/{id}` takes one change: `{"role"}` (only the Owner, between `member` and `admin`) or `{"disabled"}` (the Owner, or an Admin for a Member); either ends every session of the user.
+- **Lists** answer pages, newest first: `?limit=` (1 to 100, 50 by default) and `?before=` with the `next` of the page before. Times are UTC with milliseconds (`2027-01-15T08:00:00.000Z`), and a value that isn't there is left out.
 - **Request bodies** are JSON: a missing or other content type is 415, malformed JSON or an unknown, missing or mistyped field 400 without details, and a broken rule 422 with one entry per field; no answer or log line repeats what was sent.
 - **Dev mode** (`dev_mode = true`) serves the OpenAPI document at `GET /api/openapi.json` and logs a warning at startup. Never run a production server in dev mode. Outside it, that path answers 404 like any unknown route.
 - **The database** opens at startup: its folder must exist, a missing file is created (readable only by the server's user on Unix), and every pending migration runs. `migrate` does just that and exits 0, or 1 with the reason in the log, so you can migrate before starting a new version. On Unix, the server refuses a database, `-wal` or `-shm` file other users can read.

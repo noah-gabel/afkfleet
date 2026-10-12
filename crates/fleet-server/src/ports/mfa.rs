@@ -83,6 +83,12 @@ pub trait MfaReads: Send + Sync + fmt::Debug {
         user: UserId,
         hash: &RecoveryCodeHash,
     ) -> Result<Option<RecoveryCodeHash>, StoreError>;
+
+    /// How many unused recovery codes the user has.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn count_unused_codes(&self, user: UserId) -> Result<u32, StoreError>;
 }
 
 /// Reading and writing second factors inside a [`super::store::WriteTx`].

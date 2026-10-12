@@ -18,20 +18,28 @@ use std::fs;
 
 use fleet_api_types::auth::{
     ACCESS_TOKEN_MAX_SECS, LoginMfaRequest, LoginRequest, LoginResponse, LoginStatus,
-    PASSWORD_MAX_CHARS, REFRESH_TOKEN_MAX_SECS, RefreshRequest, StepUpRequest, TokenResponse,
-    USERNAME_MAX_CHARS,
+    NEW_PASSWORD_MAX_CHARS, PASSWORD_MAX_CHARS, REFRESH_TOKEN_MAX_SECS, RefreshRequest,
+    RegisterRequest, RegisterResponse, StepUpRequest, TokenResponse, USERNAME_MAX_CHARS,
 };
 use fleet_api_types::error::{
     FIELD_MESSAGE_MAX_CHARS, FIELD_PATH_MAX_CHARS, MESSAGE_MAX_CHARS, REQUEST_ID_MAX_CHARS,
 };
+use fleet_api_types::ids::ID_CHARS;
+use fleet_api_types::invites::{
+    CreateInviteRequest, CreatedInviteResponse, InvitePage, InviteResponse, InviteState,
+};
+use fleet_api_types::me::{FailedCodeAttempts, MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{
     CODE_MAX_CHARS, MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse,
     OTPAUTH_URI_MAX_CHARS, QR_SVG_MAX_CHARS, RECOVERY_CODE_MAX_CHARS, SETUP_TOKEN_MAX_SECS,
     TOKEN_MAX_CHARS, TOTP_SECRET_MAX_CHARS,
 };
+use fleet_api_types::sessions::{SessionPage, SessionResponse};
+use fleet_api_types::time::TIMESTAMP_CHARS;
+use fleet_api_types::users::{UserLabel, UserPage, UserPatchRequest, UserResponse, UserRole};
 use fleet_api_types::{
-    BoundedText, ErrorBody, ErrorCode, ErrorResponse, FieldError, Open, OpenEnum, SafeInt, openapi,
-    typescript,
+    BoundedText, ErrorBody, ErrorCode, ErrorResponse, FieldError, Open, OpenEnum, SafeInt,
+    Timestamp, openapi, typescript,
 };
 use rstest::rstest;
 use serde::{Deserialize, Serialize};
@@ -48,21 +56,44 @@ use utoipa::{PartialSchema as _, ToSchema};
 fn declarations() -> BTreeMap<String, String> {
     let config = Config::new();
     [
+        ("CreateInviteRequest", CreateInviteRequest::decl(&config)),
+        (
+            "CreatedInviteResponse",
+            CreatedInviteResponse::decl(&config),
+        ),
         ("ErrorBody", ErrorBody::decl(&config)),
         ("ErrorCode", ErrorCode::decl(&config)),
         ("ErrorResponse", ErrorResponse::decl(&config)),
+        ("FailedCodeAttempts", FailedCodeAttempts::decl(&config)),
         ("FieldError", FieldError::decl(&config)),
+        ("InvitePage", InvitePage::decl(&config)),
+        ("InviteResponse", InviteResponse::decl(&config)),
+        ("InviteState", InviteState::decl(&config)),
         ("LoginMfaRequest", LoginMfaRequest::decl(&config)),
         ("LoginRequest", LoginRequest::decl(&config)),
         ("LoginResponse", LoginResponse::decl(&config)),
         ("LoginStatus", LoginStatus::decl(&config)),
+        ("MeResponse", MeResponse::decl(&config)),
         ("MfaConfirmRequest", MfaConfirmRequest::decl(&config)),
         ("MfaConfirmResponse", MfaConfirmResponse::decl(&config)),
         ("MfaEnrollResponse", MfaEnrollResponse::decl(&config)),
         ("MfaResetResponse", MfaResetResponse::decl(&config)),
+        (
+            "PasswordChangeRequest",
+            PasswordChangeRequest::decl(&config),
+        ),
         ("RefreshRequest", RefreshRequest::decl(&config)),
+        ("RegisterRequest", RegisterRequest::decl(&config)),
+        ("RegisterResponse", RegisterResponse::decl(&config)),
+        ("SessionPage", SessionPage::decl(&config)),
+        ("SessionResponse", SessionResponse::decl(&config)),
         ("StepUpRequest", StepUpRequest::decl(&config)),
         ("TokenResponse", TokenResponse::decl(&config)),
+        ("UserLabel", UserLabel::decl(&config)),
+        ("UserPage", UserPage::decl(&config)),
+        ("UserPatchRequest", UserPatchRequest::decl(&config)),
+        ("UserResponse", UserResponse::decl(&config)),
+        ("UserRole", UserRole::decl(&config)),
     ]
     .into_iter()
     .map(|(name, declaration)| (name.to_owned(), declaration))
@@ -204,6 +235,10 @@ fn render(schema: &RefOr<Schema>) -> Result<String, String> {
             only(node, &["type", "minimum", "maximum"])?;
             Ok("number".to_owned())
         }
+        (Some("boolean"), _) => {
+            only(node, &["type"])?;
+            Ok("boolean".to_owned())
+        }
         _ => Err(format!("the renderer doesn't handle {node:?}")),
     }
 }
@@ -281,6 +316,37 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::refresh_token("TokenResponse", "refresh_token", TOKEN_MAX_CHARS)]
 #[case::refresh_request("RefreshRequest", "refresh_token", TOKEN_MAX_CHARS)]
 #[case::step_up_password("StepUpRequest", "password", PASSWORD_MAX_CHARS)]
+#[case::label_id("UserLabel", "id", ID_CHARS)]
+#[case::label_username("UserLabel", "username", USERNAME_MAX_CHARS)]
+#[case::user_id("UserResponse", "id", ID_CHARS)]
+#[case::user_username("UserResponse", "username", USERNAME_MAX_CHARS)]
+#[case::user_created_at("UserResponse", "created_at", TIMESTAMP_CHARS)]
+#[case::user_last_seen_at("UserResponse", "last_seen_at", TIMESTAMP_CHARS)]
+#[case::user_page_next("UserPage", "next", ID_CHARS)]
+#[case::invite_id("InviteResponse", "id", ID_CHARS)]
+#[case::invite_created_at("InviteResponse", "created_at", TIMESTAMP_CHARS)]
+#[case::invite_expires_at("InviteResponse", "expires_at", TIMESTAMP_CHARS)]
+#[case::invite_used_at("InviteResponse", "used_at", TIMESTAMP_CHARS)]
+#[case::invite_revoked_at("InviteResponse", "revoked_at", TIMESTAMP_CHARS)]
+#[case::invite_page_next("InvitePage", "next", ID_CHARS)]
+#[case::invite_code("CreatedInviteResponse", "code", TOKEN_MAX_CHARS)]
+#[case::register_invite("RegisterRequest", "invite", TOKEN_MAX_CHARS)]
+#[case::register_username("RegisterRequest", "username", USERNAME_MAX_CHARS)]
+#[case::register_password("RegisterRequest", "password", NEW_PASSWORD_MAX_CHARS)]
+#[case::registered_id("RegisterResponse", "id", ID_CHARS)]
+#[case::registered_username("RegisterResponse", "username", USERNAME_MAX_CHARS)]
+#[case::me_id("MeResponse", "id", ID_CHARS)]
+#[case::me_username("MeResponse", "username", USERNAME_MAX_CHARS)]
+#[case::me_created_at("MeResponse", "created_at", TIMESTAMP_CHARS)]
+#[case::me_password_changed_at("MeResponse", "password_changed_at", TIMESTAMP_CHARS)]
+#[case::me_mfa_confirmed_at("MeResponse", "mfa_confirmed_at", TIMESTAMP_CHARS)]
+#[case::failed_last_at("FailedCodeAttempts", "last_at", TIMESTAMP_CHARS)]
+#[case::new_password("PasswordChangeRequest", "new_password", NEW_PASSWORD_MAX_CHARS)]
+#[case::session_id("SessionResponse", "id", ID_CHARS)]
+#[case::session_created_at("SessionResponse", "created_at", TIMESTAMP_CHARS)]
+#[case::session_last_used_at("SessionResponse", "last_used_at", TIMESTAMP_CHARS)]
+#[case::session_expires_at("SessionResponse", "expires_at", TIMESTAMP_CHARS)]
+#[case::session_page_next("SessionPage", "next", ID_CHARS)]
 fn a_text_field_is_capped_at_its_constant(
     #[case] component: &str,
     #[case] field: &str,
@@ -316,6 +382,37 @@ fn every_text_field_has_its_cap_checked() {
         ("TokenResponse", "refresh_token"),
         ("RefreshRequest", "refresh_token"),
         ("StepUpRequest", "password"),
+        ("UserLabel", "id"),
+        ("UserLabel", "username"),
+        ("UserResponse", "id"),
+        ("UserResponse", "username"),
+        ("UserResponse", "created_at"),
+        ("UserResponse", "last_seen_at"),
+        ("UserPage", "next"),
+        ("InviteResponse", "id"),
+        ("InviteResponse", "created_at"),
+        ("InviteResponse", "expires_at"),
+        ("InviteResponse", "used_at"),
+        ("InviteResponse", "revoked_at"),
+        ("InvitePage", "next"),
+        ("CreatedInviteResponse", "code"),
+        ("RegisterRequest", "invite"),
+        ("RegisterRequest", "username"),
+        ("RegisterRequest", "password"),
+        ("RegisterResponse", "id"),
+        ("RegisterResponse", "username"),
+        ("MeResponse", "id"),
+        ("MeResponse", "username"),
+        ("MeResponse", "created_at"),
+        ("MeResponse", "password_changed_at"),
+        ("MeResponse", "mfa_confirmed_at"),
+        ("FailedCodeAttempts", "last_at"),
+        ("PasswordChangeRequest", "new_password"),
+        ("SessionResponse", "id"),
+        ("SessionResponse", "created_at"),
+        ("SessionResponse", "last_used_at"),
+        ("SessionResponse", "expires_at"),
+        ("SessionPage", "next"),
     ]);
     let components = components_json();
 
@@ -340,11 +437,15 @@ fn every_text_field_has_its_cap_checked() {
 #[test]
 fn a_request_schema_refuses_unknown_fields_and_responses_dont() {
     let requests = BTreeSet::from([
+        "CreateInviteRequest",
         "LoginMfaRequest",
         "LoginRequest",
         "MfaConfirmRequest",
+        "PasswordChangeRequest",
         "RefreshRequest",
+        "RegisterRequest",
         "StepUpRequest",
+        "UserPatchRequest",
     ]);
     let components = components_json();
 
@@ -419,6 +520,66 @@ fn an_open_field_lists_exactly_its_enums_known_values() {
     assert_eq!(components["ErrorCode"]["enum"], json!(known));
 }
 
+#[rstest]
+#[case::last_seen("UserResponse", "last_seen_at")]
+#[case::user_page_next("UserPage", "next")]
+#[case::used_by("InviteResponse", "used_by")]
+#[case::used_at("InviteResponse", "used_at")]
+#[case::revoked_at("InviteResponse", "revoked_at")]
+#[case::invite_page_next("InvitePage", "next")]
+#[case::patch_role("UserPatchRequest", "role")]
+#[case::patch_disabled("UserPatchRequest", "disabled")]
+#[case::mfa_confirmed_at("MeResponse", "mfa_confirmed_at")]
+#[case::failed_last_at("FailedCodeAttempts", "last_at")]
+#[case::session_page_next("SessionPage", "next")]
+fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[case] field: &str) {
+    let components = components_json();
+    let schema = property(&components, component, field);
+    let required = components[component]
+        .get("required")
+        .and_then(Value::as_array)
+        .cloned()
+        .unwrap_or_default();
+
+    assert!(!required.contains(&json!(field)), "{component}.{field}");
+    assert!(
+        schema.get("oneOf").is_none(),
+        "{component}.{field}: {schema}"
+    );
+    assert_ne!(
+        schema["type"],
+        json!(["string", "null"]),
+        "{component}.{field}"
+    );
+}
+
+#[rstest]
+#[case::user("UserResponse", "role", "UserRole")]
+#[case::invite_role("InviteResponse", "role", "UserRole")]
+#[case::invite_state("InviteResponse", "state", "InviteState")]
+#[case::registered_role("RegisterResponse", "role", "UserRole")]
+#[case::me_role("MeResponse", "role", "UserRole")]
+fn the_new_open_fields_list_exactly_their_known_values(
+    #[case] component: &str,
+    #[case] field: &str,
+    #[case] enumeration: &str,
+) {
+    let components = components_json();
+    let known: Vec<&str> = match enumeration {
+        "UserRole" => UserRole::ALL.iter().map(|role| role.as_str()).collect(),
+        _ => InviteState::ALL
+            .iter()
+            .map(|state| state.as_str())
+            .collect(),
+    };
+
+    assert_eq!(
+        property(&components, component, field)["$ref"],
+        format!("#/components/schemas/{enumeration}")
+    );
+    assert_eq!(components[enumeration]["enum"], json!(known));
+}
+
 #[test]
 fn an_optional_field_is_left_out_never_null() {
     let components = components_json();
@@ -454,6 +615,17 @@ struct Probe {
     errors: Option<Vec<FieldError>>,
     /// A nested DTO.
     nested: ErrorResponse,
+    /// A yes or no.
+    flag: bool,
+    /// A point in time.
+    #[ts(type = "string")]
+    #[schema(schema_with = Timestamp::schema)]
+    at: Timestamp,
+    /// An optional point in time.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional)]
+    #[schema(schema_with = Timestamp::schema, nullable = false)]
+    maybe_at: Option<Timestamp>,
 }
 
 #[test]
@@ -471,7 +643,6 @@ fn every_building_block_renders_as_ts_rs_declares_it() {
 #[case::all_of(json!({ "allOf": [{ "type": "string" }] }))]
 #[case::nullable(json!({ "type": ["string", "null"] }))]
 #[case::number(json!({ "type": "number" }))]
-#[case::boolean(json!({ "type": "boolean" }))]
 #[case::string_format(json!({ "type": "string", "format": "date-time" }))]
 #[case::string_pattern(json!({ "type": "string", "pattern": "^a$" }))]
 #[case::string_min_length(json!({ "type": "string", "minLength": 1 }))]
@@ -481,8 +652,9 @@ fn every_building_block_renders_as_ts_rs_declares_it() {
 #[case::object_without_properties(json!({ "type": "object" }))]
 #[case::stray_required(json!({ "type": "object", "required": ["a"], "properties": { "b": { "type": "string" } } }))]
 #[case::reference_elsewhere(json!({ "$ref": "https://example.com/schema.json" }))]
-#[case::nested_unknown(json!({ "type": "array", "items": { "type": "boolean" } }))]
-#[case::property_unknown(json!({ "type": "object", "properties": { "a": { "type": "boolean" } } }))]
+#[case::boolean_with_a_format(json!({ "type": "boolean", "format": "flag" }))]
+#[case::nested_unknown(json!({ "type": "array", "items": { "type": "number" } }))]
+#[case::property_unknown(json!({ "type": "object", "properties": { "a": { "type": "number" } } }))]
 fn the_renderer_fails_on_a_construct_it_doesnt_handle(#[case] json: Value) {
     let schema: RefOr<Schema> = serde_json::from_value(json.clone()).unwrap();
     // The case must be something utoipa can represent, or reading it would
@@ -492,4 +664,11 @@ fn the_renderer_fails_on_a_construct_it_doesnt_handle(#[case] json: Value) {
     let rendered = render(&schema);
 
     assert!(rendered.is_err(), "{rendered:?}");
+}
+
+#[test]
+fn a_boolean_renders_as_boolean() {
+    let schema: RefOr<Schema> = serde_json::from_value(json!({ "type": "boolean" })).unwrap();
+
+    assert_eq!(render(&schema).unwrap(), "boolean");
 }

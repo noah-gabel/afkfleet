@@ -1,6 +1,6 @@
 //! The login routes (Plan.md P7.6, §7.2, Appendix B, ADR-0016):
 //! `POST /api/v1/auth/login`, `/auth/login/mfa`, `/auth/refresh`,
-//! `/auth/logout` and `/auth/step-up`.
+//! `/auth/logout`, `/auth/step-up` and `/auth/register`.
 //!
 //! - **Login's refusals are one answer:** an unknown name, a wrong password,
 //!   a disabled user, a wrong code and an unknown, expired or used-up mfa
@@ -12,16 +12,21 @@
 //!   doesn't take its session for dead.
 //! - **Logout and step-up** take `AuthUser` before the body, and both
 //!   authorize `UsePersonal` on the user's own resources.
+//! - **Registering** answers 201 with the new user and no tokens. Every
+//!   invite it can't use is the same 422 on `invite`; a taken name is 422 on
+//!   `username`, and a weak password 422 on `password` with zxcvbn's
+//!   hints.
 
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use fleet_api_types::auth::{
-    LoginMfaRequest, LoginRequest, LoginResponse, LoginStatus, RefreshRequest, StepUpRequest,
-    TokenResponse,
+    INVALID_INVITE, LoginMfaRequest, LoginRequest, LoginResponse, LoginStatus, RefreshRequest,
+    RegisterRequest, RegisterResponse, StepUpRequest, TokenResponse,
 };
-use fleet_api_types::{ErrorResponse, Open, SecretText};
-use fleet_core::auth::SecondFactor;
+use fleet_api_types::users::UserRole;
+use fleet_api_types::{ErrorResponse, FieldError, Open, SecretText};
+use fleet_core::auth::{NewPassword, SecondFactor};
 use fleet_core::authz::{Permission, ResourceContext};
 use fleet_core::value::Username;
 use secrecy::{ExposeSecret as _, SecretString};
@@ -30,11 +35,17 @@ use crate::app::auth::{IssuedTokens, LogoutError, RefreshError};
 use crate::app::lockout::RecordFailureError;
 use crate::app::login::{LoginError, PasswordStep, StepUpError};
 use crate::app::mfa::CheckError;
+use crate::app::users::RegisterError;
 use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, ValidJson};
 use crate::http::rate_limit::ClientIp;
 use crate::http::router::AppState;
 use crate::ports::passwords::VerifyError;
+
+use super::{refused_password, username};
+
+/// The 422 message for a username another user has.
+pub(super) const USERNAME_TAKEN: &str = "is taken";
 
 /// A secret the service made, as a response field.
 fn text<const MAX: usize>(secret: &SecretString) -> SecretText<MAX> {
@@ -270,4 +281,63 @@ pub(crate) async fn step_up(
             }
         })?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// `POST /api/v1/auth/register`: an account from an invite; no tokens.
+#[utoipa::path(
+    post,
+    path = "/api/v1/auth/register",
+    tag = "auth",
+    request_body = RegisterRequest,
+    responses(
+        (status = 201, description = "The new user. Log in next; the first login sets up 2FA.", body = RegisterResponse),
+        (status = 400, description = "A body of the wrong shape.", body = ErrorResponse),
+        (status = 422, description = "The invite can't be used, the username is taken or invalid, or the password breaks its rules or is too weak (with hints).", body = ErrorResponse),
+        (
+            status = 429,
+            description = "Too many registrations from this address.",
+            body = ErrorResponse,
+            headers(("Retry-After" = u32, description = "Seconds to wait before trying again.")),
+        ),
+        (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
+    ),
+)]
+pub(crate) async fn register(
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    ValidJson(request): ValidJson<RegisterRequest>,
+) -> Result<(StatusCode, Json<RegisterResponse>), ApiError> {
+    // The rules already hold: garde checked them.
+    let name = Username::try_from(request.username.expose()).map_err(ApiError::internal)?;
+    let password = NewPassword::try_from(request.password.into_secret())
+        .map_err(|_| ApiError::internal("the rule already holds: garde checked it"))?;
+    let registered = state
+        .users
+        .register(
+            &state.invites,
+            &request.invite.into_secret(),
+            &name,
+            &password,
+            ip,
+        )
+        .await
+        .map_err(|error| match error {
+            RegisterError::BadInvite => {
+                ApiError::Validation(vec![FieldError::new("invite", INVALID_INVITE)])
+            }
+            RegisterError::UsernameTaken => {
+                ApiError::Validation(vec![FieldError::new("username", USERNAME_TAKEN)])
+            }
+            RegisterError::Password(error) => refused_password("password", error),
+            RegisterError::Store(error) => ApiError::from(error),
+            other @ (RegisterError::Mint(_) | RegisterError::Audit(_)) => ApiError::internal(other),
+        })?;
+    Ok((
+        StatusCode::CREATED,
+        Json(RegisterResponse {
+            id: registered.id,
+            username: username(&registered.username),
+            role: UserRole::from(registered.role).into(),
+        }),
+    ))
 }

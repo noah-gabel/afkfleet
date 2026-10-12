@@ -5,12 +5,11 @@ use uuid::Uuid;
 
 use super::AuditError;
 use super::name::{self, Dots};
-use crate::id::{AccountId, AgentId, BotId, ModeId, SessionId, UserId};
+use crate::id::{AccountId, AgentId, BotId, InviteId, ModeId, SessionId, UserId};
 
 /// What an entry touched, stored as `target_type` and `target_id`. Each
 /// variant holds its typed ID, so the type and the ID can never disagree.
-/// Later phases add variants when their ID types arrive (invites in P7's
-/// group E).
+/// Later phases add variants when their ID types arrive.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum AuditTarget {
     /// A user.
@@ -25,6 +24,8 @@ pub enum AuditTarget {
     Mode(ModeId),
     /// A session: one login's token family (P7, group D).
     Session(SessionId),
+    /// An invite to register (P7, group E).
+    Invite(InviteId),
 }
 
 impl AuditTarget {
@@ -38,6 +39,7 @@ impl AuditTarget {
             Self::Agent(_) => "agent",
             Self::Mode(_) => "mode",
             Self::Session(_) => "session",
+            Self::Invite(_) => "invite",
         }
     }
 
@@ -51,6 +53,7 @@ impl AuditTarget {
             Self::Agent(id) => *id.as_uuid(),
             Self::Mode(id) => *id.as_uuid(),
             Self::Session(id) => *id.as_uuid(),
+            Self::Invite(id) => *id.as_uuid(),
         }
     }
 }
@@ -110,6 +113,7 @@ impl RecordedTarget {
             "agent" => AgentId::try_from(id).map(AuditTarget::Agent),
             "mode" => ModeId::try_from(id).map(AuditTarget::Mode),
             "session" => SessionId::try_from(id).map(AuditTarget::Session),
+            "invite" => InviteId::try_from(id).map(AuditTarget::Invite),
             _ => return TargetKind::try_from(kind).map(|kind| Self::Unrecognized { kind, id }),
         };
         known.map(Self::Known).map_err(|_| AuditError::TargetId)
@@ -130,7 +134,7 @@ mod tests {
         )
     }
 
-    fn every_target() -> [AuditTarget; 6] {
+    fn every_target() -> [AuditTarget; 7] {
         let (random, at) = bytes();
         [
             AuditTarget::User(UserId::new_v7(at, random).unwrap()),
@@ -139,6 +143,7 @@ mod tests {
             AuditTarget::Agent(AgentId::new_v7(at, random).unwrap()),
             AuditTarget::Mode(ModeId::new_v7(at, random).unwrap()),
             AuditTarget::Session(SessionId::new_v7(at, random).unwrap()),
+            AuditTarget::Invite(InviteId::new_v7(at, random).unwrap()),
         ]
     }
 
@@ -148,7 +153,9 @@ mod tests {
 
         assert_eq!(
             kinds,
-            ["user", "account", "bot", "agent", "mode", "session"]
+            [
+                "user", "account", "bot", "agent", "mode", "session", "invite"
+            ]
         );
     }
 

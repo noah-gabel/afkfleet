@@ -7,6 +7,8 @@
 //!   read handles and one write transaction at a time, [`store::WriteTx`],
 //!   whose commit always records an audit entry.
 //! - [`users`]: the users.
+//! - [`invites`]: the invites to register, single-use and expiring (P7.1,
+//!   P7.9).
 //! - [`sessions`]: the sessions, one per login's token family (P7.1, P7.3).
 //! - [`login_attempts`]: the failed logins per username, keyed so the name
 //!   itself is never stored (P7.1, P7.10).
@@ -22,10 +24,13 @@
 //! - [`vault`]: encrypting stored secrets (P7.4).
 //! - [`audit`]: the audit log. It's append-only: the only operations are
 //!   recording (inside a write transaction) and listing.
+//! - [`page`]: the keyset pages the lists share (P7.6, P7.9).
 
 pub mod audit;
+pub mod invites;
 pub mod login_attempts;
 pub mod mfa;
+pub mod page;
 pub mod passwords;
 pub mod qr;
 pub mod recovery_codes;

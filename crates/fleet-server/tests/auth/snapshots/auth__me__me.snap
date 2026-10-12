@@ -1,0 +1,16 @@
+---
+source: crates/fleet-server/tests/auth/me.rs
+expression: "redacted(&body, &[(setup.alice.to_string(), \"alice\")])"
+---
+{
+  "created_at": "[T0-60s]",
+  "failed_code_attempts": {
+    "count": 0
+  },
+  "id": "[alice]",
+  "mfa_confirmed_at": "[T0]",
+  "password_changed_at": "[T0-60s]",
+  "recovery_codes_left": 10,
+  "role": "member",
+  "username": "alice"
+}

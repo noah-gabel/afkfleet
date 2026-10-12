@@ -1,0 +1,13 @@
+---
+source: crates/fleet-server/tests/auth/users.rs
+expression: "redacted(&seen.body, &names(&cast))"
+---
+{
+  "created_at": "[T0-60s]",
+  "disabled": false,
+  "id": "[alice]",
+  "last_seen_at": "[T0]",
+  "mfa_enrolled": false,
+  "role": "admin",
+  "username": "alice"
+}

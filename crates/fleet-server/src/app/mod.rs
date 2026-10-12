@@ -15,13 +15,16 @@
 //!   and its periodic purge (P7.10).
 //! - [`mfa`]: the second factor: enrolling and confirming a TOTP
 //!   authenticator, replacing it, and checking a code at login (P7.7).
-//! - [`users`]: creating the Owner (P7.5); registration and the admins'
-//!   changes arrive in group E.
+//! - [`invites`]: creating, listing and revoking the invites to register
+//!   (P7.9).
+//! - [`users`]: creating the Owner (P7.5), the admins' list and changes
+//!   (P7.9), and the re-check every admin's write makes in its transaction.
 
 pub mod audit;
 pub mod auth;
 pub mod challenges;
 pub mod health;
+pub mod invites;
 pub mod lockout;
 pub mod login;
 pub mod mfa;

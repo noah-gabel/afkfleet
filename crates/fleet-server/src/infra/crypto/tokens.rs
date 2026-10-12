@@ -121,6 +121,7 @@ mod tests {
     #[rstest]
     #[case::access(TokenKind::Access, "afk_at_")]
     #[case::refresh(TokenKind::Refresh, "afk_rt_")]
+    #[case::invite(TokenKind::Invite, "afk_iv_")]
     fn a_minted_token_is_its_prefix_and_43_base64url_characters(
         #[case] kind: TokenKind,
         #[case] prefix: &str,

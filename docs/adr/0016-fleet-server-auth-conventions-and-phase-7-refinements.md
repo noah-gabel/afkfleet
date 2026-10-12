@@ -1,7 +1,7 @@
 # 0016. fleet-server auth conventions and Phase 7 refinements
 
 - **Status:** Accepted
-- **Date:** 2026-10-11
+- **Date:** 2026-10-11 (group E: 2026-10-12)
 - **Related:** Plan.md Phase 7 (P7.1–P7.13), §4, §5, §7.2, §7.4, §7.5, §8, Appendix A, Appendix B, Appendix D, P8.1, P11.6, P12.2, P12.4, P12.7; ADR-0006, ADR-0010, ADR-0011, ADR-0015
 
 ## Context
@@ -562,6 +562,56 @@ The user answered group D's questions on 2026-10-11, one at a time, and amended 
 - **P7.6, tests,** red against compiling stubs (a login service that refused everything, a logout that revoked nothing, a refresh without the read-pool check, a re-hash that never ran, a 401 header for `unauthorized` only, DTO rules that accepted anything, tokens without their lifetimes): 51 of the 73 new tests failed on assertions. The ones that passed check 422s, shapes, `Debug`, registrations, limits and refusals a do-nothing stub satisfies too. Then all passed. New snapshots, read before accepting: the audit-action names (`auth.login`, `auth.logout`, `auth.step_up`), the 401 `invalid_credentials` envelope and the OpenAPI document.
 - **Coverage:** the auth gate gains `app/login.rs`.
 
+### Group E: invites, registration, the user's own routes, the admin routes and the wrap-up (P7.1's `invites`, P7.6's `register`, `/me`, `/me/password`, `/me/sessions`, P7.9, P7.12, P7.13)
+The user answered group E's questions on 2026-10-12, one at a time, and amended the plan in review.
+
+- **Invites** *(the user's choices)*:
+  - **The code** is a token like the others: `afk_iv_` and 43 base64url characters (32 bytes from `SecureRandom`), `TokenKind::Invite` through the Tokens port, stored as SHA-256 of the whole text and confirmed with `ct_eq`. It's answered once, by `POST /invites` (201 `{code, invite}`). P8's register screen trims spaces and line breaks around a pasted code; the server's shape check stays strict.
+  - **Expiry is stored at creation** from `[auth] invite_ttl_hours` (72 by default, 1 to 720), so a config change doesn't move an invite.
+  - **Revoking is soft** (`revoked_at`) and only for a pending invite: a used one is 409, a revoked or expired one 204 again without a second entry.
+  - **An inviter who loses the right**, both ways *(the user's choice)*: disabling a user or demoting them to Member revokes their pending invites in the same commit, one `invite.revoke` each with `reason` `creator_disabled` or `creator_demoted`; and registration re-checks the creator (enabled, still allowed to `CreateInvite` the role) in its transaction.
+  - **A cap** of 20 pending invites per creator, a constant (`MAX_PENDING_INVITES`), counted inside the create's transaction; the 21st is 409.
+  - **The list** shows every invite in its state (`pending`, `used`, `revoked`, `expired`, from `fleet_core::auth::invite_state`), with its creator and invitee as `{id, username}`.
+- **Registration** *(the user's choices)*: `POST /auth/register {invite, username, password}` answers 201 `{id, username, role}` and never tokens; the first login answers `mfa_setup_required`, and P8 logs in and starts the setup right away. The checks run cheapest first: the body's rules, the invite and then the username on the read pool, the strength check and the hash, then one transaction that re-checks the invite and its creator, inserts the user and uses the invite conditionally.
+  - **Every invite it can't use is one 422** on `invite`, whatever the reason; a real one that can't be used is recorded as `user.create` Failure (no actor, the IP, target the invite, `reason`), every attempt, as a sign its code leaked, while an unknown or malformed code never is.
+  - **A taken name** is 422 on `username` and leaves the invite pending, also when another registration takes the name between the checks and the insert.
+  - **The success commit** records `invite.use` (target the invite, `user_id`, `role`) and `user.create` (`via` = `invite`, `invite_id`), actor the new user.
+- **A refused new password** *(the user's choice; group D's open question)*: 422 on its field, "is too weak", then one entry per zxcvbn warning and per suggestion in zxcvbn's own words (`WeakWarning::text`, `WeakSuggestion::text`). The length and control-character rule answers with its own text, from garde. No change to the envelope.
+- **`GET /me`** *(the user's choices)*: `{id, username, role, created_at, password_changed_at, mfa_confirmed_at, recovery_codes_left, failed_code_attempts}`. `failed_code_attempts` is `{count, last_at}`: the `auth.login` Failure entries with `step` = `code` for the user after their previous successful login (the Success before the newest), or since the account's creation; `last_at` is the newest one's time, left out when there's none. A new migration indexes the audit log by target, action and ID. P8 warns when the count is above 0, naming the time.
+- **`POST /me/password {new_password}`** *(the user's choices)*: a step-up route on the `Login` bucket. The same password is 422 ("is the current password", one verify before hashing). The commit applies the re-check rule: the session live and the user's, the user enabled (401 otherwise), the stamp within 5 minutes and `password_changed_at` not after it (403 `step_up_required` otherwise, nothing written or audited); then it writes the hash and `password_changed_at`, revokes every other session and clears this session's stamp, so the next step-up action needs the new password (`user.change_password` with `sessions_revoked`). 204.
+- **`/me/sessions`** *(the user's choices)*: the live sessions (not revoked, refresh not expired) newest first, `{id, created_at, last_used_at, expires_at, current}`; `DELETE /me/sessions/{id}` ends another one (`session.revoke`), the request's own is 409 (logout ends it), and someone else's, an ended or an unknown one is 404.
+- **`GET /users`** shows `{id, username, role, disabled, created_at, mfa_enrolled, last_seen_at}` *(the user's choice)*: `mfa_enrolled` lets an Admin spot an invitee who never finished the 2FA setup, `last_seen_at` is the newest `last_used_at` of the user's sessions.
+- **`PATCH /users/{id}`** takes exactly one of `role` and `disabled` *(the user's choice)*; a value equal to the current one, decided on the row the transaction re-reads, writes nothing; it answers the user as the list shows them. A change revokes every session of the user (`user.set_role` with `role`, `previous_role`, `sessions_revoked`; `user.set_disabled` with `disabled`, `sessions_revoked`).
+- **Every admin write re-checks in its transaction** *(the user's choice)*: `PATCH /users/{id}`, `POST` and `DELETE /invites` re-read the actor's session (live, theirs), the actor's role and `disabled`, and the target, then ask `authorize()` again. A dead session or a disabled actor is 401; a refusal is what `authorize()` answers on the fresh facts. The handler authorizes first too, so an actor who can't see the target gets 404 before any work.
+- **Lists are keyset pages** *(the user's choice)*: `?before=<id>&limit=<1..100>`, 50 by default, newest first by version 7 ID, `{items, next}` with `next` left out on the last page.
+- **Bad parameters** *(the user's choice)*: a path ID that isn't a version 7 UUID is 404; a query that doesn't parse is 400; a `limit` out of range is 422.
+- **The API's new building blocks** *(the user's choices)*: `Timestamp`, always `YYYY-MM-DDTHH:MM:SS.mmmZ`, written and read by hand, which brings chrono to fleet-api-types with no features; IDs as fleet-core's typed IDs, strings on the wire; `bool` fields, for which the OpenAPI-vs-TypeScript renderer gained a `boolean` arm and its "refuses" test dropped `boolean` (the user's approval); a value that isn't there is left out, never `null`.
+- **axum's `query` feature** *(the user's approval during the build)*: `ValidQuery` wraps axum's `Query` as `ValidJson` wraps `Json`. It adds only direct edges to the lock: form_urlencoded, serde_urlencoded and serde_path_to_error were already there.
+- **Rate classes** *(the user's choice)*: `register` on `Register`, `/me/password` on `Login` (it runs argon2 twice), every other new route `Standard`, plus the per-user limit on authed routes.
+- **Layout** *(the user's choice)*: `app::invites::InviteService` (create, list, revoke, and registration's checks); `app::users::UserService` (register, me, change_password, the admins' list and change, and `recheck`); `TokenService` lists and revokes the user's own sessions.
+- **`invites`** *(the user's choices)*: `0006_invites.sql`, with three CHECKs as a belt behind the services (a use and its time together, never both used and revoked, an expiry after the creation), each with a refusal test; `0007_audit_log_target.sql` holds only the audit log's index.
+- **The threat model** *(the user's choices)*: B1 gets what crosses, what an attacker controls and a STRIDE table whose "Verified by" cells name tests; P7.12's items with their tests; a table of where the auth code lives and why; the residual risks of groups C, D and E under "Accepted risks". The top table's auth rows name tests too.
+- **Cited tests are checked** *(the user's addition)*: `scripts/threat-model-citations.mjs` checks every span in backticks in a "Verified by" column that is a Rust path: its last segment must be a test function under `crates/` (after `#[test]`, `#[tokio::test…]`, `#[sqlx::test…]`, `#[rstest]`, or a `proptest!` block's `#[test]`, past other attributes, doc comments and blank lines), each earlier segment the file's stem, a folder on its path or a `mod` in it. `just scripts-test` runs it on the real files, so CI does. CLAUDE.md records the rule.
+
+### As built (group E)
+- **P7.1's `invites`** (`0006_invites.sql`): `id`, `code_hash` (32-byte BLOB, UNIQUE), `role` (`member` or `admin` only), `created_by` and `used_by` (UNIQUE) referencing `users` without cascade, `created_at`, `expires_at`, `used_by`, `used_at`, `revoked_at`, the three belt CHECKs, and indexes on `created_by` and `expires_at`. The repository's three writes are conditional (`use_invite`, `revoke`, `revoke_pending_by` with `RETURNING`), so an invite is used once and never both used and revoked. `ports::page` holds `PageLimit`, `Page` and `Paged::split` for every list.
+- **fleet-core:** `InviteId`, `AuditTarget::Invite` (`invite`), `auth::invite` (`InviteTtl`, `invite_state`, `MAX_PENDING_INVITES`, `pending_cap_reached`), and the actions `user.set_role`, `user.set_disabled`, `user.change_password`, `invite.create`, `invite.use`, `invite.revoke`, `session.revoke`.
+- **The re-check returns `authorize()`'s own answer:** an Admin demoted to Member while disabling a Member gets 404, since a Member can't even see another user.
+- **garde has no rule across fields,** so `UserPatchRequest` implements `Validate` by hand, reporting "must hold exactly one of `role` and `disabled`" on the request as a whole.
+- **`PageQuery` has no serde `default`:** it would bound the ID type by `Default`, and a missing `Option` reads as `None` anyway. Its `OpenAPI` parameters come from its own `IntoParams`.
+- **Unique operation IDs:** utoipa names an operation after its function, so `users::list` and `invites::list` were both `list`. Each new operation names its own, and a test keeps every operation ID unique, red on the duplicate first.
+- **`mfa_confirmed_at` is optional** on the wire: a user who logged in always has an authenticator, but a profile without one reads as left out rather than failing.
+- **An over-long invite code** fails its garde rule with the same message as every other bad invite.
+- **The citation check** skips string and char literals when it counts an attribute's brackets: the first run missed two real tests whose `#[case]` strings hold `[`, and a regression case, red first, pins it. Two B4 cells cited things that aren't tests (the `log` crate, a test module ahead of its tests); they now read "records through the log crate" and name each test in full.
+- **Coverage:** the auth gate gains `app/invites.rs`.
+- **Tests,** each task red against compiling stubs first:
+  - P7.1: fleet-core 18 of 25 rule tests and the two target tests, the page 6 of 11, the repository 13 of 20
+  - P7.9: fleet-api-types 26, the users' repository 6 of 6, config 3, the token prefix 2, the extractors 3 of 6, the HTTP tests 33 of 46, the operation-ID check on a duplicate
+  - P7.6: fleet-api-types 3 rule tests, the queries 7 of 8, the HTTP tests 25 of 35
+  - the citation script: 9 of 13, and its literal case
+
+  Then all passed. The ones that passed against stubs check refusals and "nothing found", which a do-nothing stub gives too. Snapshots, read before accepting: the serialized IDs, the migrations' lines 6 and 7, the audit-action names (seven added), `users_page`, `user_patched`, `invite_created`, `invites_page`, `registered`, `register_weak`, `me`, `sessions_page` and the OpenAPI document.
+
 ## Consequences
 - **Easier:**
   - Every rule of the phase is a pure function in fleet-core, tested exhaustively on fixed times without a database.
@@ -594,6 +644,16 @@ The user answered group D's questions on 2026-10-11, one at a time, and amended 
   - A restart drops every live login challenge, so a user mid-login starts over.
   - The QR code is our own SVG writer, which its own tests must keep correct.
   - The accepted residual risks P7.12's note lists for E's threat model.
+
+- **Group E, easier:**
+  - Registration is invite-only end to end: an invite registers once, expires, dies with its creator's right, and an attempt with a real used one is recorded.
+  - Every admin write is authorized against the rows it changes, inside its own transaction.
+  - A user sees the wrong codes typed since their last login, and their live sessions.
+  - The threat model can't cite a test that's gone.
+- **Group E, harder:**
+  - Three lists share one keyset page shape, and every list endpoint takes a query.
+  - Responses now carry times, IDs and booleans, which the API types and the OpenAPI-vs-TypeScript renderer had to learn.
+  - Renaming a test the threat model cites means editing the threat model too.
 
 ## Alternatives considered
 - **P7.1 whole in group A,** or four larger groups. All four tables would be fixed before the token, 2FA and invite designs exist, and a merged migration can't be edited.
@@ -644,3 +704,16 @@ The user answered group D's questions on 2026-10-11, one at a time, and amended 
   - **Expiry as RFC 3339 times, or none:** a time type in the API types now, or no way for the app to restart a timed-out step.
   - **Secrets as plain `String`s with hand-written `Debug`s:** one forgotten `Debug` leaks.
   - **422 with a path for a wrong JSON shape:** serde can't name the kind, and an unknown field only has the path `.`.
+- **Group E:**
+  - **A typeable invite code:** easier to read out, but without the prefix secret scanners spot.
+  - **Expiry from the running config:** a config change would move every pending invite.
+  - **Hard-deleting revoked invites:** the table would lose who invited whom.
+  - **Invites that stay valid whatever happens to their creator:** a demoted or disabled Admin's invites would still let people in.
+  - **The reason in register's 422:** tells a code's holder what happened to it, for no gain.
+  - **A 409 for a taken name:** the app couldn't point at the field.
+  - **Stable hint codes in the envelope:** a change to `FieldError` for words the app can show as they are.
+  - **Unix milliseconds or RFC 3339 with offsets:** less readable, or more than one form to read.
+  - **Closed enums instead of booleans:** a renderer change avoided at the cost of odd DTOs.
+  - **Whole lists with a cap:** a list could silently lose its tail.
+  - **Hand-parsing the query string:** our own parser instead of serde_urlencoded, which was already in the lock.
+  - **Only a conditional write against races:** the actor's own demotion would go unnoticed until their next request.

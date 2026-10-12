@@ -1,5 +1,6 @@
-//! What the login tests share: a server over a fresh database, its clock and
-//! its services, a user with a real Argon2id password, and requests.
+//! What the auth tests share: a server over a fresh database, its clock and
+//! its services, a user with a real Argon2id password, more users by role,
+//! their sessions and invites, requests, and redactions for snapshots.
 
 use core::time::Duration;
 use std::collections::BTreeMap;
@@ -11,19 +12,22 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::Request;
 use axum::extract::connect_info::MockConnectInfo;
+use axum::http::Method;
 use chrono::{DateTime, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome};
-use fleet_core::auth::{LockoutPolicy, NewPassword, SessionPolicy};
+use fleet_core::auth::{InviteTtl, LockoutPolicy, NewPassword, SessionPolicy};
 use fleet_core::authz::Role;
-use fleet_core::id::{SessionId, UserId};
+use fleet_core::id::{InviteId, SessionId, UserId};
 use fleet_core::system::Clock as _;
 use fleet_core::value::Username;
 use fleet_server::app::auth::TokenService;
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
 use fleet_server::app::health::HealthService;
+use fleet_server::app::invites::InviteService;
 use fleet_server::app::lockout::LockoutService;
 use fleet_server::app::login::LoginService;
 use fleet_server::app::mfa::{MfaPorts, MfaService};
+use fleet_server::app::users::UserService;
 use fleet_server::config::{Argon2Params, HttpConfig, RateLimitConfig};
 use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::openapi::ApiDocs;
@@ -38,11 +42,13 @@ use fleet_server::infra::crypto::vault::{VaultKeys, XChaChaVault};
 use fleet_server::infra::qr::SvgQr;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditReads, AuditRecord, NewAuditEntry};
+use fleet_server::ports::invites::{InviteReads, NewInvite};
 use fleet_server::ports::login_attempts::LoginAttemptReads;
 use fleet_server::ports::mfa::MfaReads;
 use fleet_server::ports::passwords::{HashError, Passwords, VerifyError};
 use fleet_server::ports::sessions::SessionReads;
 use fleet_server::ports::store::{Store, StoreError, WriteTx};
+use fleet_server::ports::tokens::TokenHash;
 use fleet_server::ports::users::UserReads;
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use fleet_testkit::system::{ManualClock, SeededRandom};
@@ -65,6 +71,18 @@ pub(crate) const STEP_UP: &str = "/api/v1/auth/step-up";
 pub(crate) const RESET: &str = "/api/v1/me/mfa/reset";
 pub(crate) const ENROLL: &str = "/api/v1/me/mfa/enroll";
 pub(crate) const CONFIRM: &str = "/api/v1/me/mfa/confirm";
+pub(crate) const USERS: &str = "/api/v1/users";
+pub(crate) const INVITES: &str = "/api/v1/invites";
+pub(crate) const REGISTER: &str = "/api/v1/auth/register";
+pub(crate) const ME: &str = "/api/v1/me";
+pub(crate) const ME_PASSWORD: &str = "/api/v1/me/password";
+pub(crate) const ME_SESSIONS: &str = "/api/v1/me/sessions";
+
+/// A valid Argon2id PHC string (not a real hash), for users who never log
+/// in with a password.
+const PHC: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g";
+/// An invite's default lifetime, in milliseconds.
+pub(crate) const INVITE_TTL: i64 = 72 * 3_600_000;
 
 pub(crate) fn at(millis: i64) -> DateTime<Utc> {
     DateTime::from_timestamp_millis(millis).unwrap()
@@ -129,6 +147,7 @@ pub(crate) struct Options {
     pub(crate) rehash: Rehash,
     /// Alice's stored hash, when it isn't one of today's parameters.
     pub(crate) hash: Option<PasswordHash>,
+    pub(crate) invite_ttl: InviteTtl,
 }
 
 impl Default for Options {
@@ -137,6 +156,7 @@ impl Default for Options {
             limits: RateLimitConfig::default(),
             rehash: Rehash::Works,
             hash: None,
+            invite_ttl: InviteTtl::default(),
         }
     }
 }
@@ -154,6 +174,14 @@ pub(crate) enum Meanwhile {
     Disable,
     /// Alice's authenticator is replaced (only its confirmation time).
     ReplaceMfa,
+    /// A user's role changes.
+    SetRole(UserId, Role),
+    /// A user is disabled.
+    DisableUser(UserId),
+    /// An invite is used by a user.
+    UseInvite(InviteId, UserId),
+    /// Another user takes this username.
+    AddUser(&'static str),
 }
 
 /// The database, with a change queued to land right before the next write
@@ -205,6 +233,35 @@ impl HookedStore {
                 assert!(tx.mfa().replace(&current).await.unwrap());
                 tx.commit(setup_entry()).await.unwrap();
             }
+            Meanwhile::SetRole(user, role) => {
+                let mut tx = self.inner.write().await.unwrap();
+                assert!(tx.users().set_role(user, role).await.unwrap());
+                tx.commit(setup_entry()).await.unwrap();
+            }
+            Meanwhile::DisableUser(user) => {
+                let mut tx = self.inner.write().await.unwrap();
+                assert!(tx.users().set_disabled(user, true).await.unwrap());
+                tx.commit(setup_entry()).await.unwrap();
+            }
+            Meanwhile::UseInvite(invite, user) => {
+                let mut tx = self.inner.write().await.unwrap();
+                assert!(tx.invites().use_invite(invite, user, now).await.unwrap());
+                tx.commit(setup_entry()).await.unwrap();
+            }
+            Meanwhile::AddUser(name) => {
+                let mut tx = self.inner.write().await.unwrap();
+                tx.users()
+                    .insert(&NewUser {
+                        id: UserId::new_v7(now, [0xEE; 10]).unwrap(),
+                        username: Username::try_from(name).unwrap(),
+                        password_hash: PasswordHash::new(SecretString::from(PHC)).unwrap(),
+                        role: Role::Member,
+                        created_at: now,
+                    })
+                    .await
+                    .unwrap();
+                tx.commit(setup_entry()).await.unwrap();
+            }
         }
     }
 }
@@ -235,6 +292,10 @@ impl Store for HookedStore {
         self.inner.mfa()
     }
 
+    fn invites(&self) -> &dyn InviteReads {
+        self.inner.invites()
+    }
+
     fn audit(&self) -> &dyn AuditReads {
         self.inner.audit()
     }
@@ -242,6 +303,13 @@ impl Store for HookedStore {
     async fn ping(&self) -> Result<(), StoreError> {
         self.inner.ping().await
     }
+}
+
+/// A user with a live session.
+pub(crate) struct Person {
+    pub(crate) id: UserId,
+    pub(crate) session: SessionId,
+    pub(crate) token: SecretString,
 }
 
 pub(crate) struct Setup {
@@ -316,12 +384,12 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
     );
     let challenges = Challenges::new(Arc::new(clock.clone()), token_port);
     let mfa = mfa_service(&db, &clock, &random, &challenges);
-    let passwords = TestPasswords {
+    let passwords = Arc::new(TestPasswords {
         real: Argon2Passwords::new(Argon2Params::default(), Arc::new(random.clone()))
             .await
             .unwrap(),
         rehash: settings.rehash,
-    };
+    });
     let alice_hash = match settings.hash {
         Some(hash) => hash,
         None => passwords
@@ -348,11 +416,12 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
     let login = LoginService::new(
         Arc::new(clock.clone()),
         Arc::new(hooked.clone()),
-        Arc::new(passwords),
+        passwords.clone(),
         lockout.clone(),
         tokens.clone(),
         mfa.clone(),
     );
+    let (users, invites) = accounts(&clock, &random, &hooked, passwords, settings.invite_ttl);
     let limits = RateLimits::new(&settings.limits, Arc::new(clock.clone()));
     let state = AppState::new(
         HealthService::new(Arc::new(db.clone())),
@@ -360,6 +429,8 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         limits,
         mfa.clone(),
         login,
+        users,
+        invites,
     );
     let app = app(state, &clock);
     let mut tx = db.write().await.unwrap();
@@ -385,6 +456,31 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         lockout,
         alice,
     }
+}
+
+/// The users' and invites' services over `hooked`, so a queued change
+/// lands right before their write transactions too.
+fn accounts(
+    clock: &ManualClock,
+    random: &SeededRandom,
+    hooked: &HookedStore,
+    passwords: Arc<TestPasswords>,
+    ttl: InviteTtl,
+) -> (UserService, InviteService) {
+    let users = UserService::new(
+        Arc::new(clock.clone()),
+        Arc::new(random.clone()),
+        Arc::new(hooked.clone()),
+        passwords,
+    );
+    let invites = InviteService::new(
+        Arc::new(clock.clone()),
+        Arc::new(random.clone()),
+        Arc::new(hooked.clone()),
+        Arc::new(Sha256Tokens::new(Arc::new(random.clone()))),
+        ttl,
+    );
+    (users, invites)
 }
 
 pub(crate) fn setup_entry() -> NewAuditEntry {
@@ -451,7 +547,38 @@ impl Setup {
         bearer: Option<&SecretString>,
         body: Option<Value>,
     ) -> Seen {
-        let mut request = Request::post(path);
+        self.request(Method::POST, path, bearer, body).await
+    }
+
+    /// `GET path` with `bearer`.
+    pub(crate) async fn get(&self, path: &str, bearer: Option<&SecretString>) -> Seen {
+        self.request(Method::GET, path, bearer, None).await
+    }
+
+    /// `PATCH path` with `bearer` and the JSON `body`.
+    pub(crate) async fn patch(
+        &self,
+        path: &str,
+        bearer: Option<&SecretString>,
+        body: Value,
+    ) -> Seen {
+        self.request(Method::PATCH, path, bearer, Some(body)).await
+    }
+
+    /// `DELETE path` with `bearer`.
+    pub(crate) async fn delete(&self, path: &str, bearer: Option<&SecretString>) -> Seen {
+        self.request(Method::DELETE, path, bearer, None).await
+    }
+
+    /// `method path` with `bearer` and the JSON `body`, if any.
+    pub(crate) async fn request(
+        &self,
+        method: Method,
+        path: &str,
+        bearer: Option<&SecretString>,
+        body: Option<Value>,
+    ) -> Seen {
+        let mut request = Request::builder().method(method).uri(path);
         if let Some(token) = bearer {
             request = request.header("authorization", format!("Bearer {}", token.expose_secret()));
         }
@@ -531,11 +658,158 @@ impl Setup {
 
     /// A live session of Alice: its ID and its access token.
     pub(crate) async fn session(&self) -> (SessionId, SecretString) {
-        let prepared = self.tokens.prepare(self.alice).unwrap();
+        self.session_of(self.alice).await
+    }
+
+    /// A live session of `user`: its ID and its access token.
+    pub(crate) async fn session_of(&self, user: UserId) -> (SessionId, SecretString) {
+        let prepared = self.tokens.prepare(user).unwrap();
         let mut tx = self.db.write().await.unwrap();
         tx.sessions().insert(&prepared.new_session).await.unwrap();
         tx.commit(setup_entry()).await.unwrap();
         (prepared.new_session.id, prepared.tokens.access_token)
+    }
+
+    /// Adds `name` with `role`, as [`Setup::add_user`] does, with a live
+    /// session.
+    pub(crate) async fn person(&self, n: u8, name: &str, role: Role) -> Person {
+        let id = self.add_user(n, name, role).await;
+        let (session, token) = self.session_of(id).await;
+        Person { id, session, token }
+    }
+
+    /// Alice, a Member, with a live session.
+    pub(crate) async fn alice_person(&self) -> Person {
+        let (session, token) = self.session().await;
+        Person {
+            id: self.alice,
+            session,
+            token,
+        }
+    }
+
+    /// Stamps `session`'s step-up now, as `POST /auth/step-up` does.
+    pub(crate) async fn stamp(&self, session: SessionId) {
+        let mut tx = self.db.write().await.unwrap();
+        assert!(
+            tx.sessions()
+                .stamp_step_up(session, self.clock.now())
+                .await
+                .unwrap()
+        );
+        tx.commit(setup_entry()).await.unwrap();
+    }
+
+    /// A session of `user` whose login was `millis` from `T0` (in the past
+    /// for an expired one): its ID and its access token.
+    pub(crate) async fn session_since(
+        &self,
+        user: UserId,
+        millis: i64,
+    ) -> (SessionId, SecretString) {
+        let mut prepared = self.tokens.prepare(user).unwrap();
+        prepared.new_session.created_at = at(T0 + millis);
+        let mut tx = self.db.write().await.unwrap();
+        tx.sessions().insert(&prepared.new_session).await.unwrap();
+        tx.commit(setup_entry()).await.unwrap();
+        (prepared.new_session.id, prepared.tokens.access_token)
+    }
+
+    /// Adds an invite by `creator` for `role` with a real code, created
+    /// `millis` after `T0` and living 72 hours: its ID and its code.
+    pub(crate) async fn invite_code(
+        &self,
+        n: u8,
+        creator: UserId,
+        role: Role,
+        millis: i64,
+    ) -> (InviteId, SecretString) {
+        use fleet_server::ports::tokens::{TokenKind, Tokens as _};
+        let minted = Sha256Tokens::new(Arc::new(SeededRandom::new(u64::from(n) + 1_000)))
+            .mint(TokenKind::Invite)
+            .unwrap();
+        let id = InviteId::new_v7(at(T0 + millis), [n; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.invites()
+            .insert(&NewInvite {
+                id,
+                code_hash: minted.hash,
+                role,
+                created_by: creator,
+                created_at: at(T0 + millis),
+                expires_at: at(T0 + millis + INVITE_TTL),
+            })
+            .await
+            .unwrap();
+        tx.commit(setup_entry()).await.unwrap();
+        (id, minted.token)
+    }
+
+    /// Adds user `name` with `role`, its ID minted from `n`, created a minute
+    /// before `T0`. Its hash is no real one: it never logs in by password.
+    pub(crate) async fn add_user(&self, n: u8, name: &str, role: Role) -> UserId {
+        let id = UserId::new_v7(at(T0 - 60_000), [n; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.users()
+            .insert(&NewUser {
+                id,
+                username: Username::try_from(name).unwrap(),
+                password_hash: PasswordHash::new(SecretString::from(PHC)).unwrap(),
+                role,
+                created_at: at(T0 - 60_000),
+            })
+            .await
+            .unwrap();
+        tx.commit(setup_entry()).await.unwrap();
+        id
+    }
+
+    /// Adds an invite by `creator` for `role`, its ID and its code's hash
+    /// minted from `n`, created `millis` after `T0` and living 72 hours.
+    pub(crate) async fn add_invite(
+        &self,
+        n: u8,
+        creator: UserId,
+        role: Role,
+        millis: i64,
+    ) -> InviteId {
+        let id = InviteId::new_v7(at(T0 + millis), [n; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.invites()
+            .insert(&NewInvite {
+                id,
+                code_hash: TokenHash::from_bytes([n; 32]),
+                role,
+                created_by: creator,
+                created_at: at(T0 + millis),
+                expires_at: at(T0 + millis + INVITE_TTL),
+            })
+            .await
+            .unwrap();
+        tx.commit(setup_entry()).await.unwrap();
+        id
+    }
+
+    /// Marks `invite` used by `user` now.
+    pub(crate) async fn use_invite(&self, invite: InviteId, user: UserId) {
+        let mut tx = self.db.write().await.unwrap();
+        assert!(
+            tx.invites()
+                .use_invite(invite, user, self.clock.now())
+                .await
+                .unwrap()
+        );
+        tx.commit(setup_entry()).await.unwrap();
+    }
+
+    /// Whether `user`'s session `id` is still live.
+    pub(crate) async fn live(&self, id: SessionId) -> bool {
+        let mut tx = self.db.write().await.unwrap();
+        tx.sessions()
+            .find(id)
+            .await
+            .unwrap()
+            .is_some_and(|found| found.session.revoked_at.is_none())
     }
 
     /// The audit log, newest first.
@@ -583,5 +857,40 @@ impl Setup {
             .await
             .unwrap()
             .map(|attempt| attempt.failures)
+    }
+}
+
+/// `value` for a snapshot: every ID that `names` lists becomes its name,
+/// any other ID `[id]`, and every time its distance from `T0`
+/// (`[T0+60s]`), so nothing minted from `SeededRandom` is pinned.
+pub(crate) fn redacted(value: &Value, names: &[(String, &str)]) -> Value {
+    match value {
+        Value::String(text) => {
+            if let Some((_, name)) = names.iter().find(|(id, _)| id == text) {
+                return json!(format!("[{name}]"));
+            }
+            if text.parse::<UserId>().is_ok() {
+                return json!("[id]");
+            }
+            if let Ok(time) = serde_json::from_value::<fleet_api_types::Timestamp>(value.clone()) {
+                let millis = time.get().timestamp_millis() - T0;
+                return json!(match millis {
+                    0 => "[T0]".to_owned(),
+                    m if m % 1000 == 0 => format!("[T0{:+}s]", m / 1000),
+                    m => format!("[T0{m:+}ms]"),
+                });
+            }
+            value.clone()
+        }
+        Value::Array(items) => {
+            Value::Array(items.iter().map(|item| redacted(item, names)).collect())
+        }
+        Value::Object(fields) => Value::Object(
+            fields
+                .iter()
+                .map(|(key, item)| (key.clone(), redacted(item, names)))
+                .collect(),
+        ),
+        other => other.clone(),
     }
 }

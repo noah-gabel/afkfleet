@@ -17,7 +17,7 @@ Where things are:
   - §7 security model
   - Appendix: config, API, protocol, schema, state machine
 - **Decisions:** `docs/adr/`
-- **Threat model:** `docs/threat-model.md`
+- **Threat model:** `docs/threat-model.md`. Its "Verified by" cells cite tests as Rust paths (`module::test_name`); `scripts/threat-model-citations.mjs` checks that each exists (`just scripts-test`). Rename a cited test only together with the threat model.
 - **Operations:** `docs/runbook.md`
 - **Project overview and status:** `README.md` (kept current, see step 6 below)
 

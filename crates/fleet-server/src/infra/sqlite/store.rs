@@ -5,26 +5,35 @@ use core::fmt;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use fleet_core::id::{SessionId, UserId};
+use fleet_core::authz::Role;
+use fleet_core::id::{InviteId, SessionId, UserId};
 use fleet_core::value::Username;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use super::error::store_error;
-use super::{Database, audit, login_attempts, mfa, sessions, users};
+use super::{Database, audit, invites, login_attempts, mfa, sessions, users};
 use crate::ports::audit::{
-    AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, NewAuditEntry,
+    AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, FailedCodeAttempts,
+    NewAuditEntry,
+};
+use crate::ports::invites::{
+    Invite, InviteReads, InviteWrites, ListedInvite, NewInvite, RevokedInvite,
 };
 use crate::ports::login_attempts::{
     AttemptKey, LoginAttempt, LoginAttemptReads, LoginAttemptWrites,
 };
 use crate::ports::mfa::{InsertMfaError, MfaReads, MfaWrites, UserMfa};
+use crate::ports::page::Page;
 use crate::ports::recovery_codes::RecoveryCodeHash;
 use crate::ports::sessions::{
-    NewSession, RefreshLookup, Rotation, SessionReads, SessionWithUser, SessionWrites,
+    LiveSince, NewSession, RefreshLookup, Rotation, Session, SessionReads, SessionWithUser,
+    SessionWrites,
 };
 use crate::ports::store::{Store, StoreError, UnauditedWrite, WriteTx};
 use crate::ports::tokens::TokenHash;
-use crate::ports::users::{InsertUserError, NewUser, PasswordHash, User, UserReads, UserWrites};
+use crate::ports::users::{
+    InsertUserError, ListedUser, NewUser, PasswordHash, User, UserReads, UserWrites,
+};
 
 /// The statement that starts a write transaction: it takes the write lock at
 /// once. A fixed literal with no input, the one non-macro SQL in production
@@ -51,6 +60,14 @@ impl UserReads for Reads {
     async fn owner_exists(&self) -> Result<bool, StoreError> {
         users::owner_exists(&self.pool).await
     }
+
+    async fn list(&self, page: Page<UserId>) -> Result<Vec<ListedUser>, StoreError> {
+        users::list(&self.pool, page).await
+    }
+
+    async fn listed(&self, id: UserId) -> Result<Option<ListedUser>, StoreError> {
+        users::listed(&self.pool, id).await
+    }
 }
 
 #[async_trait]
@@ -64,6 +81,15 @@ impl SessionReads for Reads {
 
     async fn refresh_hash_exists(&self, hash: &TokenHash) -> Result<bool, StoreError> {
         sessions::refresh_hash_exists(&self.pool, hash).await
+    }
+
+    async fn list_live(
+        &self,
+        user: UserId,
+        live: LiveSince,
+        page: Page<SessionId>,
+    ) -> Result<Vec<Session>, StoreError> {
+        sessions::list_live(&self.pool, user, live, page).await
     }
 }
 
@@ -80,6 +106,25 @@ impl MfaReads for Reads {
     ) -> Result<Option<RecoveryCodeHash>, StoreError> {
         mfa::find_unused_code(&self.pool, user, hash).await
     }
+
+    async fn count_unused_codes(&self, user: UserId) -> Result<u32, StoreError> {
+        mfa::count_unused_codes(&self.pool, user).await
+    }
+}
+
+#[async_trait]
+impl InviteReads for Reads {
+    async fn find(&self, id: InviteId) -> Result<Option<Invite>, StoreError> {
+        invites::find(&self.pool, id).await
+    }
+
+    async fn find_by_code_hash(&self, hash: &TokenHash) -> Result<Option<Invite>, StoreError> {
+        invites::find_by_code_hash(&self.pool, hash).await
+    }
+
+    async fn list(&self, page: Page<InviteId>) -> Result<Vec<ListedInvite>, StoreError> {
+        invites::list(&self.pool, page).await
+    }
 }
 
 #[async_trait]
@@ -93,6 +138,10 @@ impl LoginAttemptReads for Reads {
 impl AuditReads for Reads {
     async fn list(&self, page: AuditPage) -> Result<Vec<AuditRecord>, StoreError> {
         audit::list(&self.pool, page).await
+    }
+
+    async fn failed_code_attempts(&self, user: UserId) -> Result<FailedCodeAttempts, StoreError> {
+        audit::failed_code_attempts(&self.pool, user).await
     }
 }
 
@@ -122,6 +171,10 @@ impl WriteTx for SqliteWriteTx {
     }
 
     fn mfa(&mut self) -> &mut dyn MfaWrites {
+        self
+    }
+
+    fn invites(&mut self) -> &mut dyn InviteWrites {
         self
     }
 
@@ -191,6 +244,10 @@ impl SessionWrites for SqliteWriteTx {
     ) -> Result<bool, StoreError> {
         sessions::stamp_step_up(&mut self.tx, id, at).await
     }
+
+    async fn clear_step_up(&mut self, id: SessionId) -> Result<bool, StoreError> {
+        sessions::clear_step_up(&mut self.tx, id).await
+    }
 }
 
 #[async_trait]
@@ -235,6 +292,50 @@ impl MfaWrites for SqliteWriteTx {
 }
 
 #[async_trait]
+impl InviteWrites for SqliteWriteTx {
+    async fn insert(&mut self, invite: &NewInvite) -> Result<(), StoreError> {
+        invites::insert(&mut self.tx, invite).await
+    }
+
+    async fn find(&mut self, id: InviteId) -> Result<Option<Invite>, StoreError> {
+        invites::find(&mut *self.tx, id).await
+    }
+
+    async fn find_by_code_hash(&mut self, hash: &TokenHash) -> Result<Option<Invite>, StoreError> {
+        invites::find_by_code_hash(&mut *self.tx, hash).await
+    }
+
+    async fn count_pending_by(
+        &mut self,
+        creator: UserId,
+        now: DateTime<Utc>,
+    ) -> Result<u32, StoreError> {
+        invites::count_pending_by(&mut self.tx, creator, now).await
+    }
+
+    async fn use_invite(
+        &mut self,
+        id: InviteId,
+        user: UserId,
+        at: DateTime<Utc>,
+    ) -> Result<bool, StoreError> {
+        invites::use_invite(&mut self.tx, id, user, at).await
+    }
+
+    async fn revoke(&mut self, id: InviteId, at: DateTime<Utc>) -> Result<bool, StoreError> {
+        invites::revoke(&mut self.tx, id, at).await
+    }
+
+    async fn revoke_pending_by(
+        &mut self,
+        creator: UserId,
+        at: DateTime<Utc>,
+    ) -> Result<Vec<RevokedInvite>, StoreError> {
+        invites::revoke_pending_by(&mut self.tx, creator, at).await
+    }
+}
+
+#[async_trait]
 impl LoginAttemptWrites for SqliteWriteTx {
     async fn find(&mut self, key: &AttemptKey) -> Result<Option<LoginAttempt>, StoreError> {
         login_attempts::find(&mut *self.tx, key).await
@@ -275,6 +376,23 @@ impl UserWrites for SqliteWriteTx {
     ) -> Result<bool, StoreError> {
         users::set_password_hash(&mut self.tx, id, hash).await
     }
+
+    async fn change_password(
+        &mut self,
+        id: UserId,
+        hash: &PasswordHash,
+        at: DateTime<Utc>,
+    ) -> Result<bool, StoreError> {
+        users::change_password(&mut self.tx, id, hash, at).await
+    }
+
+    async fn set_role(&mut self, id: UserId, role: Role) -> Result<bool, StoreError> {
+        users::set_role(&mut self.tx, id, role).await
+    }
+
+    async fn set_disabled(&mut self, id: UserId, disabled: bool) -> Result<bool, StoreError> {
+        users::set_disabled(&mut self.tx, id, disabled).await
+    }
 }
 
 #[async_trait]
@@ -308,6 +426,10 @@ impl Store for Database {
     }
 
     fn mfa(&self) -> &dyn MfaReads {
+        &self.reads
+    }
+
+    fn invites(&self) -> &dyn InviteReads {
         &self.reads
     }
 

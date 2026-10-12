@@ -176,6 +176,42 @@ async fn login(db: &Database, tokens: &TokenService, mfa: &MfaService) -> LoginS
     )
 }
 
+/// The users' and invites' services over `db`. No test here uses them, but
+/// the state carries them.
+async fn accounts(
+    db: &Database,
+) -> (
+    fleet_server::app::users::UserService,
+    fleet_server::app::invites::InviteService,
+) {
+    let clock = Arc::new(ManualClock::new(
+        chrono::DateTime::from_timestamp_millis(1_700_000_000_000).unwrap(),
+    ));
+    let random = Arc::new(SeededRandom::new(23));
+    let passwords = Argon2Passwords::new(
+        fleet_server::config::Argon2Params::default(),
+        random.clone(),
+    )
+    .await
+    .unwrap();
+    let users = fleet_server::app::users::UserService::new(
+        clock.clone(),
+        random.clone(),
+        Arc::new(db.clone()),
+        Arc::new(passwords),
+    );
+    let invites = fleet_server::app::invites::InviteService::new(
+        clock,
+        random.clone(),
+        Arc::new(db.clone()),
+        Arc::new(fleet_server::infra::crypto::tokens::Sha256Tokens::new(
+            random,
+        )),
+        fleet_core::auth::InviteTtl::default(),
+    );
+    (users, invites)
+}
+
 async fn build(db: &Database, docs: ApiDocs, extra: impl FnOnce(Routes) -> Routes) -> Built {
     let random = SeededRandom::new(13);
     let token_port = Arc::new(Sha256Tokens::new(Arc::new(random.clone())));
@@ -206,12 +242,15 @@ async fn build(db: &Database, docs: ApiDocs, extra: impl FnOnce(Routes) -> Route
     );
     let limits = limits();
     let login = login(db, &tokens, &mfa).await;
+    let (users, invites) = accounts(db).await;
     let state = AppState::new(
         HealthService::new(Arc::new(db.clone())),
         tokens.clone(),
         limits.clone(),
         mfa,
         login,
+        users,
+        invites,
     );
     let ids = RequestIds::new(Arc::new(clock()), Arc::new(SeededRandom::new(5)));
     let (app, entries) = extra(api_routes(Routes::new(&limits))).finish(state, &http(), ids, docs);
@@ -382,6 +421,7 @@ async fn outside_dev_mode_the_public_routes_are_exactly_the_allowlist(
             entry(Method::POST, "/api/v1/auth/login", RateClass::Login),
             entry(Method::POST, "/api/v1/auth/login/mfa", RateClass::Login),
             entry(Method::POST, "/api/v1/auth/refresh", RateClass::Refresh),
+            entry(Method::POST, "/api/v1/auth/register", RateClass::Register),
         ])
     );
     db.close().await;
@@ -404,6 +444,7 @@ async fn dev_mode_adds_only_the_document_to_the_public_routes(
             entry(Method::POST, "/api/v1/auth/login", RateClass::Login),
             entry(Method::POST, "/api/v1/auth/login/mfa", RateClass::Login),
             entry(Method::POST, "/api/v1/auth/refresh", RateClass::Refresh),
+            entry(Method::POST, "/api/v1/auth/register", RateClass::Register),
             entry(Method::GET, OPENAPI_PATH, RateClass::Standard),
         ])
     );
@@ -428,17 +469,16 @@ async fn the_2fa_routes_are_registered_with_their_access_and_class(
     );
     assert_eq!(
         with_access(&built.entries, Access::AuthedStepUp),
-        BTreeSet::from([entry(
-            Method::POST,
-            "/api/v1/me/mfa/reset",
-            RateClass::Standard
-        )])
+        BTreeSet::from([
+            entry(Method::POST, "/api/v1/me/mfa/reset", RateClass::Standard),
+            entry(Method::POST, "/api/v1/me/password", RateClass::Login),
+        ])
     );
     db.close().await;
 }
 
 #[sqlx::test(migrations = false)]
-async fn the_session_routes_are_authed_with_their_class(
+async fn the_authed_routes_are_registered_with_their_class(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
@@ -451,6 +491,18 @@ async fn the_session_routes_are_authed_with_their_class(
         BTreeSet::from([
             entry(Method::POST, "/api/v1/auth/logout", RateClass::Standard),
             entry(Method::POST, "/api/v1/auth/step-up", RateClass::Login),
+            entry(Method::GET, "/api/v1/me", RateClass::Standard),
+            entry(Method::GET, "/api/v1/me/sessions", RateClass::Standard),
+            entry(
+                Method::DELETE,
+                "/api/v1/me/sessions/{id}",
+                RateClass::Standard
+            ),
+            entry(Method::GET, "/api/v1/users", RateClass::Standard),
+            entry(Method::PATCH, "/api/v1/users/{id}", RateClass::Standard),
+            entry(Method::POST, "/api/v1/invites", RateClass::Standard),
+            entry(Method::GET, "/api/v1/invites", RateClass::Standard),
+            entry(Method::DELETE, "/api/v1/invites/{id}", RateClass::Standard),
         ])
     );
     db.close().await;

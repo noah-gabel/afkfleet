@@ -10,7 +10,10 @@ use sqlx::{SqliteConnection, SqlitePool};
 
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::store_error;
-use crate::ports::sessions::{NewSession, RefreshLookup, Rotation, Session, SessionWithUser};
+use crate::ports::page::Page;
+use crate::ports::sessions::{
+    LiveSince, NewSession, RefreshLookup, Rotation, Session, SessionWithUser,
+};
 use crate::ports::store::StoreError;
 use crate::ports::tokens::TokenHash;
 
@@ -224,6 +227,62 @@ pub(super) async fn stamp_step_up(
     .await
     .map_err(store_error)?;
     Ok(done.rows_affected() == 1)
+}
+
+/// Ends a session's step-up.
+pub(super) async fn clear_step_up(
+    conn: &mut SqliteConnection,
+    id: SessionId,
+) -> Result<bool, StoreError> {
+    let id = id_text(id);
+    let done = sqlx::query!("UPDATE sessions SET stepped_up_at = NULL WHERE id = ?", id)
+        .execute(conn)
+        .await
+        .map_err(store_error)?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// The user's live sessions of `page`, newest first: one more than the page
+/// holds. Times compare as text, in their one stored form.
+pub(super) async fn list_live(
+    pool: &SqlitePool,
+    user: UserId,
+    live: LiveSince,
+    page: Page<SessionId>,
+) -> Result<Vec<Session>, StoreError> {
+    let user = id_text(user);
+    let refreshed_after = stored_time(live.refreshed_after, SESSIONS, "refreshed_at")?;
+    let created_after = stored_time(live.created_after, SESSIONS, "created_at")?;
+    let before = page.before.map(|id| id_text(id).to_string());
+    let fetch = page.limit.fetch();
+    sqlx::query_as!(
+        SessionRow,
+        r#"SELECT s.rowid AS "rowid!: i64", s.id AS "id!", s.user_id AS "user_id!",
+                  s.access_hash AS "access_hash!: Vec<u8>",
+                  s.refresh_hash AS "refresh_hash!: Vec<u8>",
+                  s.created_at AS "created_at!", s.refreshed_at AS "refreshed_at!",
+                  s.last_used_at AS "last_used_at!", s.stepped_up_at AS "stepped_up_at?",
+                  s.revoked_at AS "revoked_at?", u.rowid AS "user_rowid!: i64",
+                  u.role AS "role!", u.disabled AS "disabled!: i64"
+           FROM sessions s JOIN users u ON u.id = s.user_id
+           WHERE s.user_id = ? AND s.revoked_at IS NULL
+                 AND s.refreshed_at > ? AND s.created_at > ?
+                 AND (? IS NULL OR s.id < ?)
+           ORDER BY s.id DESC
+           LIMIT ?"#,
+        user,
+        refreshed_after,
+        created_after,
+        before,
+        before,
+        fetch
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(store_error)?
+    .iter()
+    .map(|row| session_from_row(row).map(|found| found.session))
+    .collect()
 }
 
 /// The session with this ID, with its user.

@@ -28,31 +28,47 @@
 //!   `expose()` or `into_secret()`. A test formats every DTO that holds one.
 //!
 //! # Modules
-//! - [`auth`]: logging in, refreshing and stepping up.
+//! - [`auth`]: logging in, refreshing, stepping up and registering.
 //! - [`error`]: the error envelope that every failed request answers with.
+//! - [`ids`]: fleet-core's typed IDs in DTOs, and their schema.
 //! - [`int`]: the 64-bit integer type, [`SafeInt`], and the schema of a
 //!   bounded 32-bit field.
 //! - [`mfa`]: enrolling, confirming and replacing a TOTP authenticator.
+//! - [`invites`]: creating and listing the invites to register.
+//! - [`me`]: the user's profile and changing their password.
 //! - [`open`]: tolerant values, [`Open`] and [`OpenEnum`].
 //! - [`openapi`]: the `OpenAPI` schemas, which the server's dev-only document
 //!   serves and which a test keeps equal to the TypeScript.
+//! - [`page`]: the query of every list, [`PageQuery`].
 //! - [`secret`]: secrets in requests and responses, [`SecretText`].
+//! - [`sessions`]: the user's live sessions.
 //! - [`text`]: cleaned and capped text, [`BoundedText`].
+//! - [`time`]: a point in time, [`Timestamp`].
 //! - [`typescript`]: the export to TypeScript, behind `just gen` and
 //!   `just gen-check`.
+//! - [`users`]: the users Admins list and change.
 
 pub mod auth;
 pub mod error;
+pub mod ids;
 pub mod int;
+pub mod invites;
+pub mod me;
 pub mod mfa;
 pub mod open;
 pub mod openapi;
+pub mod page;
 pub mod secret;
+pub mod sessions;
 pub mod text;
+pub mod time;
 pub mod typescript;
+pub mod users;
 
 pub use error::{ErrorBody, ErrorCode, ErrorResponse, FieldError};
 pub use int::{SafeInt, SafeIntError};
 pub use open::{Open, OpenEnum};
+pub use page::PageQuery;
 pub use secret::SecretText;
 pub use text::BoundedText;
+pub use time::Timestamp;

@@ -1,4 +1,4 @@
-//! The login routes over HTTP (Plan.md P7.6, P7.12, §7.2, §7.4,
+//! The auth routes over HTTP (Plan.md P7.6, P7.9, P7.12, §7.2, §7.4,
 //! ADR-0016), through the real router with `oneshot`:
 //!
 //! - [`login`]: both steps, enumeration, the lockout through login, the
@@ -8,6 +8,15 @@
 //!   connection.
 //! - [`logout`]: ending a session.
 //! - [`step_up`]: the stamp, a wrong password counted, and the re-checks.
+//! - [`users`]: the admins' list and change, P7.12's escalation and
+//!   disabling, and the re-check in the transaction.
+//! - [`invites`]: who may invite whom, the code shown once, the cap, the
+//!   list, revoking, and the re-check in the transaction.
+//! - [`register`]: an invite registers one user; reuse, expiry and every
+//!   other unusable invite; the checks' order and the races.
+//! - [`me`]: the profile and the wrong codes since the previous login.
+//! - [`password`]: a new password after stepping up, and its re-checks.
+//! - [`sessions`]: the live sessions, and ending another one.
 //!
 //! Each test gets a fresh database from `#[sqlx::test]`; time is a
 //! `ManualClock`, never paused (CLAUDE.md). Every hash is a real Argon2id
@@ -17,8 +26,14 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
+mod invites;
 mod login;
 mod logout;
+mod me;
+mod password;
 mod refresh;
+mod register;
+mod sessions;
 mod step_up;
 mod support;
+mod users;

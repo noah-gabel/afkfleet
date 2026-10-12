@@ -51,6 +51,7 @@ mod connect;
 mod convert;
 mod error;
 mod file;
+mod invites;
 mod login_attempts;
 mod mfa;
 mod sessions;

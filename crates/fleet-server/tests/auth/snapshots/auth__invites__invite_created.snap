@@ -1,0 +1,18 @@
+---
+source: crates/fleet-server/tests/auth/invites.rs
+expression: "redacted(&body, &names(&cast))"
+---
+{
+  "code": "[code]",
+  "invite": {
+    "created_at": "[T0]",
+    "created_by": {
+      "id": "[admin]",
+      "username": "admin"
+    },
+    "expires_at": "[T0+259200s]",
+    "id": "[id]",
+    "role": "member",
+    "state": "pending"
+  }
+}

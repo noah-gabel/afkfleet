@@ -10,6 +10,7 @@ use fleet_core::id::UserId;
 use fleet_core::value::Username;
 use secrecy::{ExposeSecret as _, SecretString};
 
+use super::page::Page;
 use super::store::StoreError;
 
 /// A password hash as a PHC string (`$argon2id$v=19$m=…`). It isn't the
@@ -99,6 +100,27 @@ pub struct NewUser {
     pub created_at: DateTime<Utc>,
 }
 
+/// A user as the admins' list shows them: no password hash, plus whether
+/// they have 2FA and when they were last seen.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedUser {
+    /// The ID.
+    pub id: UserId,
+    /// The normalized (lowercase) username.
+    pub username: Username,
+    /// The global role.
+    pub role: Role,
+    /// Whether the user is disabled.
+    pub disabled: bool,
+    /// When the user was created.
+    pub created_at: DateTime<Utc>,
+    /// Whether the user has a confirmed authenticator.
+    pub mfa_enrolled: bool,
+    /// The newest `last_used_at` of any of the user's sessions, if they
+    /// have one.
+    pub last_seen_at: Option<DateTime<Utc>>,
+}
+
 /// Why a user couldn't be inserted.
 #[derive(Debug, thiserror::Error)]
 pub enum InsertUserError {
@@ -134,6 +156,19 @@ pub trait UserReads: Send + Sync + fmt::Debug {
     /// # Errors
     /// [`StoreError`].
     async fn owner_exists(&self) -> Result<bool, StoreError>;
+
+    /// The users of `page`, newest first: up to `page.limit.fetch()` of
+    /// them, one more than the page holds.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn list(&self, page: Page<UserId>) -> Result<Vec<ListedUser>, StoreError>;
+
+    /// The user with this ID as the list shows them.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn listed(&self, id: UserId) -> Result<Option<ListedUser>, StoreError>;
 }
 
 /// Writing users, inside a [`super::store::WriteTx`].
@@ -165,6 +200,32 @@ pub trait UserWrites: Send {
         id: UserId,
         hash: &PasswordHash,
     ) -> Result<bool, StoreError>;
+
+    /// Sets the user's new password: its hash, and `password_changed_at` =
+    /// `at`, so every commit that acts on the old password refuses.
+    /// Whether the user exists.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn change_password(
+        &mut self,
+        id: UserId,
+        hash: &PasswordHash,
+        at: DateTime<Utc>,
+    ) -> Result<bool, StoreError>;
+
+    /// Sets the user's role. Whether the user exists.
+    ///
+    /// # Errors
+    /// [`StoreError`]: a second Owner is [`StoreError::Backend`] (the unique
+    /// index refuses it).
+    async fn set_role(&mut self, id: UserId, role: Role) -> Result<bool, StoreError>;
+
+    /// Sets whether the user is disabled. Whether the user exists.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn set_disabled(&mut self, id: UserId, disabled: bool) -> Result<bool, StoreError>;
 }
 
 #[cfg(test)]

@@ -12,7 +12,7 @@ use super::{
     Argon2Params, AuthConfig, Bounds, ConfigError, DatabaseConfig, HttpConfig, KeyPath, LogConfig,
     LogFilter, LogFormat, ProblemKind, Problems, Rate, RateLimitConfig, ServerConfig, VaultConfig,
 };
-use fleet_core::auth::{LockoutPolicy, SessionPolicy};
+use fleet_core::auth::{InviteTtl, LockoutPolicy, SessionPolicy};
 
 use crate::http::rate_limit::{IpNet, TrustedProxies};
 
@@ -47,6 +47,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
     let vault = vault(&raw.vault, &mut problems);
     let trusted_proxies = trusted_proxies(&raw.http.trusted_proxies, &mut problems);
     let lockout = lockout(&raw.auth, &mut problems);
+    let invites = invites(&raw.auth, &mut problems);
     let rate_limits = rate_limits(&raw.rate_limits);
 
     let (
@@ -58,6 +59,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         Some(argon2),
         Some(sessions),
         Some(lockout),
+        Some(invites),
         Some(vault),
         Some(rate_limits),
     ) = (
@@ -69,6 +71,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         argon2,
         sessions,
         lockout,
+        invites,
         vault,
         rate_limits,
     )
@@ -91,6 +94,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
             argon2,
             sessions,
             lockout,
+            invites,
         },
         vault,
         rate_limits,
@@ -341,6 +345,20 @@ fn lockout(raw: &RawAuth, problems: &mut Problems) -> Option<LockoutPolicy> {
         problems,
     );
     LockoutPolicy::try_new(raw.lockout_threshold).ok()
+}
+
+/// `[auth] invite_ttl_hours`, in garde's words like the other `[auth]`
+/// keys.
+fn invites(raw: &RawAuth, problems: &mut Problems) -> Option<InviteTtl> {
+    check_ranges(
+        [(
+            "invite_ttl_hours",
+            raw.invite_ttl_hours,
+            AuthConfig::INVITE_TTL_HOURS,
+        )],
+        problems,
+    );
+    InviteTtl::try_new(raw.invite_ttl_hours).ok()
 }
 
 /// `[rate_limits]`, whose ranges garde has checked: none is 0, so only an

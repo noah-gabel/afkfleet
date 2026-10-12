@@ -1,0 +1,9 @@
+---
+source: crates/fleet-server/tests/auth/register.rs
+expression: "redacted(&seen.body, &[(carol.to_string(), \"carol\")])"
+---
+{
+  "id": "[carol]",
+  "role": "admin",
+  "username": "carol"
+}

@@ -104,6 +104,21 @@ pub(super) async fn find_unused_code(
         })
 }
 
+/// How many unused recovery codes the user has.
+pub(super) async fn count_unused_codes(pool: &SqlitePool, user: UserId) -> Result<u32, StoreError> {
+    let user = id_text(user);
+    let count = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "count!: i64" FROM recovery_codes
+           WHERE user_id = ? AND used_at IS NULL"#,
+        user
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(store_error)?;
+    // A count is never negative, and a user holds at most ten.
+    Ok(u32::try_from(count).unwrap_or(u32::MAX))
+}
+
 /// Inserts a first enrollment.
 pub(super) async fn insert(
     conn: &mut SqliteConnection,

@@ -26,9 +26,13 @@
 //!   login's one code field holds (group D).
 //! - [`challenge_expired`] and [`used_up`]: when the login's mfa and setup
 //!   tokens are over (group D).
+//! - [`InviteTtl`], [`invite_state`] and [`pending_cap_reached`]: how long an
+//!   invite lives, what a stored one is, and how many a user may hold
+//!   (group E).
 
 mod access;
 mod challenge;
+mod invite;
 mod lockout;
 mod password;
 mod recovery;
@@ -42,6 +46,10 @@ pub use access::{
 };
 pub use challenge::{
     MFA_ATTEMPTS, MFA_TOKEN_TTL, SETUP_TOKEN_TTL, challenge_expired, expires_in, used_up,
+};
+pub use invite::{
+    InviteFacts, InviteState, InviteTtl, InviteTtlError, MAX_PENDING_INVITES, invite_state,
+    pending_cap_reached,
 };
 pub use lockout::{
     FAILURE_MEMORY, FIRST_LOCK, FailureOutcome, FailureStreak, Locked, LockoutPolicy,

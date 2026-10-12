@@ -11,6 +11,9 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# `Timestamp`, a response's point in time, written and read by hand without any of chrono's
+# features (ADR-0016).
+chrono.workspace = true
 # `text::sanitize_untrusted`, which cleans every text a client reads (ADR-0015).
 fleet-core.workspace = true
 # The request DTOs' rules, checked at the server's boundary (ADR-0016).

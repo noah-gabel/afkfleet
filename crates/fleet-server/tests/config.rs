@@ -13,7 +13,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use figment::Jail;
-use fleet_core::auth::{LockoutPolicy, SessionPolicy};
+use fleet_core::auth::{InviteTtl, LockoutPolicy, SessionPolicy};
 use fleet_server::config::{
     Argon2Params, AuthConfig, ConfigError, DatabaseConfig, HttpConfig, LogConfig, LogFilterError,
     LogFormat, ParseError, ParseProblem, ParseSource, ProblemKind, Problems, Rate, RateLimitConfig,
@@ -162,6 +162,7 @@ fn only_the_database_path_and_the_vault_are_required() {
                     argon2: Argon2Params::default(),
                     sessions: SessionPolicy::default(),
                     lockout: LockoutPolicy::default(),
+                    invites: InviteTtl::default(),
                 },
                 vault: vault_config(jail),
                 rate_limits: RateLimitConfig::default(),
@@ -199,6 +200,7 @@ access_token_ttl_secs = 600
 refresh_token_idle_days = 14
 refresh_token_absolute_days = 60
 lockout_threshold = 7
+invite_ttl_hours = 24
 
 [rate_limits]
 per_ip_per_sec = 50
@@ -251,6 +253,7 @@ active_key_id = 3
             }
         );
         assert_eq!(config.auth.lockout, LockoutPolicy::try_new(7).unwrap());
+        assert_eq!(config.auth.invites, InviteTtl::try_new(24).unwrap());
         assert_eq!(
             config.rate_limits,
             RateLimitConfig {
@@ -280,6 +283,7 @@ fn environment_variables_override_the_file() {
             r#"["192.0.2.0/24", "2001:db8::/32"]"#,
         );
         jail.set_env("AFKFLEET_SERVER__AUTH__LOCKOUT_THRESHOLD", 9);
+        jail.set_env("AFKFLEET_SERVER__AUTH__INVITE_TTL_HOURS", 48);
         jail.set_env("AFKFLEET_SERVER__RATE_LIMITS__PER_IP_BURST", 80);
         let toml = minimal(jail);
 
@@ -297,6 +301,7 @@ fn environment_variables_override_the_file() {
             TrustedProxies::new(vec![net("192.0.2.0/24"), net("2001:db8::/32")])
         );
         assert_eq!(config.auth.lockout.threshold(), 9);
+        assert_eq!(config.auth.invites.hours(), 48);
         assert_eq!(config.rate_limits.per_ip.burst().get(), 80);
     });
 }
@@ -960,6 +965,29 @@ fn the_lockout_threshold_is_3_to_20() {
         for (value, message) in [(2, "lower than 3"), (21, "greater than 20")] {
             let problems = invalid(load_toml(jail, &with(value)));
             assert_eq!(keys(&problems), ["auth.lockout_threshold"]);
+            assert_eq!(
+                kinds(&problems),
+                [ProblemKind::OutOfRange {
+                    message: message.to_owned()
+                }]
+            );
+        }
+    });
+}
+
+#[test]
+fn the_invite_lifetime_is_1_to_720_hours() {
+    in_jail(|jail| {
+        let base = minimal(jail);
+        let with = |value: u32| format!("{base}\n[auth]\ninvite_ttl_hours = {value}\n");
+
+        for value in [1, 720] {
+            let config = load_toml(jail, &with(value)).unwrap();
+            assert_eq!(config.auth.invites.hours(), value);
+        }
+        for (value, message) in [(0, "lower than 1"), (721, "greater than 720")] {
+            let problems = invalid(load_toml(jail, &with(value)));
+            assert_eq!(keys(&problems), ["auth.invite_ttl_hours"]);
             assert_eq!(
                 kinds(&problems),
                 [ProblemKind::OutOfRange {

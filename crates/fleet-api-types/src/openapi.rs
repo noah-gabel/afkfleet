@@ -25,9 +25,14 @@ use utoipa::openapi::schema::Schema;
 
 use crate::ErrorResponse;
 use crate::auth::{
-    LoginMfaRequest, LoginRequest, LoginResponse, RefreshRequest, StepUpRequest, TokenResponse,
+    LoginMfaRequest, LoginRequest, LoginResponse, RefreshRequest, RegisterRequest,
+    RegisterResponse, StepUpRequest, TokenResponse,
 };
+use crate::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
+use crate::me::{MeResponse, PasswordChangeRequest};
 use crate::mfa::{MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse};
+use crate::sessions::SessionPage;
+use crate::users::{UserPage, UserPatchRequest, UserResponse};
 
 /// Every named schema of the API, by name: the root DTOs and every schema
 /// they refer to.
@@ -47,6 +52,17 @@ pub fn components() -> BTreeMap<String, RefOr<Schema>> {
     add::<TokenResponse>(&mut schemas);
     add::<RefreshRequest>(&mut schemas);
     add::<StepUpRequest>(&mut schemas);
+    add::<UserPage>(&mut schemas);
+    add::<UserResponse>(&mut schemas);
+    add::<UserPatchRequest>(&mut schemas);
+    add::<InvitePage>(&mut schemas);
+    add::<CreateInviteRequest>(&mut schemas);
+    add::<CreatedInviteResponse>(&mut schemas);
+    add::<RegisterRequest>(&mut schemas);
+    add::<RegisterResponse>(&mut schemas);
+    add::<MeResponse>(&mut schemas);
+    add::<PasswordChangeRequest>(&mut schemas);
+    add::<SessionPage>(&mut schemas);
     schemas.into_iter().collect()
 }
 

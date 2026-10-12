@@ -4,8 +4,8 @@
 //!
 //! A token is opaque: 256 random bits from the `SecureRandom` port,
 //! base64url without padding, behind its kind's prefix ([`TokenKind`]): a
-//! session's `afk_at_` and `afk_rt_`, and the login's challenges `afk_mt_`
-//! and `afk_st_`, so secret scanners spot them. Only their SHA-256 hash is
+//! session's `afk_at_` and `afk_rt_`, the login's challenges `afk_mt_` and
+//! `afk_st_`, and the invites' `afk_iv_`, so secret scanners spot them. Only their SHA-256 hash is
 //! stored, and a presented token is compared with a stored hash in constant
 //! time ([`TokenHash::ct_eq`]). The hash isn't a secret a client could use,
 //! but its `Debug` shows none of its bytes all the same, and no type here
@@ -17,8 +17,8 @@ use fleet_core::system::RandomError;
 use secrecy::SecretString;
 use subtle::ConstantTimeEq as _;
 
-/// Which kind of token: a session's two, or one of the login's challenges
-/// (group D).
+/// Which kind of token: a session's two, one of the login's challenges
+/// (group D), or an invite's code (group E).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
     /// The access token, sent with every request: `afk_at_…`.
@@ -30,6 +30,8 @@ pub enum TokenKind {
     /// The token for enrolling or replacing a TOTP authenticator:
     /// `afk_st_…`.
     Setup,
+    /// An invite's code, for registering: `afk_iv_…`.
+    Invite,
 }
 
 impl TokenKind {
@@ -41,6 +43,7 @@ impl TokenKind {
             Self::Refresh => "afk_rt_",
             Self::Mfa => "afk_mt_",
             Self::Setup => "afk_st_",
+            Self::Invite => "afk_iv_",
         }
     }
 }
@@ -197,6 +200,7 @@ mod tests {
         assert_eq!(TokenKind::Refresh.prefix(), "afk_rt_");
         assert_eq!(TokenKind::Mfa.prefix(), "afk_mt_");
         assert_eq!(TokenKind::Setup.prefix(), "afk_st_");
+        assert_eq!(TokenKind::Invite.prefix(), "afk_iv_");
     }
 
     #[test]
