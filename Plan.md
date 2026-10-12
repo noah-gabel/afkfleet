@@ -2765,7 +2765,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - The registry equals the document's operations.
   > - **Tests,** red against a registry that recorded nothing: 8 of 9 failed, then all passed.
   > - **For D and E:** a handler takes `AuthUser` before any body extractor, or its request without credentials isn't a 401 and the route-coverage test fails.
-- [ ] **P7.12** 🔴 Security tests:
+- [x] **P7.12** 🔴 Security tests:
   - **User enumeration:** an unknown user and a wrong password give the same status and body.
   - **Lockout.**
   - **Refresh reuse:** reusing a refresh token revokes the family.
@@ -2800,7 +2800,9 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **TOTP guessing by a password holder:** at the default threshold of 5, about 33 wrong codes a day get through (5 free, then locks of 1, 2, 4, 8, 16 and 32 minutes, then one an hour). Each guess hits one of about 3 in 10^6 codes (the window's three steps), so about 1e-4 a day and 3.5 % a year for an attacker who has the password and never stops, while the real user stays locked out nearly all the time.
   > - **An account without 2FA** (an invitee who abandons setup) belongs to whoever first enrolls with its password.
   > - **Displacing a login:** a password holder can replace the user's live login challenge with a password step of their own (the same class as the lockout DoS).
-- [ ] **P7.13** Audit events for:
+
+  > Note (P7.12, group E) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **every item is named with its tests** in the threat model's B1 section (`docs/threat-model.md`, "P7.12's security tests"), whose citations `scripts/threat-model-citations.mjs` checks against the crates. E's own: escalation (`a_member_cant_make_themselves_an_admin`, `an_admin_cant_change_the_owner`, `an_admin_cant_disable_another_admin`, `an_admin_cant_change_any_role`, `nobody_makes_another_owner`, `an_admin_cant_invite_an_admin`, `nobody_invites_an_owner`), disabling through `PATCH /users/{id}` (`an_admin_disables_a_member_who_is_refused_from_then_on`), invite reuse (`an_invite_registers_once_and_its_reuse_is_refused_and_recorded`, `two_registrations_with_one_invite_create_one_user`) and expiry (`an_invite_is_refused_from_its_expiry_on`), each red against its stub first. The accepted residual risks of groups C, D and E are under the threat model's "Accepted risks and known limits".
+- [x] **P7.13** Audit events for:
   - login success and failure, logout
   - password and 2FA changes
   - role changes
@@ -2828,6 +2830,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P7.13, as built, group D) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`auth.login`, `auth.logout`, `auth.step_up`, `mfa.enroll` and `mfa.reset`.** `auth.login` Success when tokens are issued (actor and target the user, `session_id`, `method`, `rehashed` only when true); Failure on every counted refusal and on a code step refused because the password or the authenticator changed (no actor, target the user or none, `step` and `reason`). `auth.logout` and `auth.step_up` target the new `AuditTarget::Session`; a step-up's Failure carries `reason`. `mfa.enroll` records a first confirm, `mfa.reset` a replacement's with `sessions_revoked`. Starting a replacement, 422s and 429s record nothing. The names snapshot gained all five, read before accepting.
 
   > Note (P7.13, as built, group C) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`security.lockout`**, recorded in the failing attempt's own transaction each time a failure starts a lock. Outcome Failure; no actor; the client's IP; target the user when the name is a user's, none otherwise (the typed name is never stored); metadata `failures` and `locked_until`. The names snapshot gained it, read before accepting.
+
+  > Note (P7.13, as built, group E) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`user.set_role`, `user.set_disabled`, `user.change_password`, `invite.create`, `invite.use`, `invite.revoke` and `session.revoke`,** plus `user.create` through an invite (Success, `via` = `invite`) and its Failure for a real invite that can't be used. Every entry whose commit revokes sessions carries `sessions_revoked`; the pending invites a demotion or disabling revokes get one `invite.revoke` each with `reason`. The names snapshot gained all seven, read before accepting.
 
 **DoD:**
 - auth + vault coverage ≥ 90 %.
@@ -2898,6 +2902,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The QR code is an SVG `data:` URI.** The app shows it only through `<img src="data:…">`, never by inserting the SVG as HTML, so nothing in it could ever run. P8.3's CSP already allows `img-src data:`.
   > - **After setup, the app asks for the next code:** the code that confirmed the authenticator can't log in.
   > - **Replacing the authenticator** goes from the profile through step-up and `POST /me/mfa/reset` straight into enroll and confirm with the setup token it answers, in the same session; until confirm, the old authenticator keeps working.
+
+  > Note (P8.7, from Phase 7, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+  > - **Registering:** the screen trims spaces and line breaks around a pasted invite code before sending it, since chat apps often add them; the server's shape check stays strict. After a successful registration the app logs in right away with the credentials just entered and goes straight into the 2FA setup, so a new account never sits without 2FA (the threat model's "an account without 2FA").
+  > - **The profile:** when `failed_code_attempts.count` is above 0, the app shows a warning that names `last_at` and suggests changing the password. When `recovery_codes_left` is 3 or fewer, it warns and points to the 2FA replacement, which issues 10 new codes.
+  > - **The session list:** the row marked `current` shows "Log out", which calls `POST /auth/logout`; `DELETE /me/sessions/{id}` answers 409 for it.
 - [ ] **P8.8** 🔴 Admin screens:
   - users: change role, disable
   - invites: the code is shown **once**, with a copy button
@@ -3420,6 +3429,8 @@ command_allowlist = ["/spawn", "/home", "/afk"]   # usable with Control; every o
                                                  # each entry: "/" + one command name, no arguments; at most 64; missing = empty
 ```
 
+> Note (Appendix A, Phase 7, group E, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): `[auth] invite_ttl_hours` is 1 to 720 (30 days), 72 by default. An invite's expiry is stored when it's created, so a change doesn't move existing invites.
+
 `agent.toml`
 ```toml
 name = "agent-1"
@@ -3496,6 +3507,12 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 
 > Note (Appendix B, Phase 7, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`POST /auth/step-up`** (user) joins the table in group D. It takes `{password}` and stamps the session's `stepped_up_at`; the "(step-up)" routes need that stamp to be at most 5 min old, otherwise they answer 403 `step_up_required`.
 
+> Note (Appendix B, Phase 7, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
+> - **Lists** (`GET /users`, `GET /invites`, `GET /me/sessions`) answer keyset pages: `?before=<id>&limit=<1..100>` (50 by default), newest first by ID, `{items, next}` with `next` left out on the last page. A query that doesn't parse is 400, a `limit` out of range 422.
+> - **A path ID** that isn't a version 7 UUID is 404, like an unknown one.
+> - **`POST /auth/register`** answers 201 `{id, username, role}`, never tokens. **`POST /invites`** answers 201 `{code, invite}`, the only time the code is shown. **`PATCH /users/{id}`** takes exactly one of `role` and `disabled`. **`DELETE /me/sessions/{id}`** is 409 for the request's own session.
+> - **Times** in responses are `YYYY-MM-DDTHH:MM:SS.mmmZ` (UTC, milliseconds); a value that isn't there is left out, never `null`.
+
 ### C. Control-plane protocol sketch (`proto/fleet/v1/agent.proto`)
 ```proto
 syntax = "proto3";
@@ -3560,6 +3577,8 @@ message ServerMessage {
 > Note (Appendix D, Phase 7, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): Phase 7's tables arrive with their first user, each in its own migration: `sessions` in group B, with an extra `stepped_up_at` for step-up (§7.2); `login_attempts` in C; `user_mfa` in D, whose `secret_ciphertext` holds a vault envelope v1; `invites` in E. Each group designs the columns with its feature.
 
 > Note (Appendix D, Phase 7, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`user_mfa` as built** is `user_id, secret_envelope, last_used_step, confirmed_at`: no `key_id` (the envelope's header has it) and no `enabled_at` (`confirmed_at`), and a row exists only for a confirmed enrollment. The recovery codes live in their own table, `recovery_codes(hash, user_id, used_at)`, instead of a `recovery_code_hashes` column. The login challenges (mfa and setup tokens) live in the server's memory, not in a table.
+
+> Note (Appendix D, Phase 7, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`invites` as built** is `id, code_hash, role, created_by, created_at, expires_at, used_by, used_at, revoked_at`: `role` is `member` or `admin` only, `used_by` is unique, a revoked or used invite keeps its row, and three CHECKs keep it consistent (a use and its time together, never both used and revoked, an expiry after the creation). `0007_audit_log_target.sql` indexes the audit log by target, action and ID, for `GET /me`'s count of wrong codes.
 
 ### E. Bot state machine (`fleet_core::bot`)
 **States:**
