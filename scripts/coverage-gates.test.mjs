@@ -2,7 +2,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { evaluateGates, GATES as GATES_IN_USE } from "./coverage-gates.mjs";
+import { evaluateGates, GATES as GATES_IN_USE, gatesFor, parseArgs } from "./coverage-gates.mjs";
 
 const ROOT = "/repo";
 
@@ -94,6 +94,19 @@ describe("evaluateGates", () => {
     );
 
     assert.equal(results["fleet-core"].status, "fail");
+  });
+
+  it("matches a Windows path with the verbatim \\\\?\\ prefix", () => {
+    const results = byName(
+      evaluateGates(
+        report([["\\\\?\\C:\\path\\to\\afkfleet\\crates\\fleet-core\\src\\lib.rs", 50, 100]]),
+        "C:\\path\\to\\afkfleet",
+        GATES,
+      ),
+    );
+
+    assert.equal(results["fleet-core"].status, "fail");
+    assert.equal(results["fleet-core"].count, 100);
   });
 
   it("ignores files outside the repository", () => {
@@ -235,5 +248,95 @@ describe("the project's gates", () => {
 
     assert.ok(results.auth.count > results.auth.covered, "fleet-core's auth file counts");
     assert.deepEqual(results.vault.missing, []);
+  });
+});
+
+/** A desktop crate file, as llvm-cov on Windows names it (placeholder repository path). */
+function desktopFile(relative) {
+  return `C:\\path\\to\\afkfleet\\apps\\desktop\\src-tauri\\src\\${relative.replaceAll("/", "\\")}`;
+}
+
+describe("reports", () => {
+  it("selects only the named report's gates", () => {
+    const desktop = gatesFor("desktop").map((gate) => gate.name);
+    const workspace = gatesFor("workspace").map((gate) => gate.name);
+
+    assert.deepEqual(desktop, ["desktop"]);
+    assert.ok(!workspace.includes("desktop"));
+    assert.ok(["workspace", "auth", "vault", "fleet-client"].every((n) => workspace.includes(n)));
+  });
+
+  it("passes the desktop gate on a Windows report of the desktop crate alone", () => {
+    const desktopGate = GATES_IN_USE.find((gate) => gate.name === "desktop");
+    const files = desktopGate.prefixes.map((prefix) => [
+      desktopFile(prefix.replace("apps/desktop/src-tauri/src/", "").replace(/\/$/, "/mod.rs")),
+      95,
+      100,
+    ]);
+    files.push([desktopFile("lib.rs"), 0, 50], [desktopFile("main.rs"), 0, 5]);
+
+    const results = evaluateGates(report(files), "C:\\path\\to\\afkfleet", gatesFor("desktop"));
+
+    assert.deepEqual(
+      results.map((r) => [r.name, r.status, r.missing]),
+      [["desktop", "pass", []]],
+    );
+  });
+
+  it("fails the desktop gate below 90 % or with a module missing", () => {
+    const low = report([[desktopFile("state.rs"), 80, 100]]);
+
+    const results = evaluateGates(low, "C:\\path\\to\\afkfleet", gatesFor("desktop"));
+
+    assert.equal(results[0].status, "fail");
+    assert.ok(results[0].missing.length > 0);
+  });
+});
+
+describe("the desktop gate", () => {
+  it("is required at 90 % over the desktop crate's modules, never lib.rs or main.rs", () => {
+    const gate = GATES_IN_USE.find((g) => g.name === "desktop");
+
+    assert.ok(gate);
+    assert.equal(gate.report, "desktop");
+    assert.equal(gate.required, true);
+    assert.equal(gate.min, 90);
+    assert.ok(gate.prefixes.every((prefix) => prefix.startsWith("apps/desktop/src-tauri/src/")));
+    for (const module of [
+      "commands/",
+      "endpoints.rs",
+      "error.rs",
+      "keychain.rs",
+      "profile.rs",
+      "state.rs",
+    ]) {
+      assert.ok(gate.prefixes.includes(`apps/desktop/src-tauri/src/${module}`), module);
+    }
+    for (const entry of ["lib.rs", "main.rs"]) {
+      assert.ok(!gate.prefixes.includes(`apps/desktop/src-tauri/src/${entry}`), entry);
+    }
+  });
+});
+
+describe("parseArgs", () => {
+  it("reads the report's path, the workspace report by default", () => {
+    assert.deepEqual(parseArgs(["target/coverage.json"]), {
+      report: "workspace",
+      reportPath: "target/coverage.json",
+    });
+  });
+
+  it("reads --report desktop", () => {
+    assert.deepEqual(parseArgs(["--report", "desktop", "target/coverage-desktop.json"]), {
+      report: "desktop",
+      reportPath: "target/coverage-desktop.json",
+    });
+  });
+
+  it("refuses an unknown report, a missing path or extra arguments", () => {
+    assert.throws(() => parseArgs(["--report", "linux", "x.json"]), /usage/);
+    assert.throws(() => parseArgs([]), /usage/);
+    assert.throws(() => parseArgs(["--report"]), /usage/);
+    assert.throws(() => parseArgs(["a.json", "b.json"]), /usage/);
   });
 });

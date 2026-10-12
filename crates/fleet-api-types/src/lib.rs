@@ -31,6 +31,8 @@
 //!   `expose()` or `into_secret()`. A test formats every DTO that holds one.
 //!
 //! # Modules
+//! - [`app`]: the desktop app's IPC types, between its Rust side and its UI;
+//!   exported to TypeScript, never on the HTTP wire.
 //! - [`auth`]: logging in, refreshing, stepping up and registering.
 //! - [`error`]: the error envelope that every failed request answers with.
 //! - [`ids`]: fleet-core's typed IDs in DTOs, re-exported, and their schema.
@@ -51,6 +53,7 @@
 //!   `just gen-check`.
 //! - [`users`]: the users Admins list and change.
 
+pub mod app;
 pub mod auth;
 pub mod error;
 pub mod ids;

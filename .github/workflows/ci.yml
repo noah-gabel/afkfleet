@@ -209,9 +209,9 @@ jobs:
       - run: just gen-check
 
   # The desktop app ships only for Windows, so the Linux jobs leave its crate out and this
-  # job covers what they would have (ADR-0017): its docs, the stable check, and the
-  # release build with the embedded frontend. clippy and test on windows-latest include it
-  # too.
+  # job covers what they would have (ADR-0017): its docs, the stable check, its coverage
+  # gate, and the release build with the embedded frontend. clippy and test on
+  # windows-latest include it too.
   tauri-build:
     name: tauri-build
     runs-on: windows-latest
@@ -224,7 +224,7 @@ jobs:
         uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
       - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
         with:
-          tool: just@${{ env.JUST_VERSION }}
+          tool: just@${{ env.JUST_VERSION }},cargo-nextest@0.9.146,cargo-llvm-cov@0.9.1
       - name: Install the pinned toolchain (used by rust-cache) and the stable one named in the justfile
         shell: bash
         run: |
@@ -239,6 +239,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: just docs
       - run: just stable-check
+      - run: just cov-desktop
       - run: just app-build
 
   frontend:

@@ -136,6 +136,20 @@ impl<S: SessionStore> Client<S> {
         self.core.logout().await
     }
 
+    /// Ends the session here without telling the server: the stored refresh
+    /// token is removed and the access token and any pending step are
+    /// dropped; nothing is sent. The desktop app calls it on a client for a
+    /// server profile it just set, so a token stored under another profile
+    /// is never resumed (ADR-0017).
+    ///
+    /// # Errors
+    /// [`ClientError::Store`] when the store can't be cleared: unlike
+    /// [`Client::logout`], the failure is returned, since a token may remain.
+    /// The tokens in memory are dropped anyway.
+    pub async fn discard_session(&self) -> Result<(), ClientError> {
+        self.core.discard().await
+    }
+
     /// `POST /auth/step-up`: the password again, which allows step-up
     /// actions in this session for 5 minutes.
     ///

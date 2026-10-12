@@ -1,11 +1,14 @@
 // Checks the coverage gates from Plan.md §8 against a `cargo llvm-cov --json` export.
 //
-//   node scripts/coverage-gates.mjs <coverage.json>
+//   node scripts/coverage-gates.mjs [--report desktop] <coverage.json>
 //
-// Every gate is measured in lines, summed over all files its pattern or its prefixes
-// match. A gate whose files don't exist yet is skipped, unless it's `required`; a gate
-// with prefixes fails when any one of them matches no file. Exits with 1 if any gate
-// fails. Tests: scripts/coverage-gates.test.mjs.
+// Every gate belongs to one report: `workspace` (the default, `just cov` on Linux) or
+// `desktop` (`just cov-desktop` on Windows, the desktop crate alone; ADR-0017). Only the
+// named report's gates run. Every gate is measured in lines, summed over all files its
+// pattern or its prefixes match. A gate whose files don't exist yet is skipped, unless
+// it's `required`; a gate with prefixes fails when any one of them matches no file.
+// Exits with 1 if any gate fails, 2 on wrong arguments. Tests:
+// scripts/coverage-gates.test.mjs.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -73,7 +76,54 @@ export const GATES = [
     required: true,
     prefixes: ["crates/fleet-client/src/"],
   },
+  {
+    // The desktop app's Rust side, measured on Windows only, since Linux never builds it:
+    // the switch rules, the keychain, the profile file and the error mapping. lib.rs's
+    // `run` and main.rs start the real event loop, which no test reaches (ADR-0017).
+    name: "desktop",
+    report: "desktop",
+    min: 90,
+    required: true,
+    prefixes: [
+      "apps/desktop/src-tauri/src/commands/",
+      "apps/desktop/src-tauri/src/endpoints.rs",
+      "apps/desktop/src-tauri/src/error.rs",
+      "apps/desktop/src-tauri/src/focus.rs",
+      "apps/desktop/src-tauri/src/keychain.rs",
+      "apps/desktop/src-tauri/src/navigation.rs",
+      "apps/desktop/src-tauri/src/profile.rs",
+      "apps/desktop/src-tauri/src/startup.rs",
+      "apps/desktop/src-tauri/src/state.rs",
+    ],
+  },
 ];
+
+/** The reports a gate can belong to. */
+const REPORTS = ["workspace", "desktop"];
+
+const USAGE = "usage: node scripts/coverage-gates.mjs [--report desktop] <coverage.json>";
+
+/** The gates of `report`: a gate without one belongs to `workspace`. */
+export function gatesFor(report, gates = GATES) {
+  return gates.filter((gate) => (gate.report ?? "workspace") === report);
+}
+
+/**
+ * Reads the command line: `[--report <name>] <coverage.json>`. Throws the usage on
+ * anything else.
+ */
+export function parseArgs(args) {
+  let report = "workspace";
+  let rest = args;
+  if (rest[0] === "--report") {
+    report = rest[1];
+    rest = rest.slice(2);
+  }
+  if (!REPORTS.includes(report) || rest.length !== 1) {
+    throw new Error(USAGE);
+  }
+  return { report, reportPath: rest[0] };
+}
 
 /** Whether `path` falls under the prefix `entry`: below it if it's a folder, equal otherwise. */
 function underPrefix(path, entry) {
@@ -125,7 +175,8 @@ export function evaluateGates(report, repoRoot, gates) {
 
 /** Returns `filename` relative to `repoRoot` with `/` separators, or null if it's outside. */
 function relativeToRoot(filename, repoRoot) {
-  const file = filename.replaceAll("\\", "/");
+  // A Windows path may come in its verbatim form, `\\?\C:\…`.
+  const file = filename.replace(/^\\\\\?\\/, "").replaceAll("\\", "/");
   const root = `${repoRoot.replaceAll("\\", "/").replace(/\/+$/, "")}/`;
   // Windows paths are case-insensitive, and drive letters come in either case.
   const inside = /^[A-Za-z]:\//.test(root)
@@ -147,14 +198,16 @@ function describe(result) {
 }
 
 function main(args) {
-  const [reportPath] = args;
-  if (reportPath === undefined) {
-    console.error("usage: node scripts/coverage-gates.mjs <coverage.json>");
+  let parsed;
+  try {
+    parsed = parseArgs(args);
+  } catch (error) {
+    console.error(error.message);
     return 2;
   }
-  const report = JSON.parse(readFileSync(reportPath, "utf8"));
+  const report = JSON.parse(readFileSync(parsed.reportPath, "utf8"));
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const results = evaluateGates(report, repoRoot, GATES);
+  const results = evaluateGates(report, repoRoot, gatesFor(parsed.report));
   for (const result of results) {
     console.log(describe(result));
   }

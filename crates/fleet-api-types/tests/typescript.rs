@@ -43,8 +43,12 @@ fn the_export_writes_one_file_per_type() {
     assert_eq!(
         files.keys().collect::<Vec<_>>(),
         [
+            "ApiErrorDetails.ts",
+            "CommandError.ts",
+            "CommandErrorCode.ts",
             "CreateInviteRequest.ts",
             "CreatedInviteResponse.ts",
+            "CustomCaView.ts",
             "ErrorBody.ts",
             "ErrorCode.ts",
             "ErrorResponse.ts",
@@ -57,17 +61,26 @@ fn the_export_writes_one_file_per_type() {
             "LoginRequest.ts",
             "LoginResponse.ts",
             "LoginStatus.ts",
+            "LoginStepKind.ts",
+            "LoginStepResponse.ts",
+            "LogoutResponse.ts",
             "MeResponse.ts",
             "MfaConfirmRequest.ts",
             "MfaConfirmResponse.ts",
             "MfaEnrollResponse.ts",
             "MfaResetResponse.ts",
             "PasswordChangeRequest.ts",
+            "ProfileUnreadable.ts",
             "RefreshRequest.ts",
             "RegisterRequest.ts",
             "RegisterResponse.ts",
+            "ServerProfileRequest.ts",
+            "ServerProfileResponse.ts",
+            "ServerProfileState.ts",
+            "ServerProfileView.ts",
             "SessionPage.ts",
             "SessionResponse.ts",
+            "SetupStepResponse.ts",
             "StepUpRequest.ts",
             "TokenResponse.ts",
             "UserLabel.ts",
@@ -77,6 +90,41 @@ fn the_export_writes_one_file_per_type() {
             "UserRole.ts",
         ]
     );
+}
+
+/// The desktop app's IPC types (ADR-0017): never on the HTTP wire, so the
+/// `OpenAPI` document leaves them out.
+const APP_TYPES: [&str; 13] = [
+    "ApiErrorDetails.ts",
+    "CommandError.ts",
+    "CommandErrorCode.ts",
+    "CustomCaView.ts",
+    "LoginStepKind.ts",
+    "LoginStepResponse.ts",
+    "LogoutResponse.ts",
+    "ProfileUnreadable.ts",
+    "ServerProfileRequest.ts",
+    "ServerProfileResponse.ts",
+    "ServerProfileState.ts",
+    "ServerProfileView.ts",
+    "SetupStepResponse.ts",
+];
+
+#[test]
+fn the_app_export_adds_exactly_the_ipc_types_to_the_apis() {
+    let api = TempDir::new().unwrap();
+    let app = TempDir::new().unwrap();
+    typescript::export_api(api.path()).unwrap();
+    typescript::export_app(app.path()).unwrap();
+    let (_all, files) = exported();
+    let api = contents(api.path());
+    let app = contents(app.path());
+
+    let only_app: Vec<&String> = app.keys().filter(|name| !api.contains_key(*name)).collect();
+    let combined: BTreeMap<&String, &String> = api.iter().chain(app.iter()).collect();
+
+    assert_eq!(only_app, APP_TYPES);
+    assert_eq!(combined, files.iter().collect::<BTreeMap<_, _>>());
 }
 
 #[test]

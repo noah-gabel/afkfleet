@@ -1,7 +1,28 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "main",
-  "description": "The main window. It grants nothing yet: every app command needs its own allow-<command> here, and no core or plugin permission is granted (ADR-0017).",
+  "description": "The main window. It grants exactly the app's own commands, each by its allow-<command> permission, and no core or plugin permission (ADR-0017).",
   "windows": ["main"],
-  "permissions": []
+  "permissions": [
+    "allow-server-profile",
+    "allow-set-server-profile",
+    "allow-check-server",
+    "allow-login",
+    "allow-login-mfa",
+    "allow-logout",
+    "allow-register",
+    "allow-step-up",
+    "allow-mfa-enroll",
+    "allow-mfa-confirm",
+    "allow-mfa-reset",
+    "allow-me",
+    "allow-change-password",
+    "allow-sessions",
+    "allow-revoke-session",
+    "allow-users",
+    "allow-patch-user",
+    "allow-invites",
+    "allow-create-invite",
+    "allow-revoke-invite"
+  ]
 }

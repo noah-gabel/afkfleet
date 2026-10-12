@@ -264,9 +264,11 @@ fn every_component_renders_as_ts_rs_declares_its_type() {
 }
 
 #[test]
-fn the_components_are_exactly_the_exported_types() {
+fn the_components_are_exactly_the_exported_api_types() {
+    // The API's DTOs only: the desktop app's IPC types (`app`) never cross
+    // the HTTP API, so the document leaves them out (ADR-0017).
     let scratch = TempDir::new().unwrap();
-    typescript::export(scratch.path()).unwrap();
+    typescript::export_api(scratch.path()).unwrap();
     let exported: BTreeSet<String> = fs::read_dir(scratch.path())
         .unwrap()
         .map(|entry| {

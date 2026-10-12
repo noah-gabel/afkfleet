@@ -1,7 +1,7 @@
 # 0017. fleet-client and desktop app conventions, Phase 8 refinements
 
 - **Status:** Accepted
-- **Date:** 2026-10-12 (amended in the review of PR #34; group B added the same day)
+- **Date:** 2026-10-12 (amended in the review of PR #34; groups B and C added the same day)
 - **Related:** Plan.md Phase 8 (P8.1–P8.9), §4, §5, §7.5, §8, Appendix A, P9.3; ADR-0006, ADR-0007, ADR-0015, ADR-0016
 
 ## Context
@@ -248,6 +248,95 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   - `location.href = "https://example.com"` stays on the app; `window.open` returns `null` and opens nothing
   - a second launch exits at once, leaving one page
 - **The release exe** builds through `just app-build` in about a minute on the dev machine; the agent's image and the slow suite (`just stack-up`, `just test-slow`) still work.
+
+### Group C: the bridge's Rust side (P8.4) *(the user's choices, 2026-10-12)*
+- **Every endpoint now** *(the user's choice)*. 20 commands, so groups D and E only build screens and never touch the ACL or the hardening pin: `server_profile`, `set_server_profile`, `check_server`, `login`, `login_mfa`, `logout`, `register`, `step_up`, `mfa_enroll`, `mfa_confirm`, `mfa_reset`, `me`, `change_password`, `sessions`, `revoke_session`, `users`, `patch_user`, `invites`, `create_invite`, `revoke_invite`. They're grouped per feature in `commands/{server,auth,mfa,me,users,invites}.rs`.
+  - Each command is a thin wrapper that calls the `AppState` method of the same name (`endpoints.rs`, `state.rs`).
+  - None takes or returns a token.
+- **The IPC types live in fleet-api-types' `app` module** *(the user's choice)*, so they're exported with the DTOs and never hand-written in TypeScript. The types are `CommandError`, `CommandErrorCode`, `ApiErrorDetails`, `LoginStepKind`, `LoginStepResponse`, `SetupStepResponse`, `LogoutResponse`, `ServerProfileRequest`, `ServerProfileView`, `CustomCaView`, `ServerProfileResponse`, `ServerProfileState` and `ProfileUnreadable`.
+  - None crosses the HTTP API. `typescript::export` is split into `export_api` and `export_app`; the `OpenAPI` comparison runs over `export_api` only.
+  - A test pins the 13 files `export_app` adds.
+- **`CommandError { code, message, api?, fields? }`** *(the user's choice, with their addition of `api.message`)*:
+  - **`code`** is a closed `CommandErrorCode`, since the Rust side and the UI ship in one exe:
+    - mapped from `ClientError`: `unreachable`, `certificate`, `timed_out`, `too_large`, `unexpected_response`, `api`, `no_session`, `no_pending_step`, `already_logged_in`, `store`, `interrupted`
+    - the app's own: `no_server`, `invalid_input`, `invalid_server_url`, `invalid_ca`, `client_build`, `profile_save`
+    - `ipc`, produced only by the UI for a rejection from Tauri itself (P8.5)
+  - **`message`** is the code's fixed sentence.
+  - **`api`** is there only for `api`: the status, the server's `Open<ErrorCode>`, the server's bounded message, the request ID, the fields and `retry_after_secs`. The UI's default branch for an unknown server code shows that message and the request ID (ADR-0015). `api` is boxed, so every `Result<_, CommandError>` stays small (clippy's `result_large_err`); the wire format doesn't change.
+  - **`fields`** lists the rules a local check broke (garde's paths).
+  - The mapping from `ClientError` is an exhaustive match, so a new variant doesn't compile until it has a code. No field ever holds a token, a URL or a raw body.
+- **Logout always answers Ok** *(the user's choice)*: `{ server: "ended" }`, or `{ server: "unconfirmed", error }` when the server couldn't be told. The session has ended in the app either way, so D can say the server's session may live until it expires.
+- **Validation at the boundary:**
+  - Each request DTO is garde-validated before its call (`invalid_input`, fields).
+  - A code must have 1 to 64 characters; the server checks its shape.
+  - A list's `before`/`limit` become a validated `PageQuery` *(the user's choice: plain optional parameters, so no TypeScript type mirrors `PageQuery`)*.
+
+### Group C: the server profile *(the user's choices)*
+- **Validated by fleet-client's own rules:** `ServerUrl::parse` and `CustomCa::from_pem`.
+  - `ServerProfileRequest` caps `url` at 2048 bytes and `ca_pem` at 65536 bytes (`CustomCa::MAX_BYTES`; a desktop test asserts the two are equal).
+  - A refused address is `invalid_server_url`, a refused CA `invalid_ca`, each with one fixed message and the rule's own text under `fields` (`url`, `ca_pem`).
+- **Stored** in `server-profile.json` in `app_local_data_dir()` (`%LOCALAPPDATA%\io.github.noah-gabel.afkfleet\`):
+  - The file is `{ version: 1, url, ca_pem? }`. The CA is re-encoded as canonical PEM from the DER `from_pem` parsed, never the pasted text, and read back through `from_pem`.
+  - It's written to `server-profile.json.tmp`, synced, and renamed over the old file.
+  - Startup reads at most 128 KiB *(the user's review addition)*.
+- **A file that can't be used** *(the user's choice)*: the app starts without a profile, and `server_profile` answers `{ state: "unreadable", reason }` with `io` (including a file over 128 KiB), `json`, `version`, `url`, `ca` or `client` (no client can be built over it). The reason never repeats the file's content.
+- **The view** *(the user's choice)*: `{ url, custom_ca?: { certificates, fingerprints } }`. Each fingerprint is the certificate's SHA-256 over its DER, written as `openssl x509 -noout -fingerprint -sha256` prints it: uppercase hex pairs joined by colons.
+- **Server checks** *(the user's choice: both)*. `set_server_profile` calls the new client's `health_live()`, and an error changes nothing. `check_server` calls `health_ready()` on the current profile, so P8.6's banner tells a busy server (503 `busy` with `retry_after_secs`) from one that's down.
+
+### Group C: switching servers *(the user's rules)*
+- **A stored session resumes only under the identical profile it was created with.**
+  - The keychain entry is keyed by origin: service = the app identifier, account = `ServerUrl::as_str()`. So a client loads only a token from its own server, and spellings of one origin (`https://EXAMPLE.com:443`) share one entry.
+  - Setting the identical profile (same origin, same certificates by canonical PEM) is a no-op that keeps the session: `{ change: "none", profile }`.
+  - Any other profile logs out of the old server (if one was set), then clears the new origin's entry without any request: `Client::discard_session()`. A token stored there came from a profile whose certificates can't be compared any more: from the `none` or `unreadable` state, or an older profile for that origin. The answer is then `{ change: "switched", profile, logout }`.
+  - The `change` tag *(the user's review change)* keeps D from reading a kept session as logged out.
+- **One `RwLock`** *(the user's choice)*. Every command holds a shared guard of the connection for its whole client call, and takes it exactly once. `set_server_profile` takes it exclusively, so nothing runs on the old client after the swap.
+- **The order** *(the user's review change)*:
+  1. Validation, building the new client and `health_live()` run before the exclusive guard. They touch no shared state, and an unreachable server would otherwise block every command for up to 20 s.
+  2. Under the guard: the identical check, the old client's `logout()`, `discard_session()`, the file write and the swap.
+
+  For the same origin with another CA, the logout runs before the discard, so it can still revoke with the old token.
+- **Aborts** *(accepted in review)*. A `store` error from the discard, or `profile_save` from the write, comes after the old logout. The old profile stays current, with its session already logged out, and the file is unchanged. Tests show both.
+
+### Group C: the keychain *(the user's choices)*
+- **keyring-core 1.0.0 over windows-native-keyring-store 1.1.0** (without its `search` feature), building entries from an explicit store, with no global default store.
+  - In Credential Manager the entry is a generic credential whose target is `<origin>.<identifier>`, e.g. `http://127.0.0.1:8080/.io.github.noah-gabel.afkfleet`: the store's `"{prefix}{user}{divider}{service}{suffix}"` with its defaults `""`, `"."` and `""`.
+  - Its persistence is `Local` (this machine only, never roaming), set with the `persistence` modifier.
+  - keyring-core's mock store refuses every modifier, so `KeychainFactory::windows` sets it and `KeychainFactory::new` (tests) doesn't.
+- **In order, off the runtime** *(the user's design)*:
+  - Each call takes the store's turn, a tokio mutex taken with `lock_owned()` in async code, whose guard moves into its `spawn_blocking` closure. A call that times out while it waits never runs, and one that has started finishes before the next starts, so calls run strictly in issue order. The Windows store doesn't order calls on one entry from different threads.
+  - Against a std mutex taken inside the closure, the test fails as the user predicted: the timed-out save ran after the clear.
+- **A new task exception** *(the user's addition to CLAUDE.md's list)*. A keychain call that outlives fleet-client's 5 s store timeout runs on in its blocking thread, holding the store's turn, until the OS returns. Its owner is the turn; the next call waits for it.
+- **No content in errors.** keyring-core's errors can hold the stored bytes (`BadEncoding`, `BadDataFormat`), so they become a `KeychainError` naming only the kind (`NoAccess`, `Platform`, `BadData`, `Invalid`, `Other`, `Interrupted`). That error is what fleet-client may log.
+- **Startup.** `main` installs the aws-lc-rs provider (`startup::install_crypto_provider`). `run()` builds the app, then manages the `AppState`: the profile file plus the Windows store under `app.config().identifier`. That happens before the event loop starts, so no command runs without it, and the mock-runtime tests manage theirs the same way.
+
+### Group C: fleet-client additions *(the user's choices)*
+- **`CustomCa`:**
+  - It keeps its parsed `CertificateDer`s.
+  - `to_pem()` writes canonical PEM (base64 in lines of 64, `\n`).
+  - `fingerprints()` are SHA-256 per DER, in file order.
+  - **`from_pem` also answers `TooLarge` when the canonical PEM would exceed 64 KiB** *(the user's choice)*: a pasted CA just under the cap with unbroken base64 lines grows about 1.6 % when re-encoded. So `from_pem(&ca.to_pem())` always succeeds.
+  - Its `Debug` is now `CustomCa { certificates: n, .. }`, since clippy's `missing_fields_in_debug` asks to account for the DER, which it never prints.
+  - base64 0.23.1 (`alloc`) and sha2 0.11.0 join fleet-client.
+- **`Client::discard_session()`** *(the user's choice over tokio in the desktop crate)*. It ends the session locally the way an end does: under the store gate it bumps the epoch, drops the access token and the pending step, and clears the store within `STORE_TIMEOUT`, sending nothing. Unlike every other end, a failed clear is returned (`ClientError::Store`), since its caller must not go on as if no token were stored. A refresh in flight saves nothing afterwards (the epoch rule). `end_under_gate` now reuses its two halves.
+
+### Group C: the ACL, the contract and the coverage *(the user's choices)*
+- **Each command is listed** in build.rs's `COMMANDS`, granted as `allow-<command>` in `capabilities/main.json`, and pinned in `scripts/tauri-hardening.mjs`.
+- **`permissions/autogenerated/` is committed** *(the user's choice)*. tauri-build writes one `<command>.toml` there per command and never deletes one. The hardening script requires exactly those 20 files, each byte-equal to tauri-utils 2.10.1's template, so a stale or edited grant fails. Its `readFolder` now returns folders as folders (the EISDIR fix). `.gitattributes` marks the folder `linguist-generated`.
+- **One contract fixture,** `src-tauri/tests/ipc-contract.json` *(the user's design)*, lists every command with the `ApiClient` method, its inputs, the exact args `TauriApiClient` sends, and the answer of an app without a profile.
+  - The hardening script requires its commands to equal `COMMANDS`, in order (Tauri can't list the registered handlers).
+  - The ACL test sends each entry from the main window on the mock runtime with the real handlers and capability. It requires each answer to parse positively *(the user's tweak)*: a rejection as a `CommandError` with the expected code, an Ok as the command's own response type with the expected value. Tauri's not-found, not-allowed and invalid-args strings only label a failure.
+  - The probe and core-command refusals stay.
+- **Coverage on Windows** *(the user's choice: 90 %)*:
+  - `just cov-desktop` (in `ci` and CI's `tauri-build` job) measures the desktop crate alone. It feeds `scripts/coverage-gates.mjs --report desktop`, whose new `desktop` gate is required over `src/` minus `lib.rs` and `main.rs`, which start the real event loop. Each gate now belongs to the `workspace` or the `desktop` report, and only the selected report's gates run. A Windows path's `\\?\` prefix is stripped.
+  - **`--no-rustc-wrapper`** *(the user's choice after the spike)*. The spike found that cargo-llvm-cov 0.9.1's rustc wrapper (the default) builds the lib's unit-test binary on Windows without instrumentation: no profiler runtime, no `.profraw`, so the in-crate tests counted 0 %. Integration-test binaries were instrumented, and renaming the lib didn't help. With RUSTFLAGS the in-crate tests count. This probably explains the old Windows gap in fleet-server's local coverage too. The CI Linux job stays the authority for the workspace gates.
+  - Measured locally: 94.95 %.
+- **The keychain's ordering tests run on real time** *(the user's choice, like the sqlx rule)*. Its blocking calls run on Tauri's runtime, outside the test's, so paused time would fire the bounds early. The call that must time out gets 100 ms, every other wait 5 s, and the fake slot is always released by a guard.
+- **One test writes to the real Credential Manager** *(the user's choice)*. It uses the service `io.github.noah-gabel.afkfleet.test-<process id>`, the account `https://example.com/` and a placeholder token, deletes the entry in a drop guard, and checks `Local` and the target name. CLAUDE.md's rule 12 now forbids reading the app's own entries.
+- **Dependencies** *(the user's approval)*:
+  - **Desktop:** fleet-client, fleet-api-types, keyring-core 1.0.0, windows-native-keyring-store 1.1.0 (no default features), rustls, secrecy, serde, serde_json, thiserror, garde.
+  - **Desktop dev:** fleet-server, fleet-testkit, fleet-startup, fleet-core, tokio (`macros`, `net`, `rt`, `time`), tempfile, totp-rs, chrono, rcgen.
+
+  Cargo.lock gains only keyring-core and windows-native-keyring-store; byteorder, zeroize, windows-sys 0.61 and log were already in it.
 
 ### Notes for later groups
 - **P8.4 (C):**

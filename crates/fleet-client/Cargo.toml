@@ -11,6 +11,9 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+# A custom CA's certificates written back as canonical PEM, from the DER `from_pem` parsed
+# (ADR-0017).
+base64 = { workspace = true, features = ["alloc"] }
 # The API's DTOs, the only internal crate the client depends on (Plan.md §4).
 fleet-api-types.workspace = true
 # HTTP over rustls with aws-lc-rs and the platform verifier; nothing else enabled: bodies
@@ -24,6 +27,8 @@ serde.workspace = true
 serde_json.workspace = true
 # The access, refresh and step tokens, never in `Debug`.
 secrecy.workspace = true
+# A custom CA's SHA-256 fingerprints, which the app shows (ADR-0017).
+sha2.workspace = true
 thiserror.workspace = true
 # `sync` for the refresh lock and the store gate, `time` for the store calls' timeout, `rt`
 # for the tasks that finish a refresh or a code step when their caller is dropped

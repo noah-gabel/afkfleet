@@ -235,10 +235,10 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 |---|---|---|---|---|
 | Password hashing | `argon2` | **0.6.0**, dfo | server | Argon2id, in `spawn_blocking` behind a semaphore. `alloc`, `password-hash`, `zeroize`; without the default `getrandom`, so salts come from the `SecureRandom` port through `hash_password_with_salt`. The dev profile compiles it and `blake2` at `opt-level = 3`: about 10 ms per hash instead of 228 ms, so every test hashes at the real baseline (ADR-0016) |
 | Authenticated encryption | `chacha20poly1305` | **0.11.0**, dfo | server (vault) | XChaCha20-Poly1305. `alloc`, `zeroize`; without the default `getrandom`, so nonces come from the `SecureRandom` port (ADR-0016) |
-| Hashing | `sha2` | **0.11.0** | server | Token hashes, certificate fingerprints |
+| Hashing | `sha2` | **0.11.0** | server, client | Token hashes, certificate fingerprints: fleet-client's `CustomCa::fingerprints` (P8.4, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 | Keyed hashing (HMAC) | `hmac` | 0.13.0 | server | HMAC-SHA256 keys of the lockout's `login_attempts` rows, so no row holds a typed name, and the derivation of their key from the vault's active key. `zeroize` wipes the keyed state. RustCrypto like sha2 0.11; already in Cargo.lock (ADR-0016) |
 | Constant-time comparison | `subtle` | 2.6.1 | server | First used for the vault's duplicate-key check (ADR-0016) |
-| Encoding | `base64` | 0.23.1, dfo | server, client | URL-safe, no padding for tokens; standard with padding for the vault's key files (ADR-0016). Without default features: `simd-unsafe`, its only unsafe code, stays off |
+| Encoding | `base64` | 0.23.1, dfo | server, client | URL-safe, no padding for tokens; standard with padding for the vault's key files (ADR-0016) and a custom CA's canonical PEM (fleet-client's `CustomCa::to_pem`, with `alloc`; P8.4). Without default features: `simd-unsafe`, its only unsafe code, stays off |
 | Secret wrappers | `secrecy` | 0.10.3 | core, mc, agent, server, client, desktop, startup | Redacted `Debug`. fleet-server's `PasswordHash` holds the stored hash in a `SecretString` (ADR-0015); fleet-startup's secret-file loader returns secrets in it (ADR-0016) |
 | Memory zeroing | `zeroize` | 1.9.0 | server, agent, startup | `Zeroizing` buffers for key files and passwords read from stdin (ADR-0016) |
 | Secure randomness | `getrandom` | 0.4.3 | server, agent | Tokens, keys, nonces: **always** use this. The agent draws its runtime seed and its bot IDs' random bytes from it; no features (ADR-0014). In fleet-server only `OsRandom` calls it, behind the `SecureRandom` port (ADR-0015) |
@@ -254,7 +254,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Open the device-code URL | `tauri-plugin-opener` | 2.7.0 | desktop | Called only from Rust |
 | Single instance | `tauri-plugin-single-instance` | 2.5.3 | desktop | Registered first. No JavaScript API, so no capability grants it anything ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 | Signed auto-update | `tauri-plugin-updater` | 2.13.1, dfo | desktop | Its default `rustls-tls` feature forces the ring provider; TLS comes from the workspace `reqwest` instead |
-| OS credential store | `keyring-core` + `windows-native-keyring-store` | 1.0.0, 1.1.0 (keyring v4 family) | desktop | Refresh token storage |
+| OS credential store | `keyring-core` + `windows-native-keyring-store` | 1.0.0, 1.1.0 (keyring v4 family) | desktop | Refresh token storage: one entry per server origin, `Local` persistence, entries built from an explicit store (no global default). The Windows store without default features, so no `search` and no regex (P8.4, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 
 ### Rust: testing
 | Concern | Crate | Version | Notes |
@@ -529,7 +529,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - **Fakes over mocks.** Fakes live in `fleet-testkit`; `mockall` is only for checking interactions.
 - **Snapshots.** API JSON and error bodies are covered by insta snapshots. Never accept them blindly: the assistant reads each new snapshot before accepting it and lists it in the PR description, and the user reviews it in the PR diff.
 - **Property tests** for state machines, parsers and conversions. CI runs them with `PROPTEST_CASES=1000`.
-- **Coverage gates** (cargo-llvm-cov): `fleet-core` ≥ 90 %, `fleet-runtime` ≥ 85 %, auth and vault modules ≥ 90 %, `fleet-client` ≥ 90 % (P8.1, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)), workspace ≥ 80 %. Per-crate and per-module gates are checked by a small script over the llvm-cov JSON report.
+- **Coverage gates** (cargo-llvm-cov): `fleet-core` ≥ 90 %, `fleet-runtime` ≥ 85 %, auth and vault modules ≥ 90 %, `fleet-client` ≥ 90 % (P8.1, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)), the desktop crate ≥ 90 % (P8.4, measured on Windows by `just cov-desktop`), workspace ≥ 80 %. Per-crate and per-module gates are checked by a small script over the llvm-cov JSON report.
 - **Mutation testing** (cargo-mutants) on `fleet-core` and auth in Phase 13.
 - **nextest profiles:**
   - `default`: fast, under ~60 s.
@@ -2961,7 +2961,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - `tests/acl.rs` shows on the mock runtime that ungranted app and core commands are refused.
   > - **Tests,** red first against stubs: `navigation` 14 of 19, `focus` 2 of 2, the ACL's app-command case, and the hardening script 18 of 25. Then all passed.
   > - **Checked live** in a debug build over WebView2's DevTools protocol: the page loads, no CSP violations, the guard keeps the window on the app, `window.open` opens nothing, and a second launch exits at once.
-- [ ] **P8.4** 🔴 Rust side:
+- [x] **P8.4** 🔴 Rust side:
   - `AppState` holds the server profile, the `fleet-client` and the session.
   - The **refresh token lives in the OS keychain**; the access token only in memory.
   - Typed commands are grouped per feature (`commands/auth.rs` …) and return `Result<T, CommandError { code, message }>`.
@@ -2972,6 +2972,51 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **`main` installs the aws-lc-rs provider** before building the client.
   > - **`CommandError` maps `ClientError`** with a default branch (`ApiFailure::code` is `Open`).
   > - **No token reaches `AppState`:** fleet-client holds the access token and the step tokens itself.
+
+  > Note (P8.4, group C, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
+  > - **Every endpoint now:** 20 commands in `commands/{server,auth,mfa,me,users,invites}.rs`, each a thin wrapper over an `AppState` method. The IPC types (`CommandError`, the login step, the logout outcome, the server profile's request, view and states) live in fleet-api-types' `app` module and are exported by `just gen`; the `OpenAPI` comparison leaves them out.
+  > - **`CommandError { code, message, api?, fields? }`:**
+  >   - a closed code
+  >   - its fixed message
+  >   - only for `api`: the server's status, open code, message, request ID, fields and `retry_after_secs`
+  >   - the rules a local check broke
+  >
+  >   Logout always answers Ok: `ended`, or `unconfirmed` with the error.
+  > - **The server profile:**
+  >   - It's validated by `ServerUrl` and `CustomCa::from_pem`, and stored as `server-profile.json` (version 1) in the local app-data folder. A CA is stored as canonical PEM re-encoded from DER (`CustomCa::to_pem`), and the file is written atomically and read with a 128 KiB cap.
+  >   - A file that can't be used starts the app without a profile, `unreadable` with its reason.
+  >   - The view is the origin plus each CA certificate's SHA-256 fingerprint.
+  >   - `set_server_profile` checks `health_live` before changing anything; `check_server` calls `health_ready`.
+  > - **Switching:**
+  >   - The keychain entry is keyed by origin, and a stored session resumes only under the identical profile.
+  >   - An identical profile is a no-op (`change: "none"`). Any other change logs out of the old server, then clears the new origin's entry unsent (`Client::discard_session`), saves and swaps (`change: "switched"`).
+  >   - One `RwLock`: every command holds it shared, and the switch exclusively, after its health check.
+  > - **The keychain:**
+  >   - keyring-core 1.0.0 over windows-native-keyring-store 1.1.0, `Local` persistence.
+  >   - Calls run in order: a tokio mutex taken before `spawn_blocking`, its guard moved in, so a call that timed out waiting never runs. A call that outlives the 5 s timeout runs on in its thread: a new task exception in CLAUDE.md.
+  >   - keyring-core's errors become content-free `KeychainError`s.
+  > - **fleet-client:** `CustomCa::to_pem` and `fingerprints`; `from_pem` also refuses a CA whose canonical PEM would pass 64 KiB; `Client::discard_session`.
+  > - **Pinned:**
+  >   - Each command is in build.rs, `main.json` and `tauri-hardening.mjs`.
+  >   - `permissions/autogenerated/` is committed and pinned byte for byte.
+  >   - `tests/ipc-contract.json` lists every command's exact args and expected answer, checked by the ACL test on the mock runtime.
+  > - **Coverage:** `just cov-desktop` on Windows (CI's `tauri-build` job), with a required 90 % gate. It runs with `--no-rustc-wrapper`, since cargo-llvm-cov 0.9.1's wrapper leaves the lib's unit-test binary uninstrumented on Windows (found in the spike).
+  > - **Tests:**
+  >   - The commands run against the in-process server (`serve::app_with`).
+  >   - The keychain's ordering tests run on real time (a deviation like sqlx's).
+  >   - One test uses the real Credential Manager under a test-only service.
+
+  > Note (P8.4, as built, group C) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
+  > - **Tests,** red first against compiling stubs:
+  >   - fleet-api-types' `app`: 1 of 14, on the stub's empty messages (a second failure was the test's own field-order mistake, fixed)
+  >   - fleet-client: 7 of 7 `CustomCa` and 4 of 4 `discard`
+  >   - the desktop crate: 94 of 129, the 35 that passed being the existing tests and checks a do-nothing stub also satisfies
+  >   - `tauri-hardening`: 10 of 34
+  >   - `coverage-gates`: 7 of 23
+  >
+  >   The keychain's ordering test also failed against a std mutex taken inside the blocking call, as the user predicted. Then all passed.
+  > - **Coverage:** 94.95 % of the desktop gate's lines on the dev machine.
+  > - **Lockfile:** it gains only keyring-core and windows-native-keyring-store.
 - [ ] **P8.5** 🔴 TypeScript side:
   - The `ApiClient` interface lives in `packages/ui/src/api/`.
   - `TauriApiClient` lives in `apps/desktop/src/` and is injected into `<App apiClient={…} />`.

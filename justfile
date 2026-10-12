@@ -32,7 +32,7 @@ default:
 check: fmt-check clippy docs test doctest db-check gen-check testkit-check tauri-check scripts-test ui-check
 
 # Everything CI runs.
-ci: fmt-check clippy docs test-ci db-check migrations-check gen-check testkit-check tauri-check scripts-test cov deny stable-check ui-check ui-audit
+ci: fmt-check clippy docs test-ci db-check migrations-check gen-check testkit-check tauri-check scripts-test cov cov-desktop deny stable-check ui-check ui-audit
 
 # Run nextest for the workspace, or for one crate: `just test fleet-core`.
 test crate="":
@@ -61,6 +61,23 @@ cov:
     cargo llvm-cov report --summary-only
     cargo llvm-cov report --json --output-path target/coverage.json
     node scripts/coverage-gates.mjs target/coverage.json
+
+# The desktop crate is measured on Windows only, since Linux never builds it (ADR-0017).
+# `--no-rustc-wrapper` instruments through RUSTFLAGS: cargo-llvm-cov 0.9.1's rustc wrapper
+# leaves the lib's unit-test binary uninstrumented on Windows (no profiler runtime, no
+# .profraw), so the in-crate tests wouldn't count (ADR-0017).
+# Coverage of the desktop crate (Windows), checked against its gate.
+[windows]
+cov-desktop:
+    cargo llvm-cov nextest -p afkfleet-desktop --no-rustc-wrapper --no-report
+    cargo llvm-cov report -p afkfleet-desktop --summary-only
+    cargo llvm-cov report -p afkfleet-desktop --json --output-path target/coverage-desktop.json
+    node scripts/coverage-gates.mjs --report desktop target/coverage-desktop.json
+
+# Coverage of the desktop crate: measured on Windows only (ADR-0017).
+[linux]
+cov-desktop:
+    @echo "The desktop crate is measured on Windows only: CI runs just cov-desktop in its tauri-build job (ADR-0017)."
 
 # Two passes with the same deny.toml (ADR-0017): the workspace without the desktop
 # crate on every target in deny.toml, then the desktop crate alone on Windows, the only
