@@ -1,0 +1,52 @@
+[package]
+name = "fleet-client"
+description = "The typed client of afkfleet's HTTP API, which the desktop app's Rust side and full-stack tests use."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# The API's DTOs, the only internal crate the client depends on (Plan.md §4).
+fleet-api-types.workspace = true
+# HTTP over rustls with aws-lc-rs and the platform verifier; nothing else enabled: bodies
+# go through serde_json and queries through reqwest's `Url` (ADR-0017).
+reqwest.workspace = true
+# Only to recognize a refused certificate in a connection error's chain, and to check a
+# custom CA's certificates as trust anchors (ADR-0017).
+rustls.workspace = true
+# `DeserializeOwned` bounds for the responses.
+serde.workspace = true
+serde_json.workspace = true
+# The access, refresh and step tokens, never in `Debug`.
+secrecy.workspace = true
+thiserror.workspace = true
+# `sync` for the refresh lock and the store gate, `time` for the store calls' timeout, `rt`
+# for the tasks that finish a refresh or a code step when their caller is dropped
+# (ADR-0017).
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tracing.workspace = true
+
+[dev-dependencies]
+# ManualClock's times for the TOTP codes.
+chrono.workspace = true
+# The Owner's username and password for `UserService::create_owner`.
+fleet-core.workspace = true
+# The in-process server the integration tests run against (ADR-0017).
+fleet-server.workspace = true
+# The signal source that stops the in-process server.
+fleet-startup.workspace = true
+# ManualClock and SeededRandom for the server.
+fleet-testkit.workspace = true
+# The TLS tests' CA and server certificates, made at run time (ADR-0017).
+rcgen = { workspace = true, features = ["aws_lc_rs", "pem"] }
+rstest.workspace = true
+# A fresh folder for each test server's database.
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt"] }
+# The authenticator app: codes from the enroll answer's otpauth URI.
+totp-rs = { workspace = true, features = ["otpauth"] }

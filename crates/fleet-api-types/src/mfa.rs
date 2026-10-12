@@ -57,7 +57,7 @@ pub struct MfaEnrollResponse {
 
 /// `POST /me/mfa/confirm`: the first code the authenticator app shows, which
 /// proves it holds the secret.
-#[derive(Debug, Deserialize, Validate, TS, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, Validate, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MfaConfirmRequest {
     /// The 6-digit code; spaces and `-` are ignored.

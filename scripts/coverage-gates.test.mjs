@@ -213,9 +213,10 @@ describe("evaluateGates with prefixes", () => {
 });
 
 describe("the project's gates", () => {
-  it("make the auth and vault gates required lists of prefixes", () => {
-    for (const name of ["auth", "vault"]) {
+  it("make the auth, vault and fleet-client gates required lists of prefixes", () => {
+    for (const name of ["auth", "vault", "fleet-client"]) {
       const gate = GATES_IN_USE.find((g) => g.name === name);
+      assert.ok(gate, name);
       assert.equal(gate.required, true, name);
       assert.equal(gate.min, 90, name);
       assert.ok(Array.isArray(gate.prefixes) && gate.prefixes.length > 0, name);

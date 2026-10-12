@@ -9,6 +9,9 @@
 //! - **Requests** derive `Deserialize`, garde's `Validate` and
 //!   `#[serde(deny_unknown_fields)]`, and each has tests for an unknown field
 //!   and for every rule. A rule's message names the rule, never the value.
+//!   They derive `Serialize` too, so `fleet-client` sends exactly these
+//!   types; an optional field is left out when it holds nothing, never sent
+//!   as `null` (ADR-0017). A test round-trips each one.
 //! - **Responses** derive `Serialize` and `Deserialize`, without
 //!   `deny_unknown_fields`, so `fleet-client` reads them and a field a newer
 //!   server adds doesn't break an older app. Each one round-trips in a test.
@@ -30,7 +33,7 @@
 //! # Modules
 //! - [`auth`]: logging in, refreshing, stepping up and registering.
 //! - [`error`]: the error envelope that every failed request answers with.
-//! - [`ids`]: fleet-core's typed IDs in DTOs, and their schema.
+//! - [`ids`]: fleet-core's typed IDs in DTOs, re-exported, and their schema.
 //! - [`int`]: the 64-bit integer type, [`SafeInt`], and the schema of a
 //!   bounded 32-bit field.
 //! - [`mfa`]: enrolling, confirming and replacing a TOTP authenticator.
@@ -66,6 +69,7 @@ pub mod typescript;
 pub mod users;
 
 pub use error::{ErrorBody, ErrorCode, ErrorResponse, FieldError};
+pub use ids::{InviteId, SessionId, UserId};
 pub use int::{SafeInt, SafeIntError};
 pub use open::{Open, OpenEnum};
 pub use page::PageQuery;

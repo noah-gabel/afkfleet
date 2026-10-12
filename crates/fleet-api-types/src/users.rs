@@ -123,17 +123,17 @@ pub struct UserPage {
 }
 
 /// `PATCH /users/{id}`: exactly one change, a role or `disabled`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, TS, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct UserPatchRequest {
     /// The new role: `member` or `admin`, and only the Owner changes it.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     #[schema(nullable = false)]
     pub role: Option<UserRole>,
     /// Whether the user is disabled. Changing it, or the role, ends every
     /// session of the user.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     #[schema(nullable = false)]
     pub disabled: Option<bool>,

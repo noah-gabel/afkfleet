@@ -11,6 +11,12 @@
 use utoipa::openapi::RefOr;
 use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
 
+/// The IDs the DTOs carry, re-exported so `fleet-client` and the app name
+/// them through this crate, which is the only one Plan.md §4 lets them
+/// depend on (ADR-0017). A DTO that carries another core type re-exports
+/// it too.
+pub use fleet_core::id::{InviteId, SessionId, UserId};
+
 /// The characters of an ID's text.
 pub const ID_CHARS: usize = 36;
 

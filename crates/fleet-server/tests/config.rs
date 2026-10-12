@@ -180,7 +180,7 @@ dev_mode = true
 
 [http]
 bind = "0.0.0.0:9090"
-request_timeout_secs = 30
+request_timeout_secs = 18
 max_body_bytes = 131072
 trusted_proxies = ["192.0.2.0/24", "2001:db8::/32"]
 
@@ -223,7 +223,7 @@ active_key_id = 3
 
         assert!(config.dev_mode);
         assert_eq!(config.http.bind, addr("0.0.0.0:9090"));
-        assert_eq!(config.http.request_timeout, Duration::from_secs(30));
+        assert_eq!(config.http.request_timeout, Duration::from_secs(18));
         assert_eq!(config.http.max_body_bytes, 131_072);
         assert_eq!(
             config.http.trusted_proxies,
@@ -477,7 +477,7 @@ fn bind_must_be_an_ip_address_with_a_fixed_port(#[case] bind: &str, #[case] kind
 
 /// A key, and its lowest and highest valid values.
 #[rstest]
-#[case::request_timeout("request_timeout_secs", 1, 300)]
+#[case::request_timeout("request_timeout_secs", 1, 19)]
 #[case::max_body("max_body_bytes", 1024, 1_048_576)]
 fn numbers_are_checked_against_their_range(#[case] key: &str, #[case] min: u64, #[case] max: u64) {
     in_jail(|jail| {

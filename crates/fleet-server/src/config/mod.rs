@@ -75,7 +75,9 @@ pub struct HttpConfig {
     /// than 0. Defaults to [`HttpConfig::DEFAULT_BIND`].
     pub bind: SocketAddr,
     /// How long a request may take before it's answered with a timeout
-    /// (`request_timeout_secs`, 1–300 s, default 15 s).
+    /// (`request_timeout_secs`, 1–19 s, default 15 s). It stays below
+    /// `fleet-client`'s 20 s for a whole request, so a refresh never commits
+    /// after the client gave up on it (Plan.md Appendix A, ADR-0017).
     pub request_timeout: Duration,
     /// The largest request body the server reads (`max_body_bytes`,
     /// 1 KiB–1 MiB, default 64 KiB).

@@ -12,7 +12,7 @@ export RUSTDOCFLAGS := "-D warnings"
 # The stable toolchain for `stable-check`, and the crates it checks: every crate
 # that doesn't depend on azalea or azalea-auth.
 stable := "1.99.0"
-stable_crates := "-p fleet-core -p fleet-testkit -p fleet-runtime -p fleet-startup -p fleet-server -p fleet-api-types"
+stable_crates := "-p fleet-core -p fleet-testkit -p fleet-runtime -p fleet-startup -p fleet-server -p fleet-api-types -p fleet-client"
 
 # The throwaway database `cargo sqlx prepare` checks queries against. Absolute,
 # because rustc runs the query macros in the workspace root, not in the crate.

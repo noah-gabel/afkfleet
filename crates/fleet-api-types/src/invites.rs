@@ -115,7 +115,7 @@ pub struct InvitePage {
 }
 
 /// `POST /invites`: a new invite for `role`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Validate, TS, ToSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Validate, TS, ToSchema)]
 #[serde(deny_unknown_fields)]
 pub struct CreateInviteRequest {
     /// The role the new user gets: `member` (Admins and the Owner) or

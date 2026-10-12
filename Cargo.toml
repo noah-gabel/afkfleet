@@ -26,6 +26,8 @@ fleet-api-types = { path = "crates/fleet-api-types" }
 fleet-core = { path = "crates/fleet-core" }
 fleet-mc = { path = "crates/fleet-mc" }
 fleet-runtime = { path = "crates/fleet-runtime" }
+# fleet-server: fleet-client's integration tests run it in-process (ADR-0017).
+fleet-server = { path = "crates/fleet-server" }
 fleet-startup = { path = "crates/fleet-startup" }
 fleet-testkit = { path = "crates/fleet-testkit" }
 
@@ -116,7 +118,9 @@ rand = { version = "0.10.3", default-features = false }
 rpassword = "7.5.4"
 # reqwest: TLS is fixed here, `rustls` (aws-lc-rs + platform verifier), never native-tls.
 # fleet-mc enables nothing else: it only names `reqwest::Proxy` in azalea's `AccountTrait`,
-# and azalea-auth already builds reqwest with `rustls` (ADR-0011).
+# and azalea-auth already builds reqwest with `rustls` (ADR-0011). fleet-client enables
+# nothing else either: it writes and reads JSON with serde_json and builds queries on
+# reqwest's `Url` (ADR-0017).
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 # rustls: the default features select the aws-lc-rs provider, which the agent installs
 # at startup; never ring (deny.toml) (ADR-0014).
@@ -190,6 +194,10 @@ ipnet = "2.12.2"
 # `std` keeps `PROPTEST_CASES` working.
 proptest = { version = "1.11.0", default-features = false }
 rstest = { version = "0.27.0", default-features = false }
+# rcgen: fleet-client's TLS tests make a CA and server certificates with it at run time,
+# since no key is ever committed. Without default features, which select ring; the
+# member enables `aws_lc_rs` and `pem` (ADR-0017). P10's PKI will use it in production.
+rcgen = { version = "0.14.10", default-features = false }
 # serde_json: also fleet-testkit's log buffer, which parses JSON log lines (ADR-0015).
 serde_json = "1.0.151"
 # tempfile: fleet-server's database tests open real files in a fresh folder; already in

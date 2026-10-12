@@ -20,8 +20,12 @@ pub(crate) struct Range {
     pub(crate) max: u64,
 }
 
-/// `[http] request_timeout_secs`.
-pub(crate) const REQUEST_TIMEOUT_SECS: Range = Range { min: 1, max: 300 };
+/// `[http] request_timeout_secs`: at most 19 s, below `fleet-client`'s 20 s
+/// for a whole request, so the client always gets the server's answer. A
+/// slower one could let a refresh commit after the client gave up, and the
+/// client's next refresh would then send the replaced token: reuse, which
+/// ends the session (Plan.md Appendix A, ADR-0017).
+pub(crate) const REQUEST_TIMEOUT_SECS: Range = Range { min: 1, max: 19 };
 /// `[http] max_body_bytes`: 1 KiB to 1 MiB, so the body limit stays a guard
 /// against oversized requests even when it's raised.
 pub(crate) const MAX_BODY_BYTES: Range = Range {
