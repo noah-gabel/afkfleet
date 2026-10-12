@@ -2,7 +2,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { evaluateGates, GATES as GATES_IN_USE, gatesFor, parseArgs } from "./coverage-gates.mjs";
+import {
+  describeResult,
+  evaluateGates,
+  GATES as GATES_IN_USE,
+  gatesFor,
+  parseArgs,
+} from "./coverage-gates.mjs";
 
 const ROOT = "/repo";
 
@@ -222,6 +228,92 @@ describe("evaluateGates with prefixes", () => {
 
     assert.equal(results.auth.status, "fail");
     assert.deepEqual(results.auth.missing, []);
+  });
+});
+
+describe("listed files without a covered line", () => {
+  it("fail a prefix gate even when its total is above the minimum, naming the file", () => {
+    const results = byName(
+      evaluateGates(
+        report([
+          ["/repo/crates/fleet-core/src/auth/mod.rs", 990, 1000],
+          ["/repo/crates/fleet-server/src/app/users.rs", 0, 10],
+        ]),
+        ROOT,
+        PREFIX_GATES,
+      ),
+    );
+
+    assert.ok(results.auth.percent >= 90, String(results.auth.percent));
+    assert.equal(results.auth.status, "fail");
+    assert.deepEqual(results.auth.uncovered, ["crates/fleet-server/src/app/users.rs"]);
+  });
+
+  it("count a file below a listed folder too", () => {
+    const results = byName(
+      evaluateGates(
+        report([
+          ["/repo/crates/fleet-core/src/auth/mod.rs", 100, 100],
+          ["/repo/crates/fleet-core/src/auth/deep/policy.rs", 0, 3],
+          ["/repo/crates/fleet-server/src/app/users.rs", 100, 100],
+        ]),
+        ROOT,
+        PREFIX_GATES,
+      ),
+    );
+
+    assert.equal(results.auth.status, "fail");
+    assert.deepEqual(results.auth.uncovered, ["crates/fleet-core/src/auth/deep/policy.rs"]);
+  });
+
+  it("ignore a file without executable lines, and a partly covered one", () => {
+    const results = byName(
+      evaluateGates(
+        report([
+          ["/repo/crates/fleet-core/src/auth/mod.rs", 0, 0],
+          ["/repo/crates/fleet-core/src/auth/other.rs", 95, 100],
+          ["/repo/crates/fleet-server/src/app/users.rs", 1, 1],
+        ]),
+        ROOT,
+        PREFIX_GATES,
+      ),
+    );
+
+    assert.equal(results.auth.status, "pass");
+    assert.deepEqual(results.auth.uncovered, []);
+  });
+
+  it("leave a pattern gate to its percentage", () => {
+    const results = byName(
+      evaluateGates(
+        report([
+          ["/repo/crates/fleet-core/src/lib.rs", 1000, 1000],
+          ["/repo/crates/fleet-core/src/unused.rs", 0, 10],
+        ]),
+        ROOT,
+        GATES,
+      ),
+    );
+
+    assert.equal(results["fleet-core"].status, "pass");
+    assert.equal(results["fleet-core"].uncovered, undefined);
+  });
+
+  it("are named in the gate's line, with the likely cause", () => {
+    const [result] = evaluateGates(
+      report([
+        ["/repo/crates/fleet-core/src/auth/mod.rs", 990, 1000],
+        ["/repo/crates/fleet-server/src/app/users.rs", 0, 10],
+      ]),
+      ROOT,
+      PREFIX_GATES,
+    );
+
+    const line = describeResult(result);
+
+    assert.match(line, /^FAIL/);
+    assert.match(line, /crates\/fleet-server\/src\/app\/users\.rs/);
+    assert.match(line, /uninstrumented test binary\?/);
   });
 });
 

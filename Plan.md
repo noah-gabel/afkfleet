@@ -2993,7 +2993,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - One `RwLock`: every command holds it shared, and the switch exclusively, after its health check.
   > - **The keychain:**
   >   - keyring-core 1.0.0 over windows-native-keyring-store 1.1.0, `Local` persistence.
-  >   - Calls run in order: a tokio mutex taken before `spawn_blocking`, its guard moved in, so a call that timed out waiting never runs. A call that outlives the 5 s timeout runs on in its thread: a new task exception in CLAUDE.md.
+  >   - Calls on one entry run in order: a tokio mutex per origin (shared by every store of that entry, after the user's review of PR #36) taken before `spawn_blocking`, its guard moved in, so a call that timed out waiting never runs. A call that outlives the 5 s timeout runs on in its thread: a new task exception in CLAUDE.md.
   >   - keyring-core's errors become content-free `KeychainError`s.
   > - **fleet-client:** `CustomCa::to_pem` and `fingerprints`; `from_pem` also refuses a CA whose canonical PEM would pass 64 KiB; `Client::discard_session`.
   > - **Pinned:**
@@ -3015,7 +3015,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - `coverage-gates`: 7 of 23
   >
   >   The keychain's ordering test also failed against a std mutex taken inside the blocking call, as the user predicted. Then all passed.
-  > - **Coverage:** 94.95 % of the desktop gate's lines on the dev machine.
+  > - **Coverage:** 94.95 % of the desktop gate's lines on the dev machine, 95.17 % in CI. After the user's review of PR #36, a prefix gate also fails on a listed file with executable lines and none covered ("uninstrumented test binary?"), and the keychain's turn is per entry (one per origin, shared by every store of it).
   > - **Lockfile:** it gains only keyring-core and windows-native-keyring-store.
 - [x] **P8.5** 🔴 TypeScript side:
   - The `ApiClient` interface lives in `packages/ui/src/api/`.

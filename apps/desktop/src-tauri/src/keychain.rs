@@ -7,19 +7,24 @@
 //!   the Credential Manager shows it as `<origin>.<identifier>`, a generic
 //!   credential with `Local` persistence: it stays on this machine and never
 //!   roams.
-//! - **Off the runtime, in order.** Every call runs in a blocking thread. It
-//!   first takes the store's turn, a tokio mutex taken in async code, whose
-//!   guard moves into the thread. So a call that timed out while waiting for
-//!   its turn never runs, and one that has started finishes before the next
-//!   starts, even after fleet-client's 5 s timeout gave up on it: the Windows
-//!   store doesn't order calls on one entry from different threads
-//!   (ADR-0017).
+//! - **Off the runtime, in order, per entry.** Every call runs in a blocking
+//!   thread. It first takes its entry's turn, a tokio mutex taken in async
+//!   code, whose guard moves into the thread. So a call that timed out while
+//!   waiting for its turn never runs, and one that has started finishes
+//!   before the next starts, even after fleet-client's 5 s timeout gave up on
+//!   it: the Windows store doesn't order calls on one entry from different
+//!   threads (ADR-0017).
+//! - **One turn per origin, not per store.** [`KeychainFactory`] keeps each
+//!   origin's turn and hands it to every store it builds for that origin, and
+//!   its clones share them. So two stores of one entry wait for each other
+//!   too, as the old and the new client do when only the CA changes: a late
+//!   save of the old client's can't land after the new client's discard.
 //! - **No content in errors.** keyring-core's errors can hold the stored
 //!   bytes, so they become a [`KeychainError`] that names only what failed.
 
 use core::future::Future;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError};
 
 use fleet_client::{ServerUrl, SessionStore, StoreError, StoreOp};
 use keyring_core::{CredentialStore, Entry};
@@ -29,6 +34,10 @@ use thiserror::Error;
 
 /// The Windows credential persistence of every entry: this machine only.
 const PERSISTENCE: &str = "Local";
+
+/// Whose turn it is on one keychain entry: held from before a call's thread
+/// starts until it ends.
+type Turn = Arc<Mutex<()>>;
 
 /// Why the keychain failed, without any of the stored content.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -107,18 +116,14 @@ impl Slot for Entry {
 #[derive(Clone)]
 pub struct KeychainStore {
     slot: Arc<dyn Slot>,
-    /// Whose turn it is: held from before a call's thread starts until it
-    /// ends.
-    turn: Arc<Mutex<()>>,
+    /// The entry's turn, shared by every store of that entry.
+    turn: Turn,
 }
 
 impl KeychainStore {
-    /// A store over `slot`.
-    pub(crate) fn with_slot(slot: Arc<dyn Slot>) -> Self {
-        Self {
-            slot,
-            turn: Arc::new(Mutex::new(())),
-        }
+    /// A store over `slot` that takes `turn`, its entry's.
+    pub(crate) fn with_turn(slot: Arc<dyn Slot>, turn: Turn) -> Self {
+        Self { slot, turn }
     }
 
     /// Runs `call` on the slot in a blocking thread, in turn.
@@ -178,6 +183,9 @@ pub struct KeychainFactory {
     /// The `persistence` modifier, for the Windows store only: keyring-core's
     /// mock store refuses every modifier.
     persistence: Option<&'static str>,
+    /// Each entry's turn, by origin, shared by every store built for it and
+    /// by every clone of this factory.
+    turns: Arc<std::sync::Mutex<HashMap<String, Turn>>>,
 }
 
 impl KeychainFactory {
@@ -189,6 +197,7 @@ impl KeychainFactory {
             store,
             service: service.to_owned(),
             persistence: Some(PERSISTENCE),
+            turns: Arc::default(),
         }
     }
 
@@ -200,7 +209,17 @@ impl KeychainFactory {
             store,
             service: service.to_owned(),
             persistence: None,
+            turns: Arc::default(),
         }
+    }
+
+    /// The turn of `origin`'s entry.
+    pub(crate) fn turn_for(&self, origin: &ServerUrl) -> Turn {
+        // Held only for this lookup, never across an await. A thread that
+        // panicked while holding it left a whole map behind, so a poisoned
+        // lock is used as it is.
+        let mut turns = self.turns.lock().unwrap_or_else(PoisonError::into_inner);
+        Arc::clone(turns.entry(origin.as_str().to_owned()).or_default())
     }
 
     /// The entry of `origin`.
@@ -244,7 +263,10 @@ impl StoreFactory for KeychainFactory {
         let entry = self
             .entry(origin)
             .map_err(|error| StoreError::new(StoreOp::Load, error))?;
-        Ok(KeychainStore::with_slot(Arc::new(entry)))
+        Ok(KeychainStore::with_turn(
+            Arc::new(entry),
+            self.turn_for(origin),
+        ))
     }
 }
 
@@ -313,9 +335,8 @@ mod tests {
         }
     }
 
-    /// A store over a fake slot, the slot, and the signal of each call's
-    /// start.
-    fn fake() -> (KeychainStore, Arc<FakeSlot>, mpsc::Receiver<()>) {
+    /// A fake slot and the signal of each call's start.
+    fn fake_slot() -> (Arc<FakeSlot>, mpsc::Receiver<()>) {
         let (entered, started) = mpsc::channel();
         let slot = Arc::new(FakeSlot {
             calls: StdMutex::new(Vec::new()),
@@ -324,7 +345,15 @@ mod tests {
             hold: StdMutex::new(None),
             error: StdMutex::new(None),
         });
-        let store = KeychainStore::with_slot(Arc::clone(&slot) as Arc<dyn Slot>);
+        (slot, started)
+    }
+
+    /// A store over a fake slot, the slot, and the signal of each call's
+    /// start.
+    fn fake() -> (KeychainStore, Arc<FakeSlot>, mpsc::Receiver<()>) {
+        let (slot, started) = fake_slot();
+        let store =
+            KeychainStore::with_turn(Arc::clone(&slot) as Arc<dyn Slot>, Arc::new(Mutex::new(())));
         (store, slot, started)
     }
 
@@ -378,6 +407,92 @@ mod tests {
             [Call::Set("afk_rt_1".to_owned()), Call::Delete]
         );
         assert_eq!(*slot.value.lock().unwrap(), None);
+    }
+
+    #[test]
+    fn stores_for_one_origin_share_its_turn_and_other_origins_dont() {
+        let factory = mock_factory();
+        let example = origin("https://example.com");
+
+        let first = factory.for_origin(&example).unwrap();
+        let respelled = factory
+            .for_origin(&origin("https://EXAMPLE.com:443"))
+            .unwrap();
+        let from_a_clone = factory.clone().for_origin(&example).unwrap();
+        let other = factory.for_origin(&origin("https://example.org")).unwrap();
+
+        assert!(Arc::ptr_eq(&first.turn, &respelled.turn));
+        assert!(Arc::ptr_eq(&first.turn, &from_a_clone.turn));
+        assert!(!Arc::ptr_eq(&first.turn, &other.turn));
+    }
+
+    // Real time, like the test above. Two stores of one entry, as the old and
+    // the new client hold when only the CA changes: a late save on the old
+    // store must end before the new store's clear starts.
+    #[tokio::test]
+    async fn a_held_call_on_one_store_makes_another_store_of_its_origin_wait() {
+        let factory = mock_factory();
+        let example = origin("https://example.com");
+        let (old_slot, old_started) = fake_slot();
+        let (new_slot, _new_started) = fake_slot();
+        let old = KeychainStore::with_turn(
+            Arc::clone(&old_slot) as Arc<dyn Slot>,
+            factory.turn_for(&example),
+        );
+        let new = KeychainStore::with_turn(
+            Arc::clone(&new_slot) as Arc<dyn Slot>,
+            factory.turn_for(&example),
+        );
+        let (release, held) = mpsc::channel();
+        *old_slot.hold.lock().unwrap() = Some(held);
+        let mut release = Release(Some(release));
+
+        let late_save = tokio::spawn(async move { old.save(&token("afk_rt_old")).await });
+        tokio::task::spawn_blocking(move || old_started.recv_timeout(WAIT))
+            .await
+            .unwrap()
+            .unwrap();
+        let mut clear = tokio::spawn(async move { new.clear().await });
+        let waited = timeout(Duration::from_millis(100), &mut clear).await;
+        let new_calls_while_held = new_slot.calls.lock().unwrap().clone();
+
+        assert!(waited.is_err(), "the other store's call didn't wait");
+        assert_eq!(new_calls_while_held, []);
+        drop(release.0.take());
+        let saved = timeout(WAIT, late_save).await.unwrap().unwrap();
+        let cleared = timeout(WAIT, clear).await.unwrap().unwrap();
+        assert!(saved.is_ok() && cleared.is_ok(), "{saved:?} {cleared:?}");
+        assert_eq!(*new_slot.calls.lock().unwrap(), [Call::Delete]);
+    }
+
+    #[tokio::test]
+    async fn stores_of_different_origins_never_wait_for_each_other() {
+        let factory = mock_factory();
+        let (held_slot, held_started) = fake_slot();
+        let (free_slot, _free_started) = fake_slot();
+        let held_store = KeychainStore::with_turn(
+            Arc::clone(&held_slot) as Arc<dyn Slot>,
+            factory.turn_for(&origin("https://example.com")),
+        );
+        let free_store = KeychainStore::with_turn(
+            Arc::clone(&free_slot) as Arc<dyn Slot>,
+            factory.turn_for(&origin("https://example.org")),
+        );
+        let (release, held) = mpsc::channel();
+        *held_slot.hold.lock().unwrap() = Some(held);
+        let mut release = Release(Some(release));
+
+        let held_call = tokio::spawn(async move { held_store.save(&token("afk_rt_1")).await });
+        tokio::task::spawn_blocking(move || held_started.recv_timeout(WAIT))
+            .await
+            .unwrap()
+            .unwrap();
+        let free_call = timeout(WAIT, free_store.clear()).await;
+        drop(release.0.take());
+        let held_call = timeout(WAIT, held_call).await.unwrap().unwrap();
+
+        assert!(matches!(free_call, Ok(Ok(()))), "{free_call:?}");
+        assert!(held_call.is_ok(), "{held_call:?}");
     }
 
     #[tokio::test]

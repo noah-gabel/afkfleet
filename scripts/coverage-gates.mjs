@@ -6,7 +6,10 @@
 // `desktop` (`just cov-desktop` on Windows, the desktop crate alone; ADR-0017). Only the
 // named report's gates run. Every gate is measured in lines, summed over all files its
 // pattern or its prefixes match. A gate whose files don't exist yet is skipped, unless
-// it's `required`; a gate with prefixes fails when any one of them matches no file.
+// it's `required`; a gate with prefixes fails when any one of them matches no file, or
+// when any file it matches has executable lines but not one covered: most likely a test
+// binary that wasn't instrumented, as cargo-llvm-cov's rustc wrapper left the desktop
+// lib's on Windows (ADR-0017).
 // Exits with 1 if any gate fails, 2 on wrong arguments. Tests:
 // scripts/coverage-gates.test.mjs.
 import { readFileSync } from "node:fs";
@@ -133,7 +136,8 @@ function underPrefix(path, entry) {
 /**
  * Evaluates `gates` against an llvm-cov JSON export.
  * Returns one `{ name, min, status: "pass" | "fail" | "skip", percent, covered, count }` per
- * gate, plus `missing`, the prefixes that matched no file, for a gate with prefixes.
+ * gate, plus, for a gate with prefixes, `missing` (the prefixes that matched no file) and
+ * `uncovered` (the matched files with executable lines but none covered).
  * Throws if `report` isn't an llvm-cov JSON export.
  */
 export function evaluateGates(report, repoRoot, gates) {
@@ -158,8 +162,12 @@ export function evaluateGates(report, repoRoot, gates) {
       prefixes === undefined
         ? undefined
         : prefixes.filter((entry) => !lines.some((line) => underPrefix(line.path, entry)));
-    const extra = missing === undefined ? {} : { missing };
     const matched = lines.filter((line) => matches(line.path));
+    const uncovered =
+      prefixes === undefined
+        ? undefined
+        : matched.filter((line) => line.count > 0 && line.covered === 0).map((line) => line.path);
+    const extra = missing === undefined ? {} : { missing, uncovered };
     if (matched.length === 0) {
       const status = required ? "fail" : "skip";
       return { name, min, status, percent: null, covered: 0, count: 0, ...extra };
@@ -168,7 +176,8 @@ export function evaluateGates(report, repoRoot, gates) {
     const count = matched.reduce((sum, line) => sum + line.count, 0);
     const percent = count === 0 ? 100 : (covered * 100) / count;
     const complete = missing === undefined || missing.length === 0;
-    const status = complete && percent >= min ? "pass" : "fail";
+    const instrumented = uncovered === undefined || uncovered.length === 0;
+    const status = complete && instrumented && percent >= min ? "pass" : "fail";
     return { name, min, status, percent, covered, count, ...extra };
   });
 }
@@ -185,16 +194,20 @@ function relativeToRoot(filename, repoRoot) {
   return inside ? file.slice(root.length) : null;
 }
 
-function describe(result) {
+export function describeResult(result) {
   const label = `${result.status.toUpperCase().padEnd(4)}  ${result.name.padEnd(14)}`;
   const missing =
     result.missing === undefined || result.missing.length === 0
       ? ""
       : `; no file under ${result.missing.join(", ")}`;
+  const uncovered =
+    result.uncovered === undefined || result.uncovered.length === 0
+      ? ""
+      : `; no covered line in ${result.uncovered.join(", ")} (uninstrumented test binary?)`;
   if (result.percent === null) {
     return `${label}no files yet (min ${result.min} %)${missing}`;
   }
-  return `${label}${result.percent.toFixed(2).padStart(6)} %  (min ${result.min} %, ${result.covered}/${result.count} lines)${missing}`;
+  return `${label}${result.percent.toFixed(2).padStart(6)} %  (min ${result.min} %, ${result.covered}/${result.count} lines)${missing}${uncovered}`;
 }
 
 function main(args) {
@@ -209,7 +222,7 @@ function main(args) {
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
   const results = evaluateGates(report, repoRoot, gatesFor(parsed.report));
   for (const result of results) {
-    console.log(describe(result));
+    console.log(describeResult(result));
   }
   const failed = results.filter((result) => result.status === "fail");
   if (failed.length > 0) {
