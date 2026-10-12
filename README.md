@@ -110,7 +110,7 @@ There's no support, and I don't take feature requests. Security reports are welc
 - **From Phase 8 (the desktop app, in progress):** group A's [`crates/fleet-client`](crates/fleet-client/), the typed client of the API that the app's Rust side will use:
   - one method per endpoint, sending and reading exactly the shared DTOs
   - the session kept out of every caller's hands: the access token in memory, the refresh token in a store (the OS keychain in the app), the login's step tokens in memory
-  - the server's refresh rules: one refresh at a time and only on a 401, no grace window, and a session that ends on a refused refresh, a revoked session or a logout, which never races a refresh in flight
+  - the server's refresh rules: one refresh at a time and only on a 401, no grace window, and a session that ends on a refused refresh, a revoked session or a logout, which never races a refresh in flight; a refresh or a login that reached the server finishes saving even when its caller gives up
   - certificates always checked, against the system's roots or only a configured CA; plain HTTP only to this computer's loopback address
   - every request bounded (5 s to connect, 20 s in all), every answer capped at 1 MiB
 

@@ -25,8 +25,10 @@ serde_json.workspace = true
 # The access, refresh and step tokens, never in `Debug`.
 secrecy.workspace = true
 thiserror.workspace = true
-# `sync` for the refresh lock and the store gate, `time` for the store calls' timeout.
-tokio = { workspace = true, features = ["sync", "time"] }
+# `sync` for the refresh lock and the store gate, `time` for the store calls' timeout, `rt`
+# for the tasks that finish a refresh or a code step when their caller is dropped
+# (ADR-0017).
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]

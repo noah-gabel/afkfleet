@@ -51,11 +51,30 @@
 //!
 //! Every holder of either lock does bounded work: each store call has its
 //! own timeout, and each request reqwest's.
+//!
+//! # A dropped caller never stops a save
+//! A refresh and a code step run inside the future of the call that needs
+//! them, which its caller may drop (a `select!`, a timeout). Once their
+//! request may have reached the server, the server has replaced the stored
+//! refresh token (a refresh) or started a session (a code step), so losing
+//! the answer would leave a replaced token behind, whose next use is reuse,
+//! or an orphaned session (ADR-0017, the user's review).
+//!
+//! So from that point on, the request, the save and the adoption run in a
+//! task of their own (`tokio::spawn`), over an `Arc` of the core, and the
+//! caller awaits its answer. A dropped caller drops only its wait; the task
+//! saves and adopts the new pair, or, after an end, revokes it (the epoch
+//! rule). A refresh's task holds the refresh lock and the refresh-out mark
+//! until it ends, so refreshes stay one at a time, and a caller that arrives
+//! meanwhile finds its result. The task is bounded by its request's and its
+//! store calls' timeouts; its only owner is its caller's wait, an exception
+//! CLAUDE.md lists. One that ends without an answer (a panic, a runtime
+//! shutting down) is [`ClientError::Interrupted`].
 
 use core::error::Error;
 use core::fmt::Write as _;
 use core::time::Duration;
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use fleet_api_types::auth::{
     LoginMfaRequest, LoginRequest, LoginResponse, LoginStatus, RefreshRequest, RegisterRequest,
@@ -76,6 +95,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
 use crate::client::LoginStep;
@@ -138,8 +158,9 @@ pub(crate) struct Core<S, T> {
     store: S,
     store_timeout: Duration,
     state: Mutex<State>,
-    /// Serializes refreshes; held across the refresh's request.
-    refresh_lock: AsyncMutex<()>,
+    /// Serializes refreshes; held across the refresh's request, by the
+    /// refresh's own task.
+    refresh_lock: Arc<AsyncMutex<()>>,
     /// Guards the epoch and every store write; never held across a request.
     gate: AsyncMutex<()>,
 }
@@ -185,15 +206,12 @@ enum StepKind {
 }
 
 /// Clears `refresh_out` when the refresh that set it ends, whichever way it
-/// ends, a dropped future's included.
-struct RefreshOut<'a>(&'a Mutex<State>);
+/// ends. Its task owns it.
+struct RefreshOut<S, T>(Arc<Core<S, T>>);
 
-impl Drop for RefreshOut<'_> {
+impl<S, T> Drop for RefreshOut<S, T> {
     fn drop(&mut self) {
-        self.0
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .refresh_out = false;
+        self.0.state().refresh_out = false;
     }
 }
 
@@ -207,7 +225,7 @@ impl<S, T> Core<S, T> {
             store,
             store_timeout,
             state: Mutex::new(State::default()),
-            refresh_lock: AsyncMutex::new(()),
+            refresh_lock: Arc::new(AsyncMutex::new(())),
             gate: AsyncMutex::new(()),
         }
     }
@@ -303,7 +321,7 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
     }
 
     pub(crate) async fn login_mfa(
-        &self,
+        self: &Arc<Self>,
         code: SecretText<CODE_MAX_CHARS>,
     ) -> Result<(), ClientError> {
         let (mfa_token, serial) = self.pending(StepKind::Mfa)?;
@@ -312,19 +330,13 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
             mfa_token: SecretText::new(mfa_token.expose_secret().to_owned()),
             code,
         };
-        let answer = self
-            .send(
-                Method::POST,
-                self.server.api(&["auth", "login", "mfa"]),
-                None,
-                Some(json(&request)),
-            )
-            .await?;
-        let tokens: TokenResponse = expect_json(answer, 200)?;
-        self.adopt(epoch, tokens).await?;
-        self.drop_pending(serial);
-        info!("the session started");
-        Ok(())
+        // A code step that reaches the server starts a session there: the
+        // rest runs in a task of its own (see the module docs).
+        let session = Arc::clone(self);
+        outcome(tokio::spawn(async move {
+            session.code_step(epoch, serial, &request).await
+        }))
+        .await
     }
 
     pub(crate) async fn logout(&self) -> Result<(), ClientError> {
@@ -387,7 +399,10 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         expect_empty(answer, 204)
     }
 
-    pub(crate) async fn step_up(&self, request: &StepUpRequest) -> Result<(), ClientError> {
+    pub(crate) async fn step_up(
+        self: &Arc<Self>,
+        request: &StepUpRequest,
+    ) -> Result<(), ClientError> {
         let answer = self
             .authed(
                 Method::POST,
@@ -413,7 +428,7 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         expect_json(answer, 201)
     }
 
-    pub(crate) async fn me(&self) -> Result<MeResponse, ClientError> {
+    pub(crate) async fn me(self: &Arc<Self>) -> Result<MeResponse, ClientError> {
         let answer = self
             .authed(Method::GET, self.server.api(&["me"]), None)
             .await?;
@@ -421,7 +436,7 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
     }
 
     pub(crate) async fn change_password(
-        &self,
+        self: &Arc<Self>,
         request: &PasswordChangeRequest,
     ) -> Result<(), ClientError> {
         let answer = self
@@ -435,7 +450,7 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
     }
 
     pub(crate) async fn sessions(
-        &self,
+        self: &Arc<Self>,
         query: &PageQuery<SessionId>,
     ) -> Result<SessionPage, ClientError> {
         let url = with_page(self.server.api(&["me", "sessions"]), query);
@@ -443,7 +458,7 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         expect_json(answer, 200)
     }
 
-    pub(crate) async fn revoke_session(&self, id: SessionId) -> Result<(), ClientError> {
+    pub(crate) async fn revoke_session(self: &Arc<Self>, id: SessionId) -> Result<(), ClientError> {
         let url = self.server.api(&["me", "sessions", &id.to_string()]);
         let answer = self.authed(Method::DELETE, url, None).await?;
         expect_empty(answer, 204)
@@ -467,7 +482,7 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         Ok(codes)
     }
 
-    pub(crate) async fn mfa_reset(&self) -> Result<Duration, ClientError> {
+    pub(crate) async fn mfa_reset(self: &Arc<Self>) -> Result<Duration, ClientError> {
         let answer = self
             .authed(Method::POST, self.server.api(&["me", "mfa", "reset"]), None)
             .await?;
@@ -476,14 +491,17 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         Ok(Duration::from_secs(response.expires_in.into()))
     }
 
-    pub(crate) async fn users(&self, query: &PageQuery<UserId>) -> Result<UserPage, ClientError> {
+    pub(crate) async fn users(
+        self: &Arc<Self>,
+        query: &PageQuery<UserId>,
+    ) -> Result<UserPage, ClientError> {
         let url = with_page(self.server.api(&["users"]), query);
         let answer = self.authed(Method::GET, url, None).await?;
         expect_json(answer, 200)
     }
 
     pub(crate) async fn patch_user(
-        &self,
+        self: &Arc<Self>,
         id: UserId,
         request: &UserPatchRequest,
     ) -> Result<UserResponse, ClientError> {
@@ -493,7 +511,7 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
     }
 
     pub(crate) async fn create_invite(
-        &self,
+        self: &Arc<Self>,
         request: &CreateInviteRequest,
     ) -> Result<CreatedInviteResponse, ClientError> {
         let answer = self
@@ -507,7 +525,7 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
     }
 
     pub(crate) async fn invites(
-        &self,
+        self: &Arc<Self>,
         query: &PageQuery<InviteId>,
     ) -> Result<InvitePage, ClientError> {
         let url = with_page(self.server.api(&["invites"]), query);
@@ -515,7 +533,7 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         expect_json(answer, 200)
     }
 
-    pub(crate) async fn revoke_invite(&self, id: InviteId) -> Result<(), ClientError> {
+    pub(crate) async fn revoke_invite(self: &Arc<Self>, id: InviteId) -> Result<(), ClientError> {
         let url = self.server.api(&["invites", &id.to_string()]);
         let answer = self.authed(Method::DELETE, url, None).await?;
         expect_empty(answer, 204)
@@ -550,7 +568,7 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
     /// Sends an authenticated request with the session's rules; see the
     /// [module docs](self).
     async fn authed(
-        &self,
+        self: &Arc<Self>,
         method: Method,
         url: Url,
         body: Option<Vec<u8>>,
@@ -627,14 +645,15 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
     /// Refreshes, one at a time, after a 401 for the token of generation
     /// `used` (`None`: no access token). A refresh that finished meanwhile
     /// answers its token instead.
-    async fn refresh(&self, used: Option<u64>) -> Result<Access, ClientError> {
-        let _serial = self.refresh_lock.lock().await;
+    async fn refresh(self: &Arc<Self>, used: Option<u64>) -> Result<Access, ClientError> {
+        // Owned, so the refresh's task holds it until the refresh ends.
+        let serial = Arc::clone(&self.refresh_lock).lock_owned().await;
         if let Some(current) = self.current_access()
             && Some(current.generation) != used
         {
             return Ok(current);
         }
-        let (epoch, token, _out) = {
+        let (epoch, token, out) = {
             let _gate = self.gate.lock().await;
             let epoch = self.state().epoch;
             let Some(token) = self.load().await.map_err(ClientError::Store)? else {
@@ -643,14 +662,29 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
                 return Err(ClientError::NoSession);
             };
             self.state().refresh_out = true;
-            (epoch, token, RefreshOut(&self.state))
+            (epoch, token, RefreshOut(Arc::clone(self)))
         };
+        // From here on the request may reach the server, which then replaces
+        // the stored token: the rest runs in a task of its own (see the
+        // module docs).
+        let session = Arc::clone(self);
+        outcome(tokio::spawn(async move {
+            let _serial = serial;
+            let _out = out;
+            session.rotate(epoch, &token).await
+        }))
+        .await
+    }
+
+    /// A refresh's request, then its save and adoption under the epoch rule;
+    /// its own task runs it.
+    async fn rotate(&self, epoch: u64, token: &SecretString) -> Result<Access, ClientError> {
         let answer = self
             .send(
                 Method::POST,
                 self.server.api(&["auth", "refresh"]),
                 None,
-                Some(refresh_body(&token)),
+                Some(refresh_body(token)),
             )
             .await?;
         if is_unauthorized(&answer) {
@@ -661,6 +695,29 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         let access = self.adopt(epoch, tokens).await?;
         debug!("the access token was refreshed");
         Ok(access)
+    }
+
+    /// A code step's request, then its save and adoption under the epoch
+    /// rule; its own task runs it.
+    async fn code_step(
+        &self,
+        epoch: u64,
+        serial: u64,
+        request: &LoginMfaRequest,
+    ) -> Result<(), ClientError> {
+        let answer = self
+            .send(
+                Method::POST,
+                self.server.api(&["auth", "login", "mfa"]),
+                None,
+                Some(json(request)),
+            )
+            .await?;
+        let tokens: TokenResponse = expect_json(answer, 200)?;
+        self.adopt(epoch, tokens).await?;
+        self.drop_pending(serial);
+        info!("the session started");
+        Ok(())
     }
 
     /// Saves and adopts a new pair, under the gate, if no end came since
@@ -749,6 +806,14 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
 }
 
 // ---- Bodies and answers ----
+
+/// The answer of a task the client spawned for work that must finish even
+/// when its caller is dropped. A task that ended without one is
+/// [`ClientError::Interrupted`].
+async fn outcome<R>(task: JoinHandle<Result<R, ClientError>>) -> Result<R, ClientError> {
+    task.await
+        .unwrap_or_else(|error| Err(ClientError::Interrupted(error)))
+}
 
 /// `request` as JSON. These DTOs hold only strings, numbers and booleans,
 /// which `serde_json` always writes; an empty body would be refused by the
@@ -859,7 +924,6 @@ fn chain(error: &dyn Error) -> String {
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, VecDeque};
-    use std::sync::Arc;
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use fleet_api_types::ErrorCode;
@@ -1106,13 +1170,13 @@ mod tests {
 
     type TestCore = Core<TestStore, Scripted>;
 
-    fn core(store: &TestStore) -> TestCore {
-        Core::new(
+    fn core(store: &TestStore) -> Arc<TestCore> {
+        Arc::new(Core::new(
             ServerUrl::parse("https://example.com").unwrap(),
             Scripted::default(),
             store.clone(),
             Duration::from_millis(100),
-        )
+        ))
     }
 
     /// Gives `core` the access token `token` as generation `generation`, as
@@ -1163,6 +1227,18 @@ mod tests {
 
     fn count(routes: &[String], route: &str) -> usize {
         routes.iter().filter(|seen| *seen == route).count()
+    }
+
+    /// Lets the runtime's other tasks run until `done` holds, at most 1000
+    /// turns, so a test whose task never finishes fails on its assertions
+    /// instead of hanging.
+    async fn settle(done: impl Fn() -> bool) {
+        for _ in 0..1000 {
+            if done() {
+                return;
+            }
+            tokio::task::yield_now().await;
+        }
     }
 
     #[rstest]
@@ -1895,5 +1971,73 @@ mod tests {
             matches!(error, ClientError::UnexpectedResponse { reason: r, .. } if r == reason),
             "{error:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn a_dropped_caller_never_stops_its_refresh_from_saving() {
+        let store = TestStore::holding("afk_rt_0").await;
+        let core = core(&store);
+        give_access(&core, "afk_at_0", 1);
+        core.transport.on(ME, Ok(refusal(401, "unauthorized")));
+        let held = core.transport.held(REFRESH, tokens(1));
+        core.transport.on(ME, Ok(profile()));
+
+        timeout(WAIT, async {
+            tokio::select! {
+                result = core.me() => panic!("the call ended first: {result:?}"),
+                () = held.arrived.notified() => {}
+            }
+        })
+        .await
+        .unwrap();
+        held.release.notify_one();
+        settle(|| access(&core).as_deref() == Some("afk_at_1")).await;
+
+        assert_eq!(store.token().await.as_deref(), Some("afk_rt_1"));
+        assert_eq!(access(&core).as_deref(), Some("afk_at_1"));
+        let me = core.me().await;
+        assert!(me.is_ok(), "{me:?}");
+        assert_eq!(core.transport.routes(), [ME, REFRESH, ME]);
+        assert_eq!(
+            core.transport.bearers(ME),
+            [Some("afk_at_0".to_owned()), Some("afk_at_1".to_owned())]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_dropped_caller_never_stops_its_code_step_from_saving() {
+        let store = TestStore::default();
+        let core = core(&store);
+        give_step(&core, StepKind::Mfa, "afk_mt_1");
+        let held = core.transport.held(LOGIN_MFA, tokens(1));
+        core.transport.on(ME, Ok(profile()));
+
+        timeout(WAIT, async {
+            tokio::select! {
+                result = core.login_mfa(code("123456")) => panic!("the call ended first: {result:?}"),
+                () = held.arrived.notified() => {}
+            }
+        })
+        .await
+        .unwrap();
+        held.release.notify_one();
+        settle(|| access(&core).is_some()).await;
+
+        assert_eq!(store.token().await.as_deref(), Some("afk_rt_1"));
+        assert_eq!(access(&core).as_deref(), Some("afk_at_1"));
+        assert!(!has_step(&core));
+        let me = core.me().await;
+        assert!(me.is_ok(), "{me:?}");
+        assert_eq!(core.transport.routes(), [LOGIN_MFA, ME]);
+        assert_eq!(core.transport.bearers(ME), [Some("afk_at_1".to_owned())]);
+    }
+
+    #[tokio::test]
+    async fn a_task_that_ends_without_an_answer_is_interrupted() {
+        let task = tokio::spawn(async { panic!("the task failed") });
+
+        let error = outcome::<()>(task).await.unwrap_err();
+
+        assert!(matches!(error, ClientError::Interrupted(_)), "{error:?}");
     }
 }

@@ -1,7 +1,7 @@
 # 0017. fleet-client and desktop app conventions, Phase 8 refinements
 
 - **Status:** Accepted
-- **Date:** 2026-10-12
+- **Date:** 2026-10-12 (amended in the review of PR #34)
 - **Related:** Plan.md Phase 8 (P8.1–P8.9), §4, §5, §7.5, §8, Appendix A, P9.3; ADR-0006, ADR-0007, ADR-0015, ADR-0016
 
 ## Context
@@ -59,6 +59,15 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   3. Without one, or when that answers 401, it falls back to the refresh token it took: it sends `POST /auth/refresh` (saving nothing), then logs out with the answer's access token. A refresh that holds the stored token at that moment (a flag it sets under the gate when it loads the token, cleared when it ends) has already sent it, so sending it again would be reuse; the logout leaves the server's side to that refresh's epoch rule.
   4. An error there is returned, but the local end stands.
 
+### Group A: a dropped caller never stops a save *(the user's review of PR #34)*
+- **The problem.** A refresh ran inside the future of the request that needed it. A caller dropped after `POST /auth/refresh` reached the server but before the new pair was saved (a `select!`, a timeout) lost the rotated refresh token. The store kept the replaced one, so the next refresh was reuse, which revoked the session and recorded a false `security.refresh_token_reuse`. A code step dropped the same way left an orphaned session on the server. The user reproduced it with the scripted transport.
+- **The rule.** Once the request may reach the server, the request, the save and the adoption run in a task of their own (`tokio::spawn`) over an `Arc` of the core, and the caller awaits its answer. A dropped caller drops only its wait. The task saves and adopts the new pair, or, after an end, revokes it (the epoch rule).
+  - **For a refresh**, the task holds the refresh lock (taken with `lock_owned`) and the refresh-out mark until it ends. Refreshes stay one at a time, and a caller that arrives meanwhile finds its result.
+  - **The store gate, the epoch rule, `refresh_out` and the single flight are unchanged.**
+- **Owner.** The task is bounded by its request's and its store calls' timeouts. Its only owner is its caller's wait, so it's the third exception CLAUDE.md lists to "every spawned task has an owner". fleet-client's tokio gains `rt`.
+- **A task that ends without an answer** (a panic, which non-test code can't cause, or a runtime shutting down) is the new `ClientError::Interrupted` *(the user's choice over reusing `Unreachable`)*, so a bug or a shutdown never reads as a server that's down.
+- **Tests.** The caller is dropped while the answer is held, then the answer is released. The store holds the new refresh token, the access token is adopted, and the next request sends it without refreshing again, both after a refresh and after a code step. Both were red against the old code (the store held `afk_rt_0`, or nothing), as the user had reproduced. A third test, red against a mapping to `NoSession`, checks `Interrupted`.
+
 ### Group A: the server, the trust and the bounds
 - **`ServerUrl`** *(the user's choice)*: an origin only, meaning a scheme, a host and an optional port, with no user info, path, query or fragment. `https` works for any host; plain `http` only for a literal loopback address (127.0.0.0/8 or `[::1]`), for `just dev-server` and the tests. `http://localhost` is refused, since name resolution could point it elsewhere. P8.4's server profile reuses the type.
 - **No redirects, no proxies** *(the user's choice)*: `redirect::Policy::none()` (a 3xx is an unexpected answer), and `no_proxy()`, so the environment's proxy variables can't route the traffic elsewhere.
@@ -84,6 +93,7 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   - `NoPendingStep`
   - `AlreadyLoggedIn`
   - `Store`
+  - `Interrupted`: a refresh's or a code step's task ended without an answer (added in the review of PR #34)
 
   No `Display` holds a token, a body or a URL; reqwest's errors are kept without their URL.
 - **Endpoints** *(the user's choice)*: every `/api/v1` route plus `health_live()` and `health_ready()`; not the dev-only `OpenAPI` document. `/auth/refresh` is called only by the client itself.
@@ -128,7 +138,7 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   - fleet-client: 101 of 132
   - the gates script's new check
 
-  Then all passed. The 31 that passed against the stubs check refusals, fixed texts and `Debug`, which a do-nothing stub satisfies too. No snapshot is new or changed.
+  Then all passed. The 31 that passed against the stubs check refusals, fixed texts and `Debug`, which a do-nothing stub satisfies too. No snapshot is new or changed. The review of PR #34 added three tests, each red first (see above).
 
 ### Notes for later groups
 - **P8.4 (C):**
@@ -153,6 +163,7 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   - A logout or any other end can't leave a token behind, whatever a refresh in flight does.
   - A custom CA is pinned: nothing else is trusted for that profile, and a key picked by mistake is refused.
 - **Harder:**
+  - The refresh and the code step outlive their caller in a task the client spawns, an exception to the task-ownership rule.
   - fleet-client's tests build the whole server (and argon2 at the baseline), so they take a few seconds.
   - A server can't be configured with a request timeout above 19 s.
   - Requests serialize, so a field added to a request must serialize correctly too (the round-trip test covers it).
@@ -177,3 +188,4 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
 - **Only the public API in tests:** unforced interleavings and real 20 s waits.
 - **The session code under the auth gate, or no gate:** the client's other security code (the certificate checks, the body cap) would stay at 80 %.
 - **Waiting for an in-flight refresh at logout:** a logout could take a refresh's full timeout, and that refresh would save after the logout began.
+- **The refresh inside its caller's future** (the first version): a dropped caller lost the rotated token. **A shared future instead of a task:** a future nobody polls any more stops too. **Reporting a lost task as `Unreachable`:** a bug or a shutdown would read as a server that's down.

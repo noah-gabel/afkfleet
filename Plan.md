@@ -2908,6 +2908,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Tests,** red against compiling stubs first: fleet-api-types 2 of 3, the config's range case, fleet-client 101 of 132, the gates script's new check. Then all passed.
   >   - The integration tests run the real server on 127.0.0.1:0: every route; the refresh rules (a transparent refresh, eight requests and one rotation, no grace window, the idle expiry); logout after a restart.
   >   - The TLS tests use rcgen certificates and a rustls server on a thread.
+  > - **A dropped caller never stops a save** (the user's review of PR #34): once a refresh's or a code step's request may reach the server, the request, the save and the adoption run in a task of their own, which holds the refresh lock and the refresh-out mark until it ends. So a cancelled caller can't lose a rotated refresh token (whose next use would be reuse) or orphan a session. A task that ends without an answer is `ClientError::Interrupted`.
   > - **Lockfile:** the build gains rcgen, pem and yasna. Cargo.lock also lists x509-parser and its parsing crates, the optional dependency behind rcgen's weak feature `x509-parser?/verify-aws`, which nothing enables or builds; `cargo deny check` passes.
 - [ ] **P8.2** Scaffold:
   - `apps/desktop` (Tauri v2; `src-tauri` is a workspace member)

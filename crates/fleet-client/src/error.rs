@@ -13,6 +13,7 @@ use core::time::Duration;
 use fleet_api_types::error::{MESSAGE_MAX_CHARS, REQUEST_ID_MAX_CHARS};
 use fleet_api_types::{BoundedText, ErrorCode, FieldError, Open};
 use thiserror::Error;
+use tokio::task::JoinError;
 
 use crate::store::StoreError;
 
@@ -63,6 +64,10 @@ pub enum ClientError {
     /// The session store failed.
     #[error("the session store failed")]
     Store(#[source] StoreError),
+    /// A refresh or a code step ended without an answer: its task panicked,
+    /// or the runtime is shutting down. Whatever it did before that stands.
+    #[error("the refresh or the code step ended without an answer")]
+    Interrupted(#[source] JoinError),
 }
 
 impl ClientError {
