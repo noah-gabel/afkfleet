@@ -70,7 +70,7 @@ On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: th
 
 | Command | What it does |
 |---|---|
-| `just check` | `cargo fmt --check`, clippy (`--all-targets -D warnings`), `cargo doc --no-deps --workspace` with `RUSTDOCFLAGS="-D warnings"`, nextest default profile, doctests, `db-check`, `gen-check`, `testkit-check`, the `scripts/` tests, and biome + `tsc --noEmit` once the frontend exists. **Run before saying a task is done.** |
+| `just check` | `cargo fmt --check`, clippy (`--all-targets -D warnings`), `cargo doc --no-deps --workspace` with `RUSTDOCFLAGS="-D warnings"`, nextest default profile, doctests, `db-check`, `gen-check`, `testkit-check`, `tauri-check`, the `scripts/` tests, and biome + `tsc --noEmit` once the frontend exists. **Run before saying a task is done.** |
 | `just test [crate]` | nextest for the workspace or one crate |
 | `just test-slow` | Pulls the server image and builds the agent's image, then runs the nextest `slow` profile with fleet-mc's test-only `fault-injection` feature, one Minecraft container or compose stack at a time (needs Docker) |
 | `just test-real-account` | **The user only; the AI never runs it.** nextest `manual` profile: the user's real token from `secrets/p1.8-account.txt` joins a local online-mode container and sends signed chat (needs Docker) |
@@ -93,7 +93,8 @@ On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: th
 | `just ui-test` / `just e2e` | Vitest in every frontend package / Playwright |
 | `just ci` | Everything CI runs |
 | `just testkit-check` | Fails if any workspace member depends on fleet-testkit outside its dev-dependencies (`cargo tree`, through `scripts/testkit-check.mjs`; ADR-0015) |
-| `just fmt-check` · `clippy` · `docs` · `doctest` · `test-ci` · `stable-check` · `db-check` · `migrations-check` · `gen-check` · `testkit-check` · `scripts-test` · `ui-check` · `ui-audit` | The building blocks of `check` and `ci`. Each CI job runs one of them, so local and CI runs can't drift apart |
+| `just tauri-check` | Fails if the desktop app's hardening changed: the CSP and every other `app.security` setting, `withGlobalTauri`, the windows and the dev URL, the one capability and what it grants, build.rs's command list and the empty default permission, and tauri's resolved features (`cargo tree`; never `devtools`, `dynamic-acl` or `custom-protocol`). Through `scripts/tauri-hardening.mjs`, whose expected values change only together with an ADR (ADR-0017) |
+| `just fmt-check` · `clippy` · `docs` · `doctest` · `test-ci` · `stable-check` · `db-check` · `migrations-check` · `gen-check` · `testkit-check` · `tauri-check` · `scripts-test` · `ui-check` · `ui-audit` | The building blocks of `check` and `ci`. Each CI job runs one of them, so local and CI runs can't drift apart |
 
 Recipes for tools that arrive in later phases (`e2e`) print the phase they arrive in and exit with an error until then.
 

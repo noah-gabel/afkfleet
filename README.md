@@ -114,7 +114,15 @@ There's no support, and I don't take feature requests. Security reports are welc
   - certificates always checked, against the system's roots or only a configured CA; plain HTTP only to this computer's loopback address
   - every request bounded (5 s to connect, 20 s in all), every answer capped at 1 MiB
 
-  Group B's desktop app scaffold: [`apps/desktop`](apps/desktop/) (Tauri v2, its Rust side a workspace member, Windows only) around [`packages/ui`](packages/ui/) (React 19, Vite, strict TypeScript 7, Tailwind CSS 4 and shadcn/ui's theme). For now the window shows only the app's name; `just dev-app` runs it with hot reload and `just app-build` builds the exe.
+  Group B's desktop app scaffold: [`apps/desktop`](apps/desktop/) (Tauri v2, its Rust side a workspace member, Windows only) around [`packages/ui`](packages/ui/) (React 19, Vite, strict TypeScript 7, Tailwind CSS 4 and shadcn/ui's theme). For now the window shows only the app's name; `just dev-app` runs it with hot reload and `just app-build` builds the exe. It's hardened before any feature arrives:
+  - P8.3's strict CSP, served exactly as written
+  - no global Tauri API and a frozen `Object.prototype`
+  - a capability that grants nothing, so every future command needs an explicit grant
+  - devtools only in debug builds
+  - one instance at a time
+  - a guard that keeps the window on the app itself
+
+  `just tauri-check` fails if any of that changes.
 
   [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md) records Phase 8's decisions so far.
 
@@ -272,7 +280,7 @@ just app-build # build the desktop app's exe: target/release/afkfleet-desktop.ex
 just ui-test   # the frontend's Vitest tests
 just icons     # after changing apps/desktop/src-tauri/icons/icon.svg: render icon.ico
 ```
-**The desktop app** (Phase 8 on): `apps/desktop` is the Tauri app, with its Rust side in `apps/desktop/src-tauri` (a workspace member, Windows only) and a thin frontend entry that renders the UI from `packages/ui`. `just dev-app` starts Vite's dev server on `localhost:1420` and opens the window; frontend changes reload at once, and Rust changes rebuild the app. `just app-build` builds the release exe with the frontend embedded (no installer yet); `just app-build --debug` builds a debug exe the same way, with devtools. The app's icon is rendered from `icons/icon.svg`, an original placeholder: change the SVG, then run `just icons`.
+**The desktop app** (Phase 8 on): `apps/desktop` is the Tauri app, with its Rust side in `apps/desktop/src-tauri` (a workspace member, Windows only) and a thin frontend entry that renders the UI from `packages/ui`. `just dev-app` starts Vite's dev server on `localhost:1420` and opens the window; frontend changes reload at once, and Rust changes rebuild the app. `just app-build` builds the release exe with the frontend embedded (no installer yet); `just app-build --debug` builds a debug exe the same way, with devtools. The app's icon is rendered from `icons/icon.svg`, an original placeholder: change the SVG, then run `just icons`. The app's hardening (the CSP, the capabilities, the global API, devtools, tauri's features) is pinned by `just tauri-check`, part of `just check`; changing it means changing `scripts/tauri-hardening.mjs` too, with an ADR.
 **The API's TypeScript types** (Phase 6 on) are generated from the Rust DTOs in `crates/fleet-api-types` with ts-rs and committed in `packages/ui/src/generated/`; never edit them by hand. After changing a DTO, run `just gen` and commit the result; `just check` (`gen-check`) and CI's `ts-types-fresh` job fail while they're stale. `just gen` exports into a fresh folder in `target/` first and deletes only files ts-rs generated: if the folder holds anything else, it stops and changes nothing.
 **The server's database** (Phase 6 on): every build checks fleet-server's SQL against the offline query data committed in `crates/fleet-server/.sqlx/`, never against a live database (`SQLX_OFFLINE` in `.cargo/config.toml`). After changing a query or adding a migration, run `just db-prepare`, which rebuilds a throwaway database in `target/` from the migrations and regenerates that data, and commit it; `just check` and CI's `sqlx-offline` job fail while it's stale. A migration is never edited once it's on `main`, because sqlx checksums it: add a new one instead. `just migrations-check` and the `sqlx-offline` job enforce that.
 The test server runs in offline mode, so it's for local development only. RCON is enabled with a random password and isn't published; run commands with `docker compose --file deploy/compose.dev.yaml exec minecraft rcon-cli <command>`.

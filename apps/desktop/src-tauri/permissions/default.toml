@@ -1,0 +1,8 @@
+# Tauri applies its ACL to the app's own commands only when the app has a permission
+# manifest. An empty command list in build.rs generates none, and without one every app
+# command would run from the app's own pages. This empty default permission is that
+# manifest, so a command runs only when a capability grants its allow-<command>
+# (ADR-0017). It grants nothing itself, and no capability lists it.
+[default]
+description = "Grants nothing: every app command needs its own allow-<command> permission."
+permissions = []

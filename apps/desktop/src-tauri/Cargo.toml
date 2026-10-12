@@ -19,9 +19,19 @@ doc = false
 
 [dependencies]
 # The shell. The workspace entry has no default features; these are the only ones this
-# crate enables (ADR-0017): the WebView2 runtime, compressed embedded assets, and Windows'
-# Common Controls v6.
-tauri = { workspace = true, features = ["wry", "compression", "common-controls-v6"] }
+# crate enables (ADR-0017): the WebView2 runtime and compressed embedded assets. Not
+# `common-controls-v6`, which only serves the predefined About dialog: its TaskDialogIndirect
+# import exists only in Common Controls v6, which Windows loads only for an exe whose
+# manifest asks for it, and test executables never get that manifest.
+tauri = { workspace = true, features = ["wry", "compression"] }
+# A second launch focuses the running window instead of opening another (P8.3).
+tauri-plugin-single-instance.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+# `tauri::test`'s mock runtime, for the ACL test: it loads the real configuration and
+# capabilities and sends IPC requests without a window (ADR-0017).
+tauri = { workspace = true, features = ["test"] }
 
 [build-dependencies]
 # Embeds the Windows icon and resolves the capabilities at build time.

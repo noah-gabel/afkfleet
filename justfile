@@ -29,10 +29,10 @@ default:
     @just --list
 
 # Formatting, lints, docs, tests and frontend checks: run before a task is done.
-check: fmt-check clippy docs test doctest db-check gen-check testkit-check scripts-test ui-check
+check: fmt-check clippy docs test doctest db-check gen-check testkit-check tauri-check scripts-test ui-check
 
 # Everything CI runs.
-ci: fmt-check clippy docs test-ci db-check migrations-check gen-check testkit-check scripts-test cov deny stable-check ui-check ui-audit
+ci: fmt-check clippy docs test-ci db-check migrations-check gen-check testkit-check tauri-check scripts-test cov deny stable-check ui-check ui-audit
 
 # Run nextest for the workspace, or for one crate: `just test fleet-core`.
 test crate="":
@@ -222,6 +222,14 @@ stable-check:
 # graph; the script fails on any other dependent and on output it can't read.
 testkit-check:
     node scripts/testkit-check.mjs
+
+# The desktop app's hardening (Plan.md P8.3, ADR-0017): the CSP, withGlobalTauri, the
+# capabilities, the command manifest and tauri's features (through `cargo tree`, which
+# needs only the dependency graph, so it runs on Linux too). Changing any of them means
+# changing scripts/tauri-hardening.mjs too, deliberately.
+# Fail if the desktop app's hardening changed.
+tauri-check:
+    node scripts/tauri-hardening.mjs
 
 # Tests for the scripts in scripts/.
 scripts-test:

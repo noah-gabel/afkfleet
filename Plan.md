@@ -250,9 +250,9 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 ### Rust: desktop
 | Concern | Crate | Version | Used in | Notes |
 |---|---|---|---|---|
-| Desktop shell | `tauri`, `tauri-build` | **2.12.3** (≥ 2.11.1), dfo; 2.7.2 | desktop | 2.11.1 fixes CVE-2026-42184 (`is_local_url` origin bypass on Windows). `tauri-build` is the required build-dependency (approved in P0). The desktop crate enables only `wry`, `compression` and `common-controls-v6`: never `dynamic-acl` (runtime `add_capability`), `devtools`, or the Linux-only `x11`/`dbus`; the CLI adds `custom-protocol` for `tauri build`. Dev only: `test`, for the ACL test ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
+| Desktop shell | `tauri`, `tauri-build` | **2.12.3** (≥ 2.11.1), dfo; 2.7.2 | desktop | 2.11.1 fixes CVE-2026-42184 (`is_local_url` origin bypass on Windows). `tauri-build` is the required build-dependency (approved in P0). The desktop crate enables only `wry` and `compression`: never `dynamic-acl` (runtime `add_capability`), `devtools`, `common-controls-v6` (its TaskDialogIndirect import breaks Windows test executables, which lack the Common Controls v6 manifest), or the Linux-only `x11`/`dbus`; the CLI adds `custom-protocol` for `tauri build`. Dev only: `test`, for the ACL test ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 | Open the device-code URL | `tauri-plugin-opener` | 2.7.0 | desktop | Called only from Rust |
-| Single instance | `tauri-plugin-single-instance` | 2.5.2 | desktop | |
+| Single instance | `tauri-plugin-single-instance` | 2.5.3 | desktop | Registered first. No JavaScript API, so no capability grants it anything ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 | Signed auto-update | `tauri-plugin-updater` | 2.13.1, dfo | desktop | Its default `rustls-tls` feature forces the ring provider; TLS comes from the workspace `reqwest` instead |
 | OS credential store | `keyring-core` + `windows-native-keyring-store` | 1.0.0, 1.1.0 (keyring v4 family) | desktop | Refresh token storage |
 
@@ -2938,12 +2938,29 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - the UI's smoke test, which found no heading in an empty `App`
   >
   >   Then all passed.
-- [ ] **P8.3** Tauri hardening:
+- [x] **P8.3** Tauri hardening:
   - CSP: `default-src 'self'; img-src 'self' data:; style-src 'self'; connect-src ipc: http://ipc.localhost`. Relax it only with an ADR.
   - Capabilities allow only our commands.
   - `withGlobalTauri: false`.
   - Devtools only in debug builds.
   - The single-instance plugin.
+
+  > Note (P8.3, group B, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
+  > - **The CSP, exactly,** with `dangerousDisableAssetCspModification: true`: Tauri appends no hashes or nonces, which makes the served header stricter, not looser. Tauri writes the header from a hash map, so its four directives come in an order that varies between runs.
+  > - **No `devCsp`:** `tauri dev` on desktop loads Vite's server directly, and Tauri sends no CSP there. The real CSP is checked in a `tauri build --debug` exe.
+  > - **`withGlobalTauri: false`** is written out.
+  > - **`freezePrototype: true`** (the user's addition); removing it needs an ADR.
+  > - **Capabilities:** one, `main`, granting nothing; no `core:default`.
+  >   - build.rs passes `const COMMANDS` (empty) to `AppManifest::commands`.
+  >   - An empty `[default]` permission in `permissions/default.toml` turns the ACL on for app commands. Without an app manifest Tauri lets every app command through, which the ACL test showed.
+  > - **Devtools:** no `devtools` feature or window setting. tauri has only `wry` and `compression`: `dynamic-acl` is out, and `common-controls-v6` is out too (the user's choice), since its TaskDialogIndirect import kept the ACL test's exe from starting.
+  > - **Single instance:** the plugin is registered first, and a second launch restores, shows and focuses the window.
+  > - **A navigation guard** (the user's addition): an internal plugin's `on_navigation` hook allows only `http://tauri.localhost`, and `devUrl`'s origin in dev builds.
+  > - **Pinned:**
+  >   - `just tauri-check` (`scripts/tauri-hardening.mjs`; in `check`, `ci` and CI's deny job) fails on any change to the security settings, the windows, the dev URL, the capability, the command list, the default permission or tauri's resolved features.
+  >   - `tests/acl.rs` shows on the mock runtime that ungranted app and core commands are refused.
+  > - **Tests,** red first against stubs: `navigation` 14 of 19, `focus` 2 of 2, the ACL's app-command case, and the hardening script 18 of 25. Then all passed.
+  > - **Checked live** in a debug build over WebView2's DevTools protocol: the page loads, no CSP violations, the guard keeps the window on the app, `window.open` opens nothing, and a second launch exits at once.
 - [ ] **P8.4** 🔴 Rust side:
   - `AppState` holds the server profile, the `fleet-client` and the session.
   - The **refresh token lives in the OS keychain**; the access token only in memory.

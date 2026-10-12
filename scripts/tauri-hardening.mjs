@@ -1,0 +1,285 @@
+// Checks the desktop app's hardening (Plan.md P8.3, ADR-0017).
+//
+//   node scripts/tauri-hardening.mjs
+//
+// Fails if any of these changes:
+// - the CSP, `withGlobalTauri` or any other `app.security` setting in tauri.conf.json
+// - a window's devtools, URL or scheme, or the dev URL
+// - the capabilities: one file, `main.json`, granting exactly the app's own commands
+// - the app's command manifest: build.rs's `COMMANDS` and the empty default permission
+//   that keeps the ACL on while that list is empty
+// - tauri's resolved features, which `cargo tree` reports; `devtools`, `dynamic-acl` and
+//   `custom-protocol` are named as never allowed
+//
+// The expected values live here on purpose: changing a hardening setting means changing
+// this check too, deliberately, with an ADR. Group C adds each command to `COMMANDS` here
+// and in build.rs, and its `allow-<command>` to `main.json`.
+//
+// Exits with 1 on any problem, or if cargo's output can't be read. Run through
+// `just tauri-check`, which needs Rust for `cargo tree`; the frontend CI job that runs
+// `just scripts-test` has none, so the tests check the parsing and the committed files.
+// Tests: scripts/tauri-hardening.test.mjs.
+import { spawnSync } from "node:child_process";
+import { readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import process from "node:process";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { isDeepStrictEqual } from "node:util";
+
+/** P8.3's CSP, exactly. Relaxing it needs an ADR. */
+export const CSP =
+  "default-src 'self'; img-src 'self' data:; style-src 'self'; connect-src ipc: http://ipc.localhost";
+
+/** The app's own commands, as build.rs lists them; group C adds them. */
+export const COMMANDS = [];
+
+/** The whole of `app.security`. */
+const SECURITY = {
+  csp: CSP,
+  // The served CSP is exactly CSP: no hashes or nonces appended (ADR-0017).
+  dangerousDisableAssetCspModification: true,
+  freezePrototype: true,
+  capabilities: ["main"],
+};
+
+/** Vite's dev server, the only other origin a dev build may show (the navigation guard). */
+const DEV_URL = "http://localhost:1420";
+
+/** Window settings that would open devtools, load other content or change the origin. */
+const FORBIDDEN_WINDOW_KEYS = ["devtools", "url", "useHttpsScheme"];
+
+/** The keys a capability may have; anything else (remote, platforms, webviews…) fails. */
+const CAPABILITY_KEYS = ["$schema", "description", "identifier", "windows", "permissions"];
+
+/** tauri's features, as `cargo tree` resolves `wry` and `compression`. */
+const TAURI_FEATURES = ["compression", "tauri-runtime-wry", "webkit2gtk", "webview2-com", "wry"];
+
+/** Features that must never appear, each named in its own message. */
+const FORBIDDEN_FEATURES = ["devtools", "dynamic-acl", "custom-protocol"];
+
+/** The desktop crate's folder, relative to the repository's root. */
+const SRC_TAURI = path.join("apps", "desktop", "src-tauri");
+
+/** The `cargo tree` arguments: tauri's line with its resolved features, dev edges left out. */
+export const CARGO_TREE_ARGS = [
+  "tree",
+  "--package",
+  "afkfleet-desktop",
+  "--edges",
+  "no-dev",
+  "--target",
+  "x86_64-pc-windows-msvc",
+  "--invert",
+  "tauri",
+  "--depth",
+  "0",
+  "--prefix",
+  "none",
+  "--format",
+  "{p}|{f}",
+];
+
+/** Each capability permission that grants one of the app's own commands. */
+function commandGrants() {
+  return COMMANDS.map((command) => `allow-${command.replaceAll("_", "-")}`);
+}
+
+function show(value) {
+  return value === undefined ? "unset" : JSON.stringify(value);
+}
+
+/** Checks tauri.conf.json's parsed content. Returns one message per problem. */
+export function checkConfig(config) {
+  const problems = [];
+  const app = config?.app ?? {};
+  if (app.withGlobalTauri !== false) {
+    problems.push(`app.withGlobalTauri is ${show(app.withGlobalTauri)}, expected false`);
+  }
+  const security = app.security ?? {};
+  for (const key of new Set([...Object.keys(SECURITY), ...Object.keys(security)])) {
+    if (!isDeepStrictEqual(security[key], SECURITY[key])) {
+      problems.push(
+        key in SECURITY
+          ? `app.security.${key} is ${show(security[key])}, expected ${show(SECURITY[key])}`
+          : `app.security.${key} must not be set`,
+      );
+    }
+  }
+  for (const [index, window] of (app.windows ?? []).entries()) {
+    for (const key of FORBIDDEN_WINDOW_KEYS) {
+      if (key in window) {
+        problems.push(`app.windows[${index}].${key} must not be set`);
+      }
+    }
+  }
+  if (config?.build?.devUrl !== DEV_URL) {
+    problems.push(`build.devUrl is ${show(config?.build?.devUrl)}, expected ${show(DEV_URL)}`);
+  }
+  return problems;
+}
+
+/**
+ * Checks the capabilities folder, given as `{ name, text }` entries. Returns one message per
+ * problem: there must be exactly `main.json`, for window `main`, granting exactly the app's
+ * own commands, so no core or plugin permission.
+ */
+export function checkCapabilities(files) {
+  const problems = files
+    .filter(({ name }) => name !== "main.json")
+    .map(({ name }) => `capabilities/${name} must not exist: main.json is the only capability`);
+  const main = files.find(({ name }) => name === "main.json");
+  if (main === undefined) {
+    return [...problems, "capabilities/main.json is missing"];
+  }
+  let capability;
+  try {
+    capability = JSON.parse(main.text);
+  } catch (error) {
+    return [...problems, `capabilities/main.json isn't JSON: ${error.message}`];
+  }
+  for (const key of Object.keys(capability)) {
+    if (!CAPABILITY_KEYS.includes(key)) {
+      problems.push(`capabilities/main.json: ${key} must not be set`);
+    }
+  }
+  const expected = { identifier: "main", windows: ["main"], permissions: commandGrants() };
+  for (const [key, value] of Object.entries(expected)) {
+    if (!isDeepStrictEqual(capability[key], value)) {
+      problems.push(
+        `capabilities/main.json: ${key} is ${show(capability[key])}, expected ${show(value)}`,
+      );
+    }
+  }
+  return problems;
+}
+
+/** build.rs's command list: `const COMMANDS: &[&str] = &[…];`. */
+const COMMANDS_CONST = /^const COMMANDS: &\[&str\] = &\[([^\]]*)\];$/m;
+
+/** Checks build.rs's text. Returns one message per problem. */
+export function checkCommands(buildScript) {
+  const match = COMMANDS_CONST.exec(buildScript.replaceAll("\r\n", "\n"));
+  if (match === null) {
+    return ["build.rs has no `const COMMANDS: &[&str] = &[…];` line"];
+  }
+  const listed = match[1]
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item !== "")
+    .map((item) => item.replace(/^"(.*)"$/, "$1"));
+  return isDeepStrictEqual(listed, COMMANDS)
+    ? []
+    : [`build.rs lists the commands ${show(listed)}, expected ${show(COMMANDS)}`];
+}
+
+/** The default permission's lines, comments and blank lines aside. */
+const DEFAULT_PERMISSION = [/^\[default\]$/, /^description = ".*"$/, /^permissions = \[\]$/];
+
+/**
+ * Checks the permissions folder, given as `{ name, text }` entries. Returns one message per
+ * problem: there must be exactly `default.toml`, an empty default permission and nothing
+ * else.
+ */
+export function checkPermissions(files) {
+  const problems = files
+    .filter(({ name }) => name !== "default.toml")
+    .map(({ name }) => `permissions/${name} must not exist: default.toml is the only one`);
+  const file = files.find(({ name }) => name === "default.toml");
+  if (file === undefined) {
+    return [...problems, "permissions/default.toml is missing: without it, the ACL is off"];
+  }
+  const lines = file.text
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line !== "" && !line.startsWith("#"));
+  const matches =
+    lines.length === DEFAULT_PERMISSION.length &&
+    lines.every((line, index) => DEFAULT_PERMISSION[index]?.test(line));
+  if (!matches) {
+    problems.push(
+      "permissions/default.toml must hold only `[default]`, a description and " +
+        "`permissions = []`: no other permission, set or grant",
+    );
+  }
+  return problems;
+}
+
+/** Checks `cargo tree`'s output for tauri's features. Returns one message per problem. */
+export function checkFeatures(output) {
+  const lines = output
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line !== "");
+  const match = lines.length === 1 ? /^tauri v\S+\|(.*)$/.exec(lines[0] ?? "") : null;
+  if (match === null) {
+    return [`cargo tree's output can't be read: \`${output.trim()}\``];
+  }
+  const features = (match[1] ?? "").split(",").filter((feature) => feature !== "");
+  const problems = FORBIDDEN_FEATURES.filter((feature) => features.includes(feature)).map(
+    (feature) => `tauri's \`${feature}\` feature is on, but it must never be`,
+  );
+  const unexpected = features.filter(
+    (feature) => !TAURI_FEATURES.includes(feature) && !FORBIDDEN_FEATURES.includes(feature),
+  );
+  const missing = TAURI_FEATURES.filter((feature) => !features.includes(feature));
+  if (unexpected.length > 0) {
+    problems.push(`tauri has features the check doesn't expect: ${unexpected.join(", ")}`);
+  }
+  if (missing.length > 0) {
+    problems.push(`tauri lacks features the check expects: ${missing.join(", ")}`);
+  }
+  return problems;
+}
+
+/** The files in `dir`, as `{ name, text }`, or none if it doesn't exist. */
+function readFolder(dir) {
+  let names;
+  try {
+    names = readdirSync(dir);
+  } catch {
+    return [];
+  }
+  return names.map((name) => ({ name, text: readFileSync(path.join(dir, name), "utf8") }));
+}
+
+/** Checks the committed files under `root` (everything but `cargo tree`). */
+export function checkRepoFiles(root) {
+  const dir = path.join(root, SRC_TAURI);
+  let config;
+  try {
+    config = JSON.parse(readFileSync(path.join(dir, "tauri.conf.json"), "utf8"));
+  } catch (error) {
+    return [`tauri.conf.json can't be read: ${error.message}`];
+  }
+  return [
+    ...checkConfig(config),
+    ...checkCapabilities(readFolder(path.join(dir, "capabilities"))),
+    ...checkCommands(readFileSync(path.join(dir, "build.rs"), "utf8")),
+    ...checkPermissions(readFolder(path.join(dir, "permissions"))),
+  ];
+}
+
+function main() {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+  const problems = checkRepoFiles(root);
+  const result = spawnSync("cargo", CARGO_TREE_ARGS, { cwd: root, encoding: "utf8" });
+  if (result.error !== undefined || result.status !== 0) {
+    console.error(result.stderr ?? "");
+    problems.push(`cargo tree failed: ${result.error?.message ?? `exit code ${result.status}`}`);
+  } else {
+    problems.push(...checkFeatures(result.stdout));
+  }
+  for (const problem of problems) {
+    console.error(problem);
+  }
+  if (problems.length > 0) {
+    console.error("the desktop app's hardening changed (Plan.md P8.3, ADR-0017)");
+    return 1;
+  }
+  console.log("the desktop app's hardening is as pinned");
+  return 0;
+}
+
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  process.exitCode = main();
+}

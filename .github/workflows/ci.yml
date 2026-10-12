@@ -141,6 +141,8 @@ jobs:
       # fleet-testkit only as a dev-dependency (ADR-0015); needs Rust, so it runs here
       # and not in the frontend job with the other scripts.
       - run: just testkit-check
+      # The desktop app's hardening (ADR-0017); its `cargo tree` call needs Rust too.
+      - run: just tauri-check
 
   stable-check:
     name: stable-check
