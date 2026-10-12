@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "The main window. It grants nothing yet: every app command needs its own allow-<command> here, and no core or plugin permission is granted (ADR-0017).",
+  "windows": ["main"],
+  "permissions": []
+}

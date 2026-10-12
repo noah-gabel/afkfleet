@@ -1,6 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/*"]
+# The desktop app's Rust side lives next to its frontend (Plan.md §4). It ships only for
+# Windows, so Linux CI excludes it and the justfile adds the flag (ADR-0017).
+members = ["crates/*", "apps/desktop/src-tauri"]
 # Spikes are throwaway experiments with their own Cargo.lock (Plan.md §4).
 exclude = ["spikes"]
 
@@ -143,6 +145,19 @@ thiserror = "2.0.21"
 # and no `chrono` (it would turn on chrono's `clock` for the whole workspace) or `json`:
 # times and JSON are converted in fleet-server (ADR-0015).
 sqlx = { version = "0.9.0", default-features = false }
+# tauri: the desktop app's shell (≥ 2.11.1 for CVE-2026-42184). Without default features:
+# the desktop crate enables `wry` and `compression`, but never `common-controls-v6` (it
+# breaks Windows test executables), `dynamic-acl` (runtime `add_capability`: the ACL stays what the build resolved), the
+# Linux-only `x11`/`dbus`, or `devtools` (debug builds have devtools anyway). The CLI adds
+# `custom-protocol` for `tauri build` (ADR-0017).
+tauri = { version = "2.12.3", default-features = false }
+# tauri-build: the desktop crate's build script; it embeds the Windows icon and resolves
+# the capabilities and the app's command manifest at build time (ADR-0017).
+tauri-build = "2.7.2"
+# tauri-plugin-single-instance: a second launch focuses the running window instead of
+# opening another. It has no JavaScript API, so no capability grants it anything
+# (ADR-0017).
+tauri-plugin-single-instance = "2.5.3"
 # totp-rs: one time step's TOTP code and the otpauth URI of an enrollment. Without
 # default features: no `std` (wall-clock `*_current`), no `gen_secret` (rand's thread RNG;
 # the secret comes from the SecureRandom port), no `serde`, no `qr` (image codecs).

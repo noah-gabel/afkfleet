@@ -21,10 +21,13 @@ COPY rust-toolchain.toml ./
 RUN rustup toolchain install
 
 # --- planner: the workspace's dependency recipe ---
+# The desktop crate is a workspace member, so cargo can't load the workspace without it;
+# nothing here builds it (ADR-0017).
 FROM chef AS planner
 COPY Cargo.toml Cargo.lock ./
 COPY .cargo ./.cargo
 COPY crates ./crates
+COPY apps/desktop/src-tauri ./apps/desktop/src-tauri
 RUN cargo chef prepare --recipe-path recipe.json
 
 # --- builder: the dependencies (cached while the recipe stays), then the agent ---
@@ -34,6 +37,7 @@ RUN cargo chef cook --release --locked --package fleet-agent --bin afkfleet-agen
 COPY Cargo.toml Cargo.lock ./
 COPY .cargo ./.cargo
 COPY crates ./crates
+COPY apps/desktop/src-tauri ./apps/desktop/src-tauri
 RUN cargo build --release --locked --package fleet-agent --bin afkfleet-agent
 
 # --- runtime: glibc and libgcc only, no shell, the nonroot user (65532) ---

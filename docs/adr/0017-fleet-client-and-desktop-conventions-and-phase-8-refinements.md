@@ -1,7 +1,7 @@
 # 0017. fleet-client and desktop app conventions, Phase 8 refinements
 
 - **Status:** Accepted
-- **Date:** 2026-10-12 (amended in the review of PR #34)
+- **Date:** 2026-10-12 (amended in the review of PR #34; group B added the same day)
 - **Related:** Plan.md Phase 8 (P8.1–P8.9), §4, §5, §7.5, §8, Appendix A, P9.3; ADR-0006, ADR-0007, ADR-0015, ADR-0016
 
 ## Context
@@ -140,6 +140,115 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
 
   Then all passed. The 31 that passed against the stubs check refusals, fixed texts and `Debug`, which a do-nothing stub satisfies too. No snapshot is new or changed. The review of PR #34 added three tests, each red first (see above).
 
+### Group B: the desktop crate, Windows only *(the user's choices, 2026-10-12)*
+- **The workspace member.** `apps/desktop/src-tauri` is the crate `afkfleet-desktop`. Its library holds the logic; the binary only calls `run()` and has `doc = false`, since the two share a name.
+- **Linux leaves it out.** The app ships only for Windows, and on Linux Tauri needs WebKitGTK and GTK3. So the justfile adds `--exclude afkfleet-desktop` to every workspace-wide Rust recipe when `os()` is linux:
+  - clippy, docs, doctest, test, test-ci, test-slow and cov
+  - CI's Linux jobs keep their YAML unchanged
+
+  Windows covers it in three places:
+  - clippy and test on windows-latest
+  - stable-check, which includes it off Linux
+  - a new `tauri-build` job on windows-latest: `just docs`, `just stable-check` and `just app-build`
+
+  Coverage never measures it, since `cov` runs on Linux only. Its logic is tested on Windows but not counted toward the gates.
+- **Doctests leave it out everywhere** (found when `just check` ran). tauri-build links the VC++ runtime statically, so friends need no redistributable: it writes a stub `msvcrt.lib` into its build output and adds that folder to the link path. Cargo hands every build script's link paths to every doctest in a run, so fleet-core's doctests linked against the stub and failed. `doctest` and `test-ci` therefore run `cargo test --workspace --exclude afkfleet-desktop --doc` on every platform. The desktop crate has no doctests; its own tests link through its own build script as usual.
+- **cargo deny in two passes** *(the user's choice over ignores)*. With tauri 2.12.3, tauri-build 2.7.2 and single-instance 2.5.3, the repo's `deny.toml` on all three targets reported three errors, all from the Linux GTK3 stack:
+  - `unsound` RUSTSEC-2024-0429: glib 0.18.5, fixed only in ≥ 0.20, which the GTK3 bindings don't use
+  - `unmaintained` RUSTSEC-2024-0370: proc-macro-error 1.0.4, through glib-macros and gtk3-macros
+  - license: target-lexicon 0.12.16, `Apache-2.0 WITH LLVM-exception`, through system-deps, a build dependency of the GTK sys crates
+
+  With `--target x86_64-pc-windows-msvc` alone, every check passed. So `just deny` runs two passes with the same `deny.toml`:
+  1. the workspace with `--exclude afkfleet-desktop`, on every target, rules unchanged
+  2. the desktop crate alone (`--manifest-path apps/desktop/src-tauri/Cargo.toml`) with `--target x86_64-pc-windows-msvc`
+
+  Both were tested in a throwaway workspace first. There are no ignores and no exceptions, and the ring, openssl-sys and native-tls bans stay.
+
+  **This narrows deny's targets for one crate, and holds only while the desktop app ships only for Windows: any new desktop target joins the second pass.** Gating Tauri behind `cfg(windows)` wouldn't help: cargo-deny filters each dependency edge against all its targets at once, so tauri's Linux-only edges stay in its combined graph (tested).
+- **Docker.** The agent's image copies `apps/desktop/src-tauri` in both stages, and `.dockerignore`'s allowlist admits it (minus its `target` and `gen`), because cargo can't load the workspace without a member. Nothing in the image builds it.
+- **Identity** *(the user's choice)*:
+  - identifier `io.github.noah-gabel.afkfleet`, derived from the repository's own URL
+  - productName and window title `afkfleet`
+  - npm packages `@afkfleet/ui` and `@afkfleet/desktop`
+
+  The identifier names the app's data folder, its WebView2 profile and the single-instance mutex, so it never changes.
+- **The icon** *(the user's choice)*. An original placeholder, `icons/icon.svg`: a rounded square with three white dots, no text, no third-party logo. `just icons` (`scripts/icons.mjs`) renders `icon.ico` from it with `tauri icon` into a fresh folder under `target/`, keeps only `icon.ico` and removes that folder. Only the SVG and the ICO are committed; tauri-build embeds the ICO in the exe, and a Windows build fails without it.
+
+### Group B: the frontend *(the user's choices and approvals)*
+- **Layout.**
+  - `packages/ui` exports its sources (`.` → `src/index.ts`, `./styles.css`); there is no build step in between.
+  - Its own `index.html` and Vite config are the web entry for development and, from P8.9, the Playwright build.
+  - `apps/desktop` is a thin entry (`index.html`, `src/main.tsx`) that renders `<App />` from `@afkfleet/ui`. Its Vite dev server runs on `localhost:1420` with `strictPort`, matching `devUrl`.
+  - Tailwind scans `packages/ui/src` (`@import "tailwindcss" source(".")`), so the desktop bundle finds the UI's classes.
+- **TypeScript 7.0.2** *(the user's choice over 6.0.3 or both side by side)*. This is the Go port, with a native `tsc` about 10× faster. It has no JavaScript compiler API until 7.1, so no tool that needs one (typescript-eslint, ts-node, vite-plugin-checker) can join until then; Biome, Vite 8, Vitest and `tsc --noEmit` need none. Since `types` now defaults to `[]`, each tsconfig lists `vite/client`. Editor diagnostics come from VS Code's TypeScript or the "TypeScript Native Preview" extension, and can differ slightly from CI's `tsc`.
+- **shadcn/ui: configuration and theme only** *(the user's choice)*. `packages/ui/components.json` is set up with:
+  - style `radix-nova`, Radix per §5
+  - base color neutral
+  - aliases through package.json `#` subpath imports (`#components/*`, `#lib/*`, `#hooks/*`), since TS 7 has no `baseUrl`
+
+  Its theme tokens are in `src/styles.css`. No shadcn package is installed. `cn` (shadcn's own replacement for clsx + tailwind-merge), class-variance-authority, radix-ui, tw-animate-css, lucide-react and the `shadcn` package's tailwind.css arrive with the first component, with the user's approval there. The CLI only ever runs as `pnpm dlx shadcn@4.21.4`, never as a dependency, since that package pulls in ts-morph, an MCP SDK and dotenvx.
+- **Vitest now** *(the user's choice)*, so the frontend job's `pnpm -r run test` covers `packages/ui` from the start with a smoke test. Its setup file unmounts after each test: Vitest runs without globals, and Testing Library's automatic cleanup needs a global `afterEach`. jsdom stays at 29.1.1 because jsdom 30 needs Node ^24.15.
+- **The Tauri CLI** is the npm `@tauri-apps/cli` *(the user's choice over `cargo install`)*. It ships prebuilt binaries through per-platform packages with integrity hashes in `pnpm-lock.yaml`, and pnpm audit covers it.
+- **Biome** sets `security.noDangerouslySetInnerHtml` and `noDangerouslySetInnerHtmlWithChildren` to `error` explicitly, so the preset can't lower them. `css.parser.tailwindDirectives` lets it parse Tailwind 4's at-rules.
+- **Dependencies** *(the user's approval)*, all pinned exactly (no `^`), with `pnpm-lock.yaml` as the lock:
+  - Rust: tauri 2.12.3, with no default features at workspace level; the desktop crate enables `wry` and `compression` (P8.3 dropped `common-controls-v6`, see below). tauri-build 2.7.2. tauri-plugin-single-instance 2.5.3 (P8.3).
+  - npm build: typescript 7.0.2, vite 8.3.4, react and react-dom 19.3.0, tailwindcss 4.3.3.
+  - Off the Introduces list, approved: `@vitejs/plugin-react` 6.1.2 (oxc on Vite 8, no Babel), `@tailwindcss/vite` 4.3.3, `@types/react` and `@types/react-dom` 19.3.0, `@tauri-apps/cli` 2.12.2.
+  - Tests: vitest 5.0.3 (5.0.4 was a day old), jsdom 29.1.1, `@testing-library/react` 16.3.3 and its peer `@testing-library/dom` 10.4.2.
+
+  No dependency runs an install script.
+
+### Group B: the hardening (P8.3) *(the user's choices)*
+- **The CSP is P8.3's, exactly:** `default-src 'self'; img-src 'self' data:; style-src 'self'; connect-src ipc: http://ipc.localhost`. Relaxing it needs an ADR.
+  - **No `devCsp`.** `tauri dev` on desktop loads Vite's dev server directly (`PROXY_DEV_SERVER` is mobile-only in tauri 2.12), and Tauri sends a CSP only with the assets its own protocol serves. So neither `csp` nor `devCsp` reaches a dev page, and a `devCsp` would be dead config. The real CSP is checked in a `tauri build --debug` exe, which embeds the frontend, applies `csp` and still has devtools.
+  - **`dangerousDisableAssetCspModification: true`.** By default Tauri hashes the bundled scripts and nonces inline styles into the header it serves, adding `script-src 'self' 'sha256-…'`. With the flag, the served header is P8.3's directives, and an inline `<script>` or `<style>` that ever lands in index.html is blocked instead of being let in. **It makes the served CSP stricter, not looser.** Tauri's warning is about CSPs with `'unsafe-inline'`, which the added nonces would silently disable, so the flag must not be removed because of its name.
+  - **The header's order varies.** Tauri keeps the policy in a hash map and writes it out per response, so the served header holds exactly these four directives and sources, but in an order that changes between runs (seen in three runs).
+- **`withGlobalTauri: false`**, written out although it's the default, so the check pins it.
+- **`freezePrototype: true`** *(the user's addition)*. Tauri runs `Object.freeze(Object.prototype)` in every webview, dev and release, which blocks prototype-pollution gadgets. **Caveat:** besides writes to `Object.prototype`, assigning a shadowing property such as `toString` or `constructor` on a plain object throws in strict code and silently fails in sloppy code. A library that does either breaks. Removing the flag needs an ADR.
+- **The ACL is on from the start.** tauri-build switches the ACL on for the app's own commands only when the app has a permission manifest. An empty `AppManifest::commands` list generates none, and without one every app command runs from the app's own pages: the ACL test's probe command ran.
+  - So `src-tauri/permissions/default.toml` holds an empty `[default]` permission that grants nothing and that no capability lists. With it, every command needs an `allow-<command>` in a capability (the probe is refused: "not allowed. Command not found").
+  - build.rs lists the commands in `const COMMANDS` and passes them to `AppManifest::commands`, which generates each one's `allow-`/`deny-` permission. It's empty until group C.
+  - The one capability, `main` for window `main` (`app.security.capabilities: ["main"]`), grants nothing: no `core:default` or other core permission, since the UI calls no Tauri API, and nothing for single-instance, which has no JavaScript API. A core command is refused too.
+- **Devtools only in debug builds.** No `devtools` feature and no window `devtools` setting. A release build turns WebView2's devtools off (`AreDevToolsEnabled`), so F12, Ctrl+Shift+I and "Inspect" do nothing. WebView2's own context menu stays, minus "Inspect" *(the user's choice not to suppress it)*.
+- **tauri's features:** `wry` and `compression` only.
+  - No `dynamic-acl`: no runtime `add_capability`, so the ACL is what the build resolved.
+  - No `common-controls-v6` *(the user's choice when the ACL test's exe couldn't start)*. It exists for the predefined About dialog, and makes Tauri import `TaskDialogIndirect`, which exists only in Common Controls v6. Windows loads v6 only for an exe whose manifest asks for it, and tauri-build embeds that manifest into the app's binary, never into test executables, so the test exe failed with 0xc0000139. We have no menu and no native dialogs. A group that adds them revisits this with an ADR line.
+- **One instance.** `tauri_plugin_single_instance` is registered first, as the plugin requires. A second launch hands over and exits at once; the first instance restores, shows and focuses its main window. Each step is tried even if an earlier one failed, and failures are dropped, since the launch that asked has already ended.
+- **The navigation guard** *(the user's addition)*. An internal plugin's `on_navigation` hook allows only the app's own origin (`http://tauri.localhost`, any path or query), plus `build.devUrl`'s origin under `cfg(dev)`, and refuses everything else, so neither a link nor a script can take the window to another site. There's no new-window handler: wry refuses `window.open` and `target=_blank` when none is set.
+- **Pinned** *(the user's choice: a script plus a Rust test)*.
+  - `scripts/tauri-hardening.mjs` (`just tauri-check`, in `check`, `ci` and CI's deny job) checks:
+    - every `app.security` key exactly, and `withGlobalTauri`
+    - that no window sets `devtools`, `url` or `useHttpsScheme`, and that `devUrl` is `http://localhost:1420`
+    - the one capability's identifier, window, keys and grants, which must equal `allow-<command>` for build.rs's commands
+    - build.rs's `COMMANDS` and the empty default permission
+    - tauri's resolved features from `cargo tree -e no-dev`, exactly; `devtools`, `dynamic-acl` and `custom-protocol` are each named as never allowed
+
+    Its expected values change only together with an ADR.
+  - The ACL test (`src-tauri/tests/acl.rs`) builds the real context on Tauri's mock runtime and shows that an app command no capability grants, and a core command, are refused.
+
+### As built (group B)
+- **Layout:**
+  - `afkfleet_desktop::run` builds the app.
+  - `focus` (the `MainWindow` trait, `focus_main_window`) and `navigation` (`guard`, `is_allowed`) are crate-private.
+  - The guard plugin uses `try_build`, mapping its error to `tauri::Error::PluginInitialization`, so our code never calls a panicking `build()`.
+- **Tests,** red first against compiling stubs:
+  - `scripts/icons.test.mjs`: 4 of 4
+  - the UI's smoke test
+  - `navigation`: 14 of 19. The 5 that passed allow the app's origin, which an allow-everything stub does too.
+  - `focus`: 2 of 2
+  - the ACL test's app-command case, red until `default.toml` existed. The core-command case passed from the start, since no capability granted it anything.
+  - `scripts/tauri-hardening.test.mjs`: 18 of 25. The 7 that passed accept the right input, which an empty stub does too.
+
+  Then all passed. No snapshot is new or changed.
+- **Checked live** in a `tauri build --debug` exe over WebView2's DevTools protocol on 127.0.0.1:
+  - the page loads at `http://tauri.localhost/` with the heading and Tailwind's styles
+  - no console errors and no CSP violations
+  - the served CSP has the four directives (in varying order)
+  - `window.__TAURI__` is undefined and `Object.prototype` is frozen
+  - `location.href = "https://example.com"` stays on the app; `window.open` returns `null` and opens nothing
+  - a second launch exits at once, leaving one page
+- **The release exe** builds through `just app-build` in about a minute on the dev machine; the agent's image and the slow suite (`just stack-up`, `just test-slow`) still work.
+
 ### Notes for later groups
 - **P8.4 (C):**
   - The keychain implements `SessionStore`, doing its blocking calls off the runtime.
@@ -147,12 +256,18 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   - `main` installs the aws-lc-rs provider before building the client.
   - `CommandError` maps `ClientError` with a default branch, since `ApiFailure::code` is `Open`.
   - The step tokens never reach the Rust side's own state either: the client holds them.
+- **P8.4/P8.5 (C), from group B:**
+  - Each command goes into build.rs's `COMMANDS` and into `COMMANDS` in `scripts/tauri-hardening.mjs`, and its `allow-<command>` (underscores become hyphens) into `capabilities/main.json`.
+  - Whether tauri-build's generated `permissions/autogenerated/` files are committed is decided there.
+  - `@tauri-apps/api` arrives with `TauriApiClient`. Its `invoke` needs no core permission; anything else (events, windows) needs a grant and an ADR line.
 - **P8.6/P8.7 (D):**
   - The unreachable banner shows on `Unreachable` and `TimedOut`.
   - Server setup explains `Certificate`.
   - A 429 or 503 shows `retry_after`.
   - `expires_in` restarts a timed-out login or setup step.
   - Register-then-log-in never meets `AlreadyLoggedIn`, since registering holds no session.
+  - From group B: shadcn's packages (`cn`, class-variance-authority, radix-ui, tw-animate-css, lucide-react, and the `shadcn` package's tailwind.css or a copy of it) arrive with the first component, with the user's approval. Radix's dialogs insert `<style>` elements, which `style-src 'self'` blocks: check them in a debug build.
+- **E, from group B:** `scripts/threat-model-citations.mjs` walks only `crates/`, so it must also walk `apps/desktop/src-tauri` (skipping `node_modules`, `gen` and `target`) before B2 cites the desktop tests. A friend's dev build needs `bundle.active` and the installer's icons (P12.5 at the latest).
 - **P9.3:** fleet-server leaves `stable_crates` when azalea-auth arrives; fleet-client leaves with it, since fleet-server is its dev-dependency and `--all-targets` builds it.
 - **P11:** the WebSocket client joins fleet-client, with tokio-tungstenite and futures-util (§5).
 
@@ -162,11 +277,18 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   - The refresh rules the server's tests pin are tested from the client's side too, against the real server and against forced interleavings.
   - A logout or any other end can't leave a token behind, whatever a refresh in flight does.
   - A custom CA is pinned: nothing else is trusted for that profile, and a key picked by mistake is refused.
+- **Easier (group B):**
+  - The desktop shell is hardened before any command exists: a new command is refused until it's listed and granted, and `just tauri-check` fails on any change to the CSP, the capabilities, the global API or tauri's features.
+  - The webview can't be steered to another site, and a second launch can't open a second window.
 - **Harder:**
   - The refresh and the code step outlive their caller in a task the client spawns, an exception to the task-ownership rule.
   - fleet-client's tests build the whole server (and argon2 at the baseline), so they take a few seconds.
   - A server can't be configured with a request timeout above 19 s.
   - Requests serialize, so a field added to a request must serialize correctly too (the round-trip test covers it).
+  - (Group B) The desktop crate builds only on Windows. Linux CI never compiles it, coverage never measures it, and its cargo deny pass covers Windows only.
+  - (Group B) Doctests can't include the desktop crate.
+  - (Group B) Every hardening change also changes `scripts/tauri-hardening.mjs`.
+  - (Group B) No tool that needs TypeScript's compiler API can join before TypeScript 7.1.
 
 ## Alternatives considered
 - **Client-side request structs:** a second definition of every request.
@@ -189,3 +311,9 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
 - **The session code under the auth gate, or no gate:** the client's other security code (the certificate checks, the body cap) would stay at 80 %.
 - **Waiting for an in-flight refresh at logout:** a logout could take a refresh's full timeout, and that refresh would save after the logout began.
 - **The refresh inside its caller's future** (the first version): a dropped caller lost the rotated token. **A shared future instead of a task:** a future nobody polls any more stops too. **Reporting a lost task as `Unreachable`:** a bug or a shutdown would read as a server that's down.
+- **(Group B) deny ignores** for the GTK3 stack's advisories and license: global, so they would hide the same crates in a shipped Linux binary. **WebKitGTK in Linux CI:** a never-shipped GTK build compiled and tested on every push. **`cfg(windows)`-gated Tauri dependencies:** cfg noise, and no help for deny, whose graph combines its targets.
+- **(Group B) A relaxed CSP on Vite's dev server, or dev without one:** a second policy to keep, or no hot reload. **Tauri's default CSP modification:** the served header would differ from the config and let a future inline script in automatically.
+- **(Group B) tauri's default features** (`dynamic-acl`, `x11`, `dbus`), **or keeping `common-controls-v6` with a manifest linked into the test executables:** runtime capability adding, or build plumbing for an About dialog we don't have.
+- **(Group B) TypeScript 6.0.3, or 7 and 6 side by side:** slower checks, or two compilers to keep in step. **A full `shadcn init`, or clsx + tailwind-merge:** packages before anything uses them, or components that need editing. **Vitest in group C, jsdom 30, the cargo-installed Tauri CLI:** uncovered packages, a Node upgrade, or a from-source build in CI.
+- **(Group B) A generated icon or one the user provides:** more code for a placeholder, or a wait. **`afkfleet.desktop` as the identifier:** no domain behind it. **Only the script as the pin:** the ACL's behaviour untested until group C.
+- **(Group B) A dynamic VC++ runtime instead of excluding the desktop crate from doctests:** friends would need the redistributable.

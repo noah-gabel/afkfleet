@@ -13,3 +13,8 @@ secrets/
 
 # Local Claude Code settings
 .claude/settings.local.json
+
+# Frontend builds (`vite build`), and tauri-build's generated schemas
+apps/desktop/dist/
+packages/ui/dist/
+apps/desktop/src-tauri/gen/

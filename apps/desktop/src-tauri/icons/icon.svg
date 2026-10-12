@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <title>afkfleet</title>
+  <!-- afkfleet's placeholder icon: an original geometric mark, three dots in a row (a fleet). -->
+  <rect x="32" y="32" width="960" height="960" rx="208" fill="#2f6f5e"/>
+  <circle cx="272" cy="512" r="104" fill="#ffffff"/>
+  <circle cx="512" cy="512" r="104" fill="#ffffff"/>
+  <circle cx="752" cy="512" r="104" fill="#ffffff"/>
+</svg>
