@@ -91,6 +91,31 @@ async fn login_entry(db: &Database, user: UserId, millis: i64, failure: Option<&
     db.write().await.unwrap().commit(entry).await.unwrap();
 }
 
+/// Records an `auth.login` entry of the login step `step` (a version 7
+/// UUID's text) for `user` at `millis`: a success, or a wrong code.
+async fn step_entry(db: &Database, user: UserId, millis: i64, step: &str, success: bool) {
+    let outcome = if success {
+        AuditOutcome::Success
+    } else {
+        AuditOutcome::Failure
+    };
+    let metadata = if success {
+        AuditMetadata::new().text("login_step_id", step).unwrap()
+    } else {
+        AuditMetadata::new()
+            .text("step", "code")
+            .unwrap()
+            .text("reason", "wrong_code")
+            .unwrap()
+            .text("login_step_id", step)
+            .unwrap()
+    };
+    let entry = NewAuditEntry::new(at(T0 + millis), AuditAction::AUTH_LOGIN, outcome)
+        .target(AuditTarget::User(user))
+        .metadata(metadata);
+    db.write().await.unwrap().commit(entry).await.unwrap();
+}
+
 async fn attempts(db: &Database, user: UserId) -> FailedCodeAttempts {
     db.audit().failed_code_attempts(user).await.unwrap()
 }
@@ -152,6 +177,32 @@ async fn before_a_second_login_every_wrong_code_counts(
         FailedCodeAttempts {
             count: 2,
             last_at: Some(at(T0 + 2_000))
+        }
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_newest_logins_own_wrong_codes_dont_count_but_every_other_does(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    const PREVIOUS: &str = "018bcfe5-6800-7aaa-8aaa-aaaaaaaaaaaa";
+    const ABANDONED: &str = "018bcfe5-6800-7bbb-8bbb-bbbbbbbbbbbb";
+    const NEWEST: &str = "018bcfe5-6800-7ccc-8ccc-cccccccccccc";
+    let db = database(options).await;
+    let user = add_user(&db, 1).await;
+    step_entry(&db, user, 1_000, PREVIOUS, true).await;
+    step_entry(&db, user, 2_000, ABANDONED, false).await;
+    login_entry(&db, user, 3_000, Some("code")).await;
+    step_entry(&db, user, 4_000, NEWEST, false).await;
+    step_entry(&db, user, 5_000, NEWEST, false).await;
+    step_entry(&db, user, 6_000, NEWEST, true).await;
+
+    assert_eq!(
+        attempts(&db, user).await,
+        FailedCodeAttempts {
+            count: 2,
+            last_at: Some(at(T0 + 3_000))
         }
     );
 }

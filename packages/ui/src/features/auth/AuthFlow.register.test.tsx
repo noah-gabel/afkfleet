@@ -1,11 +1,12 @@
 import { screen, waitFor } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../../api/ApiClient";
 import { fakeApiError } from "../../api/FakeApiClient";
 import type { ApiErrorDetails } from "../../generated/ApiErrorDetails";
 import { PROFILE } from "../../test/fixtures";
-import { renderApp } from "../../test/renderApp";
+import { fakeTime, renderApp } from "../../test/renderApp";
+import { expectWait, limited } from "../../test/retryWait";
 import { REGISTERED } from "./authFlowReducer";
 
 const PASSWORD = "placeholder password";
@@ -24,25 +25,31 @@ function refusal(status: number, code: string, extra: Partial<ApiErrorDetails> =
 }
 
 /** The App on the register form, reached from the login form. */
-async function atRegister(handlers: Partial<ApiClient> = {}) {
-  const app = renderApp({
-    serverProfile: async () => PROFILE,
-    me: async () => {
-      throw fakeApiError("no_session");
+async function atRegister(
+  handlers: Partial<ApiClient> = {},
+  advanceTimers?: (ms: number) => unknown,
+) {
+  const app = renderApp(
+    {
+      serverProfile: async () => PROFILE,
+      me: async () => {
+        throw fakeApiError("no_session");
+      },
+      register: async () => ({
+        id: "01900000-0000-7000-8000-000000000002",
+        username: "newbot",
+        role: "member",
+      }),
+      login: async () => ({ step: "setup_required", expires_in: 600 }),
+      mfaEnroll: async () => ({
+        otpauth_uri: "otpauth://totp/afkfleet:newbot?secret=ABCD",
+        qr_svg: "data:image/svg+xml;base64,PHN2Zy8+",
+        secret: "ABCDEFGHIJKLMNOPQRST",
+      }),
+      ...handlers,
     },
-    register: async () => ({
-      id: "01900000-0000-7000-8000-000000000002",
-      username: "newbot",
-      role: "member",
-    }),
-    login: async () => ({ step: "setup_required", expires_in: 600 }),
-    mfaEnroll: async () => ({
-      otpauth_uri: "otpauth://totp/afkfleet:newbot?secret=ABCD",
-      qr_svg: "data:image/svg+xml;base64,PHN2Zy8+",
-      secret: "ABCDEFGHIJKLMNOPQRST",
-    }),
-    ...handlers,
-  });
+    advanceTimers === undefined ? {} : { advanceTimers },
+  );
   await screen.findByRole("heading", { name: "Log in" });
   await app.user.click(screen.getByRole("link", { name: "Register with an invite" }));
   await screen.findByRole("heading", { name: "Register" });
@@ -63,6 +70,10 @@ async function fill(
 }
 
 describe("registering with an invite", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("names the server and links back to the login", async () => {
     await atRegister();
 
@@ -126,14 +137,41 @@ describe("registering with an invite", () => {
     expect(screen.getByLabelText("Password").getAttribute("aria-invalid")).toBe("true");
   });
 
-  it.each([
-    [
-      "a rate limit",
-      () => refusal(429, "rate_limited", { retry_after_secs: 40 }),
-      "refused: rate_limited Try again in 40 s.",
-    ],
-    ["an unreachable server", () => fakeApiError("unreachable"), "fake unreachable"],
-  ])(
+  it("counts a refusal's wait down with Register disabled", async () => {
+    const time = fakeTime();
+    const app = await atRegister(
+      {
+        register: async () => {
+          throw limited();
+        },
+      },
+      time.advanceTimers,
+    );
+
+    await fill(app, INVITE);
+
+    await expectWait(app, time, { button: "Register", method: "register" });
+  });
+
+  it("counts the wait down on the login form after a rate limit on the login that follows", async () => {
+    const time = fakeTime();
+    const app = await atRegister(
+      {
+        login: async () => {
+          throw limited();
+        },
+      },
+      time.advanceTimers,
+    );
+
+    await fill(app, INVITE);
+
+    expect(await screen.findByText(REGISTERED)).toBeDefined();
+    await waitFor(() => expect(app.path()).toBe("/login"));
+    await expectWait(app, time, { button: "Log in", method: "login" });
+  });
+
+  it.each([["an unreachable server", () => fakeApiError("unreachable"), "fake unreachable"]])(
     "sends the user to the login form after %s on the login that follows",
     async (_, failure, reason) => {
       const app = await atRegister({

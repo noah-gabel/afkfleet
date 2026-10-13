@@ -7,7 +7,7 @@ use fleet_api_types::invites::CreateInviteRequest;
 use fleet_api_types::users::UserRole;
 use fleet_client::{ClientError, LoginStep};
 
-use crate::support::{OWNER, PASSWORD, Server, is_api, login, register, stored};
+use crate::support::{OWNER, PASSWORD, Server, is_api, login, register, step_up, stored};
 
 #[tokio::test]
 async fn health_answers_without_a_session() {
@@ -130,6 +130,7 @@ async fn the_sixth_login_a_minute_is_rate_limited_with_its_wait() {
 async fn an_invitee_registers_logs_in_and_sets_up_2fa() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
+    step_up(&owner).await;
     let created = owner
         .create_invite(&CreateInviteRequest {
             role: UserRole::Member,
@@ -156,6 +157,7 @@ async fn an_invitee_registers_logs_in_and_sets_up_2fa() {
 async fn a_weak_password_and_a_used_invite_are_refused_on_their_fields() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
+    step_up(&owner).await;
     let created = owner
         .create_invite(&CreateInviteRequest {
             role: UserRole::Member,

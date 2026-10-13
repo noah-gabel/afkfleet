@@ -1,6 +1,6 @@
-// The UI's own Vite config: its web entry (index.html) for development and, from P8.9,
-// the Playwright build; and Vitest. The desktop app bundles the UI through its own config
-// in apps/desktop.
+// The UI's own Vite config: its web entry (index.html) for development, and Vitest. The
+// desktop app bundles the UI through its own configs in apps/desktop: the app's, and the
+// e2e build's (P8.9).
 import tailwindcss from "@tailwindcss/vite";
 import react from "@vitejs/plugin-react";
 import { defineConfig } from "vitest/config";

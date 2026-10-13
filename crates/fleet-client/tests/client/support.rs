@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use chrono::DateTime;
-use fleet_api_types::auth::{LoginRequest, RegisterRequest};
+use fleet_api_types::auth::{LoginRequest, RegisterRequest, StepUpRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaEnrollResponse};
 use fleet_api_types::{ErrorCode, SecretText};
 use fleet_client::{
@@ -208,6 +208,18 @@ pub(crate) fn login(username: &str, password: &str) -> LoginRequest {
         username: SecretText::new(username.to_owned()),
         password: SecretText::new(password.to_owned()),
     }
+}
+
+/// Steps `client`'s session up with the shared password: the admins'
+/// writes need it (ADR-0016's amendment in Phase 8 group E). It spends one
+/// of the per-IP Login bucket's requests, so it's never part of `owner()`.
+pub(crate) async fn step_up<S: SessionStore>(client: &Client<S>) {
+    client
+        .step_up(&StepUpRequest {
+            password: SecretText::new(PASSWORD.to_owned()),
+        })
+        .await
+        .unwrap();
 }
 
 /// The registration of `username` with the invite `code`.

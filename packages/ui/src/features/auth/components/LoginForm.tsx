@@ -1,20 +1,24 @@
 // The password step (Plan.md P8.7): username and password, checked by the API's own
 // schema before anything is sent. What the server refuses shows next to its field, or above
-// the button with describeError's text (a 429 with its wait). A notice says why the flow
-// came back here; one about a session the flow can't use offers "Log out". While the
+// the button with describeError's text; a 429's wait counts down, the button waiting with it
+// (useRetryWait). A notice says why the flow
+// came back here; one about a session the flow can't use offers "Log out", and one with a
+// refusal's wait (a login that ran by itself) starts the countdown. While the
 // flow's call runs (`pending`), its links and buttons wait.
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Link } from "@tanstack/react-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useForm } from "react-hook-form";
 
 import { toApiError } from "../../../api/ApiError";
 import { describeError } from "../../../api/describeError";
 import { FormField } from "../../../components/FormField";
 import { PasswordInput } from "../../../components/PasswordInput";
+import { RetryWaitMessage } from "../../../components/RetryWaitMessage";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
+import { useRetryWait } from "../../../hooks/useRetryWait";
 import { showFieldErrors } from "../../../lib/formErrors";
 import type { Notice } from "../authFlowReducer";
 import { type LoginValues, loginForm } from "../schemas";
@@ -41,14 +45,29 @@ export function LoginForm({
     defaultValues: { username, password: "" },
   });
   const [formError, setFormError] = useState<string>();
+  const wait = useRetryWait();
   const errors = form.formState.errors;
+  const noticeWait = notice?.wait;
+  const { startFor } = wait;
+  useEffect(() => {
+    if (noticeWait !== undefined) {
+      startFor(noticeWait);
+    }
+  }, [noticeWait, startFor]);
 
   const submit = form.handleSubmit(async (values) => {
+    if (wait.waiting !== null) {
+      return;
+    }
     setFormError(undefined);
+    wait.reset();
     try {
       await onSubmit(values);
     } catch (rejection) {
       const error = toApiError(rejection).error;
+      if (wait.start(error)) {
+        return;
+      }
       if (!showFieldErrors(form.setError, error, { username: "username", password: "password" })) {
         setFormError(describeError(error));
       }
@@ -96,7 +115,11 @@ export function LoginForm({
           )}
         </FormField>
         <FormError message={formError} />
-        <Button type="submit" disabled={pending || form.formState.isSubmitting}>
+        <RetryWaitMessage wait={wait} />
+        <Button
+          type="submit"
+          disabled={pending || form.formState.isSubmitting || wait.waiting !== null}
+        >
           Log in
         </Button>
       </form>

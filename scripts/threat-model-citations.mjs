@@ -9,7 +9,8 @@
 // or a bare name. Anything else in backticks (`tests/connector.rs`, `cargo deny`,
 // `unsafe_code = "forbid"`) is skipped.
 //
-// A citation's last segment must be a test function in a `.rs` file under crates/: a `fn`
+// A citation's last segment must be a test function in a `.rs` file under crates/ or the
+// desktop crate (apps/desktop/src-tauri, Phase 8): a `fn`
 // (`async` and `pub(crate)` allowed) after a test attribute (`#[test]`, `#[tokio::test…]`,
 // `#[sqlx::test…]`, `#[rstest]`, a `proptest!` block's `#[test]`), with other attributes,
 // doc comments and blank lines allowed in between. Each segment before it must be that
@@ -18,7 +19,7 @@
 //
 // `just scripts-test` runs the check on the real files through the tests, so CI runs it.
 // Tests: scripts/threat-model-citations.test.mjs.
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join, relative, sep } from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -180,7 +181,9 @@ export function check(markdown, files) {
     for (const citation of citations(cell.text)) {
       cited += 1;
       if (!resolves(citation, index)) {
-        problems.push(`line ${cell.line}: \`${citation}\` names no test under crates/`);
+        problems.push(
+          `line ${cell.line}: \`${citation}\` names no test under crates/ or apps/desktop/src-tauri/`,
+        );
       }
     }
   }
@@ -190,26 +193,36 @@ export function check(markdown, files) {
   return problems;
 }
 
-/** Every `.rs` file under `root`'s crates/, skipping build output, as `{ path, source }`. */
+/** Folders that hold no test of ours: build output, Tauri's generated code, dependencies. */
+const SKIPPED = new Set(["target", "gen", "node_modules"]);
+
+/**
+ * Every `.rs` file under `root`'s crates/ (paths relative to crates/) and its desktop crate
+ * (apps/desktop/src-tauri, paths relative to `root`), skipping build output, generated code,
+ * dependencies and hidden folders, as `{ path, source }`.
+ */
 export function rustFiles(root) {
-  const crates = join(root, "crates");
   const files = [];
-  const walk = (folder) => {
+  const walk = (folder, base) => {
     for (const entry of readdirSync(folder, { withFileTypes: true })) {
       const full = join(folder, entry.name);
       if (entry.isDirectory()) {
-        if (entry.name !== "target" && !entry.name.startsWith(".")) {
-          walk(full);
+        if (!SKIPPED.has(entry.name) && !entry.name.startsWith(".")) {
+          walk(full, base);
         }
       } else if (entry.isFile() && entry.name.endsWith(".rs")) {
         files.push({
-          path: relative(crates, full).split(sep).join("/"),
+          path: relative(base, full).split(sep).join("/"),
           source: readFileSync(full, "utf8"),
         });
       }
     }
   };
-  walk(crates);
+  walk(join(root, "crates"), join(root, "crates"));
+  const desktop = join(root, "apps", "desktop", "src-tauri");
+  if (existsSync(desktop)) {
+    walk(desktop, root);
+  }
   return files;
 }
 

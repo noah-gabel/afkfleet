@@ -8,7 +8,7 @@ import type { ApiErrorDetails } from "../generated/ApiErrorDetails";
 import type { LoginStepResponse } from "../generated/LoginStepResponse";
 import type { MfaEnrollResponse } from "../generated/MfaEnrollResponse";
 import { me, PROFILE } from "./fixtures";
-import { renderApp } from "./renderApp";
+import { type RenderedApp, renderApp } from "./renderApp";
 
 export const PASSWORD = "placeholder password";
 export const SECRET = "ABCDEFGHIJKLMNOPQRST";
@@ -68,7 +68,7 @@ export async function logIn(app: Awaited<ReturnType<typeof atLogin>>, username =
   await app.user.click(screen.getByRole("button", { name: "Log in" }));
 }
 
-export async function enterCode(app: Awaited<ReturnType<typeof atLogin>>, code: string) {
+export async function enterCode(app: Pick<RenderedApp, "user">, code: string) {
   const field = await screen.findByLabelText("Code");
   await app.user.clear(field);
   await app.user.type(field, code);
@@ -76,7 +76,7 @@ export async function enterCode(app: Awaited<ReturnType<typeof atLogin>>, code: 
 }
 
 /** Everything the QueryClient holds, as text. */
-export function cacheText(app: Awaited<ReturnType<typeof atLogin>>): string {
+export function cacheText(app: Pick<RenderedApp, "runtime">): string {
   const queries = app.runtime.queryClient
     .getQueryCache()
     .getAll()

@@ -70,7 +70,7 @@ On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: th
 
 | Command | What it does |
 |---|---|
-| `just check` | `cargo fmt --check`, clippy (`--all-targets -D warnings`), `cargo doc --no-deps --workspace` with `RUSTDOCFLAGS="-D warnings"`, nextest default profile, doctests, `db-check`, `gen-check`, `testkit-check`, `tauri-check`, the `scripts/` tests, and biome + `tsc --noEmit` once the frontend exists. **Run before saying a task is done.** |
+| `just check` | `cargo fmt --check`, clippy (`--all-targets -D warnings`), `cargo doc --no-deps --workspace` with `RUSTDOCFLAGS="-D warnings"`, nextest default profile, doctests, `db-check`, `gen-check`, `testkit-check`, `tauri-check`, the `scripts/` tests, biome, `tsc --noEmit` and Vitest in every frontend package, and `just e2e`. **Run before saying a task is done.** |
 | `just test [crate]` | nextest for the workspace or one crate |
 | `just test-slow` | Pulls the server image and builds the agent's image, then runs the nextest `slow` profile with fleet-mc's test-only `fault-injection` feature, one Minecraft container or compose stack at a time (needs Docker) |
 | `just test-real-account` | **The user only; the AI never runs it.** nextest `manual` profile: the user's real token from `secrets/p1.8-account.txt` joins a local online-mode container and sends signed chat (needs Docker) |
@@ -91,13 +91,12 @@ On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: th
 | `just dev-app` | `tauri dev` in `apps/desktop`: Vite's dev server on `localhost:1420` and the app, with hot reload |
 | `just app-build [args]` | `tauri build` in `apps/desktop`: the frontend, then the exe with it embedded (`target/release/`; `--debug` for a debug exe with devtools). No installer yet |
 | `just icons` | Renders `apps/desktop/src-tauri/icons/icon.ico` from `icon.svg` with `tauri icon`, through a fresh folder in `target/`, keeping only `icon.ico` (`scripts/icons.mjs`) |
-| `just ui-test` / `just e2e` | Vitest in every frontend package / Playwright |
+| `just ui-test` / `just e2e` | Vitest in every frontend package / the e2e suite: builds both shipped bundles into `target/e2e/` and the e2e bundle, runs `scripts/e2e-bundle-guard.mjs`, then Playwright in the installed Edge (`channel: "msedge"`, nothing downloaded) under the release CSP (part of `check` and `ci`; ADR-0017) |
 | `just ci` | Everything CI runs |
 | `just testkit-check` | Fails if any workspace member depends on fleet-testkit outside its dev-dependencies (`cargo tree`, through `scripts/testkit-check.mjs`; ADR-0015) |
 | `just tauri-check` | Fails if the desktop app's hardening changed: the CSP and every other `app.security` setting, `withGlobalTauri`, the windows and the dev URL, the one capability and what it grants, build.rs's command list and the empty default permission, and tauri's resolved features (`cargo tree`; never `devtools`, `dynamic-acl` or `custom-protocol`). Through `scripts/tauri-hardening.mjs`, whose expected values change only together with an ADR (ADR-0017) |
 | `just fmt-check` · `clippy` · `docs` · `doctest` · `test-ci` · `stable-check` · `db-check` · `migrations-check` · `gen-check` · `testkit-check` · `tauri-check` · `scripts-test` · `ui-check` · `ui-audit` | The building blocks of `check` and `ci`. Each CI job runs one of them, so local and CI runs can't drift apart |
 
-Recipes for tools that arrive in later phases (`e2e`) print the phase they arrive in and exit with an error until then.
 
 ## Architecture rules
 **Crates and dependencies** (full table in Plan.md §4):
@@ -219,7 +218,7 @@ fleet-server/src/
 | Components | shadcn/ui (radix-nova), copied from its registry with `cn`, `class-variance-authority` and single Radix packages (`@radix-ui/react-slot`, `@radix-ui/react-label`; never the `radix-ui` umbrella) |
 | Icons | `lucide-react` |
 | Toasts | `sonner` |
-| Tests | `vitest`, `jsdom`, `@testing-library/react` (+ its peer `@testing-library/dom`), `@testing-library/user-event`, `msw`, `@playwright/test` |
+| Tests | `vitest`, `jsdom`, `@testing-library/react` (+ its peer `@testing-library/dom`), `@testing-library/user-event`, `msw` with `@msw/playwright` (in the Playwright process only), `@playwright/test` (the installed Edge), `@types/node` (`apps/desktop`'s e2e config and specs) |
 | Lint & format | `@biomejs/biome` |
 | Tauri bridge | `@tauri-apps/api` (`apps/desktop` only) |
 | Tauri CLI | `@tauri-apps/cli` (`apps/desktop` dev only) |
@@ -358,12 +357,13 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 - `apps/desktop` implements `ApiClient` as `TauriApiClient`, with `invoke` injected, and passes it to `<App apiClient={…} />`. It imports only `@tauri-apps/api/core`: any other Tauri API needs a capability grant and an ADR. Biome's `noRestrictedImports` enforces both rules (ADR-0017).
 - A new command changes build.rs's `COMMANDS`, `capabilities/main.json`, `scripts/tauri-hardening.mjs`, `src-tauri/tests/ipc-contract.json`, `ApiClient`, `TauriApiClient` and `FakeApiClient` together.
 - Organize by feature: `src/features/<feature>/{components,hooks,routes}` with tests alongside. Shared primitives go in `src/components/ui` (shadcn).
+- `apps/desktop/e2e` is the e2e build: the app's UI with the real `TauriApiClient` over a fetch-based `invoke`, its fake backend answering through MSW in the Playwright process. It never ships: Biome refuses any import of it in `apps/desktop/src`, and `just e2e`'s bundle guard checks both shipped bundles (ADR-0017).
 - **shadcn components are copied from the registry** (`https://ui.shadcn.com/r/styles/radix-nova/<name>.json`), never added with the CLI, which installs packages of its own choosing. The copy gets the CLI's edits (aliases, no `"use client"`), its `radix-ui` import becomes the single `@radix-ui/react-*` package, and a lint finding gets a minimal code fix, never an ignore comment; the file's header lists every edit (ADR-0017).
 
 **Data and state**
 - Components use hooks (`useBots()`, …) built on TanStack Query over the injected `ApiClient`. **Never call `fetch` or `invoke` inside a component.**
 - TanStack Query holds server state; small `zustand` stores hold UI-only state, one set per `App` (`app/stores.ts`).
-- **A call whose request or answer carries a secret** (a password, a TOTP secret or QR code, recovery codes, an invite code) **is a direct call** through `useApiClient()`, never a TanStack query or mutation, which would keep it in their caches: `login`, `register`, `loginMfa`, `mfaEnroll`, `mfaConfirm`, `stepUp`, `changePassword`, `createInvite`. The secret lives only in the component's state and is dropped when its step ends (ADR-0017).
+- **A call whose request or answer carries a secret** (a password, a TOTP secret or QR code, recovery codes, an invite code) **is a direct call** through `useApiClient()`, never a TanStack query or mutation, which would keep it in their caches: `login`, `register`, `loginMfa`, `mfaEnroll`, `mfaConfirm`, `mfaReset`, `stepUp`, `changePassword`, `createInvite`. The secret lives only in the component's state and is dropped when its step ends (ADR-0017).
 - Every call goes through the watched client (`app/watched.ts`): it raises the banner on `unreachable`/`timed_out`/`certificate` and ends a signed-in session on `no_session`. Don't handle those codes again in a screen.
 - Forms use react-hook-form with zod schemas that mirror the server's limits (`src/api/schemas.ts`). The server stays authoritative.
 - `App` wraps its client in `validated()`, so every input passes its zod schema before any call. `src/api/limits.ts` holds only numeric constants named like the Rust ones; fleet-api-types' `tests/limits.rs` keeps them equal.

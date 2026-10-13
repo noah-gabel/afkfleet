@@ -38,7 +38,7 @@ use chrono::{DateTime, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::auth::SessionPolicy;
 use fleet_core::authz::Role;
-use fleet_core::id::UserId;
+use fleet_core::id::{LoginStepId, UserId};
 use fleet_core::value::Username;
 use fleet_server::app::auth::TokenService;
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
@@ -168,6 +168,7 @@ async fn login(db: &Database, tokens: &TokenService, mfa: &MfaService) -> LoginS
     );
     LoginService::new(
         clock,
+        Arc::new(SeededRandom::new(23)),
         Arc::new(db.clone()),
         Arc::new(passwords),
         lockout,
@@ -452,7 +453,7 @@ async fn dev_mode_adds_only_the_document_to_the_public_routes(
 }
 
 #[sqlx::test(migrations = false)]
-async fn the_2fa_routes_are_registered_with_their_access_and_class(
+async fn the_setup_and_step_up_routes_are_registered_with_their_access_and_class(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
@@ -472,6 +473,9 @@ async fn the_2fa_routes_are_registered_with_their_access_and_class(
         BTreeSet::from([
             entry(Method::POST, "/api/v1/me/mfa/reset", RateClass::Standard),
             entry(Method::POST, "/api/v1/me/password", RateClass::Login),
+            entry(Method::PATCH, "/api/v1/users/{id}", RateClass::Standard),
+            entry(Method::POST, "/api/v1/invites", RateClass::Standard),
+            entry(Method::DELETE, "/api/v1/invites/{id}", RateClass::Standard),
         ])
     );
     db.close().await;
@@ -499,10 +503,7 @@ async fn the_authed_routes_are_registered_with_their_class(
                 RateClass::Standard
             ),
             entry(Method::GET, "/api/v1/users", RateClass::Standard),
-            entry(Method::PATCH, "/api/v1/users/{id}", RateClass::Standard),
-            entry(Method::POST, "/api/v1/invites", RateClass::Standard),
             entry(Method::GET, "/api/v1/invites", RateClass::Standard),
-            entry(Method::DELETE, "/api/v1/invites/{id}", RateClass::Standard),
         ])
     );
     db.close().await;
@@ -592,6 +593,7 @@ fn mfa_token(challenges: &Challenges, user: UserId) -> SecretString {
                 password_changed_at: start(),
             },
             None,
+            LoginStepId::new_v7(start(), [9; 10]).unwrap(),
         )
         .unwrap()
         .token

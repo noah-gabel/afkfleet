@@ -58,13 +58,13 @@ export interface ApiClient {
   revokeSession(id: string): Promise<void>;
   /** A page of the users (Admins and the Owner). */
   users(before?: string, limit?: number): Promise<UserPage>;
-  /** One change of a user: a role or `disabled`. */
+  /** One change of a user: a role or `disabled`, after a step-up. */
   patchUser(id: string, request: UserPatchRequest): Promise<UserResponse>;
   /** A page of the invites. */
   invites(before?: string, limit?: number): Promise<InvitePage>;
-  /** A new invite, whose code is answered this once. */
+  /** A new invite, whose code is answered this once, after a step-up. */
   createInvite(request: CreateInviteRequest): Promise<CreatedInviteResponse>;
-  /** Revokes a pending invite. */
+  /** Revokes a pending invite, after a step-up. */
   revokeInvite(id: string): Promise<void>;
 }
 

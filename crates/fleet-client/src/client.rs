@@ -261,11 +261,13 @@ impl<S: SessionStore> Client<S> {
         self.core.users(query).await
     }
 
-    /// `PATCH /users/{id}`: one change of a user, a role or `disabled`.
+    /// `PATCH /users/{id}`: one change of a user, a role or `disabled`,
+    /// after [`Client::step_up`] within 5 minutes.
     ///
     /// # Errors
-    /// The server's 403, 404 or 422 as [`ClientError::Api`]; any other error
-    /// as for every authenticated call.
+    /// The server's 403 (`step_up_required` without a fresh step-up,
+    /// `forbidden` for a change that isn't the caller's), 404 or 422 as
+    /// [`ClientError::Api`]; any other error as for every authenticated call.
     pub async fn patch_user(
         &self,
         id: UserId,
@@ -274,12 +276,14 @@ impl<S: SessionStore> Client<S> {
         self.core.patch_user(id, request).await
     }
 
-    /// `POST /invites`: a new invite, whose code is answered this once.
+    /// `POST /invites`: a new invite, whose code is answered this once,
+    /// after [`Client::step_up`] within 5 minutes.
     ///
     /// # Errors
-    /// The server's 403, 404 or 409 (too many pending invites) as
-    /// [`ClientError::Api`]; any other error as for every authenticated
-    /// call.
+    /// The server's 403 (`step_up_required` without a fresh step-up,
+    /// `forbidden` for a role that isn't the caller's to invite), 404 or 409
+    /// (too many pending invites) as [`ClientError::Api`]; any other error as
+    /// for every authenticated call.
     pub async fn create_invite(
         &self,
         request: &CreateInviteRequest,
@@ -296,12 +300,14 @@ impl<S: SessionStore> Client<S> {
         self.core.invites(query).await
     }
 
-    /// `DELETE /invites/{id}`: revokes a pending invite.
+    /// `DELETE /invites/{id}`: revokes a pending invite, after
+    /// [`Client::step_up`] within 5 minutes.
     ///
     /// # Errors
-    /// The server's 409 for a used invite, or 403 or 404, as
-    /// [`ClientError::Api`]; any other error as for every authenticated
-    /// call.
+    /// The server's 409 for a used invite, or 403 (`step_up_required`
+    /// without a fresh step-up, `forbidden` for an invite that isn't the
+    /// caller's to revoke) or 404, as [`ClientError::Api`]; any other error
+    /// as for every authenticated call.
     pub async fn revoke_invite(&self, id: InviteId) -> Result<(), ClientError> {
         self.core.revoke_invite(id).await
     }

@@ -9,8 +9,10 @@ import { useForm } from "react-hook-form";
 import { toApiError } from "../../../api/ApiError";
 import { describeError } from "../../../api/describeError";
 import { FormField } from "../../../components/FormField";
+import { RetryWaitMessage } from "../../../components/RetryWaitMessage";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
+import { useRetryWait } from "../../../hooks/useRetryWait";
 import { showFieldErrors } from "../../../lib/formErrors";
 import { NEXT_CODE, type Step } from "../authFlowReducer";
 import { endsIn, useDeadline } from "../hooks/useDeadline";
@@ -37,10 +39,15 @@ export function CodeStep({
     defaultValues: { code: "" },
   });
   const [formError, setFormError] = useState<string>();
+  const wait = useRetryWait();
   const errors = form.formState.errors;
 
   const submit = form.handleSubmit(async (values) => {
+    if (wait.waiting !== null) {
+      return;
+    }
     setFormError(undefined);
+    wait.reset();
     if (Date.now() >= step.deadline) {
       onExpire();
       return;
@@ -49,6 +56,9 @@ export function CodeStep({
       await onSubmit(withoutSpaces(values.code));
     } catch (rejection) {
       const error = toApiError(rejection).error;
+      if (wait.start(error)) {
+        return;
+      }
       if (!showFieldErrors(form.setError, error, { code: "code" })) {
         setFormError(describeError(error));
       }
@@ -80,8 +90,12 @@ export function CodeStep({
           </p>
         )}
         <FormError message={formError} />
+        <RetryWaitMessage wait={wait} />
         <div className="flex gap-2">
-          <Button type="submit" disabled={pending || form.formState.isSubmitting}>
+          <Button
+            type="submit"
+            disabled={pending || form.formState.isSubmitting || wait.waiting !== null}
+          >
             Verify
           </Button>
           <Button type="button" variant="outline" disabled={pending} onClick={onCancel}>

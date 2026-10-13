@@ -2,8 +2,9 @@
 
 /**
  * The wrong 2FA codes typed for the user after their previous successful
- * login: what happened since they last logged in, their own typos at this
- * login included.
+ * login: what happened since they last logged in. The wrong codes of the
+ * newest login's own step, the user's typos before it succeeded, aren't
+ * counted, so a count above 0 means a login step that never succeeded.
  */
 export type FailedCodeAttempts = { 
 /**

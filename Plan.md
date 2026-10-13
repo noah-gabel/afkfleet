@@ -288,8 +288,8 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Toasts | `sonner` | 2.0.8 (approved in P8.6), **patched**: `patches/sonner@2.0.8.patch` removes its `__insertCSS(…)` call, a `<style>` the release CSP blocks; its stylesheet comes through `styles.css`. A bump redoes the patch and runs `Toaster.test.tsx` ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 | Tauri bridge | `@tauri-apps/api` 2 | 2.12.1 (approved in P8.5). Only in `apps/desktop`, and only `@tauri-apps/api/core`'s `invoke`, injected into `TauriApiClient`; Biome refuses every other Tauri import ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 | Unit / component tests | `vitest`, `@testing-library/react`, `@testing-library/user-event`, `jsdom` | vitest 5.0.3, jsdom 29.1.1 (jsdom 30 needs Node ^24.15), @testing-library/react 16.3.3 with its peer `@testing-library/dom` 10.4.2 (approved in P8.2); `@testing-library/user-event` 14.6.7 arrived in P8.6 |
-| API mocking | `msw` | |
-| E2E | `@playwright/test` | |
+| API mocking | `msw` | 3.0.3 (approved in P8.9), with `@msw/playwright` 0.7.0: MSW's handlers on Playwright's routing, in the Playwright process only; nothing of MSW reaches any bundle ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
+| E2E | `@playwright/test` | 1.64.0 (approved in P8.9): the installed Microsoft Edge (`channel: "msedge"`), so no browser is downloaded; `@types/node` 24.19.2 for its config and specs ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 | Lint & format | `@biomejs/biome` | |
 
 ### Tools & infrastructure (not crates)
@@ -396,7 +396,10 @@ The full analysis lives in `docs/threat-model.md`.
   - replacing 2FA (`POST /me/mfa/reset`, group D: the new authenticator replaces the old one at confirm)
   - deleting an MC account
   - changing a role
+  - disabling or enabling a user, creating or revoking an invite (Phase 8, group E)
   - rotating keys
+
+> Note (§7.2, Phase 8, group E, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)'s amendment, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **every admin write is a step-up action.** `PATCH /users/{id}` (a role or `disabled`), `POST /invites` and `DELETE /invites/{id}` register with `step_up_route`, checked by the extractor only, so an unlocked PC with a live Owner or Admin session can't change roles, disable users or mint invites without the password. Listing stays a plain authed route. The app sends the action and, on 403 `step_up_required`, asks for the password and retries once.
 
 > Note (§7.2, Phase 7, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **step-up is a session stamp.** `POST /auth/step-up {password}` sets the session's `stepped_up_at`; a step-up action needs it at most 5 min old, otherwise it answers 403 `step_up_required`. A wrong password counts toward the lockout. No request body carries the current password.
 
@@ -515,7 +518,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 | Component | `crates/<crate>/tests/*.rs` | Actor with fake session; services on a temporary SQLite DB; handlers via `tower::ServiceExt::oneshot` | tokio `test-util`, `#[sqlx::test]`, fleet-testkit |
 | Integration | `crates/<crate>/tests/*.rs` | In-process server + `fleet-client`; gRPC over loopback with test PKI; azalea against a Minecraft container (*slow*) | testcontainers, nextest `slow` profile |
 | Frontend | `packages/ui/src/**/*.test.tsx` | Components, hooks, flows against a `FakeApiClient` or MSW | Vitest, Testing Library, MSW |
-| E2E | `packages/ui/e2e/`, `deploy/` | UI flows (Playwright against the web build + MSW); Compose smoke test | Playwright, Docker Compose |
+| E2E | `apps/desktop/e2e/`, `deploy/` | UI flows: Playwright in Edge, under the release CSP, against the e2e build (the desktop app's UI and TauriApiClient over a fetch-based `invoke`), with MSW's handlers in the Playwright process (P8.9); Compose smoke test | Playwright, MSW, Docker Compose |
 
 **Rules**
 - **Deterministic.**
@@ -3073,7 +3076,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **A keychain entry the app can't read** (`tests/bridge/auth.rs`, the real `KeychainStore` on keyring-core's mock): `me()` answers `store`, `logout()` removes it, and the next login works. It pins existing behaviour, so it was shown red through a temporary change to fleet-client's logout (skipping the clear after a failed load), then reverted.
   > - **Found while building:** a check that settled before React rendered flipped `checking` twice in one batch, so the banner's next wait never started; the wait now chains from the check itself.
   > - **Found in the live check** (a `just app-build --debug` exe over WebView2's DevTools protocol): zod's JIT probe (`new Function`) caused a CSP violation at every start. zod is now jitless (`src/api/zod.ts`, the only module that may import zod), with a red-first guard test; after it, no violation and no `<style>` on any screen walked.
-- [ ] **P8.7** 🔴 Screens:
+- [x] **P8.7** 🔴 Screens:
   - server setup
   - login, including the 2FA step
   - register with an invite
@@ -3111,10 +3114,83 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Edge's own reveal button:** WebView2 adds Edge's password-reveal (and clear) button to inputs, so a password field showed two eye icons; `styles.css` hides `input::-ms-reveal` and `input::-ms-clear`, checked in the debug exe (two icons before, one after).
   > - **Smaller:** the setup secret is requested once per step, also under StrictMode; a step's deadline counts from when its request was sent; a failed login after registering lands on a real `/login` (with its notice and username), whose Register link works.
   > - **Tests,** red first: 13 flow tests and 2 switch tests against the old code, and the reducer's 11 of 13 against the old reducer. 8 more pin behaviour the old code had (double submits, "Continue as"'s guard, the generation rule, `me`'s invalidation at every way in, the setup step's deadline check), shown red through temporary mutations of those guards.
-- [ ] **P8.8** 🔴 Admin screens:
+
+  > Note (P8.7, group E's part: the profile; the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
+  > - **The layout:** `/profile` holds the account, the warnings, "Change password", "Replace authenticator" with the recovery codes left, and the sessions. `/profile/password` and `/profile/2fa` are routes of their own beside it, so leaving a flow drops its password, secret and codes.
+  > - **Step-up first.** Both flows start with "Confirm it's you" (`stepUp`, a direct call; the password lives only in `StepUpForm` until it answers).
+  >   - **The password:** then the new password, typed twice, before the step-up's 5 minutes end, counted from when it was sent (`STEP_UP_WINDOW_SECS`, mirrored in `limits.ts` and checked by `tests/limits.rs`).
+  >   - **The authenticator:** `mfaReset` straight into the 2FA setup, then the new recovery codes and "Finish", without a new login.
+  >   - `step_up_required` or a deadline goes back to the password with "That step ended. Enter your password again."
+  > - **The warnings:** wrong 2FA codes since the previous login (naming the last), and 3 or fewer recovery codes left. They show on the profile and on Home, where every sign-in lands; on Home "Dismiss" hides one until the next sign-in.
+  > - **The wrong-code count leaves out the typos of the login that succeeded** (a server change). The password step mints a `LoginStepId`, which the code step's `auth.login` entries record as `login_step_id`, and `GET /me` leaves out the newest success's own step ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)'s amendment).
+  > - **Sessions:**
+  >   - "Show more".
+  >   - Another session's "Log out" runs at once; this session's is the header's logout.
+  >   - "Log out all other sessions" asks first, then fetches every page the server lists. It runs to the end even when the screen is left, and reports on the screen or in a toast.
+
+  > Note (P8.7, as built, group E) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
+  > - **Shared with the sign-in flow:** `hooks/useStepGuard` (the step-id and pending guards), `useEnrollment`, `nextSetup`, `isStepGone`, and `SetupStep`'s and `RecoveryCodesStep`'s texts as props.
+  > - **Found while building:** `showFieldErrors` kept only a field's last message, so a weak password showed only zxcvbn's last hint. Every message now shows, one per line (red first).
+  > - **Tests,** red first:
+  >   - the UI against compiling stubs: 52 of the new and changed tests (the reducer 4 of 7, the notices store 2 of 3, navigation 2 of 10, the router 4 of 12, the overview 9 of 11, the sessions 9 of 9, the password flow 14 of 14, the 2FA flow 8 of 8); the rest are what a stub also does
+  >   - the server's wrong-code tests 3 of 3 against the old query
+  >   - `tests/limits.rs` on the missing constant
+  >   - `formErrors` 1 of 3
+  >
+  >   Tests that pin existing behaviour were shown red through temporary mutations: the login step's metadata and its error path, two `formErrors` cases, and the sessions' "every page" and "runs to the end" cases.
+
+  > Note (P8.7, the user's review of PR #38) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **A refusal's wait counts down.** A 429 (or a 503 busy) showed "Try again in N s." as static text, with the submit still enabled, so every click during the wait was refused again.
+  > - **The countdown:** every form that sends a request shows the wait counting down (`useRetryWait`, `RetryWaitMessage`). Those are login, the code step, the 2FA setup, registering, the step-up (the profile's and the admin prompt's), the new password and the server form. The form keeps its submit disabled until the wait reaches zero, then says once "You can try again now."
+  > - **Screen readers** hear the start (the refusal, with the whole wait in words) and the end (a status), never each second: the ticking number is hidden from them.
+  > - **A login that ran by itself** (after registering, or after the recovery codes) hands its wait to the login form's notice, which counts it down.
+  > - **After a reload** the countdown is gone, and the next try shows the server's remaining wait again; the server enforces it.
+  > - **Tests,** red first with fake timers against a stub hook: the hook 4 of 6, the message 2 of 3, and each form 10 of 10.
+- [x] **P8.8** 🔴 Admin screens:
   - users: change role, disable
   - invites: the code is shown **once**, with a copy button
-- [ ] **P8.9** Playwright against the Vite web build with MSW, for login, 2FA and invite registration.
+
+  > Note (P8.8, group E, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
+  > - **Only what the server would allow.** `permissions.ts` mirrors `authorize()` (`userActions`, `inviteRoles`, `canRevoke`). Its test reads fleet-core's authorization-matrix snapshot itself and checks every cell of its Users, CreateInvite and RevokeInvite tables, so a rule change fails the UI's test.
+  > - **Step-up for the admin writes** (a server change). `PATCH /users/{id}`, `POST /invites` and `DELETE /invites/{id}` are `step_up_route`s, checked by the extractor only ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)'s amendment). The screens send the write; on 403 `step_up_required` they show "Confirm it's you" at the row or the form, step up and send it once more (`useStepUpAction`).
+  > - **Inline confirmations** (no dialog) for a role change, disabling and revoking an invite, each naming what it ends; enabling runs at once.
+  > - **The invite's code** is shown once, in the screen's state only, with the clipboard note on both copy buttons:
+  >   - "Copy invitation": the server, the code, its end with its time zone, and a custom CA's fingerprints with "Ask me for the CA file"
+  >   - "Copy code"
+  > - **Paging:** "Show more" on every list.
+
+  > Note (P8.8, as built, group E) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **tests,** red first:
+  > - the server's step-up tests 5 of 5 against the old registration
+  > - fleet-client's and the desktop's admin flows (4 and 3) until they stepped up
+  > - the 38 admin tests that fail without their stamps
+  > - the UI 33 of 38 against all-refusing mirrors and the placeholder screens; the other 5 read the snapshot's tables and check refusals
+- [x] **P8.9** Playwright against the Vite web build with MSW, for login, 2FA and invite registration.
+
+  > Note (P8.9, group E, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
+  > - **The e2e build** (`apps/desktop/e2e`): the desktop app's UI with its real `TauriApiClient`, over `fetchInvoke`, which sends each command's args as JSON to `/e2e/ipc/<command>`. MSW's handlers answer in the Playwright process through `@msw/playwright`, from a fake of the Rust side and the server that answers exactly `ipc-contract.json`'s commands. There is no service worker, and no MSW code or token in any bundle.
+  > - **The browser and the CSP:**
+  >   - The installed Edge (`channel: "msedge"`): nothing is downloaded.
+  >   - `vite preview` serves the release CSP with only `connect-src 'self'`.
+  >   - Every browser spec freezes `Object.prototype`, and fails on a CSP violation, a console error or an injected style.
+  > - **Never shipped:** Biome refuses any `e2e` import in `apps/desktop/src`. `just e2e` builds both shipped bundles and runs `scripts/e2e-bundle-guard.mjs` before Playwright.
+  > - **The specs:**
+  >   - login with the code step
+  >   - the first login's 2FA setup
+  >   - registering with an invite
+  >   - the DoD's story: an Admin invites; the invitee registers, sets up 2FA and logs in; the Admin finds them in the user list
+  >
+  >   `just e2e` is in `check` and `ci`, and a new `e2e` CI job runs on windows-latest.
+  > - **Dependencies,** exact devDependencies of apps/desktop: `@playwright/test` 1.64.0, `msw` 3.0.3, `@msw/playwright` 0.7.0 and `@types/node` 24.19.2. None runs an install script. vitest's `@vitest/mocker` names msw ^2 as an optional peer, which pnpm reports as unmet; vitest runs only in Node here and never loads it.
+
+  > Note (P8.9, as built, group E) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
+  > - **17 specs:** 5 in Edge (two login specs, the first login, registering, the story) and 12 in Node (`fetchInvoke` through `TauriApiClient`, the CSP and its served header, the fake against the contract).
+  > - **Red first:** the bundle guard's script 3 of 4 against a stub. The specs were written with the code, so each was shown red through a temporary mutation:
+  >   - a `<style>`, a `console.error` and an `eval` in the e2e entry, each caught (the style count with a `style-src-elem` violation, the console, a `script-src` violation)
+  >   - the story, with the fake skipping the step-up
+  >   - `e2eCsp` returning its input: 1 of 2
+  >   - `fetchInvoke` resolving everything: 6 of 7
+  >   - the fake missing a command: 1 of 3
+  >   - the real guard, with the marker added to the shipped desktop bundle
+  > - **Every answer is a 200 with an envelope:** the browser logs a failed request as a console error, which the guards would count.
 
 **Security:**
 - Tokens never reach JavaScript.
@@ -3125,11 +3201,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - A friend can install a dev build, register with an invite and log in with 2FA, and an Admin can manage users.
 - Vitest and Playwright are green.
 
+> Note (Phase 8's DoD, group E, the user's decision) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **"A friend can install a dev build" moves to Phase 12's DoD.** A friend's PC can reach a server only over HTTPS, which Phase 12 brings (Caddy), and the app allows plain http only to a loopback address. Phase 8 proves the rest on the user's PC, by the PR's hands-on steps: the release exe against `just dev-server` over loopback, an invite created in the app, registering, setting up 2FA, logging in, and an Admin managing users. Playwright runs the same story on every push.
+
 ---
 
 ### Phase 9: Credential vault & Microsoft accounts
 **Goal:** Users link their Microsoft accounts securely. Tokens are encrypted at rest and refreshed safely.
 **Introduces:** `azalea-auth`, `moka`, `tauri-plugin-opener`.
+
+> Note (P9, from Phase 8, group E, the user's request) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **Decide step-up per action, the same way as the admin writes.** Phase 8 put role changes, disabling users and invites behind step-up, so an unlocked PC with a live session can't do them without the password. Before building them, decide for each destructive or privilege-changing action of this phase whether it needs a step-up: unlinking or deleting a Microsoft account (already in §7.2's list), changing or revoking a grant, rotating keys through the API. The app reuses the admin screens' "send, and on `step_up_required` ask for the password and retry once".
 
 - [ ] **P9.1** 🔴 Migrations and repositories:
   - `mc_accounts`: owner, MC UUID and name, kind, encrypted refresh token, `key_id`, status
@@ -3286,6 +3366,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** Full day-to-day management from the app: start and stop, modes, live chat and history.
 **Introduces:** `tokio-tungstenite`, `futures-util` (WebSocket client).
 
+> Note (P11, from Phase 8, group E, the user's request) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **Decide step-up per action, the same way as the admin writes.** Before building them, decide for each destructive or privilege-changing action of this phase whether it needs a step-up: deleting a bot, changing grants, deleting a shared mode, and anything else that loses data or widens access. The app reuses the admin screens' "send, and on `step_up_required` ask for the password and retry once".
+
 - [ ] **P11.1** 🔴 Migrations and repositories:
   - `bots`: 1:1 with an account; server address, mode, desired state, auto-start, assigned agent
   - `modes`: owner, visibility, definition JSON (validated by core), version
@@ -3414,6 +3496,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.11, from Phase 8, group D, the user's request): Phase 8's screens are functional first: shadcn's radix-nova components with the light theme, no design of their own yet.
 
+  > Note (P11.11, from Phase 8, group E, the user's addition) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **Stable screenshots.** The screenshot tests need a stable rendering, but P8.9's suite drives the installed Edge, whose version moves with Windows and the runner image. P11.11 decides then how to keep screenshots stable, for example one fixed OS with a pixel tolerance, or a pinned browser whose download is verified.
+
 **DoD:** The user's real fleet runs for 24 h, managed from the app. Every event shows up live, and the logs contain no unhandled errors.
 
 ---
@@ -3495,7 +3579,9 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P12.7, from Phase 7, group C, the user's note) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): the smoke test checks that a request through Caddy reaches the server with the client's real address (`[http] trusted_proxies` honored), so a missing or wrong `trusted_proxies` can't put every client into Caddy's one bucket unnoticed.
 
-**DoD:** A fresh VPS gets to a running system by following only the runbook.
+**DoD:**
+- A fresh VPS gets to a running system by following only the runbook.
+- A friend on another PC installs the release build, registers with an invite and logs in with 2FA, over HTTPS against that system (moved from Phase 8's DoD).
 
 ---
 
@@ -3542,7 +3628,7 @@ What would be left to do:
   - access token in memory
   - CSRF protection (a custom header check or double-submit) for requests authenticated by cookie
   - cookies via `axum-extra`
-- A web CSP, extra bot protection on the public login, and the existing Playwright suite reused (it already runs against the web build).
+- A web CSP, extra bot protection on the public login, and the existing Playwright suite reused (its specs drive the UI through its client; a web build adds an entry of its own).
 
 ---
 
@@ -3710,8 +3796,8 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 | `GET /me` · `POST /me/password` | user (step-up) | Profile, password change |
 | `POST /me/mfa/enroll` · `/confirm` · `/reset` | setup token (enroll, confirm); user + step-up (reset) | 2FA: enroll answers a new secret, confirm stores it with 10 recovery codes; reset answers a setup token whose confirm replaces the authenticator and revokes the user's other sessions (group D) |
 | `GET /me/sessions` · `DELETE /me/sessions/{id}` | user | Session management |
-| `GET /users` · `PATCH /users/{id}` | Admin+ | Role, disable |
-| `POST /invites` · `GET /invites` · `DELETE /invites/{id}` | Admin+ | Invites |
+| `GET /users` · `PATCH /users/{id}` | Admin+ (`PATCH`: step-up) | Role, disable |
+| `POST /invites` · `GET /invites` · `DELETE /invites/{id}` | Admin+ (`POST`, `DELETE`: step-up) | Invites |
 | `POST /accounts/link` · `GET /accounts/link/{flow}` | Member+ | Microsoft device-code flow |
 | `GET /accounts` · `GET/DELETE /accounts/{id}` | View / Manage | MC accounts |
 | `GET/PUT/DELETE /accounts/{id}/grants[/{user}]` | Manage | Sharing |

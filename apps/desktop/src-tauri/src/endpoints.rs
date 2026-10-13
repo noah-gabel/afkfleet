@@ -216,11 +216,12 @@ impl<F: StoreFactory> AppState<F> {
         conn.client()?.users(&query).await.map_err(error::client)
     }
 
-    /// The `patch_user` command: one change of a user.
+    /// The `patch_user` command: one change of a user, after `step_up`
+    /// within 5 minutes.
     ///
     /// # Errors
     /// `invalid_input` unless exactly one change, `no_server`, `no_session`,
-    /// or `api` 403, 404 or 422.
+    /// or `api` 403 (`step_up_required`, or `forbidden`), 404 or 422.
     pub async fn patch_user(
         &self,
         id: UserId,
@@ -249,10 +250,11 @@ impl<F: StoreFactory> AppState<F> {
     }
 
     /// The `create_invite` command: a new invite, whose code is answered
-    /// this once.
+    /// this once, after `step_up` within 5 minutes.
     ///
     /// # Errors
-    /// `no_server`, `no_session`, or `api` 403, 404 or 409.
+    /// `no_server`, `no_session`, or `api` 403 (`step_up_required`, or
+    /// `forbidden`), 404 or 409.
     pub async fn create_invite(
         &self,
         request: CreateInviteRequest,
@@ -265,10 +267,12 @@ impl<F: StoreFactory> AppState<F> {
             .map_err(error::client)
     }
 
-    /// The `revoke_invite` command: revokes a pending invite.
+    /// The `revoke_invite` command: revokes a pending invite, after
+    /// `step_up` within 5 minutes.
     ///
     /// # Errors
-    /// `no_server`, `no_session`, or `api` 403, 404 or 409.
+    /// `no_server`, `no_session`, or `api` 403 (`step_up_required`, or
+    /// `forbidden`), 404 or 409.
     pub async fn revoke_invite(&self, id: InviteId) -> Result<(), CommandError> {
         let conn = self.conn.read().await;
         conn.client()?

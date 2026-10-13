@@ -19,7 +19,7 @@
 // still held, and "Continue as" another user's.
 import { useQueryClient } from "@tanstack/react-query";
 import { useLocation, useNavigate } from "@tanstack/react-router";
-import { useCallback, useEffect, useLayoutEffect, useReducer, useRef, useState } from "react";
+import { useReducer } from "react";
 
 import { toApiError } from "../../../api/ApiError";
 import { useApiClient } from "../../../api/context";
@@ -28,25 +28,39 @@ import { meQuery, useServerProfile } from "../../../api/queries";
 import { useAppStores } from "../../../app/context";
 import type { CommandError } from "../../../generated/CommandError";
 import type { LoginStepResponse } from "../../../generated/LoginStepResponse";
+import { retryRequest } from "../../../hooks/useRetryWait";
+import { useStepGuard } from "../../../hooks/useStepGuard";
 import { displayOrigin } from "../../../lib/origin";
 import { useLogout } from "../../shell/hooks/useLogout";
-import { authFlowReducer, initialFlow, REGISTERED, SETUP_DONE } from "../authFlowReducer";
+import {
+  authFlowReducer,
+  initialFlow,
+  type Notice,
+  REGISTERED,
+  SETUP_DONE,
+} from "../authFlowReducer";
 import { handoffOf, withHandoff } from "../handoff";
+import { useEnrollment } from "../hooks/useEnrollment";
 import type { LoginValues, RegisterValues } from "../schemas";
+import { isStepGone } from "../stepErrors";
 import { CodeStep } from "./CodeStep";
 import { LoginForm, StillSignedIn } from "./LoginForm";
 import { RecoveryCodesStep } from "./RecoveryCodesStep";
 import { RegisterForm } from "./RegisterForm";
 import { SetupStep } from "./SetupStep";
 
+/**
+ * A notice of `text` and the failure behind it: its wait, which the login form counts down,
+ * or describeError's text.
+ */
+function noticeOf(text: string, error: CommandError): Notice {
+  const wait = retryRequest(error);
+  return wait === undefined ? { text, reason: describeError(error) } : { text, wait };
+}
+
 /** A wrong code at the code step: the server's 401 `invalid_credentials`. */
 function isWrongCode(error: CommandError): boolean {
   return error.api?.status === 401 && error.api.code === "invalid_credentials";
-}
-
-/** A setup or code step the server or the client no longer holds. */
-function isStepGone(error: CommandError): boolean {
-  return error.code === "no_pending_step" || error.api?.status === 401;
 }
 
 /** The sign-in flow, starting at the login form or the register form. */
@@ -63,44 +77,9 @@ export function AuthFlow({ mode }: { mode: "login" | "register" }) {
   const { data: profile } = useServerProfile();
   const origin = profile?.state === "set" ? displayOrigin(profile.profile.url) : undefined;
 
-  // Whether this flow is still on screen, and which step is current.
-  const alive = useRef(true);
-  useEffect(() => {
-    alive.current = true;
-    return () => {
-      alive.current = false;
-    };
-  }, []);
-  const current = useRef(state.stepId);
-  useLayoutEffect(() => {
-    current.current = state.stepId;
-  }, [state.stepId]);
-  const isCurrent = (from: number) => alive.current && current.current === from;
-
-  // The step whose call is running: its controls wait, a second call is ignored.
-  const busyFor = useRef<number | null>(null);
-  const [busyStep, setBusyStep] = useState<number | null>(null);
-  const pending = busyStep === state.stepId;
-
-  /** Runs `work` for the current step, once at a time; rethrows for the form to show. */
-  async function guarded(work: (from: number) => Promise<void>): Promise<void> {
-    const from = state.stepId;
-    if (busyFor.current === from) {
-      return;
-    }
-    busyFor.current = from;
-    setBusyStep(from);
-    try {
-      await work(from);
-    } finally {
-      if (busyFor.current === from) {
-        busyFor.current = null;
-        if (alive.current) {
-          setBusyStep(null);
-        }
-      }
-    }
-  }
+  // Whether this flow is still on screen, which step is current, and the step whose call
+  // is running: its controls wait, a second call is ignored (hooks/useStepGuard).
+  const { alive, isCurrent, guarded, pending } = useStepGuard(state.stepId);
 
   /** Into the app, if the step is still current: signed in, a fresh `me`, Home. */
   async function enter(from: number): Promise<void> {
@@ -182,7 +161,7 @@ export function AuthFlow({ mode }: { mode: "login" | "register" }) {
         step = await api.login(credentials);
       } catch (rejection) {
         if (isCurrent(from)) {
-          const notice = { text: REGISTERED, reason: describeError(toApiError(rejection).error) };
+          const notice = noticeOf(REGISTERED, toApiError(rejection).error);
           await navigate({
             to: "/login",
             state: (previous) => withHandoff(previous, { username: values.username, notice }),
@@ -214,40 +193,7 @@ export function AuthFlow({ mode }: { mode: "login" | "register" }) {
 
   // One secret per setup step: requested when the step starts (once, also under
   // StrictMode, which runs effects twice) and on "New QR code".
-  const secretFor = useRef<number | null>(null);
-  const enrolling = useRef<number | null>(null);
-  const requestSecret = useCallback(
-    async (from: number): Promise<void> => {
-      if (enrolling.current === from) {
-        return;
-      }
-      enrolling.current = from;
-      dispatch({ type: "enrolling", from });
-      try {
-        const enrollment = await api.mfaEnroll();
-        dispatch({ type: "enrolled", from, enrollment });
-      } catch (rejection) {
-        const error = toApiError(rejection).error;
-        dispatch(
-          isStepGone(error)
-            ? { type: "stepEnded", from }
-            : { type: "enrollFailed", from, message: describeError(error) },
-        );
-      } finally {
-        if (enrolling.current === from) {
-          enrolling.current = null;
-        }
-      }
-    },
-    [api],
-  );
-  const setupStep = state.step.kind === "setup" ? state.stepId : null;
-  useEffect(() => {
-    if (setupStep !== null && secretFor.current !== setupStep) {
-      secretFor.current = setupStep;
-      void requestSecret(setupStep);
-    }
-  }, [setupStep, requestSecret]);
+  const requestSecret = useEnrollment(state.step.kind === "setup" ? state.stepId : null, dispatch);
 
   const confirm = (code: string) =>
     guarded(async (from) => {
@@ -292,7 +238,7 @@ export function AuthFlow({ mode }: { mode: "login" | "register" }) {
         dispatch({
           type: "backToPassword",
           from,
-          notice: { text: SETUP_DONE, reason: describeError(toApiError(rejection).error) },
+          notice: noticeOf(SETUP_DONE, toApiError(rejection).error),
         });
       }
     });

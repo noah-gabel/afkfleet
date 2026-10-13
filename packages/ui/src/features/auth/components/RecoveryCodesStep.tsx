@@ -1,11 +1,12 @@
 // The recovery codes (Plan.md P8.7, ADR-0016): the 10 codes `mfa_confirm` answered, shown
 // once, as selectable text, with "Copy all". Continuing needs the "I've saved these codes"
-// box, then logs in again, since the code that confirmed the authenticator can't log in.
-// The codes live only in the flow's state, dropped when this step ends.
+// box; the sign-in flow then logs in again, since the code that confirmed the
+// authenticator can't log in, and the profile's replacement finishes. The codes live only
+// in the flow's state, dropped when this step ends.
 import { useState } from "react";
-import { toast } from "sonner";
 
 import { Button } from "../../../components/ui/button";
+import { copyWithToast } from "../../../lib/clipboard";
 import { AuthCard } from "./AuthCard";
 
 /** The toast after "Copy all". */
@@ -14,34 +15,38 @@ export const COPIED =
 /** The toast when copying failed. */
 export const COPY_FAILED = "Couldn't copy. Select the codes and copy them by hand.";
 
+/** The step's own texts. */
+export interface CodesTexts {
+  readonly title: string;
+  readonly intro: string;
+  readonly continueLabel: string;
+}
+
+/** The first login's codes. */
+export const SIGN_IN_CODES: CodesTexts = {
+  title: "Recovery codes",
+  intro:
+    "Each of these codes works once instead of a code from your app. They won't be shown again.",
+  continueLabel: "Continue",
+};
+
 /** The recovery codes step. */
 export function RecoveryCodesStep({
   codes,
+  texts = SIGN_IN_CODES,
   pending,
   onContinue,
 }: {
   codes: readonly string[];
+  texts?: CodesTexts;
   /** The flow's call (the login that follows) is running. */
   pending: boolean;
   onContinue: () => Promise<void>;
 }) {
   const [saved, setSaved] = useState(false);
 
-  async function copy(): Promise<void> {
-    try {
-      await navigator.clipboard.writeText(codes.join("\n"));
-      toast.success(COPIED);
-    } catch {
-      // No clipboard (an insecure context) or a refusal: the codes are still on screen.
-      toast.error(COPY_FAILED);
-    }
-  }
-
   return (
-    <AuthCard
-      title="Recovery codes"
-      intro="Each of these codes works once instead of a code from your app. They won't be shown again."
-    >
+    <AuthCard title={texts.title} intro={texts.intro}>
       <ul
         aria-label="Recovery codes"
         className="grid grid-cols-2 gap-1 rounded-lg border bg-muted p-3 font-mono text-sm select-text"
@@ -55,7 +60,7 @@ export function RecoveryCodesStep({
         variant="outline"
         className="self-start"
         onClick={() => {
-          void copy();
+          void copyWithToast(codes.join("\n"), COPIED, COPY_FAILED);
         }}
       >
         Copy all
@@ -76,7 +81,7 @@ export function RecoveryCodesStep({
           void onContinue();
         }}
       >
-        Continue
+        {texts.continueLabel}
       </Button>
     </AuthCard>
   );

@@ -9,7 +9,12 @@ import { renderApp } from "../test/renderApp";
 const NOT_FOUND = "This page doesn't exist or isn't available to you.";
 
 async function signedInAs(role: UserRole) {
-  const app = renderApp({ serverProfile: async () => PROFILE, me: async () => me(role) });
+  const app = renderApp({
+    serverProfile: async () => PROFILE,
+    me: async () => me(role),
+    users: async () => ({ items: [] }),
+    invites: async () => ({ items: [] }),
+  });
   await screen.findByText(/Signed in as afkbot1/);
   return app;
 }
@@ -48,20 +53,20 @@ describe("the router", () => {
     await waitFor(() => expect(app.path()).toBe(to));
   });
 
-  it("shows a Member Home and Server, nothing of the admin's", async () => {
+  it("shows a Member Home, Server and Profile, nothing of the admin's", async () => {
     await signedInAs("member");
 
-    expect(navLinks()).toEqual(["Home", "Server"]);
+    expect(navLinks()).toEqual(["Home", "Server", "Profile"]);
   });
 
   it.each<UserRole>(["admin", "owner"])("shows an %s the admin screens too", async (role) => {
     const app = await signedInAs(role);
 
-    expect(navLinks()).toEqual(["Home", "Server", "Users", "Invites"]);
+    expect(navLinks()).toEqual(["Home", "Server", "Profile", "Users", "Invites"]);
     await app.user.click(screen.getByRole("link", { name: "Users" }));
-    expect(await screen.findByText("User management arrives in the next update.")).toBeDefined();
+    expect(await screen.findByRole("heading", { name: "Users", level: 1 })).toBeDefined();
     await app.user.click(screen.getByRole("link", { name: "Invites" }));
-    expect(await screen.findByText("Invite management arrives in the next update.")).toBeDefined();
+    expect(await screen.findByRole("heading", { name: "Invites", level: 1 })).toBeDefined();
   });
 
   it.each(["/admin/users", "/admin/invites"] as const)(
@@ -72,14 +77,17 @@ describe("the router", () => {
       await act(() => app.runtime.router.navigate({ to }));
 
       expect(await screen.findByText(NOT_FOUND)).toBeDefined();
-      expect(screen.queryByText(/management arrives/)).toBeNull();
+      expect(screen.queryByRole("heading", { name: /^(Users|Invites)$/ })).toBeNull();
+      expect(app.fake.calls.map((call) => call.method)).not.toContain(
+        to === "/admin/users" ? "users" : "invites",
+      );
     },
   );
 
   it("gives a role this app doesn't know only a Member's rights", async () => {
     const app = await signedInAs("superuser" as UserRole);
 
-    expect(navLinks()).toEqual(["Home", "Server"]);
+    expect(navLinks()).toEqual(["Home", "Server", "Profile"]);
     await act(() => app.runtime.router.navigate({ to: "/admin/users" }));
     expect(await screen.findByText(NOT_FOUND)).toBeDefined();
   });

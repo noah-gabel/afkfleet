@@ -101,6 +101,30 @@
           }
         }
       }
+    },
+    {
+      "includes": ["apps/desktop/src/**"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@tauri-apps/**", "!@tauri-apps/api/core"],
+                    "message": "The desktop app uses only @tauri-apps/api/core (invoke); any other Tauri API needs a capability grant and an ADR (ADR-0017)."
+                  },
+                  {
+                    "group": ["**/e2e", "**/e2e/**"],
+                    "message": "The shipped app never imports the e2e build, whose invoke sends commands over HTTP (Plan.md P8.9, ADR-0017)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
     }
   ]
 }

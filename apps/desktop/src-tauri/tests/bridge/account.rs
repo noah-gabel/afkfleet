@@ -1,6 +1,6 @@
 //! The user's own account and the admins' routes through the bridge.
 
-use fleet_api_types::auth::{NEW_PASSWORD_MAX_CHARS, StepUpRequest};
+use fleet_api_types::auth::NEW_PASSWORD_MAX_CHARS;
 use fleet_api_types::invites::{CreateInviteRequest, InviteState};
 use fleet_api_types::me::PasswordChangeRequest;
 use fleet_api_types::page::PAGE_MAX;
@@ -8,14 +8,8 @@ use fleet_api_types::users::{UserPatchRequest, UserRole};
 use fleet_api_types::{ErrorCode, SecretText, UserId};
 
 use crate::support::{
-    Bridge, PASSWORD, Server, app_of, assert_no_token, is_api, is_invalid, register,
+    Bridge, Server, app_of, assert_no_token, is_api, is_invalid, register, step_up_request,
 };
-
-fn step_up_request() -> StepUpRequest {
-    StepUpRequest {
-        password: SecretText::new(PASSWORD.to_owned()),
-    }
-}
 
 #[tokio::test]
 async fn the_session_list_marks_the_current_session_which_cant_be_revoked_here() {
@@ -135,6 +129,7 @@ async fn replacing_the_authenticator_starts_a_setup_step_in_the_session() {
 async fn the_owner_manages_invites_and_users() {
     let server = Server::start().await;
     let (owner, _app) = server.owner().await;
+    owner.state.step_up(step_up_request()).await.unwrap();
     let member = CreateInviteRequest {
         role: UserRole::Member,
     };
@@ -207,6 +202,7 @@ async fn a_patch_without_exactly_one_change_is_invalid_input_before_any_request(
 async fn an_unknown_user_is_not_found() {
     let server = Server::start().await;
     let (owner, _app) = server.owner().await;
+    owner.state.step_up(step_up_request()).await.unwrap();
     let unknown: UserId =
         serde_json::from_value(serde_json::json!("01900000-0000-7000-8000-0000000000ff")).unwrap();
 

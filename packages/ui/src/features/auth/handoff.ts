@@ -13,6 +13,7 @@ const handoffSchema = z.object({
   notice: z.object({
     text: z.string(),
     reason: z.string().optional(),
+    wait: z.object({ message: z.string(), seconds: z.number().int().positive() }).optional(),
     logout: z.boolean().optional(),
   }),
 });
@@ -38,6 +39,7 @@ export function handoffOf(state: unknown): Handoff | undefined {
     notice: {
       text: notice.text,
       ...(notice.reason === undefined ? {} : { reason: notice.reason }),
+      ...(notice.wait === undefined ? {} : { wait: notice.wait }),
       ...(notice.logout === undefined ? {} : { logout: notice.logout }),
     },
   };

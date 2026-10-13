@@ -7,8 +7,12 @@ use argon2::password_hash::PasswordHasher as _;
 use argon2::{Algorithm, Argon2, Params, Version};
 use fleet_core::audit::{
     AuditAction, AuditMetadata, AuditOutcome, AuditTarget, RecordedMetadata, RecordedTarget,
+    RecordedValue,
 };
+use fleet_core::id::LoginStepId;
+use fleet_core::system::{MintError, RandomError};
 use fleet_core::value::Username;
+use fleet_server::app::login::LoginError;
 use fleet_server::config::{Rate, RateLimitConfig};
 use fleet_server::ports::store::Store as _;
 use fleet_server::ports::users::PasswordHash;
@@ -109,6 +113,105 @@ async fn a_user_with_2fa_gets_an_mfa_token_then_the_sessions_tokens(
     assert!(!shown.contains("rehashed"), "{shown}");
     let access = second.secret("access_token");
     assert_eq!(setup.post(LOGOUT, Some(&access), None).await.status, 204);
+}
+
+/// A code step's metadata without its `login_step_id`, which must be there
+/// and name a login step. Its value comes from the seeded source, so no test
+/// pins it.
+fn without_login_step(metadata: &RecordedMetadata) -> RecordedMetadata {
+    let step = login_step_of(metadata).expect("a code step names its login step");
+    assert!(step.parse::<LoginStepId>().is_ok(), "{step}");
+    let mut rest = RecordedMetadata::new();
+    for (key, value) in metadata.entries() {
+        match value {
+            RecordedValue::Text(_) if key == "login_step_id" => {}
+            RecordedValue::Text(text) => rest.push_text(key, text),
+            other => panic!("{key}: {other:?}"),
+        }
+    }
+    rest
+}
+
+/// The `login_step_id` an entry records, if any.
+fn login_step_of(metadata: &RecordedMetadata) -> Option<String> {
+    metadata
+        .entries()
+        .iter()
+        .find_map(|(key, value)| match value {
+            RecordedValue::Text(text) if key == "login_step_id" => Some(text.clone()),
+            _ => None,
+        })
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_code_steps_failure_and_success_name_the_same_login_step(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let (app, _) = setup.enroll_alice().await;
+    let other = setup.login("alice", PASSWORD).await;
+    let abandoned = setup
+        .code_step(&other.secret("token"), &setup.code(&app, 10))
+        .await;
+    let first = setup.login("alice", PASSWORD).await;
+    let token = first.secret("token");
+
+    let typo = setup.code_step(&token, &setup.code(&app, 10)).await;
+    let right = setup.code_step(&token, &setup.code(&app, 0)).await;
+
+    assert_eq!(abandoned.status, 401, "{}", abandoned.text);
+    assert_eq!(typo.status, 401, "{}", typo.text);
+    assert_eq!(right.status, 200, "{}", right.text);
+    let steps: Vec<(AuditOutcome, Option<String>)> = setup
+        .audit()
+        .await
+        .into_iter()
+        .filter(|entry| entry.action == AuditAction::AUTH_LOGIN)
+        .map(|entry| (entry.outcome, login_step_of(&entry.metadata)))
+        .collect();
+    let [
+        (AuditOutcome::Success, Some(success)),
+        (AuditOutcome::Failure, Some(failure)),
+        (AuditOutcome::Failure, Some(earlier)),
+    ] = steps.as_slice()
+    else {
+        panic!("{steps:?}");
+    };
+    assert_eq!(failure, success);
+    assert_ne!(earlier, success);
+    assert!(success.parse::<LoginStepId>().is_ok());
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_login_step_whose_id_cant_be_minted_fails_before_any_token(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    setup.enroll_alice().await;
+    setup.random.fail_next(RandomError::Unavailable);
+
+    let refused = setup
+        .login
+        .password_step(
+            &Username::try_from("alice").unwrap(),
+            &SecretString::from(PASSWORD),
+            "192.0.2.10".parse().unwrap(),
+        )
+        .await;
+
+    assert!(
+        matches!(
+            refused,
+            Err(LoginError::StepId(MintError::Random(
+                RandomError::Unavailable
+            )))
+        ),
+        "{refused:?}"
+    );
+    let seen = setup.login("alice", PASSWORD).await;
+    assert_eq!(seen.status, 200, "{}", seen.text);
 }
 
 #[sqlx::test(migrations = false)]
@@ -346,7 +449,7 @@ async fn wrong_codes_count_toward_the_lockout(
     assert_eq!(locked.status, 429, "{}", locked.text);
     let entry = setup.last(&AuditAction::AUTH_LOGIN).await;
     assert_eq!(
-        entry.metadata,
+        without_login_step(&entry.metadata),
         text_metadata(&[("step", "code"), ("reason", "wrong_code")])
     );
 }
@@ -664,7 +767,7 @@ async fn a_password_changed_between_the_steps_refuses_the_login_and_keeps_the_ha
     assert_eq!(sessions(&setup).await, 0);
     assert_eq!(setup.streak().await, None, "not counted");
     assert_eq!(
-        setup.last(&AuditAction::AUTH_LOGIN).await.metadata,
+        without_login_step(&setup.last(&AuditAction::AUTH_LOGIN).await.metadata),
         text_metadata(&[("step", "code"), ("reason", "password_changed")])
     );
 }
@@ -682,7 +785,7 @@ async fn a_user_disabled_between_the_steps_is_refused_and_counted(
     assert_eq!(sessions(&setup).await, 0);
     assert_eq!(setup.streak().await, Some(1));
     assert_eq!(
-        setup.last(&AuditAction::AUTH_LOGIN).await.metadata,
+        without_login_step(&setup.last(&AuditAction::AUTH_LOGIN).await.metadata),
         text_metadata(&[("step", "code"), ("reason", "disabled")])
     );
 }
@@ -700,7 +803,7 @@ async fn a_replacement_between_the_code_check_and_the_commit_refuses_the_login(
     assert_eq!(sessions(&setup).await, 0);
     assert_eq!(setup.streak().await, None, "not counted");
     assert_eq!(
-        setup.last(&AuditAction::AUTH_LOGIN).await.metadata,
+        without_login_step(&setup.last(&AuditAction::AUTH_LOGIN).await.metadata),
         text_metadata(&[("step", "code"), ("reason", "mfa_changed")])
     );
 }

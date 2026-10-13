@@ -7,6 +7,11 @@
 //!   enable Members), and the service authorizes it again on the rows it
 //!   re-reads in its transaction. An actor who can't see the target gets
 //!   404, like an unknown ID.
+//! - **A change needs a step-up** (`SteppedUpUser`, the handler's first
+//!   extractor; Phase 8 group E, ADR-0016's amendment): the password again
+//!   within 5 minutes, checked when the request arrives. Without one, any
+//!   caller gets 403 `step_up_required` before the target is read, so the
+//!   answer says nothing about it.
 
 use axum::Json;
 use axum::extract::State;
@@ -18,7 +23,7 @@ use fleet_core::id::UserId;
 use super::{page, timestamp, username};
 use crate::app::users::{ActingUser, SetUserError, UserChange};
 use crate::http::error::ApiError;
-use crate::http::extractors::{AuthUser, ValidJson, ValidPath, ValidQuery};
+use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath, ValidQuery};
 use crate::http::rate_limit::ClientIp;
 use crate::http::router::AppState;
 use crate::ports::users::ListedUser;
@@ -72,7 +77,7 @@ pub(crate) async fn list(
 }
 
 /// `PATCH /api/v1/users/{id}`: one change, a role or `disabled`; either
-/// ends every session of the user.
+/// ends every session of the user. Needs a step-up.
 #[utoipa::path(
     patch,
     path = "/api/v1/users/{id}",
@@ -84,7 +89,7 @@ pub(crate) async fn list(
         (status = 200, description = "The user after the change.", body = UserResponse),
         (status = 400, description = "A body of the wrong shape.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 403, description = "The change isn't the caller's to make.", body = ErrorResponse),
+        (status = 403, description = "Step up first: `POST /auth/step-up`; or the change isn't the caller's to make.", body = ErrorResponse),
         (status = 404, description = "No such user, or one the caller can't see.", body = ErrorResponse),
         (status = 422, description = "Not exactly one of `role` and `disabled`.", body = ErrorResponse),
         (status = 429, description = "Too many requests.", body = ErrorResponse,
@@ -93,12 +98,13 @@ pub(crate) async fn list(
     ),
 )]
 pub(crate) async fn patch(
-    user: AuthUser,
+    user: SteppedUpUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
     ValidPath(id): ValidPath<UserId>,
     ValidJson(request): ValidJson<UserPatchRequest>,
 ) -> Result<Json<UserResponse>, ApiError> {
+    let user = user.user();
     let change = match (request.role, request.disabled) {
         (Some(role), None) => UserChange::Role(role.into()),
         (None, Some(disabled)) => UserChange::Disabled(disabled),

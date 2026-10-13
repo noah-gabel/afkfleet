@@ -1,11 +1,11 @@
 // The admin routes (Plan.md P8.6, P8.8): Admins and the Owner only. Anyone else gets "not
-// found", like the server's 404 for what an actor can't see. Group E replaces the
-// placeholders with the users and invites screens.
+// found", like the server's 404 for what an actor can't see.
 import { createRoute } from "@tanstack/react-router";
 
 import { requireAdmin } from "../shell/guards";
 import { appRoute } from "../shell/routes";
-import { AdminPlaceholder } from "./components/AdminPlaceholder";
+import { InvitesScreen } from "./components/InvitesScreen";
+import { UsersScreen } from "./components/UsersScreen";
 
 /** `/admin`: the role guard of everything below it. */
 export const adminRoute = createRoute({
@@ -18,12 +18,12 @@ export const adminRoute = createRoute({
 export const usersRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: "users",
-  component: () => <AdminPlaceholder what="users" />,
+  component: UsersScreen,
 });
 
 /** `/admin/invites`. */
 export const invitesRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: "invites",
-  component: () => <AdminPlaceholder what="invites" />,
+  component: InvitesScreen,
 });

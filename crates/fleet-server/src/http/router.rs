@@ -20,10 +20,10 @@
 //! | `GET /api/v1/me/sessions` | user | one page of the user's live sessions |
 //! | `DELETE /api/v1/me/sessions/{id}` | user | ends another of the user's sessions |
 //! | `GET /api/v1/users` | user (Admin+) | one page of users |
-//! | `PATCH /api/v1/users/{id}` | user (the Owner; Admins for a Member's `disabled`) | one change: a role or `disabled` |
-//! | `POST /api/v1/invites` | user (Admin+; Admin invites the Owner) | a new invite and its code |
+//! | `PATCH /api/v1/users/{id}` | user + step-up (the Owner; Admins for a Member's `disabled`) | one change: a role or `disabled` |
+//! | `POST /api/v1/invites` | user + step-up (Admin+; Admin invites the Owner) | a new invite and its code |
 //! | `GET /api/v1/invites` | user (Admin+) | one page of invites |
-//! | `DELETE /api/v1/invites/{id}` | user (as creating) | revokes a pending invite |
+//! | `DELETE /api/v1/invites/{id}` | user + step-up (as creating) | revokes a pending invite |
 //! | `GET /api/openapi.json` | public | the `OpenAPI` document, only in dev mode ([`openapi`](super::openapi)) |
 //!
 //! The health routes have no `/api/v1` prefix. Both answer `200` with an
@@ -117,10 +117,10 @@ pub fn api_routes(routes: Routes) -> Routes {
         .authed_route(RateClass::Standard, routes!(me::list_sessions))
         .authed_route(RateClass::Standard, routes!(me::revoke_session))
         .authed_route(RateClass::Standard, routes!(users::list))
-        .authed_route(RateClass::Standard, routes!(users::patch))
-        .authed_route(RateClass::Standard, routes!(invites::create))
+        .step_up_route(RateClass::Standard, routes!(users::patch))
+        .step_up_route(RateClass::Standard, routes!(invites::create))
         .authed_route(RateClass::Standard, routes!(invites::list))
-        .authed_route(RateClass::Standard, routes!(invites::revoke))
+        .step_up_route(RateClass::Standard, routes!(invites::revoke))
 }
 
 /// Every route with `state`, behind the middleware stack with the timeout,

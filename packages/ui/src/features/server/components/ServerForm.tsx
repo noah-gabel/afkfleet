@@ -7,7 +7,8 @@
 //   reaches the UI, so it must be given again to keep it; unchecking the box is the way to
 //   the system's roots.
 // - Signed in, the first Save warns that a different server or CA logs out.
-// - A refused certificate is explained; a refused address or CA shows its rule next to it.
+// - A refused certificate is explained; a refused address or CA shows its rule next to it;
+//   a 429's wait counts down, Save waiting with it (useRetryWait).
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Link } from "@tanstack/react-router";
 import { type ChangeEvent, useMemo, useRef, useState } from "react";
@@ -18,11 +19,13 @@ import { CA_PEM_MAX_BYTES } from "../../../api/limits";
 import { useServerProfile } from "../../../api/queries";
 import { useSession } from "../../../app/context";
 import { FormField } from "../../../components/FormField";
+import { RetryWaitMessage } from "../../../components/RetryWaitMessage";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
 import { Textarea } from "../../../components/ui/textarea";
 import type { ServerProfileState } from "../../../generated/ServerProfileState";
+import { useRetryWait } from "../../../hooks/useRetryWait";
 import { showFieldErrors } from "../../../lib/formErrors";
 import { displayOrigin } from "../../../lib/origin";
 import { CERTIFICATE_HELP } from "../certificateHelp";
@@ -59,12 +62,18 @@ function ServerFormBody({ title, state }: { title: string; state: ServerProfileS
   const { save, pending } = useSaveServer();
   const [confirming, setConfirming] = useState(false);
   const [formError, setFormError] = useState<string>();
+  const wait = useRetryWait();
+  const waiting = wait.waiting !== null;
   const fileInput = useRef<HTMLInputElement>(null);
   const useCa = form.watch("useCa");
   const errors = form.formState.errors;
 
   const submit = form.handleSubmit(async (values) => {
+    if (waiting) {
+      return;
+    }
     setFormError(undefined);
+    wait.reset();
     if (signedIn && !confirming) {
       setConfirming(true);
       return;
@@ -73,7 +82,7 @@ function ServerFormBody({ title, state }: { title: string; state: ServerProfileS
     const error = await save(
       values.useCa ? { url: values.url, ca_pem: values.caPem } : { url: values.url },
     );
-    if (error === undefined) {
+    if (error === undefined || wait.start(error)) {
       return;
     }
     switch (error.code) {
@@ -168,12 +177,13 @@ function ServerFormBody({ title, state }: { title: string; state: ServerProfileS
               {formError}
             </p>
           )}
+          <RetryWaitMessage wait={wait} />
           {confirming && current !== undefined ? (
             <Alert>
               <AlertDescription className="flex flex-col gap-2 text-foreground">
                 <span>{`Saving a different server or CA logs you out of ${displayOrigin(current.url)}.`}</span>
                 <span className="flex gap-2">
-                  <Button type="submit" size="sm" disabled={pending}>
+                  <Button type="submit" size="sm" disabled={pending || waiting}>
                     Save and log out
                   </Button>
                   <Button
@@ -188,7 +198,7 @@ function ServerFormBody({ title, state }: { title: string; state: ServerProfileS
               </AlertDescription>
             </Alert>
           ) : (
-            <Button type="submit" className="self-start" disabled={pending}>
+            <Button type="submit" className="self-start" disabled={pending || waiting}>
               Save
             </Button>
           )}

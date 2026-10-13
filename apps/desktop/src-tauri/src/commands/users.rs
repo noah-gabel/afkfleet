@@ -16,7 +16,7 @@ pub(crate) async fn users(
     state.users(before, limit).await
 }
 
-/// One change of a user: a role or `disabled`.
+/// One change of a user: a role or `disabled`, after a step-up.
 #[tauri::command]
 pub(crate) async fn patch_user(
     state: Managed<'_>,

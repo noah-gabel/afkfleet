@@ -149,3 +149,33 @@ describe("the connection store", () => {
     expect(two.connection.getState().status).toBe("ok");
   });
 });
+
+describe("the notices store", () => {
+  it("dismisses nothing at first", () => {
+    const { notices } = createAppStores();
+
+    expect(notices.getState().dismissed).toEqual({ generation: 0, warnings: [] });
+  });
+
+  it("keeps what was dismissed in one sign-in together", () => {
+    const { notices } = createAppStores();
+
+    notices.getState().dismiss("failedCodes", 3);
+    notices.getState().dismiss("recoveryCodes", 3);
+    notices.getState().dismiss("failedCodes", 3);
+
+    expect(notices.getState().dismissed).toEqual({
+      generation: 3,
+      warnings: ["failedCodes", "recoveryCodes"],
+    });
+  });
+
+  it("forgets an earlier sign-in's dismissals", () => {
+    const { notices } = createAppStores();
+    notices.getState().dismiss("failedCodes", 3);
+
+    notices.getState().dismiss("recoveryCodes", 4);
+
+    expect(notices.getState().dismissed).toEqual({ generation: 4, warnings: ["recoveryCodes"] });
+  });
+});

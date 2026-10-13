@@ -14,6 +14,7 @@
 // A step ends on its own deadline, from the server's `expires_in` counted from when its
 // request was sent, because an expired step answers like a wrong code.
 import type { MfaEnrollResponse } from "../../generated/MfaEnrollResponse";
+import type { WaitRequest } from "../../hooks/useRetryWait";
 
 /** The code step's tries: the server allows 3 per step. */
 export const CODE_TRIES = 3;
@@ -38,6 +39,8 @@ export interface Notice {
   readonly text: string;
   /** describeError's text of what went wrong, when something did. */
   readonly reason?: string;
+  /** Instead of `reason`: a refusal's wait, which the login form counts down. */
+  readonly wait?: WaitRequest;
   /** Whether to offer "Log out" (a session the flow can't use). */
   readonly logout?: boolean;
 }
@@ -46,6 +49,51 @@ export interface Notice {
 export interface Handoff {
   readonly username: string;
   readonly notice: Notice;
+}
+
+/**
+ * The 2FA setup step, shared with the profile's authenticator replacement: its deadline
+ * (from the server's `expires_in`, counted from when the request was sent), and the
+ * secret, requested once per step and on "New QR code".
+ */
+export interface SetupState {
+  readonly kind: "setup";
+  readonly deadline: number;
+  readonly expiresIn: number;
+  /** A secret is being requested; the old one is hidden meanwhile. */
+  readonly loading: boolean;
+  readonly enrollment?: MfaEnrollResponse;
+  readonly enrollError?: string;
+}
+
+/** What happens to a setup step's secret, for the step it was issued in (`from`). */
+export type EnrollmentAction = { readonly from: number } & (
+  | { readonly type: "enrolling" }
+  | { readonly type: "enrolled"; readonly enrollment: MfaEnrollResponse }
+  | { readonly type: "enrollFailed"; readonly message: string }
+  | { readonly type: "stepEnded" }
+);
+
+/** A setup step that starts loading its secret, ending `expiresIn` s after `now`. */
+export function setupStep(expiresIn: number, now: number): SetupState {
+  return { kind: "setup", deadline: now + expiresIn * 1000, expiresIn, loading: true };
+}
+
+/** The setup step after a change of its secret. */
+export function nextSetup(
+  step: SetupState,
+  action: Extract<EnrollmentAction, { type: "enrolling" | "enrolled" | "enrollFailed" }>,
+): SetupState {
+  const { kind, deadline, expiresIn } = step;
+  const base = { kind, deadline, expiresIn };
+  switch (action.type) {
+    case "enrolling":
+      return { ...base, loading: true };
+    case "enrolled":
+      return { ...base, loading: false, enrollment: action.enrollment };
+    case "enrollFailed":
+      return { ...base, loading: false, enrollError: action.message };
+  }
 }
 
 /** Where the flow is. */
@@ -61,15 +109,7 @@ export type Step =
       readonly next: boolean;
       readonly message?: string;
     }
-  | {
-      readonly kind: "setup";
-      readonly deadline: number;
-      readonly expiresIn: number;
-      /** A secret is being requested; the old one is hidden meanwhile. */
-      readonly loading: boolean;
-      readonly enrollment?: MfaEnrollResponse;
-      readonly enrollError?: string;
-    }
+  | SetupState
   | { readonly kind: "recovery"; readonly codes: readonly string[] }
   | { readonly kind: "stillSignedIn"; readonly username: string };
 
@@ -148,12 +188,7 @@ export function authFlowReducer(state: FlowState, action: FlowAction): FlowState
       return moved(state, {
         username: action.username,
         password: action.password,
-        step: {
-          kind: "setup",
-          deadline: action.now + action.expiresIn * 1000,
-          expiresIn: action.expiresIn,
-          loading: true,
-        },
+        step: setupStep(action.expiresIn, action.now),
       });
     case "wrongCode": {
       if (step.kind !== "code") {
@@ -167,20 +202,8 @@ export function authFlowReducer(state: FlowState, action: FlowAction): FlowState
     }
     case "enrolling":
     case "enrolled":
-    case "enrollFailed": {
-      if (step.kind !== "setup") {
-        return state;
-      }
-      const { kind, deadline, expiresIn } = step;
-      const base = { kind, deadline, expiresIn };
-      if (action.type === "enrolling") {
-        return { ...state, step: { ...base, loading: true } };
-      }
-      if (action.type === "enrolled") {
-        return { ...state, step: { ...base, loading: false, enrollment: action.enrollment } };
-      }
-      return { ...state, step: { ...base, loading: false, enrollError: action.message } };
-    }
+    case "enrollFailed":
+      return step.kind === "setup" ? { ...state, step: nextSetup(step, action) } : state;
     case "confirmed":
       return moved(state, { step: { kind: "recovery", codes: action.codes } });
     case "stepEnded":

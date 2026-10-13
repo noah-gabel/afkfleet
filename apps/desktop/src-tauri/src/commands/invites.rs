@@ -16,7 +16,7 @@ pub(crate) async fn invites(
     state.invites(before, limit).await
 }
 
-/// A new invite, whose code is answered this once.
+/// A new invite, whose code is answered this once, after a step-up.
 #[tauri::command]
 pub(crate) async fn create_invite(
     state: Managed<'_>,
@@ -25,7 +25,7 @@ pub(crate) async fn create_invite(
     state.create_invite(request).await
 }
 
-/// Revokes a pending invite.
+/// Revokes a pending invite, after a step-up.
 #[tauri::command]
 pub(crate) async fn revoke_invite(state: Managed<'_>, id: InviteId) -> Result<(), CommandError> {
     state.revoke_invite(id).await

@@ -15,14 +15,15 @@ describe("privilegeOf", () => {
 });
 
 describe("navItems", () => {
-  it("lists Home and Server for a Member", () => {
-    expect(navItems("member").map((item) => item.label)).toEqual(["Home", "Server"]);
+  it("lists Home, Server and Profile for a Member", () => {
+    expect(navItems("member").map((item) => item.label)).toEqual(["Home", "Server", "Profile"]);
   });
 
   it("adds the admin screens for an Admin", () => {
     expect(navItems("admin").map((item) => item.to)).toEqual([
       "/home",
       "/server",
+      "/profile",
       "/admin/users",
       "/admin/invites",
     ]);

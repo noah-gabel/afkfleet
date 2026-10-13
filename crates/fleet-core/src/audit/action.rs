@@ -100,14 +100,18 @@ audit_actions! {
 
     /// A login (§7.2). Success when its code step issues the session's
     /// tokens: actor and target the user, the client's IP, metadata
-    /// `session_id`, `method` (`totp` or `recovery_code`) and, only when the
-    /// stored password hash was re-hashed with the current parameters,
-    /// `rehashed`. Failure for every counted refusal, in the lockout's
-    /// commit, and for a code step refused because the password or the
-    /// authenticator changed meanwhile: no actor, the client's IP, target
-    /// the user (none for an unknown name, which is never stored), metadata
-    /// `step` (`password` or `code`) and `reason` (`wrong_password`,
-    /// `wrong_code`, `disabled`, `password_changed` or `mfa_changed`).
+    /// `session_id`, `method` (`totp` or `recovery_code`), `login_step_id`
+    /// (since Phase 8, group E) and, only when the stored password hash was
+    /// re-hashed with the current parameters, `rehashed`. Failure for every
+    /// counted refusal, in the lockout's commit, and for a code step refused
+    /// because the password or the authenticator changed meanwhile: no
+    /// actor, the client's IP, target the user (none for an unknown name,
+    /// which is never stored), metadata `step` (`password` or `code`) and
+    /// `reason` (`wrong_password`, `wrong_code`, `disabled`,
+    /// `password_changed` or `mfa_changed`); a code step's failure also
+    /// `login_step_id`. The login step's ID ties the code step's entries to
+    /// the password step that issued its mfa token, so `GET /me` leaves the
+    /// typos of the login that succeeded out of its count.
     AUTH_LOGIN = "auth.login";
 
     /// A user ended their session. Outcome: Success. Actor: the user; target:

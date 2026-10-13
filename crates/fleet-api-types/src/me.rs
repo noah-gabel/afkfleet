@@ -23,8 +23,9 @@ use crate::users::UserRole;
 pub const RECOVERY_CODES_MAX: u32 = 10;
 
 /// The wrong 2FA codes typed for the user after their previous successful
-/// login: what happened since they last logged in, their own typos at this
-/// login included.
+/// login: what happened since they last logged in. The wrong codes of the
+/// newest login's own step, the user's typos before it succeeded, aren't
+/// counted, so a count above 0 means a login step that never succeeded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct FailedCodeAttempts {
     /// How many.
@@ -69,7 +70,8 @@ pub struct MeResponse {
     /// How many unused recovery codes are left, of 10.
     #[schema(schema_with = integer_schema::<0, RECOVERY_CODES_MAX>)]
     pub recovery_codes_left: u32,
-    /// The wrong 2FA codes since the previous login.
+    /// The wrong 2FA codes since the previous login, without the newest
+    /// login's own typos.
     pub failed_code_attempts: FailedCodeAttempts,
 }
 

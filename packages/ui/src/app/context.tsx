@@ -6,7 +6,7 @@ import { createContext, type ReactNode, useContext } from "react";
 import { useStore } from "zustand";
 
 import type { ApiClient } from "../api/ApiClient";
-import type { AppStores, ConnectionState, SessionState } from "./stores";
+import type { AppStores, ConnectionState, NoticesState, SessionState } from "./stores";
 
 /** The router's context: what every route's `beforeLoad` and `loader` receive. */
 export interface RouterContext {
@@ -40,4 +40,9 @@ export function useSession<T>(select: (state: SessionState) => T): T {
 /** A value of the connection store, re-rendering when it changes. */
 export function useConnection<T>(select: (state: ConnectionState) => T): T {
   return useStore(useAppStores().connection, select);
+}
+
+/** A value of the notices store, re-rendering when it changes. */
+export function useNotices<T>(select: (state: NoticesState) => T): T {
+  return useStore(useAppStores().notices, select);
 }

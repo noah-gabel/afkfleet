@@ -321,6 +321,7 @@ pub fn app_with(
     );
     let login = LoginService::new(
         Arc::clone(&clock),
+        Arc::clone(&random),
         Arc::clone(&store),
         passwords,
         lockout.clone(),

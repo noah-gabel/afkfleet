@@ -113,6 +113,7 @@ async fn login(db: &Database, tokens: &TokenService, mfa: &MfaService) -> LoginS
     );
     LoginService::new(
         clock,
+        Arc::new(SeededRandom::new(23)),
         Arc::new(db.clone()),
         Arc::new(passwords),
         lockout,

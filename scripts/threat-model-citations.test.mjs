@@ -1,6 +1,9 @@
 // Tests for threat-model-citations.mjs. Run with `just scripts-test`, which also checks the
 // real threat model against the real crates here.
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { describe, it } from "node:test";
 
 import {
@@ -11,6 +14,7 @@ import {
   indexTests,
   modules,
   resolves,
+  rustFiles,
   testFunctions,
   verifiedByCells,
 } from "./threat-model-citations.mjs";
@@ -175,7 +179,7 @@ describe("check", () => {
     const problems = check(TABLE.replace("an_inner_test", "a_renamed_test"), FILES);
 
     assert.deepEqual(problems, [
-      "line 6: `chat::incoming::tests::a_renamed_test` names no test under crates/",
+      "line 6: `chat::incoming::tests::a_renamed_test` names no test under crates/ or apps/desktop/src-tauri/",
     ]);
   });
 
@@ -187,6 +191,63 @@ describe("check", () => {
     assert.deepEqual(check("| a | Verified by |\n|---|---|\n| x | P7.1 |\n", FILES), [
       "the threat model cites no test, so the check proves nothing",
     ]);
+  });
+});
+
+describe("rustFiles", () => {
+  /** A repository in a temporary folder with `files` (path: source), removed after `use`. */
+  function withRepository(files, use) {
+    const root = mkdtempSync(join(tmpdir(), "citations-"));
+    try {
+      for (const [path, source] of Object.entries(files)) {
+        mkdirSync(dirname(join(root, path)), { recursive: true });
+        writeFileSync(join(root, path), source);
+      }
+      use(root);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+
+  it("reads the crates and the desktop crate, skipping build output, generated code and dependencies", () => {
+    withRepository(
+      {
+        "crates/fleet-core/src/lib.rs": "// core",
+        "crates/fleet-core/target/debug/build.rs": "// build output",
+        "apps/desktop/src-tauri/src/keychain.rs": "// keychain",
+        "apps/desktop/src-tauri/tests/acl.rs": "// acl",
+        "apps/desktop/src-tauri/target/debug/out.rs": "// build output",
+        "apps/desktop/src-tauri/gen/schemas/x.rs": "// generated",
+        "apps/desktop/src-tauri/node_modules/pkg/y.rs": "// a dependency",
+        "apps/desktop/src-tauri/.cache/z.rs": "// hidden",
+        "apps/desktop/src/main.rs": "// outside src-tauri",
+      },
+      (root) => {
+        const paths = rustFiles(root)
+          .map((file) => file.path)
+          .sort();
+
+        assert.deepEqual(paths, [
+          "apps/desktop/src-tauri/src/keychain.rs",
+          "apps/desktop/src-tauri/tests/acl.rs",
+          "fleet-core/src/lib.rs",
+        ]);
+      },
+    );
+  });
+
+  it("resolves a citation of a desktop test by its file and folders", () => {
+    withRepository(
+      {
+        "crates/fleet-core/src/lib.rs": "// core",
+        "apps/desktop/src-tauri/tests/acl.rs": "#[test]\nfn a_core_command_is_refused() {}\n",
+      },
+      (root) => {
+        const table = "| a | Verified by |\n|---|---|\n| x | `acl::a_core_command_is_refused` |\n";
+
+        assert.deepEqual(check(table, rustFiles(root)), []);
+      },
+    );
   });
 });
 

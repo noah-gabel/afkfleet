@@ -17,7 +17,7 @@ use fleet_api_types::auth::{NEW_PASSWORD_MAX_CHARS, PASSWORD_MAX_CHARS, USERNAME
 use fleet_api_types::ids::ID_CHARS;
 use fleet_api_types::mfa::{CODE_MAX_CHARS, TOKEN_MAX_CHARS};
 use fleet_api_types::page::PAGE_MAX;
-use fleet_core::auth::NewPassword;
+use fleet_core::auth::{NewPassword, STEP_UP_WINDOW};
 use fleet_core::value::Username;
 
 /// Every limit the UI mirrors, by its name in both languages.
@@ -35,6 +35,7 @@ fn expected() -> BTreeMap<&'static str, u64> {
         ("PAGE_MAX", u64::from(PAGE_MAX)),
         ("SERVER_URL_MAX_BYTES", usize(SERVER_URL_MAX_BYTES)),
         ("CA_PEM_MAX_BYTES", usize(CA_PEM_MAX_BYTES)),
+        ("STEP_UP_WINDOW_SECS", STEP_UP_WINDOW.as_secs()),
     ])
 }
 

@@ -1,0 +1,81 @@
+// What an Admin or the Owner may do to whom (Plan.md P8.8, ADR-0010, ADR-0017): a mirror of
+// fleet-core's `authorize()` for the admin screens, so each row offers only what the server
+// would allow. The server stays authoritative: a refusal anyway shows its message.
+// permissions.test.ts reads fleet-core's authorization-matrix snapshot as it is, so a rule
+// change on the server fails the UI's test until this follows.
+// - Nobody changes the Owner or themselves.
+// - The Owner sets Members and Admins to Member or Admin, and disables or enables them.
+// - An Admin only disables or enables Members.
+// - A Member invite is an Admin's or the Owner's to create and revoke, an Admin invite only
+//   the Owner's, an Owner invite nobody's.
+// A role this app doesn't know (the server's `UserRole` is open) gets nothing, and nothing
+// is offered on one.
+import type { InviteResponse } from "../../generated/InviteResponse";
+import type { UserRole } from "../../generated/UserRole";
+
+/** Who acts. */
+export interface Actor {
+  readonly id: string;
+  readonly role: UserRole;
+}
+
+/** Whom a change is for. */
+export interface Target {
+  readonly id: string;
+  readonly role: UserRole;
+}
+
+/** The changes `actor` may make to a user. */
+export interface UserActions {
+  /** Each role the user may be set to. */
+  readonly setRole: Readonly<Record<"member" | "admin" | "owner", boolean>>;
+  /** Disabling or enabling. */
+  readonly setDisabled: boolean;
+}
+
+/** Whether `actor` manages `target`: never themselves or the Owner. */
+function manages(actor: Actor, target: Target): boolean {
+  if (actor.id === target.id || (target.role !== "member" && target.role !== "admin")) {
+    return false;
+  }
+  switch (actor.role) {
+    case "owner":
+      return true;
+    case "admin":
+      return target.role === "member";
+    default:
+      return false;
+  }
+}
+
+/** What `actor` may change of `target`. */
+export function userActions(actor: Actor, target: Target): UserActions {
+  const managed = manages(actor, target);
+  const setsRoles = managed && actor.role === "owner";
+  return {
+    setRole: { member: setsRoles, admin: setsRoles, owner: false },
+    setDisabled: managed,
+  };
+}
+
+/** The roles `role` may invite. */
+export function inviteRoles(role: UserRole): readonly ("member" | "admin")[] {
+  switch (role) {
+    case "owner":
+      return ["member", "admin"];
+    case "admin":
+      return ["member"];
+    default:
+      return [];
+  }
+}
+
+/** Whether `role` may revoke an invite for `inviteRole`: as it may create one. */
+export function canRevokeRole(role: UserRole, inviteRole: UserRole): boolean {
+  return (inviteRoles(role) as readonly UserRole[]).includes(inviteRole);
+}
+
+/** Whether `role` may revoke `invite` now: only a pending one changes. */
+export function canRevoke(role: UserRole, invite: InviteResponse): boolean {
+  return invite.state === "pending" && canRevokeRole(role, invite.role);
+}

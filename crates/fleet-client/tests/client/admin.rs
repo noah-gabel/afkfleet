@@ -7,7 +7,7 @@ use fleet_api_types::users::{UserPatchRequest, UserRole};
 use fleet_api_types::{ErrorCode, PageQuery, UserId};
 use fleet_client::ClientError;
 
-use crate::support::{PASSWORD, Server, is_api, register};
+use crate::support::{PASSWORD, Server, is_api, register, step_up};
 
 fn all<I>() -> PageQuery<I> {
     PageQuery {
@@ -20,6 +20,7 @@ fn all<I>() -> PageQuery<I> {
 async fn the_owner_manages_invites_and_users() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
+    step_up(&owner).await;
     let member = CreateInviteRequest {
         role: UserRole::Member,
     };
@@ -79,6 +80,7 @@ async fn the_owner_manages_invites_and_users() {
 async fn an_unknown_user_is_not_found_and_a_member_cant_list_users() {
     let server = Server::start().await;
     let (owner, _, _) = server.owner().await;
+    step_up(&owner).await;
     let code = owner
         .create_invite(&CreateInviteRequest {
             role: UserRole::Member,

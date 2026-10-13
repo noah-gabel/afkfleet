@@ -321,6 +321,11 @@ pub(crate) struct Setup {
     pub(crate) challenges: Challenges,
     pub(crate) mfa: MfaService,
     pub(crate) lockout: LockoutService,
+    /// The login service the app runs, for a test of an error the HTTP
+    /// answer doesn't tell apart.
+    pub(crate) login: LoginService,
+    /// The random source every service shares, for a test that makes it fail.
+    pub(crate) random: SeededRandom,
     pub(crate) alice: UserId,
 }
 
@@ -415,6 +420,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
     };
     let login = LoginService::new(
         Arc::new(clock.clone()),
+        Arc::new(random.clone()),
         Arc::new(hooked.clone()),
         passwords.clone(),
         lockout.clone(),
@@ -428,7 +434,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         tokens.clone(),
         limits,
         mfa.clone(),
-        login,
+        login.clone(),
         users,
         invites,
     );
@@ -454,6 +460,8 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         challenges,
         mfa,
         lockout,
+        login,
+        random,
         alice,
     }
 }
