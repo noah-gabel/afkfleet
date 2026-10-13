@@ -26,6 +26,7 @@ export function describeError(error: CommandError): string {
     case "invalid_ca":
     case "client_build":
     case "profile_save":
+    case "session_discard":
     case "ipc":
       return error.message;
     default: {

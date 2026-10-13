@@ -3,11 +3,11 @@
 // (the Rust side ships with this UI), so the UI switches on it exhaustively; its
 // `api.code` is the server's, which can grow, so a switch on it always has a default
 // branch that shows `api.message` and `api.request_id` (describeError.ts).
-import { z } from "zod";
 
 import type { CommandError } from "../generated/CommandError";
 import type { CommandErrorCode } from "../generated/CommandErrorCode";
 import type { FieldError } from "../generated/FieldError";
+import { z } from "./zod";
 
 /**
  * Every code this UI and its Rust side know. A `Record` over the generated union, so the
@@ -31,6 +31,7 @@ const CODES: Record<CommandErrorCode, true> = {
   invalid_ca: true,
   client_build: true,
   profile_save: true,
+  session_discard: true,
   ipc: true,
 };
 

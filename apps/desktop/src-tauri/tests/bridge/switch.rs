@@ -291,7 +291,7 @@ async fn a_switch_whose_new_entry_cant_be_cleared_keeps_the_old_profile_logged_o
         .unwrap_err();
     let me = bridge.state.me().await.unwrap_err();
 
-    assert_eq!(refused.code, CommandErrorCode::Store);
+    assert_eq!(refused.code, CommandErrorCode::SessionDiscard);
     assert_eq!(current(&bridge).await.as_deref(), Some(old.url.as_str()));
     assert_eq!(me.code, CommandErrorCode::NoSession);
     assert_eq!(bridge.keychain.stored(&old.url).await, None);
@@ -432,6 +432,31 @@ async fn a_refused_store_for_the_new_origin_changes_nothing() {
         ServerProfileState::NotSet
     );
     server.stop().await;
+}
+
+/// `store` before the exclusive guard means nothing changed, a live
+/// session included; only `session_discard` and `profile_save` come after
+/// the old server's logout (ADR-0017, group D).
+#[tokio::test]
+async fn a_refused_store_for_the_new_origin_leaves_a_live_session_and_the_profile_untouched() {
+    let old = Server::start().await;
+    let new = Server::start().await;
+    let (bridge, _app) = old.owner().await;
+    bridge.keychain.refuse(&new.url);
+
+    let refused = bridge
+        .state
+        .set_server_profile(new.profile())
+        .await
+        .unwrap_err();
+    let me = bridge.state.me().await;
+
+    assert_eq!(refused.code, CommandErrorCode::Store);
+    assert_eq!(current(&bridge).await.as_deref(), Some(old.url.as_str()));
+    assert!(me.is_ok(), "{me:?}");
+    assert!(bridge.keychain.stored(&old.url).await.is_some());
+    old.stop().await;
+    new.stop().await;
 }
 
 #[tokio::test]

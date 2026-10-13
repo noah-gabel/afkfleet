@@ -3,28 +3,20 @@ import { createRoute } from "@tanstack/react-router";
 
 import { rootRoute } from "../../app/rootRoute";
 import { redirectIfSignedIn } from "../shell/guards";
+import { AuthFlow } from "./components/AuthFlow";
 
-/** `/login`. */
+/** `/login`: the sign-in flow from the login form. */
 export const loginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "login",
   beforeLoad: ({ context }) => redirectIfSignedIn(context, "/home"),
-  component: () => <Placeholder title="Log in" />,
+  component: () => <AuthFlow mode="login" />,
 });
 
-/** `/register`. */
+/** `/register`: the sign-in flow from the register form. */
 export const registerRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "register",
   beforeLoad: ({ context }) => redirectIfSignedIn(context, "/home"),
-  component: () => <Placeholder title="Register" />,
+  component: () => <AuthFlow mode="register" />,
 });
-
-// Until P8.7's AuthFlow (the next commit).
-function Placeholder({ title }: { title: string }) {
-  return (
-    <main className="p-8">
-      <h1 className="text-2xl font-semibold">{title}</h1>
-    </main>
-  );
-}

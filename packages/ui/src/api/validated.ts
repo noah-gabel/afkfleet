@@ -3,11 +3,11 @@
 // call with a broken input reaches `invoke`. A failure rejects with `invalid_input`, its
 // fields named like garde's (`username`, `limit`, `steps[0].angle`), the same shape the
 // Rust side answers. `App` wraps whatever client it's given.
-import type { z } from "zod";
 
 import type { ApiClient } from "./ApiClient";
 import { invalidInput } from "./ApiError";
 import * as schemas from "./schemas";
+import type { z } from "./zod";
 
 /** `client` behind the input checks; see the module comment. */
 export function validated(client: ApiClient): ApiClient {

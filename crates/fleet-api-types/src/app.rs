@@ -68,8 +68,13 @@ pub enum CommandErrorCode {
     InvalidCa,
     /// The connection to the server can't be set up.
     ClientBuild,
-    /// The server profile can't be saved.
+    /// The server profile can't be saved. Only after a server switch has
+    /// logged out of the old server: the old profile stays, logged out.
     ProfileSave,
+    /// The new server's stored session can't be removed from the keychain.
+    /// Only after a server switch has logged out of the old server: the old
+    /// profile stays, logged out.
+    SessionDiscard,
     /// The app's own call didn't reach the command. Only the UI produces
     /// this code, for a refusal from Tauri itself.
     Ipc,
@@ -95,6 +100,7 @@ impl CommandErrorCode {
         Self::InvalidCa,
         Self::ClientBuild,
         Self::ProfileSave,
+        Self::SessionDiscard,
         Self::Ipc,
     ];
 
@@ -120,6 +126,9 @@ impl CommandErrorCode {
             Self::InvalidCa => "The CA certificates can't be used.",
             Self::ClientBuild => "The connection to the server can't be set up.",
             Self::ProfileSave => "The server profile can't be saved.",
+            Self::SessionDiscard => {
+                "The new server's old session can't be removed from the Windows Credential Manager."
+            }
             Self::Ipc => "The app couldn't run the request.",
         }
     }
@@ -374,11 +383,12 @@ mod tests {
             CommandErrorCode::InvalidCa => 14,
             CommandErrorCode::ClientBuild => 15,
             CommandErrorCode::ProfileSave => 16,
-            CommandErrorCode::Ipc => 17,
+            CommandErrorCode::SessionDiscard => 17,
+            CommandErrorCode::Ipc => 18,
         }
     }
 
-    const CODES: usize = 18;
+    const CODES: usize = 19;
 
     fn details() -> ApiErrorDetails {
         ApiErrorDetails {

@@ -50,6 +50,30 @@
                   {
                     "group": ["@tauri-apps/**"],
                     "message": "packages/ui never knows the platform: the desktop app injects its ApiClient (CLAUDE.md, ADR-0017)."
+                  },
+                  {
+                    "group": ["zod", "zod/**"],
+                    "message": "Import z from src/api/zod.ts, which sets zod jitless before any schema exists: its JIT probe evaluates code, which the release CSP blocks and reports (ADR-0017)."
+                  }
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "includes": ["packages/ui/src/api/zod.ts"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noRestrictedImports": {
+              "level": "error",
+              "options": {
+                "patterns": [
+                  {
+                    "group": ["@tauri-apps/**"],
+                    "message": "packages/ui never knows the platform: the desktop app injects its ApiClient (CLAUDE.md, ADR-0017)."
                   }
                 ]
               }

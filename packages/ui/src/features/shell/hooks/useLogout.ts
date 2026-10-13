@@ -28,7 +28,8 @@ export function useLogout() {
   const { session } = useAppStores();
   const [pending, setPending] = useState(false);
 
-  async function logOut(): Promise<void> {
+  /** True once logged out; false when the call failed (the error was shown). */
+  async function logOut(): Promise<boolean> {
     const signedIn = session.getState().phase === "signed_in";
     if (signedIn) {
       session.getState().beginLogout();
@@ -41,11 +42,13 @@ export function useLogout() {
       if (answer.server === "unconfirmed") {
         toast.warning(unconfirmedLogout(answer.error));
       }
+      return true;
     } catch (rejection) {
       if (signedIn) {
         session.getState().cancelLogout();
       }
       toast.error(`Couldn't log out: ${describeError(toApiError(rejection).error)} Try again.`);
+      return false;
     } finally {
       setPending(false);
     }

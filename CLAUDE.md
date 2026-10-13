@@ -371,7 +371,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 - API types come only from `src/generated/` (ts-rs). **Never edit generated files**; run `just gen`. Biome ignores `src/generated/`.
 
 **Safety**
-- Never use `dangerouslySetInnerHTML`, `eval` or `new Function`.
+- Never use `dangerouslySetInnerHTML`, `eval` or `new Function`. Nor may a library at runtime: the release CSP has no 'unsafe-eval'. zod is imported only from `src/api/zod.ts`, which makes it jitless (Biome enforces it; `src/api/zod.test.ts` checks it).
 - **No runtime styles.** The release CSP has `style-src 'self'`, so a `<style>` element or a constructed stylesheet added at runtime is blocked in the real build while `just dev-app` shows nothing wrong. Every Vitest test ends with a check that the document holds none (`src/test/styleGuard.ts`). sonner is patched for this (`patches/sonner@<version>.patch`); a sonner bump redoes the patch and runs `Toaster.test.tsx` (ADR-0017). Check a new UI dependency in `just app-build --debug` too.
 - Chat is rendered as plain text.
 - External links open only through the Rust-side opener command.

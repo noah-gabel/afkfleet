@@ -106,9 +106,11 @@ impl<F: StoreFactory> AppState<F> {
     /// `invalid_input`, `invalid_server_url` or `invalid_ca` for a refused
     /// request; `store` or `client_build` when its client can't be built; the
     /// health check's error. All of these change nothing. After the old
-    /// server's logout, `store` when the new origin's entry can't be cleared
-    /// and `profile_save` when the file can't be written: the old profile
-    /// stays, its session logged out.
+    /// server's logout, `session_discard` when the new origin's entry can't
+    /// be cleared and `profile_save` when the file can't be written: the old
+    /// profile stays, its session logged out. Those two codes mean only that,
+    /// so the UI can tell a switch that logged out from one that changed
+    /// nothing.
     pub async fn set_server_profile(
         &self,
         request: ServerProfileRequest,
@@ -138,7 +140,10 @@ impl<F: StoreFactory> AppState<F> {
         };
         // A token stored for the new origin came from a profile whose
         // certificates can't be compared any more: dropped unsent.
-        client.discard_session().await.map_err(error::client)?;
+        client
+            .discard_session()
+            .await
+            .map_err(|_| error::session_discard())?;
         profile::save(&self.profile_path, &profile)
             .await
             .map_err(|_| error::profile_save())?;
