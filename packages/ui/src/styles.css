@@ -131,4 +131,10 @@
   body {
     @apply bg-background text-foreground;
   }
+  /* WebView2 is Edge, which adds its own reveal and clear buttons to inputs. PasswordInput
+     has its own toggle, so a password field would show two eye icons. */
+  input::-ms-reveal,
+  input::-ms-clear {
+    display: none;
+  }
 }

@@ -3108,6 +3108,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **A server switch while signed in runs as a deliberate logout:** `logging_out` from before the call until its answer, so a call answering `no_session` meanwhile shows no "session ended"; `none` and an error that changed nothing go back to signed in.
   > - **Late answers count only for their step:** every step has an id, each action names the step it was issued in, and the reducer drops the rest. A late answer never signs in or navigates once the flow left its step or route.
   > - **While a call runs,** its step's Cancel, links, "Log out" and "Continue as" wait, and a second submit does nothing. "New QR code" waits too, and hides the old secret and QR code while the new one loads.
+  > - **Edge's own reveal button:** WebView2 adds Edge's password-reveal (and clear) button to inputs, so a password field showed two eye icons; `styles.css` hides `input::-ms-reveal` and `input::-ms-clear`, checked in the debug exe (two icons before, one after).
   > - **Smaller:** the setup secret is requested once per step, also under StrictMode; a step's deadline counts from when its request was sent; a failed login after registering lands on a real `/login` (with its notice and username), whose Register link works.
   > - **Tests,** red first: 13 flow tests and 2 switch tests against the old code, and the reducer's 11 of 13 against the old reducer. 8 more pin behaviour the old code had (double submits, "Continue as"'s guard, the generation rule, `me`'s invalidation at every way in, the setup step's deadline check), shown red through temporary mutations of those guards.
 - [ ] **P8.8** 🔴 Admin screens:
@@ -3396,6 +3397,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P11.10** Dark mode: the app follows Windows' light or dark setting (`prefers-color-scheme` and its change event; the `.dark` class on `<html>`, set by the bundled script so the CSP allows it), and every screen is checked in both themes.
 
   > Note (P11.10, from Phase 8, group D, the user's decision) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): Phase 8 ships the light theme only (sonner's `theme="light"`). `packages/ui/src/styles.css` already holds shadcn's dark tokens under `.dark`.
+- [ ] **P11.11** UI design pass, before Phase 12 and once every screen exists:
+  - consistent layout, spacing and typography across the screens
+  - the app's branding and icon (replacing P8.2's placeholder)
+  - the loading, empty and error states of every screen
+
+  Each is checked on every screen in both themes (P11.10).
+
+  > Note (P11.11, from Phase 8, group D, the user's request): Phase 8's screens are functional first: shadcn's radix-nova components with the light theme, no design of their own yet.
 
 **DoD:** The user's real fleet runs for 24 h, managed from the app. Every event shows up live, and the logs contain no unhandled errors.
 
