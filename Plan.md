@@ -3398,11 +3398,19 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.10, from Phase 8, group D, the user's decision) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): Phase 8 ships the light theme only (sonner's `theme="light"`). `packages/ui/src/styles.css` already holds shadcn's dark tokens under `.dark`.
 - [ ] **P11.11** UI design pass, before Phase 12 and once every screen exists:
-  - consistent layout, spacing and typography across the screens
-  - the app's branding and icon (replacing P8.2's placeholder)
-  - the loading, empty and error states of every screen
-
-  Each is checked on every screen in both themes (P11.10).
+  - **Direction first.** A short design brief, then 2–3 visual directions, each shown as screenshots of two or three real screens in light and dark. The user picks one before any implementation starts.
+  - **Branding:**
+    - the name or wordmark, the logo and the app icon (replacing P8.2's placeholder) at every Windows size, for the taskbar and P12.5's installer
+    - a color palette mapped onto `styles.css`'s theme tokens for both themes; no color is hard-coded in a component
+    - the typography, and the tone of the UI's texts
+  - **Constraints:**
+    - fonts and images are bundled: the CSP allows only 'self', so no Google Fonts or CDN
+    - no runtime `<style>`: the style guard holds
+    - WCAG AA contrast and visible focus rings, in both themes
+  - **Every screen and state:** consistent layout, spacing and typography; the loading, empty and error states; the toasts, the banner and the error panel; the window's title and minimum size.
+  - **Verification:**
+    - before-and-after screenshots of every screen in both themes (P11.10) in the PR
+    - Playwright screenshot tests in P8.9's suite, so a later change can't drift from the design
 
   > Note (P11.11, from Phase 8, group D, the user's request): Phase 8's screens are functional first: shadcn's radix-nova components with the light theme, no design of their own yet.
 
