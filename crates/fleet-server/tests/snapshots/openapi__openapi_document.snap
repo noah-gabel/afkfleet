@@ -1327,7 +1327,7 @@ expression: answer.json()
                 }
               }
             },
-            "description": "The role isn't the caller's to invite."
+            "description": "Step up first: `POST /auth/step-up`; or the role isn't the caller's to invite."
           },
           "409": {
             "content": {
@@ -1375,10 +1375,11 @@ expression: answer.json()
             "access_token": []
           }
         ],
-        "summary": "`POST /api/v1/invites`: a new invite and its code, shown this once.",
+        "summary": "`POST /api/v1/invites`: a new invite and its code, shown this once.\nNeeds a step-up.",
         "tags": [
           "invites"
-        ]
+        ],
+        "x-step-up": true
       }
     },
     "/api/v1/invites/{id}": {
@@ -1417,7 +1418,7 @@ expression: answer.json()
                 }
               }
             },
-            "description": "The invite isn't the caller's to revoke."
+            "description": "Step up first: `POST /auth/step-up`; or the invite isn't the caller's to revoke."
           },
           "404": {
             "content": {
@@ -1475,10 +1476,11 @@ expression: answer.json()
             "access_token": []
           }
         ],
-        "summary": "`DELETE /api/v1/invites/{id}`: revokes a pending invite.",
+        "summary": "`DELETE /api/v1/invites/{id}`: revokes a pending invite. Needs a step-up.",
         "tags": [
           "invites"
-        ]
+        ],
+        "x-step-up": true
       }
     },
     "/api/v1/me": {
@@ -2247,7 +2249,7 @@ expression: answer.json()
                 }
               }
             },
-            "description": "The change isn't the caller's to make."
+            "description": "Step up first: `POST /auth/step-up`; or the change isn't the caller's to make."
           },
           "404": {
             "content": {
@@ -2305,10 +2307,11 @@ expression: answer.json()
             "access_token": []
           }
         ],
-        "summary": "`PATCH /api/v1/users/{id}`: one change, a role or `disabled`; either\nends every session of the user.",
+        "summary": "`PATCH /api/v1/users/{id}`: one change, a role or `disabled`; either\nends every session of the user. Needs a step-up.",
         "tags": [
           "users"
-        ]
+        ],
+        "x-step-up": true
       }
     },
     "/health/live": {

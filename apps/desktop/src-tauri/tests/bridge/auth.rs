@@ -12,6 +12,7 @@ use keyring_core::api::CredentialStoreApi as _;
 
 use crate::support::{
     Bridge, OWNER, PASSWORD, Server, app_of, assert_no_token, is_api, is_invalid, login, register,
+    step_up_request,
 };
 
 #[tokio::test]
@@ -304,6 +305,7 @@ async fn a_step_up_with_the_wrong_password_is_403_and_the_right_one_passes() {
 async fn an_invitee_registers_then_logs_in_and_sets_up_2fa() {
     let server = Server::start().await;
     let (owner, _app) = server.owner().await;
+    owner.state.step_up(step_up_request()).await.unwrap();
     let invite = owner
         .state
         .create_invite(CreateInviteRequest {

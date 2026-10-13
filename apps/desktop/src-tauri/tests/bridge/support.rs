@@ -14,7 +14,7 @@ use chrono::DateTime;
 use fleet_api_types::app::{
     CommandError, CommandErrorCode, LoginStepKind, ServerProfileRequest, ServerProfileResponse,
 };
-use fleet_api_types::auth::{LoginRequest, RegisterRequest};
+use fleet_api_types::auth::{LoginRequest, RegisterRequest, StepUpRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaEnrollResponse};
 use fleet_api_types::{ErrorCode, SecretText};
 use fleet_client::{
@@ -360,6 +360,15 @@ pub(crate) fn login(username: &str, password: &str) -> LoginRequest {
     LoginRequest {
         username: SecretText::new(username.to_owned()),
         password: SecretText::new(password.to_owned()),
+    }
+}
+
+/// The step-up with the shared password: the admins' writes need it
+/// (ADR-0016's amendment in Phase 8 group E), and so do the password change
+/// and the 2FA replacement.
+pub(crate) fn step_up_request() -> StepUpRequest {
+    StepUpRequest {
+        password: SecretText::new(PASSWORD.to_owned()),
     }
 }
 

@@ -30,7 +30,8 @@ struct Cast {
     bob: Person,
 }
 
-async fn cast(setup: &Setup) -> Cast {
+/// The cast, none of them stepped up.
+async fn unstamped_cast(setup: &Setup) -> Cast {
     Cast {
         owner: setup.person(2, "owner", Role::Owner).await,
         admin: setup.person(3, "admin", Role::Admin).await,
@@ -38,6 +39,23 @@ async fn cast(setup: &Setup) -> Cast {
         alice: setup.alice_person().await,
         bob: setup.person(5, "bob", Role::Member).await,
     }
+}
+
+/// The cast, every session stepped up now: the writes are step-up routes,
+/// so a test of what `authorize()` decides starts past the step-up check.
+/// Each test's later clock moves stay well inside the 5 minutes.
+async fn cast(setup: &Setup) -> Cast {
+    let cast = unstamped_cast(setup).await;
+    for person in [
+        &cast.owner,
+        &cast.admin,
+        &cast.other_admin,
+        &cast.alice,
+        &cast.bob,
+    ] {
+        setup.stamp(person.session).await;
+    }
+    cast
 }
 
 /// The cast's IDs by name, for redacting a snapshot.
@@ -335,6 +353,7 @@ async fn a_member_cant_make_themselves_an_admin(
         .await;
 
     assert_eq!(seen.status, 403, "{}", seen.text);
+    assert_eq!(seen.code(), "forbidden");
     assert_eq!(role(&setup, cast.alice.id).await, Role::Member);
     assert!(setup.live(cast.alice.session).await);
     assert_eq!(entries(&setup, &AuditAction::USER_SET_ROLE).await, 0);
@@ -401,6 +420,7 @@ async fn an_admin_cant_change_any_role(_pool: SqlitePoolOptions, options: Sqlite
 
     for seen in [promote, unchanged, themselves] {
         assert_eq!(seen.status, 403, "{}", seen.text);
+        assert_eq!(seen.code(), "forbidden");
     }
     assert_eq!(role(&setup, cast.alice.id).await, Role::Member);
     assert_eq!(role(&setup, cast.admin.id).await, Role::Admin);
@@ -427,7 +447,9 @@ async fn an_admin_cant_change_the_owner(_pool: SqlitePoolOptions, options: Sqlit
         .await;
 
     assert_eq!(disable.status, 403, "{}", disable.text);
+    assert_eq!(disable.code(), "forbidden");
     assert_eq!(demote.status, 403, "{}", demote.text);
+    assert_eq!(demote.code(), "forbidden");
     assert!(!disabled(&setup, cast.owner.id).await);
     assert_eq!(role(&setup, cast.owner.id).await, Role::Owner);
     assert!(setup.live(cast.owner.session).await);
@@ -450,6 +472,7 @@ async fn an_admin_cant_disable_another_admin(
         .await;
 
     assert_eq!(seen.status, 403, "{}", seen.text);
+    assert_eq!(seen.code(), "forbidden");
     assert!(!disabled(&setup, cast.other_admin.id).await);
 }
 
@@ -467,6 +490,7 @@ async fn nobody_makes_another_owner(_pool: SqlitePoolOptions, options: SqliteCon
         .await;
 
     assert_eq!(seen.status, 403, "{}", seen.text);
+    assert_eq!(seen.code(), "forbidden");
     assert_eq!(role(&setup, cast.admin.id).await, Role::Admin);
 }
 
@@ -491,7 +515,9 @@ async fn the_owner_cant_change_themselves(_pool: SqlitePoolOptions, options: Sql
         .await;
 
     assert_eq!(disable.status, 403, "{}", disable.text);
+    assert_eq!(disable.code(), "forbidden");
     assert_eq!(demote.status, 403, "{}", demote.text);
+    assert_eq!(demote.code(), "forbidden");
     assert_eq!(role(&setup, cast.owner.id).await, Role::Owner);
 }
 
@@ -699,6 +725,42 @@ async fn a_change_spends_the_users_limit(_pool: SqlitePoolOptions, options: Sqli
     assert!(!disabled(&setup, cast.alice.id).await);
 }
 
+// --- The step-up -------------------------------------------------------------------
+
+#[sqlx::test(migrations = false)]
+async fn a_user_change_without_a_fresh_step_up_is_refused_and_changes_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let cast = unstamped_cast(&setup).await;
+
+    let promoting = setup
+        .patch(
+            &user_path(cast.alice.id),
+            Some(&cast.owner.token),
+            json!({ "role": "admin" }),
+        )
+        .await;
+    let disabling = setup
+        .patch(
+            &user_path(cast.alice.id),
+            Some(&cast.admin.token),
+            json!({ "disabled": true }),
+        )
+        .await;
+
+    for seen in [&promoting, &disabling] {
+        assert_eq!(seen.status, 403, "{}", seen.text);
+        assert_eq!(seen.code(), "step_up_required");
+    }
+    assert_eq!(role(&setup, cast.alice.id).await, Role::Member);
+    assert!(!disabled(&setup, cast.alice.id).await);
+    assert!(setup.live(cast.alice.session).await);
+    assert_eq!(entries(&setup, &AuditAction::USER_SET_ROLE).await, 0);
+    assert_eq!(entries(&setup, &AuditAction::USER_SET_DISABLED).await, 0);
+}
+
 // --- The re-check in the transaction --------------------------------------------------
 
 #[sqlx::test(migrations = false)]
@@ -747,6 +809,7 @@ async fn a_member_promoted_meanwhile_cant_be_disabled_by_an_admin(
         .await;
 
     assert_eq!(seen.status, 403, "{}", seen.text);
+    assert_eq!(seen.code(), "forbidden");
     assert!(!disabled(&setup, cast.alice.id).await);
 }
 

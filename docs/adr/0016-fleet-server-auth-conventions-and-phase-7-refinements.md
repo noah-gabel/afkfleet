@@ -1,7 +1,7 @@
 # 0016. fleet-server auth conventions and Phase 7 refinements
 
 - **Status:** Accepted
-- **Date:** 2026-10-11 (group E: 2026-10-12)
+- **Date:** 2026-10-11 (group E: 2026-10-12; amended in Phase 8, group E, on 2026-10-13: see the last section of the decision)
 - **Related:** Plan.md Phase 7 (P7.1–P7.13), §4, §5, §7.2, §7.4, §7.5, §8, Appendix A, Appendix B, Appendix D, P8.1, P11.6, P12.2, P12.4, P12.7; ADR-0006, ADR-0010, ADR-0011, ADR-0015
 
 ## Context
@@ -53,7 +53,7 @@ Before writing any code, the Phase 7 plan listed every question the plan left op
 
 ### Step-up *(the user's choice)*
 - `POST /auth/step-up {password}` sets the current session's `stepped_up_at`.
-- A step-up action (§7.2: password change, 2FA reset, role change; later P9's account delete and key rotation through the API) checks that it's at most 5 minutes old. Otherwise it answers 403 with a new code, `step_up_required`.
+- A step-up action (§7.2: password change, 2FA reset, role change; later P9's account delete and key rotation through the API) checks that it's at most 5 minutes old. Otherwise it answers 403 with a new code, `step_up_required`. *(Amended in Phase 8, group E: every admin write is one, see the last section of the decision.)*
 - A wrong password counts toward the username lockout.
 - This adds one column to `sessions` (B) and one route (D), with a note under Appendix B. A request body never carries the current password, and P9's `DELETE /accounts/{id}` needs no body.
 
@@ -582,7 +582,7 @@ The user answered group E's questions on 2026-10-12, one at a time, and amended 
 - **`/me/sessions`** *(the user's choices)*: the live sessions (not revoked, refresh not expired) newest first, `{id, created_at, last_used_at, expires_at, current}`; `DELETE /me/sessions/{id}` ends another one (`session.revoke`), the request's own is 409 (logout ends it), and someone else's, an ended or an unknown one is 404.
 - **`GET /users`** shows `{id, username, role, disabled, created_at, mfa_enrolled, last_seen_at}` *(the user's choice)*: `mfa_enrolled` lets an Admin spot an invitee who never finished the 2FA setup, `last_seen_at` is the newest `last_used_at` of the user's sessions.
 - **`PATCH /users/{id}`** takes exactly one of `role` and `disabled` *(the user's choice)*; a value equal to the current one, decided on the row the transaction re-reads, writes nothing; it answers the user as the list shows them. A change revokes every session of the user (`user.set_role` with `role`, `previous_role`, `sessions_revoked`; `user.set_disabled` with `disabled`, `sessions_revoked`).
-- **Every admin write re-checks in its transaction** *(the user's choice)*: `PATCH /users/{id}`, `POST` and `DELETE /invites` re-read the actor's session (live, theirs), the actor's role and `disabled`, and the target, then ask `authorize()` again. A dead session or a disabled actor is 401; a refusal is what `authorize()` answers on the fresh facts. The handler authorizes first too, so an actor who can't see the target gets 404 before any work.
+- **Every admin write re-checks in its transaction** *(the user's choice; since Phase 8, group E, each also needs a step-up, see the last section of the decision)*: `PATCH /users/{id}`, `POST` and `DELETE /invites` re-read the actor's session (live, theirs), the actor's role and `disabled`, and the target, then ask `authorize()` again. A dead session or a disabled actor is 401; a refusal is what `authorize()` answers on the fresh facts. The handler authorizes first too, so an actor who can't see the target gets 404 before any work.
 - **Lists are keyset pages** *(the user's choice)*: `?before=<id>&limit=<1..100>`, 50 by default, newest first by version 7 ID, `{items, next}` with `next` left out on the last page.
 - **Bad parameters** *(the user's choice)*: a path ID that isn't a version 7 UUID is 404; a query that doesn't parse is 400; a `limit` out of range is 422.
 - **The API's new building blocks** *(the user's choices)*: `Timestamp`, always `YYYY-MM-DDTHH:MM:SS.mmmZ`, written and read by hand, which brings chrono to fleet-api-types with no features; IDs as fleet-core's typed IDs, strings on the wire; `bool` fields, for which the OpenAPI-vs-TypeScript renderer gained a `boolean` arm and its "refuses" test dropped `boolean` (the user's approval); a value that isn't there is left out, never `null`.
@@ -611,6 +611,16 @@ The user answered group E's questions on 2026-10-12, one at a time, and amended 
   - the citation script: 9 of 13, and its literal case
 
   Then all passed. The ones that passed against stubs check refusals and "nothing found", which a do-nothing stub gives too. Snapshots, read before accepting: the serialized IDs, the migrations' lines 6 and 7, the audit-action names (seven added), `users_page`, `user_patched`, `invite_created`, `invites_page`, `registered`, `register_weak`, `me`, `sessions_page` and the OpenAPI document.
+
+### Amended in Phase 8, group E (2026-10-13, ADR-0017)
+- **The admin writes need a step-up** *(the user's decision, from the threat model's stolen-PC case)*. `PATCH /users/{id}`, `POST /invites` and `DELETE /invites/{id}` register with `step_up_route`, so a role change, disabling or enabling a user, and creating or revoking an invite need the password within the last 5 minutes. Before, whoever opened the app on an Owner's unlocked PC could promote, demote and disable users and mint Admin invites without it. Listing users and invites stays a plain authed route.
+  - **Checked by the extractor only** *(the user's choice)*, as for `POST /me/mfa/reset`. `SteppedUpUser` is each handler's first extractor, and the transaction's re-check stays as it was: the session live and the actor's, the actor enabled, the target re-read and `authorize()` asked again. A password change ends every other session, which that re-check catches. Unlike the password change, the stamp isn't re-read in the commit; the gap is the milliseconds at the window's edge.
+  - **The order of answers:** 401 for no credentials, then the per-user 429, then 403 `step_up_required`, then the path, the body and `authorize()`. So a Member who never stepped up gets 403 `step_up_required` for `PATCH /users/{any}` instead of 404. The answer doesn't depend on the target, so it tells nothing about which users exist; with a fresh stamp the Member still gets 404 (`a_member_gets_404_for_any_other_user`).
+  - **The OpenAPI document** marks the three operations `x-step-up: true`, and each 403 reads "Step up first: `POST /auth/step-up`; or …".
+  - **Tests:** `a_user_change_without_a_fresh_step_up_is_refused_and_changes_nothing`, `creating_an_invite_needs_a_fresh_step_up` and `revoking_an_invite_needs_a_fresh_step_up` (403 `step_up_required`, nothing written or audited), and the registry test, renamed `the_setup_and_step_up_routes_are_registered_with_their_access_and_class`, were red against the old registration. The route-coverage test's step-up check picks the three routes up by itself.
+    - Every admin-write test's cast steps up first. The tests that only checked a 403 now also check the code `forbidden`, so they still test `authorize()`, not the step-up: without the stamps, 38 of the 49 admin tests fail.
+    - fleet-client's and the desktop's admin flows (4 and 3 tests) were red with `api 403 step_up_required` until they stepped up.
+  - Plan.md §7.2's list of step-up actions and Appendix B say so too.
 
 ## Consequences
 - **Easier:**

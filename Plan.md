@@ -396,7 +396,10 @@ The full analysis lives in `docs/threat-model.md`.
   - replacing 2FA (`POST /me/mfa/reset`, group D: the new authenticator replaces the old one at confirm)
   - deleting an MC account
   - changing a role
+  - disabling or enabling a user, creating or revoking an invite (Phase 8, group E)
   - rotating keys
+
+> Note (§7.2, Phase 8, group E, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)'s amendment, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **every admin write is a step-up action.** `PATCH /users/{id}` (a role or `disabled`), `POST /invites` and `DELETE /invites/{id}` register with `step_up_route`, checked by the extractor only, so an unlocked PC with a live Owner or Admin session can't change roles, disable users or mint invites without the password. Listing stays a plain authed route. The app sends the action and, on 403 `step_up_required`, asks for the password and retries once.
 
 > Note (§7.2, Phase 7, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **step-up is a session stamp.** `POST /auth/step-up {password}` sets the session's `stepped_up_at`; a step-up action needs it at most 5 min old, otherwise it answers 403 `step_up_required`. A wrong password counts toward the lockout. No request body carries the current password.
 
@@ -3131,6 +3134,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** Users link their Microsoft accounts securely. Tokens are encrypted at rest and refreshed safely.
 **Introduces:** `azalea-auth`, `moka`, `tauri-plugin-opener`.
 
+> Note (P9, from Phase 8, group E, the user's request) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **Decide step-up per action, the same way as the admin writes.** Phase 8 put role changes, disabling users and invites behind step-up, so an unlocked PC with a live session can't do them without the password. Before building them, decide for each destructive or privilege-changing action of this phase whether it needs a step-up: unlinking or deleting a Microsoft account (already in §7.2's list), changing or revoking a grant, rotating keys through the API. The app reuses the admin screens' "send, and on `step_up_required` ask for the password and retry once".
+
 - [ ] **P9.1** 🔴 Migrations and repositories:
   - `mc_accounts`: owner, MC UUID and name, kind, encrypted refresh token, `key_id`, status
   - `account_grants`
@@ -3285,6 +3290,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 ### Phase 11: Bot operations, modes & live events
 **Goal:** Full day-to-day management from the app: start and stop, modes, live chat and history.
 **Introduces:** `tokio-tungstenite`, `futures-util` (WebSocket client).
+
+> Note (P11, from Phase 8, group E, the user's request) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **Decide step-up per action, the same way as the admin writes.** Before building them, decide for each destructive or privilege-changing action of this phase whether it needs a step-up: deleting a bot, changing grants, deleting a shared mode, and anything else that loses data or widens access. The app reuses the admin screens' "send, and on `step_up_required` ask for the password and retry once".
 
 - [ ] **P11.1** 🔴 Migrations and repositories:
   - `bots`: 1:1 with an account; server address, mode, desired state, auto-start, assigned agent
@@ -3710,8 +3717,8 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 | `GET /me` · `POST /me/password` | user (step-up) | Profile, password change |
 | `POST /me/mfa/enroll` · `/confirm` · `/reset` | setup token (enroll, confirm); user + step-up (reset) | 2FA: enroll answers a new secret, confirm stores it with 10 recovery codes; reset answers a setup token whose confirm replaces the authenticator and revokes the user's other sessions (group D) |
 | `GET /me/sessions` · `DELETE /me/sessions/{id}` | user | Session management |
-| `GET /users` · `PATCH /users/{id}` | Admin+ | Role, disable |
-| `POST /invites` · `GET /invites` · `DELETE /invites/{id}` | Admin+ | Invites |
+| `GET /users` · `PATCH /users/{id}` | Admin+ (`PATCH`: step-up) | Role, disable |
+| `POST /invites` · `GET /invites` · `DELETE /invites/{id}` | Admin+ (`POST`, `DELETE`: step-up) | Invites |
 | `POST /accounts/link` · `GET /accounts/link/{flow}` | Member+ | Microsoft device-code flow |
 | `GET /accounts` · `GET/DELETE /accounts/{id}` | View / Manage | MC accounts |
 | `GET/PUT/DELETE /accounts/{id}/grants[/{user}]` | Manage | Sharing |
