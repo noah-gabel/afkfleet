@@ -33,10 +33,29 @@ dependencies = [
 name = "afkfleet-desktop"
 version = "0.1.0"
 dependencies = [
+ "chrono",
+ "fleet-api-types",
+ "fleet-client",
+ "fleet-core",
+ "fleet-server",
+ "fleet-startup",
+ "fleet-testkit",
+ "garde",
+ "keyring-core",
+ "rcgen",
  "rstest",
+ "rustls",
+ "secrecy",
+ "serde",
+ "serde_json",
  "tauri",
  "tauri-build",
  "tauri-plugin-single-instance",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "totp-rs",
+ "windows-native-keyring-store",
 ]
 
 [[package]]
@@ -2544,6 +2563,7 @@ dependencies = [
 name = "fleet-client"
 version = "0.1.0"
 dependencies = [
+ "base64 0.23.1",
  "chrono",
  "fleet-api-types",
  "fleet-core",
@@ -2557,6 +2577,7 @@ dependencies = [
  "secrecy",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
@@ -4041,6 +4062,15 @@ checksum = "0fbe853b403ae61a04233030ae8a79d94975281ed9770a1f9e246732b534b28d"
 dependencies = [
  "bitflags 2.13.2",
  "serde",
+]
+
+[[package]]
+name = "keyring-core"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "fb1e621458ca9c51aa110bd0339d4751a056b9576bf1253aee1aa560dda0fc9d"
+dependencies = [
+ "log",
 ]
 
 [[package]]
@@ -8287,6 +8317,18 @@ name = "windows-link"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f0805222e57f7521d6a62e36fa9163bc891acd422f971defe97d64e70d0a4fe5"
+
+[[package]]
+name = "windows-native-keyring-store"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "063426e76fdec7438d56bb777f67e318a84a25c707b07e575cb8b78e10c028f8"
+dependencies = [
+ "byteorder",
+ "keyring-core",
+ "windows-sys 0.61.2",
+ "zeroize",
+]
 
 [[package]]
 name = "windows-numerics"

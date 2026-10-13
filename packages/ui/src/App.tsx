@@ -1,12 +1,23 @@
+import { useMemo } from "react";
+
+import type { ApiClient } from "./api/ApiClient";
+import { ApiClientProvider } from "./api/context";
+import { validated } from "./api/validated";
+
 /**
- * The app's root component. For now it only names the app; the API client (P8.5) and the
- * routes (P8.6) arrive with the next groups.
+ * The app's root component. It takes the platform's API client (the desktop app's
+ * `TauriApiClient`, a test's `FakeApiClient`) and provides it, behind the zod checks of
+ * every input, to everything below. For now it only names the app; the routes arrive with
+ * P8.6.
  */
-export function App() {
+export function App({ apiClient }: { apiClient: ApiClient }) {
+  const client = useMemo(() => validated(apiClient), [apiClient]);
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-2 bg-background p-8 text-foreground">
-      <h1 className="text-3xl font-semibold tracking-tight">afkfleet</h1>
-      <p className="text-muted-foreground">The desktop app is being set up.</p>
-    </main>
+    <ApiClientProvider client={client}>
+      <main className="flex min-h-screen flex-col items-center justify-center gap-2 bg-background p-8 text-foreground">
+        <h1 className="text-3xl font-semibold tracking-tight">afkfleet</h1>
+        <p className="text-muted-foreground">The desktop app is being set up.</p>
+      </main>
+    </ApiClientProvider>
   );
 }

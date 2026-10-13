@@ -1,0 +1,160 @@
+{
+  "description": "The IPC contract between TauriApiClient and the Rust commands (ADR-0017): for every command in build.rs's COMMANDS, the ApiClient method and its inputs, the exact args object TauriApiClient sends, and the answer the mock app without a server profile gives. Placeholder values only. Tested by apps/desktop/src/TauriApiClient.test.ts, src-tauri/tests/acl.rs and scripts/tauri-hardening.mjs.",
+  "commands": [
+    {
+      "command": "server_profile",
+      "method": "serverProfile",
+      "inputs": [],
+      "args": {},
+      "expect": { "ok": { "state": "none" } }
+    },
+    {
+      "command": "set_server_profile",
+      "method": "setServerProfile",
+      "inputs": [{ "url": "http://192.0.2.10" }],
+      "args": { "request": { "url": "http://192.0.2.10" } },
+      "expect": { "error": "invalid_server_url" }
+    },
+    {
+      "command": "check_server",
+      "method": "checkServer",
+      "inputs": [],
+      "args": {},
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "login",
+      "method": "login",
+      "inputs": [{ "username": "AfkBot1", "password": "placeholder password" }],
+      "args": { "request": { "username": "AfkBot1", "password": "placeholder password" } },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "login_mfa",
+      "method": "loginMfa",
+      "inputs": ["123456"],
+      "args": { "code": "123456" },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "logout",
+      "method": "logout",
+      "inputs": [],
+      "args": {},
+      "expect": { "ok": { "server": "ended" } }
+    },
+    {
+      "command": "register",
+      "method": "register",
+      "inputs": [
+        {
+          "invite": "afk_iv_placeholder",
+          "username": "AfkBot1",
+          "password": "placeholder password"
+        }
+      ],
+      "args": {
+        "request": {
+          "invite": "afk_iv_placeholder",
+          "username": "AfkBot1",
+          "password": "placeholder password"
+        }
+      },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "step_up",
+      "method": "stepUp",
+      "inputs": [{ "password": "placeholder password" }],
+      "args": { "request": { "password": "placeholder password" } },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "mfa_enroll",
+      "method": "mfaEnroll",
+      "inputs": [],
+      "args": {},
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "mfa_confirm",
+      "method": "mfaConfirm",
+      "inputs": ["123456"],
+      "args": { "code": "123456" },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "mfa_reset",
+      "method": "mfaReset",
+      "inputs": [],
+      "args": {},
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "me",
+      "method": "me",
+      "inputs": [],
+      "args": {},
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "change_password",
+      "method": "changePassword",
+      "inputs": [{ "new_password": "placeholder password 2" }],
+      "args": { "request": { "new_password": "placeholder password 2" } },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "sessions",
+      "method": "sessions",
+      "inputs": ["01900000-0000-7000-8000-000000000001", 10],
+      "args": { "before": "01900000-0000-7000-8000-000000000001", "limit": 10 },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "revoke_session",
+      "method": "revokeSession",
+      "inputs": ["01900000-0000-7000-8000-000000000001"],
+      "args": { "id": "01900000-0000-7000-8000-000000000001" },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "users",
+      "method": "users",
+      "inputs": ["01900000-0000-7000-8000-000000000002", 10],
+      "args": { "before": "01900000-0000-7000-8000-000000000002", "limit": 10 },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "patch_user",
+      "method": "patchUser",
+      "inputs": ["01900000-0000-7000-8000-000000000002", { "disabled": true }],
+      "args": {
+        "id": "01900000-0000-7000-8000-000000000002",
+        "request": { "disabled": true }
+      },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "invites",
+      "method": "invites",
+      "inputs": ["01900000-0000-7000-8000-000000000003", 10],
+      "args": { "before": "01900000-0000-7000-8000-000000000003", "limit": 10 },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "create_invite",
+      "method": "createInvite",
+      "inputs": [{ "role": "member" }],
+      "args": { "request": { "role": "member" } },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "revoke_invite",
+      "method": "revokeInvite",
+      "inputs": ["01900000-0000-7000-8000-000000000003"],
+      "args": { "id": "01900000-0000-7000-8000-000000000003" },
+      "expect": { "error": "no_server" }
+    }
+  ]
+}

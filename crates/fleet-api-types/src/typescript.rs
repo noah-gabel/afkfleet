@@ -2,7 +2,8 @@
 //! `just gen-check` (the example `typescript`).
 //!
 //! - [`export`] writes every DTO through ts-rs, one `<Name>.ts` file per
-//!   type, into an empty scratch folder. Its config comes from
+//!   type, into an empty scratch folder: the API's ([`export_api`]) and the
+//!   desktop app's IPC types ([`export_app`], ADR-0017). Its config comes from
 //!   `Config::new()`, which ignores the `TS_RS_*` environment variables, so
 //!   a developer's environment can't change the output. No DTO carries
 //!   `#[ts(export)]`, so tests never write files.
@@ -24,6 +25,10 @@ use std::path::{Path, PathBuf};
 
 use ts_rs::{Config, ExportError, TS};
 
+use crate::app::{
+    LoginStepResponse, LogoutResponse, ServerProfileRequest, ServerProfileResponse,
+    ServerProfileState, SetupStepResponse,
+};
 use crate::auth::{
     LoginMfaRequest, LoginRequest, LoginResponse, RefreshRequest, RegisterRequest,
     RegisterResponse, StepUpRequest, TokenResponse,
@@ -104,12 +109,38 @@ impl fmt::Display for Difference {
     }
 }
 
-/// Exports every DTO into `scratch`, which must exist and be empty.
+/// Exports every DTO and every IPC type into `scratch`, which must exist
+/// and be empty.
 ///
 /// # Errors
 /// [`TypeScriptError::ScratchNotEmpty`], [`TypeScriptError::Export`] or
 /// [`TypeScriptError::Io`].
 pub fn export(scratch: &Path) -> Result<(), TypeScriptError> {
+    let config = scratch_config(scratch)?;
+    write_api(&config)?;
+    write_app(&config)
+}
+
+/// Exports only the HTTP API's DTOs into `scratch`, which must exist and be
+/// empty: the types the `OpenAPI` document describes too.
+///
+/// # Errors
+/// As [`export`].
+pub fn export_api(scratch: &Path) -> Result<(), TypeScriptError> {
+    write_api(&scratch_config(scratch)?)
+}
+
+/// Exports only the desktop app's IPC types ([`crate::app`]) and the types
+/// they use into `scratch`, which must exist and be empty.
+///
+/// # Errors
+/// As [`export`].
+pub fn export_app(scratch: &Path) -> Result<(), TypeScriptError> {
+    write_app(&scratch_config(scratch)?)
+}
+
+/// ts-rs's config for `scratch`, once it's known to exist and be empty.
+fn scratch_config(scratch: &Path) -> Result<Config, TypeScriptError> {
     let Some(present) = entries(scratch)? else {
         return Err(TypeScriptError::Io {
             path: scratch.to_path_buf(),
@@ -121,31 +152,44 @@ pub fn export(scratch: &Path) -> Result<(), TypeScriptError> {
             path: scratch.to_path_buf(),
         });
     }
-    let config = Config::new().with_out_dir(scratch);
-    // The root DTOs: `export_all` also writes every type they use. A DTO no
-    // listed type uses goes here.
-    ErrorResponse::export_all(&config).map_err(TypeScriptError::Export)?;
-    MfaEnrollResponse::export_all(&config).map_err(TypeScriptError::Export)?;
-    MfaConfirmRequest::export_all(&config).map_err(TypeScriptError::Export)?;
-    MfaConfirmResponse::export_all(&config).map_err(TypeScriptError::Export)?;
-    MfaResetResponse::export_all(&config).map_err(TypeScriptError::Export)?;
-    LoginRequest::export_all(&config).map_err(TypeScriptError::Export)?;
-    LoginResponse::export_all(&config).map_err(TypeScriptError::Export)?;
-    LoginMfaRequest::export_all(&config).map_err(TypeScriptError::Export)?;
-    TokenResponse::export_all(&config).map_err(TypeScriptError::Export)?;
-    RefreshRequest::export_all(&config).map_err(TypeScriptError::Export)?;
-    StepUpRequest::export_all(&config).map_err(TypeScriptError::Export)?;
-    UserPage::export_all(&config).map_err(TypeScriptError::Export)?;
-    UserResponse::export_all(&config).map_err(TypeScriptError::Export)?;
-    UserPatchRequest::export_all(&config).map_err(TypeScriptError::Export)?;
-    InvitePage::export_all(&config).map_err(TypeScriptError::Export)?;
-    CreateInviteRequest::export_all(&config).map_err(TypeScriptError::Export)?;
-    CreatedInviteResponse::export_all(&config).map_err(TypeScriptError::Export)?;
-    RegisterRequest::export_all(&config).map_err(TypeScriptError::Export)?;
-    RegisterResponse::export_all(&config).map_err(TypeScriptError::Export)?;
-    MeResponse::export_all(&config).map_err(TypeScriptError::Export)?;
-    PasswordChangeRequest::export_all(&config).map_err(TypeScriptError::Export)?;
-    SessionPage::export_all(&config).map_err(TypeScriptError::Export)
+    Ok(Config::new().with_out_dir(scratch))
+}
+
+/// Writes the API's root DTOs: `export_all` also writes every type they use.
+/// A DTO no listed type uses goes here.
+fn write_api(config: &Config) -> Result<(), TypeScriptError> {
+    ErrorResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    MfaEnrollResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    MfaConfirmRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    MfaConfirmResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    MfaResetResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    LoginRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    LoginResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    LoginMfaRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    TokenResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    RefreshRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    StepUpRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    UserPage::export_all(config).map_err(TypeScriptError::Export)?;
+    UserResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    UserPatchRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    InvitePage::export_all(config).map_err(TypeScriptError::Export)?;
+    CreateInviteRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    CreatedInviteResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    RegisterRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    RegisterResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    MeResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    PasswordChangeRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    SessionPage::export_all(config).map_err(TypeScriptError::Export)
+}
+
+/// Writes the app's root IPC types, and every type they use.
+fn write_app(config: &Config) -> Result<(), TypeScriptError> {
+    LogoutResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    LoginStepResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    SetupStepResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    ServerProfileRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    ServerProfileResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    ServerProfileState::export_all(config).map_err(TypeScriptError::Export)
 }
 
 /// Lists how `dir` differs from the export in `scratch`, by file name. A missing

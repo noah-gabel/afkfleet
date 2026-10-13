@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mfa-confirm"
+description = "Enables the mfa_confirm command without any pre-configured scope."
+commands.allow = ["mfa_confirm"]
+
+[[permission]]
+identifier = "deny-mfa-confirm"
+description = "Denies the mfa_confirm command without any pre-configured scope."
+commands.deny = ["mfa_confirm"]

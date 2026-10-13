@@ -137,6 +137,7 @@ enum EndReason {
     Revoked,
     StoreEmpty,
     LoggedOut,
+    Discarded,
 }
 
 impl EndReason {
@@ -146,6 +147,7 @@ impl EndReason {
             Self::Revoked => "revoked",
             Self::StoreEmpty => "store_empty",
             Self::LoggedOut => "logged_out",
+            Self::Discarded => "discarded",
         }
     }
 }
@@ -337,6 +339,19 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
             session.code_step(epoch, serial, &request).await
         }))
         .await
+    }
+
+    /// Ends the session here and sends nothing: the store is cleared and the
+    /// access token and the pending step are dropped, under the gate, so a
+    /// save in flight drops its pair (the epoch rule). Unlike every other
+    /// end, a failed clear is returned, since the caller must not go on as
+    /// if no token were stored.
+    pub(crate) async fn discard(&self) -> Result<(), ClientError> {
+        let _gate = self.gate.lock().await;
+        self.drop_state();
+        let cleared = self.clear().await;
+        info!(reason = EndReason::Discarded.as_str(), "the session ended");
+        cleared.map_err(ClientError::Store)
     }
 
     pub(crate) async fn logout(&self) -> Result<(), ClientError> {
@@ -756,13 +771,17 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
 
     /// Ends the session; the caller holds the gate.
     async fn end_under_gate(&self) {
-        {
-            let mut state = self.state();
-            state.epoch = state.epoch.wrapping_add(1);
-            state.access = None;
-            state.pending = None;
-        }
+        self.drop_state();
         self.clear_or_log().await;
+    }
+
+    /// Bumps the epoch and drops the access token and the pending step; the
+    /// caller holds the gate and clears the store next.
+    fn drop_state(&self) {
+        let mut state = self.state();
+        state.epoch = state.epoch.wrapping_add(1);
+        state.access = None;
+        state.pending = None;
     }
 
     /// Revokes the session of `access_token` on the server, best effort.
@@ -792,14 +811,17 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
             .unwrap_or_else(|_| Err(StoreError::timed_out(StoreOp::Save)))
     }
 
+    async fn clear(&self) -> Result<(), StoreError> {
+        tokio::time::timeout(self.store_timeout, self.store.clear())
+            .await
+            .unwrap_or_else(|_| Err(StoreError::timed_out(StoreOp::Clear)))
+    }
+
     /// Clears the store; a failure is logged at `error`, since a replaced
     /// token may stay behind, whose use would end the session on the
     /// server.
     async fn clear_or_log(&self) {
-        let cleared = tokio::time::timeout(self.store_timeout, self.store.clear())
-            .await
-            .unwrap_or_else(|_| Err(StoreError::timed_out(StoreOp::Clear)));
-        if let Err(error) = cleared {
+        if let Err(error) = self.clear().await {
             error!(error = %chain(&error), "the session store can't be cleared, so a replaced refresh token may remain; remove it from the keychain");
         }
     }
@@ -1111,6 +1133,7 @@ mod tests {
 
     #[derive(Default)]
     struct Flags {
+        fail_clear: AtomicBool,
         fail_save: AtomicBool,
         hang_load: AtomicBool,
         saves: AtomicUsize,
@@ -1162,7 +1185,11 @@ mod tests {
         }
 
         async fn clear(&self) -> Result<(), StoreError> {
-            let cleared = self.inner.clear().await;
+            let cleared = if self.flags.fail_clear.load(Ordering::SeqCst) {
+                Err(StoreError::new(StoreOp::Clear, "the keychain is locked"))
+            } else {
+                self.inner.clear().await
+            };
             self.flags.cleared.notify_one();
             cleared
         }
@@ -1663,6 +1690,87 @@ mod tests {
         assert_eq!(store.token().await, None);
         assert_eq!(store.saves(), 0);
         assert_eq!(access(&core), None);
+        assert_eq!(core.transport.routes(), [REFRESH, LOGOUT]);
+        assert_eq!(
+            core.transport.bearers(LOGOUT),
+            [Some("afk_at_1".to_owned())]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_discard_clears_the_store_and_everything_held_and_sends_nothing() {
+        let store = TestStore::holding("afk_rt_0").await;
+        let core = core(&store);
+        give_access(&core, "afk_at_0", 1);
+        give_step(&core, StepKind::Setup, "afk_st_1");
+
+        core.discard().await.unwrap();
+
+        assert_eq!(store.token().await, None);
+        assert_eq!(access(&core), None);
+        assert!(!has_step(&core));
+        assert_eq!(core.transport.routes(), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn a_discard_whose_clear_fails_answers_store_but_still_drops_the_tokens() {
+        let store = TestStore::holding("afk_rt_0").await;
+        store.flags.fail_clear.store(true, Ordering::SeqCst);
+        let core = core(&store);
+        give_access(&core, "afk_at_0", 1);
+
+        let result = core.discard().await;
+
+        assert!(
+            matches!(&result, Err(ClientError::Store(error)) if error.op() == StoreOp::Clear),
+            "{result:?}"
+        );
+        assert_eq!(access(&core), None);
+        assert_eq!(core.transport.routes(), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn after_a_discard_a_request_answers_no_session_and_sends_nothing() {
+        let store = TestStore::holding("afk_rt_0").await;
+        let core = core(&store);
+
+        core.discard().await.unwrap();
+        let me = core.me().await;
+
+        assert!(matches!(me, Err(ClientError::NoSession)), "{me:?}");
+        assert_eq!(core.transport.routes(), Vec::<String>::new());
+    }
+
+    #[tokio::test]
+    async fn a_discard_during_a_refresh_wins_and_the_refresh_saves_nothing() {
+        let store = TestStore::holding("afk_rt_0").await;
+        let core = core(&store);
+        let held = core.transport.held(REFRESH, tokens(1));
+        core.transport.on(LOGOUT, Ok(raw(204, b"")));
+
+        let (me, discard, ()) = timeout(WAIT, async {
+            tokio::join!(
+                core.me(),
+                async {
+                    held.arrived.notified().await;
+                    core.discard().await
+                },
+                async {
+                    store.flags.cleared.notified().await;
+                    held.release.notify_one();
+                }
+            )
+        })
+        .await
+        .unwrap();
+
+        assert!(matches!(me, Err(ClientError::NoSession)), "{me:?}");
+        assert!(discard.is_ok(), "{discard:?}");
+        assert_eq!(store.token().await, None);
+        assert_eq!(store.saves(), 0);
+        assert_eq!(access(&core), None);
+        // The session the refresh's answer belongs to is revoked on the
+        // server, with its own access token (the epoch rule).
         assert_eq!(core.transport.routes(), [REFRESH, LOGOUT]);
         assert_eq!(
             core.transport.bearers(LOGOUT),

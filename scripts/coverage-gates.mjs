@@ -1,11 +1,17 @@
 // Checks the coverage gates from Plan.md §8 against a `cargo llvm-cov --json` export.
 //
-//   node scripts/coverage-gates.mjs <coverage.json>
+//   node scripts/coverage-gates.mjs [--report desktop] <coverage.json>
 //
-// Every gate is measured in lines, summed over all files its pattern or its prefixes
-// match. A gate whose files don't exist yet is skipped, unless it's `required`; a gate
-// with prefixes fails when any one of them matches no file. Exits with 1 if any gate
-// fails. Tests: scripts/coverage-gates.test.mjs.
+// Every gate belongs to one report: `workspace` (the default, `just cov` on Linux) or
+// `desktop` (`just cov-desktop` on Windows, the desktop crate alone; ADR-0017). Only the
+// named report's gates run. Every gate is measured in lines, summed over all files its
+// pattern or its prefixes match. A gate whose files don't exist yet is skipped, unless
+// it's `required`; a gate with prefixes fails when any one of them matches no file, or
+// when any file it matches has executable lines but not one covered: most likely a test
+// binary that wasn't instrumented, as cargo-llvm-cov's rustc wrapper left the desktop
+// lib's on Windows (ADR-0017).
+// Exits with 1 if any gate fails, 2 on wrong arguments. Tests:
+// scripts/coverage-gates.test.mjs.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
@@ -73,7 +79,54 @@ export const GATES = [
     required: true,
     prefixes: ["crates/fleet-client/src/"],
   },
+  {
+    // The desktop app's Rust side, measured on Windows only, since Linux never builds it:
+    // the switch rules, the keychain, the profile file and the error mapping. lib.rs's
+    // `run` and main.rs start the real event loop, which no test reaches (ADR-0017).
+    name: "desktop",
+    report: "desktop",
+    min: 90,
+    required: true,
+    prefixes: [
+      "apps/desktop/src-tauri/src/commands/",
+      "apps/desktop/src-tauri/src/endpoints.rs",
+      "apps/desktop/src-tauri/src/error.rs",
+      "apps/desktop/src-tauri/src/focus.rs",
+      "apps/desktop/src-tauri/src/keychain.rs",
+      "apps/desktop/src-tauri/src/navigation.rs",
+      "apps/desktop/src-tauri/src/profile.rs",
+      "apps/desktop/src-tauri/src/startup.rs",
+      "apps/desktop/src-tauri/src/state.rs",
+    ],
+  },
 ];
+
+/** The reports a gate can belong to. */
+const REPORTS = ["workspace", "desktop"];
+
+const USAGE = "usage: node scripts/coverage-gates.mjs [--report desktop] <coverage.json>";
+
+/** The gates of `report`: a gate without one belongs to `workspace`. */
+export function gatesFor(report, gates = GATES) {
+  return gates.filter((gate) => (gate.report ?? "workspace") === report);
+}
+
+/**
+ * Reads the command line: `[--report <name>] <coverage.json>`. Throws the usage on
+ * anything else.
+ */
+export function parseArgs(args) {
+  let report = "workspace";
+  let rest = args;
+  if (rest[0] === "--report") {
+    report = rest[1];
+    rest = rest.slice(2);
+  }
+  if (!REPORTS.includes(report) || rest.length !== 1) {
+    throw new Error(USAGE);
+  }
+  return { report, reportPath: rest[0] };
+}
 
 /** Whether `path` falls under the prefix `entry`: below it if it's a folder, equal otherwise. */
 function underPrefix(path, entry) {
@@ -83,7 +136,8 @@ function underPrefix(path, entry) {
 /**
  * Evaluates `gates` against an llvm-cov JSON export.
  * Returns one `{ name, min, status: "pass" | "fail" | "skip", percent, covered, count }` per
- * gate, plus `missing`, the prefixes that matched no file, for a gate with prefixes.
+ * gate, plus, for a gate with prefixes, `missing` (the prefixes that matched no file) and
+ * `uncovered` (the matched files with executable lines but none covered).
  * Throws if `report` isn't an llvm-cov JSON export.
  */
 export function evaluateGates(report, repoRoot, gates) {
@@ -108,8 +162,12 @@ export function evaluateGates(report, repoRoot, gates) {
       prefixes === undefined
         ? undefined
         : prefixes.filter((entry) => !lines.some((line) => underPrefix(line.path, entry)));
-    const extra = missing === undefined ? {} : { missing };
     const matched = lines.filter((line) => matches(line.path));
+    const uncovered =
+      prefixes === undefined
+        ? undefined
+        : matched.filter((line) => line.count > 0 && line.covered === 0).map((line) => line.path);
+    const extra = missing === undefined ? {} : { missing, uncovered };
     if (matched.length === 0) {
       const status = required ? "fail" : "skip";
       return { name, min, status, percent: null, covered: 0, count: 0, ...extra };
@@ -118,14 +176,16 @@ export function evaluateGates(report, repoRoot, gates) {
     const count = matched.reduce((sum, line) => sum + line.count, 0);
     const percent = count === 0 ? 100 : (covered * 100) / count;
     const complete = missing === undefined || missing.length === 0;
-    const status = complete && percent >= min ? "pass" : "fail";
+    const instrumented = uncovered === undefined || uncovered.length === 0;
+    const status = complete && instrumented && percent >= min ? "pass" : "fail";
     return { name, min, status, percent, covered, count, ...extra };
   });
 }
 
 /** Returns `filename` relative to `repoRoot` with `/` separators, or null if it's outside. */
 function relativeToRoot(filename, repoRoot) {
-  const file = filename.replaceAll("\\", "/");
+  // A Windows path may come in its verbatim form, `\\?\C:\…`.
+  const file = filename.replace(/^\\\\\?\\/, "").replaceAll("\\", "/");
   const root = `${repoRoot.replaceAll("\\", "/").replace(/\/+$/, "")}/`;
   // Windows paths are case-insensitive, and drive letters come in either case.
   const inside = /^[A-Za-z]:\//.test(root)
@@ -134,29 +194,35 @@ function relativeToRoot(filename, repoRoot) {
   return inside ? file.slice(root.length) : null;
 }
 
-function describe(result) {
+export function describeResult(result) {
   const label = `${result.status.toUpperCase().padEnd(4)}  ${result.name.padEnd(14)}`;
   const missing =
     result.missing === undefined || result.missing.length === 0
       ? ""
       : `; no file under ${result.missing.join(", ")}`;
+  const uncovered =
+    result.uncovered === undefined || result.uncovered.length === 0
+      ? ""
+      : `; no covered line in ${result.uncovered.join(", ")} (uninstrumented test binary?)`;
   if (result.percent === null) {
     return `${label}no files yet (min ${result.min} %)${missing}`;
   }
-  return `${label}${result.percent.toFixed(2).padStart(6)} %  (min ${result.min} %, ${result.covered}/${result.count} lines)${missing}`;
+  return `${label}${result.percent.toFixed(2).padStart(6)} %  (min ${result.min} %, ${result.covered}/${result.count} lines)${missing}${uncovered}`;
 }
 
 function main(args) {
-  const [reportPath] = args;
-  if (reportPath === undefined) {
-    console.error("usage: node scripts/coverage-gates.mjs <coverage.json>");
+  let parsed;
+  try {
+    parsed = parseArgs(args);
+  } catch (error) {
+    console.error(error.message);
     return 2;
   }
-  const report = JSON.parse(readFileSync(reportPath, "utf8"));
+  const report = JSON.parse(readFileSync(parsed.reportPath, "utf8"));
   const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-  const results = evaluateGates(report, repoRoot, GATES);
+  const results = evaluateGates(report, repoRoot, gatesFor(parsed.report));
   for (const result of results) {
-    console.log(describe(result));
+    console.log(describeResult(result));
   }
   const failed = results.filter((result) => result.status === "fail");
   if (failed.length > 0) {

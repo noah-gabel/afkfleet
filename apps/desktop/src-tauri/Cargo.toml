@@ -18,6 +18,23 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
+# The IPC types (`app`) and the API's DTOs the commands pass through (ADR-0017).
+fleet-api-types.workspace = true
+# The only way to the server: it holds the access and step tokens itself (ADR-0017).
+fleet-client.workspace = true
+# Every request DTO and the server profile are validated at the command boundary.
+garde.workspace = true
+# The keychain: keyring-core's entries over the Windows Credential Manager, which holds
+# the refresh token, one entry per server origin (ADR-0017).
+keyring-core.workspace = true
+windows-native-keyring-store.workspace = true
+# Only to install the aws-lc-rs provider at startup, before the client is built.
+rustls.workspace = true
+# The refresh token between fleet-client and the keychain, never in `Debug`.
+secrecy.workspace = true
+# The server profile file.
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
 # The shell. The workspace entry has no default features; these are the only ones this
 # crate enables (ADR-0017): the WebView2 runtime and compressed embedded assets. Not
 # `common-controls-v6`, which only serves the predefined About dialog: its TaskDialogIndirect
@@ -26,12 +43,30 @@ doc = false
 tauri = { workspace = true, features = ["wry", "compression"] }
 # A second launch focuses the running window instead of opening another (P8.3).
 tauri-plugin-single-instance.workspace = true
+thiserror.workspace = true
 
 [dev-dependencies]
+# ManualClock's times for the TOTP codes.
+chrono.workspace = true
+# The Owner's username and password, and the Clock trait, for the in-process server.
+fleet-core.workspace = true
+# The in-process server the bridge tests run against (ADR-0017).
+fleet-server.workspace = true
+# The signal source that stops the in-process server.
+fleet-startup.workspace = true
+# ManualClock and SeededRandom for the server.
+fleet-testkit.workspace = true
+# Custom CAs for the server-profile tests, made at run time.
+rcgen = { workspace = true, features = ["aws_lc_rs", "pem"] }
 rstest.workspace = true
 # `tauri::test`'s mock runtime, for the ACL test: it loads the real configuration and
 # capabilities and sends IPC requests without a window (ADR-0017).
 tauri = { workspace = true, features = ["test"] }
+# A fresh folder for each test's profile file and server database.
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "net", "rt", "time"] }
+# The authenticator app: codes from the enroll answer's otpauth URI.
+totp-rs = { workspace = true, features = ["otpauth"] }
 
 [build-dependencies]
 # Embeds the Windows icon and resolves the capabilities at build time.

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-me"
+description = "Enables the me command without any pre-configured scope."
+commands.allow = ["me"]
+
+[[permission]]
+identifier = "deny-me"
+description = "Denies the me command without any pre-configured scope."
+commands.deny = ["me"]

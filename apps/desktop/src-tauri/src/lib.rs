@@ -6,29 +6,86 @@
 //! - the webview never leaves the app (`navigation`)
 //! - the CSP, the capabilities and the absent global API live in `tauri.conf.json` and
 //!   `capabilities/`; `scripts/tauri-hardening.mjs` pins them
+//!
+//! The bridge to the server (P8.4, ADR-0017): the UI calls the app's commands, which talk
+//! to the server only through fleet-client. [`state::AppState`] holds the server profile
+//! ([`profile`]) and the client; the refresh token lives in the OS keychain
+//! ([`keychain`]); no token ever reaches the UI or the state.
 
+mod commands;
+mod endpoints;
+mod error;
 mod focus;
+pub mod keychain;
 mod navigation;
+pub mod profile;
+pub mod startup;
+pub mod state;
 
-use tauri::Manager as _;
+use tauri::{Manager as _, Runtime};
+
+use crate::keychain::KeychainFactory;
+use crate::profile::PROFILE_FILE;
+use crate::startup::StartError;
+use crate::state::AppState;
 
 /// The main window's label, as `tauri.conf.json` names it.
 const MAIN_WINDOW: &str = "main";
 
-/// Builds the app from its configuration and runs it until its window closes.
+/// Registers the app's commands on `builder`: exactly the ones build.rs lists, each
+/// still refused until the `main` capability grants it. The caller manages an
+/// [`AppState`] on the built app before any command runs.
+#[must_use]
+pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
+    builder.invoke_handler(tauri::generate_handler![
+        commands::server::server_profile,
+        commands::server::set_server_profile,
+        commands::server::check_server,
+        commands::auth::login,
+        commands::auth::login_mfa,
+        commands::auth::logout,
+        commands::auth::register,
+        commands::auth::step_up,
+        commands::mfa::mfa_enroll,
+        commands::mfa::mfa_confirm,
+        commands::mfa::mfa_reset,
+        commands::me::me,
+        commands::me::change_password,
+        commands::me::sessions,
+        commands::me::revoke_session,
+        commands::users::users,
+        commands::users::patch_user,
+        commands::invites::invites,
+        commands::invites::create_invite,
+        commands::invites::revoke_invite,
+    ])
+}
+
+/// Builds the app from its configuration and runs it until its window closes. The
+/// caller installs the TLS provider first ([`startup::install_crypto_provider`]).
 ///
 /// # Errors
 ///
-/// Returns Tauri's error if the app can't be built or its event loop fails.
-pub fn run() -> Result<(), tauri::Error> {
-    tauri::Builder::default()
-        // First, as the plugin requires: a second launch hands over to this instance and
-        // exits before anything else of it starts.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
-                focus::focus_main_window(&window);
-            }
-        }))
-        .plugin(navigation::guard()?)
-        .run(tauri::generate_context!())
+/// [`StartError`] if the app can't be built, its data folder can't be found, the
+/// Windows Credential Manager can't be opened, or its event loop fails.
+pub fn run() -> Result<(), StartError> {
+    let app = configure(
+        tauri::Builder::default()
+            // First, as the plugin requires: a second launch hands over to this instance
+            // and exits before anything else of it starts.
+            .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+                if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+                    focus::focus_main_window(&window);
+                }
+            }))
+            .plugin(navigation::guard()?),
+    )
+    .build(tauri::generate_context!())?;
+    let store = windows_native_keyring_store::Store::new().map_err(|_| StartError::Keychain)?;
+    let factory = KeychainFactory::windows(store, &app.config().identifier);
+    let profile_path = app.path().app_local_data_dir()?.join(PROFILE_FILE);
+    // Managed before the event loop starts, so no command can run without it.
+    app.manage(AppState::load(profile_path, factory));
+    app.run(|_, _| {});
+    Ok(())
 }

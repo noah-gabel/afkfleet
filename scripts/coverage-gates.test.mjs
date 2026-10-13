@@ -2,7 +2,13 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 
-import { evaluateGates, GATES as GATES_IN_USE } from "./coverage-gates.mjs";
+import {
+  describeResult,
+  evaluateGates,
+  GATES as GATES_IN_USE,
+  gatesFor,
+  parseArgs,
+} from "./coverage-gates.mjs";
 
 const ROOT = "/repo";
 
@@ -94,6 +100,19 @@ describe("evaluateGates", () => {
     );
 
     assert.equal(results["fleet-core"].status, "fail");
+  });
+
+  it("matches a Windows path with the verbatim \\\\?\\ prefix", () => {
+    const results = byName(
+      evaluateGates(
+        report([["\\\\?\\C:\\path\\to\\afkfleet\\crates\\fleet-core\\src\\lib.rs", 50, 100]]),
+        "C:\\path\\to\\afkfleet",
+        GATES,
+      ),
+    );
+
+    assert.equal(results["fleet-core"].status, "fail");
+    assert.equal(results["fleet-core"].count, 100);
   });
 
   it("ignores files outside the repository", () => {
@@ -212,6 +231,92 @@ describe("evaluateGates with prefixes", () => {
   });
 });
 
+describe("listed files without a covered line", () => {
+  it("fail a prefix gate even when its total is above the minimum, naming the file", () => {
+    const results = byName(
+      evaluateGates(
+        report([
+          ["/repo/crates/fleet-core/src/auth/mod.rs", 990, 1000],
+          ["/repo/crates/fleet-server/src/app/users.rs", 0, 10],
+        ]),
+        ROOT,
+        PREFIX_GATES,
+      ),
+    );
+
+    assert.ok(results.auth.percent >= 90, String(results.auth.percent));
+    assert.equal(results.auth.status, "fail");
+    assert.deepEqual(results.auth.uncovered, ["crates/fleet-server/src/app/users.rs"]);
+  });
+
+  it("count a file below a listed folder too", () => {
+    const results = byName(
+      evaluateGates(
+        report([
+          ["/repo/crates/fleet-core/src/auth/mod.rs", 100, 100],
+          ["/repo/crates/fleet-core/src/auth/deep/policy.rs", 0, 3],
+          ["/repo/crates/fleet-server/src/app/users.rs", 100, 100],
+        ]),
+        ROOT,
+        PREFIX_GATES,
+      ),
+    );
+
+    assert.equal(results.auth.status, "fail");
+    assert.deepEqual(results.auth.uncovered, ["crates/fleet-core/src/auth/deep/policy.rs"]);
+  });
+
+  it("ignore a file without executable lines, and a partly covered one", () => {
+    const results = byName(
+      evaluateGates(
+        report([
+          ["/repo/crates/fleet-core/src/auth/mod.rs", 0, 0],
+          ["/repo/crates/fleet-core/src/auth/other.rs", 95, 100],
+          ["/repo/crates/fleet-server/src/app/users.rs", 1, 1],
+        ]),
+        ROOT,
+        PREFIX_GATES,
+      ),
+    );
+
+    assert.equal(results.auth.status, "pass");
+    assert.deepEqual(results.auth.uncovered, []);
+  });
+
+  it("leave a pattern gate to its percentage", () => {
+    const results = byName(
+      evaluateGates(
+        report([
+          ["/repo/crates/fleet-core/src/lib.rs", 1000, 1000],
+          ["/repo/crates/fleet-core/src/unused.rs", 0, 10],
+        ]),
+        ROOT,
+        GATES,
+      ),
+    );
+
+    assert.equal(results["fleet-core"].status, "pass");
+    assert.equal(results["fleet-core"].uncovered, undefined);
+  });
+
+  it("are named in the gate's line, with the likely cause", () => {
+    const [result] = evaluateGates(
+      report([
+        ["/repo/crates/fleet-core/src/auth/mod.rs", 990, 1000],
+        ["/repo/crates/fleet-server/src/app/users.rs", 0, 10],
+      ]),
+      ROOT,
+      PREFIX_GATES,
+    );
+
+    const line = describeResult(result);
+
+    assert.match(line, /^FAIL/);
+    assert.match(line, /crates\/fleet-server\/src\/app\/users\.rs/);
+    assert.match(line, /uninstrumented test binary\?/);
+  });
+});
+
 describe("the project's gates", () => {
   it("make the auth, vault and fleet-client gates required lists of prefixes", () => {
     for (const name of ["auth", "vault", "fleet-client"]) {
@@ -235,5 +340,95 @@ describe("the project's gates", () => {
 
     assert.ok(results.auth.count > results.auth.covered, "fleet-core's auth file counts");
     assert.deepEqual(results.vault.missing, []);
+  });
+});
+
+/** A desktop crate file, as llvm-cov on Windows names it (placeholder repository path). */
+function desktopFile(relative) {
+  return `C:\\path\\to\\afkfleet\\apps\\desktop\\src-tauri\\src\\${relative.replaceAll("/", "\\")}`;
+}
+
+describe("reports", () => {
+  it("selects only the named report's gates", () => {
+    const desktop = gatesFor("desktop").map((gate) => gate.name);
+    const workspace = gatesFor("workspace").map((gate) => gate.name);
+
+    assert.deepEqual(desktop, ["desktop"]);
+    assert.ok(!workspace.includes("desktop"));
+    assert.ok(["workspace", "auth", "vault", "fleet-client"].every((n) => workspace.includes(n)));
+  });
+
+  it("passes the desktop gate on a Windows report of the desktop crate alone", () => {
+    const desktopGate = GATES_IN_USE.find((gate) => gate.name === "desktop");
+    const files = desktopGate.prefixes.map((prefix) => [
+      desktopFile(prefix.replace("apps/desktop/src-tauri/src/", "").replace(/\/$/, "/mod.rs")),
+      95,
+      100,
+    ]);
+    files.push([desktopFile("lib.rs"), 0, 50], [desktopFile("main.rs"), 0, 5]);
+
+    const results = evaluateGates(report(files), "C:\\path\\to\\afkfleet", gatesFor("desktop"));
+
+    assert.deepEqual(
+      results.map((r) => [r.name, r.status, r.missing]),
+      [["desktop", "pass", []]],
+    );
+  });
+
+  it("fails the desktop gate below 90 % or with a module missing", () => {
+    const low = report([[desktopFile("state.rs"), 80, 100]]);
+
+    const results = evaluateGates(low, "C:\\path\\to\\afkfleet", gatesFor("desktop"));
+
+    assert.equal(results[0].status, "fail");
+    assert.ok(results[0].missing.length > 0);
+  });
+});
+
+describe("the desktop gate", () => {
+  it("is required at 90 % over the desktop crate's modules, never lib.rs or main.rs", () => {
+    const gate = GATES_IN_USE.find((g) => g.name === "desktop");
+
+    assert.ok(gate);
+    assert.equal(gate.report, "desktop");
+    assert.equal(gate.required, true);
+    assert.equal(gate.min, 90);
+    assert.ok(gate.prefixes.every((prefix) => prefix.startsWith("apps/desktop/src-tauri/src/")));
+    for (const module of [
+      "commands/",
+      "endpoints.rs",
+      "error.rs",
+      "keychain.rs",
+      "profile.rs",
+      "state.rs",
+    ]) {
+      assert.ok(gate.prefixes.includes(`apps/desktop/src-tauri/src/${module}`), module);
+    }
+    for (const entry of ["lib.rs", "main.rs"]) {
+      assert.ok(!gate.prefixes.includes(`apps/desktop/src-tauri/src/${entry}`), entry);
+    }
+  });
+});
+
+describe("parseArgs", () => {
+  it("reads the report's path, the workspace report by default", () => {
+    assert.deepEqual(parseArgs(["target/coverage.json"]), {
+      report: "workspace",
+      reportPath: "target/coverage.json",
+    });
+  });
+
+  it("reads --report desktop", () => {
+    assert.deepEqual(parseArgs(["--report", "desktop", "target/coverage-desktop.json"]), {
+      report: "desktop",
+      reportPath: "target/coverage-desktop.json",
+    });
+  });
+
+  it("refuses an unknown report, a missing path or extra arguments", () => {
+    assert.throws(() => parseArgs(["--report", "linux", "x.json"]), /usage/);
+    assert.throws(() => parseArgs([]), /usage/);
+    assert.throws(() => parseArgs(["--report"]), /usage/);
+    assert.throws(() => parseArgs(["a.json", "b.json"]), /usage/);
   });
 });

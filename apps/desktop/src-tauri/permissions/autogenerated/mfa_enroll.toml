@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-mfa-enroll"
+description = "Enables the mfa_enroll command without any pre-configured scope."
+commands.allow = ["mfa_enroll"]
+
+[[permission]]
+identifier = "deny-mfa-enroll"
+description = "Denies the mfa_enroll command without any pre-configured scope."
+commands.deny = ["mfa_enroll"]

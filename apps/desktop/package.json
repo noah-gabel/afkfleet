@@ -7,10 +7,12 @@
     "dev": "vite",
     "build": "vite build",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "tauri": "tauri"
   },
   "dependencies": {
     "@afkfleet/ui": "workspace:*",
+    "@tauri-apps/api": "2.12.1",
     "react": "19.3.0",
     "react-dom": "19.3.0"
   },
@@ -22,6 +24,7 @@
     "@vitejs/plugin-react": "6.1.2",
     "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
-    "vite": "8.3.4"
+    "vite": "8.3.4",
+    "vitest": "5.0.3"
   }
 }

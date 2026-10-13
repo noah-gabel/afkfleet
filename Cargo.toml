@@ -25,6 +25,8 @@ repository = "https://github.com/noah-gabel/afkfleet"
 [workspace.dependencies]
 # Workspace crates, by path (unpublished, so no version).
 fleet-api-types = { path = "crates/fleet-api-types" }
+# fleet-client: the desktop app's Rust side talks to the server only through it (ADR-0017).
+fleet-client = { path = "crates/fleet-client" }
 fleet-core = { path = "crates/fleet-core" }
 fleet-mc = { path = "crates/fleet-mc" }
 fleet-runtime = { path = "crates/fleet-runtime" }
@@ -95,6 +97,10 @@ governor = { version = "0.10.4", default-features = false }
 # `zeroize`, which wipes the keyed state. RustCrypto like sha2 0.11; already in Cargo.lock
 # (ADR-0016).
 hmac = "0.13.0"
+# keyring-core: the desktop app's keychain entries, built from an explicit store (no global
+# default store). No default features exist besides the optional `sample` store
+# (ADR-0017).
+keyring-core = "1.0.0"
 # log: fleet-server names `log::LevelFilter` only, because sqlx's statement-logging
 # levels take it; its logging macros are banned there (ADR-0015). In tests, fleet-testkit's
 # log capture and fleet-agent's telemetry emit `log` records to prove the bridge
@@ -193,6 +199,10 @@ utoipa = { version = "6.0.0", default-features = false }
 utoipa-axum = "0.3.0"
 # uuid: never `v4`/`v7`/`rng`, which pull in getrandom; IDs are minted from caller data (ADR-0010).
 uuid = { version = "1.27.0", default-features = false }
+# windows-native-keyring-store: the Windows Credential Manager behind keyring-core, for the
+# desktop app's refresh token. Without default features: `search` (and its regex) is off,
+# since the app only builds entries by service and account (ADR-0017).
+windows-native-keyring-store = { version = "1.1.0", default-features = false }
 # zeroize: `Zeroizing` buffers for secret files and passwords read from stdin; secrecy
 # already depends on it (ADR-0016).
 zeroize = "1.9.0"

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-patch-user"
+description = "Enables the patch_user command without any pre-configured scope."
+commands.allow = ["patch_user"]
+
+[[permission]]
+identifier = "deny-patch-user"
+description = "Denies the patch_user command without any pre-configured scope."
+commands.deny = ["patch_user"]
