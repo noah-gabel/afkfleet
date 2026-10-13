@@ -1,10 +1,14 @@
 //! Logging in and out, registering, and stepping up through the bridge.
 
+use afkfleet_desktop::keychain::KeychainFactory;
+use afkfleet_desktop::profile::PROFILE_FILE;
+use afkfleet_desktop::state::AppState;
 use fleet_api_types::app::{CommandErrorCode, LoginStepKind, LogoutResponse};
 use fleet_api_types::auth::StepUpRequest;
 use fleet_api_types::invites::CreateInviteRequest;
 use fleet_api_types::users::UserRole;
 use fleet_api_types::{ErrorCode, SecretText};
+use keyring_core::api::CredentialStoreApi as _;
 
 use crate::support::{
     Bridge, OWNER, PASSWORD, Server, app_of, assert_no_token, is_api, is_invalid, login, register,
@@ -220,6 +224,45 @@ async fn a_logout_the_server_cant_confirm_still_ends_the_session_here() {
         "{answer:?}"
     );
     assert_eq!(bridge.keychain.stored(&url).await, None);
+}
+
+/// The start screen's way out (Plan.md P8.6, ADR-0017): a keychain entry the
+/// app can't read makes every call answer `store`, and a logout removes it,
+/// after which a login works. It pins existing behaviour: `Core::logout`
+/// clears the store even when loading the token failed.
+#[tokio::test]
+async fn a_logout_removes_a_keychain_entry_that_cant_be_read() {
+    let server = Server::start().await;
+    let dir = tempfile::tempdir().unwrap();
+    let mock = keyring_core::mock::Store::new().unwrap();
+    let factory = KeychainFactory::new(mock.clone(), "io.example.test");
+    let state = AppState::load(dir.path().join(PROFILE_FILE), factory);
+    state.set_server_profile(server.profile()).await.unwrap();
+    // Not UTF-8, so the keychain answers BadData for it.
+    mock.build("io.example.test", server.url.as_str(), None)
+        .unwrap()
+        .set_secret(&[0xff, 0xfe, 0xfd])
+        .unwrap();
+
+    let me = state.me().await.unwrap_err();
+    let answer = state.logout().await;
+    let left = mock
+        .build("io.example.test", server.url.as_str(), None)
+        .unwrap()
+        .get_secret();
+    let step = state.login(login(OWNER, PASSWORD)).await;
+
+    assert_eq!(me.code, CommandErrorCode::Store);
+    assert_eq!(answer, LogoutResponse::Ended);
+    assert!(
+        matches!(left, Err(keyring_core::Error::NoEntry)),
+        "{left:?}"
+    );
+    assert!(
+        matches!(&step, Ok(step) if step.step == LoginStepKind::SetupRequired),
+        "{step:?}"
+    );
+    server.stop().await;
 }
 
 #[tokio::test]

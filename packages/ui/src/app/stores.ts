@@ -1,0 +1,139 @@
+// The app's UI-only state that code outside React sets (Plan.md P8.6, ADR-0017): small
+// zustand stores, created once per App (createAppStores), so two Apps (or two tests) never
+// share state. Components read them with `useStore`; the watched client (watched.ts) and
+// the runtime set them.
+//
+// - `session`: whether the user is signed in, and a generation that every sign-in bumps.
+//   A call's `no_session` ends the session only while it's signed in and only if the call
+//   started in the current generation, and the flip happens once: so a session end is
+//   handled once, never at launch, inside AuthFlow or during a deliberate logout, and an
+//   answer from before a re-login can't end the new session.
+// - `connection`: the banner's state. Its epoch is bumped each time the banner goes up, and
+//   only a call that started after that can take it down again.
+import { createStore, type StoreApi } from "zustand/vanilla";
+
+/** Where the user's session stands, as far as the UI knows. */
+export type SessionPhase = "starting" | "signed_out" | "signed_in" | "logging_out";
+
+/** The session store; see the module comment. */
+export interface SessionState {
+  readonly phase: SessionPhase;
+  /** Bumped by every sign-in. */
+  readonly generation: number;
+  /** A session started: signed in, with a new generation. */
+  signIn(): void;
+  /** No session (launch found none, a logout or a server switch ended it). */
+  signOut(): void;
+  /** A deliberate logout is under way: no `no_session` ends anything now. */
+  beginLogout(): void;
+  /** The logout failed: still signed in, in the same generation. */
+  cancelLogout(): void;
+  /**
+   * Ends the session for a `no_session` answer to a call that started in `generation`:
+   * true, once, if the session was signed in and in that generation.
+   */
+  endIfSignedIn(generation: number): boolean;
+}
+
+/** What the banner shows. */
+export type ConnectionStatus = "ok" | "down" | "busy" | "certificate";
+
+/** The connection store; see the module comment. */
+export interface ConnectionState {
+  readonly status: ConnectionStatus;
+  /** Bumped each time the banner goes up. */
+  readonly epoch: number;
+  /** How long a busy server asked to wait, in seconds. */
+  readonly retryAfterSecs: number | undefined;
+  /** The last check's failure text, when it was neither of the banner's own states. */
+  readonly detail: string | undefined;
+  /** The server can't be reached (`down`) or its certificate is refused. */
+  fail(status: "down" | "certificate"): void;
+  /** The server answered busy (or rate-limited the check): wait `retryAfterSecs`. */
+  busy(retryAfterSecs: number): void;
+  /** A check failed some other way: the banner stays, with `detail`. */
+  checkFailed(detail: string): void;
+  /**
+   * A call that started at `epoch` succeeded: true if that took the banner down, which
+   * happens only for a call that started after the banner went up.
+   */
+  recover(epoch: number): boolean;
+}
+
+/** The stores of one App. */
+export interface AppStores {
+  readonly session: StoreApi<SessionState>;
+  readonly connection: StoreApi<ConnectionState>;
+}
+
+/** Fresh stores for one App. */
+export function createAppStores(): AppStores {
+  return {
+    session: createStore<SessionState>()((set, get) => ({
+      phase: "starting",
+      generation: 0,
+      signIn() {
+        set({ phase: "signed_in", generation: get().generation + 1 });
+      },
+      signOut() {
+        set({ phase: "signed_out" });
+      },
+      beginLogout() {
+        set({ phase: "logging_out" });
+      },
+      cancelLogout() {
+        if (get().phase === "logging_out") {
+          set({ phase: "signed_in" });
+        }
+      },
+      endIfSignedIn(generation) {
+        const state = get();
+        if (state.phase !== "signed_in" || state.generation !== generation) {
+          return false;
+        }
+        set({ phase: "signed_out" });
+        return true;
+      },
+    })),
+    connection: createStore<ConnectionState>()((set, get) => {
+      /** The banner's new state; the epoch moves only when it goes up. */
+      const raise = (
+        status: Exclude<ConnectionStatus, "ok">,
+        retryAfterSecs: number | undefined,
+      ) => {
+        const state = get();
+        set({
+          status,
+          retryAfterSecs,
+          detail: undefined,
+          epoch: state.status === "ok" ? state.epoch + 1 : state.epoch,
+        });
+      };
+      return {
+        status: "ok",
+        epoch: 0,
+        retryAfterSecs: undefined,
+        detail: undefined,
+        fail(status) {
+          raise(status, undefined);
+        },
+        busy(retryAfterSecs) {
+          raise("busy", retryAfterSecs);
+        },
+        checkFailed(detail) {
+          if (get().status !== "ok") {
+            set({ detail });
+          }
+        },
+        recover(epoch) {
+          const state = get();
+          if (state.status === "ok" || epoch < state.epoch) {
+            return false;
+          }
+          set({ status: "ok", retryAfterSecs: undefined, detail: undefined });
+          return true;
+        },
+      };
+    }),
+  };
+}

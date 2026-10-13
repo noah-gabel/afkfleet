@@ -87,6 +87,13 @@ pub(crate) fn profile_save() -> CommandError {
     CommandError::new(CommandErrorCode::ProfileSave)
 }
 
+/// The command error for a new server's stored session that couldn't be
+/// removed after the old server's logout.
+#[must_use]
+pub(crate) fn session_discard() -> CommandError {
+    CommandError::new(CommandErrorCode::SessionDiscard)
+}
+
 /// The server's refusal as the UI sees it.
 fn details(failure: ApiFailure) -> ApiErrorDetails {
     ApiErrorDetails {
@@ -285,6 +292,10 @@ mod tests {
         assert_eq!(
             profile_save(),
             CommandError::new(CommandErrorCode::ProfileSave)
+        );
+        assert_eq!(
+            session_discard(),
+            CommandError::new(CommandErrorCode::SessionDiscard)
         );
     }
 }

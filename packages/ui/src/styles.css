@@ -4,10 +4,16 @@
  * app bundles it from apps/desktop.
  *
  * The theme tokens are shadcn/ui's (MIT, https://ui.shadcn.com), style radix-nova, base
- * color neutral. tw-animate-css and shadcn's own tailwind.css (component variants and
- * animations) arrive with the first component (ADR-0017).
+ * color neutral. Group D's components need neither tw-animate-css nor shadcn's own
+ * tailwind.css (component variants and animations); they arrive with the first component
+ * that does (ADR-0017).
+ *
+ * sonner's stylesheet comes in here, bundled and so served from 'self', in Tailwind's
+ * components layer so utilities still win. sonner itself is patched not to inject it as a
+ * <style> element, which the release CSP (`style-src 'self'`) blocks (ADR-0017).
  */
 @import "tailwindcss" source(".");
+@import "sonner/dist/styles.css" layer(components);
 
 @custom-variant dark (&:is(.dark *));
 
@@ -124,5 +130,11 @@
   }
   body {
     @apply bg-background text-foreground;
+  }
+  /* WebView2 is Edge, which adds its own reveal and clear buttons to inputs. PasswordInput
+     has its own toggle, so a password field would show two eye icons. */
+  input::-ms-reveal,
+  input::-ms-clear {
+    display: none;
   }
 }

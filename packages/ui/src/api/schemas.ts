@@ -2,7 +2,6 @@
 // limits (limits.ts) so a form can say what's wrong before anything is sent. The server
 // validates everything again and stays authoritative. Lengths count Unicode code points
 // (chars), as the Rust side does; the server profile's caps count UTF-8 bytes.
-import { z } from "zod";
 
 import {
   CA_PEM_MAX_BYTES,
@@ -17,6 +16,7 @@ import {
   USERNAME_MAX_CHARS,
   USERNAME_MIN_CHARS,
 } from "./limits";
+import { z } from "./zod";
 
 /** How many Unicode code points `text` holds. */
 function chars(text: string): number {
