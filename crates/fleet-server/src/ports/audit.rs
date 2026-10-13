@@ -173,7 +173,9 @@ pub struct AuditRecord {
 /// The wrong 2FA codes typed for a user after their previous successful
 /// login (the `auth.login` Success before the newest), or since their
 /// account was created when they logged in once or never: `auth.login`
-/// Failure entries with `step` = `code` whose target is the user.
+/// Failure entries with `step` = `code` whose target is the user, except
+/// those of the login step that ended in the newest Success (the same
+/// `login_step_id`), which are the user's own typos at that login.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FailedCodeAttempts {
     /// How many.
@@ -192,7 +194,8 @@ pub trait AuditReads: Send + Sync + fmt::Debug {
     /// ID, and the other [`StoreError`]s.
     async fn list(&self, page: AuditPage) -> Result<Vec<AuditRecord>, StoreError>;
 
-    /// The wrong 2FA codes typed for `user` since their previous login.
+    /// The wrong 2FA codes typed for `user` since their previous login,
+    /// without the newest login's own typos ([`FailedCodeAttempts`]).
     ///
     /// # Errors
     /// [`StoreError`], including [`StoreError::Corrupt`] for a time that

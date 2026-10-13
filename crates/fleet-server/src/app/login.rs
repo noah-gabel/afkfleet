@@ -8,10 +8,11 @@
 //! an unknown name and a disabled user are one refusal, counted toward the
 //! lockout and audited as `auth.login` Failure in the same commit; the
 //! typed name is never stored. A right one never gets real tokens:
-//! - a user with 2FA gets an mfa token, and a stored hash made with other
-//!   argon2 parameters is re-hashed on the way (best-effort: a full queue
-//!   or a failure leaves it for the next login); the new hash waits in the
-//!   token's challenge;
+//! - a user with 2FA gets an mfa token for a new login step, whose ID
+//!   ([`LoginStepId`]) the code step's audit entries record, and a stored
+//!   hash made with other argon2 parameters is re-hashed on the way
+//!   (best-effort: a full queue or a failure leaves it for the next login);
+//!   the new hash waits in the token's challenge;
 //! - a user without 2FA gets a setup token, for enrolling first.
 //!
 //! # The code step ([`LoginService::code_step`])
@@ -41,8 +42,8 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use fleet_core::audit::{AuditAction, AuditError, AuditMetadata, AuditOutcome, AuditTarget};
 use fleet_core::auth::SecondFactor;
-use fleet_core::id::{SessionId, UserId};
-use fleet_core::system::Clock;
+use fleet_core::id::{LoginStepId, SessionId, UserId};
+use fleet_core::system::{Clock, MintError, SecureRandom, mint};
 use fleet_core::value::Username;
 use secrecy::{ExposeSecret as _, SecretString};
 use tracing::{debug, info, warn};
@@ -89,6 +90,9 @@ pub enum LoginError {
     /// The login's token couldn't be minted.
     #[error("the login's token can't be minted")]
     Token(#[source] MintTokenError),
+    /// The login step's ID couldn't be minted.
+    #[error("the login step's ID can't be minted")]
+    StepId(#[source] MintError),
     /// A failure couldn't be recorded.
     #[error(transparent)]
     Record(#[from] RecordFailureError),
@@ -130,14 +134,15 @@ pub enum StepUpError {
 #[derive(Debug, Clone, Copy)]
 enum Step {
     Password,
-    Code,
+    /// The code step of a login step, whose ID its entries record.
+    Code(LoginStepId),
 }
 
 impl Step {
     const fn as_str(self) -> &'static str {
         match self {
             Self::Password => "password",
-            Self::Code => "code",
+            Self::Code(_) => "code",
         }
     }
 }
@@ -175,6 +180,8 @@ const fn method(factor: &SecondFactor) -> &'static str {
 /// A code step whose code matched, for its commit.
 struct Accepted {
     user_id: UserId,
+    /// The login step whose mfa token was used.
+    step: LoginStepId,
     /// The password's `password_changed_at` when the password step checked it.
     password_changed_at: DateTime<Utc>,
     check: CodeCheck,
@@ -187,6 +194,7 @@ struct Accepted {
 #[derive(Clone)]
 pub struct LoginService {
     clock: Arc<dyn Clock>,
+    random: Arc<dyn SecureRandom>,
     store: Arc<dyn Store>,
     passwords: Arc<dyn Passwords>,
     lockout: LockoutService,
@@ -205,10 +213,12 @@ impl fmt::Debug for LoginService {
 impl LoginService {
     /// The login over `store`, checking passwords with `passwords`, counting
     /// failures with `lockout`, issuing sessions with `tokens` and checking
-    /// codes with `mfa`, stamping with `clock`.
+    /// codes with `mfa`, stamping with `clock` and minting login steps' IDs
+    /// from `random`.
     #[must_use]
     pub fn new(
         clock: Arc<dyn Clock>,
+        random: Arc<dyn SecureRandom>,
         store: Arc<dyn Store>,
         passwords: Arc<dyn Passwords>,
         lockout: LockoutService,
@@ -218,6 +228,7 @@ impl LoginService {
         let audit = AuditService::new(Arc::clone(&clock), Arc::clone(&store));
         Self {
             clock,
+            random,
             store,
             passwords,
             lockout,
@@ -299,10 +310,12 @@ impl LoginService {
         } else {
             None
         };
+        let step: LoginStepId =
+            mint(self.clock.now(), self.random.as_ref()).map_err(LoginError::StepId)?;
         let issued = self
             .mfa
             .challenges()
-            .issue_mfa(challenge_user, rehash)
+            .issue_mfa(challenge_user, rehash, step)
             .map_err(LoginError::Token)?;
         drop(attempt);
         Ok(PasswordStep::MfaRequired(issued))
@@ -361,7 +374,7 @@ impl LoginService {
                     tx,
                     Some(&attempt),
                     Some(user.id),
-                    Step::Code,
+                    Step::Code(grant.step),
                     Reason::WrongCode,
                     ip,
                 )
@@ -373,6 +386,7 @@ impl LoginService {
         };
         let accepted = Accepted {
             user_id: user.id,
+            step: grant.step,
             password_changed_at: grant.user.password_changed_at,
             check,
             rehash,
@@ -392,6 +406,7 @@ impl LoginService {
     ) -> Result<IssuedTokens, LoginError> {
         let Accepted {
             user_id,
+            step,
             password_changed_at,
             check,
             rehash,
@@ -412,7 +427,7 @@ impl LoginService {
         };
         if let Some((counted, reason)) = refused {
             return self
-                .refuse(tx, counted, Some(user_id), Step::Code, reason, ip)
+                .refuse(tx, counted, Some(user_id), Step::Code(step), reason, ip)
                 .await;
         }
         let accepted = match &check {
@@ -424,7 +439,14 @@ impl LoginService {
         };
         if !accepted {
             return self
-                .refuse(tx, None, Some(user_id), Step::Code, Reason::MfaChanged, ip)
+                .refuse(
+                    tx,
+                    None,
+                    Some(user_id),
+                    Step::Code(step),
+                    Reason::MfaChanged,
+                    ip,
+                )
                 .await;
         }
         let rehashed = match &rehash {
@@ -435,7 +457,8 @@ impl LoginService {
         attempt.clear(&mut *tx).await?;
         let mut metadata = AuditMetadata::new()
             .id("session_id", prepared.new_session.id)?
-            .text("method", method)?;
+            .text("method", method)?
+            .id("login_step_id", step)?;
         if rehashed {
             metadata = metadata.flag("rehashed", true)?;
         }
@@ -470,9 +493,12 @@ impl LoginService {
         if let Some(attempt) = attempt {
             attempt.record_failure(&mut *tx, target, ip).await?;
         }
-        let metadata = AuditMetadata::new()
+        let mut metadata = AuditMetadata::new()
             .text("step", step.as_str())?
             .text("reason", reason.as_str())?;
+        if let Step::Code(login_step) = step {
+            metadata = metadata.id("login_step_id", login_step)?;
+        }
         let mut entry = self
             .audit
             .entry(AuditAction::AUTH_LOGIN, AuditOutcome::Failure)

@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use fleet_core::authz::Role;
-use fleet_core::id::{SessionId, UserId};
+use fleet_core::id::{LoginStepId, SessionId, UserId};
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::ports::totp::TotpSecret;
@@ -46,6 +46,10 @@ fn user(n: u8) -> ChallengeUser {
     }
 }
 
+fn step(n: u8) -> LoginStepId {
+    LoginStepId::new_v7(at(T0), [n; 10]).unwrap()
+}
+
 fn replace(n: u8) -> SetupPurpose {
     SetupPurpose::Replace {
         session_id: SessionId::new_v7(at(T0), [n; 10]).unwrap(),
@@ -66,7 +70,7 @@ fn token(issued: &SecretString) -> &str {
 fn an_mfa_token_is_issued_for_five_minutes_and_found_as_an_mfa_token() {
     let (challenges, _) = setup();
 
-    let issued = challenges.issue_mfa(user(1), None).unwrap();
+    let issued = challenges.issue_mfa(user(1), None, step(1)).unwrap();
 
     assert_eq!(issued.expires_in, 300);
     assert!(token(&issued.token).starts_with("afk_mt_"));
@@ -93,7 +97,7 @@ fn a_setup_token_is_issued_for_ten_minutes_and_found_as_a_setup_token() {
 #[test]
 fn an_unknown_or_malformed_token_finds_nothing() {
     let (challenges, _) = setup();
-    challenges.issue_mfa(user(1), None).unwrap();
+    challenges.issue_mfa(user(1), None, step(1)).unwrap();
 
     for presented in [
         "afk_mt_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -109,7 +113,7 @@ fn an_unknown_or_malformed_token_finds_nothing() {
 #[test]
 fn a_new_password_step_replaces_the_users_login_challenge() {
     let (challenges, _) = setup();
-    let first = challenges.issue_mfa(user(1), None).unwrap();
+    let first = challenges.issue_mfa(user(1), None, step(1)).unwrap();
 
     let second = challenges
         .issue_setup(user(1), SetupPurpose::FirstEnrollment)
@@ -123,10 +127,10 @@ fn a_new_password_step_replaces_the_users_login_challenge() {
 #[test]
 fn a_login_challenge_and_a_replace_token_never_replace_each_other() {
     let (challenges, _) = setup();
-    let login = challenges.issue_mfa(user(1), None).unwrap();
+    let login = challenges.issue_mfa(user(1), None, step(1)).unwrap();
     let replacing = challenges.issue_setup(user(1), replace(1)).unwrap();
 
-    let login_again = challenges.issue_mfa(user(1), None).unwrap();
+    let login_again = challenges.issue_mfa(user(1), None, step(1)).unwrap();
 
     assert!(challenges.mfa(token(&login.token)).is_none());
     assert!(challenges.mfa(token(&login_again.token)).is_some());
@@ -154,9 +158,9 @@ fn a_new_replacement_replaces_the_previous_one() {
 #[test]
 fn other_users_challenges_are_their_own() {
     let (challenges, _) = setup();
-    let alice = challenges.issue_mfa(user(1), None).unwrap();
+    let alice = challenges.issue_mfa(user(1), None, step(1)).unwrap();
 
-    let bob = challenges.issue_mfa(user(2), None).unwrap();
+    let bob = challenges.issue_mfa(user(2), None, step(2)).unwrap();
 
     assert_eq!(challenges.mfa(token(&alice.token)).unwrap().user, user(1));
     assert_eq!(challenges.mfa(token(&bob.token)).unwrap().user, user(2));
@@ -167,7 +171,7 @@ fn other_users_challenges_are_their_own() {
 #[test]
 fn an_mfa_token_is_over_after_five_minutes() {
     let (challenges, clock) = setup();
-    let issued = challenges.issue_mfa(user(1), None).unwrap();
+    let issued = challenges.issue_mfa(user(1), None, step(1)).unwrap();
 
     clock.advance(Duration::from_millis(299_999));
     assert!(challenges.mfa(token(&issued.token)).is_some());
@@ -192,7 +196,7 @@ fn a_setup_token_is_over_after_ten_minutes() {
 #[test]
 fn the_third_wrong_code_uses_an_mfa_token_up() {
     let (challenges, _) = setup();
-    let issued = challenges.issue_mfa(user(1), None).unwrap();
+    let issued = challenges.issue_mfa(user(1), None, step(1)).unwrap();
     let grant = challenges.mfa(token(&issued.token)).unwrap();
 
     challenges.wrong_code(&grant);
@@ -207,7 +211,7 @@ fn the_third_wrong_code_uses_an_mfa_token_up() {
 #[test]
 fn purging_drops_exactly_the_challenges_that_are_over() {
     let (challenges, clock) = setup();
-    challenges.issue_mfa(user(1), None).unwrap();
+    challenges.issue_mfa(user(1), None, step(1)).unwrap();
     challenges
         .issue_setup(user(2), SetupPurpose::FirstEnrollment)
         .unwrap();
@@ -226,7 +230,9 @@ fn an_mfa_token_is_taken_once_with_its_rehashed_password() {
     let (challenges, _) = setup();
     let rehash =
         PasswordHash::new(SecretString::from("$argon2id$v=19$m=19456,t=3,p=1$a$b")).unwrap();
-    let issued = challenges.issue_mfa(user(1), Some(rehash)).unwrap();
+    let issued = challenges
+        .issue_mfa(user(1), Some(rehash), step(1))
+        .unwrap();
     let grant = challenges.mfa(token(&issued.token)).unwrap();
 
     let taken = challenges.take_mfa(&grant);
@@ -243,7 +249,7 @@ fn an_mfa_token_is_taken_once_with_its_rehashed_password() {
 #[test]
 fn an_expired_mfa_token_cant_be_taken() {
     let (challenges, clock) = setup();
-    let issued = challenges.issue_mfa(user(1), None).unwrap();
+    let issued = challenges.issue_mfa(user(1), None, step(1)).unwrap();
     let grant = challenges.mfa(token(&issued.token)).unwrap();
     clock.advance(Duration::from_mins(5));
 
@@ -322,7 +328,7 @@ fn a_gone_setup_token_takes_no_pending_secret() {
 #[test]
 fn debug_shows_counts_only() {
     let (challenges, _) = setup();
-    let issued = challenges.issue_mfa(user(1), None).unwrap();
+    let issued = challenges.issue_mfa(user(1), None, step(1)).unwrap();
 
     let debug = format!("{challenges:?}");
 

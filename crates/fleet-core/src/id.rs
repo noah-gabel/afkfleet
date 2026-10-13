@@ -189,6 +189,14 @@ define_id!(
     InviteId
 );
 define_id!(
+    /// Identifies one login step: minted at the password step with the mfa
+    /// challenge, and recorded on the code step's audit entries, so the wrong
+    /// codes typed in the login that succeeded can be told apart from others
+    /// (Phase 8, group E; ADR-0016's amendment). It isn't a secret; the mfa
+    /// token is.
+    LoginStepId
+);
+define_id!(
     /// Identifies one HTTP request to the server: minted by its request-ID
     /// layer for every request, sent back in `x-request-id` and in every error
     /// body, and logged with the request. It names no entity.
@@ -349,6 +357,7 @@ mod tests {
         assert_trait_mints_like_the_constructor(ModeId::new_v7);
         assert_trait_mints_like_the_constructor(SessionId::new_v7);
         assert_trait_mints_like_the_constructor(InviteId::new_v7);
+        assert_trait_mints_like_the_constructor(LoginStepId::new_v7);
         assert_trait_mints_like_the_constructor(RequestId::new_v7);
     }
 
@@ -361,6 +370,7 @@ mod tests {
         assert_round_trips(ModeId::new_v7);
         assert_round_trips(SessionId::new_v7);
         assert_round_trips(InviteId::new_v7);
+        assert_round_trips(LoginStepId::new_v7);
         assert_round_trips(RequestId::new_v7);
     }
 

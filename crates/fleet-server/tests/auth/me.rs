@@ -1,6 +1,7 @@
 //! `GET /me` (Plan.md P7.6, ADR-0016): the user's profile, their 2FA and
 //! recovery codes, and the wrong 2FA codes typed since their previous
-//! login.
+//! login, without the typos of the login step that succeeded (Phase 8,
+//! group E).
 
 use core::num::NonZeroU32;
 use core::time::Duration;
@@ -119,6 +120,59 @@ async fn a_first_login_counts_every_wrong_code_before_it(
     assert_eq!(
         me(&setup, &token).await["failed_code_attempts"],
         json!({ "count": 1, "last_at": typo })
+    );
+}
+
+/// A login whose code step gets a wrong code, then the right one: the
+/// session's access token. The clock moves on a step afterwards.
+async fn typo_then_right_code(setup: &Setup, app: &Totp) -> SecretString {
+    let first = setup.login("alice", PASSWORD).await;
+    assert_eq!(first.status, 200, "{}", first.text);
+    let token = first.secret("token");
+    let typo = setup.code_step(&token, &setup.code(app, 10)).await;
+    assert_eq!(typo.status, 401, "{}", typo.text);
+    let seen = setup.code_step(&token, &setup.code(app, 0)).await;
+    assert_eq!(seen.status, 200, "{}", seen.text);
+    setup.clock.advance(Duration::from_secs(30));
+    seen.secret("access_token")
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_typo_then_the_right_code_on_one_step_counts_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = roomy(options).await;
+    let (app, _) = setup.enroll_alice().await;
+    setup.full_login(&app).await;
+    setup.clock.advance(Duration::from_secs(60));
+
+    let token = typo_then_right_code(&setup, &app).await;
+
+    assert_eq!(
+        me(&setup, &token).await["failed_code_attempts"],
+        json!({ "count": 0 })
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_wrong_code_of_a_step_that_never_succeeded_counts_also_after_a_later_login(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = roomy(options).await;
+    let (app, _) = setup.enroll_alice().await;
+    setup.full_login(&app).await;
+    setup.clock.advance(Duration::from_secs(60));
+    wrong_code(&setup, &app).await;
+    let abandoned = now_text(&setup);
+    setup.clock.advance(Duration::from_secs(60));
+
+    let token = typo_then_right_code(&setup, &app).await;
+
+    assert_eq!(
+        me(&setup, &token).await["failed_code_attempts"],
+        json!({ "count": 1, "last_at": abandoned })
     );
 }
 

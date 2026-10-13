@@ -80,6 +80,7 @@ fn login_error(error: LoginError) -> ApiError {
         | LoginError::Check(_)
         | LoginError::Issue(_)
         | LoginError::Token(_)
+        | LoginError::StepId(_)
         | LoginError::Record(_)
         | LoginError::Audit(_)) => ApiError::internal(other),
     }

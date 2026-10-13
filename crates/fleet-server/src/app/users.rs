@@ -146,7 +146,8 @@ pub struct MeView {
     pub mfa_confirmed_at: Option<DateTime<Utc>>,
     /// How many unused recovery codes are left.
     pub recovery_codes_left: u32,
-    /// The wrong 2FA codes since the previous login.
+    /// The wrong 2FA codes since the previous login, without the newest
+    /// login's own typos.
     pub failed_code_attempts: FailedCodeAttempts,
 }
 

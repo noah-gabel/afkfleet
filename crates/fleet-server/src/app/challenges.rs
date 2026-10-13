@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use chrono::{DateTime, Utc};
 use fleet_core::auth::{MFA_TOKEN_TTL, SETUP_TOKEN_TTL, challenge_expired, expires_in, used_up};
 use fleet_core::authz::Role;
-use fleet_core::id::{SessionId, UserId};
+use fleet_core::id::{LoginStepId, SessionId, UserId};
 use fleet_core::system::Clock;
 use secrecy::SecretString;
 
@@ -91,6 +91,8 @@ pub struct MfaGrant {
     hash: TokenHash,
     /// Who it's for.
     pub user: ChallengeUser,
+    /// The login step it belongs to, for the code step's audit entries.
+    pub step: LoginStepId,
 }
 
 /// A pending secret, numbered so confirm takes exactly the one it checked.
@@ -115,6 +117,7 @@ enum Kind {
     Mfa {
         wrong_codes: u32,
         rehash: Option<PasswordHash>,
+        step: LoginStepId,
     },
     Setup {
         purpose: SetupPurpose,
@@ -227,8 +230,9 @@ impl Challenges {
         self.slots.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Issues an mfa token for `user`, replacing their login slot, with the
-    /// re-hashed password the code step writes, if any.
+    /// Issues an mfa token for `user` and the login step `step`, replacing
+    /// their login slot, with the re-hashed password the code step writes,
+    /// if any.
     ///
     /// # Errors
     /// [`MintTokenError`] when the token can't be minted.
@@ -236,6 +240,7 @@ impl Challenges {
         &self,
         user: ChallengeUser,
         rehash: Option<PasswordHash>,
+        step: LoginStepId,
     ) -> Result<IssuedChallenge, MintTokenError> {
         self.issue(
             TokenKind::Mfa,
@@ -243,6 +248,7 @@ impl Challenges {
             Kind::Mfa {
                 wrong_codes: 0,
                 rehash,
+                step,
             },
         )
     }
@@ -394,9 +400,10 @@ impl Challenges {
         let mut slots = self.slots();
         let entry = slots.find(&hash, now)?;
         match &entry.kind {
-            Kind::Mfa { .. } => Some(MfaGrant {
+            Kind::Mfa { step, .. } => Some(MfaGrant {
                 hash,
                 user: entry.user,
+                step: *step,
             }),
             Kind::Setup { .. } => None,
         }

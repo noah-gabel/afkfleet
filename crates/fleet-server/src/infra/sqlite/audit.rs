@@ -92,27 +92,36 @@ pub(super) async fn list(
 
 /// The wrong 2FA codes typed for `user` since their previous successful
 /// login: `auth.login` Failure entries with `step` = `code` targeting the
-/// user, after the second-newest `auth.login` Success (or all of them). The
-/// literals are fixed names, never input (`AuditTarget::User`'s kind, the
-/// action, the outcome and the step).
+/// user, after the second-newest `auth.login` Success (or all of them),
+/// except those of the login step that ended in the newest Success (the
+/// same `login_step_id`): the user's own typos at that login. An entry
+/// without a `login_step_id` (older than Phase 8, group E) always counts.
+/// The literals are fixed names, never input (`AuditTarget::User`'s kind,
+/// the action, the outcome, the step and the metadata keys).
 pub(super) async fn failed_code_attempts(
     pool: &SqlitePool,
     user: UserId,
 ) -> Result<FailedCodeAttempts, StoreError> {
     let user = id_text(user);
     let row = sqlx::query!(
-        r#"WITH previous AS (
-               SELECT id FROM audit_log
+        r#"WITH successes AS (
+               SELECT id, json_extract(metadata_json, '$.login_step_id') AS step
+               FROM audit_log
                WHERE target_type = 'user' AND target_id = ?1 AND action = 'auth.login'
                      AND outcome = 'success'
-               ORDER BY id DESC LIMIT 1 OFFSET 1
+               ORDER BY id DESC LIMIT 2
            ),
            failures AS (
                SELECT id, at FROM audit_log
                WHERE target_type = 'user' AND target_id = ?1 AND action = 'auth.login'
                      AND outcome = 'failure'
                      AND json_extract(metadata_json, '$.step') = 'code'
-                     AND id > coalesce((SELECT id FROM previous), 0)
+                     AND id > coalesce((SELECT id FROM successes ORDER BY id DESC LIMIT 1 OFFSET 1), 0)
+                     AND coalesce(
+                             json_extract(metadata_json, '$.login_step_id')
+                                 = (SELECT step FROM successes ORDER BY id DESC LIMIT 1),
+                             0
+                         ) = 0
            )
            SELECT (SELECT count(*) FROM failures) AS "count!: i64",
                   (SELECT id FROM failures ORDER BY id DESC LIMIT 1) AS "last_id?: i64",

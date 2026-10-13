@@ -18,7 +18,7 @@ use chrono::{TimeZone as _, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::auth::LockoutPolicy;
 use fleet_core::authz::Role;
-use fleet_core::id::UserId;
+use fleet_core::id::{LoginStepId, UserId};
 use fleet_core::system::Clock as _;
 use fleet_core::value::Username;
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
@@ -206,7 +206,15 @@ async fn a_run_drops_the_expired_challenges_and_keeps_the_live_ones(
     options: SqliteConnectOptions,
 ) {
     let setup = setup(options).await;
-    setup.challenges.issue_mfa(challenge_user(1), None).unwrap();
+    setup
+        .challenges
+        .issue_mfa(
+            challenge_user(1),
+            None,
+            LoginStepId::new_v7(Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap(), [1; 10])
+                .unwrap(),
+        )
+        .unwrap();
     setup
         .challenges
         .issue_setup(challenge_user(2), SetupPurpose::FirstEnrollment)

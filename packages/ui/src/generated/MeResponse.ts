@@ -36,6 +36,7 @@ mfa_confirmed_at?: string,
  */
 recovery_codes_left: number, 
 /**
- * The wrong 2FA codes since the previous login.
+ * The wrong 2FA codes since the previous login, without the newest
+ * login's own typos.
  */
 failed_code_attempts: FailedCodeAttempts, };
