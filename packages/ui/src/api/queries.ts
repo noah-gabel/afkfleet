@@ -11,7 +11,9 @@ import {
   useQuery,
 } from "@tanstack/react-query";
 
+import type { InvitePage } from "../generated/InvitePage";
 import type { SessionPage } from "../generated/SessionPage";
+import type { UserPage } from "../generated/UserPage";
 import type { ApiClient } from "./ApiClient";
 import { useApiClient } from "./context";
 
@@ -58,4 +60,40 @@ export function sessionsQuery(api: ApiClient) {
 /** The user's sessions, through the app's client. */
 export function useSessions() {
   return useInfiniteQuery(sessionsQuery(useApiClient()));
+}
+
+/** The users (Admins and the Owner): every page loaded so far. */
+export const USERS_KEY = ["users"] as const;
+
+/** The users, a page at a time. */
+export function usersQuery(api: ApiClient) {
+  return infiniteQueryOptions({
+    queryKey: USERS_KEY,
+    queryFn: ({ pageParam }) => api.users(pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page: UserPage) => page.next,
+  });
+}
+
+/** The users, through the app's client. */
+export function useUsers() {
+  return useInfiniteQuery(usersQuery(useApiClient()));
+}
+
+/** The invites, in every state, without their codes: every page loaded so far. */
+export const INVITES_KEY = ["invites"] as const;
+
+/** The invites, a page at a time. */
+export function invitesQuery(api: ApiClient) {
+  return infiniteQueryOptions({
+    queryKey: INVITES_KEY,
+    queryFn: ({ pageParam }) => api.invites(pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page: InvitePage) => page.next,
+  });
+}
+
+/** The invites, through the app's client. */
+export function useInvites() {
+  return useInfiniteQuery(invitesQuery(useApiClient()));
 }
