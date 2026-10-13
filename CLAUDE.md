@@ -147,6 +147,7 @@ fleet-server/src/
 - Add dependencies only in `[workspace.dependencies]`; members use `dep.workspace = true`. Declare a crate there when the first member uses it, with the version and feature constraints from Plan.md §5. Cargo warns about unused workspace dependencies.
 - **Default features in `fleet-core`:** disable them and enable only what you need. Some crates pull in IO or tokio by default (for example `backon` with its tokio sleeper). `cargo tree -p fleet-core` must show no tokio and no IO crates.
 - Every crate inherits `license` (`GPL-3.0-or-later`) and `publish = false` from `[workspace.package]` (`license.workspace = true`, `publish.workspace = true`).
+- **npm packages are at least 3 days old.** `pnpm-workspace.yaml` sets `minimumReleaseAge: 4320` (minutes), so pnpm refuses any younger release when it resolves, transitive ones included, and also checks the whole lockfile at every install. A fix that can't wait goes into `minimumReleaseAgeExclude`, with a comment saying why and the user's approval; nothing else goes there (ADR-0017).
 - Before using any crate API, **check it on docs.rs for the pinned version**. These crates changed recently: sqlx 0.9, tonic 0.14 (+ `tonic-prost`), rand 0.10, argon2 0.6, chacha20poly1305 0.11, sha2 0.11, reqwest 0.13, keyring v4, azalea.
 
 **Rust crates**
@@ -215,10 +216,10 @@ fleet-server/src/
 | Validation | `zod` |
 | Forms | `react-hook-form` + `@hookform/resolvers` |
 | Styling | `tailwindcss`, `@tailwindcss/vite` |
-| Components | shadcn/ui |
+| Components | shadcn/ui (radix-nova), copied from its registry with `cn`, `class-variance-authority` and single Radix packages (`@radix-ui/react-slot`, `@radix-ui/react-label`; never the `radix-ui` umbrella) |
 | Icons | `lucide-react` |
 | Toasts | `sonner` |
-| Tests | `vitest`, `jsdom`, `@testing-library/react` (+ its peer `@testing-library/dom`), `msw`, `@playwright/test` |
+| Tests | `vitest`, `jsdom`, `@testing-library/react` (+ its peer `@testing-library/dom`), `@testing-library/user-event`, `msw`, `@playwright/test` |
 | Lint & format | `@biomejs/biome` |
 | Tauri bridge | `@tauri-apps/api` (`apps/desktop` only) |
 | Tauri CLI | `@tauri-apps/cli` (`apps/desktop` dev only) |
@@ -357,10 +358,13 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 - `apps/desktop` implements `ApiClient` as `TauriApiClient`, with `invoke` injected, and passes it to `<App apiClient={…} />`. It imports only `@tauri-apps/api/core`: any other Tauri API needs a capability grant and an ADR. Biome's `noRestrictedImports` enforces both rules (ADR-0017).
 - A new command changes build.rs's `COMMANDS`, `capabilities/main.json`, `scripts/tauri-hardening.mjs`, `src-tauri/tests/ipc-contract.json`, `ApiClient`, `TauriApiClient` and `FakeApiClient` together.
 - Organize by feature: `src/features/<feature>/{components,hooks,routes}` with tests alongside. Shared primitives go in `src/components/ui` (shadcn).
+- **shadcn components are copied from the registry** (`https://ui.shadcn.com/r/styles/radix-nova/<name>.json`), never added with the CLI, which installs packages of its own choosing. The copy gets the CLI's edits (aliases, no `"use client"`), its `radix-ui` import becomes the single `@radix-ui/react-*` package, and a lint finding gets a minimal code fix, never an ignore comment; the file's header lists every edit (ADR-0017).
 
 **Data and state**
 - Components use hooks (`useBots()`, …) built on TanStack Query over the injected `ApiClient`. **Never call `fetch` or `invoke` inside a component.**
-- TanStack Query holds server state; small `zustand` stores hold UI-only state.
+- TanStack Query holds server state; small `zustand` stores hold UI-only state, one set per `App` (`app/stores.ts`).
+- **A call whose request or answer carries a secret** (a password, a TOTP secret or QR code, recovery codes, an invite code) **is a direct call** through `useApiClient()`, never a TanStack query or mutation, which would keep it in their caches: `login`, `register`, `loginMfa`, `mfaEnroll`, `mfaConfirm`, `stepUp`, `changePassword`, `createInvite`. The secret lives only in the component's state and is dropped when its step ends (ADR-0017).
+- Every call goes through the watched client (`app/watched.ts`): it raises the banner on `unreachable`/`timed_out`/`certificate` and ends a signed-in session on `no_session`. Don't handle those codes again in a screen.
 - Forms use react-hook-form with zod schemas that mirror the server's limits (`src/api/schemas.ts`). The server stays authoritative.
 - `App` wraps its client in `validated()`, so every input passes its zod schema before any call. `src/api/limits.ts` holds only numeric constants named like the Rust ones; fleet-api-types' `tests/limits.rs` keeps them equal.
 - Every API call rejects with an `ApiError` holding a `CommandError`. A switch on its `code` is exhaustive (it's closed: the Rust side ships with the UI); a switch on `api.code`, or on any other open value, always has a default branch that shows the message and the request ID (`describeError`).
@@ -368,6 +372,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 
 **Safety**
 - Never use `dangerouslySetInnerHTML`, `eval` or `new Function`.
+- **No runtime styles.** The release CSP has `style-src 'self'`, so a `<style>` element or a constructed stylesheet added at runtime is blocked in the real build while `just dev-app` shows nothing wrong. Every Vitest test ends with a check that the document holds none (`src/test/styleGuard.ts`). sonner is patched for this (`patches/sonner@<version>.patch`); a sonner bump redoes the patch and runs `Toaster.test.tsx` (ADR-0017). Check a new UI dependency in `just app-build --debug` too.
 - Chat is rendered as plain text.
 - External links open only through the Rust-side opener command.
 

@@ -1,12 +1,13 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { App } from "./App";
-import { FakeApiClient } from "./api/FakeApiClient";
+import { UnavailableApiClient } from "./api/UnavailableApiClient";
 
 describe("App", () => {
-  it("shows the app's name as its main heading", () => {
-    render(<App apiClient={new FakeApiClient()} />);
+  it("names the app and says why the web build can't start", async () => {
+    render(<App apiClient={new UnavailableApiClient()} />);
 
-    expect(screen.getByRole("heading", { level: 1, name: "afkfleet" })).toBeDefined();
+    expect(await screen.findByRole("heading", { level: 1, name: "afkfleet" })).toBeDefined();
+    expect(screen.getByText("The web build has no server connection.")).toBeDefined();
   });
 });

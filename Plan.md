@@ -277,17 +277,17 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Bundler & dev server | `vite` | 8.3.4, with `@vitejs/plugin-react` 6.1.2 (oxc on Vite 8, no Babel or SWC; approved in P8.2, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 | UI framework | `react`, `react-dom` 19 | 19.3.0, with `@types/react` and `@types/react-dom` 19.3.0 (approved in P8.2) |
 | Language | `typescript` | `strict`, `noUncheckedIndexedAccess`, `exactOptionalPropertyTypes`. 7.0.2, the Go port: a native `tsc`, but no JavaScript compiler API until 7.1, so no tool that needs it (typescript-eslint, ts-node, vite-plugin-checker); each tsconfig lists `vite/client` in `types` ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
-| Server state & caching | `@tanstack/react-query` | |
-| Routing | `@tanstack/react-router` | Type-safe routes |
-| UI-only state | `zustand` | Small stores only |
+| Server state & caching | `@tanstack/react-query` | 5.104.1 (approved in P8.6): no retries and no refetch on focus or reconnect; no query or mutation ever carries a secret ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
+| Routing | `@tanstack/react-router` | 1.170.42 (approved in P8.6): type-safe routes defined in code (no router plugin), over a memory history ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
+| UI-only state | `zustand` | Small stores only. 5.0.15 (approved in P8.6): one set per `App`, set by the watched client (session, banner) |
 | Schema validation | `zod` 4 | 4.6.5 (approved in P8.5): the input checks every API call passes (`validated`), and the forms' schemas from P8.6 on ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 | Forms | `react-hook-form`, `@hookform/resolvers` | |
 | Styling | `tailwindcss` 4 | 4.3.3, with `@tailwindcss/vite` 4.3.3 (approved in P8.2) |
-| Components | shadcn/ui (Radix UI primitives, copied into the repo) | Style `radix-nova`, base color neutral, aliases through `packages/ui`'s package.json `#` imports. P8.2 has only `components.json` and the theme tokens; `cn`, class-variance-authority, radix-ui, tw-animate-css and lucide-react arrive with the first component. The CLI only runs as `pnpm dlx shadcn@4.21.4`, never as a dependency ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
-| Icons | `lucide-react` | |
-| Toasts | `sonner` | |
+| Components | shadcn/ui (Radix UI primitives, copied into the repo) | Style `radix-nova`, base color neutral, aliases through `packages/ui`'s package.json `#` imports. P8.6 copies Button, Input, Label, Textarea, Card and Alert from the registry's JSON (never the CLI, which installs packages itself), with `cn` 0.4.0, class-variance-authority 0.7.1 and the single Radix packages `@radix-ui/react-slot` 1.4.0 and `@radix-ui/react-label` 2.1.16 (never the `radix-ui` umbrella); tw-animate-css and shadcn's tailwind.css wait for a component that needs them. Before P8.6 it was only `components.json` and the theme tokens; the CLI never runs as a dependency ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
+| Icons | `lucide-react` | 1.53.0 (approved in P8.6) |
+| Toasts | `sonner` | 2.0.8 (approved in P8.6), **patched**: `patches/sonner@2.0.8.patch` removes its `__insertCSS(…)` call, a `<style>` the release CSP blocks; its stylesheet comes through `styles.css`. A bump redoes the patch and runs `Toaster.test.tsx` ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 | Tauri bridge | `@tauri-apps/api` 2 | 2.12.1 (approved in P8.5). Only in `apps/desktop`, and only `@tauri-apps/api/core`'s `invoke`, injected into `TauriApiClient`; Biome refuses every other Tauri import ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
-| Unit / component tests | `vitest`, `@testing-library/react`, `@testing-library/user-event`, `jsdom` | vitest 5.0.3, jsdom 29.1.1 (jsdom 30 needs Node ^24.15), @testing-library/react 16.3.3 with its peer `@testing-library/dom` 10.4.2 (approved in P8.2); user-event arrives with the first test that types |
+| Unit / component tests | `vitest`, `@testing-library/react`, `@testing-library/user-event`, `jsdom` | vitest 5.0.3, jsdom 29.1.1 (jsdom 30 needs Node ^24.15), @testing-library/react 16.3.3 with its peer `@testing-library/dom` 10.4.2 (approved in P8.2); `@testing-library/user-event` 14.6.7 arrived in P8.6 |
 | API mocking | `msw` | |
 | E2E | `@playwright/test` | |
 | Lint & format | `@biomejs/biome` | |
@@ -299,7 +299,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
   - cargo-nextest 0.9.146, cargo-llvm-cov 0.9.1, cargo-deny 0.20.2, cargo-insta 1.49.0
   - sqlx-cli **0.9.0** (P6), SQLite-only: `cargo install sqlx-cli --version 0.9.0 --locked --no-default-features --features sqlite`, the same in CI and the README
   - Later: cargo-chef 0.1.78 (P5), cargo-mutants 27.1.0 and cargo-fuzz 0.13.2 (P13)
-- **Frontend tooling:** pnpm 12.9.1 (`packageManager`) and Biome 2.5.15 from P0.8; every other package is pinned in the phase that introduces it, exactly (no `^`), with `pnpm-lock.yaml` as the lock. The Tauri CLI is `@tauri-apps/cli` 2.12.2, a dev-dependency of `apps/desktop` (approved in P8.2, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
+- **Frontend tooling:** pnpm 12.9.1 (`packageManager`) and Biome 2.5.15 from P0.8; every other package is pinned in the phase that introduces it, exactly (no `^`), with `pnpm-lock.yaml` as the lock. From P8.6 `pnpm-workspace.yaml` sets `minimumReleaseAge: 4320`: pnpm resolves no release younger than 3 days and checks the whole lockfile at every install; exceptions only in `minimumReleaseAgeExclude`, with a comment and the user's approval. The Tauri CLI is `@tauri-apps/cli` 2.12.2, a dev-dependency of `apps/desktop` (approved in P8.2, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)).
 - **Runtime & hosting:**
   - Docker + Docker Compose
   - Caddy 2 (TLS for the public API)
@@ -3043,7 +3043,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >
   >   Then all passed. One test runs the validating wrapper with `Object.prototype` frozen, as the webview does.
   > - **packages/ui** exports `./generated/*`, so apps/desktop imports each type from its own file.
-- [ ] **P8.6** 🔴 App shell:
+- [x] **P8.6** 🔴 App shell:
   - TanStack Router with an auth guard
   - role-aware navigation
   - an error boundary
@@ -3055,6 +3055,23 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - A 429 or 503 shows its `retry_after`.
   > - `expires_in` restarts a timed-out login or setup step.
   > - Registering holds no session, so the login right after it never meets `AlreadyLoggedIn`.
+
+  > Note (P8.6, group D, the user's decisions) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
+  > - **Dependencies,** exact and at least 3 days old: TanStack Router 1.170.42 and Query 5.104.1, sonner 2.0.8, zustand 5.0.15, lucide-react 1.53.0, `cn` 0.4.0, class-variance-authority 0.7.1, `@radix-ui/react-slot` 1.4.0 and `@radix-ui/react-label` 2.1.16 (never the `radix-ui` umbrella), user-event 14.6.7 (dev). `pnpm-workspace.yaml` sets `minimumReleaseAge: 4320` for every install from now on.
+  > - **No runtime styles:** sonner is patched not to inject its `<style>` (the release CSP blocks it), and every Vitest test ends with a check that the document holds no `<style>` and no stylesheet at all.
+  > - **shadcn's six components** (Button, Input, Label, Textarea, Card, Alert) are copied from the registry's JSON, never through the CLI, each with its edits in its header.
+  > - **The router:** routes in code over a memory history. `/` is the launch: no profile or an unreadable one leads to server setup; `me()` then leads Home, to login on `no_session`, or to a start screen (waiting while unreachable; otherwise the error with Try again, Server settings and Log out).
+  > - **Every call is watched:** `unreachable`/`timed_out` raise the banner, `certificate` its own banner state, and `no_session` ends a signed-in session once (only for a call of the current sign-in, never at launch, inside the sign-in flow or during a logout): to login first, then the cache is emptied, then one toast. A success of a call that started after the banner went up takes it down and refetches.
+  > - **The banner** checks every 10 s, never two at once, and waits a busy server's `retry_after` (at least 10 s); "Retry now" checks at once.
+  > - **QueryClient:** no retries, no refetch on focus or reconnect; `me` is fresh for 60 s.
+  > - **Role-aware navigation:** Home and Server for everyone; Users and Invites (placeholders until group E) for Admins and the Owner, behind a role guard that answers "not found". An unknown role gets a Member's rights.
+  > - **The error boundary** shows a fixed text with Try again and Restart; an API error its text, any other error only its name.
+  > - **Logout** from the header: login first, then the cache; a warning when the server couldn't be told; a failed call stays signed in.
+
+  > Note (P8.6, as built, group D) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
+  > - **Tests,** red first against compiling stubs: the style guard 3 of 4, sonner's guard against the unpatched package, the stores and the watched client 23 of 32, the QueryClient's defaults 1 of 2, the shell (launch, session end, header, router, nav, banner, error screen) 64 of 67. Then all passed. The 3 that passed are what a stub also does (two privileges, the error component's wiring).
+  > - **A keychain entry the app can't read** (`tests/bridge/auth.rs`, the real `KeychainStore` on keyring-core's mock): `me()` answers `store`, `logout()` removes it, and the next login works. It pins existing behaviour, so it was shown red through a temporary change to fleet-client's logout (skipping the clear after a failed load), then reverted.
+  > - **Found while building:** a check that settled before React rendered flipped `checking` twice in one batch, so the banner's next wait never started; the wait now chains from the check itself.
 - [ ] **P8.7** 🔴 Screens:
   - server setup
   - login, including the 2FA step
@@ -3353,6 +3370,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P11.9, from Phase 3, the user's request): **Parsed senders.** If P4.1's per-server chat format is built, the chat console shows a sender parsed from the text visibly differently from one a player packet named. Neither is verified: azalea 0.16 doesn't verify chat signatures, so every chat sender is only what the server claims, and none drives a permission or trigger decision (ADR-0011, threat model).
 
   > Note (P11.9, from Phase 4, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **The chat format is parsed on the server.** It stays out of the bot's spec and the agent: the server already has each system message's whole sanitized text, so a per-server format can extract the sender for display here.
+
+- [ ] **P11.10** Dark mode: the app follows Windows' light or dark setting (`prefers-color-scheme` and its change event; the `.dark` class on `<html>`, set by the bundled script so the CSP allows it), and every screen is checked in both themes.
+
+  > Note (P11.10, from Phase 8, group D, the user's decision) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): Phase 8 ships the light theme only (sonner's `theme="light"`). `packages/ui/src/styles.css` already holds shadcn's dark tokens under `.dark`.
 
 **DoD:** The user's real fleet runs for 24 h, managed from the app. Every event shows up live, and the logs contain no unhandled errors.
 

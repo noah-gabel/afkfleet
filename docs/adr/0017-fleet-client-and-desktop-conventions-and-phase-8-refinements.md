@@ -1,7 +1,7 @@
 # 0017. fleet-client and desktop app conventions, Phase 8 refinements
 
 - **Status:** Accepted
-- **Date:** 2026-10-12 (amended in the review of PR #34; groups B and C added the same day)
+- **Date:** 2026-10-12 (amended in the review of PR #34; groups B and C added the same day; group D on 2026-10-13)
 - **Related:** Plan.md Phase 8 (P8.1–P8.9), §4, §5, §7.5, §8, Appendix A, P9.3; ADR-0006, ADR-0007, ADR-0015, ADR-0016
 
 ## Context
@@ -391,6 +391,68 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   - pnpm-lock.yaml gains `@tauri-apps/api` 2.12.1 and zod 4.6.5.
 - **Not yet checked live:** the user's hands-on steps in the PR (the Credential Manager entry appearing and going away, `just dev-server` over loopback HTTP).
 
+### Group D: dependencies and the release age *(the user's approvals, 2026-10-13)*
+- **Pinned exactly, each the newest release at least 3 days old:** `@tanstack/react-router` 1.170.42, `@tanstack/react-query` 5.104.1, `sonner` 2.0.8, `zustand` 5.0.15, `lucide-react` 1.53.0 (ISC), `cn` 0.4.0, `class-variance-authority` 0.7.1 (Apache-2.0), `@radix-ui/react-slot` 1.4.0, `@radix-ui/react-label` 2.1.16, and `@testing-library/user-event` 14.6.7 (dev); P8.7 adds `react-hook-form` 7.89.0 and `@hookform/resolvers` 5.9.1. All MIT unless named. None runs an install script.
+  - The router brings `@tanstack/router-core`, `history`, `react-store` and `store`, `seroval` and `seroval-plugins`, `cookie-es` and `isbot` (Unlicense); class-variance-authority brings `clsx`; the Radix packages `react-primitive` and `react-compose-refs`.
+  - **`cn`'s npm name** held an unrelated package (0.1.x, 2013) until shadcn took it over (0.2.0, 2026-09-01); 0.4.0 is published from `shadcn-ui/cn` by GitHub Actions with npm's trusted publishing, and its tarball has no `eval`, `new Function` or `<style>` creation.
+- **Single Radix packages** *(the user's condition)*: `@radix-ui/react-slot` and `@radix-ui/react-label`, never the `radix-ui` umbrella, which brings 55 primitives for the two used. Each copied component's `import { X } from "radix-ui"` becomes `import * as X from "@radix-ui/react-x"` (both export `Root`), and every later copy gets the same edit.
+- **`minimumReleaseAge: 4320`** *(the user's rule)* in `pnpm-workspace.yaml`: pnpm 12 refuses a release younger than 3 days when it resolves, transitive ones included, and verifies the whole lockfile against it at every install, `--frozen-lockfile` included. A fix that can't wait goes into `minimumReleaseAgeExclude` with a comment and the user's approval. CLAUDE.md states the rule.
+  - **Found when it was switched on:** the lockfile already held 13 approved entries younger than 3 days (`@tauri-apps/cli` 2.12.2 and its 11 platform packages, `tinybench` 6.2.2, all published 2026-10-10), so every install failed until 2026-10-13 20:08 UTC. They were excluded locally while developing *(the user's choice)*. To commit without waiting *(the user's decision)*, both of group D's commits carry a `minimumReleaseAgeExclude` of exactly those 13 versions, commented "approved on 2026-10-13, already on main since group C, remove after 2026-10-13 20:08 UTC"; a last commit before the merge removes it, with a clean install under the full rule shown in the PR, so `main` never carries it.
+
+### Group D: no runtime styles *(the user's decisions)*
+- **The problem.** The release CSP's `style-src 'self'` blocks a `<style>` element or a constructed stylesheet added at runtime, while `just dev-app` (no CSP) shows nothing wrong. sonner 2.0.8 runs `__insertCSS(…)` at import time, appending one to `<head>`. React's `style={…}` props go through the CSS object model, which the CSP allows.
+- **sonner is patched** *(the user's choice over an unpatched sonner, an own toaster or Radix Toast)*: `patches/sonner@2.0.8.patch` (`pnpm patch`, `patchedDependencies` in `pnpm-workspace.yaml`) deletes only the top-level `__insertCSS(…)` call in `dist/index.mjs` and `dist/index.js`. `styles.css` imports `sonner/dist/styles.css` into Tailwind's `components` layer, so the bundle serves it from 'self' and utilities still win. **Every sonner bump redoes the patch and runs the guard below.**
+- **Two guards, red first** *(the user's design)*:
+  - `Toaster.test.tsx` imports sonner afresh, shows a toast and requires no `<style>` in the document. It was red against the unpatched 2.0.8.
+  - **The absolute guard** (`src/test/styleGuard.ts`, run from the setup file's afterEach before Testing Library's cleanup): after every test the document holds no `<style>`, no stylesheet and no adopted stylesheet, whoever added it and when. So a library that injects at import time fails the first test of every file that imports it, and a component that renders one fails too. Its unit test imports a test-only module that injects at import time (red against a no-op guard); a throwaway test showed the global hook failing on it. Vitest processes no CSS here, so nothing had to be turned off.
+- **Checked in the bundle:** `vite build` holds no `createElement("style")` or `insertRule`, and the unused `__insertCSS` function is tree-shaken out.
+
+### Group D: shadcn's components *(the user's choices)*
+- **Six, copied from the registry:** Button, Input, Label, Textarea, Card and Alert, from `https://ui.shadcn.com/r/styles/radix-nova/<name>.json` (what the CLI 4.21.4 reads), never through the CLI, which installs packages of its own choosing (the umbrella, at versions the release age may refuse).
+  - The CLI's own edits are repeated: aliases (none in these six) and `"use client"` dropped, since rsc is false.
+  - Ours: the Radix import above, and Biome's `useImportType` (`import type * as React`), formatting and import order. A lint finding gets a minimal fix, never an ignore comment *(the user's rule)*.
+  - Each file's header names its source, the MIT license and every edit.
+- **Our own:** `FieldMessage` and `PasswordInput` (P8.7), and a `Toaster` over sonner with `theme="light"` and lucide's icons (shadcn's own needs next-themes, whose inline script the CSP would block).
+- **Native checkboxes** *(the user's choice)* instead of shadcn's Checkbox and another Radix package. No shadcn tailwind.css and no tw-animate-css: none of the six uses their variants or animations.
+
+### Group D: the shell (P8.6) *(the user's choices)*
+- **Routes in code** over **a memory history** *(the user's choices over the router plugin's generated file, and over hash or browser history)*: the URL never changes, so a reload or a restart starts at `/`, and nothing depends on how Tauri serves an unknown path. `/` is the launch; `/setup`, `/login` and `/register` are signed out; `/home`, `/server` and the `/admin` screens sit in a signed-in layout.
+- **One runtime per App** (`app/runtime.ts`): the UI stores, the QueryClient, the API client and the router, built once and without side effects, since StrictMode may build it twice. The stores are zustand stores created per App, so tests never share state *(the user's choice of zustand)*.
+- **The QueryClient** *(the user's choice)*: no retries, no refetch on focus or reconnect. `me` is fresh for 60 s *(the user's choice)*, so a role changed by an Admin shows within about a minute of moving between screens; the server profile never goes stale, and the app invalidates it after its own changes.
+- **The launch** *(the user's choice)*:
+  - `serverProfile()`: `none` or `unreadable` → `/setup`.
+  - Then `me()`: Ok → signed in, then Home; `no_session` → login, with no toast.
+  - `unreachable` or `timed_out` → the start screen, waiting while the banner retries.
+  - Anything else → the start screen with describeError's text and **Try again, Server settings and Log out** *(the user's addition: a session the app can't use, like a keychain entry it can't read, must not leave the user stuck)*.
+- **The watched client** *(the user's choice over the caches' `onError` and `meta`, which is kept per query key and never sees direct calls)*: `watched(validated(client))` sees every call's outcome. Each call records the session's generation and the banner's epoch when it starts.
+  - `unreachable`/`timed_out` raise the banner; `certificate` raises its certificate state.
+  - **`no_session`** ends the session only while it's signed in and only for a call of the current generation; the flip happens once. So, as the user required: one navigation, one cache clear and one toast (a fixed id) however many calls fail; nothing at launch, inside the sign-in flow or during and after a deliberate logout; and an answer from before a re-login can't end the new session.
+  - **The end goes to /login first, then empties the cache** *(the user's change)*, so no mounted screen refetches after its data is gone. A logout and a server switch do the same.
+  - **A success takes the banner down** *(the user's choice)*, but only for a call that started after the banner went up *(the user's rule, like the generation)*, and does what a successful check does: it refetches the active queries and re-runs the current route's loader, so no screen stays in its error state.
+- **The banner** *(the user's choices)*: one `checkServer()` every 10 s while down, never two at once, plus "Retry now". A busy (503) or rate-limited (429) check waits its `retry_after_secs`, at least 10 s; any other failure keeps the banner up with its text. A refused certificate gets its own state: no timer, the shared certificate text, "Server settings".
+- **Role-aware navigation** *(the user's choice)*: one table with each item's privilege. Home and Server for everyone; Users and Invites for Admins and the Owner, behind the admin layout's guard, which answers "not found" to anyone else, like the server's 404. A role this app doesn't know gets a Member's privilege. The two admin screens are placeholders until group E.
+- **The error boundary** *(the user's choice)*: a class component around everything, and the router's `defaultErrorComponent`. "Something went wrong in the app." with Try again and Restart (a reload, which starts at the launch). An API error shows describeError's text; any other error only its name, never its message or stack. The error goes to `console.error`.
+- **Logout** *(the user's choices)*: the header's "Log out" sets `logging_out`, then `/login` and the cache. `unconfirmed` adds a warning that the server's session may stay valid until it expires. A rejection (`ipc`, `interrupted`) stays signed in with "Couldn't log out: … Try again."
+- **Home** shows who is signed in, with which role, on which server.
+- **Light theme only** *(the user's choice)*; Plan.md's P11.10 follows Windows' setting later.
+
+### As built (group D, P8.6)
+- **Layout (packages/ui/src):**
+  - `app/`: `runtime`, `stores`, `watched`, `queryClient`, `leave`, `context` (router context, stores provider), `rootRoute`, `router`
+  - `api/queries`: `meQuery`, `serverProfileQuery`, `useMe`, `useServerProfile`
+  - `features/shell/`: `launch`, `guards`, `nav`, `routes`, the hooks `useLogout` and `useServerRetry`, and the components; `features/home`, `features/admin`
+  - `components/ui/` (the copies) and `components/Toaster`; `lib/origin`
+  - `App` builds the runtime once; `AppRoot` renders one (tests pass their own and an `onRestart`).
+- **Tests,** red first against compiling stubs:
+  - the style guard: 3 of 4; sonner's guard against the unpatched package
+  - the stores and the watched client: 23 of 32; the QueryClient's defaults: 1 of 2 (shown against a stub after the module came first)
+  - the shell (launch, session end, header, router, nav, banner, error screen, App): 64 of 67, the 3 that passed being what a stub also does
+  - **the desktop crate:** `a_logout_removes_a_keychain_entry_that_cant_be_read` runs the real `KeychainStore` over keyring-core's mock with non-UTF-8 bytes in the entry: `me()` answers `store`, `logout()` removes the entry, the next login gives a step. It pins existing behaviour (fleet-client's logout clears the store even when its load failed), so it was shown red through a temporary change that skipped the clear after a failed load *(the user's choice)*, then reverted.
+
+  Then all passed. No snapshot is new or changed.
+- **Found while building:** a check that settled before React rendered set `checking` to true and back in one batch, so the effect that waited on it never ran again and the 10 s rhythm stopped. The wait now chains from the end of each check.
+- **Test isolation:** sonner replays every undismissed toast to a newly mounted Toaster, so the setup file dismisses them all after each test.
+
 ### Notes for later groups
 - **P8.6/P8.7 (D), from group C:**
   - Components take the client with `useApiClient()`, and TanStack Query's hooks wrap its methods. A failure is an `ApiError`: build texts on `describeError`, show `invalid_input`'s, `invalid_server_url`'s and `invalid_ca`'s `fields` next to their inputs, and keep the default branch on `api.code`.
@@ -427,6 +489,10 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   - The UI talks to the server through one typed client whose every command, argument and error is generated or pinned. A renamed command or argument fails the contract fixture on both sides, a new error code fails to compile, and a new command fails `just tauri-check` until it's listed, granted and in the fixture.
   - A refresh token can only ever be sent to the server it came from, and a session resumes only under the exact profile it was created with.
   - A broken profile file or keychain never stops the app from starting; the UI is told why.
+- **Easier (group D):**
+  - Every call's outcome is handled in one place, so a screen never re-implements the banner or the session's end, and a session ends exactly once.
+  - A library that injects styles at runtime fails CI before the release build is ever tried.
+  - No npm release younger than 3 days can enter the lockfile, transitive ones included.
 - **Harder:**
   - The refresh and the code step outlive their caller in a task the client spawns, an exception to the task-ownership rule.
   - fleet-client's tests build the whole server (and argon2 at the baseline), so they take a few seconds.
@@ -440,6 +506,8 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   - (Group C) Switching servers always logs out, even when only the CA changed, and a reinstall loses the session.
   - (Group C) Every new command touches build.rs, the capability, the hardening script, the contract fixture, `ApiClient`, `TauriApiClient` and `FakeApiClient`.
   - (Group C) The desktop coverage build instruments every crate through RUSTFLAGS (`--no-rustc-wrapper`), so it's slower than the wrapper's.
+  - (Group D) Every sonner bump redoes its patch. shadcn's components are copied by hand, with their edits repeated.
+  - (Group D) A package younger than 3 days can't be installed without an approved exclude, and the first install after the rule failed on group B's and C's own entries for a few hours.
 
 ## Alternatives considered
 - **Client-side request structs:** a second definition of every request.
@@ -472,4 +540,8 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
 - **(Group C) Refusing a profile change while logged in:** a check-then-swap race and a new fleet-client API. **Resuming a stored token after a reinstall or a broken file:** a session under certificates that can't be compared. **A shared keychain entry for every server:** a token one race away from another server. **Roaming or Enterprise persistence:** the token on other machines. **The raw pasted PEM, or base64 DER in the file:** the user's text stored as is, or a second parser.
 - **(Group C) Plain `spawn_blocking` for the keychain, or a std mutex inside it:** a timed-out save could land after the clear that followed it (the test proved it). **A dedicated keychain thread:** one more long-lived thread with its own shutdown.
 - **(Group C) Unit tests only, or a stub HTTP server, for the commands:** the switch rules untested, or a hand-written server that drifts. **Gitignoring the generated permissions:** a stale grant would stay local and unseen. **The default rustc wrapper for coverage:** the in-crate tests would count 0 % on Windows.
+- **(Group D) sonner unpatched:** a CSP violation at every start, and its styles applied only through our import. **An own toaster or Radix Toast:** code we'd maintain instead of a two-line patch.
+- **(Group D) The router plugin's generated route tree:** a dev dependency and a generated file for a dozen routes. **Hash or browser history:** a reload would resume a screen whose state lives only in memory, and browser history depends on Tauri's fallback for unknown paths.
+- **(Group D) The caches' `onError` with `meta` for the global handling:** `meta` stays with a query's key, and direct calls never reach the caches. **A style guard relative to a baseline:** an import-time injection would be the baseline.
+- **(Group D) The `radix-ui` umbrella or the shadcn CLI:** 55 primitives for two, and packages the CLI picks itself. **TanStack Query's default retries:** an unreachable server would take over a minute to show.
 - **(Group C) A stateful fake server for the UI's tests:** the server's rules re-implemented. **zod inside TauriApiClient only:** fakes would skip the checks. **Tauri's `mockIPC`:** an import the rule would need to allow. **Review only for the import rules:** an event or window API could slip in unnoticed.

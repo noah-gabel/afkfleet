@@ -1,23 +1,41 @@
-import { useMemo } from "react";
+import { QueryClientProvider } from "@tanstack/react-query";
+import { RouterProvider } from "@tanstack/react-router";
+import { useState } from "react";
 
 import type { ApiClient } from "./api/ApiClient";
 import { ApiClientProvider } from "./api/context";
-import { validated } from "./api/validated";
+import { StoresProvider } from "./app/context";
+import { type AppRuntime, createAppRuntime } from "./app/runtime";
+import { Toaster } from "./components/Toaster";
+import { AppErrorBoundary } from "./features/shell/components/AppErrorBoundary";
 
 /**
  * The app's root component. It takes the platform's API client (the desktop app's
- * `TauriApiClient`, a test's `FakeApiClient`) and provides it, behind the zod checks of
- * every input, to everything below. For now it only names the app; the routes arrive with
- * P8.6.
+ * `TauriApiClient`, a test's `FakeApiClient`) and builds the app around it once: the zod
+ * checks of every input, the watch over every call's outcome, the query cache, the UI
+ * stores and the router (app/runtime.ts). A later `apiClient` is ignored.
  */
 export function App({ apiClient }: { apiClient: ApiClient }) {
-  const client = useMemo(() => validated(apiClient), [apiClient]);
+  const [runtime] = useState(() => createAppRuntime(apiClient));
+  return <AppRoot runtime={runtime} />;
+}
+
+/**
+ * The app over an existing runtime: the error boundary around everything, the providers,
+ * the router and the toasts. Tests render it to reach the runtime; `onRestart` replaces
+ * the error screen's reload.
+ */
+export function AppRoot({ runtime, onRestart }: { runtime: AppRuntime; onRestart?: () => void }) {
   return (
-    <ApiClientProvider client={client}>
-      <main className="flex min-h-screen flex-col items-center justify-center gap-2 bg-background p-8 text-foreground">
-        <h1 className="text-3xl font-semibold tracking-tight">afkfleet</h1>
-        <p className="text-muted-foreground">The desktop app is being set up.</p>
-      </main>
-    </ApiClientProvider>
+    <AppErrorBoundary {...(onRestart === undefined ? {} : { onRestart })}>
+      <ApiClientProvider client={runtime.apiClient}>
+        <QueryClientProvider client={runtime.queryClient}>
+          <StoresProvider stores={runtime.stores}>
+            <RouterProvider router={runtime.router} />
+            <Toaster />
+          </StoresProvider>
+        </QueryClientProvider>
+      </ApiClientProvider>
+    </AppErrorBoundary>
   );
 }

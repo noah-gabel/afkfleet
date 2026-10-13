@@ -1,0 +1,89 @@
+// The one place every API call's outcome is seen (Plan.md P8.6, ADR-0017): queries,
+// mutations and AuthFlow's direct calls all go through `watched(client)`, which App puts
+// behind the input checks. Each call records, when it starts, the session's generation and
+// the banner's epoch (stores.ts), then:
+// - `unreachable` and `timed_out` put the banner up, `certificate` its certificate state;
+// - `no_session` ends the session, but only through `endIfSignedIn`, so once per end, never
+//   at launch, inside AuthFlow or during a logout, and never for a call from before a
+//   re-login;
+// - a success takes the banner down if the call started after it went up, which then does
+//   what a successful check does (`recovered`).
+// The error is rethrown as it came, as an `ApiError`.
+import type { ApiClient } from "../api/ApiClient";
+import { type ApiError, toApiError } from "../api/ApiError";
+import type { AppStores } from "./stores";
+
+/** What the runtime does when the watched client sees these. */
+export interface WatchEvents {
+  /** The session ended during use (once per end). */
+  sessionEnded(): void;
+  /** The banner went down: refetch what failed. */
+  recovered(): void;
+}
+
+/** `client`, with every call's outcome handled; see the module comment. */
+export function watched(client: ApiClient, stores: AppStores, events: WatchEvents): ApiClient {
+  /** `call`, watched. */
+  function watch<A extends unknown[], R>(call: (...args: A) => Promise<R>) {
+    return async (...args: A): Promise<R> => {
+      const generation = stores.session.getState().generation;
+      const epoch = stores.connection.getState().epoch;
+      let value: R;
+      try {
+        value = await call(...args);
+      } catch (rejection) {
+        const error = toApiError(rejection);
+        failed(error, generation);
+        throw error;
+      }
+      if (stores.connection.getState().recover(epoch)) {
+        events.recovered();
+      }
+      return value;
+    };
+  }
+
+  /** What a failure of a call that started in `generation` changes. */
+  function failed(error: ApiError, generation: number): void {
+    switch (error.error.code) {
+      case "unreachable":
+      case "timed_out":
+        stores.connection.getState().fail("down");
+        return;
+      case "certificate":
+        stores.connection.getState().fail("certificate");
+        return;
+      case "no_session":
+        if (stores.session.getState().endIfSignedIn(generation)) {
+          events.sessionEnded();
+        }
+        return;
+      default:
+        // Every other failure is the caller's to show.
+        return;
+    }
+  }
+
+  return {
+    serverProfile: watch(() => client.serverProfile()),
+    setServerProfile: watch((request) => client.setServerProfile(request)),
+    checkServer: watch(() => client.checkServer()),
+    login: watch((request) => client.login(request)),
+    loginMfa: watch((code) => client.loginMfa(code)),
+    logout: watch(() => client.logout()),
+    register: watch((request) => client.register(request)),
+    stepUp: watch((request) => client.stepUp(request)),
+    mfaEnroll: watch(() => client.mfaEnroll()),
+    mfaConfirm: watch((code) => client.mfaConfirm(code)),
+    mfaReset: watch(() => client.mfaReset()),
+    me: watch(() => client.me()),
+    changePassword: watch((request) => client.changePassword(request)),
+    sessions: watch((before, limit) => client.sessions(before, limit)),
+    revokeSession: watch((id) => client.revokeSession(id)),
+    users: watch((before, limit) => client.users(before, limit)),
+    patchUser: watch((id, request) => client.patchUser(id, request)),
+    invites: watch((before, limit) => client.invites(before, limit)),
+    createInvite: watch((request) => client.createInvite(request)),
+    revokeInvite: watch((id) => client.revokeInvite(id)),
+  };
+}
