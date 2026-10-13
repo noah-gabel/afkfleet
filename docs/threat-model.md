@@ -3,6 +3,7 @@
 > **Status: skeleton (P0.13).** Based on Plan.md §7.1. It gets expanded as the components are built:
 > - the Minecraft servers (B4) in **P3** (done)
 > - authentication and authorization in **P7** (done)
+> - the desktop app (B2, B7) in **P8** (done)
 > - the vault and Microsoft accounts in **P9**
 > - the control plane in **P10**
 >
@@ -58,7 +59,7 @@ Ranked by impact if compromised:
 | Threat | Mitigation | Verified by |
 |---|---|---|
 | Brute force / credential stuffing | Argon2id; per-IP and per-account throttling; lockout with exponential delay; mandatory 2FA for every user; invite-only registration | `the_fifth_wrong_password_locks_the_name_and_the_right_one_waits`, `wrong_codes_count_toward_the_lockout`, `the_sixth_login_step_in_a_minute_from_one_address_is_429`, `an_invite_registers_once_and_its_reuse_is_refused_and_recorded`; B1 below |
-| Token theft | Short-lived opaque access tokens; refresh-token rotation with reuse detection that revokes the whole family; tokens hashed at rest; refresh token only in the OS keychain, never in JS or localStorage (ADR-0006, ADR-0007) | `reusing_a_replaced_refresh_token_revokes_the_whole_session`, `an_access_token_counts_until_its_last_millisecond`, `a_minted_tokens_hash_is_the_hash_of_its_text`; P8.4 (planned) |
+| Token theft | Short-lived opaque access tokens; refresh-token rotation with reuse detection that revokes the whole family; tokens hashed at rest; refresh token only in the OS keychain, never in JS or localStorage (ADR-0006, ADR-0007) | `reusing_a_replaced_refresh_token_revokes_the_whole_session`, `an_access_token_counts_until_its_last_millisecond`, `a_minted_tokens_hash_is_the_hash_of_its_text`, `no_answer_of_a_whole_session_holds_a_token`, `a_first_login_sets_up_2fa_and_starts_a_session_whose_token_only_the_keychain_holds`; B2 below |
 | Privilege escalation by a friend | One pure `authorize()` for every route, deny by default; per-account grants, never to oneself; Admins can't touch the Owner or other Admins; only the Owner changes roles and enrolls agents; authorization-matrix test; route-coverage test; audit log | `authorization_matrix`, `every_route_that_needs_credentials_answers_401_without_them`, `a_member_cant_make_themselves_an_admin`, `an_admin_cant_change_the_owner`; P13.1 (planned) |
 | Bot abuse (`/op`, `/pay`, …) | Slash commands need **Manage**, or must be on the allowlist (compared exactly and case-sensitively), also inside modes; per-bot and per-user chat rate limits; every sent message is audited | P2.9, P11.3 |
 | Database or backup leak | MS tokens and TOTP secrets encrypted with XChaCha20-Poly1305, bound to their record by AAD; key stored outside the DB and backups; passwords hashed with Argon2id; session tokens stored as SHA-256 | `the_plaintext_never_appears_in_the_envelope`, `another_record_is_rejected`, `a_minted_tokens_hash_is_the_hash_of_its_text`; P9.2, P12.3 (planned) |
@@ -130,7 +131,60 @@ To be written per boundary (STRIDE: spoofing, tampering, repudiation, informatio
 | fleet-api-types | The DTOs, `SecretText`, `Timestamp`, the TypeScript export | Shared by the server, `fleet-client` and the app; the OpenAPI document and the TypeScript can't drift |
 
 ### Desktop app (B2, B7)
-*To be expanded in P8.*
+*Expanded in P8 (ADR-0007, ADR-0017).*
+
+**What crosses B2, the webview and the app's Rust side.** The UI calls the 20 commands its one capability grants, and nothing else: no core command and no plugin API, and `withGlobalTauri` is off.
+- **Into Rust:**
+  - the server's address and a custom CA's certificates
+  - usernames, passwords (login, registration, step-up, a new password), 2FA and recovery codes, invite codes
+  - IDs and page cursors
+- **Back to the UI:**
+  - profiles, users, invites and sessions
+  - the 2FA setup's secret, its QR code and the recovery codes, once each
+  - a new invite's code, once
+  - errors: a closed code with a fixed message and the server's details
+- **Never a token.** fleet-client keeps the access token and the login's step tokens in memory, and the refresh token lives in the Windows Credential Manager.
+- **Secrets in the UI** live only in the state of the screen that needs them, never in TanStack Query's caches, and go when the screen does.
+
+**What sits on B7, the user's PC:**
+- the refresh token, a generic credential in the Windows Credential Manager, one per server origin (`<origin>.io.github.noah-gabel.afkfleet`), stored with Local persistence (this PC only, never roaming)
+- `server-profile.json` in `%LOCALAPPDATA%\io.github.noah-gabel.afkfleet\`: the origin and a custom CA's certificates, no secret
+- the exe and WebView2's profile
+
+**What an attacker controls:**
+- a page the webview might load: it loads only the app's own bundle (the CSP names no remote origin, and the navigation guard refuses every other URL)
+- a compromised npm package inside that bundle
+- a hostile server's answers, which are rendered as text
+- on B7, the PC itself: whoever uses the unlocked Windows account, or malware running as that user
+
+| STRIDE | Threat | Mitigation | Verified by |
+|---|---|---|---|
+| Spoofing | A page or script that isn't the app calling the commands | The CSP (`default-src 'self'`, no remote origin, no `unsafe-eval`); a navigation guard that allows only the app's own origin; no global Tauri API; an ACL that refuses every command no capability grants, and every core command. `just tauri-check` pins the settings | `an_app_command_no_capability_grants_is_refused_by_the_acl`, `a_core_command_is_refused_since_no_core_permission_is_granted`, `navigation::everything_else_is_refused` |
+| Spoofing | Another server receiving a session's token | The refresh token is stored per origin and resumes only under the identical profile. A switch logs out of the old server first. Plain http goes only to a loopback address. Certificates are always checked, against the system's roots or only the configured CA, and redirects are never followed | `a_token_stored_for_one_origin_is_never_used_by_a_client_of_another`, `another_origin_never_sees_the_token`, `switching_logs_out_of_the_old_server_and_leaves_no_token_for_it`, `url::anything_else_is_refused_without_repeating_it`, `another_ca_is_refused`, `the_system_roots_refuse_a_private_ca`, `a_profile_with_a_ca_trusts_only_that_ca`, `transport::a_redirect_is_never_followed` |
+| Tampering | Commands with arguments the Rust side doesn't expect | Every argument deserializes into the shared types, or the command is refused before it runs. Each request is checked with garde before any call; the UI checks it with zod first, and the server checks again | `a_command_with_an_unknown_argument_shape_is_refused_before_it_runs`, `every_contract_command_passes_the_acl_and_answers_as_the_contract_says` |
+| Tampering | Injected styles or evaluated code: a foothold for script injection, or a library that does it | `style-src 'self'`, no `unsafe-eval` and a frozen `Object.prototype`. React escapes text, and Biome refuses `dangerouslySetInnerHTML`. The QR code is shown only as an `<img>` data URI. Every Vitest test ends with a check that the document holds no `<style>` (`packages/ui/src/test/styleGuard.ts`). Every Playwright spec runs under the release CSP in Edge and fails on any violation, console error or injected style (`apps/desktop/e2e/fixtures.ts`) | P8.3, P8.6, P8.9 |
+| Information disclosure | A token reaching JavaScript, where injected script or a devtools user could read it | No command takes or returns a token. fleet-client holds the access token and the step tokens, and the keychain the refresh token. Devtools exist only in debug builds | `no_answer_of_a_whole_session_holds_a_token`, `a_first_login_sets_up_2fa_and_starts_a_session_whose_token_only_the_keychain_holds` |
+| Information disclosure | Secrets kept in the UI's caches after their screen is gone | Every call whose request or answer carries a secret is a direct call, never a query or mutation. The cache tests run each flow and find no password, TOTP secret, QR code, recovery code or invite code in the QueryClient | P8.7, P8.8: the Vitest cache tests of the sign-in, profile and admin screens |
+| Denial of service | A broken profile file or keychain entry locking the user out | A file that can't be used starts the app without a profile, which asks for the server again. A keychain entry that can't be read is removed at logout | `a_saved_profile_whose_store_cant_be_built_is_unreadable_client`, `a_logout_removes_a_keychain_entry_that_cant_be_read` |
+| Elevation of privilege | The UI offering an action the user's role doesn't allow | The server decides every write with `authorize()`. The UI's mirror only hides what the server would refuse, and its test reads fleet-core's authorization matrix itself (`packages/ui/src/features/admin/permissions.test.ts`) | `authorization_matrix` |
+
+**A stolen or shared PC with a live session (B7).** The app keeps the user signed in, so whoever opens it on the user's unlocked Windows account is that user, without a password.
+- **What it gives:**
+  - everything that needs no password: the user's profile and sessions, and for an Admin the user and invite lists
+  - ending the user's other sessions, and logging out
+  - from Phase 9 on, the bots and accounts the user may use, unless that phase puts them behind a step-up (its Plan note)
+- **What it no longer gives:** changing the password, replacing the authenticator, and every admin write need the password within the last 5 minutes. The admin writes are a role change, disabling or enabling a user, and creating or revoking an invite; they need it since Phase 8, group E. Guessing the password at the step-up counts toward the username's lockout, which then locks the login too.
+- **Malware running as the user can read the refresh token,** as any process of that Windows account can read its generic credentials, and use it elsewhere. Rotation limits that: the first refresh on either side replaces the token, and the other side's next refresh is reuse, which ends the whole session. The real user is logged out, which they notice.
+- **The remedies:**
+  - from another PC, the session list: sessions can't be told apart, so "Log out all other sessions" ends them all, every page included
+  - changing the password or replacing the authenticator, either of which ends every other session
+  - an Admin disabling the user, which ends every session
+  - a session ends 7 days after its last use and 30 days after its login at the latest
+
+| STRIDE | Threat | Mitigation | Verified by |
+|---|---|---|---|
+| Spoofing | Someone at the user's unlocked PC acting as them | A step-up for every sensitive action. The session list with "Log out all other sessions", a password change or a 2FA replacement, and an Admin disabling the user. The session's idle and absolute end | `a_user_change_without_a_fresh_step_up_is_refused_and_changes_nothing`, `creating_an_invite_needs_a_fresh_step_up`, `revoking_an_invite_needs_a_fresh_step_up`, `a_change_needs_a_fresh_step_up`, `wrong_step_up_passwords_lock_the_name_for_login_too`, `a_stepped_up_user_changes_their_password_and_every_other_session_ends`, `an_admin_disables_a_member_who_is_refused_from_then_on`, `a_session_idle_for_seven_days_cant_refresh` |
+| Information disclosure | Malware running as the user reading the refresh token | The token sits in the Credential Manager with Local persistence, one per origin. Rotation with reuse detection ends the session at the next refresh of either copy | `reusing_a_replaced_refresh_token_revokes_the_whole_session`, `a_lost_refresh_answer_is_reuse_and_ends_the_whole_session` |
 
 ### Vault and Microsoft accounts (B5, B6)
 *To be expanded in P9.*
@@ -155,7 +209,7 @@ A Minecraft server never receives the Minecraft token, and an agent never holds 
 |---|---|---|---|
 | Spoofing | An impostor server, through DNS or the network path | The token goes only to Mojang over TLS, and Mojang binds the join to the server's key, so an impostor can't pass the login on. The rest is an accepted risk (below) | `fleet-mc` `online::slow_online_mode_scenario`; the user's `real_account::manual_real_account_scenario` |
 | Spoofing | Forged chat senders: system text naming a player, or a sender the server made up | Senders come only from player and disguised packets, and system chat never gets one. No permission or trigger decision relies on a sender (accepted risk, below) | `map::system_chat_has_no_sender_even_when_its_text_names_one`, `incoming::a_spoofed_sender_in_system_text_stays_text` |
-| Tampering | Chat or kick text with control characters, format codes, bidi controls or newlines, aimed at logs and the UI | The core sanitizer strips them and caps the length. Text is stored and rendered as plain text, and chat is logged only at `debug`, as a structured `?` field | P2.3 (`incoming::received_chat_is_always_clean`), `disconnect::kick_messages_are_sanitized_and_capped`, `map::chat_text_and_sender_are_sanitized`; P8.3 (planned), P11.9 (planned) |
+| Tampering | Chat or kick text with control characters, format codes, bidi controls or newlines, aimed at logs and the UI | The core sanitizer strips them and caps the length. Text is stored and rendered as plain text, and chat is logged only at `debug`, as a structured `?` field | P2.3 (`incoming::received_chat_is_always_clean`), `disconnect::kick_messages_are_sanitized_and_capped`, `map::chat_text_and_sender_are_sanitized`; P8.3 (the CSP; B2 above), P11.9 (planned) |
 | Tampering | A dependency's panic message that carries server text into the agent's log | The panic hook sanitizes the payload like chat (control, format, bidi and invisible characters), turns line breaks into ` \| ` and caps it at 1024 characters | `text::tests::untrusted_text_becomes_one_capped_line`, the agent's `panic::tests::payloads_become_one_clean_line` and `tests/panic_hook.rs` |
 | Tampering | A kick text that pretends to be a ban or a duplicate login | Kicks are classified by translation key, never by text, and a kick without a known key is transient. Per-server conflict texts are opt-in (P4.1, planned; accepted risk below) | P2.4 (`disconnect::classifies_kicks_by_key`, `kicks_without_a_known_key_are_transient`), `map::nested_args_keep_a_ban_permanent` |
 | Repudiation | What a bot said on a server | Every message a bot sends is audited. An online account signs its chat, so what it says is attributable to the player, as with any client | P11.3 (planned); signed chat in the user's real-account check |
@@ -176,7 +230,9 @@ A Minecraft server never receives the Minecraft token, and an agent never holds 
 - **Keeping an account locked.** The lockout lets anyone who knows a username keep it locked by failing once per lock: one failure an hour once the lock reached its cap. The user's existing sessions keep working, and an unknown name locks exactly like a real one, so the lock tells nothing about which names exist (ADR-0016).
 - **Stale hashes after an `argon2_*` change.** A user who doesn't log in keeps a hash made with the old parameters, so a login for that name takes a different time than the dummy hash, and the name stays distinguishable until they log in once (their hash is re-hashed then).
 - **Guessing 2FA codes with the password.** At the default threshold of 5, about 33 wrong codes a day get through (5 free, then locks of 1, 2, 4, 8, 16 and 32 minutes, then one an hour). Each guess matches one of about 3 in 10^6 codes (the window's three steps), so about 1e-4 a day and 3.5 % a year for an attacker who has the password and never stops, while the real user stays locked out nearly all the time. `GET /me` counts the wrong codes since the previous login, without the typos of the login that succeeded (Phase 8, group E), and the app warns about them on Home and in the profile, so the user sees the attempts (ADR-0016).
-- **An account without 2FA.** An invitee who registers and never finishes the 2FA setup leaves an account that whoever first logs in with its password enrolls. The app logs in and starts the setup right after registering (P8), and Admins see `mfa_enrolled` in the user list and can disable such an account.
+- **An account without 2FA.** An invitee who registers and never finishes the 2FA setup leaves an account that whoever first logs in with its password enrolls. The app logs in and starts the setup right after registering (P8.7), and the Users screen shows such an account's 2FA as "Not set up", with a hint to disable it (P8.8).
+- **No app lock.** The app asks for nothing when it starts: a session in the Credential Manager signs the user in (B7 above). The Windows account's own lock and disk encryption protect the PC, and an Owner's or Admin's PC deserves both. Every sensitive action needs the password again (a step-up).
+- **A secret on the clipboard.** "Copy all" (recovery codes) and an invite's copy buttons put a secret on the clipboard, where Windows' clipboard history may keep it; their toasts say so, and the text is also on screen to copy by hand.
 - **Displacing a login.** Someone with a user's password can replace the user's live login challenge with a password step of their own, the same class as keeping an account locked.
 - **Names an invitee can probe.** Whoever holds a usable invite learns, through registration's "is taken", which usernames exist; the register limit (5 an hour per address) bounds it, and the invite isn't spent by a taken name.
 - **Session tokens outlive server outages.** A Minecraft session token lives about 24 h. If the server is unreachable for longer, a bot that disconnects can't rejoin until it's back (Plan.md §6).
