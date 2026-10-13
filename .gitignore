@@ -17,4 +17,8 @@ secrets/
 # Frontend builds (`vite build`), and tauri-build's generated schemas
 apps/desktop/dist/
 packages/ui/dist/
+# The e2e build and Playwright's output (Plan.md P8.9)
+apps/desktop/dist-e2e/
+apps/desktop/test-results/
+apps/desktop/playwright-report/
 apps/desktop/src-tauri/gen/

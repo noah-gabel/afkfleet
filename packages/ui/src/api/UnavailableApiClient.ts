@@ -1,6 +1,6 @@
-// The API client of the UI's own web entry (src/main.tsx), until P8.9 decides what its
-// Playwright build uses: it has no server connection, so every call rejects with `ipc`.
-// No test code ships in that bundle.
+// The API client of the UI's own web entry (src/main.tsx): it has no server connection, so
+// every call rejects with `ipc`. No test code ships in that bundle; the e2e build lives in
+// apps/desktop/e2e (P8.9).
 import type { ApiClient } from "./ApiClient";
 import { ApiError } from "./ApiError";
 

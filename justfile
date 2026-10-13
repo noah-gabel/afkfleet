@@ -28,11 +28,11 @@ sqlx_db := "sqlite:" + justfile_directory() / "target" / "sqlx-prepare.db"
 default:
     @just --list
 
-# Formatting, lints, docs, tests and frontend checks: run before a task is done.
-check: fmt-check clippy docs test doctest db-check gen-check testkit-check tauri-check scripts-test ui-check
+# Formatting, lints, docs, tests, frontend checks and the e2e suite: run before a task is done.
+check: fmt-check clippy docs test doctest db-check gen-check testkit-check tauri-check scripts-test ui-check e2e
 
 # Everything CI runs.
-ci: fmt-check clippy docs test-ci db-check migrations-check gen-check testkit-check tauri-check scripts-test cov cov-desktop deny stable-check ui-check ui-audit
+ci: fmt-check clippy docs test-ci db-check migrations-check gen-check testkit-check tauri-check scripts-test cov cov-desktop deny stable-check ui-check ui-audit e2e
 
 # Run nextest for the workspace, or for one crate: `just test fleet-core`.
 test crate="":
@@ -199,8 +199,18 @@ icons:
 ui-test:
     pnpm -r --if-present run test
 
-# End-to-end tests (Playwright).
-e2e: (_unavailable "e2e" "P8.9")
+# The shipped bundles are built as they ship (the desktop app's frontend, packages/ui's web
+# entry) into target/e2e/, then the e2e bundle; the guard checks the e2e build reached
+# neither (scripts/e2e-bundle-guard.mjs), then Playwright runs the specs in the installed
+# Edge against `vite preview` of the e2e bundle, under the release CSP (Plan.md P8.9,
+# ADR-0017). Edge must be installed; nothing is downloaded.
+# End-to-end tests (Playwright, Edge) against the e2e build.
+e2e:
+    pnpm --filter @afkfleet/desktop exec vite build --outDir ../../target/e2e/shipped-desktop --emptyOutDir
+    pnpm --filter @afkfleet/ui exec vite build --outDir ../../target/e2e/shipped-ui --emptyOutDir
+    pnpm --filter @afkfleet/desktop run e2e:build
+    node scripts/e2e-bundle-guard.mjs
+    pnpm --filter @afkfleet/desktop exec playwright test
 
 # --- Building blocks of `check` and `ci` (CI runs them as separate jobs) ---
 
@@ -262,6 +272,3 @@ ui-check:
 ui-audit:
     pnpm audit
 
-_unavailable recipe phase:
-    @echo "just {{ recipe }} is available from {{ phase }}."
-    @exit 1
