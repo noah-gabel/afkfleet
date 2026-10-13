@@ -6,6 +6,7 @@ import { fakeApiError } from "../../api/FakeApiClient";
 import { SESSION_ENDED } from "../../app/leave";
 import { me } from "../../test/fixtures";
 import { fakeTime } from "../../test/renderApp";
+import { expectWait, limited } from "../../test/retryWait";
 import {
   atLogin,
   CODES,
@@ -47,16 +48,38 @@ describe("logging in", () => {
     expect(app.fake.calls.map((call) => call.method)).not.toContain("login");
   });
 
-  it("shows the server's refusal and its wait", async () => {
-    const app = await atLogin({
-      login: async () => {
-        throw refusal(429, "rate_limited", { retry_after_secs: 30 });
+  it("counts a refusal's wait down with Log in disabled, then says to try again", async () => {
+    const time = fakeTime();
+    const app = await atLogin(
+      {
+        login: async () => {
+          throw limited();
+        },
       },
-    });
+      time.advanceTimers,
+    );
 
     await logIn(app);
 
-    expect(await screen.findByText("refused: rate_limited Try again in 30 s.")).toBeDefined();
+    await expectWait(app, time, { button: "Log in", method: "login" });
+  });
+
+  it("counts a refusal's wait down at the code step with Verify disabled", async () => {
+    const time = fakeTime();
+    const app = await atLogin(
+      {
+        login: async () => MFA,
+        loginMfa: async () => {
+          throw limited();
+        },
+      },
+      time.advanceTimers,
+    );
+    await logIn(app);
+
+    await enterCode(app, "123456");
+
+    await expectWait(app, time, { button: "Verify", method: "loginMfa" });
   });
 
   it("logs in with a code, without its spaces, and opens Home in a new sign-in", async () => {
@@ -357,6 +380,7 @@ describe("the first login's 2FA setup", () => {
   });
 
   it("goes back to the password step when the login after the codes fails", async () => {
+    const time = fakeTime();
     let logins = 0;
     const app = await atLogin(
       setupHandlers({
@@ -365,9 +389,10 @@ describe("the first login's 2FA setup", () => {
           if (logins === 1) {
             return SETUP;
           }
-          throw refusal(429, "rate_limited", { retry_after_secs: 20 });
+          throw limited();
         },
       }),
+      time.advanceTimers,
     );
     await logIn(app);
     await enterCode(app, "654321");
@@ -376,9 +401,26 @@ describe("the first login's 2FA setup", () => {
     await app.user.click(screen.getByRole("button", { name: "Continue" }));
 
     expect(await screen.findByText(SETUP_DONE)).toBeDefined();
-    expect(screen.getByText("refused: rate_limited Try again in 20 s.")).toBeDefined();
     expect((screen.getByLabelText("Username") as HTMLInputElement).value).toBe("afkbot1");
     expect((screen.getByLabelText("Password") as HTMLInputElement).value).toBe("");
+    await expectWait(app, time, { button: "Log in", method: "login" });
+  });
+
+  it("counts a refusal's wait down at the setup step with Confirm disabled", async () => {
+    const time = fakeTime();
+    const app = await atLogin(
+      setupHandlers({
+        mfaConfirm: async () => {
+          throw limited();
+        },
+      }),
+      time.advanceTimers,
+    );
+    await logIn(app);
+
+    await enterCode(app, "654321");
+
+    await expectWait(app, time, { button: "Confirm", method: "mfaConfirm" });
   });
 });
 

@@ -1,5 +1,5 @@
 import { screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../../api/ApiClient";
 import type { MeResponse } from "../../generated/MeResponse";
@@ -8,6 +8,8 @@ import type { UserResponse } from "../../generated/UserResponse";
 import type { UserRole } from "../../generated/UserRole";
 import { formatTime } from "../../lib/time";
 import { me } from "../../test/fixtures";
+import { fakeTime } from "../../test/renderApp";
+import { expectWait, limited } from "../../test/retryWait";
 import { atScreen } from "../../test/signedIn";
 import { cacheText, PASSWORD, refusal } from "../../test/signIn";
 
@@ -49,7 +51,12 @@ function actor(role: UserRole = "owner", username = "afkowner"): MeResponse {
  * user, after a step-up when `stepUpFirst` (the server's stamp, held for the test).
  */
 async function atUsers(
-  options: { me?: MeResponse; stepUpFirst?: boolean; handlers?: Partial<ApiClient> } = {},
+  options: {
+    me?: MeResponse;
+    stepUpFirst?: boolean;
+    handlers?: Partial<ApiClient>;
+    advanceTimers?: (ms: number) => unknown;
+  } = {},
 ) {
   let users = [...ALL];
   let stamped = options.stepUpFirst !== true;
@@ -76,7 +83,10 @@ async function atUsers(
       },
       ...options.handlers,
     },
-    { user: options.me ?? actor() },
+    {
+      user: options.me ?? actor(),
+      ...(options.advanceTimers === undefined ? {} : { advanceTimers: options.advanceTimers }),
+    },
   );
   await screen.findByRole("table", { name: "Users" });
   return app;
@@ -237,6 +247,10 @@ describe("the users screen", () => {
 });
 
 describe("a change that needs a step-up", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it("asks for the password at the row, then sends the change once more", async () => {
     const app = await atUsers({ stepUpFirst: true });
 
@@ -300,6 +314,25 @@ describe("a change that needs a step-up", () => {
     expect(await screen.findByText(/refused: step_up_required/)).toBeDefined();
     expect(screen.queryByLabelText("Current password")).toBeNull();
     expect(patches(app)).toHaveLength(2);
+  });
+
+  it("counts a refusal's wait down at the prompt with Continue disabled", async () => {
+    const time = fakeTime();
+    const app = await atUsers({
+      stepUpFirst: true,
+      advanceTimers: time.advanceTimers,
+      handlers: {
+        stepUp: async () => {
+          throw limited();
+        },
+      },
+    });
+    await app.user.click(row("afkbot4").getByRole("button", { name: "Enable" }));
+    await app.user.type(await screen.findByLabelText("Current password"), PASSWORD);
+
+    await app.user.click(screen.getByRole("button", { name: "Continue" }));
+
+    await expectWait(app, time, { button: "Continue", method: "stepUp" });
   });
 
   it("sends nothing more when the prompt is cancelled", async () => {

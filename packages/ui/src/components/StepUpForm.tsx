@@ -3,7 +3,8 @@
 // server answers `step_up_required`. The password lives only in this form, which empties its
 // field after every answer, and goes to `onConfirm`, a direct call (never a query or a
 // mutation, CLAUDE.md). A wrong one is the server's 403 `forbidden`; it counts toward the
-// lockout like a wrong login.
+// lockout like a wrong login. A 429's wait (the Login bucket, or a locked name) counts down,
+// Continue waiting with it (useRetryWait).
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
@@ -12,10 +13,12 @@ import { toApiError } from "../api/ApiError";
 import { describeError } from "../api/describeError";
 import { password } from "../api/schemas";
 import { z } from "../api/zod";
+import { useRetryWait } from "../hooks/useRetryWait";
 import { showFieldErrors } from "../lib/formErrors";
 import { isWrongPassword, WRONG_PASSWORD } from "../lib/stepUp";
 import { FormField } from "./FormField";
 import { PasswordInput } from "./PasswordInput";
+import { RetryWaitMessage } from "./RetryWaitMessage";
 import { Button } from "./ui/button";
 
 /** The form: a password that isn't blank, within the server's limit. */
@@ -47,15 +50,23 @@ export function StepUpForm({
     defaultValues: { password: "" },
   });
   const [formError, setFormError] = useState<string>();
+  const wait = useRetryWait();
 
   const submit = form.handleSubmit(async (values) => {
+    if (wait.waiting !== null) {
+      return;
+    }
     setFormError(undefined);
+    wait.reset();
     try {
       await onConfirm(values.password);
       form.reset({ password: "" });
     } catch (rejection) {
       const error = toApiError(rejection).error;
       form.reset({ password: "" });
+      if (wait.start(error)) {
+        return;
+      }
       if (isWrongPassword(error)) {
         setFormError(WRONG_PASSWORD);
       } else if (!showFieldErrors(form.setError, error, { password: "password" })) {
@@ -81,8 +92,12 @@ export function StepUpForm({
           {formError}
         </p>
       )}
+      <RetryWaitMessage wait={wait} />
       <div className="flex gap-2">
-        <Button type="submit" disabled={pending || form.formState.isSubmitting}>
+        <Button
+          type="submit"
+          disabled={pending || form.formState.isSubmitting || wait.waiting !== null}
+        >
           Continue
         </Button>
         <Button type="button" variant="outline" disabled={pending} onClick={onCancel}>

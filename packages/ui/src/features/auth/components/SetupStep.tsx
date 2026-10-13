@@ -12,8 +12,10 @@ import { useForm } from "react-hook-form";
 import { toApiError } from "../../../api/ApiError";
 import { describeError } from "../../../api/describeError";
 import { FormField } from "../../../components/FormField";
+import { RetryWaitMessage } from "../../../components/RetryWaitMessage";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
+import { useRetryWait } from "../../../hooks/useRetryWait";
 import { showFieldErrors } from "../../../lib/formErrors";
 import type { SetupState } from "../authFlowReducer";
 import { endsIn, useDeadline } from "../hooks/useDeadline";
@@ -69,11 +71,16 @@ export function SetupStep({
     defaultValues: { code: "" },
   });
   const [formError, setFormError] = useState<string>();
+  const wait = useRetryWait();
   const errors = form.formState.errors;
   const enrollment = step.loading ? undefined : step.enrollment;
 
   const submit = form.handleSubmit(async (values) => {
+    if (wait.waiting !== null) {
+      return;
+    }
     setFormError(undefined);
+    wait.reset();
     if (Date.now() >= step.deadline) {
       onExpire();
       return;
@@ -82,6 +89,9 @@ export function SetupStep({
       await onConfirm(withoutSpaces(values.code));
     } catch (rejection) {
       const error = toApiError(rejection).error;
+      if (wait.start(error)) {
+        return;
+      }
       if (!showFieldErrors(form.setError, error, { code: "code" })) {
         setFormError(describeError(error));
       }
@@ -144,8 +154,14 @@ export function SetupStep({
           )}
         </FormField>
         <FormError message={formError} />
+        <RetryWaitMessage wait={wait} />
         <div className="flex gap-2">
-          <Button type="submit" disabled={step.loading || pending || form.formState.isSubmitting}>
+          <Button
+            type="submit"
+            disabled={
+              step.loading || pending || form.formState.isSubmitting || wait.waiting !== null
+            }
+          >
             Confirm
           </Button>
           <Button type="button" variant="outline" disabled={pending} onClick={onCancel}>

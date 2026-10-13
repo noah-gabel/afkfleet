@@ -14,6 +14,7 @@
 // A step ends on its own deadline, from the server's `expires_in` counted from when its
 // request was sent, because an expired step answers like a wrong code.
 import type { MfaEnrollResponse } from "../../generated/MfaEnrollResponse";
+import type { WaitRequest } from "../../hooks/useRetryWait";
 
 /** The code step's tries: the server allows 3 per step. */
 export const CODE_TRIES = 3;
@@ -38,6 +39,8 @@ export interface Notice {
   readonly text: string;
   /** describeError's text of what went wrong, when something did. */
   readonly reason?: string;
+  /** Instead of `reason`: a refusal's wait, which the login form counts down. */
+  readonly wait?: WaitRequest;
   /** Whether to offer "Log out" (a session the flow can't use). */
   readonly logout?: boolean;
 }

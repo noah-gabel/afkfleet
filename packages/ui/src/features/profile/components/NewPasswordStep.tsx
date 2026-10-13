@@ -1,7 +1,8 @@
 // The password change's second step (Plan.md P8.7): the new password, typed twice, before
 // the step-up's 5 minutes end (counted from when it was sent). The form checks the length
 // and the repeat; the server checks the strength, and every reason it gives shows at the
-// field. A password entered after the deadline is never sent.
+// field. A password entered after the deadline is never sent. A 429's wait counts down, the
+// button waiting with it (useRetryWait).
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useState } from "react";
 import { useForm } from "react-hook-form";
@@ -10,7 +11,9 @@ import { toApiError } from "../../../api/ApiError";
 import { describeError } from "../../../api/describeError";
 import { FormField } from "../../../components/FormField";
 import { PasswordInput } from "../../../components/PasswordInput";
+import { RetryWaitMessage } from "../../../components/RetryWaitMessage";
 import { Button } from "../../../components/ui/button";
+import { useRetryWait } from "../../../hooks/useRetryWait";
 import { showFieldErrors } from "../../../lib/formErrors";
 import { AuthCard, FormError } from "../../auth/components/AuthCard";
 import { endsIn, useDeadline } from "../../auth/hooks/useDeadline";
@@ -37,10 +40,15 @@ export function NewPasswordStep({
     defaultValues: { password: "", repeat: "" },
   });
   const [formError, setFormError] = useState<string>();
+  const wait = useRetryWait();
   const errors = form.formState.errors;
 
   const submit = form.handleSubmit(async (values) => {
+    if (wait.waiting !== null) {
+      return;
+    }
     setFormError(undefined);
+    wait.reset();
     if (Date.now() >= step.deadline) {
       onExpire();
       return;
@@ -49,6 +57,9 @@ export function NewPasswordStep({
       await onSubmit(values.password);
     } catch (rejection) {
       const error = toApiError(rejection).error;
+      if (wait.start(error)) {
+        return;
+      }
       if (!showFieldErrors(form.setError, error, { new_password: "password" })) {
         setFormError(describeError(error));
       }
@@ -92,8 +103,12 @@ export function NewPasswordStep({
           )}
         </FormField>
         <FormError message={formError} />
+        <RetryWaitMessage wait={wait} />
         <div className="flex gap-2">
-          <Button type="submit" disabled={pending || form.formState.isSubmitting}>
+          <Button
+            type="submit"
+            disabled={pending || form.formState.isSubmitting || wait.waiting !== null}
+          >
             Change password
           </Button>
           <Button type="button" variant="outline" disabled={pending} onClick={onCancel}>

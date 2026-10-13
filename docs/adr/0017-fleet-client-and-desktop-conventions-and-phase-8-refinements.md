@@ -600,6 +600,15 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   Then all passed: 1199 server tests, fleet-client's 147, the desktop crate's 134, the UI's 329 Vitest tests and the 17 Playwright specs. The OpenAPI snapshot changed twice (the step-up's `x-step-up` and 403 texts; `FailedCodeAttempts`' description), read before accepting.
 - **Lockfile:** pnpm-lock.yaml gains the four packages with the transitive set of the scratch resolution, except `undici-types` 7.24.6 (from `@types/node` 24) and jsdom's existing `tough-cookie` and `tldts`.
 
+### Group E: the review of PR #38 *(the user's change)*
+- **A refusal's wait counts down.** A 429 (a rate limit, or a locked username) or a 503 (busy) carries the server's `Retry-After`. The forms showed it as static text ("Try again in N s.") with the submit enabled, so every click during the wait was one more refused request.
+- **`useRetryWait`** (`hooks/`) starts the wait a refusal asks for, ticks once a second from its start (the wait is whole seconds), and ends it on the tick that reaches the deadline, keeping the end's notice until the next submit. **`RetryWaitMessage`** (`components/`) shows it.
+  - Every form that sends a request uses them: login, the code step, the 2FA setup, registering, `StepUpForm` (the profile's step-up and the admin prompt), the new password and the server form. Its submit stays disabled while the wait runs, and a submit then does nothing.
+  - A login that ran by itself (after registering, or after the recovery codes) hands its wait to the login form in the notice (`Notice.wait`, through the handoff's zod check too), which starts the countdown.
+- **Screen readers hear the start and the end, never each second** *(the user's rule)*. The alert's spoken text names the whole wait ("Try again in 30 seconds.") and never changes. The ticking "Try again in 29 s." is `aria-hidden`. The end, "You can try again now.", is a status that appears once.
+- **After a reload** the countdown is gone; the next try shows the server's remaining wait again, which the server enforces anyway *(accepted by the user)*.
+- **Tests,** red first with fake timers against a stub hook: the hook 4 of 6, the message 2 of 3 (it checks the spoken text without the hidden parts), and every form 10 of 10 (`test/retryWait.ts`: the countdown, the disabled submit, a click that sends nothing, the end). The two that passed against the stub check refusals a stub also gives. A first version chained a timeout from each render, which fake timers advanced only one tick per step; a single interval replaced it.
+
 ### Notes for later groups
 - **P8.6/P8.7 (D), from group C:**
   - Components take the client with `useApiClient()`, and TanStack Query's hooks wrap its methods. A failure is an `ApiError`: build texts on `describeError`, show `invalid_input`'s, `invalid_server_url`'s and `invalid_ca`'s `fields` next to their inputs, and keep the default branch on `api.code`.

@@ -1,5 +1,5 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../../api/ApiClient";
 import { fakeApiError } from "../../api/FakeApiClient";
@@ -10,7 +10,8 @@ import type { ServerProfileResponse } from "../../generated/ServerProfileRespons
 import type { ServerProfileState } from "../../generated/ServerProfileState";
 import type { SessionPage } from "../../generated/SessionPage";
 import { deferred, me, ORIGIN, PROFILE } from "../../test/fixtures";
-import { renderApp } from "../../test/renderApp";
+import { fakeTime, renderApp } from "../../test/renderApp";
+import { expectWait, limited } from "../../test/retryWait";
 import { CERTIFICATE_HELP } from "./certificateHelp";
 
 const NEW_URL = "https://afk.example.com";
@@ -33,8 +34,12 @@ const SWITCHED = {
 async function atSetup(
   handlers: Partial<ApiClient> = {},
   state: ServerProfileState = { state: "none" },
+  advanceTimers?: (ms: number) => unknown,
 ) {
-  const app = renderApp({ serverProfile: async () => state, ...handlers });
+  const app = renderApp(
+    { serverProfile: async () => state, ...handlers },
+    advanceTimers === undefined ? {} : { advanceTimers },
+  );
   await screen.findByRole("heading", { name: "Server setup" });
   return app;
 }
@@ -58,6 +63,28 @@ const sent = (app: Awaited<ReturnType<typeof atSetup>>) =>
   app.fake.calls.filter((call) => call.method === "setServerProfile").map((call) => call.args[0]);
 
 describe("server setup, signed out", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("counts a refusal's wait down with Save disabled", async () => {
+    const time = fakeTime();
+    const app = await atSetup(
+      {
+        setServerProfile: async () => {
+          throw limited();
+        },
+      },
+      { state: "none" },
+      time.advanceTimers,
+    );
+    await typeUrl(app, NEW_URL);
+
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+
+    await expectWait(app, time, { button: "Save", method: "setServerProfile" });
+  });
+
   it("saves the first server and goes on to the login", async () => {
     const app = await atSetup({ setServerProfile: async () => SWITCHED });
 

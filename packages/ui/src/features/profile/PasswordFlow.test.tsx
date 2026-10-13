@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../../api/ApiClient";
 import { deferred } from "../../test/fixtures";
 import { fakeTime } from "../../test/renderApp";
+import { expectWait, limited } from "../../test/retryWait";
 import { atScreen, type SignedInOptions } from "../../test/signedIn";
 import { cacheText, PASSWORD, refusal } from "../../test/signIn";
 import { PASSWORD_CHANGED } from "./components/ProfileFlow";
@@ -81,16 +82,37 @@ describe("changing the password", () => {
     expect(screen.queryByLabelText("New password")).toBeNull();
   });
 
-  it("shows a rate limit's wait", async () => {
-    const app = await atPassword({
-      stepUp: async () => {
-        throw refusal(429, "rate_limited", { retry_after_secs: 30 });
+  it("counts a refusal's wait down at the step-up with Continue disabled", async () => {
+    const time = fakeTime();
+    const app = await atPassword(
+      {
+        stepUp: async () => {
+          throw limited();
+        },
       },
-    });
+      { advanceTimers: time.advanceTimers },
+    );
 
     await confirmPassword(app);
 
-    expect(await screen.findByText("refused: rate_limited Try again in 30 s.")).toBeDefined();
+    await expectWait(app, time, { button: "Continue", method: "stepUp" });
+  });
+
+  it("counts a refusal's wait down at the new password with its button disabled", async () => {
+    const time = fakeTime();
+    const app = await atPassword(
+      {
+        changePassword: async () => {
+          throw limited();
+        },
+      },
+      { advanceTimers: time.advanceTimers },
+    );
+    await confirmPassword(app);
+
+    await enterNew(app);
+
+    await expectWait(app, time, { button: "Change password", method: "changePassword" });
   });
 
   it("then asks for the new password, before the step-up ends", async () => {

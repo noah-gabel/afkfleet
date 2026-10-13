@@ -3138,6 +3138,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - `formErrors` 1 of 3
   >
   >   Tests that pin existing behaviour were shown red through temporary mutations: the login step's metadata and its error path, two `formErrors` cases, and the sessions' "every page" and "runs to the end" cases.
+
+  > Note (P8.7, the user's review of PR #38) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **A refusal's wait counts down.** A 429 (or a 503 busy) showed "Try again in N s." as static text, with the submit still enabled, so every click during the wait was refused again.
+  > - **The countdown:** every form that sends a request shows the wait counting down (`useRetryWait`, `RetryWaitMessage`). Those are login, the code step, the 2FA setup, registering, the step-up (the profile's and the admin prompt's), the new password and the server form. The form keeps its submit disabled until the wait reaches zero, then says once "You can try again now."
+  > - **Screen readers** hear the start (the refusal, with the whole wait in words) and the end (a status), never each second: the ticking number is hidden from them.
+  > - **A login that ran by itself** (after registering, or after the recovery codes) hands its wait to the login form's notice, which counts it down.
+  > - **After a reload** the countdown is gone, and the next try shows the server's remaining wait again; the server enforces it.
+  > - **Tests,** red first with fake timers against a stub hook: the hook 4 of 6, the message 2 of 3, and each form 10 of 10.
 - [x] **P8.8** 🔴 Admin screens:
   - users: change role, disable
   - invites: the code is shown **once**, with a copy button
