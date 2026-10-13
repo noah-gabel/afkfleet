@@ -16,7 +16,7 @@ afkfleet is **a hobby project** I'm building for my friends with Claude Code. I 
 There's no support, and I don't take feature requests. Security reports are welcome, though: see [SECURITY.md](SECURITY.md).
 
 ## Status
-**Phase 7 (authentication and authorization) is done.** The agent, `afkfleet-agent`, runs a few offline-mode bots against a local server (see [Quickstart](#quickstart)), and the server, `afkfleet-server`, runs the secure HTTP API with invite-only accounts, mandatory 2FA and central authorization that every later phase builds on (see [Running the server](#running-the-server)). What exists:
+**Phase 8 (the desktop app) is done.** The agent, `afkfleet-agent`, runs a few offline-mode bots against a local server (see [Quickstart](#quickstart)). The server, `afkfleet-server`, runs the secure HTTP API with invite-only accounts, mandatory 2FA and central authorization that every later phase builds on (see [Running the server](#running-the-server)). The Windows desktop app signs in to it, sets up 2FA, manages the user's own account and sessions, and lets Admins manage users and invites (see [the desktop app](#development)). What exists:
 - **From Phase 0:**
   - the Cargo workspace with all lints and the pinned toolchain
   - the quality gates: formatting, clippy, docs, tests, coverage gates, cargo-deny, Biome
@@ -107,7 +107,7 @@ There's no support, and I don't take feature requests. Security reports are welc
   - the threat model's analysis of the API's authentication and authorization, with the tests behind each mitigation and the accepted risks ([`docs/threat-model.md`](docs/threat-model.md), B1); a script checks that every test it cites exists
 
   [ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md) records Phase 7's decisions.
-- **From Phase 8 (the desktop app, in progress):** group A's [`crates/fleet-client`](crates/fleet-client/), the typed client of the API that the app's Rust side will use:
+- **From Phase 8 (the desktop app):** group A's [`crates/fleet-client`](crates/fleet-client/), the typed client of the API that the app's Rust side will use:
   - one method per endpoint, sending and reading exactly the shared DTOs
   - the session kept out of every caller's hands: the access token in memory, the refresh token in a store (the OS keychain in the app), the login's step tokens in memory
   - the server's refresh rules: one refresh at a time and only on a 401, no grace window, and a session that ends on a refused refresh, a revoked session or a logout, which never races a refresh in flight; a refresh or a login that reached the server finishes saving even when its caller gives up
@@ -144,9 +144,22 @@ There's no support, and I don't take feature requests. Security reports are welc
   - the first login's 2FA setup: a QR code (or its key, to type in), then 10 recovery codes shown once, then the next code from your app
   - registering with an invite, which goes straight into the 2FA setup
 
-  No password, 2FA secret or recovery code is kept anywhere but the screen that needs it, never in the UI's caches.
+  And group E's:
+  - **the profile:**
+    - your account, its password and its authenticator
+    - a warning on Home and in the profile when wrong 2FA codes were entered since your previous login, or when 3 or fewer recovery codes are left
+    - changing the password and replacing the authenticator, each after entering the password again
+    - your sessions, each of which can be logged out, and "Log out all other sessions" for a lost PC
+  - **the admin screens:**
+    - users: make a Member an Admin or the reverse (the Owner), disable or enable (Admins for Members, the Owner for both)
+    - invites: list, revoke, and a new one whose code is shown once, with "Copy invitation" (server, code, expiry and the CA's fingerprints) and "Copy code"
 
-  [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md) records Phase 8's decisions so far.
+    Each row offers only what the server would allow, every change that ends something asks first, and every admin write needs the password within the last 5 minutes.
+  - **Playwright tests** in Microsoft Edge: the app's UI, with its real API client, under the release CSP, against a fake of the server (`just e2e`). They cover logging in, the first 2FA setup, registering, and an Admin inviting someone who then registers.
+
+  No password, 2FA secret, recovery code or invite code is kept anywhere but the screen that needs it, never in the UI's caches, and no token ever reaches the UI. The threat model's "Desktop app" section describes the app's boundaries, including a stolen or shared PC with a live session. A friend on another PC needs the server over HTTPS, which Phase 12 brings.
+
+  [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md) records Phase 8's decisions.
 
 **Minecraft version:** Java Edition **26.1** (azalea 0.16.0, see [ADR-0003](docs/adr/0003-azalea-and-pinned-nightly.md)). Servers on newer versions need ViaVersion/ViaBackwards.
 
@@ -300,11 +313,12 @@ just gen       # after changing an API type: refresh packages/ui/src/generated/
 just dev-app   # run the desktop app with Vite's dev server (hot reload)
 just app-build # build the desktop app's exe: target/release/afkfleet-desktop.exe
 just ui-test   # the frontend's Vitest tests
+just e2e       # the Playwright tests in the installed Edge (part of just check)
 just cov-desktop # the desktop crate's coverage and its 90 % gate (Windows only)
 just icons     # after changing apps/desktop/src-tauri/icons/icon.svg: render icon.ico
 ```
-**The desktop app** (Phase 8 on): `apps/desktop` is the Tauri app, with its Rust side in `apps/desktop/src-tauri` (a workspace member, Windows only) and a thin frontend entry that renders the UI from `packages/ui`. `just dev-app` starts Vite's dev server on `localhost:1420` and opens the window; frontend changes reload at once, and Rust changes rebuild the app. `just app-build` builds the release exe with the frontend embedded (no installer yet); `just app-build --debug` builds a debug exe the same way, with devtools. The app's icon is rendered from `icons/icon.svg`, an original placeholder: change the SVG, then run `just icons`. The app's hardening (the CSP, the capabilities, the global API, devtools, tauri's features, the commands and their generated permissions in `src-tauri/permissions/autogenerated/`) is pinned by `just tauri-check`, part of `just check`; changing it means changing `scripts/tauri-hardening.mjs` too, with an ADR. A new command goes into build.rs's `COMMANDS`, `capabilities/main.json`, the script, and `src-tauri/tests/ipc-contract.json`. `pnpm install` applies `patches/`: sonner is patched so it adds no `<style>` element, which the release CSP blocks (every Vitest test checks that nothing does). It also refuses any npm release younger than 3 days (`minimumReleaseAge` in `pnpm-workspace.yaml`).
-**Trying the app:** run `just dev-server` and, once per fresh database, `just dev-owner <name>`; then `just dev-app` (or a `just app-build --debug` exe) and enter `http://127.0.0.1:8080` as the server. The first login sets up 2FA with your phone's authenticator app. The admin screens arrive with group E; until then an invite for trying registration can be created in a debug build's DevTools console: `await __TAURI_INTERNALS__.invoke("create_invite", { request: { role: "member" } })`.
+**The desktop app** (Phase 8 on): `apps/desktop` is the Tauri app, with its Rust side in `apps/desktop/src-tauri` (a workspace member, Windows only) and a thin frontend entry that renders the UI from `packages/ui`. `just dev-app` starts Vite's dev server on `localhost:1420` and opens the window; frontend changes reload at once, and Rust changes rebuild the app. `just app-build` builds the release exe with the frontend embedded (no installer yet); `just app-build --debug` builds a debug exe the same way, with devtools. The app's icon is rendered from `icons/icon.svg`, an original placeholder: change the SVG, then run `just icons`. The app's hardening (the CSP, the capabilities, the global API, devtools, tauri's features, the commands and their generated permissions in `src-tauri/permissions/autogenerated/`) is pinned by `just tauri-check`, part of `just check`; changing it means changing `scripts/tauri-hardening.mjs` too, with an ADR. A new command goes into build.rs's `COMMANDS`, `capabilities/main.json`, the script, and `src-tauri/tests/ipc-contract.json`. `pnpm install` applies `patches/`: sonner is patched so it adds no `<style>` element, which the release CSP blocks (every Vitest test checks that nothing does). It also refuses any npm release younger than 3 days (`minimumReleaseAge` in `pnpm-workspace.yaml`). `just e2e` builds the e2e entry (`apps/desktop/e2e`: the app's UI and its real `TauriApiClient`, over HTTP to a fake of the server that MSW runs inside Playwright), checks that neither shipped bundle holds any of it, and runs Playwright in the installed Microsoft Edge (nothing is downloaded) under the release CSP; every spec fails on a CSP violation, a console error or an injected style.
+**Trying the app:** run `just dev-server` and, once per fresh database, `just dev-owner <name>`; then `just dev-app` (or a `just app-build --debug` exe) and enter `http://127.0.0.1:8080` as the server. The first login sets up 2FA with your phone's authenticator app. To try registering, create an invite in the Invites screen (it asks for your password first), log out, and register with its code.
 **The desktop app's data:** the server profile is `%LOCALAPPDATA%\io.github.noah-gabel.afkfleet\server-profile.json` (an origin and, optionally, a CA's certificates; no secrets). The refresh token is a generic credential in the Windows Credential Manager named `<server origin>.io.github.noah-gabel.afkfleet`, e.g. `http://127.0.0.1:8080/.io.github.noah-gabel.afkfleet` for `just dev-server`. Logging out removes it. To reset the app by hand, delete that file and that credential (Control Panel, Credential Manager, Windows Credentials).
 **The API's TypeScript types** (Phase 6 on) are generated from the Rust DTOs in `crates/fleet-api-types` with ts-rs and committed in `packages/ui/src/generated/`; never edit them by hand. After changing a DTO, run `just gen` and commit the result; `just check` (`gen-check`) and CI's `ts-types-fresh` job fail while they're stale. `just gen` exports into a fresh folder in `target/` first and deletes only files ts-rs generated: if the folder holds anything else, it stops and changes nothing.
 **The server's database** (Phase 6 on): every build checks fleet-server's SQL against the offline query data committed in `crates/fleet-server/.sqlx/`, never against a live database (`SQLX_OFFLINE` in `.cargo/config.toml`). After changing a query or adding a migration, run `just db-prepare`, which rebuilds a throwaway database in `target/` from the migrations and regenerates that data, and commit it; `just check` and CI's `sqlx-offline` job fail while it's stale. A migration is never edited once it's on `main`, because sqlx checksums it: add a new one instead. `just migrations-check` and the `sqlx-offline` job enforce that.

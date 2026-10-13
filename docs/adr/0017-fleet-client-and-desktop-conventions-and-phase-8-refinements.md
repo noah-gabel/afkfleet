@@ -1,7 +1,7 @@
 # 0017. fleet-client and desktop app conventions, Phase 8 refinements
 
 - **Status:** Accepted
-- **Date:** 2026-10-12 (amended in the review of PR #34; groups B and C added the same day; group D on 2026-10-13)
+- **Date:** 2026-10-12 (amended in the review of PR #34; groups B and C added the same day; groups D and E on 2026-10-13)
 - **Related:** Plan.md Phase 8 (P8.1–P8.9), §4, §5, §7.5, §8, Appendix A, P9.3; ADR-0006, ADR-0007, ADR-0015, ADR-0016
 
 ## Context
@@ -177,7 +177,7 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
 ### Group B: the frontend *(the user's choices and approvals)*
 - **Layout.**
   - `packages/ui` exports its sources (`.` → `src/index.ts`, `./styles.css`); there is no build step in between.
-  - Its own `index.html` and Vite config are the web entry for development and, from P8.9, the Playwright build.
+  - Its own `index.html` and Vite config are the web entry for development. *(Group E: the Playwright build became apps/desktop's e2e entry, see group E's e2e suite.)*
   - `apps/desktop` is a thin entry (`index.html`, `src/main.tsx`) that renders `<App />` from `@afkfleet/ui`. Its Vite dev server runs on `localhost:1420` with `strictPort`, matching `devUrl`.
   - Tailwind scans `packages/ui/src` (`@import "tailwindcss" source(".")`), so the desktop bundle finds the UI's classes.
 - **TypeScript 7.0.2** *(the user's choice over 6.0.3 or both side by side)*. This is the Go port, with a native `tsc` about 10× faster. It has no JavaScript compiler API until 7.1, so no tool that needs one (typescript-eslint, ts-node, vite-plugin-checker) can join until then; Biome, Vite 8, Vitest and `tsc --noEmit` need none. Since `types` now defaults to `[]`, each tsconfig lists `vite/client`. Editor diagnostics come from VS Code's TypeScript or the "TypeScript Native Preview" extension, and can differ slightly from CI's `tsc`.
@@ -493,6 +493,113 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
 - **A failed login after registering lands on `/login`** with its notice and the username, handed over in the history entry's state (read back through a zod check; memory history, so it never leaves the app), so that form's "Register with an invite" link works.
 - **Tests,** red first: 13 flow tests and the 2 switch tests against the old code; the reducer's 11 of 13 against the old reducer (the 2 that passed are what an identity reducer also does); the register suite's two handoff cases now expect `/login`. Eight tests pinned behaviour the old code already had and were shown red through temporary mutations, each restored: a double click on Verify and on the recovery codes' Continue (the guard and the button's `disabled` removed), "Continue as" (made to wait on a held `invalidateQueries`, after its first version turned out not to reach the guard), a call from before "Continue as" (`endIfSignedIn` without the generation), `me`'s invalidation at the code step, the same user's held session and "Continue as" (the invalidation removed), and the setup step's deadline check before submit (the check removed).
 
+### Group E: the release age and the order *(the user's choices, 2026-10-13)*
+- **Group D's exclude is gone.** `main` still carried its 13 entries when group E started, at 14:44 UTC. They reached 3 days only at 20:08 UTC, so the branch's first commit removed them and no `pnpm install` ran before then. The first install after it, which added P8.9's dev dependencies, is the clean install under the full rule shown in the PR. Until then pnpm's pre-run dependency check printed "installing dependencies" failures, which didn't stop any script.
+
+### Group E: step-up for the admin writes *(the user's decision, from the threat model's stolen-PC case)*
+- **The three admin writes need a step-up.** `PATCH /users/{id}`, `POST /invites` and `DELETE /invites/{id}` register with `step_up_route`, checked by the `SteppedUpUser` extractor only, as `POST /me/mfa/reset` is *(the user's choice over a re-check in the transaction)*. Listing stays authed. [ADR-0016](0016-fleet-server-auth-conventions-and-phase-7-refinements.md)'s amendment holds the server's details.
+- **The app asks only when the server wants it** *(the user's choice over asking before every write or a client-side timer)*. `useStepUpAction` sends the write. On 403 `step_up_required` its row or form shows "Confirm it's you" inline (`StepUpPrompt` around `StepUpForm`), steps up with a direct call, and sends the same write once more. Several writes within 5 minutes ask once. A retry the server refuses again shows its message, never a second prompt.
+- **Later phases decide the same per action** *(the user's request)*: Plan.md's notes on Phases 9 and 11 ask, for each destructive or privilege-changing action, whether it needs a step-up.
+
+### Group E: the wrong-code signal *(the user's decision, before the app shows it)*
+- **The count leaves out the typos of the login that succeeded.** A warning that fires on every typo teaches everyone to ignore it, including the time it's real.
+  - The password step mints a `LoginStepId` (fleet-core), which the mfa challenge carries.
+  - The code step records it as `login_step_id` on its `auth.login` Failure entries and on the Success.
+  - `failed_code_attempts` leaves out the failures of the newest Success's own step.
+- So a count above 0 means a login step that never succeeded. [ADR-0016](0016-fleet-server-auth-conventions-and-phase-7-refinements.md)'s amendment gives the server's side; the warning's text no longer mentions the user's own typos.
+
+### Group E: the profile (P8.7's part) *(the user's choices)*
+- **Routes:** `/profile` is the overview: the account, the warnings, the two flows' buttons and the sessions. `/profile/password` and `/profile/2fa` sit beside it, each a flow of its own *(the user's choice over flows inline or separate pages)*.
+- **Step-up first, then the action** *(the user's choice over one combined form)*. "Confirm it's you" takes the password (`stepUp`, a direct call; it lives only in `StepUpForm`, which empties its field after every answer).
+  - **The password:** the new password typed twice, before the step-up's 5 minutes end, counted from when it was sent. A weak password's 422 costs one request per retry instead of two Login-bucket requests.
+  - **The authenticator:** `mfaReset` right away, then the setup step and the new recovery codes, with their own texts, and "Finish" without a new login.
+  - `step_up_required` or a deadline goes back to the password with "That step ended. Enter your password again."
+  - The reducer (`profileFlowReducer`) and the guards are group D's patterns: every step has an id, late answers count only for their step, and a call's step waits while it runs.
+- **The warnings** *(the user's choice: the profile and Home)*. They show wrong codes since the previous login (naming the last) and 3 or fewer recovery codes left. On Home they link to the profile and can be dismissed for the current sign-in (the per-App `notices` store, keyed by the session's generation).
+- **Sessions** *(the user's choices)*. "Show more". Another session's "Log out" runs at once; this session's is the header's logout.
+  - **"Log out all other sessions"** asks first, then fetches **every** page the server lists before ending each other session, so an older one (a stolen PC's) on a later page goes too *(the user's change)*.
+  - It **runs to the end even when the screen is left**, since stopping halfway could leave a stolen PC's session alive with nobody seeing the report *(the user's change at the plan's approval)*. The report shows on the screen, or as a toast.
+- **Shared with group D's flow:** `hooks/useStepGuard`, `useEnrollment`, `nextSetup`, `isStepGone`, and `SetupStep`'s and `RecoveryCodesStep`'s texts as props.
+
+### Group E: the admin screens (P8.8) *(the user's choices)*
+- **Only what the server would allow** *(the user's choice)*. `permissions.ts` mirrors `authorize()`. Its test reads fleet-core's authorization-matrix snapshot itself (a `?raw` import) and checks every cell of the Users, CreateInvite and RevokeInvite tables, with their headers and row counts, so a rule change on the server fails the UI's test, the way `ipc-contract.json` keeps the commands in step *(the user's change)*.
+- **Inline confirmations, no dialog** *(the user's choice)*. A role change, disabling and revoking an invite each ask first, naming what they end: all of a user's sessions, and with a demotion or a disabling their pending invites. Enabling runs at once.
+- **The invite's code** is shown once in the screen's state. `createInvite` is a direct call; Done or leaving drops the code.
+  - **"Copy invitation"** *(the user's choice)* copies the server, the code, its end with its time zone, and a custom CA's fingerprints with "Ask me for the CA file".
+  - **"Copy code"** copies the code alone.
+  - Both copies toast the clipboard note.
+- **Paging:** "Show more" on the users, invites and sessions *(the user's choice)*.
+
+### Group E: the e2e suite (P8.9) *(the user's choices)*
+- **The real client, over HTTP** *(the user's choice over a separate fetch client, MSW's service worker, or a REST client with tokens in JavaScript)*. The e2e entry (`apps/desktop/e2e`) renders the desktop app's UI with its real `TauriApiClient`, over `fetchInvoke`. `fetchInvoke` sends each command's args as JSON to `/e2e/ipc/<command>` and settles like Tauri's `invoke`.
+  - Every answer is a 200 with an envelope, so the browser logs no failed request.
+  - The e2e build holds no token: the fake stands in for the Rust side as well.
+- **MSW in the Playwright process** through `@msw/playwright` (Playwright's routing): no service worker and nothing of MSW in any bundle. The fake backend (`e2e/fake/backend.ts`) answers exactly `ipc-contract.json`'s commands with the generated types and the Rust side's fixed messages, fresh per test.
+- **The installed Edge** *(the user's choice)*, `channel: "msedge"`: the engine of WebView2, and nothing downloaded outside the lockfile.
+- **The release CSP in e2e** *(the user's choice)*. `vite preview` serves the release CSP of `tauri.conf.json` with only `connect-src` changed to `'self'` (a test compares them, and checks the served header).
+  - Every browser spec freezes `Object.prototype` as Tauri does.
+  - It fails on any CSP violation, console error, uncaught error, `<style>`, adopted stylesheet or stylesheet from another origin.
+- **Never shipped** *(the user's rule)*:
+  - The e2e entry builds only through `vite.e2e.config.ts`, into `dist-e2e/`.
+  - Biome refuses any import of `e2e` in `apps/desktop/src`.
+  - `just e2e` builds both shipped bundles (the desktop frontend and packages/ui's web entry) into `target/e2e/` and runs `scripts/e2e-bundle-guard.mjs`. It refuses the e2e marker or `/e2e/ipc/` in them, and requires the marker in the e2e bundle.
+- **The specs** *(the user's choice: the named flows plus the DoD's story)*:
+  - logging in with the code step
+  - the first login's 2FA setup with recovery codes
+  - registering with an invite into the setup
+  - the story: the Owner invites (the step-up prompt, the code once, copied), the invitee registers, sets up 2FA and logs in, and the Owner finds them in the user list
+- **Where it runs** *(the user's choice)*: `just e2e` is part of `just check` and `just ci`, and a new `e2e` CI job runs on windows-latest. `packages/ui`'s own web entry keeps `UnavailableApiClient` for `pnpm dev`.
+- **Dependencies** *(the user's approval, all exact, devDependencies of `@afkfleet/desktop`)*:
+  - `@playwright/test` 1.64.0 (Apache-2.0, 2026-10-07)
+  - `msw` 3.0.3 (MIT, 2026-10-10)
+  - `@msw/playwright` 0.7.0 (MIT, 2026-09-28)
+  - `@types/node` 24.19.2 (MIT, 2026-10-09)
+
+  None runs an install script.
+
+### Group E: the DoD and the threat model *(the user's choices)*
+- **The friend's PC moves to Phase 12** *(the user's choice over a LAN proxy with its own CA now)*. Phase 8 proves the rest on the user's PC (the release exe over loopback, by the PR's hands-on steps) and in Playwright. Phase 12's DoD gains the line.
+- **The threat model's "Desktop app (B2, B7)"** covers:
+  - what crosses the webview boundary (never a token) and what sits on the PC
+  - a STRIDE table citing the desktop and fleet-client tests
+  - a stolen or shared PC with a live session in the Credential Manager: what it gives, what step-up now keeps from it, malware reading the credential, and the remedies
+
+  `scripts/threat-model-citations.mjs` now also walks `apps/desktop/src-tauri`.
+- **P11.11's screenshots** *(the user's addition)*: the installed Edge moves with Windows, so P11.11 decides how to keep screenshots stable.
+
+### As built (group E)
+- **Layout (packages/ui/src):**
+  - `hooks/useStepGuard`
+  - `components/StepUpForm`
+  - `lib/{stepUp, time, clipboard}`
+  - `features/profile/` (`profileFlowReducer`, `schemas`, `routes`, `hooks/useLogOutOthers`, the components `ProfileOverview`, `SecurityWarnings`, `SessionList`, `ProfileFlow`, `ConfirmStep`, `NewPasswordStep`)
+  - `features/admin/` (`permissions`, `invitation`, `hooks/useStepUpAction`, the components `UsersScreen`, `InvitesScreen`, `StepUpPrompt`)
+  - `features/auth/{hooks/useEnrollment, stepErrors}`
+  - the `notices` store
+  - `api/queries`' paged queries
+- **Layout (apps/desktop):**
+  - `e2e/` (`app/{main, fetchInvoke, marker}`, `base`, `csp`, `fake/{backend, handlers}`, `fixtures`, `specs/`, `unit/`)
+  - `vite.e2e.config.ts`, `playwright.config.ts`, `tsconfig.e2e.json`
+- **Server:** fleet-core `LoginStepId`; `LoginService::new` takes the random source; `Challenges::issue_mfa` takes the step's ID; `LoginError::StepId`.
+- **Found while building:** `showFieldErrors` kept only a field's last message, so a weak password's 422 showed only zxcvbn's last hint, not "is too weak". Every message now shows, one per line (`FieldMessage` keeps line breaks), red first.
+- **Tests,** red first:
+  - **The server:**
+    - the step-up registration 5 of 5
+    - fleet-client 4 and the desktop 3 until they stepped up
+    - 38 of the 49 admin tests without their stamps
+    - the wrong-code count 3 of 3
+    - the login step's metadata and error path through mutations
+  - **The UI:**
+    - the profile 52 against compiling stubs
+    - the admin screens 33 of 38
+    - `formErrors` 1 of 3, and `tests/limits.rs`
+    - the session list's "every page" and "runs to the end" through mutations of `useLogOutOthers`
+  - **The scripts:** the citation walk 3 of 3, the bundle guard 3 of 4.
+  - **The e2e specs,** written with the code, through mutations: an injected `<style>`, a `console.error` and an `eval` (each caught), the fake skipping the step-up, `e2eCsp` returning its input, `fetchInvoke` resolving everything, the fake missing a command, and the marker in the shipped desktop bundle.
+
+  Then all passed: 1199 server tests, fleet-client's 147, the desktop crate's 134, the UI's 329 Vitest tests and the 17 Playwright specs. The OpenAPI snapshot changed twice (the step-up's `x-step-up` and 403 texts; `FailedCodeAttempts`' description), read before accepting.
+- **Lockfile:** pnpm-lock.yaml gains the four packages with the transitive set of the scratch resolution, except `undici-types` 7.24.6 (from `@types/node` 24) and jsdom's existing `tough-cookie` and `tldts`.
+
 ### Notes for later groups
 - **P8.6/P8.7 (D), from group C:**
   - Components take the client with `useApiClient()`, and TanStack Query's hooks wrap its methods. A failure is an `ApiError`: build texts on `describeError`, show `invalid_input`'s, `invalid_server_url`'s and `invalid_ca`'s `fields` next to their inputs, and keep the default branch on `api.code`.
@@ -516,8 +623,12 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   - The profile's step-up and password change, and the invite's creation, are direct calls (the secret rule above); reuse `PasswordInput`, `FormField`, `showFieldErrors` and `AuthCard`'s pattern.
   - Replace the admin placeholders (`features/admin`) and add Profile to the navigation table (`features/shell/nav.ts`).
   - The 2FA replacement (`mfaReset`, then enroll and confirm) can reuse `SetupStep` and `RecoveryCodesStep`.
-  - P8.9's web build replaces `UnavailableApiClient` with MSW; the watched client and the stores work the same there.
+  - P8.9's web build replaces `UnavailableApiClient` with MSW; the watched client and the stores work the same there. *(Group E chose otherwise: the e2e entry in apps/desktop reuses `TauriApiClient` over a fetch-based `invoke`, and packages/ui's web entry keeps `UnavailableApiClient`.)*
 - **E, from group B:** `scripts/threat-model-citations.mjs` walks only `crates/`, so it must also walk `apps/desktop/src-tauri` (skipping `node_modules`, `gen` and `target`) before B2 cites the desktop tests (group C's are in `tests/bridge/`, `tests/acl.rs` and the in-crate `keychain`, `profile` and `error` tests). A friend's dev build needs `bundle.active` and the installer's icons (P12.5 at the latest).
+- **From group E:**
+  - **P9, P11:** decide for each destructive or privilege-changing action whether it needs a step-up (Plan.md's notes); the app reuses `useStepUpAction`.
+  - **P11.11:** the screenshot tests need a stable rendering, but the installed Edge moves with Windows and the runner image.
+  - **P12:** Phase 12's DoD holds "a friend on another PC installs the release build, registers with an invite and logs in with 2FA", moved from Phase 8.
 - **P9.3:** fleet-server leaves `stable_crates` when azalea-auth arrives; fleet-client leaves with it, since fleet-server is its dev-dependency and `--all-targets` builds it.
 - **P11:** the WebSocket client joins fleet-client, with tokio-tungstenite and futures-util (§5).
 
@@ -538,6 +649,11 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   - Every call's outcome is handled in one place, so a screen never re-implements the banner or the session's end, and a session ends exactly once.
   - A library that injects styles at runtime fails CI before the release build is ever tried.
   - No npm release younger than 3 days can enter the lockfile, transitive ones included.
+- **Easier (group E):**
+  - A stolen or shared PC with a live session can't change a password, an authenticator, a role or a user, or mint an invite, without the password.
+  - The wrong-code warning fires only for a login step that never succeeded, not for a user's own typo.
+  - A rule change in `authorize()` fails the admin screens' test until the UI follows.
+  - Every push runs the UI in Edge under the release CSP, so a style injection or an `eval` fails CI before any exe is built.
 - **Harder:**
   - The refresh and the code step outlive their caller in a task the client spawns, an exception to the task-ownership rule.
   - fleet-client's tests build the whole server (and argon2 at the baseline), so they take a few seconds.
@@ -554,6 +670,7 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   - (Group D) Every sonner bump redoes its patch. shadcn's components are copied by hand, with their edits repeated.
   - (Group D) A package younger than 3 days can't be installed without an approved exclude, and the first install after the rule failed on group B's and C's own entries for a few hours.
   - (Group D) The sign-in flow can't use TanStack's mutations for its calls, so it tracks pending and errors itself. The UI must keep two codes (`profile_save`, `session_discard`) that mean a switch logged out.
+  - (Group E) An Admin's write may ask for the password first, once every 5 minutes. The e2e fake must follow every new command (its test against `ipc-contract.json` fails until it does). `just check` builds three bundles and starts Edge, which takes about a minute more. The installed Edge's version isn't pinned.
 
 ## Alternatives considered
 - **Client-side request structs:** a second definition of every request.
@@ -592,4 +709,9 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
 - **(Group D) A zustand store shared by one route per sign-in step:** the password in module state until something clears it. **Mutations with `gcTime: 0`:** an observer still holds the variables while mounted, and removal runs on a timer. **Re-running the password step itself after a timed-out code:** the password kept for as long as the user keeps failing.
 - **(Group D) Checking `me()` after an ambiguous `store` from a server switch, or always treating it as logged out:** a guess where the Rust side can say it. **Moving the new store's build after the logout:** a broken Credential Manager would be found only after logging out.
 - **(Group D) The `radix-ui` umbrella or the shadcn CLI:** 55 primitives for two, and packages the CLI picks itself. **TanStack Query's default retries:** an unreachable server would take over a minute to show.
+- **(Group E) Asking for the password before every admin write, or a client-side window:** two Login-bucket requests per write, or a timer that guesses the server's stamp. **A re-check of the stamp in each admin write's transaction:** more code in three services for a gap of milliseconds. **No step-up for admin writes:** an unlocked PC could change roles and mint invites.
+- **(Group E) One form with the current and the new password:** each retry of a weak password costs two Login-bucket requests. **The flows inline on the profile, or separate pages:** a flow's secrets would outlive it on screen, or the overview would split up. **A warning on the profile only:** a sign of a guessed password could go unseen.
+- **(Group E) Showing every action and letting the server refuse, or disabling with a reason:** buttons that can only fail. **A copy of the matrix's cases in the UI's test:** a rule change on the server would pass unnoticed.
+- **(Group E) MSW's service worker in the e2e bundle, a separate fetch client, or a REST client with tokens in JavaScript:** MSW in a bundle, a second command mapping, or fleet-client's session logic rewritten in TypeScript. **Playwright's downloaded Chromium:** a browser from outside the lockfile, and not WebView2's engine. **No CSP in e2e:** the style guard alone, without the browser's real blocking.
+- **(Group E) A LAN proxy with its own CA for the friend's PC now:** a dev-only Caddy setup Phase 12 replaces anyway.
 - **(Group C) A stateful fake server for the UI's tests:** the server's rules re-implemented. **zod inside TauriApiClient only:** fakes would skip the checks. **Tauri's `mockIPC`:** an import the rule would need to allow. **Review only for the import rules:** an event or window API could slip in unnoticed.
