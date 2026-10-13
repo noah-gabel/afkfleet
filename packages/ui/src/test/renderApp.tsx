@@ -2,6 +2,7 @@
 // test its runtime (stores, cache, router) and a user-event session.
 import { act, render } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { StrictMode } from "react";
 import { vi } from "vitest";
 
 import { AppRoot } from "../App";
@@ -23,7 +24,7 @@ export interface RenderedApp {
 /** The App over a FakeApiClient scripted with `handlers`. */
 export function renderApp(
   handlers: Partial<ApiClient> = {},
-  options: { advanceTimers?: (ms: number) => unknown } = {},
+  options: { advanceTimers?: (ms: number) => unknown; strict?: boolean } = {},
 ): RenderedApp {
   const fake = new FakeApiClient(handlers);
   const runtime = createAppRuntime(fake);
@@ -31,7 +32,9 @@ export function renderApp(
   const user = userEvent.setup(
     options.advanceTimers === undefined ? {} : { advanceTimers: options.advanceTimers },
   );
-  render(<AppRoot runtime={runtime} onRestart={restart} />);
+  const root = <AppRoot runtime={runtime} onRestart={restart} />;
+  // StrictMode as in development: React runs every effect twice.
+  render(options.strict === true ? <StrictMode>{root}</StrictMode> : root);
   return { fake, runtime, user, restart, path: () => runtime.router.state.location.pathname };
 }
 

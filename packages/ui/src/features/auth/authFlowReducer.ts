@@ -6,8 +6,14 @@
 // (or a registration) until the login that follows the recovery codes answers, since the
 // code that confirmed the authenticator can't log in. Every other step holds none, and
 // anything that ends or leaves a step (it expired, a third wrong code, a cancel) drops it.
-// The step ends on its own deadline, from the server's `expires_in`, because an expired
-// step answers like a wrong code.
+// The TOTP secret lives in its setup step and goes with it.
+//
+// Every step has an id, and every action names the step it was issued in (`from`): the
+// reducer drops an action whose step is no longer current, so a late answer (a code
+// checked after its step expired, a confirm after the user went back) changes nothing.
+// A step ends on its own deadline, from the server's `expires_in` counted from when its
+// request was sent, because an expired step answers like a wrong code.
+import type { MfaEnrollResponse } from "../../generated/MfaEnrollResponse";
 
 /** The code step's tries: the server allows 3 per step. */
 export const CODE_TRIES = 3;
@@ -36,6 +42,12 @@ export interface Notice {
   readonly logout?: boolean;
 }
 
+/** What a failed login after registering hands to the login form at /login. */
+export interface Handoff {
+  readonly username: string;
+  readonly notice: Notice;
+}
+
 /** Where the flow is. */
 export type Step =
   | { readonly kind: "password"; readonly notice?: Notice }
@@ -49,26 +61,35 @@ export type Step =
       readonly next: boolean;
       readonly message?: string;
     }
-  | { readonly kind: "setup"; readonly deadline: number; readonly expiresIn: number }
+  | {
+      readonly kind: "setup";
+      readonly deadline: number;
+      readonly expiresIn: number;
+      /** A secret is being requested; the old one is hidden meanwhile. */
+      readonly loading: boolean;
+      readonly enrollment?: MfaEnrollResponse;
+      readonly enrollError?: string;
+    }
   | { readonly kind: "recovery"; readonly codes: readonly string[] }
   | { readonly kind: "stillSignedIn"; readonly username: string };
 
 /** The flow's state. */
 export interface FlowState {
   readonly step: Step;
+  /** Bumped at every change of step; see the module comment. */
+  readonly stepId: number;
   readonly username: string;
   /** Only while a later step needs it; see the module comment. */
   readonly password: string | null;
-  /** Bumped at every return to the password step, so its form starts empty. */
-  readonly round: number;
 }
 
-/** What happens in the flow. */
-export type FlowAction =
+/** What happens in the flow, each for the step it was issued in (`from`). */
+export type FlowAction = { readonly from: number } & (
   | {
       readonly type: "codeRequired";
       readonly username: string;
       readonly expiresIn: number;
+      /** When the request was sent, in ms since the epoch. */
       readonly now: number;
       readonly next?: boolean;
     }
@@ -77,30 +98,42 @@ export type FlowAction =
       readonly username: string;
       readonly password: string;
       readonly expiresIn: number;
+      /** When the request was sent, in ms since the epoch. */
       readonly now: number;
     }
   | { readonly type: "wrongCode" }
+  | { readonly type: "enrolling" }
+  | { readonly type: "enrolled"; readonly enrollment: MfaEnrollResponse }
+  | { readonly type: "enrollFailed"; readonly message: string }
   | { readonly type: "confirmed"; readonly codes: readonly string[] }
   | { readonly type: "stepEnded" }
   | { readonly type: "backToPassword"; readonly notice?: Notice; readonly username?: string }
-  | { readonly type: "stillSignedIn"; readonly username: string };
+  | { readonly type: "stillSignedIn"; readonly username: string }
+);
 
-/** The flow's start: the login form, or the register form. */
-export function initialFlow(mode: "login" | "register"): FlowState {
+/** The flow's start: the login form (with what a registration handed over), or the register form. */
+export function initialFlow(mode: "login" | "register", handoff?: Handoff): FlowState {
+  if (mode === "register") {
+    return { step: { kind: "register" }, stepId: 0, username: "", password: null };
+  }
   return {
-    step: mode === "login" ? { kind: "password" } : { kind: "register" },
-    username: "",
+    step:
+      handoff === undefined ? { kind: "password" } : { kind: "password", notice: handoff.notice },
+    stepId: 0,
+    username: handoff?.username ?? "",
     password: null,
-    round: 0,
   };
 }
 
 /** The next state; see the module comment. */
 export function authFlowReducer(state: FlowState, action: FlowAction): FlowState {
+  if (action.from !== state.stepId) {
+    return state;
+  }
+  const step = state.step;
   switch (action.type) {
     case "codeRequired":
-      return {
-        ...state,
+      return moved(state, {
         username: action.username,
         password: null,
         step: {
@@ -110,30 +143,46 @@ export function authFlowReducer(state: FlowState, action: FlowAction): FlowState
           triesLeft: CODE_TRIES,
           next: action.next ?? false,
         },
-      };
+      });
     case "setupRequired":
-      return {
-        ...state,
+      return moved(state, {
         username: action.username,
         password: action.password,
         step: {
           kind: "setup",
           deadline: action.now + action.expiresIn * 1000,
           expiresIn: action.expiresIn,
+          loading: true,
         },
-      };
+      });
     case "wrongCode": {
-      if (state.step.kind !== "code") {
+      if (step.kind !== "code") {
         return state;
       }
-      const triesLeft = state.step.triesLeft - 1;
+      const triesLeft = step.triesLeft - 1;
       if (triesLeft <= 0) {
         return back(state, { text: STEP_ENDED });
       }
-      return { ...state, step: { ...state.step, triesLeft, message: wrongCode(triesLeft) } };
+      return { ...state, step: { ...step, triesLeft, message: wrongCode(triesLeft) } };
+    }
+    case "enrolling":
+    case "enrolled":
+    case "enrollFailed": {
+      if (step.kind !== "setup") {
+        return state;
+      }
+      const { kind, deadline, expiresIn } = step;
+      const base = { kind, deadline, expiresIn };
+      if (action.type === "enrolling") {
+        return { ...state, step: { ...base, loading: true } };
+      }
+      if (action.type === "enrolled") {
+        return { ...state, step: { ...base, loading: false, enrollment: action.enrollment } };
+      }
+      return { ...state, step: { ...base, loading: false, enrollError: action.message } };
     }
     case "confirmed":
-      return { ...state, step: { kind: "recovery", codes: action.codes } };
+      return moved(state, { step: { kind: "recovery", codes: action.codes } });
     case "stepEnded":
       return back(state, { text: STEP_ENDED });
     case "backToPassword":
@@ -142,20 +191,22 @@ export function authFlowReducer(state: FlowState, action: FlowAction): FlowState
         action.notice,
       );
     case "stillSignedIn":
-      return {
-        ...state,
+      return moved(state, {
         password: null,
         step: { kind: "stillSignedIn", username: action.username },
-      };
+      });
   }
+}
+
+/** `state` in a new step: `changes` applied, the step id bumped. */
+function moved(state: FlowState, changes: Partial<FlowState> & { step: Step }): FlowState {
+  return { ...state, ...changes, stepId: state.stepId + 1 };
 }
 
 /** The password step, with `notice`, holding no password. */
 function back(state: FlowState, notice: Notice | undefined): FlowState {
-  return {
-    ...state,
+  return moved(state, {
     password: null,
-    round: state.round + 1,
     step: notice === undefined ? { kind: "password" } : { kind: "password", notice },
-  };
+  });
 }

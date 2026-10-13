@@ -1,10 +1,11 @@
-// The 2FA setup (Plan.md P8.7, ADR-0016): a new secret from `mfa_enroll`, shown as the
-// server's QR code and as its key in groups of 4, then the app's first code to confirm it.
-// The QR code is shown only through `<img src>`, and only when it's the SVG data URI the
-// server sends: the CSP allows any `data:` image. "New QR code" asks for another secret
-// (the old one is then void). The secret lives only in this step's state.
+// The 2FA setup (Plan.md P8.7, ADR-0016): the step's secret, shown as the server's QR code
+// and as its key in groups of 4, then the app's first code to confirm it. The flow requests
+// the secret once per step and on "New QR code" (the old one is then void); while a new
+// one loads, the old one is hidden and the step waits. The QR code is shown only through
+// `<img src>`, and only when it's the SVG data URI the server sends: the CSP allows any
+// `data:` image. The secret lives only in the flow's state for this step.
 import { zodResolver } from "@hookform/resolvers/zod";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 
 import { toApiError } from "../../../api/ApiError";
@@ -12,7 +13,6 @@ import { describeError } from "../../../api/describeError";
 import { FormField } from "../../../components/FormField";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
-import type { MfaEnrollResponse } from "../../../generated/MfaEnrollResponse";
 import { showFieldErrors } from "../../../lib/formErrors";
 import type { Step } from "../authFlowReducer";
 import { endsIn, useDeadline } from "../hooks/useDeadline";
@@ -27,61 +27,31 @@ export function grouped(secret: string): string {
   return (secret.match(/.{1,4}/g) ?? []).join(" ");
 }
 
-/** The setup step. `onEnroll` and `onConfirm` throw what the step should show. */
+/** The setup step. `onConfirm` throws what the step should show. */
 export function SetupStep({
   step,
-  onEnroll,
+  pending,
+  onNewSecret,
   onConfirm,
   onExpire,
   onCancel,
 }: {
   step: Extract<Step, { kind: "setup" }>;
-  onEnroll: () => Promise<MfaEnrollResponse>;
+  /** The flow's call (the confirm) is running. */
+  pending: boolean;
+  onNewSecret: () => void;
   onConfirm: (code: string) => Promise<void>;
   onExpire: () => void;
   onCancel: () => void;
 }) {
   const lastMinute = useDeadline(step.deadline, onExpire);
-  const [enrollment, setEnrollment] = useState<MfaEnrollResponse>();
-  const [enrollError, setEnrollError] = useState<string>();
   const form = useForm<CodeValues>({
     resolver: zodResolver(codeForm),
     defaultValues: { code: "" },
   });
   const [formError, setFormError] = useState<string>();
   const errors = form.formState.errors;
-
-  // A new secret at the start and on every "New QR code". Each request takes a ticket and
-  // only the newest ticket's answer shows, since an older secret is void once a newer one
-  // exists (and StrictMode starts the first request twice).
-  const enroll = useRef(onEnroll);
-  useEffect(() => {
-    enroll.current = onEnroll;
-  }, [onEnroll]);
-  const newest = useRef(0);
-  const requestSecret = useCallback(() => {
-    newest.current += 1;
-    const ticket = newest.current;
-    enroll.current().then(
-      (answer) => {
-        if (ticket === newest.current) {
-          setEnrollment(answer);
-          setEnrollError(undefined);
-        }
-      },
-      (rejection: unknown) => {
-        if (ticket === newest.current) {
-          setEnrollError(describeError(toApiError(rejection).error));
-        }
-      },
-    );
-  }, []);
-  useEffect(() => {
-    requestSecret();
-    return () => {
-      newest.current += 1;
-    };
-  }, [requestSecret]);
+  const enrollment = step.loading ? undefined : step.enrollment;
 
   const submit = form.handleSubmit(async (values) => {
     setFormError(undefined);
@@ -110,7 +80,8 @@ export function SetupStep({
           This step ends in under a minute.
         </p>
       ) : null}
-      <FormError message={enrollError} />
+      <FormError message={step.enrollError} />
+      {step.loading ? <p className="text-sm text-muted-foreground">Loading a new key…</p> : null}
       {enrollment === undefined ? null : (
         <div className="flex flex-col items-center gap-3">
           {enrollment.qr_svg.startsWith(QR_PREFIX) ? (
@@ -134,7 +105,13 @@ export function SetupStep({
         Only the newest QR code works. Delete any entry you scanned from an earlier one in your
         authenticator app.
       </p>
-      <Button type="button" variant="outline" className="self-start" onClick={requestSecret}>
+      <Button
+        type="button"
+        variant="outline"
+        className="self-start"
+        disabled={step.loading || pending}
+        onClick={onNewSecret}
+      >
         New QR code
       </Button>
       <form className="flex flex-col gap-4" noValidate onSubmit={(event) => void submit(event)}>
@@ -155,10 +132,10 @@ export function SetupStep({
         </FormField>
         <FormError message={formError} />
         <div className="flex gap-2">
-          <Button type="submit" disabled={form.formState.isSubmitting}>
+          <Button type="submit" disabled={step.loading || pending || form.formState.isSubmitting}>
             Confirm
           </Button>
-          <Button type="button" variant="outline" onClick={onCancel}>
+          <Button type="button" variant="outline" disabled={pending} onClick={onCancel}>
             Cancel
           </Button>
         </div>

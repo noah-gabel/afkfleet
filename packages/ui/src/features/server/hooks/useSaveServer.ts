@@ -6,6 +6,10 @@
 // - `profile_save` or `session_discard`: they come only after the old server's logout, so a
 //   signed-in user is logged out with the error; the previous server stays set.
 // - anything else changed nothing: the form shows it.
+// Signed in, the switch runs as a deliberate logout (`logging_out`) from before the call
+// until its answer, so a call that answers `no_session` meanwhile (the old server's session
+// is gone) shows no "session ended"; `none` or an error that changed nothing goes back to
+// signed in, in the same generation.
 // A profile holds no secret (an origin and a CA's certificates), so this is a mutation.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
@@ -49,6 +53,9 @@ export function useSaveServer() {
   /** Saves `request`; answers the error the form should show, or nothing once it's done. */
   async function save(request: ServerProfileRequest): Promise<CommandError | undefined> {
     const signedIn = session.getState().phase === "signed_in";
+    if (signedIn) {
+      session.getState().beginLogout();
+    }
     let answer: Awaited<ReturnType<typeof api.setServerProfile>>;
     try {
       answer = await mutation.mutateAsync(request);
@@ -59,12 +66,16 @@ export function useSaveServer() {
         toast.error(switchFailed(error));
         return undefined;
       }
+      if (signedIn) {
+        session.getState().cancelLogout();
+      }
       return error;
     }
     const state: ServerProfileState = { state: "set", profile: answer.profile };
     queryClient.setQueryData(serverProfileQuery(api).queryKey, state);
     if (answer.change === "none") {
       if (signedIn) {
+        session.getState().cancelLogout();
         toast.info(UNCHANGED);
       } else {
         await router.navigate({ to: "/login" });

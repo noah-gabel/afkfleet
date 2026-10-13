@@ -20,9 +20,11 @@ import { AuthCard, FormError } from "./AuthCard";
 /** The register form. `onSubmit` throws what the form should show. */
 export function RegisterForm({
   origin,
+  pending,
   onSubmit,
 }: {
   origin: string | undefined;
+  pending: boolean;
   onSubmit: (values: RegisterValues) => Promise<void>;
 }) {
   const form = useForm<RegisterInput, unknown, RegisterValues>({
@@ -85,11 +87,11 @@ export function RegisterForm({
           )}
         </FormField>
         <FormError message={formError} />
-        <Button type="submit" disabled={form.formState.isSubmitting}>
+        <Button type="submit" disabled={pending || form.formState.isSubmitting}>
           Register
         </Button>
       </form>
-      <Link to="/login" className="text-sm underline underline-offset-4">
+      <Link to="/login" disabled={pending} className="text-sm underline underline-offset-4">
         Back to login
       </Link>
     </AuthCard>

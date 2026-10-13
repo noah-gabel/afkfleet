@@ -20,11 +20,13 @@ import { AuthCard, FormError } from "./AuthCard";
 /** The code step. `onSubmit` throws what the form should show. */
 export function CodeStep({
   step,
+  pending,
   onSubmit,
   onExpire,
   onCancel,
 }: {
   step: Extract<Step, { kind: "code" }>;
+  pending: boolean;
   onSubmit: (code: string) => Promise<void>;
   onExpire: () => void;
   onCancel: () => void;
@@ -79,10 +81,10 @@ export function CodeStep({
         )}
         <FormError message={formError} />
         <div className="flex gap-2">
-          <Button type="submit" disabled={form.formState.isSubmitting}>
+          <Button type="submit" disabled={pending || form.formState.isSubmitting}>
             Verify
           </Button>
-          <Button type="button" variant="outline" onClick={onCancel}>
+          <Button type="button" variant="outline" disabled={pending} onClick={onCancel}>
             Cancel
           </Button>
         </div>

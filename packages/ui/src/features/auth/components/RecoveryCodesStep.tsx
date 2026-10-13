@@ -17,13 +17,15 @@ export const COPY_FAILED = "Couldn't copy. Select the codes and copy them by han
 /** The recovery codes step. */
 export function RecoveryCodesStep({
   codes,
+  pending,
   onContinue,
 }: {
   codes: readonly string[];
+  /** The flow's call (the login that follows) is running. */
+  pending: boolean;
   onContinue: () => Promise<void>;
 }) {
   const [saved, setSaved] = useState(false);
-  const [pending, setPending] = useState(false);
 
   async function copy(): Promise<void> {
     try {
@@ -71,8 +73,7 @@ export function RecoveryCodesStep({
         type="button"
         disabled={!saved || pending}
         onClick={() => {
-          setPending(true);
-          void onContinue().finally(() => setPending(false));
+          void onContinue();
         }}
       >
         Continue

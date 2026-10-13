@@ -4,86 +4,23 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../../api/ApiClient";
 import { fakeApiError } from "../../api/FakeApiClient";
 import { SESSION_ENDED } from "../../app/leave";
-import type { ApiErrorDetails } from "../../generated/ApiErrorDetails";
-import type { LoginStepResponse } from "../../generated/LoginStepResponse";
-import type { MfaEnrollResponse } from "../../generated/MfaEnrollResponse";
-import { me, PROFILE } from "../../test/fixtures";
-import { fakeTime, renderApp } from "../../test/renderApp";
+import { me } from "../../test/fixtures";
+import { fakeTime } from "../../test/renderApp";
+import {
+  atLogin,
+  CODES,
+  cacheText,
+  ENROLLMENT,
+  enterCode,
+  logIn,
+  MFA,
+  PASSWORD,
+  refusal,
+  SECRET,
+  SETUP,
+  WRONG,
+} from "../../test/signIn";
 import { NEXT_CODE, SETUP_DONE, STEP_ENDED } from "./authFlowReducer";
-
-const PASSWORD = "placeholder password";
-const SECRET = "ABCDEFGHIJKLMNOPQRST";
-const ENROLLMENT: MfaEnrollResponse = {
-  otpauth_uri: `otpauth://totp/afkfleet:afkbot1?secret=${SECRET}&issuer=afkfleet`,
-  qr_svg: "data:image/svg+xml;base64,PHN2Zy8+",
-  secret: SECRET,
-};
-const CODES = Array.from({ length: 10 }, (_, i) => `aaaa-bbbb-cccc-dddd-eee${i}`);
-const MFA: LoginStepResponse = { step: "mfa_required", expires_in: 300 };
-const SETUP: LoginStepResponse = { step: "setup_required", expires_in: 600 };
-
-function refusal(status: number, code: string, extra: Partial<ApiErrorDetails> = {}) {
-  return fakeApiError("api", {
-    api: {
-      status,
-      code: code as ApiErrorDetails["code"],
-      message: `refused: ${code}`,
-      request_id: "01900000-0000-7000-8000-000000000009",
-      ...extra,
-    },
-  });
-}
-
-const WRONG = () => refusal(401, "invalid_credentials");
-
-/** The App on the login form: no session at launch; `loginMfa` (or `signIn()`) starts one. */
-async function atLogin(handlers: Partial<ApiClient> = {}, advanceTimers?: (ms: number) => unknown) {
-  const session = { live: false };
-  const app = renderApp(
-    {
-      serverProfile: async () => PROFILE,
-      me: async () => {
-        if (!session.live) {
-          throw fakeApiError("no_session");
-        }
-        return me();
-      },
-      loginMfa: async () => {
-        session.live = true;
-      },
-      ...handlers,
-    },
-    advanceTimers === undefined ? {} : { advanceTimers },
-  );
-  await screen.findByRole("heading", { name: "Log in" });
-  return { ...app, session };
-}
-
-async function logIn(app: Awaited<ReturnType<typeof atLogin>>, username = "afkbot1") {
-  await app.user.type(screen.getByLabelText("Username"), username);
-  await app.user.type(screen.getByLabelText("Password"), PASSWORD);
-  await app.user.click(screen.getByRole("button", { name: "Log in" }));
-}
-
-async function enterCode(app: Awaited<ReturnType<typeof atLogin>>, code: string) {
-  const field = await screen.findByLabelText("Code");
-  await app.user.clear(field);
-  await app.user.type(field, code);
-  await app.user.click(screen.getByRole("button", { name: /^(Verify|Confirm)$/ }));
-}
-
-/** Everything the QueryClient holds, as text. */
-function cacheText(app: Awaited<ReturnType<typeof atLogin>>): string {
-  const queries = app.runtime.queryClient
-    .getQueryCache()
-    .getAll()
-    .map((query) => ({ key: query.queryKey, state: query.state }));
-  const mutations = app.runtime.queryClient
-    .getMutationCache()
-    .getAll()
-    .map((mutation) => mutation.state);
-  return JSON.stringify({ queries, mutations });
-}
 
 describe("logging in", () => {
   afterEach(() => {

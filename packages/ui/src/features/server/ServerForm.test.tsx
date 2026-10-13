@@ -1,4 +1,4 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import type { ApiClient } from "../../api/ApiClient";
@@ -6,8 +6,10 @@ import { fakeApiError } from "../../api/FakeApiClient";
 import { CA_PEM_MAX_BYTES } from "../../api/limits";
 import { SESSION_ENDED } from "../../app/leave";
 import type { ProfileUnreadable } from "../../generated/ProfileUnreadable";
+import type { ServerProfileResponse } from "../../generated/ServerProfileResponse";
 import type { ServerProfileState } from "../../generated/ServerProfileState";
-import { me, ORIGIN, PROFILE } from "../../test/fixtures";
+import type { SessionPage } from "../../generated/SessionPage";
+import { deferred, me, ORIGIN, PROFILE } from "../../test/fixtures";
 import { renderApp } from "../../test/renderApp";
 import { CERTIFICATE_HELP } from "./certificateHelp";
 
@@ -249,6 +251,36 @@ describe("the server settings, signed in", () => {
     expect(app.runtime.queryClient.getQueryData(["me"])).toBeUndefined();
     expect(screen.queryByText(SESSION_ENDED)).toBeNull();
   });
+
+  it.each(["before", "after"] as const)(
+    "is quiet for a call that starts during the switch and answers no_session %s it",
+    async (order) => {
+      const answer = deferred<ServerProfileResponse>();
+      const call = deferred<SessionPage>();
+      const app = await atServer({
+        setServerProfile: () => answer.promise,
+        sessions: () => call.promise,
+      });
+      await typeUrl(app, NEW_URL);
+      await app.user.click(screen.getByRole("button", { name: "Save" }));
+      await app.user.click(await screen.findByRole("button", { name: "Save and log out" }));
+
+      const during = app.runtime.apiClient.sessions().catch(() => {});
+      await act(async () => {
+        if (order === "before") {
+          call.reject(fakeApiError("no_session"));
+          answer.resolve(SWITCHED);
+        } else {
+          answer.resolve(SWITCHED);
+          call.reject(fakeApiError("no_session"));
+        }
+        await during;
+      });
+
+      await waitFor(() => expect(app.path()).toBe("/login"));
+      expect(screen.queryByText(SESSION_ENDED)).toBeNull();
+    },
+  );
 
   it("says when the old server couldn't be told", async () => {
     const app = await atServer({

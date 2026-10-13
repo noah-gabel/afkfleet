@@ -148,7 +148,7 @@ describe("registering with an invite", () => {
       expect(screen.getByText(reason)).toBeDefined();
       expect((screen.getByLabelText("Username") as HTMLInputElement).value).toBe("NewBot");
       expect((screen.getByLabelText("Password") as HTMLInputElement).value).toBe("");
-      await waitFor(() => expect(app.path()).toBe("/register"));
+      await waitFor(() => expect(app.path()).toBe("/login"));
     },
   );
 

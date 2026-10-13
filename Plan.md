@@ -3103,6 +3103,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P8.7, as built, group D) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
   > - **Tests,** red first: the flow's reducer 9 of 11; the field components 3 of 4; the login, register and server screens 57 of 57 against the placeholders; the desktop crate 2 of 134 against a `session_discard()` stub; the UI failed to compile until it knew the new code, by design. A test that a store refused before the guard leaves a live session untouched pins existing behaviour and was shown red through a temporary change that logged out first; the frozen-prototype flow test, through a temporary shadowing `toString` assignment.
   > - **E's part:** the profile (password change, sessions) and the admin screens replace group D's placeholders; P8.7 is ticked there.
+
+  > Note (P8.7, the user's review of PR #37) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)):
+  > - **A server switch while signed in runs as a deliberate logout:** `logging_out` from before the call until its answer, so a call answering `no_session` meanwhile shows no "session ended"; `none` and an error that changed nothing go back to signed in.
+  > - **Late answers count only for their step:** every step has an id, each action names the step it was issued in, and the reducer drops the rest. A late answer never signs in or navigates once the flow left its step or route.
+  > - **While a call runs,** its step's Cancel, links, "Log out" and "Continue as" wait, and a second submit does nothing. "New QR code" waits too, and hides the old secret and QR code while the new one loads.
+  > - **Smaller:** the setup secret is requested once per step, also under StrictMode; a step's deadline counts from when its request was sent; a failed login after registering lands on a real `/login` (with its notice and username), whose Register link works.
+  > - **Tests,** red first: 13 flow tests and 2 switch tests against the old code, and the reducer's 11 of 13 against the old reducer. 8 more pin behaviour the old code had (double submits, "Continue as"'s guard, the generation rule, `me`'s invalidation at every way in, the setup step's deadline check), shown red through temporary mutations of those guards.
 - [ ] **P8.8** 🔴 Admin screens:
   - users: change role, disable
   - invites: the code is shown **once**, with a copy button

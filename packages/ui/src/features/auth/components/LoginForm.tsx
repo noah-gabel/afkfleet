@@ -1,7 +1,8 @@
 // The password step (Plan.md P8.7): username and password, checked by the API's own
 // schema before anything is sent. What the server refuses shows next to its field, or above
 // the button with describeError's text (a 429 with its wait). A notice says why the flow
-// came back here; one about a session the flow can't use offers "Log out".
+// came back here; one about a session the flow can't use offers "Log out". While the
+// flow's call runs (`pending`), its links and buttons wait.
 import { zodResolver } from "@hookform/resolvers/zod";
 import { Link } from "@tanstack/react-router";
 import { useState } from "react";
@@ -24,12 +25,14 @@ export function LoginForm({
   origin,
   username,
   notice,
+  pending,
   onSubmit,
   onLogOut,
 }: {
   origin: string | undefined;
   username: string;
   notice: Notice | undefined;
+  pending: boolean;
   onSubmit: (values: LoginValues) => Promise<void>;
   onLogOut: () => void;
 }) {
@@ -67,6 +70,7 @@ export function LoginForm({
                 size="sm"
                 variant="outline"
                 className="self-start"
+                disabled={pending}
                 onClick={onLogOut}
               >
                 Log out
@@ -92,15 +96,15 @@ export function LoginForm({
           )}
         </FormField>
         <FormError message={formError} />
-        <Button type="submit" disabled={form.formState.isSubmitting}>
+        <Button type="submit" disabled={pending || form.formState.isSubmitting}>
           Log in
         </Button>
       </form>
       <div className="flex justify-between text-sm">
-        <Link to="/register" className="underline underline-offset-4">
+        <Link to="/register" disabled={pending} className="underline underline-offset-4">
           Register with an invite
         </Link>
-        <Link to="/setup" className="underline underline-offset-4">
+        <Link to="/setup" disabled={pending} className="underline underline-offset-4">
           Server settings
         </Link>
       </div>
@@ -111,10 +115,12 @@ export function LoginForm({
 /** A login found another account's session still held. */
 export function StillSignedIn({
   username,
+  pending,
   onContinue,
   onLogOut,
 }: {
   username: string;
+  pending: boolean;
   onContinue: () => void;
   onLogOut: () => void;
 }) {
@@ -122,10 +128,10 @@ export function StillSignedIn({
     <AuthCard title="Log in">
       <p>{`You're still signed in as ${username}.`}</p>
       <div className="flex gap-2">
-        <Button type="button" onClick={onContinue}>
+        <Button type="button" disabled={pending} onClick={onContinue}>
           {`Continue as ${username}`}
         </Button>
-        <Button type="button" variant="outline" onClick={onLogOut}>
+        <Button type="button" variant="outline" disabled={pending} onClick={onLogOut}>
           Log out
         </Button>
       </div>
