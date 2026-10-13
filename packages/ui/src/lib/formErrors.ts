@@ -13,21 +13,25 @@ export function fieldErrorsOf(error: CommandError): readonly FieldError[] {
 }
 
 /**
- * Sets each of `error`'s field errors on the form field `paths` maps its path to. True if
- * any landed, so the caller shows the general text only when none did.
+ * Sets `error`'s field errors on the form fields `paths` maps their paths to. A field with
+ * several (a weak password: "is too weak", then each of zxcvbn's hints) gets them all, one
+ * per line, in the server's order. True if any landed, so the caller shows the general
+ * text only when none did.
  */
 export function showFieldErrors<T extends FieldValues>(
   setError: UseFormSetError<T>,
   error: CommandError,
   paths: Readonly<Record<string, Path<T>>>,
 ): boolean {
-  let shown = false;
+  const messages = new Map<Path<T>, string[]>();
   for (const field of fieldErrorsOf(error)) {
     const path = Object.hasOwn(paths, field.path) ? paths[field.path] : undefined;
     if (path !== undefined) {
-      setError(path, { type: "server", message: field.message });
-      shown = true;
+      messages.set(path, [...(messages.get(path) ?? []), field.message]);
     }
   }
-  return shown;
+  for (const [path, lines] of messages) {
+    setError(path, { type: "server", message: lines.join("\n") });
+  }
+  return messages.size > 0;
 }

@@ -1,4 +1,5 @@
-// The server's limits on the app's inputs, which the zod schemas mirror (schemas.ts).
+// The server's limits on the app's inputs, which the zod schemas mirror (schemas.ts), and
+// how long a step-up holds (lib/stepUp.ts).
 // Each name is the Rust constant's; fleet-api-types' `tests/limits.rs` checks every value
 // against it, so they can't drift. The server stays authoritative. Only `export const
 // NAME = <number>;` lines belong here.
@@ -13,3 +14,4 @@ export const ID_CHARS = 36;
 export const PAGE_MAX = 100;
 export const SERVER_URL_MAX_BYTES = 2048;
 export const CA_PEM_MAX_BYTES = 65536;
+export const STEP_UP_WINDOW_SECS = 300;

@@ -1,9 +1,17 @@
-// The queries more than one screen shares (Plan.md P8.6): the user and the server profile.
-// No query or mutation may carry a secret in its request or its answer (a password, a TOTP
-// secret or QR code, recovery codes, an invite code): those calls are direct calls, so
-// nothing secret ever sits in TanStack Query's caches (CLAUDE.md, ADR-0017).
-import { queryOptions, useQuery } from "@tanstack/react-query";
+// The queries more than one screen shares (Plan.md P8.6): the user and the server profile;
+// and the lists the server answers in pages, newest first, which a screen shows a page at a
+// time with "Show more" (P8.7, P8.8). No query or mutation may carry a secret in its request
+// or its answer (a password, a TOTP secret or QR code, recovery codes, an invite code):
+// those calls are direct calls, so nothing secret ever sits in TanStack Query's caches
+// (CLAUDE.md, ADR-0017).
+import {
+  infiniteQueryOptions,
+  queryOptions,
+  useInfiniteQuery,
+  useQuery,
+} from "@tanstack/react-query";
 
+import type { SessionPage } from "../generated/SessionPage";
 import type { ApiClient } from "./ApiClient";
 import { useApiClient } from "./context";
 
@@ -32,4 +40,22 @@ export function useMe() {
 /** The server profile, through the app's client. */
 export function useServerProfile() {
   return useQuery(serverProfileQuery(useApiClient()));
+}
+
+/** The user's sessions: every page loaded so far. */
+export const SESSIONS_KEY = ["sessions"] as const;
+
+/** The user's live sessions, a page at a time. */
+export function sessionsQuery(api: ApiClient) {
+  return infiniteQueryOptions({
+    queryKey: SESSIONS_KEY,
+    queryFn: ({ pageParam }) => api.sessions(pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page: SessionPage) => page.next,
+  });
+}
+
+/** The user's sessions, through the app's client. */
+export function useSessions() {
+  return useInfiniteQuery(sessionsQuery(useApiClient()));
 }

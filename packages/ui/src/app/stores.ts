@@ -10,6 +10,8 @@
 //   answer from before a re-login can't end the new session.
 // - `connection`: the banner's state. Its epoch is bumped each time the banner goes up, and
 //   only a call that started after that can take it down again.
+// - `notices`: the warnings Home's user dismissed, for the sign-in (the session's
+//   generation) they dismissed them in; a new sign-in shows them again (Plan.md P8.7).
 import { createStore, type StoreApi } from "zustand/vanilla";
 
 /** Where the user's session stands, as far as the UI knows. */
@@ -60,10 +62,22 @@ export interface ConnectionState {
   recover(epoch: number): boolean;
 }
 
+/** A warning Home shows about the user's account. */
+export type HomeWarning = "failedCodes" | "recoveryCodes";
+
+/** The notices store; see the module comment. */
+export interface NoticesState {
+  /** The warnings dismissed in the sign-in `generation`. */
+  readonly dismissed: { readonly generation: number; readonly warnings: readonly HomeWarning[] };
+  /** Hides `warning` on Home until the next sign-in after `generation`. */
+  dismiss(warning: HomeWarning, generation: number): void;
+}
+
 /** The stores of one App. */
 export interface AppStores {
   readonly session: StoreApi<SessionState>;
   readonly connection: StoreApi<ConnectionState>;
+  readonly notices: StoreApi<NoticesState>;
 }
 
 /** Fresh stores for one App. */
@@ -135,5 +149,15 @@ export function createAppStores(): AppStores {
         },
       };
     }),
+    notices: createStore<NoticesState>()((set, get) => ({
+      dismissed: { generation: 0, warnings: [] },
+      dismiss(warning, generation) {
+        const { dismissed } = get();
+        const earlier = dismissed.generation === generation ? dismissed.warnings : [];
+        if (!earlier.includes(warning)) {
+          set({ dismissed: { generation, warnings: [...earlier, warning] } });
+        }
+      },
+    })),
   };
 }
