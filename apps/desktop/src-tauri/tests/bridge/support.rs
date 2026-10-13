@@ -52,6 +52,18 @@ pub(crate) const PASSWORD: &str = "correct horse battery staple";
 const T0: i64 = 1_800_000_015_000;
 /// How long a test waits for something that must happen.
 pub(crate) const WAIT: Duration = Duration::from_secs(10);
+/// The test server's own bounds. These tests check the app against a real server,
+/// not the server's speed (its own tests do that, with the production values). CI's
+/// coverage build, with every crate instrumented, ran them up to 4 times slower on a
+/// busy runner, where the production 5 s to get a database connection and a 3 s
+/// shutdown weren't enough (PR #37), so the server gets generous ones.
+const DATABASE_WAIT: Duration = Duration::from_secs(30);
+const SHUTDOWN: ShutdownTimeouts = ShutdownTimeouts {
+    drain: Duration::from_secs(2),
+    close: Duration::from_secs(15),
+};
+/// How long `Server::stop` waits: more than the shutdown's whole budget.
+const STOP_WAIT: Duration = Duration::from_secs(30);
 
 /// The real server, in-process, with its Owner (who has no 2FA yet).
 pub(crate) struct Server {
@@ -71,9 +83,12 @@ impl Server {
         let clock = ManualClock::new(DateTime::from_timestamp_millis(T0).unwrap());
         let random = SeededRandom::new(8);
         let config = config(&dir);
-        let database = sqlite::open(&config.database, DatabaseOptions::default())
-            .await
-            .unwrap();
+        let database = sqlite::open(
+            &config.database,
+            DatabaseOptions::default().with_acquire_timeout(DATABASE_WAIT),
+        )
+        .await
+        .unwrap();
         let passwords: Arc<dyn Passwords> = Arc::new(
             Argon2Passwords::new(Argon2Params::default(), Arc::new(random.clone()))
                 .await
@@ -107,13 +122,7 @@ impl Server {
         let url = ServerUrl::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
         let (stop, signals) = ChannelSignals::new();
         let mut running = JoinSet::new();
-        running.spawn(async move {
-            let timeouts = ShutdownTimeouts {
-                drain: Duration::from_secs(1),
-                close: Duration::from_secs(2),
-            };
-            serve(listener, app, &database, signals, timeouts).await
-        });
+        running.spawn(async move { serve(listener, app, &database, signals, SHUTDOWN).await });
         Self {
             url,
             clock,
@@ -126,7 +135,7 @@ impl Server {
     /// Stops the server as a signal would, and checks it stopped cleanly.
     pub(crate) async fn stop(mut self) {
         self.stop.send(Signal::Terminate).await.unwrap();
-        let exit = timeout(WAIT, self.running.join_next())
+        let exit = timeout(STOP_WAIT, self.running.join_next())
             .await
             .expect("the server didn't stop in time")
             .unwrap()
