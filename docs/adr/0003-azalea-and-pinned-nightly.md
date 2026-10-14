@@ -37,7 +37,7 @@ The project needs a reproducible toolchain: the same compiler for every develope
 ### Bump procedure (Minecraft version upgrade)
 One pull request changes all of these together, never one alone:
 1. **azalea:** pick the new azalea release on crates.io and note its Minecraft version.
-2. **Pins:** update `azalea`/`azalea-auth` (and `azalea-chat`/`azalea-language`, which fleet-mc uses directly) in Plan.md §5, `Cargo.toml` (once used) and `spikes/toolchain-check/Cargo.toml`.
+2. **Pins:** update `azalea`/`azalea-auth` (and `azalea-chat`/`azalea-language`, which fleet-mc uses directly) in Plan.md §5, `Cargo.toml` (once used) and `spikes/toolchain-check/Cargo.toml`. *(Phase 9, group B)* No member depends on azalea-auth directly any more; its pin in §5 follows azalea's ([ADR-0018](0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
 3. **Nightly:** start with the newest nightly whose `rustfmt`, `clippy` and `llvm-tools-preview` exist for `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu`. If azalea fails to build, bisect back to the newest nightly that works, counting only the azalea error as "bad".
 4. **Test server:** update `VERSION` (and, if needed, the pinned `itzg/minecraft-server` image) in `deploy/compose.dev.yaml` (from P1.1), and the same pins in fleet-mc's slow-test harness (`crates/fleet-mc/tests/minecraft/harness.rs`). A fast test (`pins`) fails while the two differ (ADR-0011).
 5. **Verify:**
@@ -47,6 +47,8 @@ One pull request changes all of these together, never one alone:
    - re-check fleet-mc's renderer (`crates/fleet-mc/src/events/render.rs`) against azalea-chat's `TranslatableComponent::read` and `FormattedText` rendering; its tests compare the two on ordinary text (ADR-0011)
    - re-check what fleet-mc's connector relies on (ADR-0008 §1, §8, Consequences): `#[doc(hidden)] start_ecs_runner` and its return values, the plugin list it disables plugins from, `RawConnection::write_raw`, and whether `Client::attack` still needs the `attack_raw` workaround
    - run `just ci`, `just test-slow` and `just demo-agent` (an hour with one server restart, ADR-0014), and put the demo's `summary.txt` in the bump's pull request
+   - *(from Phase 9, group B, [ADR-0018](0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md))* run `just deny`: a new azalea crate that depends on azalea-auth is named there, and `deny.toml`'s azalea-auth wrapper list is updated together with a note in ADR-0018
+   - *(from Phase 9, group B)* compare fleet-server's Microsoft adapter (`crates/fleet-server/src/infra/msauth/`) with the new azalea-auth's `auth.rs`: its endpoints, client ID, scope, fields and headers. The adapter sends its own requests with azalea-auth's protocol, so a change there isn't picked up by the bump
 6. **Record:** update this ADR, or supersede it, and `docs/runbook.md` (from P12).
 
 ## Consequences

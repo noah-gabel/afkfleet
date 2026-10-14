@@ -38,6 +38,11 @@ Every azalea bump (ADR-0003's procedure, step 5):
 - removes the two hickory ignores once azalea uses hickory-proto ≥ 0.26.1
 - updates the license exceptions to the new versions after a review
 
+### Phase 9, group B: azalea-auth only through azalea *(the user's decision, [ADR-0018](0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md))*
+- **A wrapper ban.** `[bans] deny` gains `{ crate = "azalea-auth", wrappers = ["azalea", "azalea-client", "azalea-inventory", "azalea-protocol"] }`: the four crates that depend on azalea-auth in azalea 0.16.0, checked in Cargo.lock. A direct dependency in any member fails `just deny`, shown with a temporary one in fleet-server ("bans FAILED", `error[banned]`). The desktop pass reports the wrapper as unused, like its other not-encountered entries.
+- **RUSTSEC-2023-0071 stays where it was.** fleet-server's Microsoft adapter sends its own requests, so neither azalea-auth nor `rsa` reaches it (`cargo tree -p fleet-server -e normal,build,dev --target all -i rsa` finds nothing). The analysis above still covers fleet-mc and the agent, the only crates that build `rsa`; the server never touches certificates or RSA.
+- **At a bump,** a new azalea crate that depends on azalea-auth is named by cargo-deny, and the wrapper list is updated together with a note in ADR-0018 (ADR-0003's procedure).
+
 ## Consequences
 - **Easier:** azalea builds in the workspace, and `cargo deny` stays strict everywhere else. Each exception carries its reason and its removal trigger in `deny.toml` itself.
 - **Harder:** every azalea bump has to revisit five entries. A new advisory against `rsa` or `hickory-proto` still fails the build, because the ignores name single advisory IDs.

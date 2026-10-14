@@ -74,6 +74,7 @@ On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: th
 | `just test [crate]` | nextest for the workspace or one crate |
 | `just test-slow` | Pulls the server image and builds the agent's image, then runs the nextest `slow` profile with fleet-mc's test-only `fault-injection` feature, one Minecraft container or compose stack at a time (needs Docker) |
 | `just test-real-account` | **The user only; the AI never runs it.** nextest `manual` profile: the user's real token from `secrets/p1.8-account.txt` joins a local online-mode container and sends signed chat (needs Docker) |
+| `just test-ms-account [filter]` | **The user only; the AI never runs it.** nextest `manual` profile with `--no-capture`, fleet-server only: the Microsoft adapter against the user's own account, in memory only. It prints a link and a code, then pass or FAIL per step; `filter` picks `account_check` or `declined_link` (ADR-0018) |
 | `just cov` | cargo-llvm-cov with the coverage gates (per-crate and per-module gates are checked by a script over the JSON report) |
 | `just cov-desktop` | Windows only (on Linux it prints a note and succeeds): cargo-llvm-cov over the desktop crate alone, with `--no-rustc-wrapper` (the default wrapper leaves its lib's unit-test binary uninstrumented on Windows), checked against the desktop gate by `coverage-gates.mjs --report desktop` (CI's `tauri-build` job; ADR-0017) |
 | `just deny` | `cargo deny check` in two passes with the same `deny.toml`: the workspace without the desktop crate on every target, then the desktop crate alone on Windows (ADR-0017) |
@@ -102,9 +103,10 @@ On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: th
 ## Architecture rules
 **Crates and dependencies** (full table in Plan.md §4):
 - `fleet-core` is pure: no IO, no tokio, no azalea. It contains domain types, the bot state machine, policies, `authorize()` and the Minecraft port traits.
-- **Only `fleet-mc` may depend on `azalea`; only `fleet-server` may depend on `azalea-auth`.**
+- **Only `fleet-mc` may depend on `azalea`. No member depends on `azalea-auth` directly**: it enters only through azalea's own crates, and a `deny.toml` wrapper entry enforces it (ADR-0018).
   - `fleet-mc` may use only `azalea::auth::sessionserver` and `azalea::auth::certs`, through azalea's re-export, to join with a server-issued Minecraft token.
-  - The Microsoft flows (device code, Microsoft tokens, the account cache) belong to `fleet-server` alone. `fleet-mc`'s `clippy.toml` bans them (ADR-0011).
+  - The Microsoft flows (device code, Microsoft tokens, refresh, the Minecraft session) belong to `fleet-server` alone, in its own adapter (`infra/msauth`, reqwest with its own requests; ADR-0018). `fleet-mc`'s `clippy.toml` bans azalea's Microsoft flows (ADR-0011).
+  - Only `infra/msauth/client.rs` names reqwest's client types, through the one builder; fleet-server's `clippy.toml` bans them elsewhere, along with reqwest's unbounded body readers (ADR-0018).
 - azalea code runs only on the MC host threads in `fleet-mc` (current-thread runtime + `LocalSet`). Never call azalea from a normal tokio task.
 - `fleet-startup` holds only the binaries' process start-up and lifecycle code: the config loader and its errors, the `[log]` types, the log layer, the panic hook, the stop signals (`OsSignals`) and the secret-file loader (`secret_file`, which reads every `*_file` secret of both binaries with one set of rules; ADR-0016). Internally it depends only on `fleet-core`. Its filter always caps `azalea_auth` at `info` and lets panic reports through; a binary only adds rules through `FilterRules` (ADR-0015).
 
@@ -137,7 +139,7 @@ fleet-server/src/
   cli/        # serve, migrate, healthcheck, user create-owner, vault status, vault rotate-key, pki, backup
   app/        # services: auth, users, accounts, bots, modes, agents, audit, events, vault
   ports/      # repository and provider traits
-  infra/      # sqlite/ (sqlx repos), crypto/ (vault, tokens, passwords), msauth/ (azalea-auth adapter)
+  infra/      # sqlite/ (sqlx repos), crypto/ (vault, tokens, passwords), msauth/ (Microsoft's account flows over HTTP)
   http/       # router.rs, middleware/, extractors/, handlers/<resource>.rs, error.rs, openapi.rs, ws.rs
   grpc/       # enrollment.rs, control.rs, registry.rs, scheduler.rs, reconciler.rs
 ```
@@ -156,7 +158,7 @@ fleet-server/src/
 |---|---|---|
 | Domain & runtime | Minecraft | `azalea` (fleet-mc only) |
 | | Chat components, translations | `azalea-chat`, `azalea-language` (fleet-mc only, for its bounded renderer) |
-| | MS auth | `azalea-auth` (server only) |
+| | MS auth | fleet-server's own adapter over `reqwest`; never `azalea-auth` directly (ADR-0018) |
 | | Async runtime | `tokio` |
 | | Cancellation | `tokio-util` (`CancellationToken`, `TaskTracker`) |
 | | Streams | `tokio-stream` |
@@ -318,12 +320,14 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 - Unit tests: `#[cfg(test)] mod tests` at the bottom of the file.
 - Component and integration tests: `crates/<crate>/tests/*.rs`.
 - Slow tests (containers, real Minecraft) have names starting with `slow_`.
-- Manual tests need the user's real credentials and have names starting with `manual_`. **Only the user runs them**, with `just test-real-account`. The AI never runs that recipe or the `manual` nextest profile, and no other profile includes them.
+- Manual tests need the user's real credentials and have names starting with `manual_`. **Only the user runs them**, with `just test-real-account` (fleet-mc) or `just test-ms-account` (fleet-server's Microsoft check). The AI never runs those recipes or the `manual` nextest profile, and no other profile includes them.
 
 **How to write them**
 - Names describe behavior, e.g. `login_with_wrong_password_returns_401_and_counts_attempt`.
 - Arrange / Act / Assert, one behavior per test. Use `rstest` `#[case]` for tables.
 - **Time:** `#[tokio::test(start_paused = true)]` plus `tokio::time::advance`. Never a real `sleep`.
+  - **The one exception: fleet-server's two `manual_` Microsoft tests** wait Microsoft's real poll interval, at most 8 minutes (ADR-0018).
+  - **Tests over real sockets run on real time** (the Microsoft adapter against its local fakes), with short bounds and never a sleep; paused time would fire their timeouts early (ADR-0018).
   - **Never paused time with sqlx.** It runs each SQLite connection on a worker thread, so the runtime looks idle while it waits, and paused time would jump ahead and fire its timeouts early. A test that waits for a pool timeout lowers it (`DatabaseOptions`) instead (ADR-0015).
   - **The desktop keychain's tests run on real time** for the same reason: its blocking calls run on Tauri's runtime, outside the test's. Short bounds (100 ms for a call that must time out, 5 s for everything else), never a sleep (ADR-0017).
   - `governor` (rate limits) and `moka` (caches with expiry) keep their own clocks, which paused tokio time doesn't control. Inject a clock for them (governor supports custom clocks), or ask the user before testing them another way.
