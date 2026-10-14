@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE mc_accounts SET status = ?, status_reason = ?\n         WHERE id = ? AND kind = 'microsoft'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "20d9da5c3ac39756719e16634836c1988e4cb8187b4eb214f1a3cd091779b831"
+}

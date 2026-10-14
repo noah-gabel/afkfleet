@@ -1,6 +1,7 @@
 //! The Microsoft port's fake keeps its contract (ADR-0018): scripts answered
 //! in order per method, a panic naming the method on an unscripted call, a
-//! log of every call with its token, and a hang that never answers.
+//! log of every call with its token, a hang that never answers, and a gate
+//! that answers only once the test releases it.
 //!
 //! Every test runs on paused time and bounds each call, so a fake that
 //! hangs where it should answer fails the test at once instead of blocking
@@ -15,7 +16,7 @@ use fleet_server::ports::msauth::{
 };
 
 use crate::support::msauth::{
-    Call, FakeMicrosoftAuth, Script, access_token, device_code, device_flow, refresh_token,
+    Call, FakeMicrosoftAuth, Script, access_token, device_code, device_flow, gated, refresh_token,
     session, tokens,
 };
 
@@ -179,4 +180,42 @@ async fn a_hang_lets_the_next_script_answer_the_next_call() {
     assert_eq!(flow.code.expose_secret(), "code-2");
     assert!(refresh_hangs, "the first refresh answered");
     assert_eq!(refused, RefreshError::InvalidGrant);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_gated_call_tells_it_arrived_and_answers_only_once_released() {
+    let fake = FakeMicrosoftAuth::new();
+    let (script, mut gate) = gated();
+    fake.script_refresh(script);
+    let refresh = refresh_token("refresh-1");
+    let mut call = Box::pin(fake.refresh(&refresh));
+
+    let early = tokio::select! {
+        biased;
+        answer = &mut call => Some(answer),
+        () = gate.entered() => None,
+    };
+    let still_waiting = hangs(&mut call).await;
+    gate.release(Ok(tokens("access-2", "refresh-2", at())));
+    let answer = answered(call).await.unwrap();
+
+    assert!(early.is_none(), "{early:?}");
+    assert!(still_waiting);
+    assert_eq!(answer.refresh.expose_secret(), "refresh-2");
+    assert_eq!(
+        fake.calls(),
+        [Call::Refresh {
+            refresh_token: "refresh-1".to_owned()
+        }]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_gate_dropped_unreleased_never_answers() {
+    let fake = FakeMicrosoftAuth::new();
+    let (script, gate) = gated::<Result<_, SessionError>>();
+    fake.script_session(script);
+    drop(gate);
+
+    assert!(hangs(fake.minecraft_session(&access_token("access-1"))).await);
 }

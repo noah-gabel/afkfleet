@@ -1,8 +1,10 @@
-//! Tests for the linked Minecraft accounts' repository (Plan.md P9.1,
+//! Tests for the linked Minecraft accounts' repository (Plan.md P9.1, P9.5,
 //! ADR-0018): an account is found on the read pool and in a transaction, a
 //! Minecraft account is linked at most once (a Microsoft account by its
 //! UUID, pending ones included; an offline account by its name in any
-//! case), and the table refuses what its CHECKs and foreign key forbid.
+//! case), the table refuses what its CHECKs and foreign key forbid, a
+//! status is written and read with its reason, and a rename is a
+//! compare-and-set on the old name.
 //!
 //! Each test gets a fresh database from `#[sqlx::test]` and opens it with
 //! `Database::connect`, the production settings. Time isn't paused: sqlx's
@@ -13,11 +15,11 @@
 #![cfg(test)]
 
 use chrono::{DateTime, Utc};
-use fleet_core::account::AccountStatus;
+use fleet_core::account::{AccountStatus, RefusalReason};
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::authz::Role;
 use fleet_core::id::{AccountId, UserId};
-use fleet_core::value::Username;
+use fleet_core::value::{McUsername, Username};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountCredential, InsertAccountError, McAccount};
 use fleet_server::ports::audit::NewAuditEntry;
@@ -37,6 +39,8 @@ const STORED_AT: &str = "2027-01-15T08:00:00.000Z";
 const PROFILE: &str = "069a79f4-44e9-4726-a5be-fca90e38aaf5";
 /// Another one.
 const OTHER_PROFILE: &str = "853c80ef-3c37-49fd-aa49-938b674adae6";
+/// A third one.
+const THIRD_PROFILE: &str = "6f5a3c2e-8d1b-4c7a-9e2f-0a1b2c3d4e5f";
 /// The length of a version 1 envelope around a 16-byte token: the shortest
 /// envelope the table takes is 46 bytes, one byte of token.
 const ENVELOPE_LEN: usize = 61;
@@ -107,6 +111,23 @@ async fn insert(db: &Database, account: &McAccount) -> Result<(), InsertAccountE
 
 async fn found(db: &Database, id: AccountId) -> Option<McAccount> {
     db.accounts().find(id).await.unwrap()
+}
+
+/// The raw `status` and `status_reason` of the account `id`.
+async fn status_columns(pool: &SqlitePool, id: AccountId) -> (String, Option<String>) {
+    let id = id.to_string();
+    let row = sqlx::query!(
+        r#"SELECT status AS "status!", status_reason FROM mc_accounts WHERE id = ?"#,
+        id
+    )
+    .fetch_one(pool)
+    .await
+    .unwrap();
+    (row.status, row.status_reason)
+}
+
+fn name(text: &str) -> McUsername {
+    text.parse().unwrap()
 }
 
 async fn rows(pool: &SqlitePool) -> i64 {
@@ -310,6 +331,149 @@ async fn a_second_account_with_the_same_id_is_a_database_error(
     );
 }
 
+// --- Statuses and names (P9.5) ------------------------------------------------------------
+
+#[sqlx::test(migrations = false)]
+async fn a_refused_account_is_stored_and_read_back_with_its_reason(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(&db, 1).await;
+    let refused = account(
+        owner,
+        1,
+        "AfkBot1",
+        microsoft(
+            PROFILE,
+            1,
+            AccountStatus::Refused(RefusalReason::XboxBanned),
+        ),
+    );
+
+    insert(&db, &refused).await.unwrap();
+
+    assert_eq!(found(&db, refused.id).await.as_ref(), Some(&refused));
+    assert_eq!(
+        status_columns(db.read_pool(), refused.id).await,
+        ("refused".to_owned(), Some("xbox_banned".to_owned()))
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn set_status_writes_the_status_and_its_reason_together(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(&db, 1).await;
+    let stored = account(
+        owner,
+        1,
+        "AfkBot1",
+        microsoft(PROFILE, 1, AccountStatus::Active),
+    );
+    insert(&db, &stored).await.unwrap();
+    let steps = [
+        (
+            AccountStatus::Refused(RefusalReason::NotOwned),
+            ("refused", Some("not_owned")),
+        ),
+        (AccountStatus::ReauthRequired, ("reauth_required", None)),
+        (AccountStatus::Active, ("active", None)),
+    ];
+
+    for (status, (column, reason)) in steps {
+        let mut tx = db.write().await.unwrap();
+        let changed = tx.accounts().set_status(stored.id, status).await.unwrap();
+        tx.commit(setup_entry()).await.unwrap();
+
+        assert!(changed, "{status:?}");
+        assert_eq!(found(&db, stored.id).await.unwrap().status(), status);
+        assert_eq!(
+            status_columns(db.read_pool(), stored.id).await,
+            (column.to_owned(), reason.map(str::to_owned))
+        );
+    }
+}
+
+/// Passes against the stub (which changes nothing); shown red by dropping
+/// the update's `kind = 'microsoft'` (ADR-0018, group C).
+#[sqlx::test(migrations = false)]
+async fn set_status_changes_no_offline_or_missing_account(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(&db, 1).await;
+    let offline = account(owner, 1, "OffBot", AccountCredential::Offline);
+    insert(&db, &offline).await.unwrap();
+    let missing = AccountId::new_v7(at(T0), [9; 10]).unwrap();
+
+    let mut tx = db.write().await.unwrap();
+    let offline_changed = tx
+        .accounts()
+        .set_status(offline.id, AccountStatus::Refused(RefusalReason::NoProfile))
+        .await
+        .unwrap();
+    let missing_changed = tx
+        .accounts()
+        .set_status(missing, AccountStatus::ReauthRequired)
+        .await
+        .unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert!(!offline_changed);
+    assert!(!missing_changed);
+    assert_eq!(
+        status_columns(db.read_pool(), offline.id).await,
+        ("active".to_owned(), None)
+    );
+    assert_eq!(found(&db, offline.id).await, Some(offline));
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_rename_happens_only_while_the_name_is_exactly_the_old_one(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(&db, 1).await;
+    let stored = account(
+        owner,
+        1,
+        "AfkBot1",
+        microsoft(PROFILE, 1, AccountStatus::Active),
+    );
+    insert(&db, &stored).await.unwrap();
+    let missing = AccountId::new_v7(at(T0), [9; 10]).unwrap();
+
+    let mut tx = db.write().await.unwrap();
+    let other_case = tx
+        .accounts()
+        .rename(stored.id, &name("afkbot1"), &name("Wrong"))
+        .await
+        .unwrap();
+    let of_missing = tx
+        .accounts()
+        .rename(missing, &name("AfkBot1"), &name("Wrong"))
+        .await
+        .unwrap();
+    let renamed = tx
+        .accounts()
+        .rename(stored.id, &name("AfkBot1"), &name("afkBOT_2"))
+        .await
+        .unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert!(!other_case);
+    assert!(!of_missing);
+    assert!(renamed);
+    let read = found(&db, stored.id).await.unwrap();
+    assert_eq!(read.name.as_str(), "afkBOT_2");
+    assert_eq!(read.credential, stored.credential);
+}
+
 // --- The table's own rules --------------------------------------------------------------
 
 /// An `mc_accounts` row as raw column values, for inserts that bypass the
@@ -323,6 +487,7 @@ struct RawAccount {
     mc_name: String,
     refresh_envelope: Option<Vec<u8>>,
     status: String,
+    status_reason: Option<String>,
     created_at: String,
 }
 
@@ -336,6 +501,7 @@ impl RawAccount {
             mc_name: "AfkBot1".to_owned(),
             refresh_envelope: Some(vec![1; ENVELOPE_LEN]),
             status: "active".to_owned(),
+            status_reason: None,
             created_at: STORED_AT.to_owned(),
         }
     }
@@ -354,8 +520,9 @@ impl RawAccount {
         let envelope = self.refresh_envelope.as_deref();
         sqlx::query!(
             "INSERT INTO mc_accounts
-                 (id, owner_user_id, kind, mc_uuid, mc_name, refresh_envelope, status, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                 (id, owner_user_id, kind, mc_uuid, mc_name, refresh_envelope, status,
+                  status_reason, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             self.id,
             self.owner_user_id,
             self.kind,
@@ -363,6 +530,7 @@ impl RawAccount {
             self.mc_name,
             envelope,
             self.status,
+            self.status_reason,
             self.created_at
         )
         .execute(pool)
@@ -562,6 +730,67 @@ async fn a_stored_value_that_doesnt_read_back_is_corrupt(
         assert!(
             matches!(read, Err(StoreError::Corrupt { table: "mc_accounts", column: c, .. }) if c == column),
             "{column}: {read:?}"
+        );
+    }
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_reason_that_doesnt_fit_its_status_is_corrupt(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(&db, 1).await;
+    let cases = [
+        (
+            "refused without a reason",
+            RawAccount {
+                status: "refused".to_owned(),
+                ..RawAccount::microsoft(owner, 1)
+            },
+        ),
+        (
+            "refused with an unknown reason",
+            RawAccount {
+                status: "refused".to_owned(),
+                status_reason: Some("banned".to_owned()),
+                mc_uuid: Some(OTHER_PROFILE.to_owned()),
+                ..RawAccount::microsoft(owner, 2)
+            },
+        ),
+        (
+            "active with a reason",
+            RawAccount {
+                status_reason: Some("not_owned".to_owned()),
+                mc_uuid: Some(THIRD_PROFILE.to_owned()),
+                ..RawAccount::microsoft(owner, 3)
+            },
+        ),
+        (
+            "an offline account with a reason",
+            RawAccount {
+                status_reason: Some("not_owned".to_owned()),
+                ..RawAccount::offline(owner, 4)
+            },
+        ),
+    ];
+
+    for (case, row) in cases {
+        row.insert(db.write_pool()).await.unwrap();
+        let id: AccountId = row.id.parse().unwrap();
+
+        let read = db.accounts().find(id).await;
+
+        assert!(
+            matches!(
+                read,
+                Err(StoreError::Corrupt {
+                    table: "mc_accounts",
+                    column: "status_reason",
+                    ..
+                })
+            ),
+            "{case}: {read:?}"
         );
     }
 }

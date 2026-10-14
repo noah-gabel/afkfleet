@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO mc_accounts\n                 (id, owner_user_id, kind, mc_uuid, mc_name, refresh_envelope, status,\n                  status_reason, created_at)\n             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 9
+    },
+    "nullable": []
+  },
+  "hash": "1a54f2eefaaa19ef98ebd9403025f1e90645198bc3c24d38323cc79154e01fdb"
+}

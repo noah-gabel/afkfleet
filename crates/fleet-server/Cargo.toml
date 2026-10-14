@@ -82,8 +82,9 @@ totp-rs = { workspace = true, features = ["otpauth", "zeroize"] }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 # `ServiceBuilder`, which lists the middleware stack outermost first (ADR-0015).
 tower.workspace = true
-# `CancellationToken`, which asks axum's server to shut down gracefully (ADR-0015).
-tokio-util.workspace = true
+# `CancellationToken`, which asks axum's server to shut down gracefully (ADR-0015), and
+# `rt` for the `TaskTracker` that owns the session-token service's refreshes (ADR-0018).
+tokio-util = { workspace = true, features = ["rt"] }
 # The middleware stack's tower-http layers; the request-ID and trace layers are
 # the server's own (ADR-0015).
 tower-http = { workspace = true, features = ["catch-panic", "limit", "sensitive-headers", "set-header", "timeout"] }

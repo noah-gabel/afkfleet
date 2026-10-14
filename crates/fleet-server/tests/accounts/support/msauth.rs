@@ -8,10 +8,13 @@
 //!   in the test.
 //! - A scripted [`Script::Hang`] never answers, for the callers' bounds and
 //!   cancellation.
+//! - A scripted [`Script::Gated`] answers when the test releases its [`Gate`],
+//!   which also tells when the call arrived (group C's concurrency tests).
 //! - The log records each call and the token it got.
 //!
 //! Every token here is invented.
 
+use core::time::Duration;
 use std::collections::VecDeque;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -23,6 +26,7 @@ use fleet_server::ports::msauth::{
     SessionError, UserCode, VerificationUri,
 };
 use secrecy::SecretString;
+use tokio::sync::oneshot;
 
 /// What a call answers.
 #[derive(Debug)]
@@ -31,6 +35,61 @@ pub(crate) enum Script<T> {
     Answer(T),
     /// Nothing, ever: the caller has to give up.
     Hang,
+    /// What the test releases through the [`Gate`] [`gated`] made with it;
+    /// nothing, ever, if the gate is dropped unreleased.
+    Gated(Gated<T>),
+}
+
+/// The fake's end of a gate.
+#[derive(Debug)]
+pub(crate) struct Gated<T> {
+    entered: oneshot::Sender<()>,
+    answer: oneshot::Receiver<T>,
+}
+
+/// The test's end of a gate: it learns when the gated call arrived, and
+/// releases its answer.
+#[derive(Debug)]
+pub(crate) struct Gate<T> {
+    entered: Option<oneshot::Receiver<()>>,
+    answer: oneshot::Sender<T>,
+}
+
+/// How long [`Gate::entered`] waits for the call before failing the test.
+const ENTER_BOUND: Duration = Duration::from_secs(5);
+
+impl<T> Gate<T> {
+    /// Waits until the gated call arrived; fails the test after 5 seconds.
+    pub(crate) async fn entered(&mut self) {
+        if let Some(entered) = self.entered.take() {
+            tokio::time::timeout(ENTER_BOUND, entered)
+                .await
+                .expect("the gated call arrived in time")
+                .expect("the fake kept the gate");
+        }
+    }
+
+    /// Lets the gated call answer `answer`.
+    pub(crate) fn release(self, answer: T) {
+        // The call may be gone already; then nobody needs the answer.
+        let _ = self.answer.send(answer);
+    }
+}
+
+/// A gated script, and the gate that releases it.
+pub(crate) fn gated<T>() -> (Script<T>, Gate<T>) {
+    let (entered_tx, entered_rx) = oneshot::channel();
+    let (answer_tx, answer_rx) = oneshot::channel();
+    (
+        Script::Gated(Gated {
+            entered: entered_tx,
+            answer: answer_rx,
+        }),
+        Gate {
+            entered: Some(entered_rx),
+            answer: answer_tx,
+        },
+    )
 }
 
 /// A call the fake received, with the token it got.
@@ -102,6 +161,14 @@ async fn answer<T>(script: Script<T>) -> T {
     match script {
         Script::Answer(result) => result,
         Script::Hang => std::future::pending().await,
+        Script::Gated(gated) => {
+            // The test may not wait for the call; then nobody listens.
+            let _ = gated.entered.send(());
+            match gated.answer.await {
+                Ok(result) => result,
+                Err(_) => std::future::pending().await,
+            }
+        }
     }
 }
 

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE mc_accounts SET mc_name = ? WHERE id = ? AND mc_name = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "c9e88cd23a8ef25aae6e37669153b1afd2458230ad0ae10d736cfbd8e009e9a5"
+}

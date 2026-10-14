@@ -5,9 +5,10 @@ use core::fmt;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use fleet_core::account::AccountStatus;
 use fleet_core::authz::Role;
 use fleet_core::id::{AccountId, InviteId, SessionId, UserId};
-use fleet_core::value::Username;
+use fleet_core::value::{McUsername, Username};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use super::error::store_error;
@@ -323,6 +324,23 @@ impl AccountWrites for SqliteWriteTx {
 
     async fn insert(&mut self, account: &McAccount) -> Result<(), InsertAccountError> {
         accounts::insert(&mut self.tx, account).await
+    }
+
+    async fn set_status(
+        &mut self,
+        id: AccountId,
+        status: AccountStatus,
+    ) -> Result<bool, StoreError> {
+        accounts::set_status(&mut self.tx, id, status).await
+    }
+
+    async fn rename(
+        &mut self,
+        id: AccountId,
+        from: &McUsername,
+        to: &McUsername,
+    ) -> Result<bool, StoreError> {
+        accounts::rename(&mut self.tx, id, from, to).await
     }
 }
 

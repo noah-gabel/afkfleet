@@ -542,7 +542,9 @@ pub struct MicrosoftTokens {
     pub refresh: RefreshToken,
 }
 
-/// A Minecraft session: its token and the profile it belongs to.
+/// A Minecraft session: its token and the profile it belongs to. The
+/// session-token service (P9.5) caches it and hands out clones.
+#[derive(Clone)]
 pub struct MinecraftSession {
     /// The token an agent joins with.
     pub token: McToken,

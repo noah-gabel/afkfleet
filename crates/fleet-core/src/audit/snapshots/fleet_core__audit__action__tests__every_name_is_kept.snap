@@ -18,5 +18,9 @@ expression: names
   "invite.use",
   "user.change_password",
   "session.revoke",
-  "vault.rotate_key"
+  "vault.rotate_key",
+  "account.refresh",
+  "account.set_status",
+  "account.rename",
+  "security.account_profile_mismatch"
 ]

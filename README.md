@@ -169,7 +169,15 @@ There's no support, and I don't take feature requests. Security reports are welc
     - refreshing an account's tokens
     - starting a Minecraft session, which also checks that the account owns the game and has a profile
 
-    The server sends these requests itself, with the protocol azalea-auth uses, and never through azalea-auth. Everything Microsoft answers is checked and bounded, and no token, code, name or UUID reaches a log. Nothing uses it yet: the link flow (P9.4) and the session tokens (P9.5) come next. You can try it with your own account through the manual Microsoft check (see [Development](#development)).
+    The server sends these requests itself, with the protocol azalea-auth uses, and never through azalea-auth. Everything Microsoft answers is checked and bounded, and no token, code, name or UUID reaches a log. You can try it with your own account through the manual Microsoft check (see [Development](#development)).
+  - the session tokens a bot will join with:
+    - one refresh per account at a time, whatever its callers do
+    - each rotated refresh token stored before any session is handed out, and kept in memory until it's stored if the database fails
+    - each session reused until 10 minutes before it expires
+    - only for an active account whose owner isn't disabled
+    - an account Microsoft or Minecraft refuses is marked as needing a new link, with the reason
+
+    After a failure the server waits before asking Microsoft again, and every account waits after a rate limit. Nothing uses the session tokens before Phase 10; the link flow (P9.4) comes next.
 
   [ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md) records Phase 9's decisions.
 

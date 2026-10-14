@@ -2,7 +2,7 @@
 
 - **Status:** Accepted
 - **Date:** 2026-10-14
-- **Related:** Plan.md Phase 9 (P9.1–P9.8), §4, §5, §7.2, §7.4, §7.5, Appendix D; ADR-0002, ADR-0003, ADR-0010, ADR-0011, ADR-0012, ADR-0015, ADR-0016, ADR-0017
+- **Related:** Plan.md Phase 9 (P9.1–P9.8), P10.6, §4, §5, §7.2, §7.4, §7.5, Appendix D; ADR-0002, ADR-0003, ADR-0010, ADR-0011, ADR-0012, ADR-0015, ADR-0016, ADR-0017
 
 ## Context
 Phase 9 links Microsoft accounts. A user starts Microsoft's device-code flow, the server stores the account's refresh token, sealed by the vault, and only short-lived Minecraft session tokens ever leave the server (security rule 6). The phase also extends the vault: a second purpose, and `vault rotate-key`, which §7.5 promised since Phase 7.
@@ -257,11 +257,138 @@ The user answered group B's questions one at a time, after reading azalea-auth 0
   - A mutation of the fake's queue order made one of its tests hang, so every call in the fake's tests is bounded now.
   - The rustls advisories (the separate PR above).
 
+### Group C: the session-token service (P9.5) *(the user's choices, 2026-10-14)*
+The user answered group C's questions one at a time and added three requirements: one with the backoff answer, one with the wait bound's, and one at the plan's approval.
+
+- **No moka** *(the user's choice)*.
+  - Its facts: moka 0.12.16 (released 2026-08-09, license "(MIT OR Apache-2.0) AND Apache-2.0").
+  - Its source (`future/value_initializer.rs`) shows two problems with `try_get_with`:
+    - When the caller evaluating the init is dropped, a waiting caller runs its own init (`WaiterValue::EnclosingFutureAborted`). Here that would be a second refresh with a token Microsoft may already have rotated.
+    - It panics after repeated aborts (`panic_if_retry_exhausted_for_aborting`).
+  - A per-account lock was needed either way. So each account's slot has a `tokio::sync::Mutex`, and the request that needs Microsoft hands its owned guard to a task, the flight. The flight holds it until the rotated token is stored and the session cached (fleet-client's pattern, ADR-0017).
+  - §5's moka row keeps only P11's WebSocket tickets, which ask again.
+- **The flight's owner** *(the user's choice)*: a `TaskTracker`, with a child `CancellationToken` checked only right before a refresh is sent.
+  - It takes tokio-util's `rt` feature on fleet-server. That pulls in only futures-util, already in its tree, so `Cargo.lock` gains one line in tokio-util's list.
+  - Callers await the flight's `JoinHandle`. `shutdown()` cancels, closes the tracker and waits.
+  - No new exception to CLAUDE.md's task rule.
+- **Refusals after linking** *(the user's choices)*:
+  - NotOwned, NoProfile and every Xbox refusal set a new status, `refused`. Its reason goes into a new nullable column, `status_reason` (`0009_mc_accounts_status_reason.sql`, `ALTER TABLE ADD COLUMN`).
+  - The reasons: `not_owned`, `no_profile`, `xbox_banned`, `xbox_no_xbox_profile`, `xbox_country_unavailable`, `xbox_adult_verification`, `xbox_child_account`, `xbox_other` and `profile_mismatch`. An `xbox_other`'s XErr is kept in the audit metadata only.
+  - Only `refused` has a reason. There's no CHECK, as for `status` (group A).
+- **The type** *(the user's choice)*:
+  - fleet-core's `AccountStatus` gains `Refused(RefusalReason)` and stays `Copy`. `as_str()` stays the `status` column's name; `reason()` gives the reason.
+  - `AccountStatus::from_columns(status, reason)` replaces `FromStr`, so group A's "`as_str` and `FromStr`" reading changes here. It refuses:
+    - a refused status without a reason (`MissingReason`)
+    - an unknown reason (`UnknownReason`)
+    - a reason on any other status (`UnexpectedReason`)
+  - The repository reads such a row as `Corrupt`, naming `status_reason`.
+- **A profile with another UUID** *(the user's choice)*: `refused` with `profile_mismatch`.
+  - It's recorded as `security.account_profile_mismatch` (Failure), not `account.set_status`.
+  - One `error` line, and nothing is handed out.
+- **A changed name** *(the user's choices)*:
+  - Online-mode servers check a join's name against the profile, so the profile's current name is handed out.
+  - `mc_name` is updated after the session in a short transaction, a compare-and-set on the exact old name, recorded as `account.rename`. A change of case counts too.
+  - If the update fails, the session is still handed out with one `warn`, and the next session tries again.
+- **Backoff** *(the user's choice, with an addition)*, on the `Clock`; the next success resets it:
+  - Per account, every `Failure` starts a backoff: 5 s, doubling to 5 minutes, no jitter (`ACCOUNT_BACKOFF`).
+  - Server-wide, `RateLimited` pauses every account: 30 s, doubling to 10 minutes (`GLOBAL_PAUSE`). Microsoft's 429 applies to the server's IP and client ID, not to one account.
+  - A request that needs Microsoft gets `BackingOff { until }` at once (the later of both waits) and never waits.
+  - **The addition:** the backoff applies only to requests that would call Microsoft. A cached session still outside the margin is handed out during any backoff, the account's own or the global one. A test pins it: during a global pause, a second account's cached session is still handed out.
+  - The schedule is fleet-core's `resilience::Doubling`, a policy like `LockoutPolicy::lock_for`.
+- **No Microsoft access token is kept** *(the user's choice)*: every new Minecraft token is a refresh plus a session. With tokens that live about a day, that's about one refresh per account per day, plus fresh requests.
+- **The margin** *(the user's choice)*: `REUSE_MARGIN`, 10 minutes, a constant. A freshly minted session is always handed out; the margin only decides whether a cached one is reused.
+- **Fresh requests** *(the user's choice)*: `session(account, fresh)`. A fresh request reuses only a session whose minting started after it arrived.
+  - Each slot numbers its mintings. A request notes the number before its first await, and the flight takes the next number right before `minecraft_session`, so a minting that started before the request never counts.
+  - A burst of fresh requests costs one refresh. The backoff still applies to them.
+- **Audit** *(the user's choices)*. None of these has an actor or IP, and the target is the account:
+  - `account.set_status` (Success) for `invalid_grant`, with metadata `status`, `previous_status` and `reason`. The reason is `invalid_grant`, though the column stays NULL.
+  - `account.set_status` for every refusal too, with `xerr` for `xbox_other` only.
+  - `security.account_profile_mismatch` (Failure) for the UUID mismatch, with `status` and `previous_status`, never either UUID.
+  - `account.refresh` (Success) for every stored rotation, with `rotated`: whether Microsoft sent another token than the one sent, compared in constant time. That's about one entry per account per day, and it shows when the server used each account's token. No new unaudited exemption.
+  - `account.rename` (Success) with `name` and `previous_name`.
+- **A stored token that can't be used** *(the user's choice)*: an envelope that doesn't open, or a plaintext that isn't a token.
+  - The answer is `Envelope` or `StoredToken`, neither retryable.
+  - One `error` line names the account and the vault's or the token rule's error, never a byte.
+  - No write, no audit, no call to Microsoft: `vault status` and `vault rotate-key` already report such envelopes.
+  - The plaintext is read with `str::from_utf8`, never `String::from_utf8`, whose error would carry the bytes.
+- **A failed store** *(the user's choices, with the clarification at the plan's approval)*:
+  - Nothing is handed out and the status is left alone.
+  - The rotated token stays in the account's slot, and the next request stores it before any refresh, then refreshes with it.
+  - It's discarded only when the row's envelope changed (linked again) or the row is gone. A change of the account's status or of its owner never discards it: a request for an inactive account or a disabled owner is refused before the flight and leaves the token waiting.
+  - The same holds for a failed seal or an entry that can't be built.
+  - A restart loses the token, like any crash.
+- **A disabled owner** *(the user's choice)*: `OwnerDisabled`, not retryable. Nothing is stored, so enabling the owner restores the account. A missing owner, which the foreign key forbids, counts as disabled.
+- **Only active Microsoft accounts get a session.** Unknown, offline, pending, `reauth_required` and `refused` accounts are refused before any call. The account and its owner are read on every request, so a cached session is withheld once the account stops being usable.
+- **The wait bound** *(the user's choice, with an addition)*:
+  - `WAIT_BOUND` is 2 minutes, above the flight's worst case: a 20 s refresh, a 60 s session and a few 5 s acquires.
+  - One deadline covers the lock (`InFlight`) and the answer (`TimedOut`). Past it the flight goes on, and the next request finds its result.
+  - **The addition:** `with_wait_bound` only shortens it. Zero and anything above `WAIT_BOUND` are `WaitBoundError`, so no caller can make the wait longer or unbounded. It's documented as for tests.
+- **serve doesn't build it** *(the user's choice)*: P10.6 wires it over D's adapter, with a child of serve's shutdown token, and calls `shutdown()` within serve's deadline.
+- **Hands-on** *(the user's choice)*: none. Everything new is local logic the fake drives, and Microsoft's side hasn't changed since B.
+- **Readings of these decisions** (in the plan the user approved, or found while building):
+  - **Compare-and-set.** Every write reads its row inside its own `BEGIN IMMEDIATE` transaction first, and the audit entry is built and the token sealed before that (ADR-0015).
+    - Storing a rotation compares only the envelope. A status changed meanwhile doesn't lose the token; it only answers `NotActive`.
+    - A status change happens only while the account is still active and holds the envelope that was used. Otherwise nothing changes, and the current state answers: `NotActive`, `ChangedMeanwhile` or `NotFound`.
+  - **The flight reads the account again** once it holds the lock, since the flight before may have rotated the token.
+  - **The global reset.** A minted session starts the pause's run over, so the next 429 waits 30 s again. A running pause still runs out: a success that started before the 429 says nothing about the rate limit.
+  - **A kept token during a backoff** is stored anyway, since that calls no Microsoft; the backoff still answers the request.
+  - **Slots** exist only for accounts that passed the first read, and are never removed, so an account never has two flights. A refusal clears the cached session. A missing row also drops the kept token: a flight finds the row gone itself, and a request takes the slot's lock without waiting (`try_lock`).
+  - **`retryable()`** says yes for `BackingOff`, `Microsoft`, `InFlight`, `TimedOut`, `ChangedMeanwhile`, `ShuttingDown`, `Interrupted`, `Seal`, and a busy or failing database. It says no for the refusals, `Envelope`, `StoredToken`, a corrupt or unstorable value, and `Audit`. An entry that can't be built fails the same way every time; the plan had listed it with the store errors.
+  - **Logs** carry the account's ID and an error's text, never a token, a name, a UUID or a byte. Levels:
+    - `warn`: `reauth_required`, a refusal, a kept token stored at last, the global pause, a failed rename.
+    - `error`: a UUID mismatch, an unusable stored token, a failed store, a flight that ended without an answer.
+
+### As built (group C)
+- **fleet-core:**
+  - `account::RefusalReason`, `AccountStatus::Refused`, `AccountStatus::{reason, from_columns}`, and `AccountError::{UnknownReason, MissingReason, UnexpectedReason}`.
+  - `resilience::Doubling`.
+  - The audit actions `account.refresh`, `account.set_status`, `account.rename` and `security.account_profile_mismatch`.
+- **fleet-server:**
+  - `0009_mc_accounts_status_reason.sql`, and `AccountWrites::{set_status, rename}`.
+  - `app::session_tokens`: `SessionTokenService`, `SessionTokenPorts`, `SessionTokenError`, `WaitBoundError` and the four constants. Private modules: `slot` (the slot, the backoff and the pure checks) and `flight` (the task).
+  - `MinecraftSession` derives `Clone`.
+  - The service's module joins the `msauth` coverage gate.
+- **Tests,** each red first against compiling stubs that returned wrong values:
+  - **fleet-core:**
+    - 33 of 34 account tests. The one that passed checks the errors' fixed messages.
+    - 10 of 11 `Doubling` tests. The one that passed checks the accessors.
+    - The action names snapshot.
+  - **The repository:** 4 of 5. `set_status` leaving an offline or missing account alone was shown red by dropping `kind = 'microsoft'`. The migrations snapshot is red too.
+  - **The fake's gate:** 2 tests, written after it and shown red by mutations: a gate that never says it was entered, and a dropped gate that panics.
+  - **The service's unit tests:**
+    - `retryable()`: 12 of 23. The 11 that passed are the cases whose answer is the stub's `false`, and the messages.
+    - The slot's checks: 9 of 21. The 12 that passed answer "no" or "none", like the stub.
+  - **The service:** all 49 tests in `tests/accounts/session_tokens/`. The stub's `session` answered `Err(InFlight)`, its `shutdown` did nothing, and its `with_wait_bound` accepted everything.
+  - **Four of those failed against the stub before reaching their assertion,** so each was shown red by a mutation:
+    - a `debug` line with the rotated token: the redaction test
+    - a `Debug` that prints the cached tokens
+    - an unbounded wait for the flight (red at the test's own 10 s bound)
+    - the minting numbered when the session is cached instead of before it starts: the fresh request's test
+  - **Ten more tests came from the coverage run** for the races and failure paths it showed untested. Each was shown red by a mutation of the code it guards:
+    - a kept token stored during a pause
+    - a kept token stored while the status changed just before
+    - a kept token whose account was deleted just before its store
+    - a status change during the refresh
+    - a link again during the refresh
+    - an account deleted during the refresh (with a rotated token, and with `invalid_grant`, each by its own mutation)
+    - a refusal whose status write fails
+    - a stop while a kept token is stored
+    - a database failure that keeps the cache
+    - the flight's second read
+  - **The test store's gates.** `FlakyStore`'s write gate and account-read gate hold one call while the test changes the row, so each race runs the same way every time.
+  - **The coverage gate's script test:** 1 of 1.
+  - Every mutation was reverted and checked by checksum.
+- **Coverage:** on Windows with `--no-rustc-wrapper`, the `msauth` gate's lines were at 99.05 % and `app/session_tokens/` at 99.7 %. The two lines left: a `set_status` that finds no row inside the transaction that just read it, and a rename that loses its compare-and-set.
+- **Found during the build:**
+  - tracing's macros read a constant as a field: `warn!(account_id = %id, REAUTH)` logged a field named `REAUTH` and no message. The messages are format strings now (`"{REAUTH}"`), and the tests check each line's message and level.
+  - In one instrumented, fully parallel coverage run on Windows, five of these tests failed in `Database::connect` under the load. The rerun and every normal run passed.
+  - The request's own stop check before spawning the flight is gone: the biased `select!` already answers `ShuttingDown` first, and the flight checks again right before the refresh.
+
 ### Notes for later groups
 - **B (P9.3):** done (above). Two of these notes changed with the user's decisions. fleet-server, fleet-client and the desktop crate stay in `stable_crates`, and azalea-auth doesn't reach fleet-server at all. The redaction test runs with the configured filter at `trace`, as planned.
   - ~~fleet-server leaves `stable_crates` together with fleet-client and the desktop crate, since both dev-depend on fleet-server and `stable-check` builds `--all-targets`.~~
   - ~~azalea-auth comes from the same azalea release as fleet-mc.~~
-- **C (P9.5):** a rotated refresh token is stored with the account's ID as the AAD's record (`VaultPurpose::MsRefreshToken`). `reauth_required` is the status's name.
+- **C (P9.5):** done (above); every note below was applied. A rotated refresh token is stored with the account's ID as the AAD's record (`VaultPurpose::MsRefreshToken`). `reauth_required` is the status's name.
   - *(from B)* **Tokens:**
     - A stored refresh token becomes a `RefreshToken` through `TryFrom<SecretString>` on the vault's plaintext.
     - After every refresh, store `MicrosoftTokens.refresh`: it's the token sent when Microsoft returned none.
@@ -280,12 +407,16 @@ The user answered group B's questions one at a time, after reading azalea-auth 0
   - *(from B)* **Wiring:** `ReqwestMicrosoftAuth::new(clock)` is built in `serve`, after main.rs has installed the TLS provider.
   - *(from B)* **Unknown codes:** `Rule::OAuthCode` names an OAuth code the port doesn't map, so a surprise is visible in the logs.
   - A linked UUID or offline name is `InsertAccountError::Taken`, whose refusal names nobody.
+  - *(from C)* A new link's status has no reason (`AccountStatus` builds the pair), and D's poller uses `minecraft_session` itself: the session-token service is for linked accounts only.
   - `account.link` records the creator, the name and the UUID.
   - `[accounts]` arrives here.
 - **E (P9.1's `account_grants`, P9.6):**
   - The approve and refuse endpoints, and whether each needs a step-up.
   - The grants table.
   - P9.6's open point: how a Member picks a grantee without enumerating usernames.
+  - *(from C)* **Linking again** must check that the profile's UUID is the account's, and sets the status to `active` (clearing a `refused` reason) together with the new envelope. Its envelope change makes a flight in progress drop its rotated token (`ChangedMeanwhile`).
+  - *(from C)* In C's design a `refused` or `reauth_required` account comes back through linking again; E decides whether approving or refusing may touch them too.
+  - *(from C)* Deleting an account needs nothing from the service: a request finds the row gone, and the slot's kept token is dropped.
   - P9.1 is ticked here.
 - **F (P9.8):**
   - The warning text above, in the link dialog only.
@@ -295,6 +426,7 @@ The user answered group B's questions one at a time, after reading azalea-auth 0
   - Home's count of pending links for Admins and the Owner.
   - The threat model's device-code phishing entry and B5/B6, citing A's swap tests.
   - The DoD's "rotate-key works on a copy of the DB" again, with a linked account.
+  - *(from C)* A text per `RefusalReason` and per status, for the account list and the re-auth prompt; `xbox_other`'s code is in the audit log only.
 
 ## Consequences
 - **Easier:**
@@ -314,6 +446,15 @@ The user answered group B's questions one at a time, after reading azalea-auth 0
   - The server owns the Microsoft, Xbox Live and Minecraft login protocol. A change at Microsoft or Mojang isn't fixed by an azalea bump; each bump compares our requests with azalea-auth's (ADR-0003).
   - The client ID is copied from azalea-auth, not read from it.
   - The form and JSON bodies reqwest sends keep unwipeable copies of the tokens.
+
+- **Group C, easier:**
+  - A rotated refresh token is never lost to a dropped caller, a timeout or a failed store, and nothing is handed out before it's stored.
+  - One refresh per account at a time, and one per burst of fresh requests. A 429 pauses every account, while cached sessions keep working.
+  - Every way Minecraft's side refuses an account is a status with its reason, visible to the app, and every change is audited.
+- **Group C, harder:**
+  - A kept token lives only in memory: a restart while the database fails loses it, and the account may need linking again.
+  - A request reads the account and its owner every time, two queries even for a cached session.
+  - The status is two columns now, read together through `from_columns`.
 
 ## Alternatives considered
 - **Five groups, with P9.3 and P9.5 together:** the first Microsoft-facing PR would hold both the adapter and the service that uses it.
@@ -336,5 +477,15 @@ The user answered group B's questions one at a time, after reading azalea-auth 0
 - *(group B)* **clippy method bans on `Client::new` and `Client::default`:** clippy can't name a trait impl's method, and reqwest's `Default` calls `new` inside reqwest.
 - *(group B)* **A `cargo tree` check for azalea-auth, or none:** it would cover only fleet-server, or only review.
 - *(group B)* **Retry-After kept, timeouts as config keys, retries in the adapter:** more input to bound, more config to test, and hidden traffic under an outage.
+- *(group C)* **moka for the cache and the coalescing:** a dropped caller would let a waiter refresh again with a spent token, and repeated aborts panic; the per-account lock was needed anyway.
+- *(group C)* **Plain `tokio::spawn` owned by the caller's wait (fleet-client's exception):** a fifth exception to the task rule, and shutdown couldn't wait for a refresh in flight.
+- *(group C)* **`reauth_required` for every refusal, or keeping the account active:** a misleading status (linking again doesn't buy the game), or nothing in the account list.
+- *(group C)* **A flat `Refused` with a separate reason field:** a refused status without its reason could be built.
+- *(group C)* **A CHECK on the reason, or a reason for `reauth_required` too:** a table rebuild for a new reason, or a column that says what the status already says.
+- *(group C)* **Caching the Microsoft access token:** fewer refreshes, but a broader secret in memory.
+- *(group C)* **A timestamp instead of mint numbers for fresh requests:** a manual clock that doesn't move, or two requests in one millisecond, would blur before and after.
+- *(group C)* **An unaudited exemption for the rotation's store:** the log couldn't show when an account's token was used.
+- *(group C)* **Discarding a token whose store failed, or retrying inside the task:** the next refresh would spend a token Microsoft may have invalidated, and the account would need linking again.
+- *(group C)* **A configurable margin or wait bound:** more config to validate, and a wait bound that could be made unbounded.
 - *(group B)* **The fake in fleet-testkit with the port in fleet-core, or a shared `tests/common`:** services generic over the provider unlike every other server port, or `dead_code` in each binary that doesn't use every helper.
 - *(group B)* **Testing only the mapping, or a public endpoint override over TLS:** the reader, the bounds and the client's settings untested, or an override reachable from production code.

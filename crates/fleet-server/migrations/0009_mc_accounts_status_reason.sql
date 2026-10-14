@@ -1,0 +1,13 @@
+-- Why an account is refused (Plan.md P9.5; ADR-0018, group C). Never edit this file once
+-- it's on main: sqlx records its checksum, and `just migrations-check` refuses a change. Add
+-- a new migration instead (ADR-0015).
+--
+-- The session-token service sets an account's status to 'refused' when Minecraft's side
+-- refuses it after it was linked, and stores why here: 'not_owned', 'no_profile',
+-- 'xbox_banned', 'xbox_no_xbox_profile', 'xbox_country_unavailable',
+-- 'xbox_adult_verification', 'xbox_child_account', 'xbox_other' or 'profile_mismatch'.
+-- Only a refused account has a reason; every other status leaves it NULL. No CHECK on the
+-- values or on the pairing, as for `status` (group A): fleet-core's AccountStatus reads both
+-- columns together, and a pair it doesn't know is read as corrupt. Linking the account again
+-- clears it.
+ALTER TABLE mc_accounts ADD COLUMN status_reason TEXT;

@@ -17,6 +17,8 @@
 //!   authenticator, replacing it, and checking a code at login (P7.7).
 //! - [`invites`]: creating, listing and revoking the invites to register
 //!   (P7.9).
+//! - [`session_tokens`]: Minecraft session tokens for linked Microsoft
+//!   accounts, one refresh per account at a time (P9.5).
 //! - [`users`]: creating the Owner (P7.5), the admins' list and changes
 //!   (P7.9), and the re-check every admin's write makes in its transaction.
 //! - [`vault`]: what the vault's keys seal, and re-encrypting the secrets
@@ -30,5 +32,6 @@ pub mod invites;
 pub mod lockout;
 pub mod login;
 pub mod mfa;
+pub mod session_tokens;
 pub mod users;
 pub mod vault;

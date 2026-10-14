@@ -7,11 +7,15 @@
 //! - [`FailureWindow`]: "N failures within a time window", used by the circuit
 //!   breaker and later by the supervisor's restart limit.
 //! - [`CircuitBreaker`]: stops retrying a flapping server for a cool-down.
+//! - [`Doubling`]: a backoff without jitter, for the server's calls to
+//!   Microsoft (P9.5).
 
 mod circuit;
+mod doubling;
 mod retry;
 mod window;
 
 pub use circuit::{CircuitBreaker, CircuitPolicy, CircuitPolicyError, CircuitState};
+pub use doubling::Doubling;
 pub use retry::{RetryPolicy, RetryPolicyError};
 pub use window::FailureWindow;
