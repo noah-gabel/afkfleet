@@ -77,6 +77,15 @@ export const GATES = [
     ],
   },
   {
+    // Microsoft accounts (P9.3, ADR-0018): the port and its adapter, which
+    // handle the refresh tokens and every answer Microsoft sends. Later Phase 9
+    // groups add their account services.
+    name: "msauth",
+    min: 90,
+    required: true,
+    prefixes: ["crates/fleet-server/src/ports/msauth.rs", "crates/fleet-server/src/infra/msauth/"],
+  },
+  {
     // The desktop app's client: the refresh, the session's end and the
     // certificate checks are security code (ADR-0017).
     name: "fleet-client",

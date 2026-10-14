@@ -638,7 +638,7 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   - **P9, P11:** decide for each destructive or privilege-changing action whether it needs a step-up (Plan.md's notes); the app reuses `useStepUpAction`.
   - **P11.11:** the screenshot tests need a stable rendering, but the installed Edge moves with Windows and the runner image.
   - **P12:** Phase 12's DoD holds "a friend on another PC installs the release build, registers with an invite and logs in with 2FA", moved from Phase 8.
-- **P9.3:** fleet-server leaves `stable_crates` when azalea-auth arrives; fleet-client leaves with it, since fleet-server is its dev-dependency and `--all-targets` builds it.
+- **P9.3:** fleet-server leaves `stable_crates` when azalea-auth arrives; fleet-client leaves with it, since fleet-server is its dev-dependency and `--all-targets` builds it. *(Corrected by Phase 9, group B: azalea-auth never reaches fleet-server, so fleet-server, fleet-client and the desktop crate stay; [ADR-0018](0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md).)*
 - **P11:** the WebSocket client joins fleet-client, with tokio-tungstenite and futures-util (§5).
 
 ## Consequences

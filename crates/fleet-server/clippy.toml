@@ -41,6 +41,17 @@ disallowed-methods = [
     { path = "uuid::Uuid::new_v4", reason = "mint IDs with fleet_core::system::mint from the ports (ADR-0015)", allow-invalid = true },
     { path = "uuid::Uuid::new_v7", reason = "mint IDs with fleet_core::system::mint from the ports (ADR-0015)", allow-invalid = true },
     { path = "uuid::Timestamp::now", reason = "read time through the Clock port (ADR-0015)", allow-invalid = true },
+    # Microsoft's answers are input: the Microsoft adapter reads every body through
+    # its capped reader, since reqwest's own readers read without a bound (ADR-0018).
+    # `json` and `text_with_charset` exist only with reqwest features fleet-server
+    # doesn't enable itself (azalea-auth turns `json` on in workspace builds).
+    # `reqwest::get` builds a default client without naming its type, so it's banned
+    # here; the client types themselves are banned under disallowed-types below.
+    { path = "reqwest::Response::json", reason = "read Microsoft's answers through the adapter's capped reader (ADR-0018)", allow-invalid = true },
+    { path = "reqwest::Response::text", reason = "read Microsoft's answers through the adapter's capped reader (ADR-0018)" },
+    { path = "reqwest::Response::text_with_charset", reason = "read Microsoft's answers through the adapter's capped reader (ADR-0018)", allow-invalid = true },
+    { path = "reqwest::Response::bytes", reason = "read Microsoft's answers through the adapter's capped reader (ADR-0018)" },
+    { path = "reqwest::get", reason = "build and hold reqwest clients only in infra/msauth/client.rs, through the adapter's one builder (ADR-0018)" },
     # Repeated from the root clippy.toml: channels are always bounded (ADR-0011).
     { path = "tokio::sync::mpsc::unbounded_channel", reason = "channels are always bounded; overload is an explicit error (CLAUDE.md, ADR-0011)", allow-invalid = true },
 ]
@@ -50,6 +61,13 @@ disallowed-types = [
     { path = "rand::rngs::ThreadRng", reason = "draw random bytes through the SecureRandom port (ADR-0015)", allow-invalid = true },
     { path = "rand::rngs::SysRng", reason = "draw random bytes through the SecureRandom port (ADR-0015)", allow-invalid = true },
     { path = "getrandom::SysRng", reason = "draw random bytes through the SecureRandom port (ADR-0015)", allow-invalid = true },
+    # reqwest's clients: only the Microsoft adapter's one builder makes one, with
+    # timeouts, no redirects, no proxy and https only, and only infra/msauth/client.rs
+    # names these types (its one approved `#![expect]`). A type ban, because clippy
+    # can't name `Client::default`, the `Default` impl that calls `Client::new`
+    # inside reqwest, where a method ban on `Client::new` doesn't reach (ADR-0018).
+    { path = "reqwest::Client", reason = "build and hold reqwest clients only in infra/msauth/client.rs, through the adapter's one builder (ADR-0018)" },
+    { path = "reqwest::ClientBuilder", reason = "build and hold reqwest clients only in infra/msauth/client.rs, through the adapter's one builder (ADR-0018)" },
 ]
 
 # fleet-server depends on `log` only for sqlx's `LevelFilter`; all its logging goes

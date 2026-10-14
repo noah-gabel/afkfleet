@@ -3,8 +3,9 @@
 # level of an integration test or inside a module. nextest matches the full test
 # path (e.g. `tests::slow_join`), hence `(^|::)` instead of `^`.
 # Manual tests (`manual_*`) need the user's real credentials, so only the user
-# runs them, with `just test-real-account`; no other profile includes them
-# (ADR-0011).
+# runs them: fleet-mc's with `just test-real-account` (ADR-0011), fleet-server's
+# Microsoft check with `just test-ms-account` (ADR-0018). No other profile
+# includes them.
 
 [profile.default]
 default-filter = "not test(/(^|::)(slow|manual)_/)"

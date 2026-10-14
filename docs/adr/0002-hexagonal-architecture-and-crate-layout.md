@@ -36,7 +36,7 @@ The business rules need to be testable without any of them. Two rules matter mos
 | `fleet-api-types` | HTTP/WS DTOs, exported to TypeScript | `fleet-core` |
 | `fleet-startup` | The binaries' start-up code: config loader and errors, `[log]`, log layer, panic hook *(added in Phase 6, ADR-0015)* | `fleet-core` |
 | `fleet-agent` (bin) | Agent: config, wiring, control-plane client | `fleet-core`, `fleet-runtime`, `fleet-mc`, `fleet-proto`, `fleet-startup` |
-| `fleet-server` (bin) | HTTP API, auth, vault, persistence, gRPC control plane, CLI | `fleet-core`, `fleet-proto`, `fleet-api-types`, `fleet-startup`, `azalea-auth` |
+| `fleet-server` (bin) | HTTP API, auth, vault, persistence, gRPC control plane, CLI | `fleet-core`, `fleet-proto`, `fleet-api-types`, `fleet-startup`; no `azalea-auth` since Phase 9, group B: its Microsoft adapter sends its own requests ([ADR-0018](0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)) |
 | `fleet-client` | Typed HTTP + WS client | `fleet-api-types` |
 | `apps/desktop/src-tauri` | Tauri backend | `fleet-client`, `fleet-api-types` |
 | `fleet-testkit` | Fakes, fixtures, builders (dev-dependency only) | `fleet-core` |

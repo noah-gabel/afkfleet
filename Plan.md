@@ -171,7 +171,7 @@ Crates are created in the phase that first needs them, not up front.
 | `fleet-api-types` | `fleet-core` |
 | `fleet-startup` | `fleet-core` |
 | `fleet-agent` (bin) | `fleet-core`, `fleet-runtime`, `fleet-mc`, `fleet-proto`, `fleet-startup` |
-| `fleet-server` (bin) | `fleet-core`, `fleet-proto`, `fleet-api-types`, `fleet-startup`, **azalea-auth** |
+| `fleet-server` (bin) | `fleet-core`, `fleet-proto`, `fleet-api-types`, `fleet-startup` (no azalea-auth since P9.3: its Microsoft adapter sends its own requests, [ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)) |
 | `fleet-client` | `fleet-api-types` (its tests: `fleet-server`, `fleet-startup`, `fleet-core` and `fleet-testkit`, as dev-dependencies) |
 | `apps/desktop/src-tauri` | `fleet-client`, `fleet-api-types` |
 | `fleet-testkit` | `fleet-core` (dev-dependency for everyone else) |
@@ -191,7 +191,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 |---|---|---|---|---|
 | Minecraft protocol & client | `azalea` | `=0.16.0` (+mc26.1) | fleet-mc | Needs nightly (ADR-0003). Disable its `AutoReconnectPlugin` and `AutoRespawnPlugin`. Runs only inside a `LocalSet` |
 | Minecraft chat components & translations | `azalea-chat`, `azalea-language` | `=0.16.0` (+mc26.1) | fleet-mc | Already in azalea's graph at the same pin. Only for fleet-mc's bounded renderer of server text: it names `PrimitiveOrComponent`, which azalea doesn't re-export, and looks up translation templates, because azalea's own rendering grows exponentially (ADR-0011). Bumped together with azalea |
-| Microsoft / Minecraft auth | `azalea-auth` | `=0.16.0` (+mc26.1) | fleet-server | Device-code flow. Never use its file cache. fleet-mc reaches only `azalea::auth::sessionserver` and `certs`, through azalea's re-export, never the Microsoft flows; its clippy config bans them (ADR-0011) |
+| Microsoft / Minecraft auth | `azalea-auth` | `=0.16.0` (+mc26.1) | none directly: only through azalea's crates | **Not used by fleet-server** (P9.3, the user's decision): azalea-auth checks no status, polls in a loop that drops every refusal, can panic on an unexpected answer and prints tokens in `Debug`, so fleet-server's adapter sends its own requests with azalea-auth 0.16.0's protocol (client ID, scope, fields, headers). `deny.toml` lets it in only through `azalea`, `azalea-client`, `azalea-inventory` and `azalea-protocol` ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)). fleet-mc reaches only `azalea::auth::sessionserver` and `certs`, through azalea's re-export, never the Microsoft flows; its clippy config bans them (ADR-0011) |
 | Async runtime | `tokio` | 1.53.2 | runtime, mc, testkit, agent, server, client | `test-util` feature in dev. Clippy bans `unbounded_channel`; azalea's two mandated channels are the only exceptions (ADR-0011). The agent builds a multi-threaded runtime after loading its config (ADR-0014). fleet-server enables `fs`, to create the database file and check its permissions, `time`, for the trace layer's latency from tokio's clock, and from P6.11 `rt`, `rt-multi-thread`, `macros`, `net` and `io-util`, for its runtimes, the listener and the healthcheck's TCP probe; fleet-startup enables `signal` and `macros` for the stop signals (ADR-0015) |
 | Cancellation, task tracking | `tokio-util` | 0.7.19 | runtime, mc, agent, server | `CancellationToken`, `TaskTracker`. fleet-runtime and the agent enable no features: they use only `CancellationToken`, and their tasks live in tokio's `JoinSet`, which reports panics (ADR-0013, ADR-0014). fleet-server neither: its token asks axum's server for the graceful shutdown (P6.12, ADR-0015) |
 | Stream adapters | `tokio-stream` | 0.1.19 | proto, agent, server | gRPC streams, broadcast → stream |
@@ -225,8 +225,8 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Protobuf | `prost` | 0.14.4 | proto | |
 | Protobuf codegen | `tonic-prost-build`, `protox` | 0.14.6, 0.9.1 | proto (`build.rs`) | Pure Rust, no system `protoc` |
 | TLS | `rustls` | 0.23.46 | agent, server, client, desktop | **Only the aws-lc-rs provider**, installed explicitly at startup. The default features select it. The agent's `main.rs` installs it before anything else runs (ADR-0014). 0.23.46 is a security floor (2026-10-14): RUSTSEC-2026-0346 (client session values' `Debug`), 0347 (ECH, never enabled here), 0348 (the `brotli` feature, never enabled here) and 0349 (a downgrade to classical key exchange on resumed client connections) |
-| X.509 / CSR | `rcgen` | 0.14.10, dfo | server (CA, signing), agent (CSR), client (dev: test certificates) | `aws_lc_rs`, `pem`, `x509-parser`. The default is ring. fleet-client's TLS tests make their CA and server certificates with it at run time (`aws_lc_rs`, `pem`), since no key is ever committed ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
-| HTTP client | `reqwest` | **0.13.5**, dfo | client, server, desktop, mc | Feature `rustls` (aws-lc-rs + platform verifier), no native-tls. fleet-mc enables no features: it only names `reqwest::Proxy` in azalea's `AccountTrait` (ADR-0011). fleet-client enables none either, and builds its client with no redirects, no proxies, a 5 s connect and 20 s request timeout, and `tls_certs_only` for a custom CA; it reads each body itself, capped at 1 MiB ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
+| X.509 / CSR | `rcgen` | 0.14.10, dfo | server (CA, signing; dev: the Microsoft adapter's certificate test), agent (CSR), client (dev: test certificates) | `aws_lc_rs`, `pem`, `x509-parser`. The default is ring. fleet-client's TLS tests make their CA and server certificates with it at run time (`aws_lc_rs`, `pem`), since no key is ever committed ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)); fleet-server's Microsoft adapter test does the same from P9.3 ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)) |
+| HTTP client | `reqwest` | **0.13.5**, dfo | client, server, desktop, mc | Feature `rustls` (aws-lc-rs + platform verifier), no native-tls. fleet-mc enables no features: it only names `reqwest::Proxy` in azalea's `AccountTrait` (ADR-0011). fleet-client enables none either, and builds its client with no redirects, no proxies, a 5 s connect and 20 s request timeout, and `tls_certs_only` for a custom CA; it reads each body itself, capped at 1 MiB ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)). fleet-server (P9.3) enables `form` only, for its Microsoft adapter: no redirects, no proxies, https only, a 5 s connect and 15 s request timeout, every body read through its own reader capped at 256 KiB. Its clippy config bans reqwest's unbounded readers and `reqwest::get`, and its client types outside the adapter's `client.rs` ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)) |
 | WebSocket client | `tokio-tungstenite` | 0.29.0, dfo | client | `connect`, `rustls-tls-native-roots`. 0.29 matches axum 0.8.9's `ws`, so only one tungstenite is built |
 | Rust → TypeScript types | `ts-rs` | 12.0.1, dfo | api-types | `serde-compat` only, so serde's renames reach the TypeScript; `chrono-impl` and `uuid-impl` come with the first DTO that holds a time or an ID. The export runs through `Config::new()`, never `#[ts(export)]` or the `TS_RS_*` variables (ADR-0015) |
 
@@ -3219,6 +3219,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** Users link their Microsoft accounts securely. Tokens are encrypted at rest and refreshed safely.
 **Introduces:** `azalea-auth`, `moka`, `tauri-plugin-opener`.
 
+> Note (P9, Phase 9, group B, the user's decision) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **azalea-auth isn't introduced.** fleet-server's Microsoft adapter sends its own requests, and `deny.toml` keeps azalea-auth out of every member. Group B adds reqwest (`form`) and rustls to fleet-server, and rcgen to its dev-dependencies.
+
 > Note (P9):
 > - **Six group branches.** At the user's request, Phase 9 is built in group PRs like Phases 2–8. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
 >
@@ -3265,7 +3267,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - Neither vault command creates or migrates the database.
   > - **The swap test** is `a_refresh_token_moved_to_another_account_is_rejected` (the vault) and `rotation_refuses_refresh_tokens_swapped_between_two_accounts_and_records_each` (the rotation).
   > - **CLI only:** no API route for key rotation, so no step-up to decide.
-- [ ] **P9.3** 🔴 `MicrosoftAuthProvider` port (`start_device_flow`, `poll`, `refresh`, `minecraft_session`), with an `azalea-auth` adapter and a fake.
+- [x] **P9.3** 🔴 `MicrosoftAuthProvider` port (`start_device_flow`, `poll`, `refresh`, `minecraft_session`), with an `azalea-auth` adapter and a fake.
   - Use azalea-auth's default client ID; a custom Azure app ID would need approval from Mojang.
   - **Never** use azalea's file cache.
   - At `trace`, azalea-auth logs Microsoft access and refresh tokens. `fleet-server` caps the `azalea_auth` log level at `info`, whatever the configured filter says.
@@ -3280,6 +3282,24 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **stable-check.** fleet-server is in the justfile's `stable_crates` since Phase 6, because it didn't depend on azalea-auth yet. When azalea-auth arrives here, fleet-server leaves `stable_crates`, as the rule says (P0.11).
   > Note (P9.3, from Phase 8, group A) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **fleet-client leaves `stable_crates` with fleet-server,** since fleet-server is its dev-dependency and `stable-check` builds `--all-targets`.
   > Note (P9.3, from Phase 9, group A's planning) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **the desktop crate leaves `stable_crates` too.** `apps/desktop/src-tauri` also dev-depends on fleet-server, and `stable-check` includes it off Linux.
+  > Note (P9.3, Phase 9, group B, the user's decision) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **correction to the three notes above: fleet-server, fleet-client and the desktop crate stay in `stable_crates`.** They rested on fleet-server getting azalea-auth, which it doesn't; the justfile's rule (crates that don't depend on azalea or azalea-auth) still holds for all three.
+  > Note (P9.3, Phase 9, group B, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
+  > - **No azalea-auth adapter.** azalea-auth 0.16.0 checks no HTTP status, so `invalid_grant`, a 429, an Xbox refusal and a missing profile look alike. Its only poll is a loop that drops every refusal, it can panic on an unexpected answer, and its types print tokens in `Debug`. `infra::msauth::ReqwestMicrosoftAuth` sends its own requests with azalea-auth 0.16.0's protocol: the default client ID, scope, fields and headers. `deny.toml` keeps azalea-auth out of every member, and the `azalea_auth` cap stays as a guard.
+  > - **The port** (`ports::msauth`) has one error enum per method.
+  >   - `poll` makes one try and returns `Pending`, `SlowDown`, `Declined`, `Expired` or `Authorized`.
+  >   - `refresh` returns the token to store every time; a 200 without one keeps the token sent (RFC 6749 §6). Only `invalid_grant` is `RefreshError::InvalidGrant`.
+  >   - `minecraft_session` runs Xbox Live, XSTS, the Minecraft login, the entitlements (none at all is `NotOwned`) and the profile (`NOT_FOUND` is `NoProfile`), with named `XboxRefusal`s.
+  >   - Failures: `Unreachable`, `Certificate`, `TimedOut`, `RateLimited`, `Unavailable` and `Unexpected {endpoint, rule}`. An unknown OAuth code is named only when it matches `[a-z_]{1,64}`.
+  > - **Microsoft's answer is input.**
+  >   - Bounded numbers: interval 1–60 s (5 s when missing); device code 60 s–1 h; access token 60 s–1 day; Minecraft token 60 s–2 days.
+  >   - Every token is 1 B–16 KiB of visible ASCII, which is the stored refresh token's upper bound.
+  >   - Every body is at most 256 KiB.
+  >   - The verification link must be https to `www.microsoft.com` or `microsoft.com`.
+  >   - Expiries come from the `Clock`, read just before the request.
+  > - **The client:** 5 s connect, 15 s per request, 20 s per call (60 s for `minecraft_session`), no redirects, no proxy, https only, no retries. A failed call logs one `debug` line without any value.
+  > - **Tests without Microsoft:** a `#[cfg(test)]` constructor against an axum fake, raw TCP servers and an rcgen-certified TLS server. The fake for later groups lives in the `tests/accounts/` binary. Coverage has a new `msauth` gate at 90 %.
+  > - **The provider:** `serve` installs aws-lc-rs as the rustls provider in main.rs's `start()`, never in the library's `serve::run`.
+  > - **Hands-on:** `just test-ms-account` runs two `manual_` tests the user runs with their own account, the only tests with a real sleep.
 - [ ] **P9.4** 🔴 Device-code flow:
   - `POST /accounts/link` returns `{flow_id, user_code, verification_uri, expires_at}`.
   - A background poller runs bounded and cancellable, with per-user and total caps.
@@ -3329,6 +3349,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - Refresh tokens never leave the server.
 - A test checks that logs are redacted.
 - fleet-server's log filter caps `azalea_auth` at `info`, the same cap as the agent's (P5.2), and the redaction test checks it. At `trace`, azalea-auth logs Microsoft and Minecraft tokens, the refresh token and the account cache (P9.3).
+
+  > Note (Phase 9's security, group B) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): fleet-server has no azalea-auth code, so the cap is a guard. `tests/telemetry.rs` checks it with the filter at `trace` from the config file or the environment, and `msauth::tests::no_secret_reaches_any_log_at_any_level` checks the adapter's own logs.
 - AAD-binding test.
 - Per-user caps on link flows.
 
@@ -3624,6 +3646,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - incident response: revoke sessions, disable users and agents
 
   > Note (P12.6, from Phase 5, group D, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): The **Minecraft version upgrade** section carries ADR-0003's bump procedure, whose verify step now runs `just ci`, `just test-slow` and `just demo-agent` (1 h), with the demo's `summary.txt` in the bump's pull request.
+  > Note (P12.6, from Phase 9, group B, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
+  > - **The manual Microsoft check:** `just test-ms-account` checks the Microsoft adapter with the operator's own account. It prints a link and a code, then pass or FAIL per step; `just test-ms-account declined_link` checks a refusal.
+  > - **CA certificates in the server image:** reqwest's platform verifier reads the system's CA store on Linux, so the server image needs one, or every Microsoft call fails as `Certificate`. The agent image's distroless/cc base already has them.
+  > - **The Minecraft version upgrade** carries ADR-0003's new steps. A new azalea crate that depends on azalea-auth is named by cargo-deny, and `deny.toml`'s wrapper list is updated with an ADR note. The adapter's endpoints, fields and headers are compared with the new azalea-auth's `auth.rs`.
 - [ ] **P12.7** 🔴 Compose smoke test in CI, run nightly:
   1. `up`
   2. health checks pass

@@ -160,10 +160,16 @@ There's no support, and I don't take feature requests. Security reports are welc
   No password, 2FA secret, recovery code or invite code is kept anywhere but the screen that needs it, never in the UI's caches, and no token ever reaches the UI. The threat model's "Desktop app" section describes the app's boundaries, including a stolen or shared PC with a live session. A friend on another PC needs the server over HTTPS, which Phase 12 brings.
 
   [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md) records Phase 8's decisions.
-- **From Phase 9 (Microsoft accounts), so far:** group A's groundwork on the server, before any account can be linked:
+- **From Phase 9 (Microsoft accounts), so far:** the groundwork on the server, before any account can be linked:
   - the table of linked Minecraft accounts: Microsoft accounts, each linked at most once by its profile's UUID, and offline accounts for development, each name once in any case
   - the vault's second kind of secret, a Microsoft account's refresh token, bound to its account as a TOTP secret is to its user
   - `vault status`, which shows what each vault key still seals without reading any key, and `vault rotate-key`, which moves every secret to a new key in one transaction (see [Running the server](#running-the-server))
+  - the server's connection to Microsoft:
+    - Microsoft's device-code sign-in, one poll at a time
+    - refreshing an account's tokens
+    - starting a Minecraft session, which also checks that the account owns the game and has a profile
+
+    The server sends these requests itself, with the protocol azalea-auth uses, and never through azalea-auth. Everything Microsoft answers is checked and bounded, and no token, code, name or UUID reaches a log. Nothing uses it yet: the link flow (P9.4) and the session tokens (P9.5) come next. You can try it with your own account through the manual Microsoft check (see [Development](#development)).
 
   [ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md) records Phase 9's decisions.
 
@@ -326,6 +332,7 @@ just stack-up  # build the agent's image and run the server and the agent in Doc
 just test-slow # pull the server image, build the agent's image, then the slow tests one at a time (needs Docker)
 just demo-agent # the Phase 5 demo: the Docker agent's five bots for an hour with one server restart
 just test-real-account # the real-account check: you only (see below)
+just test-ms-account # the Microsoft check with your own account: you only (see below)
 just db-prepare # after changing a query or adding a migration: refresh crates/fleet-server/.sqlx/
 just gen       # after changing an API type: refresh packages/ui/src/generated/
 just dev-app   # run the desktop app with Vite's dev server (hot reload)
@@ -354,6 +361,21 @@ The compose e2e test runs the Docker stack under a project of its own, `afkfleet
 3. Report only the outcome, and delete the file afterwards.
 
 When the test ends, its container is removed together with its volumes, which hold the account name in the server's usercache and logs. A killed run can leave the container behind; check `docker ps -a`.
+
+**The Microsoft check** (Phase 9 on) runs the server's Microsoft adapter against Microsoft with your own account. It needs your real account, so only you run it; the AI never does. It keeps everything in memory, writes nothing to disk, and needs no Docker and no file.
+1. Run `just test-ms-account`. It runs two tests in turn:
+   - **The account check.** It prints a link (Microsoft's `microsoft.com/link` page), a code and a deadline. Open the link, enter the code and approve the sign-in. It then prints pass or FAIL for each step:
+     - a "pending" answer before your approval
+     - the approval
+     - a Minecraft session, with the game owned and a profile
+     - a refresh and a second session of the same profile ("refresh token rotated: yes/no" is for information)
+     - an invented refresh token refused as `invalid_grant`
+     - that no value it saw reached a log
+   - **The declined check.** It prints a second link and code. Enter the code, then press Cancel or Decline; it passes when Microsoft reports the refusal.
+
+   Each waits at most 8 minutes. `just test-ms-account declined_link` (or `account_check`) runs one of them.
+2. It never prints a token, your Minecraft name or your UUID. A failed step names the rule Microsoft's answer broke, never a value from it.
+3. Report every step's pass or FAIL, with a FAIL's text.
 `just --list` shows every recipe; [`CLAUDE.md`](CLAUDE.md) describes them and the project's working rules.
 
 Every change goes through a pull request; nobody commits to `main`.

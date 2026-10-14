@@ -318,14 +318,23 @@ describe("listed files without a covered line", () => {
 });
 
 describe("the project's gates", () => {
-  it("make the auth, vault and fleet-client gates required lists of prefixes", () => {
-    for (const name of ["auth", "vault", "fleet-client"]) {
+  it("make the auth, vault, msauth and fleet-client gates required lists of prefixes", () => {
+    for (const name of ["auth", "vault", "msauth", "fleet-client"]) {
       const gate = GATES_IN_USE.find((g) => g.name === name);
       assert.ok(gate, name);
       assert.equal(gate.required, true, name);
       assert.equal(gate.min, 90, name);
       assert.ok(Array.isArray(gate.prefixes) && gate.prefixes.length > 0, name);
     }
+  });
+
+  it("put the Microsoft port and its adapter under the msauth gate (ADR-0018)", () => {
+    const gate = GATES_IN_USE.find((g) => g.name === "msauth");
+
+    assert.deepEqual(gate.prefixes, [
+      "crates/fleet-server/src/ports/msauth.rs",
+      "crates/fleet-server/src/infra/msauth/",
+    ]);
   });
 
   it("count fleet-core's auth module under the auth gate", () => {
