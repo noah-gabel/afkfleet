@@ -193,13 +193,13 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Minecraft chat components & translations | `azalea-chat`, `azalea-language` | `=0.16.0` (+mc26.1) | fleet-mc | Already in azalea's graph at the same pin. Only for fleet-mc's bounded renderer of server text: it names `PrimitiveOrComponent`, which azalea doesn't re-export, and looks up translation templates, because azalea's own rendering grows exponentially (ADR-0011). Bumped together with azalea |
 | Microsoft / Minecraft auth | `azalea-auth` | `=0.16.0` (+mc26.1) | none directly: only through azalea's crates | **Not used by fleet-server** (P9.3, the user's decision): azalea-auth checks no status, polls in a loop that drops every refusal, can panic on an unexpected answer and prints tokens in `Debug`, so fleet-server's adapter sends its own requests with azalea-auth 0.16.0's protocol (client ID, scope, fields, headers). `deny.toml` lets it in only through `azalea`, `azalea-client`, `azalea-inventory` and `azalea-protocol` ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)). fleet-mc reaches only `azalea::auth::sessionserver` and `certs`, through azalea's re-export, never the Microsoft flows; its clippy config bans them (ADR-0011) |
 | Async runtime | `tokio` | 1.53.2 | runtime, mc, testkit, agent, server, client | `test-util` feature in dev. Clippy bans `unbounded_channel`; azalea's two mandated channels are the only exceptions (ADR-0011). The agent builds a multi-threaded runtime after loading its config (ADR-0014). fleet-server enables `fs`, to create the database file and check its permissions, `time`, for the trace layer's latency from tokio's clock, and from P6.11 `rt`, `rt-multi-thread`, `macros`, `net` and `io-util`, for its runtimes, the listener and the healthcheck's TCP probe; fleet-startup enables `signal` and `macros` for the stop signals (ADR-0015) |
-| Cancellation, task tracking | `tokio-util` | 0.7.19 | runtime, mc, agent, server | `CancellationToken`, `TaskTracker`. fleet-runtime and the agent enable no features: they use only `CancellationToken`, and their tasks live in tokio's `JoinSet`, which reports panics (ADR-0013, ADR-0014). fleet-server neither: its token asks axum's server for the graceful shutdown (P6.12, ADR-0015) |
+| Cancellation, task tracking | `tokio-util` | 0.7.19 | runtime, mc, agent, server | `CancellationToken`, `TaskTracker`. fleet-runtime and the agent enable no features: they use only `CancellationToken`, and their tasks live in tokio's `JoinSet`, which reports panics (ADR-0013, ADR-0014). fleet-server enables `rt` only, since P9.5: its token asks axum's server for the graceful shutdown (P6.12, ADR-0015), and the session-token service's refreshes run on a `TaskTracker` ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)) |
 | Stream adapters | `tokio-stream` | 0.1.19 | proto, agent, server | gRPC streams, broadcast → stream |
 | Sink/Stream extension traits | `futures-util` | 0.3.34 | client, server | WebSocket split/send |
 | Async fns in `dyn` traits | `async-trait` | 0.1.92 | server | Only for `Arc<dyn Port>`. Use generics + RPITIT elsewhere. First used by fleet-server's store ports (ADR-0015) |
 | Retry & backoff | `backon` | 1.6.0, dfo | core (policy), agent, client | Exponential backoff with jitter. The default features pull in a tokio sleeper |
 | Rate limiting (keyed / in-process) | `governor` | 0.10.4, dfo | runtime (chat), server (HTTP: per IP, per route class, per user) | fleet-runtime and fleet-server enable `std` only. The defaults add `quanta`, `dashmap` and `jitter`, which pulls rand 0.9 and getrandom 0.3 into normal dependencies. Without `quanta` there's no `DefaultClock`: the chat queue uses `direct_with_clock` with a tokio-backed clock, so paused time controls it (ADR-0013); the server's keyed `hashmap_with_clock` limiters run on its `Clock` port, a monotonic clock in production and `ManualClock` in tests, behind its own axum middleware (ADR-0016) |
-| TTL cache / single-flight | `moka` | 0.12.16 | server | MC token cache, WS tickets |
+| TTL cache / single-flight | `moka` | 0.12.16 | server | WS tickets (P11). Not the MC token cache: P9.5's single-flight is a per-account tokio `Mutex`, since moka's coalescing lets a waiter re-run the init when the evaluating caller is dropped, a second refresh with a spent token ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)) |
 | Library errors | `thiserror` | 2.0.21 | all libraries | |
 | Binary error reporting | `anyhow` | 1.0.104 | `main.rs` only | Not declared yet: the agent's and the server's `main.rs` map their typed errors to exit codes themselves (the user's decision for the server, P6.11). It arrives with the first `main.rs` that uses it (ADR-0014, ADR-0015) |
 | Serialization | `serde`, `serde_json` | 1.0.229, 1.0.151 | all | fleet-testkit's log buffer parses JSON log lines with `serde_json`; fleet-server reads the audit log's metadata JSON back with it, while fleet-core's `AuditMetadata` writes its JSON itself, byte for byte as `serde_json` would (ADR-0015) |
@@ -3221,6 +3221,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 > Note (P9, Phase 9, group B, the user's decision) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **azalea-auth isn't introduced.** fleet-server's Microsoft adapter sends its own requests, and `deny.toml` keeps azalea-auth out of every member. Group B adds reqwest (`form`) and rustls to fleet-server, and rcgen to its dev-dependencies.
 
+> Note (P9, Phase 9, group C, the user's decision) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **moka isn't introduced either.** The session-token service's single-flight is its own per-account lock, and group C adds no dependency: only tokio-util's `rt` feature on fleet-server, for a `TaskTracker`.
+
 > Note (P9):
 > - **Six group branches.** At the user's request, Phase 9 is built in group PRs like Phases 2–8. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
 >
@@ -3307,17 +3309,30 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - On success, check the profile and game ownership, store the encrypted token, and give the creator Manage.
   - Member quota from `accounts.max_per_member`.
 
+  > Note (P9.4, from Phase 9, group C) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): a new link's status has no reason, and the link flow calls `minecraft_session` itself; the session-token service serves linked accounts only.
+
   > Note (P9.4, from group D): Starting a flow checks `LinkAccount` (every role). `GET /accounts/link/{flow_id}` checks `UsePersonal` on `ResourceContext::Personal{owner}` with the flow's creator, so other users get 404 (ADR-0010).
 
   > Note (P9.4, from Phase 9, group A, the user's decisions on device-code phishing) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
   > - **New links wait for approval.** A Member's or an Admin's new account is `pending` until someone above them approves it (a Member's: an Admin or the Owner; an Admin's: the Owner). The Owner's own links are `active` at once. No bot can use a pending account.
   > - **One link per Minecraft account.** A UUID that's already linked, pending ones included, can't be linked again by anyone (`InsertAccountError::Taken`); the refusal names nobody.
   > - **`account.link`** records the creator, the Minecraft name and the UUID.
-- [ ] **P9.5** 🔴 `SessionTokenService`:
+- [x] **P9.5** 🔴 `SessionTokenService`:
   - single-flight refresh per account (moka)
   - stores rotated refresh tokens atomically
   - caches the MC session token until shortly before it expires
   - on `invalid_grant`, marks the account `ReauthRequired`
+
+  > Note (P9.5, Phase 9, group C, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
+  > - **No moka:** each account's slot has a tokio `Mutex`, whose owned guard a task on the service's `TaskTracker` holds until the rotated token is stored. A dropped or timed-out caller never loses a rotated token.
+  > - **Order:** a refresh, the rotated token's store (`account.refresh`), then `minecraft_session`; nothing is handed out unless the store succeeded. No Microsoft access token is kept.
+  > - **A failed store** keeps the token in the slot for the next request, which stores it first. It's discarded only when the row's envelope changed or the row is gone.
+  > - **Who gets a session:** an active Microsoft account whose owner isn't disabled (`OwnerDisabled`), read on every request.
+  > - **Statuses:** `invalid_grant` marks `reauth_required`. NotOwned, NoProfile and the Xbox refusals mark a new `refused` with its reason in a new `status_reason` column (`0009`). A profile with another UUID marks `refused`/`profile_mismatch` with `security.account_profile_mismatch`. A renamed profile's name is handed out and stored (`account.rename`). Every change is a compare-and-set and audited (`account.set_status`).
+  > - **Cache:** until 10 minutes before expiry (`REUSE_MARGIN`), from the `Clock`. A fresh request reuses only a session whose minting started after it arrived.
+  > - **Backoff:** an account backs off 5 s doubling to 5 min after a failure; a 429 pauses every account 30 s doubling to 10 min. Only calls to Microsoft wait; cached sessions are still handed out.
+  > - **Wait bound:** 2 minutes; `with_wait_bound` can only shorten it.
+  > - **Not wired yet:** P10.6 builds it in serve. No hands-on check in C.
 - [ ] **P9.6** 🔴 Account endpoints:
   - list (only what the user may View)
   - get
@@ -3330,6 +3345,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Grants.** Only Manage edits grants, and nobody grants to themselves.
   > - **Flagged, not decided:** how a Member picks a grantee. Members can't list users, so the dialog (P9.8) needs a lookup that doesn't let them enumerate usernames.
 
+  > Note (P9.6, from Phase 9, group C) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **re-link** must check that the profile's UUID is the account's, and sets `active` (clearing a `refused` reason) together with the new envelope, which makes a refresh in flight drop its rotated token. A `refused` or `reauth_required` account comes back through re-link; E decides whether approve or refuse may touch them.
+
   > Note (P9.6, from Phase 9, group A, the user's decisions on device-code phishing) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **approving and refusing a pending link** get endpoints here, and this group decides whether each needs a step-up. Admins and the Owner see every account with who linked it and when.
 - [ ] **P9.7** Offline accounts only when `accounts.allow_offline = true`. It's off by default and meant for dev.
 - [ ] **P9.8** 🔴 App screens:
@@ -3340,6 +3357,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     - shows the live status
   - sharing dialog (grants)
   - re-auth prompt
+
+  > Note (P9.8, from Phase 9, group C) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): the account list and the re-auth prompt need a text per `RefusalReason` and per status; `xbox_other`'s code is in the audit log only.
 
   > Note (P9.8, from Phase 9, group A, the user's decisions on device-code phishing) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
   > - **The link dialog** says, in the user's words: "Only enter a code you started yourself here. Never enter a code someone sent you, it would hand them your Minecraft account." Home carries no warning.
@@ -3400,6 +3419,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P10.6** 🔴 Session grants: `SessionRequest{bot_id}` returns `SessionGrant`, but only if the bot is assigned to *this* agent; otherwise `SessionDenied`. On the agent this backs `SessionCredentialProvider`.
 
   > Note (P10.6, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The port is `fleet_core::mc`'s credentials provider, and the runtime doesn't check `expires_at`. The managed provider never hands out a token that expires within the connect timeout.
+
+  > Note (P10.6, from Phase 9, group C, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **serve builds `SessionTokenService` here**, over D's `ReqwestMicrosoftAuth`, with a child of serve's shutdown token, and calls its `shutdown()` within serve's shutdown deadline (it waits for refreshes in flight).
+  > - `SessionRequest.fresh` maps to `session(account, fresh)`; `SessionTokenError::retryable()` maps to `CredentialError::retryable`.
+  > - A cached session is handed out only while more than 10 minutes are left, so it never expires within the agent's connect timeout.
+  > - An offline account is `SessionTokenError::Offline`: the grant carries its name instead.
 - [ ] **P10.7** 🔴 Agent client:
   - reconnects with backon
   - keeps bots running during outages
@@ -3979,6 +4003,8 @@ message ServerMessage {
 > - **Uniqueness:** a Microsoft account is unique by `mc_uuid`, an offline account by `lower(mc_name)`.
 > - **No CHECK** on `status`'s values or on the name's shape.
 > - **`account_grants`** arrives with group E.
+
+> Note (Appendix D, Phase 9, group C, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **`0009_mc_accounts_status_reason.sql`** adds `status_reason TEXT`, set only with the new status `refused`: `not_owned`, `no_profile`, `xbox_banned`, `xbox_no_xbox_profile`, `xbox_country_unavailable`, `xbox_adult_verification`, `xbox_child_account`, `xbox_other` or `profile_mismatch`. No CHECK; fleet-core's `AccountStatus::from_columns` reads both columns together.
 
 > Note (Appendix D, Phase 7, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`invites` as built** is `id, code_hash, role, created_by, created_at, expires_at, used_by, used_at, revoked_at`: `role` is `member` or `admin` only, `used_by` is unique, a revoked or used invite keeps its row, and three CHECKs keep it consistent (a use and its time together, never both used and revoked, an expiry after the creation). `0007_audit_log_target.sql` indexes the audit log by target, action and ID, for `GET /me`'s count of wrong codes.
 
