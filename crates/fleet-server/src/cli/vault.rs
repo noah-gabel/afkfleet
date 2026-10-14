@@ -447,6 +447,18 @@ mod tests {
         ids
     }
 
+    /// Creates an empty database file in `dir`, owner-only on Unix, as the
+    /// server would: the permission check refuses one other users can read.
+    fn empty_database(dir: &Path) {
+        let path = dir.join("afkfleet.db");
+        std::fs::write(&path, b"").unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        }
+    }
+
     /// The key every stored envelope names, by row, read straight from the
     /// database.
     async fn sealed_under(dir: &Path) -> BTreeMap<SealedRecord, u32> {
@@ -624,7 +636,7 @@ mod tests {
     #[tokio::test]
     async fn status_refuses_pending_migrations_and_changes_nothing() {
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("afkfleet.db"), b"").unwrap();
+        empty_database(dir.path());
 
         let run = run_status(&config(dir.path(), &[1], 1)).await;
 
@@ -674,7 +686,7 @@ mod tests {
     #[tokio::test]
     async fn rotate_key_refuses_pending_migrations_before_reading_a_key() {
         let dir = TempDir::new().unwrap();
-        std::fs::write(dir.path().join("afkfleet.db"), b"").unwrap();
+        empty_database(dir.path());
 
         // Key 1's file doesn't exist: reading it would fail differently.
         let run = run_rotate(&config(dir.path(), &[1], 1)).await;

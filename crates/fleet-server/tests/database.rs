@@ -236,6 +236,17 @@ fn on_disk(path: &Path) -> (Vec<u8>, bool, bool) {
     )
 }
 
+/// Creates `path` as an empty file, owner-only on Unix, as `open` would: the
+/// permission check refuses a database other users can read.
+fn empty_database(path: &Path) {
+    std::fs::write(path, b"").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
 #[tokio::test]
 async fn open_migrated_never_creates_a_missing_file() {
     let dir = TempDir::new().unwrap();
@@ -271,7 +282,7 @@ async fn open_migrated_refuses_a_missing_folder() {
 async fn an_empty_file_is_pending_from_the_first_migration_and_stays_empty() {
     let dir = TempDir::new().unwrap();
     let path = config_in(&dir).path;
-    std::fs::write(&path, b"").unwrap();
+    empty_database(&path);
 
     let result = open_migrated_in(&dir).await;
 
@@ -286,7 +297,7 @@ async fn an_empty_file_is_pending_from_the_first_migration_and_stays_empty() {
 async fn a_database_behind_this_server_is_pending_and_left_as_it_was() {
     let dir = TempDir::new().unwrap();
     let path = config_in(&dir).path;
-    std::fs::write(&path, b"").unwrap();
+    empty_database(&path);
     let pool = sqlx::sqlite::SqlitePoolOptions::new()
         .max_connections(1)
         .connect_with(connect_options(
