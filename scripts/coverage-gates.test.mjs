@@ -328,12 +328,13 @@ describe("the project's gates", () => {
     }
   });
 
-  it("put the Microsoft port and its adapter under the msauth gate (ADR-0018)", () => {
+  it("put the Microsoft port, its adapter and the session-token service under the msauth gate (ADR-0018)", () => {
     const gate = GATES_IN_USE.find((g) => g.name === "msauth");
 
     assert.deepEqual(gate.prefixes, [
       "crates/fleet-server/src/ports/msauth.rs",
       "crates/fleet-server/src/infra/msauth/",
+      "crates/fleet-server/src/app/session_tokens/",
     ]);
   });
 

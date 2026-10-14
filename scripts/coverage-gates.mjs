@@ -78,12 +78,17 @@ export const GATES = [
   },
   {
     // Microsoft accounts (P9.3, ADR-0018): the port and its adapter, which
-    // handle the refresh tokens and every answer Microsoft sends. Later Phase 9
-    // groups add their account services.
+    // handle the refresh tokens and every answer Microsoft sends, and the
+    // session-token service (P9.5), which refreshes and stores them. Later
+    // Phase 9 groups add their account services.
     name: "msauth",
     min: 90,
     required: true,
-    prefixes: ["crates/fleet-server/src/ports/msauth.rs", "crates/fleet-server/src/infra/msauth/"],
+    prefixes: [
+      "crates/fleet-server/src/ports/msauth.rs",
+      "crates/fleet-server/src/infra/msauth/",
+      "crates/fleet-server/src/app/session_tokens/",
+    ],
   },
   {
     // The desktop app's client: the refresh, the session's end and the

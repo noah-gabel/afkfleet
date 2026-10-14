@@ -188,6 +188,37 @@ audit_actions! {
     ///   `reason` (`unknown_key`, `rejected` or `malformed`) and, when the
     ///   envelope's header is readable, `sealed_with` (the key it names).
     VAULT_ROTATE_KEY = "vault.rotate_key";
+
+    /// The session-token service (P9.5, ADR-0018) stored an account's
+    /// refresh token after a refresh, in the commit that stores it. No actor
+    /// or IP: the server refreshed it to start a Minecraft session. Outcome:
+    /// Success. Target: the account. Metadata: `rotated` (whether Microsoft
+    /// sent a new token, or the one sent is kept).
+    ACCOUNT_REFRESH = "account.refresh";
+
+    /// An account's status changed. From the session-token service (P9.5,
+    /// ADR-0018): no actor or IP, the server decided. Outcome: Success.
+    /// Target: the account. Metadata: `status` (the new one),
+    /// `previous_status` and `reason`: `invalid_grant` when Microsoft refused
+    /// the refresh token (`reauth_required`), or the refusal's reason when
+    /// Minecraft's side refused the account (`refused`; `not_owned`,
+    /// `no_profile`, `xbox_*`), with `xerr` (Xbox Live's code) for
+    /// `xbox_other` only.
+    ACCOUNT_SET_STATUS = "account.set_status";
+
+    /// The session-token service (P9.5, ADR-0018) found that the account's
+    /// Minecraft name changed, and stored the profile's current one. No actor
+    /// or IP. Outcome: Success. Target: the account. Metadata: `name` and
+    /// `previous_name`.
+    ACCOUNT_RENAME = "account.rename";
+
+    /// The session-token service (P9.5, ADR-0018) started a Minecraft session
+    /// for an account whose profile has another UUID than the one linked, so
+    /// it handed out nothing and refused the account (`refused` with the
+    /// reason `profile_mismatch`) in the same commit. Outcome: Failure. No
+    /// actor or IP. Target: the account. Metadata: `status` and
+    /// `previous_status`; never either UUID.
+    SECURITY_ACCOUNT_PROFILE_MISMATCH = "security.account_profile_mismatch";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

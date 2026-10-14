@@ -8,8 +8,13 @@
 //! Microsoft account is unique by its profile's UUID, pending ones included,
 //! and an offline account by its name, whatever its case.
 //!
-//! Group A has only what it uses: inserting an account and finding one by
-//! its ID. Later groups add what the link flow and the endpoints need.
+//! Group A added what it uses: inserting an account and finding one by its
+//! ID. Group C (P9.5) adds what the session-token service writes: an
+//! account's status, with its reason ([`AccountWrites::set_status`]), and
+//! its Minecraft name after a rename ([`AccountWrites::rename`]); it stores
+//! a rotated refresh token through
+//! [`EnvelopeWrites::swap`](super::envelopes::EnvelopeWrites::swap). Later
+//! groups add what the link flow and the endpoints need.
 
 use core::fmt;
 
@@ -61,7 +66,7 @@ pub enum AccountCredential {
         /// The Microsoft refresh token, sealed by the vault: a version 1
         /// envelope bound to the account's ID and the purpose `ms_refresh`.
         refresh_envelope: Vec<u8>,
-        /// Where it stands.
+        /// Where it stands, with the reason of a refusal.
         status: AccountStatus,
     },
     /// Without any sign-in, for offline-mode servers in development.
@@ -140,6 +145,31 @@ pub trait AccountWrites: Send {
     /// already, or [`InsertAccountError::Store`]; an owner that doesn't exist
     /// or an ID that does is [`StoreError::Backend`].
     async fn insert(&mut self, account: &McAccount) -> Result<(), InsertAccountError>;
+
+    /// Sets the Microsoft account `id`'s status to `status`, and its reason
+    /// with it (none unless refused). Whether a row changed: `false` for an
+    /// account that doesn't exist or is an offline one, which is always
+    /// active. The caller compares the row first, in the same transaction.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn set_status(
+        &mut self,
+        id: AccountId,
+        status: AccountStatus,
+    ) -> Result<bool, StoreError>;
+
+    /// Renames the account `id` from `from` to `to`, but only while its name
+    /// is exactly `from` (case included). Whether a row changed.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn rename(
+        &mut self,
+        id: AccountId,
+        from: &McUsername,
+        to: &McUsername,
+    ) -> Result<bool, StoreError>;
 }
 
 #[cfg(test)]

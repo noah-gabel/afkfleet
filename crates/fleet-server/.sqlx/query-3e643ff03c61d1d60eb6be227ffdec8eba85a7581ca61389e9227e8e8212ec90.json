@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT rowid AS \"rowid!: i64\", id AS \"id!\", owner_user_id AS \"owner_user_id!\",\n                  kind AS \"kind!\", mc_uuid, mc_name AS \"mc_name!\",\n                  refresh_envelope AS \"refresh_envelope: Vec<u8>\", status AS \"status!\",\n                  created_at AS \"created_at!\"\n           FROM mc_accounts WHERE id = ?",
+  "query": "SELECT rowid AS \"rowid!: i64\", id AS \"id!\", owner_user_id AS \"owner_user_id!\",\n                  kind AS \"kind!\", mc_uuid, mc_name AS \"mc_name!\",\n                  refresh_envelope AS \"refresh_envelope: Vec<u8>\", status AS \"status!\",\n                  status_reason, created_at AS \"created_at!\"\n           FROM mc_accounts WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -92,8 +92,19 @@
         }
       },
       {
-        "name": "created_at!",
+        "name": "status_reason",
         "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "status_reason"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 9,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -115,8 +126,9 @@
       false,
       true,
       false,
+      true,
       false
     ]
   },
-  "hash": "573ca06700f4bc273e4672cffce52923522659a75448978849a231b249112e66"
+  "hash": "3e643ff03c61d1d60eb6be227ffdec8eba85a7581ca61389e9227e8e8212ec90"
 }

@@ -4,9 +4,11 @@
 //! its UUID, its refresh token's envelope and its status; an offline
 //! account none of them, and always the status `active`. A row whose
 //! columns disagree with its kind doesn't read back, though the table's
-//! CHECKs already refuse one.
+//! CHECKs already refuse one. The status is read from two columns, `status`
+//! and `status_reason`, which only a refused account fills (P9.5); a pair
+//! that doesn't describe a status doesn't read back either.
 
-use fleet_core::account::{AccountKind, AccountStatus};
+use fleet_core::account::{AccountError, AccountKind, AccountStatus, RefusalReason};
 use fleet_core::id::AccountId;
 use fleet_core::value::{McUsername, McUuid};
 use sqlx::SqliteConnection;
@@ -36,6 +38,7 @@ struct AccountRow {
     mc_name: String,
     refresh_envelope: Option<Vec<u8>>,
     status: String,
+    status_reason: Option<String>,
     created_at: String,
 }
 
@@ -50,7 +53,7 @@ where
         r#"SELECT rowid AS "rowid!: i64", id AS "id!", owner_user_id AS "owner_user_id!",
                   kind AS "kind!", mc_uuid, mc_name AS "mc_name!",
                   refresh_envelope AS "refresh_envelope: Vec<u8>", status AS "status!",
-                  created_at AS "created_at!"
+                  status_reason, created_at AS "created_at!"
            FROM mc_accounts WHERE id = ?"#,
         id
     )
@@ -72,6 +75,7 @@ pub(super) async fn insert(
     let kind = account.credential.kind().as_str();
     let name = account.name.as_str();
     let status = account.status().as_str();
+    let reason = account.status().reason().map(RefusalReason::as_str);
     let created_at = time_text(account.created_at).ok_or(StoreError::Unstorable {
         table: MC_ACCOUNTS,
         column: "created_at",
@@ -86,8 +90,9 @@ pub(super) async fn insert(
     };
     sqlx::query!(
         "INSERT INTO mc_accounts
-             (id, owner_user_id, kind, mc_uuid, mc_name, refresh_envelope, status, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+             (id, owner_user_id, kind, mc_uuid, mc_name, refresh_envelope, status,
+              status_reason, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         id,
         owner,
         kind,
@@ -95,6 +100,7 @@ pub(super) async fn insert(
         name,
         envelope,
         status,
+        reason,
         created_at
     )
     .execute(conn)
@@ -104,6 +110,51 @@ pub(super) async fn insert(
         _ => InsertAccountError::Store(store_error(error)),
     })?;
     Ok(())
+}
+
+/// Sets the Microsoft account `id`'s status and reason, which an offline
+/// account never changes.
+pub(super) async fn set_status(
+    conn: &mut SqliteConnection,
+    id: AccountId,
+    status: AccountStatus,
+) -> Result<bool, StoreError> {
+    let id = id_text(id);
+    let name = status.as_str();
+    let reason = status.reason().map(RefusalReason::as_str);
+    let done = sqlx::query!(
+        "UPDATE mc_accounts SET status = ?, status_reason = ?
+         WHERE id = ? AND kind = 'microsoft'",
+        name,
+        reason,
+        id
+    )
+    .execute(conn)
+    .await
+    .map_err(store_error)?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// Renames the account `id` from exactly `from` to `to`.
+pub(super) async fn rename(
+    conn: &mut SqliteConnection,
+    id: AccountId,
+    from: &McUsername,
+    to: &McUsername,
+) -> Result<bool, StoreError> {
+    let id = id_text(id);
+    let from = from.as_str();
+    let to = to.as_str();
+    let done = sqlx::query!(
+        "UPDATE mc_accounts SET mc_name = ? WHERE id = ? AND mc_name = ?",
+        to,
+        id,
+        from
+    )
+    .execute(conn)
+    .await
+    .map_err(store_error)?;
+    Ok(done.rows_affected() == 1)
 }
 
 /// Checks every value of a stored row; one that doesn't read back, or a
@@ -116,7 +167,14 @@ fn account_from_row(row: AccountRow) -> Result<McAccount, StoreError> {
         rowid: row.rowid,
     };
     let kind: AccountKind = row.kind.parse().map_err(|_| corrupt("kind"))?;
-    let status: AccountStatus = row.status.parse().map_err(|_| corrupt("status"))?;
+    let status = AccountStatus::from_columns(&row.status, row.status_reason.as_deref()).map_err(
+        |error| match error {
+            AccountError::UnknownStatus | AccountError::UnknownKind => corrupt("status"),
+            AccountError::UnknownReason
+            | AccountError::MissingReason
+            | AccountError::UnexpectedReason => corrupt("status_reason"),
+        },
+    )?;
     let credential = match kind {
         AccountKind::Microsoft => AccountCredential::Microsoft {
             uuid: row
@@ -138,6 +196,9 @@ fn account_from_row(row: AccountRow) -> Result<McAccount, StoreError> {
             }
             if status != AccountStatus::Active {
                 return Err(corrupt("status"));
+            }
+            if row.status_reason.is_some() {
+                return Err(corrupt("status_reason"));
             }
             AccountCredential::Offline
         }
