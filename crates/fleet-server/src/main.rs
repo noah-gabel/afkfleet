@@ -19,6 +19,8 @@
 //! - `user create-owner` starts logging and runs [`user::create_owner`] on a
 //!   current-thread runtime, with the terminal or stdin as the password's
 //!   source.
+//! - `vault status` and `vault rotate-key` start logging and run
+//!   [`vault::status`] or [`vault::rotate_key`] on a current-thread runtime.
 //!
 //! The library holds the logic; this file only wires it together.
 
@@ -30,7 +32,9 @@ use std::process::ExitCode;
 use clap::Parser as _;
 use fleet_server::cli::serve::StartError;
 use fleet_server::cli::user::{self, PasswordInput, TerminalPrompt};
-use fleet_server::cli::{self, Cli, Command, UserCommand, healthcheck, migrate, serve};
+use fleet_server::cli::{
+    self, Cli, Command, UserCommand, VaultCommand, healthcheck, migrate, serve, vault,
+};
 use fleet_server::config::{self, ServerConfig};
 use fleet_server::infra::crypto::vault::VaultKeys;
 use fleet_startup::signals::OsSignals;
@@ -59,6 +63,12 @@ fn main() -> ExitCode {
                     password_stdin,
                 },
         } => create_owner(&config, &username, password_stdin),
+        Command::Vault {
+            command: VaultCommand::Status { config },
+        } => run_vault(&config, VaultRun::Status),
+        Command::Vault {
+            command: VaultCommand::RotateKey { config },
+        } => run_vault(&config, VaultRun::RotateKey),
     }
 }
 
@@ -174,6 +184,39 @@ fn create_owner(path: &Path, username: &str, password_stdin: bool) -> ExitCode {
         &mut io::stdout(),
         &mut io::stderr(),
     ));
+    ExitCode::from(exit.code())
+}
+
+/// Which vault command [`run_vault`] runs.
+#[derive(Debug, Clone, Copy)]
+enum VaultRun {
+    /// `vault status`.
+    Status,
+    /// `vault rotate-key`.
+    RotateKey,
+}
+
+/// `afkfleet-server vault status` or `vault rotate-key`.
+fn run_vault(path: &Path, command: VaultRun) -> ExitCode {
+    let config = match config::load(path) {
+        Ok(config) => config,
+        Err(error) => return fail_early(&error),
+    };
+    if let Err(error) = init_with(&config.log, &NoRules) {
+        return fail_early(&error);
+    }
+    let runtime = match current_thread() {
+        Ok(runtime) => runtime,
+        Err(error) => return fail_early(&StartError::Runtime(error)),
+    };
+    let mut out = io::stdout();
+    let mut err = io::stderr();
+    let exit = runtime.block_on(async {
+        match command {
+            VaultRun::Status => vault::status(&config, &mut out, &mut err).await,
+            VaultRun::RotateKey => vault::rotate_key(&config, &mut out, &mut err).await,
+        }
+    });
     ExitCode::from(exit.code())
 }
 

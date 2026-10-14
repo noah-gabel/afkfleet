@@ -222,8 +222,9 @@ pub struct ServerPorts {
 
 impl ServerPorts {
     /// The real ones: [`SystemClock`], a [`MonotonicClock`] for the
-    /// limiters, and [`OsRandom`]. Only [`app`] calls it, so `serve` and
-    /// `user create-owner` stay the only places they're built.
+    /// limiters, and [`OsRandom`]. Only [`app`] calls it, so `serve`,
+    /// `user create-owner` and the `vault` commands stay the only places the
+    /// real clock and randomness are built.
     #[must_use]
     pub fn system() -> Self {
         Self {

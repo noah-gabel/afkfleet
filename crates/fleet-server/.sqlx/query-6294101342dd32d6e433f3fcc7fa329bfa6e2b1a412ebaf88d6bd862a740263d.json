@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rowid AS \"rowid!: i64\", id AS \"id!\",\n                  refresh_envelope AS \"envelope!: Vec<u8>\"\n           FROM mc_accounts WHERE refresh_envelope IS NOT NULL ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "envelope!: Vec<u8>",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "refresh_envelope"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "6294101342dd32d6e433f3fcc7fa329bfa6e2b1a412ebaf88d6bd862a740263d"
+}

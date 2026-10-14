@@ -30,7 +30,9 @@ use tokio::sync::Notify;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
-use crate::support::{ChannelSignals, app_of, capture, listener};
+use crate::support::{
+    ChannelSignals, app_of, capture, listener, server_config, test_dir, vault_keys,
+};
 
 /// The server's defaults: a 15 s request timeout and the 5 s close.
 const TIMEOUTS: ShutdownTimeouts = ShutdownTimeouts {
@@ -531,4 +533,40 @@ async fn a_connection_the_database_never_gets_back_fails_the_shutdown_at_the_dea
     );
     drop(held);
     database.close().await;
+}
+
+/// `just dev-rotate-key` reads a `-wal` next to the dev database as a running
+/// server (ADR-0018), so a server stopped by a signal must leave none behind:
+/// the real `run`, a request that writes (an unknown name's failed login,
+/// counted toward the lockout), then the stop.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_server_stopped_by_a_signal_leaves_no_wal_or_shm() {
+    let dir = test_dir("clean_stop_leaves_no_wal");
+    let (listener, address) = listener().await;
+    let config = server_config(&dir, address, false);
+    let keys = vault_keys(&config);
+    let (sender, signals) = ChannelSignals::new();
+    let server = tokio::spawn(async move { serve::run(&config, listener, signals, keys).await });
+    let body = r#"{"username":"nobody","password":"not the password at all"}"#;
+    let request = format!(
+        "POST /api/v1/auth/login HTTP/1.1\r\nHost: test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    let answer = within("the server should answer the login", async {
+        let mut stream = TcpStream::connect(address).await.unwrap();
+        stream.write_all(request.as_bytes()).await.unwrap();
+        let mut answer = Vec::new();
+        stream.read_to_end(&mut answer).await.unwrap();
+        String::from_utf8_lossy(&answer).into_owned()
+    })
+    .await;
+    assert!(answer.starts_with("HTTP/1.1 401"), "{answer}");
+
+    sender.send(Signal::Terminate).await.unwrap();
+
+    let exit = within("the server should stop", server).await.unwrap();
+    assert_eq!(exit, Exit::Stopped);
+    assert!(dir.join("afkfleet.db").is_file());
+    assert!(!dir.join("afkfleet.db-wal").exists());
+    assert!(!dir.join("afkfleet.db-shm").exists());
 }

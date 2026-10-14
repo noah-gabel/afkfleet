@@ -19,6 +19,8 @@
 //!   (P7.9).
 //! - [`users`]: creating the Owner (P7.5), the admins' list and changes
 //!   (P7.9), and the re-check every admin's write makes in its transaction.
+//! - [`vault`]: what the vault's keys seal, and re-encrypting the secrets
+//!   under the active key (P9.2).
 
 pub mod audit;
 pub mod auth;
@@ -29,3 +31,4 @@ pub mod lockout;
 pub mod login;
 pub mod mfa;
 pub mod users;
+pub mod vault;

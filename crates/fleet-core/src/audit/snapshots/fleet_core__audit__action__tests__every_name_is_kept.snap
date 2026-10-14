@@ -17,5 +17,6 @@ expression: names
   "invite.revoke",
   "invite.use",
   "user.change_password",
-  "session.revoke"
+  "session.revoke",
+  "vault.rotate_key"
 ]

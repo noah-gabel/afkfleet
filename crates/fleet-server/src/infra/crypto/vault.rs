@@ -3,10 +3,11 @@
 //!
 //! # The envelope, version 1
 //! `0x01 | key_id (u32, big-endian) | nonce (24 bytes) | ciphertext + tag (16
-//! bytes)`, stored as a BLOB. XChaCha20-Poly1305 with a nonce from the
-//! [`SecureRandom`] port; the key ID names the key that sealed it, so old
-//! keys keep opening their envelopes until `vault rotate-key` (P9) has
-//! re-encrypted everything.
+//! bytes)`, stored as a BLOB; the port defines its header
+//! ([`crate::ports::vault::key_id_of`]). XChaCha20-Poly1305 with a nonce
+//! from the [`SecureRandom`] port; the key ID names the key that sealed it,
+//! so old keys keep opening their envelopes until `vault rotate-key` (P9.2)
+//! has re-encrypted them under the active key.
 //!
 //! The AAD binds the header, the record and the purpose: `0x01 ‖ key_id (4) ‖
 //! record UUID (16 bytes) ‖ purpose name`. The fixed widths come first and
@@ -38,18 +39,12 @@ use uuid::Uuid;
 
 use super::attempt_keys::hmac_sha256;
 use crate::config::VaultConfig;
-use crate::ports::vault::{Vault, VaultError, VaultPurpose};
-
-/// The envelope's version byte.
-pub const VERSION_1: u8 = 0x01;
-/// What an envelope adds to its plaintext: the version, the key ID, the
-/// nonce and the tag.
-pub const OVERHEAD: usize = HEADER_BYTES + NONCE_BYTES + 16;
+use crate::ports::vault::{
+    HEADER_BYTES, OVERHEAD, VERSION_1, Vault, VaultError, VaultPurpose, key_id_of,
+};
 
 /// A key's length: one XChaCha20-Poly1305 key.
 const KEY_BYTES: usize = 32;
-/// The version byte and the key ID.
-const HEADER_BYTES: usize = 1 + 4;
 /// `XChaCha20`'s extended nonce.
 const NONCE_BYTES: usize = 24;
 
@@ -316,6 +311,10 @@ fn aad(key_id: u32, record: Uuid, purpose: VaultPurpose) -> Vec<u8> {
 }
 
 impl Vault for XChaChaVault {
+    fn active_key_id(&self) -> u32 {
+        self.active
+    }
+
     fn seal(
         &self,
         purpose: VaultPurpose,
@@ -352,20 +351,11 @@ impl Vault for XChaChaVault {
         record: Uuid,
         envelope: &[u8],
     ) -> Result<SecretBox<Vec<u8>>, VaultError> {
-        if envelope.len() < OVERHEAD {
-            return Err(VaultError::Malformed);
-        }
-        let (header, rest) = envelope
-            .split_at_checked(HEADER_BYTES)
+        let key_id = key_id_of(envelope)?;
+        let (nonce, sealed) = envelope
+            .get(HEADER_BYTES..)
+            .and_then(|rest| rest.split_at_checked(NONCE_BYTES))
             .ok_or(VaultError::Malformed)?;
-        let (nonce, sealed) = rest
-            .split_at_checked(NONCE_BYTES)
-            .ok_or(VaultError::Malformed)?;
-        let (&version, key_id) = header.split_first().ok_or(VaultError::Malformed)?;
-        if version != VERSION_1 {
-            return Err(VaultError::Malformed);
-        }
-        let key_id = u32::from_be_bytes(key_id.try_into().map_err(|_| VaultError::Malformed)?);
         let nonce: [u8; NONCE_BYTES] = nonce.try_into().map_err(|_| VaultError::Malformed)?;
         let cipher = self
             .ciphers
@@ -407,8 +397,19 @@ mod tests {
     const GOLDEN_KEY: [u8; 32] = [0x42; 32];
     const GOLDEN_PLAINTEXT: &[u8] = b"golden totp secret";
 
+    /// The golden version 1 envelope of a Microsoft refresh token: `seal` of
+    /// [`GOLDEN_REFRESH_PLAINTEXT`] for [`golden_account`] under key 7 =
+    /// `[0x42; 32]`. Made once (P9.2) and never regenerated, like
+    /// [`GOLDEN_ENVELOPE`]: it pins the purpose's name in the AAD.
+    const GOLDEN_REFRESH_ENVELOPE: &str = "0100000007611830d3641a68f94a690dcc25d1f4b0dac948325ac18f6d35531b76929b54f6634e96fc88b51531ce27496bd20475f181e26e2e39e975164790720bfb55c5";
+    const GOLDEN_REFRESH_PLAINTEXT: &[u8] = b"golden ms refresh token";
+
     fn golden_record() -> Uuid {
         "0192a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6b".parse().unwrap()
+    }
+
+    fn golden_account() -> Uuid {
+        "0192a3b4-c5d6-7e8f-9a0b-1c2d3e4f5a6c".parse().unwrap()
     }
 
     /// `bytes` encoded by `engine`; base64 is built without `alloc`, so
@@ -559,6 +560,27 @@ mod tests {
     }
 
     #[test]
+    fn the_golden_refresh_token_envelope_still_opens() {
+        let opened = golden_vault()
+            .open(
+                VaultPurpose::MsRefreshToken,
+                golden_account(),
+                &hex(GOLDEN_REFRESH_ENVELOPE),
+            )
+            .unwrap();
+
+        assert_eq!(opened.expose_secret().as_slice(), GOLDEN_REFRESH_PLAINTEXT);
+    }
+
+    #[test]
+    fn the_vault_names_its_active_key() {
+        let keys = Keys::new().key(1, &[1; 32]).key(2, &[2; 32]);
+
+        assert_eq!(vault(&keys, 2, &SeededRandom::new(1)).active_key_id(), 2);
+        assert_eq!(golden_vault().active_key_id(), GOLDEN_KEY_ID);
+    }
+
+    #[test]
     fn an_envelope_is_the_version_the_key_id_a_nonce_and_the_ciphertext() {
         let vault = golden_vault();
 
@@ -594,13 +616,64 @@ mod tests {
     const fn pinned_name(purpose: VaultPurpose) -> &'static str {
         match purpose {
             VaultPurpose::TotpSecret => "totp_secret",
+            VaultPurpose::MsRefreshToken => "ms_refresh",
         }
     }
 
     #[rstest]
     #[case::totp_secret(VaultPurpose::TotpSecret)]
+    #[case::ms_refresh(VaultPurpose::MsRefreshToken)]
     fn every_purpose_keeps_its_name(#[case] purpose: VaultPurpose) {
         assert_eq!(purpose.name(), pinned_name(purpose));
+    }
+
+    #[rstest]
+    #[case::totp_secret_as_refresh_token(VaultPurpose::TotpSecret, VaultPurpose::MsRefreshToken)]
+    #[case::refresh_token_as_totp_secret(VaultPurpose::MsRefreshToken, VaultPurpose::TotpSecret)]
+    fn a_secret_never_opens_for_another_purpose(
+        #[case] sealed_for: VaultPurpose,
+        #[case] opened_as: VaultPurpose,
+    ) {
+        let vault = golden_vault();
+        // The same record on both sides: only the purpose differs.
+        let envelope = vault.seal(sealed_for, record(1), b"secret").unwrap();
+
+        let result = vault.open(opened_as, record(1), &envelope);
+
+        assert!(
+            matches!(
+                result,
+                Err(VaultError::Rejected {
+                    key_id: GOLDEN_KEY_ID
+                })
+            ),
+            "{result:?}"
+        );
+    }
+
+    /// P9.2's swap test at the vault: a refresh token copied into another
+    /// account's row doesn't open there.
+    #[test]
+    fn a_refresh_token_moved_to_another_account_is_rejected() {
+        let vault = golden_vault();
+        let first = vault
+            .seal(VaultPurpose::MsRefreshToken, record(1), b"first token")
+            .unwrap();
+        let second = vault
+            .seal(VaultPurpose::MsRefreshToken, record(2), b"second token")
+            .unwrap();
+
+        let first_in_second = vault.open(VaultPurpose::MsRefreshToken, record(2), &first);
+        let second_in_first = vault.open(VaultPurpose::MsRefreshToken, record(1), &second);
+
+        assert!(
+            matches!(first_in_second, Err(VaultError::Rejected { .. })),
+            "{first_in_second:?}"
+        );
+        assert!(
+            matches!(second_in_first, Err(VaultError::Rejected { .. })),
+            "{second_in_first:?}"
+        );
     }
 
     // --- Sealing and opening ------------------------------------------------------

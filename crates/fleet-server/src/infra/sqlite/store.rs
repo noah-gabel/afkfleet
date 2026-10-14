@@ -11,12 +11,13 @@ use fleet_core::value::Username;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use super::error::store_error;
-use super::{Database, accounts, audit, invites, login_attempts, mfa, sessions, users};
+use super::{Database, accounts, audit, envelopes, invites, login_attempts, mfa, sessions, users};
 use crate::ports::accounts::{AccountReads, AccountWrites, InsertAccountError, McAccount};
 use crate::ports::audit::{
     AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, FailedCodeAttempts,
     NewAuditEntry,
 };
+use crate::ports::envelopes::{EnvelopeReads, EnvelopeWrites, SealedEnvelope, SealedRecord};
 use crate::ports::invites::{
     Invite, InviteReads, InviteWrites, ListedInvite, NewInvite, RevokedInvite,
 };
@@ -121,6 +122,13 @@ impl AccountReads for Reads {
 }
 
 #[async_trait]
+impl EnvelopeReads for Reads {
+    async fn all(&self) -> Result<Vec<SealedEnvelope>, StoreError> {
+        envelopes::all(&self.pool).await
+    }
+}
+
+#[async_trait]
 impl InviteReads for Reads {
     async fn find(&self, id: InviteId) -> Result<Option<Invite>, StoreError> {
         invites::find(&self.pool, id).await
@@ -187,6 +195,10 @@ impl WriteTx for SqliteWriteTx {
     }
 
     fn accounts(&mut self) -> &mut dyn AccountWrites {
+        self
+    }
+
+    fn envelopes(&mut self) -> &mut dyn EnvelopeWrites {
         self
     }
 
@@ -311,6 +323,22 @@ impl AccountWrites for SqliteWriteTx {
 
     async fn insert(&mut self, account: &McAccount) -> Result<(), InsertAccountError> {
         accounts::insert(&mut self.tx, account).await
+    }
+}
+
+#[async_trait]
+impl EnvelopeWrites for SqliteWriteTx {
+    async fn swap(
+        &mut self,
+        record: SealedRecord,
+        old: &[u8],
+        new: &[u8],
+    ) -> Result<bool, StoreError> {
+        envelopes::swap(&mut self.tx, record, old, new).await
+    }
+
+    async fn count_not_under(&mut self, key_id: u32) -> Result<u64, StoreError> {
+        envelopes::count_not_under(&mut self.tx, key_id).await
     }
 }
 
@@ -457,6 +485,10 @@ impl Store for Database {
     }
 
     fn accounts(&self) -> &dyn AccountReads {
+        &self.reads
+    }
+
+    fn envelopes(&self) -> &dyn EnvelopeReads {
         &self.reads
     }
 

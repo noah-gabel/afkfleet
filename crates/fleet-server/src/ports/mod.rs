@@ -23,13 +23,17 @@
 //! - [`passwords`]: hashing and checking passwords (P7.2).
 //! - [`totp`]: TOTP's crypto, a time step's code and the otpauth URI (P7.7).
 //! - [`qr`]: drawing the enrollment's QR code (P7.7).
-//! - [`vault`]: encrypting stored secrets (P7.4).
+//! - [`vault`]: encrypting stored secrets (P7.4), and reading an envelope's
+//!   key (P9.2).
+//! - [`envelopes`]: the stored envelopes, for `vault status` and
+//!   `vault rotate-key` (P9.2).
 //! - [`audit`]: the audit log. It's append-only: the only operations are
 //!   recording (inside a write transaction) and listing.
 //! - [`page`]: the keyset pages the lists share (P7.6, P7.9).
 
 pub mod accounts;
 pub mod audit;
+pub mod envelopes;
 pub mod invites;
 pub mod login_attempts;
 pub mod mfa;

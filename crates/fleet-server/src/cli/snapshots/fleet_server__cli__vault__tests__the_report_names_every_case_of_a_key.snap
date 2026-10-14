@@ -1,0 +1,9 @@
+---
+source: crates/fleet-server/src/cli/vault.rs
+expression: report(&status)
+---
+key 1: seals nothing; it can leave [vault] master_key_files (keep its file while backups from before the rotation exist)
+key 2 (active): 1 TOTP secret, 0 Microsoft refresh tokens
+key 3: 2 TOTP secrets, 1 Microsoft refresh token
+key 4 (not configured): 1 TOTP secret, 2 Microsoft refresh tokens; these can't be opened until key 4's file is back in [vault] master_key_files
+2 malformed envelopes: 1 TOTP secret, 1 Microsoft refresh token
