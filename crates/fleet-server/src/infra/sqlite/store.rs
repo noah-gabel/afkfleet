@@ -6,12 +6,13 @@ use core::fmt;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::authz::Role;
-use fleet_core::id::{InviteId, SessionId, UserId};
+use fleet_core::id::{AccountId, InviteId, SessionId, UserId};
 use fleet_core::value::Username;
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use super::error::store_error;
-use super::{Database, audit, invites, login_attempts, mfa, sessions, users};
+use super::{Database, accounts, audit, invites, login_attempts, mfa, sessions, users};
+use crate::ports::accounts::{AccountReads, AccountWrites, InsertAccountError, McAccount};
 use crate::ports::audit::{
     AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, FailedCodeAttempts,
     NewAuditEntry,
@@ -113,6 +114,13 @@ impl MfaReads for Reads {
 }
 
 #[async_trait]
+impl AccountReads for Reads {
+    async fn find(&self, id: AccountId) -> Result<Option<McAccount>, StoreError> {
+        accounts::find(&self.pool, id).await
+    }
+}
+
+#[async_trait]
 impl InviteReads for Reads {
     async fn find(&self, id: InviteId) -> Result<Option<Invite>, StoreError> {
         invites::find(&self.pool, id).await
@@ -175,6 +183,10 @@ impl WriteTx for SqliteWriteTx {
     }
 
     fn invites(&mut self) -> &mut dyn InviteWrites {
+        self
+    }
+
+    fn accounts(&mut self) -> &mut dyn AccountWrites {
         self
     }
 
@@ -288,6 +300,17 @@ impl MfaWrites for SqliteWriteTx {
         at: DateTime<Utc>,
     ) -> Result<bool, StoreError> {
         mfa::use_code(&mut self.tx, user, hash, at).await
+    }
+}
+
+#[async_trait]
+impl AccountWrites for SqliteWriteTx {
+    async fn find(&mut self, id: AccountId) -> Result<Option<McAccount>, StoreError> {
+        accounts::find(&mut *self.tx, id).await
+    }
+
+    async fn insert(&mut self, account: &McAccount) -> Result<(), InsertAccountError> {
+        accounts::insert(&mut self.tx, account).await
     }
 }
 
@@ -430,6 +453,10 @@ impl Store for Database {
     }
 
     fn invites(&self) -> &dyn InviteReads {
+        &self.reads
+    }
+
+    fn accounts(&self) -> &dyn AccountReads {
         &self.reads
     }
 

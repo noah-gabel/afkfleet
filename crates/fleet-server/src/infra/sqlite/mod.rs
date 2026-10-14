@@ -46,6 +46,7 @@
 //! callers bound it: `migrate` through [`Database::close_within`], `serve`
 //! within its shutdown deadline.
 
+mod accounts;
 mod audit;
 mod connect;
 mod convert;

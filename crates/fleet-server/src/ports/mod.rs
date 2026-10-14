@@ -7,6 +7,8 @@
 //!   read handles and one write transaction at a time, [`store::WriteTx`],
 //!   whose commit always records an audit entry.
 //! - [`users`]: the users.
+//! - [`accounts`]: the linked Minecraft accounts, Microsoft or offline
+//!   (P9.1).
 //! - [`invites`]: the invites to register, single-use and expiring (P7.1,
 //!   P7.9).
 //! - [`sessions`]: the sessions, one per login's token family (P7.1, P7.3).
@@ -26,6 +28,7 @@
 //!   recording (inside a write transaction) and listing.
 //! - [`page`]: the keyset pages the lists share (P7.6, P7.9).
 
+pub mod accounts;
 pub mod audit;
 pub mod invites;
 pub mod login_attempts;

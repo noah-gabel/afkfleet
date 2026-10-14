@@ -7,8 +7,10 @@
 //!
 //! # Modules
 //! - [`id`]: typed IDs for users, accounts, bots, agents and modes.
-//! - [`value`]: server addresses and the names of Minecraft accounts, users
-//!   and agents.
+//! - [`value`]: server addresses, the names of Minecraft accounts, users
+//!   and agents, and Minecraft profiles' UUIDs.
+//! - [`account`]: what a linked Minecraft account is (Microsoft or offline)
+//!   and where it stands.
 //! - [`chat`]: the messages bots send, and sanitized messages they receive.
 //! - [`disconnect`]: why a session ended, and whether the bot retries.
 //! - [`resilience`]: retry backoff, failure windows and the circuit breaker.
@@ -62,6 +64,7 @@
 //!   serde: their wire formats come with the proto and DTO conversions.
 //! - **Secrets** are `SecretString`s, whose `Debug` output is redacted.
 
+pub mod account;
 pub mod audit;
 pub mod auth;
 pub mod authz;
