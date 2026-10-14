@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE _sqlx_migrations SET success = 0 WHERE version = 2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "eb3cb86afc143ad77db5c775626b2690206011ae0439d7fad8ef771070053eb6"
+}

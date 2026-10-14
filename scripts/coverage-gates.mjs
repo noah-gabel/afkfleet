@@ -69,6 +69,11 @@ export const GATES = [
       "crates/fleet-server/src/infra/crypto/vault.rs",
       "crates/fleet-server/src/ports/vault.rs",
       "crates/fleet-startup/src/secret_file.rs",
+      // vault status and rotate-key (P9.2, ADR-0018): the service, and the
+      // database layer's swap, count and envelope listing in their own files.
+      "crates/fleet-server/src/app/vault.rs",
+      "crates/fleet-server/src/ports/envelopes.rs",
+      "crates/fleet-server/src/infra/sqlite/envelopes.rs",
     ],
   },
   {

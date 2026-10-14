@@ -20,7 +20,8 @@ use fleet_core::id::UserId;
 use fleet_core::value::Username;
 use fleet_server::config::DatabaseConfig;
 use fleet_server::infra::sqlite::{
-    CloseTimedOut, Database, DatabaseOptions, MIGRATOR, OpenError, READ_CONNECTIONS, open,
+    CloseTimedOut, Database, DatabaseOptions, MIGRATOR, OpenError, PoolRole, READ_CONNECTIONS,
+    connect_options, open, open_migrated,
 };
 use fleet_server::ports::audit::{AuditLimit, AuditPage, NewAuditEntry};
 use fleet_server::ports::store::Store;
@@ -217,6 +218,221 @@ async fn closing_checkpoints_and_removes_the_wal() {
     let path = config_in(&dir).path;
     assert!(!sibling(&path, "-wal").exists());
     assert!(!sibling(&path, "-shm").exists());
+}
+
+// --- Opening without migrating (the vault commands, P9.2) -------------------------------
+
+async fn open_migrated_in(dir: &TempDir) -> Result<Database, OpenError> {
+    open_migrated(&config_in(dir), DatabaseOptions::default()).await
+}
+
+/// The bytes of the database file and whether a `-wal` or `-shm` sits next to
+/// it.
+fn on_disk(path: &Path) -> (Vec<u8>, bool, bool) {
+    (
+        std::fs::read(path).unwrap(),
+        sibling(path, "-wal").exists(),
+        sibling(path, "-shm").exists(),
+    )
+}
+
+/// Creates `path` as an empty file, owner-only on Unix, as `open` would: the
+/// permission check refuses a database other users can read.
+fn empty_database(path: &Path) {
+    std::fs::write(path, b"").unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+}
+
+#[tokio::test]
+async fn open_migrated_never_creates_a_missing_file() {
+    let dir = TempDir::new().unwrap();
+    let path = config_in(&dir).path;
+
+    let result = open_migrated_in(&dir).await;
+
+    assert!(
+        matches!(&result, Err(OpenError::MissingFile { file }) if *file == path),
+        "{result:?}"
+    );
+    assert!(!path.exists());
+}
+
+#[tokio::test]
+async fn open_migrated_refuses_a_missing_folder() {
+    let dir = TempDir::new().unwrap();
+    let folder = dir.path().join("typo");
+    let config = DatabaseConfig {
+        path: folder.join("afkfleet.db"),
+    };
+
+    let result = open_migrated(&config, DatabaseOptions::default()).await;
+
+    assert!(
+        matches!(&result, Err(OpenError::MissingFolder { folder: missing }) if *missing == folder),
+        "{result:?}"
+    );
+    assert!(!folder.exists());
+}
+
+#[tokio::test]
+async fn an_empty_file_is_pending_from_the_first_migration_and_stays_empty() {
+    let dir = TempDir::new().unwrap();
+    let path = config_in(&dir).path;
+    empty_database(&path);
+
+    let result = open_migrated_in(&dir).await;
+
+    assert!(
+        matches!(result, Err(OpenError::Pending { version: 1 })),
+        "{result:?}"
+    );
+    assert_eq!(on_disk(&path), (Vec::new(), false, false));
+}
+
+#[tokio::test]
+async fn a_database_behind_this_server_is_pending_and_left_as_it_was() {
+    let dir = TempDir::new().unwrap();
+    let path = config_in(&dir).path;
+    empty_database(&path);
+    let pool = sqlx::sqlite::SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(connect_options(
+            SqliteConnectOptions::new().filename(&path),
+            PoolRole::Write,
+            &DatabaseOptions::default(),
+        ))
+        .await
+        .unwrap();
+    let last = MIGRATOR
+        .iter()
+        .map(|migration| migration.version)
+        .max()
+        .unwrap();
+    MIGRATOR.run_to(last - 1, &pool).await.unwrap();
+    pool.close().await;
+    let before = on_disk(&path);
+
+    let result = open_migrated_in(&dir).await;
+
+    assert!(
+        matches!(result, Err(OpenError::Pending { version }) if version == last),
+        "{result:?}"
+    );
+    assert_eq!(on_disk(&path), before);
+}
+
+/// A change to `_sqlx_migrations` of a migrated database.
+#[derive(Debug, Clone, Copy)]
+enum Tampered {
+    /// Migration 1's checksum changes.
+    Edited,
+    /// A migration this server doesn't know appears.
+    Newer,
+    /// Migration 2 is marked as failed halfway.
+    Failed,
+}
+
+/// What `open_migrated` answers once a migrated database's
+/// `_sqlx_migrations` was changed by `tampered`.
+async fn open_migrated_after(tampered: Tampered) -> Result<Database, OpenError> {
+    let dir = TempDir::new().unwrap();
+    let db = open_in(&dir).await;
+    match tampered {
+        Tampered::Edited => {
+            sqlx::query!("UPDATE _sqlx_migrations SET checksum = x'00' WHERE version = 1")
+                .execute(db.write_pool())
+                .await
+                .unwrap();
+        }
+        Tampered::Newer => {
+            sqlx::query!(
+                "INSERT INTO _sqlx_migrations (version, description, success, checksum, execution_time) VALUES (?, 'from a newer server', 1, x'00', 0)",
+                9_999_i64
+            )
+            .execute(db.write_pool())
+            .await
+            .unwrap();
+        }
+        Tampered::Failed => {
+            sqlx::query!("UPDATE _sqlx_migrations SET success = 0 WHERE version = 2")
+                .execute(db.write_pool())
+                .await
+                .unwrap();
+        }
+    }
+    db.close().await;
+    open_migrated_in(&dir).await
+}
+
+#[tokio::test]
+async fn open_migrated_refuses_an_edited_migration() {
+    let result = open_migrated_after(Tampered::Edited).await;
+
+    assert!(
+        matches!(result, Err(OpenError::EditedMigration { version: 1 })),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn open_migrated_refuses_a_schema_from_a_newer_server() {
+    let result = open_migrated_after(Tampered::Newer).await;
+
+    assert!(
+        matches!(result, Err(OpenError::NewerSchema { version: 9_999 })),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn open_migrated_refuses_a_migration_that_failed_halfway() {
+    let result = open_migrated_after(Tampered::Failed).await;
+
+    assert!(
+        matches!(
+            result,
+            Err(OpenError::Migrate(sqlx::migrate::MigrateError::Dirty(2)))
+        ),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_current_database_opens_and_its_lazy_write_pool_still_writes() {
+    let dir = TempDir::new().unwrap();
+    open_in(&dir).await.close().await;
+
+    let db = open_migrated_in(&dir).await.unwrap();
+    create_probe_table(db.write_pool()).await.unwrap();
+
+    assert!(has_table(db.read_pool(), "probe").await);
+    db.close().await;
+}
+
+/// `just dev-rotate-key` reads a `-wal` next to the dev database as a running
+/// server (ADR-0018), so `vault status`'s reads must leave none behind:
+/// read connections with `query_only` and a write pool that never connected.
+#[tokio::test]
+async fn a_closed_open_migrated_database_leaves_no_wal_or_shm() {
+    let dir = TempDir::new().unwrap();
+    let path = config_in(&dir).path;
+    open_in(&dir).await.close().await;
+    let before = on_disk(&path);
+    assert_eq!((before.1, before.2), (false, false));
+
+    let db = open_migrated_in(&dir).await.unwrap();
+    db.envelopes().all().await.unwrap();
+    db.accounts()
+        .find(fleet_core::id::AccountId::new_v7(DateTime::UNIX_EPOCH, [1; 10]).unwrap())
+        .await
+        .unwrap();
+    db.close().await;
+
+    assert_eq!(on_disk(&path), before);
 }
 
 #[tokio::test]

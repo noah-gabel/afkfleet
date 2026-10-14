@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT version AS \"version!: i64\", checksum AS \"checksum!: Vec<u8>\",\n                  success AS \"success!: bool\"\n           FROM _sqlx_migrations ORDER BY version",
+  "describe": {
+    "columns": [
+      {
+        "name": "version!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "_sqlx_migrations",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "checksum!: Vec<u8>",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "_sqlx_migrations",
+            "name": "checksum"
+          }
+        }
+      },
+      {
+        "name": "success!: bool",
+        "ordinal": 2,
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "_sqlx_migrations",
+            "name": "success"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "2977f412edd730151e06ca1a4bab5a8d5086a9a4bce49dae9411ad6f4dfb8620"
+}

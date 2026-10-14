@@ -41,7 +41,9 @@ use fleet_server::infra::crypto::totp::TotpRs;
 use fleet_server::infra::crypto::vault::{VaultKeys, XChaChaVault};
 use fleet_server::infra::qr::SvgQr;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
+use fleet_server::ports::accounts::AccountReads;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditReads, AuditRecord, NewAuditEntry};
+use fleet_server::ports::envelopes::EnvelopeReads;
 use fleet_server::ports::invites::{InviteReads, NewInvite};
 use fleet_server::ports::login_attempts::LoginAttemptReads;
 use fleet_server::ports::mfa::MfaReads;
@@ -294,6 +296,14 @@ impl Store for HookedStore {
 
     fn invites(&self) -> &dyn InviteReads {
         self.inner.invites()
+    }
+
+    fn accounts(&self) -> &dyn AccountReads {
+        self.inner.accounts()
+    }
+
+    fn envelopes(&self) -> &dyn EnvelopeReads {
+        self.inner.envelopes()
     }
 
     fn audit(&self) -> &dyn AuditReads {

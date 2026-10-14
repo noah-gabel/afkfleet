@@ -26,7 +26,7 @@ Where things are:
 2. **Pick the task.** Take the next unchecked task, or the one the user names (e.g. "do P4.3"). Before coding, restate its goal and acceptance criteria in 2–4 lines.
 3. **Branch.**
    - Start from an up-to-date `main`: `git switch main`, then `git pull`.
-   - Create the task branch `p<phase>/<task-id>-<slug>`, e.g. `p2/p2.6-bot-state-machine`. Phases 0 and 1 each use one branch for the whole phase: `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each, with one commit per task (Plan.md, the note under Phase 2). Phase 3 does the same with five group branches, plus one task branch for P3.9 (Plan.md, the note under Phase 3). Phase 4 uses five group branches (Plan.md, the note under Phase 4). Phase 5 uses four group branches (Plan.md, the note under Phase 5). Phase 6 uses five group branches (Plan.md, the note under Phase 6). Phase 7 uses five group branches (Plan.md, the note under Phase 7). Phase 8 uses five group branches (Plan.md, the note under Phase 8).
+   - Create the task branch `p<phase>/<task-id>-<slug>`, e.g. `p2/p2.6-bot-state-machine`. Phases 0 and 1 each use one branch for the whole phase: `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each, with one commit per task (Plan.md, the note under Phase 2). Phase 3 does the same with five group branches, plus one task branch for P3.9 (Plan.md, the note under Phase 3). Phase 4 uses five group branches (Plan.md, the note under Phase 4). Phase 5 uses four group branches (Plan.md, the note under Phase 5). Phase 6 uses five group branches (Plan.md, the note under Phase 6). Phase 7 uses five group branches (Plan.md, the note under Phase 7). Phase 8 uses five group branches (Plan.md, the note under Phase 8). Phase 9 uses six group branches (Plan.md, the note under Phase 9).
    - One task, or one Phase 2 group, per branch. If the previous PR isn't merged yet, stop and tell the user instead of stacking branches.
 4. **TDD.**
    1. Write the tests first.
@@ -87,6 +87,7 @@ On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: th
 | `just stack-up` | Builds the agent's image and starts the local server plus the agent (`deploy/dev/agent.compose.toml`) in Docker, waiting until both are healthy |
 | `just dev-server` / `just dev-agent` | Run the server with `deploy/dev/server.toml` (dev mode; its database and its vault key in `target/dev-server/`, or the absolute paths given; it creates the key when it's missing and never overwrites it) / the agent with `deploy/dev/agent.toml` |
 | `just dev-owner username` | Create the Owner `username` in `dev-server`'s database with `user create-owner`, the password typed twice at the terminal (same paths as `dev-server`) |
+| `just dev-vault-status` / `just dev-rotate-key` / `just dev-server-rotated` | `vault status` on `dev-server`'s database (key 1; no key file read) / copy that database to `target/dev-server/rotation/` (refused when the folder exists or a `-wal` shows `dev-server` running), create `vault-key-2` when it's missing and `vault rotate-key` the copy to it (keys 1 and 2) / serve the copy with key 2 alone. Overridable absolute paths, like `dev-server`'s (ADR-0018) |
 | `just demo-agent [minutes]` | Phase 5's demo: the compose stack (project `afkfleet-demo`) for 60 minutes, or `minutes`, with one server restart at half time; prints a summary and a verdict, saves its logs under `target/demo-agent/` (needs Docker) |
 | `just dev-app` | `tauri dev` in `apps/desktop`: Vite's dev server on `localhost:1420` and the app, with hot reload |
 | `just app-build [args]` | `tauri build` in `apps/desktop`: the frontend, then the exe with it embedded (`target/release/`; `--debug` for a debug exe with devtools). No installer yet |
@@ -133,8 +134,8 @@ Server module layout:
 ```
 fleet-server/src/
   main.rs  lib.rs  config.rs
-  cli/        # serve, migrate, healthcheck, user create-owner, pki, vault rotate-key, backup
-  app/        # services: auth, users, accounts, bots, modes, agents, audit, events
+  cli/        # serve, migrate, healthcheck, user create-owner, vault status, vault rotate-key, pki, backup
+  app/        # services: auth, users, accounts, bots, modes, agents, audit, events, vault
   ports/      # repository and provider traits
   infra/      # sqlite/ (sqlx repos), crypto/ (vault, tokens, passwords), msauth/ (azalea-auth adapter)
   http/       # router.rs, middleware/, extractors/, handlers/<resource>.rs, error.rs, openapi.rs, ws.rs

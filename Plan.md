@@ -399,6 +399,8 @@ The full analysis lives in `docs/threat-model.md`.
   - disabling or enabling a user, creating or revoking an invite (Phase 8, group E)
   - rotating keys
 
+> Note (§7.2, Phase 9, group A, the user's decision) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **rotating keys is the command line's only.** `afkfleet-server vault rotate-key` runs on the server's host, with the server stopped. A new key is a file the operator adds to the config, which no API request can do, so there's no route and no step-up to decide for it.
+
 > Note (§7.2, Phase 8, group E, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)'s amendment, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **every admin write is a step-up action.** `PATCH /users/{id}` (a role or `disabled`), `POST /invites` and `DELETE /invites/{id}` register with `step_up_route`, checked by the extractor only, so an unlocked PC with a live Owner or Admin session can't change roles, disable users or mint invites without the password. Listing stays a plain authed route. The app sends the action and, on 403 `step_up_required`, asks for the password and retries once.
 
 > Note (§7.2, Phase 7, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **step-up is a session stamp.** `POST /auth/step-up {password}` sets the session's `stepped_up_at`; a step-up action needs it at most 5 min old, otherwise it answers 403 `step_up_required`. A wrong password counts toward the lockout. No request body carries the current password.
@@ -469,6 +471,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - AAD: `record_id ‖ purpose`. A ciphertext can't be moved to another record or purpose without failing.
   - Master keys load from files (Docker secrets) into `SecretBox`.
   - `afkfleet-server vault rotate-key` re-encrypts everything inside one transaction.
+
+  > Note (§7.5, Phase 9, group A, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **`vault rotate-key` as built.**
+  > - **What it re-encrypts:** every envelope under another key than `[vault] active_key_id`, and nothing already under it.
+  > - **Where the crypto runs:** before the transaction, which swaps each row only while it still holds the envelope that was read, and rolls back if anything changed.
+  > - **A bad envelope:** one that doesn't open stops it, with a Failure entry each.
+  > - **The database:** it never creates or migrates it.
+  > - **`vault status`** shows, without any key, what each key ID still seals.
+  > - **The procedure** (stop, copy the database, add and activate the new key, rotate, check the status, drop the old key from the config but keep its file while older backups exist, start) is in the README.
 - **CA private key.** Its own secret, separate from the vault key.
 - **Agents.** They receive only short-lived Minecraft session tokens, held in memory as `SecretString`, and only for the bots assigned to them.
 - **Never log secrets:**
@@ -3209,6 +3219,24 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** Users link their Microsoft accounts securely. Tokens are encrypted at rest and refreshed safely.
 **Introduces:** `azalea-auth`, `moka`, `tauri-plugin-opener`.
 
+> Note (P9):
+> - **Six group branches.** At the user's request, Phase 9 is built in group PRs like Phases 2–8. Each group has one branch and one commit per task, and the groups run in this order, each after the previous PR is merged:
+>
+>   | Group | Branch | Tasks |
+>   |---|---|---|
+>   | A | `p9/p9.1-p9.2-accounts-table-and-vault` | P9.1's `mc_accounts`; P9.2 |
+>   | B | `p9/p9.3-microsoft-auth-provider` | P9.3, alone, so the Microsoft token handling gets a focused review |
+>   | C | `p9/p9.5-session-token-service` | P9.5 |
+>   | D | `p9/p9.4-p9.7-link-flow-and-offline` | P9.4, P9.7 |
+>   | E | `p9/p9.1-p9.6-grants-and-account-endpoints` | P9.1's `account_grants`; P9.6 |
+>   | F | `p9/p9.8-app-screens-wrap-up` | P9.8; the DoD, the threat model and the README |
+>
+>   - **P9.1 is spread over A and E** and ticked in E: each table arrives with its first user.
+>   - **New dependencies** arrive with their group, each approved with its version, license and release date: azalea-auth in B, moka in C, tauri-plugin-opener in F.
+>   - **Hands-on checks** use the user's own Microsoft account; each group's PR names exactly what the user does and should see.
+>   - Each later group asks its own implementation questions in its session.
+> - **Decisions.** The user answered group A's questions on 2026-10-14, one at a time. [ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md) records them; the notes below summarize what changes a task.
+
 > Note (P9, from Phase 8, group E, the user's request) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **Decide step-up per action, the same way as the admin writes.** Phase 8 put role changes, disabling users and invites behind step-up, so an unlocked PC with a live session can't do them without the password. Before building them, decide for each destructive or privilege-changing action of this phase whether it needs a step-up: unlinking or deleting a Microsoft account (already in §7.2's list), changing or revoking a grant, rotating keys through the API. The app reuses the admin screens' "send, and on `step_up_required` ask for the password and retry once".
 
 - [ ] **P9.1** 🔴 Migrations and repositories:
@@ -3216,11 +3244,27 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `account_grants`
 
   > Note (P9.1, from the group A review): **Account identity.** `McUsername` keeps its case, but Minecraft names are case-insensitive. Identify accounts by MC UUID; any lookup or comparison by name ignores case.
-- [ ] **P9.2** 🔴 Vault extensions:
+
+  > Note (P9.1, Phase 9, group A, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **`mc_accounts` is built in group A, `account_grants` in E**, which ticks P9.1.
+  > - **One table for both kinds** (`0008_mc_accounts.sql`). An offline account has no UUID and no envelope. A Microsoft account is unique by its profile's UUID, pending ones included; an offline account by its lowercased name.
+  > - **No `key_id` column:** the envelope's header names its key, as in `user_mfa`.
+  > - **No CHECK** on the status's values (`pending`, `active`, `reauth_required`) or the name's shape; fleet-core's `AccountStatus` and `McUsername` check them when a row is read back. An offline account is always `active`.
+  > - **Core types:** `fleet_core::account::{AccountKind, AccountStatus}` and `fleet_core::value::McUuid`, a non-nil UUID in lowercase hyphenated form.
+  > - **The repository** has only what A uses: `insert` (`Taken` for a linked account) and `find`.
+- [x] **P9.2** 🔴 Vault extensions:
   - purpose-bound AAD (`account_id|ms_refresh`)
   - `vault rotate-key` CLI that re-encrypts transactionally
   - lookup by `key_id`
   - a test that a ciphertext swapped between two accounts fails to decrypt
+
+  > Note (P9.2, Phase 9, group A, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
+  > - **"Lookup by `key_id`"** is P7.4's `open`, which already finds the key the header names, plus `key_id_of` (the header, read without a key) and **`vault status`**. That's a report of what each key ID seals, which reads no key file and exits 3 when an envelope names a key that isn't configured or is malformed.
+  > - **`vault rotate-key`** re-encrypts only the envelopes under other keys than the active one.
+  >   - The crypto runs before the transaction (ADR-0015's rule). The one transaction swaps each row only while it holds the envelope that was read, and rolls back if anything changed.
+  >   - An envelope that doesn't open stops it, with one `vault.rotate_key` Failure entry each.
+  >   - Neither vault command creates or migrates the database.
+  > - **The swap test** is `a_refresh_token_moved_to_another_account_is_rejected` (the vault) and `rotation_refuses_refresh_tokens_swapped_between_two_accounts_and_records_each` (the rotation).
+  > - **CLI only:** no API route for key rotation, so no step-up to decide.
 - [ ] **P9.3** 🔴 `MicrosoftAuthProvider` port (`start_device_flow`, `poll`, `refresh`, `minecraft_session`), with an `azalea-auth` adapter and a fake.
   - Use azalea-auth's default client ID; a custom Azure app ID would need approval from Mojang.
   - **Never** use azalea's file cache.
@@ -3235,6 +3279,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The cap already exists.** fleet-server's log layer comes from fleet-startup, which caps `azalea_auth` at `info` for every binary, outside the rules a binary can add, since Phase 6. P9.3 adds no second cap; P9's redaction test still checks this one on the server.
   > - **stable-check.** fleet-server is in the justfile's `stable_crates` since Phase 6, because it didn't depend on azalea-auth yet. When azalea-auth arrives here, fleet-server leaves `stable_crates`, as the rule says (P0.11).
   > Note (P9.3, from Phase 8, group A) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **fleet-client leaves `stable_crates` with fleet-server,** since fleet-server is its dev-dependency and `stable-check` builds `--all-targets`.
+  > Note (P9.3, from Phase 9, group A's planning) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **the desktop crate leaves `stable_crates` too.** `apps/desktop/src-tauri` also dev-depends on fleet-server, and `stable-check` includes it off Linux.
 - [ ] **P9.4** 🔴 Device-code flow:
   - `POST /accounts/link` returns `{flow_id, user_code, verification_uri, expires_at}`.
   - A background poller runs bounded and cancellable, with per-user and total caps.
@@ -3243,6 +3288,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - Member quota from `accounts.max_per_member`.
 
   > Note (P9.4, from group D): Starting a flow checks `LinkAccount` (every role). `GET /accounts/link/{flow_id}` checks `UsePersonal` on `ResourceContext::Personal{owner}` with the flow's creator, so other users get 404 (ADR-0010).
+
+  > Note (P9.4, from Phase 9, group A, the user's decisions on device-code phishing) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
+  > - **New links wait for approval.** A Member's or an Admin's new account is `pending` until someone above them approves it (a Member's: an Admin or the Owner; an Admin's: the Owner). The Owner's own links are `active` at once. No bot can use a pending account.
+  > - **One link per Minecraft account.** A UUID that's already linked, pending ones included, can't be linked again by anyone (`InsertAccountError::Taken`); the refusal names nobody.
+  > - **`account.link`** records the creator, the Minecraft name and the UUID.
 - [ ] **P9.5** 🔴 `SessionTokenService`:
   - single-flight refresh per account (moka)
   - stores rotated refresh tokens atomically
@@ -3259,6 +3309,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Permissions.** `ViewBot` for list and get, `DeleteAccount`, `RelinkAccount`, `ManageGrants` (list, revoke) and `Grant{level, grantee}` (create, change), all on `ResourceContext::Account{owner, grant}` with the actor's own grant.
   > - **Grants.** Only Manage edits grants, and nobody grants to themselves.
   > - **Flagged, not decided:** how a Member picks a grantee. Members can't list users, so the dialog (P9.8) needs a lookup that doesn't let them enumerate usernames.
+
+  > Note (P9.6, from Phase 9, group A, the user's decisions on device-code phishing) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **approving and refusing a pending link** get endpoints here, and this group decides whether each needs a step-up. Admins and the Owner see every account with who linked it and when.
 - [ ] **P9.7** Offline accounts only when `accounts.allow_offline = true`. It's off by default and meant for dev.
 - [ ] **P9.8** 🔴 App screens:
   - accounts list
@@ -3268,6 +3320,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     - shows the live status
   - sharing dialog (grants)
   - re-auth prompt
+
+  > Note (P9.8, from Phase 9, group A, the user's decisions on device-code phishing) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
+  > - **The link dialog** says, in the user's words: "Only enter a code you started yourself here. Never enter a code someone sent you, it would hand them your Minecraft account." Home carries no warning.
+  > - **Home** shows Admins and the Owner how many links wait for their approval, so none is missed.
 
 **Security:**
 - Refresh tokens never leave the server.
@@ -3890,6 +3946,13 @@ message ServerMessage {
 > Note (Appendix D, Phase 7, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): Phase 7's tables arrive with their first user, each in its own migration: `sessions` in group B, with an extra `stepped_up_at` for step-up (§7.2); `login_attempts` in C; `user_mfa` in D, whose `secret_ciphertext` holds a vault envelope v1; `invites` in E. Each group designs the columns with its feature.
 
 > Note (Appendix D, Phase 7, group D, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`user_mfa` as built** is `user_id, secret_envelope, last_used_step, confirmed_at`: no `key_id` (the envelope's header has it) and no `enabled_at` (`confirmed_at`), and a row exists only for a confirmed enrollment. The recovery codes live in their own table, `recovery_codes(hash, user_id, used_at)`, instead of a `recovery_code_hashes` column. The login challenges (mfa and setup tokens) live in the server's memory, not in a table.
+
+> Note (Appendix D, Phase 9, group A, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **`mc_accounts` as built** (`0008_mc_accounts.sql`) is `id, owner_user_id, kind, mc_uuid, mc_name, refresh_envelope, status, created_at`.
+> - **No `key_id`:** the envelope's header names its key.
+> - **Offline accounts:** `refresh_envelope` (a vault envelope, purpose `ms_refresh`) and `mc_uuid` are NULL exactly for them. An offline account is always `active`.
+> - **Uniqueness:** a Microsoft account is unique by `mc_uuid`, an offline account by `lower(mc_name)`.
+> - **No CHECK** on `status`'s values or on the name's shape.
+> - **`account_grants`** arrives with group E.
 
 > Note (Appendix D, Phase 7, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`invites` as built** is `id, code_hash, role, created_by, created_at, expires_at, used_by, used_at, revoked_at`: `role` is `member` or `admin` only, `used_by` is unique, a revoked or used invite keeps its row, and three CHECKs keep it consistent (a use and its time together, never both used and revoked, an expiry after the creation). `0007_audit_log_target.sql` indexes the audit log by target, action and ID, for `GET /me`'s count of wrong codes.
 

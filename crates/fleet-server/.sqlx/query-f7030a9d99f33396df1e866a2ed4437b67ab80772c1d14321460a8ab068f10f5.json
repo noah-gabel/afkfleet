@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE user_mfa SET secret_envelope = ?\n                 WHERE user_id = ? AND secret_envelope = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "f7030a9d99f33396df1e866a2ed4437b67ab80772c1d14321460a8ab068f10f5"
+}

@@ -164,6 +164,38 @@ dev-owner username $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "tar
     node -e "require('node:fs').mkdirSync(require('node:path').dirname(process.argv[1]), { recursive: true })" "{{ AFKFLEET_SERVER__DATABASE__PATH }}"
     cargo run -p fleet-server --bin afkfleet-server -- user create-owner --config deploy/dev/server.toml --username "{{ username }}"
 
+# `vault status` on dev-server's database with its key 1: what each key ID seals, read from
+# the envelopes' headers. It reads no key file and never creates or migrates the database
+# (ADR-0018). No exit message: the command prints its own report, error line and exit code
+# (3 when a secret names a key that isn't configured).
+# Show what dev-server's vault keys seal.
+[no-exit-message]
+dev-vault-status $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dev-server" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dev-server" / "vault-key-1"):
+    cargo run -p fleet-server --bin afkfleet-server -- vault status --config deploy/dev/server.toml
+
+# The rotation check on a copy (Phase 9's DoD; ADR-0018). Stop dev-server first: the copy
+# is refused while dev-server's database has a -wal file, and when target/dev-server/rotation/
+# exists (nothing is ever deleted or overwritten). Then a second dev key, vault-key-2, is
+# created when it's missing (never overwritten, never printed; never read it), and
+# `vault rotate-key` re-encrypts the copy's secrets under it, with keys 1 and 2 configured.
+# The paths are dev-server's database, the copy, and the two key files.
+# Copy dev-server's database and rotate the copy's vault key to a new key 2.
+[no-exit-message]
+dev-rotate-key source=(justfile_directory() / "target" / "dev-server" / "afkfleet.db") $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dev-server" / "rotation" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dev-server" / "vault-key-1") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__2=(justfile_directory() / "target" / "dev-server" / "vault-key-2") $AFKFLEET_SERVER__VAULT__ACTIVE_KEY_ID="2":
+    node scripts/dev-rotation.mjs copy "{{ source }}" "{{ AFKFLEET_SERVER__DATABASE__PATH }}"
+    node scripts/dev-vault-key.mjs "{{ AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__2 }}"
+    cargo run -p fleet-server --bin afkfleet-server -- vault rotate-key --config deploy/dev/server.toml
+
+# The rotated copy, served with key 2 only, so logging in with 2FA proves the secrets open
+# without key 1. It refuses to start without the copy, since serve would create an empty
+# database. No exit message, as for dev-server. Don't run it beside dev-server: both use
+# 127.0.0.1:8080.
+# Run the server on dev-rotate-key's copy with key 2 only.
+[no-exit-message]
+dev-server-rotated $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dev-server" / "rotation" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__2=(justfile_directory() / "target" / "dev-server" / "vault-key-2") $AFKFLEET_SERVER__VAULT__ACTIVE_KEY_ID="2":
+    node scripts/dev-rotation.mjs check "{{ AFKFLEET_SERVER__DATABASE__PATH }}"
+    cargo run -p fleet-server --bin afkfleet-server -- serve --config deploy/dev/server.toml
+
 # No exit message: on Windows, Ctrl+C reaches just and PowerShell too, so just
 # would call a clean stop a failure. The agent logs its own errors and exit code.
 # Run the agent with deploy/dev/agent.toml: three bots against `just mc-up`'s server.

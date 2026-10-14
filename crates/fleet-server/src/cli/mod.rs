@@ -13,8 +13,10 @@
 //! - [`healthcheck`]: asks a running server's `GET /health/ready`, for
 //!   Docker's HEALTHCHECK.
 //! - [`user`]: `user create-owner`, the bootstrap of the Owner (P7.5).
+//! - [`vault`]: `vault status` and `vault rotate-key`, what the vault's keys
+//!   seal and re-encrypting it all under the active key (P9.2).
 //!
-//! Later phases add `pki` (P10), `vault rotate-key` (P9) and `backup` (P12).
+//! Later phases add `pki` (P10) and `backup` (P12).
 
 use core::time::Duration;
 use std::ffi::OsString;
@@ -27,6 +29,7 @@ pub mod housekeeping;
 pub mod migrate;
 pub mod serve;
 pub mod user;
+pub mod vault;
 
 /// How long closing the database may take once nothing uses it any more,
 /// the pools' acquire timeout: `migrate` waits this long, and `serve` at
@@ -109,6 +112,13 @@ pub enum Command {
         #[command(subcommand)]
         command: UserCommand,
     },
+    /// Shows what the vault's keys seal, and re-encrypts the secrets under
+    /// the active key. Neither creates or migrates the database.
+    Vault {
+        /// What to do.
+        #[command(subcommand)]
+        command: VaultCommand,
+    },
 }
 
 /// `afkfleet-server user …`.
@@ -132,6 +142,33 @@ pub enum UserCommand {
         /// asking at the terminal, for scripts.
         #[arg(long)]
         password_stdin: bool,
+    },
+}
+
+/// `afkfleet-server vault …`.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum VaultCommand {
+    /// Prints how many secrets each key ID seals, read from the envelopes'
+    /// headers. It reads no key file.
+    #[command(after_help = vault::STATUS_EXIT_CODES)]
+    Status {
+        /// The config file (TOML): the command reads `[database] path`,
+        /// `[vault]` (the key IDs, never the files) and `[log]`.
+        /// `AFKFLEET_SERVER__…` environment variables override its keys, as
+        /// for `serve`.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+    },
+    /// Re-encrypts every secret sealed under another key than `[vault]
+    /// active_key_id`, in one transaction, then prints the status. Stop the
+    /// server and copy the database first (README).
+    #[command(after_help = vault::ROTATE_KEY_EXIT_CODES)]
+    RotateKey {
+        /// The config file (TOML): the command reads `[database] path`,
+        /// `[vault]` with every key file, and `[log]`. `AFKFLEET_SERVER__…`
+        /// environment variables override its keys, as for `serve`.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
     },
 }
 
@@ -280,6 +317,51 @@ mod tests {
         let help = create_owner.render_help().to_string();
 
         assert!(help.contains(user::CREATE_OWNER_EXIT_CODES), "{help}");
+    }
+
+    #[rstest]
+    #[case::status("status", VaultCommand::Status { config: PathBuf::from("server.toml") })]
+    #[case::rotate_key("rotate-key", VaultCommand::RotateKey { config: PathBuf::from("server.toml") })]
+    fn each_vault_command_takes_the_config_path(
+        #[case] name: &str,
+        #[case] expected: VaultCommand,
+    ) {
+        let cli =
+            Cli::try_parse_from(["afkfleet-server", "vault", name, "--config", "server.toml"])
+                .unwrap();
+
+        assert_eq!(cli.command, Command::Vault { command: expected });
+    }
+
+    #[rstest]
+    #[case::status_without_a_config(&["vault", "status"])]
+    #[case::rotate_key_without_a_config(&["vault", "rotate-key"])]
+    #[case::no_vault_command(&["vault"])]
+    #[case::an_unknown_vault_command(&["vault", "rotate", "--config", "server.toml"])]
+    fn vault_usage_errors_exit_2(#[case] args: &[&str]) {
+        let args: Vec<OsString> = core::iter::once("afkfleet-server")
+            .chain(args.iter().copied())
+            .map(OsString::from)
+            .collect();
+        let error = Cli::try_parse_from(&args).unwrap_err();
+
+        assert_eq!(exit_code(&error, args), 2, "{error}");
+    }
+
+    #[rstest]
+    #[case::status("status", vault::STATUS_EXIT_CODES)]
+    #[case::rotate_key("rotate-key", vault::ROTATE_KEY_EXIT_CODES)]
+    fn each_vault_commands_help_lists_its_exit_codes(#[case] name: &str, #[case] codes: &str) {
+        let mut command = Cli::command();
+        let subcommand = command
+            .find_subcommand_mut("vault")
+            .unwrap()
+            .find_subcommand_mut(name)
+            .unwrap();
+
+        let help = subcommand.render_help().to_string();
+
+        assert!(help.contains(codes), "{help}");
     }
 
     #[test]

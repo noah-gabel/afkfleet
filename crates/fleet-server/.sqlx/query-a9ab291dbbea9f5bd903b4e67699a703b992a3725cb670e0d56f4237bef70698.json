@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT (SELECT count(*) FROM user_mfa WHERE substr(secret_envelope, 1, 5) != ?)\n                + (SELECT count(*) FROM mc_accounts\n                   WHERE refresh_envelope IS NOT NULL AND substr(refresh_envelope, 1, 5) != ?)\n           AS \"count!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "count!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "a9ab291dbbea9f5bd903b4e67699a703b992a3725cb670e0d56f4237bef70698"
+}

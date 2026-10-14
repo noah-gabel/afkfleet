@@ -5,7 +5,9 @@ use core::fmt;
 
 use async_trait::async_trait;
 
+use super::accounts::{AccountReads, AccountWrites};
 use super::audit::{AuditEntryId, AuditReads, AuditWrites, NewAuditEntry};
+use super::envelopes::{EnvelopeReads, EnvelopeWrites};
 use super::invites::{InviteReads, InviteWrites};
 use super::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
 use super::mfa::{MfaReads, MfaWrites};
@@ -73,6 +75,12 @@ pub trait Store: Send + Sync + fmt::Debug {
     /// The invites, read through the read connections.
     fn invites(&self) -> &dyn InviteReads;
 
+    /// The linked Minecraft accounts, read through the read connections.
+    fn accounts(&self) -> &dyn AccountReads;
+
+    /// Every stored vault envelope, read through the read connections.
+    fn envelopes(&self) -> &dyn EnvelopeReads;
+
     /// The audit log, read through the read connections.
     fn audit(&self) -> &dyn AuditReads;
 
@@ -115,6 +123,12 @@ pub trait WriteTx: Send {
 
     /// The invites, read and written in this transaction.
     fn invites(&mut self) -> &mut dyn InviteWrites;
+
+    /// The linked Minecraft accounts, read and written in this transaction.
+    fn accounts(&mut self) -> &mut dyn AccountWrites;
+
+    /// The stored vault envelopes, changed in this transaction.
+    fn envelopes(&mut self) -> &mut dyn EnvelopeWrites;
 
     /// The audit log, for a second entry in this transaction.
     fn audit(&mut self) -> &mut dyn AuditWrites;

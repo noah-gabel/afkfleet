@@ -170,6 +170,24 @@ audit_actions! {
     /// Outcome: Success. Actor: the user; target: the session; the client's
     /// IP.
     SESSION_REVOKE = "session.revoke";
+
+    /// `afkfleet-server vault rotate-key` ran on the server's host (P9.2,
+    /// ADR-0018). No actor and no IP: an operator ran it from the command
+    /// line.
+    /// - **Success:** every secret sealed under another key than the active
+    ///   one was re-encrypted under the active key, in this one commit. No
+    ///   target (it's the whole vault). Metadata: `sealed_with` (the active
+    ///   key's ID), `totp` and `ms_refresh` (how many TOTP secrets and
+    ///   Microsoft refresh tokens were re-encrypted; a metadata key never
+    ///   holds a secret word). A run that finds nothing to re-encrypt records
+    ///   nothing.
+    /// - **Failure:** one entry per secret that didn't open, all in one
+    ///   commit, and nothing was re-encrypted. A secret that doesn't open
+    ///   may mean someone changed the database. Target: the user (a TOTP
+    ///   secret) or the account (a Microsoft refresh token). Metadata:
+    ///   `reason` (`unknown_key`, `rejected` or `malformed`) and, when the
+    ///   envelope's header is readable, `sealed_with` (the key it names).
+    VAULT_ROTATE_KEY = "vault.rotate_key";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

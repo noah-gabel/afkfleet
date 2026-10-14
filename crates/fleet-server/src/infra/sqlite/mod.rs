@@ -5,7 +5,9 @@
 //! [`open`] is what the server calls at startup (and the `migrate` command,
 //! P6.11): it prepares the file, then [`Database::connect`] builds both pools
 //! and runs every pending migration before anything else touches the
-//! database.
+//! database. [`open_migrated`] is the vault commands' (P9.2): it opens only
+//! an existing database whose migrations are all applied, and never creates
+//! or migrates one.
 //! - **The folder must exist.** A typo in `[database] path` or a missing
 //!   volume stops startup instead of creating a fresh, empty database
 //!   somewhere unexpected.
@@ -46,9 +48,11 @@
 //! callers bound it: `migrate` through [`Database::close_within`], `serve`
 //! within its shutdown deadline.
 
+mod accounts;
 mod audit;
 mod connect;
 mod convert;
+mod envelopes;
 mod error;
 mod file;
 mod invites;
@@ -134,9 +138,24 @@ pub enum OpenError {
         /// The unknown migration's version.
         version: i64,
     },
-    /// Running the migrations failed.
+    /// Running the migrations failed, or ([`open_migrated`]) the database
+    /// records a migration that failed halfway (`Dirty`).
     #[error("couldn't migrate the database")]
     Migrate(#[source] MigrateError),
+    /// ([`open_migrated`]) The database file doesn't exist.
+    #[error("the database {} doesn't exist, and this command never creates one", file.display())]
+    MissingFile {
+        /// The missing file.
+        file: PathBuf,
+    },
+    /// ([`open_migrated`]) The database lacks migrations this server has.
+    #[error(
+        "the database has pending migrations (the first is {version}); run `afkfleet-server migrate` first"
+    )]
+    Pending {
+        /// The first migration it lacks.
+        version: i64,
+    },
 }
 
 /// [`Database::close_within`] ran out of time: a connection was still
@@ -182,17 +201,17 @@ impl Database {
             .map_err(OpenError::Connect)?;
         // Unbounded on purpose: a migration must finish or fail (module docs).
         MIGRATOR.run(&write).await.map_err(migrate_error)?;
-        let read = SqlitePoolOptions::new()
-            .max_connections(READ_CONNECTIONS)
-            .acquire_timeout(options.acquire_timeout())
-            .connect_with(connect_options(base, PoolRole::Read, &options))
-            .await
-            .map_err(OpenError::Connect)?;
-        Ok(Self {
+        let read = read_pool(base, &options).await?;
+        Ok(Self::from_pools(write, read))
+    }
+
+    /// The database over its two pools.
+    fn from_pools(write: SqlitePool, read: SqlitePool) -> Self {
+        Self {
             write,
             reads: store::Reads { pool: read.clone() },
             read,
-        })
+        }
     }
 
     /// The write pool: exactly one connection.
@@ -243,6 +262,130 @@ pub async fn open(
     Database::connect(SqliteConnectOptions::new().filename(&config.path), options).await
 }
 
+/// Opens the existing database at the configured path without creating or
+/// migrating anything, for `vault status` and `vault rotate-key` (P9.2): a
+/// key rotation never changes the schema as a side effect.
+///
+/// The file must exist (with the folder and, on Unix, the permissions
+/// [`open`] checks). The read pool checks the applied migrations against
+/// [`MIGRATOR`] with plain SELECTs, refusing the database in sqlx's own
+/// order: a migration that failed halfway, one this server doesn't know, an
+/// edited one, then the first pending one. The write pool is lazy: it opens
+/// its connection only at the first [`Store::write`](crate::ports::store::Store::write),
+/// so a command that only reads never opens one.
+///
+/// # Errors
+/// [`OpenError::MissingFolder`], [`OpenError::MissingFile`],
+/// [`OpenError::Inspect`] or, on Unix, [`OpenError::Permissions`] when the
+/// file isn't there or is open to others; [`OpenError::Connect`];
+/// [`OpenError::Migrate`] (`Dirty`), [`OpenError::NewerSchema`],
+/// [`OpenError::EditedMigration`] or [`OpenError::Pending`] when the
+/// migrations don't match this server's.
+pub async fn open_migrated(
+    config: &DatabaseConfig,
+    options: DatabaseOptions,
+) -> Result<Database, OpenError> {
+    file::check_existing(&config.path).await?;
+    let base = SqliteConnectOptions::new().filename(&config.path);
+    let read = read_pool(base.clone(), &options).await?;
+    let checked = match applied_migrations(&read).await {
+        Ok(applied) => schema_state(&applied, &MIGRATOR),
+        Err(error) => Err(error),
+    };
+    if let Err(error) = checked {
+        read.close().await;
+        return Err(error);
+    }
+    let write = SqlitePoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(options.acquire_timeout())
+        .connect_lazy_with(connect_options(base, PoolRole::Write, &options));
+    Ok(Database::from_pools(write, read))
+}
+
+/// The read pool over `base`, through [`connect_options`].
+async fn read_pool(
+    base: SqliteConnectOptions,
+    options: &DatabaseOptions,
+) -> Result<SqlitePool, OpenError> {
+    SqlitePoolOptions::new()
+        .max_connections(READ_CONNECTIONS)
+        .acquire_timeout(options.acquire_timeout())
+        .connect_with(connect_options(base, PoolRole::Read, options))
+        .await
+        .map_err(OpenError::Connect)
+}
+
+/// The rows of `_sqlx_migrations`, read without writing: none when the table
+/// doesn't exist yet, as in an empty file. sqlx's own `run` would create the
+/// table first.
+async fn applied_migrations(read: &SqlitePool) -> Result<Vec<Applied>, OpenError> {
+    let tables = sqlx::query_scalar!(
+        r#"SELECT COUNT(*) AS "count!: i64" FROM sqlite_schema WHERE type = 'table' AND name = ?"#,
+        "_sqlx_migrations"
+    )
+    .fetch_one(read)
+    .await
+    .map_err(OpenError::Connect)?;
+    if tables == 0 {
+        return Ok(Vec::new());
+    }
+    sqlx::query_as!(
+        Applied,
+        r#"SELECT version AS "version!: i64", checksum AS "checksum!: Vec<u8>",
+                  success AS "success!: bool"
+           FROM _sqlx_migrations ORDER BY version"#
+    )
+    .fetch_all(read)
+    .await
+    .map_err(OpenError::Connect)
+}
+
+/// A row of `_sqlx_migrations`, as [`schema_state`] needs it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Applied {
+    version: i64,
+    checksum: Vec<u8>,
+    success: bool,
+}
+
+/// Whether the applied migrations `applied` are exactly `migrator`'s, in
+/// sqlx's order of checks.
+fn schema_state(applied: &[Applied], migrator: &Migrator) -> Result<(), OpenError> {
+    if let Some(failed) = applied.iter().find(|row| !row.success) {
+        return Err(OpenError::Migrate(MigrateError::Dirty(failed.version)));
+    }
+    if let Some(unknown) = applied
+        .iter()
+        .find(|row| !migrator.version_exists(row.version))
+    {
+        return Err(OpenError::NewerSchema {
+            version: unknown.version,
+        });
+    }
+    let ups = || {
+        migrator
+            .iter()
+            .filter(|migration| !migration.migration_type.is_down_migration())
+    };
+    for migration in ups() {
+        let edited = applied.iter().any(|row| {
+            row.version == migration.version && row.checksum != migration.checksum.as_ref()
+        });
+        if edited {
+            return Err(OpenError::EditedMigration {
+                version: migration.version,
+            });
+        }
+    }
+    match ups().find(|migration| !applied.iter().any(|row| row.version == migration.version)) {
+        Some(pending) => Err(OpenError::Pending {
+            version: pending.version,
+        }),
+        None => Ok(()),
+    }
+}
+
 /// Maps sqlx's migration errors, giving the two an operator must understand
 /// their own variants.
 fn migrate_error(error: MigrateError) -> OpenError {
@@ -256,6 +399,112 @@ fn migrate_error(error: MigrateError) -> OpenError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every migration of this server, as a database that applied them all
+    /// records it.
+    fn all_applied() -> Vec<Applied> {
+        MIGRATOR
+            .iter()
+            .map(|migration| Applied {
+                version: migration.version,
+                checksum: migration.checksum.to_vec(),
+                success: true,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_database_with_every_migration_is_current() {
+        assert!(schema_state(&all_applied(), &MIGRATOR).is_ok());
+    }
+
+    #[test]
+    fn a_missing_migration_is_pending_from_the_first_one_missing() {
+        let mut applied = all_applied();
+        let last = applied.pop().unwrap();
+        applied.pop();
+
+        let state = schema_state(&applied, &MIGRATOR);
+
+        assert!(
+            matches!(state, Err(OpenError::Pending { version }) if version == last.version - 1),
+            "{state:?}"
+        );
+        assert!(matches!(
+            schema_state(&[], &MIGRATOR),
+            Err(OpenError::Pending { version: 1 })
+        ));
+    }
+
+    #[test]
+    fn an_edited_migration_comes_before_a_pending_one() {
+        let mut applied = all_applied();
+        applied.pop();
+        applied[1].checksum = vec![0];
+
+        let state = schema_state(&applied, &MIGRATOR);
+
+        assert!(
+            matches!(state, Err(OpenError::EditedMigration { version: 2 })),
+            "{state:?}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_migration_comes_before_an_edited_one() {
+        let mut applied = all_applied();
+        applied[0].checksum = vec![0];
+        applied.push(Applied {
+            version: 9_999,
+            checksum: vec![0],
+            success: true,
+        });
+
+        let state = schema_state(&applied, &MIGRATOR);
+
+        assert!(
+            matches!(state, Err(OpenError::NewerSchema { version: 9_999 })),
+            "{state:?}"
+        );
+    }
+
+    #[test]
+    fn a_failed_migration_comes_first() {
+        let mut applied = all_applied();
+        applied[2].success = false;
+        applied.push(Applied {
+            version: 9_999,
+            checksum: vec![0],
+            success: true,
+        });
+
+        let state = schema_state(&applied, &MIGRATOR);
+
+        assert!(
+            matches!(state, Err(OpenError::Migrate(MigrateError::Dirty(3)))),
+            "{state:?}"
+        );
+    }
+
+    #[test]
+    fn the_new_errors_name_the_file_and_the_fix() {
+        let missing = OpenError::MissingFile {
+            file: PathBuf::from("/data/afkfleet.db"),
+        };
+        let pending = OpenError::Pending { version: 8 };
+
+        assert_eq!(
+            missing.to_string(),
+            format!(
+                "the database {} doesn't exist, and this command never creates one",
+                PathBuf::from("/data/afkfleet.db").display()
+            )
+        );
+        assert_eq!(
+            pending.to_string(),
+            "the database has pending migrations (the first is 8); run `afkfleet-server migrate` first"
+        );
+    }
 
     #[test]
     fn an_edited_migration_has_its_own_error() {

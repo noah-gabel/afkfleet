@@ -14,6 +14,7 @@ use fleet_core::authz::Role;
 use fleet_core::value::Username;
 use fleet_server::cli::serve;
 use fleet_server::cli::user::CREATE_OWNER_EXIT_CODES;
+use fleet_server::cli::vault::{ROTATE_KEY_EXIT_CODES, STATUS_EXIT_CODES};
 use fleet_server::cli::{HEALTHCHECK_EXIT_CODES, MIGRATE_EXIT_CODES, SERVE_EXIT_CODES};
 use fleet_server::config::DatabaseConfig;
 use fleet_server::infra::sqlite::{self, DatabaseOptions};
@@ -206,6 +207,90 @@ fn serve_with_a_bad_vault_key_file_logs_the_file_and_exits_1() {
 }
 
 /// `user create-owner --password-stdin`, as P12.7's smoke test runs it.
+#[rstest]
+#[case::status("status", STATUS_EXIT_CODES)]
+#[case::rotate_key("rotate-key", ROTATE_KEY_EXIT_CODES)]
+fn each_vault_commands_help_lists_its_exit_codes(#[case] command: &str, #[case] codes: &str) {
+    let finished = finish(&["vault", command, "--help"]);
+
+    assert_eq!(finished.status.code(), Some(0));
+    assert!(finished.stdout.contains(codes), "{}", finished.stdout);
+}
+
+#[rstest]
+#[case::status("status")]
+#[case::rotate_key("rotate-key")]
+fn a_vault_command_with_a_missing_config_exits_1(#[case] command: &str) {
+    let missing = test_dir(&format!("vault_missing_config_{command}")).join("missing.toml");
+
+    let finished = finish(&["vault", command, "--config", path_arg(&missing)]);
+
+    assert_eq!(finished.status.code(), Some(1));
+    assert_eq!(finished.stdout, "");
+    assert_eq!(
+        finished.stderr,
+        format!("afkfleet-server: no config file at {}\n", missing.display())
+    );
+}
+
+#[rstest]
+#[case::status("status")]
+#[case::rotate_key("rotate-key")]
+fn a_vault_command_without_a_config_is_a_usage_error(#[case] command: &str) {
+    let finished = finish(&["vault", command]);
+
+    assert_eq!(finished.status.code(), Some(2));
+    assert!(finished.stderr.contains("--config"), "{}", finished.stderr);
+}
+
+#[test]
+fn the_vault_commands_report_a_fresh_database_and_exit_0() {
+    let dir = test_dir("vault_fresh");
+    let config = write_config(&dir, &config_body(&dir, closed_port()));
+    assert_eq!(
+        finish(&["migrate", "--config", path_arg(&config)])
+            .status
+            .code(),
+        Some(0)
+    );
+
+    let status = finish(&["vault", "status", "--config", path_arg(&config)]);
+    let rotate = finish(&["vault", "rotate-key", "--config", path_arg(&config)]);
+
+    assert_eq!(status.status.code(), Some(0), "{}", status.stderr);
+    assert!(
+        status.stdout.contains("key 1 (active): seals nothing\n"),
+        "{}",
+        status.stdout
+    );
+    assert_eq!(rotate.status.code(), Some(0), "{}", rotate.stderr);
+    assert!(
+        rotate.stdout.contains(
+            "nothing to re-encrypt: no secret is sealed under another key than key 1 (active)\n"
+        ),
+        "{}",
+        rotate.stdout
+    );
+}
+
+#[test]
+fn a_vault_command_never_creates_a_missing_database() {
+    let dir = test_dir("vault_missing_database");
+    let config = write_config(&dir, &config_body(&dir, closed_port()));
+
+    let finished = finish(&["vault", "status", "--config", path_arg(&config)]);
+
+    assert_eq!(finished.status.code(), Some(1));
+    assert!(
+        finished
+            .stderr
+            .contains("doesn't exist, and this command never creates one"),
+        "{}",
+        finished.stderr
+    );
+    assert!(!dir.join("afkfleet.db").exists());
+}
+
 fn create_owner(config: &Path, stdin: Option<&[u8]>) -> crate::support::Finished {
     finish_with_stdin(
         &[

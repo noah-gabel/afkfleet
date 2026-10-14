@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE mc_accounts SET refresh_envelope = ?\n                 WHERE id = ? AND refresh_envelope = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "dd4074aac46466569fc6427746cdcdbd62cffa9741fff90aed384cff51d91a1d"
+}

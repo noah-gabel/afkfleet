@@ -898,6 +898,35 @@ fn the_dev_config_runs_in_dev_mode_with_the_database_and_vault_key_from_the_envi
     });
 }
 
+/// `just dev-rotate-key` (keys 1 and 2, active 2) and `just dev-server-rotated`
+/// (key 2 only) set the active key through the environment over the dev
+/// config's `active_key_id = 1` (ADR-0018).
+#[rstest]
+#[case::rotation(&[1, 2])]
+#[case::rotated_server(&[2])]
+fn the_active_key_can_come_from_the_environment(#[case] ids: &[u32]) {
+    in_jail(|jail| {
+        jail.set_env("AFKFLEET_SERVER__DATABASE__PATH", db_path(jail).display());
+        for &id in ids {
+            jail.set_env(
+                format!("AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__{id}"),
+                key_path(jail, id).display(),
+            );
+        }
+        jail.set_env("AFKFLEET_SERVER__VAULT__ACTIVE_KEY_ID", 2);
+
+        let config = load(&dev_config()).unwrap();
+
+        assert_eq!(config.vault.active_key_id, 2);
+        assert_eq!(
+            config.vault.key_files,
+            ids.iter()
+                .map(|&id| (id, key_path(jail, id)))
+                .collect::<BTreeMap<_, _>>()
+        );
+    });
+}
+
 #[test]
 fn the_dev_config_holds_neither_the_database_path_nor_the_vault_key_file() {
     in_jail(|_jail| {

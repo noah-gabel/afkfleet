@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rowid AS \"rowid!: i64\", user_id AS \"id!\",\n                  secret_envelope AS \"envelope!: Vec<u8>\"\n           FROM user_mfa ORDER BY user_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "user_mfa",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "user_mfa",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "envelope!: Vec<u8>",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "user_mfa",
+            "name": "secret_envelope"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "6b037a561e00ac90888a5344ff4dd1228f587a4a4cd6db64f2a38b13fda731dc"
+}

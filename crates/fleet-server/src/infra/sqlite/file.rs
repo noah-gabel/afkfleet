@@ -16,6 +16,29 @@ pub(super) async fn prepare(path: &Path) -> Result<(), OpenError> {
     check_permissions(path).await
 }
 
+/// Makes sure the existing file `path` can be opened as it is: its folder
+/// exists, the file exists, and on Unix neither it nor a leftover `-wal` or
+/// `-shm` next to it is open to other users. Nothing is created, for
+/// [`super::open_migrated`].
+pub(super) async fn check_existing(path: &Path) -> Result<(), OpenError> {
+    check_folder(path).await?;
+    match tokio::fs::metadata(path).await {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Err(OpenError::MissingFile {
+                file: path.to_owned(),
+            });
+        }
+        Err(source) => {
+            return Err(OpenError::Inspect {
+                file: path.to_owned(),
+                source,
+            });
+        }
+    }
+    check_permissions(path).await
+}
+
 /// Refuses a missing folder, so a typo or a missing volume never gets a fresh
 /// database somewhere unexpected. Nothing is created.
 async fn check_folder(path: &Path) -> Result<(), OpenError> {
