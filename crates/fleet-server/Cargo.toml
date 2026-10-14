@@ -53,8 +53,15 @@ qrcodegen.workspace = true
 # Only `log::LevelFilter`, for sqlx's statement-logging levels; clippy.toml bans its
 # logging macros (ADR-0015).
 log.workspace = true
+# The Microsoft adapter's own HTTP client (infra::msauth): rustls with aws-lc-rs from
+# the workspace, and `form` for the OAuth form bodies. Answers are read through the
+# adapter's capped reader; clippy.toml bans reqwest's unbounded readers (ADR-0018).
+reqwest = { workspace = true, features = ["form"] }
 # `user create-owner`'s hidden password prompt (ADR-0016).
 rpassword.workspace = true
+# `serve` installs aws-lc-rs as the process's one rustls provider at startup, and the
+# Microsoft adapter finds a refused certificate in its errors (ADR-0018).
+rustls.workspace = true
 # PasswordHash holds the hash as a SecretString: redacted Debug, zeroized (ADR-0015).
 secrecy.workspace = true
 serde = { workspace = true, features = ["derive"] }
@@ -102,6 +109,9 @@ insta = { workspace = true, features = ["json"] }
 ipnet.workspace = true
 # The time conversion's round trip and order (ADR-0015).
 proptest = { workspace = true, features = ["std"] }
+# The Microsoft adapter's certificate test: a CA and a server certificate made at run
+# time, since no key is ever committed (ADR-0018).
+rcgen = { workspace = true, features = ["aws_lc_rs", "pem"] }
 rstest.workspace = true
 # A fresh folder for each database test (ADR-0015).
 tempfile.workspace = true

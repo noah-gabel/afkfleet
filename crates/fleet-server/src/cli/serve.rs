@@ -165,6 +165,10 @@ impl ShutdownTimeouts {
 /// Why the server couldn't start once logging runs.
 #[derive(Debug, thiserror::Error)]
 pub enum StartError {
+    /// The aws-lc-rs provider couldn't become the process's rustls
+    /// provider: another one was installed first (ADR-0018).
+    #[error("a TLS crypto provider is already installed")]
+    CryptoProvider,
     /// The async runtime couldn't be built.
     #[error("the async runtime can't be built")]
     Runtime(#[source] io::Error),
@@ -548,6 +552,14 @@ mod tests {
         assert_eq!(lines.len(), 1, "{}", logs.text());
         assert_eq!(lines[0]["level"], "INFO");
         assert_eq!(lines[0]["exit_code"], 4);
+    }
+
+    #[test]
+    fn a_crypto_provider_installed_first_has_its_reason() {
+        assert_eq!(
+            StartError::CryptoProvider.to_string(),
+            "a TLS crypto provider is already installed"
+        );
     }
 
     #[test]

@@ -6,10 +6,11 @@
 //! - [`crypto`]: the password service (P7.2), the vault (P7.4), the
 //!   session tokens (P7.3), TOTP and the recovery codes (P7.7).
 //! - [`qr`]: the enrollment's QR code, drawn as an SVG (P7.7).
-//!
-//! P9 adds `msauth`.
+//! - [`msauth`]: Microsoft's account flows over HTTP, the adapter's own
+//!   requests (P9.3).
 
 pub mod crypto;
+pub mod msauth;
 pub mod qr;
 pub mod sqlite;
 pub mod system;

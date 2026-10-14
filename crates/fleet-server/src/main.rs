@@ -6,7 +6,8 @@
 //! 1. Then, by command:
 //!
 //! - `serve` starts logging, warns once if dev mode is on, loads the vault's
-//!   keys (ADR-0016), builds a multi-threaded runtime, installs the stop
+//!   keys (ADR-0016), installs aws-lc-rs as the process's one rustls provider
+//!   (ADR-0018), builds a multi-threaded runtime, installs the stop
 //!   signals, binds `[http] bind` and runs [`serve::run`] until a signal
 //!   stops it. Every startup error
 //!   from here on is one `error` event, "the server can't start", and the
@@ -91,9 +92,19 @@ fn run_server(path: &Path) -> ExitCode {
     ExitCode::from(exit.code())
 }
 
-/// Builds the runtime, installs the stop signals, binds the address and
-/// runs the server with the vault's `keys`.
+/// Installs the TLS provider, builds the runtime, installs the stop
+/// signals, binds the address and runs the server with the vault's `keys`.
+///
+/// The provider is installed here, never in the library's `serve::run`:
+/// in-process tests start several servers in one process, and a second
+/// install fails (ADR-0018).
 fn start(config: &ServerConfig, keys: VaultKeys) -> serve::Exit {
+    if rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .is_err()
+    {
+        return serve::cant_start(&StartError::CryptoProvider);
+    }
     let runtime = match Builder::new_multi_thread().enable_all().build() {
         Ok(runtime) => runtime,
         Err(error) => return serve::cant_start(&StartError::Runtime(error)),

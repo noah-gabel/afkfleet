@@ -64,6 +64,10 @@ deny = [
     { crate = "openssl-sys", reason = "rustls with aws-lc-rs is the only TLS stack" },
     { crate = "native-tls", reason = "rustls with aws-lc-rs is the only TLS stack" },
     { crate = "ring", reason = "aws-lc-rs is the only rustls crypto provider (P0.10); an exception needs a `wrappers` entry and an ADR" },
+    # Microsoft accounts go through fleet-server's own adapter, never azalea-auth
+    # (ADR-0018). azalea-auth enters only through the azalea crates that depend on it
+    # in azalea 0.16.0; an azalea bump that adds one updates this list (ADR-0003).
+    { crate = "azalea-auth", wrappers = ["azalea", "azalea-client", "azalea-inventory", "azalea-protocol"], reason = "Microsoft auth is fleet-server's own adapter; azalea-auth enters only through azalea's crates (ADR-0018)" },
 ]
 
 [sources]
