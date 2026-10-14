@@ -91,6 +91,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # Windows' temp folder is on the runner's C: drive, whose file IO stalls for
+      # seconds under load, and the databases tests keep in temp folders then miss
+      # their 5 s bounds. D:, the runner's own temp folder, doesn't stall (ADR-0015).
+      - name: "Temp files on D: (C: stalls under load; ADR-0015)"
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
       - name: Install NASM (aws-lc-rs; prebuilt objects are disabled in .cargo/config.toml)
         if: runner.os == 'Windows'
         uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
@@ -220,6 +229,13 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      # `just cov-desktop` runs the bridge tests, whose server keeps its database in a
+      # temp folder: on D:, as in the test job (ADR-0015).
+      - name: "Temp files on D: (C: stalls under load; ADR-0015)"
+        shell: pwsh
+        run: |
+          "TMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
+          "TEMP=$env:RUNNER_TEMP" >> $env:GITHUB_ENV
       - name: Install NASM (aws-lc-rs; prebuilt objects are disabled in .cargo/config.toml)
         uses: ilammy/setup-nasm@72793074d3c8cdda771dba85f6deafe00623038b # v1.5.2
       - uses: taiki-e/install-action@e407f7bafb71fd004bc5c2da3032e5470cbb6ef0 # v2.87.24
