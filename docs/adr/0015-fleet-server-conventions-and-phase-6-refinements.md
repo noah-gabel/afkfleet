@@ -1,7 +1,7 @@
 # 0015. fleet-server conventions and Phase 6 refinements
 
 - **Status:** Accepted
-- **Date:** 2026-10-10
+- **Date:** 2026-10-10 (amended before Phase 9, group D, on 2026-10-15: see the last section of the decision)
 - **Related:** Plan.md Phase 6 (P6.1–P6.12), §4, §5, §7.2, §7.5, Appendix A; ADR-0002, ADR-0005, ADR-0010, ADR-0011, ADR-0014
 
 ## Context
@@ -392,6 +392,54 @@ Group B *(the user's approval of the whole set)*:
 - **New in `[workspace.dependencies]`:** sqlx 0.9.0 (no default features), async-trait 0.1.92, and tempfile 3.27.0, which was already in the lockfile through figment and insta. `log` moves out of the test-only block. Cargo.lock gains only sqlx's tree; cargo deny passes, and no `ring` comes with it.
 - **fleet-server** gains fleet-core, async-trait, chrono (`now`), getrandom, log (only for sqlx's `LevelFilter`), secrecy, serde_json, sqlx (`runtime-tokio`, `sqlite-bundled`, `macros`, `migrate`, `uuid`), tokio (`fs`) and uuid. Dev: insta (no features), proptest (`std`), tempfile, tokio (`macros`, `rt`).
 - **fleet-testkit** gains chrono and rand (`std_rng`). **fleet-core** gains nothing.
+
+### Amended before Phase 9, group D: Windows CI's temp folders (2026-10-15)
+The user asked for this as a separate PR before group D, without retries: the `ci` profile's `retries = 0` stays.
+
+**The failures.**
+- **PR #43's first run:** two fleet-client full-stack tests failed with `Connect(PoolTimedOut)` in `sqlite::open`, and two with `Exit::ServerFailed`, because the database didn't close by the stop deadline.
+- **Main's run of the same code:** `a_held_write_connection_times_the_next_writer_out` failed with `PoolTimedOut` while opening its database.
+- **P8.7's first run:** two `user create-owner` tests failed. The command's close missed `DATABASE_CLOSE` (5 s).
+
+**What the logs of 17 `test (windows-latest)` runs show** (2026-10-13 to 10-14):
+- **Only databases in a temp folder stalled.** These are the tests that keep their file in `tempfile::tempdir()`:
+  - fleet-client's full-stack tests
+  - `cli::user`, `cli::vault` and `cli::migrate`
+  - `tests/database.rs` and `tests/database_logging.rs`
+  - `tests/serve/shutdown.rs`
+
+  Normally none of them takes more than 2.2 s. They took over 2.5 s in 7 of the 17 runs, up to 9.1 s, and failed 3 runs.
+- **The `#[sqlx::test]` databases never did.** Their files are under `target/`, and they do the same work: create, migrate, WAL, close. About 7,800 test runs, never more than 1.29 s.
+- **The stalls are shared.** In PR #43's run, the four failing tests were the only ones running. No test finished for 5.4 s, and all four ended within 6 ms of each other. In its green retry, three `tests/database.rs` tests stalled about 4.4 s and ended within 25 ms of each other.
+- **The cause is the disk.** `%TEMP%` is on the runner's C: drive, `target/` is on D:, and C: on GitHub's Windows runners is known to be far slower ([runner-images#8755](https://github.com/actions/runner-images/issues/8755)).
+
+**So the server's shutdown isn't at fault.**
+- Opening stalls as badly as closing: two of the four failures came before any shutdown code ran.
+- The same fleet-client tests normally start, log in and stop in 0.4–1.4 s.
+- A close stalls only because it checkpoints the WAL and deletes the `-wal` and `-shm` files on that disk.
+- **No production timeout changes** *(the user's decision)*. Production closes on Linux, with at least `DATABASE_CLOSE` plus whatever the drain didn't use. The tests' bounds stay as they are too.
+
+**The decision** *(the user's choices)*: CI's `test (windows-latest)` and `tauri-build` jobs move the temp folder to D:.
+- Each job's first step after the checkout writes `TMP` and `TEMP` = `RUNNER_TEMP` (`D:\a\_temp`) to `GITHUB_ENV`, so the compile and every test use D:. Rust's `env::temp_dir()` on Windows (GetTempPath2) reads `TMP` first, then `TEMP`.
+- `tauri-build` gets it too because `just cov-desktop` runs the desktop bridge tests, whose server keeps its database in a temp folder as well.
+- Local runs are unchanged.
+
+**Before and after.**
+
+| | job | compile | nextest | temp-folder DB tests |
+|---|---|---|---|---|
+| 17 runs before | 6.6–18.5 min, median 8.7 | 3m 16s – 6m 00s, median 4m 15s | 62–116 s, median 75 s | over 2.5 s in 7 runs, max 9.1 s; 3 runs failed |
+| PR #44, run 1 | 16.7 min | 6m 14s | 73.3 s | max 2.07 s, none over 2.5 s |
+| PR #44, run 1's re-run | 9.3 min | 4m 45s | 81.8 s | max 2.06 s, none over 2.5 s |
+
+- Run 1's job includes 5.4 min for saving a new 1.65 GB rust-cache, which the re-run didn't need.
+- The job's length follows the cache, not the tests.
+- `tauri-build` passed with the step too.
+
+**Rejected:**
+- **A nextest test group:** the temp-folder tests take about 34 s back to back in a quiet run, and their databases would stay on the stalling disk.
+- **Longer test-only bounds:** they can't reach `user create-owner`'s production close, and they would wait out the stalls instead of removing them.
+- **Retries:** they would hide real faults.
 
 ## Consequences
 - **Easier:**
