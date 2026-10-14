@@ -131,8 +131,9 @@ rpassword = "7.5.4"
 # reqwest's `Url` (ADR-0017).
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 # rustls: the default features select the aws-lc-rs provider, which the agent installs
-# at startup; never ring (deny.toml) (ADR-0014).
-rustls = "0.23.45"
+# at startup; never ring (deny.toml) (ADR-0014). 0.23.46 is a security floor:
+# RUSTSEC-2026-0346 to 0349.
+rustls = "0.23.46"
 # secrecy: `SecretString` with a redacted `Debug`; it has no default features and only
 # pulls in zeroize (alloc).
 secrecy = "0.10.3"
