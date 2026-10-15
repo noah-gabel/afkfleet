@@ -21,6 +21,7 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
+mod at_rest;
 mod delete;
 mod grants;
 mod link_flows;
