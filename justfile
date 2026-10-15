@@ -18,7 +18,7 @@ linux_exclude := if os() == "linux" { "--exclude " + desktop } else { "" }
 # The stable toolchain for `stable-check`, and the crates it checks: every crate
 # that doesn't depend on azalea or azalea-auth (the desktop crate only off Linux).
 stable := "1.99.0"
-stable_crates := "-p fleet-core -p fleet-testkit -p fleet-runtime -p fleet-startup -p fleet-server -p fleet-api-types -p fleet-client" + (if os() == "linux" { "" } else { " -p " + desktop })
+stable_crates := "-p fleet-core -p fleet-testkit -p fleet-runtime -p fleet-startup -p fleet-proto -p fleet-server -p fleet-api-types -p fleet-client" +(if os() == "linux" { "" } else { " -p " + desktop })
 
 # The throwaway database `cargo sqlx prepare` checks queries against. Absolute,
 # because rustc runs the query macros in the workspace root, not in the crate.
@@ -105,8 +105,9 @@ fmt:
     pnpm exec biome format --write .
 
 # Each run exports into a fresh folder in target/gen/, and only files ts-rs generated
-# are ever deleted from packages/ui/src/generated/ (ADR-0015). P10 adds the proto
-# codegen check.
+# are ever deleted from packages/ui/src/generated/ (ADR-0015). The gRPC code isn't
+# exported or committed: fleet-proto's build script generates it at every build, and a
+# snapshot test pins the wire schema it comes from (ADR-0019).
 # Export the API's TypeScript types (fleet-api-types) to packages/ui/src/generated/.
 gen:
     cargo run -p fleet-api-types --example typescript -- write packages/ui/src/generated

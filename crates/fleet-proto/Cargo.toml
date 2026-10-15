@@ -1,0 +1,38 @@
+[package]
+name = "fleet-proto"
+description = "The control plane's wire format: the gRPC protocol between afkfleet's agents and its server, generated at build time, and its validated conversions to and from fleet-core's types."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+# Times on the wire are Unix milliseconds, converted to `DateTime<Utc>` without any of
+# chrono's features (ADR-0019).
+chrono.workspace = true
+fleet-core.workspace = true
+prost.workspace = true
+# The Minecraft access token of a session grant goes straight into a `SecretString`
+# (ADR-0019).
+secrecy.workspace = true
+thiserror.workspace = true
+# `codegen` only: the generated client and server, without tonic's transport (ADR-0019).
+tonic = { workspace = true, features = ["codegen"] }
+tonic-prost.workspace = true
+# IDs on the wire are 16 bytes, converted with `Uuid::from_bytes` (ADR-0019).
+uuid.workspace = true
+# A generated message that holds a secret wipes it when it's dropped (ADR-0019).
+zeroize.workspace = true
+
+[build-dependencies]
+protox.workspace = true
+tonic-prost-build.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+proptest = { workspace = true, features = ["std"] }
+rstest.workspace = true

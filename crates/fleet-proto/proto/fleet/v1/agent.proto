@@ -1,0 +1,261 @@
+// The control plane between an agent and the server: one stream each way over
+// mutual TLS (Plan.md P10.4, Appendix C; ADR-0019).
+syntax = "proto3";
+
+package fleet.v1;
+
+import "fleet/v1/bot.proto";
+import "fleet/v1/chat.proto";
+import "fleet/v1/common.proto";
+
+// The service an enrolled agent calls with its client certificate.
+service AgentControl {
+  // The agent's one stream: it says hello, reports its bots, and receives
+  // what it should run.
+  rpc Connect(stream AgentMessage) returns (stream ServerMessage);
+}
+
+// A message from an agent to the server.
+message AgentMessage {
+  // The message.
+  oneof msg {
+    // The first message on every stream.
+    Hello hello = 1;
+    // A sign of life.
+    Heartbeat heartbeat = 2;
+    // A bot's new status.
+    BotSnapshot status = 3;
+    // Something that happened to a bot.
+    BotEvent event = 4;
+    // A bot asks for session credentials.
+    SessionRequest session_request = 5;
+  }
+}
+
+// The first message on every stream.
+message Hello {
+  // The agent's name.
+  string name = 1;
+  // The agent's version.
+  string agent_version = 2;
+  // The protocol version the agent speaks.
+  uint32 protocol_version = 3;
+  // How many bots the agent may run at once, 1 to 1000.
+  uint32 capacity = 4;
+  // The status of every bot the agent runs, at most 1000, each bot once.
+  repeated BotSnapshot running = 5;
+}
+
+// A sign of life. It carries no time: the server stamps it with its own clock.
+message Heartbeat {}
+
+// Something that happened to one bot.
+message BotEvent {
+  // The bot's ID, a version 7 UUID.
+  bytes bot_id = 1;
+  // When it happened, by the agent's clock.
+  optional int64 at_unix_ms = 2;
+  // What happened.
+  oneof kind {
+    // The bot died; the agent respawns it.
+    Unit died = 3;
+    // The bot received a chat message.
+    IncomingChat chat_received = 4;
+    // A user's chat message was sent.
+    ChatSent chat_sent = 5;
+    // A user's chat message wasn't sent.
+    ChatFailed chat_failed = 6;
+    // The bot's mode sent a chat message.
+    ModeChatSent mode_chat_sent = 7;
+    // The bot paused or failed and needs a human.
+    BotNotification alert = 8;
+    // The agent removed the bot; this is its last event.
+    Unit removed = 9;
+  }
+}
+
+// A user's chat message was sent.
+message ChatSent {
+  // The request's ID from the server's send, a version 7 UUID.
+  bytes request_id = 1;
+}
+
+// A user's chat message wasn't sent.
+message ChatFailed {
+  // The request's ID from the server's send, a version 7 UUID.
+  bytes request_id = 1;
+  // Why it wasn't sent.
+  ChatFailedReason reason = 2;
+}
+
+// Why a user's chat message wasn't sent. It isn't retried.
+enum ChatFailedReason {
+  // Not set; never valid.
+  CHAT_FAILED_REASON_UNSPECIFIED = 0;
+  // The session ended before the message was sent.
+  CHAT_FAILED_REASON_DISCONNECTED = 1;
+  // The server requires signed chat, and the session can't sign it.
+  CHAT_FAILED_REASON_CHAT_UNAVAILABLE = 2;
+  // The session didn't answer in time.
+  CHAT_FAILED_REASON_TIMED_OUT = 3;
+  // The session was too busy.
+  CHAT_FAILED_REASON_SESSION_BUSY = 4;
+  // The bot wasn't in a world.
+  CHAT_FAILED_REASON_NOT_IN_WORLD = 5;
+  // The bot wasn't online.
+  CHAT_FAILED_REASON_NOT_ONLINE = 6;
+  // The bot's chat queue was full.
+  CHAT_FAILED_REASON_QUEUE_FULL = 7;
+  // The bot's chat rate limit was reached.
+  CHAT_FAILED_REASON_RATE_LIMITED = 8;
+  // The agent doesn't run the bot.
+  CHAT_FAILED_REASON_UNKNOWN_BOT = 9;
+  // The agent was too busy to take the message.
+  CHAT_FAILED_REASON_AGENT_BUSY = 10;
+  // The agent is shutting down.
+  CHAT_FAILED_REASON_SHUTTING_DOWN = 11;
+}
+
+// The bot's mode sent a chat message.
+message ModeChatSent {
+  // The message, in its validated form.
+  string message = 1;
+}
+
+// A bot asks for session credentials for one connection attempt. It names no
+// account: the server knows which account the bot it assigned plays as.
+message SessionRequest {
+  // The agent's number for this request, from 1; the answer repeats it.
+  uint64 id = 1;
+  // The bot's ID, a version 7 UUID.
+  bytes bot_id = 2;
+  // Whether the last session was rejected, so a cached one won't do.
+  bool fresh = 3;
+}
+
+// A message from the server to an agent.
+message ServerMessage {
+  // The message.
+  oneof msg {
+    // The answer to a hello the server accepts.
+    Welcome welcome = 1;
+    // Every bot the agent should run, replacing what it runs now.
+    ReconcileFull reconcile = 2;
+    // A bot the agent should run.
+    AssignBot assign = 3;
+    // A bot the agent should stop running.
+    UnassignBot unassign = 4;
+    // A new spec for a bot the agent runs.
+    UpdateBotSpec update = 5;
+    // A user's chat message for a bot to send.
+    SendChat send_chat = 6;
+    // The session credentials a bot asked for.
+    SessionGrant session_grant = 7;
+    // The answer to a session request the server can't grant.
+    SessionDenied session_denied = 8;
+    // The answer to a hello the server refuses; the stream then ends.
+    Reject reject = 9;
+  }
+}
+
+// The answer to a hello the server accepts.
+message Welcome {
+  // How often the agent sends a heartbeat, in milliseconds.
+  uint64 heartbeat_interval_ms = 1;
+}
+
+// Every bot the agent should run, at most 1000, each bot once.
+message ReconcileFull {
+  // The bots.
+  repeated AssignBot bots = 1;
+}
+
+// A bot the agent should run.
+message AssignBot {
+  // What the bot should be doing.
+  BotSpec spec = 1;
+  // The paused or failed state the bot starts in, if the server stored one.
+  StickyState restore = 2;
+}
+
+// A bot the agent should stop running.
+message UnassignBot {
+  // The bot's ID, a version 7 UUID.
+  bytes bot_id = 1;
+}
+
+// A new spec for a bot the agent runs.
+message UpdateBotSpec {
+  // What the bot should be doing now.
+  BotSpec spec = 1;
+}
+
+// A user's chat message for a bot to send.
+message SendChat {
+  // The request's ID, a version 7 UUID, which the agent's answer repeats.
+  bytes request_id = 1;
+  // The bot's ID, a version 7 UUID.
+  bytes bot_id = 2;
+  // The message, in its validated form.
+  string message = 3;
+}
+
+// The session credentials a bot asked for.
+message SessionGrant {
+  // The request's number.
+  uint64 id = 1;
+  // The bot's ID, a version 7 UUID.
+  bytes bot_id = 2;
+  // The credentials.
+  oneof session {
+    // A Minecraft session for a linked account.
+    OnlineSession online = 3;
+    // An offline-mode account, for development.
+    OfflineSession offline = 4;
+  }
+}
+
+// A Minecraft session for a linked account. It holds a secret, so it never
+// prints its token (ADR-0019).
+message OnlineSession {
+  // The account's name.
+  string username = 1;
+  // The account's UUID, 16 bytes.
+  bytes uuid = 2;
+  // The Minecraft access token.
+  string access_token = 3;
+  // When the token expires.
+  optional int64 expires_at_unix_ms = 4;
+}
+
+// An offline-mode account.
+message OfflineSession {
+  // The name the bot logs in with.
+  string username = 1;
+}
+
+// The answer to a session request the server can't grant.
+message SessionDenied {
+  // The request's number.
+  uint64 id = 1;
+  // The bot's ID, a version 7 UUID.
+  bytes bot_id = 2;
+  // Whether asking again later may help.
+  bool retryable = 3;
+}
+
+// The answer to a hello the server refuses.
+message Reject {
+  // Why.
+  RejectReason reason = 1;
+}
+
+// Why the server refuses a hello.
+enum RejectReason {
+  // Not set; never valid.
+  REJECT_REASON_UNSPECIFIED = 0;
+  // The server doesn't speak the agent's protocol version.
+  REJECT_REASON_INCOMPATIBLE_PROTOCOL = 1;
+  // The agent is disabled.
+  REJECT_REASON_AGENT_DISABLED = 2;
+}

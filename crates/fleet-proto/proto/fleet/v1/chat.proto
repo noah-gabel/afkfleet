@@ -1,0 +1,41 @@
+// Chat a bot received, as an agent reports it. The text comes from a Minecraft
+// server, so the server cleans it again when it reads it (ADR-0019).
+syntax = "proto3";
+
+package fleet.v1;
+
+// A received chat message.
+message IncomingChat {
+  // The kind of message.
+  ChatKind kind = 1;
+  // Who sent it. Only player messages have a sender.
+  ChatSender sender = 2;
+  // The text.
+  string text = 3;
+  // Whether the agent cut the text off.
+  bool truncated = 4;
+}
+
+// Who sent a player message.
+message ChatSender {
+  // The display name the server showed.
+  string name = 1;
+  // The player's UUID, 16 bytes, which only ordinary chat carries.
+  optional bytes uuid = 2;
+}
+
+// The kind of a received message.
+enum ChatKind {
+  // Not set; never valid.
+  CHAT_KIND_UNSPECIFIED = 0;
+  // Ordinary chat.
+  CHAT_KIND_CHAT = 1;
+  // An emote.
+  CHAT_KIND_EMOTE = 2;
+  // A whisper to the bot.
+  CHAT_KIND_WHISPER = 3;
+  // An announcement.
+  CHAT_KIND_ANNOUNCEMENT = 4;
+  // A message from the server itself.
+  CHAT_KIND_SYSTEM = 5;
+}

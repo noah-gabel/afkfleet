@@ -1,0 +1,7 @@
+// Building blocks the other files of the control plane's protocol share.
+syntax = "proto3";
+
+package fleet.v1;
+
+// Carries nothing. A oneof case of this type only says which case it is.
+message Unit {}

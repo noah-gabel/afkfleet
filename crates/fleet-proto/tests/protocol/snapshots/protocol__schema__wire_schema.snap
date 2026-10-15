@@ -1,0 +1,247 @@
+---
+source: crates/fleet-proto/tests/protocol/schema.rs
+expression: "format!(\"protocol version {PROTOCOL_VERSION}\\n\\n{WIRE_SCHEMA}\")"
+---
+protocol version 1
+
+message fleet.v1.Action
+  1 look: fleet.v1.Action.Look (oneof action)
+  2 rotate_random: fleet.v1.Action.RotateRandom (oneof action)
+  3 jump: fleet.v1.Unit (oneof action)
+  4 sneak: fleet.v1.Action.Sneak (oneof action)
+  5 swing_arm: fleet.v1.Unit (oneof action)
+  6 use_item: fleet.v1.Unit (oneof action)
+  7 hold_use: fleet.v1.Action.HoldUse (oneof action)
+  8 attack_facing_entity: fleet.v1.Unit (oneof action)
+  9 select_hotbar_slot: fleet.v1.Action.SelectHotbarSlot (oneof action)
+  10 send_chat: fleet.v1.Action.SendChat (oneof action)
+message fleet.v1.Action.HoldUse
+  1 on: bool
+message fleet.v1.Action.Look
+  1 yaw: float
+  2 pitch: float
+message fleet.v1.Action.RotateRandom
+  1 max_yaw: float
+  2 max_pitch: float
+message fleet.v1.Action.SelectHotbarSlot
+  1 slot: uint32
+message fleet.v1.Action.SendChat
+  1 message: string
+message fleet.v1.Action.Sneak
+  1 on: bool
+message fleet.v1.AgentMessage
+  1 hello: fleet.v1.Hello (oneof msg)
+  2 heartbeat: fleet.v1.Heartbeat (oneof msg)
+  3 status: fleet.v1.BotSnapshot (oneof msg)
+  4 event: fleet.v1.BotEvent (oneof msg)
+  5 session_request: fleet.v1.SessionRequest (oneof msg)
+message fleet.v1.AssignBot
+  1 spec: fleet.v1.BotSpec
+  2 restore: fleet.v1.StickyState
+message fleet.v1.BotAccount
+  1 offline_username: string (oneof account)
+  2 online_account_id: bytes (oneof account)
+message fleet.v1.BotEvent
+  1 bot_id: bytes
+  2 at_unix_ms: optional int64
+  3 died: fleet.v1.Unit (oneof kind)
+  4 chat_received: fleet.v1.IncomingChat (oneof kind)
+  5 chat_sent: fleet.v1.ChatSent (oneof kind)
+  6 chat_failed: fleet.v1.ChatFailed (oneof kind)
+  7 mode_chat_sent: fleet.v1.ModeChatSent (oneof kind)
+  8 alert: fleet.v1.BotNotification (oneof kind)
+  9 removed: fleet.v1.Unit (oneof kind)
+message fleet.v1.BotNotification
+  1 paused: fleet.v1.PauseReason (oneof notification)
+  2 failed: fleet.v1.FailReason (oneof notification)
+message fleet.v1.BotSnapshot
+  1 bot_id: bytes
+  2 state: fleet.v1.BotState
+  3 since_unix_ms: optional int64
+  4 last_disconnect: fleet.v1.DisconnectReason
+message fleet.v1.BotSpec
+  1 id: bytes
+  2 account: fleet.v1.BotAccount
+  3 server: string
+  4 mode: fleet.v1.ModeDefinition
+  5 desired: fleet.v1.DesiredRunState
+  6 conflict_texts: repeated string
+message fleet.v1.BotState
+  1 stopped: fleet.v1.Unit (oneof state)
+  2 awaiting_session: fleet.v1.BotState.AwaitingSession (oneof state)
+  3 connecting: fleet.v1.BotState.Connecting (oneof state)
+  4 online: fleet.v1.BotState.Online (oneof state)
+  5 backoff: fleet.v1.BotState.Backoff (oneof state)
+  6 paused: fleet.v1.PauseReason (oneof state)
+  7 failed: fleet.v1.FailReason (oneof state)
+  8 stopping: fleet.v1.BotState.Stopping (oneof state)
+message fleet.v1.BotState.AwaitingSession
+  1 attempt: uint32
+  2 fresh: bool
+message fleet.v1.BotState.Backoff
+  1 attempt: uint32
+message fleet.v1.BotState.Connecting
+  1 attempt: uint32
+  2 auth_retried: bool
+message fleet.v1.BotState.Online
+  1 since_unix_ms: optional int64
+  2 attempt: uint32
+message fleet.v1.BotState.Stopping
+  1 restart: bool
+message fleet.v1.ChatFailed
+  1 request_id: bytes
+  2 reason: fleet.v1.ChatFailedReason
+message fleet.v1.ChatSender
+  1 name: string
+  2 uuid: optional bytes
+message fleet.v1.ChatSent
+  1 request_id: bytes
+message fleet.v1.DisconnectReason
+  1 kicked: fleet.v1.Kick (oneof reason)
+  2 connection_closed: fleet.v1.Unit (oneof reason)
+  3 connect_failed: fleet.v1.ConnectFailure (oneof reason)
+  4 auth_rejected: fleet.v1.Unit (oneof reason)
+  5 account_restricted: fleet.v1.AccountRestriction (oneof reason)
+  6 session_server_failed: fleet.v1.SessionServerFailure (oneof reason)
+  7 session_crashed: fleet.v1.Unit (oneof reason)
+  8 watchdog_timeout: fleet.v1.Unit (oneof reason)
+  9 liveness_timeout: fleet.v1.Unit (oneof reason)
+  10 respawn_failed: fleet.v1.Unit (oneof reason)
+message fleet.v1.Heartbeat
+message fleet.v1.Hello
+  1 name: string
+  2 agent_version: string
+  3 protocol_version: uint32
+  4 capacity: uint32
+  5 running: repeated fleet.v1.BotSnapshot
+message fleet.v1.IncomingChat
+  1 kind: fleet.v1.ChatKind
+  2 sender: fleet.v1.ChatSender
+  3 text: string
+  4 truncated: bool
+message fleet.v1.Kick
+  1 key: optional string
+  2 message: string
+message fleet.v1.ModeChatSent
+  1 message: string
+message fleet.v1.ModeDefinition
+  1 steps: repeated fleet.v1.Step
+message fleet.v1.OfflineSession
+  1 username: string
+message fleet.v1.OnlineSession
+  1 username: string
+  2 uuid: bytes
+  3 access_token: string
+  4 expires_at_unix_ms: optional int64
+message fleet.v1.ReconcileFull
+  1 bots: repeated fleet.v1.AssignBot
+message fleet.v1.Reject
+  1 reason: fleet.v1.RejectReason
+message fleet.v1.Schedule
+  1 at_start: fleet.v1.Unit (oneof schedule)
+  2 every: fleet.v1.Schedule.Every (oneof schedule)
+message fleet.v1.Schedule.Every
+  1 interval_ms: uint64
+  2 jitter_ms: uint64
+message fleet.v1.SendChat
+  1 request_id: bytes
+  2 bot_id: bytes
+  3 message: string
+message fleet.v1.ServerMessage
+  1 welcome: fleet.v1.Welcome (oneof msg)
+  2 reconcile: fleet.v1.ReconcileFull (oneof msg)
+  3 assign: fleet.v1.AssignBot (oneof msg)
+  4 unassign: fleet.v1.UnassignBot (oneof msg)
+  5 update: fleet.v1.UpdateBotSpec (oneof msg)
+  6 send_chat: fleet.v1.SendChat (oneof msg)
+  7 session_grant: fleet.v1.SessionGrant (oneof msg)
+  8 session_denied: fleet.v1.SessionDenied (oneof msg)
+  9 reject: fleet.v1.Reject (oneof msg)
+message fleet.v1.SessionDenied
+  1 id: uint64
+  2 bot_id: bytes
+  3 retryable: bool
+message fleet.v1.SessionGrant
+  1 id: uint64
+  2 bot_id: bytes
+  3 online: fleet.v1.OnlineSession (oneof session)
+  4 offline: fleet.v1.OfflineSession (oneof session)
+message fleet.v1.SessionRequest
+  1 id: uint64
+  2 bot_id: bytes
+  3 fresh: bool
+message fleet.v1.Step
+  1 action: fleet.v1.Action
+  2 schedule: fleet.v1.Schedule
+  3 probability: uint32
+message fleet.v1.StickyState
+  1 paused: fleet.v1.PauseReason (oneof state)
+  2 failed: fleet.v1.FailReason (oneof state)
+message fleet.v1.UnassignBot
+  1 bot_id: bytes
+message fleet.v1.Unit
+message fleet.v1.UpdateBotSpec
+  1 spec: fleet.v1.BotSpec
+message fleet.v1.Welcome
+  1 heartbeat_interval_ms: uint64
+enum fleet.v1.AccountRestriction
+  0 ACCOUNT_RESTRICTION_UNSPECIFIED
+  1 ACCOUNT_RESTRICTION_BANNED
+  2 ACCOUNT_RESTRICTION_MULTIPLAYER_DISABLED
+enum fleet.v1.ChatFailedReason
+  0 CHAT_FAILED_REASON_UNSPECIFIED
+  1 CHAT_FAILED_REASON_DISCONNECTED
+  2 CHAT_FAILED_REASON_CHAT_UNAVAILABLE
+  3 CHAT_FAILED_REASON_TIMED_OUT
+  4 CHAT_FAILED_REASON_SESSION_BUSY
+  5 CHAT_FAILED_REASON_NOT_IN_WORLD
+  6 CHAT_FAILED_REASON_NOT_ONLINE
+  7 CHAT_FAILED_REASON_QUEUE_FULL
+  8 CHAT_FAILED_REASON_RATE_LIMITED
+  9 CHAT_FAILED_REASON_UNKNOWN_BOT
+  10 CHAT_FAILED_REASON_AGENT_BUSY
+  11 CHAT_FAILED_REASON_SHUTTING_DOWN
+enum fleet.v1.ChatKind
+  0 CHAT_KIND_UNSPECIFIED
+  1 CHAT_KIND_CHAT
+  2 CHAT_KIND_EMOTE
+  3 CHAT_KIND_WHISPER
+  4 CHAT_KIND_ANNOUNCEMENT
+  5 CHAT_KIND_SYSTEM
+enum fleet.v1.ConnectFailure
+  0 CONNECT_FAILURE_UNSPECIFIED
+  1 CONNECT_FAILURE_REFUSED
+  2 CONNECT_FAILURE_TIMED_OUT
+  3 CONNECT_FAILURE_UNRESOLVABLE
+  4 CONNECT_FAILURE_HOST_UNAVAILABLE
+  5 CONNECT_FAILURE_OTHER
+enum fleet.v1.DesiredRunState
+  0 DESIRED_RUN_STATE_UNSPECIFIED
+  1 DESIRED_RUN_STATE_RUNNING
+  2 DESIRED_RUN_STATE_STOPPED
+enum fleet.v1.FailReason
+  0 FAIL_REASON_UNSPECIFIED
+  1 FAIL_REASON_BANNED
+  2 FAIL_REASON_NOT_WHITELISTED
+  3 FAIL_REASON_WRONG_VERSION
+  4 FAIL_REASON_ACCOUNT_BANNED
+  5 FAIL_REASON_MULTIPLAYER_DISABLED
+  6 FAIL_REASON_AUTH
+  7 FAIL_REASON_SESSION_DENIED
+  8 FAIL_REASON_CRASH_LOOP
+enum fleet.v1.PauseReason
+  0 PAUSE_REASON_UNSPECIFIED
+  1 PAUSE_REASON_DUPLICATE_LOGIN
+enum fleet.v1.RejectReason
+  0 REJECT_REASON_UNSPECIFIED
+  1 REJECT_REASON_INCOMPATIBLE_PROTOCOL
+  2 REJECT_REASON_AGENT_DISABLED
+enum fleet.v1.SessionServerFailure
+  0 SESSION_SERVER_FAILURE_UNSPECIFIED
+  1 SESSION_SERVER_FAILURE_UNREACHABLE
+  2 SESSION_SERVER_FAILURE_RATE_LIMITED
+  3 SESSION_SERVER_FAILURE_TIMED_OUT
+  4 SESSION_SERVER_FAILURE_UNEXPECTED
+service fleet.v1.AgentControl
+  rpc Connect(stream fleet.v1.AgentMessage) returns (stream fleet.v1.ServerMessage)
+redacted fleet.v1.OnlineSession

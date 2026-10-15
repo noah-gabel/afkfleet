@@ -1,5 +1,6 @@
-//! Typed IDs for the domain's entities, and [`RequestId`], which names one HTTP
-//! request to the server rather than an entity.
+//! Typed IDs for the domain's entities, and two that name a request rather
+//! than an entity: [`RequestId`], one HTTP request to the server, and
+//! [`ChatRequestId`], one chat message a user asked a bot to send.
 //!
 //! Every entity has its own ID type, so a [`BotId`] can't be passed where a
 //! [`UserId`] is expected:
@@ -208,6 +209,13 @@ define_id!(
     /// body, and logged with the request. It names no entity.
     RequestId
 );
+define_id!(
+    /// Identifies one chat message a user asked a bot to send: minted by the
+    /// server when it accepts the request (P11.3), sent to the bot's agent with
+    /// the message, and repeated by the agent when it reports whether the bot
+    /// sent it (Plan.md P10.1; ADR-0019).
+    ChatRequestId
+);
 
 #[cfg(test)]
 mod tests {
@@ -366,6 +374,7 @@ mod tests {
         assert_trait_mints_like_the_constructor(LoginStepId::new_v7);
         assert_trait_mints_like_the_constructor(LinkFlowId::new_v7);
         assert_trait_mints_like_the_constructor(RequestId::new_v7);
+        assert_trait_mints_like_the_constructor(ChatRequestId::new_v7);
     }
 
     #[test]
@@ -380,6 +389,7 @@ mod tests {
         assert_round_trips(LoginStepId::new_v7);
         assert_round_trips(LinkFlowId::new_v7);
         assert_round_trips(RequestId::new_v7);
+        assert_round_trips(ChatRequestId::new_v7);
     }
 
     #[test]
