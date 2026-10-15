@@ -12,7 +12,7 @@
 //! ([`profile`]) and the client; the refresh token lives in the OS keychain
 //! ([`keychain`]); no token ever reaches the UI or the state.
 //!
-//! Microsoft's sign-in page (P9.8, ADR-0018) opens through [`ShellOpener`]:
+//! Microsoft's sign-in page (P9.8, ADR-0018) opens through `ShellOpener`:
 //! tauri-plugin-opener's free `open_url`, on the one link the state holds
 //! after fleet-client's `VerifiedLink` passed it. The plugin isn't
 //! registered, so the webview gets none of its commands.
