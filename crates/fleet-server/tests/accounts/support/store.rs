@@ -12,6 +12,7 @@ use fleet_server::infra::sqlite::Database;
 use fleet_server::ports::accounts::{AccountReads, McAccount};
 use fleet_server::ports::audit::AuditReads;
 use fleet_server::ports::envelopes::EnvelopeReads;
+use fleet_server::ports::grants::GrantReads;
 use fleet_server::ports::invites::InviteReads;
 use fleet_server::ports::login_attempts::LoginAttemptReads;
 use fleet_server::ports::mfa::MfaReads;
@@ -190,6 +191,10 @@ impl Store for FlakyStore {
 
     fn accounts(&self) -> &dyn AccountReads {
         self
+    }
+
+    fn grants(&self) -> &dyn GrantReads {
+        self.inner.grants()
     }
 
     fn envelopes(&self) -> &dyn EnvelopeReads {

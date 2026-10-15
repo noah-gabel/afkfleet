@@ -7,19 +7,22 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::account::AccountStatus;
 use fleet_core::audit::AuditAction;
-use fleet_core::authz::Role;
+use fleet_core::authz::{GrantLevel, Role};
 use fleet_core::id::{AccountId, InviteId, SessionId, UserId};
 use fleet_core::value::{McUsername, Username};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use super::error::store_error;
-use super::{Database, accounts, audit, envelopes, invites, login_attempts, mfa, sessions, users};
+use super::{
+    Database, accounts, audit, envelopes, grants, invites, login_attempts, mfa, sessions, users,
+};
 use crate::ports::accounts::{AccountReads, AccountWrites, InsertAccountError, McAccount};
 use crate::ports::audit::{
     AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, FailedCodeAttempts,
     NewAuditEntry,
 };
 use crate::ports::envelopes::{EnvelopeReads, EnvelopeWrites, SealedEnvelope, SealedRecord};
+use crate::ports::grants::{AccountGrant, GrantReads, GrantWrites, InsertGrantError, ListedGrant};
 use crate::ports::invites::{
     Invite, InviteReads, InviteWrites, ListedInvite, NewInvite, RevokedInvite,
 };
@@ -132,6 +135,17 @@ impl AccountReads for Reads {
 }
 
 #[async_trait]
+impl GrantReads for Reads {
+    async fn list(
+        &self,
+        account: AccountId,
+        page: Page<UserId>,
+    ) -> Result<Vec<ListedGrant>, StoreError> {
+        grants::list(&self.pool, account, page).await
+    }
+}
+
+#[async_trait]
 impl EnvelopeReads for Reads {
     async fn all(&self) -> Result<Vec<SealedEnvelope>, StoreError> {
         envelopes::all(&self.pool).await
@@ -214,6 +228,10 @@ impl WriteTx for SqliteWriteTx {
     }
 
     fn accounts(&mut self) -> &mut dyn AccountWrites {
+        self
+    }
+
+    fn grants(&mut self) -> &mut dyn GrantWrites {
         self
     }
 
@@ -363,6 +381,36 @@ impl AccountWrites for SqliteWriteTx {
         to: &McUsername,
     ) -> Result<bool, StoreError> {
         accounts::rename(&mut self.tx, id, from, to).await
+    }
+}
+
+#[async_trait]
+impl GrantWrites for SqliteWriteTx {
+    async fn find(
+        &mut self,
+        account: AccountId,
+        user: UserId,
+    ) -> Result<Option<AccountGrant>, StoreError> {
+        grants::find(&mut self.tx, account, user).await
+    }
+
+    async fn insert(&mut self, grant: &AccountGrant) -> Result<(), InsertGrantError> {
+        grants::insert(&mut self.tx, grant).await
+    }
+
+    async fn set_level(
+        &mut self,
+        account: AccountId,
+        user: UserId,
+        level: GrantLevel,
+        by: UserId,
+        at: DateTime<Utc>,
+    ) -> Result<bool, StoreError> {
+        grants::set_level(&mut self.tx, account, user, level, by, at).await
+    }
+
+    async fn delete(&mut self, account: AccountId, user: UserId) -> Result<bool, StoreError> {
+        grants::delete(&mut self.tx, account, user).await
     }
 }
 
@@ -534,6 +582,10 @@ impl Store for Database {
     }
 
     fn accounts(&self) -> &dyn AccountReads {
+        &self.reads
+    }
+
+    fn grants(&self) -> &dyn GrantReads {
         &self.reads
     }
 

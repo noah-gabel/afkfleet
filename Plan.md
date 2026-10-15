@@ -3248,7 +3248,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 > Note (P9, from Phase 8, group E, the user's request) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **Decide step-up per action, the same way as the admin writes.** Phase 8 put role changes, disabling users and invites behind step-up, so an unlocked PC with a live session can't do them without the password. Before building them, decide for each destructive or privilege-changing action of this phase whether it needs a step-up: unlinking or deleting a Microsoft account (already in §7.2's list), changing or revoking a grant, rotating keys through the API. The app reuses the admin screens' "send, and on `step_up_required` ask for the password and retry once".
 
-- [ ] **P9.1** 🔴 Migrations and repositories:
+- [x] **P9.1** 🔴 Migrations and repositories:
   - `mc_accounts`: owner, MC UUID and name, kind, encrypted refresh token, `key_id`, status
   - `account_grants`
 
@@ -3257,9 +3257,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P9.1, Phase 9, group A, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **`mc_accounts` is built in group A, `account_grants` in E**, which ticks P9.1.
   > - **One table for both kinds** (`0008_mc_accounts.sql`). An offline account has no UUID and no envelope. A Microsoft account is unique by its profile's UUID, pending ones included; an offline account by its lowercased name.
   > - **No `key_id` column:** the envelope's header names its key, as in `user_mfa`.
-  > - **No CHECK** on the status's values (`pending`, `active`, `reauth_required`) or the name's shape; fleet-core's `AccountStatus` and `McUsername` check them when a row is read back. An offline account is always `active`.
+  > - **No CHECK** on the status's values (`pending`, `active`, `reauth_required`, and `refused` since group C) or the name's shape; fleet-core's `AccountStatus` and `McUsername` check them when a row is read back. An offline account is always `active`.
   > - **Core types:** `fleet_core::account::{AccountKind, AccountStatus}` and `fleet_core::value::McUuid`, a non-nil UUID in lowercase hyphenated form.
   > - **The repository** has only what A uses: `insert` (`Taken` for a linked account) and `find`.
+
+  > Note (P9.1, Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **`account_grants` as built** (`0010_account_grants.sql`) is `account_id, user_id, level, granted_by, granted_at`, as Appendix D has it.
+  > - **One grant per account and user** (`PRIMARY KEY (account_id, user_id)`), so changing a grant rewrites its row, and no cap is needed (S10 in ADR-0018's group E). The rows go with their account (`ON DELETE CASCADE`); users are never deleted.
+  > - **CHECKs:** the ID and time shapes, `level` in `view`/`control`/`manage` (a closed set, as `users.role`), and `user_id <> granted_by`, a belt behind `authorize()`'s ban on granting to oneself. The owner never has a row.
+  > - **The repository** (`ports::grants`, `infra::sqlite::grants`): `GrantReads::list` (a keyset page by grantee ID, with both names) and `GrantWrites::{find, insert, set_level, delete}`; a second grant is `InsertGrantError::Exists`. Statuses are the services' business, not the table's.
 - [x] **P9.2** 🔴 Vault extensions:
   - purpose-bound AAD (`account_id|ms_refresh`)
   - `vault rotate-key` CLI that re-encrypts transactionally
@@ -4047,6 +4052,8 @@ message ServerMessage {
 > - **Uniqueness:** a Microsoft account is unique by `mc_uuid`, an offline account by `lower(mc_name)`.
 > - **No CHECK** on `status`'s values or on the name's shape.
 > - **`account_grants`** arrives with group E.
+
+> Note (Appendix D, Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **`account_grants` as built** (`0010_account_grants.sql`) has the columns above, `PRIMARY KEY (account_id, user_id)`, `ON DELETE CASCADE` from `mc_accounts`, a CHECK on `level` (`view`, `control`, `manage`) and one against a grant to its own granter, and an index on `user_id`.
 
 > Note (Appendix D, Phase 9, group C, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **`0009_mc_accounts_status_reason.sql`** adds `status_reason TEXT`, set only with the new status `refused`: `not_owned`, `no_profile`, `xbox_banned`, `xbox_no_xbox_profile`, `xbox_country_unavailable`, `xbox_adult_verification`, `xbox_child_account`, `xbox_other` or `profile_mismatch`. No CHECK; fleet-core's `AccountStatus::from_columns` reads both columns together.
 

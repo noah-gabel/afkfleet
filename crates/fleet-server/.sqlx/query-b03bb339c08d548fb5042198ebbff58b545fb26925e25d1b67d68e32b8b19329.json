@@ -1,0 +1,134 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT account_grants.rowid AS \"rowid!: i64\",\n                  account_grants.account_id AS \"account_id!\",\n                  account_grants.user_id AS \"user_id!\", account_grants.level AS \"level!\",\n                  account_grants.granted_by AS \"granted_by!\",\n                  account_grants.granted_at AS \"granted_at!\",\n                  grantee.username AS \"user_name!\", grantee.rowid AS \"user_rowid!: i64\",\n                  granter.username AS \"granted_by_name!\",\n                  granter.rowid AS \"granter_rowid!: i64\"\n           FROM account_grants\n           JOIN users AS grantee ON grantee.id = account_grants.user_id\n           JOIN users AS granter ON granter.id = account_grants.granted_by\n           WHERE account_grants.account_id = ?\n             AND (? IS NULL OR account_grants.user_id < ?)\n           ORDER BY account_grants.user_id DESC\n           LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "account_grants",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "account_id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "account_grants",
+            "name": "account_id"
+          }
+        }
+      },
+      {
+        "name": "user_id!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "account_grants",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "level!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "account_grants",
+            "name": "level"
+          }
+        }
+      },
+      {
+        "name": "granted_by!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "account_grants",
+            "name": "granted_by"
+          }
+        }
+      },
+      {
+        "name": "granted_at!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "account_grants",
+            "name": "granted_at"
+          }
+        }
+      },
+      {
+        "name": "user_name!",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "name": "user_rowid!: i64",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "granted_by_name!",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "name": "granter_rowid!: i64",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "rowid"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "b03bb339c08d548fb5042198ebbff58b545fb26925e25d1b67d68e32b8b19329"
+}
