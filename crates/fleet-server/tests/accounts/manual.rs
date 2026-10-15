@@ -6,7 +6,11 @@
 //! them**, with `just test-ms-account`; the AI never runs them or the
 //! `manual` profile.
 //!
-//! - Everything stays in memory, and nothing is written to disk.
+//! - The adapter's two checks keep everything in memory. The link flow's
+//!   database lives in a fresh folder in the system's temp directory,
+//!   sealed with a vault key drawn from the OS for the run and kept only in
+//!   memory. The folder is deleted at every end, pass, FAIL or panic; one
+//!   that Ctrl+C leaves behind holds a refresh token nobody can open.
 //! - It prints only the link, the code, the deadline, and pass or FAIL per
 //!   step with an error's text, which names a rule but never a value. Never
 //!   a token, the Minecraft name or the UUID.
@@ -31,7 +35,7 @@ use fleet_core::account::AccountStatus;
 use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget, RecordedValue};
 use fleet_core::authz::Role;
 use fleet_core::id::AccountId;
-use fleet_core::system::Clock;
+use fleet_core::system::{Clock, SecureRandom as _};
 use fleet_core::time::{add, elapsed};
 use fleet_server::cli::serve::ServerPorts;
 use fleet_server::config::{AccountsConfig, RateLimitConfig};
@@ -48,7 +52,8 @@ use fleet_server::ports::vault::{Vault as _, VaultPurpose};
 use fleet_testkit::log_capture;
 use secrecy::{ExposeSecret as _, SecretBox, SecretString};
 use serde_json::Value;
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use sqlx::sqlite::SqliteConnectOptions;
+use tempfile::Builder;
 use tokio::time::Instant;
 
 use crate::support::http::{Person, Server};
@@ -400,42 +405,34 @@ fn meta_text<'a>(entry: &'a AuditRecord, key: &str) -> Option<&'a str> {
         })
 }
 
-#[sqlx::test(migrations = false)]
-async fn manual_link_flow_member_then_owner(
-    _pool: SqlitePoolOptions,
-    options: SqliteConnectOptions,
-) {
-    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
-    let server = Server::start(
-        options,
-        RateLimitConfig::default(),
-        AccountsConfig::default(),
-        0x5A,
-        ServerPorts {
-            limiter_clock: Arc::new(MonotonicClock::start()),
-            random: Arc::new(OsRandom),
-            microsoft: Arc::new(adapter()),
-            pace: Arc::new(TokioPace),
-            clock,
-        },
-    )
-    .await;
-    let vault = XChaChaVault::new(
-        VaultKeys::from_keys(
-            BTreeMap::from([(1, SecretBox::new(Box::new([0x5A; 32])))]),
-            1,
-        )
-        .unwrap(),
-        Arc::new(OsRandom),
-    );
+/// A vault key drawn from the OS for this run, kept only in memory: a
+/// database the run leaves behind can't be opened by anyone.
+fn run_key() -> SecretBox<[u8; 32]> {
+    SecretBox::init_with_mut(|key: &mut [u8; 32]| OsRandom.fill(key).unwrap())
+}
+
+/// The link flow's steps on `server`, with `vault` over the server's key:
+/// the Member's link, then the Owner's with the same Microsoft account.
+async fn link_steps(server: Arc<Server>, vault: XChaChaVault) -> Steps {
     let member = server.person(1, Role::Member).await;
     let owner = server.person(2, Role::Owner).await;
     let mut steps = Steps::default();
+    if let Some(uuid) = member_links(&server, &vault, &member, &mut steps).await {
+        owner_finds_it_taken(&server, &owner, &uuid, &mut steps).await;
+    }
+    steps
+}
 
+/// The Member links the account, and the server stores and records it: the
+/// profile's UUID, or `None` once a step failed that the next ones need.
+async fn member_links(
+    server: &Server,
+    vault: &XChaChaVault,
+    member: &Person,
+    steps: &mut Steps,
+) -> Option<String> {
     // The Member links the account: it waits for approval.
-    let Some(read) = link_once(&server, &member, &mut steps, "approve the sign-in").await else {
-        return steps.finish();
-    };
+    let read = link_once(server, member, steps, "approve the sign-in").await?;
     steps.check(
         "waiting seen",
         read.waiting,
@@ -452,7 +449,7 @@ async fn manual_link_flow_member_then_owner(
         &format!("ended {}", read.last["status"]),
     );
     if !linked {
-        return steps.finish();
+        return None;
     }
     let account: AccountId = read.last["account_id"].as_str().unwrap().parse().unwrap();
     let name = read.last["name"].as_str().unwrap().to_owned();
@@ -465,7 +462,7 @@ async fn manual_link_flow_member_then_owner(
     } = stored.credential
     else {
         steps.fail("stored account", "not a Microsoft account");
-        return steps.finish();
+        return None;
     };
     steps.saw(&uuid.to_string());
     steps.saw(&uuid.as_uuid().simple().to_string());
@@ -495,13 +492,13 @@ async fn manual_link_flow_member_then_owner(
         }
         Err(error) => steps.fail("sealed refresh token opens for the account", error),
     }
-    let starts = entries(&server, &AuditAction::ACCOUNT_START_LINK).await;
+    let starts = entries(server, &AuditAction::ACCOUNT_START_LINK).await;
     steps.check(
         "account.start_link recorded",
         starts.len() == 1 && starts[0].actor == Some(member.id),
         "missing or another actor",
     );
-    let links = entries(&server, &AuditAction::ACCOUNT_LINK).await;
+    let links = entries(server, &AuditAction::ACCOUNT_LINK).await;
     let uuid_text = uuid.to_string();
     steps.check(
         "account.link recorded with the creator, the name and the UUID",
@@ -512,12 +509,16 @@ async fn manual_link_flow_member_then_owner(
             && meta_text(&links[0], "uuid") == Some(uuid_text.as_str()),
         "missing, or another actor, name or UUID",
     );
+    Some(uuid_text)
+}
 
-    // The Owner tries the same Microsoft account: it's taken.
+/// The Owner tries the same Microsoft account, whose profile is `uuid`:
+/// it's taken.
+async fn owner_finds_it_taken(server: &Server, owner: &Person, uuid: &str, steps: &mut Steps) {
     if let Some(read) = link_once(
-        &server,
-        &owner,
-        &mut steps,
+        server,
+        owner,
+        steps,
         "sign in with the SAME Microsoft account and approve",
     )
     .await
@@ -527,7 +528,7 @@ async fn manual_link_flow_member_then_owner(
             read.last == serde_json::json!({ "status": "taken" }),
             &format!("ended {}", read.last["status"]),
         );
-        let links = entries(&server, &AuditAction::ACCOUNT_LINK).await;
+        let links = entries(server, &AuditAction::ACCOUNT_LINK).await;
         let failure = links.get(1);
         steps.check(
             "account.link Failure recorded for the Owner, reason taken, with the UUID",
@@ -536,12 +537,70 @@ async fn manual_link_flow_member_then_owner(
                     && entry.actor == Some(owner.id)
                     && entry.target == Some(RecordedTarget::Known(AuditTarget::User(owner.id)))
                     && meta_text(entry, "reason") == Some("taken")
-                    && meta_text(entry, "uuid") == Some(uuid_text.as_str())
+                    && meta_text(entry, "uuid") == Some(uuid)
             }),
             "missing or different",
         );
     }
+}
 
+#[tokio::test]
+async fn manual_link_flow_member_then_owner() {
+    // A fresh folder, deleted at every end below, and a key for this run
+    // alone: a folder that Ctrl+C leaves behind holds a refresh token nobody
+    // can open.
+    let dir = Builder::new()
+        .prefix("afkfleet-link-flow-")
+        .tempdir()
+        .unwrap();
+    let path = dir.path().join("link-flow.db");
+    tokio::fs::File::create(&path).await.unwrap();
+    let key = run_key();
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let server = Arc::new(
+        Server::start(
+            SqliteConnectOptions::new().filename(&path),
+            RateLimitConfig::default(),
+            AccountsConfig::default(),
+            &key,
+            ServerPorts {
+                limiter_clock: Arc::new(MonotonicClock::start()),
+                random: Arc::new(OsRandom),
+                microsoft: Arc::new(adapter()),
+                pace: Arc::new(TokioPace),
+                clock,
+            },
+        )
+        .await,
+    );
+    let vault = XChaChaVault::new(
+        VaultKeys::from_keys(
+            BTreeMap::from([(1, SecretBox::new(Box::new(*key.expose_secret())))]),
+            1,
+        )
+        .unwrap(),
+        Arc::new(OsRandom),
+    );
+    drop(key);
+
+    // The steps run in a task of their own, so a panic comes back here as an
+    // error: the flows stop, the database closes and its folder goes on
+    // every end.
+    let ended = tokio::spawn(link_steps(Arc::clone(&server), vault)).await;
     bounded(server.link_flows.shutdown()).await;
-    steps.finish();
+    bounded(server.db.close()).await;
+    drop(server);
+    let deleted = dir.close().is_ok();
+    match ended {
+        Ok(mut steps) => {
+            steps.check("database deleted", deleted, "its folder is still there");
+            steps.finish();
+        }
+        Err(failed) => {
+            if !deleted {
+                println!("database deleted: FAIL (its folder is still there)");
+            }
+            std::panic::resume_unwind(failed.into_panic());
+        }
+    }
 }

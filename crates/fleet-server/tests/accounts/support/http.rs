@@ -143,20 +143,20 @@ pub(crate) struct Server {
 }
 
 impl Server {
-    /// The app over `ports` with `limits` and `accounts`, its vault's key
-    /// all `key`; sessions are minted on the ports' clock and randomness.
+    /// The app over `ports` with `limits` and `accounts`, its vault's one
+    /// key `key`; sessions are minted on the ports' clock and randomness.
     pub(crate) async fn start(
         options: SqliteConnectOptions,
         limits: RateLimitConfig,
         accounts: AccountsConfig,
-        key: u8,
+        key: &SecretBox<[u8; 32]>,
         ports: ServerPorts,
     ) -> Self {
         let db = Database::connect(options, DatabaseOptions::default())
             .await
             .unwrap();
         let keys = VaultKeys::from_keys(
-            BTreeMap::from([(1, SecretBox::new(Box::new([key; 32])))]),
+            BTreeMap::from([(1, SecretBox::new(Box::new(*key.expose_secret())))]),
             1,
         )
         .unwrap();
@@ -339,7 +339,14 @@ impl HttpSetup {
             pace: pace.clone(),
         };
         Self {
-            server: Server::start(options, limits, accounts, 0x21, ports).await,
+            server: Server::start(
+                options,
+                limits,
+                accounts,
+                &SecretBox::new(Box::new([0x21; 32])),
+                ports,
+            )
+            .await,
             clock,
             fake,
             pace,

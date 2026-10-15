@@ -382,7 +382,7 @@ The compose e2e test runs the Docker stack under a project of its own, `afkfleet
 
 When the test ends, its container is removed together with its volumes, which hold the account name in the server's usercache and logs. A killed run can leave the container behind; check `docker ps -a`.
 
-**The Microsoft check** (Phase 9 on) runs the server's Microsoft adapter, and the link flow through the server's own routes, against Microsoft with your own account. It needs your real account, so only you run it; the AI never does. It keeps everything in memory (the link flow uses a temporary database), and needs no Docker and no file.
+**The Microsoft check** (Phase 9 on) runs the server's Microsoft adapter, and the link flow through the server's own routes, against Microsoft with your own account. It needs your real account, so only you run it; the AI never does. The account and declined checks keep everything in memory. The link flow's database lives in a fresh `afkfleet-link-flow-…` folder in your temp directory, its refresh token sealed with a vault key drawn for the run and kept only in memory, and the folder is deleted at every end: pass, FAIL or panic. Only Ctrl+C can leave it behind. The token in it can't be opened, since its key ended with the run, but the folder still holds your Minecraft name and UUID as plain text, so delete it. The check needs no Docker and no file.
 1. Run `just test-ms-account <filter>`: `account_check`, `declined_link` or `link_flow`. A plain `just test-ms-account` runs all three in turn, and the declined check can't pass on an account that already approved this sign-in once: Microsoft remembers the consent and never shows Decline again, so it waits its 8 minutes and fails. The three tests:
    - **The account check.** It prints a link (Microsoft's `microsoft.com/link` page), a code and a deadline. Open the link, enter the code and approve the sign-in. It then prints pass or FAIL for each step:
      - a "pending" answer before your approval
@@ -399,7 +399,7 @@ When the test ends, its container is removed together with its volumes, which ho
      - the refresh token sealed for the account, and opening for it
      - the `account.start_link` and `account.link` audit entries, with the creator, the name and the UUID
 
-     It then prints a second code, for the Owner's flow: enter it with the **same** Microsoft account and approve. It passes as `taken`, with an `account.link` Failure for the Owner (reason `taken`, with the UUID). Last, that no value it saw reached a log.
+     It then prints a second code, for the Owner's flow: enter it with the **same** Microsoft account and approve. It passes as `taken`, with an `account.link` Failure for the Owner (reason `taken`, with the UUID). Then that its database was deleted, and last, that no value it saw reached a log.
 
    The account and declined checks wait at most 8 minutes each, the link flow at most 4 minutes per code.
 2. It never prints a token, your Minecraft name or your UUID. A failed step names the rule Microsoft's answer broke, never a value from it.

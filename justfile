@@ -56,8 +56,9 @@ test-real-account:
     cargo nextest run -p fleet-mc --profile manual
 
 # The user's Microsoft check (ADR-0018): the Microsoft adapter, and the link flow
-# through serve's own routes over a temporary database, against the user's own
-# account, in memory only. It prints a link and a code to enter, the deadline,
+# through serve's own routes, against the user's own account. The adapter's checks
+# stay in memory; the link flow's database is a temporary folder, deleted at every
+# end and sealed with a vault key drawn for the run and kept in memory. It prints a link and a code to enter, the deadline,
 # then pass or FAIL per step, never a token, a name or a UUID. It needs the user's
 # real account, so only the user runs it; the AI never does. `filter` picks one of
 # its three tests (`account_check`, `declined_link` or `link_flow`); without it, all
