@@ -6,8 +6,10 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
+mod accounts;
 mod admin;
 mod auth;
+mod link;
 mod me;
 mod mfa;
 mod refresh;

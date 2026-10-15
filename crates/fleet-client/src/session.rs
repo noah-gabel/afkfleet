@@ -76,6 +76,11 @@ use core::fmt::Write as _;
 use core::time::Duration;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use fleet_api_types::accounts::{
+    AccountPage, AccountResponse, ChangeGrantRequest, CreateGrantRequest,
+    CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
+    LinkFlowResponse, LinkStartedResponse,
+};
 use fleet_api_types::auth::{
     LoginMfaRequest, LoginRequest, LoginResponse, LoginStatus, RefreshRequest, RegisterRequest,
     RegisterResponse, StepUpRequest, TokenResponse,
@@ -88,7 +93,8 @@ use fleet_api_types::mfa::{
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
 use fleet_api_types::{
-    ErrorCode, ErrorResponse, InviteId, PageQuery, SecretText, SessionId, UserId,
+    AccountId, ErrorCode, ErrorResponse, InviteId, LinkFlowId, PageQuery, SecretText, SessionId,
+    UserId,
 };
 use reqwest::{Method, Url};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -552,6 +558,139 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         let url = self.server.api(&["invites", &id.to_string()]);
         let answer = self.authed(Method::DELETE, url, None).await?;
         expect_empty(answer, 204)
+    }
+
+    // ---- Microsoft accounts (Plan.md P9.4, P9.6, P9.7) ----
+
+    pub(crate) async fn start_link(self: &Arc<Self>) -> Result<LinkStartedResponse, ClientError> {
+        let url = self.server.api(&["accounts", "link"]);
+        let answer = self.authed(Method::POST, url, None).await?;
+        expect_json(answer, 201)
+    }
+
+    pub(crate) async fn link_status(
+        self: &Arc<Self>,
+        flow: LinkFlowId,
+    ) -> Result<LinkFlowResponse, ClientError> {
+        let url = self.server.api(&["accounts", "link", &flow.to_string()]);
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn create_offline_account(
+        self: &Arc<Self>,
+        request: &CreateOfflineAccountRequest,
+    ) -> Result<CreatedOfflineAccountResponse, ClientError> {
+        let url = self.server.api(&["accounts", "offline"]);
+        let answer = self.authed(Method::POST, url, Some(json(request))).await?;
+        expect_json(answer, 201)
+    }
+
+    pub(crate) async fn accounts(
+        self: &Arc<Self>,
+        query: &PageQuery<AccountId>,
+    ) -> Result<AccountPage, ClientError> {
+        let url = with_page(self.server.api(&["accounts"]), query);
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn accounts_awaiting_approval(
+        self: &Arc<Self>,
+        query: &PageQuery<AccountId>,
+    ) -> Result<AccountPage, ClientError> {
+        let url = with_page(self.server.api(&["accounts", "awaiting-approval"]), query);
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn account(
+        self: &Arc<Self>,
+        id: AccountId,
+    ) -> Result<AccountResponse, ClientError> {
+        let url = self.server.api(&["accounts", &id.to_string()]);
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn delete_account(self: &Arc<Self>, id: AccountId) -> Result<(), ClientError> {
+        let url = self.server.api(&["accounts", &id.to_string()]);
+        let answer = self.authed(Method::DELETE, url, None).await?;
+        expect_empty(answer, 204)
+    }
+
+    pub(crate) async fn approve_account(
+        self: &Arc<Self>,
+        id: AccountId,
+    ) -> Result<AccountResponse, ClientError> {
+        let url = self.server.api(&["accounts", &id.to_string(), "approve"]);
+        let answer = self.authed(Method::POST, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn refuse_account(self: &Arc<Self>, id: AccountId) -> Result<(), ClientError> {
+        let url = self.server.api(&["accounts", &id.to_string(), "refuse"]);
+        let answer = self.authed(Method::POST, url, None).await?;
+        expect_empty(answer, 204)
+    }
+
+    pub(crate) async fn relink_account(
+        self: &Arc<Self>,
+        id: AccountId,
+    ) -> Result<LinkStartedResponse, ClientError> {
+        let url = self.server.api(&["accounts", &id.to_string(), "relink"]);
+        let answer = self.authed(Method::POST, url, None).await?;
+        expect_json(answer, 201)
+    }
+
+    pub(crate) async fn account_grants(
+        self: &Arc<Self>,
+        id: AccountId,
+        query: &PageQuery<UserId>,
+    ) -> Result<GrantPage, ClientError> {
+        let url = with_page(
+            self.server.api(&["accounts", &id.to_string(), "grants"]),
+            query,
+        );
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn create_grant(
+        self: &Arc<Self>,
+        id: AccountId,
+        request: &CreateGrantRequest,
+    ) -> Result<GrantResponse, ClientError> {
+        let url = self.server.api(&["accounts", &id.to_string(), "grants"]);
+        let answer = self.authed(Method::POST, url, Some(json(request))).await?;
+        expect_json(answer, 201)
+    }
+
+    pub(crate) async fn change_grant(
+        self: &Arc<Self>,
+        id: AccountId,
+        user: UserId,
+        request: &ChangeGrantRequest,
+    ) -> Result<GrantResponse, ClientError> {
+        let url = self.grant_url(id, user);
+        let answer = self.authed(Method::PUT, url, Some(json(request))).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn revoke_grant(
+        self: &Arc<Self>,
+        id: AccountId,
+        user: UserId,
+    ) -> Result<(), ClientError> {
+        let url = self.grant_url(id, user);
+        let answer = self.authed(Method::DELETE, url, None).await?;
+        expect_empty(answer, 204)
+    }
+
+    /// `/accounts/{id}/grants/{user}`.
+    fn grant_url(&self, id: AccountId, user: UserId) -> Url {
+        self.server
+            .api(&["accounts", &id.to_string(), "grants", &user.to_string()])
     }
 
     // ---- Sending ----
@@ -2147,5 +2286,324 @@ mod tests {
         let error = outcome::<()>(task).await.unwrap_err();
 
         assert!(matches!(error, ClientError::Interrupted(_)), "{error:?}");
+    }
+
+    // ---- Microsoft accounts ----
+
+    const ACCOUNT: &str = "01900000-0000-7000-8000-00000000000a";
+    const FLOW: &str = "01900000-0000-7000-8000-00000000000b";
+    const GRANTEE: &str = "01900000-0000-7000-8000-00000000000c";
+
+    fn id<T: core::str::FromStr>(text: &str) -> T
+    where
+        T::Err: core::fmt::Debug,
+    {
+        text.parse().unwrap()
+    }
+
+    fn at() -> fleet_api_types::Timestamp {
+        serde_json::from_value(json!("2026-10-15T10:00:00.000Z")).unwrap()
+    }
+
+    fn label(user: &str, name: &str) -> fleet_api_types::users::UserLabel {
+        fleet_api_types::users::UserLabel {
+            id: id(user),
+            username: fleet_api_types::BoundedText::new(name),
+        }
+    }
+
+    fn started() -> LinkStartedResponse {
+        LinkStartedResponse {
+            flow_id: id(FLOW),
+            user_code: SecretText::new("B7X4-KDLQ".to_owned()),
+            verification_uri: fleet_api_types::BoundedText::new("https://www.microsoft.com/link"),
+            expires_at: at(),
+        }
+    }
+
+    fn an_account() -> AccountResponse {
+        use fleet_api_types::accounts::{AccountKind, AccountStatus, GrantLevel};
+        AccountResponse {
+            id: id(ACCOUNT),
+            name: fleet_api_types::BoundedText::new("AfkBot1"),
+            kind: AccountKind::Microsoft.into(),
+            status: AccountStatus::Pending.into(),
+            reason: None,
+            level: GrantLevel::Manage.into(),
+            owner: Some(label("01900000-0000-7000-8000-000000000001", "alice")),
+            linked_at: Some(at()),
+        }
+    }
+
+    fn a_grant() -> GrantResponse {
+        GrantResponse {
+            user: label(GRANTEE, "carol"),
+            level: fleet_api_types::accounts::GrantLevel::Control.into(),
+            granted_by: label("01900000-0000-7000-8000-000000000001", "alice"),
+            granted_at: at(),
+        }
+    }
+
+    fn first_page<I>() -> PageQuery<I> {
+        PageQuery {
+            before: None,
+            limit: None,
+        }
+    }
+
+    /// `value` as the server's answer with `status`.
+    fn dto(status: u16, value: &impl Serialize) -> Incoming {
+        answer(status, &serde_json::to_value(value).unwrap())
+    }
+
+    /// A core in a live session, holding `afk_at_0`.
+    async fn signed_in() -> Arc<TestCore> {
+        let store = TestStore::holding("afk_rt_0").await;
+        let core = core(&store);
+        give_access(&core, "afk_at_0", 1);
+        core
+    }
+
+    fn sent(route: &str, body: Option<Value>) -> Seen {
+        Seen {
+            route: route.to_owned(),
+            bearer: Some("afk_at_0".to_owned()),
+            body,
+        }
+    }
+
+    #[tokio::test]
+    async fn a_link_and_a_link_again_post_without_a_body_and_read_the_201() {
+        let core = signed_in().await;
+        let link = "POST /api/v1/accounts/link";
+        let again = format!("POST /api/v1/accounts/{ACCOUNT}/relink");
+        core.transport.on(link, Ok(dto(201, &started())));
+        core.transport.on(&again, Ok(dto(201, &started())));
+
+        let new = core.start_link().await.unwrap();
+        let relinked = core.relink_account(id(ACCOUNT)).await.unwrap();
+
+        for answer in [new, relinked] {
+            assert_eq!(answer.flow_id, id(FLOW));
+            assert_eq!(answer.user_code.expose(), "B7X4-KDLQ");
+            assert_eq!(
+                answer.verification_uri.as_str(),
+                "https://www.microsoft.com/link"
+            );
+            assert_eq!(answer.expires_at, at());
+        }
+        assert_eq!(
+            core.transport.seen(),
+            [sent(link, None), sent(&again, None)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_link_start_answered_with_200_is_unexpected() {
+        let core = signed_in().await;
+        core.transport
+            .on("POST /api/v1/accounts/link", Ok(dto(200, &started())));
+
+        let error = core.start_link().await.unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                ClientError::UnexpectedResponse {
+                    status: 200,
+                    reason: Unexpected::Status
+                }
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_link_status_reads_each_state_and_one_this_version_doesnt_know() {
+        use fleet_api_types::accounts::{AccountStatus, LinkFlowState, RefusalReason};
+        let core = signed_in().await;
+        let route = format!("GET /api/v1/accounts/link/{FLOW}");
+        let states = [
+            LinkFlowResponse {
+                status: LinkFlowState::Waiting.into(),
+                expires_at: Some(at()),
+                reason: None,
+                account_id: None,
+                account_status: None,
+                name: None,
+            },
+            LinkFlowResponse {
+                status: LinkFlowState::Refused.into(),
+                expires_at: None,
+                reason: Some(RefusalReason::NotOwned.into()),
+                account_id: None,
+                account_status: None,
+                name: None,
+            },
+            LinkFlowResponse {
+                status: LinkFlowState::Linked.into(),
+                expires_at: None,
+                reason: None,
+                account_id: Some(id(ACCOUNT)),
+                account_status: Some(AccountStatus::Pending.into()),
+                name: Some(fleet_api_types::BoundedText::new("AfkBot1")),
+            },
+        ];
+        for state in &states {
+            core.transport.on(&route, Ok(dto(200, state)));
+        }
+        core.transport
+            .on(&route, Ok(answer(200, &json!({ "status": "brand_new" }))));
+
+        let mut read = Vec::new();
+        for _ in 0..4 {
+            read.push(core.link_status(id(FLOW)).await.unwrap());
+        }
+
+        assert_eq!(read.get(..3), Some(&states[..]));
+        let unknown = read.get(3).unwrap();
+        assert_eq!(unknown.status.known(), None);
+        assert_eq!(unknown.status.as_str(), "brand_new");
+        assert_eq!(
+            core.transport.routes(),
+            [route.clone(), route.clone(), route.clone(), route]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_account_reads_go_to_their_routes() {
+        let core = signed_in().await;
+        let page = AccountPage {
+            items: vec![an_account()],
+            next: Some(id(ACCOUNT)),
+        };
+        let one = format!("GET /api/v1/accounts/{ACCOUNT}");
+        core.transport
+            .on("GET /api/v1/accounts", Ok(dto(200, &page)));
+        core.transport.on(
+            "GET /api/v1/accounts/awaiting-approval",
+            Ok(dto(200, &page)),
+        );
+        core.transport.on(&one, Ok(dto(200, &an_account())));
+
+        let listed = core.accounts(&first_page()).await.unwrap();
+        let awaiting = core
+            .accounts_awaiting_approval(&first_page())
+            .await
+            .unwrap();
+        let read = core.account(id(ACCOUNT)).await.unwrap();
+
+        assert_eq!(listed, page);
+        assert_eq!(awaiting, page);
+        assert_eq!(read, an_account());
+        assert_eq!(
+            core.transport.seen(),
+            [
+                sent("GET /api/v1/accounts", None),
+                sent("GET /api/v1/accounts/awaiting-approval", None),
+                sent(&one, None)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_account_writes_send_their_method_path_and_body() {
+        use fleet_api_types::accounts::{AccountKind, AccountStatus};
+        let core = signed_in().await;
+        let created = CreatedOfflineAccountResponse {
+            id: id(ACCOUNT),
+            name: fleet_api_types::BoundedText::new("AfkBot1"),
+            kind: AccountKind::Offline.into(),
+            status: AccountStatus::Active.into(),
+        };
+        let delete = format!("DELETE /api/v1/accounts/{ACCOUNT}");
+        let approve = format!("POST /api/v1/accounts/{ACCOUNT}/approve");
+        let refuse = format!("POST /api/v1/accounts/{ACCOUNT}/refuse");
+        core.transport
+            .on("POST /api/v1/accounts/offline", Ok(dto(201, &created)));
+        core.transport.on(&delete, Ok(raw(204, b"")));
+        core.transport.on(&approve, Ok(dto(200, &an_account())));
+        core.transport.on(&refuse, Ok(raw(204, b"")));
+        let request: CreateOfflineAccountRequest =
+            serde_json::from_value(json!({ "name": "AfkBot1" })).unwrap();
+
+        let made = core.create_offline_account(&request).await.unwrap();
+        core.delete_account(id(ACCOUNT)).await.unwrap();
+        let approved = core.approve_account(id(ACCOUNT)).await.unwrap();
+        core.refuse_account(id(ACCOUNT)).await.unwrap();
+
+        assert_eq!(made, created);
+        assert_eq!(approved, an_account());
+        assert_eq!(
+            core.transport.seen(),
+            [
+                sent(
+                    "POST /api/v1/accounts/offline",
+                    Some(json!({ "name": "AfkBot1" }))
+                ),
+                sent(&delete, None),
+                sent(&approve, None),
+                sent(&refuse, None)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_grant_routes_send_their_method_path_and_body() {
+        let core = signed_in().await;
+        let page = GrantPage {
+            items: vec![a_grant()],
+            next: Some(id(GRANTEE)),
+        };
+        let list = format!("GET /api/v1/accounts/{ACCOUNT}/grants");
+        let create = format!("POST /api/v1/accounts/{ACCOUNT}/grants");
+        let change = format!("PUT /api/v1/accounts/{ACCOUNT}/grants/{GRANTEE}");
+        let revoke = format!("DELETE /api/v1/accounts/{ACCOUNT}/grants/{GRANTEE}");
+        core.transport.on(&list, Ok(dto(200, &page)));
+        core.transport.on(&create, Ok(dto(201, &a_grant())));
+        core.transport.on(&change, Ok(dto(200, &a_grant())));
+        core.transport.on(&revoke, Ok(raw(204, b"")));
+        let grant: CreateGrantRequest =
+            serde_json::from_value(json!({ "username": "carol", "level": "control" })).unwrap();
+        let level: ChangeGrantRequest = serde_json::from_value(json!({ "level": "view" })).unwrap();
+
+        let listed = core
+            .account_grants(id(ACCOUNT), &first_page())
+            .await
+            .unwrap();
+        let created = core.create_grant(id(ACCOUNT), &grant).await.unwrap();
+        let changed = core
+            .change_grant(id(ACCOUNT), id(GRANTEE), &level)
+            .await
+            .unwrap();
+        core.revoke_grant(id(ACCOUNT), id(GRANTEE)).await.unwrap();
+
+        assert_eq!(listed, page);
+        assert_eq!((created, changed), (a_grant(), a_grant()));
+        assert_eq!(
+            core.transport.seen(),
+            [
+                sent(&list, None),
+                sent(
+                    &create,
+                    Some(json!({ "username": "carol", "level": "control" }))
+                ),
+                sent(&change, Some(json!({ "level": "view" }))),
+                sent(&revoke, None)
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_refused_account_write_comes_back_with_the_servers_code() {
+        let core = signed_in().await;
+        let delete = format!("DELETE /api/v1/accounts/{ACCOUNT}");
+        core.transport
+            .on(&delete, Ok(refusal(403, "step_up_required")));
+
+        let error = core.delete_account(id(ACCOUNT)).await.unwrap_err();
+
+        assert!(is_api(&error, 403, ErrorCode::StepUpRequired), "{error:?}");
+        assert_eq!(core.transport.routes(), [delete]);
     }
 }

@@ -42,6 +42,7 @@ use core::time::Duration;
 
 pub mod client;
 pub mod error;
+pub mod link;
 pub mod store;
 pub mod trust;
 pub mod url;
@@ -51,6 +52,7 @@ mod transport;
 
 pub use client::{Client, ClientConfig, LoginStep};
 pub use error::{ApiFailure, BuildError, ClientError, Unexpected};
+pub use link::{VerifiedLink, VerifiedLinkError};
 pub use store::{MemoryStore, SessionStore, StoreError, StoreOp};
 pub use trust::{CaError, CustomCa, Trust};
 pub use url::{ServerUrl, ServerUrlError};

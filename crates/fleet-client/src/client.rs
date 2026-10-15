@@ -16,13 +16,18 @@ use core::fmt;
 use core::time::Duration;
 use std::sync::Arc;
 
+use fleet_api_types::accounts::{
+    AccountPage, AccountResponse, ChangeGrantRequest, CreateGrantRequest,
+    CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
+    LinkFlowResponse, LinkStartedResponse,
+};
 use fleet_api_types::auth::{LoginRequest, RegisterRequest, RegisterResponse, StepUpRequest};
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
-use fleet_api_types::{InviteId, PageQuery, SecretText, SessionId, UserId};
+use fleet_api_types::{AccountId, InviteId, LinkFlowId, PageQuery, SecretText, SessionId, UserId};
 
 use crate::error::{BuildError, ClientError};
 use crate::session::Core;
@@ -310,6 +315,184 @@ impl<S: SessionStore> Client<S> {
     /// as for every authenticated call.
     pub async fn revoke_invite(&self, id: InviteId) -> Result<(), ClientError> {
         self.core.revoke_invite(id).await
+    }
+
+    /// `POST /accounts/link`: starts linking a Microsoft account with
+    /// Microsoft's device code. The answer is the only place the user code
+    /// ever shows; [`VerifiedLink`](crate::VerifiedLink) checks its link
+    /// before an app opens it.
+    ///
+    /// # Errors
+    /// The server's 409 (a Member's quota is full), 429 (the user's flow is
+    /// finishing, or the daily cap; with its wait) or 503 (every place is
+    /// taken, or Microsoft can't be reached; with its wait) as
+    /// [`ClientError::Api`]; any other error as for every authenticated
+    /// call.
+    pub async fn start_link(&self) -> Result<LinkStartedResponse, ClientError> {
+        self.core.start_link().await
+    }
+
+    /// `GET /accounts/link/{flow_id}`: the state of the caller's link flow.
+    /// It never holds the user code.
+    ///
+    /// # Errors
+    /// The server's 404 for a flow that isn't the caller's, was replaced, or
+    /// ended more than 15 minutes ago, as [`ClientError::Api`]; any other
+    /// error as for every authenticated call.
+    pub async fn link_status(&self, flow: LinkFlowId) -> Result<LinkFlowResponse, ClientError> {
+        self.core.link_status(flow).await
+    }
+
+    /// `POST /accounts/offline`: a new offline account, while the server
+    /// allows them (`[accounts] allow_offline`, meant for test servers).
+    ///
+    /// # Errors
+    /// The server's 404 while offline accounts are off, 409 (the name is
+    /// taken in any case, or a Member's quota is full) or 422 as
+    /// [`ClientError::Api`]; any other error as for every authenticated
+    /// call.
+    pub async fn create_offline_account(
+        &self,
+        request: &CreateOfflineAccountRequest,
+    ) -> Result<CreatedOfflineAccountResponse, ClientError> {
+        self.core.create_offline_account(request).await
+    }
+
+    /// `GET /accounts`: a page of the accounts the caller may see, newest
+    /// first.
+    ///
+    /// # Errors
+    /// The server's 422 for a limit out of range; any other error as for
+    /// every authenticated call.
+    pub async fn accounts(&self, query: &PageQuery<AccountId>) -> Result<AccountPage, ClientError> {
+        self.core.accounts(query).await
+    }
+
+    /// `GET /accounts/awaiting-approval`: a page of the pending links the
+    /// caller may approve or refuse; a Member's is empty.
+    ///
+    /// # Errors
+    /// The server's 422 for a limit out of range; any other error as for
+    /// every authenticated call.
+    pub async fn accounts_awaiting_approval(
+        &self,
+        query: &PageQuery<AccountId>,
+    ) -> Result<AccountPage, ClientError> {
+        self.core.accounts_awaiting_approval(query).await
+    }
+
+    /// `GET /accounts/{id}`: one account, as the caller sees it.
+    ///
+    /// # Errors
+    /// The server's 404 for an account that doesn't exist or that the caller
+    /// may not see, as [`ClientError::Api`]; any other error as for every
+    /// authenticated call.
+    pub async fn account(&self, id: AccountId) -> Result<AccountResponse, ClientError> {
+        self.core.account(id).await
+    }
+
+    /// `DELETE /accounts/{id}`: deletes an account with its grants and its
+    /// stored sign-in, after [`Client::step_up`] within 5 minutes.
+    ///
+    /// # Errors
+    /// The server's 403 (`step_up_required` without a fresh step-up,
+    /// `forbidden` below Manage) or 404, as [`ClientError::Api`]; any other
+    /// error as for every authenticated call.
+    pub async fn delete_account(&self, id: AccountId) -> Result<(), ClientError> {
+        self.core.delete_account(id).await
+    }
+
+    /// `POST /accounts/{id}/approve`: approves a pending link, after
+    /// [`Client::step_up`] within 5 minutes; bots may use it from then on.
+    ///
+    /// # Errors
+    /// The server's 403 (`step_up_required` without a fresh step-up,
+    /// `forbidden` when the caller isn't above the owner), 404, or 409 for
+    /// an account that isn't pending, as [`ClientError::Api`]; any other
+    /// error as for every authenticated call.
+    pub async fn approve_account(&self, id: AccountId) -> Result<AccountResponse, ClientError> {
+        self.core.approve_account(id).await
+    }
+
+    /// `POST /accounts/{id}/refuse`: refuses a pending link, which deletes
+    /// it, after [`Client::step_up`] within 5 minutes.
+    ///
+    /// # Errors
+    /// As [`Client::approve_account`].
+    pub async fn refuse_account(&self, id: AccountId) -> Result<(), ClientError> {
+        self.core.refuse_account(id).await
+    }
+
+    /// `POST /accounts/{id}/relink`: starts linking an account again, with
+    /// the same answer and caps as [`Client::start_link`].
+    ///
+    /// # Errors
+    /// The server's 403 below Manage, 404, 409 for a pending or offline
+    /// account, or the 429s and 503s of [`Client::start_link`], as
+    /// [`ClientError::Api`]; any other error as for every authenticated
+    /// call.
+    pub async fn relink_account(&self, id: AccountId) -> Result<LinkStartedResponse, ClientError> {
+        self.core.relink_account(id).await
+    }
+
+    /// `GET /accounts/{id}/grants`: a page of who else has access (Manage).
+    ///
+    /// # Errors
+    /// The server's 403 below Manage, 404 or 422, as [`ClientError::Api`];
+    /// any other error as for every authenticated call.
+    pub async fn account_grants(
+        &self,
+        id: AccountId,
+        query: &PageQuery<UserId>,
+    ) -> Result<GrantPage, ClientError> {
+        self.core.account_grants(id, query).await
+    }
+
+    /// `POST /accounts/{id}/grants`: gives a user access by their exact
+    /// username, after [`Client::step_up`] within 5 minutes.
+    ///
+    /// # Errors
+    /// The server's 403 (`step_up_required` without a fresh step-up,
+    /// `forbidden` below Manage), 404, 409 (a grant that exists, or a
+    /// pending account), 422 (a name that can't be given a grant) or 429
+    /// (the by-name limit), as [`ClientError::Api`]; any other error as for
+    /// every authenticated call.
+    pub async fn create_grant(
+        &self,
+        id: AccountId,
+        request: &CreateGrantRequest,
+    ) -> Result<GrantResponse, ClientError> {
+        self.core.create_grant(id, request).await
+    }
+
+    /// `PUT /accounts/{id}/grants/{user}`: changes a grant's level, after
+    /// [`Client::step_up`] within 5 minutes.
+    ///
+    /// # Errors
+    /// The server's 403 (`step_up_required` without a fresh step-up,
+    /// `forbidden` below Manage), 404 (no such grant), or 409 (a raise on a
+    /// pending account, or for someone with implicit Manage), as
+    /// [`ClientError::Api`]; any other error as for every authenticated
+    /// call.
+    pub async fn change_grant(
+        &self,
+        id: AccountId,
+        user: UserId,
+        request: &ChangeGrantRequest,
+    ) -> Result<GrantResponse, ClientError> {
+        self.core.change_grant(id, user, request).await
+    }
+
+    /// `DELETE /accounts/{id}/grants/{user}`: revokes a grant, after
+    /// [`Client::step_up`] within 5 minutes.
+    ///
+    /// # Errors
+    /// The server's 403 (`step_up_required` without a fresh step-up,
+    /// `forbidden` below Manage) or 404 (no such grant), as
+    /// [`ClientError::Api`]; any other error as for every authenticated
+    /// call.
+    pub async fn revoke_grant(&self, id: AccountId, user: UserId) -> Result<(), ClientError> {
+        self.core.revoke_grant(id, user).await
     }
 }
 

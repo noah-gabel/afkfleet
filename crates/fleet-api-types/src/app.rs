@@ -75,6 +75,15 @@ pub enum CommandErrorCode {
     /// Only after a server switch has logged out of the old server: the old
     /// profile stays, logged out.
     SessionDiscard,
+    /// The server's link to Microsoft's sign-in page breaks the rule the app
+    /// checks it with (ADR-0018): the start's answer, its code included, is
+    /// dropped.
+    InvalidVerificationLink,
+    /// There's no checked link to Microsoft's sign-in page to open: no link
+    /// was started since the last sign-in.
+    NoVerificationLink,
+    /// Windows couldn't open Microsoft's sign-in page.
+    VerificationLinkOpen,
     /// The app's own call didn't reach the command. Only the UI produces
     /// this code, for a refusal from Tauri itself.
     Ipc,
@@ -101,6 +110,9 @@ impl CommandErrorCode {
         Self::ClientBuild,
         Self::ProfileSave,
         Self::SessionDiscard,
+        Self::InvalidVerificationLink,
+        Self::NoVerificationLink,
+        Self::VerificationLinkOpen,
         Self::Ipc,
     ];
 
@@ -129,6 +141,9 @@ impl CommandErrorCode {
             Self::SessionDiscard => {
                 "The new server's old session can't be removed from the Windows Credential Manager."
             }
+            Self::InvalidVerificationLink => "The server's sign-in link isn't Microsoft's page.",
+            Self::NoVerificationLink => "There's no Microsoft page to open.",
+            Self::VerificationLinkOpen => "Windows couldn't open Microsoft's page.",
             Self::Ipc => "The app couldn't run the request.",
         }
     }
@@ -384,11 +399,14 @@ mod tests {
             CommandErrorCode::ClientBuild => 15,
             CommandErrorCode::ProfileSave => 16,
             CommandErrorCode::SessionDiscard => 17,
-            CommandErrorCode::Ipc => 18,
+            CommandErrorCode::InvalidVerificationLink => 18,
+            CommandErrorCode::NoVerificationLink => 19,
+            CommandErrorCode::VerificationLinkOpen => 20,
+            CommandErrorCode::Ipc => 21,
         }
     }
 
-    const CODES: usize = 19;
+    const CODES: usize = 22;
 
     fn details() -> ApiErrorDetails {
         ApiErrorDetails {
@@ -436,6 +454,9 @@ mod tests {
             CommandErrorCode::TimedOut,
             CommandErrorCode::UnexpectedResponse,
             CommandErrorCode::InvalidServerUrl,
+            CommandErrorCode::InvalidVerificationLink,
+            CommandErrorCode::NoVerificationLink,
+            CommandErrorCode::VerificationLinkOpen,
             CommandErrorCode::Ipc,
         ]
         .iter()
@@ -448,6 +469,9 @@ mod tests {
                 json!("timed_out"),
                 json!("unexpected_response"),
                 json!("invalid_server_url"),
+                json!("invalid_verification_link"),
+                json!("no_verification_link"),
+                json!("verification_link_open"),
                 json!("ipc")
             ]
         );

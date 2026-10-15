@@ -7,12 +7,17 @@ use std::sync::Arc;
 
 use chrono::DateTime;
 use fleet_api_types::auth::{LoginRequest, RegisterRequest, StepUpRequest};
+use fleet_api_types::invites::CreateInviteRequest;
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaEnrollResponse};
+use fleet_api_types::users::UserRole;
 use fleet_api_types::{ErrorCode, SecretText};
 use fleet_client::{
     Client, ClientConfig, ClientError, LoginStep, MemoryStore, ServerUrl, SessionStore, Trust,
 };
+use fleet_core::account::AccountStatus;
+use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::auth::NewPassword;
+use fleet_core::id::{AccountId, UserId};
 use fleet_core::system::Clock as _;
 use fleet_core::value::Username;
 use fleet_server::app::users::UserService;
@@ -25,9 +30,12 @@ use fleet_server::http::rate_limit::TrustedProxies;
 use fleet_server::infra::crypto::passwords::Argon2Passwords;
 use fleet_server::infra::crypto::vault::{DerivedKey, VaultKeys};
 use fleet_server::infra::msauth::ReqwestMicrosoftAuth;
-use fleet_server::infra::sqlite::{self, DatabaseOptions};
+use fleet_server::infra::sqlite::{self, Database, DatabaseOptions};
 use fleet_server::infra::system::TokioPace;
+use fleet_server::ports::accounts::{AccountCredential, McAccount};
+use fleet_server::ports::audit::NewAuditEntry;
 use fleet_server::ports::passwords::Passwords;
+use fleet_server::ports::store::Store as _;
 use fleet_startup::signals::{ShutdownSignals, Signal};
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use secrecy::{SecretBox, SecretString};
@@ -52,6 +60,9 @@ pub(crate) struct Server {
     pub(crate) url: ServerUrl,
     /// The server's clock, for sessions, TOTP steps and rate limits alike.
     pub(crate) clock: ManualClock,
+    /// The server's database, for rows no route can make without
+    /// Microsoft: a pending link ([`Server::pending_account`]).
+    db: Database,
     stop: mpsc::Sender<Signal>,
     running: JoinSet<Exit>,
     _dir: TempDir,
@@ -101,6 +112,7 @@ impl Server {
             pace: Arc::new(TokioPace),
         };
         let app = app_with(&config, &database, keys, lockout_key, passwords, ports);
+        let db = database.clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = ServerUrl::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
         let (stop, signals) = ChannelSignals::new();
@@ -115,6 +127,7 @@ impl Server {
         Self {
             url,
             clock,
+            db,
             stop,
             running,
             _dir: dir,
@@ -199,6 +212,59 @@ impl Server {
         self.next_step();
     }
 
+    /// A Member named `username`, invited by `owner` (stepped up within 5
+    /// minutes) and logged in with 2FA: the client and the user's ID.
+    pub(crate) async fn member<S: SessionStore>(
+        &self,
+        owner: &Client<S>,
+        username: &str,
+    ) -> (Client<MemoryStore>, UserId) {
+        let invite = owner
+            .create_invite(&CreateInviteRequest {
+                role: UserRole::Member,
+            })
+            .await
+            .unwrap();
+        let (client, _) = self.client();
+        let registered = client
+            .register(&register(invite.code.expose(), username, PASSWORD))
+            .await
+            .unwrap();
+        self.first_login(&client, username).await;
+        (client, registered.id)
+    }
+
+    /// A Microsoft account of `owner`'s, numbered `n`, waiting for
+    /// approval, as a Member's link leaves it. It's written straight to
+    /// the database, since a link needs Microsoft; its envelope is opaque
+    /// bytes, which approving or refusing never opens.
+    pub(crate) async fn pending_account(&self, owner: UserId, n: u8) -> AccountId {
+        let now = self.clock.now();
+        let id = AccountId::new_v7(now, [n; 10]).unwrap();
+        let account = McAccount {
+            id,
+            owner,
+            name: format!("AfkBot{n}").parse().unwrap(),
+            created_at: now,
+            credential: AccountCredential::Microsoft {
+                uuid: format!("00000000-0000-4000-8000-0000000000{n:02x}")
+                    .parse()
+                    .unwrap(),
+                refresh_envelope: vec![n; 61],
+                status: AccountStatus::Pending,
+            },
+        };
+        let mut tx = self.db.write().await.unwrap();
+        tx.accounts().insert(&account).await.unwrap();
+        let entry = NewAuditEntry::new(
+            now,
+            AuditAction::try_from("test.account_setup").unwrap(),
+            AuditOutcome::Success,
+        );
+        tx.commit(entry).await.unwrap();
+        id
+    }
+
     /// The Owner, logged in with 2FA: the client, its store and the app.
     pub(crate) async fn owner(&self) -> (Client<MemoryStore>, MemoryStore, Totp) {
         let (client, store) = self.client();
@@ -259,7 +325,9 @@ pub(crate) fn is_api(error: &ClientError, status: u16, code: ErrorCode) -> bool 
 }
 
 /// The server's config: production defaults, its database in `dir`. The
-/// vault's key comes from memory, so its file is never read.
+/// vault's key comes from memory, so its file is never read. One
+/// exception: offline accounts are on, since they're the only accounts
+/// these tests can create without Microsoft (ADR-0018, group F).
 fn config(dir: &TempDir) -> ServerConfig {
     ServerConfig {
         dev_mode: false,
@@ -282,7 +350,10 @@ fn config(dir: &TempDir) -> ServerConfig {
             key_files: BTreeMap::from([(1, dir.path().join("vault-key-1"))]),
             active_key_id: 1,
         },
-        accounts: AccountsConfig::default(),
+        accounts: AccountsConfig {
+            allow_offline: true,
+            ..AccountsConfig::default()
+        },
     }
 }
 
