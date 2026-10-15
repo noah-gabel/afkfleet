@@ -29,6 +29,8 @@ fleet-api-types = { path = "crates/fleet-api-types" }
 fleet-client = { path = "crates/fleet-client" }
 fleet-core = { path = "crates/fleet-core" }
 fleet-mc = { path = "crates/fleet-mc" }
+# fleet-proto: the control plane's wire format and its conversions to core types (ADR-0019).
+fleet-proto = { path = "crates/fleet-proto" }
 fleet-runtime = { path = "crates/fleet-runtime" }
 # fleet-server: fleet-client's integration tests run it in-process (ADR-0017).
 fleet-server = { path = "crates/fleet-server" }
@@ -116,6 +118,14 @@ metrics = "0.24.6"
 # lockfile, and nothing uses them for secrets. One `metrics` 0.24.x in the tree keeps
 # the runtime and the exporter on the same recorder (ADR-0014).
 metrics-exporter-prometheus = { version = "0.18.3", default-features = false }
+# prost: the control plane's protobuf messages, which fleet-proto's build script generates.
+# Its defaults (`derive`, `std`) are what the generated code needs. Already in Cargo.lock
+# through testcontainers' Docker client (ADR-0019).
+prost = "0.14.4"
+# protox: fleet-proto's build script compiles the .proto files with it, in pure Rust, so no
+# system protoc is needed. Build-only; it brings prost-types, which nothing uses at run
+# time (ADR-0019).
+protox = "0.9.1"
 # qrcodegen: the QR code of a TOTP enrollment's otpauth URI; fleet-server writes its
 # modules as an SVG itself, so no image codec joins the tree. It has no dependencies
 # (ADR-0016).
@@ -181,6 +191,17 @@ tokio = "1.53.2"
 # fleet-server enables `rt` for the session-token service's `TaskTracker`, which pulls in only
 # futures-util, already in its tree (ADR-0018).
 tokio-util = { version = "0.7.19", default-features = false }
+# tonic: the control plane's gRPC. Without default features; fleet-proto enables only
+# `codegen`, for the generated client and server. Its TLS features are fixed here when a
+# member first serves or connects: `tls-aws-lc` and `tls-connect-info`, never `tls-ring`
+# or `tls-webpki-roots` (ADR-0019).
+tonic = { version = "0.14.6", default-features = false }
+# tonic-prost: the prost codec the generated services name (ADR-0019).
+tonic-prost = "0.14.6"
+# tonic-prost-build: fleet-proto's build script. Without default features: no transport
+# helpers (the build sets `build_transport(false)`) and no `cleanup-markdown`
+# (pulldown-cmark), since the .proto comments are plain sentences (ADR-0019).
+tonic-prost-build = { version = "0.14.6", default-features = false }
 # tower: fleet-server builds its middleware stack with `ServiceBuilder` (no feature); its
 # handler tests enable `util` for `ServiceExt::oneshot` (ADR-0015).
 tower = { version = "0.5.3", default-features = false }

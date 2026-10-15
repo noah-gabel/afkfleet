@@ -1,0 +1,244 @@
+// A bot's spec, state and status as they cross the wire. Times are
+// milliseconds since the Unix epoch, and IDs are UUIDs as 16 bytes (ADR-0019).
+syntax = "proto3";
+
+package fleet.v1;
+
+import "fleet/v1/common.proto";
+import "fleet/v1/mode.proto";
+
+// What a bot should be doing, as the server decided it.
+message BotSpec {
+  // The bot's ID, a version 7 UUID.
+  bytes id = 1;
+  // The account it plays as. It never changes for a bot.
+  BotAccount account = 2;
+  // The server it joins, as host and optional port.
+  string server = 3;
+  // What it does while it's online.
+  ModeDefinition mode = 4;
+  // Whether it should run.
+  DesiredRunState desired = 5;
+  // Kick texts that count as a duplicate login on its server.
+  repeated string conflict_texts = 6;
+}
+
+// The account a bot plays as.
+message BotAccount {
+  // The account.
+  oneof account {
+    // An offline-mode account's name.
+    string offline_username = 1;
+    // A linked account's ID, a version 7 UUID.
+    bytes online_account_id = 2;
+  }
+}
+
+// Whether a bot should run.
+enum DesiredRunState {
+  // Not set; never valid.
+  DESIRED_RUN_STATE_UNSPECIFIED = 0;
+  // The bot should be online.
+  DESIRED_RUN_STATE_RUNNING = 1;
+  // The bot should be offline.
+  DESIRED_RUN_STATE_STOPPED = 2;
+}
+
+// Where a bot is in its lifecycle. An attempt counts from 1.
+message BotState {
+  // The state.
+  oneof state {
+    // Not running, and not asked to.
+    Unit stopped = 1;
+    // Waiting for session credentials.
+    AwaitingSession awaiting_session = 2;
+    // Connecting to the Minecraft server.
+    Connecting connecting = 3;
+    // Joined the server.
+    Online online = 4;
+    // Waiting before the next attempt.
+    Backoff backoff = 5;
+    // Stopped by itself because a human is playing on the account.
+    PauseReason paused = 6;
+    // Stopped by itself because retrying won't help.
+    FailReason failed = 7;
+    // The session is being torn down.
+    Stopping stopping = 8;
+  }
+
+  // Waiting for session credentials.
+  message AwaitingSession {
+    // The attempt the session is for.
+    uint32 attempt = 1;
+    // Whether a fresh session was requested.
+    bool fresh = 2;
+  }
+
+  // Connecting to the Minecraft server.
+  message Connecting {
+    // The current attempt.
+    uint32 attempt = 1;
+    // Whether this attempt already uses a fresh session.
+    bool auth_retried = 2;
+  }
+
+  // Joined the server.
+  message Online {
+    // When the bot joined.
+    optional int64 since_unix_ms = 1;
+    // The attempt that got the bot online.
+    uint32 attempt = 2;
+  }
+
+  // Waiting before the next attempt.
+  message Backoff {
+    // The attempt that failed.
+    uint32 attempt = 1;
+  }
+
+  // The session is being torn down.
+  message Stopping {
+    // Whether the bot starts again once the teardown has finished.
+    bool restart = 1;
+  }
+}
+
+// Why a bot paused.
+enum PauseReason {
+  // Not set; never valid.
+  PAUSE_REASON_UNSPECIFIED = 0;
+  // Someone else logged in to the account.
+  PAUSE_REASON_DUPLICATE_LOGIN = 1;
+}
+
+// Why a bot failed.
+enum FailReason {
+  // Not set; never valid.
+  FAIL_REASON_UNSPECIFIED = 0;
+  // The server banned the account or its address.
+  FAIL_REASON_BANNED = 1;
+  // The account isn't on the server's whitelist.
+  FAIL_REASON_NOT_WHITELISTED = 2;
+  // The server runs another Minecraft version.
+  FAIL_REASON_WRONG_VERSION = 3;
+  // The account is banned from multiplayer everywhere.
+  FAIL_REASON_ACCOUNT_BANNED = 4;
+  // The account's settings don't allow multiplayer.
+  FAIL_REASON_MULTIPLAYER_DISABLED = 5;
+  // The server rejected the session, even a fresh one.
+  FAIL_REASON_AUTH = 6;
+  // No session can be issued for the account.
+  FAIL_REASON_SESSION_DENIED = 7;
+  // The bot's actor crashed too often.
+  FAIL_REASON_CRASH_LOOP = 8;
+}
+
+// A paused or failed state, which the server stores and sends back when it
+// assigns the bot, so the bot never connects over a human playing.
+message StickyState {
+  // The state.
+  oneof state {
+    // The bot paused.
+    PauseReason paused = 1;
+    // The bot failed.
+    FailReason failed = 2;
+  }
+}
+
+// An alert for a human: the bot paused or failed.
+message BotNotification {
+  // The alert.
+  oneof notification {
+    // The bot paused; resuming connects it again.
+    PauseReason paused = 1;
+    // The bot failed; resetting connects it again.
+    FailReason failed = 2;
+  }
+}
+
+// Why a Minecraft session ended.
+message DisconnectReason {
+  // The reason.
+  oneof reason {
+    // The server kicked the bot.
+    Kick kicked = 1;
+    // The connection closed without a reason.
+    Unit connection_closed = 2;
+    // Connecting failed.
+    ConnectFailure connect_failed = 3;
+    // The session server rejected the bot's token.
+    Unit auth_rejected = 4;
+    // The session server refused the account for good.
+    AccountRestriction account_restricted = 5;
+    // The session server couldn't confirm the join this time.
+    SessionServerFailure session_server_failed = 6;
+    // The session's runner died.
+    Unit session_crashed = 7;
+    // No game tick for the watchdog timeout.
+    Unit watchdog_timeout = 8;
+    // No packet from the server for the liveness timeout.
+    Unit liveness_timeout = 9;
+    // The bot died and couldn't be respawned.
+    Unit respawn_failed = 10;
+  }
+}
+
+// A kick the server sent. Its text came from the Minecraft server.
+message Kick {
+  // The translation key, if the kick had one.
+  optional string key = 1;
+  // The kick message.
+  string message = 2;
+}
+
+// Why connecting failed.
+enum ConnectFailure {
+  // Not set; never valid.
+  CONNECT_FAILURE_UNSPECIFIED = 0;
+  // The server refused the connection.
+  CONNECT_FAILURE_REFUSED = 1;
+  // Connecting timed out.
+  CONNECT_FAILURE_TIMED_OUT = 2;
+  // The host name couldn't be resolved.
+  CONNECT_FAILURE_UNRESOLVABLE = 3;
+  // No session could be started on the agent.
+  CONNECT_FAILURE_HOST_UNAVAILABLE = 4;
+  // Any other network error.
+  CONNECT_FAILURE_OTHER = 5;
+}
+
+// Why the session server refused the account for good.
+enum AccountRestriction {
+  // Not set; never valid.
+  ACCOUNT_RESTRICTION_UNSPECIFIED = 0;
+  // The account is banned from multiplayer.
+  ACCOUNT_RESTRICTION_BANNED = 1;
+  // The account's settings don't allow multiplayer.
+  ACCOUNT_RESTRICTION_MULTIPLAYER_DISABLED = 2;
+}
+
+// Why the session server couldn't confirm a join this time.
+enum SessionServerFailure {
+  // Not set; never valid.
+  SESSION_SERVER_FAILURE_UNSPECIFIED = 0;
+  // It couldn't be reached.
+  SESSION_SERVER_FAILURE_UNREACHABLE = 1;
+  // It turned the join down for now.
+  SESSION_SERVER_FAILURE_RATE_LIMITED = 2;
+  // It didn't answer in time.
+  SESSION_SERVER_FAILURE_TIMED_OUT = 3;
+  // It answered with something unknown.
+  SESSION_SERVER_FAILURE_UNEXPECTED = 4;
+}
+
+// A bot's status at one point in time.
+message BotSnapshot {
+  // The bot's ID, a version 7 UUID.
+  bytes bot_id = 1;
+  // Where the bot is in its lifecycle.
+  BotState state = 2;
+  // When the bot entered that state.
+  optional int64 since_unix_ms = 3;
+  // Why the bot's last session ended, if one has.
+  DisconnectReason last_disconnect = 4;
+}

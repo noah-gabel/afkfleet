@@ -1,0 +1,110 @@
+// A bot's mode as it crosses the wire: the steps of a validated mode, which the
+// receiver checks again with the mode rules of fleet-core (ADR-0019).
+syntax = "proto3";
+
+package fleet.v1;
+
+import "fleet/v1/common.proto";
+
+// What a bot does while it's online.
+message ModeDefinition {
+  // The steps, in the order they run when several are due at once.
+  repeated Step steps = 1;
+}
+
+// One entry of a mode: what the bot does, when, and how likely.
+message Step {
+  // What the bot does.
+  Action action = 1;
+  // When it does it.
+  Schedule schedule = 2;
+  // The chance in percent, 1 to 100, that the step runs each time it's due.
+  uint32 probability = 3;
+}
+
+// What a step makes the bot do. Angles are in degrees.
+message Action {
+  // The action.
+  oneof action {
+    // Look in a fixed direction.
+    Look look = 1;
+    // Turn by a random amount.
+    RotateRandom rotate_random = 2;
+    // Jump once.
+    Unit jump = 3;
+    // Start or stop sneaking.
+    Sneak sneak = 4;
+    // Swing the main arm.
+    Unit swing_arm = 5;
+    // Use the held item.
+    Unit use_item = 6;
+    // Hold the use button down, or let go of it.
+    HoldUse hold_use = 7;
+    // Attack the entity the bot looks at.
+    Unit attack_facing_entity = 8;
+    // Select a hotbar slot.
+    SelectHotbarSlot select_hotbar_slot = 9;
+    // Send a chat message or a command.
+    SendChat send_chat = 10;
+  }
+
+  // A fixed direction.
+  message Look {
+    // Degrees, -180 to 180.
+    float yaw = 1;
+    // Degrees, -90 to 90.
+    float pitch = 2;
+  }
+
+  // The largest random turn in either direction.
+  message RotateRandom {
+    // Degrees, 0 to 180.
+    float max_yaw = 1;
+    // Degrees, 0 to 90.
+    float max_pitch = 2;
+  }
+
+  // Whether the bot sneaks from now on.
+  message Sneak {
+    // Sneaking or not.
+    bool on = 1;
+  }
+
+  // Whether the bot holds the use button from now on.
+  message HoldUse {
+    // Holding or not.
+    bool on = 1;
+  }
+
+  // A hotbar slot, 0 to 8 from left to right.
+  message SelectHotbarSlot {
+    // The slot.
+    uint32 slot = 1;
+  }
+
+  // A chat message or a command, in its validated form.
+  message SendChat {
+    // The text.
+    string message = 1;
+  }
+}
+
+// When a step runs.
+message Schedule {
+  // The schedule.
+  oneof schedule {
+    // Once, right after the bot joins.
+    Unit at_start = 1;
+    // Again and again while the bot is online.
+    Every every = 2;
+  }
+
+  // A repeating schedule. Each gap is uniform between the interval and the
+  // interval plus the jitter.
+  message Every {
+    // The shortest gap, in milliseconds.
+    uint64 interval_ms = 1;
+    // How much longer a gap may be, in milliseconds.
+    uint64 jitter_ms = 2;
+  }
+}
