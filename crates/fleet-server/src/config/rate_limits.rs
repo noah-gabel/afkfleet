@@ -1,5 +1,6 @@
 //! `[rate_limits]`: §7.4's request limits (Plan.md P7.10, Appendix A,
-//! ADR-0016). The chat keys and `ws_connections_per_user` arrive with P11.
+//! ADR-0016), and the Microsoft link flows' caps (P9.4, ADR-0018). The chat
+//! keys and `ws_connections_per_user` arrive with P11.
 
 use core::num::NonZeroU32;
 use core::time::Duration;
@@ -72,6 +73,32 @@ pub struct RateLimitConfig {
     /// Every authed request, per user (`per_user_per_sec`,
     /// `per_user_burst`).
     pub per_user: Rate,
+    /// The Microsoft link flows (`link_flows_total`,
+    /// `link_flows_per_user_per_day`).
+    pub link_flows: LinkFlowLimits,
+}
+
+/// `[rate_limits]`'s caps on Microsoft link flows (P9.4, ADR-0018). Each
+/// user runs one flow at a time, a fixed rule: a new start replaces their
+/// waiting flow.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LinkFlowLimits {
+    /// How many flows run at once on the whole server
+    /// (`link_flows_total`); one more start is refused as busy.
+    pub total: NonZeroU32,
+    /// How many flows one user starts in any 24 hours
+    /// (`link_flows_per_user_per_day`), counted from the audit log.
+    pub per_user_per_day: NonZeroU32,
+}
+
+impl Default for LinkFlowLimits {
+    /// §7.4's: 3 at once, 10 a day per user.
+    fn default() -> Self {
+        Self {
+            total: nonzero(3),
+            per_user_per_day: nonzero(10),
+        }
+    }
 }
 
 impl RateLimitConfig {
@@ -95,6 +122,10 @@ impl RateLimitConfig {
         min: 1,
         max: 10_000,
     };
+    /// `link_flows_total`: 1 to 16. Default 3.
+    pub const LINK_FLOWS_TOTAL: Bounds = Bounds { min: 1, max: 16 };
+    /// `link_flows_per_user_per_day`: 1 to 100. Default 10.
+    pub const LINK_FLOWS_PER_USER_PER_DAY: Bounds = Bounds { min: 1, max: 100 };
 }
 
 impl Default for RateLimitConfig {
@@ -106,12 +137,13 @@ impl Default for RateLimitConfig {
             refresh: Rate::per_minute(nonzero(30)),
             register: Rate::per_hour(nonzero(5)),
             per_user: Rate::per_second(nonzero(10), nonzero(30)),
+            link_flows: LinkFlowLimits::default(),
         }
     }
 }
 
 /// `n` as a `NonZeroU32`, or 1 for 0, which no default is.
-const fn nonzero(n: u32) -> NonZeroU32 {
+pub(super) const fn nonzero(n: u32) -> NonZeroU32 {
     match NonZeroU32::new(n) {
         Some(n) => n,
         None => NonZeroU32::MIN,
@@ -153,6 +185,8 @@ mod tests {
             defaults.per_user,
             Rate::per_second(nonzero(10), nonzero(30))
         );
+        assert_eq!(defaults.link_flows.total.get(), 3);
+        assert_eq!(defaults.link_flows.per_user_per_day.get(), 10);
     }
 
     #[test]

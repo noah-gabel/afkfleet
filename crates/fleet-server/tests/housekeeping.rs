@@ -22,9 +22,10 @@ use fleet_core::id::{LoginStepId, UserId};
 use fleet_core::system::Clock as _;
 use fleet_core::value::Username;
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
+use fleet_server::app::link_flows::LinkFlows;
 use fleet_server::app::lockout::LockoutService;
 use fleet_server::cli::housekeeping::Housekeeping;
-use fleet_server::config::{LogConfig, LogFormat, Rate, RateLimitConfig};
+use fleet_server::config::{LinkFlowLimits, LogConfig, LogFormat, Rate, RateLimitConfig};
 use fleet_server::http::rate_limit::RateLimits;
 use fleet_server::http::routes::RateClass;
 use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
@@ -85,6 +86,7 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
             refresh: one,
             register: one,
             per_user: one,
+            link_flows: LinkFlowLimits::default(),
         },
         Arc::new(clock.clone()),
     );
@@ -99,7 +101,12 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
         Arc::new(Sha256Tokens::new(Arc::new(SeededRandom::new(3)))),
     );
     Setup {
-        housekeeping: Housekeeping::new(limits.clone(), lockout.clone(), challenges.clone()),
+        housekeeping: Housekeeping::new(
+            limits.clone(),
+            lockout.clone(),
+            challenges.clone(),
+            LinkFlows::new(Arc::new(clock.clone())),
+        ),
         limits,
         lockout,
         challenges,

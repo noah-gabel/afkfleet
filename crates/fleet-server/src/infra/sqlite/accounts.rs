@@ -9,9 +9,9 @@
 //! that doesn't describe a status doesn't read back either.
 
 use fleet_core::account::{AccountError, AccountKind, AccountStatus, RefusalReason};
-use fleet_core::id::AccountId;
+use fleet_core::id::{AccountId, UserId};
 use fleet_core::value::{McUsername, McUuid};
-use sqlx::SqliteConnection;
+use sqlx::{SqliteConnection, SqlitePool};
 
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::{store_error, unique_violation};
@@ -62,6 +62,35 @@ where
     .map_err(store_error)?
     .map(account_from_row)
     .transpose()
+}
+
+/// How many accounts `owner` owns, of any kind and status.
+pub(super) async fn count_owned_by<'c, E>(executor: E, owner: UserId) -> Result<u32, StoreError>
+where
+    E: sqlx::SqliteExecutor<'c>,
+{
+    let owner = id_text(owner);
+    let count = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "count!: i64" FROM mc_accounts WHERE owner_user_id = ?"#,
+        owner
+    )
+    .fetch_one(executor)
+    .await
+    .map_err(store_error)?;
+    // A count is never negative, and nobody owns 4 billion accounts.
+    Ok(u32::try_from(count).unwrap_or(u32::MAX))
+}
+
+/// How many offline accounts exist.
+pub(super) async fn count_offline(pool: &SqlitePool) -> Result<u64, StoreError> {
+    let count = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "count!: i64" FROM mc_accounts WHERE kind = 'offline'"#
+    )
+    .fetch_one(pool)
+    .await
+    .map_err(store_error)?;
+    // A count is never negative.
+    Ok(u64::try_from(count).unwrap_or_default())
 }
 
 /// Inserts `account`. A taken Microsoft account or offline name is

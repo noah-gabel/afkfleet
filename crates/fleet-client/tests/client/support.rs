@@ -18,13 +18,15 @@ use fleet_core::value::Username;
 use fleet_server::app::users::UserService;
 use fleet_server::cli::serve::{Exit, ServerPorts, ShutdownTimeouts, app_with, serve};
 use fleet_server::config::{
-    Argon2Params, AuthConfig, DatabaseConfig, HttpConfig, LogConfig, LogFormat, RateLimitConfig,
-    ServerConfig, VaultConfig,
+    AccountsConfig, Argon2Params, AuthConfig, DatabaseConfig, HttpConfig, LogConfig, LogFormat,
+    RateLimitConfig, ServerConfig, VaultConfig,
 };
 use fleet_server::http::rate_limit::TrustedProxies;
 use fleet_server::infra::crypto::passwords::Argon2Passwords;
 use fleet_server::infra::crypto::vault::{DerivedKey, VaultKeys};
+use fleet_server::infra::msauth::ReqwestMicrosoftAuth;
 use fleet_server::infra::sqlite::{self, DatabaseOptions};
+use fleet_server::infra::system::TokioPace;
 use fleet_server::ports::passwords::Passwords;
 use fleet_startup::signals::{ShutdownSignals, Signal};
 use fleet_testkit::system::{ManualClock, SeededRandom};
@@ -94,6 +96,9 @@ impl Server {
             clock: Arc::new(clock.clone()),
             limiter_clock: Arc::new(clock.clone()),
             random: Arc::new(random),
+            // Never called: these tests link no Microsoft account.
+            microsoft: Arc::new(ReqwestMicrosoftAuth::new(Arc::new(clock.clone())).unwrap()),
+            pace: Arc::new(TokioPace),
         };
         let app = app_with(&config, &database, keys, lockout_key, passwords, ports);
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -277,6 +282,7 @@ fn config(dir: &TempDir) -> ServerConfig {
             key_files: BTreeMap::from([(1, dir.path().join("vault-key-1"))]),
             active_key_id: 1,
         },
+        accounts: AccountsConfig::default(),
     }
 }
 

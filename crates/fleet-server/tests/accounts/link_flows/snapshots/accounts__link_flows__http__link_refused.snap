@@ -1,0 +1,8 @@
+---
+source: crates/fleet-server/tests/accounts/link_flows/http.rs
+expression: redacted(&refused.body)
+---
+{
+  "reason": "xbox_child_account",
+  "status": "refused"
+}

@@ -27,6 +27,7 @@ use core::time::Duration;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use fleet_core::account::RefusalReason;
 use fleet_core::value::{McUsername, McUuid};
 use secrecy::{ExposeSecret as _, SecretString};
 
@@ -164,20 +165,24 @@ impl fmt::Debug for UserCode {
 /// Why a text isn't a valid [`VerificationUri`]. It doesn't carry the text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 #[error(
-    "a verification link is https to www.microsoft.com or microsoft.com, without a user, another port, a query or a fragment"
+    "a verification link is https to www.microsoft.com or microsoft.com, without a user, another port, a query or a fragment, at most 256 characters"
 )]
 pub struct VerificationUriError;
 
 /// The page where the user enters the code. The app opens it (P9.8), so
 /// only an https link to one of [`VerificationUri::HOSTS`] is accepted:
-/// without a user, a port other than 443, a query or a fragment
-/// (ADR-0018).
+/// without a user, a port other than 443, a query or a fragment, and at most
+/// [`VerificationUri::MAX_LEN`] characters as written back, so the link
+/// flow's answer always holds it whole (ADR-0018).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VerificationUri(String);
 
 impl VerificationUri {
     /// The hosts the link may name.
     pub const HOSTS: [&str; 2] = ["www.microsoft.com", "microsoft.com"];
+
+    /// The longest link, in characters (it's ASCII once parsed).
+    pub const MAX_LEN: usize = 256;
 
     /// The link, as parsed and written back.
     #[must_use]
@@ -199,7 +204,8 @@ impl TryFrom<&str> for VerificationUri {
             && url.password().is_none()
             && url.port().is_none()
             && url.query().is_none()
-            && url.fragment().is_none();
+            && url.fragment().is_none()
+            && url.as_str().len() <= Self::MAX_LEN;
         if allowed {
             Ok(Self(url.as_str().to_owned()))
         } else {
@@ -451,6 +457,21 @@ pub enum XboxRefusal {
 }
 
 impl XboxRefusal {
+    /// The reason an account refused this way is stored with, and Xbox
+    /// Live's code for [`XboxRefusal::Other`], which goes into the audit
+    /// log only (P9.4, P9.5).
+    #[must_use]
+    pub const fn reason(self) -> (RefusalReason, Option<u32>) {
+        match self {
+            Self::Banned => (RefusalReason::XboxBanned, None),
+            Self::NoXboxProfile => (RefusalReason::XboxNoXboxProfile, None),
+            Self::CountryUnavailable => (RefusalReason::XboxCountryUnavailable, None),
+            Self::AdultVerification => (RefusalReason::XboxAdultVerification, None),
+            Self::ChildAccount => (RefusalReason::XboxChildAccount, None),
+            Self::Other { xerr } => (RefusalReason::XboxOther, Some(xerr)),
+        }
+    }
+
     /// The refusal `xerr` means.
     #[must_use]
     pub const fn from_xerr(xerr: u32) -> Self {
@@ -746,7 +767,54 @@ mod tests {
     fn the_link_error_names_the_rule() {
         assert_eq!(
             VerificationUriError.to_string(),
-            "a verification link is https to www.microsoft.com or microsoft.com, without a user, another port, a query or a fragment"
+            "a verification link is https to www.microsoft.com or microsoft.com, without a user, another port, a query or a fragment, at most 256 characters"
+        );
+    }
+
+    /// An allowed link of exactly `len` characters.
+    fn link_of(len: usize) -> String {
+        let base = "https://www.microsoft.com/";
+        format!("{base}{}", "a".repeat(len - base.len()))
+    }
+
+    #[test]
+    fn a_link_of_256_characters_is_accepted() {
+        let link = link_of(VerificationUri::MAX_LEN);
+
+        assert_eq!(VerificationUri::MAX_LEN, 256);
+        assert_eq!(
+            VerificationUri::try_from(link.as_str()).unwrap().as_str(),
+            link
+        );
+    }
+
+    #[test]
+    fn a_longer_link_is_refused() {
+        let link = link_of(VerificationUri::MAX_LEN + 1);
+
+        assert_eq!(
+            VerificationUri::try_from(link.as_str()),
+            Err(VerificationUriError)
+        );
+    }
+
+    #[test]
+    fn the_length_is_the_written_back_links() {
+        // The text sent is 4 characters longer (`:443`), the link kept is
+        // exactly the longest.
+        let host = "https://www.microsoft.com";
+        let path = format!("/{}", "a".repeat(VerificationUri::MAX_LEN - host.len() - 1));
+
+        assert_eq!(
+            VerificationUri::try_from(format!("{host}:443{path}").as_str())
+                .unwrap()
+                .as_str()
+                .len(),
+            VerificationUri::MAX_LEN
+        );
+        assert_eq!(
+            VerificationUri::try_from(format!("{host}:443{path}a").as_str()),
+            Err(VerificationUriError)
         );
     }
 
@@ -827,6 +895,30 @@ mod tests {
     #[case::zero(0, XboxRefusal::Other { xerr: 0 })]
     fn xerr_codes_map_to_refusals(#[case] xerr: u32, #[case] refusal: XboxRefusal) {
         assert_eq!(XboxRefusal::from_xerr(xerr), refusal);
+    }
+
+    #[rstest]
+    #[case::banned(XboxRefusal::Banned, RefusalReason::XboxBanned)]
+    #[case::no_profile(XboxRefusal::NoXboxProfile, RefusalReason::XboxNoXboxProfile)]
+    #[case::country(XboxRefusal::CountryUnavailable, RefusalReason::XboxCountryUnavailable)]
+    #[case::adult(XboxRefusal::AdultVerification, RefusalReason::XboxAdultVerification)]
+    #[case::child(XboxRefusal::ChildAccount, RefusalReason::XboxChildAccount)]
+    fn every_named_xbox_refusal_has_its_reason_without_a_code(
+        #[case] refusal: XboxRefusal,
+        #[case] reason: RefusalReason,
+    ) {
+        assert_eq!(refusal.reason(), (reason, None));
+    }
+
+    #[test]
+    fn another_xbox_refusal_keeps_its_code() {
+        assert_eq!(
+            XboxRefusal::Other {
+                xerr: 2_148_916_262
+            }
+            .reason(),
+            (RefusalReason::XboxOther, Some(2_148_916_262))
+        );
     }
 
     // --- Texts -------------------------------------------------------------

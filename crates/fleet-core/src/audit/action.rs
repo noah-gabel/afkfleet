@@ -219,6 +219,20 @@ audit_actions! {
     /// actor or IP. Target: the account. Metadata: `status` and
     /// `previous_status`; never either UUID.
     SECURITY_ACCOUNT_PROFILE_MISMATCH = "security.account_profile_mismatch";
+
+    /// A user started a Microsoft link flow (P9.4, ADR-0018): Microsoft
+    /// answered with a device code, and the start passed every cap. Only
+    /// accepted starts are recorded, and the daily cap counts these entries.
+    /// Outcome: Success. Target: the user. Metadata: `flow` (the flow's ID).
+    ACCOUNT_START_LINK = "account.start_link";
+
+    /// A user linked a Minecraft account (P9.4, P9.7, ADR-0018), in the commit
+    /// that stores it. Success: target the new account; metadata `kind`,
+    /// `name`, `status`, and for a Microsoft account `uuid` and `flow`.
+    /// Failure (nothing stored): target the user; metadata `reason` (`taken`:
+    /// the Minecraft account is already linked, or `over_quota`), `kind`,
+    /// `name`, and for a Microsoft account `uuid` and `flow`.
+    ACCOUNT_LINK = "account.link";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

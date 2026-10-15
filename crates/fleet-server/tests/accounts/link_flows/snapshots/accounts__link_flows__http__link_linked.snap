@@ -1,0 +1,10 @@
+---
+source: crates/fleet-server/tests/accounts/link_flows/http.rs
+expression: redacted(&linked.body)
+---
+{
+  "account_id": "[account]",
+  "account_status": "pending",
+  "name": "AfkBot1",
+  "status": "linked"
+}

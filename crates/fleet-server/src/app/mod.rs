@@ -2,6 +2,8 @@
 //! (Plan.md §4, ADR-0015). They hold the ports as `Arc<dyn …>` and read the
 //! time and randomness only through fleet-core's `Clock` and `SecureRandom`.
 //!
+//! - [`accounts`]: the linked Minecraft accounts' use cases beside the link
+//!   flow: creating an offline account (P9.7).
 //! - [`audit`]: stamping audit entries, recording the ones that change
 //!   nothing, and listing the log.
 //! - [`auth`]: sessions and their tokens: issuing, refreshing with reuse
@@ -17,6 +19,8 @@
 //!   authenticator, replacing it, and checking a code at login (P7.7).
 //! - [`invites`]: creating, listing and revoking the invites to register
 //!   (P7.9).
+//! - [`link_flows`]: linking a Microsoft account through Microsoft's
+//!   device-code flow, held in memory and polled in the background (P9.4).
 //! - [`session_tokens`]: Minecraft session tokens for linked Microsoft
 //!   accounts, one refresh per account at a time (P9.5).
 //! - [`users`]: creating the Owner (P7.5), the admins' list and changes
@@ -24,11 +28,13 @@
 //! - [`vault`]: what the vault's keys seal, and re-encrypting the secrets
 //!   under the active key (P9.2).
 
+pub mod accounts;
 pub mod audit;
 pub mod auth;
 pub mod challenges;
 pub mod health;
 pub mod invites;
+pub mod link_flows;
 pub mod lockout;
 pub mod login;
 pub mod mfa;

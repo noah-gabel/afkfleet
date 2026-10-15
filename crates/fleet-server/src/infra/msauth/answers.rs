@@ -465,6 +465,11 @@ mod tests {
         r#""https://example.com/link""#,
         Rule::LinkNotAllowed
     )]
+    #[case::too_long_link(
+        "verification_uri",
+        &format!(r#""https://www.microsoft.com/{}""#, "a".repeat(231)),
+        Rule::LinkNotAllowed
+    )]
     #[case::wrong_type("expires_in", r#""900""#, Rule::NotJson)]
     #[case::negative("interval", "-5", Rule::NotJson)]
     fn a_device_answer_with_a_bad_field_is_refused(

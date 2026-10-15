@@ -7,7 +7,7 @@ use core::time::Duration;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use async_trait::async_trait;
-use fleet_core::id::AccountId;
+use fleet_core::id::{AccountId, UserId};
 use fleet_server::infra::sqlite::Database;
 use fleet_server::ports::accounts::{AccountReads, McAccount};
 use fleet_server::ports::audit::AuditReads;
@@ -223,5 +223,13 @@ impl AccountReads for FlakyStore {
             held.wait().await;
         }
         self.inner.accounts().find(id).await
+    }
+
+    async fn count_owned_by(&self, owner: UserId) -> Result<u32, StoreError> {
+        self.inner.accounts().count_owned_by(owner).await
+    }
+
+    async fn count_offline(&self) -> Result<u64, StoreError> {
+        self.inner.accounts().count_offline().await
     }
 }

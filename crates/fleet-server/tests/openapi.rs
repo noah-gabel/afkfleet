@@ -30,7 +30,7 @@ use fleet_server::config::{HttpConfig, RateLimitConfig};
 use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::openapi::{ApiDocs, OPENAPI_PATH};
 use fleet_server::http::rate_limit::{RateLimits, TrustedProxies};
-use fleet_server::http::router::{AppState, router};
+use fleet_server::http::router::{AppState, Services, router};
 use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
 use fleet_server::infra::crypto::passwords::Argon2Passwords;
 use fleet_server::infra::crypto::recovery_codes::Sha256RecoveryCodes;
@@ -176,15 +176,17 @@ async fn app(db: &Database, docs: ApiDocs) -> Router {
     let mfa = mfa(db);
     let login = login(db, &tokens, &mfa).await;
     let (users, invites) = accounts(db).await;
-    let state = AppState::new(
-        HealthService::new(Arc::new(db.clone())),
+    let state = AppState::new(Services {
+        health: HealthService::new(Arc::new(db.clone())),
         tokens,
         limits,
         mfa,
         login,
         users,
         invites,
-    );
+        link_flows: idle_link_flows(db),
+        accounts: idle_accounts(db),
+    });
     router(state, &http, ids, docs)
         .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))))
 }
@@ -365,6 +367,9 @@ async fn the_document_lists_exactly_the_api_routes(
     assert_eq!(
         paths,
         BTreeSet::from([
+            ("/api/v1/accounts/link", "post"),
+            ("/api/v1/accounts/link/{flow_id}", "get"),
+            ("/api/v1/accounts/offline", "post"),
             ("/api/v1/auth/login", "post"),
             ("/api/v1/auth/login/mfa", "post"),
             ("/api/v1/auth/logout", "post"),
@@ -438,4 +443,60 @@ async fn the_document_names_its_license_and_version_but_no_contact_or_server(
     );
     assert!(document["info"].get("contact").is_none());
     assert!(document.get("servers").is_none());
+}
+
+/// The link flows, which these tests never start (P9.4): a service over
+/// `db` with Microsoft's real client, never called.
+fn idle_link_flows(
+    db: &fleet_server::infra::sqlite::Database,
+) -> fleet_server::app::link_flows::LinkFlowService {
+    use fleet_server::app::link_flows::{LinkFlowPorts, LinkFlowService, LinkFlowSettings};
+    let clock: Arc<dyn fleet_core::system::Clock> =
+        Arc::new(fleet_testkit::system::ManualClock::new(
+            chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+        ));
+    let random: Arc<dyn fleet_core::system::SecureRandom> =
+        Arc::new(fleet_testkit::system::SeededRandom::new(3));
+    let keys = fleet_server::infra::crypto::vault::VaultKeys::from_keys(
+        std::collections::BTreeMap::from([(1, secrecy::SecretBox::new(Box::new([1_u8; 32])))]),
+        1,
+    )
+    .unwrap();
+    LinkFlowService::new(
+        LinkFlowPorts {
+            microsoft: Arc::new(
+                fleet_server::infra::msauth::ReqwestMicrosoftAuth::new(Arc::clone(&clock)).unwrap(),
+            ),
+            vault: Arc::new(fleet_server::infra::crypto::vault::XChaChaVault::new(
+                keys,
+                Arc::clone(&random),
+            )),
+            store: Arc::new(db.clone()),
+            pace: Arc::new(fleet_server::infra::system::TokioPace),
+            clock,
+            random,
+        },
+        LinkFlowSettings {
+            total: core::num::NonZeroU32::MIN,
+            per_user_per_day: core::num::NonZeroU32::MIN,
+            max_per_member: core::num::NonZeroU32::MIN,
+        },
+    )
+}
+
+/// The account service, which these tests never call (P9.7).
+fn idle_accounts(
+    db: &fleet_server::infra::sqlite::Database,
+) -> fleet_server::app::accounts::AccountService {
+    fleet_server::app::accounts::AccountService::new(
+        Arc::new(fleet_testkit::system::ManualClock::new(
+            chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+        )),
+        Arc::new(fleet_testkit::system::SeededRandom::new(4)),
+        Arc::new(db.clone()),
+        fleet_server::app::accounts::AccountSettings {
+            allow_offline: false,
+            max_per_member: core::num::NonZeroU32::MIN,
+        },
+    )
 }

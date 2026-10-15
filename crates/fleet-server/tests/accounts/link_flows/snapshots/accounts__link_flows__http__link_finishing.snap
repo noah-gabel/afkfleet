@@ -1,0 +1,7 @@
+---
+source: crates/fleet-server/tests/accounts/link_flows/http.rs
+expression: redacted(&finishing.body)
+---
+{
+  "status": "finishing"
+}

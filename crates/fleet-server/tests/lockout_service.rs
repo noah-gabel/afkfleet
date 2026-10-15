@@ -633,5 +633,5 @@ fn a_refused_attempt_answers_429_and_a_failure_like_any_store_failure() {
 
     assert!(matches!(locked, ApiError::RateLimited { retry_after } if retry_after == secs(60)));
     assert!(matches!(in_flight, ApiError::RateLimited { retry_after } if retry_after == secs(1)));
-    assert!(matches!(busy, ApiError::Busy));
+    assert!(matches!(busy, ApiError::Busy { .. }));
 }

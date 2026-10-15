@@ -5,6 +5,9 @@
 //!   and the session-token service's setup.
 //! - [`msauth_fake`]: the fake's own behavior.
 //! - [`session_tokens`]: the session-token service (P9.5).
+//! - [`pace_fake`]: the pacing fake's own behavior.
+//! - [`link_flows`]: the link flows and their routes (P9.4).
+//! - [`offline`]: the offline accounts and their route (P9.7).
 //! - [`manual`]: the user's hands-on check against Microsoft, which only the
 //!   user runs (`just test-ms-account`).
 //!
@@ -14,7 +17,10 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
+mod link_flows;
 mod manual;
 mod msauth_fake;
+mod offline;
+mod pace_fake;
 mod session_tokens;
 mod support;

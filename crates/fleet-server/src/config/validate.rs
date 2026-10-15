@@ -7,10 +7,11 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::raw::{RawAuth, RawConfig, RawLog, RawRateLimits, RawVault};
+use super::raw::{RawAccounts, RawAuth, RawConfig, RawLog, RawRateLimits, RawVault};
 use super::{
-    Argon2Params, AuthConfig, Bounds, ConfigError, DatabaseConfig, HttpConfig, KeyPath, LogConfig,
-    LogFilter, LogFormat, ProblemKind, Problems, Rate, RateLimitConfig, ServerConfig, VaultConfig,
+    AccountsConfig, Argon2Params, AuthConfig, Bounds, ConfigError, DatabaseConfig, HttpConfig,
+    KeyPath, LinkFlowLimits, LogConfig, LogFilter, LogFormat, ProblemKind, Problems, Rate,
+    RateLimitConfig, ServerConfig, VaultConfig,
 };
 use fleet_core::auth::{InviteTtl, LockoutPolicy, SessionPolicy};
 
@@ -49,6 +50,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
     let lockout = lockout(&raw.auth, &mut problems);
     let invites = invites(&raw.auth, &mut problems);
     let rate_limits = rate_limits(&raw.rate_limits);
+    let accounts = accounts(&raw.accounts);
 
     let (
         true,
@@ -62,6 +64,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         Some(invites),
         Some(vault),
         Some(rate_limits),
+        Some(accounts),
     ) = (
         problems.is_empty(),
         bind,
@@ -74,6 +77,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         invites,
         vault,
         rate_limits,
+        accounts,
     )
     else {
         return Err(ConfigError::Invalid(problems.sorted()));
@@ -98,6 +102,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         },
         vault,
         rate_limits,
+        accounts,
     })
 }
 
@@ -371,6 +376,19 @@ fn rate_limits(raw: &RawRateLimits) -> Option<RateLimitConfig> {
         refresh: Rate::per_minute(count(raw.refresh_per_ip_per_min)?),
         register: Rate::per_hour(count(raw.register_per_ip_per_hour)?),
         per_user: Rate::per_second(count(raw.per_user_per_sec)?, count(raw.per_user_burst)?),
+        link_flows: LinkFlowLimits {
+            total: count(raw.link_flows_total)?,
+            per_user_per_day: count(raw.link_flows_per_user_per_day)?,
+        },
+    })
+}
+
+/// `[accounts]`, whose ranges garde has checked: none is 0, so only an
+/// error that can't happen remains.
+fn accounts(raw: &RawAccounts) -> Option<AccountsConfig> {
+    Some(AccountsConfig {
+        max_per_member: NonZeroU32::new(raw.max_per_member)?,
+        allow_offline: raw.allow_offline,
     })
 }
 

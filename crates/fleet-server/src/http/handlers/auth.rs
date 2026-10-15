@@ -72,7 +72,7 @@ fn login_error(error: LoginError) -> ApiError {
     match error {
         LoginError::Refused => ApiError::InvalidCredentials,
         LoginError::Lockout(error) => ApiError::from(error),
-        LoginError::Verify(VerifyError::Busy) => ApiError::Busy,
+        LoginError::Verify(VerifyError::Busy) => ApiError::busy(),
         LoginError::Check(CheckError::Store(error))
         | LoginError::Record(RecordFailureError::Store(error))
         | LoginError::Store(error) => ApiError::from(error),
@@ -273,7 +273,7 @@ pub(crate) async fn step_up(
             StepUpError::SessionGone => ApiError::Unauthorized,
             StepUpError::Refused => ApiError::Forbidden,
             StepUpError::Lockout(error) => ApiError::from(error),
-            StepUpError::Verify(VerifyError::Busy) => ApiError::Busy,
+            StepUpError::Verify(VerifyError::Busy) => ApiError::busy(),
             StepUpError::Record(RecordFailureError::Store(error)) | StepUpError::Store(error) => {
                 ApiError::from(error)
             }

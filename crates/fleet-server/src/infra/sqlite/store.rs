@@ -6,6 +6,7 @@ use core::fmt;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::account::AccountStatus;
+use fleet_core::audit::AuditAction;
 use fleet_core::authz::Role;
 use fleet_core::id::{AccountId, InviteId, SessionId, UserId};
 use fleet_core::value::{McUsername, Username};
@@ -120,6 +121,14 @@ impl AccountReads for Reads {
     async fn find(&self, id: AccountId) -> Result<Option<McAccount>, StoreError> {
         accounts::find(&self.pool, id).await
     }
+
+    async fn count_owned_by(&self, owner: UserId) -> Result<u32, StoreError> {
+        accounts::count_owned_by(&self.pool, owner).await
+    }
+
+    async fn count_offline(&self) -> Result<u64, StoreError> {
+        accounts::count_offline(&self.pool).await
+    }
 }
 
 #[async_trait]
@@ -159,6 +168,15 @@ impl AuditReads for Reads {
 
     async fn failed_code_attempts(&self, user: UserId) -> Result<FailedCodeAttempts, StoreError> {
         audit::failed_code_attempts(&self.pool, user).await
+    }
+
+    async fn user_successes_since(
+        &self,
+        user: UserId,
+        action: &AuditAction,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<DateTime<Utc>>, StoreError> {
+        audit::user_successes_since(&self.pool, user, action, since).await
     }
 }
 
@@ -322,6 +340,10 @@ impl AccountWrites for SqliteWriteTx {
         accounts::find(&mut *self.tx, id).await
     }
 
+    async fn count_owned_by(&mut self, owner: UserId) -> Result<u32, StoreError> {
+        accounts::count_owned_by(&mut *self.tx, owner).await
+    }
+
     async fn insert(&mut self, account: &McAccount) -> Result<(), InsertAccountError> {
         accounts::insert(&mut self.tx, account).await
     }
@@ -468,6 +490,15 @@ impl UserWrites for SqliteWriteTx {
 impl AuditWrites for SqliteWriteTx {
     async fn record(&mut self, entry: &NewAuditEntry) -> Result<AuditEntryId, StoreError> {
         audit::record(&mut self.tx, entry).await
+    }
+
+    async fn user_successes_since(
+        &mut self,
+        user: UserId,
+        action: &AuditAction,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<DateTime<Utc>>, StoreError> {
+        audit::user_successes_since(&mut *self.tx, user, action, since).await
     }
 }
 

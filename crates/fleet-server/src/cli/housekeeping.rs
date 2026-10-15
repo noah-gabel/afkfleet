@@ -9,7 +9,9 @@
 //!    shutdown; a failure is a `warn`, and the next run tries again;
 //! 3. the login's expired challenges (mfa and setup tokens) are dropped from
 //!    memory;
-//! 4. one `info` line sums up the requests the limits and the lockout
+//! 4. the link flows that finished more than 15 minutes ago are dropped
+//!    from memory (P9.4);
+//! 5. one `info` line sums up the requests the limits and the lockout
 //!    refused since the last run, only if they refused any. A refused
 //!    request's own line is at `debug`, so a flood adds one line a minute to
 //!    the log, not thousands a second.
@@ -24,6 +26,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::app::challenges::Challenges;
+use crate::app::link_flows::LinkFlows;
 use crate::app::lockout::LockoutService;
 use crate::http::error::chain;
 use crate::http::rate_limit::RateLimits;
@@ -31,23 +34,31 @@ use crate::http::rate_limit::RateLimits;
 /// How often the housekeeping runs.
 pub const INTERVAL: Duration = Duration::from_mins(1);
 
-/// What the housekeeping looks after: the rate limits, the lockout and the
-/// login's challenges.
+/// What the housekeeping looks after: the rate limits, the lockout, the
+/// login's challenges and the link flows.
 #[derive(Debug, Clone)]
 pub struct Housekeeping {
     limits: RateLimits,
     lockout: LockoutService,
     challenges: Challenges,
+    link_flows: LinkFlows,
 }
 
 impl Housekeeping {
-    /// The housekeeping of `limits`, `lockout` and `challenges`.
+    /// The housekeeping of `limits`, `lockout`, `challenges` and
+    /// `link_flows`.
     #[must_use]
-    pub const fn new(limits: RateLimits, lockout: LockoutService, challenges: Challenges) -> Self {
+    pub const fn new(
+        limits: RateLimits,
+        lockout: LockoutService,
+        challenges: Challenges,
+        link_flows: LinkFlows,
+    ) -> Self {
         Self {
             limits,
             lockout,
             challenges,
+            link_flows,
         }
     }
 
@@ -71,6 +82,10 @@ impl Housekeeping {
         match self.challenges.purge_expired() {
             0 => {}
             dropped => debug!(dropped, "expired login challenges were dropped"),
+        }
+        match self.link_flows.purge_finished() {
+            0 => {}
+            dropped => debug!(dropped, "finished link flows were dropped"),
         }
         let limits = self.limits.take_refusals();
         let lockout = self.lockout.take_refusals();

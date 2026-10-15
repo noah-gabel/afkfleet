@@ -78,8 +78,9 @@ use crate::ports::store::StoreError;
 /// response, always with a server-generated ID.
 pub const REQUEST_ID_HEADER: HeaderName = HeaderName::from_static("x-request-id");
 
-/// How long a `busy` response asks the client to wait: a busy database
-/// clears well within the pools' 5 s acquire timeout.
+/// How long a `busy` response asks the client to wait unless it says
+/// otherwise ([`ApiError::busy`]): a busy database clears well within the
+/// pools' 5 s acquire timeout, and so does a full password limiter.
 pub const BUSY_RETRY_AFTER: Duration = Duration::from_secs(1);
 
 /// The most characters of an internal error's source chain in the log.
@@ -145,10 +146,14 @@ pub enum ApiError {
     /// the fixed message.
     #[error("the server failed")]
     Internal(#[source] Box<dyn Error + Send + Sync>),
-    /// The server is busy, e.g. the database (503). The client may retry
-    /// after [`BUSY_RETRY_AFTER`].
+    /// The server is busy, e.g. the database or every link flow's place
+    /// (503). The client may retry after `retry_after`, mostly
+    /// [`BUSY_RETRY_AFTER`] ([`ApiError::busy`]).
     #[error("the server is busy")]
-    Busy,
+    Busy {
+        /// When the client may try again; sent in whole seconds, rounded up.
+        retry_after: Duration,
+    },
 }
 
 impl ApiError {
@@ -156,6 +161,15 @@ impl ApiError {
     /// shown to the client.
     pub fn internal(source: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
         Self::Internal(source.into())
+    }
+
+    /// The server is busy for a moment: the client may retry after
+    /// [`BUSY_RETRY_AFTER`].
+    #[must_use]
+    pub const fn busy() -> Self {
+        Self::Busy {
+            retry_after: BUSY_RETRY_AFTER,
+        }
     }
 
     /// The error's code.
@@ -176,7 +190,7 @@ impl ApiError {
             Self::Validation(_) => ErrorCode::ValidationFailed,
             Self::RateLimited { .. } => ErrorCode::RateLimited,
             Self::Internal(_) => ErrorCode::Internal,
-            Self::Busy => ErrorCode::Busy,
+            Self::Busy { .. } => ErrorCode::Busy,
         }
     }
 
@@ -211,7 +225,7 @@ pub const fn status(code: ErrorCode) -> StatusCode {
 impl From<StoreError> for ApiError {
     fn from(error: StoreError) -> Self {
         match error {
-            StoreError::Busy => Self::Busy,
+            StoreError::Busy => Self::busy(),
             other @ (StoreError::Corrupt { .. }
             | StoreError::Unstorable { .. }
             | StoreError::Backend(_)) => Self::internal(other),
@@ -320,12 +334,8 @@ impl ApiError {
             headers.insert(WWW_AUTHENTICATE, BEARER);
         }
         let (fields, source) = match self {
-            Self::RateLimited { retry_after } => {
+            Self::RateLimited { retry_after } | Self::Busy { retry_after } => {
                 headers.insert(RETRY_AFTER, retry_after_seconds(retry_after));
-                (None, None)
-            }
-            Self::Busy => {
-                headers.insert(RETRY_AFTER, retry_after_seconds(BUSY_RETRY_AFTER));
                 (None, None)
             }
             Self::Validation(fields) => (Some(fields), None),

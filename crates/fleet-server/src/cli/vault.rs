@@ -316,7 +316,9 @@ mod tests {
 
     use super::*;
     use crate::app::vault::{KeyUsage, PurposeCounts};
-    use crate::config::{AuthConfig, DatabaseConfig, HttpConfig, RateLimitConfig, VaultConfig};
+    use crate::config::{
+        AccountsConfig, AuthConfig, DatabaseConfig, HttpConfig, RateLimitConfig, VaultConfig,
+    };
     use crate::http::rate_limit::TrustedProxies;
     use crate::infra::crypto::vault::{VaultKeys, XChaChaVault};
     use crate::infra::sqlite::{self, DatabaseOptions};
@@ -381,6 +383,7 @@ mod tests {
                 key_files: ids.iter().map(|&id| (id, key_file(dir, id))).collect(),
                 active_key_id: active,
             },
+            accounts: AccountsConfig::default(),
         }
     }
 

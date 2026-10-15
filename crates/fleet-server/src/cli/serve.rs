@@ -6,7 +6,8 @@
 //! builds a multi-threaded runtime, installs the stop signals and binds
 //! `[http] bind`; [`run`] derives the lockout's key from the vault's, opens
 //! the database (running every pending migration), builds the app over the
-//! real clock, the OS's randomness, the vault and the database, and serves.
+//! real clock, the OS's randomness, the vault, the database and Microsoft's
+//! client (after main.rs installed the TLS provider), and serves.
 //! Every startup failure is one `error` event, "the server can't start",
 //! with the error's whole chain, and exit 1. The last line, "the server
 //! stopped", carries the exit code.
@@ -27,6 +28,9 @@
 //! - **The housekeeping** is the server's one long-lived background task,
 //!   owned by [`serve`]'s `JoinSet`, and stops at the first signal through a
 //!   child of the shutdown token.
+//! - **The link flows** (P9.4) poll Microsoft on their service's own
+//!   tasks; a task on the same `JoinSet` stops them at the first signal and
+//!   waits for them (ADR-0018).
 //!
 //! # Shutdown
 //! The first signal starts it, and one deadline bounds it,
@@ -40,9 +44,10 @@
 //!    logged at `warn` and left: axum owns its connection tasks, and the
 //!    runtime's shutdown ends them right after.
 //! 3. The housekeeping ends (it stopped at the signal, or after its current
-//!    purge batch), then the database closes, both with the rest of the
-//!    deadline, at least [`DATABASE_CLOSE`]. If that doesn't finish in time,
-//!    that's an `error` and exit 4.
+//!    purge batch), and the link flows (each stopped at the signal, or after
+//!    a commit that started), then the database closes, all with the rest of
+//!    the deadline, at least [`DATABASE_CLOSE`]. If that doesn't finish in
+//!    time, that's an `error` and exit 4.
 //!
 //! A later signal is only logged: the shutdown is already running.
 //!
@@ -67,10 +72,12 @@ use tracing::{error, info, warn};
 
 use super::DATABASE_CLOSE;
 use super::housekeeping::Housekeeping;
+use crate::app::accounts::{AccountService, AccountSettings};
 use crate::app::auth::TokenService;
 use crate::app::challenges::Challenges;
 use crate::app::health::HealthService;
 use crate::app::invites::InviteService;
+use crate::app::link_flows::{LinkFlowPorts, LinkFlowService, LinkFlowSettings};
 use crate::app::lockout::LockoutService;
 use crate::app::login::LoginService;
 use crate::app::mfa::{MfaPorts, MfaService};
@@ -80,16 +87,19 @@ use crate::http::error::chain;
 use crate::http::middleware::RequestIds;
 use crate::http::openapi::ApiDocs;
 use crate::http::rate_limit::RateLimits;
-use crate::http::router::{AppState, router};
+use crate::http::router::{AppState, Services, router};
 use crate::infra::crypto::attempt_keys::HmacAttemptKeys;
 use crate::infra::crypto::passwords::Argon2Passwords;
 use crate::infra::crypto::recovery_codes::Sha256RecoveryCodes;
 use crate::infra::crypto::tokens::Sha256Tokens;
 use crate::infra::crypto::totp::TotpRs;
 use crate::infra::crypto::vault::{DerivedKey, VaultKeyError, VaultKeys, XChaChaVault};
+use crate::infra::msauth::{BuildError, ReqwestMicrosoftAuth};
 use crate::infra::qr::SvgQr;
 use crate::infra::sqlite::{self, Database, DatabaseOptions, OpenError};
-use crate::infra::system::{MonotonicClock, OsRandom, SystemClock};
+use crate::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
+use crate::ports::msauth::MicrosoftAuthProvider;
+use crate::ports::pace::Pace;
 use crate::ports::passwords::{HashError, Passwords};
 use crate::ports::store::Store;
 use crate::ports::tokens::Tokens;
@@ -193,6 +203,9 @@ pub enum StartError {
     /// The password service couldn't make its dummy hash.
     #[error("the password service can't start")]
     Passwords(#[source] HashError),
+    /// The HTTP client for Microsoft couldn't be built (ADR-0018).
+    #[error(transparent)]
+    Microsoft(BuildError),
 }
 
 /// Logs `error` with its whole chain as "the server can't start" and
@@ -202,61 +215,78 @@ pub fn cant_start(error: &StartError) -> Exit {
     Exit::StartupFailed
 }
 
-/// What [`serve`] runs: the router, and its periodic housekeeping.
+/// What [`serve`] runs: the router, its periodic housekeeping, and the link
+/// flows it stops at the first signal.
 #[derive(Debug)]
 pub struct App {
     /// Every route behind the middleware stack.
     pub router: Router,
-    /// The background task that looks after the rate limits and the
-    /// lockout.
+    /// The background task that looks after the rate limits, the lockout,
+    /// the login's challenges and the finished link flows.
     pub housekeeping: Housekeeping,
+    /// The Microsoft link flows, whose pollers run until the shutdown.
+    pub link_flows: LinkFlowService,
 }
 
-/// The clocks and the randomness the app runs on.
+/// The clocks, the randomness, Microsoft and the pacing the app runs on.
 #[derive(Debug, Clone)]
 pub struct ServerPorts {
     /// Everything stored or audited: sessions, the lockout, audit entries,
-    /// request IDs, TOTP steps.
+    /// request IDs, TOTP steps, the link flows' expiries.
     pub clock: Arc<dyn Clock>,
     /// The rate limiters' clock, which only measures intervals.
     pub limiter_clock: Arc<dyn Clock>,
     /// Tokens, IDs, nonces and secrets.
     pub random: Arc<dyn SecureRandom>,
+    /// Microsoft's account flows.
+    pub microsoft: Arc<dyn MicrosoftAuthProvider>,
+    /// The link flows' waits between their calls.
+    pub pace: Arc<dyn Pace>,
 }
 
 impl ServerPorts {
     /// The real ones: [`SystemClock`], a [`MonotonicClock`] for the
-    /// limiters, and [`OsRandom`]. Only [`app`] calls it, so `serve`,
-    /// `user create-owner` and the `vault` commands stay the only places the
-    /// real clock and randomness are built.
-    #[must_use]
-    pub fn system() -> Self {
-        Self {
-            clock: Arc::new(SystemClock),
+    /// limiters, [`OsRandom`], [`ReqwestMicrosoftAuth`] on the system clock,
+    /// and [`TokioPace`]. Only [`app`] calls it, so `serve`, `user
+    /// create-owner` and the `vault` commands stay the only places the real
+    /// clock and randomness are built.
+    ///
+    /// # Errors
+    /// [`BuildError`] when Microsoft's HTTP client can't be built.
+    pub fn system() -> Result<Self, BuildError> {
+        let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+        Ok(Self {
+            microsoft: Arc::new(ReqwestMicrosoftAuth::new(Arc::clone(&clock))?),
+            clock,
             limiter_clock: Arc::new(MonotonicClock::start()),
             random: Arc::new(OsRandom),
-        }
+            pace: Arc::new(TokioPace),
+        })
     }
 }
 
 /// The app `serve` runs: [`app_with`] over [`ServerPorts::system`], the
-/// real clocks and the OS's randomness; see the [module docs](self).
-#[must_use]
+/// real clocks, the OS's randomness and Microsoft; see the [module
+/// docs](self).
+///
+/// # Errors
+/// [`StartError::Microsoft`] when Microsoft's HTTP client can't be built.
 pub fn app(
     config: &ServerConfig,
     database: &Database,
     keys: VaultKeys,
     lockout_key: SecretBox<[u8; 32]>,
     passwords: Arc<dyn Passwords>,
-) -> App {
-    app_with(
+) -> Result<App, StartError> {
+    let ports = ServerPorts::system().map_err(StartError::Microsoft)?;
+    Ok(app_with(
         config,
         database,
         keys,
         lockout_key,
         passwords,
-        ServerPorts::system(),
-    )
+        ports,
+    ))
 }
 
 /// The app over `ports`: the routes over `database`, sessions with
@@ -280,9 +310,22 @@ pub fn app_with(
         clock,
         limiter_clock,
         random,
+        microsoft,
+        pace,
     } = ports;
     let store: Arc<dyn Store> = Arc::new(database.clone());
     let vault: Arc<dyn Vault> = Arc::new(XChaChaVault::new(keys, Arc::clone(&random)));
+    let (link_flows, accounts) = account_services(
+        config,
+        LinkFlowPorts {
+            clock: Arc::clone(&clock),
+            random: Arc::clone(&random),
+            store: Arc::clone(&store),
+            vault: Arc::clone(&vault),
+            microsoft,
+            pace,
+        },
+    );
     let token_port: Arc<dyn Tokens> = Arc::new(Sha256Tokens::new(Arc::clone(&random)));
     let tokens = TokenService::new(
         Arc::clone(&clock),
@@ -334,15 +377,17 @@ pub fn app_with(
         mfa.clone(),
     );
     let ids = RequestIds::new(clock, random);
-    let state = AppState::new(
-        HealthService::new(store),
+    let state = AppState::new(Services {
+        health: HealthService::new(store),
         tokens,
-        limits.clone(),
+        limits: limits.clone(),
         mfa,
         login,
         users,
         invites,
-    );
+        link_flows: link_flows.clone(),
+        accounts,
+    });
     App {
         router: router(
             state,
@@ -350,8 +395,35 @@ pub fn app_with(
             ids,
             ApiDocs::for_dev_mode(config.dev_mode),
         ),
-        housekeeping: Housekeeping::new(limits, lockout, challenges),
+        housekeeping: Housekeeping::new(limits, lockout, challenges, link_flows.flows()),
+        link_flows,
     }
+}
+
+/// The Microsoft link flows and the other account use cases over `ports`,
+/// with `config`'s `[rate_limits]` and `[accounts]`.
+fn account_services(
+    config: &ServerConfig,
+    ports: LinkFlowPorts,
+) -> (LinkFlowService, AccountService) {
+    let accounts = AccountService::new(
+        Arc::clone(&ports.clock),
+        Arc::clone(&ports.random),
+        Arc::clone(&ports.store),
+        AccountSettings {
+            allow_offline: config.accounts.allow_offline,
+            max_per_member: config.accounts.max_per_member,
+        },
+    );
+    let link_flows = LinkFlowService::new(
+        ports,
+        LinkFlowSettings {
+            total: config.rate_limits.link_flows.total,
+            per_user_per_day: config.rate_limits.link_flows.per_user_per_day,
+            max_per_member: config.accounts.max_per_member,
+        },
+    );
+    (link_flows, accounts)
 }
 
 /// Opens the database `config` names and serves the API on `listener`
@@ -385,7 +457,11 @@ pub async fn run<S: ShutdownSignals>(
             Ok(passwords) => Arc::new(passwords),
             Err(error) => return cant_start(&StartError::Passwords(error)),
         };
-    let app = app(config, &database, keys, lockout_key, passwords);
+    warn_about_kept_offline_accounts(config, &database).await;
+    let app = match app(config, &database, keys, lockout_key, passwords) {
+        Ok(app) => app,
+        Err(error) => return cant_start(&error),
+    };
     info!(%address, "the server is listening");
     serve(
         listener,
@@ -395,6 +471,26 @@ pub async fn run<S: ShutdownSignals>(
         ShutdownTimeouts::of(&config.http),
     )
     .await
+}
+
+/// What a start logs while offline accounts are kept with the switch off.
+const KEPT_OFFLINE: &str = "offline accounts are kept while [accounts] allow_offline is off; no bot may use them until it's on again";
+
+/// Logs one `warn` when offline accounts exist while `[accounts]
+/// allow_offline` is off (P9.7, ADR-0018): they stay untouched, and no bot
+/// may run on them. A failed count is a `warn` too, and the start goes on.
+async fn warn_about_kept_offline_accounts(config: &ServerConfig, database: &Database) {
+    if config.accounts.allow_offline {
+        return;
+    }
+    match database.accounts().count_offline().await {
+        Ok(0) => {}
+        Ok(offline_accounts) => warn!(offline_accounts, "{KEPT_OFFLINE}"),
+        Err(error) => warn!(
+            error = %chain(&error),
+            "the offline accounts couldn't be counted at startup"
+        ),
+    }
 }
 
 /// Serves `app` on `listener`, every connection with its peer's address,
@@ -411,6 +507,12 @@ pub async fn serve<S: ShutdownSignals>(
     let shutdown = CancellationToken::new();
     let mut background = JoinSet::new();
     background.spawn(app.housekeeping.run(shutdown.child_token()));
+    let flows_stop = shutdown.child_token();
+    let link_flows = app.link_flows;
+    background.spawn(async move {
+        flows_stop.cancelled().await;
+        link_flows.shutdown().await;
+    });
     let server = axum::serve(
         listener,
         app.router
@@ -421,7 +523,7 @@ pub async fn serve<S: ShutdownSignals>(
     let close = async move {
         while let Some(ended) = background.join_next().await {
             if let Err(error) = ended {
-                error!(%error, "the housekeeping task failed");
+                error!(%error, "a background task failed");
             }
         }
         database.close().await;
@@ -552,6 +654,22 @@ mod tests {
         assert_eq!(lines.len(), 1, "{}", logs.text());
         assert_eq!(lines[0]["level"], "INFO");
         assert_eq!(lines[0]["exit_code"], 4);
+    }
+
+    #[test]
+    fn a_microsoft_client_that_cant_be_built_stops_the_start_with_its_cause() {
+        let error =
+            StartError::Microsoft(BuildError::caused_by(io::Error::other("no TLS backend")));
+
+        assert_eq!(
+            error.to_string(),
+            "the HTTP client for Microsoft can't be built"
+        );
+        assert_eq!(
+            chain(&error),
+            "the HTTP client for Microsoft can't be built: no TLS backend"
+        );
+        assert_eq!(cant_start(&error), Exit::StartupFailed);
     }
 
     #[test]

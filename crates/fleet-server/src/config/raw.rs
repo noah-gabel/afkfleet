@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use garde::Validate;
 use serde::Deserialize;
 
-use super::{Argon2Params, RateLimitConfig};
+use super::{AccountsConfig, Argon2Params, RateLimitConfig};
 
 /// A range of a numeric key, inclusive at both ends.
 pub(crate) struct Range {
@@ -62,6 +62,9 @@ pub(crate) struct RawConfig {
     #[serde(default)]
     #[garde(dive)]
     pub(crate) rate_limits: RawRateLimits,
+    #[serde(default)]
+    #[garde(dive)]
+    pub(crate) accounts: RawAccounts,
 }
 
 /// `[vault]`. Both keys are required; validation checks the key IDs, the
@@ -178,6 +181,10 @@ pub(crate) struct RawRateLimits {
     pub(crate) per_user_per_sec: u32,
     #[garde(range(min = RateLimitConfig::PER_USER_BURST.min, max = RateLimitConfig::PER_USER_BURST.max))]
     pub(crate) per_user_burst: u32,
+    #[garde(range(min = RateLimitConfig::LINK_FLOWS_TOTAL.min, max = RateLimitConfig::LINK_FLOWS_TOTAL.max))]
+    pub(crate) link_flows_total: u32,
+    #[garde(range(min = RateLimitConfig::LINK_FLOWS_PER_USER_PER_DAY.min, max = RateLimitConfig::LINK_FLOWS_PER_USER_PER_DAY.max))]
+    pub(crate) link_flows_per_user_per_day: u32,
 }
 
 impl Default for RawRateLimits {
@@ -190,6 +197,32 @@ impl Default for RawRateLimits {
             register_per_ip_per_hour: 5,
             per_user_per_sec: 10,
             per_user_burst: 30,
+            link_flows_total: 3,
+            link_flows_per_user_per_day: 10,
+        }
+    }
+}
+
+/// `[accounts]`. Missing keys take Appendix A's defaults; the keys are the
+/// field names, so garde's report names them.
+#[derive(Debug, Deserialize, Validate)]
+#[serde(
+    default,
+    deny_unknown_fields,
+    expecting = "a table of account settings"
+)]
+pub(crate) struct RawAccounts {
+    #[garde(range(min = AccountsConfig::MAX_PER_MEMBER.min, max = AccountsConfig::MAX_PER_MEMBER.max))]
+    pub(crate) max_per_member: u32,
+    #[garde(skip)]
+    pub(crate) allow_offline: bool,
+}
+
+impl Default for RawAccounts {
+    fn default() -> Self {
+        Self {
+            max_per_member: 3,
+            allow_offline: false,
         }
     }
 }
@@ -518,6 +551,11 @@ mod secret_names {
             "rate_limits.register_per_ip_per_hour",
             "rate_limits.per_user_per_sec",
             "rate_limits.per_user_burst",
+            "rate_limits.link_flows_total",
+            "rate_limits.link_flows_per_user_per_day",
+            "accounts",
+            "accounts.max_per_member",
+            "accounts.allow_offline",
         ] {
             assert!(keys.iter().any(|found| found == key), "{key} in {keys:?}");
         }

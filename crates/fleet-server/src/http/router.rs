@@ -24,6 +24,9 @@
 //! | `POST /api/v1/invites` | user + step-up (Admin+; Admin invites the Owner) | a new invite and its code |
 //! | `GET /api/v1/invites` | user (Admin+) | one page of invites |
 //! | `DELETE /api/v1/invites/{id}` | user + step-up (as creating) | revokes a pending invite |
+//! | `POST /api/v1/accounts/link` | user | starts a Microsoft link flow; its code, shown this once |
+//! | `GET /api/v1/accounts/link/{flow_id}` | user (the flow's creator) | where the flow stands |
+//! | `POST /api/v1/accounts/offline` | user (while `[accounts] allow_offline` is on) | a new offline account |
 //! | `GET /api/openapi.json` | public | the `OpenAPI` document, only in dev mode ([`openapi`](super::openapi)) |
 //!
 //! The health routes have no `/api/v1` prefix. Both answer `200` with an
@@ -38,14 +41,16 @@
 use axum::Router;
 use utoipa_axum::routes;
 
-use super::handlers::{auth, health, invites, me, mfa, users};
+use super::handlers::{accounts, auth, health, invites, me, mfa, users};
 use super::middleware::RequestIds;
 use super::openapi::ApiDocs;
 use super::rate_limit::RateLimits;
 use super::routes::{RateClass, Routes};
+use crate::app::accounts::AccountService;
 use crate::app::auth::TokenService;
 use crate::app::health::HealthService;
 use crate::app::invites::InviteService;
+use crate::app::link_flows::LinkFlowService;
 use crate::app::login::LoginService;
 use crate::app::mfa::MfaService;
 use crate::app::users::UserService;
@@ -71,20 +76,51 @@ pub struct AppState {
     pub(crate) users: UserService,
     /// The invites to register.
     pub(crate) invites: InviteService,
+    /// The Microsoft link flows.
+    pub(crate) link_flows: LinkFlowService,
+    /// The accounts beside the link flows: offline ones.
+    pub(crate) accounts: AccountService,
+}
+
+/// Every service the handlers share, by name, so each one is a line of its
+/// own where the state is built.
+#[derive(Debug, Clone)]
+pub struct Services {
+    /// The readiness check.
+    pub health: HealthService,
+    /// Sessions and their tokens.
+    pub tokens: TokenService,
+    /// The request limits.
+    pub limits: RateLimits,
+    /// The second factor and the login's challenges.
+    pub mfa: MfaService,
+    /// Logging in and stepping up.
+    pub login: LoginService,
+    /// The users: the admins' list and changes.
+    pub users: UserService,
+    /// The invites to register.
+    pub invites: InviteService,
+    /// The Microsoft link flows.
+    pub link_flows: LinkFlowService,
+    /// The accounts beside the link flows: offline ones.
+    pub accounts: AccountService,
 }
 
 impl AppState {
-    /// The state over the server's services and its request `limits`.
+    /// The state over the server's `services`.
     #[must_use]
-    pub fn new(
-        health: HealthService,
-        tokens: TokenService,
-        limits: RateLimits,
-        mfa: MfaService,
-        login: LoginService,
-        users: UserService,
-        invites: InviteService,
-    ) -> Self {
+    pub fn new(services: Services) -> Self {
+        let Services {
+            health,
+            tokens,
+            limits,
+            mfa,
+            login,
+            users,
+            invites,
+            link_flows,
+            accounts,
+        } = services;
         Self {
             health,
             tokens,
@@ -93,6 +129,8 @@ impl AppState {
             login,
             users,
             invites,
+            link_flows,
+            accounts,
         }
     }
 }
@@ -121,6 +159,9 @@ pub fn api_routes(routes: Routes) -> Routes {
         .step_up_route(RateClass::Standard, routes!(invites::create))
         .authed_route(RateClass::Standard, routes!(invites::list))
         .step_up_route(RateClass::Standard, routes!(invites::revoke))
+        .authed_route(RateClass::Standard, routes!(accounts::start_link))
+        .authed_route(RateClass::Standard, routes!(accounts::link_status))
+        .authed_route(RateClass::Standard, routes!(accounts::create_offline))
 }
 
 /// Every route with `state`, behind the middleware stack with the timeout,

@@ -1,11 +1,16 @@
-//! The user's hands-on Microsoft check (Plan.md P9.3, ADR-0018): the real
-//! adapter against Microsoft, with the user's own account.
+//! The user's hands-on Microsoft checks (Plan.md P9.3, P9.4, ADR-0018): the
+//! real adapter against Microsoft, with the user's own account, and the link
+//! flow through serve's own app and its routes.
 //!
-//! **It needs the user's real Microsoft account, so only the user runs it**,
-//! with `just test-ms-account`; the AI never runs it or the `manual`
-//! profile.
+//! **They need the user's real Microsoft account, so only the user runs
+//! them**, with `just test-ms-account`; the AI never runs them or the
+//! `manual` profile.
 //!
-//! - Everything stays in memory, and nothing is written to disk.
+//! - The adapter's two checks keep everything in memory. The link flow's
+//!   database lives in a fresh folder in the system's temp directory,
+//!   sealed with a vault key drawn from the OS for the run and kept only in
+//!   memory. The folder is deleted at every end, pass, FAIL or panic; one
+//!   that Ctrl+C leaves behind holds a refresh token nobody can open.
 //! - It prints only the link, the code, the deadline, and pass or FAIL per
 //!   step with an error's text, which names a rule but never a value. Never
 //!   a token, the Minecraft name or the UUID.
@@ -14,24 +19,45 @@
 //!   targets and counts.
 //!
 //! The waits are real, since Microsoft sets the poll interval. That's these
-//! two tests' approved exception to "never a real sleep" (CLAUDE.md,
-//! ADR-0018). Each waits at most 8 minutes, or until the code expires if
-//! that's sooner, inside the `manual` profile's 10-minute limit.
+//! three tests' approved exception to "never a real sleep" (CLAUDE.md,
+//! ADR-0018). The adapter's two checks wait at most 8 minutes each, the link
+//! flow's at most 4 minutes for each of its two codes, reading the flow's
+//! status every 2 seconds: always inside the `manual` profile's 10-minute
+//! limit.
 
 use core::fmt::Display;
 use core::time::Duration;
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use fleet_core::system::Clock as _;
+use chrono::{DateTime, Utc};
+use fleet_core::account::AccountStatus;
+use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget, RecordedValue};
+use fleet_core::authz::Role;
+use fleet_core::id::AccountId;
+use fleet_core::system::{Clock, SecureRandom as _};
 use fleet_core::time::{add, elapsed};
+use fleet_server::cli::serve::ServerPorts;
+use fleet_server::config::{AccountsConfig, RateLimitConfig};
+use fleet_server::infra::crypto::vault::{VaultKeys, XChaChaVault};
 use fleet_server::infra::msauth::ReqwestMicrosoftAuth;
-use fleet_server::infra::system::SystemClock;
+use fleet_server::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
+use fleet_server::ports::accounts::AccountCredential;
+use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord};
 use fleet_server::ports::msauth::{
     DeviceFlow, Failure, MicrosoftAuthProvider as _, PollOutcome, RefreshError, RefreshToken,
 };
+use fleet_server::ports::store::Store as _;
+use fleet_server::ports::vault::{Vault as _, VaultPurpose};
 use fleet_testkit::log_capture;
-use secrecy::SecretString;
+use secrecy::{ExposeSecret as _, SecretBox, SecretString};
+use serde_json::Value;
+use sqlx::sqlite::SqliteConnectOptions;
+use tempfile::Builder;
 use tokio::time::Instant;
+
+use crate::support::http::{Person, Server};
+use crate::support::service::bounded;
 
 /// The longest wait for the user's answer.
 const WAIT: Duration = Duration::from_mins(8);
@@ -271,4 +297,310 @@ async fn manual_microsoft_declined_link() {
     }
 
     steps.finish();
+}
+
+// --- The link flow, end to end (P9.4) ------------------------------------------
+
+/// The longest wait for each of the link flow's codes.
+const LINK_WAIT: Duration = Duration::from_mins(4);
+/// How often the link flow's status is read.
+const READ_EVERY: Duration = Duration::from_secs(2);
+
+/// How a flow's status ended, as its reads saw it.
+struct Read {
+    /// The last answer's body.
+    last: Value,
+    /// Whether `waiting` was seen.
+    waiting: bool,
+    /// Whether `finishing` was seen.
+    finishing: bool,
+}
+
+/// Starts a flow for `by` through the route, prints its link, its code and
+/// the deadline, and reads its status every 2 seconds until it leaves
+/// `waiting` and `finishing`, or the deadline passes.
+async fn link_once(
+    server: &Server,
+    by: &Person,
+    steps: &mut Steps,
+    what_to_do: &str,
+) -> Option<Read> {
+    let started = server.start_link(by).await;
+    if started.status != 201 {
+        steps.fail("start", format!("{} {}", started.status, started.code()));
+        return None;
+    }
+    pass("start");
+    let flow = started.body["flow_id"].as_str().unwrap().to_owned();
+    let user_code = started.body["user_code"].as_str().unwrap().to_owned();
+    steps.saw(&user_code);
+    let now = SystemClock.now();
+    let expires_at: DateTime<Utc> = started.body["expires_at"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    let wait = elapsed(now, expires_at).min(LINK_WAIT);
+    println!();
+    println!(
+        "Open {} and enter the code {user_code}, then {what_to_do}.",
+        started.body["verification_uri"].as_str().unwrap()
+    );
+    println!("Waiting until {} UTC.", add(now, wait).format("%H:%M:%S"));
+    println!();
+    let deadline = Instant::now() + wait;
+    let mut read = Read {
+        last: Value::Null,
+        waiting: false,
+        finishing: false,
+    };
+    loop {
+        let seen = server.status(by, &flow).await;
+        if seen.status != 200 {
+            steps.fail("status", format!("{} {}", seen.status, seen.code()));
+            return None;
+        }
+        read.last = seen.body;
+        match read.last["status"].as_str() {
+            Some("waiting") => read.waiting = true,
+            Some("finishing") => read.finishing = true,
+            _ => return Some(read),
+        }
+        if Instant::now() + READ_EVERY > deadline {
+            return Some(read);
+        }
+        tokio::time::sleep(READ_EVERY).await;
+    }
+}
+
+/// The audit entries with `action`, oldest first.
+async fn entries(server: &Server, action: &AuditAction) -> Vec<AuditRecord> {
+    let page = AuditPage {
+        before: None,
+        limit: AuditLimit::new(100).unwrap(),
+    };
+    let mut entries: Vec<AuditRecord> = server
+        .db
+        .audit()
+        .list(page)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|entry| &entry.action == action)
+        .collect();
+    entries.reverse();
+    entries
+}
+
+/// The text `entry` holds under `key`.
+fn meta_text<'a>(entry: &'a AuditRecord, key: &str) -> Option<&'a str> {
+    entry
+        .metadata
+        .entries()
+        .iter()
+        .find(|(name, _)| name == key)
+        .and_then(|(_, value)| match value {
+            RecordedValue::Text(text) => Some(text.as_str()),
+            _ => None,
+        })
+}
+
+/// A vault key drawn from the OS for this run, kept only in memory: a
+/// database the run leaves behind can't be opened by anyone.
+fn run_key() -> SecretBox<[u8; 32]> {
+    SecretBox::init_with_mut(|key: &mut [u8; 32]| OsRandom.fill(key).unwrap())
+}
+
+/// The link flow's steps on `server`, with `vault` over the server's key:
+/// the Member's link, then the Owner's with the same Microsoft account.
+async fn link_steps(server: Arc<Server>, vault: XChaChaVault) -> Steps {
+    let member = server.person(1, Role::Member).await;
+    let owner = server.person(2, Role::Owner).await;
+    let mut steps = Steps::default();
+    if let Some(uuid) = member_links(&server, &vault, &member, &mut steps).await {
+        owner_finds_it_taken(&server, &owner, &uuid, &mut steps).await;
+    }
+    steps
+}
+
+/// The Member links the account, and the server stores and records it: the
+/// profile's UUID, or `None` once a step failed that the next ones need.
+async fn member_links(
+    server: &Server,
+    vault: &XChaChaVault,
+    member: &Person,
+    steps: &mut Steps,
+) -> Option<String> {
+    // The Member links the account: it waits for approval.
+    let read = link_once(server, member, steps, "approve the sign-in").await?;
+    steps.check(
+        "waiting seen",
+        read.waiting,
+        "the first read wasn't waiting",
+    );
+    println!(
+        "finishing seen: {} (for information: it may pass between two reads)",
+        if read.finishing { "yes" } else { "no" }
+    );
+    let linked = read.last["status"] == "linked" && read.last["account_status"] == "pending";
+    steps.check(
+        "linked, pending",
+        linked,
+        &format!("ended {}", read.last["status"]),
+    );
+    if !linked {
+        return None;
+    }
+    let account: AccountId = read.last["account_id"].as_str().unwrap().parse().unwrap();
+    let name = read.last["name"].as_str().unwrap().to_owned();
+    steps.saw(&name);
+    let stored = server.db.accounts().find(account).await.unwrap().unwrap();
+    let AccountCredential::Microsoft {
+        uuid,
+        refresh_envelope,
+        status,
+    } = stored.credential
+    else {
+        steps.fail("stored account", "not a Microsoft account");
+        return None;
+    };
+    steps.saw(&uuid.to_string());
+    steps.saw(&uuid.as_uuid().simple().to_string());
+    steps.check(
+        "stored account: the Member's, pending, with the profile's name",
+        stored.owner == member.id
+            && status == AccountStatus::Pending
+            && stored.name.as_str() == name,
+        "another owner, status or name",
+    );
+    match vault.open(
+        VaultPurpose::MsRefreshToken,
+        account.into(),
+        &refresh_envelope,
+    ) {
+        Ok(plaintext) => {
+            let token = core::str::from_utf8(plaintext.expose_secret())
+                .ok()
+                .map(|text| SecretString::from(text.to_owned()));
+            match token.map(RefreshToken::try_from) {
+                Some(Ok(token)) => {
+                    steps.saw(token.expose_secret());
+                    pass("sealed refresh token opens for the account");
+                }
+                _ => steps.fail("sealed refresh token opens for the account", "not a token"),
+            }
+        }
+        Err(error) => steps.fail("sealed refresh token opens for the account", error),
+    }
+    let starts = entries(server, &AuditAction::ACCOUNT_START_LINK).await;
+    steps.check(
+        "account.start_link recorded",
+        starts.len() == 1 && starts[0].actor == Some(member.id),
+        "missing or another actor",
+    );
+    let links = entries(server, &AuditAction::ACCOUNT_LINK).await;
+    let uuid_text = uuid.to_string();
+    steps.check(
+        "account.link recorded with the creator, the name and the UUID",
+        links.len() == 1
+            && links[0].outcome == AuditOutcome::Success
+            && links[0].actor == Some(member.id)
+            && meta_text(&links[0], "name") == Some(name.as_str())
+            && meta_text(&links[0], "uuid") == Some(uuid_text.as_str()),
+        "missing, or another actor, name or UUID",
+    );
+    Some(uuid_text)
+}
+
+/// The Owner tries the same Microsoft account, whose profile is `uuid`:
+/// it's taken.
+async fn owner_finds_it_taken(server: &Server, owner: &Person, uuid: &str, steps: &mut Steps) {
+    if let Some(read) = link_once(
+        server,
+        owner,
+        steps,
+        "sign in with the SAME Microsoft account and approve",
+    )
+    .await
+    {
+        steps.check(
+            "the same account again is taken",
+            read.last == serde_json::json!({ "status": "taken" }),
+            &format!("ended {}", read.last["status"]),
+        );
+        let links = entries(server, &AuditAction::ACCOUNT_LINK).await;
+        let failure = links.get(1);
+        steps.check(
+            "account.link Failure recorded for the Owner, reason taken, with the UUID",
+            failure.is_some_and(|entry| {
+                entry.outcome == AuditOutcome::Failure
+                    && entry.actor == Some(owner.id)
+                    && entry.target == Some(RecordedTarget::Known(AuditTarget::User(owner.id)))
+                    && meta_text(entry, "reason") == Some("taken")
+                    && meta_text(entry, "uuid") == Some(uuid)
+            }),
+            "missing or different",
+        );
+    }
+}
+
+#[tokio::test]
+async fn manual_link_flow_member_then_owner() {
+    // A fresh folder, deleted at every end below, and a key for this run
+    // alone: a folder that Ctrl+C leaves behind holds a refresh token nobody
+    // can open.
+    let dir = Builder::new()
+        .prefix("afkfleet-link-flow-")
+        .tempdir()
+        .unwrap();
+    let path = dir.path().join("link-flow.db");
+    tokio::fs::File::create(&path).await.unwrap();
+    let key = run_key();
+    let clock: Arc<dyn Clock> = Arc::new(SystemClock);
+    let server = Arc::new(
+        Server::start(
+            SqliteConnectOptions::new().filename(&path),
+            RateLimitConfig::default(),
+            AccountsConfig::default(),
+            &key,
+            ServerPorts {
+                limiter_clock: Arc::new(MonotonicClock::start()),
+                random: Arc::new(OsRandom),
+                microsoft: Arc::new(adapter()),
+                pace: Arc::new(TokioPace),
+                clock,
+            },
+        )
+        .await,
+    );
+    let vault = XChaChaVault::new(
+        VaultKeys::from_keys(
+            BTreeMap::from([(1, SecretBox::new(Box::new(*key.expose_secret())))]),
+            1,
+        )
+        .unwrap(),
+        Arc::new(OsRandom),
+    );
+    drop(key);
+
+    // The steps run in a task of their own, so a panic comes back here as an
+    // error: the flows stop, the database closes and its folder goes on
+    // every end.
+    let ended = tokio::spawn(link_steps(Arc::clone(&server), vault)).await;
+    bounded(server.link_flows.shutdown()).await;
+    bounded(server.db.close()).await;
+    drop(server);
+    let deleted = dir.close().is_ok();
+    match ended {
+        Ok(mut steps) => {
+            steps.check("database deleted", deleted, "its folder is still there");
+            steps.finish();
+        }
+        Err(failed) => {
+            if !deleted {
+                println!("database deleted: FAIL (its folder is still there)");
+            }
+            std::panic::resume_unwind(failed.into_panic());
+        }
+    }
 }

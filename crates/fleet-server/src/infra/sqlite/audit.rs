@@ -1,4 +1,5 @@
-//! The `audit_log` table's SQL: insert and list, nothing else.
+//! The `audit_log` table's SQL: insert, list, and the counts behind the
+//! user's own routes and the link flows' daily cap.
 
 use std::net::IpAddr;
 
@@ -143,6 +144,47 @@ pub(super) async fn failed_code_attempts(
             .map(|text| parse_time(&text).ok_or_else(|| corrupt("at")))
             .transpose()?,
     })
+}
+
+/// When the Success entries of `action` whose target is `user` were
+/// recorded, for those after `since`, in commit order. The `(target_type,
+/// target_id, action, id)` index finds them; the daily cap keeps them few.
+pub(super) async fn user_successes_since<'c, E>(
+    executor: E,
+    user: UserId,
+    action: &AuditAction,
+    since: chrono::DateTime<chrono::Utc>,
+) -> Result<Vec<chrono::DateTime<chrono::Utc>>, StoreError>
+where
+    E: sqlx::SqliteExecutor<'c>,
+{
+    let user = id_text(user);
+    let action = action.as_str();
+    let since = time_text(since).ok_or(StoreError::Unstorable {
+        table: TABLE,
+        column: "at",
+    })?;
+    let rows = sqlx::query!(
+        r#"SELECT id AS "id!: i64", at AS "at!" FROM audit_log
+           WHERE target_type = 'user' AND target_id = ? AND action = ? AND outcome = 'success'
+                 AND at > ?
+           ORDER BY id"#,
+        user,
+        action,
+        since
+    )
+    .fetch_all(executor)
+    .await
+    .map_err(store_error)?;
+    rows.into_iter()
+        .map(|row| {
+            parse_time(&row.at).ok_or(StoreError::Corrupt {
+                table: TABLE,
+                column: "at",
+                rowid: row.id,
+            })
+        })
+        .collect()
 }
 
 /// Checks every value of a stored row. Reading is tolerant of a target type

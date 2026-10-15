@@ -35,12 +35,14 @@ use fleet_server::app::challenges::Challenges;
 use fleet_server::app::health::HealthService;
 use fleet_server::app::login::LoginService;
 use fleet_server::app::mfa::{MfaPorts, MfaService};
-use fleet_server::config::{HttpConfig, LogConfig, LogFormat, Rate, RateLimitConfig};
+use fleet_server::config::{
+    HttpConfig, LinkFlowLimits, LogConfig, LogFormat, Rate, RateLimitConfig,
+};
 use fleet_server::http::extractors::AuthUser;
 use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::openapi::ApiDocs;
 use fleet_server::http::rate_limit::{ClientIp, RateLimits, Refusals, TrustedProxies};
-use fleet_server::http::router::{AppState, api_routes};
+use fleet_server::http::router::{AppState, Services, api_routes};
 use fleet_server::http::routes::{RateClass, Routes};
 use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
 use fleet_server::infra::crypto::passwords::Argon2Passwords;
@@ -90,6 +92,7 @@ fn loose() -> RateLimitConfig {
         refresh: loose,
         register: loose,
         per_user: loose,
+        link_flows: LinkFlowLimits::default(),
     }
 }
 
@@ -251,15 +254,17 @@ async fn setup(options: SqliteConnectOptions, config: RateLimitConfig, proxies: 
     let mfa = mfa(&db);
     let logins = login_service(&db, &service, &mfa).await;
     let (users, invites) = accounts(&db).await;
-    let state = AppState::new(
-        HealthService::new(Arc::new(db.clone())),
-        service.clone(),
-        limits.clone(),
+    let state = AppState::new(Services {
+        health: HealthService::new(Arc::new(db.clone())),
+        tokens: service.clone(),
+        limits: limits.clone(),
         mfa,
-        logins,
+        login: logins,
         users,
         invites,
-    );
+        link_flows: idle_link_flows(&db),
+        accounts: idle_accounts(&db),
+    });
     let http = HttpConfig {
         bind: HttpConfig::DEFAULT_BIND,
         request_timeout: Duration::from_secs(15),
@@ -804,4 +809,60 @@ async fn every_refusal_is_counted_and_its_line_is_at_debug(
             ..Refusals::default()
         }
     );
+}
+
+/// The link flows, which these tests never start (P9.4): a service over
+/// `db` with Microsoft's real client, never called.
+fn idle_link_flows(
+    db: &fleet_server::infra::sqlite::Database,
+) -> fleet_server::app::link_flows::LinkFlowService {
+    use fleet_server::app::link_flows::{LinkFlowPorts, LinkFlowService, LinkFlowSettings};
+    let clock: Arc<dyn fleet_core::system::Clock> =
+        Arc::new(fleet_testkit::system::ManualClock::new(
+            chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+        ));
+    let random: Arc<dyn fleet_core::system::SecureRandom> =
+        Arc::new(fleet_testkit::system::SeededRandom::new(3));
+    let keys = fleet_server::infra::crypto::vault::VaultKeys::from_keys(
+        std::collections::BTreeMap::from([(1, secrecy::SecretBox::new(Box::new([1_u8; 32])))]),
+        1,
+    )
+    .unwrap();
+    LinkFlowService::new(
+        LinkFlowPorts {
+            microsoft: Arc::new(
+                fleet_server::infra::msauth::ReqwestMicrosoftAuth::new(Arc::clone(&clock)).unwrap(),
+            ),
+            vault: Arc::new(fleet_server::infra::crypto::vault::XChaChaVault::new(
+                keys,
+                Arc::clone(&random),
+            )),
+            store: Arc::new(db.clone()),
+            pace: Arc::new(fleet_server::infra::system::TokioPace),
+            clock,
+            random,
+        },
+        LinkFlowSettings {
+            total: core::num::NonZeroU32::MIN,
+            per_user_per_day: core::num::NonZeroU32::MIN,
+            max_per_member: core::num::NonZeroU32::MIN,
+        },
+    )
+}
+
+/// The account service, which these tests never call (P9.7).
+fn idle_accounts(
+    db: &fleet_server::infra::sqlite::Database,
+) -> fleet_server::app::accounts::AccountService {
+    fleet_server::app::accounts::AccountService::new(
+        Arc::new(fleet_testkit::system::ManualClock::new(
+            chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+        )),
+        Arc::new(fleet_testkit::system::SeededRandom::new(4)),
+        Arc::new(db.clone()),
+        fleet_server::app::accounts::AccountSettings {
+            allow_offline: false,
+            max_per_member: core::num::NonZeroU32::MIN,
+        },
+    )
 }

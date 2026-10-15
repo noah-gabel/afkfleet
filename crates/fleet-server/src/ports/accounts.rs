@@ -127,6 +127,20 @@ pub trait AccountReads: Send + Sync + fmt::Debug {
     /// [`StoreError`], including [`StoreError::Corrupt`] for a row that
     /// doesn't read back.
     async fn find(&self, id: AccountId) -> Result<Option<McAccount>, StoreError>;
+
+    /// How many accounts `owner` owns, of any kind and status: what the
+    /// Member quota counts (P9.4, ADR-0018).
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn count_owned_by(&self, owner: UserId) -> Result<u32, StoreError>;
+
+    /// How many offline accounts exist: serve warns about them while
+    /// `[accounts] allow_offline` is off (P9.7).
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn count_offline(&self) -> Result<u64, StoreError>;
 }
 
 /// Reading and writing accounts inside a [`super::store::WriteTx`].
@@ -137,6 +151,13 @@ pub trait AccountWrites: Send {
     /// # Errors
     /// [`StoreError`], including [`StoreError::Corrupt`].
     async fn find(&mut self, id: AccountId) -> Result<Option<McAccount>, StoreError>;
+
+    /// How many accounts `owner` owns, of any kind and status, read in this
+    /// transaction.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn count_owned_by(&mut self, owner: UserId) -> Result<u32, StoreError>;
 
     /// Inserts `account`.
     ///
