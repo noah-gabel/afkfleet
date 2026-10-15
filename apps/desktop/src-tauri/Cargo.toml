@@ -43,6 +43,10 @@ serde_json.workspace = true
 tauri = { workspace = true, features = ["wry", "compression"] }
 # A second launch focuses the running window instead of opening another (P8.3).
 tauri-plugin-single-instance.workspace = true
+# Opens Microsoft's sign-in page in the default browser: only its free `open_url`, from
+# `open_verification_link`, on a link fleet-client's `VerifiedLink` checked. The plugin
+# isn't registered, so the webview gets none of its commands (ADR-0018).
+tauri-plugin-opener.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

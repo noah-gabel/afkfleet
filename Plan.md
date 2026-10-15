@@ -251,7 +251,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Concern | Crate | Version | Used in | Notes |
 |---|---|---|---|---|
 | Desktop shell | `tauri`, `tauri-build` | **2.12.3** (≥ 2.11.1), dfo; 2.7.2 | desktop | 2.11.1 fixes CVE-2026-42184 (`is_local_url` origin bypass on Windows). `tauri-build` is the required build-dependency (approved in P0). The desktop crate enables only `wry` and `compression`: never `dynamic-acl` (runtime `add_capability`), `devtools`, `common-controls-v6` (its TaskDialogIndirect import breaks Windows test executables, which lack the Common Controls v6 manifest), or the Linux-only `x11`/`dbus`; the CLI adds `custom-protocol` for `tauri build`. Dev only: `test`, for the ACL test ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
-| Open the device-code URL | `tauri-plugin-opener` | 2.7.0 | desktop | Called only from Rust |
+| Open the device-code URL | `tauri-plugin-opener` | 2.7.0 (its build-dependency `tauri-plugin` 2.7.1 in Cargo.lock, so tauri-utils stays 2.10.1) | desktop | Called only from Rust: its free `open_url`, from one command without arguments, on the link fleet-client's `VerifiedLink` checked. Never registered, so the webview gets none of its commands ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)) |
 | Single instance | `tauri-plugin-single-instance` | 2.5.3 | desktop | Registered first. No JavaScript API, so no capability grants it anything ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
 | Signed auto-update | `tauri-plugin-updater` | 2.13.1, dfo | desktop | Its default `rustls-tls` feature forces the ring provider; TLS comes from the workspace `reqwest` instead |
 | OS credential store | `keyring-core` + `windows-native-keyring-store` | 1.0.0, 1.1.0 (keyring v4 family) | desktop | Refresh token storage: one entry per server origin, `Local` persistence, entries built from an explicit store (no global default). The Windows store without default features, so no `search` and no regex (P8.4, [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)) |
@@ -3404,7 +3404,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **It counts toward the Member quota** (409 when full), like every account, and is recorded as `account.link` with `kind` offline, or a Failure for `taken` and `over_quota`.
   > - **With `allow_offline` off,** the route answers 404 like an unknown one, before the body is read; it stays registered and in the `OpenAPI` document. Turning the switch off again keeps the existing offline accounts untouched, and serve warns at startup with how many are kept. No bot may run on one while it's off (P10.5, P10.6).
   > - **The dev config** (`deploy/dev/server.toml`) turns it on, for the offline-mode test server.
-- [ ] **P9.8** 🔴 App screens:
+- [x] **P9.8** 🔴 App screens:
   - accounts list
   - **"Link Microsoft account" dialog**:
     - shows the code with a copy button
@@ -3430,6 +3430,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **fleet-client's methods**, the Tauri commands and `ApiClient` for the eleven routes come with the screens.
   > - **The threat model** gains: approving, refusing, deleting and the grant writes need a step-up; names a Manage holder can probe, bounded by the per-user limit (an accepted risk); someone at the Owner's unlocked PC can still start a link that's active at once; an Admin's linked row can be deleted only by the Owner.
 
+  > Note (P9.8, Phase 9, group F) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **as built.** The user's choices (U5–U15) and the review agents' decisions the user approved at the plan review (S1–S7):
+  > - **Where:** "Accounts" in the navigation for every role (`/accounts`): one card per account; above them, for Admins and the Owner, the links waiting for their approval as cards with Approve and Refuse. Each account has its own screen (`/accounts/<id>`) with its facts, the re-auth prompt, "Who has access" (grants by exact username, level picker, Revoke) and Delete. Cards show the re-auth prompt with "Link again" for Manage holders.
+  > - **The link screen** is its own route (`/accounts/link`, `/accounts/<id>/link-again`), in two steps: the warning and "Get a code", then the code with "Copy code", Microsoft's page (it opens by itself once), and the status, read every 2 s until it ends. The code lives only in the screen's state: starting is a direct call, and the code goes when the flow ends.
+  > - **The opener:** `open_verification_link`, a synchronous command without arguments (on the main thread; one approved `#[expect(clippy::needless_pass_by_value)]`), opens only the link the newest start answered with, checked when it arrived by `fleet_client::VerifiedLink`, a copy of group B's rule compared case by case with the server's. A bad link drops the whole answer (`invalid_verification_link`). tauri-plugin-opener 2.7.0 isn't registered. The capability grows by exactly 15 `allow-` entries (35).
+  > - **Home** shows Admins and the Owner how many links wait (an alert, and a badge on Accounts), read when Home or Accounts mounts, after the user's own writes, and when the window regains focus; no timer.
+  > - **Offline accounts** have a form behind its own button on Accounts.
+  > - **Texts:** the user's table at the plan review; a start's 429 and 503 have one text each. Long waits count down in minutes, or hours and minutes, in every form.
+  > - **Tests:** fleet-client and the bridge reach the routes without a Microsoft fake (refusals before Microsoft, offline accounts, pending rows written to the store); the 201s over fleet-client's scripted transport; the held link in-crate; two e2e stories.
+
 **Security:**
 - Refresh tokens never leave the server.
 - A test checks that logs are redacted.
@@ -3443,6 +3452,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - A real Microsoft account is linked end to end.
 - The DB contains only ciphertext.
 - `rotate-key` works on a copy of the DB.
+
+> Note (Phase 9's DoD, group F) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **how each is shown.**
+> - **A real account linked end to end:** the user's hands-on check in group F's PR, through the app against `just dev-server`, ending with the account deleted in the app and `target/dev-server` wiped.
+> - **Only ciphertext:** `at_rest::no_token_reaches_the_database_file_after_a_link_a_link_again_and_a_refresh` reads the database's files, open (with the WAL) and closed, after a link, a link again and a refresh with the fake, and finds no token or code.
+> - **`rotate-key` on a copy:** `at_rest::rotate_key_moves_a_linked_accounts_token_to_the_new_key_on_a_copy` runs the real binary's `vault rotate-key` and `vault status` on a copy with a linked account; the copy then works with the new key alone, and the original stays under the old one.
 
 ---
 
@@ -3644,6 +3658,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P11.9, from group B): **Controls.** For paused or failed bots, the app shows Resume or Reset instead of Start and Stop (ADR-0010).
 
   > Note (P11.9, from group D, the user's request): **Promotions.** When a Member is promoted to Admin (P8.8), the app shows the existing grants on their accounts, and the server provides them, so the Owner can review and revoke them. Grants made before the promotion survive it, including one an Admin gave an alt account (ADR-0010, threat model).
+
+  > Note (P11.9, from Phase 9, group F, the user's request) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **leaving a shared account.** A View or Control grantee can't remove themselves from a shared account; only a Manage holder revokes a grant. A "leave" action could come here.
 
   > Note (P11.9, from Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **demotions too.** A grant can't be made to someone with implicit Manage, but one made before a promotion stays dormant, and comes back when that Admin is demoted, so the review at a role change shows the grants the user holds as well as those on their accounts.
 

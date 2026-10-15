@@ -31,11 +31,35 @@ export async function signedIn(handlers: Partial<ApiClient> = {}, options: Signe
 
 /** The App signed in, then on `to`. */
 export async function atScreen(
-  to: "/profile" | "/profile/password" | "/profile/2fa" | "/admin/users" | "/admin/invites",
+  to:
+    | "/accounts"
+    | "/accounts/link"
+    | "/profile"
+    | "/profile/password"
+    | "/profile/2fa"
+    | "/admin/users"
+    | "/admin/invites",
   handlers: Partial<ApiClient> = {},
   options: SignedInOptions = {},
 ) {
   const app = await signedIn(handlers, options);
   await act(() => app.runtime.router.navigate({ to }));
+  return app;
+}
+
+/** The App signed in, then on account `id`'s screen, or on its link-again screen. */
+export async function atAccount(
+  id: string,
+  handlers: Partial<ApiClient> = {},
+  options: SignedInOptions & { readonly again?: boolean } = {},
+) {
+  const app = await signedIn(handlers, options);
+  await act(() =>
+    app.runtime.router.navigate(
+      options.again === true
+        ? { to: "/accounts/$id/link-again", params: { id } }
+        : { to: "/accounts/$id", params: { id } },
+    ),
+  );
   return app;
 }

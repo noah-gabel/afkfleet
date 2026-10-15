@@ -7,12 +7,20 @@
 //   /login /register the sign-in flows
 //   (app)            signed in only: header, navigation
 //     /home /server
+//     /accounts      the Microsoft accounts the user may see
+//       /accounts/link /accounts/$id /accounts/$id/link-again
 //     /profile       the user's own account, sessions and warnings
 //       /profile/password /profile/2fa   one route per flow, beside the overview
 //     /admin         Admins and the Owner only; anyone else gets "not found"
 //       /admin/users /admin/invites
 import { createMemoryHistory, createRouter } from "@tanstack/react-router";
 
+import {
+  accountRoute,
+  accountsRoute,
+  linkAgainRoute,
+  linkRoute,
+} from "../features/accounts/routes";
 import { adminRoute, invitesRoute, usersRoute } from "../features/admin/routes";
 import { loginRoute, registerRoute } from "../features/auth/routes";
 import { homeRoute } from "../features/home/routes";
@@ -31,6 +39,10 @@ const routeTree = rootRoute.addChildren([
   registerRoute,
   appRoute.addChildren([
     homeRoute,
+    accountsRoute,
+    linkRoute,
+    accountRoute,
+    linkAgainRoute,
     serverRoute,
     profileRoute,
     passwordRoute,

@@ -155,6 +155,136 @@
       "inputs": ["01900000-0000-7000-8000-000000000003"],
       "args": { "id": "01900000-0000-7000-8000-000000000003" },
       "expect": { "error": "no_server" }
+    },
+    {
+      "command": "start_link",
+      "method": "startLink",
+      "inputs": [],
+      "args": {},
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "link_status",
+      "method": "linkStatus",
+      "inputs": ["01900000-0000-7000-8000-00000000000b"],
+      "args": { "id": "01900000-0000-7000-8000-00000000000b" },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "create_offline_account",
+      "method": "createOfflineAccount",
+      "inputs": [{ "name": "AfkBot1" }],
+      "args": { "request": { "name": "AfkBot1" } },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "accounts",
+      "method": "accounts",
+      "inputs": ["01900000-0000-7000-8000-00000000000a", 10],
+      "args": { "before": "01900000-0000-7000-8000-00000000000a", "limit": 10 },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "accounts_awaiting_approval",
+      "method": "accountsAwaitingApproval",
+      "inputs": ["01900000-0000-7000-8000-00000000000a", 10],
+      "args": { "before": "01900000-0000-7000-8000-00000000000a", "limit": 10 },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "account",
+      "method": "account",
+      "inputs": ["01900000-0000-7000-8000-00000000000a"],
+      "args": { "id": "01900000-0000-7000-8000-00000000000a" },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "delete_account",
+      "method": "deleteAccount",
+      "inputs": ["01900000-0000-7000-8000-00000000000a"],
+      "args": { "id": "01900000-0000-7000-8000-00000000000a" },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "approve_account",
+      "method": "approveAccount",
+      "inputs": ["01900000-0000-7000-8000-00000000000a"],
+      "args": { "id": "01900000-0000-7000-8000-00000000000a" },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "refuse_account",
+      "method": "refuseAccount",
+      "inputs": ["01900000-0000-7000-8000-00000000000a"],
+      "args": { "id": "01900000-0000-7000-8000-00000000000a" },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "relink_account",
+      "method": "relinkAccount",
+      "inputs": ["01900000-0000-7000-8000-00000000000a"],
+      "args": { "id": "01900000-0000-7000-8000-00000000000a" },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "account_grants",
+      "method": "accountGrants",
+      "inputs": [
+        "01900000-0000-7000-8000-00000000000a",
+        "01900000-0000-7000-8000-000000000002",
+        10
+      ],
+      "args": {
+        "id": "01900000-0000-7000-8000-00000000000a",
+        "before": "01900000-0000-7000-8000-000000000002",
+        "limit": 10
+      },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "create_grant",
+      "method": "createGrant",
+      "inputs": [
+        "01900000-0000-7000-8000-00000000000a",
+        { "username": "afkbot2", "level": "view" }
+      ],
+      "args": {
+        "id": "01900000-0000-7000-8000-00000000000a",
+        "request": { "username": "afkbot2", "level": "view" }
+      },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "change_grant",
+      "method": "changeGrant",
+      "inputs": [
+        "01900000-0000-7000-8000-00000000000a",
+        "01900000-0000-7000-8000-000000000002",
+        { "level": "control" }
+      ],
+      "args": {
+        "id": "01900000-0000-7000-8000-00000000000a",
+        "user": "01900000-0000-7000-8000-000000000002",
+        "request": { "level": "control" }
+      },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "revoke_grant",
+      "method": "revokeGrant",
+      "inputs": ["01900000-0000-7000-8000-00000000000a", "01900000-0000-7000-8000-000000000002"],
+      "args": {
+        "id": "01900000-0000-7000-8000-00000000000a",
+        "user": "01900000-0000-7000-8000-000000000002"
+      },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "open_verification_link",
+      "method": "openVerificationLink",
+      "inputs": [],
+      "args": {},
+      "expect": { "error": "no_verification_link" }
     }
   ]
 }

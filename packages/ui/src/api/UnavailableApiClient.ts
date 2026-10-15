@@ -34,4 +34,19 @@ export class UnavailableApiClient implements ApiClient {
   invites = unavailable;
   createInvite = unavailable;
   revokeInvite = unavailable;
+  startLink = unavailable;
+  linkStatus = unavailable;
+  createOfflineAccount = unavailable;
+  accounts = unavailable;
+  accountsAwaitingApproval = unavailable;
+  account = unavailable;
+  deleteAccount = unavailable;
+  approveAccount = unavailable;
+  refuseAccount = unavailable;
+  relinkAccount = unavailable;
+  accountGrants = unavailable;
+  createGrant = unavailable;
+  changeGrant = unavailable;
+  revokeGrant = unavailable;
+  openVerificationLink = unavailable;
 }

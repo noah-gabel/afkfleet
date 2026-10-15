@@ -9,18 +9,24 @@ use std::sync::{Arc, Mutex};
 
 use afkfleet_desktop::keychain::StoreFactory;
 use afkfleet_desktop::profile::PROFILE_FILE;
-use afkfleet_desktop::state::AppState;
+use afkfleet_desktop::state::{AppState, LinkOpener, OpenError};
 use chrono::DateTime;
 use fleet_api_types::app::{
     CommandError, CommandErrorCode, LoginStepKind, ServerProfileRequest, ServerProfileResponse,
 };
 use fleet_api_types::auth::{LoginRequest, RegisterRequest, StepUpRequest};
+use fleet_api_types::invites::CreateInviteRequest;
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaEnrollResponse};
+use fleet_api_types::users::UserRole;
 use fleet_api_types::{ErrorCode, SecretText};
 use fleet_client::{
     Client, ClientConfig, MemoryStore, ServerUrl, SessionStore, StoreError, StoreOp, Trust,
+    VerifiedLink,
 };
+use fleet_core::account::AccountStatus;
+use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::auth::NewPassword;
+use fleet_core::id::{AccountId, UserId};
 use fleet_core::system::Clock as _;
 use fleet_core::value::Username;
 use fleet_server::app::users::UserService;
@@ -33,9 +39,12 @@ use fleet_server::http::rate_limit::TrustedProxies;
 use fleet_server::infra::crypto::passwords::Argon2Passwords;
 use fleet_server::infra::crypto::vault::{DerivedKey, VaultKeys};
 use fleet_server::infra::msauth::ReqwestMicrosoftAuth;
-use fleet_server::infra::sqlite::{self, DatabaseOptions};
+use fleet_server::infra::sqlite::{self, Database, DatabaseOptions};
 use fleet_server::infra::system::TokioPace;
+use fleet_server::ports::accounts::{AccountCredential, McAccount};
+use fleet_server::ports::audit::NewAuditEntry;
 use fleet_server::ports::passwords::Passwords;
+use fleet_server::ports::store::Store as _;
 use fleet_startup::signals::{ShutdownSignals, Signal};
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use secrecy::{ExposeSecret as _, SecretBox, SecretString};
@@ -71,6 +80,9 @@ const STOP_WAIT: Duration = Duration::from_secs(30);
 pub(crate) struct Server {
     pub(crate) url: ServerUrl,
     clock: ManualClock,
+    /// The server's database, for rows no route can make without
+    /// Microsoft: a pending link ([`Server::pending_account`]).
+    db: Database,
     stop: mpsc::Sender<Signal>,
     running: JoinSet<Exit>,
     _dir: TempDir,
@@ -123,6 +135,7 @@ impl Server {
             pace: Arc::new(TokioPace),
         };
         let app = app_with(&config, &database, keys, lockout_key, passwords, ports);
+        let db = database.clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = ServerUrl::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
         let (stop, signals) = ChannelSignals::new();
@@ -131,6 +144,7 @@ impl Server {
         Self {
             url,
             clock,
+            db,
             stop,
             running,
             _dir: dir,
@@ -204,6 +218,63 @@ impl Server {
         self.next_step();
     }
 
+    /// Moves the clock on by `by`.
+    pub(crate) fn advance(&self, by: Duration) {
+        self.clock.advance(by);
+    }
+
+    /// A Member named `username`, invited by `owner` (stepped up within 5
+    /// minutes) and logged in through a bridge of their own: the bridge and
+    /// the user's ID.
+    pub(crate) async fn member(&self, owner: &Bridge, username: &str) -> (Bridge, UserId) {
+        let invite = owner
+            .state
+            .create_invite(CreateInviteRequest {
+                role: UserRole::Member,
+            })
+            .await
+            .unwrap();
+        let bridge = Bridge::on(self).await;
+        let registered = bridge
+            .state
+            .register(register(invite.code.expose(), username))
+            .await
+            .unwrap();
+        self.first_login(&bridge, username).await;
+        (bridge, registered.id)
+    }
+
+    /// A Microsoft account of `owner`'s, numbered `n`, waiting for
+    /// approval, as a Member's link leaves it. It's written straight to the
+    /// database, since a link needs Microsoft; its envelope is opaque bytes,
+    /// which approving or refusing never opens.
+    pub(crate) async fn pending_account(&self, owner: UserId, n: u8) -> AccountId {
+        let now = self.clock.now();
+        let id = AccountId::new_v7(now, [n; 10]).unwrap();
+        let account = McAccount {
+            id,
+            owner,
+            name: format!("AfkBot{n}").parse().unwrap(),
+            created_at: now,
+            credential: AccountCredential::Microsoft {
+                uuid: format!("00000000-0000-4000-8000-0000000000{n:02x}")
+                    .parse()
+                    .unwrap(),
+                refresh_envelope: vec![n; 61],
+                status: AccountStatus::Pending,
+            },
+        };
+        let mut tx = self.db.write().await.unwrap();
+        tx.accounts().insert(&account).await.unwrap();
+        let entry = NewAuditEntry::new(
+            now,
+            AuditAction::try_from("test.account_setup").unwrap(),
+            AuditOutcome::Success,
+        );
+        tx.commit(entry).await.unwrap();
+        id
+    }
+
     /// A bridge set up for this server, with the Owner logged in.
     pub(crate) async fn owner(&self) -> (Bridge, Totp) {
         let bridge = Bridge::on(self).await;
@@ -213,10 +284,11 @@ impl Server {
 }
 
 /// An [`AppState`] as the app holds it, over a profile file in a fresh
-/// folder and a test keychain.
+/// folder, a test keychain and an opener that records what it opens.
 pub(crate) struct Bridge {
     pub(crate) state: AppState<TestFactory>,
     pub(crate) keychain: TestFactory,
+    pub(crate) opener: Arc<RecordingOpener>,
     pub(crate) dir: TempDir,
 }
 
@@ -229,10 +301,16 @@ impl Bridge {
     /// The state the app would load from `dir`'s profile file and
     /// `keychain`, as after a restart.
     pub(crate) fn over(dir: TempDir, keychain: TestFactory) -> Self {
-        let state = AppState::load(dir.path().join(PROFILE_FILE), keychain.clone());
+        let opener = Arc::new(RecordingOpener::default());
+        let state = AppState::load(
+            dir.path().join(PROFILE_FILE),
+            keychain.clone(),
+            Arc::clone(&opener) as Arc<dyn LinkOpener>,
+        );
         Self {
             state,
             keychain,
+            opener,
             dir,
         }
     }
@@ -250,6 +328,26 @@ impl Bridge {
             "{answer:?}"
         );
         bridge
+    }
+}
+
+/// Records each link it's asked to open, and opens nothing.
+#[derive(Default)]
+pub(crate) struct RecordingOpener {
+    opened: Mutex<Vec<String>>,
+}
+
+impl RecordingOpener {
+    /// The links it was asked to open, in order.
+    pub(crate) fn opened(&self) -> Vec<String> {
+        self.opened.lock().unwrap().clone()
+    }
+}
+
+impl LinkOpener for RecordingOpener {
+    fn open(&self, link: &VerifiedLink) -> Result<(), OpenError> {
+        self.opened.lock().unwrap().push(link.as_str().to_owned());
+        Ok(())
     }
 }
 
@@ -417,7 +515,9 @@ pub(crate) fn assert_no_token(answer: &impl serde::Serialize) {
 }
 
 /// The server's config: production defaults, its database in `dir`. The
-/// vault's key comes from memory, so its file is never read.
+/// vault's key comes from memory, so its file is never read. One exception:
+/// offline accounts are on, since they're the only accounts these tests can
+/// create without Microsoft (ADR-0018, group F).
 fn config(dir: &TempDir) -> ServerConfig {
     ServerConfig {
         dev_mode: false,
@@ -440,7 +540,10 @@ fn config(dir: &TempDir) -> ServerConfig {
             key_files: BTreeMap::from([(1, dir.path().join("vault-key-1"))]),
             active_key_id: 1,
         },
-        accounts: AccountsConfig::default(),
+        accounts: AccountsConfig {
+            allow_offline: true,
+            ..AccountsConfig::default()
+        },
     }
 }
 

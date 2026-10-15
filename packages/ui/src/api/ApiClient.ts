@@ -2,9 +2,19 @@
 // the desktop app's Rust side. The UI never knows the platform: `apps/desktop` injects a
 // `TauriApiClient`, tests a `FakeApiClient`. No method takes or returns a token. Every
 // method rejects with an `ApiError` (ApiError.ts).
+import type { AccountPage } from "../generated/AccountPage";
+import type { AccountResponse } from "../generated/AccountResponse";
+import type { ChangeGrantRequest } from "../generated/ChangeGrantRequest";
 import type { CreatedInviteResponse } from "../generated/CreatedInviteResponse";
+import type { CreatedOfflineAccountResponse } from "../generated/CreatedOfflineAccountResponse";
+import type { CreateGrantRequest } from "../generated/CreateGrantRequest";
 import type { CreateInviteRequest } from "../generated/CreateInviteRequest";
+import type { CreateOfflineAccountRequest } from "../generated/CreateOfflineAccountRequest";
+import type { GrantPage } from "../generated/GrantPage";
+import type { GrantResponse } from "../generated/GrantResponse";
 import type { InvitePage } from "../generated/InvitePage";
+import type { LinkFlowResponse } from "../generated/LinkFlowResponse";
+import type { LinkStartedResponse } from "../generated/LinkStartedResponse";
 import type { LoginRequest } from "../generated/LoginRequest";
 import type { LoginStepResponse } from "../generated/LoginStepResponse";
 import type { LogoutResponse } from "../generated/LogoutResponse";
@@ -66,6 +76,38 @@ export interface ApiClient {
   createInvite(request: CreateInviteRequest): Promise<CreatedInviteResponse>;
   /** Revokes a pending invite, after a step-up. */
   revokeInvite(id: string): Promise<void>;
+  /** Starts linking a Microsoft account; its answer carries the user code, shown this once. */
+  startLink(): Promise<LinkStartedResponse>;
+  /** The state of the caller's link flow; it never carries the code. */
+  linkStatus(id: string): Promise<LinkFlowResponse>;
+  /** A new offline account, while the server allows them (test servers). */
+  createOfflineAccount(
+    request: CreateOfflineAccountRequest,
+  ): Promise<CreatedOfflineAccountResponse>;
+  /** A page of the accounts the caller may see. */
+  accounts(before?: string, limit?: number): Promise<AccountPage>;
+  /** A page of the pending links the caller may approve or refuse. */
+  accountsAwaitingApproval(before?: string, limit?: number): Promise<AccountPage>;
+  /** One account, as the caller sees it. */
+  account(id: string): Promise<AccountResponse>;
+  /** Deletes an account with its grants, after a step-up. */
+  deleteAccount(id: string): Promise<void>;
+  /** Approves a pending link, after a step-up. */
+  approveAccount(id: string): Promise<AccountResponse>;
+  /** Refuses a pending link, which deletes it, after a step-up. */
+  refuseAccount(id: string): Promise<void>;
+  /** Starts linking an account again; its answer carries the user code, shown this once. */
+  relinkAccount(id: string): Promise<LinkStartedResponse>;
+  /** A page of who else has access to an account (Manage). */
+  accountGrants(id: string, before?: string, limit?: number): Promise<GrantPage>;
+  /** Gives a user access by their exact username, after a step-up. */
+  createGrant(id: string, request: CreateGrantRequest): Promise<GrantResponse>;
+  /** Changes a grant's level, after a step-up. */
+  changeGrant(id: string, user: string, request: ChangeGrantRequest): Promise<GrantResponse>;
+  /** Revokes a grant, after a step-up. */
+  revokeGrant(id: string, user: string): Promise<void>;
+  /** Opens Microsoft's sign-in page: the link the newest start answered with, checked in Rust. */
+  openVerificationLink(): Promise<void>;
 }
 
 /** A method of the API. */
@@ -93,4 +135,19 @@ export const API_METHODS = [
   "invites",
   "createInvite",
   "revokeInvite",
+  "startLink",
+  "linkStatus",
+  "createOfflineAccount",
+  "accounts",
+  "accountsAwaitingApproval",
+  "account",
+  "deleteAccount",
+  "approveAccount",
+  "refuseAccount",
+  "relinkAccount",
+  "accountGrants",
+  "createGrant",
+  "changeGrant",
+  "revokeGrant",
+  "openVerificationLink",
 ] as const satisfies readonly ApiMethod[];

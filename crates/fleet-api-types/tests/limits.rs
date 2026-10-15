@@ -12,13 +12,14 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::Path;
 
+use fleet_api_types::accounts::MC_NAME_MAX_CHARS;
 use fleet_api_types::app::{CA_PEM_MAX_BYTES, SERVER_URL_MAX_BYTES};
 use fleet_api_types::auth::{NEW_PASSWORD_MAX_CHARS, PASSWORD_MAX_CHARS, USERNAME_MAX_CHARS};
 use fleet_api_types::ids::ID_CHARS;
 use fleet_api_types::mfa::{CODE_MAX_CHARS, TOKEN_MAX_CHARS};
 use fleet_api_types::page::PAGE_MAX;
 use fleet_core::auth::{NewPassword, STEP_UP_WINDOW};
-use fleet_core::value::Username;
+use fleet_core::value::{McUsername, Username};
 
 /// Every limit the UI mirrors, by its name in both languages.
 fn expected() -> BTreeMap<&'static str, u64> {
@@ -36,6 +37,8 @@ fn expected() -> BTreeMap<&'static str, u64> {
         ("SERVER_URL_MAX_BYTES", usize(SERVER_URL_MAX_BYTES)),
         ("CA_PEM_MAX_BYTES", usize(CA_PEM_MAX_BYTES)),
         ("STEP_UP_WINDOW_SECS", STEP_UP_WINDOW.as_secs()),
+        ("MC_NAME_MIN_CHARS", usize(McUsername::MIN_LEN)),
+        ("MC_NAME_MAX_CHARS", usize(MC_NAME_MAX_CHARS)),
     ])
 }
 

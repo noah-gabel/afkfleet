@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-accounts-awaiting-approval"
+description = "Enables the accounts_awaiting_approval command without any pre-configured scope."
+commands.allow = ["accounts_awaiting_approval"]
+
+[[permission]]
+identifier = "deny-accounts-awaiting-approval"
+description = "Denies the accounts_awaiting_approval command without any pre-configured scope."
+commands.deny = ["accounts_awaiting_approval"]

@@ -15,14 +15,22 @@
 //! - **The server must answer first.** The new client's `health_live` runs
 //!   before the exclusive guard is taken, so a slow or unreachable server
 //!   never blocks the other commands, and an error changes nothing.
+//! - **Microsoft's sign-in page opens only from a checked link** (P9.8,
+//!   ADR-0018). The newest link or re-link answer's link is held here once
+//!   fleet-client's [`VerifiedLink`] passed it, and only that one opens,
+//!   through a [`LinkOpener`]; the webview never names a URL. It's held
+//!   behind its own short lock, outside the connection's, since the open
+//!   command runs on the main thread and must never wait for a switch. A
+//!   bad link, a login, a logout and a switch forget it.
 
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use fleet_api_types::app::{
     CommandError, CommandErrorCode, LogoutResponse, ProfileUnreadable, ServerProfileRequest,
     ServerProfileResponse, ServerProfileState,
 };
-use fleet_client::{Client, ClientError};
+use fleet_client::{Client, ClientError, VerifiedLink};
 use garde::Validate as _;
 use tauri::async_runtime::RwLock;
 
@@ -30,14 +38,36 @@ use crate::error;
 use crate::keychain::StoreFactory;
 use crate::profile::{self, Loaded, ServerProfile};
 
-/// The app's state: where the profile lives, the keychain, and the current
-/// connection; see the [module docs](self).
+/// Opens a checked link to Microsoft's sign-in page in the default browser.
+/// The app's one is tauri-plugin-opener's `open_url`; tests record the
+/// links instead.
+pub trait LinkOpener: Send + Sync + 'static {
+    /// Opens `link`.
+    ///
+    /// # Errors
+    /// [`OpenError`] when the system refuses to open it.
+    fn open(&self, link: &VerifiedLink) -> Result<(), OpenError>;
+}
+
+/// Why a link wasn't opened. It doesn't carry the system's message.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the system couldn't open the link")]
+pub struct OpenError;
+
+/// The app's state: where the profile lives, the keychain, the current
+/// connection, and the link to Microsoft's sign-in page; see the
+/// [module docs](self).
 pub struct AppState<F: StoreFactory> {
     profile_path: PathBuf,
     factory: F,
     /// The connection: every command reads it for its whole call; only
     /// `set_server_profile` writes it.
     pub(crate) conn: RwLock<Conn<F::Store>>,
+    /// Opens the held link.
+    opener: Arc<dyn LinkOpener>,
+    /// The newest link or re-link answer's checked link. Its guard is held
+    /// only to read or replace it, never across an `.await`.
+    link: Mutex<Option<VerifiedLink>>,
 }
 
 /// The current connection, or why there's none.
@@ -70,9 +100,10 @@ impl<S> Conn<S> {
 
 impl<F: StoreFactory> AppState<F> {
     /// The state at startup: the profile saved at `profile_path`, if it can
-    /// be used, with its client over `factory`'s store.
+    /// be used, with its client over `factory`'s store; links open through
+    /// `opener`.
     #[must_use]
-    pub fn load(profile_path: PathBuf, factory: F) -> Self {
+    pub fn load(profile_path: PathBuf, factory: F, opener: Arc<dyn LinkOpener>) -> Self {
         let conn = match profile::load(&profile_path) {
             Loaded::NotSet => Conn::NotSet,
             Loaded::Unreadable(reason) => Conn::Unreadable(reason),
@@ -85,7 +116,36 @@ impl<F: StoreFactory> AppState<F> {
             profile_path,
             factory,
             conn: RwLock::new(conn),
+            opener,
+            link: Mutex::new(None),
         }
+    }
+
+    /// The `open_verification_link` command: opens the held link to
+    /// Microsoft's sign-in page. It takes no argument, so nothing the
+    /// webview sends can name a URL.
+    ///
+    /// # Errors
+    /// `no_verification_link` when no link is held; `verification_link_open`
+    /// when the system refuses to open it.
+    pub fn open_verification_link(&self) -> Result<(), CommandError> {
+        // Cloned out, so the guard isn't held while the system opens it.
+        let link = self.held_link().clone();
+        let link = link.ok_or_else(|| CommandError::new(CommandErrorCode::NoVerificationLink))?;
+        self.opener
+            .open(&link)
+            .map_err(|_| CommandError::new(CommandErrorCode::VerificationLinkOpen))
+    }
+
+    /// Holds `link`, or forgets the held one.
+    pub(crate) fn hold_link(&self, link: Option<VerifiedLink>) {
+        *self.held_link() = link;
+    }
+
+    /// The held link's slot. A poisoned lock still holds a whole value: the
+    /// guard only ever replaces it.
+    fn held_link(&self) -> std::sync::MutexGuard<'_, Option<VerifiedLink>> {
+        self.link.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The `server_profile` command: the current profile, or why there's
@@ -149,6 +209,8 @@ impl<F: StoreFactory> AppState<F> {
             .map_err(|_| error::profile_save())?;
         let view = profile.view();
         *conn = Conn::Set(Connection { profile, client });
+        // The old server's link flow can't be finished on the new one.
+        self.hold_link(None);
         Ok(ServerProfileResponse::Switched {
             profile: view,
             logout,

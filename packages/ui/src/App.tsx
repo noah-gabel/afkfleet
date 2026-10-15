@@ -5,6 +5,7 @@ import { useState } from "react";
 import type { ApiClient } from "./api/ApiClient";
 import { ApiClientProvider } from "./api/context";
 import { StoresProvider } from "./app/context";
+import { useWindowFocus } from "./app/focus";
 import { type AppRuntime, createAppRuntime } from "./app/runtime";
 import { Toaster } from "./components/Toaster";
 import { AppErrorBoundary } from "./features/shell/components/AppErrorBoundary";
@@ -23,9 +24,10 @@ export function App({ apiClient }: { apiClient: ApiClient }) {
 /**
  * The app over an existing runtime: the error boundary around everything, the providers,
  * the router and the toasts. Tests render it to reach the runtime; `onRestart` replaces
- * the error screen's reload.
+ * the error screen's reload. While it's mounted, the window's focus counts (app/focus.ts).
  */
 export function AppRoot({ runtime, onRestart }: { runtime: AppRuntime; onRestart?: () => void }) {
+  useWindowFocus();
   return (
     <AppErrorBoundary {...(onRestart === undefined ? {} : { onRestart })}>
       <ApiClientProvider client={runtime.apiClient}>

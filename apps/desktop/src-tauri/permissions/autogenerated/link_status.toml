@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-link-status"
+description = "Enables the link_status command without any pre-configured scope."
+commands.allow = ["link_status"]
+
+[[permission]]
+identifier = "deny-link-status"
+description = "Denies the link_status command without any pre-configured scope."
+commands.deny = ["link_status"]

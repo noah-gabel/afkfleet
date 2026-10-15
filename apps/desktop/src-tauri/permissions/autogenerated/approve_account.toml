@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-approve-account"
+description = "Enables the approve_account command without any pre-configured scope."
+commands.allow = ["approve_account"]
+
+[[permission]]
+identifier = "deny-approve-account"
+description = "Denies the approve_account command without any pre-configured scope."
+commands.deny = ["approve_account"]

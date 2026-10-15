@@ -8,7 +8,7 @@ export type Privilege = "member" | "admin";
 
 /** One navigation entry. */
 export interface NavItem {
-  readonly to: "/home" | "/server" | "/profile" | "/admin/users" | "/admin/invites";
+  readonly to: "/home" | "/accounts" | "/server" | "/profile" | "/admin/users" | "/admin/invites";
   readonly label: string;
   readonly privilege: Privilege;
 }
@@ -16,6 +16,7 @@ export interface NavItem {
 /** Every entry, in display order. */
 export const NAV_ITEMS: readonly NavItem[] = [
   { to: "/home", label: "Home", privilege: "member" },
+  { to: "/accounts", label: "Accounts", privilege: "member" },
   { to: "/server", label: "Server", privilege: "member" },
   { to: "/profile", label: "Profile", privilege: "member" },
   { to: "/admin/users", label: "Users", privilege: "admin" },

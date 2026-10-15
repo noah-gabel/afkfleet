@@ -7,6 +7,8 @@ import {
   CA_PEM_MAX_BYTES,
   CODE_MAX_CHARS,
   ID_CHARS,
+  MC_NAME_MAX_CHARS,
+  MC_NAME_MIN_CHARS,
   NEW_PASSWORD_MAX_CHARS,
   NEW_PASSWORD_MIN_CHARS,
   PAGE_MAX,
@@ -129,3 +131,23 @@ export const serverProfileRequest = z.strictObject({
     )
     .optional(),
 });
+
+/** A Minecraft name: the server's `McUsername` rule, in its own words. */
+export const mcName = z
+  .string()
+  .refine(
+    (text) =>
+      text.length >= MC_NAME_MIN_CHARS &&
+      text.length <= MC_NAME_MAX_CHARS &&
+      /^[A-Za-z0-9_]+$/.test(text),
+    `must be ${MC_NAME_MIN_CHARS} to ${MC_NAME_MAX_CHARS} letters, digits or \`_\``,
+  );
+
+export const createOfflineAccountRequest = z.strictObject({ name: mcName });
+
+/** A grant's level. */
+export const grantLevel = z.enum(["view", "control", "manage"]);
+
+export const createGrantRequest = z.strictObject({ username, level: grantLevel });
+
+export const changeGrantRequest = z.strictObject({ level: grantLevel });
