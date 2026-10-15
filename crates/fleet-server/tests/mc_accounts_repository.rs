@@ -4,7 +4,8 @@
 //! UUID, pending ones included; an offline account by its name in any
 //! case), the table refuses what its CHECKs and foreign key forbid, a
 //! status is written and read with its reason, and a rename is a
-//! compare-and-set on the old name.
+//! compare-and-set on the old name. The Member quota counts an owner's
+//! accounts, and a refused insert leaves its transaction usable.
 //!
 //! Each test gets a fresh database from `#[sqlx::test]` and opens it with
 //! `Database::connect`, the production settings. Time isn't paused: sqlx's
@@ -22,7 +23,7 @@ use fleet_core::id::{AccountId, UserId};
 use fleet_core::value::{McUsername, Username};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountCredential, InsertAccountError, McAccount};
-use fleet_server::ports::audit::NewAuditEntry;
+use fleet_server::ports::audit::{AuditLimit, AuditPage, NewAuditEntry};
 use fleet_server::ports::store::{Store, StoreError};
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use secrecy::SecretString;
@@ -329,6 +330,137 @@ async fn a_second_account_with_the_same_id_is_a_database_error(
         ),
         "{again:?}"
     );
+}
+
+// --- Counting and a refused insert (P9.4) ------------------------------------------------
+
+#[sqlx::test(migrations = false)]
+async fn the_owned_count_counts_every_status_and_kind_of_one_owner(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(&db, 1).await;
+    let other = add_user(&db, 2).await;
+    let nobody = add_user(&db, 3).await;
+    let owned = [
+        account(
+            owner,
+            1,
+            "Pending1",
+            microsoft(PROFILE, 1, AccountStatus::Pending),
+        ),
+        account(
+            owner,
+            2,
+            "Active1",
+            microsoft(OTHER_PROFILE, 2, AccountStatus::Active),
+        ),
+        account(
+            owner,
+            3,
+            "Reauth1",
+            microsoft(THIRD_PROFILE, 3, AccountStatus::ReauthRequired),
+        ),
+        account(
+            owner,
+            4,
+            "Refused1",
+            microsoft(
+                "0f0e0d0c-0b0a-4908-8706-050403020100",
+                4,
+                AccountStatus::Refused(RefusalReason::NotOwned),
+            ),
+        ),
+        account(owner, 5, "Offline1", AccountCredential::Offline),
+    ];
+    for one in &owned {
+        insert(&db, one).await.unwrap();
+    }
+    insert(
+        &db,
+        &account(other, 6, "Theirs", AccountCredential::Offline),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(db.accounts().count_owned_by(owner).await.unwrap(), 5);
+    assert_eq!(db.accounts().count_owned_by(other).await.unwrap(), 1);
+    assert_eq!(db.accounts().count_owned_by(nobody).await.unwrap(), 0);
+    let mut tx = db.write().await.unwrap();
+    assert_eq!(tx.accounts().count_owned_by(owner).await.unwrap(), 5);
+    assert_eq!(tx.accounts().count_owned_by(nobody).await.unwrap(), 0);
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_count_in_a_transaction_sees_its_own_insert(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(&db, 1).await;
+    let mut tx = db.write().await.unwrap();
+
+    tx.accounts()
+        .insert(&account(owner, 1, "OffBot", AccountCredential::Offline))
+        .await
+        .unwrap();
+
+    assert_eq!(tx.accounts().count_owned_by(owner).await.unwrap(), 1);
+    assert_eq!(db.accounts().count_owned_by(owner).await.unwrap(), 0);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_taken_insert_leaves_the_transaction_usable_for_its_entry(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    // The link flow commits its Failure entry in the transaction whose
+    // insert was refused (ADR-0018): SQLite backs out only that statement.
+    let db = database(options).await;
+    let first = add_user(&db, 1).await;
+    let second = add_user(&db, 2).await;
+    insert(
+        &db,
+        &account(
+            first,
+            1,
+            "AfkBot1",
+            microsoft(PROFILE, 1, AccountStatus::Pending),
+        ),
+    )
+    .await
+    .unwrap();
+    let failure = NewAuditEntry::new(
+        at(T0),
+        AuditAction::try_from("test.accounts_refused").unwrap(),
+        AuditOutcome::Failure,
+    );
+
+    let mut tx = db.write().await.unwrap();
+    let again = tx
+        .accounts()
+        .insert(&account(
+            second,
+            2,
+            "AfkBot2",
+            microsoft(PROFILE, 2, AccountStatus::Pending),
+        ))
+        .await;
+    tx.commit(failure).await.unwrap();
+
+    assert!(matches!(again, Err(InsertAccountError::Taken)), "{again:?}");
+    assert_eq!(rows(db.read_pool()).await, 1);
+    let newest = db
+        .audit()
+        .list(AuditPage {
+            before: None,
+            limit: AuditLimit::new(1).unwrap(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(newest[0].action.as_str(), "test.accounts_refused");
+    assert_eq!(newest[0].outcome, AuditOutcome::Failure);
 }
 
 // --- Statuses and names (P9.5) ------------------------------------------------------------

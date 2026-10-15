@@ -21,8 +21,8 @@ use fleet_server::app::lockout::LockoutService;
 use fleet_server::cli::housekeeping::Housekeeping;
 use fleet_server::cli::serve::App;
 use fleet_server::config::{
-    AuthConfig, DatabaseConfig, HttpConfig, LogConfig, LogFormat, RateLimitConfig, ServerConfig,
-    VaultConfig,
+    AccountsConfig, AuthConfig, DatabaseConfig, HttpConfig, LogConfig, LogFormat, RateLimitConfig,
+    ServerConfig, VaultConfig,
 };
 use fleet_server::http::rate_limit::RateLimits;
 use fleet_server::http::rate_limit::TrustedProxies;
@@ -131,6 +131,7 @@ pub(crate) fn server_config(dir: &Path, bind: SocketAddr, dev_mode: bool) -> Ser
             key_files: BTreeMap::from([(1, vault_key(dir))]),
             active_key_id: 1,
         },
+        accounts: AccountsConfig::default(),
     }
 }
 
@@ -312,8 +313,8 @@ pub(crate) fn capture() -> (LogBuffer, tracing::subscriber::DefaultGuard) {
 }
 
 /// `router` with the housekeeping `serve` runs beside it: the default
-/// limits, a lockout over `database` and an empty challenge store, on a
-/// clock that never moves, with a fixed lockout key.
+/// limits, a lockout over `database`, an empty challenge store and idle
+/// link flows, on a clock that never moves, with a fixed lockout key.
 pub(crate) fn app_of(router: Router, database: &Database) -> App {
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(
         DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
@@ -328,13 +329,16 @@ pub(crate) fn app_of(router: Router, database: &Database) -> App {
         Arc::clone(&clock),
         Arc::new(Sha256Tokens::new(Arc::new(SeededRandom::new(9)))),
     );
+    let link_flows = idle_link_flows(database);
     App {
         router,
         housekeeping: Housekeeping::new(
             RateLimits::new(&RateLimitConfig::default(), clock),
             lockout,
             challenges,
+            link_flows.flows(),
         ),
+        link_flows,
     }
 }
 
@@ -345,4 +349,43 @@ impl<T> Drop for AbortOnDrop<T> {
     fn drop(&mut self) {
         self.0.abort();
     }
+}
+
+/// The link flows, which these tests never start (P9.4): a service over
+/// `db` with Microsoft's real client, never called.
+fn idle_link_flows(
+    db: &fleet_server::infra::sqlite::Database,
+) -> fleet_server::app::link_flows::LinkFlowService {
+    use fleet_server::app::link_flows::{LinkFlowPorts, LinkFlowService, LinkFlowSettings};
+    let clock: Arc<dyn fleet_core::system::Clock> =
+        Arc::new(fleet_testkit::system::ManualClock::new(
+            chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+        ));
+    let random: Arc<dyn fleet_core::system::SecureRandom> =
+        Arc::new(fleet_testkit::system::SeededRandom::new(3));
+    let keys = fleet_server::infra::crypto::vault::VaultKeys::from_keys(
+        std::collections::BTreeMap::from([(1, secrecy::SecretBox::new(Box::new([1_u8; 32])))]),
+        1,
+    )
+    .unwrap();
+    LinkFlowService::new(
+        LinkFlowPorts {
+            microsoft: Arc::new(
+                fleet_server::infra::msauth::ReqwestMicrosoftAuth::new(Arc::clone(&clock)).unwrap(),
+            ),
+            vault: Arc::new(fleet_server::infra::crypto::vault::XChaChaVault::new(
+                keys,
+                Arc::clone(&random),
+            )),
+            store: Arc::new(db.clone()),
+            pace: Arc::new(fleet_server::infra::system::TokioPace),
+            clock,
+            random,
+        },
+        LinkFlowSettings {
+            total: core::num::NonZeroU32::MIN,
+            per_user_per_day: core::num::NonZeroU32::MIN,
+            max_per_member: core::num::NonZeroU32::MIN,
+        },
+    )
 }

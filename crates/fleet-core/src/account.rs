@@ -12,9 +12,25 @@
 //!
 //! A status is read back from its two columns with
 //! [`AccountStatus::from_columns`]: only a refused account has a reason.
+//!
+//! # Linking (P9.4, P9.7, ADR-0018)
+//! Whoever links an account owns it. A Member owns at most
+//! `[accounts] max_per_member` accounts of any kind and status
+//! ([`over_quota`]); Admins and the Owner have no quota. A new Microsoft
+//! link is [`AccountStatus::Pending`] until someone above the linker approves
+//! it, except the Owner's own ([`new_link_status`]). A user starts at most
+//! `[rate_limits] link_flows_per_user_per_day` link flows in any
+//! [`LINK_START_WINDOW`] ([`link_start_wait`]).
 
 use core::fmt;
+use core::num::NonZeroU32;
 use core::str::FromStr;
+use core::time::Duration;
+
+use chrono::{DateTime, Utc};
+
+use crate::authz::Role;
+use crate::time::{add, elapsed};
 
 /// Why a stored name isn't a known account kind, status or reason.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -217,6 +233,62 @@ impl fmt::Display for AccountStatus {
     }
 }
 
+/// The window the daily cap on link flows counts starts in: a start counts
+/// until it's this old.
+pub const LINK_START_WINDOW: Duration = Duration::from_hours(24);
+
+/// Whether a user with `role` who owns `owned` accounts, of any kind and
+/// status, may not link another: only a Member has a quota,
+/// `max_per_member`.
+#[must_use]
+pub const fn over_quota(role: Role, owned: u32, max_per_member: u32) -> bool {
+    matches!(role, Role::Member) && owned >= max_per_member
+}
+
+/// The status a new Microsoft link of a user with `role` starts in: the
+/// Owner's is active at once, everyone else's waits for approval (ADR-0018).
+#[must_use]
+pub const fn new_link_status(role: Role) -> AccountStatus {
+    match role {
+        Role::Owner => AccountStatus::Active,
+        Role::Admin | Role::Member => AccountStatus::Pending,
+    }
+}
+
+/// How long a user must wait at `now` before starting another link flow,
+/// given the times of their counted `starts` and the `cap` on starts in a
+/// [`LINK_START_WINDOW`]: `None` when they may start one now.
+///
+/// A start stops counting once it's [`LINK_START_WINDOW`] old. The wait
+/// lasts until enough of the counted starts are that old to bring the user
+/// below the cap, which is the oldest one whenever exactly `cap` count.
+#[must_use]
+pub fn link_start_wait(
+    starts: &[DateTime<Utc>],
+    cap: NonZeroU32,
+    now: DateTime<Utc>,
+) -> Option<Duration> {
+    let mut counted: Vec<DateTime<Utc>> = starts
+        .iter()
+        .copied()
+        .filter(|start| elapsed(*start, now) < LINK_START_WINDOW)
+        .collect();
+    let count = u32::try_from(counted.len()).unwrap_or(u32::MAX);
+    let excess = count.checked_sub(cap.get())?;
+    // `excess + 1` starts must age out: the last of them is the one at index
+    // `excess`, oldest first.
+    counted.sort_unstable();
+    let index = usize::try_from(excess).unwrap_or(usize::MAX);
+    let last_to_age_out = counted.get(index)?;
+    let free_at = add(*last_to_age_out, LINK_START_WINDOW);
+    Some(
+        free_at
+            .signed_duration_since(now)
+            .to_std()
+            .unwrap_or(Duration::ZERO),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
@@ -364,6 +436,121 @@ mod tests {
         assert_eq!(
             AccountError::UnknownReason.to_string(),
             "unknown refusal reason"
+        );
+    }
+
+    // Linking.
+
+    /// The start of every link test, in milliseconds.
+    const T0: i64 = 1_800_000_000_000;
+
+    fn at(millis: i64) -> DateTime<Utc> {
+        DateTime::from_timestamp_millis(millis).unwrap()
+    }
+
+    fn hours(n: i64) -> i64 {
+        n * 3_600_000
+    }
+
+    fn cap(n: u32) -> NonZeroU32 {
+        NonZeroU32::new(n).unwrap()
+    }
+
+    #[rstest]
+    #[case::member_below(Role::Member, 2, 3, false)]
+    #[case::member_at(Role::Member, 3, 3, true)]
+    #[case::member_above(Role::Member, 4, 3, true)]
+    #[case::member_none_of_one(Role::Member, 0, 1, false)]
+    #[case::admin_far_above(Role::Admin, 50, 3, false)]
+    #[case::owner_far_above(Role::Owner, 50, 3, false)]
+    fn a_member_at_the_quota_is_over_it_admins_and_the_owner_never(
+        #[case] role: Role,
+        #[case] owned: u32,
+        #[case] max: u32,
+        #[case] over: bool,
+    ) {
+        assert_eq!(over_quota(role, owned, max), over);
+    }
+
+    #[rstest]
+    #[case::member(Role::Member, AccountStatus::Pending)]
+    #[case::admin(Role::Admin, AccountStatus::Pending)]
+    #[case::owner(Role::Owner, AccountStatus::Active)]
+    fn the_owners_link_is_active_everyone_elses_pending(
+        #[case] role: Role,
+        #[case] status: AccountStatus,
+    ) {
+        assert_eq!(new_link_status(role), status);
+    }
+
+    #[test]
+    fn the_window_is_a_day() {
+        assert_eq!(LINK_START_WINDOW, Duration::from_hours(24));
+    }
+
+    #[test]
+    fn starts_below_the_cap_need_no_wait() {
+        let starts = [at(T0), at(T0 + hours(1))];
+
+        assert_eq!(link_start_wait(&starts, cap(3), at(T0 + hours(2))), None);
+        assert_eq!(link_start_wait(&[], cap(1), at(T0)), None);
+    }
+
+    #[test]
+    fn the_tenth_start_in_24_h_waits_until_one_ages_out() {
+        // Ten starts an hour apart; the first one is 9 h old at `now`.
+        let starts: Vec<_> = (0..10).map(|n| at(T0 + hours(n))).collect();
+        let now = at(T0 + hours(9));
+
+        assert_eq!(
+            link_start_wait(&starts, cap(10), now),
+            Some(Duration::from_hours(15))
+        );
+    }
+
+    #[test]
+    fn the_order_of_the_starts_doesnt_matter() {
+        let starts = [at(T0 + hours(5)), at(T0), at(T0 + hours(2))];
+
+        assert_eq!(
+            link_start_wait(&starts, cap(3), at(T0 + hours(6))),
+            Some(Duration::from_hours(18))
+        );
+    }
+
+    #[test]
+    fn a_start_exactly_a_day_old_no_longer_counts() {
+        let starts = [at(T0), at(T0 + hours(1))];
+
+        assert_eq!(link_start_wait(&starts, cap(2), at(T0 + hours(24))), None);
+        assert_eq!(
+            link_start_wait(&starts, cap(2), at(T0 + hours(24) - 1)),
+            Some(Duration::from_millis(1))
+        );
+    }
+
+    #[test]
+    fn a_lowered_cap_waits_until_enough_age_out() {
+        // Five starts an hour apart and a cap lowered to 2: four must age out
+        // to leave one, so the wait ends when the fourth oldest is a day old.
+        let starts: Vec<_> = (0..5).map(|n| at(T0 + hours(n))).collect();
+        let now = at(T0 + hours(5));
+
+        assert_eq!(
+            link_start_wait(&starts, cap(2), now),
+            Some(Duration::from_hours(22))
+        );
+    }
+
+    #[test]
+    fn starts_from_the_future_count_and_wait_their_whole_day() {
+        // A clock that went backwards: the start counts until it's a day
+        // old by the clock.
+        let starts = [at(T0 + hours(1))];
+
+        assert_eq!(
+            link_start_wait(&starts, cap(1), at(T0)),
+            Some(Duration::from_hours(25))
         );
     }
 }

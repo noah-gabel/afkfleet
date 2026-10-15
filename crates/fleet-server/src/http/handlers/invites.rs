@@ -26,9 +26,8 @@ use fleet_core::authz::{Permission, ResourceContext, Role};
 use fleet_core::id::{InviteId, UserId};
 use fleet_core::value::Username;
 
-use super::{page, secret_text, timestamp, username};
+use super::{acting, page, secret_text, timestamp, username};
 use crate::app::invites::{CreateInviteError, InviteView, RevokeInviteError};
-use crate::app::users::ActingUser;
 use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath, ValidQuery};
 use crate::http::rate_limit::ClientIp;
@@ -60,15 +59,6 @@ fn invite_response(view: &InviteView) -> Result<InviteResponse, ApiError> {
         used_at: invite.used_at.map(timestamp).transpose()?,
         revoked_at: invite.revoked_at.map(timestamp).transpose()?,
     })
-}
-
-/// Who makes an admin's write.
-fn acting(user: &AuthUser, ip: std::net::IpAddr) -> ActingUser {
-    ActingUser {
-        actor: user.actor(),
-        session_id: user.session_id(),
-        ip,
-    }
 }
 
 /// `POST /api/v1/invites`: a new invite and its code, shown this once.

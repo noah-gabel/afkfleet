@@ -29,6 +29,7 @@
 //!   `vault rotate-key` (P9.2).
 //! - [`msauth`]: Microsoft's account flows, the device code, the refresh and
 //!   the Minecraft session (P9.3).
+//! - [`pace`]: how a background task waits between its calls (P9.4).
 //! - [`audit`]: the audit log. It's append-only: the only operations are
 //!   recording (inside a write transaction) and listing.
 //! - [`page`]: the keyset pages the lists share (P7.6, P7.9).
@@ -40,6 +41,7 @@ pub mod invites;
 pub mod login_attempts;
 pub mod mfa;
 pub mod msauth;
+pub mod pace;
 pub mod page;
 pub mod passwords;
 pub mod qr;

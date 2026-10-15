@@ -55,11 +55,13 @@ test-slow $AFKFLEET_E2E_IMAGE_BUILT="1":
 test-real-account:
     cargo nextest run -p fleet-mc --profile manual
 
-# The user's Microsoft check (ADR-0018): the Microsoft adapter against the user's
-# own account, in memory only. It prints a link and a code to enter, the deadline,
+# The user's Microsoft check (ADR-0018): the Microsoft adapter, and the link flow
+# through serve's own routes over a temporary database, against the user's own
+# account, in memory only. It prints a link and a code to enter, the deadline,
 # then pass or FAIL per step, never a token, a name or a UUID. It needs the user's
 # real account, so only the user runs it; the AI never does. `filter` picks one of
-# its two tests (`account_check` or `declined_link`); without it, both run in turn.
+# its three tests (`account_check`, `declined_link` or `link_flow`); without it, all
+# run in turn.
 test-ms-account *filter:
     cargo nextest run -p fleet-server --profile manual --no-capture {{ filter }}
 

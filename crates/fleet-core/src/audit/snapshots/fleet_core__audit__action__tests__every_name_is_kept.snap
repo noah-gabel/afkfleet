@@ -22,5 +22,7 @@ expression: names
   "account.refresh",
   "account.set_status",
   "account.rename",
-  "security.account_profile_mismatch"
+  "security.account_profile_mismatch",
+  "account.start_link",
+  "account.link"
 ]

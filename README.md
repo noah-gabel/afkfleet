@@ -160,7 +160,7 @@ There's no support, and I don't take feature requests. Security reports are welc
   No password, 2FA secret, recovery code or invite code is kept anywhere but the screen that needs it, never in the UI's caches, and no token ever reaches the UI. The threat model's "Desktop app" section describes the app's boundaries, including a stolen or shared PC with a live session. A friend on another PC needs the server over HTTPS, which Phase 12 brings.
 
   [ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md) records Phase 8's decisions.
-- **From Phase 9 (Microsoft accounts), so far:** the groundwork on the server, before any account can be linked:
+- **From Phase 9 (Microsoft accounts), so far:** linking a Microsoft account through the server's API, and the groundwork beneath it:
   - the table of linked Minecraft accounts: Microsoft accounts, each linked at most once by its profile's UUID, and offline accounts for development, each name once in any case
   - the vault's second kind of secret, a Microsoft account's refresh token, bound to its account as a TOTP secret is to its user
   - `vault status`, which shows what each vault key still seals without reading any key, and `vault rotate-key`, which moves every secret to a new key in one transaction (see [Running the server](#running-the-server))
@@ -177,7 +177,13 @@ There's no support, and I don't take feature requests. Security reports are welc
     - only for an active account whose owner isn't disabled
     - an account Microsoft or Minecraft refuses is marked as needing a new link, with the reason
 
-    After a failure the server waits before asking Microsoft again, and every account waits after a rate limit. Nothing uses the session tokens before Phase 10; the link flow (P9.4) comes next.
+    After a failure the server waits before asking Microsoft again, and every account waits after a rate limit. Nothing uses the session tokens before Phase 10.
+  - **linking a Microsoft account** (the app's dialog comes later in Phase 9; until then, the API and the manual check):
+    - the server asks Microsoft for a code, which only the user who started the flow sees, once
+    - a background poller waits for the approval at Microsoft's page, then checks the game and the profile, and stores the account with its refresh token sealed
+    - the account waits for approval by an Admin or the Owner, unless the Owner linked it; a Minecraft account already linked by anyone is refused without naming who
+    - each user runs one flow at a time (a new start replaces a waiting one), at most 3 run on the server at once, a user starts at most 10 a day, and a Member owns at most 3 accounts of any kind (all configurable)
+    - a passing failure at Microsoft or in the database is retried for up to 5 minutes after the approval; a stop of the server ends every flow at once, and the user starts again
 
   [ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md) records Phase 9's decisions.
 
@@ -281,6 +287,8 @@ afkfleet-server vault rotate-key --config server.toml   # move every secret to t
   - `[auth] lockout_threshold`: how many failed logins lock a username, 5 by default (3 to 20).
   - `[auth] invite_ttl_hours`: how long an invite lives, 72 by default (1 to 720). An invite's expiry is fixed when it's created, so a change doesn't move existing invites.
   - `[rate_limits]`: `per_ip_per_sec` 20 and `per_ip_burst` 40 for every request per client IP, `login_per_ip_per_min` 5 (login and its 2FA step together), `refresh_per_ip_per_min` 30, `register_per_ip_per_hour` 5, and `per_user_per_sec` 10 with `per_user_burst` 30 for every authed request per user. Each is at least 1; Plan.md's P7.10 note lists the upper bounds.
+  - `[rate_limits]`' Microsoft link flows: `link_flows_total` 3 (1 to 16), how many users may run a flow at once on the server, and `link_flows_per_user_per_day` 10 (1 to 100), how many flows one user starts in any 24 hours. The daily count comes from the audit log, so a restart doesn't reset it. Each user runs one flow at a time, a fixed rule.
+  - `[accounts] max_per_member`: how many accounts a Member may own, 3 by default (1 to 100). Every account counts, whatever its kind and status; Admins and the Owner have no quota.
   - `[vault]` is required: `master_key_files = { 1 = "/run/secrets/vault_key_1" }` (1 to 16 key IDs, absolute paths) and `active_key_id = 1`. A key file can also come from the environment, as `AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=/path`.
 - **The vault's keys** are read by `serve` at startup, before anything else: each file holds 32 random bytes as standard base64 with padding (`openssl rand -base64 32`). On Unix it must be readable only by the server's user (`chmod 600`). A bad key file, two IDs with the same key or an active key without a file stops the server with exit 1, naming the file but never its content. `migrate`, `healthcheck` and `user create-owner` never read the keys. Back them up separately: the database holds only ciphertext.
 - **What the keys seal:** `vault status` lists every key ID, configured or named by a stored secret, with how many TOTP secrets and Microsoft refresh tokens it seals, marks the active one, says which configured key seals nothing, and names a key that seals secrets but has no file. It reads the secrets' headers only, never a key file. It never creates or migrates the database: a missing database, or one with pending migrations, is exit 1 (run `migrate` first). Exit codes, also listed by `afkfleet-server vault status --help`: 0 every secret's key is configured and none is malformed, 1 a failure, 2 usage error, 3 a secret names a key that isn't configured, or one is malformed.
@@ -302,6 +310,7 @@ afkfleet-server vault rotate-key --config server.toml   # move every secret to t
 - **Invites and registration:** an Admin creates a Member invite and the Owner an Admin invite with `POST /api/v1/invites {"role"}` (after a step-up), which answers its code (`afk_iv_…`) this one time; a creator holds at most 20 pending invites. `GET /api/v1/invites` lists every invite in its state, and `DELETE /api/v1/invites/{id}` (after a step-up) revokes a pending one. The invitee calls `POST /api/v1/auth/register {"invite", "username", "password"}`, which answers 201 with the new user and no tokens: their first login answers `mfa_setup_required`. Every invite that can't be used gets the same 422 on `invite`; a taken name is 422 on `username`; a weak password is 422 with zxcvbn's hints, one field entry each. Disabling or demoting an invite's creator revokes their pending invites.
 - **The user's own routes:** `GET /api/v1/me` answers the profile, the recovery codes left and the wrong 2FA codes typed since the previous login, without the typos of the newest login's own step. `POST /api/v1/me/password {"new_password"}` needs a step-up within 5 minutes; it ends every other session and this session's step-up. `GET /api/v1/me/sessions` lists the live sessions, and `DELETE /api/v1/me/sessions/{id}` ends another one (the current one ends through logout).
 - **The admins' routes:** `GET /api/v1/users` lists the users, with whether each has 2FA and when they were last seen. `PATCH /api/v1/users/{id}` takes one change, after a step-up: `{"role"}` (only the Owner, between `member` and `admin`) or `{"disabled"}` (the Owner, or an Admin for a Member); either ends every session of the user.
+- **Linking a Microsoft account:** `POST /api/v1/accounts/link` answers 201 `{"flow_id", "user_code", "verification_uri", "expires_at"}`: open the link, enter the code there, and approve. Only enter a code you started yourself: entering someone else's code hands them your Minecraft account. `GET /api/v1/accounts/link/{flow_id}` answers `{"status"}` with `waiting` (and `expires_at`), `finishing`, `declined`, `expired`, `taken`, `over_quota`, `refused` (and `reason`), `failed`, or `linked` (and `account_id`, `account_status` `pending` or `active`, and `name`); only the user who started the flow can read it, everyone else gets 404, and a result stays readable for 15 minutes after it ends. A start answers 409 `conflict` for a Member at the quota, 429 with `Retry-After` for the daily cap (until a start is a day old) or while the user's flow is finishing (5 s), and 503 `busy` with `Retry-After: 30` when every place is taken or Microsoft doesn't answer.
 - **Lists** answer pages, newest first: `?limit=` (1 to 100, 50 by default) and `?before=` with the `next` of the page before. Times are UTC with milliseconds (`2027-01-15T08:00:00.000Z`), and a value that isn't there is left out.
 - **Request bodies** are JSON: a missing or other content type is 415, malformed JSON or an unknown, missing or mistyped field 400 without details, and a broken rule 422 with one entry per field; no answer or log line repeats what was sent.
 - **Dev mode** (`dev_mode = true`) serves the OpenAPI document at `GET /api/openapi.json` and logs a warning at startup. Never run a production server in dev mode. Outside it, that path answers 404 like any unknown route.
@@ -370,8 +379,8 @@ The compose e2e test runs the Docker stack under a project of its own, `afkfleet
 
 When the test ends, its container is removed together with its volumes, which hold the account name in the server's usercache and logs. A killed run can leave the container behind; check `docker ps -a`.
 
-**The Microsoft check** (Phase 9 on) runs the server's Microsoft adapter against Microsoft with your own account. It needs your real account, so only you run it; the AI never does. It keeps everything in memory, writes nothing to disk, and needs no Docker and no file.
-1. Run `just test-ms-account`. It runs two tests in turn:
+**The Microsoft check** (Phase 9 on) runs the server's Microsoft adapter, and the link flow through the server's own routes, against Microsoft with your own account. It needs your real account, so only you run it; the AI never does. It keeps everything in memory (the link flow uses a temporary database), and needs no Docker and no file.
+1. Run `just test-ms-account <filter>`: `account_check`, `declined_link` or `link_flow`. A plain `just test-ms-account` runs all three in turn, and the declined check can't pass on an account that already approved this sign-in once: Microsoft remembers the consent and never shows Decline again, so it waits its 8 minutes and fails. The three tests:
    - **The account check.** It prints a link (Microsoft's `microsoft.com/link` page), a code and a deadline. Open the link, enter the code and approve the sign-in. It then prints pass or FAIL for each step:
      - a "pending" answer before your approval
      - the approval
@@ -380,8 +389,16 @@ When the test ends, its container is removed together with its volumes, which ho
      - an invented refresh token refused as `invalid_grant`
      - that no value it saw reached a log
    - **The declined check.** It prints a second link and code. Enter the code, then press Cancel or Decline; it passes when Microsoft reports the refusal.
+   - **The link flow** (`just test-ms-account link_flow`). It runs the server in process with a Member and the Owner, and talks to it through its own routes. It prints a link and a code for the Member's flow: enter the code and approve. It then prints pass or FAIL for:
+     - the start, and a `waiting` status ("finishing seen" is for information: it may pass between two reads)
+     - `linked` with `pending`
+     - the stored account: the Member's, `pending`, with the profile's name
+     - the refresh token sealed for the account, and opening for it
+     - the `account.start_link` and `account.link` audit entries, with the creator, the name and the UUID
 
-   Each waits at most 8 minutes. `just test-ms-account declined_link` (or `account_check`) runs one of them.
+     It then prints a second code, for the Owner's flow: enter it with the **same** Microsoft account and approve. It passes as `taken`, with an `account.link` Failure for the Owner (reason `taken`, with the UUID). Last, that no value it saw reached a log.
+
+   The account and declined checks wait at most 8 minutes each, the link flow at most 4 minutes per code.
 2. It never prints a token, your Minecraft name or your UUID. A failed step names the rule Microsoft's answer broke, never a value from it.
 3. Report every step's pass or FAIL, with a FAIL's text.
 `just --list` shows every recipe; [`CLAUDE.md`](CLAUDE.md) describes them and the project's working rules.

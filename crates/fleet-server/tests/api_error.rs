@@ -133,7 +133,7 @@ fn test_request_id() -> HeaderValue {
     retry_after: Duration::from_millis(1500),
 })]
 #[case::internal("internal", || ApiError::internal(io::Error::other("disk I/O error")))]
-#[case::busy("busy", || ApiError::Busy)]
+#[case::busy("busy", ApiError::busy)]
 #[tokio::test]
 async fn every_variant_answers_with_its_status_headers_and_envelope(
     #[case] code: &str,
@@ -200,7 +200,7 @@ const MAKERS: [fn() -> ApiError; 15] = [
         retry_after: Duration::ZERO,
     },
     || ApiError::internal("test"),
-    || ApiError::Busy,
+    ApiError::busy,
 ];
 
 #[rstest]
@@ -213,6 +213,23 @@ fn retry_after_is_whole_seconds_rounded_up(#[case] retry_after: Duration, #[case
     let response = ApiError::RateLimited { retry_after }.into_response();
 
     assert_eq!(response.headers()["retry-after"], header);
+}
+
+#[rstest]
+#[case::the_link_flows_30_s(Duration::from_secs(30), "30")]
+#[case::rounded_up(Duration::from_millis(2500), "3")]
+fn a_busy_answer_sends_its_own_retry_after(#[case] retry_after: Duration, #[case] header: &str) {
+    let response = ApiError::Busy { retry_after }.into_response();
+
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.headers()["retry-after"], header);
+}
+
+#[test]
+fn a_moments_busy_asks_for_one_second() {
+    let response = ApiError::busy().into_response();
+
+    assert_eq!(response.headers()["retry-after"], "1");
 }
 
 // --- What is logged, and what the client never sees -----------------------
@@ -260,7 +277,7 @@ async fn the_logged_chain_is_cleaned_and_capped_at_1024_characters() {
 
 #[tokio::test]
 async fn a_busy_server_is_logged_as_a_warning() {
-    let (seen, logs) = send_logged(app(|| ApiError::Busy), Some(test_request_id())).await;
+    let (seen, logs) = send_logged(app(ApiError::busy), Some(test_request_id())).await;
 
     assert_eq!(seen.status, 503);
     let lines = logs.json_lines().unwrap();

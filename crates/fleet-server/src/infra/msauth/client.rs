@@ -62,6 +62,15 @@ impl Timeouts {
 #[error("the HTTP client for Microsoft can't be built")]
 pub struct BuildError(#[source] Box<dyn Error + Send + Sync>);
 
+#[cfg(test)]
+impl BuildError {
+    /// A build failure caused by `source`, for the tests of what starting
+    /// does with one.
+    pub(crate) fn caused_by(source: impl Into<Box<dyn Error + Send + Sync>>) -> Self {
+        Self(source.into())
+    }
+}
+
 /// The adapter's client, built only by [`build`].
 pub(super) struct HttpClient(reqwest::Client);
 

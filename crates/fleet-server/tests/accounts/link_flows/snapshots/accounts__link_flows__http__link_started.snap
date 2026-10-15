@@ -1,0 +1,10 @@
+---
+source: crates/fleet-server/tests/accounts/link_flows/http.rs
+expression: redacted(&started.body)
+---
+{
+  "expires_at": "2027-01-15T08:15:00.000Z",
+  "flow_id": "[flow]",
+  "user_code": "[user code]",
+  "verification_uri": "https://www.microsoft.com/link"
+}

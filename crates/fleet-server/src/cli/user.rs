@@ -404,7 +404,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::config::{AuthConfig, DatabaseConfig, HttpConfig, VaultConfig};
+    use crate::config::{AccountsConfig, AuthConfig, DatabaseConfig, HttpConfig, VaultConfig};
     use crate::infra::crypto::passwords::Argon2Passwords;
     use crate::infra::sqlite::{self, DatabaseOptions};
     use crate::ports::audit::{AuditLimit, AuditPage};
@@ -433,6 +433,7 @@ mod tests {
                 key_files: BTreeMap::from([(1, dir.join("never-read"))]),
                 active_key_id: 1,
             },
+            accounts: AccountsConfig::default(),
         }
     }
 

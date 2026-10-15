@@ -1,16 +1,21 @@
 //! [`SystemClock`] and [`OsRandom`]: the server's real [`Clock`] and
-//! [`SecureRandom`] (ADR-0015), and [`MonotonicClock`], the rate limiters'
-//! clock (ADR-0016).
+//! [`SecureRandom`] (ADR-0015), [`MonotonicClock`], the rate limiters'
+//! clock (ADR-0016), and [`TokioPace`], the real [`Pace`] (ADR-0018).
 //!
 //! They're the only code in fleet-server that reads the wall clock or the
 //! OS's randomness: `clippy.toml` bans every direct read, and each of the two
 //! carries the one approved exception. Everything else gets time and random
 //! bytes from the ports, so tests can control both.
 
+use core::time::Duration;
+
+use async_trait::async_trait;
 use chrono::{DateTime, SubsecRound, Utc};
 use fleet_core::system::{Clock, RandomError, SecureRandom};
 use fleet_core::time::add;
 use tokio::time::Instant;
+
+use crate::ports::pace::Pace;
 
 /// The wall clock, in UTC and whole milliseconds.
 #[derive(Debug, Clone, Copy, Default)]
@@ -78,6 +83,17 @@ impl SecureRandom for OsRandom {
     }
 }
 
+/// Waits with tokio's timer: the only [`Pace`] outside tests.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct TokioPace;
+
+#[async_trait]
+impl Pace for TokioPace {
+    async fn wait(&self, duration: Duration) {
+        tokio::time::sleep(duration).await;
+    }
+}
+
 /// Maps getrandom's error, which may carry the OS's error number.
 fn random_error(raw_os_error: Option<i32>) -> RandomError {
     raw_os_error.map_or(RandomError::Unavailable, |code| RandomError::Os { code })
@@ -85,8 +101,6 @@ fn random_error(raw_os_error: Option<i32>) -> RandomError {
 
 #[cfg(test)]
 mod tests {
-    use core::time::Duration;
-
     use chrono::{Datelike, TimeDelta, TimeZone as _, Timelike};
 
     use super::*;
@@ -154,6 +168,29 @@ mod tests {
     #[test]
     fn an_os_error_keeps_its_number() {
         assert_eq!(random_error(Some(5)), RandomError::Os { code: 5 });
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_real_pace_waits_its_whole_duration() {
+        let start = Instant::now();
+
+        TokioPace.wait(Duration::from_secs(5)).await;
+
+        assert_eq!(start.elapsed(), Duration::from_secs(5));
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_dropped_wait_ends_before_its_duration() {
+        let start = Instant::now();
+
+        let waited = tokio::time::timeout(
+            Duration::from_secs(1),
+            TokioPace.wait(Duration::from_secs(60)),
+        )
+        .await;
+
+        assert!(waited.is_err());
+        assert_eq!(start.elapsed(), Duration::from_secs(1));
     }
 
     #[test]

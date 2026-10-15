@@ -106,7 +106,7 @@ pub(crate) async fn poll_once<F: Future + Unpin>(future: &mut F) -> Option<F::Ou
 
 /// The entry a test commits its setup with. A test-only name, never listed
 /// in `audit_actions!`.
-fn setup_entry() -> NewAuditEntry {
+pub(crate) fn setup_entry() -> NewAuditEntry {
     NewAuditEntry::new(
         at(T0),
         AuditAction::try_from("test.session_setup").unwrap(),

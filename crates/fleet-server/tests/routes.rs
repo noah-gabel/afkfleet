@@ -50,7 +50,7 @@ use fleet_server::http::extractors::AuthUser;
 use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::openapi::{ApiDocs, OPENAPI_PATH};
 use fleet_server::http::rate_limit::{RateLimits, TrustedProxies};
-use fleet_server::http::router::{AppState, api_routes};
+use fleet_server::http::router::{AppState, Services, api_routes};
 use fleet_server::http::routes::{Access, RateClass, RouteEntry, Routes};
 use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
 use fleet_server::infra::crypto::passwords::Argon2Passwords;
@@ -244,15 +244,16 @@ async fn build(db: &Database, docs: ApiDocs, extra: impl FnOnce(Routes) -> Route
     let limits = limits();
     let login = login(db, &tokens, &mfa).await;
     let (users, invites) = accounts(db).await;
-    let state = AppState::new(
-        HealthService::new(Arc::new(db.clone())),
-        tokens.clone(),
-        limits.clone(),
+    let state = AppState::new(Services {
+        health: HealthService::new(Arc::new(db.clone())),
+        tokens: tokens.clone(),
+        limits: limits.clone(),
         mfa,
         login,
         users,
         invites,
-    );
+        link_flows: idle_link_flows(db),
+    });
     let ids = RequestIds::new(Arc::new(clock()), Arc::new(SeededRandom::new(5)));
     let (app, entries) = extra(api_routes(Routes::new(&limits))).finish(state, &http(), ids, docs);
     Built {
@@ -504,6 +505,12 @@ async fn the_authed_routes_are_registered_with_their_class(
             ),
             entry(Method::GET, "/api/v1/users", RateClass::Standard),
             entry(Method::GET, "/api/v1/invites", RateClass::Standard),
+            entry(Method::POST, "/api/v1/accounts/link", RateClass::Standard),
+            entry(
+                Method::GET,
+                "/api/v1/accounts/link/{flow_id}",
+                RateClass::Standard
+            ),
         ])
     );
     db.close().await;
@@ -830,4 +837,43 @@ fn a_path_parameter_is_replaced_by_an_id() {
         format!("/api/v1/bots/{PATH_PARAMETER}/chat")
     );
     assert_eq!(concrete("/health/live"), "/health/live");
+}
+
+/// The link flows, which these tests never start (P9.4): a service over
+/// `db` with Microsoft's real client, never called.
+fn idle_link_flows(
+    db: &fleet_server::infra::sqlite::Database,
+) -> fleet_server::app::link_flows::LinkFlowService {
+    use fleet_server::app::link_flows::{LinkFlowPorts, LinkFlowService, LinkFlowSettings};
+    let clock: Arc<dyn fleet_core::system::Clock> =
+        Arc::new(fleet_testkit::system::ManualClock::new(
+            chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+        ));
+    let random: Arc<dyn fleet_core::system::SecureRandom> =
+        Arc::new(fleet_testkit::system::SeededRandom::new(3));
+    let keys = fleet_server::infra::crypto::vault::VaultKeys::from_keys(
+        std::collections::BTreeMap::from([(1, secrecy::SecretBox::new(Box::new([1_u8; 32])))]),
+        1,
+    )
+    .unwrap();
+    LinkFlowService::new(
+        LinkFlowPorts {
+            microsoft: Arc::new(
+                fleet_server::infra::msauth::ReqwestMicrosoftAuth::new(Arc::clone(&clock)).unwrap(),
+            ),
+            vault: Arc::new(fleet_server::infra::crypto::vault::XChaChaVault::new(
+                keys,
+                Arc::clone(&random),
+            )),
+            store: Arc::new(db.clone()),
+            pace: Arc::new(fleet_server::infra::system::TokioPace),
+            clock,
+            random,
+        },
+        LinkFlowSettings {
+            total: core::num::NonZeroU32::MIN,
+            per_user_per_day: core::num::NonZeroU32::MIN,
+            max_per_member: core::num::NonZeroU32::MIN,
+        },
+    )
 }

@@ -43,6 +43,7 @@ fn the_export_writes_one_file_per_type() {
     assert_eq!(
         files.keys().collect::<Vec<_>>(),
         [
+            "AccountStatus.ts",
             "ApiErrorDetails.ts",
             "CommandError.ts",
             "CommandErrorCode.ts",
@@ -57,6 +58,9 @@ fn the_export_writes_one_file_per_type() {
             "InvitePage.ts",
             "InviteResponse.ts",
             "InviteState.ts",
+            "LinkFlowResponse.ts",
+            "LinkFlowState.ts",
+            "LinkStartedResponse.ts",
             "LoginMfaRequest.ts",
             "LoginRequest.ts",
             "LoginResponse.ts",
@@ -72,6 +76,7 @@ fn the_export_writes_one_file_per_type() {
             "PasswordChangeRequest.ts",
             "ProfileUnreadable.ts",
             "RefreshRequest.ts",
+            "RefusalReason.ts",
             "RegisterRequest.ts",
             "RegisterResponse.ts",
             "ServerProfileRequest.ts",

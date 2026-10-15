@@ -24,6 +24,7 @@ use utoipa::openapi::RefOr;
 use utoipa::openapi::schema::Schema;
 
 use crate::ErrorResponse;
+use crate::accounts::{LinkFlowResponse, LinkStartedResponse};
 use crate::auth::{
     LoginMfaRequest, LoginRequest, LoginResponse, RefreshRequest, RegisterRequest,
     RegisterResponse, StepUpRequest, TokenResponse,
@@ -63,6 +64,8 @@ pub fn components() -> BTreeMap<String, RefOr<Schema>> {
     add::<MeResponse>(&mut schemas);
     add::<PasswordChangeRequest>(&mut schemas);
     add::<SessionPage>(&mut schemas);
+    add::<LinkStartedResponse>(&mut schemas);
+    add::<LinkFlowResponse>(&mut schemas);
     schemas.into_iter().collect()
 }
 

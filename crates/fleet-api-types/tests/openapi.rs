@@ -16,6 +16,10 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
 
+use fleet_api_types::accounts::{
+    AccountStatus, LinkFlowResponse, LinkFlowState, LinkStartedResponse, MC_NAME_MAX_CHARS,
+    RefusalReason, USER_CODE_MAX_CHARS, VERIFICATION_URI_MAX_CHARS,
+};
 use fleet_api_types::auth::{
     ACCESS_TOKEN_MAX_SECS, LoginMfaRequest, LoginRequest, LoginResponse, LoginStatus,
     NEW_PASSWORD_MAX_CHARS, PASSWORD_MAX_CHARS, REFRESH_TOKEN_MAX_SECS, RefreshRequest,
@@ -56,6 +60,11 @@ use utoipa::{PartialSchema as _, ToSchema};
 fn declarations() -> BTreeMap<String, String> {
     let config = Config::new();
     [
+        ("AccountStatus", AccountStatus::decl(&config)),
+        ("LinkFlowResponse", LinkFlowResponse::decl(&config)),
+        ("LinkFlowState", LinkFlowState::decl(&config)),
+        ("LinkStartedResponse", LinkStartedResponse::decl(&config)),
+        ("RefusalReason", RefusalReason::decl(&config)),
         ("CreateInviteRequest", CreateInviteRequest::decl(&config)),
         (
             "CreatedInviteResponse",
@@ -349,6 +358,17 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::session_last_used_at("SessionResponse", "last_used_at", TIMESTAMP_CHARS)]
 #[case::session_expires_at("SessionResponse", "expires_at", TIMESTAMP_CHARS)]
 #[case::session_page_next("SessionPage", "next", ID_CHARS)]
+#[case::link_flow_id("LinkStartedResponse", "flow_id", ID_CHARS)]
+#[case::link_user_code("LinkStartedResponse", "user_code", USER_CODE_MAX_CHARS)]
+#[case::link_verification_uri(
+    "LinkStartedResponse",
+    "verification_uri",
+    VERIFICATION_URI_MAX_CHARS
+)]
+#[case::link_started_expires_at("LinkStartedResponse", "expires_at", TIMESTAMP_CHARS)]
+#[case::link_expires_at("LinkFlowResponse", "expires_at", TIMESTAMP_CHARS)]
+#[case::link_account_id("LinkFlowResponse", "account_id", ID_CHARS)]
+#[case::link_name("LinkFlowResponse", "name", MC_NAME_MAX_CHARS)]
 fn a_text_field_is_capped_at_its_constant(
     #[case] component: &str,
     #[case] field: &str,
@@ -415,6 +435,13 @@ fn every_text_field_has_its_cap_checked() {
         ("SessionResponse", "last_used_at"),
         ("SessionResponse", "expires_at"),
         ("SessionPage", "next"),
+        ("LinkStartedResponse", "flow_id"),
+        ("LinkStartedResponse", "user_code"),
+        ("LinkStartedResponse", "verification_uri"),
+        ("LinkStartedResponse", "expires_at"),
+        ("LinkFlowResponse", "expires_at"),
+        ("LinkFlowResponse", "account_id"),
+        ("LinkFlowResponse", "name"),
     ]);
     let components = components_json();
 
@@ -534,6 +561,11 @@ fn an_open_field_lists_exactly_its_enums_known_values() {
 #[case::mfa_confirmed_at("MeResponse", "mfa_confirmed_at")]
 #[case::failed_last_at("FailedCodeAttempts", "last_at")]
 #[case::session_page_next("SessionPage", "next")]
+#[case::link_expires_at("LinkFlowResponse", "expires_at")]
+#[case::link_reason("LinkFlowResponse", "reason")]
+#[case::link_account_id("LinkFlowResponse", "account_id")]
+#[case::link_account_status("LinkFlowResponse", "account_status")]
+#[case::link_name("LinkFlowResponse", "name")]
 fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[case] field: &str) {
     let components = components_json();
     let schema = property(&components, component, field);
@@ -561,6 +593,9 @@ fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[ca
 #[case::invite_state("InviteResponse", "state", "InviteState")]
 #[case::registered_role("RegisterResponse", "role", "UserRole")]
 #[case::me_role("MeResponse", "role", "UserRole")]
+#[case::link_status("LinkFlowResponse", "status", "LinkFlowState")]
+#[case::link_reason("LinkFlowResponse", "reason", "RefusalReason")]
+#[case::link_account_status("LinkFlowResponse", "account_status", "AccountStatus")]
 fn the_new_open_fields_list_exactly_their_known_values(
     #[case] component: &str,
     #[case] field: &str,
@@ -569,6 +604,18 @@ fn the_new_open_fields_list_exactly_their_known_values(
     let components = components_json();
     let known: Vec<&str> = match enumeration {
         "UserRole" => UserRole::ALL.iter().map(|role| role.as_str()).collect(),
+        "LinkFlowState" => LinkFlowState::ALL
+            .iter()
+            .map(|state| state.as_str())
+            .collect(),
+        "RefusalReason" => RefusalReason::ALL
+            .iter()
+            .map(|reason| reason.as_str())
+            .collect(),
+        "AccountStatus" => AccountStatus::ALL
+            .iter()
+            .map(|status| status.as_str())
+            .collect(),
         _ => InviteState::ALL
             .iter()
             .map(|state| state.as_str())

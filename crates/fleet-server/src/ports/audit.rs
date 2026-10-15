@@ -201,6 +201,20 @@ pub trait AuditReads: Send + Sync + fmt::Debug {
     /// [`StoreError`], including [`StoreError::Corrupt`] for a time that
     /// doesn't read back.
     async fn failed_code_attempts(&self, user: UserId) -> Result<FailedCodeAttempts, StoreError>;
+
+    /// When the Success entries of `action` whose target is `user` were
+    /// recorded, for those recorded after `since`, in commit order: the link
+    /// starts the daily cap counts (P9.4, ADR-0018).
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`] for a time that
+    /// doesn't read back.
+    async fn user_successes_since(
+        &self,
+        user: UserId,
+        action: &AuditAction,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<DateTime<Utc>>, StoreError>;
 }
 
 /// Recording in the audit log, inside a [`super::store::WriteTx`].
@@ -212,6 +226,17 @@ pub trait AuditWrites: Send {
     /// [`StoreError`]. Never because of the metadata: `AuditMetadata` always
     /// fits its column.
     async fn record(&mut self, entry: &NewAuditEntry) -> Result<AuditEntryId, StoreError>;
+
+    /// [`AuditReads::user_successes_since`], read in this transaction.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn user_successes_since(
+        &mut self,
+        user: UserId,
+        action: &AuditAction,
+        since: DateTime<Utc>,
+    ) -> Result<Vec<DateTime<Utc>>, StoreError>;
 }
 
 #[cfg(test)]

@@ -17,6 +17,8 @@
 //!   authenticator, replacing it, and checking a code at login (P7.7).
 //! - [`invites`]: creating, listing and revoking the invites to register
 //!   (P7.9).
+//! - [`link_flows`]: linking a Microsoft account through Microsoft's
+//!   device-code flow, held in memory and polled in the background (P9.4).
 //! - [`session_tokens`]: Minecraft session tokens for linked Microsoft
 //!   accounts, one refresh per account at a time (P9.5).
 //! - [`users`]: creating the Owner (P7.5), the admins' list and changes
@@ -29,6 +31,7 @@ pub mod auth;
 pub mod challenges;
 pub mod health;
 pub mod invites;
+pub mod link_flows;
 pub mod lockout;
 pub mod login;
 pub mod mfa;

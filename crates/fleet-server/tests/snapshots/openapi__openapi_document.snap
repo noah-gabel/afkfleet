@@ -5,6 +5,16 @@ expression: answer.json()
 {
   "components": {
     "schemas": {
+      "AccountStatus": {
+        "description": "Where a linked account stands.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "pending",
+          "active",
+          "reauth_required",
+          "refused"
+        ],
+        "type": "string"
+      },
       "CreateInviteRequest": {
         "additionalProperties": false,
         "description": "`POST /invites`: a new invite for `role`.",
@@ -216,6 +226,82 @@ expression: answer.json()
           "expired"
         ],
         "type": "string"
+      },
+      "LinkFlowResponse": {
+        "description": "`GET /accounts/link/{flow_id}`: where the flow stands. Each field but\n`status` is there only for the states its docs name.",
+        "properties": {
+          "account_id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "account_status": {
+            "$ref": "#/components/schemas/AccountStatus",
+            "description": "`linked`: `pending` until approved, or `active` for the Owner's."
+          },
+          "expires_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 16,
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/RefusalReason",
+            "description": "`refused`: why."
+          },
+          "status": {
+            "$ref": "#/components/schemas/LinkFlowState",
+            "description": "Where the flow stands."
+          }
+        },
+        "required": [
+          "status"
+        ],
+        "type": "object"
+      },
+      "LinkFlowState": {
+        "description": "Where a link flow stands.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "waiting",
+          "finishing",
+          "declined",
+          "expired",
+          "taken",
+          "over_quota",
+          "refused",
+          "failed",
+          "linked"
+        ],
+        "type": "string"
+      },
+      "LinkStartedResponse": {
+        "description": "`POST /accounts/link`: a started flow, for its creator only.",
+        "properties": {
+          "expires_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "flow_id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "user_code": {
+            "maxLength": 16,
+            "type": "string"
+          },
+          "verification_uri": {
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "flow_id",
+          "user_code",
+          "verification_uri",
+          "expires_at"
+        ],
+        "type": "object"
       },
       "LoginMfaRequest": {
         "additionalProperties": false,
@@ -434,6 +520,21 @@ expression: answer.json()
           "refresh_token"
         ],
         "type": "object"
+      },
+      "RefusalReason": {
+        "description": "Why Minecraft's side refused an account.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "not_owned",
+          "no_profile",
+          "xbox_banned",
+          "xbox_no_xbox_profile",
+          "xbox_country_unavailable",
+          "xbox_adult_verification",
+          "xbox_child_account",
+          "xbox_other",
+          "profile_mismatch"
+        ],
+        "type": "string"
       },
       "RegisterRequest": {
         "additionalProperties": false,
@@ -706,6 +807,189 @@ expression: answer.json()
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/accounts/link": {
+      "post": {
+        "operationId": "start_link",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkStartedResponse"
+                }
+              }
+            },
+            "description": "The flow started: open the link and enter the code."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The Member owns their quota of accounts already."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests, the user's daily cap of link flows, or the user's flow is finishing or starting.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Every place for a link flow is taken, Microsoft didn't answer, or the server is busy.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/accounts/link`: starts a Microsoft link flow, and answers\nits code, shown this once.",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/v1/accounts/link/{flow_id}": {
+      "get": {
+        "operationId": "link_status",
+        "parameters": [
+          {
+            "description": "The flow's ID, from `POST /accounts/link`.",
+            "in": "path",
+            "name": "flow_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkFlowResponse"
+                }
+              }
+            },
+            "description": "Where the flow stands."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such flow, one that ended more than 15 minutes ago or was replaced, or another user's."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/accounts/link/{flow_id}`: where the caller's flow stands.",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
     "/api/v1/auth/login": {
       "post": {
         "operationId": "login",

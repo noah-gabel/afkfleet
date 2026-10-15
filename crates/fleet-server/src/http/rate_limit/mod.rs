@@ -373,6 +373,7 @@ mod tests {
     use governor::clock::Clock as _;
 
     use super::*;
+    use crate::config::LinkFlowLimits;
 
     fn start() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2027, 1, 15, 8, 0, 0).unwrap()
@@ -391,6 +392,7 @@ mod tests {
             refresh: rate,
             register: rate,
             per_user: rate,
+            link_flows: LinkFlowLimits::default(),
         }
     }
 

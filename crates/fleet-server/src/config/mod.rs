@@ -14,12 +14,14 @@
 //!   (`http.bind`), and never echoes a value.
 //! - **Each phase adds its own keys,** so a key of a later phase is still an
 //!   unknown key (Appendix A). Phase 7 adds `[auth]`, `[vault]`,
-//!   `[rate_limits]` and `[http] trusted_proxies` (ADR-0016).
+//!   `[rate_limits]` and `[http] trusted_proxies` (ADR-0016); Phase 9 adds
+//!   `[accounts]` and the link flows' rate limits (ADR-0018).
 //! - **Secrets never go in this file.** A key for a secret names the file
 //!   that holds it and ends in `_file` or `_files`; a test checks every
 //!   key's name (security rule 4). fleet-startup's `secret_file` reads those
 //!   files, and only `serve` reads them (ADR-0016).
 
+mod accounts;
 mod auth;
 mod error;
 mod rate_limits;
@@ -35,13 +37,14 @@ use raw::RawConfig;
 
 use crate::http::rate_limit::TrustedProxies;
 
+pub use accounts::AccountsConfig;
 pub use auth::{Argon2Params, Argon2ParamsError, AuthConfig, Bounds};
 pub use error::{ConfigError, Problem, ProblemKind, Problems};
 pub use fleet_startup::config::{
     KeyPath, KeySegment, LogConfig, LogFilter, LogFilterError, LogFormat, ParseError, ParseProblem,
     ParseSource, UnknownLogFormatError,
 };
-pub use rate_limits::{Rate, RateLimitConfig};
+pub use rate_limits::{LinkFlowLimits, Rate, RateLimitConfig};
 
 /// The prefix of the environment variables that override config keys:
 /// `AFKFLEET_SERVER__` plus the key path in capitals, with `__` between the
@@ -64,6 +67,8 @@ pub struct ServerConfig {
     pub vault: VaultConfig,
     /// The request limits (`[rate_limits]`).
     pub rate_limits: RateLimitConfig,
+    /// The linked Minecraft accounts (`[accounts]`).
+    pub accounts: AccountsConfig,
     /// How the server logs (`[log]`).
     pub log: LogConfig,
 }

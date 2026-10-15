@@ -197,6 +197,12 @@ define_id!(
     LoginStepId
 );
 define_id!(
+    /// Identifies one Microsoft link flow (Plan.md P9.4): minted when a user
+    /// starts one, and readable by them alone while the server keeps it in
+    /// memory. It isn't a secret; the flow's device code is.
+    LinkFlowId
+);
+define_id!(
     /// Identifies one HTTP request to the server: minted by its request-ID
     /// layer for every request, sent back in `x-request-id` and in every error
     /// body, and logged with the request. It names no entity.
@@ -358,6 +364,7 @@ mod tests {
         assert_trait_mints_like_the_constructor(SessionId::new_v7);
         assert_trait_mints_like_the_constructor(InviteId::new_v7);
         assert_trait_mints_like_the_constructor(LoginStepId::new_v7);
+        assert_trait_mints_like_the_constructor(LinkFlowId::new_v7);
         assert_trait_mints_like_the_constructor(RequestId::new_v7);
     }
 
@@ -371,6 +378,7 @@ mod tests {
         assert_round_trips(SessionId::new_v7);
         assert_round_trips(InviteId::new_v7);
         assert_round_trips(LoginStepId::new_v7);
+        assert_round_trips(LinkFlowId::new_v7);
         assert_round_trips(RequestId::new_v7);
     }
 

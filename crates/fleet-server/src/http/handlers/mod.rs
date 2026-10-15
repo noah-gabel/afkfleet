@@ -2,6 +2,8 @@
 //! its input, authorizes, calls a service and maps the result: no business
 //! logic and no SQL.
 //!
+//! - [`accounts`]: `POST /api/v1/accounts/link` and `GET
+//!   /api/v1/accounts/link/{flow_id}` (P9.4).
 //! - [`auth`]: `POST /api/v1/auth/login`, `/auth/login/mfa`,
 //!   `/auth/refresh`, `/auth/logout`, `/auth/step-up` and `/auth/register`
 //!   (P7.6).
@@ -15,12 +17,15 @@
 //!
 //! The helpers here turn what the services hand back into response fields.
 
+pub(super) mod accounts;
 pub(super) mod auth;
 pub(super) mod health;
 pub(super) mod invites;
 pub(super) mod me;
 pub(super) mod mfa;
 pub(super) mod users;
+
+use std::net::IpAddr;
 
 use chrono::{DateTime, Utc};
 use fleet_api_types::auth::USERNAME_MAX_CHARS;
@@ -29,6 +34,8 @@ use fleet_core::value::Username;
 use secrecy::{ExposeSecret as _, SecretString};
 
 use super::error::ApiError;
+use super::extractors::AuthUser;
+use crate::app::users::ActingUser;
 use crate::ports::page::{Page, PageLimit};
 use crate::ports::passwords::HashError;
 
@@ -60,8 +67,18 @@ fn refused_password(field: &str, error: HashError) -> ApiError {
                     .collect(),
             )
         }
-        HashError::Busy => ApiError::Busy,
+        HashError::Busy => ApiError::busy(),
         other @ (HashError::Random(_) | HashError::Failed(_)) => ApiError::internal(other),
+    }
+}
+
+/// Who makes a write: the authenticated user, their session and their
+/// client's address.
+fn acting(user: &AuthUser, ip: IpAddr) -> ActingUser {
+    ActingUser {
+        actor: user.actor(),
+        session_id: user.session_id(),
+        ip,
     }
 }
 

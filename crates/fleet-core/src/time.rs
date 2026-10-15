@@ -1,8 +1,8 @@
 //! Saturating arithmetic on points in time and durations.
 //!
 //! `fleet-core` takes the current time as a `DateTime<Utc>` and durations as
-//! `std::time::Duration` (ADR-0010). chrono's `+` panics on overflow, so all
-//! mixed arithmetic goes through these two functions, which never panic.
+//! `std::time::Duration` (ADR-0010). chrono's `+` and `-` panic on overflow,
+//! so all mixed arithmetic goes through these functions, which never panic.
 
 use core::time::Duration;
 
@@ -15,6 +15,16 @@ pub fn add(at: DateTime<Utc>, duration: Duration) -> DateTime<Utc> {
         .ok()
         .and_then(|delta| at.checked_add_signed(delta))
         .unwrap_or(DateTime::<Utc>::MAX_UTC)
+}
+
+/// Returns `at - duration`, or the earliest representable time if that
+/// overflows.
+#[must_use]
+pub fn sub(at: DateTime<Utc>, duration: Duration) -> DateTime<Utc> {
+    TimeDelta::from_std(duration)
+        .ok()
+        .and_then(|delta| at.checked_sub_signed(delta))
+        .unwrap_or(DateTime::<Utc>::MIN_UTC)
 }
 
 /// Returns how long ago `since` was at `now`, or zero if `now` is earlier
@@ -45,6 +55,20 @@ mod tests {
         assert_eq!(
             add(DateTime::<Utc>::MAX_UTC, Duration::from_secs(1)),
             DateTime::<Utc>::MAX_UTC
+        );
+    }
+
+    #[test]
+    fn sub_subtracts() {
+        assert_eq!(sub(at(100), Duration::from_secs(5)), at(95));
+    }
+
+    #[test]
+    fn sub_saturates_instead_of_overflowing() {
+        assert_eq!(sub(at(100), Duration::MAX), DateTime::<Utc>::MIN_UTC);
+        assert_eq!(
+            sub(DateTime::<Utc>::MIN_UTC, Duration::from_secs(1)),
+            DateTime::<Utc>::MIN_UTC
         );
     }
 

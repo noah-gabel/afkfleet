@@ -32,7 +32,7 @@ use crate::ports::audit::NewAuditEntry;
 use crate::ports::envelopes::SealedRecord;
 use crate::ports::msauth::{
     MicrosoftTokens, MinecraftSession, MsAccessToken, RefreshError, RefreshToken, SessionError,
-    TokenError, XboxRefusal,
+    TokenError,
 };
 use crate::ports::vault::VaultPurpose;
 
@@ -139,7 +139,7 @@ pub(super) async fn fly(
             );
         }
         Err(SessionError::Xbox(refusal)) => {
-            let (reason, xerr) = xbox_reason(refusal);
+            let (reason, xerr) = refusal.reason();
             return Err(refuse(&inner, &slot, id, &envelope, reason, xerr).await?);
         }
     };
@@ -461,17 +461,4 @@ async fn try_rename(
         tx.commit(entry).await?;
     }
     Ok(())
-}
-
-/// The reason an Xbox refusal is stored with, and Xbox Live's code for
-/// another one.
-const fn xbox_reason(refusal: XboxRefusal) -> (RefusalReason, Option<u32>) {
-    match refusal {
-        XboxRefusal::Banned => (RefusalReason::XboxBanned, None),
-        XboxRefusal::NoXboxProfile => (RefusalReason::XboxNoXboxProfile, None),
-        XboxRefusal::CountryUnavailable => (RefusalReason::XboxCountryUnavailable, None),
-        XboxRefusal::AdultVerification => (RefusalReason::XboxAdultVerification, None),
-        XboxRefusal::ChildAccount => (RefusalReason::XboxChildAccount, None),
-        XboxRefusal::Other { xerr } => (RefusalReason::XboxOther, Some(xerr)),
-    }
 }

@@ -139,7 +139,7 @@ pub(crate) async fn change_password(
                 ApiError::Validation(vec![FieldError::new("new_password", SAME_PASSWORD)])
             }
             ChangePasswordError::Password(error) => refused_password("new_password", error),
-            ChangePasswordError::Verify(VerifyError::Busy) => ApiError::Busy,
+            ChangePasswordError::Verify(VerifyError::Busy) => ApiError::busy(),
             ChangePasswordError::Store(error) => ApiError::from(error),
             other @ (ChangePasswordError::Verify(_) | ChangePasswordError::Audit(_)) => {
                 ApiError::internal(other)

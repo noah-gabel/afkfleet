@@ -384,6 +384,81 @@ The user answered group C's questions one at a time and added three requirements
   - In one instrumented, fully parallel coverage run on Windows, five of these tests failed in `Database::connect` under the load. The rerun and every normal run passed.
   - The request's own stop check before spawning the flight is gone: the biased `select!` already answers `ShuttingDown` first, and the flight checks again right before the refresh.
 
+### Group D: the link flow (P9.4) *(the user's choices, 2026-10-15)*
+The user answered group D's questions one at a time, and added two notes for E at the plan's approval.
+
+- **The creator's Manage is ownership** *(the user's choice)*. The creator becomes `owner_user_id`, and `authorize()`'s `manages()` already gives an account's owner Manage (§7.3: "whoever links an account owns it, which counts as Manage"). E adds no grant row for the owner, and a grant to oneself stays refused.
+- **The Member quota** *(the user's choices)*:
+  - `[accounts] max_per_member` (1–100, 3 by default) counts every account a Member owns: Microsoft accounts in any status (`pending`, `active`, `reauth_required`, `refused`) and offline ones. A slot is freed only by deleting an account (E).
+  - Only Members have a quota; Admins and the Owner don't.
+  - It's checked when a flow starts (409 `conflict`, before Microsoft is asked) and again inside the commit's transaction, where the flow ends `over_quota`.
+- **The caps** *(the user's choices)*:
+  - **One flow per user,** a fixed rule. A new start replaces the user's waiting flow: its poller is cancelled, so its code links nothing any more. A flow Microsoft already approved isn't replaced, and neither is another start of the same user still asking Microsoft: both answer 429 `rate_limited` with `Retry-After: 5`.
+  - **`[rate_limits] link_flows_total`** (1–16, 3 by default): how many users hold a flow at once, a start in progress included. One more answers 503 `busy` with a fixed `Retry-After: 30`. `ApiError::Busy` gained its own `retry_after` for it; the password limiter keeps 1 s (`ApiError::busy()`).
+  - **`[rate_limits] link_flows_per_user_per_day`** (1–100, 10 by default), counted from the audit log: every accepted start records `account.start_link` (target the user, metadata `flow`), and the cap counts the user's entries from the last 24 hours, read through the `(target, action, id)` index like `GET /me`'s wrong codes. A restart doesn't reset it, and refused starts aren't recorded. It answers 429 with `Retry-After` until enough counted starts are a day old: the oldest one whenever exactly the cap counts, and correct too after the cap was lowered.
+  - **The order,** cheapest first: shutting down (503), the user's flow finishing or starting (429), every place taken (503), the daily cap (429), the quota (409), then Microsoft. A Microsoft failure answers 503 with 30 s for `Unreachable`, `TimedOut`, `RateLimited` and `Unavailable`, and 500 `internal` (one `error` line naming the rule) for `Certificate` and `Unexpected`, which need a human. Nothing is recorded for a refused start.
+  - The start's own transaction re-reads the session (`users::recheck`) and re-counts the daily starts and the quota before it records `account.start_link`.
+- **`POST /accounts/link`** answers 201 `{flow_id, user_code, verification_uri, expires_at}` *(the user's choice)*, the only answer that shows the code.
+- **`GET /accounts/link/{flow_id}`** *(the user's choices)*:
+  - A flat answer with `status: Open<LinkFlowState>`, like every other response, and optional fields only where the state has them: `waiting` (with `expires_at`), `finishing` (Microsoft approved; the profile is checked and the account stored), `declined`, `expired`, `taken`, `over_quota`, `refused` (with `reason`, a `RefusalReason`), `failed`, and `linked` (with `account_id`, `account_status` `pending` or `active`, and the Minecraft `name`).
+  - It never carries the code, so the app may poll it as a normal query.
+  - `UsePersonal` on `Personal{owner}`: an unknown flow, a replaced one, another user's (the Owner's included) and a result past its retention are all the same 404.
+- **Retention** *(the user's choice)*: each user has at most one flow in memory, waiting, finishing or finished; a new start replaces their finished one. A finished result stays readable for 15 minutes after it ends (`FINISHED_RETENTION`, on the `Clock`), then answers 404, and the housekeeping drops it each minute.
+- **Failures** *(the user's choices)*:
+  - **While waiting:** a poll failing with `Unreachable`, `TimedOut` or `Unavailable` waits one interval and polls again (one `debug` line); a 429 also slows the polls down by 5 s, like `SlowDown`. The code's expiry, read from the `Clock` after each wait, bounds the phase, and Microsoft's `Declined` and `Expired` end it.
+  - **After the approval:** `minecraft_session` failing with `Unreachable`, `TimedOut`, `RateLimited` or `Unavailable` is retried after 5 s, doubling to a minute (`FINISH_BACKOFF`), for at most 5 minutes after the approval (`FINISH_WINDOW`) and never past the access token's expiry; one `warn` per retry, one `error` when it gives up. A busy database at the commit is retried the same way, on the same count.
+  - `Certificate` and `Unexpected` end the flow `failed` at once in both phases.
+  - `NotOwned`, `NoProfile` and the Xbox refusals end it `refused` with their reason. Group C's private `xbox_reason` moved to `XboxRefusal::reason()`, which both services use; an `xbox_other`'s code goes into one `info` line, since a refused link writes no audit entry.
+- **Shutdown** *(the user's choice)*: it cancels every flow at once, a wait, a poll or a session call in flight, each safe to drop (a poll can be repeated, and nothing is stored before the commit). Only a commit already running finishes, bounded by the database's own timeouts. serve's `JoinSet` holds a task that stops the link flows at the first signal and waits for them, before the database closes. A restart loses the flows, and the users start again.
+- **The commit's re-checks** *(the user's choices)*: inside the transaction, `users::recheck` reads the creator and the session that started the flow. A revoked session, a logout, or a disabled or deleted creator stores nothing, and the flow ends `failed` with one `info` line; a session refreshed during the flow is the same row and still links. The role read there decides `pending` or `active` (`new_link_status`), and the quota.
+- **Audit** *(the user's choices)*:
+  - `account.start_link` (Success) for each accepted start.
+  - `account.link` Success: actor, IP, target the account, metadata `kind`, `name`, `uuid`, `status` and `flow`.
+  - `account.link` Failure for `taken` and `over_quota`, committed in the commit's own transaction without the insert (SQLite backs out only the refused statement, which a repository test pins): target the creator, metadata `reason`, `kind`, `name`, `uuid` and `flow`. Admins then see an attempt on an already linked account, a phishing attempt or a victim's duplicate.
+  - Declined, expired, refused and failed flows log one line each and record nothing.
+  - The over-quota check comes before the insert, so a Member at the quota who also tried a taken account sees `over_quota`.
+- **The Microsoft client** *(the user's choice)*: `ServerPorts::system()` builds `ReqwestMicrosoftAuth` on the system clock, and a client that can't be built stops serve's start with `StartError::Microsoft` (`#[error(transparent)]`, "the HTTP client for Microsoft can't be built", exit 1), before it listens. It's built after main.rs installed the TLS provider, never inside `serve::run` or `serve::serve`.
+- **Test time** *(the user's choice)*: the poller waits through a port, `ports::pace::Pace`, implemented by `infra::system::TokioPace`. The tests' `FakePace` records each wait and moves the `ManualClock` by it at once, or holds it at a gate, so the tests check the exact waits on real time with sqlx and never wait.
+- **The hands-on check** *(the user's choices)*: `manual_link_flow_member_then_owner`, run only by the user with `just test-ms-account link_flow`. It runs serve's own app in process over a temporary database with the real adapter, and goes through the real routes: a Member's link (`waiting`, `linked`/`pending`, the stored row, the sealed token, the audit entries), then the Owner's with the same Microsoft account (`taken`, its Failure entry), then the redaction check. It waits at most 4 minutes per code and reads the status every 2 s: CLAUDE.md's real-time exception names three `manual_` tests now. A plain `just test-ms-account` also runs the declined check, which can't pass on an account that already gave consent.
+- **fleet-client and the app** *(the user's choice)*: fleet-client's methods, the Tauri commands, `ApiClient` and the dialog come in F.
+- **Coverage** *(the user's choice)*: `app/link_flows/` joins the `msauth` gate (90 %). `ports/pace.rs` holds only a trait, which llvm-cov never lists, so `TokioPace` lives in `infra/system.rs` and the pacing code stays under the workspace gate *(the user's choice at the conflict)*.
+- **`AppState::new(services: Services)`** *(the user's choice at the conflict)*: a plain struct with one documented field per service replaces the seven positional arguments, since an eighth would trip clippy's `too_many_arguments`.
+- **`VerificationUri::MAX_LEN = 256`** *(the user's choice)*: a longer link, as written back, is refused in the port, which the adapter reports as `Unexpected` (`LinkNotAllowed`), so the answer's `BoundedText<256>` always holds it whole. This tightens group B's rule.
+- **Known limit:** `users::recheck` checks that the session is live and the user enabled, not the session's expiry, so a flow that started at the very end of a session's lifetime can still link a few minutes after the session expired.
+
+### As built (group D, P9.4)
+- **fleet-core:**
+  - `id::LinkFlowId`; the audit actions `account.start_link` and `account.link`.
+  - `account::{LINK_START_WINDOW, over_quota, new_link_status, link_start_wait}` (the daily cap's `cap` is a `NonZeroU32`).
+  - `time::sub`, the saturating twin of `add`.
+- **fleet-api-types:** `accounts` with `LinkFlowState`, `AccountStatus`, `RefusalReason` (open enums), `LinkStartedResponse` and `LinkFlowResponse`; `AccountId` and `LinkFlowId` re-exported.
+- **fleet-server:**
+  - `app::link_flows`: `LinkFlowService`, `LinkFlowPorts`, `LinkFlowSettings`, `LinkFlowStatus`, `LinkFlowView`, `StartedFlow`, `LinkStartError`, `LinkFlows` (the table) and the constants; private modules `table`, `poller` and `commit`.
+  - `ports::pace::Pace` and `infra::system::TokioPace`; `XboxRefusal::reason`; `VerificationUri::MAX_LEN`.
+  - `AccountReads`/`AccountWrites::count_owned_by` and `AuditReads`/`AuditWrites::user_successes_since`, with their queries (no migration).
+  - `http::handlers::accounts` (`start_link`, `link_status`), `http::router::Services`, `ApiError::Busy { retry_after }` and `ApiError::busy()`.
+  - `config::{AccountsConfig, LinkFlowLimits}`; `ServerPorts::{microsoft, pace}`, `App::link_flows`, `StartError::Microsoft`; the housekeeping's purge.
+- **Tests,** each red first against compiling stubs that returned wrong values, or by a temporary mutation where a stub's answer was already right; every mutation was reverted and checked by checksum:
+  - **fleet-core:** 8 of 16 policy tests (the other 8 expect what the stubs answered: below the quota, `pending`, no wait, the window constant); `time::sub` 2 of 2; the action names snapshot.
+  - **The port:** 9 of 11 (the 256-character link passes against a stub that accepts every link; the message changed with the stub).
+  - **The repository:** 3 of 5. "No starts" is the stub's answer; the refused insert pins SQLite's behavior and was shown red by an insert that rolls back after `Taken` ("cannot commit - no transaction is active").
+  - **Config:** 5 of 7 new or changed tests; the section list and the defaults pass against a stub that parses the keys without ranges.
+  - **`ApiError::Busy`:** 2 of 3 (1 s is the old behavior); `TokioPace` 2 of 2.
+  - **The table:** 13 of 20 against a stub that always grants and never stores; the other 7 expect the stub's answers (nothing held, refused, unknown).
+  - **The service** (`tests/accounts/link_flows/`, 57 tests): 53 against a stub service; the start's "session gone" test was shown red by a start that ignores its re-check.
+  - **`FakePace`**, written after it: all 4 by mutations (no clock advance, a dropped gate that ends the wait).
+  - **The DTOs' lists:** 18 failed with the new DTOs left out of the components and the TypeScript roots.
+  - **The routes** (15 tests): 14 against handlers answering 404; serve's stop of the flows by a serve without that task.
+  - **The housekeeping's purge** against a run that skipped the flows; `StartError::Microsoft` by a variant with its own text, which doubled the chain.
+  - **The coverage gate's script test:** 1 of 1.
+- **Snapshots,** read before accepting: the audit action names (`account.start_link`, `account.link` appended), the OpenAPI document (five schemas, two paths), and `link_started`, `link_waiting`, `link_finishing`, `link_linked` and `link_refused`.
+- **Found during the build:**
+  - `#[sqlx::test]` takes no `#[rstest]` cases (its control attributes need its own database management), so the tables run as loops inside one test, as group C's do, each case with its own user.
+  - A start polled once stops at its first database read, before Microsoft; the tests drive it to the gate (`drive_until`).
+  - A test that moves the clock 15 minutes ends its sessions' access tokens too, so it reads with a fresh session.
+  - `StartError::Microsoft` with its own text would print the message twice in the start's error chain; `#[error(transparent)]` prints it once.
+  - **A race in the tests' pacing, not in the service:** a test that held a flow's first wait and then replaced that flow could leave the hold queued when the replaced poller was cancelled before it ever waited (sqlx's worker thread can answer a start's reads without the start yielding). The next flow's wait then took the hold and never ended: one run of `just check` timed out in the redaction test under full load. `held_start` now returns only once its poller is in the held wait.
+
 ### Notes for later groups
 - **B (P9.3):** done (above). Two of these notes changed with the user's decisions. fleet-server, fleet-client and the desktop crate stay in `stable_crates`, and azalea-auth doesn't reach fleet-server at all. The redaction test runs with the configured filter at `trace`, as planned.
   - ~~fleet-server leaves `stable_crates` together with fleet-client and the desktop crate, since both dev-depend on fleet-server and `stable-check` builds `--all-targets`.~~
@@ -417,6 +492,10 @@ The user answered group C's questions one at a time and added three requirements
   - *(from C)* **Linking again** must check that the profile's UUID is the account's, and sets the status to `active` (clearing a `refused` reason) together with the new envelope. Its envelope change makes a flight in progress drop its rotated token (`ChangedMeanwhile`).
   - *(from C)* In C's design a `refused` or `reauth_required` account comes back through linking again; E decides whether approving or refusing may touch them too.
   - *(from C)* Deleting an account needs nothing from the service: a request finds the row gone, and the slot's kept token is dropped.
+  - *(from D)* The owner's Manage is ownership: no grant row for the owner.
+  - *(from D)* The quota counts every account a Member owns, so deleting one frees its slot. Deleting must also work for offline accounts while `accounts.allow_offline` is off, so a Member with leftover offline accounts can free those slots *(the user's note at D's approval)*.
+  - *(from D)* A pending link that an Admin or the Owner refuses still fills the Member's quota: either refusing it deletes it, or the Member can delete it themselves. E decides which *(the user's note at D's approval)*.
+  - *(from D)* Reuse D's DTO enums, `AccountStatus` and `RefusalReason`, for the accounts.
   - P9.1 is ticked here.
 - **F (P9.8):**
   - The warning text above, in the link dialog only.
@@ -427,6 +506,9 @@ The user answered group C's questions one at a time and added three requirements
   - The threat model's device-code phishing entry and B5/B6, citing A's swap tests.
   - The DoD's "rotate-key works on a copy of the DB" again, with a linked account.
   - *(from C)* A text per `RefusalReason` and per status, for the account list and the re-auth prompt; `xbox_other`'s code is in the audit log only.
+  - *(from D)* Starting a flow is a direct call, since its answer carries the user code; its status may be a query. A text per `LinkFlowState`, and per refusal of a start: 409 (the quota), 429 (the daily cap, or the user's flow finishing), 503 (every place taken, or Microsoft away).
+  - *(from D)* fleet-client's methods for the link routes come with the dialog, with the Tauri commands and `ApiClient`.
+  - *(from D)* The threat model's device-code entry can cite D's tests of the caps and of the re-checks (`link_flows::caps`, `link_flows::commit`, `link_flows::http`).
 
 ## Consequences
 - **Easier:**
@@ -455,6 +537,16 @@ The user answered group C's questions one at a time and added three requirements
   - A kept token lives only in memory: a restart while the database fails loses it, and the account may need linking again.
   - A request reads the account and its owner every time, two queries even for a cached session.
   - The status is two columns now, read together through `from_columns`.
+
+- **Group D, easier:**
+  - A user links an account through two routes, and every outcome is a state the app can show.
+  - No cap can be dodged by a restart: the daily one is counted from the audit log, and the others hold only while the server runs anyway.
+  - The user's approval at Microsoft survives a passing outage of Microsoft or of the database for 5 minutes.
+  - A revoked session or a disabled creator can't finish a link that started before.
+- **Group D, harder:**
+  - The flows live in memory, so a restart loses them, and the users start again.
+  - Each accepted start is an audit entry, and the daily cap reads them on every start.
+  - A tool that holds `AppState` builds it from `Services`.
 
 ## Alternatives considered
 - **Five groups, with P9.3 and P9.5 together:** the first Microsoft-facing PR would hold both the adapter and the service that uses it.
@@ -487,5 +579,13 @@ The user answered group C's questions one at a time and added three requirements
 - *(group C)* **An unaudited exemption for the rotation's store:** the log couldn't show when an account's token was used.
 - *(group C)* **Discarding a token whose store failed, or retrying inside the task:** the next refresh would spend a token Microsoft may have invalidated, and the account would need linking again.
 - *(group C)* **A configurable margin or wait bound:** more config to validate, and a wait bound that could be made unbounded.
+- *(group D)* **A grant row for the creator:** a second source of the owner's Manage, against `authorize()`'s rule that nobody grants to themselves.
+- *(group D)* **The daily cap in memory, or as a governor bucket:** a restart would reset it, and a bucket refills one start every 2.4 hours instead of counting a day.
+- *(group D)* **Refusing a second start until the first ends, or a cancel route:** a user who closed the dialog would wait out the code's 15 minutes, or the app would need a route the plan doesn't have.
+- *(group D)* **The user code in the status:** a reopened dialog could show it again, but every read of the status would carry a secret, and the app couldn't cache it.
+- *(group D)* **Three tries after the approval, or 15 minutes:** a passing Mojang outage would throw the approval away, or a finishing flow would hold one of the places that long.
+- *(group D)* **Letting finishing flows run during shutdown:** a session call takes longer than serve's deadline, so the shutdown would mostly end in exit 4.
+- *(group D)* **Real 1-second waits, or paused time without sqlx, in the tests:** slower, timing-dependent tests, or two test styles in one binary.
+- *(group D)* **Running without linking when Microsoft's client can't be built:** the problem would only show at the first link.
 - *(group B)* **The fake in fleet-testkit with the port in fleet-core, or a shared `tests/common`:** services generic over the provider unlike every other server port, or `dead_code` in each binary that doesn't use every helper.
 - *(group B)* **Testing only the mapping, or a public endpoint override over TLS:** the reader, the bounds and the client's settings untested, or an override reachable from production code.

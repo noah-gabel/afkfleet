@@ -31,6 +31,8 @@
 //!   `expose()` or `into_secret()`. A test formats every DTO that holds one.
 //!
 //! # Modules
+//! - [`accounts`]: the linked Minecraft accounts: starting a Microsoft link
+//!   flow and reading where it stands.
 //! - [`app`]: the desktop app's IPC types, between its Rust side and its UI;
 //!   exported to TypeScript, never on the HTTP wire.
 //! - [`auth`]: logging in, refreshing, stepping up and registering.
@@ -53,6 +55,7 @@
 //!   `just gen-check`.
 //! - [`users`]: the users Admins list and change.
 
+pub mod accounts;
 pub mod app;
 pub mod auth;
 pub mod error;
@@ -72,7 +75,7 @@ pub mod typescript;
 pub mod users;
 
 pub use error::{ErrorBody, ErrorCode, ErrorResponse, FieldError};
-pub use ids::{InviteId, SessionId, UserId};
+pub use ids::{AccountId, InviteId, LinkFlowId, SessionId, UserId};
 pub use int::{SafeInt, SafeIntError};
 pub use open::{Open, OpenEnum};
 pub use page::PageQuery;

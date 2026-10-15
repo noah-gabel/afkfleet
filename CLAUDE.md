@@ -74,7 +74,7 @@ On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: th
 | `just test [crate]` | nextest for the workspace or one crate |
 | `just test-slow` | Pulls the server image and builds the agent's image, then runs the nextest `slow` profile with fleet-mc's test-only `fault-injection` feature, one Minecraft container or compose stack at a time (needs Docker) |
 | `just test-real-account` | **The user only; the AI never runs it.** nextest `manual` profile: the user's real token from `secrets/p1.8-account.txt` joins a local online-mode container and sends signed chat (needs Docker) |
-| `just test-ms-account [filter]` | **The user only; the AI never runs it.** nextest `manual` profile with `--no-capture`, fleet-server only: the Microsoft adapter against the user's own account, in memory only. It prints a link and a code, then pass or FAIL per step; `filter` picks `account_check` or `declined_link` (ADR-0018) |
+| `just test-ms-account [filter]` | **The user only; the AI never runs it.** nextest `manual` profile with `--no-capture`, fleet-server only: the Microsoft adapter, and the link flow through serve's own routes over a temporary database, against the user's own account, in memory only. It prints a link and a code, then pass or FAIL per step; `filter` picks `account_check`, `declined_link` or `link_flow` (ADR-0018) |
 | `just cov` | cargo-llvm-cov with the coverage gates (per-crate and per-module gates are checked by a script over the JSON report) |
 | `just cov-desktop` | Windows only (on Linux it prints a note and succeeds): cargo-llvm-cov over the desktop crate alone, with `--no-rustc-wrapper` (the default wrapper leaves its lib's unit-test binary uninstrumented on Windows), checked against the desktop gate by `coverage-gates.mjs --report desktop` (CI's `tauri-build` job; ADR-0017) |
 | `just deny` | `cargo deny check` in two passes with the same `deny.toml`: the workspace without the desktop crate on every target, then the desktop crate alone on Windows (ADR-0017) |
@@ -326,7 +326,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 - Names describe behavior, e.g. `login_with_wrong_password_returns_401_and_counts_attempt`.
 - Arrange / Act / Assert, one behavior per test. Use `rstest` `#[case]` for tables.
 - **Time:** `#[tokio::test(start_paused = true)]` plus `tokio::time::advance`. Never a real `sleep`.
-  - **The one exception: fleet-server's two `manual_` Microsoft tests** wait Microsoft's real poll interval, at most 8 minutes (ADR-0018).
+  - **The one exception: fleet-server's three `manual_` Microsoft tests** wait Microsoft's real poll interval: the adapter's two checks at most 8 minutes each, the link flow's at most 4 minutes for each of its two codes, reading the flow's status every 2 s (ADR-0018).
   - **Tests over real sockets run on real time** (the Microsoft adapter against its local fakes), with short bounds and never a sleep; paused time would fire their timeouts early (ADR-0018).
   - **Never paused time with sqlx.** It runs each SQLite connection on a worker thread, so the runtime looks idle while it waits, and paused time would jump ahead and fire its timeouts early. A test that waits for a pool timeout lowers it (`DatabaseOptions`) instead (ADR-0015).
   - **The desktop keychain's tests run on real time** for the same reason: its blocking calls run on Tauri's runtime, outside the test's. Short bounds (100 ms for a call that must time out, 5 s for everything else), never a sleep (ADR-0017).

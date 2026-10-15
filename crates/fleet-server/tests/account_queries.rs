@@ -1,7 +1,8 @@
 //! Tests for the queries behind the user's own routes (Plan.md P7.6,
 //! ADR-0016): the wrong 2FA codes since the previous login, the unused
 //! recovery codes, a password change, the live sessions in pages, and
-//! ending a session's step-up.
+//! ending a session's step-up; and the link starts behind the link flows'
+//! daily cap (P9.4).
 //!
 //! Each test gets a fresh database from `#[sqlx::test]` and opens it with
 //! `Database::connect`, the production settings. Time isn't paused: sqlx's
@@ -376,4 +377,84 @@ async fn a_cleared_step_up_is_gone(_pool: SqlitePoolOptions, options: SqliteConn
     assert!(cleared);
     assert!(!missing);
     assert_eq!(after.session.stepped_up_at, None);
+}
+
+// --- The link starts the daily cap counts (P9.4) ---------------------------
+
+/// Records an `action` entry for `target` at `millis` with `outcome`.
+async fn entry(
+    db: &Database,
+    action: AuditAction,
+    target: UserId,
+    millis: i64,
+    outcome: AuditOutcome,
+) {
+    let entry =
+        NewAuditEntry::new(at(T0 + millis), action, outcome).target(AuditTarget::User(target));
+    db.write().await.unwrap().commit(entry).await.unwrap();
+}
+
+#[sqlx::test(migrations = false)]
+async fn only_one_users_successes_of_one_action_after_the_time_are_listed_in_commit_order(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let user = add_user(&db, 1).await;
+    let other = add_user(&db, 2).await;
+    let start = || AuditAction::ACCOUNT_START_LINK;
+    // Before and exactly at the time: not listed.
+    entry(&db, start(), user, 1_000, AuditOutcome::Success).await;
+    entry(&db, start(), user, 2_000, AuditOutcome::Success).await;
+    // Listed, in commit order.
+    entry(&db, start(), user, 5_000, AuditOutcome::Success).await;
+    entry(&db, start(), user, 3_000, AuditOutcome::Success).await;
+    // Another outcome, action or user: not listed.
+    entry(&db, start(), user, 4_000, AuditOutcome::Failure).await;
+    entry(
+        &db,
+        AuditAction::AUTH_LOGIN,
+        user,
+        4_000,
+        AuditOutcome::Success,
+    )
+    .await;
+    entry(&db, start(), other, 4_000, AuditOutcome::Success).await;
+    let since = at(T0 + 2_000);
+
+    let listed = db
+        .audit()
+        .user_successes_since(user, &start(), since)
+        .await
+        .unwrap();
+    let mut tx = db.write().await.unwrap();
+    let in_tx = tx
+        .audit()
+        .user_successes_since(user, &start(), since)
+        .await
+        .unwrap();
+
+    assert_eq!(listed, [at(T0 + 5_000), at(T0 + 3_000)]);
+    assert_eq!(in_tx, listed);
+    assert_eq!(
+        db.audit()
+            .user_successes_since(other, &start(), since)
+            .await
+            .unwrap(),
+        [at(T0 + 4_000)]
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_user_without_starts_has_none(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
+    let db = database(options).await;
+    let user = add_user(&db, 1).await;
+
+    let listed = db
+        .audit()
+        .user_successes_since(user, &AuditAction::ACCOUNT_START_LINK, at(T0))
+        .await
+        .unwrap();
+
+    assert_eq!(listed, Vec::<DateTime<Utc>>::new());
 }
