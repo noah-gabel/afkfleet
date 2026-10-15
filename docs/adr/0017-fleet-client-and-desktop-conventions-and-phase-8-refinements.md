@@ -607,6 +607,7 @@ P8.7 is ticked in E. Where only the user can check something by hand on Windows 
   - A login that ran by itself (after registering, or after the recovery codes) hands its wait to the login form in the notice (`Notice.wait`, through the handoff's zod check too), which starts the countdown.
 - **Screen readers hear the start and the end, never each second** *(the user's rule)*. The alert's spoken text names the whole wait ("Try again in 30 seconds.") and never changes. The ticking "Try again in 29 s." is `aria-hidden`. The end, "You can try again now.", is a status that appears once.
 - **After a reload** the countdown is gone; the next try shows the server's remaining wait again, which the server enforces anyway *(accepted by the user)*.
+- **Amended in Phase 9, group F** *(the user's change at that plan review, [ADR-0018](0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md))*: a wait above 60 s shows in minutes, rounded up, and above 60 minutes in hours and minutes ("Try again in 3 h 12 min."), on screen and spoken, for every form.
 - **Tests,** red first with fake timers against a stub hook: the hook 4 of 6, the message 2 of 3 (it checks the spoken text without the hidden parts), and every form 10 of 10 (`test/retryWait.ts`: the countdown, the disabled submit, a click that sends nothing, the end). The two that passed against the stub check refusals a stub also gives. A first version chained a timeout from each render, which fake timers advanced only one tick per step; a single interval replaced it.
 
 ### Notes for later groups

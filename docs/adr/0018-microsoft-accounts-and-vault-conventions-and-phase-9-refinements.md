@@ -544,6 +544,54 @@ For group E the user changed how open questions are decided. Each one went to it
   - A `PUT` with the grant's own level answers the grant unchanged and records nothing.
   - The handlers ask `authorize()` and the services ask again in their transactions with the same answers, so the HTTP tests of a refusal were shown red by removing both.
 
+### Group F: the app's account screens (P9.8), the DoD, the threat model *(2026-10-15)*
+Open questions went to review subagents as in group E (CLAUDE.md's step 10). The user answered the look-and-feel and rule questions one at a time, reviewed every text friends read in one table at the plan review, and changed four points there.
+
+**The user's choices:**
+- **U5. tauri-plugin-opener 2.7.0** (2026-09-29, Apache-2.0 OR MIT), over 2.7.1 and 2.7.2. It brings `open` 5.4.4 (MIT) and the build-dependency `tauri-plugin`, pinned to 2.7.1 in Cargo.lock: its 2.7.2 would raise tauri-utils from 2.10.1 to 2.10.2. Cargo.lock also lists `is-wsl` and `is-docker`, Linux-only and never built on Windows.
+- **U6. The app checks Microsoft's link once, when the start's answer arrives in Rust** *(the reading of "a Rust command that checks it again")*. A bad link refuses the whole answer, so the UI never sees its code; the open command takes only the checked value.
+- **U7. "Accounts" is its own nav item** for every role, between Home and Server.
+- **U8. Cards,** with the links waiting for the user's approval as cards in their own section on top.
+- **U9. The link is its own screen, in two steps:** the warning and "Get a code" first, so nothing starts before that click.
+- **U10. Microsoft's page opens by itself** once the code shows; "Open Microsoft's page" stays.
+- **U11. Each account has its own screen,** which holds the sharing.
+- **U12. A card shows the re-auth prompt with "Link again" for Manage holders** *(changed at the plan review; the answer recorded during planning had read "text only")*; below Manage, it asks the viewer to turn to whoever manages it.
+- **U13. Home's count is an alert that can't be dismissed, plus a badge on Accounts** on every screen.
+- **U14. The capability grows by exactly 15 `allow-` entries** (35), nothing for core or a plugin.
+- **U15, at the plan review:** Home's count is also read when the window regains focus; `RetryWaitMessage` shows waits above 60 s in minutes and above 60 minutes in hours and minutes, for every form (an amendment to ADR-0017's group E); the link code's copy toast is "Code copied. Paste it on Microsoft's page."
+- **U16, during the build:** one `#[expect(clippy::needless_pass_by_value)]` on the synchronous `open_verification_link` command: Tauri passes a command's `State` by value, and a synchronous command only borrows it. The alternative was an async command with `spawn_blocking`, on a thread without COM.
+- **The texts** are the table the user approved at the plan review (in the PR), with their changes.
+
+**Decided by the review agents** *(approved by the user at the plan review)*:
+- **S1 (security). The opener command.** `open_verification_link` takes no argument and opens only the `fleet_client::VerifiedLink` the desktop's `AppState` holds: the newest successful start's or link again's, behind its own short `std::sync::Mutex`, outside the connection's `RwLock`. A refused start keeps it; a bad link, a login, a logout and a server switch forget it (the switch under its write guard). It's synchronous, so it runs on the main thread, where WebView2 initialized COM, and no runtime thread blocks. The plugin isn't registered: only its free `open_url` is called, so the webview has none of its commands and no injected script. The seam is a sync `LinkOpener` trait in `state.rs` (`Arc<dyn LinkOpener>`); the real `ShellOpener` sits in `lib.rs`, outside the coverage gate like the rest of the real-OS wiring. Three new `CommandErrorCode`s: `invalid_verification_link`, `no_verification_link`, `verification_link_open`. *Why:* nothing the webview sends can name a URL, and one live flow per user is exactly "the newest answer". *Two views, recorded:* group F's third agent suggested keeping the held link inside the connection, dropped by the switch by construction; the first agent's separate lock stays, since the synchronous command must never wait for a switch's write guard (up to 25 s).
+- **S2 (security). The app's rule** is `fleet_client::VerifiedLink` (`TryFrom<&str>` over reqwest's `Url`, group B's checks unchanged). `link::the_app_and_the_server_accept_exactly_the_same_links` runs one table through it and the server's `VerificationUri`: the server's cases, what the parser rewrites (case, `:443`, `:0443`, an empty port or user, backslashes, tabs and line breaks, spaces around, a percent-encoded host, full-width letters, a non-ASCII path), look-alike hosts (a trailing dot, `ø`, a Cyrillic `і`, punycode, `@` and backslash tricks), other schemes, the length on the written-back link, and 36 000 generated combinations. Both must agree on the verdict and the text; `HOSTS` and `MAX_LEN` are pinned equal. fleet-client returns the DTO unchanged; only the desktop checks. *Why:* the server's parser, no new dependency, and no drift. *Rejected:* a JSON fixture, a hand-written parser in fleet-api-types (overturning group B's "parsed with reqwest's `Url`"), `url` as a new dependency, a copy in the desktop crate (Windows-only tests, no fuzzing in P13.2).
+- **S3 (security). Testing without Microsoft.** No Microsoft fake in fleet-client's or the bridge's tests, whose real adapter stays wired: every start there ends in a refusal the server gives before it asks Microsoft (a Member at the quota, an offline account linked again, an unknown flow). Offline accounts (`allow_offline` on in both supports) cover the lists, reading, deleting and grants; approving and refusing use pending rows written to the server's store. The 201s and the status's states go through fleet-client's scripted transport, with answers serialized from the DTOs; the held link's rules are in-crate tests over a crate-private handler. *Why:* no new dependency (async-trait would need the user's approval), no second Microsoft fake (group B), no stub server (ADR-0017).
+- **S4. Following the status:** one query, `["linkFlow", id]`, outside the accounts' keys, read every 2 s, also in the background; it stops for good at an end state or a 404, a failed read pauses it (the banner's recovery restarts it), and a 429 or 503 waits what it asks, at least 2 s. A state this version doesn't know keeps it reading. `linked` or a 404 invalidates every account query. The start's answer never seeds the cache; the code leaves the screen when the flow ends.
+- **S5 (security). Home's count:** one query, `["accounts", "awaiting"]`, every page, read only for Admins and the Owner, again when Home or Accounts mounts, after the user's own writes, on the banner's recovery and (U15) on window focus; no timer, which would keep an unattended app's session alive past its 7-day idle end. A failed read shows on Home; the badge then shows nothing.
+- **S6. Offline accounts** get a form for every role, always reachable but behind its own button; a 404 says the server doesn't allow them, a 409 names both causes. `limits.ts` gains `MC_NAME_MIN_CHARS` and `MC_NAME_MAX_CHARS`. A name isn't a secret: a plain mutation.
+- **S7. A start's refusals:** one text per status (429, 503), each naming all its causes; `Retry-After` drives only the countdown. *Why:* the 5 s and 30 s are server constants the app can't pin.
+
+### As built (group F)
+- **fleet-api-types:** `CommandErrorCode::{InvalidVerificationLink, NoVerificationLink, VerificationLinkOpen}`.
+- **fleet-client:** `link::{VerifiedLink, VerifiedLinkError}`; `Client::{start_link, link_status, create_offline_account, accounts, accounts_awaiting_approval, account, delete_account, approve_account, refuse_account, relink_account, account_grants, create_grant, change_grant, revoke_grant}`.
+- **The desktop crate:** `commands::{links, accounts, grants}`; `state::{LinkOpener, OpenError}`, the held link, `AppState::load(path, factory, opener)` and `open_verification_link`; the endpoints and the crate-private `held`; `lib.rs`'s `ShellOpener`; 35 commands in build.rs, the capability, `scripts/tauri-hardening.mjs` and `ipc-contract.json`, with 15 generated permission files.
+- **packages/ui:** `features/accounts/` (the screens, `permissions.ts`, `texts.ts`, the hooks `useAwaitingApproval`, `useLinkFlowStatus`, `useAccountWrites`); `app/focus.ts`; the account queries; `RetryWaitMessage`'s `visibleWait` and `spokenWait`; `lib/time`'s `formatClock`. CLAUDE.md's direct-call list gains `startLink` and `relinkAccount`.
+- **e2e:** the fake backend's accounts, flows and grants, and two stories (a Member's link, the Owner's approval with a step-up, sharing and deleting; linking an account again).
+- **fleet-server's tests:** `accounts::at_rest`, the DoD's two tests.
+- **Tests,** red first against stubs with the real signatures (client methods answering `NoSession`, a `VerifiedLink` accepting everything, desktop methods answering `ipc`, a handler holding nothing, screens rendering nothing, pass-through checks, seconds-only waits):
+  - fleet-api-types: the codes' sentences 1 of 1 (empty stub sentences); `tests/limits.rs` red until `limits.ts` had the two names.
+  - fleet-client: `VerifiedLink` 21 of 25 (two accepted links an identity stub keeps, the fixed error text, and the constants' pin, shown red by `MAX_LEN = 257`); the scripted-transport tests 7 of 7; the integration tests 5 of 5.
+  - The desktop crate: 11 against the stubs; the three in-crate tests a stub's "nothing held" answers too (nothing held, login and logout, the switch) shown red by removing each forget call and by an open that answers Ok without a link; the plugin's refusal shown red by registering it and granting `opener:allow-open-url` (its empty scope refused the URL itself: "Not allowed to open url …", so nothing opened).
+  - `TauriApiClient`'s contract: shown red by a renamed command and a dropped argument.
+  - The UI: the checks 3 of 4 (the pass-through test passes a pass-through stub); the waits 13 of 20 (the seconds cases are the old behaviour); the permissions 3 of 4, the unknown level by a mutation; the screens 69 and the waiting count 7, against stubs; the nav's lists (updated after the entry) shown red by removing it; the texts' default branch by a mutation; the Member's "never reads" by a gate that lets every role read.
+  - The DoD's tests, pinning existing behaviour: shown red by a mutation that copied the Minecraft token into `account.link`'s metadata (caught in the open database's WAL) and by a rotation that kept the old envelope.
+  - Every mutation was reverted and checked by checksum.
+- **Snapshots:** none new or changed.
+- **Found during the build:**
+  - **A form inside a form.** The first sharing form held "Confirm it's you", itself a form: in Edge, its Continue submitted the outer form natively and reloaded the app to Home. jsdom doesn't navigate, so only the e2e story caught it. The prompt sits after the form now, and the sharing test checks that the password's form has no form around it (red with the prompt moved back).
+  - **Edge names a badge differently from jsdom** ("Accounts , 1 waiting…" with a space before an `sr-only` span), so the link's spoken name is its `aria-label`, and the badge is hidden from screen readers.
+  - The crate docs may not link the private `ShellOpener`.
+
 ### Notes for later groups
 - **B (P9.3):** done (above). Two of these notes changed with the user's decisions. fleet-server, fleet-client and the desktop crate stay in `stable_crates`, and azalea-auth doesn't reach fleet-server at all. The redaction test runs with the configured filter at `trace`, as planned.
   - ~~fleet-server leaves `stable_crates` together with fleet-client and the desktop crate, since both dev-depend on fleet-server and `stable-check` builds `--all-targets`.~~
@@ -582,7 +630,7 @@ For group E the user changed how open questions are decided. Each one went to it
   - *(from D)* A pending link that an Admin or the Owner refuses still fills the Member's quota: either refusing it deletes it, or the Member can delete it themselves. E decides which *(the user's note at D's approval)*.
   - *(from D)* Reuse D's DTO enums, `AccountStatus` and `RefusalReason`, for the accounts.
   - P9.1 is ticked here.
-- **F (P9.8):**
+- **F (P9.8):** done (above); every note below was applied.
   - The warning text above, in the link dialog only.
   - *(from B)* The verification link is already checked (https, `www.microsoft.com` or `microsoft.com`); the user code is shown but never logged.
   - *(from B)* Each `XboxRefusal`, `NotOwned` and `NoProfile` has a text for the user. `Failure::Certificate` on a Linux server means a missing CA store (P12.6).
@@ -598,6 +646,10 @@ For group E the user changed how open questions are decided. Each one went to it
   - *(from E)* fleet-client's methods, the Tauri commands and `ApiClient` for E's eleven routes.
   - *(from E)* The threat model gains: approving, refusing, deleting and the grant writes need a step-up (`review::reviewing_needs_a_fresh_step_up_and_changes_nothing_without_one`, `delete::deleting_needs_a_fresh_step_up_and_changes_nothing_without_one`, `grants::every_grant_write_needs_a_fresh_step_up`); names a Manage holder can probe, bounded by the per-user limit (`grants::granting_by_name_spends_its_own_per_user_limit`, an accepted risk); a pending link's review by someone above its owner (`review::only_someone_above_the_owner_reviews_whatever_grant_anyone_holds`); someone at the Owner's unlocked PC can still start a link that's active at once; an Admin's linked row can be deleted only by the Owner, so ADR-0018's "an Admin deletes the row" holds for Members' links.
   - *(from E, flagged, not changed)* P11.6's cleanup doesn't list the used and revoked invites, which keep their rows "until P11.6's cleanup" (`0006_invites.sql`).
+- **From F:**
+  - **P11.9 (the user's request):** a View or Control grantee can't remove themselves from a shared account; a "leave" action could come there.
+  - **P11.11:** the account screens join the design pass, the offline form's control and the badge included.
+  - *(proposed, not done)* fleet-api-types' `MC_NAME_MAX_CHARS` is a literal 16, not `= McUsername::MAX_LEN` as `NEW_PASSWORD_MAX_CHARS` is.
 
 ## Consequences
 - **Easier:**
@@ -646,6 +698,15 @@ For group E the user changed how open questions are decided. Each one went to it
   - Every account write and grant write asks for the password within 5 minutes.
   - A Manage holder can still learn whether a username exists, bounded by 10 tries an hour.
   - The handlers and the services both ask `authorize()`, and an account read costs a join with its owner and the viewer's grant.
+
+- **Group F, easier:**
+  - Every user links, shares and reviews accounts in the app; nothing about a link's code reaches a cache or a log, and only a link the app checked itself is ever opened.
+  - The app's link rule can't drift from the server's: one test runs every case through both.
+  - Phase 9's DoD is two automated tests and one hands-on check.
+- **Group F, harder:**
+  - Two copies of the link rule to change together, and 35 commands to keep in step across seven files.
+  - The waiting count isn't live: it's read on a mount, a write, a recovery or a focus, until P11's events.
+  - fleet-client's and the bridge's tests can't reach a successful link; the scripted transport and the in-crate tests cover it.
 
 ## Alternatives considered
 - **Five groups, with P9.3 and P9.5 together:** the first Microsoft-facing PR would hold both the adapter and the service that uses it.
@@ -701,3 +762,7 @@ For group E the user changed how open questions are decided. Each one went to it
 - *(group E)* **A step-up to link again, or only `refused` and `reauth_required` accounts linkable:** a password asked for a recovery, or a stale `active` that can't be fixed before a bot fails.
 - *(group B)* **The fake in fleet-testkit with the port in fleet-core, or a shared `tests/common`:** services generic over the provider unlike every other server port, or `dead_code` in each binary that doesn't use every helper.
 - *(group B)* **Testing only the mapping, or a public endpoint override over TLS:** the reader, the bounds and the client's settings untested, or an override reachable from production code.
+- *(group F)* **A free URL from the UI, or a flow ID, for the opener:** a URL parameter the user's rule forbids, or a map of flows the server already replaced. **The plugin registered:** its commands and its link-click script in every page, refused only by the ACL. **An async opener with `spawn_blocking`:** a thread without COM, and a task that outlives a timeout. **The check only at the click:** a hostile server's code shown first.
+- *(group F)* **A Microsoft fake in fleet-client's and the bridge's tests:** a copied macro expansion or async-trait as a new dependency, and a second fake beside group B's.
+- *(group F)* **A timer for Home's count:** an unattended app's session would never reach its idle end.
+- *(group F)* **A text per cause of a 429 or 503 from `Retry-After`:** server constants the app can't pin.
