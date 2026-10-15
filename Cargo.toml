@@ -165,6 +165,10 @@ tauri-build = "2.7.2"
 # opening another. It has no JavaScript API, so no capability grants it anything
 # (ADR-0017).
 tauri-plugin-single-instance = "2.5.3"
+# tauri-plugin-opener: opens Microsoft's sign-in page in the default browser (P9.8). Only
+# its free `open_url` is called, from one Rust command without arguments; the plugin isn't
+# registered, so the webview gets none of its commands (ADR-0018).
+tauri-plugin-opener = "2.7.0"
 # totp-rs: one time step's TOTP code and the otpauth URI of an enrollment. Without
 # default features: no `std` (wall-clock `*_current`), no `gen_secret` (rand's thread RNG;
 # the secret comes from the SecureRandom port), no `serde`, no `qr` (image codecs).

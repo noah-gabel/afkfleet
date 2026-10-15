@@ -1,6 +1,8 @@
 //! The desktop app's ACL and IPC contract (P8.3, P8.4, ADR-0017), on Tauri's mock
 //! runtime with the real `tauri.conf.json`, capabilities and app manifest:
 //! - no command reaches the app, and no core command runs, unless a capability grants it
+//! - tauri-plugin-opener's own commands don't exist for the webview: the app calls only
+//!   its free `open_url`, from Rust (ADR-0018)
 //! - every command the app registers and grants answers exactly as
 //!   `tests/ipc-contract.json` says, with the arguments `TauriApiClient` sends
 // Integration tests are test code, but clippy only applies the test allowances
@@ -9,12 +11,13 @@
 #![cfg(test)]
 
 use core::time::Duration;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 
 use afkfleet_desktop::keychain::KeychainFactory;
 use afkfleet_desktop::profile::PROFILE_FILE;
-use afkfleet_desktop::state::AppState;
+use afkfleet_desktop::state::{AppState, LinkOpener, OpenError};
 use fleet_api_types::app::{CommandError, LogoutResponse, ServerProfileState};
+use fleet_client::VerifiedLink;
 use serde_json::Value;
 use tauri::ipc::{CallbackFn, InvokeBody, InvokeResponseBody};
 use tauri::test::{INVOKE_KEY, MockRuntime, get_ipc_response, mock_builder};
@@ -46,16 +49,30 @@ fn probe_window() -> WebviewWindow<MockRuntime> {
         .unwrap()
 }
 
+/// An opener that fails the test if anything reaches it: no contract entry may open a
+/// link, so none ever starts a browser.
+struct NeverOpens;
+
+impl LinkOpener for NeverOpens {
+    fn open(&self, link: &VerifiedLink) -> Result<(), OpenError> {
+        panic!("the ACL test opened {}", link.as_str())
+    }
+}
+
 /// The app as `run` builds it, with the real commands, over a profile path in `dir`
-/// (no file there: no server is set up) and keyring-core's in-memory mock store, and
-/// its main window.
+/// (no file there: no server is set up), keyring-core's in-memory mock store and an
+/// opener that must never be called, and its main window.
 fn app_window(dir: &TempDir) -> WebviewWindow<MockRuntime> {
     let app = afkfleet_desktop::configure(mock_builder())
         .build(tauri::generate_context!(test = true))
         .unwrap();
     let factory =
         KeychainFactory::new(keyring_core::mock::Store::new().unwrap(), "io.example.test");
-    app.manage(AppState::load(dir.path().join(PROFILE_FILE), factory));
+    app.manage(AppState::load(
+        dir.path().join(PROFILE_FILE),
+        factory,
+        Arc::new(NeverOpens),
+    ));
     WebviewWindowBuilder::new(&app, "main", WebviewUrl::default())
         .build()
         .unwrap()
@@ -131,6 +148,21 @@ fn a_core_command_is_refused_since_no_core_permission_is_granted() {
 }
 
 #[test]
+fn the_opener_plugins_command_is_refused() {
+    let dir = TempDir::new().unwrap();
+    let window = app_window(&dir);
+
+    let answer = invoke(
+        &window,
+        "plugin:opener|open_url",
+        serde_json::json!({ "url": "https://www.microsoft.com/link" }),
+    );
+
+    let error = answer.expect_err("the opener plugin's command ran");
+    assert_eq!(rejection_kind(&error), "the ACL refused it", "{error}");
+}
+
+#[test]
 fn every_contract_command_passes_the_acl_and_answers_as_the_contract_says() {
     let dir = TempDir::new().unwrap();
     let window = app_window(&dir);
@@ -157,7 +189,7 @@ fn every_contract_command_passes_the_acl_and_answers_as_the_contract_says() {
             (_, _, answer) => panic!("{command}: unexpected answer {answer:?}"),
         }
     }
-    assert_eq!(entries.len(), 20);
+    assert_eq!(entries.len(), 35);
 }
 
 /// An Ok answer must parse as `command`'s own response type and equal the expected

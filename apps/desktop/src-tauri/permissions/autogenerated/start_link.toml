@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-start-link"
+description = "Enables the start_link command without any pre-configured scope."
+commands.allow = ["start_link"]
+
+[[permission]]
+identifier = "deny-start-link"
+description = "Denies the start_link command without any pre-configured scope."
+commands.deny = ["start_link"]

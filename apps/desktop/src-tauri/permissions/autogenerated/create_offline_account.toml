@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-create-offline-account"
+description = "Enables the create_offline_account command without any pre-configured scope."
+commands.allow = ["create_offline_account"]
+
+[[permission]]
+identifier = "deny-create-offline-account"
+description = "Denies the create_offline_account command without any pre-configured scope."
+commands.deny = ["create_offline_account"]

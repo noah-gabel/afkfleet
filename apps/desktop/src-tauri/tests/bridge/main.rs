@@ -8,6 +8,7 @@
 #![cfg(test)]
 
 mod account;
+mod accounts;
 mod auth;
 mod support;
 mod switch;

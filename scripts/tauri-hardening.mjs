@@ -33,7 +33,7 @@ import { isDeepStrictEqual } from "node:util";
 export const CSP =
   "default-src 'self'; img-src 'self' data:; style-src 'self'; connect-src ipc: http://ipc.localhost";
 
-/** The app's own commands, as build.rs lists them (P8.4). */
+/** The app's own commands, as build.rs lists them (P8.4; the accounts' and the opener in P9.8, ADR-0018). */
 export const COMMANDS = [
   "server_profile",
   "set_server_profile",
@@ -55,6 +55,21 @@ export const COMMANDS = [
   "invites",
   "create_invite",
   "revoke_invite",
+  "start_link",
+  "link_status",
+  "create_offline_account",
+  "accounts",
+  "accounts_awaiting_approval",
+  "account",
+  "delete_account",
+  "approve_account",
+  "refuse_account",
+  "relink_account",
+  "account_grants",
+  "create_grant",
+  "change_grant",
+  "revoke_grant",
+  "open_verification_link",
 ];
 
 /** The whole of `app.security`. */

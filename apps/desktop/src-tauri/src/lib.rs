@@ -11,6 +11,11 @@
 //! to the server only through fleet-client. [`state::AppState`] holds the server profile
 //! ([`profile`]) and the client; the refresh token lives in the OS keychain
 //! ([`keychain`]); no token ever reaches the UI or the state.
+//!
+//! Microsoft's sign-in page (P9.8, ADR-0018) opens through [`ShellOpener`]:
+//! tauri-plugin-opener's free `open_url`, on the one link the state holds
+//! after fleet-client's `VerifiedLink` passed it. The plugin isn't
+//! registered, so the webview gets none of its commands.
 
 mod commands;
 mod endpoints;
@@ -22,12 +27,15 @@ pub mod profile;
 pub mod startup;
 pub mod state;
 
+use std::sync::Arc;
+
+use fleet_client::VerifiedLink;
 use tauri::{Manager as _, Runtime};
 
 use crate::keychain::KeychainFactory;
 use crate::profile::PROFILE_FILE;
 use crate::startup::StartError;
-use crate::state::AppState;
+use crate::state::{AppState, LinkOpener, OpenError};
 
 /// The main window's label, as `tauri.conf.json` names it.
 const MAIN_WINDOW: &str = "main";
@@ -58,6 +66,21 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         commands::invites::invites,
         commands::invites::create_invite,
         commands::invites::revoke_invite,
+        commands::links::start_link,
+        commands::links::link_status,
+        commands::accounts::create_offline_account,
+        commands::accounts::accounts,
+        commands::accounts::accounts_awaiting_approval,
+        commands::accounts::account,
+        commands::accounts::delete_account,
+        commands::accounts::approve_account,
+        commands::accounts::refuse_account,
+        commands::links::relink_account,
+        commands::grants::account_grants,
+        commands::grants::create_grant,
+        commands::grants::change_grant,
+        commands::grants::revoke_grant,
+        commands::links::open_verification_link,
     ])
 }
 
@@ -85,7 +108,18 @@ pub fn run() -> Result<(), StartError> {
     let factory = KeychainFactory::windows(store, &app.config().identifier);
     let profile_path = app.path().app_local_data_dir()?.join(PROFILE_FILE);
     // Managed before the event loop starts, so no command can run without it.
-    app.manage(AppState::load(profile_path, factory));
+    app.manage(AppState::load(profile_path, factory, Arc::new(ShellOpener)));
     app.run(|_, _| {});
     Ok(())
+}
+
+/// Opens a checked link in the default browser with tauri-plugin-opener's
+/// free `open_url`, which needs no registered plugin. Only real-OS wiring,
+/// like the rest of this file: no test opens a browser.
+struct ShellOpener;
+
+impl LinkOpener for ShellOpener {
+    fn open(&self, link: &VerifiedLink) -> Result<(), OpenError> {
+        tauri_plugin_opener::open_url(link.as_str(), None::<&str>).map_err(|_| OpenError)
+    }
 }

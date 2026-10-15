@@ -31,6 +31,21 @@ const COMMANDS: &[&str] = &[
     "invites",
     "create_invite",
     "revoke_invite",
+    "start_link",
+    "link_status",
+    "create_offline_account",
+    "accounts",
+    "accounts_awaiting_approval",
+    "account",
+    "delete_account",
+    "approve_account",
+    "refuse_account",
+    "relink_account",
+    "account_grants",
+    "create_grant",
+    "change_grant",
+    "revoke_grant",
+    "open_verification_link",
 ];
 
 fn main() -> Result<(), Box<dyn Error>> {

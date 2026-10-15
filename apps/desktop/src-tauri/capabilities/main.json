@@ -23,6 +23,21 @@
     "allow-patch-user",
     "allow-invites",
     "allow-create-invite",
-    "allow-revoke-invite"
+    "allow-revoke-invite",
+    "allow-start-link",
+    "allow-link-status",
+    "allow-create-offline-account",
+    "allow-accounts",
+    "allow-accounts-awaiting-approval",
+    "allow-account",
+    "allow-delete-account",
+    "allow-approve-account",
+    "allow-refuse-account",
+    "allow-relink-account",
+    "allow-account-grants",
+    "allow-create-grant",
+    "allow-change-grant",
+    "allow-revoke-grant",
+    "allow-open-verification-link"
   ]
 }

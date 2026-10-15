@@ -1,5 +1,7 @@
 //! Logging in and out, registering, and stepping up through the bridge.
 
+use std::sync::Arc;
+
 use afkfleet_desktop::keychain::KeychainFactory;
 use afkfleet_desktop::profile::PROFILE_FILE;
 use afkfleet_desktop::state::AppState;
@@ -11,8 +13,8 @@ use fleet_api_types::{ErrorCode, SecretText};
 use keyring_core::api::CredentialStoreApi as _;
 
 use crate::support::{
-    Bridge, OWNER, PASSWORD, Server, app_of, assert_no_token, is_api, is_invalid, login, register,
-    step_up_request,
+    Bridge, OWNER, PASSWORD, RecordingOpener, Server, app_of, assert_no_token, is_api, is_invalid,
+    login, register, step_up_request,
 };
 
 #[tokio::test]
@@ -237,7 +239,11 @@ async fn a_logout_removes_a_keychain_entry_that_cant_be_read() {
     let dir = tempfile::tempdir().unwrap();
     let mock = keyring_core::mock::Store::new().unwrap();
     let factory = KeychainFactory::new(mock.clone(), "io.example.test");
-    let state = AppState::load(dir.path().join(PROFILE_FILE), factory);
+    let state = AppState::load(
+        dir.path().join(PROFILE_FILE),
+        factory,
+        Arc::new(RecordingOpener::default()),
+    );
     state.set_server_profile(server.profile()).await.unwrap();
     // Not UTF-8, so the keychain answers BadData for it.
     mock.build("io.example.test", server.url.as_str(), None)

@@ -332,6 +332,7 @@ async fn a_switch_waits_for_a_call_in_flight_and_the_next_call_reaches_the_new_s
         keychain,
         dir,
         state,
+        ..
     } = bridge;
     drop(state);
     let restarted = Arc::new(Bridge::over(dir, keychain));
@@ -377,6 +378,7 @@ async fn after_a_restart_the_saved_profile_and_session_resume() {
         keychain,
         dir,
         state,
+        ..
     } = bridge;
     drop(state);
 
@@ -399,6 +401,7 @@ async fn a_saved_profile_whose_store_cant_be_built_is_unreadable_client() {
         keychain,
         dir,
         state,
+        ..
     } = bridge;
     drop(state);
     keychain.refuse(&server.url);
