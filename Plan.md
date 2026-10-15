@@ -221,9 +221,9 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | HTTP middleware | `tower-http` | 0.7.1 | server | fleet-server enables `catch-panic`, `timeout`, `limit`, `sensitive-headers` and `set-header`. Never `request-id`, which turns on uuid's `v4` and with it `rng`, nor `trace`, whose response hook can't see the route: the request-ID and trace layers are the server's own (P6.6). reqwest keeps its own 0.6.11 (ADR-0015) |
 | OpenAPI | `utoipa`, `utoipa-axum` | 6.0.0, 0.3.0 | api-types, server | P0 picked 6.x (ADR-0009); re-checked in P6.10 (2026-10-11): still the newest, MIT/Apache-2.0. utoipa without default features: fleet-api-types and fleet-server enable `macros`, and fleet-api-types `preserve_order`, so properties keep the field order ts-rs writes and a test compares the two. utoipa-axum takes axum without default features. Cargo.lock gained only utoipa, utoipa-gen, utoipa-axum and its macro helper pastey (ADR-0015) |
 | Database | `sqlx` | **0.9.0**, dfo | server | `runtime-tokio`, `sqlite-bundled`, `migrate`, `macros`, `uuid`; no TLS feature (SQLite); offline data in `crates/fleet-server/.sqlx/`. Not `sqlite`: in 0.9 it also turns on extension loading, deserialize and unlock-notify. Not `chrono`: it would turn on chrono's `clock` for the whole workspace build, so times are converted in fleet-server. Not `json` (ADR-0015) |
-| gRPC | `tonic`, `tonic-prost` | **0.14.6** | proto, agent, server | Features `tls-aws-lc`, `tls-connect-info`. Never `tls-ring` or `tls-webpki-roots` |
-| Protobuf | `prost` | 0.14.4 | proto | |
-| Protobuf codegen | `tonic-prost-build`, `protox` | 0.14.6, 0.9.1 | proto (`build.rs`) | Pure Rust, no system `protoc` |
+| gRPC | `tonic`, `tonic-prost` | **0.14.6** | proto, agent, server | Features `tls-aws-lc`, `tls-connect-info`. Never `tls-ring` or `tls-webpki-roots`. Declared without default features (P10.1): fleet-proto enables `codegen` only, for the generated client and server; the agent and the server add the transport and TLS features in their groups ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)) |
+| Protobuf | `prost` | 0.14.4 | proto | Its defaults (`derive`, `std`). Already in Cargo.lock through testcontainers before P10.1 |
+| Protobuf codegen | `tonic-prost-build`, `protox` | 0.14.6, 0.9.1 | proto (`build.rs`) | Pure Rust, no system `protoc`. tonic-prost-build without default features: no transport helpers, no `cleanup-markdown`. protox 0.9.1 over 0.10.0 (2026-10-07) is the user's choice at Phase 10's planning; no advisory names it. Build-only, with prost-build, prost-reflect, protox-parse, logos, miette and prost-types, which nothing uses at run time ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)) |
 | TLS | `rustls` | 0.23.46 | agent, server, client, desktop | **Only the aws-lc-rs provider**, installed explicitly at startup. The default features select it. The agent's `main.rs` installs it before anything else runs (ADR-0014). 0.23.46 is a security floor (2026-10-14): RUSTSEC-2026-0346 (client session values' `Debug`), 0347 (ECH, never enabled here), 0348 (the `brotli` feature, never enabled here) and 0349 (a downgrade to classical key exchange on resumed client connections) |
 | X.509 / CSR | `rcgen` | 0.14.10, dfo | server (CA, signing; dev: the Microsoft adapter's certificate test), agent (CSR), client (dev: test certificates) | `aws_lc_rs`, `pem`, `x509-parser`. The default is ring. fleet-client's TLS tests make their CA and server certificates with it at run time (`aws_lc_rs`, `pem`), since no key is ever committed ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)); fleet-server's Microsoft adapter test does the same from P9.3 ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)) |
 | HTTP client | `reqwest` | **0.13.5**, dfo | client, server, desktop, mc | Feature `rustls` (aws-lc-rs + platform verifier), no native-tls. fleet-mc enables no features: it only names `reqwest::Proxy` in azalea's `AccountTrait` (ADR-0011). fleet-client enables none either, and builds its client with no redirects, no proxies, a 5 s connect and 20 s request timeout, and `tls_certs_only` for a custom CA; it reads each body itself, capped at 1 MiB ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)). fleet-server (P9.3) enables `form` only, for its Microsoft adapter: no redirects, no proxies, https only, a 5 s connect and 15 s request timeout, every body read through its own reader capped at 256 KiB. Its clippy config bans reqwest's unbounded readers and `reqwest::get`, and its client types outside the adapter's `client.rs` ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)) |
@@ -569,7 +569,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Conventions**
 - Each task has an ID `P<phase>.<n>`. 🔴 means *the test comes first*, strictly. Tasks without 🔴 (scaffolding, config, wiring) are verified by `just check`, CI or the task's demo, but any logic they add still gets tests.
 - A phase is finished when every task is ticked **and** its Definition of Done (DoD) holds.
-- **Branches:** one branch per task, `p<phase>/<task-id>-<slug>` (e.g. `p2/p2.6-bot-state-machine`). Phases 0 and 1 each use a single branch, `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each (see the note under Phase 2). Phase 3 uses five group branches plus one task branch for P3.9 (see the note under Phase 3). Phase 4 uses five group branches (see the note under Phase 4). Phase 5 uses four group branches (see the note under Phase 5). Phase 6 uses five group branches (see the note under Phase 6). Phase 7 uses five group branches (see the note under Phase 7). Phase 8 uses five group branches (see the note under Phase 8). Every branch ends in a PR that the user reviews and merges. The `Plan.md` checkbox is ticked in that same PR.
+- **Branches:** one branch per task, `p<phase>/<task-id>-<slug>` (e.g. `p2/p2.6-bot-state-machine`). Phases 0 and 1 each use a single branch, `p0/foundation` and `p1/azalea-spike`. Phase 2 uses five group branches, one PR each (see the note under Phase 2). Phase 3 uses five group branches plus one task branch for P3.9 (see the note under Phase 3). Phase 4 uses five group branches (see the note under Phase 4). Phase 5 uses four group branches (see the note under Phase 5). Phase 6 uses five group branches (see the note under Phase 6). Phase 7 uses five group branches (see the note under Phase 7). Phase 8 uses five group branches (see the note under Phase 8). Phase 9 uses six group branches (see the note under Phase 9). Phase 10 uses eight group branches (see the note under Phase 10). Every branch ends in a PR that the user reviews and merges. The `Plan.md` checkbox is ticked in that same PR.
 - Phases are vertical slices:
   - **0–5** produce a working standalone bot.
   - **6–11** build the fully managed system with the app.
@@ -3464,14 +3464,47 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** Agents enroll securely, receive the desired state and report the actual state, and everything reconciles after any disconnect.
 **Introduces:** `tonic`, `tonic-prost`, `prost`, `tonic-prost-build`, `protox`, `rcgen`, `tokio-stream`, `backon` (IO retries).
 
-- [ ] **P10.1** 🔴 `fleet-proto`:
+> Note (P10, Phase 10's planning, 2026-10-15) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
+> - **Eight group branches.** Phase 10 is built in group PRs like Phases 2–9: one branch and one commit per task, in this order, each after the previous PR is merged:
+>
+>   | Group | Branch | Tasks |
+>   |---|---|---|
+>   | A | `p10/p10.1-fleet-proto` | P10.1, alone: the wire contract and the trust boundary for agent input |
+>   | B | `p10/p10.2-p10.3-pki-and-enrollment` | P10.2, P10.3: how an agent gets its identity |
+>   | C | `p10/p10.4-p10.10-connect-and-agents` | P10.4, P10.5's `AgentRegistry`, P10.10: who may stay connected, and the switch that ends it; P10.9's rejections are tested here |
+>   | D | `p10/p10.5-p11.1-bots-scheduler-reconciler` | P11.1's `bots` and `modes`; the rest of P10.5 (ticked here) |
+>   | E | `p10/p11.2-bot-endpoints` | P11.2 |
+>   | F | `p10/p10.6-session-grants` | P10.6, alone: the one place Minecraft tokens leave the server |
+>   | G | `p10/p10.7-p10.8-agent-client-and-ingest` | P10.7, P10.8, P11.1's `chat_messages` (P11.1 ticked here) |
+>   | H | `p10/p10.9-loopback-wrap-up` | P10.9, the DoD, the threat model and the README |
+>
+>   - **New dependencies** arrive with their group, each shown to the user with its version, license and release date: prost, tonic, tonic-prost, tonic-prost-build and protox in A; rcgen in production code and tonic's TLS features in B; tokio-stream in C; backon's tokio sleeper in G.
+>   - **Hands-on checks:** none in A. B and C are local (`just dev-server`, `just dev-agent`). H's DoD check uses the user's real Microsoft account and needs Docker for a local online-mode Minecraft server (as in P1.8), unless the user points it at their own; one machine is enough. It follows Phase 9 group D's manual-test pattern: a vault key drawn for the run and kept in memory, a temporary folder deleted at every end, and only the new test's filter.
+>   - **Approvals later groups ask for:** G, a new `commit_unaudited` exemption for the batched writes (`EventBatch`, which ADR-0015 anticipated); B, how the Owner gets an enrollment token while the agents screen is P11.9's.
+> - **The phase boundary** *(the user's choice, U1)*. P10.5, P10.6 and P10.8 need P11.1's tables, and the DoD needed P11.2 and P11.9. P11.1's `bots` and `modes` (with the built-in seeds) come with P10.5, their first reader; its `chat_messages` with P10.8, its first writer; all of P11.2, with fleet-client's bot methods, in group E. The DoD's app part moves to Phase 11 (see the DoD below).
+> - **protox 0.9.1** *(the user's choice, U2)*, §5's pin, over 0.10.0 (2026-10-07).
+> - **Decided by the review agents** *(approved by the user at the plan review)*, S1–S9 in ADR-0019: renewal stays in P13.6 (S1); the validated messages live in fleet-proto (S2); `ChatRequestId` and the agent's session request numbers (S3); the mode as structured messages (S4); times as Unix milliseconds and IDs as 16 bytes (S5); Minecraft text cleaned again, validated values strict (S6); secrets out of `Debug` (S7); no agent labels, `AgentCapacity` 1–1000 (S8); the wire-schema snapshot as P0's "proto codegen check" (S9).
+
+- [x] **P10.1** 🔴 `fleet-proto`:
   - `proto/fleet/v1/*.proto` (Appendix C)
   - `build.rs` using protox and `tonic-prost-build`
   - core ⇄ proto conversions with round-trip proptests that reject invalid proto values
+
+  > Note (P10.1, Phase 10, group A) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **as built.**
+  > - **The protocol** is `crates/fleet-proto/proto/fleet/v1/` (`agent`, `bot`, `chat`, `mode`, `common`), package `fleet.v1`: the `AgentControl` service with its `Connect` stream. `RenewCertificate` waits for P13.6 (S1); the enrollment service and its messages come with P10.3, their first user. Appendix C's note lists the refinements.
+  > - **The build** compiles the files with protox and generates the client and the server with tonic-prost-build into `OUT_DIR`, without transport helpers. Nothing generated is committed. The build script also renders the compiled wire schema, which `tests/protocol/schema.rs` pins with insta under `PROTOCOL_VERSION` (1): P0's "proto codegen check" (S9).
+  > - **`fleet_proto::generated`** carries only `#[allow(clippy::pedantic)]`, the one group of lints the generated code trips.
+  > - **`fleet_proto::control`** holds the validated messages (S2): `AgentMessage` (`Hello`, the heartbeat, a snapshot, `BotEvent`, `SessionRequest`) and `ServerMessage` (`Welcome`, a full reconcile, `Assignment`, unassign, update, `SendChat`, `SessionGrant`, `SessionDenied`, `RejectReason`), each read with `TryFrom` from its generated envelope and written back with `TryFrom`. The leaf conversions cover `BotSpec`, `ModeDefinition`, `BotState`, `BotSnapshot`, `StickyState`, `BotNotification`, `DisconnectReason`, `IncomingChat` and `SessionCredentials`.
+  > - **Reading refuses** what fleet-core's constructors refuse, a missing field, an enum value or oneof this version doesn't know, an ID that isn't 16 bytes or not v7, a nil profile UUID, a time outside years 0–9999, a count of 0, more than 1000 bots or a bot twice in a hello or a full reconcile, a heartbeat interval outside 1 s–5 min, and a token that isn't 1 B–16 KiB of visible ASCII. A validated text must arrive exactly as its type keeps it: a server address in its written form, a chat message trimmed. Minecraft's text is cleaned again instead (S6). `ConvertError { field, index, problem }` never holds a value.
+  > - **Secrets** (S7): `OnlineSession` has no derived `Debug`; its own prints the expiry only, its `Drop` wipes the token, and the conversion moves the token into a `SecretString`. A test fails on any field named like a secret outside a redacted message.
+  > - **fleet-core** gains `id::ChatRequestId` and `value::{AgentCapacity, AgentVersion}`.
+  > - **Tests,** each red first against compiling stubs with the real signatures (`tests/protocol/`, 164 tests, then the exhaustive enum tables); the cases a stub happened to satisfy were shown red by temporary mutations, each reverted and checked by checksum (ADR-0019).
 - [ ] **P10.2** 🔴 PKI:
   - `afkfleet-server pki init` creates the CA and the server certificate. The CA key is its own secret.
   - CSR signing with a fixed lifetime (default 60 days), with the agent ID in the SAN.
   - Fingerprints are stored in `agent_certs`.
+
+  > Note (P10.2, from Phase 10's planning, S1) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **room for P13.6's renewal.** `agent_certs` is keyed by fingerprint, and `agent_id` is indexed but not unique: a renewing agent holds two certificates. The agent ID in the SAN comes from the server's record, never from the CSR.
 - [ ] **P10.3** 🔴 Enrollment:
   1. An Admin calls `POST /agents/enrollment-tokens` and gets a single-use token, valid 15 min, stored hashed.
   2. `afkfleet-agent enroll` creates a key and a CSR (rcgen).
@@ -3479,12 +3512,22 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   4. The agent stores its cert and key, readable only by itself.
 
   > Note (P10.3, from group D): **Only the Owner** creates enrollment tokens (`EnrollAgent`), not an Admin as step 1 says. An agent receives session tokens for the bots assigned to it, and P10.5 assigns bots to any agent with free capacity, so an Admin's own agent could otherwise get the Owner's. Viewing and disabling agents stays Admin+ (ADR-0010).
+
+  > Note (P10.3, from Phase 10, group A) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
+  > - **The enrollment service and its messages** join the proto here, their first user, with the wire schema's snapshot. `EnrollRequest` holds the enrollment token, so it follows S7: listed in the build script's `REDACTED`, a `Debug` in `fleet_proto::redact` that never prints it, a `Drop` that wipes it, and a `SecretString` at the conversion.
+  > - **The agent's key and certificate** go on its writable volume (`/data`, Appendix A), never a Docker secret, owner-only and written atomically (S1).
+  > - **To ask the user:** how the Owner gets a token while the agents screen is P11.9's.
 - [ ] **P10.4** 🔴 `AgentControl.Connect` bidi stream. It requires:
   - a verified client certificate
   - an allowlisted fingerprint and an enabled agent
   - a version handshake: `Hello` gets either `Welcome` or a rejection
   - heartbeats with a timeout
   - message size limits
+
+  > Note (P10.4, from Phase 10, group A) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
+  > - **A hello that doesn't convert** (S8: a capacity outside 1–1000, among the rest) gets `Reject`; P10.4 decides the rule for `protocol_version`, which fleet-proto sends as `PROTOCOL_VERSION`, and may refine `Welcome` and `RejectReason`.
+  > - **A connection needs** a fingerprint that's neither revoked nor expired, and an enabled agent (S1). P10.9's rejections (revoked, another CA, never enrolled, expired) are tested in this group.
+  > - **The agent notices a dead server too** *(the user's note at the plan review)*. Over a half-open connection (a server crash, a NAT timeout) the stream can hang without an error, so the agent would never reconnect. C decides between HTTP/2 keepalive with a timeout, on the agent's channel and on the server for its own check, and a server heartbeat the agent times out on. The loopback suite tests it: a connection that goes silent without closing (e.g. through a test proxy) ends within the bound. C tests the server's side, G the agent's reconnect and resync.
 - [ ] **P10.5** 🔴 Server components:
   - `AgentRegistry`
   - `Scheduler`: in v1, the first agent with free capacity, labels optional
@@ -3497,6 +3540,12 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P10.5, from P4.7, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **No `Stopped` before `Removed` for a sticky bot.** A removed bot publishes `StateChanged(Stopped)` only if its actor stopped it through `transition()`. A Paused, Failed or crash-looped bot gets only `Removed`, so `bots.last_state` keeps the Paused or Failed the server sends with `AssignBot` on the next agent. Otherwise the new agent would connect and kick the human who's playing (§6 row 3), or retry a failed account.
   > Note (P10.5, from Phase 9, group D, the user's decision) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **no bot runs on an offline account while `[accounts] allow_offline` is off.** The offline accounts kept from before stay untouched (serve warns at startup), and the scheduler refuses to assign their bots until the switch is on again.
+
+  > Note (P10.5, from Phase 10's planning) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
+  > - **The tables** *(the user's choice, U1)*: P11.1's `bots` and `modes` (with the built-in seeds) arrive in this group, their columns designed with the scheduler and the reconciler (`agent_id`, `last_state`, `last_state_at`, and how `Unknown` is shown).
+  > - **Every account gets its bot** *(the user's note at the plan review)*. Bots are 1:1 with accounts, but nothing creates a bot row yet, and there's no `POST /bots`. D decides how: created together with the account, on each path that creates one (a Microsoft link's commit, an offline account, and the review if that matters), plus a backfill for the accounts that already exist. The DoD check then needs only the moved P11.2 routes: `PATCH` sets the server address on the existing row, and `start` starts it. Deleting an account deletes its bot (P9.6's note), and the reconciler unassigns it.
+  > - **Capacity** (S8): the hello's `AgentCapacity`, with no labels in v1. Free capacity also counts the bots unassigned whose `Removed` hasn't arrived, since the runtime counts a bot until then. An agent that comes back with a lower capacity has bots moved off it.
+  > - **What an agent reports** is untrusted (S6): an event or a status for a bot that isn't assigned to that agent is refused. A session request names no account; the server takes it from its own assignment (S3).
 - [ ] **P10.6** 🔴 Session grants: `SessionRequest{bot_id}` returns `SessionGrant`, but only if the bot is assigned to *this* agent; otherwise `SessionDenied`. On the agent this backs `SessionCredentialProvider`.
 
   > Note (P10.6, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The port is `fleet_core::mc`'s credentials provider, and the runtime doesn't check `expires_at`. The managed provider never hands out a token that expires within the connect timeout.
@@ -3507,6 +3556,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - An offline account is `SessionTokenError::Offline`: the grant carries its name instead.
 
   > Note (P10.6, from Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): an account linked again (P9.6) during a refresh answers `ChangedMeanwhile`, which is retryable, and the retry uses the new token; a test here should show it end to end.
+
+  > Note (P10.6, from Phase 10, group A) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
+  > - **Correlation** (S3): a grant and a denial repeat the request's `SessionRequestId`, the agent's own number from 1, and its `bot_id`. The agent's managed provider drops an answer to a request it no longer waits for (the actor dropped it, or its 30 s passed), so a late grant can't answer a later `fresh` request.
+  > - **The grant** is `fleet_proto::control::SessionGrant` over core's `SessionCredentials`; the token reaches the wire only inside `OnlineSession`, whose `Debug` never prints it (S7). This group's `log_capture` test covers a grant and a denial at every level of every target (tonic, h2, hyper and rustls included).
 - [ ] **P10.7** 🔴 Agent client:
   - reconnects with backon
   - keeps bots running during outages
@@ -3520,10 +3573,20 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P10.7, from the PR #15 review): **An event can come before its ticket.** `ChatQueue::send` returns the ticket while the queue's delivery task may already be publishing `ChatSent` or `ChatFailed` for it, so on the agent the event can arrive before the `send_chat` reply. The agent must handle a ticket it hasn't mapped to a request id yet, for example by handling replies and events in one task, or by holding unknown tickets briefly.
 
   > Note (P10.7, from Phase 4, group C) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): `FleetEventKind::Alert(BotNotification)` comes right after the `StateChanged` to Paused or Failed it belongs to: an alert for a human. The agent maps it too.
+
+  > Note (P10.7, from Phase 10, group A) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
+  > - **The mapping:** a `FleetEvent` becomes `fleet_proto::control::BotEvent`, a `StateChanged` an `AgentMessage::Status`. `ChatSent` and `ChatFailed` carry the `ChatRequestId` the server's `SendChat` named (S3), and `ChatFailedReason` covers both the runtime's `ChatFailure` and the refusals of `send_chat` (`NotOnline`, `QueueFull`, `RateLimited`, and the fleet's `UnknownBot`, `Busy`/`TimedOut` as `AgentBusy`, `ShuttingDown`), mapped with exhaustive matches.
+  > - **Capacity** (S8): the hello's capacity is `[runtime] max_bots`, and a test keeps the agent config's range equal to `AgentCapacity::MIN` and `MAX`.
+  > - **A dead server** *(the user's note at the plan review)*: the agent notices a stream that hangs without an error (P10.4's note) and reconnects and resyncs; the loopback suite tests it.
 - [ ] **P10.8** 🔴 Server ingest:
   - status and chat are written in batches, in transactions roughly every 500 ms
   - **no per-tick writes**
   - events are published on the internal bus (`broadcast`)
+
+  > Note (P10.8, from Phase 10's planning) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
+  > - **P11.1's `chat_messages`** arrives in this group, its first writer *(the user's choice, U1)*, with a `truncated` column: the agent's flag OR the server's own cut (S6). The rebuilt text is what's stored.
+  > - **The batched writes** need a new `commit_unaudited` exemption (`EventBatch`, which ADR-0015 anticipated): the user's approval, and its own ADR note.
+  > - **A heartbeat** carries no time: the server stamps `last_seen_at` with its own `Clock` (S5).
 - [ ] **P10.9** 🔴 Loopback tests with a test PKI. Each of these is rejected:
   - a revoked certificate
   - a certificate from the wrong CA
@@ -3533,9 +3596,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - **Connection killed mid-stream:** the state reconciles.
   - **Agent restart:** no duplicate bots.
   - **Server restart:** agents resync.
+
+  > Note (P10.9, from Phase 10's planning) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **an expired certificate** joins the rejections (S1), and **a connection that goes silent without closing** joins the cases that must hold *(the user's note at the plan review, P10.4's note)*. The rejections are tested in group C, which builds `Connect`; the rest of the suite in H.
 - [ ] **P10.10** Admin endpoints: `GET /agents`, and `POST /agents/{id}/disable`, which revokes the fingerprint and drops the stream.
 
   > Note (P10.10, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a response value that a later version may extend, such as an agent's status, is an `Open<…>` in its DTO, and a 64-bit number is a `SafeInt`.
+
+  > Note (P10.10, from Phase 10's planning) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **disable revokes every fingerprint** the agent holds, not one (S1). `GET /agents` shows the current certificate's `not_after`, so an expiry is visible before P13.6's renewal, and the capacity as a plain number; there are no labels (S8).
 
 **Security:**
 - A client certificate is required for `Connect`.
@@ -3543,7 +3610,9 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - Enrollment tokens are hashed and single-use.
 - The gRPC port is published only when remote agents exist.
 
-**DoD:** In managed mode, pressing Start in the app brings a bot with a real Microsoft account Online on a real server.
+**DoD:** In managed mode, a bot with a real Microsoft account, started through `POST /bots/{id}/start`, goes Online on a real server and goes offline through `stop`.
+
+> Note (Phase 10's DoD, from Phase 10's planning, the user's choice, U1) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the app's part moved to Phase 11.** The DoD read "pressing Start in the app brings a bot with a real Microsoft account Online on a real server", which needs P11.9's screens. The user does this check by hand in group H, with their own account; it needs Docker for a local online-mode Minecraft server (as in P1.8), unless they point it at their own. P10.9's loopback suite is the rest of the proof.
 
 ---
 
@@ -3558,6 +3627,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `modes`: owner, visibility, definition JSON (validated by core), version
   - `chat_messages`
 
+  > Note (P11.1, from Phase 10's planning, the user's choice, U1) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **built in Phase 10.** `bots` and `modes` come in Phase 10's group D, with P10.5's scheduler and reconciler, their first readers; `chat_messages` in group G, with P10.8's ingest, its first writer, which ticks P11.1. Each table keeps the notes below. The per-server conflict texts stay in Phase 11: Phase 10's specs carry an empty list, and the per-server storage arrives later in a table of its own.
+
   > Note (P11.1, from group C): The `modes` migration seeds the built-in modes `afk` and `farm`: fixed v7 IDs (ADR-0010), no owner, and the JSON of `ModeDefinition::afk()` and `farm()`.
 
   > Note (P11.1, from Phase 4, group B, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Outgoing mode chat** arrives as `ModeChatSent{message}` (P4.5), so `chat_messages` can record what a mode said, with direction out, next to user chat.
@@ -3569,6 +3640,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - `POST /bots/{id}/start|stop|restart|reset|resume`
 
   Every call is authorized, audited and reconciled.
+
+  > Note (P11.2, from Phase 10's planning, the user's choice, U1) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **built in Phase 10's group E,** right after the reconciler, so "reconciled" is the real one, with fleet-client's bot methods for P10.9's tests and the DoD check. Its open notes (SSRF, the answer for a Paused or Failed bot, and P11's step-up decision for `PATCH` and the five lifecycle calls) are decided there. Restart, reset and resume need a message the protocol doesn't have yet: group E adds it to `fleet.v1` as a new oneof case (S3). The Tauri commands, `ApiClient` and the bot screens stay in Phase 11.
 
   > Note (P11.2, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): the bot's state, mode and disconnect reason in a response are values a later version may extend, so their DTO fields are `Open<…>`.
 
@@ -3689,7 +3762,9 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.11, from Phase 8, group E, the user's addition) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **Stable screenshots.** The screenshot tests need a stable rendering, but P8.9's suite drives the installed Edge, whose version moves with Windows and the runner image. P11.11 decides then how to keep screenshots stable, for example one fixed OS with a pixel tolerance, or a pinned browser whose download is verified.
 
-**DoD:** The user's real fleet runs for 24 h, managed from the app. Every event shows up live, and the logs contain no unhandled errors.
+**DoD:**
+- Pressing Start in the app brings a bot with a real Microsoft account Online on a real server (moved from Phase 10, the user's choice, U1 in ADR-0019).
+- The user's real fleet runs for 24 h, managed from the app. Every event shows up live, and the logs contain no unhandled errors.
 
 ---
 
@@ -4075,6 +4150,15 @@ message ServerMessage {
 }
 ```
 
+> Note (Appendix C, Phase 10, group A) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the protocol as built** (`crates/fleet-proto/proto/fleet/v1/`, pinned by the wire-schema snapshot) keeps the envelopes' cases and numbers above, and refines the sketch (decided by the review agents, approved by the user at the plan review):
+> - **No `RenewCertificate` yet** (S1): it comes with P13.6, as a new RPC that breaks no agent. **`AgentEnrollment`** joins in P10.3, its first user.
+> - **Times** are `optional int64` milliseconds since the Unix epoch (`*_unix_ms`), **IDs** 16 bytes, and there are no well-known types (S5). A heartbeat carries no time.
+> - **`Hello`** is `name, agent_version, protocol_version, capacity, running` (snapshots), without labels (S8). **`BotStatus`** is a `BotSnapshot`. **`BotEvent`** has the bot, its time and one of `died`, `chat_received`, `chat_sent`, `chat_failed`, `mode_chat_sent`, `alert` and `removed`.
+> - **Correlation** (S3): `SendChat` carries a `ChatRequestId` that `chat_sent` and `chat_failed` repeat; `SessionRequest` carries the agent's own number, which `SessionGrant` and `SessionDenied` repeat with the bot, and names no account.
+> - **`AssignBot`** is the spec and the sticky state to restore; `ReconcileFull` a list of them. **`SessionGrant`** holds an `OnlineSession` (name, UUID, token, expiry) or an `OfflineSession` (name). **`Welcome`** carries only the heartbeat interval; P10.4 may refine it and `Reject`'s reasons.
+> - **A bot's mode** is structured messages that mirror its steps (S4); no JSON crosses the wire.
+> - **Restart, reset and resume** get a message with P11.2, in Phase 10's group E.
+
 ### D. Database tables (SQLite)
 | Table | Key columns |
 |---|---|
@@ -4111,6 +4195,8 @@ message ServerMessage {
 > Note (Appendix D, Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **`account_grants` as built** (`0010_account_grants.sql`) has the columns above, `PRIMARY KEY (account_id, user_id)`, `ON DELETE CASCADE` from `mc_accounts`, a CHECK on `level` (`view`, `control`, `manage`) and one against a grant to its own granter, and an index on `user_id`.
 
 > Note (Appendix D, Phase 9, group C, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **`0009_mc_accounts_status_reason.sql`** adds `status_reason TEXT`, set only with the new status `refused`: `not_owned`, `no_profile`, `xbox_banned`, `xbox_no_xbox_profile`, `xbox_country_unavailable`, `xbox_adult_verification`, `xbox_child_account`, `xbox_other` or `profile_mismatch`. No CHECK; fleet-core's `AccountStatus::from_columns` reads both columns together.
+
+> Note (Appendix D, from Phase 10's planning) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`agents` has no `labels`** (S8): nothing in v1 schedules by them. `agents.capacity` holds the last capacity an agent reported, NULL until its first hello, with no range CHECK (ADR-0015's rule), read back through `AgentCapacity`. **`agent_certs.agent_id`** is indexed but not unique, so P13.6's renewal can hold two certificates per agent (S1). **`chat_messages`** gains a `truncated` column (S6). The tables arrive with their first users in Phase 10's groups: `agents`, `agent_certs` and `enrollment_tokens` in B, `bots` and `modes` in D, `chat_messages` in G.
 
 > Note (Appendix D, Phase 7, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`invites` as built** is `id, code_hash, role, created_by, created_at, expires_at, used_by, used_at, revoked_at`: `role` is `member` or `admin` only, `used_by` is unique, a revoked or used invite keeps its row, and three CHECKs keep it consistent (a use and its time together, never both used and revoked, an expiry after the creation). `0007_audit_log_target.sql` indexes the audit log by target, action and ID, for `GET /me`'s count of wrong codes.
 

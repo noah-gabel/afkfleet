@@ -1,0 +1,118 @@
+# 0019. The control plane: conventions, Phase 10 refinements
+
+- **Status:** Accepted
+- **Date:** 2026-10-15
+- **Related:** Plan.md Phase 10 (P10.1–P10.10), P11.1, P11.2, P13.6, §4, §5, §6, §7.5, Appendices C and D; ADR-0002, ADR-0010, ADR-0011, ADR-0013, ADR-0014, ADR-0015, ADR-0016, ADR-0018
+
+## Context
+Phase 10 connects agents to the server: enrollment with a server-signed certificate, one gRPC stream per agent over mutual TLS, the scheduler and the reconciler, short-lived session grants, the agent's client and the server's batched ingest. The stream crosses the project's sharpest trust boundary after the public API. An agent host is one of the attackers in the threat model, and the server hands that stream the only Minecraft tokens that ever leave it.
+
+Before any code, the plan found one conflict between the user's phases: P10.5, P10.6 and P10.8 need P11.1's `bots` table (and `chat_messages`), and Phase 10's DoD ("pressing Start in the app brings a bot … Online") needs P11.2's start endpoint and P11.9's screens. The user decided it (U1). Every other open question went to its own read-only review subagent, given the options neutrally (CLAUDE.md's step 10). The user approved their decisions (S1–S9) at the plan review and added two notes for later groups. Each later group asks its own questions in its session and adds its decisions here.
+
+## Decision
+### Grouping *(proposed in the plan, approved by the user)*
+One branch and one PR per group, one commit per task, in this order, each after the previous PR is merged:
+
+| Group | Branch | Tasks |
+|---|---|---|
+| A | `p10/p10.1-fleet-proto` | P10.1, alone: the wire contract and the trust boundary for agent input |
+| B | `p10/p10.2-p10.3-pki-and-enrollment` | P10.2, P10.3: how an agent gets its identity |
+| C | `p10/p10.4-p10.10-connect-and-agents` | P10.4, P10.5's `AgentRegistry`, P10.10: who may stay connected, and the switch that ends it |
+| D | `p10/p10.5-p11.1-bots-scheduler-reconciler` | P11.1's `bots` and `modes`; the rest of P10.5 |
+| E | `p10/p11.2-bot-endpoints` | P11.2 |
+| F | `p10/p10.6-session-grants` | P10.6, alone: the one place Minecraft tokens leave the server |
+| G | `p10/p10.7-p10.8-agent-client-and-ingest` | P10.7, P10.8, P11.1's `chat_messages` |
+| H | `p10/p10.9-loopback-wrap-up` | P10.9, the DoD, the threat model and the README |
+
+- **P10.5 is spread over C and D** and ticked in D; **P11.1 over D and G**, ticked in G: each table arrives with its first user, as P9.1 did (ADR-0018).
+- **P10.9's rejections** (a revoked certificate, another CA, an agent that never enrolled, an expired certificate) are tested in C, which builds `Connect`; the rest of the suite in H.
+- **New dependencies** arrive with their group, each with the user's approval of its version, license and release date: prost, tonic, tonic-prost, tonic-prost-build and protox in A; rcgen in production code and tonic's TLS features in B; tokio-stream in C; backon's tokio sleeper in G. All are in §5 already.
+- **Hands-on checks:** none in A. B and C are local (`just dev-server`, `just dev-agent`). H's DoD check uses the user's own Microsoft account and needs Docker for a local online-mode Minecraft server (as P1.8 did), unless the user points it at their own; one machine is enough. It follows Phase 9 group D's pattern: a vault key drawn for the run and kept in memory, a temporary folder deleted at every end, and a recipe that runs only the new test's filter.
+
+### The user's choices
+- **U1. The phase boundary.** The subagent's recommendation, chosen by the user over three others (full DoD with a minimal app control in Phase 10; ports and fakes with the whole DoD in Phase 11; P11.1 and P11.2 before P10.5 with the app kept):
+  - P11.1's `bots` and `modes` (with the built-in seeds) come with P10.5, their first reader, in D; `chat_messages` with P10.8, its first writer, in G.
+  - All of P11.2, with fleet-client's bot methods, comes in E, right after the reconciler, so "reconciled" is the real one.
+  - **Phase 10's DoD:** "In managed mode, a bot with a real Microsoft account, started through `POST /bots/{id}/start`, goes Online on a real server and goes offline through `stop`." **Phase 11's DoD** gains "pressing Start in the app brings a bot with a real Microsoft account Online on a real server".
+  - P11.2's open notes (SSRF, the answer for a Paused or Failed bot, P11's step-up decision for `PATCH` and the lifecycle calls) are decided in E. The per-server conflict texts stay in Phase 11; Phase 10's specs carry an empty list.
+- **U2. protox 0.9.1** (2025-12-02, MIT OR Apache-2.0), §5's pin, over 0.10.0 (2026-10-07), whose only listed change is a nesting cap against a stack overflow in deeply nested .proto files. No RustSec advisory names protox or protox-parse.
+- **Two notes for later groups, at the plan review:**
+  - **Every account gets its bot** (D). Bots are 1:1 with accounts, but nothing creates a bot row yet, and there's no `POST /bots`. D decides how every account gets its bot: created together with the account on each path that creates one, plus a backfill for the accounts that already exist, so the DoD check needs only the moved P11.2 routes.
+  - **The agent notices a dead server too** (C, G). Over a half-open connection (a server crash, a NAT timeout) the stream can hang without an error. C decides between HTTP/2 keepalive with a timeout and a server heartbeat the agent times out on; the loopback suite tests a connection that goes silent without closing, C on the server's side and G for the agent's reconnect and resync.
+
+### Decided by the review agents *(approved by the user at the plan review)*
+- **S1 (security). Certificate renewal stays in P13.6,** which already plans it ("renew at 2/3 of the lifetime"), with P12.6's runbook. Group A leaves `RenewCertificate` out of the proto: a new RPC later breaks no agent. Phase 10 only keeps the way open: `agent_certs.agent_id` is indexed but not unique (B); the SAN's agent ID comes from the server's record (B); the agent writes its key and certificate atomically, owner-only, on its `/data` volume (B); a connection needs a fingerprint that's neither revoked nor expired (C); disable revokes every fingerprint, and `GET /agents` shows `not_after` (P10.10); an expired certificate joins P10.9's rejections. *Why:* it's the user's recorded plan; building renewal next to P13's threat-model review is safer than adding the path a stolen key would use to the biggest phase; a unique `agent_id` now would force a table rebuild then. *Rejected:* building it in Phase 10 (overturns P13.6), dropping it (Owner-only re-enrollment every 60 days per agent).
+- **S2. The validated messages live in fleet-proto,** in `fleet_proto::control`, next to `generated` and never inside it: one `AgentMessage` and one `ServerMessage` built from core types, each read with `TryFrom` from its generated envelope and written back the same way. Agent and server never match on generated oneofs. What exists only on the wire stays in fleet-proto; what is stored, shown or used by a policy goes to core. *Why:* it mirrors the HTTP side, where fleet-api-types holds the DTOs and the server's services see core types; core stays the pure domain; P13.2 gets two fuzz targets that reach every conversion. *Rejected:* protocol enums in core (transport types in the domain, a second chat-failure enum there); matching on generated types in both binaries (validation repeated, unfuzzable).
+- **S3 (security). Correlation.**
+  - **`SendChat`** carries a new core ID, `ChatRequestId` (v7), which the server's chat service mints through `Clock` and `SecureRandom` (P11.3); `ChatSent` and `ChatFailed` repeat it, and the agent maps it to the runtime's `ChatTicket`. *Not a u64 counter:* an outcome buffered across a server restart would meet the restarted counter. *Not the HTTP `RequestId`:* it names one HTTP request, never an entity (ADR-0015).
+  - **`SessionRequest`** carries the agent's own number (`SessionRequestId`, a `NonZeroU64` counted from 1 per process), which `SessionGrant` and `SessionDenied` repeat with the bot. The agent drops an answer it no longer waits for. *Not the bot alone:* the server may take 2 minutes, the agent waits 30 s, and a late grant from before a rejection could answer the next `fresh` request.
+  - **`SessionRequest` names no account:** the server takes it from its own assignment, so "an agent gets tokens only for its own bots" stays the server's decision.
+  - **Restart, reset and resume** get a message with P11.2 (E), as a new oneof case, together with P11.2's own questions about them.
+- **S4 (security). A mode crosses the wire as structured messages** that mirror `ModeDefinition`: `Step { action, schedule, probability }`, a oneof of the ten actions, a oneof of the two schedules. Reading rebuilds a `ModeDraft` and runs `ModeDraft::validate`; a step whose action or schedule this version doesn't know is refused. *Why:* JSON stays the stored format alone (ADR-0010), so a database migration that rewrites stored modes can't change the protocol; serde_json's errors quote their input, and fleet-proto's never do. *Rejected:* the JSON form in a string (a third JSON use, migrations coupled to the wire, quoting errors on the agent); `google.protobuf.Struct`.
+- **S5 (security). Times and IDs.** Times are `optional int64` milliseconds since the Unix epoch (`*_unix_ms`): reading refuses a missing one and one outside 0000-01-01T00:00:00.000Z to 9999-12-31T23:59:59.999Z, the database's and the API's range; writing drops anything finer than a millisecond and refuses a time outside the range. IDs are 16 bytes: a bot's, an account's, an agent's and a chat request's must be v7, a Minecraft profile's non-nil. No well-known types, so prost-types stays build-only. A heartbeat carries no time: the server stamps `last_seen_at` with its own clock. *Why:* every value round-trips exactly, with no text parser facing untrusted input; whatever an agent sends, the server can store. *Rejected:* string times and IDs (canonical-form checks, a third time parser, twice the size); `google.protobuf.Timestamp` (a run-time dependency, nanos to check).
+- **S6 (security). Text from Minecraft is cleaned again; validated values are strict.** Received chat and a kick's key and message are rebuilt through `IncomingChat::from_parts` and `DisconnectReason::kicked`, which clean and cap them; only structural faults are errors. `truncated` is the agent's flag OR the server's own cut. Validated values are refused, never repaired, in both directions: a chat message must arrive trimmed, a server address in its written form, conflict texts, names and versions as their constructors accept them (a set's order and duplicates are accepted). *Why:* a compromised agent gains nothing from dirty text it can't store, while a stricter rule would drop an older agent's report (a duplicate-login Paused kick) whenever the sanitizer's lists grow; repairing a human's text silently changes it (ADR-0013). *Rejected:* refusing text that cleaning would change; counting cleaned messages inside the conversion (it can come at ingest).
+- **S7 (security). Secrets stay out of `Debug`.** The build script skips prost's derived `Debug` for each message that holds a secret (`OnlineSession` now, `EnrollRequest` in B), listed in its `REDACTED`. `fleet_proto::redact` writes their `Debug`, which names only what isn't sensitive and ends with `..`, and a `Drop` that wipes the secret. The conversion moves the token out with `mem::take` into `SecretString::from(&str)`, which allocates exactly its length, and wipes the original. The enclosing oneof's and envelope's derived `Debug` call the hand-written one, so forgetting it fails to compile; `missing_debug_implementations` stays out of the generated module's allowances. A test fails on any field named like a secret (`token`, `secret`, `password`, `key`) outside a redacted message, unless it's on a not-secret list with a reason (a kick's translation `key`). *Accepted residual:* the buffers tonic, h2 and rustls decode and encode into can't be wiped, as ADR-0018 accepted for hyper's. *Rejected:* no `Debug` at all (it spreads to every type that holds a message, and would need the allowance loosened); convention only (prost's derive prints the token); a wrapper message; hand-written wire code.
+- **S8 (security). No agent labels in v1,** in no config key, proto field, core type or column: nothing schedules by them through Phase 13. **Capacity** is the agent's `[runtime] max_bots`, sent in the hello as the new core `AgentCapacity` (1–1000, the config's range); 0 or above 1000 is refused, never clamped. Free capacity also counts the bots unassigned whose `Removed` hasn't arrived. *Why:* capacity decides which agent gets which bots, and so which session tokens; labels can come later as an additive field. The threat model records that only Owner-only enrollment, mTLS and revocation stop an agent inflating its capacity. *Rejected:* labels now (six layers without a consumer); a bare proto field (unvalidated input).
+- **S9 (security, low). "The proto codegen check"** (P0's promise in CLAUDE.md's commands table and the justfile) is a pinned wire-schema snapshot. build.rs generates the code into `OUT_DIR`, as P10.1 says, and renders the compiled descriptor as text: every message's fields with number, name, label, type and oneof, reserved numbers and names, every enum, the service with its streaming flags, and the redacted messages, without comments or source positions. `tests/protocol/schema.rs` snapshots it under `PROTOCOL_VERSION`, so a wire change shows in review; no recipe or CI job is added. The protocol stays at version 1 until the first release (P12); after that, a snapshot change needs a decision about the version. *Rejected:* committing generated code with a freshness check (contradicts P10.1's build script, churns on every prost bump); dropping the promise.
+
+### As built (group A)
+- **The crate** `fleet-proto` (depends only on fleet-core): `proto/fleet/v1/{agent,bot,chat,mode,common}.proto`, package `fleet.v1`, with the `AgentControl` service and its `Connect` stream; `build.rs`; `src/{lib.rs, control/, convert/, error.rs, redact.rs}`. The files live under `crates/`, the only folder the agent image's `.dockerignore` admits. It joins `stable_crates`.
+- **The build:** `protox::compile`, then `tonic_prost_build::configure()` with client and server, `build_transport(false)`, `skip_debug` for `REDACTED`, and `compile_fds`. The schema is rendered through protox's re-export of prost-reflect, so the build needs no other crate. `main` returns a `Result`.
+- **`fleet_proto::generated`** carries `#[allow(clippy::pedantic)]` and nothing else: the generated code trips only pedantic lints (`doc_markdown`, `must_use_candidate`, `default_trait_access`, `missing_errors_doc`), none of the workspace's denied ones.
+- **`fleet_proto::control`:** `AgentMessage` (`Hello`, `Heartbeat`, `Status(BotSnapshot)`, `Event(BotEvent)`, `SessionRequest`), `BotEventKind`, `ChatFailedReason` (the runtime's five delivery failures and six refusals), `SessionRequestId`; `ServerMessage` (`Welcome`, `Reconcile(Vec<Assignment>)`, `Assign`, `Unassign`, `Update`, `SendChat`, `SessionGrant`, `SessionDenied`, `Reject(RejectReason)`); `MAX_BOTS` (1000, pinned equal to `AgentCapacity::MAX`). `Welcome`'s heartbeat interval is 1 s–5 min on the wire.
+- **The leaf conversions** are trait impls between core's and the generated types: `BotSpec`, `ModeDefinition`, `StickyState`, `BotNotification`, `DisconnectReason` and `IncomingChat` are written with `From`; `BotState` and `BotSnapshot` with `TryFrom`, since they hold times. `SessionCredentials` converts inside `SessionGrant`.
+- **Errors:** `ConvertError { field, index, problem }`, where `field` is `Message.field` in the protocol's names, `index` the position in the innermost list (a bot in a hello or a reconcile, a mode's step), and `Problem` one of `Missing`, `Unknown`, `WrongLength`, `NotV7`, `Nil`, `OutOfRange`, `TooMany`, `Duplicate`, `NotExact`, `InvalidToken` or a wrapped core error, none of which carries input.
+- **fleet-core:** `id::ChatRequestId`; `value::AgentCapacity` (`NonZeroU16`, `TryFrom<u32>`) and `value::AgentVersion` (1–64 of `[0-9A-Za-z.+-]`, starting with a letter or digit, like `AgentName`).
+- **Tests,** each red first against compiling stubs with the real signatures:
+  - **fleet-core:** 29 for the two values, 19 of them red against stubs that refused everything; the others check refusals and the errors' fixed texts. The capacity property passed at first, since uniform `u32`s almost never land in 1–1000; its input is weighted toward the range now, and it went red. `ChatRequestId` is one more instance of the ID macro, covered by the two tests that list every ID type.
+  - **fleet-proto:** `tests/protocol/` (round trips, decoding any input, one case per rejection, redaction, the schema) and unit tests of the helpers. 147 of 164 failed against stubs that refused every read and wrote default messages. The 17 that passed checked what a stub happened to answer (an expected `Missing`, the helper `required`, the constant pin, the error's formatting) or held vacuously while everything was refused (the decode properties, the guard).
+  - **Temporary mutations** showed those red, each reverted and checked by checksum: the agent's `truncated` flag dropped (the clean-text property), a probability wrapped instead of refused (the mode property), the heartbeat read without its range (any server bytes), an unspecified enum read as unknown and a missing value read as unknown (seven rejection cases), the error without its position, a refused token named in the error, a field named `password` outside a redacted message (the guard), and a time read without its range (the time property and its unit test).
+  - **Found by a mutation:** an encoder that swapped `AgentBusy` for `ShuttingDown` passed every property, since random cases reach one reason of eleven in one event kind of seven too rarely. Five exhaustive tables now cover every value of each mapped enum, and swaps in three of them went red. The time property's input is weighted toward the range's edges too: uniform `i64`s rarely land in chrono's range outside years 0–9999.
+  - **The snapshot** `protocol__schema__wire_schema.snap` was read before it was accepted.
+- **Found during the build:**
+  - The zeroizing `Drop` forbids struct-update syntax on `OnlineSession`, so its test cases change a valid session through a helper.
+  - Integration tests read `OUT_DIR`, so the schema test and the guard read the build script's rendering directly.
+  - chrono without features has no `to_rfc3339`; the range test compares the date's parts.
+
+### Notes for later groups
+- **B (P10.2, P10.3):**
+  - The enrollment service and its messages join `fleet.v1` with the snapshot; `EnrollRequest` follows S7 (added to `REDACTED`, a `Debug` and a `Drop` in `redact`, a `SecretString` at the conversion).
+  - `agent_certs` keyed by fingerprint, `agent_id` indexed but not unique; the SAN's agent ID from the server's record (S1).
+  - The agent's key and certificate on its `/data` volume, owner-only, written atomically (S1).
+  - `agents.capacity` NULL until the first hello, no range CHECK, read through `AgentCapacity`; no `labels` column (S8).
+  - tonic's TLS features are fixed at workspace level when a member first serves or connects: `tls-aws-lc` and `tls-connect-info`.
+  - To ask the user: how the Owner gets an enrollment token while the agents screen is P11.9's.
+- **C (P10.4, P10.5's registry, P10.10):**
+  - A hello that doesn't convert gets `Reject`; P10.4 decides the rule for `protocol_version` and may refine `Welcome` and `RejectReason`.
+  - A connection needs an unrevoked, unexpired fingerprint and an enabled agent; disable revokes every fingerprint; `GET /agents` shows `not_after` and the capacity (S1, S8).
+  - The dead-server note above: C decides keepalive or a server heartbeat, and tests the server's side.
+  - P10.9's rejections, including an expired certificate.
+- **D (P11.1's `bots` and `modes`, P10.5):**
+  - Every account gets its bot (the user's note above).
+  - Free capacity counts bots until their `Removed`; an agent that comes back with less capacity has bots moved off it (S8).
+  - An event or a status for a bot not assigned to the agent that sent it is refused (S6).
+- **E (P11.2):** the lifecycle message for restart, reset and resume (S3), and P11.2's open notes.
+- **F (P10.6):** `SessionRequestId` and the bot are repeated in every answer; the account comes from the assignment (S3); a `log_capture` test over a grant and a denial at every level of every target.
+- **G (P10.7, P10.8, P11.1's `chat_messages`):**
+  - `ChatRequestId` ↔ `ChatTicket`; `ChatFailedReason` mapped exhaustively from `ChatFailure`, `ChatError` and the fleet's refusals (`Busy` and `TimedOut` as `AgentBusy`) (S3).
+  - The hello's capacity from `max_bots`, and a test that keeps the config's range equal to `AgentCapacity`'s (S8).
+  - `chat_messages.truncated` (S6); the `EventBatch` exemption needs the user's approval and its own note here.
+  - The dead-server note above, the agent's side.
+- **H (P10.9, the DoD):** the threat model's B3 section and its "Rogue or compromised agent" row cite A's tests (`redaction::the_validated_grant_keeps_its_token_secret`, `redaction::every_field_named_like_a_secret_is_in_a_redacted_message`, `decode::received_chat_is_always_clean_and_capped`, `decode::a_kick_is_always_clean_and_capped`) and record S6's accepted risk (a compromised agent can forge clean chat and kicks for its own bots), S7's residual buffers and S8's inflated capacity.
+
+## Consequences
+- **Easier:**
+  - Agent and server handle only validated values; every message from the other side passes fleet-core's constructors once, at the stream's edge.
+  - A wire change can't slip in: the snapshot shows it next to the protocol version.
+  - A forgotten redaction fails to compile, and a new field named like a secret fails a test.
+  - Later groups build on a protocol whose every refusal is tested and named.
+- **Harder:**
+  - Every new mode action needs a proto message and two conversion arms, next to its JSON.
+  - A generated message that holds a secret can't be built with struct-update syntax.
+  - The protocol's structure is written twice: in the .proto files and in `fleet_proto::control`.
+
+## Alternatives considered
+- **The phase boundary** (U1's other options): a minimal bot screen in Phase 10, before live events and the design pass; ports and fakes, with the security core proven only against fakes and Phase 10's real-account check gone; P11.1 and P11.2 before P10.5, which needs a stand-in for "reconciled".
+- **protox 0.10.0** (U2): newer by eight days, with a fix for input we never parse.
+- **Fewer groups,** e.g. P10.6 with the agent client or P11.2 with the reconciler: the two most security-sensitive pieces would share a review with the largest ones.
+- The rejected options of S1–S9, each listed with its decision above.
