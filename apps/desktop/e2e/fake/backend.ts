@@ -1,20 +1,32 @@
 // The e2e suite's fake backend (Plan.md P8.9, ADR-0017): the desktop app's Rust side and the
-// server in one, answering the 20 commands of src-tauri/tests/ipc-contract.json with the
+// server in one, answering the 35 commands of src-tauri/tests/ipc-contract.json with the
 // generated types, the Rust side's fixed `CommandError` messages and the server's error
 // codes. It keeps the state one test needs, fresh per test: users with their passwords and
 // authenticators, invites, the one session the app holds, the pending login or setup step,
-// and the session's step-up.
+// the session's step-up, and the Microsoft accounts with their grants and the one link flow.
+// A flow reads `waiting` once, then `linked`, its account pending unless the Owner linked
+// it.
 //
 // An authenticator here has one valid code at a time (`code(username)`), which a successful
 // use replaces, like a TOTP code that can't be used twice. A pending setup expects
 // `setupCode()`. Everything is a placeholder (CLAUDE.md).
+import type { AccountKind } from "@afkfleet/ui/generated/AccountKind";
+import type { AccountPage } from "@afkfleet/ui/generated/AccountPage";
+import type { AccountResponse } from "@afkfleet/ui/generated/AccountResponse";
+import type { AccountStatus } from "@afkfleet/ui/generated/AccountStatus";
 import type { ApiErrorDetails } from "@afkfleet/ui/generated/ApiErrorDetails";
 import type { CommandError } from "@afkfleet/ui/generated/CommandError";
 import type { CommandErrorCode } from "@afkfleet/ui/generated/CommandErrorCode";
 import type { CreatedInviteResponse } from "@afkfleet/ui/generated/CreatedInviteResponse";
+import type { CreatedOfflineAccountResponse } from "@afkfleet/ui/generated/CreatedOfflineAccountResponse";
 import type { ErrorCode } from "@afkfleet/ui/generated/ErrorCode";
+import type { GrantLevel } from "@afkfleet/ui/generated/GrantLevel";
+import type { GrantPage } from "@afkfleet/ui/generated/GrantPage";
+import type { GrantResponse } from "@afkfleet/ui/generated/GrantResponse";
 import type { InvitePage } from "@afkfleet/ui/generated/InvitePage";
 import type { InviteResponse } from "@afkfleet/ui/generated/InviteResponse";
+import type { LinkFlowResponse } from "@afkfleet/ui/generated/LinkFlowResponse";
+import type { LinkStartedResponse } from "@afkfleet/ui/generated/LinkStartedResponse";
 import type { LoginStepResponse } from "@afkfleet/ui/generated/LoginStepResponse";
 import type { LogoutResponse } from "@afkfleet/ui/generated/LogoutResponse";
 import type { MeResponse } from "@afkfleet/ui/generated/MeResponse";
@@ -33,6 +45,13 @@ export const OWNER = "afkowner";
 export const PASSWORD = "placeholder password";
 /** A user who registered and never set up 2FA. */
 export const NEW_USER = "afkbot1";
+/** A Member with 2FA. */
+export const MEMBER = "afkmember";
+/** Every link flow's user code. */
+export const LINK_CODE = "B7X4-KDLQ";
+/** The server's 422 for a name that can't be given a grant (U4 in ADR-0018). */
+const UNGRANTABLE =
+  "can't be given a grant: unknown, disabled, or already has access; check the name";
 /** A Member invite's code that registration accepts. */
 export const INVITE_CODE = "afk_iv_placeholderplaceholderplaceholder01";
 /** The server the app is set up for. */
@@ -60,6 +79,21 @@ export const COMMANDS = [
   "invites",
   "create_invite",
   "revoke_invite",
+  "start_link",
+  "link_status",
+  "create_offline_account",
+  "accounts",
+  "accounts_awaiting_approval",
+  "account",
+  "delete_account",
+  "approve_account",
+  "refuse_account",
+  "relink_account",
+  "account_grants",
+  "create_grant",
+  "change_grant",
+  "revoke_grant",
+  "open_verification_link",
 ] as const;
 
 /** One command. */
@@ -76,6 +110,7 @@ const MESSAGES: Partial<Record<CommandErrorCode, string>> = {
   no_session: "You're not logged in.",
   no_pending_step: "No login or 2FA step is pending. Start again.",
   already_logged_in: "You're already logged in. Log out first.",
+  no_verification_link: "There's no Microsoft page to open.",
 };
 
 /** The server's messages (fleet-api-types' `ErrorCode::message`). */
@@ -142,6 +177,26 @@ interface Session {
   steppedUp: boolean;
 }
 
+/** A Microsoft or offline account the fake keeps, with its grants. */
+interface Account {
+  readonly id: string;
+  name: string;
+  readonly kind: AccountKind;
+  status: AccountStatus;
+  readonly ownerId: string;
+  readonly linkedAt: string;
+  readonly grants: Map<string, { level: GrantLevel; readonly by: string }>;
+}
+
+/** The one link flow: its user, the account it links again, and its reads. */
+interface Flow {
+  readonly id: string;
+  readonly userId: string;
+  readonly again: string | null;
+  reads: number;
+  linked?: Account;
+}
+
 /** A pending login or setup step. */
 type Pending =
   | { readonly kind: "mfa"; readonly user: User; tries: number }
@@ -153,12 +208,17 @@ export class FakeBackend {
   readonly #invites: Invite[] = [];
   #session: Session | null = null;
   #pending: Pending | null = null;
+  readonly #accounts: Account[] = [];
+  #flow: Flow | null = null;
+  #opened = 0;
+  #accountNames = 0;
   #ids = 100;
   #codes = 0;
 
   constructor() {
     this.#addUser(OWNER, "owner", true);
     this.#addUser(NEW_USER, "member", false);
+    this.#addUser(MEMBER, "member", true);
     this.#invites.push({
       code: INVITE_CODE,
       response: {
@@ -305,7 +365,7 @@ export class FakeBackend {
       case "revoke_invite":
         return this.#revokeInvite(String(args.id));
       default:
-        throw new Error(`the fake doesn't know ${command}`);
+        return this.#accountCommand(command as Command, args);
     }
   }
 
@@ -518,5 +578,295 @@ export class FakeBackend {
       };
       return value();
     });
+  }
+
+  // ---- Microsoft accounts (P9.8) ----
+
+  /** How many times the app asked to open Microsoft's page. */
+  opened(): number {
+    return this.#opened;
+  }
+
+  /** An account of `username`'s, named `AfkBot<n>`, for a test to start from. */
+  addAccount(username: string, status: AccountStatus = "active"): string {
+    return this.#addAccount(this.#user(username), "microsoft", status).id;
+  }
+
+  #addAccount(owner: User, kind: AccountKind, status: AccountStatus, name?: string): Account {
+    this.#accountNames += 1;
+    const account: Account = {
+      id: id(this.#next()),
+      name: name ?? `AfkBot${this.#accountNames}`,
+      kind,
+      status,
+      ownerId: owner.id,
+      linkedAt: "2026-10-13T12:00:00.000Z",
+      grants: new Map(),
+    };
+    this.#accounts.push(account);
+    return account;
+  }
+
+  /** What `user` holds on `account`: their grant or their implicit Manage, or nothing. */
+  #level(user: User, account: Account): GrantLevel | null {
+    const owner = this.#users.find((one) => one.id === account.ownerId);
+    if (
+      account.ownerId === user.id ||
+      user.role === "owner" ||
+      (user.role === "admin" && owner?.role === "member")
+    ) {
+      return "manage";
+    }
+    return account.grants.get(user.id)?.level ?? null;
+  }
+
+  /** Whether `user` may review `account`: someone above its owner, never its owner. */
+  #reviews(user: User, account: Account): boolean {
+    const owner = this.#users.find((one) => one.id === account.ownerId);
+    if (account.status !== "pending" || owner === undefined || owner.id === user.id) {
+      return false;
+    }
+    return user.role === "owner" || (user.role === "admin" && owner.role === "member");
+  }
+
+  #accountResponse(user: User, account: Account): AccountResponse {
+    const level = this.#level(user, account) ?? "view";
+    const owner = this.#users.find((one) => one.id === account.ownerId);
+    return {
+      id: account.id,
+      name: account.name,
+      kind: account.kind,
+      status: account.status,
+      level,
+      ...(level === "manage" && owner !== undefined
+        ? { owner: { id: owner.id, username: owner.username }, linked_at: account.linkedAt }
+        : {}),
+    };
+  }
+
+  /** `account`, if `user` may see it, with what they hold on it. */
+  #seen(user: User, target: unknown): { account: Account; level: GrantLevel } | null {
+    const account = this.#accounts.find((one) => one.id === String(target));
+    if (account === undefined) {
+      return null;
+    }
+    const level = this.#level(user, account);
+    return level === null ? null : { account, level };
+  }
+
+  /** `then` on an account the session's user manages; 404 or 403 otherwise. */
+  #managed(session: Session, target: unknown, then: (account: Account) => Outcome): Outcome {
+    const seen = this.#seen(session.user, target);
+    if (seen === null) {
+      return api(404, "not_found");
+    }
+    return seen.level === "manage" ? then(seen.account) : api(403, "forbidden");
+  }
+
+  #startLink(again: unknown): Outcome {
+    return this.#signedIn((session) => {
+      let relinked: string | null = null;
+      if (again !== undefined) {
+        const seen = this.#seen(session.user, again);
+        if (seen === null) {
+          return api(404, "not_found");
+        }
+        if (seen.level !== "manage") {
+          return api(403, "forbidden");
+        }
+        if (seen.account.status === "pending" || seen.account.kind === "offline") {
+          return api(409, "conflict");
+        }
+        relinked = seen.account.id;
+      }
+      this.#flow = { id: id(this.#next()), userId: session.user.id, again: relinked, reads: 0 };
+      return value({
+        flow_id: this.#flow.id,
+        user_code: LINK_CODE,
+        verification_uri: "https://www.microsoft.com/link",
+        expires_at: "2026-10-13T12:15:00.000Z",
+      } satisfies LinkStartedResponse);
+    });
+  }
+
+  /** The flow's state: waiting at its first read, linked from its second on. */
+  #linkStatus(target: unknown): Outcome {
+    return this.#signedIn((session) => {
+      const flow = this.#flow;
+      if (flow === null || flow.id !== String(target) || flow.userId !== session.user.id) {
+        return api(404, "not_found");
+      }
+      flow.reads += 1;
+      if (flow.reads === 1) {
+        return value({
+          status: "waiting",
+          expires_at: "2026-10-13T12:15:00.000Z",
+        } satisfies LinkFlowResponse);
+      }
+      flow.linked ??= this.#commit(session.user, flow.again);
+      return value({
+        status: "linked",
+        account_id: flow.linked.id,
+        account_status: flow.linked.status,
+        name: flow.linked.name,
+      } satisfies LinkFlowResponse);
+    });
+  }
+
+  /** A flow's commit: a new account, pending unless the Owner linked it, or one linked again. */
+  #commit(user: User, again: string | null): Account {
+    const relinked = this.#accounts.find((one) => one.id === again);
+    if (relinked !== undefined) {
+      relinked.status = "active";
+      return relinked;
+    }
+    return this.#addAccount(user, "microsoft", user.role === "owner" ? "active" : "pending");
+  }
+
+  #grantsOf(account: Account): GrantResponse[] {
+    return [...account.grants.entries()].map(([userId, grant]) => {
+      const user = this.#users.find((one) => one.id === userId);
+      const by = this.#users.find((one) => one.id === grant.by);
+      return {
+        user: { id: userId, username: user?.username ?? "" },
+        level: grant.level,
+        granted_by: { id: grant.by, username: by?.username ?? "" },
+        granted_at: "2026-10-13T12:30:00.000Z",
+      };
+    });
+  }
+
+  #createGrant(target: unknown, request: Record<string, unknown>): Outcome {
+    return this.#steppedUp((session) =>
+      this.#managed(session, target, (account) => {
+        const grantee = this.#users.find(
+          (one) => one.username === String(request.username) && !one.disabled,
+        );
+        if (grantee === undefined || this.#level(grantee, account) === "manage") {
+          return api(422, "validation_failed", [{ path: "username", message: UNGRANTABLE }]);
+        }
+        if (account.grants.has(grantee.id) || account.status === "pending") {
+          return api(409, "conflict");
+        }
+        const level = String(request.level) as GrantLevel;
+        account.grants.set(grantee.id, { level, by: session.user.id });
+        return value(this.#grantsOf(account).find((grant) => grant.user.id === grantee.id));
+      }),
+    );
+  }
+
+  #changeGrant(target: unknown, user: unknown, request: Record<string, unknown>): Outcome {
+    return this.#steppedUp((session) =>
+      this.#managed(session, target, (account) => {
+        const grant = account.grants.get(String(user));
+        if (grant === undefined) {
+          return api(404, "not_found");
+        }
+        grant.level = String(request.level) as GrantLevel;
+        return value(this.#grantsOf(account).find((one) => one.user.id === String(user)));
+      }),
+    );
+  }
+
+  #review(target: unknown, approve: boolean): Outcome {
+    return this.#steppedUp((session) => {
+      const seen = this.#seen(session.user, target);
+      if (seen === null) {
+        return api(404, "not_found");
+      }
+      if (seen.account.status !== "pending") {
+        return api(409, "conflict");
+      }
+      if (!this.#reviews(session.user, seen.account)) {
+        return api(403, "forbidden");
+      }
+      if (!approve) {
+        this.#accounts.splice(this.#accounts.indexOf(seen.account), 1);
+        return value();
+      }
+      seen.account.status = "active";
+      return value(this.#accountResponse(session.user, seen.account));
+    });
+  }
+
+  #accountCommand(command: Command, args: Record<string, unknown>): Outcome {
+    const request = (args.request ?? {}) as Record<string, unknown>;
+    switch (command) {
+      case "start_link":
+        return this.#startLink(undefined);
+      case "relink_account":
+        return this.#startLink(args.id);
+      case "link_status":
+        return this.#linkStatus(args.id);
+      case "open_verification_link":
+        if (this.#flow === null) {
+          return refused("no_verification_link");
+        }
+        this.#opened += 1;
+        return value();
+      case "create_offline_account":
+        return this.#signedIn((session) => {
+          const account = this.#addAccount(session.user, "offline", "active", String(request.name));
+          return value({
+            id: account.id,
+            name: account.name,
+            kind: "offline",
+            status: "active",
+          } satisfies CreatedOfflineAccountResponse);
+        });
+      case "accounts":
+        return this.#signedIn((session) =>
+          value({
+            items: [...this.#accounts]
+              .reverse()
+              .filter((account) => this.#level(session.user, account) !== null)
+              .map((account) => this.#accountResponse(session.user, account)),
+          } satisfies AccountPage),
+        );
+      case "accounts_awaiting_approval":
+        return this.#signedIn((session) =>
+          value({
+            items: this.#accounts
+              .filter((account) => this.#reviews(session.user, account))
+              .map((account) => this.#accountResponse(session.user, account)),
+          } satisfies AccountPage),
+        );
+      case "account":
+        return this.#signedIn((session) => {
+          const seen = this.#seen(session.user, args.id);
+          return seen === null
+            ? api(404, "not_found")
+            : value(this.#accountResponse(session.user, seen.account));
+        });
+      case "delete_account":
+        return this.#steppedUp((session) =>
+          this.#managed(session, args.id, (account) => {
+            this.#accounts.splice(this.#accounts.indexOf(account), 1);
+            return value();
+          }),
+        );
+      case "approve_account":
+        return this.#review(args.id, true);
+      case "refuse_account":
+        return this.#review(args.id, false);
+      case "account_grants":
+        return this.#signedIn((session) =>
+          this.#managed(session, args.id, (account) =>
+            value({ items: this.#grantsOf(account) } satisfies GrantPage),
+          ),
+        );
+      case "create_grant":
+        return this.#createGrant(args.id, request);
+      case "change_grant":
+        return this.#changeGrant(args.id, args.user, request);
+      case "revoke_grant":
+        return this.#steppedUp((session) =>
+          this.#managed(session, args.id, (account) =>
+            account.grants.delete(String(args.user)) ? value() : api(404, "not_found"),
+          ),
+        );
+      default:
+        throw new Error(`the fake doesn't know ${command}`);
+    }
   }
 }

@@ -2,6 +2,7 @@
 // locale; with the zone's name where the text may be read elsewhere (an invitation).
 const FORMAT = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 const WITH_ZONE = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "long" });
+const CLOCK = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
 
 /** `iso` as the user reads a date and time. */
 export function formatTime(iso: string): string {
@@ -11,4 +12,9 @@ export function formatTime(iso: string): string {
 /** `iso` with its time zone, for a text sent to someone else. */
 export function formatTimeWithZone(iso: string): string {
   return WITH_ZONE.format(new Date(iso));
+}
+
+/** `iso` as a time of day, for something that ends within the hour (a link's code). */
+export function formatClock(iso: string): string {
+  return CLOCK.format(new Date(iso));
 }

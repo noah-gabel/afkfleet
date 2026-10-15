@@ -27,6 +27,9 @@ export function describeError(error: CommandError): string {
     case "client_build":
     case "profile_save":
     case "session_discard":
+    case "invalid_verification_link":
+    case "no_verification_link":
+    case "verification_link_open":
     case "ipc":
       return error.message;
     default: {

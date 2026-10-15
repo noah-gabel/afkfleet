@@ -1,12 +1,23 @@
 // The API client for tests (Plan.md P8.5, ADR-0017): each test scripts only the methods
 // it needs; any other method rejects with an `ApiError` that names it, so a test can't
 // pass by accident. Every call is recorded with its arguments, for checking interactions.
+
+import type { AccountPage } from "../generated/AccountPage";
+import type { AccountResponse } from "../generated/AccountResponse";
 import type { ApiErrorDetails } from "../generated/ApiErrorDetails";
+import type { ChangeGrantRequest } from "../generated/ChangeGrantRequest";
 import type { CommandErrorCode } from "../generated/CommandErrorCode";
 import type { CreatedInviteResponse } from "../generated/CreatedInviteResponse";
+import type { CreatedOfflineAccountResponse } from "../generated/CreatedOfflineAccountResponse";
+import type { CreateGrantRequest } from "../generated/CreateGrantRequest";
 import type { CreateInviteRequest } from "../generated/CreateInviteRequest";
+import type { CreateOfflineAccountRequest } from "../generated/CreateOfflineAccountRequest";
 import type { FieldError } from "../generated/FieldError";
+import type { GrantPage } from "../generated/GrantPage";
+import type { GrantResponse } from "../generated/GrantResponse";
 import type { InvitePage } from "../generated/InvitePage";
+import type { LinkFlowResponse } from "../generated/LinkFlowResponse";
+import type { LinkStartedResponse } from "../generated/LinkStartedResponse";
 import type { LoginRequest } from "../generated/LoginRequest";
 import type { LoginStepResponse } from "../generated/LoginStepResponse";
 import type { LogoutResponse } from "../generated/LogoutResponse";
@@ -133,6 +144,68 @@ export class FakeApiClient implements ApiClient {
 
   async revokeInvite(id: string): Promise<void> {
     return this.#handler("revokeInvite", [id])(id);
+  }
+
+  async startLink(): Promise<LinkStartedResponse> {
+    return this.#handler("startLink", [])();
+  }
+
+  async linkStatus(id: string): Promise<LinkFlowResponse> {
+    return this.#handler("linkStatus", [id])(id);
+  }
+
+  async createOfflineAccount(
+    request: CreateOfflineAccountRequest,
+  ): Promise<CreatedOfflineAccountResponse> {
+    return this.#handler("createOfflineAccount", [request])(request);
+  }
+
+  async accounts(before?: string, limit?: number): Promise<AccountPage> {
+    return this.#handler("accounts", [before, limit])(before, limit);
+  }
+
+  async accountsAwaitingApproval(before?: string, limit?: number): Promise<AccountPage> {
+    return this.#handler("accountsAwaitingApproval", [before, limit])(before, limit);
+  }
+
+  async account(id: string): Promise<AccountResponse> {
+    return this.#handler("account", [id])(id);
+  }
+
+  async deleteAccount(id: string): Promise<void> {
+    return this.#handler("deleteAccount", [id])(id);
+  }
+
+  async approveAccount(id: string): Promise<AccountResponse> {
+    return this.#handler("approveAccount", [id])(id);
+  }
+
+  async refuseAccount(id: string): Promise<void> {
+    return this.#handler("refuseAccount", [id])(id);
+  }
+
+  async relinkAccount(id: string): Promise<LinkStartedResponse> {
+    return this.#handler("relinkAccount", [id])(id);
+  }
+
+  async accountGrants(id: string, before?: string, limit?: number): Promise<GrantPage> {
+    return this.#handler("accountGrants", [id, before, limit])(id, before, limit);
+  }
+
+  async createGrant(id: string, request: CreateGrantRequest): Promise<GrantResponse> {
+    return this.#handler("createGrant", [id, request])(id, request);
+  }
+
+  async changeGrant(id: string, user: string, request: ChangeGrantRequest): Promise<GrantResponse> {
+    return this.#handler("changeGrant", [id, user, request])(id, user, request);
+  }
+
+  async revokeGrant(id: string, user: string): Promise<void> {
+    return this.#handler("revokeGrant", [id, user])(id, user);
+  }
+
+  async openVerificationLink(): Promise<void> {
+    return this.#handler("openVerificationLink", [])();
   }
 }
 

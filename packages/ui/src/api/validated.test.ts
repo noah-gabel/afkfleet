@@ -6,6 +6,7 @@ import { FakeApiClient } from "./FakeApiClient";
 import {
   CA_PEM_MAX_BYTES,
   CODE_MAX_CHARS,
+  MC_NAME_MAX_CHARS,
   NEW_PASSWORD_MAX_CHARS,
   PAGE_MAX,
   PASSWORD_MAX_CHARS,
@@ -16,6 +17,7 @@ import {
 import { validated } from "./validated";
 
 const ID = "01900000-0000-7000-8000-000000000001";
+const USER = "01900000-0000-7000-8000-000000000002";
 
 /** A fake whose every method answers, wrapped in the checks. */
 function client() {
@@ -41,6 +43,21 @@ function client() {
     invites: ok,
     createInvite: ok,
     revokeInvite: ok,
+    startLink: ok,
+    linkStatus: ok,
+    createOfflineAccount: ok,
+    accounts: ok,
+    accountsAwaitingApproval: ok,
+    account: ok,
+    deleteAccount: ok,
+    approveAccount: ok,
+    refuseAccount: ok,
+    relinkAccount: ok,
+    accountGrants: ok,
+    createGrant: ok,
+    changeGrant: ok,
+    revokeGrant: ok,
+    openVerificationLink: ok,
   });
   return { fake, api: validated(fake) as ApiClient };
 }
@@ -179,5 +196,79 @@ describe("validated", () => {
     const request = { url: "https://example.com", insecure: true };
 
     expect(await refusedFields(api.setServerProfile(request))).toEqual([""]);
+  });
+
+  it("passes valid account inputs through unchanged", async () => {
+    const { fake, api } = client();
+
+    await api.startLink();
+    await api.linkStatus(ID);
+    await api.createOfflineAccount({ name: "AfkBot_1" });
+    await api.accounts(ID, PAGE_MAX);
+    await api.accountsAwaitingApproval(undefined, undefined);
+    await api.account(ID);
+    await api.deleteAccount(ID);
+    await api.approveAccount(ID);
+    await api.refuseAccount(ID);
+    await api.relinkAccount(ID);
+    await api.accountGrants(ID, USER, 1);
+    await api.createGrant(ID, { username: "afkbot2", level: "control" });
+    await api.changeGrant(ID, USER, { level: "manage" });
+    await api.revokeGrant(ID, USER);
+    await api.openVerificationLink();
+
+    expect(fake.calls).toHaveLength(15);
+    expect(fake.calls[11]?.args).toEqual([ID, { username: "afkbot2", level: "control" }]);
+  });
+
+  it("refuses an offline name that isn't a Minecraft name, before the call", async () => {
+    const { fake, api } = client();
+
+    for (const name of ["ab", "a".repeat(MC_NAME_MAX_CHARS + 1), "Afk Bot", "Afk-Bot", "Bøt1"]) {
+      expect(await refusedFields(api.createOfflineAccount({ name }))).toEqual(["name"]);
+    }
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("checks a grant's username and level, and every ID it names", async () => {
+    const { fake, api } = client();
+    const owner = { username: "ab", level: "owner" } as never;
+
+    expect((await refusedFields(api.createGrant("x", owner))).sort()).toEqual([
+      "id",
+      "level",
+      "username",
+    ]);
+    expect(
+      (await refusedFields(api.changeGrant(ID, "y", { level: "admin" } as never))).sort(),
+    ).toEqual(["level", "user"]);
+    expect(await refusedFields(api.revokeGrant("x", USER))).toEqual(["id"]);
+    expect(
+      await refusedFields(
+        api.createGrant(ID, { username: "afkbot2", level: "view", note: 1 } as never),
+      ),
+    ).toEqual([""]);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("refuses an account ID that isn't one, and a page out of range", async () => {
+    const { fake, api } = client();
+
+    for (const call of [
+      api.linkStatus("x"),
+      api.account("x"),
+      api.deleteAccount("x"),
+      api.approveAccount("x"),
+      api.refuseAccount("x"),
+      api.relinkAccount("x"),
+    ]) {
+      expect(await refusedFields(call)).toEqual(["id"]);
+    }
+    expect(await refusedFields(api.accounts("x", 0))).toEqual(["before", "limit"]);
+    expect(await refusedFields(api.accountsAwaitingApproval(undefined, PAGE_MAX + 1))).toEqual([
+      "limit",
+    ]);
+    expect(await refusedFields(api.accountGrants("x", "y", 0))).toEqual(["id", "before", "limit"]);
+    expect(fake.calls).toEqual([]);
   });
 });

@@ -32,6 +32,9 @@ const CODES: Record<CommandErrorCode, true> = {
   client_build: true,
   profile_save: true,
   session_discard: true,
+  invalid_verification_link: true,
+  no_verification_link: true,
+  verification_link_open: true,
   ipc: true,
 };
 

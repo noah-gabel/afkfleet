@@ -85,5 +85,22 @@ export function watched(client: ApiClient, stores: AppStores, events: WatchEvent
     invites: watch((before, limit) => client.invites(before, limit)),
     createInvite: watch((request) => client.createInvite(request)),
     revokeInvite: watch((id) => client.revokeInvite(id)),
+    startLink: watch(() => client.startLink()),
+    linkStatus: watch((id) => client.linkStatus(id)),
+    createOfflineAccount: watch((request) => client.createOfflineAccount(request)),
+    accounts: watch((before, limit) => client.accounts(before, limit)),
+    accountsAwaitingApproval: watch((before, limit) =>
+      client.accountsAwaitingApproval(before, limit),
+    ),
+    account: watch((id) => client.account(id)),
+    deleteAccount: watch((id) => client.deleteAccount(id)),
+    approveAccount: watch((id) => client.approveAccount(id)),
+    refuseAccount: watch((id) => client.refuseAccount(id)),
+    relinkAccount: watch((id) => client.relinkAccount(id)),
+    accountGrants: watch((id, before, limit) => client.accountGrants(id, before, limit)),
+    createGrant: watch((id, request) => client.createGrant(id, request)),
+    changeGrant: watch((id, user, request) => client.changeGrant(id, user, request)),
+    revokeGrant: watch((id, user) => client.revokeGrant(id, user)),
+    openVerificationLink: watch(() => client.openVerificationLink()),
   };
 }

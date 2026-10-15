@@ -1,8 +1,14 @@
 // The navigation (Plan.md P8.6): the entries the user's role may see (nav.ts), the admin
 // screens under their own heading. Until `me` has answered, only a Member's entries show.
+// Accounts carries the count of links waiting for an Admin's or the Owner's approval.
 import { Link } from "@tanstack/react-router";
 
 import { useMe } from "../../../api/queries";
+import {
+  accountsLinkName,
+  useWaitingCount,
+  WaitingBadge,
+} from "../../accounts/components/WaitingAlert";
 import { type NavItem, navItems } from "../nav";
 
 /** The navigation. */
@@ -25,15 +31,18 @@ export function Nav() {
 }
 
 function Entries({ items }: { items: readonly NavItem[] }) {
+  const waiting = useWaitingCount();
   return (
     <ul className="flex flex-col gap-1">
       {items.map((item) => (
         <li key={item.to}>
           <Link
             to={item.to}
+            aria-label={item.to === "/accounts" ? accountsLinkName(waiting) : undefined}
             className="block rounded-md px-2 py-1.5 hover:bg-muted data-[status=active]:bg-muted data-[status=active]:font-medium"
           >
             {item.label}
+            {item.to === "/accounts" ? <WaitingBadge count={waiting} /> : null}
           </Link>
         </li>
       ))}

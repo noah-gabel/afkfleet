@@ -47,6 +47,47 @@ export function validated(client: ApiClient): ApiClient {
     createInvite: async (request) =>
       client.createInvite(check(schemas.createInviteRequest, request)),
     revokeInvite: async (id) => client.revokeInvite(check(schemas.id, id, "id")),
+    startLink: () => client.startLink(),
+    linkStatus: async (id) => client.linkStatus(check(schemas.id, id, "id")),
+    createOfflineAccount: async (request) =>
+      client.createOfflineAccount(check(schemas.createOfflineAccountRequest, request)),
+    accounts: async (before, limit) => {
+      checkPage(before, limit);
+      return client.accounts(before, limit);
+    },
+    accountsAwaitingApproval: async (before, limit) => {
+      checkPage(before, limit);
+      return client.accountsAwaitingApproval(before, limit);
+    },
+    account: async (id) => client.account(check(schemas.id, id, "id")),
+    deleteAccount: async (id) => client.deleteAccount(check(schemas.id, id, "id")),
+    approveAccount: async (id) => client.approveAccount(check(schemas.id, id, "id")),
+    refuseAccount: async (id) => client.refuseAccount(check(schemas.id, id, "id")),
+    relinkAccount: async (id) => client.relinkAccount(check(schemas.id, id, "id")),
+    accountGrants: async (id, before, limit) => {
+      checkAll([...problems(schemas.id, id, "id"), ...pageProblems(before, limit)]);
+      return client.accountGrants(id, before, limit);
+    },
+    createGrant: async (id, request) => {
+      checkAll([
+        ...problems(schemas.id, id, "id"),
+        ...problems(schemas.createGrantRequest, request),
+      ]);
+      return client.createGrant(id, request);
+    },
+    changeGrant: async (id, user, request) => {
+      checkAll([
+        ...problems(schemas.id, id, "id"),
+        ...problems(schemas.id, user, "user"),
+        ...problems(schemas.changeGrantRequest, request),
+      ]);
+      return client.changeGrant(id, user, request);
+    },
+    revokeGrant: async (id, user) => {
+      checkAll([...problems(schemas.id, id, "id"), ...problems(schemas.id, user, "user")]);
+      return client.revokeGrant(id, user);
+    },
+    openVerificationLink: () => client.openVerificationLink(),
   };
 }
 
@@ -88,10 +129,15 @@ function check<T>(schema: z.ZodType, value: T, name?: string): T {
   return value;
 }
 
-/** A page's `before` (an ID, when given) and `limit` (a page size, when given). */
-function checkPage(before: string | undefined, limit: number | undefined): void {
-  checkAll([
+/** What a page's `before` (an ID, when given) and `limit` (a page size, when given) break. */
+function pageProblems(before: string | undefined, limit: number | undefined) {
+  return [
     ...(before === undefined ? [] : problems(schemas.id, before, "before")),
     ...(limit === undefined ? [] : problems(schemas.limit, limit, "limit")),
-  ]);
+  ];
+}
+
+/** A page's `before` and `limit`; see `pageProblems`. */
+function checkPage(before: string | undefined, limit: number | undefined): void {
+  checkAll(pageProblems(before, limit));
 }

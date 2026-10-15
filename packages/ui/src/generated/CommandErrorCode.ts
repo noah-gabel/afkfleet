@@ -5,4 +5,4 @@
  * together, so the UI knows every code; the server's code, which can grow,
  * is in [`ApiErrorDetails::code`].
  */
-export type CommandErrorCode = "unreachable" | "certificate" | "timed_out" | "too_large" | "unexpected_response" | "api" | "no_session" | "no_pending_step" | "already_logged_in" | "store" | "interrupted" | "no_server" | "invalid_input" | "invalid_server_url" | "invalid_ca" | "client_build" | "profile_save" | "session_discard" | "ipc";
+export type CommandErrorCode = "unreachable" | "certificate" | "timed_out" | "too_large" | "unexpected_response" | "api" | "no_session" | "no_pending_step" | "already_logged_in" | "store" | "interrupted" | "no_server" | "invalid_input" | "invalid_server_url" | "invalid_ca" | "client_build" | "profile_save" | "session_discard" | "invalid_verification_link" | "no_verification_link" | "verification_link_open" | "ipc";

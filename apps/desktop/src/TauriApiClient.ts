@@ -5,9 +5,19 @@
 // anything else (Tauri's own refusals are plain strings) becomes `ipc`, its text dropped.
 import type { ApiClient } from "@afkfleet/ui";
 import { toApiError } from "@afkfleet/ui";
+import type { AccountPage } from "@afkfleet/ui/generated/AccountPage";
+import type { AccountResponse } from "@afkfleet/ui/generated/AccountResponse";
+import type { ChangeGrantRequest } from "@afkfleet/ui/generated/ChangeGrantRequest";
 import type { CreatedInviteResponse } from "@afkfleet/ui/generated/CreatedInviteResponse";
+import type { CreatedOfflineAccountResponse } from "@afkfleet/ui/generated/CreatedOfflineAccountResponse";
+import type { CreateGrantRequest } from "@afkfleet/ui/generated/CreateGrantRequest";
 import type { CreateInviteRequest } from "@afkfleet/ui/generated/CreateInviteRequest";
+import type { CreateOfflineAccountRequest } from "@afkfleet/ui/generated/CreateOfflineAccountRequest";
+import type { GrantPage } from "@afkfleet/ui/generated/GrantPage";
+import type { GrantResponse } from "@afkfleet/ui/generated/GrantResponse";
 import type { InvitePage } from "@afkfleet/ui/generated/InvitePage";
+import type { LinkFlowResponse } from "@afkfleet/ui/generated/LinkFlowResponse";
+import type { LinkStartedResponse } from "@afkfleet/ui/generated/LinkStartedResponse";
 import type { LoginRequest } from "@afkfleet/ui/generated/LoginRequest";
 import type { LoginStepResponse } from "@afkfleet/ui/generated/LoginStepResponse";
 import type { LogoutResponse } from "@afkfleet/ui/generated/LogoutResponse";
@@ -127,5 +137,67 @@ export class TauriApiClient implements ApiClient {
 
   revokeInvite(id: string): Promise<void> {
     return this.#call("revoke_invite", { id });
+  }
+
+  startLink(): Promise<LinkStartedResponse> {
+    return this.#call("start_link");
+  }
+
+  linkStatus(id: string): Promise<LinkFlowResponse> {
+    return this.#call("link_status", { id });
+  }
+
+  createOfflineAccount(
+    request: CreateOfflineAccountRequest,
+  ): Promise<CreatedOfflineAccountResponse> {
+    return this.#call("create_offline_account", { request });
+  }
+
+  accounts(before?: string, limit?: number): Promise<AccountPage> {
+    return this.#call("accounts", { before, limit });
+  }
+
+  accountsAwaitingApproval(before?: string, limit?: number): Promise<AccountPage> {
+    return this.#call("accounts_awaiting_approval", { before, limit });
+  }
+
+  account(id: string): Promise<AccountResponse> {
+    return this.#call("account", { id });
+  }
+
+  deleteAccount(id: string): Promise<void> {
+    return this.#call("delete_account", { id });
+  }
+
+  approveAccount(id: string): Promise<AccountResponse> {
+    return this.#call("approve_account", { id });
+  }
+
+  refuseAccount(id: string): Promise<void> {
+    return this.#call("refuse_account", { id });
+  }
+
+  relinkAccount(id: string): Promise<LinkStartedResponse> {
+    return this.#call("relink_account", { id });
+  }
+
+  accountGrants(id: string, before?: string, limit?: number): Promise<GrantPage> {
+    return this.#call("account_grants", { id, before, limit });
+  }
+
+  createGrant(id: string, request: CreateGrantRequest): Promise<GrantResponse> {
+    return this.#call("create_grant", { id, request });
+  }
+
+  changeGrant(id: string, user: string, request: ChangeGrantRequest): Promise<GrantResponse> {
+    return this.#call("change_grant", { id, user, request });
+  }
+
+  revokeGrant(id: string, user: string): Promise<void> {
+    return this.#call("revoke_grant", { id, user });
+  }
+
+  openVerificationLink(): Promise<void> {
+    return this.#call("open_verification_link");
   }
 }

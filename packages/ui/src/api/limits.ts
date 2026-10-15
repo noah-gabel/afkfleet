@@ -15,3 +15,5 @@ export const PAGE_MAX = 100;
 export const SERVER_URL_MAX_BYTES = 2048;
 export const CA_PEM_MAX_BYTES = 65536;
 export const STEP_UP_WINDOW_SECS = 300;
+export const MC_NAME_MIN_CHARS = 3;
+export const MC_NAME_MAX_CHARS = 16;

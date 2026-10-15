@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { useRetryWait } from "../hooks/useRetryWait";
 import { fakeTime } from "../test/renderApp";
 import { refusal } from "../test/signIn";
-import { RetryWaitMessage, TRY_AGAIN } from "./RetryWaitMessage";
+import { RetryWaitMessage, spokenWait, TRY_AGAIN, visibleWait } from "./RetryWaitMessage";
 
 /** A form's error area with the wait of a 429 that asks for `seconds`. */
 function Harness({ seconds }: { seconds: number }) {
@@ -74,5 +74,42 @@ describe("RetryWaitMessage", () => {
 
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByRole("status").textContent).toBe(TRY_AGAIN);
+  });
+
+  it.each([
+    [1, "Try again in 1 s."],
+    [60, "Try again in 60 s."],
+    [61, "Try again in 2 min."],
+    [120, "Try again in 2 min."],
+    [3600, "Try again in 60 min."],
+    [3601, "Try again in 1 h 1 min."],
+    [3661, "Try again in 1 h 2 min."],
+    [7200, "Try again in 2 h."],
+    [86_400, "Try again in 24 h."],
+  ])("shows a wait of %i s as %s", (seconds, text) => {
+    expect(visibleWait(seconds)).toBe(text);
+  });
+
+  it.each([
+    [1, "Try again in 1 second."],
+    [60, "Try again in 60 seconds."],
+    [61, "Try again in 2 minutes."],
+    [3600, "Try again in 60 minutes."],
+    [3601, "Try again in 1 hour 1 minute."],
+    [7260, "Try again in 2 hours 1 minute."],
+    [7200, "Try again in 2 hours."],
+  ])("says a wait of %i s as %s", (seconds, text) => {
+    expect(spokenWait(seconds)).toBe(text);
+  });
+
+  it("switches from minutes to seconds as a long wait runs down", () => {
+    fakeTime();
+    render(<Harness seconds={90} />);
+    act(() => screen.getByRole("button", { name: "Refuse" }).click());
+
+    expect(screen.getByText("Try again in 2 min.")).toBeDefined();
+    advance(30_000);
+    expect(screen.getByText("Try again in 60 s.")).toBeDefined();
+    expect(spoken(screen.getByRole("alert"))).toContain("Try again in 2 minutes.");
   });
 });
