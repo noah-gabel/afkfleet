@@ -88,6 +88,26 @@ async fn a_wait_before_a_retry_stops_at_once(
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_wait_before_a_commit_retry_stops_at_once(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = LinkSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+    let mut wait = setup.pace.hold_next();
+    script_link(&setup, 1);
+    let flow = setup.started(&alice, "device-code-1").await;
+    wait.entered().await;
+    setup.store.fail_next_writes(1);
+    let mut retry = setup.pace.hold_next();
+    wait.release();
+    retry.entered().await;
+
+    stopped_without_storing(&setup, flow, alice.actor.id).await;
+    drop(retry);
+}
+
+#[sqlx::test(migrations = false)]
 async fn a_commit_that_started_finishes_before_shutdown_returns(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,

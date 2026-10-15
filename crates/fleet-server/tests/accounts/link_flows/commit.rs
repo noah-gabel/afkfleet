@@ -10,14 +10,17 @@ use fleet_server::app::link_flows::LinkFlowStatus;
 use fleet_server::app::users::ActingUser;
 use fleet_server::ports::accounts::AccountCredential;
 use fleet_server::ports::audit::AuditRecord;
+use fleet_testkit::log_buffer::LogBuffer;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-use fleet_core::system::Clock as _;
+use fleet_core::system::{Clock as _, RandomError};
 
 use super::{approval, script_link};
 use crate::support::link::{IP, LinkSetup, meta};
 use crate::support::msauth::{Script, session};
-use crate::support::service::{DAY, PROFILE, T0, at, profile};
+use crate::support::service::{DAY, PROFILE, T0, at, json_logs, levels, profile};
+
+const COMMIT_FAILED: &str = "a link flow couldn't store the account, and the flow ended";
 
 /// Links `PROFILE` as `AfkBot1` for `by`; how the flow ended.
 async fn linked(setup: &LinkSetup, by: &ActingUser) -> LinkFlowStatus {
@@ -258,4 +261,74 @@ async fn a_session_refreshed_during_the_wait_still_links(
         LinkFlowStatus::Linked { .. }
     ));
     assert_eq!(setup.owned(alice.actor.id).await, 1);
+}
+
+/// Starts a flow for `by`, runs `fail` while the flow waits for the
+/// approval scripted behind it, and returns how the flow ended, with the
+/// levels of its failed-commit lines.
+async fn ended_after(
+    setup: &LinkSetup,
+    by: &ActingUser,
+    fail: impl FnOnce(&LinkSetup),
+    logs: &LogBuffer,
+) -> (LinkFlowStatus, Vec<String>) {
+    let mut wait = setup.pace.hold_next();
+    script_link(setup, 1);
+    let flow = setup.started(by, "device-code-1").await;
+    wait.entered().await;
+    fail(setup);
+    wait.release();
+    (setup.ended(flow).await, levels(logs, COMMIT_FAILED))
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_failed_account_id_fails_the_flow_and_stores_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (logs, _guard) = json_logs();
+    let setup = LinkSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+
+    let (status, errors) = ended_after(
+        &setup,
+        &alice,
+        |setup| setup.random.fail_next(RandomError::Unavailable),
+        &logs,
+    )
+    .await;
+
+    assert_eq!(status, LinkFlowStatus::Failed);
+    assert_eq!(errors, ["ERROR"]);
+    assert_eq!(setup.owned(alice.actor.id).await, 0);
+    assert_eq!(
+        setup.entries(&AuditAction::ACCOUNT_LINK).await,
+        Vec::<AuditRecord>::new()
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_failed_seal_fails_the_flow_and_stores_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (logs, _guard) = json_logs();
+    let setup = LinkSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+
+    let (status, errors) = ended_after(
+        &setup,
+        &alice,
+        |setup| setup.vault_random.fail_next(RandomError::Unavailable),
+        &logs,
+    )
+    .await;
+
+    assert_eq!(status, LinkFlowStatus::Failed);
+    assert_eq!(errors, ["ERROR"]);
+    assert_eq!(setup.owned(alice.actor.id).await, 0);
+    assert_eq!(
+        setup.entries(&AuditAction::ACCOUNT_LINK).await,
+        Vec::<AuditRecord>::new()
+    );
 }

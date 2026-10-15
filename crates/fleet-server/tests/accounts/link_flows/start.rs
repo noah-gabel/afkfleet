@@ -3,6 +3,7 @@
 use core::num::NonZeroU32;
 use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget, RecordedValue};
 use fleet_core::authz::Role;
+use fleet_core::system::RandomError;
 
 use fleet_server::app::link_flows::{LinkFlowSettings, LinkFlowStatus, LinkStartError};
 use fleet_server::ports::audit::AuditRecord;
@@ -142,6 +143,31 @@ async fn a_failed_microsoft_start_records_nothing_and_frees_the_place(
         Vec::<AuditRecord>::new()
     );
     assert_eq!(setup.service.flows().active(), 0);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_failed_flow_id_records_nothing_and_frees_the_place(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = LinkSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+    setup.script_start("device-code-1");
+    setup.random.fail_next(RandomError::Unavailable);
+
+    let refused = setup.start(&alice).await;
+
+    assert!(
+        matches!(refused, Err(LinkStartError::Mint(_))),
+        "{refused:?}"
+    );
+    assert_eq!(
+        setup.entries(&AuditAction::ACCOUNT_START_LINK).await,
+        Vec::<AuditRecord>::new()
+    );
+    assert_eq!(setup.service.flows().active(), 0);
+    assert_eq!(setup.service.flows().held(), 0);
+    assert_eq!(setup.polled_with(), Vec::<String>::new());
 }
 
 #[sqlx::test(migrations = false)]

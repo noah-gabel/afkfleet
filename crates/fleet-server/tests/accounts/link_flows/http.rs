@@ -389,6 +389,23 @@ async fn microsoft_away_is_503_with_30_s_and_a_broken_setup_500(
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_start_while_the_server_stops_answers_503_with_1_s(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+    bounded(setup.link_flows.shutdown()).await;
+
+    let refused = setup.start(&alice).await;
+
+    assert_eq!(refused.status, 503, "{}", refused.text);
+    assert_eq!(refused.code(), "busy");
+    assert_eq!(refused.retry_after.as_deref(), Some("1"));
+    assert_eq!(setup.fake.calls().len(), 0);
+}
+
+#[sqlx::test(migrations = false)]
 async fn the_link_routes_spend_the_users_request_limit(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,

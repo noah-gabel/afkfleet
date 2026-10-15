@@ -2,7 +2,7 @@
 //! ADR-0018): never a device code, a user code, a token, a Minecraft name or
 //! a profile's UUID, on any path the flows take.
 
-use fleet_core::account::AccountStatus;
+use fleet_core::account::{AccountStatus, RefusalReason};
 use fleet_core::authz::Role;
 use fleet_core::id::AccountId;
 use fleet_server::app::link_flows::LinkFlowStatus;
@@ -136,6 +136,32 @@ fn a_flows_status_and_view_debug_without_the_minecraft_name() {
 
     assert!(!shown.contains("Secret_Name1"), "{shown}");
     assert!(shown.contains("Pending"), "{shown}");
+}
+
+#[test]
+fn every_other_status_debugs_as_its_state_alone() {
+    let waiting = LinkFlowStatus::Waiting { expires_at: at(T0) };
+    let refused = LinkFlowStatus::Refused(RefusalReason::NotOwned);
+    let others = [
+        (LinkFlowStatus::Finishing, "finishing"),
+        (LinkFlowStatus::Declined, "declined"),
+        (LinkFlowStatus::Expired, "expired"),
+        (LinkFlowStatus::Taken, "taken"),
+        (LinkFlowStatus::OverQuota, "over_quota"),
+        (LinkFlowStatus::Failed, "failed"),
+    ];
+
+    let shown: Vec<String> = others
+        .iter()
+        .map(|(status, _)| format!("{status:?}"))
+        .collect();
+
+    assert_eq!(
+        format!("{waiting:?}"),
+        format!("Waiting {{ expires_at: {:?} }}", at(T0))
+    );
+    assert_eq!(format!("{refused:?}"), "Refused(NotOwned)");
+    assert_eq!(shown, others.map(|(_, state)| state));
 }
 
 #[sqlx::test(migrations = false)]

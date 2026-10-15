@@ -183,6 +183,42 @@ async fn a_finished_flow_frees_its_place(_pool: SqlitePoolOptions, options: Sqli
     assert!(setup.status(bobs).is_some());
 }
 
+#[sqlx::test(migrations = false)]
+async fn the_start_counts_the_day_again_in_its_transaction(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = LinkSetup::with(options, with(3, 1, 3)).await;
+    let alice = setup.person(1, Role::Member).await;
+    // A second service on the same database records a start of the same
+    // user while the first one's start waits for its transaction.
+    let other = setup.restarted();
+    setup.script_start("device-code-1");
+    let mut write = setup.store.gate_next_write();
+    let mut start = Box::pin(setup.service.start(&alice));
+    drive_until(&mut start, write.entered()).await;
+    setup.script_start("device-code-2");
+    let mut wait = setup.pace.hold_next();
+    bounded(other.start(&alice)).await.unwrap();
+    wait.entered().await;
+
+    write.release();
+    let refused = bounded(start).await;
+
+    assert!(
+        matches!(refused, Err(LinkStartError::DailyCap { retry_after }) if retry_after == Duration::from_hours(24)),
+        "{refused:?}"
+    );
+    assert_eq!(
+        setup.entries(&AuditAction::ACCOUNT_START_LINK).await.len(),
+        1
+    );
+    assert_eq!(setup.service.flows().active(), 0);
+    assert_eq!(setup.service.flows().held(), 0);
+    bounded(other.shutdown()).await;
+    drop(wait);
+}
+
 // --- The Member quota --------------------------------------------------------------
 
 #[sqlx::test(migrations = false)]
@@ -271,6 +307,41 @@ async fn admins_and_the_owner_have_no_quota(
 
         assert!(setup.status(flow).is_some(), "{role:?}");
     }
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_start_counts_the_quota_again_in_its_transaction(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = LinkSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+    for n in 1..=2 {
+        setup
+            .add_account(alice.actor.id, n, Some(AccountStatus::Active))
+            .await;
+    }
+    setup.script_start("device-code-1");
+    let mut write = setup.store.gate_next_write();
+    let mut start = Box::pin(setup.service.start(&alice));
+    drive_until(&mut start, write.entered()).await;
+    // A third account, offline, is created while Microsoft answered.
+    setup.add_account(alice.actor.id, 3, None).await;
+
+    write.release();
+    let refused = bounded(start).await;
+
+    assert!(
+        matches!(refused, Err(LinkStartError::OverQuota)),
+        "{refused:?}"
+    );
+    assert_eq!(setup.starts(), 1);
+    assert_eq!(
+        setup.entries(&AuditAction::ACCOUNT_START_LINK).await.len(),
+        0
+    );
+    assert_eq!(setup.service.flows().active(), 0);
+    assert_eq!(setup.service.flows().held(), 0);
 }
 
 #[sqlx::test(migrations = false)]

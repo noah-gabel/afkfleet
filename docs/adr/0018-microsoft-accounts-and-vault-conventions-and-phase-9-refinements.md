@@ -451,6 +451,15 @@ The user answered group D's questions one at a time, and added two notes for E a
   - **The routes** (15 tests): 14 against handlers answering 404; serve's stop of the flows by a serve without that task.
   - **The housekeeping's purge** against a run that skipped the flows; `StartError::Microsoft` by a variant with its own text, which doubled the chain.
   - **The coverage gate's script test:** 1 of 1.
+  - **Eight more tests came from the coverage run** for failure paths it showed untested. Each was shown red by a mutation of the code it guards:
+    - a flow ID that can't be minted (answered `SessionGone`)
+    - the start's transaction counting the day and the quota again (both checks skipped)
+    - an account ID that can't be minted, and a seal that fails (each ending `declined`)
+    - a wait before a commit's retry (a wait the stop can't end; red at the test's 10 s bound)
+    - the plain states' `Debug` (another word)
+    - a start while the server stops (30 s instead of 1 s)
+
+    The link setup's vault now draws on its own seeded source, so a test can fail a seal without failing an ID.
 - **Snapshots,** read before accepting: the audit action names (`account.start_link`, `account.link` appended), the OpenAPI document (five schemas, two paths), and `link_started`, `link_waiting`, `link_finishing`, `link_linked` and `link_refused`.
 - **Found during the build:**
   - `#[sqlx::test]` takes no `#[rstest]` cases (its control attributes need its own database management), so the tables run as loops inside one test, as group C's do, each case with its own user.

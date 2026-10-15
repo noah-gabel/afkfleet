@@ -69,7 +69,12 @@ pub(crate) struct LinkSetup {
     pub(crate) db: Database,
     pub(crate) store: Arc<FlakyStore>,
     pub(crate) clock: Arc<ManualClock>,
+    /// The service's randomness, for the flows' and the accounts' IDs.
+    pub(crate) random: SeededRandom,
     pub(crate) vault: Arc<XChaChaVault>,
+    /// The vault's own randomness, for its nonces: a test can fail a seal
+    /// without failing an ID.
+    pub(crate) vault_random: SeededRandom,
     pub(crate) fake: Arc<FakeMicrosoftAuth>,
     pub(crate) pace: Arc<FakePace>,
     pub(crate) service: LinkFlowService,
@@ -87,12 +92,13 @@ impl LinkSetup {
         let store = Arc::new(FlakyStore::new(db.clone()));
         let clock = Arc::new(ManualClock::new(at(T0)));
         let random = SeededRandom::new(11);
-        let vault = Arc::new(vault_with_key(1, &random));
+        let vault_random = SeededRandom::new(12);
+        let vault = Arc::new(vault_with_key(1, &vault_random));
         let fake = Arc::new(FakeMicrosoftAuth::new());
         let pace = Arc::new(FakePace::new(clock.clone()));
         let ports = LinkFlowPorts {
             clock: clock.clone(),
-            random: Arc::new(random),
+            random: Arc::new(random.clone()),
             store: store.clone(),
             vault: vault.clone(),
             microsoft: fake.clone(),
@@ -105,7 +111,9 @@ impl LinkSetup {
             db,
             store,
             clock,
+            random,
             vault,
+            vault_random,
             fake,
             pace,
             service,
