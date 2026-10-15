@@ -379,6 +379,8 @@ async fn rotate_key_moves_a_linked_accounts_token_to_the_new_key_on_a_copy(
     assert!(setup.fake.calls().contains(&Call::Refresh {
         refresh_token: "refresh-1".to_owned()
     }));
+    // sqlx's test file is 0644, and the server opens only owner-only files on Unix.
+    owner_only(&original);
     let before = sqlite::open(
         &DatabaseConfig { path: original },
         DatabaseOptions::default(),
