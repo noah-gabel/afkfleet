@@ -75,6 +75,7 @@ use super::housekeeping::Housekeeping;
 use crate::app::accounts::{AccountService, AccountSettings};
 use crate::app::auth::TokenService;
 use crate::app::challenges::Challenges;
+use crate::app::grants::GrantService;
 use crate::app::health::HealthService;
 use crate::app::invites::InviteService;
 use crate::app::link_flows::{LinkFlowPorts, LinkFlowService, LinkFlowSettings};
@@ -376,6 +377,7 @@ pub fn app_with(
         tokens.clone(),
         mfa.clone(),
     );
+    let grants = GrantService::new(Arc::clone(&clock), Arc::clone(&store));
     let ids = RequestIds::new(clock, random);
     let state = AppState::new(Services {
         health: HealthService::new(store),
@@ -387,6 +389,7 @@ pub fn app_with(
         invites,
         link_flows: link_flows.clone(),
         accounts,
+        grants,
     });
     App {
         router: router(

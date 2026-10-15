@@ -380,6 +380,7 @@ fn rate_limits(raw: &RawRateLimits) -> Option<RateLimitConfig> {
             total: count(raw.link_flows_total)?,
             per_user_per_day: count(raw.link_flows_per_user_per_day)?,
         },
+        grants_by_name: Rate::per_hour(count(raw.grants_by_name_per_user_per_hour)?),
     })
 }
 

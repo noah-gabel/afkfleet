@@ -173,6 +173,22 @@ fn only_the_database_path_and_the_vault_are_required() {
     });
 }
 
+/// The `[rate_limits]` that `every_key_maps_to_its_setting`'s file sets.
+fn every_rate_limit() -> RateLimitConfig {
+    RateLimitConfig {
+        per_ip: Rate::per_second(nonzero(50), nonzero(100)),
+        login: Rate::per_minute(nonzero(10)),
+        refresh: Rate::per_minute(nonzero(60)),
+        register: Rate::per_hour(nonzero(2)),
+        per_user: Rate::per_second(nonzero(20), nonzero(60)),
+        link_flows: LinkFlowLimits {
+            total: nonzero(5),
+            per_user_per_day: nonzero(20),
+        },
+        grants_by_name: Rate::per_hour(nonzero(4)),
+    }
+}
+
 #[test]
 fn every_key_maps_to_its_setting() {
     in_jail(|jail| {
@@ -214,6 +230,7 @@ per_user_per_sec = 20
 per_user_burst = 60
 link_flows_total = 5
 link_flows_per_user_per_day = 20
+grants_by_name_per_user_per_hour = 4
 
 [accounts]
 max_per_member = 7
@@ -262,20 +279,7 @@ active_key_id = 3
         );
         assert_eq!(config.auth.lockout, LockoutPolicy::try_new(7).unwrap());
         assert_eq!(config.auth.invites, InviteTtl::try_new(24).unwrap());
-        assert_eq!(
-            config.rate_limits,
-            RateLimitConfig {
-                per_ip: Rate::per_second(nonzero(50), nonzero(100)),
-                login: Rate::per_minute(nonzero(10)),
-                refresh: Rate::per_minute(nonzero(60)),
-                register: Rate::per_hour(nonzero(2)),
-                per_user: Rate::per_second(nonzero(20), nonzero(60)),
-                link_flows: LinkFlowLimits {
-                    total: nonzero(5),
-                    per_user_per_day: nonzero(20),
-                },
-            }
-        );
+        assert_eq!(config.rate_limits, every_rate_limit());
         assert_eq!(
             config.accounts,
             AccountsConfig {
@@ -305,6 +309,10 @@ fn environment_variables_override_the_file() {
         jail.set_env("AFKFLEET_SERVER__AUTH__INVITE_TTL_HOURS", 48);
         jail.set_env("AFKFLEET_SERVER__RATE_LIMITS__PER_IP_BURST", 80);
         jail.set_env("AFKFLEET_SERVER__RATE_LIMITS__LINK_FLOWS_TOTAL", 2);
+        jail.set_env(
+            "AFKFLEET_SERVER__RATE_LIMITS__GRANTS_BY_NAME_PER_USER_PER_HOUR",
+            3,
+        );
         jail.set_env("AFKFLEET_SERVER__ACCOUNTS__MAX_PER_MEMBER", 1);
         jail.set_env("AFKFLEET_SERVER__ACCOUNTS__ALLOW_OFFLINE", true);
         let toml = minimal(jail);
@@ -326,6 +334,7 @@ fn environment_variables_override_the_file() {
         assert_eq!(config.auth.invites.hours(), 48);
         assert_eq!(config.rate_limits.per_ip.burst().get(), 80);
         assert_eq!(config.rate_limits.link_flows.total.get(), 2);
+        assert_eq!(config.rate_limits.grants_by_name.burst().get(), 3);
         assert_eq!(config.accounts.max_per_member.get(), 1);
         assert!(config.accounts.allow_offline);
     });
@@ -980,6 +989,7 @@ fn the_dev_config_holds_neither_the_database_path_nor_the_vault_key_file() {
 #[case::per_user_burst("per_user_burst", 1, 10_000)]
 #[case::link_flows_total("link_flows_total", 1, 16)]
 #[case::link_flows_per_user_per_day("link_flows_per_user_per_day", 1, 100)]
+#[case::grants_by_name("grants_by_name_per_user_per_hour", 1, 100)]
 fn rate_limit_keys_are_checked_against_their_range(
     #[case] key: &str,
     #[case] min: u64,

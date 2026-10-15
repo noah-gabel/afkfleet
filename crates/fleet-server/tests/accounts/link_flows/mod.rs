@@ -11,6 +11,7 @@
 //! - [`retention`]: how long a result stays readable.
 //! - [`shutdown`]: stopping every flow at once.
 //! - [`redaction`]: no code, token, name or UUID in any log or `Debug`.
+//! - [`relink`]: linking an account again (P9.6).
 //! - [`http`]: the routes, through the real router and serve's wiring.
 //!
 //! Time isn't paused: sqlx's worker threads would make paused timeouts fire
@@ -23,6 +24,7 @@ mod finish;
 mod http;
 mod poll;
 mod redaction;
+mod relink;
 mod replace;
 mod retention;
 mod shutdown;

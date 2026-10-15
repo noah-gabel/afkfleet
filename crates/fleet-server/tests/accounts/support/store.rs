@@ -7,14 +7,17 @@ use core::time::Duration;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use async_trait::async_trait;
+use fleet_core::authz::Actor;
 use fleet_core::id::{AccountId, UserId};
 use fleet_server::infra::sqlite::Database;
-use fleet_server::ports::accounts::{AccountReads, McAccount};
+use fleet_server::ports::accounts::{AccountReads, ListedAccount, McAccount};
 use fleet_server::ports::audit::AuditReads;
 use fleet_server::ports::envelopes::EnvelopeReads;
+use fleet_server::ports::grants::GrantReads;
 use fleet_server::ports::invites::InviteReads;
 use fleet_server::ports::login_attempts::LoginAttemptReads;
 use fleet_server::ports::mfa::MfaReads;
+use fleet_server::ports::page::Page;
 use fleet_server::ports::sessions::SessionReads;
 use fleet_server::ports::store::{Store, StoreError, WriteTx};
 use fleet_server::ports::users::UserReads;
@@ -192,6 +195,10 @@ impl Store for FlakyStore {
         self
     }
 
+    fn grants(&self) -> &dyn GrantReads {
+        self.inner.grants()
+    }
+
     fn envelopes(&self) -> &dyn EnvelopeReads {
         self.inner.envelopes()
     }
@@ -231,5 +238,29 @@ impl AccountReads for FlakyStore {
 
     async fn count_offline(&self) -> Result<u64, StoreError> {
         self.inner.accounts().count_offline().await
+    }
+
+    async fn listed(
+        &self,
+        id: AccountId,
+        viewer: UserId,
+    ) -> Result<Option<ListedAccount>, StoreError> {
+        self.inner.accounts().listed(id, viewer).await
+    }
+
+    async fn list_visible(
+        &self,
+        viewer: Actor,
+        page: Page<AccountId>,
+    ) -> Result<Vec<ListedAccount>, StoreError> {
+        self.inner.accounts().list_visible(viewer, page).await
+    }
+
+    async fn awaiting_review(
+        &self,
+        viewer: Actor,
+        page: Page<AccountId>,
+    ) -> Result<Vec<ListedAccount>, StoreError> {
+        self.inner.accounts().awaiting_review(viewer, page).await
     }
 }

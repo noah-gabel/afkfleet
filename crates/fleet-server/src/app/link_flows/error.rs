@@ -3,6 +3,7 @@
 use core::time::Duration;
 
 use fleet_core::audit::AuditError;
+use fleet_core::authz::AuthzError;
 use fleet_core::system::MintError;
 
 use super::table::Busy;
@@ -33,6 +34,15 @@ pub enum LinkStartError {
     /// The Member owns their quota of accounts already.
     #[error("the member owns their quota of accounts")]
     OverQuota,
+    /// Linking again: the account is gone.
+    #[error("the account doesn't exist")]
+    AccountGone,
+    /// Linking again: `authorize()` refused it on the fresh facts.
+    #[error("linking the account again isn't allowed")]
+    Denied(#[source] AuthzError),
+    /// Linking again: the account is pending, or an offline one.
+    #[error("the account can't be linked again")]
+    NotRelinkable,
     /// The acting user's session ended, or they were disabled, meanwhile.
     #[error("the acting session is gone")]
     SessionGone,

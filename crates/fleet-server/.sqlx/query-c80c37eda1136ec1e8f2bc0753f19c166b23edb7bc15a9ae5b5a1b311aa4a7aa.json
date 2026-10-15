@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE mc_accounts SET status = 'frozen' WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "c80c37eda1136ec1e8f2bc0753f19c166b23edb7bc15a9ae5b5a1b311aa4a7aa"
+}

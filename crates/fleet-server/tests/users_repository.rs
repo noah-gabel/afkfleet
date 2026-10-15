@@ -186,6 +186,28 @@ async fn one_user_reads_as_the_list_shows_them(
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_user_is_found_by_username_in_a_transaction(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    add_user(&db, 1, Role::Owner).await;
+    let bob = add_user(&db, 2, Role::Member).await;
+    let name = |text: &str| Username::try_from(text).unwrap();
+
+    let mut tx = db.write().await.unwrap();
+    let found = tx.users().find_by_username(&name("user2")).await.unwrap();
+    let in_capitals = tx.users().find_by_username(&name("USER2")).await.unwrap();
+    let unknown = tx.users().find_by_username(&name("nobody")).await.unwrap();
+
+    let found = found.unwrap();
+    assert_eq!(found.id, bob);
+    assert_eq!(found.role, Role::Member);
+    assert_eq!(in_capitals.map(|user| user.id), Some(bob));
+    assert!(unknown.is_none());
+}
+
+#[sqlx::test(migrations = false)]
 async fn a_role_is_changed_and_read_back(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
     let db = database(options).await;
     let alice = add_user(&db, 2, Role::Member).await;

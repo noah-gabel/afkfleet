@@ -44,6 +44,7 @@ use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::AccountReads;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditReads, AuditRecord, NewAuditEntry};
 use fleet_server::ports::envelopes::EnvelopeReads;
+use fleet_server::ports::grants::GrantReads;
 use fleet_server::ports::invites::{InviteReads, NewInvite};
 use fleet_server::ports::login_attempts::LoginAttemptReads;
 use fleet_server::ports::mfa::MfaReads;
@@ -302,6 +303,10 @@ impl Store for HookedStore {
         self.inner.accounts()
     }
 
+    fn grants(&self) -> &dyn GrantReads {
+        self.inner.grants()
+    }
+
     fn envelopes(&self) -> &dyn EnvelopeReads {
         self.inner.envelopes()
     }
@@ -449,6 +454,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         invites,
         link_flows: idle_link_flows(&db),
         accounts: idle_accounts(&db),
+        grants: idle_grants(&db),
     });
     let app = app(state, &clock);
     let mut tx = db.write().await.unwrap();
@@ -951,6 +957,18 @@ fn idle_link_flows(
             per_user_per_day: core::num::NonZeroU32::MIN,
             max_per_member: core::num::NonZeroU32::MIN,
         },
+    )
+}
+
+/// The grants, which these tests never write.
+fn idle_grants(
+    db: &fleet_server::infra::sqlite::Database,
+) -> fleet_server::app::grants::GrantService {
+    fleet_server::app::grants::GrantService::new(
+        Arc::new(fleet_testkit::system::ManualClock::new(
+            chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+        )),
+        Arc::new(db.clone()),
     )
 }
 

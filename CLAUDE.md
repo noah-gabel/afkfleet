@@ -50,7 +50,12 @@ Where things are:
    - Then **stop and wait**. The user reviews and merges.
 8. **Stay in scope.** Keep changes to the task. Propose refactors outside it; don't do them silently.
 9. **Finish the phase.** When a phase is done, check its **Definition of Done** point by point and report.
-10. **Ask on ambiguity.** If the plan is ambiguous or conflicts with reality (an API changed, the spike found something), stop and ask. Don't improvise around it.
+10. **Open questions.** Don't improvise around them. Each open question goes to its own read-only subagent, given the options neutrally. The subagent reads the whole project and returns one decision: the option, why, the rejected ones, the later phases it affects and how hard it is to change. The plan lists them under "Decided without you" (S1, S2, …), each marked "security" where it touches security or permissions, for the user's review. Names follow the naming rules and are the AI's. Only these go to the user directly, one at a time:
+    1. A decision whose chosen option would add, loosen or except a rule that binds the AI (this file's rules, lints, `#[expect]`, clippy and deny bans, coverage gates, CI, dependencies, manual tests, permissions).
+    2. A genuine conflict between decisions the ADRs record as the user's, or between such a decision and the code, where every sensible option overturns one of them.
+    3. Matters of taste (looks, texts friends read, UX).
+
+    If at least one sensible option respects every rule and every recorded decision, the subagent decides, and the decision goes into "Decided without you". When unsure whether a question is (1)–(3), ask.
 
 ## Git & GitHub rules
 - **Never:** merge a PR, push to `main`, force-push, or rewrite history that's already pushed. The ruleset on `main` blocks most of this anyway; don't try to work around a rejection.

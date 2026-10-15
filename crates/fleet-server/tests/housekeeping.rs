@@ -87,6 +87,7 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
             register: one,
             per_user: one,
             link_flows: LinkFlowLimits::default(),
+            grants_by_name: one,
         },
         Arc::new(clock.clone()),
     );
@@ -173,6 +174,14 @@ async fn a_run_sums_up_the_refusals_since_the_last_one_in_one_line(
     for _ in 0..3 {
         let _ = setup.limits.check_class(RateClass::Login, ip("192.0.2.10"));
     }
+    let grantor = fleet_core::id::UserId::new_v7(
+        Utc.with_ymd_and_hms(2027, 1, 15, 8, 0, 0).unwrap(),
+        [7; 10],
+    )
+    .unwrap();
+    for _ in 0..2 {
+        let _ = setup.limits.check_grant_by_name(grantor);
+    }
     for _ in 0..5 {
         setup.fail("alice").await;
     }
@@ -192,6 +201,7 @@ async fn a_run_sums_up_the_refusals_since_the_last_one_in_one_line(
     assert_eq!(line["refresh"], 0);
     assert_eq!(line["register"], 0);
     assert_eq!(line["per_user"], 0);
+    assert_eq!(line["grants_by_name"], 1);
     assert_eq!(line["locked"], 1);
     assert_eq!(line["in_flight"], 1);
     let again = setup.run_once().await;

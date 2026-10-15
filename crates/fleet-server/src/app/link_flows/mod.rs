@@ -42,6 +42,23 @@
 //! Owner. Each outcome that touches the database is audited
 //! (`account.link`).
 //!
+//! # Linking an account again (P9.6; ADR-0018, group E)
+//! [`LinkFlowService::start_relink`] starts the same flow for an existing
+//! Microsoft account that its caller holds Manage on, with the same caps,
+//! the same daily count (its start is an `account.start_link` too, naming
+//! the account) and the same one flow per user. It refuses a pending
+//! account, which would skip its approval, and an offline one, before
+//! Microsoft is asked; there's no quota. Its commit reads the account, the
+//! caller's grant and the owner's role again and asks `authorize()` again:
+//! an account gone, no longer the caller's to link again, or turned pending
+//! stores nothing. A profile with another UUID than the account's stores
+//! nothing either, and ends the flow `refused`/`profile_mismatch` (an
+//! `account.relink` Failure). Otherwise the new refresh token replaces the
+//! stored one only while the row still holds the one read in the same
+//! transaction, the account is `active` again without a reason, and it
+//! takes the profile's current name (`account.relink`). The new envelope
+//! makes a refresh in flight drop its rotated token (ADR-0018, group C).
+//!
 //! # Shutdown
 //! [`LinkFlowService::shutdown`] cancels every flow at once: a wait, a poll
 //! or a session call in flight. Only a commit that started finishes. The
@@ -59,9 +76,10 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use fleet_core::account::{
-    AccountStatus, LINK_START_WINDOW, RefusalReason, link_start_wait, over_quota,
+    AccountStatus, LINK_START_WINDOW, RefusalReason, link_start_wait, over_quota, relinkable,
 };
 use fleet_core::audit::{AuditAction, AuditMetadata, AuditOutcome, AuditTarget};
+use fleet_core::authz::{Actor, Permission, authorize};
 use fleet_core::id::{AccountId, LinkFlowId, UserId};
 use fleet_core::resilience::Doubling;
 use fleet_core::system::{Clock, SecureRandom, mint};
@@ -72,13 +90,14 @@ use tokio_util::task::TaskTracker;
 use tracing::info;
 
 pub use self::error::LinkStartError;
-use self::poller::Running;
+use self::poller::{Running, Target};
 pub use self::table::LinkFlows;
 use super::audit::AuditService;
 use super::users::{ActingUser, recheck};
+use crate::ports::accounts::ListedAccount;
 use crate::ports::msauth::{MicrosoftAuthProvider, UserCode, VerificationUri};
 use crate::ports::pace::Pace;
-use crate::ports::store::Store;
+use crate::ports::store::{Store, WriteTx};
 use crate::ports::vault::Vault;
 
 /// How long a finished flow's result stays readable.
@@ -164,15 +183,17 @@ pub enum LinkFlowStatus {
     Taken,
     /// The Member owns their quota of accounts already.
     OverQuota,
-    /// Minecraft's side refused the account.
+    /// Minecraft's side refused the account, or, linking an account again,
+    /// the profile isn't the account's (`profile_mismatch`).
     Refused(RefusalReason),
     /// Microsoft or the server failed, or the creator's session ended.
     Failed,
     /// The account is stored.
     Linked {
-        /// The new account.
+        /// The new account, or the one linked again.
         account: AccountId,
-        /// `pending`, or `active` for the Owner's.
+        /// `pending`, or `active` for the Owner's and for an account linked
+        /// again.
         status: AccountStatus,
         /// Its Minecraft name.
         name: McUsername,
@@ -274,6 +295,32 @@ impl LinkFlowService {
     /// [`LinkStartError::SessionGone`] when the session ended meanwhile, and
     /// the server's failures.
     pub async fn start(&self, by: &ActingUser) -> Result<StartedFlow, LinkStartError> {
+        self.start_flow(by, Target::Link).await
+    }
+
+    /// Starts a flow for `by` that links the Microsoft account `account`
+    /// again; see the [module docs](self).
+    ///
+    /// # Errors
+    /// The refusals in the module docs' order, with
+    /// [`LinkStartError::AccountGone`], [`LinkStartError::Denied`] and
+    /// [`LinkStartError::NotRelinkable`] in place of the quota, then
+    /// [`LinkStartError::Microsoft`], [`LinkStartError::SessionGone`], and
+    /// the server's failures.
+    pub async fn start_relink(
+        &self,
+        by: &ActingUser,
+        account: AccountId,
+    ) -> Result<StartedFlow, LinkStartError> {
+        self.start_flow(by, Target::Relink { account }).await
+    }
+
+    /// Starts a flow of either kind; see the [module docs](self).
+    async fn start_flow(
+        &self,
+        by: &ActingUser,
+        target: Target,
+    ) -> Result<StartedFlow, LinkStartError> {
         let inner = &self.inner;
         if inner.stop.is_cancelled() {
             return Err(LinkStartError::ShuttingDown);
@@ -294,10 +341,7 @@ impl LinkFlowService {
         if let Some(retry_after) = link_start_wait(&starts, inner.settings.per_user_per_day, now) {
             return Err(LinkStartError::DailyCap { retry_after });
         }
-        let owned = inner.ports.store.accounts().count_owned_by(user).await?;
-        if over_quota(by.actor.role, owned, inner.settings.max_per_member.get()) {
-            return Err(LinkStartError::OverQuota);
-        }
+        target_allowed(inner, &by.actor, target).await?;
         let device = tokio::select! {
             biased;
             // Dropping the call is safe: nothing was stored yet.
@@ -312,13 +356,17 @@ impl LinkFlowService {
         let now = inner.ports.clock.now();
         let id: LinkFlowId =
             mint(now, inner.ports.random.as_ref()).map_err(LinkStartError::Mint)?;
+        let mut metadata = AuditMetadata::new().id("flow", id)?;
+        if let Target::Relink { account } = target {
+            metadata = metadata.id("account", account)?;
+        }
         let entry = inner
             .audit
             .entry(AuditAction::ACCOUNT_START_LINK, AuditOutcome::Success)
             .actor(user)
             .ip(by.ip)
             .target(AuditTarget::User(user))
-            .metadata(AuditMetadata::new().id("flow", id)?);
+            .metadata(metadata);
         let mut tx = inner.ports.store.write().await?;
         let Some(acting) = recheck(tx.as_mut(), by).await? else {
             return Err(LinkStartError::SessionGone);
@@ -334,14 +382,7 @@ impl LinkFlowService {
         if let Some(retry_after) = link_start_wait(&starts, inner.settings.per_user_per_day, now) {
             return Err(LinkStartError::DailyCap { retry_after });
         }
-        let owned = tx.accounts().count_owned_by(user).await?;
-        if over_quota(
-            acting.actor.role,
-            owned,
-            inner.settings.max_per_member.get(),
-        ) {
-            return Err(LinkStartError::OverQuota);
-        }
+        target_still_allowed(inner, tx.as_mut(), &acting.actor, target).await?;
         tx.commit(entry).await?;
         let cancel = inner.stop.child_token();
         reservation.register(id, device.expires_at, cancel.clone());
@@ -350,6 +391,7 @@ impl LinkFlowService {
             Running {
                 id,
                 by: *by,
+                target,
                 code: device.code,
                 interval: device.interval,
                 expires_at: device.expires_at,
@@ -386,6 +428,65 @@ impl LinkFlowService {
         self.inner.stop.cancel();
         self.inner.tasks.close();
         self.inner.tasks.wait().await;
+    }
+}
+
+/// The check of the flow's kind before Microsoft is asked: the Member quota
+/// for a new link, the account itself for a link again.
+async fn target_allowed(
+    inner: &Inner,
+    actor: &Actor,
+    target: Target,
+) -> Result<(), LinkStartError> {
+    let accounts = inner.ports.store.accounts();
+    match target {
+        Target::Link => {
+            let owned = accounts.count_owned_by(actor.id).await?;
+            if over_quota(actor.role, owned, inner.settings.max_per_member.get()) {
+                return Err(LinkStartError::OverQuota);
+            }
+            Ok(())
+        }
+        Target::Relink { account } => {
+            let listed = accounts.listed(account, actor.id).await?;
+            may_relink(actor, listed.as_ref())
+        }
+    }
+}
+
+/// The same check again, inside the start's transaction, with the role it
+/// read there.
+async fn target_still_allowed(
+    inner: &Inner,
+    tx: &mut dyn WriteTx,
+    actor: &Actor,
+    target: Target,
+) -> Result<(), LinkStartError> {
+    match target {
+        Target::Link => {
+            let owned = tx.accounts().count_owned_by(actor.id).await?;
+            if over_quota(actor.role, owned, inner.settings.max_per_member.get()) {
+                return Err(LinkStartError::OverQuota);
+            }
+            Ok(())
+        }
+        Target::Relink { account } => {
+            let listed = tx.accounts().listed(account, actor.id).await?;
+            may_relink(actor, listed.as_ref())
+        }
+    }
+}
+
+/// Whether `actor` may link `listed` again: it exists, they hold Manage on
+/// it, and it's a Microsoft account that isn't pending.
+fn may_relink(actor: &Actor, listed: Option<&ListedAccount>) -> Result<(), LinkStartError> {
+    let listed = listed.ok_or(LinkStartError::AccountGone)?;
+    authorize(actor, Permission::RelinkAccount, &listed.context())
+        .map_err(LinkStartError::Denied)?;
+    if relinkable(listed.kind, listed.status) {
+        Ok(())
+    } else {
+        Err(LinkStartError::NotRelinkable)
     }
 }
 

@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rowid AS \"rowid!: i64\", account_id AS \"account_id!\", user_id AS \"user_id!\",\n                  level AS \"level!\", granted_by AS \"granted_by!\", granted_at AS \"granted_at!\"\n           FROM account_grants WHERE account_id = ? AND user_id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "account_grants",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "account_id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "account_grants",
+            "name": "account_id"
+          }
+        }
+      },
+      {
+        "name": "user_id!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "account_grants",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "level!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "account_grants",
+            "name": "level"
+          }
+        }
+      },
+      {
+        "name": "granted_by!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "account_grants",
+            "name": "granted_by"
+          }
+        }
+      },
+      {
+        "name": "granted_at!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "account_grants",
+            "name": "granted_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "faaecb45bdbab681fd3dc7750c3c7aada691aee2ec2ff17daf9622f17d65e60d"
+}

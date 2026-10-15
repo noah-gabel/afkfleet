@@ -189,6 +189,13 @@ pub trait UserWrites: Send {
     /// [`StoreError`].
     async fn get(&mut self, id: UserId) -> Result<Option<User>, StoreError>;
 
+    /// The user with this normalized username, read in this transaction: a
+    /// grant created by name finds its grantee here (P9.6).
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn find_by_username(&mut self, username: &Username) -> Result<Option<User>, StoreError>;
+
     /// Replaces the user's password hash with `hash`, the same password
     /// re-hashed with the current parameters. `password_changed_at` stays:
     /// it isn't a password change. Whether the user exists.

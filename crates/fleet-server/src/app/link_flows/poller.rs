@@ -24,7 +24,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use fleet_core::account::RefusalReason;
-use fleet_core::id::{LinkFlowId, UserId};
+use fleet_core::id::{AccountId, LinkFlowId, UserId};
 use fleet_core::time::add;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -49,12 +49,26 @@ const SESSION_FAILED: &str = "a link flow couldn't start the Minecraft session, 
 /// What an approval that arrived for a replaced or cancelled flow logs.
 const STALE: &str = "a link flow was approved after it was replaced; nothing was stored";
 
+/// What a flow links.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Target {
+    /// A new account.
+    Link,
+    /// An existing Microsoft account, again.
+    Relink {
+        /// The account.
+        account: AccountId,
+    },
+}
+
 /// What a flow's poller needs.
 pub(super) struct Running {
     /// The flow.
     pub(super) id: LinkFlowId,
     /// Who started it, and their session.
     pub(super) by: ActingUser,
+    /// What it links.
+    pub(super) target: Target,
     /// The device code: a secret, held only here.
     pub(super) code: DeviceCode,
     /// The interval Microsoft asked for.

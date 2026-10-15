@@ -14,16 +14,22 @@
 //! its Minecraft name after a rename ([`AccountWrites::rename`]); it stores
 //! a rotated refresh token through
 //! [`EnvelopeWrites::swap`](super::envelopes::EnvelopeWrites::swap). Later
-//! groups add what the link flow and the endpoints need.
+//! groups add what the link flow and the endpoints need: group E (P9.6)
+//! adds [`ListedAccount`], an account as one viewer sees it, with the lists
+//! of what a viewer may see ([`AccountReads::list_visible`]) and review
+//! ([`AccountReads::awaiting_review`]), deleting an account and storing a
+//! link again ([`AccountWrites::relink`]).
 
 use core::fmt;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::account::{AccountKind, AccountStatus};
+use fleet_core::authz::{Actor, GrantLevel, ResourceContext, UserRef};
 use fleet_core::id::{AccountId, UserId};
-use fleet_core::value::{McUsername, McUuid};
+use fleet_core::value::{McUsername, McUuid, Username};
 
+use super::page::Page;
 use super::store::StoreError;
 
 /// A linked Minecraft account.
@@ -106,6 +112,42 @@ impl fmt::Debug for AccountCredential {
     }
 }
 
+/// An account as one viewer sees it: its facts without its refresh token,
+/// its owner with their current role and name, and the viewer's own grant
+/// on it. It's what `authorize()` needs to decide, and what the API shows.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedAccount {
+    /// Its ID.
+    pub id: AccountId,
+    /// Who owns it, with their current role.
+    pub owner: UserRef,
+    /// The owner's username.
+    pub owner_name: Username,
+    /// The Minecraft name, in the case Minecraft shows it.
+    pub name: McUsername,
+    /// The profile's UUID: a Microsoft account's only.
+    pub uuid: Option<McUuid>,
+    /// How it signs in.
+    pub kind: AccountKind,
+    /// Where it stands.
+    pub status: AccountStatus,
+    /// When it was linked.
+    pub created_at: DateTime<Utc>,
+    /// The viewer's own grant on it, if any.
+    pub grant: Option<GrantLevel>,
+}
+
+impl ListedAccount {
+    /// The facts `authorize()` decides on for the viewer.
+    #[must_use]
+    pub const fn context(&self) -> ResourceContext {
+        ResourceContext::Account {
+            owner: self.owner,
+            grant: self.grant,
+        }
+    }
+}
+
 /// Why an account couldn't be inserted.
 #[derive(Debug, thiserror::Error)]
 pub enum InsertAccountError {
@@ -141,6 +183,43 @@ pub trait AccountReads: Send + Sync + fmt::Debug {
     /// # Errors
     /// [`StoreError`].
     async fn count_offline(&self) -> Result<u64, StoreError>;
+
+    /// The account `id` as `viewer` sees it, whether or not they may see it:
+    /// the caller asks `authorize()`.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn listed(
+        &self,
+        id: AccountId,
+        viewer: UserId,
+    ) -> Result<Option<ListedAccount>, StoreError>;
+
+    /// One page of the accounts `viewer` may see, newest first: their own,
+    /// those granted to them, every Member's for an Admin, and all of them
+    /// for the Owner, by the owners' current roles (ADR-0010). The caller
+    /// still asks `authorize()` for each.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn list_visible(
+        &self,
+        viewer: Actor,
+        page: Page<AccountId>,
+    ) -> Result<Vec<ListedAccount>, StoreError>;
+
+    /// One page of the pending accounts `viewer` may approve or refuse,
+    /// newest first: those whose owner they outrank by current role, which
+    /// is the Owner over Admins and Members and an Admin over Members
+    /// (ADR-0018). The caller still asks `authorize()` for each.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn awaiting_review(
+        &self,
+        viewer: Actor,
+        page: Page<AccountId>,
+    ) -> Result<Vec<ListedAccount>, StoreError>;
 }
 
 /// Reading and writing accounts inside a [`super::store::WriteTx`].
@@ -190,6 +269,37 @@ pub trait AccountWrites: Send {
         id: AccountId,
         from: &McUsername,
         to: &McUsername,
+    ) -> Result<bool, StoreError>;
+
+    /// The account `id` as `viewer` sees it, read in this transaction.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn listed(
+        &mut self,
+        id: AccountId,
+        viewer: UserId,
+    ) -> Result<Option<ListedAccount>, StoreError>;
+
+    /// Deletes the account `id`, with its grants. Whether it existed.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn delete(&mut self, id: AccountId) -> Result<bool, StoreError>;
+
+    /// Stores a new link of the Microsoft account `id`: the envelope `to`
+    /// in place of `from`, the status `active` without a reason, and the
+    /// Minecraft name `name`, but only while it holds exactly `from` and
+    /// isn't pending. Whether a row changed.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn relink(
+        &mut self,
+        id: AccountId,
+        from: &[u8],
+        to: &[u8],
+        name: &McUsername,
     ) -> Result<bool, StoreError>;
 }
 

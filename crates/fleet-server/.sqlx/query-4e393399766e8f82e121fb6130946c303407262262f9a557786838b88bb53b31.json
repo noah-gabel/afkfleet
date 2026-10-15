@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO account_grants (account_id, user_id, level, granted_by, granted_at)\n             VALUES (?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "4e393399766e8f82e121fb6130946c303407262262f9a557786838b88bb53b31"
+}

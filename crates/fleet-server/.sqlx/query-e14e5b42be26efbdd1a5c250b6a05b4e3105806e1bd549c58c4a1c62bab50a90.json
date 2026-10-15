@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE account_grants SET level = ?, granted_by = ?, granted_at = ?\n         WHERE account_id = ? AND user_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "e14e5b42be26efbdd1a5c250b6a05b4e3105806e1bd549c58c4a1c62bab50a90"
+}

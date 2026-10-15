@@ -227,7 +227,10 @@ pub(crate) fn new_password_rule<const MAX: usize, C>(
 /// The garde rule of a username: a valid `Username`. The message names the
 /// rule, never the text, which may be a password typed into the wrong
 /// field. garde passes its context (`()`) by reference.
-fn valid_username<C>(name: &SecretText<USERNAME_MAX_CHARS>, _context: &C) -> garde::Result {
+pub(crate) fn valid_username<C>(
+    name: &SecretText<USERNAME_MAX_CHARS>,
+    _context: &C,
+) -> garde::Result {
     Username::try_from(name.expose()).map(drop).map_err(|_| {
         garde::Error::new(
             "must be 3 to 32 letters, digits, `_`, `.` or `-`, starting with a letter or digit",

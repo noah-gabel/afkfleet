@@ -1,0 +1,86 @@
+---
+source: crates/fleet-server/tests/accounts/views.rs
+expression: seen
+---
+{
+  "1 the owner": {
+    "id": "[account]",
+    "kind": "microsoft",
+    "level": "manage",
+    "linked_at": "2027-01-15T08:00:00.000Z",
+    "name": "AfkBot1",
+    "owner": {
+      "id": "[owner]",
+      "username": "user4"
+    },
+    "reason": "not_owned",
+    "status": "refused"
+  },
+  "2 a grantee with view": {
+    "id": "[account]",
+    "kind": "microsoft",
+    "level": "view",
+    "name": "AfkBot1",
+    "reason": "not_owned",
+    "status": "refused"
+  },
+  "3 a grantee with control": {
+    "id": "[account]",
+    "kind": "microsoft",
+    "level": "control",
+    "name": "AfkBot1",
+    "reason": "not_owned",
+    "status": "refused"
+  },
+  "4 a grantee with manage": {
+    "id": "[account]",
+    "kind": "microsoft",
+    "level": "manage",
+    "linked_at": "2027-01-15T08:00:00.000Z",
+    "name": "AfkBot1",
+    "owner": {
+      "id": "[owner]",
+      "username": "user4"
+    },
+    "reason": "not_owned",
+    "status": "refused"
+  },
+  "5 an admin": {
+    "id": "[account]",
+    "kind": "microsoft",
+    "level": "manage",
+    "linked_at": "2027-01-15T08:00:00.000Z",
+    "name": "AfkBot1",
+    "owner": {
+      "id": "[owner]",
+      "username": "user4"
+    },
+    "reason": "not_owned",
+    "status": "refused"
+  },
+  "6 the Owner": {
+    "id": "[account]",
+    "kind": "microsoft",
+    "level": "manage",
+    "linked_at": "2027-01-15T08:00:00.000Z",
+    "name": "AfkBot1",
+    "owner": {
+      "id": "[owner]",
+      "username": "user4"
+    },
+    "reason": "not_owned",
+    "status": "refused"
+  },
+  "7 an admin with view on another admin's": {
+    "id": "[account]",
+    "kind": "offline",
+    "level": "view",
+    "linked_at": "2027-01-15T08:00:00.000Z",
+    "name": "AfkBot2",
+    "owner": {
+      "id": "[owner]",
+      "username": "user3"
+    },
+    "status": "active"
+  }
+}

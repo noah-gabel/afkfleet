@@ -42,6 +42,11 @@ pub enum Permission {
     RelinkAccount,
     /// Delete the account and its bot (Manage).
     DeleteAccount,
+    /// Approve or refuse the account's pending link: someone above its
+    /// owner, so the Owner for Admins' and Members' links and an Admin for
+    /// Members'. The actor must see the account; a grant never counts, and
+    /// nobody reviews their own (ADR-0018).
+    ReviewLink,
 
     // Fleet-wide (`ResourceContext::Global`).
     /// Link a new Microsoft account (every role; P9.4 checks the quota).

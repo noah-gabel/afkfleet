@@ -21,6 +21,12 @@
 //! it, except the Owner's own ([`new_link_status`]). A user starts at most
 //! `[rate_limits] link_flows_per_user_per_day` link flows in any
 //! [`LINK_START_WINDOW`] ([`link_start_wait`]).
+//!
+//! # Reviewing and linking again (P9.6, ADR-0018, group E)
+//! Only a pending account is approved or refused ([`awaits_review`]); who may
+//! is `authorize()`'s `ReviewLink`. A Microsoft account that was approved
+//! comes back from `reauth_required` or `refused` by linking it again, which
+//! a pending or offline account can't be ([`relinkable`]).
 
 use core::fmt;
 use core::num::NonZeroU32;
@@ -255,6 +261,24 @@ pub const fn new_link_status(role: Role) -> AccountStatus {
     }
 }
 
+/// Whether an account in `status` waits for someone to approve or refuse
+/// its link: only a pending one. Every other status was approved before, or
+/// is the Owner's own, and comes back through linking again (ADR-0018,
+/// group E).
+#[must_use]
+pub const fn awaits_review(status: AccountStatus) -> bool {
+    matches!(status, AccountStatus::Pending)
+}
+
+/// Whether an account of `kind` in `status` may be linked again: a Microsoft
+/// account in any status but pending. An offline account has nothing to
+/// sign in, and linking a pending one again would skip its approval
+/// (ADR-0018, group E).
+#[must_use]
+pub const fn relinkable(kind: AccountKind, status: AccountStatus) -> bool {
+    matches!(kind, AccountKind::Microsoft) && !awaits_review(status)
+}
+
 /// How long a user must wait at `now` before starting another link flow,
 /// given the times of their counted `starts` and the `cap` on starts in a
 /// [`LINK_START_WINDOW`]: `None` when they may start one now.
@@ -296,6 +320,46 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    /// Every status, each refusal reason included.
+    fn every_status() -> Vec<AccountStatus> {
+        let mut statuses = vec![
+            AccountStatus::Pending,
+            AccountStatus::Active,
+            AccountStatus::ReauthRequired,
+        ];
+        statuses.extend(RefusalReason::ALL.map(AccountStatus::Refused));
+        statuses
+    }
+
+    #[test]
+    fn only_a_pending_account_awaits_review() {
+        for status in every_status() {
+            assert_eq!(
+                awaits_review(status),
+                status == AccountStatus::Pending,
+                "{status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_microsoft_account_is_relinkable_in_every_status_but_pending() {
+        for status in every_status() {
+            assert_eq!(
+                relinkable(AccountKind::Microsoft, status),
+                status != AccountStatus::Pending,
+                "{status:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_offline_account_is_never_relinkable() {
+        for status in every_status() {
+            assert!(!relinkable(AccountKind::Offline, status), "{status:?}");
+        }
+    }
 
     #[rstest]
     #[case::microsoft(AccountKind::Microsoft, "microsoft")]

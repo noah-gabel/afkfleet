@@ -70,6 +70,30 @@ fn manages(actor: &Actor, owner: UserRef) -> bool {
         || (actor.role == Role::Admin && owner.role == Role::Member)
 }
 
+/// Whether `user` has implicit Manage on an account `owner` owns: its owner
+/// (by ID), the Owner, or an Admin on a Member's account. A grant to such a
+/// user would add nothing now and outlive the implicit Manage later, so
+/// nobody gets one (ADR-0018, group E).
+#[must_use]
+pub fn implicit_manage(user: &Actor, owner: UserRef) -> bool {
+    manages(user, owner)
+}
+
+/// The level `actor` holds on an account `owner` owns, given the `grant`
+/// they hold on it: the higher of the grant and their implicit Manage, or
+/// `None` when they may not even see it. It's what [`authorize`] checks for
+/// every account permission.
+#[must_use]
+pub fn effective_level(
+    actor: &Actor,
+    owner: UserRef,
+    grant: Option<GrantLevel>,
+) -> Option<GrantLevel> {
+    manages(actor, owner)
+        .then_some(GrantLevel::Manage)
+        .max(grant)
+}
+
 fn account(
     actor: &Actor,
     permission: Permission,
@@ -77,7 +101,9 @@ fn account(
     grant: Option<GrantLevel>,
 ) -> Result<(), AuthzError> {
     let required = match permission {
-        Permission::ViewBot => GrantLevel::View,
+        // Reviewing a link needs only to see the account; the rank rule
+        // below decides.
+        Permission::ViewBot | Permission::ReviewLink => GrantLevel::View,
         Permission::ControlBot => GrantLevel::Control,
         Permission::SendChat(check) | Permission::SetBotMode(check) => {
             if check.needs_manage() {
@@ -110,14 +136,16 @@ fn account(
         | Permission::SetDisabled
         | Permission::UsePersonal => return Err(AuthzError::WrongResource),
     };
-    let implicit = manages(actor, owner).then_some(GrantLevel::Manage);
-    let Some(level) = implicit.max(grant) else {
+    let Some(level) = effective_level(actor, owner, grant) else {
         return Err(AuthzError::NotFound);
     };
     // A grant to oneself would outlive the implicit Manage it came from,
     // e.g. after a Member is promoted to Admin (ADR-0010).
     let to_self = matches!(permission, Permission::Grant { grantee, .. } if grantee == actor.id);
-    allow(level >= required && !to_self)
+    // A pending link is reviewed by someone above its linker, by the
+    // owner's current role; no grant counts (ADR-0018).
+    let reviews = !matches!(permission, Permission::ReviewLink) || manages_user(actor, owner);
+    allow(level >= required && !to_self && reviews)
 }
 
 fn global(actor: &Actor, permission: Permission) -> Result<(), AuthzError> {
@@ -147,6 +175,7 @@ fn global(actor: &Actor, permission: Permission) -> Result<(), AuthzError> {
         | Permission::Grant { .. }
         | Permission::RelinkAccount
         | Permission::DeleteAccount
+        | Permission::ReviewLink
         | Permission::RevokeInvite
         | Permission::ViewMode
         | Permission::UpdateMode { .. }
@@ -180,6 +209,7 @@ fn invite(actor: &Actor, permission: Permission, role: Role) -> Result<(), Authz
         | Permission::Grant { .. }
         | Permission::RelinkAccount
         | Permission::DeleteAccount
+        | Permission::ReviewLink
         | Permission::LinkAccount
         | Permission::CreateMode { .. }
         | Permission::ListUsers
@@ -223,6 +253,7 @@ fn mode(
         | Permission::Grant { .. }
         | Permission::RelinkAccount
         | Permission::DeleteAccount
+        | Permission::ReviewLink
         | Permission::LinkAccount
         | Permission::CreateMode { .. }
         | Permission::ListUsers
@@ -284,6 +315,7 @@ fn user(actor: &Actor, permission: Permission, target: UserRef) -> Result<(), Au
         | Permission::Grant { .. }
         | Permission::RelinkAccount
         | Permission::DeleteAccount
+        | Permission::ReviewLink
         | Permission::LinkAccount
         | Permission::CreateMode { .. }
         | Permission::ListUsers
@@ -331,6 +363,7 @@ fn personal(actor: &Actor, permission: Permission, owner: UserId) -> Result<(), 
         | Permission::Grant { .. }
         | Permission::RelinkAccount
         | Permission::DeleteAccount
+        | Permission::ReviewLink
         | Permission::LinkAccount
         | Permission::CreateMode { .. }
         | Permission::ListUsers
@@ -468,7 +501,7 @@ mod tests {
     }
 
     /// How many variants [`Permission`] has.
-    const PERMISSION_VARIANTS: usize = 25;
+    const PERMISSION_VARIANTS: usize = 26;
 
     /// The variant's index, and the kind of context it applies to.
     ///
@@ -502,6 +535,7 @@ mod tests {
             Permission::SetRole { .. } => (22, Kind::User),
             Permission::SetDisabled => (23, Kind::User),
             Permission::UsePersonal => (24, Kind::Personal),
+            Permission::ReviewLink => (25, Kind::Account),
         }
     }
 
@@ -537,6 +571,7 @@ mod tests {
             ("Grant view to oneself", grant_to(View, ME)),
             ("RelinkAccount", Permission::RelinkAccount),
             ("DeleteAccount", Permission::DeleteAccount),
+            ("ReviewLink", Permission::ReviewLink),
             ("LinkAccount", Permission::LinkAccount),
             (
                 "CreateMode private",
@@ -1083,6 +1118,150 @@ mod tests {
                 Err(Forbidden)
             );
         }
+    }
+
+    // Accounts: reviewing a pending link (ADR-0018).
+
+    #[rstest]
+    #[case::the_owner_reviews_an_admins(Role::Owner, Role::Admin, None, Ok(()))]
+    #[case::the_owner_reviews_a_members(Role::Owner, Role::Member, None, Ok(()))]
+    #[case::an_admin_reviews_a_members(Role::Admin, Role::Member, None, Ok(()))]
+    #[case::an_admin_granted_view_reviews_a_members(Role::Admin, Role::Member, Some(View), Ok(()))]
+    #[case::an_admin_doesnt_see_another_admins(Role::Admin, Role::Admin, None, Err(NotFound))]
+    #[case::an_admin_granted_manage_cant_review_another_admins(
+        Role::Admin,
+        Role::Admin,
+        Some(Manage),
+        Err(Forbidden)
+    )]
+    #[case::an_admin_granted_view_cant_review_the_owners(
+        Role::Admin,
+        Role::Owner,
+        Some(View),
+        Err(Forbidden)
+    )]
+    #[case::a_member_granted_manage_cant_review_a_members(
+        Role::Member,
+        Role::Member,
+        Some(Manage),
+        Err(Forbidden)
+    )]
+    #[case::a_member_doesnt_see_another_members(Role::Member, Role::Member, None, Err(NotFound))]
+    fn reviewing_a_link_needs_a_role_above_its_owner(
+        #[case] actor_role: Role,
+        #[case] owner: Role,
+        #[case] grant: Option<GrantLevel>,
+        #[case] expected: Result<(), AuthzError>,
+    ) {
+        let account = account(other(owner), grant);
+
+        assert_eq!(
+            authorize(&actor(actor_role), Permission::ReviewLink, &account),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::owner(Role::Owner)]
+    #[case::admin(Role::Admin)]
+    #[case::member(Role::Member)]
+    fn nobody_reviews_their_own_link(#[case] role: Role) {
+        let actor = actor(role);
+
+        assert_eq!(
+            authorize(
+                &actor,
+                Permission::ReviewLink,
+                &account(myself(&actor), None)
+            ),
+            Err(Forbidden)
+        );
+    }
+
+    #[test]
+    fn reviewing_goes_by_the_owners_role_as_loaded() {
+        let admin = actor(Role::Admin);
+        // A Member promoted while their link waited is the Owner's to review,
+        // and an Admin demoted meanwhile is the Admins' again.
+        let promoted = account(other(Role::Admin), None);
+        let demoted = account(other(Role::Member), None);
+
+        assert_eq!(
+            authorize(&admin, Permission::ReviewLink, &promoted),
+            Err(NotFound)
+        );
+        assert_eq!(authorize(&admin, Permission::ReviewLink, &demoted), Ok(()));
+    }
+
+    // Accounts: the levels the API shows.
+
+    #[test]
+    fn the_effective_level_is_what_authorize_allows() {
+        for role in ROLES {
+            let actor = actor(role);
+            for relation in relations(role) {
+                let owner = party(&actor, relation);
+                for grant in GRANTS {
+                    let level = effective_level(&actor, owner, grant);
+                    let allowed =
+                        |permission| authorize(&actor, permission, &account(owner, grant)).is_ok();
+                    let case = format!("{role:?} on {relation:?} with {grant:?}");
+
+                    assert_eq!(level.is_some(), allowed(Permission::ViewBot), "{case}");
+                    assert_eq!(
+                        level >= Some(Control),
+                        allowed(Permission::ControlBot),
+                        "{case}"
+                    );
+                    assert_eq!(
+                        level == Some(Manage),
+                        allowed(Permission::ConfigureBot),
+                        "{case}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_grant_below_implicit_manage_changes_no_level() {
+        let admin = actor(Role::Admin);
+
+        assert_eq!(
+            effective_level(&admin, other(Role::Member), Some(View)),
+            Some(Manage)
+        );
+        assert_eq!(
+            effective_level(&admin, other(Role::Admin), Some(View)),
+            Some(View)
+        );
+        assert_eq!(effective_level(&admin, other(Role::Admin), None), None);
+    }
+
+    #[rstest]
+    #[case::the_owner_over_an_admin(Role::Owner, Relation::Other(Role::Admin), true)]
+    #[case::the_owner_over_a_member(Role::Owner, Relation::Other(Role::Member), true)]
+    #[case::an_admin_over_a_member(Role::Admin, Relation::Other(Role::Member), true)]
+    #[case::an_admin_over_another_admin(Role::Admin, Relation::Other(Role::Admin), false)]
+    #[case::an_admin_over_the_owner(Role::Admin, Relation::Other(Role::Owner), false)]
+    #[case::a_member_over_another_member(Role::Member, Relation::Other(Role::Member), false)]
+    #[case::a_member_over_an_admin(Role::Member, Relation::Other(Role::Admin), false)]
+    #[case::the_owner_over_their_own(Role::Owner, Relation::Own, true)]
+    #[case::an_admin_over_their_own(Role::Admin, Relation::Own, true)]
+    #[case::a_member_over_their_own(Role::Member, Relation::Own, true)]
+    fn implicit_manage_is_ownership_the_owner_and_an_admin_over_members(
+        #[case] role: Role,
+        #[case] relation: Relation,
+        #[case] expected: bool,
+    ) {
+        let user = actor(role);
+        let owner = party(&user, relation);
+
+        assert_eq!(implicit_manage(&user, owner), expected);
+        assert_eq!(
+            effective_level(&user, owner, None) == Some(Manage),
+            expected
+        );
     }
 
     #[test]

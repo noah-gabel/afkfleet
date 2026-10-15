@@ -7,19 +7,24 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::account::AccountStatus;
 use fleet_core::audit::AuditAction;
-use fleet_core::authz::Role;
+use fleet_core::authz::{Actor, GrantLevel, Role};
 use fleet_core::id::{AccountId, InviteId, SessionId, UserId};
 use fleet_core::value::{McUsername, Username};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use super::error::store_error;
-use super::{Database, accounts, audit, envelopes, invites, login_attempts, mfa, sessions, users};
-use crate::ports::accounts::{AccountReads, AccountWrites, InsertAccountError, McAccount};
+use super::{
+    Database, accounts, audit, envelopes, grants, invites, login_attempts, mfa, sessions, users,
+};
+use crate::ports::accounts::{
+    AccountReads, AccountWrites, InsertAccountError, ListedAccount, McAccount,
+};
 use crate::ports::audit::{
     AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, FailedCodeAttempts,
     NewAuditEntry,
 };
 use crate::ports::envelopes::{EnvelopeReads, EnvelopeWrites, SealedEnvelope, SealedRecord};
+use crate::ports::grants::{AccountGrant, GrantReads, GrantWrites, InsertGrantError, ListedGrant};
 use crate::ports::invites::{
     Invite, InviteReads, InviteWrites, ListedInvite, NewInvite, RevokedInvite,
 };
@@ -129,6 +134,41 @@ impl AccountReads for Reads {
     async fn count_offline(&self) -> Result<u64, StoreError> {
         accounts::count_offline(&self.pool).await
     }
+
+    async fn listed(
+        &self,
+        id: AccountId,
+        viewer: UserId,
+    ) -> Result<Option<ListedAccount>, StoreError> {
+        accounts::listed(&self.pool, id, viewer).await
+    }
+
+    async fn list_visible(
+        &self,
+        viewer: Actor,
+        page: Page<AccountId>,
+    ) -> Result<Vec<ListedAccount>, StoreError> {
+        accounts::list_visible(&self.pool, viewer, page).await
+    }
+
+    async fn awaiting_review(
+        &self,
+        viewer: Actor,
+        page: Page<AccountId>,
+    ) -> Result<Vec<ListedAccount>, StoreError> {
+        accounts::awaiting_review(&self.pool, viewer, page).await
+    }
+}
+
+#[async_trait]
+impl GrantReads for Reads {
+    async fn list(
+        &self,
+        account: AccountId,
+        page: Page<UserId>,
+    ) -> Result<Vec<ListedGrant>, StoreError> {
+        grants::list(&self.pool, account, page).await
+    }
 }
 
 #[async_trait]
@@ -214,6 +254,10 @@ impl WriteTx for SqliteWriteTx {
     }
 
     fn accounts(&mut self) -> &mut dyn AccountWrites {
+        self
+    }
+
+    fn grants(&mut self) -> &mut dyn GrantWrites {
         self
     }
 
@@ -364,6 +408,58 @@ impl AccountWrites for SqliteWriteTx {
     ) -> Result<bool, StoreError> {
         accounts::rename(&mut self.tx, id, from, to).await
     }
+
+    async fn listed(
+        &mut self,
+        id: AccountId,
+        viewer: UserId,
+    ) -> Result<Option<ListedAccount>, StoreError> {
+        accounts::listed(&mut *self.tx, id, viewer).await
+    }
+
+    async fn delete(&mut self, id: AccountId) -> Result<bool, StoreError> {
+        accounts::delete(&mut self.tx, id).await
+    }
+
+    async fn relink(
+        &mut self,
+        id: AccountId,
+        from: &[u8],
+        to: &[u8],
+        name: &McUsername,
+    ) -> Result<bool, StoreError> {
+        accounts::relink(&mut self.tx, id, from, to, name).await
+    }
+}
+
+#[async_trait]
+impl GrantWrites for SqliteWriteTx {
+    async fn find(
+        &mut self,
+        account: AccountId,
+        user: UserId,
+    ) -> Result<Option<AccountGrant>, StoreError> {
+        grants::find(&mut self.tx, account, user).await
+    }
+
+    async fn insert(&mut self, grant: &AccountGrant) -> Result<(), InsertGrantError> {
+        grants::insert(&mut self.tx, grant).await
+    }
+
+    async fn set_level(
+        &mut self,
+        account: AccountId,
+        user: UserId,
+        level: GrantLevel,
+        by: UserId,
+        at: DateTime<Utc>,
+    ) -> Result<bool, StoreError> {
+        grants::set_level(&mut self.tx, account, user, level, by, at).await
+    }
+
+    async fn delete(&mut self, account: AccountId, user: UserId) -> Result<bool, StoreError> {
+        grants::delete(&mut self.tx, account, user).await
+    }
 }
 
 #[async_trait]
@@ -460,6 +556,10 @@ impl UserWrites for SqliteWriteTx {
         users::get_in(&mut self.tx, id).await
     }
 
+    async fn find_by_username(&mut self, username: &Username) -> Result<Option<User>, StoreError> {
+        users::find_by_username(&mut *self.tx, username).await
+    }
+
     async fn set_password_hash(
         &mut self,
         id: UserId,
@@ -534,6 +634,10 @@ impl Store for Database {
     }
 
     fn accounts(&self) -> &dyn AccountReads {
+        &self.reads
+    }
+
+    fn grants(&self) -> &dyn GrantReads {
         &self.reads
     }
 

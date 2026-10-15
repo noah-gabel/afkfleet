@@ -14,6 +14,9 @@
 //!   Member's account have implicit Manage. Admins have none on the Owner's
 //!   or other Admins' accounts. Only Manage edits grants, nobody grants
 //!   above their own level, and nobody grants to themselves.
+//!   A pending link is approved or refused by someone above its owner (the
+//!   Owner for Admins' and Members' links, an Admin for Members'), whatever
+//!   grant anyone holds ([`Permission::ReviewLink`]).
 //! - **Commands.** A `/command` that isn't on the [`CommandAllowlist`] needs
 //!   Manage, whether it's sent as chat or in a mode the bot switches to.
 //! - **Modes.** Built-in modes are read-only, even for the Owner. Shared
@@ -41,7 +44,7 @@ mod level;
 mod permission;
 
 pub use allowlist::{CommandAllowlist, CommandAllowlistError, CommandCheck};
-pub use authorize::{AuthzError, authorize};
+pub use authorize::{AuthzError, authorize, effective_level, implicit_manage};
 pub use context::{Actor, ResourceContext, UserRef};
 pub use level::{GrantLevel, LevelError, ModeVisibility, Role};
 pub use permission::Permission;

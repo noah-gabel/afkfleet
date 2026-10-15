@@ -55,6 +55,7 @@ mod convert;
 mod envelopes;
 mod error;
 mod file;
+mod grants;
 mod invites;
 mod login_attempts;
 mod mfa;

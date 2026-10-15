@@ -1,6 +1,7 @@
-//! The linked Minecraft accounts' DTOs (Plan.md P9.4, P9.7, ADR-0018):
-//! starting a Microsoft link flow, reading where it stands, and creating an
-//! offline account for development.
+//! The linked Minecraft accounts' DTOs (Plan.md P9.4, P9.6, P9.7, ADR-0018):
+//! starting a Microsoft link flow, reading where it stands, creating an
+//! offline account for development, listing and reading accounts
+//! ([`AccountResponse`]), and sharing them ([`GrantResponse`]).
 //!
 //! A flow's code is in [`LinkStartedResponse`] only, its creator's answer:
 //! the user types it at Microsoft's page, and nothing else ever shows it, so
@@ -8,19 +9,21 @@
 //! result are readable by their creator alone, for 15 minutes after they
 //! end.
 
-use fleet_core::account;
-use fleet_core::id::{AccountId, LinkFlowId};
+use fleet_core::id::{AccountId, LinkFlowId, UserId};
 use fleet_core::value::McUsername;
+use fleet_core::{account, authz};
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use utoipa::{PartialSchema as _, ToSchema};
 
+use crate::auth::{USERNAME_MAX_CHARS, valid_username};
 use crate::ids::id_schema;
 use crate::open::{Open, OpenEnum};
 use crate::secret::SecretText;
 use crate::text::BoundedText;
 use crate::time::Timestamp;
+use crate::users::UserLabel;
 
 /// The most characters of a Minecraft name: 16 (`McUsername`).
 pub const MC_NAME_MAX_CHARS: usize = 16;
@@ -312,6 +315,172 @@ fn valid_mc_name<C>(name: &SecretText<MC_NAME_MAX_CHARS>, _context: &C) -> garde
         .map_err(|_| garde::Error::new("must be 3 to 16 letters, digits or `_`"))
 }
 
+/// What a user may do with an account (Plan.md §7.3): `view` < `control` <
+/// `manage`.
+/// This union lists the values this version knows; a newer server may send
+/// others, so code that branches on it keeps a default branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum GrantLevel {
+    /// See the bot: its status, settings and chat.
+    View,
+    /// Start and stop it, and send plain chat and allowlisted commands.
+    Control,
+    /// Everything: any command, its settings, its grants, linking it again
+    /// and deleting it.
+    Manage,
+}
+
+impl OpenEnum for GrantLevel {
+    const ALL: &'static [Self] = &[Self::View, Self::Control, Self::Manage];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::View => "view",
+            Self::Control => "control",
+            Self::Manage => "manage",
+        }
+    }
+}
+
+impl From<authz::GrantLevel> for GrantLevel {
+    fn from(level: authz::GrantLevel) -> Self {
+        match level {
+            authz::GrantLevel::View => Self::View,
+            authz::GrantLevel::Control => Self::Control,
+            authz::GrantLevel::Manage => Self::Manage,
+        }
+    }
+}
+
+impl From<GrantLevel> for authz::GrantLevel {
+    fn from(level: GrantLevel) -> Self {
+        match level {
+            GrantLevel::View => Self::View,
+            GrantLevel::Control => Self::Control,
+            GrantLevel::Manage => Self::Manage,
+        }
+    }
+}
+
+/// An account as `GET /accounts`, `GET /accounts/awaiting-approval` and
+/// `GET /accounts/{id}` show it to the caller, and as approving it answers.
+/// Who owns it is shown only to Admins, the Owner and whoever holds Manage
+/// on it (ADR-0018, group E).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct AccountResponse {
+    /// The account's ID.
+    #[ts(type = "string")]
+    #[schema(schema_with = id_schema)]
+    pub id: AccountId,
+    /// The Minecraft name, in the case Minecraft shows it.
+    #[ts(type = "string")]
+    #[schema(schema_with = BoundedText::<MC_NAME_MAX_CHARS>::schema)]
+    pub name: BoundedText<MC_NAME_MAX_CHARS>,
+    /// How it signs in.
+    #[ts(as = "AccountKind")]
+    #[schema(value_type = AccountKind)]
+    pub kind: Open<AccountKind>,
+    /// Where it stands.
+    #[ts(as = "AccountStatus")]
+    #[schema(value_type = AccountStatus)]
+    pub status: Open<AccountStatus>,
+    /// `refused`: why.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<RefusalReason>", optional)]
+    #[schema(value_type = Option<RefusalReason>, nullable = false)]
+    pub reason: Option<Open<RefusalReason>>,
+    /// What the caller may do with it: their own grant, or the Manage their
+    /// role or ownership gives them, whichever is higher.
+    #[ts(as = "GrantLevel")]
+    #[schema(value_type = GrantLevel)]
+    pub level: Open<GrantLevel>,
+    /// Who linked it, and so owns it: for Admins, the Owner and Manage only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[schema(nullable = false)]
+    pub owner: Option<UserLabel>,
+    /// When it was linked: shown with `owner`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional)]
+    #[schema(schema_with = Timestamp::schema, nullable = false)]
+    pub linked_at: Option<Timestamp>,
+}
+
+/// One page of accounts, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct AccountPage {
+    /// The accounts.
+    pub items: Vec<AccountResponse>,
+    /// The `before` of the next page, when one follows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional)]
+    #[schema(schema_with = id_schema, nullable = false)]
+    pub next: Option<AccountId>,
+}
+
+/// The 422 message on `username` for every name that can't be given a
+/// grant: one answer for an unknown name, a disabled user, and someone who
+/// already has access through their role or ownership (the user's text,
+/// ADR-0018, group E).
+pub const UNGRANTABLE: &str =
+    "can't be given a grant: unknown, disabled, or already has access; check the name";
+
+/// `POST /accounts/{id}/grants`: share the account with the user named
+/// `username`. Every name that can't be granted gets the same answer, so it
+/// tells nothing about which users exist.
+#[derive(Debug, Serialize, Deserialize, Validate, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateGrantRequest {
+    /// The grantee's username, in any case.
+    #[garde(custom(valid_username))]
+    #[ts(type = "string")]
+    #[schema(schema_with = SecretText::<USERNAME_MAX_CHARS>::schema)]
+    pub username: SecretText<USERNAME_MAX_CHARS>,
+    /// What they may do with it.
+    #[garde(skip)]
+    pub level: GrantLevel,
+}
+
+/// `PUT /accounts/{id}/grants/{user}`: change the user's grant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Validate, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ChangeGrantRequest {
+    /// What they may do with it from now on.
+    #[garde(skip)]
+    pub level: GrantLevel,
+}
+
+/// A grant as `GET /accounts/{id}/grants` lists it, and as creating or
+/// changing one answers.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct GrantResponse {
+    /// Who it's for.
+    pub user: UserLabel,
+    /// What it allows.
+    #[ts(as = "GrantLevel")]
+    #[schema(value_type = GrantLevel)]
+    pub level: Open<GrantLevel>,
+    /// Who set it last.
+    pub granted_by: UserLabel,
+    /// When it was set last.
+    #[ts(type = "string")]
+    #[schema(schema_with = Timestamp::schema)]
+    pub granted_at: Timestamp,
+}
+
+/// `GET /accounts/{id}/grants`: one page of grants, newest grantee first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct GrantPage {
+    /// The grants.
+    pub items: Vec<GrantResponse>,
+    /// The `before` of the next page, when one follows: a user's ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional)]
+    #[schema(schema_with = id_schema, nullable = false)]
+    pub next: Option<UserId>,
+}
+
 /// The new offline account.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct CreatedOfflineAccountResponse {
@@ -474,6 +643,139 @@ mod tests {
 
         assert_eq!(serde_json::to_value(back).unwrap(), created);
         assert!(!format!("{request:?}").contains("Secret_Name1"));
+    }
+
+    #[test]
+    fn every_level_names_itself_as_serde_does_and_as_fleet_core_does_both_ways() {
+        for level in [
+            authz::GrantLevel::View,
+            authz::GrantLevel::Control,
+            authz::GrantLevel::Manage,
+        ] {
+            let api = GrantLevel::from(level);
+
+            assert_eq!(serde_json::to_value(api).unwrap(), json!(level.as_str()));
+            assert_eq!(api.as_str(), level.as_str());
+            assert_eq!(authz::GrantLevel::from(api), level);
+        }
+        assert_eq!(GrantLevel::ALL.len(), 3);
+    }
+
+    #[test]
+    fn an_account_and_its_page_round_trip_and_leave_out_what_isnt_there() {
+        let shown_to_its_owner = json!({
+            "id": "018bcfe5-6800-7101-8101-010101010101",
+            "name": "AfkBot1",
+            "kind": "microsoft",
+            "status": "refused",
+            "reason": "not_owned",
+            "level": "manage",
+            "owner": { "id": "018bcfe5-6800-7202-8202-020202020202", "username": "alice" },
+            "linked_at": "2027-01-15T08:00:00.000Z"
+        });
+        let shown_to_a_grantee = json!({
+            "id": "018bcfe5-6800-7101-8101-010101010101",
+            "name": "AfkBot1",
+            "kind": "offline",
+            "status": "active",
+            "level": "view"
+        });
+        let page = json!({ "items": [shown_to_a_grantee.clone()] });
+        let more = json!({
+            "items": [],
+            "next": "018bcfe5-6800-7101-8101-010101010101"
+        });
+
+        for account in [shown_to_its_owner, shown_to_a_grantee] {
+            let back: AccountResponse = serde_json::from_value(account.clone()).unwrap();
+            assert_eq!(serde_json::to_value(back).unwrap(), account);
+        }
+        for page in [page, more] {
+            let back: AccountPage = serde_json::from_value(page.clone()).unwrap();
+            assert_eq!(serde_json::to_value(back).unwrap(), page);
+        }
+    }
+
+    #[test]
+    fn a_level_a_newer_server_sends_still_reads() {
+        let read: AccountResponse = serde_json::from_value(json!({
+            "id": "018bcfe5-6800-7101-8101-010101010101",
+            "name": "AfkBot1",
+            "kind": "bedrock",
+            "status": "active",
+            "level": "admin"
+        }))
+        .unwrap();
+
+        assert_eq!(read.level.known(), None);
+        assert_eq!(read.level.as_str(), "admin");
+        assert_eq!(read.kind.as_str(), "bedrock");
+    }
+
+    #[test]
+    fn a_grant_and_its_page_round_trip() {
+        let grant = json!({
+            "user": { "id": "018bcfe5-6800-7202-8202-020202020202", "username": "bob" },
+            "level": "control",
+            "granted_by": { "id": "018bcfe5-6800-7303-8303-030303030303", "username": "alice" },
+            "granted_at": "2027-01-15T08:00:00.000Z"
+        });
+        let page = json!({
+            "items": [grant.clone()],
+            "next": "018bcfe5-6800-7202-8202-020202020202"
+        });
+
+        let back: GrantResponse = serde_json::from_value(grant.clone()).unwrap();
+        let page_back: GrantPage = serde_json::from_value(page.clone()).unwrap();
+
+        assert_eq!(serde_json::to_value(back).unwrap(), grant);
+        assert_eq!(serde_json::to_value(page_back).unwrap(), page);
+    }
+
+    #[test]
+    fn a_grant_request_takes_a_username_and_a_level_and_hides_the_name() {
+        let request: CreateGrantRequest =
+            serde_json::from_value(json!({ "username": "Secret.Friend", "level": "manage" }))
+                .unwrap();
+
+        assert_eq!(request.username.expose(), "Secret.Friend");
+        assert_eq!(request.level, GrantLevel::Manage);
+        assert!(request.validate().is_ok());
+        assert!(!format!("{request:?}").contains("Secret.Friend"));
+    }
+
+    #[test]
+    fn a_grant_request_refuses_what_isnt_a_username_without_echoing_it() {
+        for name in ["ab", "-starts-with-a-dash", "has space", "ünicode"] {
+            let request: CreateGrantRequest =
+                serde_json::from_value(json!({ "username": name, "level": "view" })).unwrap();
+
+            let report = request.validate().unwrap_err();
+
+            let text = report.to_string();
+            assert!(text.contains("username"), "{text}");
+            assert!(text.contains("must be 3 to 32 letters"), "{text}");
+            assert!(!text.contains(name), "{text}");
+        }
+    }
+
+    #[test]
+    fn the_grant_requests_refuse_unknown_missing_and_mistyped_fields() {
+        let create = |body| serde_json::from_value::<CreateGrantRequest>(body);
+        let change = |body| serde_json::from_value::<ChangeGrantRequest>(body);
+
+        assert!(create(json!({ "username": "bob", "level": "view", "x": 1 })).is_err());
+        assert!(create(json!({ "username": "bob" })).is_err());
+        assert!(create(json!({ "username": "bob", "level": "owner" })).is_err());
+        assert!(change(json!({ "level": "view", "x": 1 })).is_err());
+        assert!(change(json!({})).is_err());
+        assert!(change(json!({ "level": "Manage" })).is_err());
+        assert!(
+            change(json!({ "level": "manage" }))
+                .unwrap()
+                .validate()
+                .is_ok()
+        );
     }
 
     #[test]

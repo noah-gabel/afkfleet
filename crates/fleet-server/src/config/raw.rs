@@ -185,6 +185,8 @@ pub(crate) struct RawRateLimits {
     pub(crate) link_flows_total: u32,
     #[garde(range(min = RateLimitConfig::LINK_FLOWS_PER_USER_PER_DAY.min, max = RateLimitConfig::LINK_FLOWS_PER_USER_PER_DAY.max))]
     pub(crate) link_flows_per_user_per_day: u32,
+    #[garde(range(min = RateLimitConfig::GRANTS_BY_NAME_PER_USER_PER_HOUR.min, max = RateLimitConfig::GRANTS_BY_NAME_PER_USER_PER_HOUR.max))]
+    pub(crate) grants_by_name_per_user_per_hour: u32,
 }
 
 impl Default for RawRateLimits {
@@ -199,6 +201,7 @@ impl Default for RawRateLimits {
             per_user_burst: 30,
             link_flows_total: 3,
             link_flows_per_user_per_day: 10,
+            grants_by_name_per_user_per_hour: 10,
         }
     }
 }
@@ -553,6 +556,7 @@ mod secret_names {
             "rate_limits.per_user_burst",
             "rate_limits.link_flows_total",
             "rate_limits.link_flows_per_user_per_day",
+            "rate_limits.grants_by_name_per_user_per_hour",
             "accounts",
             "accounts.max_per_member",
             "accounts.allow_offline",

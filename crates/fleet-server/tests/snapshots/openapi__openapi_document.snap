@@ -13,6 +13,71 @@ expression: answer.json()
         ],
         "type": "string"
       },
+      "AccountPage": {
+        "description": "One page of accounts, newest first.",
+        "properties": {
+          "items": {
+            "description": "The accounts.",
+            "items": {
+              "$ref": "#/components/schemas/AccountResponse"
+            },
+            "type": "array"
+          },
+          "next": {
+            "maxLength": 36,
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "AccountResponse": {
+        "description": "An account as `GET /accounts`, `GET /accounts/awaiting-approval` and\n`GET /accounts/{id}` show it to the caller, and as approving it answers.\nWho owns it is shown only to Admins, the Owner and whoever holds Manage\non it (ADR-0018, group E).",
+        "properties": {
+          "id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AccountKind",
+            "description": "How it signs in."
+          },
+          "level": {
+            "$ref": "#/components/schemas/GrantLevel",
+            "description": "What the caller may do with it: their own grant, or the Manage their\nrole or ownership gives them, whichever is higher."
+          },
+          "linked_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 16,
+            "type": "string"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/UserLabel",
+            "description": "Who linked it, and so owns it: for Admins, the Owner and Manage only."
+          },
+          "reason": {
+            "$ref": "#/components/schemas/RefusalReason",
+            "description": "`refused`: why."
+          },
+          "status": {
+            "$ref": "#/components/schemas/AccountStatus",
+            "description": "Where it stands."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "status",
+          "level"
+        ],
+        "type": "object"
+      },
       "AccountStatus": {
         "description": "Where a linked account stands.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
         "enum": [
@@ -22,6 +87,39 @@ expression: answer.json()
           "refused"
         ],
         "type": "string"
+      },
+      "ChangeGrantRequest": {
+        "additionalProperties": false,
+        "description": "`PUT /accounts/{id}/grants/{user}`: change the user's grant.",
+        "properties": {
+          "level": {
+            "$ref": "#/components/schemas/GrantLevel",
+            "description": "What they may do with it from now on."
+          }
+        },
+        "required": [
+          "level"
+        ],
+        "type": "object"
+      },
+      "CreateGrantRequest": {
+        "additionalProperties": false,
+        "description": "`POST /accounts/{id}/grants`: share the account with the user named\n`username`. Every name that can't be granted gets the same answer, so it\ntells nothing about which users exist.",
+        "properties": {
+          "level": {
+            "$ref": "#/components/schemas/GrantLevel",
+            "description": "What they may do with it."
+          },
+          "username": {
+            "maxLength": 32,
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "level"
+        ],
+        "type": "object"
       },
       "CreateInviteRequest": {
         "additionalProperties": false,
@@ -194,6 +292,63 @@ expression: answer.json()
         "required": [
           "path",
           "message"
+        ],
+        "type": "object"
+      },
+      "GrantLevel": {
+        "description": "What a user may do with an account (Plan.md §7.3): `view` < `control` <\n`manage`.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "view",
+          "control",
+          "manage"
+        ],
+        "type": "string"
+      },
+      "GrantPage": {
+        "description": "`GET /accounts/{id}/grants`: one page of grants, newest grantee first.",
+        "properties": {
+          "items": {
+            "description": "The grants.",
+            "items": {
+              "$ref": "#/components/schemas/GrantResponse"
+            },
+            "type": "array"
+          },
+          "next": {
+            "maxLength": 36,
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "GrantResponse": {
+        "description": "A grant as `GET /accounts/{id}/grants` lists it, and as creating or\nchanging one answers.",
+        "properties": {
+          "granted_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "granted_by": {
+            "$ref": "#/components/schemas/UserLabel",
+            "description": "Who set it last."
+          },
+          "level": {
+            "$ref": "#/components/schemas/GrantLevel",
+            "description": "What it allows."
+          },
+          "user": {
+            "$ref": "#/components/schemas/UserLabel",
+            "description": "Who it's for."
+          }
+        },
+        "required": [
+          "user",
+          "level",
+          "granted_by",
+          "granted_at"
         ],
         "type": "object"
       },
@@ -857,6 +1012,224 @@ expression: answer.json()
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/v1/accounts": {
+      "get": {
+        "operationId": "list_accounts",
+        "parameters": [
+          {
+            "description": "Only items older than this ID: the `next` of the page before.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maxLength": 36,
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many items at most; 50 by default.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountPage"
+                }
+              }
+            },
+            "description": "One page of the accounts the caller may see, newest first: their own, those shared with them, every Member's for an Admin, and all of them for the Owner."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A query that doesn't parse."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A `limit` outside 1 to 100."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/accounts`: the accounts the caller may see, newest first.",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/v1/accounts/awaiting-approval": {
+      "get": {
+        "operationId": "accounts_awaiting_approval",
+        "parameters": [
+          {
+            "description": "Only items older than this ID: the `next` of the page before.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maxLength": 36,
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many items at most; 50 by default.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountPage"
+                }
+              }
+            },
+            "description": "One page of the pending links the caller may approve or refuse, newest first: Members' for an Admin, Members' and Admins' for the Owner, none for a Member."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A query that doesn't parse."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A `limit` outside 1 to 100."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/accounts/awaiting-approval`: the pending links the caller\nmay approve or refuse, newest first.",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
     "/api/v1/accounts/link": {
       "post": {
         "operationId": "start_link",
@@ -1161,6 +1534,1047 @@ expression: answer.json()
           }
         ],
         "summary": "`POST /api/v1/accounts/offline`: a new offline account, while the\nserver allows them.",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/v1/accounts/{id}": {
+      "delete": {
+        "operationId": "delete_account",
+        "parameters": [
+          {
+            "description": "The account's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The account, its refresh token and its grants are deleted."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or the caller may see the account but not delete it (Manage)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such account, or one the caller may not see."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`DELETE /api/v1/accounts/{id}`: deletes the account, with its grants.\nNeeds a step-up.",
+        "tags": [
+          "accounts"
+        ],
+        "x-step-up": true
+      },
+      "get": {
+        "operationId": "get_account",
+        "parameters": [
+          {
+            "description": "The account's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "The account, as the caller sees it."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such account, or one the caller may not see."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/accounts/{id}`: one account the caller may see.",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/v1/accounts/{id}/approve": {
+      "post": {
+        "operationId": "approve_account",
+        "parameters": [
+          {
+            "description": "The account's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            },
+            "description": "The account is active, as the caller sees it now."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or the caller may see the account but isn't above its owner (the Owner for Admins' links, an Admin for Members')."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such account, or one the caller may not see."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The account isn't pending."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/accounts/{id}/approve`: approves a pending link, which\nmakes the account usable. Needs a step-up.",
+        "tags": [
+          "accounts"
+        ],
+        "x-step-up": true
+      }
+    },
+    "/api/v1/accounts/{id}/grants": {
+      "get": {
+        "operationId": "list_grants",
+        "parameters": [
+          {
+            "description": "The account's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items older than this ID: the `next` of the page before.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maxLength": 36,
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many items at most; 50 by default.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantPage"
+                }
+              }
+            },
+            "description": "One page of the account's grants, newest grantee first."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A query that doesn't parse."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller may see the account but not its grants (Manage)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such account, or one the caller may not see."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A `limit` outside 1 to 100."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/accounts/{id}/grants`: who the account is shared with.",
+        "tags": [
+          "accounts"
+        ]
+      },
+      "post": {
+        "operationId": "create_grant",
+        "parameters": [
+          {
+            "description": "The account's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantResponse"
+                }
+              }
+            },
+            "description": "The grant."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A body that isn't the request's shape."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or the caller may see the account but not share it (Manage), or names themselves."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such account, or one the caller may not see."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The user holds a grant on the account already (change it instead), or the account is pending."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A body that isn't JSON."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A name that isn't a username, or one that can't be given a grant: the same answer for an unknown name, a disabled user and someone who has access already."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests, or too many grants by name in the last hour.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/accounts/{id}/grants`: shares the account with the user\nnamed in the body. Needs a step-up.",
+        "tags": [
+          "accounts"
+        ],
+        "x-step-up": true
+      }
+    },
+    "/api/v1/accounts/{id}/grants/{user}": {
+      "delete": {
+        "operationId": "revoke_grant",
+        "parameters": [
+          {
+            "description": "The account's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The grantee's ID.",
+            "in": "path",
+            "name": "user",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The grant is revoked."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or the caller may see the account but not its grants (Manage)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such account, one the caller may not see, or no grant of this user on it."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`DELETE /api/v1/accounts/{id}/grants/{user}`: revokes the user's grant.\nNeeds a step-up.",
+        "tags": [
+          "accounts"
+        ],
+        "x-step-up": true
+      },
+      "put": {
+        "operationId": "change_grant",
+        "parameters": [
+          {
+            "description": "The account's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "The grantee's ID.",
+            "in": "path",
+            "name": "user",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChangeGrantRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GrantResponse"
+                }
+              }
+            },
+            "description": "The grant, changed."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A body that isn't the request's shape."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or the caller may see the account but not share it (Manage), or names themselves."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such account, one the caller may not see, or no grant of this user on it."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A raise on a pending account, or for a user who has access through their role by now."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A body that isn't JSON."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`PUT /api/v1/accounts/{id}/grants/{user}`: changes the user's grant.\nNeeds a step-up.",
+        "tags": [
+          "accounts"
+        ],
+        "x-step-up": true
+      }
+    },
+    "/api/v1/accounts/{id}/refuse": {
+      "post": {
+        "operationId": "refuse_account",
+        "parameters": [
+          {
+            "description": "The account's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The link is refused: the account, its refresh token and its grants are deleted."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or the caller may see the account but isn't above its owner (the Owner for Admins' links, an Admin for Members')."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such account, or one the caller may not see."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The account isn't pending."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/accounts/{id}/refuse`: refuses a pending link, which\ndeletes the account. Needs a step-up.",
+        "tags": [
+          "accounts"
+        ],
+        "x-step-up": true
+      }
+    },
+    "/api/v1/accounts/{id}/relink": {
+      "post": {
+        "operationId": "relink_account",
+        "parameters": [
+          {
+            "description": "The account's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LinkStartedResponse"
+                }
+              }
+            },
+            "description": "The flow started: open the link and enter the code, signing in with this account's Microsoft account. Read it with `GET /accounts/link/{flow_id}`."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller may see the account but not link it again (Manage)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such account, or one the caller may not see."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The account is pending (approve or refuse it first), or an offline one."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests, the user's daily cap of link flows, or the user's flow is finishing or starting.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Every place for a link flow is taken, Microsoft didn't answer, or the server is busy.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/accounts/{id}/relink`: starts a Microsoft link flow that\nlinks the account again, and answers its code, shown this once.",
         "tags": [
           "accounts"
         ]

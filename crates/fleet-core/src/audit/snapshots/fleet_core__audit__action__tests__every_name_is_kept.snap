@@ -24,5 +24,12 @@ expression: names
   "account.rename",
   "security.account_profile_mismatch",
   "account.start_link",
-  "account.link"
+  "account.link",
+  "account.approve",
+  "account.refuse",
+  "account.delete",
+  "account.relink",
+  "grant.create",
+  "grant.set_level",
+  "grant.revoke"
 ]

@@ -254,6 +254,7 @@ async fn build(db: &Database, docs: ApiDocs, extra: impl FnOnce(Routes) -> Route
         invites,
         link_flows: idle_link_flows(db),
         accounts: idle_accounts(db),
+        grants: idle_grants(db),
     });
     let ids = RequestIds::new(Arc::new(clock()), Arc::new(SeededRandom::new(5)));
     let (app, entries) = extra(api_routes(Routes::new(&limits))).finish(state, &http(), ids, docs);
@@ -478,6 +479,32 @@ async fn the_setup_and_step_up_routes_are_registered_with_their_access_and_class
             entry(Method::PATCH, "/api/v1/users/{id}", RateClass::Standard),
             entry(Method::POST, "/api/v1/invites", RateClass::Standard),
             entry(Method::DELETE, "/api/v1/invites/{id}", RateClass::Standard),
+            entry(Method::DELETE, "/api/v1/accounts/{id}", RateClass::Standard),
+            entry(
+                Method::POST,
+                "/api/v1/accounts/{id}/approve",
+                RateClass::Standard
+            ),
+            entry(
+                Method::POST,
+                "/api/v1/accounts/{id}/refuse",
+                RateClass::Standard
+            ),
+            entry(
+                Method::POST,
+                "/api/v1/accounts/{id}/grants",
+                RateClass::Standard
+            ),
+            entry(
+                Method::PUT,
+                "/api/v1/accounts/{id}/grants/{user}",
+                RateClass::Standard
+            ),
+            entry(
+                Method::DELETE,
+                "/api/v1/accounts/{id}/grants/{user}",
+                RateClass::Standard
+            ),
         ])
     );
     db.close().await;
@@ -515,6 +542,23 @@ async fn the_authed_routes_are_registered_with_their_class(
             entry(
                 Method::POST,
                 "/api/v1/accounts/offline",
+                RateClass::Standard
+            ),
+            entry(Method::GET, "/api/v1/accounts", RateClass::Standard),
+            entry(
+                Method::GET,
+                "/api/v1/accounts/awaiting-approval",
+                RateClass::Standard
+            ),
+            entry(Method::GET, "/api/v1/accounts/{id}", RateClass::Standard),
+            entry(
+                Method::POST,
+                "/api/v1/accounts/{id}/relink",
+                RateClass::Standard
+            ),
+            entry(
+                Method::GET,
+                "/api/v1/accounts/{id}/grants",
                 RateClass::Standard
             ),
         ])
@@ -881,6 +925,18 @@ fn idle_link_flows(
             per_user_per_day: core::num::NonZeroU32::MIN,
             max_per_member: core::num::NonZeroU32::MIN,
         },
+    )
+}
+
+/// The grants, which these tests never write.
+fn idle_grants(
+    db: &fleet_server::infra::sqlite::Database,
+) -> fleet_server::app::grants::GrantService {
+    fleet_server::app::grants::GrantService::new(
+        Arc::new(fleet_testkit::system::ManualClock::new(
+            chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+        )),
+        Arc::new(db.clone()),
     )
 }
 

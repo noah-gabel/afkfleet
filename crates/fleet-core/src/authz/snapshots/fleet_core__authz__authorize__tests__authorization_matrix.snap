@@ -204,6 +204,20 @@ Member  another Member  404       403   403      ok
 Member  an Admin        404       403   403      ok
 Member  the Owner       404       403   403      ok
 
+### ReviewLink
+actor   owner           no grant  view  control  manage
+Owner   self            403       403   403      403
+Owner   a Member        ok        ok    ok       ok
+Owner   an Admin        ok        ok    ok       ok
+Admin   self            403       403   403      403
+Admin   a Member        ok        ok    ok       ok
+Admin   another Admin   404       403   403      403
+Admin   the Owner       404       403   403      403
+Member  self            403       403   403      403
+Member  another Member  404       403   403      403
+Member  an Admin        404       403   403      403
+Member  the Owner       404       403   403      403
+
 ## Fleet-wide
 Columns: the actor's role.
 

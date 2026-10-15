@@ -76,6 +76,10 @@ pub struct RateLimitConfig {
     /// The Microsoft link flows (`link_flows_total`,
     /// `link_flows_per_user_per_day`).
     pub link_flows: LinkFlowLimits,
+    /// Grants created by a username, per user
+    /// (`grants_by_name_per_user_per_hour`): each one tries a name, so this
+    /// bounds how many names one user can probe (ADR-0018, group E).
+    pub grants_by_name: Rate,
 }
 
 /// `[rate_limits]`'s caps on Microsoft link flows (P9.4, ADR-0018). Each
@@ -126,10 +130,13 @@ impl RateLimitConfig {
     pub const LINK_FLOWS_TOTAL: Bounds = Bounds { min: 1, max: 16 };
     /// `link_flows_per_user_per_day`: 1 to 100. Default 10.
     pub const LINK_FLOWS_PER_USER_PER_DAY: Bounds = Bounds { min: 1, max: 100 };
+    /// `grants_by_name_per_user_per_hour`: 1 to 100. Default 10.
+    pub const GRANTS_BY_NAME_PER_USER_PER_HOUR: Bounds = Bounds { min: 1, max: 100 };
 }
 
 impl Default for RateLimitConfig {
-    /// §7.4's and Appendix A's values.
+    /// §7.4's and Appendix A's values, and group E's limit on grants by
+    /// name (ADR-0018).
     fn default() -> Self {
         Self {
             per_ip: Rate::per_second(nonzero(20), nonzero(40)),
@@ -138,6 +145,7 @@ impl Default for RateLimitConfig {
             register: Rate::per_hour(nonzero(5)),
             per_user: Rate::per_second(nonzero(10), nonzero(30)),
             link_flows: LinkFlowLimits::default(),
+            grants_by_name: Rate::per_hour(nonzero(10)),
         }
     }
 }
@@ -187,6 +195,7 @@ mod tests {
         );
         assert_eq!(defaults.link_flows.total.get(), 3);
         assert_eq!(defaults.link_flows.per_user_per_day.get(), 10);
+        assert_eq!(defaults.grants_by_name, Rate::per_hour(nonzero(10)));
     }
 
     #[test]
