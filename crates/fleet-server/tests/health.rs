@@ -211,6 +211,7 @@ async fn app(db: &Database) -> Router {
         invites,
         link_flows: idle_link_flows(db),
         accounts: idle_accounts(db),
+        grants: idle_grants(db),
     });
     router(state, &http, ids, ApiDocs::Hidden)
         .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))))
@@ -491,6 +492,18 @@ fn idle_link_flows(
             per_user_per_day: core::num::NonZeroU32::MIN,
             max_per_member: core::num::NonZeroU32::MIN,
         },
+    )
+}
+
+/// The grants, which these tests never write.
+fn idle_grants(
+    db: &fleet_server::infra::sqlite::Database,
+) -> fleet_server::app::grants::GrantService {
+    fleet_server::app::grants::GrantService::new(
+        Arc::new(fleet_testkit::system::ManualClock::new(
+            chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+        )),
+        Arc::new(db.clone()),
     )
 }
 

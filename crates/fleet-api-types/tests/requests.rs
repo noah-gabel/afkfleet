@@ -6,7 +6,9 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
-use fleet_api_types::accounts::CreateOfflineAccountRequest;
+use fleet_api_types::accounts::{
+    ChangeGrantRequest, CreateGrantRequest, CreateOfflineAccountRequest,
+};
 use fleet_api_types::auth::{
     LoginMfaRequest, LoginRequest, RefreshRequest, RegisterRequest, StepUpRequest,
 };
@@ -51,6 +53,8 @@ fn every_request_serializes_to_the_json_the_server_reads() {
     round_trip::<UserPatchRequest>(&json!({ "role": "admin" }));
     round_trip::<UserPatchRequest>(&json!({ "disabled": true }));
     round_trip::<CreateOfflineAccountRequest>(&json!({ "name": "AfkBot1" }));
+    round_trip::<CreateGrantRequest>(&json!({ "username": "alice", "level": "control" }));
+    round_trip::<ChangeGrantRequest>(&json!({ "level": "view" }));
 }
 
 #[test]

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE mc_accounts\n         SET refresh_envelope = ?, status = 'active', status_reason = NULL, mc_name = ?\n         WHERE id = ? AND kind = 'microsoft' AND refresh_envelope = ? AND status <> 'pending'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "8f9d64bda1cec165fe7f41f483f7377d91096f57524fedcd096db35ff9dd76c0"
+}

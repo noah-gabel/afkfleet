@@ -26,8 +26,9 @@ use std::path::{Path, PathBuf};
 use ts_rs::{Config, ExportError, TS};
 
 use crate::accounts::{
-    CreateOfflineAccountRequest, CreatedOfflineAccountResponse, LinkFlowResponse,
-    LinkStartedResponse,
+    AccountPage, AccountResponse, ChangeGrantRequest, CreateGrantRequest,
+    CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
+    LinkFlowResponse, LinkStartedResponse,
 };
 use crate::app::{
     LoginStepResponse, LogoutResponse, ServerProfileRequest, ServerProfileResponse,
@@ -187,7 +188,13 @@ fn write_api(config: &Config) -> Result<(), TypeScriptError> {
     LinkStartedResponse::export_all(config).map_err(TypeScriptError::Export)?;
     LinkFlowResponse::export_all(config).map_err(TypeScriptError::Export)?;
     CreateOfflineAccountRequest::export_all(config).map_err(TypeScriptError::Export)?;
-    CreatedOfflineAccountResponse::export_all(config).map_err(TypeScriptError::Export)
+    CreatedOfflineAccountResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    AccountPage::export_all(config).map_err(TypeScriptError::Export)?;
+    AccountResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    CreateGrantRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    ChangeGrantRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    GrantResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    GrantPage::export_all(config).map_err(TypeScriptError::Export)
 }
 
 /// Writes the app's root IPC types, and every type they use.

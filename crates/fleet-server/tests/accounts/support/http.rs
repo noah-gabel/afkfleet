@@ -19,9 +19,11 @@ use axum::Router;
 use axum::body::{Body, to_bytes};
 use axum::extract::connect_info::MockConnectInfo;
 use axum::http::{Method, Request};
+use fleet_core::account::AccountStatus;
+use fleet_core::audit::{AuditAction, RecordedValue};
 use fleet_core::auth::SessionPolicy;
-use fleet_core::authz::{Actor, Role};
-use fleet_core::id::{SessionId, UserId};
+use fleet_core::authz::{Actor, GrantLevel, Role};
+use fleet_core::id::{AccountId, SessionId, UserId};
 use fleet_core::system::{Clock, SecureRandom};
 use fleet_core::value::Username;
 use fleet_server::app::auth::TokenService;
@@ -37,6 +39,9 @@ use fleet_server::infra::crypto::passwords::Argon2Passwords;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::crypto::vault::{DerivedKey, VaultKeys};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
+use fleet_server::ports::accounts::{AccountCredential, McAccount};
+use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord};
+use fleet_server::ports::grants::AccountGrant;
 use fleet_server::ports::store::Store as _;
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use fleet_testkit::system::{ManualClock, SeededRandom};
@@ -48,7 +53,7 @@ use tower::ServiceExt as _;
 use super::link::IP;
 use super::msauth::FakeMicrosoftAuth;
 use super::pace::FakePace;
-use super::service::{T0, at, setup_entry};
+use super::service::{T0, at, profile, setup_entry};
 
 /// A valid Argon2id PHC string (not a real hash).
 const PHC: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g";
@@ -288,6 +293,130 @@ impl Server {
         )
         .await
     }
+
+    /// `method /api/v1{path}` as `by`, with `body`.
+    pub(crate) async fn api(
+        &self,
+        method: Method,
+        path: &str,
+        by: &Person,
+        body: Option<Value>,
+    ) -> Seen {
+        self.request(method, &format!("/api/v1{path}"), Some(&by.access), body)
+            .await
+    }
+
+    /// Adds account `n` of `owner` directly: a Microsoft one in `status`
+    /// for `profile(n)`, its envelope all `n`, or an offline one for `None`.
+    pub(crate) async fn add_account(
+        &self,
+        owner: UserId,
+        n: u8,
+        status: Option<AccountStatus>,
+    ) -> AccountId {
+        let id = AccountId::new_v7(at(T0 + i64::from(n)), [n; 10]).unwrap();
+        let credential = status.map_or(AccountCredential::Offline, |status| {
+            AccountCredential::Microsoft {
+                uuid: profile(n).parse().unwrap(),
+                refresh_envelope: vec![n; 61],
+                status,
+            }
+        });
+        let mut tx = self.db.write().await.unwrap();
+        tx.accounts()
+            .insert(&McAccount {
+                id,
+                owner,
+                name: format!("AfkBot{n}").parse().unwrap(),
+                created_at: at(T0),
+                credential,
+            })
+            .await
+            .unwrap();
+        tx.commit(setup_entry()).await.unwrap();
+        id
+    }
+
+    /// Gives `user` `level` on `account` directly, as set by `by`.
+    pub(crate) async fn add_grant(
+        &self,
+        account: AccountId,
+        user: UserId,
+        level: GrantLevel,
+        by: UserId,
+    ) {
+        let mut tx = self.db.write().await.unwrap();
+        tx.grants()
+            .insert(&AccountGrant {
+                account,
+                user,
+                level,
+                granted_by: by,
+                granted_at: at(T0),
+            })
+            .await
+            .unwrap();
+        tx.commit(setup_entry()).await.unwrap();
+    }
+
+    /// The account `id` as stored, if it is.
+    pub(crate) async fn stored(&self, id: AccountId) -> Option<McAccount> {
+        self.db.accounts().find(id).await.unwrap()
+    }
+
+    /// `user`'s grant on `account` as stored, if any.
+    pub(crate) async fn grant_of(&self, account: AccountId, user: UserId) -> Option<AccountGrant> {
+        let mut tx = self.db.write().await.unwrap();
+        tx.grants().find(account, user).await.unwrap()
+    }
+
+    /// Sets `id`'s role directly.
+    pub(crate) async fn set_role(&self, id: UserId, role: Role) {
+        let mut tx = self.db.write().await.unwrap();
+        assert!(tx.users().set_role(id, role).await.unwrap());
+        tx.commit(setup_entry()).await.unwrap();
+    }
+
+    /// Disables or enables `id` directly.
+    pub(crate) async fn set_disabled(&self, id: UserId, disabled: bool) {
+        let mut tx = self.db.write().await.unwrap();
+        assert!(tx.users().set_disabled(id, disabled).await.unwrap());
+        tx.commit(setup_entry()).await.unwrap();
+    }
+
+    /// Every audit entry with `action`, oldest first.
+    pub(crate) async fn entries(&self, action: &AuditAction) -> Vec<AuditRecord> {
+        let page = AuditPage {
+            before: None,
+            limit: AuditLimit::new(100).unwrap(),
+        };
+        let mut entries: Vec<AuditRecord> = self
+            .db
+            .audit()
+            .list(page)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|entry| &entry.action == action)
+            .collect();
+        entries.reverse();
+        entries
+    }
+}
+
+/// `entry`'s metadata value for `key`, if it has one.
+pub(crate) fn meta(entry: &AuditRecord, key: &str) -> Option<RecordedValue> {
+    entry
+        .metadata
+        .entries()
+        .iter()
+        .find(|(name, _)| name == key)
+        .map(|(_, value)| value.clone())
+}
+
+/// A text metadata value.
+pub(crate) fn text(value: &str) -> RecordedValue {
+    RecordedValue::Text(value.to_owned())
 }
 
 /// The app over the fakes and a manual clock, for the route tests.
@@ -356,5 +485,25 @@ impl HttpSetup {
     /// `POST /api/v1/accounts/link` as `by`.
     pub(crate) async fn start(&self, by: &Person) -> Seen {
         self.server.start_link(by).await
+    }
+
+    /// Stamps `by`'s session as stepped up now, as `POST /auth/step-up`
+    /// does.
+    pub(crate) async fn step_up(&self, by: &Person) {
+        let mut tx = self.db.write().await.unwrap();
+        assert!(
+            tx.sessions()
+                .stamp_step_up(by.session, self.clock.now())
+                .await
+                .unwrap()
+        );
+        tx.commit(setup_entry()).await.unwrap();
+    }
+
+    /// `user<n>` with `role`, a live session and a fresh step-up.
+    pub(crate) async fn stepped_up(&self, n: u8, role: Role) -> Person {
+        let person = self.person(n, role).await;
+        self.step_up(&person).await;
+        person
     }
 }

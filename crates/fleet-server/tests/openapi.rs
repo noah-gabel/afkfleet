@@ -186,6 +186,7 @@ async fn app(db: &Database, docs: ApiDocs) -> Router {
         invites,
         link_flows: idle_link_flows(db),
         accounts: idle_accounts(db),
+        grants: idle_grants(db),
     });
     router(state, &http, ids, docs)
         .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))))
@@ -367,9 +368,20 @@ async fn the_document_lists_exactly_the_api_routes(
     assert_eq!(
         paths,
         BTreeSet::from([
+            ("/api/v1/accounts", "get"),
+            ("/api/v1/accounts/awaiting-approval", "get"),
             ("/api/v1/accounts/link", "post"),
             ("/api/v1/accounts/link/{flow_id}", "get"),
             ("/api/v1/accounts/offline", "post"),
+            ("/api/v1/accounts/{id}", "delete"),
+            ("/api/v1/accounts/{id}", "get"),
+            ("/api/v1/accounts/{id}/approve", "post"),
+            ("/api/v1/accounts/{id}/grants", "get"),
+            ("/api/v1/accounts/{id}/grants", "post"),
+            ("/api/v1/accounts/{id}/grants/{user}", "delete"),
+            ("/api/v1/accounts/{id}/grants/{user}", "put"),
+            ("/api/v1/accounts/{id}/refuse", "post"),
+            ("/api/v1/accounts/{id}/relink", "post"),
             ("/api/v1/auth/login", "post"),
             ("/api/v1/auth/login/mfa", "post"),
             ("/api/v1/auth/logout", "post"),
@@ -481,6 +493,18 @@ fn idle_link_flows(
             per_user_per_day: core::num::NonZeroU32::MIN,
             max_per_member: core::num::NonZeroU32::MIN,
         },
+    )
+}
+
+/// The grants, which these tests never write.
+fn idle_grants(
+    db: &fleet_server::infra::sqlite::Database,
+) -> fleet_server::app::grants::GrantService {
+    fleet_server::app::grants::GrantService::new(
+        Arc::new(fleet_testkit::system::ManualClock::new(
+            chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+        )),
+        Arc::new(db.clone()),
     )
 }
 

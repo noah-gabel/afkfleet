@@ -17,9 +17,10 @@ use std::fmt::Write as _;
 use std::fs;
 
 use fleet_api_types::accounts::{
-    AccountKind, AccountStatus, CreateOfflineAccountRequest, CreatedOfflineAccountResponse,
-    LinkFlowResponse, LinkFlowState, LinkStartedResponse, MC_NAME_MAX_CHARS, RefusalReason,
-    USER_CODE_MAX_CHARS, VERIFICATION_URI_MAX_CHARS,
+    AccountKind, AccountPage, AccountResponse, AccountStatus, ChangeGrantRequest,
+    CreateGrantRequest, CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantLevel,
+    GrantPage, GrantResponse, LinkFlowResponse, LinkFlowState, LinkStartedResponse,
+    MC_NAME_MAX_CHARS, RefusalReason, USER_CODE_MAX_CHARS, VERIFICATION_URI_MAX_CHARS,
 };
 use fleet_api_types::auth::{
     ACCESS_TOKEN_MAX_SECS, LoginMfaRequest, LoginRequest, LoginResponse, LoginStatus,
@@ -62,7 +63,14 @@ fn declarations() -> BTreeMap<String, String> {
     let config = Config::new();
     [
         ("AccountKind", AccountKind::decl(&config)),
+        ("AccountPage", AccountPage::decl(&config)),
+        ("AccountResponse", AccountResponse::decl(&config)),
         ("AccountStatus", AccountStatus::decl(&config)),
+        ("ChangeGrantRequest", ChangeGrantRequest::decl(&config)),
+        ("CreateGrantRequest", CreateGrantRequest::decl(&config)),
+        ("GrantLevel", GrantLevel::decl(&config)),
+        ("GrantPage", GrantPage::decl(&config)),
+        ("GrantResponse", GrantResponse::decl(&config)),
         (
             "CreateOfflineAccountRequest",
             CreateOfflineAccountRequest::decl(&config),
@@ -382,6 +390,13 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::offline_request_name("CreateOfflineAccountRequest", "name", MC_NAME_MAX_CHARS)]
 #[case::offline_id("CreatedOfflineAccountResponse", "id", ID_CHARS)]
 #[case::offline_name("CreatedOfflineAccountResponse", "name", MC_NAME_MAX_CHARS)]
+#[case::account_id("AccountResponse", "id", ID_CHARS)]
+#[case::account_name("AccountResponse", "name", MC_NAME_MAX_CHARS)]
+#[case::account_linked_at("AccountResponse", "linked_at", TIMESTAMP_CHARS)]
+#[case::account_page_next("AccountPage", "next", ID_CHARS)]
+#[case::grant_username("CreateGrantRequest", "username", USERNAME_MAX_CHARS)]
+#[case::granted_at("GrantResponse", "granted_at", TIMESTAMP_CHARS)]
+#[case::grant_page_next("GrantPage", "next", ID_CHARS)]
 fn a_text_field_is_capped_at_its_constant(
     #[case] component: &str,
     #[case] field: &str,
@@ -458,6 +473,13 @@ fn every_text_field_has_its_cap_checked() {
         ("CreateOfflineAccountRequest", "name"),
         ("CreatedOfflineAccountResponse", "id"),
         ("CreatedOfflineAccountResponse", "name"),
+        ("AccountResponse", "id"),
+        ("AccountResponse", "name"),
+        ("AccountResponse", "linked_at"),
+        ("AccountPage", "next"),
+        ("CreateGrantRequest", "username"),
+        ("GrantResponse", "granted_at"),
+        ("GrantPage", "next"),
     ]);
     let components = components_json();
 
@@ -482,6 +504,8 @@ fn every_text_field_has_its_cap_checked() {
 #[test]
 fn a_request_schema_refuses_unknown_fields_and_responses_dont() {
     let requests = BTreeSet::from([
+        "ChangeGrantRequest",
+        "CreateGrantRequest",
         "CreateInviteRequest",
         "CreateOfflineAccountRequest",
         "LoginMfaRequest",
@@ -583,6 +607,11 @@ fn an_open_field_lists_exactly_its_enums_known_values() {
 #[case::link_account_id("LinkFlowResponse", "account_id")]
 #[case::link_account_status("LinkFlowResponse", "account_status")]
 #[case::link_name("LinkFlowResponse", "name")]
+#[case::account_reason("AccountResponse", "reason")]
+#[case::account_owner("AccountResponse", "owner")]
+#[case::account_linked_at("AccountResponse", "linked_at")]
+#[case::account_page_next("AccountPage", "next")]
+#[case::grant_page_next("GrantPage", "next")]
 fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[case] field: &str) {
     let components = components_json();
     let schema = property(&components, component, field);
@@ -615,6 +644,11 @@ fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[ca
 #[case::link_account_status("LinkFlowResponse", "account_status", "AccountStatus")]
 #[case::offline_kind("CreatedOfflineAccountResponse", "kind", "AccountKind")]
 #[case::offline_status("CreatedOfflineAccountResponse", "status", "AccountStatus")]
+#[case::account_kind("AccountResponse", "kind", "AccountKind")]
+#[case::account_status("AccountResponse", "status", "AccountStatus")]
+#[case::account_reason("AccountResponse", "reason", "RefusalReason")]
+#[case::account_level("AccountResponse", "level", "GrantLevel")]
+#[case::grant_level("GrantResponse", "level", "GrantLevel")]
 fn the_new_open_fields_list_exactly_their_known_values(
     #[case] component: &str,
     #[case] field: &str,
@@ -636,6 +670,7 @@ fn the_new_open_fields_list_exactly_their_known_values(
             .map(|status| status.as_str())
             .collect(),
         "AccountKind" => AccountKind::ALL.iter().map(|kind| kind.as_str()).collect(),
+        "GrantLevel" => GrantLevel::ALL.iter().map(|level| level.as_str()).collect(),
         _ => InviteState::ALL
             .iter()
             .map(|state| state.as_str())

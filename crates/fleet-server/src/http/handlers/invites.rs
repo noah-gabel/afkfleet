@@ -20,26 +20,17 @@ use axum::http::StatusCode;
 use fleet_api_types::invites::{
     CreateInviteRequest, CreatedInviteResponse, InvitePage, InviteResponse,
 };
-use fleet_api_types::users::{UserLabel, UserRole};
+use fleet_api_types::users::UserRole;
 use fleet_api_types::{ErrorResponse, PageQuery};
 use fleet_core::authz::{Permission, ResourceContext, Role};
-use fleet_core::id::{InviteId, UserId};
-use fleet_core::value::Username;
+use fleet_core::id::InviteId;
 
-use super::{acting, page, secret_text, timestamp, username};
+use super::{acting, label, page, secret_text, timestamp};
 use crate::app::invites::{CreateInviteError, InviteView, RevokeInviteError};
 use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath, ValidQuery};
 use crate::http::rate_limit::ClientIp;
 use crate::http::router::AppState;
-
-/// A user named next to an invite.
-fn label(id: UserId, name: &Username) -> UserLabel {
-    UserLabel {
-        id,
-        username: username(name),
-    }
-}
 
 /// An invite as the API shows it.
 fn invite_response(view: &InviteView) -> Result<InviteResponse, ApiError> {

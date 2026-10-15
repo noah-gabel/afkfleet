@@ -246,7 +246,7 @@ async fn when_off_it_is_404_like_an_unknown_route_whatever_the_body(
     let unknown = setup
         .request(
             Method::POST,
-            "/api/v1/accounts/nothing-here",
+            "/api/v1/nothing-here",
             Some(&alice.access),
             None,
         )

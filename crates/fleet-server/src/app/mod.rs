@@ -3,13 +3,15 @@
 //! time and randomness only through fleet-core's `Clock` and `SecureRandom`.
 //!
 //! - [`accounts`]: the linked Minecraft accounts' use cases beside the link
-//!   flow: creating an offline account (P9.7).
+//!   flow: creating an offline account (P9.7), listing and reading
+//!   accounts, reviewing pending links and deleting accounts (P9.6).
 //! - [`audit`]: stamping audit entries, recording the ones that change
 //!   nothing, and listing the log.
 //! - [`auth`]: sessions and their tokens: issuing, refreshing with reuse
 //!   detection (P7.3), and from P7.8 authenticating every request.
 //! - [`challenges`]: the login's mfa and setup tokens, held in memory
 //!   (P7.6, P7.7).
+//! - [`grants`]: sharing a linked account with other users (P9.6).
 //! - [`health`]: whether the server is ready to serve requests.
 //! - [`login`]: logging in (the password step and the code step) and
 //!   stepping up (P7.6).
@@ -32,6 +34,7 @@ pub mod accounts;
 pub mod audit;
 pub mod auth;
 pub mod challenges;
+pub mod grants;
 pub mod health;
 pub mod invites;
 pub mod link_flows;

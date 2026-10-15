@@ -13,16 +13,29 @@
 //!    nobody in the answer);
 //! 4. commits with `account.link`.
 //!
+//! Linking an account again (P9.6) seals the token for the account's own ID
+//! and commits differently: it reads the creator and their session, then
+//! the account, its owner's role and the creator's grant, and asks
+//! `authorize()` again (a gone account, a lost grant or a pending account
+//! stores nothing, and the flow fails); a profile with another UUID than
+//! the account's ends the flow `refused`/`profile_mismatch` with an
+//! `account.relink` Failure; otherwise the new envelope replaces exactly
+//! the one read, the account is `active` again, with the profile's current
+//! name, and `account.relink` is recorded.
+//!
 //! A busy database is retried with the finishing phase's backoff; any other
 //! failure ends the flow `failed` with one `error` line.
 
-use fleet_core::account::{AccountKind, AccountStatus, new_link_status, over_quota};
+use fleet_core::account::{
+    AccountKind, AccountStatus, RefusalReason, new_link_status, over_quota, relinkable,
+};
 use fleet_core::audit::{AuditAction, AuditError, AuditMetadata, AuditOutcome, AuditTarget};
+use fleet_core::authz::{Permission, authorize};
 use fleet_core::id::AccountId;
 use fleet_core::system::mint;
 use tracing::{error, info, warn};
 
-use super::poller::{Retries, Running, pause};
+use super::poller::{Retries, Running, Target, pause};
 use super::{Inner, LinkFlowStatus};
 use crate::app::users::recheck;
 use crate::ports::accounts::{AccountCredential, InsertAccountError, McAccount};
@@ -37,6 +50,8 @@ const FAILED: &str = "a link flow couldn't store the account, and the flow ended
 const BUSY: &str = "the database was busy storing a link flow's account; the flow tries again";
 /// What a commit for a gone session or creator logs.
 const GONE: &str = "a link flow's session or creator is gone; nothing was stored";
+/// What linking an account again logs when it may not any more.
+const NOT_RELINKABLE: &str = "a link flow's account is gone, pending, or no longer the creator's to link again; nothing was stored";
 
 /// The entries one commit may record.
 struct Entries {
@@ -56,7 +71,11 @@ pub(super) async fn store(
     retries: &mut Retries,
 ) -> Option<LinkFlowStatus> {
     let now = inner.ports.clock.now();
-    let id: AccountId = match mint(now, inner.ports.random.as_ref()) {
+    let minted = match running.target {
+        Target::Link => mint(now, inner.ports.random.as_ref()),
+        Target::Relink { account } => Ok(account),
+    };
+    let id: AccountId = match minted {
         Ok(id) => id,
         Err(failure) => {
             error!(flow_id = %running.id, error = %failure, "{FAILED}");
@@ -80,7 +99,11 @@ pub(super) async fn store(
         if running.cancel.is_cancelled() {
             return None;
         }
-        match commit(inner, running, id, &sealed, &session).await {
+        let committed = match running.target {
+            Target::Link => commit(inner, running, id, &sealed, &session).await,
+            Target::Relink { .. } => relink(inner, running, id, &sealed, &session).await,
+        };
+        match committed {
             Ok(status) => return Some(status),
             Err(Failed::Store(StoreError::Busy)) => {
                 let Some(delay) = retries.next(inner.ports.clock.now()) else {
@@ -162,6 +185,81 @@ async fn commit(
     Ok(LinkFlowStatus::Linked {
         account: id,
         status,
+        name: session.name.clone(),
+    })
+}
+
+/// One transaction of a link again; see the [module docs](self).
+async fn relink(
+    inner: &Inner,
+    running: &Running,
+    id: AccountId,
+    sealed: &[u8],
+    session: &MinecraftSession,
+) -> Result<LinkFlowStatus, Failed> {
+    let creator = running.by.actor.id;
+    let entry = |outcome| {
+        inner
+            .audit
+            .entry(AuditAction::ACCOUNT_RELINK, outcome)
+            .actor(creator)
+            .ip(running.by.ip)
+            .target(AuditTarget::Account(id))
+    };
+    let mismatch = entry(AuditOutcome::Failure).metadata(
+        AuditMetadata::new()
+            .text("reason", RefusalReason::ProfileMismatch.as_str())?
+            .id("flow", running.id)?,
+    );
+    let mut tx = inner.ports.store.write().await?;
+    let Some(acting) = recheck(tx.as_mut(), &running.by).await? else {
+        info!(user_id = %creator, flow_id = %running.id, "{GONE}");
+        return Ok(LinkFlowStatus::Failed);
+    };
+    // The account as the creator may link it again now, then the envelope
+    // the new one replaces.
+    let listed = tx.accounts().listed(id, creator).await?.filter(|listed| {
+        authorize(&acting.actor, Permission::RelinkAccount, &listed.context()).is_ok()
+            && relinkable(listed.kind, listed.status)
+    });
+    let stored = match listed {
+        Some(_) => tx.accounts().find(id).await?,
+        None => None,
+    };
+    let (
+        Some(listed),
+        Some(AccountCredential::Microsoft {
+            refresh_envelope, ..
+        }),
+    ) = (listed, stored.map(|account| account.credential))
+    else {
+        info!(user_id = %creator, flow_id = %running.id, account_id = %id, "{NOT_RELINKABLE}");
+        return Ok(LinkFlowStatus::Failed);
+    };
+    if listed.uuid != Some(session.uuid) {
+        tx.commit(mismatch).await?;
+        return Ok(LinkFlowStatus::Refused(RefusalReason::ProfileMismatch));
+    }
+    if !tx
+        .accounts()
+        .relink(id, &refresh_envelope, sealed, &session.name)
+        .await?
+    {
+        info!(user_id = %creator, flow_id = %running.id, account_id = %id, "{NOT_RELINKABLE}");
+        return Ok(LinkFlowStatus::Failed);
+    }
+    let mut metadata = AuditMetadata::new()
+        .id("flow", running.id)?
+        .text("previous_status", listed.status.as_str())?
+        .text("name", session.name.as_str())?;
+    if listed.name != session.name {
+        metadata = metadata.text("previous_name", listed.name.as_str())?;
+    }
+    tx.commit(entry(AuditOutcome::Success).metadata(metadata))
+        .await?;
+    Ok(LinkFlowStatus::Linked {
+        account: id,
+        status: AccountStatus::Active,
         name: session.name.clone(),
     })
 }

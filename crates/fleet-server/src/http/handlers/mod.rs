@@ -3,8 +3,13 @@
 //! logic and no SQL.
 //!
 //! - [`accounts`]: `POST /api/v1/accounts/link`, `GET
-//!   /api/v1/accounts/link/{flow_id}` (P9.4) and `POST
-//!   /api/v1/accounts/offline` (P9.7).
+//!   /api/v1/accounts/link/{flow_id}` (P9.4), `POST
+//!   /api/v1/accounts/offline` (P9.7), and `GET /api/v1/accounts`, `GET
+//!   /api/v1/accounts/awaiting-approval`, `GET` and `DELETE
+//!   /api/v1/accounts/{id}`, `POST /api/v1/accounts/{id}/approve`,
+//!   `/refuse` and `/relink` (P9.6).
+//! - [`grants`]: `GET` and `POST /api/v1/accounts/{id}/grants`, `PUT` and
+//!   `DELETE /api/v1/accounts/{id}/grants/{user}` (P9.6).
 //! - [`auth`]: `POST /api/v1/auth/login`, `/auth/login/mfa`,
 //!   `/auth/refresh`, `/auth/logout`, `/auth/step-up` and `/auth/register`
 //!   (P7.6).
@@ -20,6 +25,7 @@
 
 pub(super) mod accounts;
 pub(super) mod auth;
+pub(super) mod grants;
 pub(super) mod health;
 pub(super) mod invites;
 pub(super) mod me;
@@ -30,7 +36,9 @@ use std::net::IpAddr;
 
 use chrono::{DateTime, Utc};
 use fleet_api_types::auth::USERNAME_MAX_CHARS;
+use fleet_api_types::users::UserLabel;
 use fleet_api_types::{BoundedText, FieldError, PageQuery, SecretText, Timestamp};
+use fleet_core::id::UserId;
 use fleet_core::value::Username;
 use secrecy::{ExposeSecret as _, SecretString};
 
@@ -97,6 +105,15 @@ fn timestamp(at: DateTime<Utc>) -> Result<Timestamp, ApiError> {
 /// A username as a response field: always within its cap.
 fn username(name: &Username) -> BoundedText<USERNAME_MAX_CHARS> {
     BoundedText::new(name.as_str())
+}
+
+/// A user named next to something else: an invite's creator, an account's
+/// owner, a grant's grantee or granter.
+fn label(id: UserId, name: &Username) -> UserLabel {
+    UserLabel {
+        id,
+        username: username(name),
+    }
 }
 
 /// The page a list's query asks for. garde has checked the limit, so one

@@ -9,13 +9,15 @@
 //! that doesn't describe a status doesn't read back either.
 
 use fleet_core::account::{AccountError, AccountKind, AccountStatus, RefusalReason};
+use fleet_core::authz::{Actor, GrantLevel, Role, UserRef};
 use fleet_core::id::{AccountId, UserId};
-use fleet_core::value::{McUsername, McUuid};
+use fleet_core::value::{McUsername, McUuid, Username};
 use sqlx::{SqliteConnection, SqlitePool};
 
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::{store_error, unique_violation};
-use crate::ports::accounts::{AccountCredential, InsertAccountError, McAccount};
+use crate::ports::accounts::{AccountCredential, InsertAccountError, ListedAccount, McAccount};
+use crate::ports::page::Page;
 use crate::ports::store::StoreError;
 
 /// The table, as errors name it.
@@ -186,6 +188,185 @@ pub(super) async fn rename(
     Ok(done.rows_affected() == 1)
 }
 
+/// A row of the views: an account without its envelope, its owner's role
+/// and name, and the viewer's grant.
+struct ListedRow {
+    rowid: i64,
+    id: String,
+    owner_user_id: String,
+    owner_role: String,
+    owner_name: String,
+    owner_rowid: i64,
+    kind: String,
+    mc_uuid: Option<String>,
+    mc_name: String,
+    status: String,
+    status_reason: Option<String>,
+    created_at: String,
+    grant_level: Option<String>,
+    grant_rowid: Option<i64>,
+}
+
+/// The account `id` as `viewer` sees it.
+pub(super) async fn listed<'c, E>(
+    executor: E,
+    id: AccountId,
+    viewer: UserId,
+) -> Result<Option<ListedAccount>, StoreError>
+where
+    E: sqlx::SqliteExecutor<'c>,
+{
+    let id = id_text(id);
+    let viewer = id_text(viewer);
+    sqlx::query_as!(
+        ListedRow,
+        r#"SELECT a.rowid AS "rowid!: i64", a.id AS "id!", a.owner_user_id AS "owner_user_id!",
+                  o.role AS "owner_role!", o.username AS "owner_name!",
+                  o.rowid AS "owner_rowid!: i64", a.kind AS "kind!", a.mc_uuid AS "mc_uuid?",
+                  a.mc_name AS "mc_name!", a.status AS "status!",
+                  a.status_reason AS "status_reason?", a.created_at AS "created_at!",
+                  g.level AS "grant_level?", g.rowid AS "grant_rowid?: i64"
+           FROM mc_accounts AS a
+           JOIN users AS o ON o.id = a.owner_user_id
+           LEFT JOIN account_grants AS g ON g.account_id = a.id AND g.user_id = ?
+           WHERE a.id = ?"#,
+        viewer,
+        id
+    )
+    .fetch_optional(executor)
+    .await
+    .map_err(store_error)?
+    .map(|row| listed_from_row(&row))
+    .transpose()
+}
+
+/// One page of the accounts `viewer` may see: their own, those granted to
+/// them, every Member's for an Admin, and all of them for the Owner, by the
+/// owners' current roles (`authorize()`'s account rule).
+pub(super) async fn list_visible(
+    pool: &SqlitePool,
+    viewer: Actor,
+    page: Page<AccountId>,
+) -> Result<Vec<ListedAccount>, StoreError> {
+    let role = viewer.role.as_str();
+    let viewer = id_text(viewer.id);
+    let before = page.before.map(|id| id_text(id).to_string());
+    let fetch = page.limit.fetch();
+    sqlx::query_as!(
+        ListedRow,
+        r#"SELECT a.rowid AS "rowid!: i64", a.id AS "id!", a.owner_user_id AS "owner_user_id!",
+                  o.role AS "owner_role!", o.username AS "owner_name!",
+                  o.rowid AS "owner_rowid!: i64", a.kind AS "kind!", a.mc_uuid AS "mc_uuid?",
+                  a.mc_name AS "mc_name!", a.status AS "status!",
+                  a.status_reason AS "status_reason?", a.created_at AS "created_at!",
+                  g.level AS "grant_level?", g.rowid AS "grant_rowid?: i64"
+           FROM mc_accounts AS a
+           JOIN users AS o ON o.id = a.owner_user_id
+           LEFT JOIN account_grants AS g ON g.account_id = a.id AND g.user_id = ?
+           WHERE (? IS NULL OR a.id < ?)
+             AND (? = 'owner'
+                  OR a.owner_user_id = ?
+                  OR g.level IS NOT NULL
+                  OR (? = 'admin' AND o.role = 'member'))
+           ORDER BY a.id DESC
+           LIMIT ?"#,
+        viewer,
+        before,
+        before,
+        role,
+        viewer,
+        role,
+        fetch
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(store_error)?
+    .into_iter()
+    .map(|row| listed_from_row(&row))
+    .collect()
+}
+
+/// One page of the pending accounts `viewer` may review: those whose owner
+/// they outrank by current role, the Owner over Admins and Members and an
+/// Admin over Members (`authorize()`'s `ReviewLink`).
+pub(super) async fn awaiting_review(
+    pool: &SqlitePool,
+    viewer: Actor,
+    page: Page<AccountId>,
+) -> Result<Vec<ListedAccount>, StoreError> {
+    let role = viewer.role.as_str();
+    let viewer = id_text(viewer.id);
+    let before = page.before.map(|id| id_text(id).to_string());
+    let fetch = page.limit.fetch();
+    sqlx::query_as!(
+        ListedRow,
+        r#"SELECT a.rowid AS "rowid!: i64", a.id AS "id!", a.owner_user_id AS "owner_user_id!",
+                  o.role AS "owner_role!", o.username AS "owner_name!",
+                  o.rowid AS "owner_rowid!: i64", a.kind AS "kind!", a.mc_uuid AS "mc_uuid?",
+                  a.mc_name AS "mc_name!", a.status AS "status!",
+                  a.status_reason AS "status_reason?", a.created_at AS "created_at!",
+                  g.level AS "grant_level?", g.rowid AS "grant_rowid?: i64"
+           FROM mc_accounts AS a
+           JOIN users AS o ON o.id = a.owner_user_id
+           LEFT JOIN account_grants AS g ON g.account_id = a.id AND g.user_id = ?
+           WHERE a.status = 'pending'
+             AND a.owner_user_id <> ?
+             AND ((? = 'owner' AND o.role <> 'owner') OR (? = 'admin' AND o.role = 'member'))
+             AND (? IS NULL OR a.id < ?)
+           ORDER BY a.id DESC
+           LIMIT ?"#,
+        viewer,
+        viewer,
+        role,
+        role,
+        before,
+        before,
+        fetch
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(store_error)?
+    .into_iter()
+    .map(|row| listed_from_row(&row))
+    .collect()
+}
+
+/// Deletes the account `id`; its grants go with it.
+pub(super) async fn delete(conn: &mut SqliteConnection, id: AccountId) -> Result<bool, StoreError> {
+    let id = id_text(id);
+    let done = sqlx::query!("DELETE FROM mc_accounts WHERE id = ?", id)
+        .execute(conn)
+        .await
+        .map_err(store_error)?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// Stores a new link of the Microsoft account `id`, but only over exactly
+/// the envelope `from`, and never on a pending account.
+pub(super) async fn relink(
+    conn: &mut SqliteConnection,
+    id: AccountId,
+    from: &[u8],
+    to: &[u8],
+    name: &McUsername,
+) -> Result<bool, StoreError> {
+    let id = id_text(id);
+    let name = name.as_str();
+    let done = sqlx::query!(
+        "UPDATE mc_accounts
+         SET refresh_envelope = ?, status = 'active', status_reason = NULL, mc_name = ?
+         WHERE id = ? AND kind = 'microsoft' AND refresh_envelope = ? AND status <> 'pending'",
+        to,
+        name,
+        id,
+        from
+    )
+    .execute(conn)
+    .await
+    .map_err(store_error)?;
+    Ok(done.rows_affected() == 1)
+}
+
 /// Checks every value of a stored row; one that doesn't read back, or a
 /// combination its kind doesn't allow, is [`StoreError::Corrupt`], naming
 /// the column and the rowid, never the value.
@@ -196,14 +377,7 @@ fn account_from_row(row: AccountRow) -> Result<McAccount, StoreError> {
         rowid: row.rowid,
     };
     let kind: AccountKind = row.kind.parse().map_err(|_| corrupt("kind"))?;
-    let status = AccountStatus::from_columns(&row.status, row.status_reason.as_deref()).map_err(
-        |error| match error {
-            AccountError::UnknownStatus | AccountError::UnknownKind => corrupt("status"),
-            AccountError::UnknownReason
-            | AccountError::MissingReason
-            | AccountError::UnexpectedReason => corrupt("status_reason"),
-        },
-    )?;
+    let status = read_status(&row.status, row.status_reason.as_deref(), corrupt)?;
     let credential = match kind {
         AccountKind::Microsoft => AccountCredential::Microsoft {
             uuid: row
@@ -238,5 +412,87 @@ fn account_from_row(row: AccountRow) -> Result<McAccount, StoreError> {
         name: McUsername::try_from(row.mc_name.as_str()).map_err(|_| corrupt("mc_name"))?,
         created_at: parse_time(&row.created_at).ok_or_else(|| corrupt("created_at"))?,
         credential,
+    })
+}
+
+/// Reads a status from its two columns; a pair that doesn't describe one is
+/// [`StoreError::Corrupt`], naming the column that's wrong.
+fn read_status(
+    status: &str,
+    reason: Option<&str>,
+    corrupt: impl Fn(&'static str) -> StoreError,
+) -> Result<AccountStatus, StoreError> {
+    AccountStatus::from_columns(status, reason).map_err(|error| match error {
+        AccountError::UnknownStatus | AccountError::UnknownKind => corrupt("status"),
+        AccountError::UnknownReason
+        | AccountError::MissingReason
+        | AccountError::UnexpectedReason => corrupt("status_reason"),
+    })
+}
+
+/// Checks every value of a view's row as [`account_from_row`] does, and the
+/// owner's role and name and the viewer's grant, each naming its own table's
+/// row when it doesn't read back.
+fn listed_from_row(row: &ListedRow) -> Result<ListedAccount, StoreError> {
+    let corrupt = |column| StoreError::Corrupt {
+        table: MC_ACCOUNTS,
+        column,
+        rowid: row.rowid,
+    };
+    let owner_corrupt = |column| StoreError::Corrupt {
+        table: "users",
+        column,
+        rowid: row.owner_rowid,
+    };
+    let kind: AccountKind = row.kind.parse().map_err(|_| corrupt("kind"))?;
+    let status = read_status(&row.status, row.status_reason.as_deref(), corrupt)?;
+    let uuid = match kind {
+        AccountKind::Microsoft => Some(
+            row.mc_uuid
+                .as_deref()
+                .and_then(|text| text.parse::<McUuid>().ok())
+                .ok_or_else(|| corrupt("mc_uuid"))?,
+        ),
+        AccountKind::Offline => {
+            if row.mc_uuid.is_some() {
+                return Err(corrupt("mc_uuid"));
+            }
+            if status != AccountStatus::Active {
+                return Err(corrupt("status"));
+            }
+            None
+        }
+    };
+    let grant = match (row.grant_level.as_deref(), row.grant_rowid) {
+        (Some(level), Some(rowid)) => {
+            Some(
+                level
+                    .parse::<GrantLevel>()
+                    .map_err(|_| StoreError::Corrupt {
+                        table: "account_grants",
+                        column: "level",
+                        rowid,
+                    })?,
+            )
+        }
+        _ => None,
+    };
+    Ok(ListedAccount {
+        id: parse_id(&row.id).ok_or_else(|| corrupt("id"))?,
+        owner: UserRef {
+            id: parse_id(&row.owner_user_id).ok_or_else(|| corrupt("owner_user_id"))?,
+            role: row
+                .owner_role
+                .parse::<Role>()
+                .map_err(|_| owner_corrupt("role"))?,
+        },
+        owner_name: Username::try_from(row.owner_name.as_str())
+            .map_err(|_| owner_corrupt("username"))?,
+        name: McUsername::try_from(row.mc_name.as_str()).map_err(|_| corrupt("mc_name"))?,
+        uuid,
+        kind,
+        status,
+        created_at: parse_time(&row.created_at).ok_or_else(|| corrupt("created_at"))?,
+        grant,
     })
 }

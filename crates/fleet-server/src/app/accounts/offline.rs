@@ -1,8 +1,5 @@
-//! [`AccountService`]: the linked Minecraft accounts' use cases that aren't
-//! the link flow: for now, creating an offline account (Plan.md P9.7,
-//! ADR-0018). E adds the list, the grants, re-linking and deleting.
+//! Creating an offline account (Plan.md P9.7, ADR-0018).
 //!
-//! # Offline accounts
 //! An offline account is only a Minecraft name, for offline-mode servers in
 //! development. It exists only while `[accounts] allow_offline` is on: with
 //! the switch off, creating one is refused as if the route didn't exist,
@@ -16,33 +13,21 @@
 //! inserts (ADR-0015). Each outcome that touches the database is audited:
 //! `account.link` Success, or a Failure for `taken` and `over_quota`.
 
-use std::sync::Arc;
-
-use core::num::NonZeroU32;
 use fleet_core::account::{AccountKind, AccountStatus, over_quota};
 use fleet_core::audit::{AuditAction, AuditError, AuditMetadata, AuditOutcome, AuditTarget};
 use fleet_core::id::AccountId;
-use fleet_core::system::{Clock, MintError, SecureRandom, mint};
+use fleet_core::system::{MintError, mint};
 use fleet_core::value::McUsername;
 use tracing::{debug, info};
 
-use super::audit::AuditService;
-use super::users::{ActingUser, recheck};
+use super::AccountService;
+use crate::app::users::{ActingUser, recheck};
 use crate::ports::accounts::{AccountCredential, InsertAccountError, McAccount};
 use crate::ports::audit::NewAuditEntry;
-use crate::ports::store::{Store, StoreError};
+use crate::ports::store::StoreError;
 
 /// What creating an offline account logs.
 const CREATED: &str = "an offline account was created";
-
-/// The accounts' settings (`[accounts]`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AccountSettings {
-    /// Whether offline accounts may be created (`allow_offline`).
-    pub allow_offline: bool,
-    /// How many accounts a Member may own (`max_per_member`).
-    pub max_per_member: NonZeroU32,
-}
 
 /// Why an offline account wasn't created.
 #[derive(Debug, thiserror::Error)]
@@ -77,44 +62,9 @@ struct Entries {
     over_quota: NewAuditEntry,
 }
 
-/// The accounts' use cases; see the [module docs](self).
-#[derive(Debug, Clone)]
-pub struct AccountService {
-    clock: Arc<dyn Clock>,
-    random: Arc<dyn SecureRandom>,
-    store: Arc<dyn Store>,
-    audit: AuditService,
-    settings: AccountSettings,
-}
-
 impl AccountService {
-    /// The service over `store`, minting IDs from `random`, stamping with
-    /// `clock`, with `settings`.
-    #[must_use]
-    pub fn new(
-        clock: Arc<dyn Clock>,
-        random: Arc<dyn SecureRandom>,
-        store: Arc<dyn Store>,
-        settings: AccountSettings,
-    ) -> Self {
-        let audit = AuditService::new(Arc::clone(&clock), Arc::clone(&store));
-        Self {
-            clock,
-            random,
-            store,
-            audit,
-            settings,
-        }
-    }
-
-    /// Whether offline accounts may be created.
-    #[must_use]
-    pub const fn offline_allowed(&self) -> bool {
-        self.settings.allow_offline
-    }
-
     /// Creates the offline account `name` for `by`; see the [module
-    /// docs](self).
+    /// docs](super).
     ///
     /// # Errors
     /// [`CreateOfflineError::Disabled`], [`CreateOfflineError::SessionGone`],

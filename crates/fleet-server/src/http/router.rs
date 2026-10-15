@@ -27,6 +27,17 @@
 //! | `POST /api/v1/accounts/link` | user | starts a Microsoft link flow; its code, shown this once |
 //! | `GET /api/v1/accounts/link/{flow_id}` | user (the flow's creator) | where the flow stands |
 //! | `POST /api/v1/accounts/offline` | user (while `[accounts] allow_offline` is on) | a new offline account |
+//! | `GET /api/v1/accounts` | user | one page of the accounts the user may see |
+//! | `GET /api/v1/accounts/awaiting-approval` | user | one page of the pending links the user may review |
+//! | `GET /api/v1/accounts/{id}` | user (View) | one account |
+//! | `DELETE /api/v1/accounts/{id}` | user + step-up (Manage) | deletes the account and its grants |
+//! | `POST /api/v1/accounts/{id}/approve` | user + step-up (above the owner) | approves a pending link |
+//! | `POST /api/v1/accounts/{id}/refuse` | user + step-up (above the owner) | refuses a pending link, deleting it |
+//! | `POST /api/v1/accounts/{id}/relink` | user (Manage) | starts a link flow that links the account again |
+//! | `GET /api/v1/accounts/{id}/grants` | user (Manage) | one page of the account's grants |
+//! | `POST /api/v1/accounts/{id}/grants` | user + step-up (Manage) | shares the account with a user named in the body |
+//! | `PUT /api/v1/accounts/{id}/grants/{user}` | user + step-up (Manage) | changes a grant |
+//! | `DELETE /api/v1/accounts/{id}/grants/{user}` | user + step-up (Manage) | revokes a grant |
 //! | `GET /api/openapi.json` | public | the `OpenAPI` document, only in dev mode ([`openapi`](super::openapi)) |
 //!
 //! The health routes have no `/api/v1` prefix. Both answer `200` with an
@@ -41,13 +52,14 @@
 use axum::Router;
 use utoipa_axum::routes;
 
-use super::handlers::{accounts, auth, health, invites, me, mfa, users};
+use super::handlers::{accounts, auth, grants, health, invites, me, mfa, users};
 use super::middleware::RequestIds;
 use super::openapi::ApiDocs;
 use super::rate_limit::RateLimits;
 use super::routes::{RateClass, Routes};
 use crate::app::accounts::AccountService;
 use crate::app::auth::TokenService;
+use crate::app::grants::GrantService;
 use crate::app::health::HealthService;
 use crate::app::invites::InviteService;
 use crate::app::link_flows::LinkFlowService;
@@ -78,8 +90,11 @@ pub struct AppState {
     pub(crate) invites: InviteService,
     /// The Microsoft link flows.
     pub(crate) link_flows: LinkFlowService,
-    /// The accounts beside the link flows: offline ones.
+    /// The accounts beside the link flows: offline ones, the lists, the
+    /// reviews and deleting.
     pub(crate) accounts: AccountService,
+    /// The grants that share accounts.
+    pub(crate) grants: GrantService,
 }
 
 /// Every service the handlers share, by name, so each one is a line of its
@@ -102,8 +117,11 @@ pub struct Services {
     pub invites: InviteService,
     /// The Microsoft link flows.
     pub link_flows: LinkFlowService,
-    /// The accounts beside the link flows: offline ones.
+    /// The accounts beside the link flows: offline ones, the lists, the
+    /// reviews and deleting.
     pub accounts: AccountService,
+    /// The grants that share accounts.
+    pub grants: GrantService,
 }
 
 impl AppState {
@@ -120,6 +138,7 @@ impl AppState {
             invites,
             link_flows,
             accounts,
+            grants,
         } = services;
         Self {
             health,
@@ -131,6 +150,7 @@ impl AppState {
             invites,
             link_flows,
             accounts,
+            grants,
         }
     }
 }
@@ -162,6 +182,17 @@ pub fn api_routes(routes: Routes) -> Routes {
         .authed_route(RateClass::Standard, routes!(accounts::start_link))
         .authed_route(RateClass::Standard, routes!(accounts::link_status))
         .authed_route(RateClass::Standard, routes!(accounts::create_offline))
+        .authed_route(RateClass::Standard, routes!(accounts::list))
+        .authed_route(RateClass::Standard, routes!(accounts::awaiting_approval))
+        .authed_route(RateClass::Standard, routes!(accounts::get))
+        .step_up_route(RateClass::Standard, routes!(accounts::delete))
+        .step_up_route(RateClass::Standard, routes!(accounts::approve))
+        .step_up_route(RateClass::Standard, routes!(accounts::refuse))
+        .authed_route(RateClass::Standard, routes!(accounts::relink))
+        .authed_route(RateClass::Standard, routes!(grants::list))
+        .step_up_route(RateClass::Standard, routes!(grants::create))
+        .step_up_route(RateClass::Standard, routes!(grants::change))
+        .step_up_route(RateClass::Standard, routes!(grants::revoke))
 }
 
 /// Every route with `state`, behind the middleware stack with the timeout,

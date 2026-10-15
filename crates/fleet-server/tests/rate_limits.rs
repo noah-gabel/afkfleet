@@ -93,6 +93,7 @@ fn loose() -> RateLimitConfig {
         register: loose,
         per_user: loose,
         link_flows: LinkFlowLimits::default(),
+        grants_by_name: loose,
     }
 }
 
@@ -264,6 +265,7 @@ async fn setup(options: SqliteConnectOptions, config: RateLimitConfig, proxies: 
         invites,
         link_flows: idle_link_flows(&db),
         accounts: idle_accounts(&db),
+        grants: idle_grants(&db),
     });
     let http = HttpConfig {
         bind: HttpConfig::DEFAULT_BIND,
@@ -847,6 +849,18 @@ fn idle_link_flows(
             per_user_per_day: core::num::NonZeroU32::MIN,
             max_per_member: core::num::NonZeroU32::MIN,
         },
+    )
+}
+
+/// The grants, which these tests never write.
+fn idle_grants(
+    db: &fleet_server::infra::sqlite::Database,
+) -> fleet_server::app::grants::GrantService {
+    fleet_server::app::grants::GrantService::new(
+        Arc::new(fleet_testkit::system::ManualClock::new(
+            chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+        )),
+        Arc::new(db.clone()),
     )
 }
 

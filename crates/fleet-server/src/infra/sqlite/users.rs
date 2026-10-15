@@ -79,10 +79,13 @@ pub(super) async fn get(pool: &SqlitePool, id: UserId) -> Result<Option<User>, S
 }
 
 /// The user with this normalized username.
-pub(super) async fn find_by_username(
-    pool: &SqlitePool,
+pub(super) async fn find_by_username<'c, E>(
+    executor: E,
     username: &Username,
-) -> Result<Option<User>, StoreError> {
+) -> Result<Option<User>, StoreError>
+where
+    E: sqlx::SqliteExecutor<'c>,
+{
     let username = username.as_str();
     sqlx::query_as!(
         UserRow,
@@ -91,7 +94,7 @@ pub(super) async fn find_by_username(
            FROM users WHERE username = ?"#,
         username
     )
-    .fetch_optional(pool)
+    .fetch_optional(executor)
     .await
     .map_err(store_error)?
     .map(user_from_row)

@@ -34,7 +34,7 @@ One branch and one PR per group, one commit per task, in this order, each after 
   - No bot can use a pending account.
   - For Admins and the Owner, Home shows how many links wait for them, so none is missed.
 - **One link per Minecraft account** (A's table, D's flow). A Minecraft account (by its UUID) that's already linked, pending ones included, can't be linked by anyone else. The refusal names nobody. A friend who linked their own account first is safe. A victim takes theirs back by revoking the app's access in their Microsoft account and having an Admin delete the row.
-- **Audit and visibility** (D, E). `account.link` records the creator, the Minecraft name and the UUID. Admins and the Owner see every account, with who linked it and when.
+- **Audit and visibility** (D, E). `account.link` records the creator, the Minecraft name and the UUID. Admins and the Owner see every account, with who linked it and when. *(Group E, the user's reading: every account they can view under ADR-0010, U1 below.)*
 - **A warning in the link dialog only** (F), the user's exact text: "Only enter a code you started yourself here. Never enter a code someone sent you, it would hand them your Minecraft account." Home carries no warning.
 - **The threat model** (F) records the threat, these counters and the residual risk.
 
@@ -489,6 +489,61 @@ The user answered group D's questions one at a time, and added two notes for E a
   - **Shown red by mutations,** each reverted and checked by checksum: the 404 while off (the body read before the switch), the name rule's 422 and its DTO test (every name passing), and no warning while allowed (the switch ignored). The 401 test pins the router's rule, which the route-coverage test checks too.
 - **Snapshots,** read before accepting: `offline_created`, and the `OpenAPI` document again (the route, `AccountKind` and both DTOs).
 
+### Group E: the grants and the account endpoints (P9.1's `account_grants`, P9.6) *(2026-10-15)*
+For group E the user changed how open questions are decided. Each one went to its own read-only review subagent, given the options neutrally; it read the whole project (CLAUDE.md, Plan.md with every later phase, the ADRs, the code) and returned one decision with its reasons, the rejected options and what it affects later. The user approved the decisions at the plan review, so they're marked *(decided by the review agent, approved by the user at the plan review)* below. Questions that touched the user's recorded decisions, a rule that binds the AI or the user's taste went to the user directly, one at a time, and are marked as theirs. CLAUDE.md's step 10 records the way of working *(the user's text, at the plan review)*.
+
+**The user's choices:**
+- **U1. What Admins see.** "Admins and the Owner see every account, with who linked it and when" (above) means every account they can view under ADR-0010. An Admin sees Members' accounts, their own and any account granted to them, each with who linked it and when; only the Owner sees all of them. The Owner's and other Admins' accounts stay 404 for Admins. *(Asked because it read against ADR-0010's Admin rule.)*
+- **U2. A pending account can't be linked again:** the start is 409 before Microsoft is asked. Group C's "linking again sets `active`" holds for accounts that were approved before, so linking again can't skip an approval. *(Asked because the literal reading of C's note went around the approval rule.)*
+- **U3. No hands-on check in E.** Linking again makes the same Microsoft calls D's check covered; the new parts are local logic the fakes drive. CLAUDE.md's real-time exception stays at three `manual_` tests.
+- **U4. The grant's 422 text**, which the app's forms show: "can't be given a grant: unknown, disabled, or already has access; check the name" (`fleet_api_types::accounts::UNGRANTABLE`), in the shape of the invite's.
+- **The by-name limit's default** (S6): 10 an hour, burst 10, approved at the plan review (security rule 10).
+
+**Approval and refusal** *(decided by the review agent, approved by the user at the plan review)*:
+- **S1. Refusing deletes the pending link**, with its grants, only while it's still pending (409 otherwise, 404 if it's gone), recorded as `account.refuse` with `owner`, `name` and `uuid`. *Why:* a kept refused row could be flipped back by its owner's link again, and deleting drops what is probably a phished victim's refresh token, freeing the slot and the UUID at once.
+- **S2. Who reviews:** a new account permission, `Permission::ReviewLink`. The actor must see the account (404 otherwise), then outrank its owner by the owner's current role, read in the review's own transaction: the Owner over Admins and Members, an Admin over Members (the existing `manages_user` rule). A grant never counts, nobody reviews their own, and a disabled owner doesn't matter: the session-token service still refuses their account (`OwnerDisabled`). *Why:* a role stored at link time would go stale and send approvals to Admins `authorize()` hides the account from.
+- **S3. Approving and refusing need a step-up**, as admin writes, and refusing is a delete (§7.2).
+- **S4. Only a pending account is reviewed** (409 otherwise, nothing written). *Why:* a refused or `reauth_required` account was approved before, and `reauth_required` can't recover without a new token; linking again is the way back.
+- **S5. The approval queue:** `GET /accounts/awaiting-approval`, a keyset list of the pending links the caller outranks the owner of, filtered in SQL and every row passed through `authorize(ReviewLink)`; a Member gets an empty 200. *Why:* the app can't work it out from the list, where `manage` looks the same on approvable and other accounts; a route keeps `PageQuery` and every list method unchanged.
+
+**Grants** *(decided by the review agent, approved by the user at the plan review)*:
+- **S6. A grantee is named by their exact username** in `POST /accounts/{id}/grants {username, level}`. An unknown name, a disabled user and anyone with implicit Manage (S9) all get the same 422 on `username` (U4), each recorded as a `grant.create` Failure with its `reason` (`unknown_user`, `disabled`, `implicit_manage`) and never the name. An existing grant is 409. Changing and revoking go by user ID (`PUT`/`DELETE /accounts/{id}/grants/{user}`). Creating by name spends its own per-user limit, `[rate_limits] grants_by_name_per_user_per_hour`. *Why:* only someone who already holds Manage on the account can ask, and a right guess has visible, audited effects; a lookup route would show Members users outside any account, a directory would reopen `ListUsers` being Admin+, and share codes would add a forwardable secret. *(Refined when built: the limit is its own per-user limiter in `RateLimits`, spent by the handler right after the step-up check, not a `RateClass`: classes are per-IP route layers that run before authentication.)*
+- **S7. Every grant write needs a step-up:** create, change and revoke; listing stays authed. *Why:* a grant outlives the session, and the stolen-PC remedies don't undo it; route-level step-up can't tell a raise from a lowering.
+- **S8. No grant is created or raised on a pending account** (409, after `authorize()`). Listing and revoking work in every status; `reauth_required` and `refused` accounts take grants. *Why:* approving a pending account then approves exactly one person.
+- **S9. Nobody gets a grant who has implicit Manage** on the account (its owner, the Owner, an Admin on a Member's account): the same 422. A raise for someone who has it by now is 409; lowering and revoking always work; role changes never touch grants. The rule is `authorize()`'s `manages()`, now public as `authz::implicit_manage`. *Why:* otherwise two Admins could grant each other Manage on a Member's account that outlives the Member's promotion, the self-grant ban's loophole through a second person.
+- **S10. No cap on grants:** one row per account and user, cascading with the account. *Why:* a grant creates no new key; the project caps only calls that add a fresh row each time.
+
+**What viewers see** *(decided by the review agent, approved by the user at the plan review)*:
+- **S11.** Every viewer sees the account's `id`, `name`, `kind`, `status`, `reason` (refused) and their own `level` (the higher of their grant and implicit Manage, `authz::effective_level`); `owner` and `linked_at` only Admins, the Owner and Manage holders. Other grantees are only in the grant list (Manage). *Why:* Members are kept from other users' names on purpose, and a grantee may not know the owner.
+
+**Linking again** *(decided by the review agent, approved by the user at the plan review)*:
+- **S12. A second kind of D's link flow:** `POST /accounts/{id}/relink` (`RelinkAccount`) answers like `POST /accounts/link` and shares its one flow per user (either kind replaces a waiting one), the total, the daily count (its start is an `account.start_link` too, with `account`), the retries and shutdown; no quota. The commit reads the session, the account, its owner's role and the creator's grant again and asks `authorize()` again; a gone, pending or no-longer-theirs account stores nothing (`failed`). A profile with another UUID ends it `refused`/`profile_mismatch` with an `account.relink` Failure (`reason`, `flow`, never a UUID). Otherwise one compare-and-set swaps the envelope read in the same transaction, sets `active` without a reason and stores the profile's current name, recorded as `account.relink` (`flow`, `previous_status`, `name`, `previous_name` when it changed). *Why:* the user's rule that D's rules apply if its machinery is reused; separate caps would silently double §7.4's. *(Refined when built: the UUID is compared in the commit against the stored row, which never changes, rather than right after the session.)*
+- **S13. No step-up to start it;** the commit authorizes again. *Why:* it can't move the account to another profile, needs that Microsoft account's sign-in, and gives less than a new link, which has none.
+- **S14. `active`, `reauth_required` and `refused` accounts may be linked again;** pending (U2) and offline ones are 409, checked at the start and again in the commit. *Why:* `active` can be stale, for example after access was revoked at Microsoft, ADR-0018's remedy for a phishing victim.
+
+### As built (group E)
+- **fleet-core:** `authz::Permission::ReviewLink`; `authz::{implicit_manage, effective_level}`, which `authorize()`'s account rule uses itself; `account::{awaits_review, relinkable}`; the audit actions `account.approve`, `account.refuse`, `account.delete`, `account.relink`, `grant.create`, `grant.set_level` and `grant.revoke`, and `account.start_link`'s `account`.
+- **fleet-api-types:** `accounts::{GrantLevel, AccountResponse, AccountPage, CreateGrantRequest, ChangeGrantRequest, GrantResponse, GrantPage, UNGRANTABLE}`.
+- **fleet-server:**
+  - `0010_account_grants.sql`; `ports::grants` and `infra::sqlite::grants`; `Store::grants` and `WriteTx::grants`.
+  - `ports::accounts::ListedAccount` (an account as one viewer sees it, without its envelope) with `AccountReads::{listed, list_visible, awaiting_review}` and `AccountWrites::{listed, delete, relink}`; `UserWrites::find_by_username`.
+  - `app::accounts` is a folder: `offline`, `view` (`ListAccountsError`), `review` (`ReviewError`) and `delete` (`DeleteAccountError`). `app::grants`: `GrantService`, `UnusableName`, `CreateGrantError`, `ChangeGrantError`, `RevokeGrantError`.
+  - `LinkFlowService::start_relink`, the poller's `Target`, the commit's second kind, and `LinkStartError::{AccountGone, Denied, NotRelinkable}`.
+  - `http::handlers::accounts` (`list`, `awaiting_approval`, `get`, `delete`, `approve`, `refuse`, `relink`) and `http::handlers::grants` (`list`, `create`, `change`, `revoke`); `Services::grants`; the shared `label` helper.
+  - `RateLimits::check_grant_by_name`, `Refusals::grants_by_name` (in the minute's summary) and `config::RateLimitConfig::grants_by_name`.
+- **Tests,** each red first against compiling stubs that returned wrong values, or through a temporary mutation where a stub's answer was already right; every mutation was reverted and checked by checksum:
+  - **fleet-core:** the authorization tests, 18 failed against a `ReviewLink` refused everywhere and helpers answering `false` and `None` (the others expect 403 or `false`); the status checks 2 of 3, the offline one by a mutation that ignores the kind; the names and matrix snapshots.
+  - **The grants' repository:** 10 of 14 against a stub; the table's rules by a migration without its CHECKs and foreign keys, the valid-row and missing-grant tests and the two later error paths by mutations.
+  - **The accounts' views:** 8 of 10 against stubs; the unknown account and the link again's two guards by mutations. The visibility tests pin `list_visible` and `awaiting_review` to `authorize()` over every role, owner role, grant and status.
+  - **The rest of the storage:** `find_by_username` in a transaction 1 of 1; the limit and its key 10 against stubs.
+  - **The DTOs:** the lists 20 against DTOs left out of the components and the TypeScript roots; their unit tests through two batches of mutations.
+  - **The routes and services** (`tests/accounts/`: `views`, `review`, `delete`, `grants`, `link_flows/relink`): views 5 of 7, review 6 of 10, grants 11 of 14 against stub services; delete 4 of 6 and relink 7 of 8 against the stubs swapped back in; the re-link's commit by four mutations (storing nothing, no `authorize()`, no UUID compare, no status check); the handlers' checks by removing them together with the services' (each HTTP refusal); every step-up test by registering the writes as plain authed routes; the by-name limit by a handler that doesn't spend it.
+- **Snapshots,** read before accepting: the authorization matrix (the `ReviewLink` section), the audit action names (seven appended), the migrations (line 10), the OpenAPI document (eleven operations, seven schemas), `account_as_each_viewer_sees_it` and `grant_created`.
+- **Found during the build:**
+  - `POST /api/v1/accounts/nothing-here`, D's sample of an unknown route, now answers 405: `/accounts/{id}` has `GET` and `DELETE`. D's offline test compares with `/api/v1/nothing-here` instead.
+  - A `PUT` with the grant's own level answers the grant unchanged and records nothing.
+  - The handlers ask `authorize()` and the services ask again in their transactions with the same answers, so the HTTP tests of a refusal were shown red by removing both.
+
 ### Notes for later groups
 - **B (P9.3):** done (above). Two of these notes changed with the user's decisions. fleet-server, fleet-client and the desktop crate stay in `stable_crates`, and azalea-auth doesn't reach fleet-server at all. The redaction test runs with the configured filter at `trace`, as planned.
   - ~~fleet-server leaves `stable_crates` together with fleet-client and the desktop crate, since both dev-depend on fleet-server and `stable-check` builds `--all-targets`.~~
@@ -515,7 +570,7 @@ The user answered group D's questions one at a time, and added two notes for E a
   - *(from C)* A new link's status has no reason (`AccountStatus` builds the pair), and D's poller uses `minecraft_session` itself: the session-token service is for linked accounts only.
   - `account.link` records the creator, the name and the UUID.
   - `[accounts]` arrives here.
-- **E (P9.1's `account_grants`, P9.6):**
+- **E (P9.1's `account_grants`, P9.6):** done (above); every note below was applied.
   - The approve and refuse endpoints, and whether each needs a step-up.
   - The grants table.
   - P9.6's open point: how a Member picks a grantee without enumerating usernames.
@@ -539,6 +594,10 @@ The user answered group D's questions one at a time, and added two notes for E a
   - *(from D)* Starting a flow is a direct call, since its answer carries the user code; its status may be a query. A text per `LinkFlowState`, and per refusal of a start: 409 (the quota), 429 (the daily cap, or the user's flow finishing), 503 (every place taken, or Microsoft away).
   - *(from D)* fleet-client's methods for the link routes come with the dialog, with the Tauri commands and `ApiClient`.
   - *(from D)* The threat model's device-code entry can cite D's tests of the caps and of the re-checks (`link_flows::caps`, `link_flows::commit`, `link_flows::http`).
+  - *(from E)* Home's count reads `GET /accounts/awaiting-approval`; approve, refuse, delete and the grant writes go through `useStepUpAction`; starting a link again is a direct call that reuses the link dialog. Texts for each 409 (not pending; a pending or offline account linked again; an existing grant; a pending account shared; a raise for someone with implicit Manage), the grant's 422 (U4), the by-name 429, and `profile_mismatch` when linking again. A View or Control grantee's list has no owner column.
+  - *(from E)* fleet-client's methods, the Tauri commands and `ApiClient` for E's eleven routes.
+  - *(from E)* The threat model gains: approving, refusing, deleting and the grant writes need a step-up (`review::reviewing_needs_a_fresh_step_up_and_changes_nothing_without_one`, `delete::deleting_needs_a_fresh_step_up_and_changes_nothing_without_one`, `grants::every_grant_write_needs_a_fresh_step_up`); names a Manage holder can probe, bounded by the per-user limit (`grants::granting_by_name_spends_its_own_per_user_limit`, an accepted risk); a pending link's review by someone above its owner (`review::only_someone_above_the_owner_reviews_whatever_grant_anyone_holds`); someone at the Owner's unlocked PC can still start a link that's active at once; an Admin's linked row can be deleted only by the Owner, so ADR-0018's "an Admin deletes the row" holds for Members' links.
+  - *(from E, flagged, not changed)* P11.6's cleanup doesn't list the used and revoked invites, which keep their rows "until P11.6's cleanup" (`0006_invites.sql`).
 
 ## Consequences
 - **Easier:**
@@ -577,6 +636,16 @@ The user answered group D's questions one at a time, and added two notes for E a
   - The flows live in memory, so a restart loses them, and the users start again.
   - Each accepted start is an audit entry, and the daily cap reads them on every start.
   - A tool that holds `AppState` builds it from `Services`.
+
+- **Group E, easier:**
+  - Every account route answers what `authorize()` decides, and the lists are pinned to it over every role, owner role, grant and status.
+  - A phished link waits for someone above its linker, who sees who linked it, and refusing it frees the victim's Minecraft account at once.
+  - A grant can't stand for a Manage that a role change would end, and can't be made on an unvetted account.
+  - A refused or `reauth_required` account comes back through the same flow, caps and checks as a new link.
+- **Group E, harder:**
+  - Every account write and grant write asks for the password within 5 minutes.
+  - A Manage holder can still learn whether a username exists, bounded by 10 tries an hour.
+  - The handlers and the services both ask `authorize()`, and an account read costs a join with its owner and the viewer's grant.
 
 ## Alternatives considered
 - **Five groups, with P9.3 and P9.5 together:** the first Microsoft-facing PR would hold both the adapter and the service that uses it.
@@ -617,5 +686,18 @@ The user answered group D's questions one at a time, and added two notes for E a
 - *(group D)* **Letting finishing flows run during shutdown:** a session call takes longer than serve's deadline, so the shutdown would mostly end in exit 4.
 - *(group D)* **Real 1-second waits, or paused time without sqlx, in the tests:** slower, timing-dependent tests, or two test styles in one binary.
 - *(group D)* **Running without linking when Microsoft's client can't be built:** the problem would only show at the first link.
+- *(group E)* **Refusing keeps the row as `refused`:** the owner's link again could flip it back, and a phished token would stay stored.
+- *(group E)* **The owner's role at link time decides the reviewer:** a stale fact, and approvals sent to Admins who can't see the account.
+- *(group E)* **No step-up, or one only for approving or refusing:** an unlocked approver's PC could activate or delete links.
+- *(group E)* **Approving `refused` or `reauth_required` accounts too:** an approval that vouches for nothing, and a `reauth_required` token that's refused again.
+- *(group E)* **A filter on `GET /accounts`, a count route, a per-row flag, or nothing:** a second query type, two reads that can disagree, a client walking every page, or a UI copy of `authorize()`.
+- *(group E)* **A lookup route, a user directory or share codes for picking a grantee:** users shown outside any account, `ListUsers` reopened, or a forwardable secret.
+- *(group E)* **Step-up only for widening grant writes, or for none:** route-level step-up can't tell a raise from a lowering, and a grant outlives the session.
+- *(group E)* **Grants on pending accounts, or only on active ones:** an unvetted account shared before approval, or no way to hand a refused account to whoever can link it again.
+- *(group E)* **Grants to anyone with implicit Manage, or to Admins only:** a Manage that outlives a promotion through a second person, or the harmless case refused instead.
+- *(group E)* **A cap on grants, fixed or configurable:** a limit the number of users already sets.
+- *(group E)* **Owners or the grant list shown to every grantee:** other users' names shown to Members who may not know them.
+- *(group E)* **Separate caps or a separate service for linking again:** §7.4's limits silently doubled, or the poller copied.
+- *(group E)* **A step-up to link again, or only `refused` and `reauth_required` accounts linkable:** a password asked for a recovery, or a stale `active` that can't be fixed before a bot fails.
 - *(group B)* **The fake in fleet-testkit with the port in fleet-core, or a shared `tests/common`:** services generic over the provider unlike every other server port, or `dead_code` in each binary that doesn't use every helper.
 - *(group B)* **Testing only the mapping, or a public endpoint override over TLS:** the reader, the bounds and the client's settings untested, or an override reachable from production code.

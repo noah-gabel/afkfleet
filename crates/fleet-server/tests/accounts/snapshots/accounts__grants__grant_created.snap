@@ -1,0 +1,16 @@
+---
+source: crates/fleet-server/tests/accounts/grants.rs
+expression: redacted(created.body.clone())
+---
+{
+  "granted_at": "2027-01-15T08:00:00.000Z",
+  "granted_by": {
+    "id": "[granted_by]",
+    "username": "user1"
+  },
+  "level": "control",
+  "user": {
+    "id": "[user]",
+    "username": "user2"
+  }
+}

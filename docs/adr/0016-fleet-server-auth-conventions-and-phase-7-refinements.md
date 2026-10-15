@@ -53,7 +53,7 @@ Before writing any code, the Phase 7 plan listed every question the plan left op
 
 ### Step-up *(the user's choice)*
 - `POST /auth/step-up {password}` sets the current session's `stepped_up_at`.
-- A step-up action (§7.2: password change, 2FA reset, role change; later P9's account delete and key rotation through the API) checks that it's at most 5 minutes old. Otherwise it answers 403 with a new code, `step_up_required`. *(Amended in Phase 8, group E: every admin write is one, see the last section of the decision.)*
+- A step-up action (§7.2: password change, 2FA reset, role change; later P9's account delete and key rotation through the API) checks that it's at most 5 minutes old. Otherwise it answers 403 with a new code, `step_up_required`. *(Amended in Phase 8, group E: every admin write is one, see the last section of the decision. Amended in Phase 9: key rotation has no API route, it's the command line's only (ADR-0018, group A); group E made deleting an account, approving and refusing a pending link and every grant write step-up actions (ADR-0018).)*
 - A wrong password counts toward the username lockout.
 - This adds one column to `sessions` (B) and one route (D), with a note under Appendix B. A request body never carries the current password, and P9's `DELETE /accounts/{id}` needs no body.
 

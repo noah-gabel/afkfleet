@@ -223,7 +223,9 @@ audit_actions! {
     /// A user started a Microsoft link flow (P9.4, ADR-0018): Microsoft
     /// answered with a device code, and the start passed every cap. Only
     /// accepted starts are recorded, and the daily cap counts these entries.
-    /// Outcome: Success. Target: the user. Metadata: `flow` (the flow's ID).
+    /// Outcome: Success. Target: the user. Metadata: `flow` (the flow's ID),
+    /// and `account` (its ID) when it links an account again (P9.6), whose
+    /// starts the daily cap counts alike.
     ACCOUNT_START_LINK = "account.start_link";
 
     /// A user linked a Minecraft account (P9.4, P9.7, ADR-0018), in the commit
@@ -233,6 +235,51 @@ audit_actions! {
     /// the Minecraft account is already linked, or `over_quota`), `kind`,
     /// `name`, and for a Microsoft account `uuid` and `flow`.
     ACCOUNT_LINK = "account.link";
+
+    /// An Admin or the Owner approved a pending link (P9.6, ADR-0018): the
+    /// account is active from this commit on. Outcome: Success. Target: the
+    /// account. Metadata: `owner` (the linker's ID), `name` and `uuid`.
+    ACCOUNT_APPROVE = "account.approve";
+
+    /// An Admin or the Owner refused a pending link (P9.6, ADR-0018), which
+    /// deletes the account, its refresh token and its grants in this commit.
+    /// Outcome: Success. Target: the account, which is gone. Metadata:
+    /// `owner` (the linker's ID), `name` and `uuid`.
+    ACCOUNT_REFUSE = "account.refuse";
+
+    /// A user deleted an account (P9.6), with its refresh token and its
+    /// grants, in this commit. Outcome: Success. Target: the account, which
+    /// is gone. Metadata: `owner` (its owner's ID), `kind`, `name`, `status`,
+    /// and for a Microsoft account `uuid`.
+    ACCOUNT_DELETE = "account.delete";
+
+    /// A user linked a Microsoft account again (P9.6, ADR-0018). Success, in
+    /// the commit that stores its new refresh token and sets it active:
+    /// metadata `flow`, `previous_status`, `name` (the profile's current
+    /// one) and, when it changed, `previous_name`. Failure (nothing stored):
+    /// the profile has another UUID than the account's; metadata `reason`
+    /// (`profile_mismatch`) and `flow`, never either UUID. Target: the
+    /// account.
+    ACCOUNT_RELINK = "account.relink";
+
+    /// A user gave another user a grant on an account (P9.6, ADR-0018).
+    /// Success: metadata `grantee` (their ID) and `level`. Failure (nothing
+    /// stored): the name typed can't be granted, which the user was told
+    /// with the same answer for every such name; metadata `reason`
+    /// (`unknown_user`, `disabled`, or `implicit_manage`: the account's
+    /// owner, the Owner, or an Admin on a Member's account), never the
+    /// name. Target: the account.
+    GRANT_CREATE = "grant.create";
+
+    /// A user changed another user's grant on an account (P9.6). Outcome:
+    /// Success. Target: the account. Metadata: `grantee` (their ID), `level`
+    /// and `previous_level`.
+    GRANT_SET_LEVEL = "grant.set_level";
+
+    /// A user revoked another user's grant on an account (P9.6). Outcome:
+    /// Success. Target: the account. Metadata: `grantee` (their ID) and
+    /// `level` (the one revoked).
+    GRANT_REVOKE = "grant.revoke";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

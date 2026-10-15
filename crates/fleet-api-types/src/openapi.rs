@@ -25,8 +25,9 @@ use utoipa::openapi::schema::Schema;
 
 use crate::ErrorResponse;
 use crate::accounts::{
-    CreateOfflineAccountRequest, CreatedOfflineAccountResponse, LinkFlowResponse,
-    LinkStartedResponse,
+    AccountPage, AccountResponse, ChangeGrantRequest, CreateGrantRequest,
+    CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
+    LinkFlowResponse, LinkStartedResponse,
 };
 use crate::auth::{
     LoginMfaRequest, LoginRequest, LoginResponse, RefreshRequest, RegisterRequest,
@@ -71,6 +72,12 @@ pub fn components() -> BTreeMap<String, RefOr<Schema>> {
     add::<LinkFlowResponse>(&mut schemas);
     add::<CreateOfflineAccountRequest>(&mut schemas);
     add::<CreatedOfflineAccountResponse>(&mut schemas);
+    add::<AccountPage>(&mut schemas);
+    add::<AccountResponse>(&mut schemas);
+    add::<CreateGrantRequest>(&mut schemas);
+    add::<ChangeGrantRequest>(&mut schemas);
+    add::<GrantResponse>(&mut schemas);
+    add::<GrantPage>(&mut schemas);
     schemas.into_iter().collect()
 }
 
