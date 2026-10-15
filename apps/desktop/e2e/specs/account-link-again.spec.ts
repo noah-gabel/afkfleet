@@ -29,5 +29,5 @@ test("an account that needs a new sign-in is linked again", async ({ page, conte
   await expect(page.getByText("AfkBot1 is linked again.")).toBeVisible();
   await page.getByRole("link", { name: "Open account" }).click();
   await expect(page.getByText("Active", { exact: true })).toBeVisible();
-  expect(backend.opened()).toBe(1);
+  await expect.poll(() => backend.opened()).toBe(1);
 });

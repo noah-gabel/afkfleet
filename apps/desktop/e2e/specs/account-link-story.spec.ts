@@ -22,7 +22,8 @@ test("a Member's link waits for the Owner's approval, then is shared and deleted
   expect(backend.opened()).toBe(0);
   await page.getByRole("button", { name: "Get a code" }).click();
   await expect(page.getByText(LINK_CODE, { exact: true })).toBeVisible();
-  expect(backend.opened()).toBe(1);
+  // The page opens after the code shows, through its own request: poll for it.
+  await expect.poll(() => backend.opened()).toBe(1);
   await expect(
     page.getByText("AfkBot1 is linked. It waits for an Admin's or the Owner's approval", {
       exact: false,
