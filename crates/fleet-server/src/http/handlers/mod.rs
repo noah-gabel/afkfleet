@@ -2,8 +2,9 @@
 //! its input, authorizes, calls a service and maps the result: no business
 //! logic and no SQL.
 //!
-//! - [`accounts`]: `POST /api/v1/accounts/link` and `GET
-//!   /api/v1/accounts/link/{flow_id}` (P9.4).
+//! - [`accounts`]: `POST /api/v1/accounts/link`, `GET
+//!   /api/v1/accounts/link/{flow_id}` (P9.4) and `POST
+//!   /api/v1/accounts/offline` (P9.7).
 //! - [`auth`]: `POST /api/v1/auth/login`, `/auth/login/mfa`,
 //!   `/auth/refresh`, `/auth/logout`, `/auth/step-up` and `/auth/register`
 //!   (P7.6).

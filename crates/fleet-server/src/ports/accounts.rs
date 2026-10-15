@@ -134,6 +134,13 @@ pub trait AccountReads: Send + Sync + fmt::Debug {
     /// # Errors
     /// [`StoreError`].
     async fn count_owned_by(&self, owner: UserId) -> Result<u32, StoreError>;
+
+    /// How many offline accounts exist: serve warns about them while
+    /// `[accounts] allow_offline` is off (P9.7).
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn count_offline(&self) -> Result<u64, StoreError>;
 }
 
 /// Reading and writing accounts inside a [`super::store::WriteTx`].

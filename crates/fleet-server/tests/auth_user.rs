@@ -263,6 +263,7 @@ async fn setup_with(options: SqliteConnectOptions, database: DatabaseOptions) ->
         users,
         invites,
         link_flows: idle_link_flows(&db),
+        accounts: idle_accounts(&db),
     });
     let http = HttpConfig {
         bind: HttpConfig::DEFAULT_BIND,
@@ -821,6 +822,23 @@ fn idle_link_flows(
         LinkFlowSettings {
             total: core::num::NonZeroU32::MIN,
             per_user_per_day: core::num::NonZeroU32::MIN,
+            max_per_member: core::num::NonZeroU32::MIN,
+        },
+    )
+}
+
+/// The account service, which these tests never call (P9.7).
+fn idle_accounts(
+    db: &fleet_server::infra::sqlite::Database,
+) -> fleet_server::app::accounts::AccountService {
+    fleet_server::app::accounts::AccountService::new(
+        Arc::new(fleet_testkit::system::ManualClock::new(
+            chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+        )),
+        Arc::new(fleet_testkit::system::SeededRandom::new(4)),
+        Arc::new(db.clone()),
+        fleet_server::app::accounts::AccountSettings {
+            allow_offline: false,
             max_per_member: core::num::NonZeroU32::MIN,
         },
     )

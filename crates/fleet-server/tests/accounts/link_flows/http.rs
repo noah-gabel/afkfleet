@@ -118,6 +118,7 @@ fn limits(total: u32, per_day: u32) -> RateLimitConfig {
 fn quota(max: u32) -> AccountsConfig {
     AccountsConfig {
         max_per_member: NonZeroU32::new(max).unwrap(),
+        allow_offline: false,
     }
 }
 

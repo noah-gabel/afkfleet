@@ -72,6 +72,7 @@ use tracing::{error, info, warn};
 
 use super::DATABASE_CLOSE;
 use super::housekeeping::Housekeeping;
+use crate::app::accounts::{AccountService, AccountSettings};
 use crate::app::auth::TokenService;
 use crate::app::challenges::Challenges;
 use crate::app::health::HealthService;
@@ -314,7 +315,8 @@ pub fn app_with(
     } = ports;
     let store: Arc<dyn Store> = Arc::new(database.clone());
     let vault: Arc<dyn Vault> = Arc::new(XChaChaVault::new(keys, Arc::clone(&random)));
-    let link_flows = LinkFlowService::new(
+    let (link_flows, accounts) = account_services(
+        config,
         LinkFlowPorts {
             clock: Arc::clone(&clock),
             random: Arc::clone(&random),
@@ -322,11 +324,6 @@ pub fn app_with(
             vault: Arc::clone(&vault),
             microsoft,
             pace,
-        },
-        LinkFlowSettings {
-            total: config.rate_limits.link_flows.total,
-            per_user_per_day: config.rate_limits.link_flows.per_user_per_day,
-            max_per_member: config.accounts.max_per_member,
         },
     );
     let token_port: Arc<dyn Tokens> = Arc::new(Sha256Tokens::new(Arc::clone(&random)));
@@ -389,6 +386,7 @@ pub fn app_with(
         users,
         invites,
         link_flows: link_flows.clone(),
+        accounts,
     });
     App {
         router: router(
@@ -400,6 +398,32 @@ pub fn app_with(
         housekeeping: Housekeeping::new(limits, lockout, challenges, link_flows.flows()),
         link_flows,
     }
+}
+
+/// The Microsoft link flows and the other account use cases over `ports`,
+/// with `config`'s `[rate_limits]` and `[accounts]`.
+fn account_services(
+    config: &ServerConfig,
+    ports: LinkFlowPorts,
+) -> (LinkFlowService, AccountService) {
+    let accounts = AccountService::new(
+        Arc::clone(&ports.clock),
+        Arc::clone(&ports.random),
+        Arc::clone(&ports.store),
+        AccountSettings {
+            allow_offline: config.accounts.allow_offline,
+            max_per_member: config.accounts.max_per_member,
+        },
+    );
+    let link_flows = LinkFlowService::new(
+        ports,
+        LinkFlowSettings {
+            total: config.rate_limits.link_flows.total,
+            per_user_per_day: config.rate_limits.link_flows.per_user_per_day,
+            max_per_member: config.accounts.max_per_member,
+        },
+    );
+    (link_flows, accounts)
 }
 
 /// Opens the database `config` names and serves the API on `listener`
@@ -433,6 +457,7 @@ pub async fn run<S: ShutdownSignals>(
             Ok(passwords) => Arc::new(passwords),
             Err(error) => return cant_start(&StartError::Passwords(error)),
         };
+    warn_about_kept_offline_accounts(config, &database).await;
     let app = match app(config, &database, keys, lockout_key, passwords) {
         Ok(app) => app,
         Err(error) => return cant_start(&error),
@@ -446,6 +471,26 @@ pub async fn run<S: ShutdownSignals>(
         ShutdownTimeouts::of(&config.http),
     )
     .await
+}
+
+/// What a start logs while offline accounts are kept with the switch off.
+const KEPT_OFFLINE: &str = "offline accounts are kept while [accounts] allow_offline is off; no bot may use them until it's on again";
+
+/// Logs one `warn` when offline accounts exist while `[accounts]
+/// allow_offline` is off (P9.7, ADR-0018): they stay untouched, and no bot
+/// may run on them. A failed count is a `warn` too, and the start goes on.
+async fn warn_about_kept_offline_accounts(config: &ServerConfig, database: &Database) {
+    if config.accounts.allow_offline {
+        return;
+    }
+    match database.accounts().count_offline().await {
+        Ok(0) => {}
+        Ok(offline_accounts) => warn!(offline_accounts, "{KEPT_OFFLINE}"),
+        Err(error) => warn!(
+            error = %chain(&error),
+            "the offline accounts couldn't be counted at startup"
+        ),
+    }
 }
 
 /// Serves `app` on `listener`, every connection with its peer's address,

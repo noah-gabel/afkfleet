@@ -12,6 +12,10 @@ pub struct AccountsConfig {
     /// How many accounts a Member may own, of any kind and status
     /// (`max_per_member`); Admins and the Owner have no quota.
     pub max_per_member: NonZeroU32,
+    /// Whether offline accounts may be created (`allow_offline`), for
+    /// offline-mode servers in development (P9.7). Off by default; turning
+    /// it off again keeps the existing ones untouched.
+    pub allow_offline: bool,
 }
 
 impl AccountsConfig {
@@ -24,6 +28,7 @@ impl Default for AccountsConfig {
     fn default() -> Self {
         Self {
             max_per_member: nonzero(3),
+            allow_offline: false,
         }
     }
 }
@@ -35,5 +40,6 @@ mod tests {
     #[test]
     fn the_defaults_are_appendix_as() {
         assert_eq!(AccountsConfig::default().max_per_member.get(), 3);
+        assert!(!AccountsConfig::default().allow_offline);
     }
 }

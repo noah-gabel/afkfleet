@@ -32,7 +32,7 @@
 //!
 //! # Modules
 //! - [`accounts`]: the linked Minecraft accounts: starting a Microsoft link
-//!   flow and reading where it stands.
+//!   flow, reading where it stands, and creating an offline account.
 //! - [`app`]: the desktop app's IPC types, between its Rust side and its UI;
 //!   exported to TypeScript, never on the HTTP wire.
 //! - [`auth`]: logging in, refreshing, stepping up and registering.

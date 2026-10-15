@@ -185,6 +185,7 @@ async fn app(db: &Database, docs: ApiDocs) -> Router {
         users,
         invites,
         link_flows: idle_link_flows(db),
+        accounts: idle_accounts(db),
     });
     router(state, &http, ids, docs)
         .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))))
@@ -368,6 +369,7 @@ async fn the_document_lists_exactly_the_api_routes(
         BTreeSet::from([
             ("/api/v1/accounts/link", "post"),
             ("/api/v1/accounts/link/{flow_id}", "get"),
+            ("/api/v1/accounts/offline", "post"),
             ("/api/v1/auth/login", "post"),
             ("/api/v1/auth/login/mfa", "post"),
             ("/api/v1/auth/logout", "post"),
@@ -477,6 +479,23 @@ fn idle_link_flows(
         LinkFlowSettings {
             total: core::num::NonZeroU32::MIN,
             per_user_per_day: core::num::NonZeroU32::MIN,
+            max_per_member: core::num::NonZeroU32::MIN,
+        },
+    )
+}
+
+/// The account service, which these tests never call (P9.7).
+fn idle_accounts(
+    db: &fleet_server::infra::sqlite::Database,
+) -> fleet_server::app::accounts::AccountService {
+    fleet_server::app::accounts::AccountService::new(
+        Arc::new(fleet_testkit::system::ManualClock::new(
+            chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+        )),
+        Arc::new(fleet_testkit::system::SeededRandom::new(4)),
+        Arc::new(db.clone()),
+        fleet_server::app::accounts::AccountSettings {
+            allow_offline: false,
             max_per_member: core::num::NonZeroU32::MIN,
         },
     )

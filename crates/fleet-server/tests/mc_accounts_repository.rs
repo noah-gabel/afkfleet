@@ -393,6 +393,44 @@ async fn the_owned_count_counts_every_status_and_kind_of_one_owner(
 }
 
 #[sqlx::test(migrations = false)]
+async fn the_offline_count_counts_only_offline_accounts_of_every_owner(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let first = add_user(&db, 1).await;
+    let second = add_user(&db, 2).await;
+    assert_eq!(db.accounts().count_offline().await.unwrap(), 0);
+    insert(
+        &db,
+        &account(first, 1, "OffBot1", AccountCredential::Offline),
+    )
+    .await
+    .unwrap();
+    insert(
+        &db,
+        &account(second, 2, "OffBot2", AccountCredential::Offline),
+    )
+    .await
+    .unwrap();
+    insert(
+        &db,
+        &account(
+            first,
+            3,
+            "AfkBot1",
+            microsoft(PROFILE, 3, AccountStatus::Active),
+        ),
+    )
+    .await
+    .unwrap();
+
+    let count = db.accounts().count_offline().await.unwrap();
+
+    assert_eq!(count, 2);
+}
+
+#[sqlx::test(migrations = false)]
 async fn the_count_in_a_transaction_sees_its_own_insert(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,

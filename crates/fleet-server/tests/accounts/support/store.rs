@@ -228,4 +228,8 @@ impl AccountReads for FlakyStore {
     async fn count_owned_by(&self, owner: UserId) -> Result<u32, StoreError> {
         self.inner.accounts().count_owned_by(owner).await
     }
+
+    async fn count_offline(&self) -> Result<u64, StoreError> {
+        self.inner.accounts().count_offline().await
+    }
 }

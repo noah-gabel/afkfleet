@@ -17,8 +17,9 @@ use std::fmt::Write as _;
 use std::fs;
 
 use fleet_api_types::accounts::{
-    AccountStatus, LinkFlowResponse, LinkFlowState, LinkStartedResponse, MC_NAME_MAX_CHARS,
-    RefusalReason, USER_CODE_MAX_CHARS, VERIFICATION_URI_MAX_CHARS,
+    AccountKind, AccountStatus, CreateOfflineAccountRequest, CreatedOfflineAccountResponse,
+    LinkFlowResponse, LinkFlowState, LinkStartedResponse, MC_NAME_MAX_CHARS, RefusalReason,
+    USER_CODE_MAX_CHARS, VERIFICATION_URI_MAX_CHARS,
 };
 use fleet_api_types::auth::{
     ACCESS_TOKEN_MAX_SECS, LoginMfaRequest, LoginRequest, LoginResponse, LoginStatus,
@@ -60,7 +61,16 @@ use utoipa::{PartialSchema as _, ToSchema};
 fn declarations() -> BTreeMap<String, String> {
     let config = Config::new();
     [
+        ("AccountKind", AccountKind::decl(&config)),
         ("AccountStatus", AccountStatus::decl(&config)),
+        (
+            "CreateOfflineAccountRequest",
+            CreateOfflineAccountRequest::decl(&config),
+        ),
+        (
+            "CreatedOfflineAccountResponse",
+            CreatedOfflineAccountResponse::decl(&config),
+        ),
         ("LinkFlowResponse", LinkFlowResponse::decl(&config)),
         ("LinkFlowState", LinkFlowState::decl(&config)),
         ("LinkStartedResponse", LinkStartedResponse::decl(&config)),
@@ -369,6 +379,9 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::link_expires_at("LinkFlowResponse", "expires_at", TIMESTAMP_CHARS)]
 #[case::link_account_id("LinkFlowResponse", "account_id", ID_CHARS)]
 #[case::link_name("LinkFlowResponse", "name", MC_NAME_MAX_CHARS)]
+#[case::offline_request_name("CreateOfflineAccountRequest", "name", MC_NAME_MAX_CHARS)]
+#[case::offline_id("CreatedOfflineAccountResponse", "id", ID_CHARS)]
+#[case::offline_name("CreatedOfflineAccountResponse", "name", MC_NAME_MAX_CHARS)]
 fn a_text_field_is_capped_at_its_constant(
     #[case] component: &str,
     #[case] field: &str,
@@ -442,6 +455,9 @@ fn every_text_field_has_its_cap_checked() {
         ("LinkFlowResponse", "expires_at"),
         ("LinkFlowResponse", "account_id"),
         ("LinkFlowResponse", "name"),
+        ("CreateOfflineAccountRequest", "name"),
+        ("CreatedOfflineAccountResponse", "id"),
+        ("CreatedOfflineAccountResponse", "name"),
     ]);
     let components = components_json();
 
@@ -467,6 +483,7 @@ fn every_text_field_has_its_cap_checked() {
 fn a_request_schema_refuses_unknown_fields_and_responses_dont() {
     let requests = BTreeSet::from([
         "CreateInviteRequest",
+        "CreateOfflineAccountRequest",
         "LoginMfaRequest",
         "LoginRequest",
         "MfaConfirmRequest",
@@ -596,6 +613,8 @@ fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[ca
 #[case::link_status("LinkFlowResponse", "status", "LinkFlowState")]
 #[case::link_reason("LinkFlowResponse", "reason", "RefusalReason")]
 #[case::link_account_status("LinkFlowResponse", "account_status", "AccountStatus")]
+#[case::offline_kind("CreatedOfflineAccountResponse", "kind", "AccountKind")]
+#[case::offline_status("CreatedOfflineAccountResponse", "status", "AccountStatus")]
 fn the_new_open_fields_list_exactly_their_known_values(
     #[case] component: &str,
     #[case] field: &str,
@@ -616,6 +635,7 @@ fn the_new_open_fields_list_exactly_their_known_values(
             .iter()
             .map(|status| status.as_str())
             .collect(),
+        "AccountKind" => AccountKind::ALL.iter().map(|kind| kind.as_str()).collect(),
         _ => InviteState::ALL
             .iter()
             .map(|state| state.as_str())

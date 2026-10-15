@@ -217,6 +217,7 @@ link_flows_per_user_per_day = 20
 
 [accounts]
 max_per_member = 7
+allow_offline = true
 
 [vault]
 master_key_files = {{ 3 = {} }}
@@ -279,6 +280,7 @@ active_key_id = 3
             config.accounts,
             AccountsConfig {
                 max_per_member: nonzero(7),
+                allow_offline: true,
             }
         );
     });
@@ -304,6 +306,7 @@ fn environment_variables_override_the_file() {
         jail.set_env("AFKFLEET_SERVER__RATE_LIMITS__PER_IP_BURST", 80);
         jail.set_env("AFKFLEET_SERVER__RATE_LIMITS__LINK_FLOWS_TOTAL", 2);
         jail.set_env("AFKFLEET_SERVER__ACCOUNTS__MAX_PER_MEMBER", 1);
+        jail.set_env("AFKFLEET_SERVER__ACCOUNTS__ALLOW_OFFLINE", true);
         let toml = minimal(jail);
 
         let config = load_toml(jail, &toml).unwrap();
@@ -324,6 +327,7 @@ fn environment_variables_override_the_file() {
         assert_eq!(config.rate_limits.per_ip.burst().get(), 80);
         assert_eq!(config.rate_limits.link_flows.total.get(), 2);
         assert_eq!(config.accounts.max_per_member.get(), 1);
+        assert!(config.accounts.allow_offline);
     });
 }
 
@@ -917,6 +921,7 @@ fn the_dev_config_runs_in_dev_mode_with_the_database_and_vault_key_from_the_envi
         assert_eq!(config.database.path, path);
         assert_eq!(config.log.format, LogFormat::Pretty);
         assert_eq!(config.vault, vault_config(jail));
+        assert!(config.accounts.allow_offline);
     });
 }
 

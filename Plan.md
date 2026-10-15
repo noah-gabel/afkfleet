@@ -3374,7 +3374,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P9.6, from Phase 9, group C) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **re-link** must check that the profile's UUID is the account's, and sets `active` (clearing a `refused` reason) together with the new envelope, which makes a refresh in flight drop its rotated token. A `refused` or `reauth_required` account comes back through re-link; E decides whether approve or refuse may touch them.
 
   > Note (P9.6, from Phase 9, group A, the user's decisions on device-code phishing) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **approving and refusing a pending link** get endpoints here, and this group decides whether each needs a step-up. Admins and the Owner see every account with who linked it and when.
-- [ ] **P9.7** Offline accounts only when `accounts.allow_offline = true`. It's off by default and meant for dev.
+- [x] **P9.7** Offline accounts only when `accounts.allow_offline = true`. It's off by default and meant for dev.
+
+  > Note (P9.7, Phase 9, group D, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
+  > - **`POST /accounts/offline {name}`,** an authed route for every role (`LinkAccount`), without a step-up. The name follows `McUsername` (3–16 of letters, digits and `_`); the answer is 201 `{id, name, kind, status}`, always `active`, with no approval. A name taken in any case is 409 and names nobody.
+  > - **It counts toward the Member quota** (409 when full), like every account, and is recorded as `account.link` with `kind` offline, or a Failure for `taken` and `over_quota`.
+  > - **With `allow_offline` off,** the route answers 404 like an unknown one, before the body is read; it stays registered and in the `OpenAPI` document. Turning the switch off again keeps the existing offline accounts untouched, and serve warns at startup with how many are kept. No bot may run on one while it's off (P10.5, P10.6).
+  > - **The dev config** (`deploy/dev/server.toml`) turns it on, for the offline-mode test server.
 - [ ] **P9.8** 🔴 App screens:
   - accounts list
   - **"Link Microsoft account" dialog**:
@@ -3447,6 +3453,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Moving a bot** to another agent waits for the old agent's `Removed` event (or a timeout), so two agents never run the same account at once.
 
   > Note (P10.5, from P4.7, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **No `Stopped` before `Removed` for a sticky bot.** A removed bot publishes `StateChanged(Stopped)` only if its actor stopped it through `transition()`. A Paused, Failed or crash-looped bot gets only `Removed`, so `bots.last_state` keeps the Paused or Failed the server sends with `AssignBot` on the next agent. Otherwise the new agent would connect and kick the human who's playing (§6 row 3), or retry a failed account.
+  > Note (P10.5, from Phase 9, group D, the user's decision) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **no bot runs on an offline account while `[accounts] allow_offline` is off.** The offline accounts kept from before stay untouched (serve warns at startup), and the scheduler refuses to assign their bots until the switch is on again.
 - [ ] **P10.6** 🔴 Session grants: `SessionRequest{bot_id}` returns `SessionGrant`, but only if the bot is assigned to *this* agent; otherwise `SessionDenied`. On the agent this backs `SessionCredentialProvider`.
 
   > Note (P10.6, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The port is `fleet_core::mc`'s credentials provider, and the runtime doesn't check `expires_at`. The managed provider never hands out a token that expires within the connect timeout.
@@ -3883,7 +3890,7 @@ command_allowlist = ["/spawn", "/home", "/afk"]   # usable with Control; every o
 
 > Note (Appendix A, Phase 7, group E, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): `[auth] invite_ttl_hours` is 1 to 720 (30 days), 72 by default. An invite's expiry is stored when it's created, so a change doesn't move existing invites.
 
-> Note (Appendix A, Phase 9, group D, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **`[accounts]` arrives** with `max_per_member` (1–100, 3 by default), which counts every account a Member owns. `[rate_limits]` gains `link_flows_total` (1–16, 3) and `link_flows_per_user_per_day` (1–100, 10). None needs a place on the secret-name test's allowlist.
+> Note (Appendix A, Phase 9, group D, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **`[accounts]` arrives** with `max_per_member` (1–100, 3 by default), which counts every account a Member owns, and `allow_offline` (false by default; the dev config turns it on). `[rate_limits]` gains `link_flows_total` (1–16, 3) and `link_flows_per_user_per_day` (1–100, 10). None needs a place on the secret-name test's allowlist.
 
 `agent.toml`
 ```toml
@@ -3961,7 +3968,7 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 
 > Note (Appendix B, Phase 7, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`POST /auth/step-up`** (user) joins the table in group D. It takes `{password}` and stamps the session's `stepped_up_at`; the "(step-up)" routes need that stamp to be at most 5 min old, otherwise they answer 403 `step_up_required`.
 
-> Note (Appendix B, Phase 9, group D, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **`POST /accounts/link`** (every role) answers 201 `{flow_id, user_code, verification_uri, expires_at}`, the only time the code is shown. **`GET /accounts/link/{flow_id}`** is the flow's creator's alone (404 for everyone else) and answers `{status}` with each state's fields. P9.4's notes list both routes' answers.
+> Note (Appendix B, Phase 9, group D, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **`POST /accounts/link`** (every role) answers 201 `{flow_id, user_code, verification_uri, expires_at}`, the only time the code is shown. **`GET /accounts/link/{flow_id}`** is the flow's creator's alone (404 for everyone else) and answers `{status}` with each state's fields. P9.4's notes list both routes' answers. **`POST /accounts/offline {name}`** (every role, while `[accounts] allow_offline` is on; 404 otherwise) answers 201 `{id, name, kind, status}` (P9.7).
 
 > Note (Appendix B, Phase 7, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)):
 > - **Lists** (`GET /users`, `GET /invites`, `GET /me/sessions`) answer keyset pages: `?before=<id>&limit=<1..100>` (50 by default), newest first by ID, `{items, next}` with `next` left out on the last page. A query that doesn't parse is 400, a `limit` out of range 422.

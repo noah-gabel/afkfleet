@@ -125,6 +125,10 @@ impl AccountReads for Reads {
     async fn count_owned_by(&self, owner: UserId) -> Result<u32, StoreError> {
         accounts::count_owned_by(&self.pool, owner).await
     }
+
+    async fn count_offline(&self) -> Result<u64, StoreError> {
+        accounts::count_offline(&self.pool).await
+    }
 }
 
 #[async_trait]

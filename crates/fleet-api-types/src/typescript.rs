@@ -25,7 +25,10 @@ use std::path::{Path, PathBuf};
 
 use ts_rs::{Config, ExportError, TS};
 
-use crate::accounts::{LinkFlowResponse, LinkStartedResponse};
+use crate::accounts::{
+    CreateOfflineAccountRequest, CreatedOfflineAccountResponse, LinkFlowResponse,
+    LinkStartedResponse,
+};
 use crate::app::{
     LoginStepResponse, LogoutResponse, ServerProfileRequest, ServerProfileResponse,
     ServerProfileState, SetupStepResponse,
@@ -182,7 +185,9 @@ fn write_api(config: &Config) -> Result<(), TypeScriptError> {
     PasswordChangeRequest::export_all(config).map_err(TypeScriptError::Export)?;
     SessionPage::export_all(config).map_err(TypeScriptError::Export)?;
     LinkStartedResponse::export_all(config).map_err(TypeScriptError::Export)?;
-    LinkFlowResponse::export_all(config).map_err(TypeScriptError::Export)
+    LinkFlowResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    CreateOfflineAccountRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    CreatedOfflineAccountResponse::export_all(config).map_err(TypeScriptError::Export)
 }
 
 /// Writes the app's root IPC types, and every type they use.

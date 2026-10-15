@@ -214,11 +214,16 @@ impl Default for RawRateLimits {
 pub(crate) struct RawAccounts {
     #[garde(range(min = AccountsConfig::MAX_PER_MEMBER.min, max = AccountsConfig::MAX_PER_MEMBER.max))]
     pub(crate) max_per_member: u32,
+    #[garde(skip)]
+    pub(crate) allow_offline: bool,
 }
 
 impl Default for RawAccounts {
     fn default() -> Self {
-        Self { max_per_member: 3 }
+        Self {
+            max_per_member: 3,
+            allow_offline: false,
+        }
     }
 }
 
@@ -550,6 +555,7 @@ mod secret_names {
             "rate_limits.link_flows_per_user_per_day",
             "accounts",
             "accounts.max_per_member",
+            "accounts.allow_offline",
         ] {
             assert!(keys.iter().any(|found| found == key), "{key} in {keys:?}");
         }

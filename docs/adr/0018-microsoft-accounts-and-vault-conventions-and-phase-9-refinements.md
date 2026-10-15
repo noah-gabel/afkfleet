@@ -459,6 +459,26 @@ The user answered group D's questions one at a time, and added two notes for E a
   - `StartError::Microsoft` with its own text would print the message twice in the start's error chain; `#[error(transparent)]` prints it once.
   - **A race in the tests' pacing, not in the service:** a test that held a flow's first wait and then replaced that flow could leave the hold queued when the replaced poller was cancelled before it ever waited (sqlx's worker thread can answer a start's reads without the start yielding). The next flow's wait then took the hold and never ended: one run of `just check` timed out in the redaction test under full load. `held_start` now returns only once its poller is in the held wait.
 
+### Group D: offline accounts (P9.7) *(the user's choices, 2026-10-15)*
+- **`POST /accounts/offline {name}`** *(the user's choice)*: an authed route for every role (`LinkAccount`), with no step-up, while `[accounts] allow_offline` is on.
+  - The name follows `McUsername`'s rules (3–16 of letters, digits and `_`), checked by the request's garde rule, whose message names the rule and never the text. The request holds it as a `SecretText`, like a username, so it's never in `Debug`.
+  - The answer is 201 `{id, name, kind, status}`. An offline account is always `active` and needs no approval (group A's CHECK).
+  - A name taken in any case is 409 `conflict` and names nobody.
+  - It counts toward the Member quota (409 when full), checked in the transaction like a link's.
+  - Audit: `account.link` with `kind` offline, `name` and `status`; a Failure for `taken` and `over_quota`, as a link's.
+  - The service, `app::accounts::AccountService`, mints the ID and builds every entry before its transaction, which re-reads the creator and their session, then counts the quota, then inserts.
+- **With `allow_offline` off** *(the user's choice)*: the route answers 404 like an unknown one, whatever the body, since the switch is checked before the body is read. It stays registered and in the `OpenAPI` document, so the registry and the document don't depend on the config.
+- **Turning it off again** *(the user's choice)*: the offline accounts kept from before stay untouched. serve logs one `warn` at startup naming how many are kept (`offline_accounts`), and a failed count is a `warn` too. No bot may run on one while the switch is off: P10.5's scheduler refuses them (a note there).
+- **The dev config** turns it on *(the user's choice)*: `deploy/dev/server.toml` has `[accounts] allow_offline = true`, for the offline-mode test server (`just mc-up`). The default stays off.
+
+### As built (group D, P9.7)
+- **fleet-server:** `app::accounts` (`AccountService`, `AccountSettings`, `CreateOfflineError`); `AccountReads::count_offline` and its query; the route `http::handlers::accounts::create_offline`; `Services::accounts`; `config::AccountsConfig::allow_offline`; serve's startup warning.
+- **fleet-api-types:** `accounts::{AccountKind, CreateOfflineAccountRequest, CreatedOfflineAccountResponse}`.
+- **Tests,** red first against stubs (the config ignoring the key, a count of 0, a service answering `Disabled`, a warning that logs nothing):
+  - config 3 of 3 changed tests; the repository 1 of 1; the route 8 of 11; serve's warning 1 of 2; fleet-api-types' lists until the DTOs joined them.
+  - **Shown red by mutations,** each reverted and checked by checksum: the 404 while off (the body read before the switch), the name rule's 422 and its DTO test (every name passing), and no warning while allowed (the switch ignored). The 401 test pins the router's rule, which the route-coverage test checks too.
+- **Snapshots,** read before accepting: `offline_created`, and the `OpenAPI` document again (the route, `AccountKind` and both DTOs).
+
 ### Notes for later groups
 - **B (P9.3):** done (above). Two of these notes changed with the user's decisions. fleet-server, fleet-client and the desktop crate stay in `stable_crates`, and azalea-auth doesn't reach fleet-server at all. The redaction test runs with the configured filter at `trace`, as planned.
   - ~~fleet-server leaves `stable_crates` together with fleet-client and the desktop crate, since both dev-depend on fleet-server and `stable-check` builds `--all-targets`.~~
@@ -471,7 +491,7 @@ The user answered group D's questions one at a time, and added two notes for E a
   - *(from B)* **Sessions:** `minecraft_session` checks the entitlements and the profile every time, so compare its `uuid` with the account's `McUuid` before handing out its token.
   - *(from B)* **Retries:** the adapter makes none; the service owns them, and its single-flight keeps a rotated token from being spent twice.
   - *(from B)* **Tests:** the service's tests join the `tests/accounts/` binary with its fake, and its module joins the `msauth` coverage gate.
-- **D (P9.4, P9.7):**
+- **D (P9.4, P9.7):** done (above); every note below was applied. P10.5 has a note: no bot runs on an offline account while `[accounts] allow_offline` is off.
   - A Member's or an Admin's link starts `pending`, the Owner's `active`.
   - *(from B)* **The poller:**
     - It polls once per `DeviceFlow.interval` and switches to `PollInterval::slowed_down()` after a `SlowDown`.

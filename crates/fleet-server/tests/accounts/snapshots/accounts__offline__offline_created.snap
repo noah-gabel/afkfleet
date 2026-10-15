@@ -1,0 +1,10 @@
+---
+source: crates/fleet-server/tests/accounts/offline.rs
+expression: shown
+---
+{
+  "id": "[account]",
+  "kind": "offline",
+  "name": "Afk_Bot1",
+  "status": "active"
+}

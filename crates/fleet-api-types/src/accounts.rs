@@ -1,5 +1,6 @@
-//! The linked Minecraft accounts' DTOs (Plan.md P9.4, ADR-0018): starting a
-//! Microsoft link flow, and reading where it stands.
+//! The linked Minecraft accounts' DTOs (Plan.md P9.4, P9.7, ADR-0018):
+//! starting a Microsoft link flow, reading where it stands, and creating an
+//! offline account for development.
 //!
 //! A flow's code is in [`LinkStartedResponse`] only, its creator's answer:
 //! the user types it at Microsoft's page, and nothing else ever shows it, so
@@ -9,6 +10,8 @@
 
 use fleet_core::account;
 use fleet_core::id::{AccountId, LinkFlowId};
+use fleet_core::value::McUsername;
+use garde::Validate;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use utoipa::{PartialSchema as _, ToSchema};
@@ -78,6 +81,38 @@ impl OpenEnum for LinkFlowState {
             Self::Refused => "refused",
             Self::Failed => "failed",
             Self::Linked => "linked",
+        }
+    }
+}
+
+/// How an account signs in to Minecraft.
+/// This union lists the values this version knows; a newer server may send
+/// others, so code that branches on it keeps a default branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum AccountKind {
+    /// Through Microsoft.
+    Microsoft,
+    /// Without any sign-in, for offline-mode servers in development only.
+    Offline,
+}
+
+impl OpenEnum for AccountKind {
+    const ALL: &'static [Self] = &[Self::Microsoft, Self::Offline];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Microsoft => "microsoft",
+            Self::Offline => "offline",
+        }
+    }
+}
+
+impl From<account::AccountKind> for AccountKind {
+    fn from(kind: account::AccountKind) -> Self {
+        match kind {
+            account::AccountKind::Microsoft => Self::Microsoft,
+            account::AccountKind::Offline => Self::Offline,
         }
     }
 }
@@ -255,6 +290,49 @@ pub struct LinkFlowResponse {
     pub name: Option<BoundedText<MC_NAME_MAX_CHARS>>,
 }
 
+/// `POST /accounts/offline`: an offline account named `name`, while the
+/// server allows them (`[accounts] allow_offline`).
+#[derive(Debug, Serialize, Deserialize, Validate, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CreateOfflineAccountRequest {
+    /// The Minecraft name: 3 to 16 letters, digits or `_`, unique in any
+    /// case.
+    #[garde(custom(valid_mc_name))]
+    #[ts(type = "string")]
+    #[schema(schema_with = SecretText::<MC_NAME_MAX_CHARS>::schema)]
+    pub name: SecretText<MC_NAME_MAX_CHARS>,
+}
+
+/// The garde rule of a Minecraft name: a valid `McUsername`. The message
+/// names the rule, never the text.
+fn valid_mc_name<C>(name: &SecretText<MC_NAME_MAX_CHARS>, _context: &C) -> garde::Result {
+    name.expose()
+        .parse::<McUsername>()
+        .map(drop)
+        .map_err(|_| garde::Error::new("must be 3 to 16 letters, digits or `_`"))
+}
+
+/// The new offline account.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct CreatedOfflineAccountResponse {
+    /// The account's ID.
+    #[ts(type = "string")]
+    #[schema(schema_with = id_schema)]
+    pub id: AccountId,
+    /// Its Minecraft name, as sent.
+    #[ts(type = "string")]
+    #[schema(schema_with = BoundedText::<MC_NAME_MAX_CHARS>::schema)]
+    pub name: BoundedText<MC_NAME_MAX_CHARS>,
+    /// `offline`.
+    #[ts(as = "AccountKind")]
+    #[schema(value_type = AccountKind)]
+    pub kind: Open<AccountKind>,
+    /// `active`: an offline account needs no approval.
+    #[ts(as = "AccountStatus")]
+    #[schema(value_type = AccountStatus)]
+    pub status: Open<AccountStatus>,
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -330,6 +408,72 @@ mod tests {
         assert_eq!(read.status.as_str(), "paused");
         assert_eq!(read.reason.unwrap().as_str(), "xbox_new_rule");
         assert_eq!(read.account_status.unwrap().as_str(), "frozen");
+    }
+
+    #[test]
+    fn every_kind_names_itself_as_serde_does_and_as_fleet_core_does() {
+        for kind in [
+            account::AccountKind::Microsoft,
+            account::AccountKind::Offline,
+        ] {
+            let api = AccountKind::from(kind);
+
+            assert_eq!(serde_json::to_value(api).unwrap(), json!(kind.as_str()));
+            assert_eq!(api.as_str(), kind.as_str());
+        }
+        assert_eq!(AccountKind::ALL.len(), 2);
+    }
+
+    #[test]
+    fn an_offline_request_takes_a_minecraft_name() {
+        let request: CreateOfflineAccountRequest =
+            serde_json::from_value(json!({ "name": "Afk_Bot1" })).unwrap();
+
+        assert_eq!(request.name.expose(), "Afk_Bot1");
+        assert!(request.validate().is_ok());
+    }
+
+    #[test]
+    fn an_offline_request_refuses_what_isnt_a_minecraft_name() {
+        for name in ["ab", "seventeen_chars_x", "Afk Bot", "Afk-Bot", "Äfk"] {
+            let request: CreateOfflineAccountRequest =
+                serde_json::from_value(json!({ "name": name })).unwrap();
+
+            let report = request.validate().unwrap_err();
+
+            let text = report.to_string();
+            assert!(
+                text.contains("must be 3 to 16 letters, digits or `_`"),
+                "{text}"
+            );
+            assert!(!text.contains(name), "{text}");
+        }
+    }
+
+    #[test]
+    fn an_offline_request_refuses_unknown_missing_and_mistyped_fields() {
+        let read = |body| serde_json::from_value::<CreateOfflineAccountRequest>(body);
+
+        assert!(read(json!({ "name": "AfkBot1", "kind": "offline" })).is_err());
+        assert!(read(json!({})).is_err());
+        assert!(read(json!({ "name": 1 })).is_err());
+    }
+
+    #[test]
+    fn the_offline_answer_round_trips_and_its_request_hides_the_name() {
+        let created = json!({
+            "id": "018bcfe5-6800-7101-8101-010101010101",
+            "name": "AfkBot1",
+            "kind": "offline",
+            "status": "active"
+        });
+        let request: CreateOfflineAccountRequest =
+            serde_json::from_value(json!({ "name": "Secret_Name1" })).unwrap();
+
+        let back: CreatedOfflineAccountResponse = serde_json::from_value(created.clone()).unwrap();
+
+        assert_eq!(serde_json::to_value(back).unwrap(), created);
+        assert!(!format!("{request:?}").contains("Secret_Name1"));
     }
 
     #[test]

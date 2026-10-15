@@ -43,12 +43,15 @@ fn the_export_writes_one_file_per_type() {
     assert_eq!(
         files.keys().collect::<Vec<_>>(),
         [
+            "AccountKind.ts",
             "AccountStatus.ts",
             "ApiErrorDetails.ts",
             "CommandError.ts",
             "CommandErrorCode.ts",
             "CreateInviteRequest.ts",
+            "CreateOfflineAccountRequest.ts",
             "CreatedInviteResponse.ts",
+            "CreatedOfflineAccountResponse.ts",
             "CustomCaView.ts",
             "ErrorBody.ts",
             "ErrorCode.ts",

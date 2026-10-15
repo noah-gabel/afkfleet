@@ -2,6 +2,8 @@
 //! (Plan.md §4, ADR-0015). They hold the ports as `Arc<dyn …>` and read the
 //! time and randomness only through fleet-core's `Clock` and `SecureRandom`.
 //!
+//! - [`accounts`]: the linked Minecraft accounts' use cases beside the link
+//!   flow: creating an offline account (P9.7).
 //! - [`audit`]: stamping audit entries, recording the ones that change
 //!   nothing, and listing the log.
 //! - [`auth`]: sessions and their tokens: issuing, refreshing with reuse
@@ -26,6 +28,7 @@
 //! - [`vault`]: what the vault's keys seal, and re-encrypting the secrets
 //!   under the active key (P9.2).
 
+pub mod accounts;
 pub mod audit;
 pub mod auth;
 pub mod challenges;

@@ -5,6 +5,14 @@ expression: answer.json()
 {
   "components": {
     "schemas": {
+      "AccountKind": {
+        "description": "How an account signs in to Minecraft.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "microsoft",
+          "offline"
+        ],
+        "type": "string"
+      },
       "AccountStatus": {
         "description": "Where a linked account stands.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
         "enum": [
@@ -29,6 +37,20 @@ expression: answer.json()
         ],
         "type": "object"
       },
+      "CreateOfflineAccountRequest": {
+        "additionalProperties": false,
+        "description": "`POST /accounts/offline`: an offline account named `name`, while the\nserver allows them (`[accounts] allow_offline`).",
+        "properties": {
+          "name": {
+            "maxLength": 16,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
       "CreatedInviteResponse": {
         "description": "The new invite, with its code: shown this once.",
         "properties": {
@@ -44,6 +66,34 @@ expression: answer.json()
         "required": [
           "code",
           "invite"
+        ],
+        "type": "object"
+      },
+      "CreatedOfflineAccountResponse": {
+        "description": "The new offline account.",
+        "properties": {
+          "id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AccountKind",
+            "description": "`offline`."
+          },
+          "name": {
+            "maxLength": 16,
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AccountStatus",
+            "description": "`active`: an offline account needs no approval."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "status"
         ],
         "type": "object"
       },
@@ -985,6 +1035,132 @@ expression: answer.json()
           }
         ],
         "summary": "`GET /api/v1/accounts/link/{flow_id}`: where the caller's flow stands.",
+        "tags": [
+          "accounts"
+        ]
+      }
+    },
+    "/api/v1/accounts/offline": {
+      "post": {
+        "operationId": "create_offline_account",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateOfflineAccountRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedOfflineAccountResponse"
+                }
+              }
+            },
+            "description": "The offline account, active at once."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A body that isn't the request's shape."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server doesn't allow offline accounts (`[accounts] allow_offline`)."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The name is taken, in any case, or the Member owns their quota of accounts already."
+          },
+          "415": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A body that isn't JSON."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A name that isn't a Minecraft name."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/accounts/offline`: a new offline account, while the\nserver allows them.",
         "tags": [
           "accounts"
         ]

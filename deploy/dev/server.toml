@@ -27,3 +27,6 @@ filter = "info"                          # EnvFilter syntax; azalea_auth stays a
 
 [vault]
 active_key_id = 1                        # the key in master_key_files.1, from just dev-server
+
+[accounts]
+allow_offline = true                     # dev only: offline-mode test server

@@ -26,6 +26,7 @@
 //! | `DELETE /api/v1/invites/{id}` | user + step-up (as creating) | revokes a pending invite |
 //! | `POST /api/v1/accounts/link` | user | starts a Microsoft link flow; its code, shown this once |
 //! | `GET /api/v1/accounts/link/{flow_id}` | user (the flow's creator) | where the flow stands |
+//! | `POST /api/v1/accounts/offline` | user (while `[accounts] allow_offline` is on) | a new offline account |
 //! | `GET /api/openapi.json` | public | the `OpenAPI` document, only in dev mode ([`openapi`](super::openapi)) |
 //!
 //! The health routes have no `/api/v1` prefix. Both answer `200` with an
@@ -45,6 +46,7 @@ use super::middleware::RequestIds;
 use super::openapi::ApiDocs;
 use super::rate_limit::RateLimits;
 use super::routes::{RateClass, Routes};
+use crate::app::accounts::AccountService;
 use crate::app::auth::TokenService;
 use crate::app::health::HealthService;
 use crate::app::invites::InviteService;
@@ -76,6 +78,8 @@ pub struct AppState {
     pub(crate) invites: InviteService,
     /// The Microsoft link flows.
     pub(crate) link_flows: LinkFlowService,
+    /// The accounts beside the link flows: offline ones.
+    pub(crate) accounts: AccountService,
 }
 
 /// Every service the handlers share, by name, so each one is a line of its
@@ -98,6 +102,8 @@ pub struct Services {
     pub invites: InviteService,
     /// The Microsoft link flows.
     pub link_flows: LinkFlowService,
+    /// The accounts beside the link flows: offline ones.
+    pub accounts: AccountService,
 }
 
 impl AppState {
@@ -113,6 +119,7 @@ impl AppState {
             users,
             invites,
             link_flows,
+            accounts,
         } = services;
         Self {
             health,
@@ -123,6 +130,7 @@ impl AppState {
             users,
             invites,
             link_flows,
+            accounts,
         }
     }
 }
@@ -153,6 +161,7 @@ pub fn api_routes(routes: Routes) -> Routes {
         .step_up_route(RateClass::Standard, routes!(invites::revoke))
         .authed_route(RateClass::Standard, routes!(accounts::start_link))
         .authed_route(RateClass::Standard, routes!(accounts::link_status))
+        .authed_route(RateClass::Standard, routes!(accounts::create_offline))
 }
 
 /// Every route with `state`, behind the middleware stack with the timeout,

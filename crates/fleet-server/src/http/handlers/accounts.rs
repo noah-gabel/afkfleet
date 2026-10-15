@@ -1,6 +1,7 @@
-//! The account routes (Plan.md P9.4, Appendix B, ADR-0018): `POST
-//! /api/v1/accounts/link` starts a Microsoft link flow, and `GET
-//! /api/v1/accounts/link/{flow_id}` reads where it stands.
+//! The account routes (Plan.md P9.4, P9.7, Appendix B, ADR-0018): `POST
+//! /api/v1/accounts/link` starts a Microsoft link flow, `GET
+//! /api/v1/accounts/link/{flow_id}` reads where it stands, and `POST
+//! /api/v1/accounts/offline` creates an offline account.
 //!
 //! - **Starting** is every role's (`LinkAccount`); the service applies the
 //!   caps and the Member quota. The answer carries the code the user types
@@ -8,23 +9,30 @@
 //! - **Reading** a flow is its creator's alone (`UsePersonal`): an unknown,
 //!   replaced or long finished flow, and another user's, are all 404 with
 //!   the same body.
+//! - **An offline account** is every role's (`LinkAccount`), while `[accounts]
+//!   allow_offline` is on. With it off, the route answers 404 like an
+//!   unknown one, whatever the body, since the body is read only after that
+//!   check.
 
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use fleet_api_types::accounts::{
-    AccountStatus, LinkFlowResponse, LinkFlowState, LinkStartedResponse, RefusalReason,
+    AccountKind, AccountStatus, CreateOfflineAccountRequest, CreatedOfflineAccountResponse,
+    LinkFlowResponse, LinkFlowState, LinkStartedResponse, RefusalReason,
 };
 use fleet_api_types::{BoundedText, ErrorResponse, SecretText};
 use fleet_core::authz::{Permission, ResourceContext};
 use fleet_core::id::LinkFlowId;
+use fleet_core::value::McUsername;
 
 use super::{acting, timestamp};
+use crate::app::accounts::CreateOfflineError;
 use crate::app::link_flows::{
     ALL_BUSY_RETRY_AFTER, IN_PROGRESS_RETRY_AFTER, LinkFlowStatus, LinkStartError,
 };
 use crate::http::error::ApiError;
-use crate::http::extractors::{AuthUser, ValidPath};
+use crate::http::extractors::{AuthUser, ValidJson, ValidPath};
 use crate::http::rate_limit::ClientIp;
 use crate::http::router::AppState;
 use crate::ports::msauth::Failure;
@@ -125,6 +133,64 @@ pub(crate) async fn link_status(
         },
     )?;
     Ok(Json(flow_response(view.status)?))
+}
+
+/// `POST /api/v1/accounts/offline`: a new offline account, while the
+/// server allows them.
+#[utoipa::path(
+    post,
+    path = "/api/v1/accounts/offline",
+    operation_id = "create_offline_account",
+    tag = "accounts",
+    request_body = CreateOfflineAccountRequest,
+    responses(
+        (status = 201, description = "The offline account, active at once.", body = CreatedOfflineAccountResponse),
+        (status = 400, description = "A body that isn't the request's shape.", body = ErrorResponse),
+        (status = 401, description = "No valid access token.", body = ErrorResponse),
+        (status = 404, description = "The server doesn't allow offline accounts (`[accounts] allow_offline`).", body = ErrorResponse),
+        (status = 409, description = "The name is taken, in any case, or the Member owns their quota of accounts already.", body = ErrorResponse),
+        (status = 415, description = "A body that isn't JSON.", body = ErrorResponse),
+        (status = 422, description = "A name that isn't a Minecraft name.", body = ErrorResponse),
+        (status = 429, description = "Too many requests.", body = ErrorResponse,
+            headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
+        (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
+    ),
+)]
+pub(crate) async fn create_offline(
+    user: AuthUser,
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    body: Result<ValidJson<CreateOfflineAccountRequest>, ApiError>,
+) -> Result<(StatusCode, Json<CreatedOfflineAccountResponse>), ApiError> {
+    if !state.accounts.offline_allowed() {
+        return Err(ApiError::NotFound);
+    }
+    let ValidJson(request) = body?;
+    user.require(Permission::LinkAccount, &ResourceContext::Global)?;
+    // garde checked it's a Minecraft name.
+    let name: McUsername = request.name.expose().parse().map_err(ApiError::internal)?;
+    let account = state
+        .accounts
+        .create_offline(&acting(&user, ip), name)
+        .await
+        .map_err(|error| match error {
+            CreateOfflineError::Disabled => ApiError::NotFound,
+            CreateOfflineError::SessionGone => ApiError::Unauthorized,
+            CreateOfflineError::OverQuota | CreateOfflineError::Taken => ApiError::Conflict,
+            CreateOfflineError::Store(error) => ApiError::from(error),
+            other @ (CreateOfflineError::Mint(_) | CreateOfflineError::Audit(_)) => {
+                ApiError::internal(other)
+            }
+        })?;
+    Ok((
+        StatusCode::CREATED,
+        Json(CreatedOfflineAccountResponse {
+            id: account.id,
+            name: BoundedText::new(account.name.as_str()),
+            kind: AccountKind::from(account.credential.kind()).into(),
+            status: AccountStatus::from(account.status()).into(),
+        }),
+    ))
 }
 
 /// A flow's status as the API shows it.

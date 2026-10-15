@@ -388,6 +388,7 @@ fn rate_limits(raw: &RawRateLimits) -> Option<RateLimitConfig> {
 fn accounts(raw: &RawAccounts) -> Option<AccountsConfig> {
     Some(AccountsConfig {
         max_per_member: NonZeroU32::new(raw.max_per_member)?,
+        allow_offline: raw.allow_offline,
     })
 }
 
