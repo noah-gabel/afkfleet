@@ -104,8 +104,9 @@ async fn a_message_at_the_limit_is_read_and_one_byte_over_ends_the_stream(
     assert_eq!(status.message(), TOO_LARGE);
     assert_eq!(request_id(status.metadata()), over.request_id());
 
+    // Each end is recorded after its answer.
     let ends = port
-        .entries(&fleet_core::audit::AuditAction::AGENT_DISCONNECT)
+        .entries_once(&fleet_core::audit::AuditAction::AGENT_DISCONNECT, 2)
         .await;
     assert_eq!(ends.len(), 2, "{ends:?}");
     for end in &ends {

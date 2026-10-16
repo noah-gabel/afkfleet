@@ -3,8 +3,10 @@
 //! queued and ends the stream.
 //!
 //! The last message is a `Reject` (the stream then ends OK) or a status.
-//! Without one, the stream ends OK once every sender of the queue is gone
-//! and what they queued went out.
+//! Once the stream's switch ([`Halt`]) is thrown, nothing queued goes out
+//! any more: only the last message, or, without one, the stream's end.
+//! Without a switch thrown or a last message, the stream ends OK once every
+//! sender of the queue is gone and what they queued went out.
 
 use core::future::Future as _;
 use core::pin::Pin;
@@ -16,6 +18,8 @@ use tokio_stream::Stream;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Status;
 
+use crate::grpc::registry::Halt;
+
 /// The last thing a stream sends: a message (a `Reject`), then OK, or a
 /// status.
 pub(super) type Last = Result<wire::ServerMessage, Status>;
@@ -25,18 +29,23 @@ pub(super) type Last = Result<wire::ServerMessage, Status>;
 #[derive(Debug)]
 pub struct Outbound {
     last: Option<oneshot::Receiver<Last>>,
+    /// Once thrown, only the last answer goes out.
+    halt: Halt,
     queue: ReceiverStream<wire::ServerMessage>,
     done: bool,
 }
 
 impl Outbound {
-    /// The answers of a session holding `queue`'s sender and `last`'s.
+    /// The answers of a session holding `queue`'s sender and `last`'s,
+    /// stopped by `halt`.
     pub(super) fn new(
         queue: mpsc::Receiver<wire::ServerMessage>,
         last: oneshot::Receiver<Last>,
+        halt: Halt,
     ) -> Self {
         Self {
             last: Some(last),
+            halt,
             queue: ReceiverStream::new(queue),
             done: false,
         }
@@ -63,6 +72,15 @@ impl Stream for Outbound {
                 Poll::Ready(Err(_)) => this.last = None,
                 Poll::Pending => {}
             }
+        }
+        if this.halt.is_halted() {
+            // Its last message wakes it, or its sender's drop: `last`'s
+            // poll above holds this task's waker.
+            if this.last.is_none() {
+                this.done = true;
+                return Poll::Ready(None);
+            }
+            return Poll::Pending;
         }
         match Pin::new(&mut this.queue).poll_next(cx) {
             Poll::Ready(Some(message)) => Poll::Ready(Some(Ok(message))),
@@ -109,7 +127,51 @@ mod tests {
     ) {
         let (queue, queued) = mpsc::channel(8);
         let (last, lasting) = oneshot::channel();
-        (queue, last, Outbound::new(queued, lasting))
+        (queue, last, Outbound::new(queued, lasting, Halt::default()))
+    }
+
+    #[test]
+    fn a_halted_stream_sends_nothing_queued_but_its_last_message() {
+        let (queue, queued) = mpsc::channel(8);
+        let (last, lasting) = oneshot::channel();
+        let halt = Halt::default();
+        let outbound = Outbound::new(queued, lasting, halt.clone());
+        let mut outbound = core::pin::pin!(outbound);
+        queue.try_send(assign(1)).unwrap();
+        queue.try_send(assign(2)).unwrap();
+        let flag = Arc::new(Flag(AtomicBool::new(false)));
+        let waker = Arc::clone(&flag).into();
+        let mut cx = Context::from_waker(&waker);
+
+        halt.halt();
+        let held = outbound.as_mut().poll_next(&mut cx);
+        last.send(Ok(reject())).unwrap();
+
+        assert!(held.is_pending(), "{held:?}");
+        assert!(flag.0.load(Ordering::SeqCst));
+        let polled = outbound.as_mut().poll_next(&mut cx);
+        assert!(
+            matches!(&polled, Poll::Ready(Some(Ok(message))) if *message == reject()),
+            "{polled:?}"
+        );
+        assert!(matches!(
+            outbound.as_mut().poll_next(&mut cx),
+            Poll::Ready(None)
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_halted_stream_without_a_last_message_ends() {
+        let (queue, queued) = mpsc::channel(8);
+        let (last, lasting) = oneshot::channel();
+        let halt = Halt::default();
+        let mut outbound = Outbound::new(queued, lasting, halt.clone());
+        queue.send(assign(1)).await.unwrap();
+
+        halt.halt();
+        drop(last);
+
+        assert!(outbound.next().await.is_none());
     }
 
     /// A waker that notes it was woken.

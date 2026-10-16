@@ -153,15 +153,9 @@ async fn a_silent_connection_with_a_stream_is_closed_and_the_stream_recorded(
     proxy.server_closed(1).await;
     let ended = port.disconnect(&agent).await;
     // The keepalive and the stream's own deadline run out together; either
-    // may end it.
-    let reason = text(&ended, "reason");
-    assert!(
-        matches!(
-            reason.as_deref(),
-            Some("heartbeat_timeout" | "stream_error")
-        ),
-        "{reason:?}"
-    );
+    // may end it, and tonic may read the keepalive's close as a clean end or
+    // a failed one. Every way, it ended of silence.
+    assert_eq!(text(&ended, "reason").as_deref(), Some("heartbeat_timeout"));
     port.stop().await;
 }
 

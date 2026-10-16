@@ -16,7 +16,7 @@ use fleet_proto::PROTOCOL_VERSION;
 use fleet_proto::control::{RejectReason, ServerMessage, Welcome};
 use fleet_proto::generated as wire;
 use fleet_proto::generated::agent_control_client::AgentControlClient;
-use fleet_server::app::agents::AgentConnectionService;
+use fleet_server::app::agents::{AgentConnectionService, AgentService, Disabler};
 use fleet_server::app::enrollment::EnrollmentService;
 use fleet_server::config::{Heartbeats, RateLimitConfig};
 use fleet_server::grpc::control::{ControlTimings, REQUEST_ID, Sessions, control_service};
@@ -334,6 +334,22 @@ impl Port {
             .unwrap();
     }
 
+    /// Disables `agent` as `afkfleet-server agent disable` does beside the
+    /// running server: through the agents' service, which revokes every
+    /// certificate too, with a registry of its own that holds no stream, so
+    /// only the port's sweep can end the stream.
+    pub(crate) async fn host_disable(&self, agent: &Agent) {
+        let clock = Arc::new(self.clock.clone());
+        AgentService::new(
+            clock.clone(),
+            Arc::new(self.db.clone()),
+            Arc::new(AgentRegistry::new(clock)),
+        )
+        .disable(Disabler::Host, agent.id)
+        .await
+        .unwrap();
+    }
+
     /// Agent `agent`'s row.
     pub(crate) async fn row(&self, agent: &Agent) -> AgentRow {
         self.db.agents().find(agent.id).await.unwrap().unwrap()
@@ -410,9 +426,31 @@ impl Port {
             .collect()
     }
 
+    /// The entries of `action` once there are `count`, waiting within
+    /// [`BOUND`]: a stream's end is recorded after its last answer.
+    pub(crate) async fn entries_once(
+        &self,
+        action: &AuditAction,
+        count: usize,
+    ) -> Vec<AuditRecord> {
+        tokio::time::timeout(BOUND, async {
+            loop {
+                let entries = self.entries(action).await;
+                if entries.len() >= count {
+                    return entries;
+                }
+                // The session writes it on its own task; there's nothing
+                // to wait on but the database.
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap()
+    }
+
     /// Waits within [`BOUND`] until `agent.disconnect` is recorded for
     /// `agent`, and returns it. The session records it after its last
-    /// answer, so a client may see the end first.
+    /// answer, so a client sees the end first.
     pub(crate) async fn disconnect(&self, agent: &Agent) -> AuditRecord {
         tokio::time::timeout(BOUND, async {
             loop {

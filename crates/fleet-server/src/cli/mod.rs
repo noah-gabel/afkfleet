@@ -172,7 +172,7 @@ pub enum AgentCommand {
     },
     /// Disables an agent for good: every certificate it holds is revoked,
     /// so it can't connect again, and its name is free for a new
-    /// enrollment. A running server ends its stream within 5 s. It neither
+    /// enrollment. A running server ends its stream within 10 s. It neither
     /// creates nor migrates the database, and works without `[grpc]`.
     #[command(after_help = agent::DISABLE_EXIT_CODES)]
     Disable {

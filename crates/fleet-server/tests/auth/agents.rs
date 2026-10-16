@@ -16,7 +16,7 @@ use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock as _;
 use fleet_core::value::AgentName;
 use fleet_server::config::{Rate, RateLimitConfig};
-use fleet_server::grpc::registry::Lease;
+use fleet_server::grpc::registry::{Halt, Lease};
 use fleet_server::ports::agent_connections::{Admitted, StreamEnd};
 use fleet_server::ports::agents::{NewAgent, NewAgentCert};
 use fleet_server::ports::store::Store as _;
@@ -84,7 +84,7 @@ impl Setup {
         let (queue, queued) = mpsc::channel(4);
         let ended = self
             .registry
-            .activate(&lease, queue, self.clock.now())
+            .activate(&lease, queue, Halt::default(), self.clock.now())
             .unwrap();
         (lease, queued, ended)
     }

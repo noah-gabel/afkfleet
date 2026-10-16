@@ -30,7 +30,7 @@ use fleet_server::app::link_flows::LinkFlows;
 use fleet_server::app::lockout::LockoutService;
 use fleet_server::cli::housekeeping::Housekeeping;
 use fleet_server::config::{LinkFlowLimits, LogConfig, LogFormat, Rate, RateLimitConfig};
-use fleet_server::grpc::registry::AgentRegistry;
+use fleet_server::grpc::registry::{AgentRegistry, Halt};
 use fleet_server::http::rate_limit::RateLimits;
 use fleet_server::http::routes::RateClass;
 use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
@@ -247,7 +247,10 @@ async fn a_run_logs_one_line_per_agent_whose_reports_were_dropped(
     };
     let lease = setup.registry.claim(&admitted).unwrap();
     let (queue, _queued) = tokio::sync::mpsc::channel(1);
-    let _ended = setup.registry.activate(&lease, queue, now).unwrap();
+    let _ended = setup
+        .registry
+        .activate(&lease, queue, Halt::default(), now)
+        .unwrap();
     let status = AgentMessage::Status(BotSnapshot {
         bot_id: BotId::new_v7(now, [2; 10]).unwrap(),
         state: BotState::Stopped,

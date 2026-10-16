@@ -234,7 +234,10 @@ pub trait AgentConnections: Send + Sync + fmt::Debug {
     async fn conflict(&self, admitted: &Admitted, conflict: Conflict);
 
     /// Checks `live` against the store with one read of every admissible
-    /// certificate, and names each stream whose permission ended, with why.
+    /// certificate, and names each stream whose permission ended, with why:
+    /// a disabled agent's is `Disabled` whatever its certificates' state. A
+    /// stream whose rows can't be read is a `warn` line and stays until the
+    /// next sweep; the others are still judged.
     ///
     /// # Errors
     /// [`AdmitError::Busy`] or [`AdmitError::Internal`] when the store fails;

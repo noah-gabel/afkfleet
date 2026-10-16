@@ -278,25 +278,25 @@ impl AgentConnectionService {
     }
 
     /// Why `stream`'s certificate, missing from the admissible ones, no
-    /// longer admits it at `now`; none if it does again.
+    /// longer admits it at `now`; none if it does again. A disabled agent's
+    /// end is its disable, whatever its certificates' state: disabling
+    /// revokes them all in the same transaction (S27, U8).
     async fn why_ended(
         &self,
         stream: &LiveCertificate,
         now: DateTime<Utc>,
     ) -> Result<Option<PermissionEnd>, AdmitError> {
+        let agent = self.store.agents().find(stream.agent).await?;
+        if agent.as_ref().is_some_and(|agent| !agent.enabled) {
+            return Ok(Some(PermissionEnd::Disabled));
+        }
+        // A row that's gone admits nobody.
         let Some(cert) = self.store.agents().cert(stream.fingerprint).await? else {
             return Ok(Some(PermissionEnd::CertificateRevoked));
         };
-        let enabled = self
-            .store
-            .agents()
-            .find(cert.agent)
-            .await?
-            .is_some_and(|agent| agent.enabled);
-        Ok(match Self::judge(&cert, enabled, now) {
+        Ok(match Self::judge(&cert, agent.is_some(), now) {
             Ok(()) => None,
             Err(ConnectRefusal::Expired) => Some(PermissionEnd::CertificateExpired),
-            Err(ConnectRefusal::Disabled) => Some(PermissionEnd::Disabled),
             Err(_) => Some(PermissionEnd::CertificateRevoked),
         })
     }
@@ -460,8 +460,16 @@ impl AgentConnections for AgentConnectionService {
             .iter()
             .filter(|stream| !admissible.contains(&stream.fingerprint))
         {
-            if let Some(why) = self.why_ended(stream, now).await? {
-                ended.push((stream.agent, why));
+            match self.why_ended(stream, now).await {
+                Ok(Some(why)) => ended.push((stream.agent, why)),
+                Ok(None) => {}
+                // One stream's rows that can't be read keep it until the next
+                // sweep, and the others are still judged.
+                Err(failure) => warn!(
+                    agent_id = %stream.agent,
+                    error = %failure,
+                    "an agent's certificate couldn't be checked; its stream stays until the next sweep"
+                ),
             }
         }
         Ok(ended)

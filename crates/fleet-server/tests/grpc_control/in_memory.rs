@@ -16,6 +16,11 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use fleet_core::id::BotId;
+use fleet_proto::control::{RejectReason, ServerMessage};
+use fleet_server::grpc::registry::SendError;
+use tokio::sync::{Semaphore, watch};
+
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use fleet_core::id::AgentId;
@@ -53,19 +58,38 @@ use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity
 use super::support::{BOUND, Call, heartbeat, hello, identity, pki};
 
 /// The fake: it admits one certificate, accepts every hello and keeps how
-/// its streams ended.
+/// its streams ended. With a gate, recording an end waits for
+/// [`OneAgent::release`], as a slow database would.
 #[derive(Debug)]
 struct OneAgent {
     agent: AgentId,
     name: AgentName,
     fingerprint: CertFingerprint,
     not_after: DateTime<Utc>,
-    ended: Mutex<Vec<StreamEnd>>,
+    ended: watch::Sender<Vec<StreamEnd>>,
+    gate: Option<Semaphore>,
 }
 
 impl OneAgent {
     fn ended(&self) -> Vec<StreamEnd> {
-        self.ended.lock().unwrap().clone()
+        self.ended.borrow().clone()
+    }
+
+    /// The ends once one is recorded, within [`BOUND`].
+    async fn recorded(&self) -> Vec<StreamEnd> {
+        let mut ended = self.ended.subscribe();
+        tokio::time::timeout(BOUND, ended.wait_for(|ended| !ended.is_empty()))
+            .await
+            .unwrap()
+            .unwrap()
+            .clone()
+    }
+
+    /// Lets one gated end be recorded.
+    fn release(&self) {
+        if let Some(gate) = &self.gate {
+            gate.add_permits(1);
+        }
     }
 }
 
@@ -97,7 +121,10 @@ impl AgentConnections for OneAgent {
     async fn name_refused(&self, _admitted: &Admitted) {}
 
     async fn ended(&self, _admitted: &Admitted, ended: Ended) {
-        self.ended.lock().unwrap().push(ended.reason);
+        if let Some(gate) = &self.gate {
+            drop(gate.acquire().await.unwrap());
+        }
+        self.ended.send_modify(|all| all.push(ended.reason));
     }
 
     async fn conflict(&self, _admitted: &Admitted, _conflict: Conflict) {}
@@ -195,6 +222,7 @@ async fn beat_until(call: &Call, next: &mut Instant, interval: Duration, until: 
 /// paused.
 struct Port {
     connections: Arc<OneAgent>,
+    registry: AgentRegistry,
     accept: mpsc::Sender<io::Result<Bounded<DuplexStream>>>,
     ca_pem: String,
     identity: Identity,
@@ -206,6 +234,15 @@ struct Port {
 
 impl Port {
     async fn start() -> Self {
+        Self::start_with(None).await
+    }
+
+    /// A port whose fake records an end only once released.
+    async fn start_gated() -> Self {
+        Self::start_with(Some(Semaphore::new(0))).await
+    }
+
+    async fn start_with(gate: Option<Semaphore>) -> Self {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         // sqlx runs here only, before time is paused (R22).
         let folder = tempfile::tempdir().unwrap();
@@ -233,7 +270,8 @@ impl Port {
             name: AgentName::try_from("agent-1").unwrap(),
             fingerprint: cert.fingerprint,
             not_after: cert.validity.not_after,
-            ended: Mutex::new(Vec::new()),
+            ended: watch::channel(Vec::new()).0,
+            gate,
         });
         let limits = RateLimits::new(&RateLimitConfig::default(), Arc::new(clock.clone()));
         let ids = RequestIds::new(Arc::new(clock.clone()), Arc::new(random.clone()));
@@ -256,6 +294,7 @@ impl Port {
             fleet_proto::enrollment::SERVER_DEADLINE,
         );
         let sessions = Sessions::new(CancellationToken::new());
+        let registry = AgentRegistry::new(Arc::new(clock.clone()));
         let control = control_service(
             connections.clone(),
             Arc::new(clock.clone()),
@@ -263,7 +302,7 @@ impl Port {
             ids,
             ControlTimings::new(Heartbeats::default()),
             sessions.clone(),
-            AgentRegistry::new(Arc::new(clock.clone())),
+            registry.clone(),
         );
         let router = listener::router(tls, enrollment, control, Heartbeats::default()).unwrap();
         let (accept, incoming) = mpsc::channel(2);
@@ -277,6 +316,7 @@ impl Port {
         });
         Self {
             connections,
+            registry,
             accept,
             ca_pem,
             identity: identity(&cert.pem, &key),
@@ -349,6 +389,33 @@ async fn an_agent_stream_lives_an_hour_through_the_real_router_while_an_unverifi
     call.send(hello("agent-1")).await;
     let status = call.ended().await;
     assert_eq!(status.message(), ONE_HELLO, "{status:?}");
-    assert_eq!(port.connections.ended(), vec![StreamEnd::ProtocolError]);
+    assert_eq!(
+        port.connections.recorded().await,
+        vec![StreamEnd::ProtocolError]
+    );
+    port.stop().await;
+}
+
+#[tokio::test]
+async fn an_ended_streams_reject_leaves_before_its_end_is_recorded_and_nothing_more_is_queued() {
+    let port = Port::start_gated().await;
+    let agent = port.connections.agent;
+    let (client, _gone) = port.connect(Some(port.identity.clone())).await;
+    let mut call = Call::open(client).await.unwrap();
+    call.send(hello("agent-1")).await;
+    let _ = call.welcome().await;
+
+    assert!(port.registry.end(agent, StreamEnd::Disabled));
+    let queued = port.registry.send(
+        agent,
+        ServerMessage::Unassign(BotId::new_v7(DateTime::UNIX_EPOCH, [1; 10]).unwrap()),
+    );
+
+    assert_eq!(queued, Err(SendError::NotConnected));
+    // The fake's record waits: the Reject didn't wait for it.
+    assert_eq!(call.rejected().await, RejectReason::AgentDisabled);
+    assert_eq!(port.connections.ended(), Vec::new());
+    port.connections.release();
+    assert_eq!(port.connections.recorded().await, vec![StreamEnd::Disabled]);
     port.stop().await;
 }

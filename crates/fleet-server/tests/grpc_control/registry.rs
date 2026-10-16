@@ -220,8 +220,9 @@ async fn a_host_disable_ends_the_stream_within_one_sweep(
     let agent = port.enroll(1, "agent-1").await;
     let (mut call, _) = port.welcomed(&agent).await;
 
-    // As `afkfleet-server agent disable` does, beside the running server.
-    port.disable(&agent).await;
+    // As `afkfleet-server agent disable` does, beside the running server:
+    // every certificate is revoked too, and the end is still the disable.
+    port.host_disable(&agent).await;
 
     assert_eq!(call.rejected().await, RejectReason::AgentDisabled);
     let ended = port.disconnect(&agent).await;

@@ -21,7 +21,8 @@ use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget, 
 use fleet_core::id::{AgentId, RequestId};
 use fleet_core::pki::CertFingerprint;
 use fleet_core::value::{AgentCapacity, AgentName, AgentVersion};
-use fleet_server::app::agents::AgentConnectionService;
+use fleet_server::app::agents::{AgentConnectionService, AgentService, Disabler};
+use fleet_server::grpc::registry::AgentRegistry;
 use fleet_server::infra::pki::{CertificateAuthority, Ed25519Key, X509AgentNames, fingerprint};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::agent_connections::{
@@ -158,6 +159,21 @@ impl Setup {
             .execute(self.db.write_pool())
             .await
             .unwrap();
+    }
+
+    /// Disables `agent` as the host does: through the agents' service, which
+    /// revokes every certificate too, with a registry of its own that holds
+    /// no stream.
+    async fn host_disable(&self, agent: AgentId) {
+        let clock = Arc::new(self.clock.clone());
+        AgentService::new(
+            clock.clone(),
+            Arc::new(self.db.clone()),
+            Arc::new(AgentRegistry::new(clock)),
+        )
+        .disable(Disabler::Host, agent)
+        .await
+        .unwrap();
     }
 
     async fn admit(&self, enrolled: &Enrolled) -> Result<Admitted, AdmitError> {
@@ -697,7 +713,7 @@ async fn the_sweep_names_each_stream_whose_permission_ended_with_why(
     let disabled = setup.enroll(3, "agent-3").await;
     let expired = setup.enroll(4, "agent-4").await;
     setup.revoke(revoked.id).await;
-    setup.disable(disabled.id).await;
+    setup.host_disable(disabled.id).await;
     let unknown = LiveCertificate {
         agent: AgentId::new_v7(at(T0), [5; 10]).unwrap(),
         fingerprint: CertFingerprint::from_digest([5; 32]),
@@ -710,7 +726,14 @@ async fn the_sweep_names_each_stream_whose_permission_ended_with_why(
 
     let mut ended = setup.connections.sweep(&streams).await.unwrap();
     setup.clock.set(expired.not_after);
-    let at_expiry = setup.connections.sweep(&[live(&expired)]).await.unwrap();
+    // Revoked and expired by now, the disabled agent's end is still its
+    // disable.
+    let mut at_expiry = setup
+        .connections
+        .sweep(&[live(&expired), live(&disabled)])
+        .await
+        .unwrap();
+    at_expiry.sort_by_key(|(agent, _)| *agent);
 
     ended.sort_by_key(|(agent, _)| *agent);
     let mut expected = vec![
@@ -721,10 +744,12 @@ async fn the_sweep_names_each_stream_whose_permission_ended_with_why(
     ];
     expected.sort_by_key(|(agent, _)| *agent);
     assert_eq!(ended, expected);
-    assert_eq!(
-        at_expiry,
-        vec![(expired.id, PermissionEnd::CertificateExpired)]
-    );
+    let mut expected_at_expiry = vec![
+        (expired.id, PermissionEnd::CertificateExpired),
+        (disabled.id, PermissionEnd::Disabled),
+    ];
+    expected_at_expiry.sort_by_key(|(agent, _)| *agent);
+    assert_eq!(at_expiry, expected_at_expiry);
 }
 
 #[sqlx::test(migrations = false)]
@@ -748,4 +773,34 @@ async fn a_sweep_that_cant_read_is_an_error(
         matches!(result, Err(AdmitError::Internal(_) | AdmitError::Busy)),
         "{result:?}"
     );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_stream_whose_rows_cant_be_read_is_skipped_and_the_sweep_goes_on(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let broken = setup.enroll(1, "agent-1").await;
+    let revoked = setup.enroll(2, "agent-2").await;
+    setup.revoke(broken.id).await;
+    setup.revoke(revoked.id).await;
+    // A name that doesn't read back as an agent's: the row is corrupt.
+    let id = broken.id.as_uuid().hyphenated().to_string();
+    sqlx::query!("UPDATE agents SET name = '.hidden' WHERE id = ?", id)
+        .execute(setup.db.write_pool())
+        .await
+        .unwrap();
+    let live = |agent: &Enrolled| LiveCertificate {
+        agent: agent.id,
+        fingerprint: agent.fingerprint,
+    };
+
+    let ended = setup
+        .connections
+        .sweep(&[live(&broken), live(&revoked)])
+        .await
+        .unwrap();
+
+    assert_eq!(ended, vec![(revoked.id, PermissionEnd::CertificateRevoked)]);
 }

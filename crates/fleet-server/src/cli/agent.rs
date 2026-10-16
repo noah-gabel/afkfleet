@@ -12,7 +12,8 @@
 //! `agent disable --id …` disables an agent for good, as the API does: every
 //! certificate revoked, its name freed, `agent.disable` with `via` = `cli`
 //! and no actor. It works without `[grpc]`. A running server ends the
-//! agent's stream within one 5 s sweep (U8). An agent disabled already is
+//! agent's stream within one 5 s sweep, or two when the disable lands as a
+//! stream is being welcomed (U8). An agent disabled already is
 //! no change and no entry.
 //!
 //! `agent create-enrollment-token`:
@@ -81,7 +82,7 @@ Exit codes:
 pub const DISABLE_EXIT_CODES: &str = "\
 Exit codes:
   0  the agent is disabled, now or before: every certificate it held is
-     revoked, and a running server ends its stream within 5 s
+     revoked, and a running server ends its stream within 10 s
   1  nothing was disabled: no agent has this ID, or the config, logging or
      the database failed (a missing database and pending migrations
      included)
@@ -231,7 +232,7 @@ fn print_disabled(disabled: &DisabledAgent, out: &mut dyn Write, err: &mut dyn W
     let agent = &disabled.view.listed.agent;
     let line = match disabled.revoked {
         Some(revoked) => format!(
-            "The agent {} ({}) is disabled: {revoked} certificate{} revoked. A running server ends its stream within 5 s.",
+            "The agent {} ({}) is disabled: {revoked} certificate{} revoked. A running server ends its stream within 10 s.",
             agent.name,
             agent.id,
             if revoked == 1 { "" } else { "s" }
@@ -815,7 +816,7 @@ mod tests {
         assert_eq!(
             first.out,
             format!(
-                "The agent agent-1 ({agent}) is disabled: 1 certificate revoked. A running server ends its stream within 5 s.\n"
+                "The agent agent-1 ({agent}) is disabled: 1 certificate revoked. A running server ends its stream within 10 s.\n"
             )
         );
         assert_eq!(again.exit, Exit::Done, "{}", again.err);

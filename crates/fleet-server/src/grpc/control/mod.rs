@@ -51,7 +51,9 @@
 //! | the server shuts down | open | `UNAVAILABLE` [`SHUTTING_DOWN`] |
 //!
 //! A message after `Welcome` that decodes but doesn't convert is dropped
-//! and logged at `debug`; it's no sign of life.
+//! and logged at `debug`; it's no sign of life. A close or a failed
+//! transport within one heartbeat interval of the deadline counts as the
+//! heartbeat timeout: HTTP/2 keepalive closes a silent connection then.
 //!
 //! **Logs:** never the peer's address, the hello's name or the certificate's
 //! bytes; an agent appears under its stored name and ID only. A call
@@ -86,7 +88,7 @@ pub use outbound::Outbound;
 use self::gate::ControlCall;
 use self::session::Session;
 use super::listener::Connection;
-use super::registry::AgentRegistry;
+use super::registry::{AgentRegistry, Halt};
 use super::status::refusal;
 use crate::config::Heartbeats;
 use crate::http::error::{BUSY_RETRY_AFTER, chain, whole_seconds};
@@ -227,7 +229,9 @@ impl AgentControl for ControlGrpc {
             })?;
         let (queue, queued) = mpsc::channel(QUEUE_DEPTH);
         let (last, lasting) = oneshot::channel();
+        let halt = Halt::default();
         let session = Session {
+            halt: halt.clone(),
             admitted,
             inbound: request.into_inner(),
             queue,
@@ -239,7 +243,7 @@ impl AgentControl for ControlGrpc {
             registry: self.registry.clone(),
         };
         self.sessions.tasks.spawn(session.run(last));
-        let mut response = Response::new(Outbound::new(queued, lasting));
+        let mut response = Response::new(Outbound::new(queued, lasting, halt));
         super::status::request_id(response.metadata_mut(), call.id);
         Ok(response)
     }

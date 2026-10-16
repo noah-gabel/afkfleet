@@ -4,14 +4,15 @@
 //! - **One stream per agent** (S26): a session claims its agent's slot once
 //!   the hello passed its checks; a claim while the slot is taken is
 //!   refused (`Reject(AlreadyConnected)`), and the live stream is untouched.
-//!   The slot frees when the session drops its [`Lease`], after it recorded
-//!   its end.
+//!   The slot frees when the session drops its [`Lease`], before it sends
+//!   its last answer and records its end.
 //! - **Activation** (R13, S27): after the hello's transaction the session
 //!   activates its claim with its queue. It fails when [`AgentRegistry::end`]
 //!   ended the claim meanwhile, so a stream whose permission ended during
 //!   its hello is never welcomed.
-//! - **Ending** (S27): `end` hands the session the reason, which it ends its
-//!   stream with, ahead of anything queued. A sweep every
+//! - **Ending** (S27): `end` throws the stream's switch, so nothing queued
+//!   leaves any more and `send` and `hold` refuse it, and hands the
+//!   session the reason, whose last answer it sends at once. A sweep every
 //!   [`SWEEP_INTERVAL`] ends each stream whose certificate stopped admitting
 //!   it, which is how a disable on the server's host reaches a running
 //!   server.
@@ -35,6 +36,7 @@ use core::fmt;
 use core::time::Duration;
 use std::collections::{BTreeMap, HashMap};
 use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use chrono::{DateTime, Utc};
@@ -122,6 +124,8 @@ enum Phase {
 /// A welcomed stream.
 struct Live {
     queue: mpsc::Sender<wire::ServerMessage>,
+    /// The stream's switch, thrown when it's ended.
+    halt: Halt,
     /// Taken by the first end.
     ender: Option<oneshot::Sender<StreamEnd>>,
     holds: HashMap<BotId, Hold>,
@@ -136,6 +140,25 @@ pub enum Hold {
     Assigned,
     /// The bot was unassigned; only its `Removed` is still expected.
     Releasing,
+}
+
+/// A stream's switch: once thrown, the stream sends nothing more but its
+/// last answer. The registry throws it when it ends the stream, the
+/// session when it ends its own; clones share it.
+#[derive(Debug, Clone, Default)]
+pub struct Halt(Arc<AtomicBool>);
+
+impl Halt {
+    /// Throws the switch.
+    pub fn halt(&self) {
+        self.0.store(true, Ordering::Release);
+    }
+
+    /// Whether the switch is thrown.
+    #[must_use]
+    pub fn is_halted(&self) -> bool {
+        self.0.load(Ordering::Acquire)
+    }
 }
 
 /// A session's claim on its agent's slot; dropping it frees the slot.
@@ -273,8 +296,9 @@ impl AgentRegistry {
         })
     }
 
-    /// Makes `lease`'s claim live with `queue`, welcomed at `connected_at`:
-    /// the receiver gets the reason when the stream is ended.
+    /// Makes `lease`'s claim live with `queue` and its switch `halt`,
+    /// welcomed at `connected_at`: the receiver gets the reason when the
+    /// stream is ended.
     ///
     /// # Errors
     /// The reason the claim was ended with meanwhile.
@@ -282,6 +306,7 @@ impl AgentRegistry {
         &self,
         lease: &Lease,
         queue: mpsc::Sender<wire::ServerMessage>,
+        halt: Halt,
         connected_at: DateTime<Utc>,
     ) -> Result<oneshot::Receiver<StreamEnd>, StreamEnd> {
         let mut state = self.state();
@@ -300,6 +325,7 @@ impl AgentRegistry {
                 let (ender, notice) = oneshot::channel();
                 slot.phase = Phase::Live(Live {
                     queue,
+                    halt,
                     ender: Some(ender),
                     holds: HashMap::new(),
                     connected_at,
@@ -338,6 +364,9 @@ impl AgentRegistry {
         let Phase::Live(live) = &mut slot.phase else {
             return Err(SendError::NotConnected);
         };
+        if live.halt.is_halted() {
+            return Err(SendError::NotConnected);
+        }
         match live.queue.try_send(message) {
             Ok(()) => Ok(()),
             Err(mpsc::error::TrySendError::Full(_)) => {
@@ -400,7 +429,7 @@ impl AgentRegistry {
     pub fn hold(&self, agent: AgentId, bot: BotId) -> bool {
         let mut state = self.state();
         match state.slots.get_mut(&agent).map(|slot| &mut slot.phase) {
-            Some(Phase::Live(live)) => {
+            Some(Phase::Live(live)) if !live.halt.is_halted() => {
                 live.holds.insert(bot, Hold::Assigned);
                 true
             }
@@ -414,7 +443,7 @@ impl AgentRegistry {
     pub fn release(&self, agent: AgentId, bot: BotId) -> bool {
         let mut state = self.state();
         match state.slots.get_mut(&agent).map(|slot| &mut slot.phase) {
-            Some(Phase::Live(live)) => match live.holds.get_mut(&bot) {
+            Some(Phase::Live(live)) if !live.halt.is_halted() => match live.holds.get_mut(&bot) {
                 Some(hold) => {
                     *hold = Hold::Releasing;
                     true
@@ -540,14 +569,16 @@ impl LiveAgents for AgentRegistry {
     }
 }
 
-/// Ends `slot`'s stream for `reason`: a claim is never activated, a live
-/// stream's session gets the reason. Only the first reason counts.
+/// Ends `slot`'s stream for `reason`: a claim is never activated; a live
+/// stream's switch is thrown and its session gets the reason. Only the
+/// first reason counts.
 fn end_slot(slot: &mut Slot, reason: StreamEnd) {
     match &mut slot.phase {
         Phase::Claimed { ended } => {
             ended.get_or_insert(reason);
         }
         Phase::Live(live) => {
+            live.halt.halt();
             if let Some(ender) = live.ender.take() {
                 // A session that's ending dropped its receiver: nothing to tell.
                 let _ = ender.send(reason);
@@ -634,7 +665,9 @@ mod tests {
     ) {
         let lease = registry.claim(&admitted(n)).unwrap();
         let (queue, queued) = mpsc::channel(depth);
-        let ended = registry.activate(&lease, queue, at(T0)).unwrap();
+        let ended = registry
+            .activate(&lease, queue, Halt::default(), at(T0))
+            .unwrap();
         (lease, queued, ended)
     }
 
@@ -668,7 +701,9 @@ mod tests {
 
         let while_claimed = registry.claim(&admitted(2));
         let (queue, _queued) = mpsc::channel(1);
-        let _ended = registry.activate(&first, queue, at(T0)).unwrap();
+        let _ended = registry
+            .activate(&first, queue, Halt::default(), at(T0))
+            .unwrap();
         let while_live = registry.claim(&admitted(2));
 
         assert!(
@@ -701,7 +736,7 @@ mod tests {
 
         let found = registry.end(agent(1), StreamEnd::Disabled);
         let (queue, _queued) = mpsc::channel(1);
-        let activated = registry.activate(&lease, queue, at(T0));
+        let activated = registry.activate(&lease, queue, Halt::default(), at(T0));
 
         assert!(found);
         assert_eq!(activated.unwrap_err(), StreamEnd::Disabled);
@@ -722,6 +757,29 @@ mod tests {
     }
 
     #[test]
+    fn an_ended_stream_takes_no_more_messages_or_bots_and_its_switch_is_thrown() {
+        let (registry, _) = registry();
+        let lease = registry.claim(&admitted(1)).unwrap();
+        let (queue, mut queued) = mpsc::channel(4);
+        let halt = Halt::default();
+        let _ended = registry
+            .activate(&lease, queue, halt.clone(), at(T0))
+            .unwrap();
+        assert!(registry.hold(agent(1), bot(1)));
+
+        assert!(registry.end(agent(1), StreamEnd::Disabled));
+
+        assert!(halt.is_halted());
+        assert_eq!(
+            registry.send(agent(1), unassign(1)),
+            Err(SendError::NotConnected)
+        );
+        assert!(!registry.hold(agent(1), bot(2)));
+        assert!(!registry.release(agent(1), bot(1)));
+        assert!(queued.try_recv().is_err());
+    }
+
+    #[test]
     fn a_live_stream_shows_when_it_connected_and_was_last_heard_from() {
         let (registry, clock) = registry();
         let lease = registry.claim(&admitted(1)).unwrap();
@@ -731,7 +789,9 @@ mod tests {
             "claimed isn't live"
         );
         let (queue, _queued) = mpsc::channel(1);
-        let _ended = registry.activate(&lease, queue, at(T0)).unwrap();
+        let _ended = registry
+            .activate(&lease, queue, Halt::default(), at(T0))
+            .unwrap();
         clock.advance(Duration::from_secs(5));
 
         let _ = registry.admit(&lease, &AgentMessage::Heartbeat);
@@ -926,7 +986,9 @@ mod tests {
         drop(lease);
         let next = registry.claim(&admitted(2)).unwrap();
         let (queue, _queued) = mpsc::channel(1);
-        let _ended = registry.activate(&next, queue, at(T0)).unwrap();
+        let _ended = registry
+            .activate(&next, queue, Halt::default(), at(T0))
+            .unwrap();
 
         assert_eq!(registry.admit(&next, &AgentMessage::Heartbeat).1, None);
     }

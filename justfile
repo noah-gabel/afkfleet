@@ -218,7 +218,7 @@ dev-agents $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "
 
 # `agent disable --id id` on dev-server's database: the agent is disabled for good, every
 # certificate it holds revoked and its name free for a new enrollment; a running dev-server
-# ends its stream within 5 s (ADR-0019, U8). The same paths as dev-agents. No exit message:
+# ends its stream within 10 s (ADR-0019, U8). The same paths as dev-agents. No exit message:
 # the command prints its own result, error line and exit code.
 # Disable dev-server's agent `id` for good.
 [no-exit-message]

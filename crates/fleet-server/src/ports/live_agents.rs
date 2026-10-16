@@ -35,8 +35,9 @@ pub struct LiveStream {
 /// The agents' live streams; see the [module docs](self).
 pub trait LiveAgents: Send + Sync + fmt::Debug {
     /// Ends `agent`'s stream for `reason`, its last message the matching
-    /// `Reject`, ahead of anything queued; or, while its hello is being
-    /// accepted, makes sure it's never welcomed. Whether there was one.
+    /// `Reject`, and nothing queued goes out after this call; or, while its
+    /// hello is being accepted, makes sure it's never welcomed. Whether
+    /// there was one.
     fn end(&self, agent: AgentId, reason: PermissionEnd) -> bool;
 
     /// `agent`'s live stream, if it has one.

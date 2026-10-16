@@ -16,10 +16,15 @@
 //!    that doesn't convert is dropped. The stream ends at the deadline, at
 //!    the certificate's expiry, when the registry ends it (a permission
 //!    that ended, a full queue), at the shutdown, at a second hello, or when
-//!    the agent ends it. Its end is recorded first, then the slot and the
-//!    lift are freed, then the last answer sent: an agent that sees the end
-//!    finds it recorded, and can connect again at once.
+//!    the agent ends it. A stream that ends by itself (the agent's close,
+//!    or a failed transport) within one heartbeat interval of its deadline
+//!    ended of silence: HTTP/2 keepalive closes a silent connection then,
+//!    and tonic may read that as a clean end. At its end the stream's switch
+//!    is thrown, so nothing queued goes out any more, the slot is freed, so
+//!    the agent can connect again at once, and the last answer is sent;
+//!    only then is the end recorded and the lift dropped.
 
+use core::time::Duration;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -41,7 +46,7 @@ use super::{
     HELLO_TOO_SLOW, MESSAGE_UNREADABLE, ONE_HELLO, SHUTTING_DOWN, TOO_LARGE, TOO_SLOW, refused,
 };
 use crate::grpc::listener::Connection;
-use crate::grpc::registry::{AgentRegistry, Lease, Verdict};
+use crate::grpc::registry::{AgentRegistry, Halt, Lease, Verdict};
 use crate::grpc::status::refusal;
 use crate::http::error::chain;
 use crate::ports::agent_connections::{AdmitError, Admitted, AgentConnections, Ended, StreamEnd};
@@ -54,6 +59,8 @@ pub(super) struct Session {
     pub(super) inbound: Streaming<wire::AgentMessage>,
     /// The stream's queue to the agent.
     pub(super) queue: mpsc::Sender<wire::ServerMessage>,
+    /// The stream's switch, which stops its answers but the last.
+    pub(super) halt: Halt,
     /// The connection, whose age a welcomed stream lifts.
     pub(super) connection: Connection,
     /// The app's side of the stream.
@@ -89,13 +96,12 @@ impl End {
 impl Session {
     /// Runs the session to its end, and sends its last answer on `last`.
     pub(super) async fn run(mut self, last: oneshot::Sender<Last>) {
-        let answer = match self.handshake().await {
-            Ok((lease, connected_at)) => self.welcomed(lease, connected_at).await,
-            Err(answer) => Some(*answer),
-        };
-        if let Some(answer) = answer {
-            // An agent that's gone dropped the receiver; nothing to tell.
-            let _ = last.send(answer);
+        match self.handshake().await {
+            Ok((lease, connected_at)) => self.welcomed(lease, connected_at, last).await,
+            Err(answer) => {
+                // An agent that's gone dropped the receiver; nothing to tell.
+                let _ = last.send(*answer);
+            }
         }
     }
 
@@ -198,15 +204,23 @@ impl Session {
         Ok((lease, connected_at))
     }
 
-    /// The welcomed stream of `lease` until it ends; its last answer.
-    async fn welcomed(&mut self, lease: Lease, connected_at: DateTime<Utc>) -> Option<Last> {
+    /// The welcomed stream of `lease` until it ends, and its last answer on
+    /// `last`.
+    async fn welcomed(
+        &mut self,
+        lease: Lease,
+        connected_at: DateTime<Utc>,
+        last: oneshot::Sender<Last>,
+    ) {
         // Lifted before `Welcome` leaves, so the age can't cut the
         // connection between the two.
         let lift = self.connection.lift();
-        let end = match self
-            .registry
-            .activate(&lease, self.queue.clone(), connected_at)
-        {
+        let end = match self.registry.activate(
+            &lease,
+            self.queue.clone(),
+            self.halt.clone(),
+            connected_at,
+        ) {
             // Its permission ended during the hello's transaction (R13).
             Err(reason) => End::new(reason, connected_at, Some(self.ended_by(reason))),
             Ok(ended) => match self.welcome() {
@@ -214,6 +228,18 @@ impl Session {
                 Err(answer) => End::new(StreamEnd::StreamError, connected_at, Some(*answer)),
             },
         };
+        // Nothing queued leaves after this, and the agent's slot is free
+        // before it hears of the end; the answer doesn't wait for the
+        // database.
+        self.halt.halt();
+        drop(lease);
+        match end.answer {
+            // An agent that's gone dropped the receiver; nothing to tell.
+            Some(answer) => {
+                let _ = last.send(answer);
+            }
+            None => drop(last),
+        }
         self.connections
             .ended(
                 &self.admitted,
@@ -231,9 +257,7 @@ impl Session {
             reason = end.reason.as_str(),
             "an agent's stream ended"
         );
-        drop(lease);
         drop(lift);
-        end.answer
     }
 
     /// Queues `Welcome`, the stream's first answer; or the stream's last
@@ -298,9 +322,14 @@ impl Session {
                 Ok(Some(message)) => message,
                 // A reset arrives as an end too: tonic reads a request's
                 // CANCEL as one.
-                Ok(None) => return End::new(StreamEnd::Closed, last_seen, None),
+                Ok(None) => {
+                    return self.ended_itself(StreamEnd::Closed, silence.deadline(), last_seen);
+                }
                 Err(failure) => {
                     let (reason, answer) = read_failure(failure.code());
+                    if reason == StreamEnd::StreamError {
+                        return self.ended_itself(reason, silence.deadline(), last_seen);
+                    }
                     let answer = answer.map(|(code, message)| Err(self.status(code, message)));
                     return End::new(reason, last_seen, answer);
                 }
@@ -327,6 +356,20 @@ impl Session {
                     "an agent's message that doesn't convert was dropped"
                 ),
             }
+        }
+    }
+
+    /// The end of a stream that ended by itself as `end`, whose heartbeat
+    /// deadline is `deadline`; see [`own_end`].
+    fn ended_itself(&self, end: StreamEnd, deadline: Instant, last_seen: DateTime<Utc>) -> End {
+        let left = deadline.saturating_duration_since(Instant::now());
+        match own_end(end, left, self.timings.heartbeats.interval()) {
+            StreamEnd::HeartbeatTimeout => End::new(
+                StreamEnd::HeartbeatTimeout,
+                last_seen,
+                Some(Err(self.status(Code::DeadlineExceeded, HEARTBEAT_MISSED))),
+            ),
+            other => End::new(other, last_seen, None),
         }
     }
 
@@ -405,6 +448,25 @@ impl Session {
     }
 }
 
+/// What a welcomed stream that ended by itself, as `end` (`Closed` or
+/// `StreamError`), ended of, `left` before its heartbeat deadline, with
+/// heartbeats every `interval`.
+///
+/// Within one interval of the deadline it ended of silence. HTTP/2
+/// keepalive closes a connection only after the heartbeat timeout without
+/// anything read, which may be a little before the deadline, counted from
+/// when the session last handled a message; tonic may read that close as
+/// the agent's own. An agent that beats closes at least `timeout -
+/// interval`, one interval or more, before its deadline.
+fn own_end(end: StreamEnd, left: Duration, interval: Duration) -> StreamEnd {
+    match end {
+        StreamEnd::Closed | StreamEnd::StreamError if left <= interval => {
+            StreamEnd::HeartbeatTimeout
+        }
+        other => other,
+    }
+}
+
 /// Why a welcomed stream ended when reading it failed with `code`, and
 /// the code and message of its answer, if anyone is left to answer.
 const fn read_failure(code: Code) -> (StreamEnd, Option<(Code, &'static str)>) {
@@ -429,6 +491,31 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    const SECOND: Duration = Duration::from_secs(1);
+
+    #[rstest]
+    #[case::closed_at_the_deadline(StreamEnd::Closed, Duration::ZERO, StreamEnd::HeartbeatTimeout)]
+    #[case::closed_within_an_interval_of_it(StreamEnd::Closed, SECOND, StreamEnd::HeartbeatTimeout)]
+    #[case::closed_earlier(StreamEnd::Closed, SECOND + Duration::from_millis(1), StreamEnd::Closed)]
+    #[case::failed_at_the_deadline(
+        StreamEnd::StreamError,
+        Duration::ZERO,
+        StreamEnd::HeartbeatTimeout
+    )]
+    #[case::failed_earlier(StreamEnd::StreamError, 3 * SECOND, StreamEnd::StreamError)]
+    #[case::a_protocol_error_stays(
+        StreamEnd::ProtocolError,
+        Duration::ZERO,
+        StreamEnd::ProtocolError
+    )]
+    fn a_stream_that_ends_by_itself_near_its_deadline_ended_of_silence(
+        #[case] end: StreamEnd,
+        #[case] left: Duration,
+        #[case] expected: StreamEnd,
+    ) {
+        assert_eq!(own_end(end, left, SECOND), expected);
+    }
 
     #[rstest]
     #[case::over_the_limit(Code::OutOfRange, StreamEnd::ProtocolError, Some((Code::OutOfRange, TOO_LARGE)))]

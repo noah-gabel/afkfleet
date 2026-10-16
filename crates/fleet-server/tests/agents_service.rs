@@ -28,7 +28,7 @@ use fleet_core::value::{AgentName, Username};
 use fleet_proto::control::AgentMessage;
 use fleet_server::app::agents::{AgentService, DisableAgentError, Disabler};
 use fleet_server::app::users::ActingUser;
-use fleet_server::grpc::registry::{AgentRegistry, Lease};
+use fleet_server::grpc::registry::{AgentRegistry, Halt, Lease};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::agent_connections::{Admitted, StreamEnd};
 use fleet_server::ports::agents::{NewAgent, NewAgentCert};
@@ -196,7 +196,7 @@ impl Setup {
         let (queue, queued) = mpsc::channel(4);
         let ended = self
             .registry
-            .activate(&lease, queue, self.clock.now())
+            .activate(&lease, queue, Halt::default(), self.clock.now())
             .unwrap();
         (lease, queued, ended)
     }
@@ -341,7 +341,9 @@ async fn a_disable_during_a_hello_keeps_the_stream_from_being_welcomed(
     setup.agents.disable(Disabler::Host, agent).await.unwrap();
 
     let (queue, _queued) = mpsc::channel(4);
-    let activated = setup.registry.activate(&lease, queue, setup.clock.now());
+    let activated = setup
+        .registry
+        .activate(&lease, queue, Halt::default(), setup.clock.now());
     assert_eq!(activated.unwrap_err(), StreamEnd::Disabled);
 }
 

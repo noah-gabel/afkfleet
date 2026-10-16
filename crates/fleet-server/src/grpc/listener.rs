@@ -42,6 +42,7 @@ use tokio_stream::{Stream, StreamExt as _};
 use tokio_util::sync::CancellationToken;
 use tonic::transport::server::{Connected, Router, TcpIncoming};
 use tonic::transport::{Certificate, Identity, Server, ServerTlsConfig};
+use tracing::error;
 
 use super::control::ControlRoute;
 use super::enrollment::{EnrollGate, EnrollmentGrpc};
@@ -56,6 +57,12 @@ pub const MAX_CONCURRENT_STREAMS: u32 = 16;
 /// when its last lift ended. It's the cut group B's listener made at 60 s
 /// plus 20 s of grace (S14).
 pub const CONNECTION_AGE: Duration = Duration::from_secs(80);
+
+/// How long the port waits before it accepts again after an accept error
+/// that isn't one connection's: out of file descriptors (`EMFILE`,
+/// `ENFILE`), every accept fails until a connection ends, and tonic would
+/// try again at once (axum waits the same).
+pub const ACCEPT_PAUSE: Duration = Duration::from_secs(1);
 
 /// The enrollment service behind its gate, as [`router`] takes it.
 pub type EnrollmentRoute = tonic::service::interceptor::InterceptedService<
@@ -108,13 +115,37 @@ pub async fn serve(
 ) -> Result<(), tonic::transport::Error> {
     // An accepted socket is never turned into an error here: tonic ends its
     // accept loop on an error it can't recover from.
-    let incoming = TcpIncoming::from(listener).map(move |accepted| {
+    let incoming = paced(TcpIncoming::from(listener)).map(move |accepted| {
         accepted.map(|socket| {
             let peer = socket.peer_addr().ok();
             Bounded::new(socket, peer, age)
         })
     });
     serve_incoming(router, incoming, stop).await
+}
+
+/// `incoming`, waiting [`ACCEPT_PAUSE`] after an accept error that isn't
+/// one connection's before it passes the error on.
+fn paced<S, T>(incoming: S) -> impl Stream<Item = io::Result<T>>
+where
+    S: Stream<Item = io::Result<T>>,
+{
+    incoming.then(|accepted| async move {
+        if let Err(error) = &accepted
+            && !matches!(
+                error.kind(),
+                io::ErrorKind::ConnectionRefused
+                    | io::ErrorKind::ConnectionAborted
+                    | io::ErrorKind::ConnectionReset
+            )
+        {
+            // Once a second at most: until a connection ends, every accept
+            // fails the same way.
+            error!(error = %error, "the gRPC port can't accept a connection; it tries again in 1 s");
+            tokio::time::sleep(ACCEPT_PAUSE).await;
+        }
+        accepted
+    })
 }
 
 /// Serves `router` on the connections `incoming` yields until `stop` is
@@ -387,6 +418,32 @@ mod tests {
     async fn read_one(bounded: &mut Bounded<DuplexStream>) -> io::Result<u8> {
         let mut byte = [0];
         within(bounded.read_exact(&mut byte)).await.map(|_| byte[0])
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn an_accept_error_pauses_the_accepts_and_a_connections_own_doesnt() {
+        let accepts = [
+            Err(io::Error::other("too many open files")),
+            Ok(1),
+            Err(io::Error::from(io::ErrorKind::ConnectionReset)),
+            Ok(2),
+        ];
+        let start = Instant::now();
+
+        let seen: Vec<(Duration, bool)> = paced(tokio_stream::iter(accepts))
+            .map(|accepted| (start.elapsed(), accepted.is_ok()))
+            .collect()
+            .await;
+
+        assert_eq!(
+            seen,
+            [
+                (ACCEPT_PAUSE, false),
+                (ACCEPT_PAUSE, true),
+                (ACCEPT_PAUSE, false),
+                (ACCEPT_PAUSE, true),
+            ]
+        );
     }
 
     #[tokio::test(start_paused = true)]
