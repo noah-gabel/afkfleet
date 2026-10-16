@@ -318,6 +318,90 @@ async fn a_signal_source_that_ended_never_stops_the_server() {
     assert!(!shutdown.is_cancelled());
 }
 
+// --- both: the API and the gRPC port as one server (ADR-0019) -----------------
+
+/// A stand-in port that fails with `what` `after` it starts.
+async fn failing(after: Duration, what: &str) -> io::Result<()> {
+    tokio::time::sleep(after).await;
+    Err(io::Error::other(what.to_owned()))
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_grpc_port_that_fails_drains_the_api_and_ends_with_its_error() {
+    let shutdown = CancellationToken::new();
+    let started = Instant::now();
+
+    let ended = tokio::time::timeout(
+        secs(3600),
+        serve::both(
+            draining(&shutdown, secs(2)),
+            Some(failing(secs(3), "the port failed")),
+            &shutdown,
+        ),
+    )
+    .await
+    .expect("the API should drain once the port failed");
+
+    assert_eq!(ended.unwrap_err().to_string(), "the port failed");
+    assert!(shutdown.is_cancelled());
+    assert_eq!(started.elapsed(), secs(5));
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_api_that_ends_drains_the_grpc_port_and_ends_with_its_error() {
+    let shutdown = CancellationToken::new();
+    let started = Instant::now();
+
+    let ended = tokio::time::timeout(
+        secs(3600),
+        serve::both(
+            failing(secs(1), "the API failed"),
+            Some(draining(&shutdown, secs(2))),
+            &shutdown,
+        ),
+    )
+    .await
+    .expect("the port should drain once the API ended");
+
+    assert_eq!(ended.unwrap_err().to_string(), "the API failed");
+    assert!(shutdown.is_cancelled());
+    assert_eq!(started.elapsed(), secs(3));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_shutdown_waits_for_the_slower_of_the_two() {
+    let shutdown = CancellationToken::new();
+    shutdown.cancel();
+    let started = Instant::now();
+
+    let ended = serve::both(
+        draining(&shutdown, secs(2)),
+        Some(draining(&shutdown, secs(4))),
+        &shutdown,
+    )
+    .await;
+
+    assert!(ended.is_ok(), "{ended:?}");
+    assert_eq!(started.elapsed(), secs(4));
+}
+
+#[tokio::test(start_paused = true)]
+async fn without_a_grpc_port_it_is_the_api_alone() {
+    let shutdown = CancellationToken::new();
+    let started = Instant::now();
+
+    let ended = serve::both(
+        failing(secs(1), "the API failed"),
+        None::<core::future::Ready<io::Result<()>>>,
+        &shutdown,
+    )
+    .await;
+
+    assert_eq!(ended.unwrap_err().to_string(), "the API failed");
+    assert!(!shutdown.is_cancelled());
+    assert_eq!(started.elapsed(), secs(1));
+}
+
 // --- serve, over real sockets and a real database ---------------------------
 
 /// A database in a fresh folder; the folder lives as long as it's held.
@@ -374,6 +458,7 @@ async fn an_in_flight_request_finishes_after_the_signal_while_new_connections_ar
         async move {
             serve::serve(
                 listener,
+                None,
                 app_of(app, &database),
                 &database,
                 signals,
@@ -422,6 +507,7 @@ async fn the_housekeeping_stops_at_the_first_signal() {
         async move {
             serve::serve(
                 listener,
+                None,
                 app_of(app, &database),
                 &database,
                 signals,
@@ -456,6 +542,7 @@ async fn an_idle_keep_alive_connection_doesnt_hold_up_the_shutdown() {
         async move {
             serve::serve(
                 listener,
+                None,
                 app_of(app, &database),
                 &database,
                 signals,
@@ -512,6 +599,7 @@ async fn a_connection_the_database_never_gets_back_fails_the_shutdown_at_the_dea
         async move {
             serve::serve(
                 listener,
+                None,
                 app_of(app, &database),
                 &database,
                 signals,
@@ -546,7 +634,8 @@ async fn a_server_stopped_by_a_signal_leaves_no_wal_or_shm() {
     let config = server_config(&dir, address, false);
     let keys = vault_keys(&config);
     let (sender, signals) = ChannelSignals::new();
-    let server = tokio::spawn(async move { serve::run(&config, listener, signals, keys).await });
+    let server =
+        tokio::spawn(async move { serve::run(&config, listener, None, signals, keys).await });
     let body = r#"{"username":"nobody","password":"not the password at all"}"#;
     let request = format!(
         "POST /api/v1/auth/login HTTP/1.1\r\nHost: test\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",

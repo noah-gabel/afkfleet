@@ -15,7 +15,7 @@ use core::fmt;
 
 use zeroize::Zeroize;
 
-use crate::generated::OnlineSession;
+use crate::generated::{EnrollRequest, OnlineSession};
 
 impl fmt::Debug for OnlineSession {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -36,5 +36,26 @@ impl fmt::Debug for OnlineSession {
 impl Drop for OnlineSession {
     fn drop(&mut self) {
         self.access_token.zeroize();
+    }
+}
+
+impl fmt::Debug for EnrollRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Every field is named here, so a new one has to be placed: shown or
+        // hidden. The CSR isn't secret, but its bytes say nothing in a log.
+        let Self {
+            token: _,
+            name,
+            csr_der: _,
+        } = self;
+        f.debug_struct("EnrollRequest")
+            .field("name", name)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Drop for EnrollRequest {
+    fn drop(&mut self) {
+        self.token.zeroize();
     }
 }

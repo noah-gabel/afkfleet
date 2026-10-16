@@ -1,6 +1,7 @@
 //! The `afkfleet-agent` binary: its command line, the errors it prints
 //! before logging exists, its exit codes, and the `healthcheck` command
-//! (Plan.md P5.3, P5.5; ADR-0014).
+//! (Plan.md P5.3, P5.5; ADR-0014), and `enroll`'s refusals before anything is
+//! sent (P10.3; ADR-0019).
 //!
 //! Each test starts the real binary with its own deadline, and a guard kills
 //! the agent if the test ends first, so a hang can't stall the run. Threads
@@ -12,7 +13,7 @@
 #![cfg(test)]
 
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Seek as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
@@ -75,7 +76,12 @@ struct Finished {
 
 /// Runs the agent with `args` until it exits, within the deadline.
 fn finish(args: &[&str]) -> Finished {
-    let mut child = agent(args).spawn().unwrap();
+    finish_command(agent(args))
+}
+
+/// Runs `command` until it exits, within the deadline.
+fn finish_command(mut command: Command) -> Finished {
+    let mut child = command.spawn().unwrap();
     let stdout = drain(child.stdout.take().unwrap());
     let stderr = drain(child.stderr.take().unwrap());
     let mut running = Running(Some(child));
@@ -401,4 +407,98 @@ mod sigterm {
             "{seen:#?}"
         );
     }
+}
+
+/// A managed config in `dir`: dev-server's URL and three files there that
+/// don't exist.
+fn managed_config(dir: &Path) -> PathBuf {
+    let body = format!(
+        "name = \"cli-agent\"\n[control_plane]\nurl = \"https://127.0.0.1:1\"\nca_cert_file = '{}'\ncert_file = '{}'\nkey_file = '{}'\n",
+        dir.join("ca.crt").display(),
+        dir.join("agent.crt").display(),
+        dir.join("agent.key").display(),
+    );
+    write_config(dir, &body)
+}
+
+#[test]
+fn enroll_refuses_a_standalone_config_with_one_line_on_stderr() {
+    let dir = test_dir("enroll_standalone");
+    let (config, _) = one_bot_config(&dir);
+
+    let finished = finish(&["enroll", "--config", path_arg(&config)]);
+
+    assert_eq!(finished.status.code(), Some(1));
+    assert_eq!(finished.stdout, "");
+    assert_eq!(
+        finished.stderr,
+        "afkfleet-agent: enroll needs a config with [control_plane]; a [standalone] agent isn't enrolled\n"
+    );
+}
+
+#[test]
+fn enroll_refuses_stdin_that_isnt_a_bundle_and_writes_nothing() {
+    let dir = test_dir("enroll_no_bundle");
+    let config = managed_config(&dir);
+
+    let finished = finish(&["enroll", "--config", path_arg(&config)]);
+
+    assert_eq!(finished.status.code(), Some(1));
+    assert_eq!(finished.stdout, "");
+    assert!(
+        finished
+            .stderr
+            .starts_with("afkfleet-agent: stdin isn't an enrollment bundle"),
+        "{}",
+        finished.stderr
+    );
+    let mut names: Vec<String> = fs::read_dir(&dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["agent.toml"]);
+}
+
+#[test]
+fn the_help_of_enroll_lists_its_exit_codes() {
+    let finished = finish(&["enroll", "--help"]);
+
+    assert_eq!(finished.status.code(), Some(0));
+    assert!(
+        finished
+            .stdout
+            .contains(fleet_agent::enroll::ENROLL_EXIT_CODES),
+        "{}",
+        finished.stdout
+    );
+}
+
+#[test]
+fn enroll_reads_stdin_unbuffered_and_at_most_one_byte_past_its_limit() {
+    let dir = test_dir("enroll_long_stdin");
+    let config = managed_config(&dir);
+    let input = dir.join("stdin.txt");
+    fs::write(&input, vec![b'A'; 16 * 1024]).unwrap();
+    let stdin = File::open(&input).unwrap();
+    // A duplicate shares the child's file position.
+    let mut shared = stdin.try_clone().unwrap();
+    let mut command = agent(&["enroll", "--config", path_arg(&config)]);
+    command.stdin(Stdio::from(stdin));
+
+    let finished = finish_command(command);
+
+    assert_eq!(finished.status.code(), Some(1));
+    assert!(
+        finished
+            .stderr
+            .starts_with("afkfleet-agent: stdin holds more than 1 KiB"),
+        "{}",
+        finished.stderr
+    );
+    let limit = fleet_agent::enroll::bundle::MAX_INPUT_BYTES + 1;
+    assert_eq!(
+        shared.stream_position().unwrap(),
+        u64::try_from(limit).unwrap()
+    );
 }

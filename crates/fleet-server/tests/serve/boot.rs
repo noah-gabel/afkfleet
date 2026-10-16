@@ -34,7 +34,7 @@ async fn a_missing_database_folder_fails_the_start_before_listening() {
     let (logs, _guard) = capture();
 
     let keys = vault_keys(&config);
-    let exit = serve::run(&config, listener, ChannelSignals::silent(), keys).await;
+    let exit = serve::run(&config, listener, None, ChannelSignals::silent(), keys).await;
 
     assert_eq!(exit, Exit::StartupFailed);
     assert_eq!(exit.code(), 1);
@@ -71,7 +71,7 @@ async fn the_app_boots_on_a_fresh_database_passes_the_health_checks_and_stops_cl
     let keys = vault_keys(&config);
     let server = tokio::spawn({
         let config = config.clone();
-        async move { serve::run(&config, listener, signals, keys).await }
+        async move { serve::run(&config, listener, None, signals, keys).await }
     });
 
     for path in ["/health/live", "/health/ready"] {
@@ -125,7 +125,7 @@ async fn requests_over_real_connections_reach_the_per_ip_limit_with_their_addres
     let keys = vault_keys(&config);
     let server = tokio::spawn({
         let config = config.clone();
-        async move { serve::run(&config, listener, signals, keys).await }
+        async move { serve::run(&config, listener, None, signals, keys).await }
     });
 
     let mut statuses = Vec::new();
@@ -210,7 +210,7 @@ async fn kept_offline_lines(config: &ServerConfig) -> Vec<serde_json::Value> {
 
     let exit = tokio::time::timeout(
         PATIENCE,
-        serve::run(config, listener, signals, vault_keys(config)),
+        serve::run(config, listener, None, signals, vault_keys(config)),
     )
     .await
     .unwrap();

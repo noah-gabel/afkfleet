@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rowid AS \"rowid!: i64\", id AS \"id!\", token_hash AS \"token_hash!: Vec<u8>\",\n                  created_by AS \"created_by?\", created_at AS \"created_at!\",\n                  expires_at AS \"expires_at!\", used_at AS \"used_at?\", agent_id AS \"agent_id?\"\n           FROM enrollment_tokens WHERE token_hash = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "enrollment_tokens",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "enrollment_tokens",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "token_hash!: Vec<u8>",
+        "ordinal": 2,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "enrollment_tokens",
+            "name": "token_hash"
+          }
+        }
+      },
+      {
+        "name": "created_by?",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "enrollment_tokens",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "enrollment_tokens",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "expires_at!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "enrollment_tokens",
+            "name": "expires_at"
+          }
+        }
+      },
+      {
+        "name": "used_at?",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "enrollment_tokens",
+            "name": "used_at"
+          }
+        }
+      },
+      {
+        "name": "agent_id?",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "enrollment_tokens",
+            "name": "agent_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "c7987db6d96777d33e5a3992f7f34d303724efdc5fb77af508d12b7df9c4ad4c"
+}

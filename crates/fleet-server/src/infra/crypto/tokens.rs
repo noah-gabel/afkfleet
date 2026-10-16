@@ -122,6 +122,7 @@ mod tests {
     #[case::access(TokenKind::Access, "afk_at_")]
     #[case::refresh(TokenKind::Refresh, "afk_rt_")]
     #[case::invite(TokenKind::Invite, "afk_iv_")]
+    #[case::enrollment(TokenKind::Enrollment, "afk_et_")]
     fn a_minted_token_is_its_prefix_and_43_base64url_characters(
         #[case] kind: TokenKind,
         #[case] prefix: &str,
@@ -132,6 +133,18 @@ mod tests {
         assert_eq!(text.len(), 50, "{text}");
         let secret = text.strip_prefix(prefix).unwrap();
         assert!(secret.bytes().all(is_base64url), "{text}");
+    }
+
+    #[test]
+    fn a_minted_enrollment_token_is_the_shape_an_enrollment_bundle_takes() {
+        for seed in 0..32 {
+            let minted = tokens(seed).mint(TokenKind::Enrollment).unwrap();
+
+            assert!(
+                fleet_core::enrollment::is_token_shaped(minted.token.expose_secret()),
+                "seed {seed}"
+            );
+        }
     }
 
     #[test]

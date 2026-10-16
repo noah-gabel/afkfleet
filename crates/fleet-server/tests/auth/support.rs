@@ -18,10 +18,12 @@ use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::auth::{InviteTtl, LockoutPolicy, NewPassword, SessionPolicy};
 use fleet_core::authz::Role;
 use fleet_core::id::{InviteId, SessionId, UserId};
+use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock as _;
 use fleet_core::value::Username;
 use fleet_server::app::auth::TokenService;
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
+use fleet_server::app::enrollment::EnrollmentTokenService;
 use fleet_server::app::health::HealthService;
 use fleet_server::app::invites::InviteService;
 use fleet_server::app::lockout::LockoutService;
@@ -42,7 +44,9 @@ use fleet_server::infra::crypto::vault::{VaultKeys, XChaChaVault};
 use fleet_server::infra::qr::SvgQr;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::AccountReads;
+use fleet_server::ports::agents::AgentReads;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditReads, AuditRecord, NewAuditEntry};
+use fleet_server::ports::enrollment_tokens::EnrollmentTokenReads;
 use fleet_server::ports::envelopes::EnvelopeReads;
 use fleet_server::ports::grants::GrantReads;
 use fleet_server::ports::invites::{InviteReads, NewInvite};
@@ -74,6 +78,7 @@ pub(crate) const STEP_UP: &str = "/api/v1/auth/step-up";
 pub(crate) const RESET: &str = "/api/v1/me/mfa/reset";
 pub(crate) const ENROLL: &str = "/api/v1/me/mfa/enroll";
 pub(crate) const CONFIRM: &str = "/api/v1/me/mfa/confirm";
+pub(crate) const ENROLLMENT_TOKENS: &str = "/api/v1/agents/enrollment-tokens";
 pub(crate) const USERS: &str = "/api/v1/users";
 pub(crate) const INVITES: &str = "/api/v1/invites";
 pub(crate) const REGISTER: &str = "/api/v1/auth/register";
@@ -86,6 +91,8 @@ pub(crate) const ME_SESSIONS: &str = "/api/v1/me/sessions";
 const PHC: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g";
 /// An invite's default lifetime, in milliseconds.
 pub(crate) const INVITE_TTL: i64 = 72 * 3_600_000;
+/// The CA fingerprint the tests' enrollment tokens pin.
+pub(crate) const CA_FINGERPRINT: CertFingerprint = CertFingerprint::from_digest([0xAB; 32]);
 
 pub(crate) fn at(millis: i64) -> DateTime<Utc> {
     DateTime::from_timestamp_millis(millis).unwrap()
@@ -151,6 +158,9 @@ pub(crate) struct Options {
     /// Alice's stored hash, when it isn't one of today's parameters.
     pub(crate) hash: Option<PasswordHash>,
     pub(crate) invite_ttl: InviteTtl,
+    /// Whether the control plane is on: the enrollment tokens' route
+    /// answers 404 without it.
+    pub(crate) control_plane: bool,
 }
 
 impl Default for Options {
@@ -160,6 +170,7 @@ impl Default for Options {
             rehash: Rehash::Works,
             hash: None,
             invite_ttl: InviteTtl::default(),
+            control_plane: false,
         }
     }
 }
@@ -307,6 +318,14 @@ impl Store for HookedStore {
         self.inner.grants()
     }
 
+    fn enrollment_tokens(&self) -> &dyn EnrollmentTokenReads {
+        self.inner.enrollment_tokens()
+    }
+
+    fn agents(&self) -> &dyn AgentReads {
+        self.inner.agents()
+    }
+
     fn envelopes(&self) -> &dyn EnvelopeReads {
         self.inner.envelopes()
     }
@@ -444,6 +463,9 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
     );
     let (users, invites) = accounts(&clock, &random, &hooked, passwords, settings.invite_ttl);
     let limits = RateLimits::new(&settings.limits, Arc::new(clock.clone()));
+    let enrollment_tokens = settings
+        .control_plane
+        .then(|| enrollment_tokens(&clock, &random, &hooked));
     let state = AppState::new(Services {
         health: HealthService::new(Arc::new(db.clone())),
         tokens: tokens.clone(),
@@ -455,6 +477,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         link_flows: idle_link_flows(&db),
         accounts: idle_accounts(&db),
         grants: idle_grants(&db),
+        enrollment_tokens,
     });
     let app = app(state, &clock);
     let mut tx = db.write().await.unwrap();
@@ -482,6 +505,21 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         random,
         alice,
     }
+}
+
+/// The enrollment tokens' service over `hooked`, pinning [`CA_FINGERPRINT`].
+fn enrollment_tokens(
+    clock: &ManualClock,
+    random: &SeededRandom,
+    hooked: &HookedStore,
+) -> EnrollmentTokenService {
+    EnrollmentTokenService::new(
+        Arc::new(clock.clone()),
+        Arc::new(random.clone()),
+        Arc::new(hooked.clone()),
+        Arc::new(Sha256Tokens::new(Arc::new(random.clone()))),
+        CA_FINGERPRINT,
+    )
 }
 
 /// The users' and invites' services over `hooked`, so a queued change

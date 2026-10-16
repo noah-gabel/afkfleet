@@ -132,6 +132,7 @@ pub(crate) fn server_config(dir: &Path, bind: SocketAddr, dev_mode: bool) -> Ser
             active_key_id: 1,
         },
         accounts: AccountsConfig::default(),
+        grpc: None,
     }
 }
 
@@ -339,6 +340,7 @@ pub(crate) fn app_of(router: Router, database: &Database) -> App {
             link_flows.flows(),
         ),
         link_flows,
+        enrollment: None,
     }
 }
 

@@ -76,6 +76,20 @@ pub enum ProblemKind {
     /// An entry that an earlier one of the same list already names.
     #[error("is listed twice")]
     Duplicate,
+    /// A path that another key of its section already names
+    /// (`[grpc]`'s files).
+    #[error("is the same file as `{key}`")]
+    SameFileAs {
+        /// The other key, without its section.
+        key: &'static str,
+    },
+    /// A listener's port that another listener already uses
+    /// (`[grpc] bind` and `[http] bind`).
+    #[error("uses the same port as `{key}`")]
+    SamePortAs {
+        /// The other key, with its section.
+        key: &'static str,
+    },
 }
 
 #[cfg(test)]

@@ -11,7 +11,9 @@ use fleet_core::authz::Actor;
 use fleet_core::id::{AccountId, UserId};
 use fleet_server::infra::sqlite::Database;
 use fleet_server::ports::accounts::{AccountReads, ListedAccount, McAccount};
+use fleet_server::ports::agents::AgentReads;
 use fleet_server::ports::audit::AuditReads;
+use fleet_server::ports::enrollment_tokens::EnrollmentTokenReads;
 use fleet_server::ports::envelopes::EnvelopeReads;
 use fleet_server::ports::grants::GrantReads;
 use fleet_server::ports::invites::InviteReads;
@@ -197,6 +199,14 @@ impl Store for FlakyStore {
 
     fn grants(&self) -> &dyn GrantReads {
         self.inner.grants()
+    }
+
+    fn enrollment_tokens(&self) -> &dyn EnrollmentTokenReads {
+        self.inner.enrollment_tokens()
+    }
+
+    fn agents(&self) -> &dyn AgentReads {
+        self.inner.agents()
     }
 
     fn envelopes(&self) -> &dyn EnvelopeReads {

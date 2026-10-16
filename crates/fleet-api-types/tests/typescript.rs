@@ -54,6 +54,7 @@ fn the_export_writes_one_file_per_type() {
             "CreateGrantRequest.ts",
             "CreateInviteRequest.ts",
             "CreateOfflineAccountRequest.ts",
+            "CreatedEnrollmentTokenResponse.ts",
             "CreatedInviteResponse.ts",
             "CreatedOfflineAccountResponse.ts",
             "CustomCaView.ts",

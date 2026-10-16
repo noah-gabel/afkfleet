@@ -32,7 +32,7 @@ use tracing_subscriber::registry::LookupSpan;
 use crate::config::LogConfig;
 use filter::AzaleaRules;
 
-pub use fleet_startup::telemetry::{PANIC_TARGET, TelemetryError};
+pub use fleet_startup::telemetry::{LogOutput, PANIC_TARGET, TelemetryError};
 
 /// The agent's log layer, writing to `writer`: JSON or pretty lines, with the
 /// filter that `[log] filter` and azalea's rules make (see
@@ -56,4 +56,14 @@ where
 /// already installed.
 pub fn init(config: &LogConfig) -> Result<(), TelemetryError> {
     fleet_startup::telemetry::init_with(config, &AzaleaRules)
+}
+
+/// [`init`] on `output`: `enroll` logs to stderr, since its stdout carries
+/// its result.
+///
+/// # Errors
+/// [`TelemetryError::AlreadyInstalled`] if a global subscriber or logger is
+/// already installed.
+pub fn init_on(config: &LogConfig, output: LogOutput) -> Result<(), TelemetryError> {
+    fleet_startup::telemetry::init_on(config, &AzaleaRules, output)
 }

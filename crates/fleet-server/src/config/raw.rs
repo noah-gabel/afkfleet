@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use garde::Validate;
 use serde::Deserialize;
 
-use super::{AccountsConfig, Argon2Params, RateLimitConfig};
+use super::{AccountsConfig, Argon2Params, GrpcConfig, RateLimitConfig};
 
 /// A range of a numeric key, inclusive at both ends.
 pub(crate) struct Range {
@@ -65,6 +65,45 @@ pub(crate) struct RawConfig {
     #[serde(default)]
     #[garde(dive)]
     pub(crate) accounts: RawAccounts,
+    /// Absent means the control plane is off.
+    #[serde(default)]
+    #[garde(dive)]
+    pub(crate) grpc: Option<RawGrpc>,
+}
+
+/// `[grpc]`. The four files are required once the section is there;
+/// validation checks them. A missing `bind` is `127.0.0.1:7443`.
+#[derive(Debug, Deserialize, Validate)]
+#[serde(default, deny_unknown_fields, expecting = "a table of gRPC settings")]
+pub(crate) struct RawGrpc {
+    #[garde(skip)]
+    pub(crate) bind: Option<String>,
+    #[garde(skip)]
+    pub(crate) ca_cert_file: Option<String>,
+    #[garde(skip)]
+    pub(crate) ca_key_file: Option<String>,
+    #[garde(skip)]
+    pub(crate) server_cert_file: Option<String>,
+    #[garde(skip)]
+    pub(crate) server_key_file: Option<String>,
+    #[garde(range(min = GrpcConfig::AGENT_CERT_LIFETIME_DAYS.min, max = GrpcConfig::AGENT_CERT_LIFETIME_DAYS.max))]
+    pub(crate) agent_cert_lifetime_days: u32,
+}
+
+/// Appendix A's agent certificate lifetime.
+const DEFAULT_AGENT_CERT_LIFETIME_DAYS: u32 = 60;
+
+impl Default for RawGrpc {
+    fn default() -> Self {
+        Self {
+            bind: None,
+            ca_cert_file: None,
+            ca_key_file: None,
+            server_cert_file: None,
+            server_key_file: None,
+            agent_cert_lifetime_days: DEFAULT_AGENT_CERT_LIFETIME_DAYS,
+        }
+    }
 }
 
 /// `[vault]`. Both keys are required; validation checks the key IDs, the
@@ -187,6 +226,8 @@ pub(crate) struct RawRateLimits {
     pub(crate) link_flows_per_user_per_day: u32,
     #[garde(range(min = RateLimitConfig::GRANTS_BY_NAME_PER_USER_PER_HOUR.min, max = RateLimitConfig::GRANTS_BY_NAME_PER_USER_PER_HOUR.max))]
     pub(crate) grants_by_name_per_user_per_hour: u32,
+    #[garde(range(min = RateLimitConfig::ENROLL_PER_IP_PER_MIN.min, max = RateLimitConfig::ENROLL_PER_IP_PER_MIN.max))]
+    pub(crate) enroll_per_ip_per_min: u32,
 }
 
 impl Default for RawRateLimits {
@@ -202,6 +243,7 @@ impl Default for RawRateLimits {
             link_flows_total: 3,
             link_flows_per_user_per_day: 10,
             grants_by_name_per_user_per_hour: 10,
+            enroll_per_ip_per_min: 5,
         }
     }
 }
@@ -557,9 +599,17 @@ mod secret_names {
             "rate_limits.link_flows_total",
             "rate_limits.link_flows_per_user_per_day",
             "rate_limits.grants_by_name_per_user_per_hour",
+            "rate_limits.enroll_per_ip_per_min",
             "accounts",
             "accounts.max_per_member",
             "accounts.allow_offline",
+            "grpc",
+            "grpc.bind",
+            "grpc.ca_cert_file",
+            "grpc.ca_key_file",
+            "grpc.server_cert_file",
+            "grpc.server_key_file",
+            "grpc.agent_cert_lifetime_days",
         ] {
             assert!(keys.iter().any(|found| found == key), "{key} in {keys:?}");
         }

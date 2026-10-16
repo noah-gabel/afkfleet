@@ -61,13 +61,16 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use axum::Router;
+use chrono::{DateTime, Utc};
 use fleet_core::system::{Clock, SecureRandom};
+use fleet_proto::enrollment::SERVER_DEADLINE;
 use fleet_startup::signals::ShutdownSignals;
 use secrecy::SecretBox;
 use tokio::net::TcpListener;
 use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
+use tonic::transport::ServerTlsConfig;
 use tracing::{error, info, warn};
 
 use super::DATABASE_CLOSE;
@@ -75,6 +78,7 @@ use super::housekeeping::Housekeeping;
 use crate::app::accounts::{AccountService, AccountSettings};
 use crate::app::auth::TokenService;
 use crate::app::challenges::Challenges;
+use crate::app::enrollment::{EnrollmentService, EnrollmentTokenService};
 use crate::app::grants::GrantService;
 use crate::app::health::HealthService;
 use crate::app::invites::InviteService;
@@ -84,6 +88,8 @@ use crate::app::login::LoginService;
 use crate::app::mfa::{MfaPorts, MfaService};
 use crate::app::users::UserService;
 use crate::config::{HttpConfig, ServerConfig};
+use crate::grpc::enrollment::enrollment_service;
+use crate::grpc::listener::{self as grpc_listener, EnrollmentRoute};
 use crate::http::error::chain;
 use crate::http::middleware::RequestIds;
 use crate::http::openapi::ApiDocs;
@@ -96,6 +102,7 @@ use crate::infra::crypto::tokens::Sha256Tokens;
 use crate::infra::crypto::totp::TotpRs;
 use crate::infra::crypto::vault::{DerivedKey, VaultKeyError, VaultKeys, XChaChaVault};
 use crate::infra::msauth::{BuildError, ReqwestMicrosoftAuth};
+use crate::infra::pki::{AgentIssuer, CertificateAuthority, LoadedPki, PkiLoadError};
 use crate::infra::qr::SvgQr;
 use crate::infra::sqlite::{self, Database, DatabaseOptions, OpenError};
 use crate::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
@@ -207,6 +214,12 @@ pub enum StartError {
     /// The HTTP client for Microsoft couldn't be built (ADR-0018).
     #[error(transparent)]
     Microsoft(BuildError),
+    /// `[grpc]`'s PKI couldn't be read or doesn't hold together (ADR-0019).
+    #[error("the control plane's PKI can't be used")]
+    Pki(#[source] PkiLoadError),
+    /// The gRPC port couldn't be set up with the PKI (ADR-0019).
+    #[error("the gRPC port can't be set up")]
+    Grpc(#[source] tonic::transport::Error),
 }
 
 /// Logs `error` with its whole chain as "the server can't start" and
@@ -227,6 +240,29 @@ pub struct App {
     pub housekeeping: Housekeeping,
     /// The Microsoft link flows, whose pollers run until the shutdown.
     pub link_flows: LinkFlowService,
+    /// The agents' enrollment behind its gate, while the control plane is
+    /// on: [`run`] serves it on the gRPC port.
+    pub enrollment: Option<EnrollmentRoute>,
+}
+
+/// The control plane, while `[grpc]` is configured: the listener main.rs
+/// bound on `[grpc] bind` and the PKI it read before the runtime started.
+#[derive(Debug)]
+pub struct ControlPlane {
+    /// The gRPC port's listener.
+    pub listener: TcpListener,
+    /// The CA, which signs agents' certificates, and the server's identity.
+    pub pki: LoadedPki,
+}
+
+/// The gRPC port [`serve`] runs beside the API: its listener and its
+/// server, TLS and services set up.
+#[derive(Debug)]
+pub struct GrpcPort {
+    /// The port's listener.
+    pub listener: TcpListener,
+    /// Its server.
+    pub router: tonic::transport::server::Router,
 }
 
 /// The clocks, the randomness, Microsoft and the pacing the app runs on.
@@ -278,6 +314,7 @@ pub fn app(
     keys: VaultKeys,
     lockout_key: SecretBox<[u8; 32]>,
     passwords: Arc<dyn Passwords>,
+    ca: Option<CertificateAuthority>,
 ) -> Result<App, StartError> {
     let ports = ServerPorts::system().map_err(StartError::Microsoft)?;
     Ok(app_with(
@@ -287,6 +324,7 @@ pub fn app(
         lockout_key,
         passwords,
         ports,
+        ca,
     ))
 }
 
@@ -298,6 +336,11 @@ pub fn app(
 /// It builds the vault from `keys` too, for the 2FA service, which seals and
 /// opens the users' TOTP secrets with it (ADR-0016), and logs in through
 /// `passwords`, which [`run`] builds (its dummy hash is async work).
+///
+/// With `[grpc]` and its `ca`, the control plane is on: the API creates
+/// enrollment tokens that pin the CA, and [`App::enrollment`] signs agents'
+/// certificates with it (ADR-0019). Without either, the token route answers
+/// 404 and there is no enrollment.
 #[must_use]
 pub fn app_with(
     config: &ServerConfig,
@@ -306,6 +349,7 @@ pub fn app_with(
     lockout_key: SecretBox<[u8; 32]>,
     passwords: Arc<dyn Passwords>,
     ports: ServerPorts,
+    ca: Option<CertificateAuthority>,
 ) -> App {
     let ServerPorts {
         clock,
@@ -342,19 +386,8 @@ pub fn app_with(
         Arc::clone(&token_port),
         config.auth.invites,
     );
-    let challenges = Challenges::new(Arc::clone(&clock), token_port);
-    let mfa = MfaService::new(
-        Arc::clone(&clock),
-        Arc::clone(&random),
-        Arc::clone(&store),
-        vault,
-        MfaPorts {
-            totp: Arc::new(TotpRs::new()),
-            recovery: Arc::new(Sha256RecoveryCodes::new()),
-            qr: Arc::new(SvgQr::new()),
-        },
-        challenges.clone(),
-    );
+    let challenges = Challenges::new(Arc::clone(&clock), Arc::clone(&token_port));
+    let mfa = mfa_service(&clock, &random, &store, vault, &challenges);
     let limits = RateLimits::new(&config.rate_limits, limiter_clock);
     let lockout = LockoutService::new(
         Arc::clone(&clock),
@@ -378,7 +411,19 @@ pub fn app_with(
         mfa.clone(),
     );
     let grants = GrantService::new(Arc::clone(&clock), Arc::clone(&store));
-    let ids = RequestIds::new(clock, random);
+    let ids = RequestIds::new(Arc::clone(&clock), Arc::clone(&random));
+    let (enrollment_tokens, enrollment) = control_plane_services(
+        config,
+        ca,
+        EnrollmentPorts {
+            clock,
+            random,
+            store: Arc::clone(&store),
+            tokens: token_port,
+            limits: limits.clone(),
+            ids: ids.clone(),
+        },
+    );
     let state = AppState::new(Services {
         health: HealthService::new(store),
         tokens,
@@ -390,6 +435,7 @@ pub fn app_with(
         link_flows: link_flows.clone(),
         accounts,
         grants,
+        enrollment_tokens,
     });
     App {
         router: router(
@@ -400,7 +446,80 @@ pub fn app_with(
         ),
         housekeeping: Housekeeping::new(limits, lockout, challenges, link_flows.flows()),
         link_flows,
+        enrollment,
     }
+}
+
+/// The 2FA service over the app's ports, sealing TOTP secrets with `vault`
+/// and reading the login's `challenges`.
+fn mfa_service(
+    clock: &Arc<dyn Clock>,
+    random: &Arc<dyn SecureRandom>,
+    store: &Arc<dyn Store>,
+    vault: Arc<dyn Vault>,
+    challenges: &Challenges,
+) -> MfaService {
+    MfaService::new(
+        Arc::clone(clock),
+        Arc::clone(random),
+        Arc::clone(store),
+        vault,
+        MfaPorts {
+            totp: Arc::new(TotpRs::new()),
+            recovery: Arc::new(Sha256RecoveryCodes::new()),
+            qr: Arc::new(SvgQr::new()),
+        },
+        challenges.clone(),
+    )
+}
+
+/// What the control plane's services run on: the app's clock, randomness,
+/// store and tokens, the rate limits and the request IDs.
+struct EnrollmentPorts {
+    clock: Arc<dyn Clock>,
+    random: Arc<dyn SecureRandom>,
+    store: Arc<dyn Store>,
+    tokens: Arc<dyn Tokens>,
+    limits: RateLimits,
+    ids: RequestIds,
+}
+
+/// The control plane's services over `ports`, while `config` has `[grpc]`
+/// and there is a `ca`: the enrollment tokens' for the API, pinning the
+/// CA, and the enrollment for the gRPC port, signing with the CA for
+/// `[grpc] agent_cert_lifetime_days` within [`SERVER_DEADLINE`].
+fn control_plane_services(
+    config: &ServerConfig,
+    ca: Option<CertificateAuthority>,
+    ports: EnrollmentPorts,
+) -> (Option<EnrollmentTokenService>, Option<EnrollmentRoute>) {
+    let Some((grpc, ca)) = config.grpc.as_ref().zip(ca) else {
+        return (None, None);
+    };
+    let tokens = EnrollmentTokenService::new(
+        Arc::clone(&ports.clock),
+        Arc::clone(&ports.random),
+        Arc::clone(&ports.store),
+        Arc::clone(&ports.tokens),
+        ca.fingerprint(),
+    );
+    let issuer = AgentIssuer::new(ca, Arc::clone(&ports.random), grpc.agent_cert_lifetime);
+    let enrollment = EnrollmentService::new(
+        ports.clock,
+        ports.random,
+        ports.store,
+        ports.tokens,
+        Arc::new(issuer),
+    );
+    (
+        Some(tokens),
+        Some(enrollment_service(
+            enrollment,
+            ports.limits,
+            ports.ids,
+            SERVER_DEADLINE,
+        )),
+    )
 }
 
 /// The Microsoft link flows and the other account use cases over `ports`,
@@ -429,12 +548,14 @@ fn account_services(
     (link_flows, accounts)
 }
 
-/// Opens the database `config` names and serves the API on `listener`
-/// until a signal from `signals` stops it. `keys` are the vault's, which
-/// main.rs loads before the runtime starts.
+/// Opens the database `config` names and serves the API on `listener`, and
+/// the gRPC port on the `control_plane`'s while `[grpc]` is configured,
+/// until a signal from `signals` stops them. `keys` are the vault's, which
+/// main.rs loads before the runtime starts, like the control plane's PKI.
 pub async fn run<S: ShutdownSignals>(
     config: &ServerConfig,
     listener: TcpListener,
+    control_plane: Option<ControlPlane>,
     signals: S,
     keys: VaultKeys,
 ) -> Exit {
@@ -461,19 +582,74 @@ pub async fn run<S: ShutdownSignals>(
             Err(error) => return cant_start(&StartError::Passwords(error)),
         };
     warn_about_kept_offline_accounts(config, &database).await;
-    let app = match app(config, &database, keys, lockout_key, passwords) {
+    let (opened, ca) = if let Some(plane) = control_plane {
+        let (opened, ca) = open(plane, SystemClock.now());
+        (Some(opened), Some(ca))
+    } else {
+        info!("the control plane is off: [grpc] isn't configured, so no agent can enroll");
+        (None, None)
+    };
+    let mut app = match app(config, &database, keys, lockout_key, passwords, ca) {
         Ok(app) => app,
+        Err(error) => return cant_start(&error),
+    };
+    let grpc = match grpc_port(config, opened, app.enrollment.take()) {
+        Ok(grpc) => grpc,
         Err(error) => return cant_start(&error),
     };
     info!(%address, "the server is listening");
     serve(
         listener,
+        grpc,
         app,
         &database,
         signals,
         ShutdownTimeouts::of(&config.http),
     )
     .await
+}
+
+/// The gRPC port's listener and TLS, and the CA, from `plane`. A server
+/// certificate that expired by `now` is logged at `error`: agents can't
+/// connect, but the API keeps working (ADR-0019, S12).
+fn open(
+    plane: ControlPlane,
+    now: DateTime<Utc>,
+) -> ((TcpListener, ServerTlsConfig), CertificateAuthority) {
+    let ControlPlane { listener, pki } = plane;
+    if pki.server_not_after <= now {
+        error!(
+            not_after = %pki.server_not_after,
+            "the server certificate has expired: no agent can connect until `afkfleet-server pki server-cert` replaces it"
+        );
+    }
+    let tls = grpc_listener::tls(&pki);
+    ((listener, tls), pki.ca)
+}
+
+/// The gRPC port over `opened` serving `enrollment`, when `config` has
+/// `[grpc]` and both are there.
+///
+/// # Errors
+/// [`StartError::Listen`] when the listener's address can't be read, and
+/// [`StartError::Grpc`] when its TLS can't be set up.
+fn grpc_port(
+    config: &ServerConfig,
+    opened: Option<(TcpListener, ServerTlsConfig)>,
+    enrollment: Option<EnrollmentRoute>,
+) -> Result<Option<GrpcPort>, StartError> {
+    let (Some(grpc), Some((listener, tls)), Some(route)) =
+        (config.grpc.as_ref(), opened, enrollment)
+    else {
+        return Ok(None);
+    };
+    let address = listener.local_addr().map_err(|source| StartError::Listen {
+        address: grpc.bind,
+        source,
+    })?;
+    let router = grpc_listener::router(tls, route).map_err(StartError::Grpc)?;
+    info!(%address, "the control plane is listening");
+    Ok(Some(GrpcPort { listener, router }))
 }
 
 /// What a start logs while offline accounts are kept with the switch off.
@@ -497,11 +673,12 @@ async fn warn_about_kept_offline_accounts(config: &ServerConfig, database: &Data
 }
 
 /// Serves `app` on `listener`, every connection with its peer's address,
-/// and runs its housekeeping, until a signal from `signals` stops both; then
-/// shuts down within `timeouts`, waits for the housekeeping and closes
-/// `database`.
+/// and the `grpc` port if there is one, and runs the housekeeping, until a
+/// signal from `signals` stops them; then shuts down within `timeouts`,
+/// waits for the housekeeping and closes `database`.
 pub async fn serve<S: ShutdownSignals>(
     listener: TcpListener,
+    grpc: Option<GrpcPort>,
     app: App,
     database: &Database,
     signals: S,
@@ -516,13 +693,21 @@ pub async fn serve<S: ShutdownSignals>(
         flows_stop.cancelled().await;
         link_flows.shutdown().await;
     });
-    let server = axum::serve(
+    let http = axum::serve(
         listener,
         app.router
             .into_make_service_with_connect_info::<SocketAddr>(),
     )
     .with_graceful_shutdown(shutdown.clone().cancelled_owned())
     .into_future();
+    // Boxed, so the server's future stays as small with the port as without.
+    let grpc = grpc.map(|port| {
+        Box::pin(grpc_listener::serve(
+            port.router,
+            port.listener,
+            shutdown.child_token(),
+        ))
+    });
     let close = async move {
         while let Some(ended) = background.join_next().await {
             if let Err(error) = ended {
@@ -531,7 +716,49 @@ pub async fn serve<S: ShutdownSignals>(
         }
         database.close().await;
     };
-    drive(server, &shutdown, close, signals, timeouts).await
+    drive(
+        both(http, grpc, &shutdown),
+        &shutdown,
+        close,
+        signals,
+        timeouts,
+    )
+    .await
+}
+
+/// `http` and, if there is one, `grpc`, as the one server [`drive`] runs:
+/// when either ends, it cancels `shutdown`, so the other drains too, and it
+/// ends once both have, with the first error. A gRPC port that fails
+/// before any signal is thus a server that ended unasked.
+///
+/// # Errors
+/// The first of the two servers' errors, the gRPC port's as an
+/// [`io::Error`].
+pub async fn both<H, G, E>(http: H, grpc: Option<G>, shutdown: &CancellationToken) -> io::Result<()>
+where
+    H: Future<Output = io::Result<()>>,
+    G: Future<Output = Result<(), E>>,
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    let Some(grpc) = grpc else {
+        return http.await;
+    };
+    let mut http = pin!(http);
+    let mut grpc = pin!(async { grpc.await.map_err(io::Error::other) });
+    tokio::select! {
+        // Both branches are pinned futures, each polled to its end, here
+        // or right after: cancel-safe.
+        ended = &mut http => {
+            shutdown.cancel();
+            let other = grpc.await;
+            ended.and(other)
+        }
+        ended = &mut grpc => {
+            shutdown.cancel();
+            let other = http.await;
+            other.and(ended)
+        }
+    }
 }
 
 /// The shutdown sequence of the [module docs](self): runs `server` until a

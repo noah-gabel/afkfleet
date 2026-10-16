@@ -5,6 +5,8 @@
 //! - `decode`: random and mutated bytes, received chat and modes in any form
 //!   are refused or read as a valid value that reads back the same.
 //! - `rejects`: one case per rule that refuses a message, with its error.
+//! - `enrollment`: the enrollment's messages: the wire, their refusals, the
+//!   token's redaction and the shared limits.
 //! - `redaction`: a secret never prints, and every field named like a secret
 //!   belongs to a redacted message.
 //! - `schema`: the pinned wire schema.
@@ -15,6 +17,7 @@
 #![cfg(test)]
 
 mod decode;
+mod enrollment;
 mod redaction;
 mod rejects;
 mod round_trip;

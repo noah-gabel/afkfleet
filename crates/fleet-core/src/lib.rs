@@ -13,11 +13,15 @@
 //!   and where it stands.
 //! - [`chat`]: the messages bots send, and sanitized messages they receive.
 //! - [`disconnect`]: why a session ended, and whether the bot retries.
+//! - [`enrollment`]: an agent's enrollment: the token's rules and the
+//!   bundle the Owner hands the agent.
 //! - [`resilience`]: retry backoff, failure windows and the circuit breaker.
 //! - [`bot`]: the bot state machine, and a bot's spec and status.
 //! - [`mode`]: what a bot does while it's online, and the presets.
 //! - [`mc`]: the Minecraft ports the runtime drives a session through.
 //! - [`authz`]: who may do what, decided by [`authz::authorize`].
+//! - [`pki`]: the control plane's keys and certificate fingerprints, shared by the
+//!   server and the agent.
 //! - [`audit`]: the vocabulary of the server's audit log.
 //! - [`auth`]: the rules of authentication, such as what a new password
 //!   must be.
@@ -71,9 +75,11 @@ pub mod authz;
 pub mod bot;
 pub mod chat;
 pub mod disconnect;
+pub mod enrollment;
 pub mod id;
 pub mod mc;
 pub mod mode;
+pub mod pki;
 pub mod resilience;
 pub mod system;
 pub mod text;

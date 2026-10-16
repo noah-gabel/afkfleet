@@ -94,6 +94,7 @@ fn loose() -> RateLimitConfig {
         per_user: loose,
         link_flows: LinkFlowLimits::default(),
         grants_by_name: loose,
+        enroll: loose,
     }
 }
 
@@ -266,6 +267,7 @@ async fn setup(options: SqliteConnectOptions, config: RateLimitConfig, proxies: 
         link_flows: idle_link_flows(&db),
         accounts: idle_accounts(&db),
         grants: idle_grants(&db),
+        enrollment_tokens: None,
     });
     let http = HttpConfig {
         bind: HttpConfig::DEFAULT_BIND,

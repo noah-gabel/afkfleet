@@ -255,6 +255,7 @@ async fn build(db: &Database, docs: ApiDocs, extra: impl FnOnce(Routes) -> Route
         link_flows: idle_link_flows(db),
         accounts: idle_accounts(db),
         grants: idle_grants(db),
+        enrollment_tokens: None,
     });
     let ids = RequestIds::new(Arc::new(clock()), Arc::new(SeededRandom::new(5)));
     let (app, entries) = extra(api_routes(Routes::new(&limits))).finish(state, &http(), ids, docs);
@@ -478,6 +479,11 @@ async fn the_setup_and_step_up_routes_are_registered_with_their_access_and_class
             entry(Method::POST, "/api/v1/me/password", RateClass::Login),
             entry(Method::PATCH, "/api/v1/users/{id}", RateClass::Standard),
             entry(Method::POST, "/api/v1/invites", RateClass::Standard),
+            entry(
+                Method::POST,
+                "/api/v1/agents/enrollment-tokens",
+                RateClass::Standard
+            ),
             entry(Method::DELETE, "/api/v1/invites/{id}", RateClass::Standard),
             entry(Method::DELETE, "/api/v1/accounts/{id}", RateClass::Standard),
             entry(

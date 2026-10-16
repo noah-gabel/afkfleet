@@ -1,0 +1,19 @@
+# The managed agent's development config, for `just dev-enroll` on the host only:
+# it enrolls with `just dev-server`'s control plane on 127.0.0.1:7443, whose
+# server certificate names localhost, 127.0.0.1 and ::1.
+#
+# DEVELOPMENT ONLY. The three files must be absolute paths, which a committed
+# file can't hold for every machine, so they aren't set here: `just dev-enroll`
+# passes AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE (dev-server's CA,
+# target/dev-server/pki/ca.crt), and AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE and
+# __KEY_FILE in its folder (target/dev-agent/ by default). `afkfleet-agent run`
+# refuses this config until managed mode runs (P10.7); `enroll` uses it.
+
+name = "dev-agent"
+
+[log]
+format = "pretty"
+filter = "info"
+
+[control_plane]
+url = "https://127.0.0.1:7443"

@@ -131,6 +131,7 @@ fn config(limits: RateLimitConfig, accounts: AccountsConfig) -> ServerConfig {
             active_key_id: 1,
         },
         accounts,
+        grpc: None,
     }
 }
 
@@ -178,6 +179,7 @@ impl Server {
             lockout_key,
             Arc::new(passwords),
             ports,
+            None,
         );
         let tokens = TokenService::new(
             clock,

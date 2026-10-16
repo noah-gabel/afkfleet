@@ -1,0 +1,37 @@
+// An agent's enrollment: how it gets its identity (Plan.md P10.3, Appendix C;
+// ADR-0019).
+syntax = "proto3";
+
+package fleet.v1;
+
+// The service an agent calls once, over TLS without a client certificate, to
+// trade a single-use enrollment token and a certificate request for its
+// certificate.
+service AgentEnrollment {
+  // Checks the token and the request, creates the agent, and answers its
+  // certificate.
+  rpc Enroll(EnrollRequest) returns (EnrollResponse);
+}
+
+// What an agent sends to enroll. It holds the enrollment token, so it has no
+// derived Debug, and its Drop wipes the token.
+message EnrollRequest {
+  // The single-use enrollment token (afk_et_…).
+  string token = 1;
+  // The name the agent's config gives it.
+  string name = 2;
+  // A PKCS#10 certificate request for the agent's own Ed25519 key,
+  // DER-encoded. Only its public key is used.
+  bytes csr_der = 3;
+}
+
+// What the server answers an agent it enrolled.
+message EnrollResponse {
+  // The new agent's ID, 16 bytes; its certificate names it.
+  bytes agent_id = 1;
+  // The agent's certificate, as one PEM CERTIFICATE section: what the
+  // agent checks and stores as it is.
+  string certificate_pem = 2;
+  // When the certificate stops being valid.
+  optional int64 not_after_unix_ms = 3;
+}

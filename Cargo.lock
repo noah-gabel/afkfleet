@@ -2529,6 +2529,7 @@ dependencies = [
  "figment",
  "fleet-core",
  "fleet-mc",
+ "fleet-proto",
  "fleet-runtime",
  "fleet-startup",
  "fleet-testkit",
@@ -2537,15 +2538,20 @@ dependencies = [
  "log",
  "metrics",
  "metrics-exporter-prometheus",
+ "rcgen",
  "rstest",
  "rustls",
+ "secrecy",
  "serde",
  "serde_json",
+ "sha2 0.11.0",
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+ "tonic",
  "tracing",
  "tracing-subscriber",
+ "zeroize",
 ]
 
 [[package]]
@@ -2682,6 +2688,7 @@ dependencies = [
  "figment",
  "fleet-api-types",
  "fleet-core",
+ "fleet-proto",
  "fleet-startup",
  "fleet-testkit",
  "garde",
@@ -2708,6 +2715,7 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tokio-util",
+ "tonic",
  "totp-rs",
  "tower",
  "tower-http 0.7.1",
@@ -2716,6 +2724,7 @@ dependencies = [
  "utoipa",
  "utoipa-axum",
  "uuid",
+ "x509-parser",
  "zeroize",
  "zxcvbn",
 ]
@@ -5789,6 +5798,7 @@ dependencies = [
  "time",
  "x509-parser",
  "yasna",
+ "zeroize",
 ]
 
 [[package]]
@@ -7789,6 +7799,7 @@ dependencies = [
  "socket2",
  "sync_wrapper",
  "tokio",
+ "tokio-rustls",
  "tokio-stream",
  "tower",
  "tower-layer",

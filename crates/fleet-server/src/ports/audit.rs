@@ -215,6 +215,18 @@ pub trait AuditReads: Send + Sync + fmt::Debug {
         action: &AuditAction,
         since: DateTime<Utc>,
     ) -> Result<Vec<DateTime<Utc>>, StoreError>;
+
+    /// How many Failure entries of `action` name `target`: the refused
+    /// enrollments a token has had, which are recorded at most 10 times
+    /// (P10.3, ADR-0019).
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn failures_on(
+        &self,
+        target: AuditTarget,
+        action: &AuditAction,
+    ) -> Result<u32, StoreError>;
 }
 
 /// Recording in the audit log, inside a [`super::store::WriteTx`].
@@ -237,6 +249,16 @@ pub trait AuditWrites: Send {
         action: &AuditAction,
         since: DateTime<Utc>,
     ) -> Result<Vec<DateTime<Utc>>, StoreError>;
+
+    /// [`AuditReads::failures_on`], read in this transaction.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn failures_on(
+        &mut self,
+        target: AuditTarget,
+        action: &AuditAction,
+    ) -> Result<u32, StoreError>;
 }
 
 #[cfg(test)]

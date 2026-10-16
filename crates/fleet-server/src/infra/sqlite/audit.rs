@@ -3,7 +3,7 @@
 
 use std::net::IpAddr;
 
-use fleet_core::audit::{AuditAction, RecordedMetadata, RecordedTarget};
+use fleet_core::audit::{AuditAction, AuditTarget, RecordedMetadata, RecordedTarget};
 use fleet_core::id::UserId;
 use serde_json::Value;
 use sqlx::{SqliteConnection, SqlitePool};
@@ -149,6 +149,32 @@ pub(super) async fn failed_code_attempts(
 /// When the Success entries of `action` whose target is `user` were
 /// recorded, for those after `since`, in commit order. The `(target_type,
 /// target_id, action, id)` index finds them; the daily cap keeps them few.
+/// How many Failure entries of `action` name `target`.
+pub(super) async fn failures_on<'c, E>(
+    executor: E,
+    target: AuditTarget,
+    action: &AuditAction,
+) -> Result<u32, StoreError>
+where
+    E: sqlx::SqliteExecutor<'c>,
+{
+    let kind = target.kind();
+    let id = id_text(target.id());
+    let action = action.as_str();
+    let count = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "count!: i64" FROM audit_log
+           WHERE target_type = ? AND target_id = ? AND action = ? AND outcome = 'failure'"#,
+        kind,
+        id,
+        action
+    )
+    .fetch_one(executor)
+    .await
+    .map_err(store_error)?;
+    // A count is never negative, and never near 2^32 entries.
+    Ok(u32::try_from(count).unwrap_or(u32::MAX))
+}
+
 pub(super) async fn user_successes_since<'c, E>(
     executor: E,
     user: UserId,

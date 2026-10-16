@@ -6,7 +6,9 @@ use core::fmt;
 use async_trait::async_trait;
 
 use super::accounts::{AccountReads, AccountWrites};
+use super::agents::{AgentReads, AgentWrites};
 use super::audit::{AuditEntryId, AuditReads, AuditWrites, NewAuditEntry};
+use super::enrollment_tokens::{EnrollmentTokenReads, EnrollmentTokenWrites};
 use super::envelopes::{EnvelopeReads, EnvelopeWrites};
 use super::grants::{GrantReads, GrantWrites};
 use super::invites::{InviteReads, InviteWrites};
@@ -85,6 +87,13 @@ pub trait Store: Send + Sync + fmt::Debug {
     /// Every stored vault envelope, read through the read connections.
     fn envelopes(&self) -> &dyn EnvelopeReads;
 
+    /// The agents' enrollment tokens, read through the read connections.
+    fn enrollment_tokens(&self) -> &dyn EnrollmentTokenReads;
+
+    /// The agents and their certificates, read through the read
+    /// connections.
+    fn agents(&self) -> &dyn AgentReads;
+
     /// The audit log, read through the read connections.
     fn audit(&self) -> &dyn AuditReads;
 
@@ -137,6 +146,12 @@ pub trait WriteTx: Send {
 
     /// The stored vault envelopes, changed in this transaction.
     fn envelopes(&mut self) -> &mut dyn EnvelopeWrites;
+
+    /// The agents' enrollment tokens, read and written in this transaction.
+    fn enrollment_tokens(&mut self) -> &mut dyn EnrollmentTokenWrites;
+
+    /// The agents and their certificates, written in this transaction.
+    fn agents(&mut self) -> &mut dyn AgentWrites;
 
     /// The audit log, for a second entry in this transaction.
     fn audit(&mut self) -> &mut dyn AuditWrites;

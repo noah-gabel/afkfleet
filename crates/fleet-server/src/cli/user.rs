@@ -434,6 +434,7 @@ mod tests {
                 active_key_id: 1,
             },
             accounts: AccountsConfig::default(),
+            grpc: None,
         }
     }
 

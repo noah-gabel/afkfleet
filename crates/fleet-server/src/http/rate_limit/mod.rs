@@ -15,6 +15,10 @@
 //! - **Creating a grant by a username spends its own per-user limit** too,
 //!   in its handler after the step-up check, since each one tries a name
 //!   ([`RateLimits::check_grant_by_name`]; ADR-0018, group E).
+//! - **An `Enroll` call on the gRPC port spends its client's own per-IP
+//!   limit,** in that port's interceptor before the request is read
+//!   ([`RateLimits::check_enroll`]; ADR-0019, S14). The port has no other
+//!   limit of this module.
 //! - **Keys:** an IPv4 client by its address, an IPv6 client by its /64
 //!   ([`limiter_key`]); a user by their ID.
 //! - **A refusal** is `ApiError::RateLimited` with governor's wait, which
@@ -128,6 +132,8 @@ pub struct Refusals {
     pub per_user: u64,
     /// The per-user limit of grants created by a username.
     pub grants_by_name: u64,
+    /// The per-IP limit of `Enroll` calls on the gRPC port.
+    pub enroll: u64,
 }
 
 impl Refusals {
@@ -140,6 +146,7 @@ impl Refusals {
             && self.register == 0
             && self.per_user == 0
             && self.grants_by_name == 0
+            && self.enroll == 0
     }
 }
 
@@ -152,6 +159,7 @@ struct Counters {
     register: AtomicU64,
     per_user: AtomicU64,
     grants_by_name: AtomicU64,
+    enroll: AtomicU64,
 }
 
 /// Every limiter, built from `[rate_limits]`.
@@ -163,6 +171,7 @@ struct Limiters {
     register: Limiter<IpAddr>,
     per_user: Limiter<UserId>,
     grants_by_name: Limiter<UserId>,
+    enroll: Limiter<IpAddr>,
     refused: Counters,
 }
 
@@ -200,6 +209,7 @@ impl RateLimits {
             register: limiter(config.register, &clock),
             per_user: limiter(config.per_user, &clock),
             grants_by_name: limiter(config.grants_by_name, &clock),
+            enroll: limiter(config.enroll, &clock),
             refused: Counters::default(),
             clock,
         }))
@@ -250,6 +260,21 @@ impl RateLimits {
         )
     }
 
+    /// Spends one of `ip`'s `Enroll` calls, which the gRPC port's
+    /// interceptor does before the request is read (ADR-0019, S14).
+    ///
+    /// # Errors
+    /// [`Refused`] when its bucket is empty.
+    pub fn check_enroll(&self, ip: IpAddr) -> Result<(), Refused> {
+        let limits = &self.0;
+        spend(
+            &limits.enroll,
+            &limits.clock,
+            &limiter_key(ip),
+            &limits.refused.enroll,
+        )
+    }
+
     /// Spends one of `user`'s authed requests.
     ///
     /// # Errors
@@ -274,6 +299,7 @@ impl RateLimits {
         limits.register.retain_recent();
         limits.per_user.retain_recent();
         limits.grants_by_name.retain_recent();
+        limits.enroll.retain_recent();
     }
 
     /// How many keys the limiters hold.
@@ -286,6 +312,7 @@ impl RateLimits {
             + limits.register.len()
             + limits.per_user.len()
             + limits.grants_by_name.len()
+            + limits.enroll.len()
     }
 
     /// The refusals since the last call, and starts counting again.
@@ -300,6 +327,7 @@ impl RateLimits {
             register: take(&refused.register),
             per_user: take(&refused.per_user),
             grants_by_name: take(&refused.grants_by_name),
+            enroll: take(&refused.enroll),
         }
     }
 }
@@ -422,6 +450,7 @@ mod tests {
             per_user: rate,
             link_flows: LinkFlowLimits::default(),
             grants_by_name: rate,
+            enroll: rate,
         }
     }
 
@@ -500,6 +529,7 @@ mod tests {
         }
         assert_eq!(limits.check_user(user(1)), Ok(()));
         assert_eq!(limits.check_grant_by_name(user(1)), Ok(()));
+        assert_eq!(limits.check_enroll(ip("192.0.2.10")), Ok(()));
     }
 
     #[test]
@@ -520,6 +550,25 @@ mod tests {
         assert_eq!(limits.check_user(user(1)), Ok(()));
         clock.advance(Duration::from_millis(500));
         assert_eq!(limits.check_grant_by_name(user(1)), Ok(()));
+    }
+
+    #[test]
+    fn enrollments_are_refused_past_their_burst_per_client_apart_from_other_requests() {
+        let clock = ManualClock::new(start());
+        let limits = RateLimits::new(&tight(), Arc::new(clock.clone()));
+        limits.check_enroll(ip("2001:db8:0:1::1")).unwrap();
+        limits.check_enroll(ip("2001:db8:0:1::2")).unwrap();
+
+        assert_eq!(
+            limits.check_enroll(ip("2001:db8:0:1:ffff::9")),
+            Err(Refused {
+                retry_after: Duration::from_millis(500)
+            })
+        );
+        assert_eq!(limits.check_enroll(ip("2001:db8:0:2::1")), Ok(()));
+        assert_eq!(limits.check_ip(ip("2001:db8:0:1::1")), Ok(()));
+        clock.advance(Duration::from_millis(500));
+        assert_eq!(limits.check_enroll(ip("2001:db8:0:1::1")), Ok(()));
     }
 
     #[test]
@@ -575,6 +624,9 @@ mod tests {
         for _ in 0..3 {
             let _ = limits.check_user(user(1));
         }
+        for _ in 0..3 {
+            let _ = limits.check_enroll(ip("192.0.2.10"));
+        }
         for _ in 0..4 {
             let _ = limits.check_grant_by_name(user(1));
         }
@@ -589,6 +641,7 @@ mod tests {
                 register: 0,
                 per_user: 1,
                 grants_by_name: 2,
+                enroll: 1,
             }
         );
         assert_eq!(limits.take_refusals(), Refusals::default());
@@ -622,6 +675,10 @@ mod tests {
                 grants_by_name: 1,
                 ..Refusals::default()
             },
+            Refusals {
+                enroll: 1,
+                ..Refusals::default()
+            },
         ] {
             assert!(!refusals.is_empty(), "{refusals:?}");
         }
@@ -637,14 +694,15 @@ mod tests {
             .unwrap();
         limits.check_user(user(1)).unwrap();
         limits.check_grant_by_name(user(1)).unwrap();
+        limits.check_enroll(ip("192.0.2.10")).unwrap();
         clock.advance(Duration::from_millis(400));
         limits.check_ip(ip("198.51.100.10")).unwrap();
-        assert_eq!(limits.tracked(), 5);
-        // The first four are full again at 500 ms, the later one at 900 ms;
+        assert_eq!(limits.tracked(), 6);
+        // The first five are full again at 500 ms, the later one at 900 ms;
         // each is dropped one 500 ms interval after that.
         clock.advance(Duration::from_millis(599));
         limits.retain_recent();
-        assert_eq!(limits.tracked(), 5, "a millisecond short");
+        assert_eq!(limits.tracked(), 6, "a millisecond short");
 
         clock.advance(Duration::from_millis(1));
         limits.retain_recent();

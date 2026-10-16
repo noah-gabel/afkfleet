@@ -15,7 +15,8 @@
 //! - **Each phase adds its own keys,** so a key of a later phase is still an
 //!   unknown key (Appendix A). Phase 7 adds `[auth]`, `[vault]`,
 //!   `[rate_limits]` and `[http] trusted_proxies` (ADR-0016); Phase 9 adds
-//!   `[accounts]` and the link flows' rate limits (ADR-0018).
+//!   `[accounts]` and the link flows' rate limits (ADR-0018); Phase 10 adds
+//!   the optional `[grpc]` (ADR-0019).
 //! - **Secrets never go in this file.** A key for a secret names the file
 //!   that holds it and ends in `_file` or `_files`; a test checks every
 //!   key's name (security rule 4). fleet-startup's `secret_file` reads those
@@ -32,6 +33,8 @@ use std::collections::BTreeMap;
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
+
+use chrono::TimeDelta;
 
 use raw::RawConfig;
 
@@ -71,6 +74,51 @@ pub struct ServerConfig {
     pub accounts: AccountsConfig,
     /// How the server logs (`[log]`).
     pub log: LogConfig,
+    /// The agents' control plane (`[grpc]`), or `None` when the section is
+    /// absent: then serve has no gRPC listener and reads no PKI file.
+    pub grpc: Option<GrpcConfig>,
+}
+
+/// `[grpc]`: the agents' control plane, its listener and its PKI (Plan.md
+/// P10.2, Appendix A; ADR-0019). Optional; when it's there, its four files
+/// are required.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GrpcConfig {
+    /// The address the gRPC listener binds: an IP address and a port other
+    /// than 0 and other than `[http] bind`'s. Defaults to
+    /// [`GrpcConfig::DEFAULT_BIND`].
+    pub bind: SocketAddr,
+    /// The PKI's files, which `pki init` writes and serve reads.
+    pub pki: PkiPaths,
+    /// How long an agent's certificate is valid
+    /// (`agent_cert_lifetime_days`, 1–365 days, default 60), read when a
+    /// certificate is signed.
+    pub agent_cert_lifetime: TimeDelta,
+}
+
+impl GrpcConfig {
+    /// `127.0.0.1:7443`: a server started without `bind` takes agents only
+    /// from this machine. A container sets `0.0.0.0:7443` itself.
+    pub const DEFAULT_BIND: SocketAddr =
+        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::LOCALHOST, 7443));
+    /// `agent_cert_lifetime_days`: 1 to 365. Default 60.
+    pub const AGENT_CERT_LIFETIME_DAYS: Bounds = Bounds { min: 1, max: 365 };
+}
+
+/// The PKI's four files (`[grpc]`), each an absolute path and none the same
+/// as another. The keys are secrets, read through fleet-startup's
+/// `secret_file`; so are the certificates, which follow the same rules
+/// (ADR-0019).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PkiPaths {
+    /// `ca_cert_file`: the CA's certificate, which agents trust.
+    pub ca_cert_file: PathBuf,
+    /// `ca_key_file`: the CA's private key, its own secret.
+    pub ca_key_file: PathBuf,
+    /// `server_cert_file`: the gRPC listener's certificate.
+    pub server_cert_file: PathBuf,
+    /// `server_key_file`: the gRPC listener's private key.
+    pub server_key_file: PathBuf,
 }
 
 /// `[http]`.

@@ -561,6 +561,7 @@ async fn serve_stops_every_link_flow_at_the_signal(
     stop.send(Signal::Terminate).await.unwrap();
     let exit = bounded(serve(
         listener,
+        None,
         app,
         &setup.db,
         ChannelSignals(receiver),

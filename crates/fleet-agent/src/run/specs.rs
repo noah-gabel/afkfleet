@@ -13,9 +13,9 @@ use crate::config::StandaloneBot;
 /// Why the run can't start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum StartupError {
-    /// The config is for managed mode, which arrives in Phase 10.
+    /// The config is for managed mode, which runs from P10.7 on.
     #[error(
-        "managed mode ([control_plane]) arrives in Phase 10; this agent runs only [standalone] bots"
+        "managed mode runs from P10.7; until then this config is only for `afkfleet-agent enroll`"
     )]
     ManagedMode,
     /// The OS's random source failed.

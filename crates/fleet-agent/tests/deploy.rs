@@ -1,5 +1,5 @@
 //! The deployment files around the agent (Plan.md P5.6, P5.7; ADR-0014):
-//! - both dev configs load
+//! - the dev configs load, the managed one with `just dev-enroll`'s paths
 //! - the compose agent's bots join the compose server, and none of them
 //!   clashes with `just dev-agent`'s, so both agents can run at once
 //! - Docker's grace period outlasts the compose agent's worst-case shutdown,
@@ -164,6 +164,45 @@ fn the_dev_agents_config_loads() {
     let config = load_dev_config("agent.toml");
 
     assert_ne!(standalone_bots(&config), []);
+}
+
+/// `just dev-enroll`'s config (ADR-0019): it loads with the three paths the
+/// recipe passes, dials dev-server's control plane, and is useless without
+/// them.
+#[test]
+fn the_managed_dev_config_loads_with_dev_enrolls_paths() {
+    let path = dev_config("agent.managed.toml");
+    let mut loaded = None;
+    let mut bare = None;
+    in_jail(|jail| {
+        jail.clear_env();
+        bare = Some(load(&path));
+        let dir = jail.directory().to_owned();
+        jail.set_env(
+            "AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE",
+            dir.join("ca.crt").display(),
+        );
+        jail.set_env(
+            "AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE",
+            dir.join("agent.crt").display(),
+        );
+        jail.set_env(
+            "AFKFLEET_AGENT__CONTROL_PLANE__KEY_FILE",
+            dir.join("agent.key").display(),
+        );
+        loaded = Some(load(&path));
+    });
+
+    let config = loaded.unwrap().unwrap();
+    let AgentMode::ControlPlane(plane) = config.mode else {
+        panic!("a managed config");
+    };
+    assert_eq!(plane.url, "https://127.0.0.1:7443");
+    assert!(plane.key_file.ends_with("agent.key"));
+    assert!(
+        bare.unwrap().is_err(),
+        "the paths come only from the recipe"
+    );
 }
 
 #[test]

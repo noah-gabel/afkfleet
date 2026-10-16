@@ -12,6 +12,9 @@ use std::path::Path;
 use fleet_core::audit::AuditAction;
 use fleet_core::authz::Role;
 use fleet_core::value::Username;
+use fleet_server::cli::pki::{
+    INIT_EXIT_CODES as PKI_INIT_EXIT_CODES, SERVER_CERT_EXIT_CODES as PKI_SERVER_CERT_EXIT_CODES,
+};
 use fleet_server::cli::serve;
 use fleet_server::cli::user::CREATE_OWNER_EXIT_CODES;
 use fleet_server::cli::vault::{ROTATE_KEY_EXIT_CODES, STATUS_EXIT_CODES};
@@ -404,10 +407,9 @@ async fn running_server(dir: &Path) -> (u16, AbortOnDrop<serve::Exit>) {
     let (listener, address) = listener().await;
     let config = server_config(dir, address, false);
     let keys = vault_keys(&config);
-    let task =
-        tokio::spawn(
-            async move { serve::run(&config, listener, ChannelSignals::silent(), keys).await },
-        );
+    let task = tokio::spawn(async move {
+        serve::run(&config, listener, None, ChannelSignals::silent(), keys).await
+    });
     (address.port(), AbortOnDrop(task))
 }
 
@@ -614,4 +616,76 @@ mod sigterm {
         assert_eq!(shutting_down["signal"], "SIGTERM");
         assert_eq!(lines[position(DEV_MODE_WARNING)]["level"], "WARN");
     }
+}
+
+#[test]
+fn pki_init_creates_a_pki_that_reads_back_and_never_runs_twice() {
+    let dir = test_dir("pki_init");
+    let pki = dir.join("pki");
+    std::fs::create_dir(&pki).unwrap();
+    let config = write_config(
+        &dir,
+        &format!(
+            "{}[grpc]\nca_cert_file = {}\nca_key_file = {}\nserver_cert_file = {}\nserver_key_file = {}\n",
+            config_body(&dir, "127.0.0.1:8080".parse().unwrap()),
+            toml_path(&pki.join("ca.crt")),
+            toml_path(&pki.join("ca.key")),
+            toml_path(&pki.join("server.crt")),
+            toml_path(&pki.join("server.key")),
+        ),
+    );
+    let args = [
+        "pki",
+        "init",
+        "--config",
+        path_arg(&config),
+        "--dns",
+        "localhost",
+        "--ip",
+        "127.0.0.1",
+    ];
+
+    let first = finish(&args);
+    let second = finish(&args);
+
+    assert_eq!(first.status.code(), Some(0), "{}", first.stderr);
+    let paths = fleet_server::config::PkiPaths {
+        ca_cert_file: pki.join("ca.crt"),
+        ca_key_file: pki.join("ca.key"),
+        server_cert_file: pki.join("server.crt"),
+        server_key_file: pki.join("server.key"),
+    };
+    let now = fleet_core::system::Clock::now(&fleet_server::infra::system::SystemClock);
+    let loaded = fleet_server::infra::pki::load(&paths, now).unwrap();
+    assert!(
+        first.stdout.contains(&format!(
+            "CA fingerprint (SHA-256): {}\n",
+            loaded.ca.fingerprint()
+        )),
+        "{}",
+        first.stdout
+    );
+    assert!(!first.stdout.contains("PRIVATE KEY"));
+    assert_eq!(second.status.code(), Some(1));
+    assert_eq!(second.stdout, "");
+    assert_eq!(
+        second
+            .stderr
+            .lines()
+            .filter(|line| line.contains("exists already"))
+            .count(),
+        4,
+        "{}",
+        second.stderr
+    );
+}
+
+#[rstest]
+#[case::init("init", PKI_INIT_EXIT_CODES)]
+#[case::server_cert("server-cert", PKI_SERVER_CERT_EXIT_CODES)]
+fn each_pki_commands_help_lists_its_exit_codes(#[case] command: &str, #[case] codes: &str) {
+    let finished = finish(&["pki", command, "--help"]);
+
+    assert_eq!(finished.status.code(), Some(0));
+    assert!(finished.stdout.contains(codes), "{}", finished.stdout);
 }
