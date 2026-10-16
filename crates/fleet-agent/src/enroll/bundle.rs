@@ -4,12 +4,15 @@
 //!
 //! - **A terminal is refused:** typing the bundle would echo it, and a
 //!   script that forgot the pipe would hang. It's piped in.
-//! - **At most [`MAX_INPUT_BYTES`]** are read, into a fixed buffer that's
-//!   wiped when it's dropped; more is refused.
+//! - **At most [`MAX_INPUT_BYTES`]** (plus one, to see more) are read, into
+//!   a fixed buffer that's wiped when it's dropped; more is refused. The
+//!   read goes through a duplicate of stdin's handle, never std's buffered
+//!   `Stdin`, which would keep up to 8 KiB of it unwiped.
 //! - **One trailing line break** (`\n` or `\r\n`, as PowerShell's pipe
 //!   writes it) is removed; anything else must be exactly the bundle.
 
-use std::io::{self, Read};
+use std::fs::File;
+use std::io::{self, IsTerminal as _, Read};
 
 use fleet_core::enrollment::EnrollmentBundle;
 use zeroize::Zeroizing;
@@ -36,6 +39,38 @@ pub enum BundleInputError {
         "stdin isn't an enrollment bundle: one line, the token, a dot and the CA's fingerprint"
     )]
     Malformed,
+}
+
+/// The bundle on this process's stdin.
+///
+/// # Errors
+/// [`BundleInputError`].
+pub fn stdin_bundle() -> Result<EnrollmentBundle, BundleInputError> {
+    if io::stdin().is_terminal() {
+        return Err(BundleInputError::Terminal);
+    }
+    let input = unbuffered_stdin().map_err(BundleInputError::Read)?;
+    read_bundle(input, false)
+}
+
+/// stdin as a `File` of its own: a duplicate of its handle, unbuffered.
+/// std's `Stdin` reads through an 8 KiB buffer that's never wiped and reads
+/// more than it's asked for.
+fn unbuffered_stdin() -> io::Result<File> {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsFd as _;
+        io::stdin().as_fd().try_clone_to_owned().map(File::from)
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::io::AsHandle as _;
+        io::stdin().as_handle().try_clone_to_owned().map(File::from)
+    }
+    #[cfg(not(any(unix, windows)))]
+    {
+        Err(io::Error::from(io::ErrorKind::Unsupported))
+    }
 }
 
 /// The bundle `input` holds; `is_terminal` says whether it's a terminal.

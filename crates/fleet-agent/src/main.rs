@@ -21,7 +21,7 @@
 //! Docker reserves 2 for healthchecks.
 
 use core::fmt::Display;
-use std::io::{IsTerminal as _, Write as _};
+use std::io::Write as _;
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -30,7 +30,7 @@ use std::time::SystemTime;
 use clap::Parser as _;
 use fleet_agent::cli::{self, Cli, Command};
 use fleet_agent::config::{self, AgentConfig, AgentMode};
-use fleet_agent::enroll::bundle::read_bundle;
+use fleet_agent::enroll::bundle::stdin_bundle;
 use fleet_agent::enroll::key::OsRandom;
 use fleet_agent::enroll::{Enrollment, enroll};
 use fleet_agent::healthcheck;
@@ -74,8 +74,7 @@ fn enroll_agent(path: &Path) -> ExitCode {
         );
     };
     // A plain read, before any runtime exists.
-    let stdin = std::io::stdin();
-    let bundle = match read_bundle(stdin.lock(), stdin.is_terminal()) {
+    let bundle = match stdin_bundle() {
         Ok(bundle) => bundle,
         Err(error) => return fail_early(&error),
     };

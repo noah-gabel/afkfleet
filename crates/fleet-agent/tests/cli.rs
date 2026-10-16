@@ -13,7 +13,7 @@
 #![cfg(test)]
 
 use std::fs::{self, File};
-use std::io::Read;
+use std::io::{Read, Seek as _};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
 use std::sync::mpsc;
@@ -76,7 +76,12 @@ struct Finished {
 
 /// Runs the agent with `args` until it exits, within the deadline.
 fn finish(args: &[&str]) -> Finished {
-    let mut child = agent(args).spawn().unwrap();
+    finish_command(agent(args))
+}
+
+/// Runs `command` until it exits, within the deadline.
+fn finish_command(mut command: Command) -> Finished {
+    let mut child = command.spawn().unwrap();
     let stdout = drain(child.stdout.take().unwrap());
     let stderr = drain(child.stderr.take().unwrap());
     let mut running = Running(Some(child));
@@ -466,5 +471,34 @@ fn the_help_of_enroll_lists_its_exit_codes() {
             .contains(fleet_agent::enroll::ENROLL_EXIT_CODES),
         "{}",
         finished.stdout
+    );
+}
+
+#[test]
+fn enroll_reads_stdin_unbuffered_and_at_most_one_byte_past_its_limit() {
+    let dir = test_dir("enroll_long_stdin");
+    let config = managed_config(&dir);
+    let input = dir.join("stdin.txt");
+    fs::write(&input, vec![b'A'; 16 * 1024]).unwrap();
+    let stdin = File::open(&input).unwrap();
+    // A duplicate shares the child's file position.
+    let mut shared = stdin.try_clone().unwrap();
+    let mut command = agent(&["enroll", "--config", path_arg(&config)]);
+    command.stdin(Stdio::from(stdin));
+
+    let finished = finish_command(command);
+
+    assert_eq!(finished.status.code(), Some(1));
+    assert!(
+        finished
+            .stderr
+            .starts_with("afkfleet-agent: stdin holds more than 1 KiB"),
+        "{}",
+        finished.stderr
+    );
+    let limit = fleet_agent::enroll::bundle::MAX_INPUT_BYTES + 1;
+    assert_eq!(
+        shared.stream_position().unwrap(),
+        u64::try_from(limit).unwrap()
     );
 }
