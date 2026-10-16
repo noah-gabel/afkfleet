@@ -88,6 +88,90 @@ expression: answer.json()
         ],
         "type": "string"
       },
+      "AgentPage": {
+        "description": "`GET /agents`: one page of agents, newest first.",
+        "properties": {
+          "items": {
+            "description": "The agents.",
+            "items": {
+              "$ref": "#/components/schemas/AgentResponse"
+            },
+            "type": "array"
+          },
+          "next": {
+            "maxLength": 36,
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "AgentResponse": {
+        "description": "An agent as `GET /agents` lists it, and as\n`POST /agents/{id}/disable` answers.",
+        "properties": {
+          "capacity": {
+            "maximum": 1000,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "connected_since": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "created_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "enabled": {
+            "description": "Whether it's enabled; disabling is final.",
+            "type": "boolean"
+          },
+          "id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "last_seen_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "not_after": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AgentStatus",
+            "description": "Its status."
+          },
+          "version": {
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "enabled",
+          "status",
+          "created_at"
+        ],
+        "type": "object"
+      },
+      "AgentStatus": {
+        "description": "An agent's status.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "online",
+          "offline",
+          "expired",
+          "disabled"
+        ],
+        "type": "string"
+      },
       "ChangeGrantRequest": {
         "additionalProperties": false,
         "description": "`PUT /accounts/{id}/grants/{user}`: change the user's grant.",
@@ -2608,6 +2692,125 @@ expression: answer.json()
         ]
       }
     },
+    "/api/v1/agents": {
+      "get": {
+        "operationId": "list_agents",
+        "parameters": [
+          {
+            "description": "Only items older than this ID: the `next` of the page before.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maxLength": 36,
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many items at most; 50 by default.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentPage"
+                }
+              }
+            },
+            "description": "One page of agents, newest first, with their status."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A query that doesn't parse."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Only Admins and the Owner list agents."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A `limit` outside 1 to 100."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/agents`: one page of agents, newest first.",
+        "tags": [
+          "agents"
+        ]
+      }
+    },
     "/api/v1/agents/enrollment-tokens": {
       "post": {
         "operationId": "create_enrollment_token",
@@ -2699,6 +2902,104 @@ expression: answer.json()
           }
         ],
         "summary": "`POST /api/v1/agents/enrollment-tokens`: a new enrollment token, in its\nbundle, shown this once. Needs a step-up.",
+        "tags": [
+          "agents"
+        ],
+        "x-step-up": true
+      }
+    },
+    "/api/v1/agents/{id}/disable": {
+      "post": {
+        "operationId": "disable_agent",
+        "parameters": [
+          {
+            "description": "The agent's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentResponse"
+                }
+              }
+            },
+            "description": "The agent, disabled: every certificate revoked and its stream ended. An agent disabled already answers as it is."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or only Admins and the Owner disable agents."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such agent."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/agents/{id}/disable`: disables an agent for good, revoking\nevery certificate and ending its stream. Needs a step-up.",
         "tags": [
           "agents"
         ],

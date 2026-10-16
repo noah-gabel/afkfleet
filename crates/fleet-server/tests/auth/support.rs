@@ -21,6 +21,7 @@ use fleet_core::id::{InviteId, SessionId, UserId};
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock as _;
 use fleet_core::value::Username;
+use fleet_server::app::agents::AgentService;
 use fleet_server::app::auth::TokenService;
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
 use fleet_server::app::enrollment::EnrollmentTokenService;
@@ -31,6 +32,7 @@ use fleet_server::app::login::LoginService;
 use fleet_server::app::mfa::{MfaPorts, MfaService};
 use fleet_server::app::users::UserService;
 use fleet_server::config::{Argon2Params, HttpConfig, RateLimitConfig};
+use fleet_server::grpc::registry::AgentRegistry;
 use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::openapi::ApiDocs;
 use fleet_server::http::rate_limit::{RateLimits, TrustedProxies};
@@ -361,6 +363,8 @@ pub(crate) struct Setup {
     /// The random source every service shares, for a test that makes it fail.
     pub(crate) random: SeededRandom,
     pub(crate) alice: UserId,
+    /// The agents' live streams, which a test claims directly.
+    pub(crate) registry: AgentRegistry,
 }
 
 /// The 2FA service over `db`, its vault on an in-memory key.
@@ -466,6 +470,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
     let enrollment_tokens = settings
         .control_plane
         .then(|| enrollment_tokens(&clock, &random, &hooked));
+    let (registry, agents) = agents(&clock, &hooked);
     let state = AppState::new(Services {
         health: HealthService::new(Arc::new(db.clone())),
         tokens: tokens.clone(),
@@ -478,20 +483,10 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         accounts: idle_accounts(&db),
         grants: idle_grants(&db),
         enrollment_tokens,
+        agents,
     });
     let app = app(state, &clock);
-    let mut tx = db.write().await.unwrap();
-    tx.users()
-        .insert(&NewUser {
-            id: alice,
-            username: Username::try_from("alice").unwrap(),
-            password_hash: alice_hash,
-            role: Role::Member,
-            created_at: at(T0 - 60_000),
-        })
-        .await
-        .unwrap();
-    tx.commit(setup_entry()).await.unwrap();
+    insert_alice(&db, alice, alice_hash).await;
     Setup {
         app,
         hooked,
@@ -504,7 +499,36 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         login,
         random,
         alice,
+        registry,
     }
+}
+
+/// Stores Alice, a Member, with `hash`.
+async fn insert_alice(db: &Database, alice: UserId, hash: PasswordHash) {
+    let mut tx = db.write().await.unwrap();
+    tx.users()
+        .insert(&NewUser {
+            id: alice,
+            username: Username::try_from("alice").unwrap(),
+            password_hash: hash,
+            role: Role::Member,
+            created_at: at(T0 - 60_000),
+        })
+        .await
+        .unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+}
+
+/// Each agent's one stream, which a test claims directly, and the agents'
+/// service over `hooked`, ending streams there.
+fn agents(clock: &ManualClock, hooked: &HookedStore) -> (AgentRegistry, AgentService) {
+    let registry = AgentRegistry::new(Arc::new(clock.clone()));
+    let agents = AgentService::new(
+        Arc::new(clock.clone()),
+        Arc::new(hooked.clone()),
+        Arc::new(registry.clone()),
+    );
+    (registry, agents)
 }
 
 /// The enrollment tokens' service over `hooked`, pinning [`CA_FINGERPRINT`].

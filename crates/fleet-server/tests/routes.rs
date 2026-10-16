@@ -256,6 +256,7 @@ async fn build(db: &Database, docs: ApiDocs, extra: impl FnOnce(Routes) -> Route
         accounts: idle_accounts(db),
         grants: idle_grants(db),
         enrollment_tokens: None,
+        agents: idle_agents(db),
     });
     let ids = RequestIds::new(Arc::new(clock()), Arc::new(SeededRandom::new(5)));
     let (app, entries) = extra(api_routes(Routes::new(&limits))).finish(state, &http(), ids, docs);
@@ -484,6 +485,11 @@ async fn the_setup_and_step_up_routes_are_registered_with_their_access_and_class
                 "/api/v1/agents/enrollment-tokens",
                 RateClass::Standard
             ),
+            entry(
+                Method::POST,
+                "/api/v1/agents/{id}/disable",
+                RateClass::Standard
+            ),
             entry(Method::DELETE, "/api/v1/invites/{id}", RateClass::Standard),
             entry(Method::DELETE, "/api/v1/accounts/{id}", RateClass::Standard),
             entry(
@@ -538,6 +544,7 @@ async fn the_authed_routes_are_registered_with_their_class(
                 RateClass::Standard
             ),
             entry(Method::GET, "/api/v1/users", RateClass::Standard),
+            entry(Method::GET, "/api/v1/agents", RateClass::Standard),
             entry(Method::GET, "/api/v1/invites", RateClass::Standard),
             entry(Method::POST, "/api/v1/accounts/link", RateClass::Standard),
             entry(
@@ -960,5 +967,19 @@ fn idle_accounts(
             allow_offline: false,
             max_per_member: core::num::NonZeroU32::MIN,
         },
+    )
+}
+
+/// The agents' service, which these tests never call (P10.10).
+fn idle_agents(
+    db: &fleet_server::infra::sqlite::Database,
+) -> fleet_server::app::agents::AgentService {
+    let clock = Arc::new(fleet_testkit::system::ManualClock::new(
+        chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+    ));
+    fleet_server::app::agents::AgentService::new(
+        clock.clone(),
+        Arc::new(db.clone()),
+        Arc::new(fleet_server::grpc::registry::AgentRegistry::new(clock)),
     )
 }

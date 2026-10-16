@@ -532,3 +532,36 @@ fn the_binary_prints_a_bundle_that_pins_the_ca() {
         help.stdout
     );
 }
+
+#[test]
+fn the_binary_lists_agents_on_stdout_and_logs_on_stderr() {
+    let dir = test_dir("agent_list");
+    let config = write_config(&dir, &config_body(&dir, closed_port()));
+    let migrated = finish(&["migrate", "--config", path_arg(&config)]);
+    assert_eq!(migrated.status.code(), Some(0), "{}", migrated.stdout);
+
+    let listed = finish(&["agent", "list", "--config", path_arg(&config)]);
+    let unknown = finish(&[
+        "agent",
+        "disable",
+        "--config",
+        path_arg(&config),
+        "--id",
+        "019bcfe5-6800-7101-8101-010101010101",
+    ]);
+
+    assert_eq!(listed.status.code(), Some(0), "{}", listed.stderr);
+    assert_eq!(
+        listed.stdout,
+        format!("{}\n", fleet_server::cli::agent::LIST_HEADER)
+    );
+    assert_eq!(unknown.status.code(), Some(1), "{}", unknown.stderr);
+    assert_eq!(unknown.stdout, "");
+    assert!(
+        unknown
+            .stderr
+            .contains("afkfleet-server: no agent has the ID 019bcfe5-6800-7101-8101-010101010101"),
+        "{}",
+        unknown.stderr
+    );
+}

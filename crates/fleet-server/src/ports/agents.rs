@@ -17,6 +17,7 @@ use fleet_core::id::AgentId;
 use fleet_core::pki::CertFingerprint;
 use fleet_core::value::{AgentCapacity, AgentName, AgentVersion};
 
+use super::page::Page;
 use super::store::StoreError;
 
 /// A stored agent.
@@ -102,6 +103,17 @@ pub enum InsertAgentError {
     Store(#[from] StoreError),
 }
 
+/// An agent as the agents' list shows it: its row, and when its latest
+/// unrevoked certificate expires (ADR-0019, S31).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedAgent {
+    /// The row.
+    pub agent: Agent,
+    /// The latest `not_after` of its unrevoked certificates; none once every
+    /// one is revoked.
+    pub not_after: Option<DateTime<Utc>>,
+}
+
 /// Reading agents through the read connections.
 #[async_trait]
 pub trait AgentReads: Send + Sync + fmt::Debug {
@@ -138,6 +150,19 @@ pub trait AgentReads: Send + Sync + fmt::Debug {
     /// # Errors
     /// [`StoreError`], including [`StoreError::Corrupt`].
     async fn admissible(&self, now: DateTime<Utc>) -> Result<Vec<CertFingerprint>, StoreError>;
+
+    /// The agents of `page`, newest first: one more than its limit when
+    /// another page follows.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn list(&self, page: Page<AgentId>) -> Result<Vec<ListedAgent>, StoreError>;
+
+    /// The agent `id`, as the list shows it.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn listed(&self, id: AgentId) -> Result<Option<ListedAgent>, StoreError>;
 }
 
 /// Writing agents inside a [`super::store::WriteTx`].
@@ -185,4 +210,16 @@ pub trait AgentWrites: Send {
     /// # Errors
     /// [`StoreError`].
     async fn record_seen(&mut self, id: AgentId, at: DateTime<Utc>) -> Result<(), StoreError>;
+
+    /// Disables agent `id` while it's enabled. Whether it changed.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn disable(&mut self, id: AgentId) -> Result<bool, StoreError>;
+
+    /// Revokes every unrevoked certificate of agent `id` at `at`; how many.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn revoke_certs(&mut self, id: AgentId, at: DateTime<Utc>) -> Result<u64, StoreError>;
 }

@@ -76,7 +76,7 @@ use tracing::{error, info, warn};
 use super::DATABASE_CLOSE;
 use super::housekeeping::Housekeeping;
 use crate::app::accounts::{AccountService, AccountSettings};
-use crate::app::agents::AgentConnectionService;
+use crate::app::agents::{AgentConnectionService, AgentService};
 use crate::app::auth::TokenService;
 use crate::app::challenges::Challenges;
 use crate::app::enrollment::{EnrollmentService, EnrollmentTokenService};
@@ -447,9 +447,7 @@ pub fn app_with(
     );
     let grants = GrantService::new(Arc::clone(&clock), Arc::clone(&store));
     let ids = RequestIds::new(Arc::clone(&clock), Arc::clone(&random));
-    // Without [grpc] it stays empty: the agents' services still end streams
-    // through it, and none ever lives.
-    let agents = AgentRegistry::new(Arc::clone(&clock));
+    let (agents, agent_service) = agent_services(&clock, &store);
     let (enrollment_tokens, grpc) = control_plane_services(
         config,
         ca,
@@ -475,6 +473,7 @@ pub fn app_with(
         accounts,
         grants,
         enrollment_tokens,
+        agents: agent_service,
     });
     App {
         router: router(
@@ -487,6 +486,19 @@ pub fn app_with(
         link_flows,
         grpc,
     }
+}
+
+/// Each agent's one stream, and the agents' service that ends them: the
+/// registry stays empty without `[grpc]`, where the service still disables
+/// agents and no stream ever lives.
+fn agent_services(clock: &Arc<dyn Clock>, store: &Arc<dyn Store>) -> (AgentRegistry, AgentService) {
+    let agents = AgentRegistry::new(Arc::clone(clock));
+    let service = AgentService::new(
+        Arc::clone(clock),
+        Arc::clone(store),
+        Arc::new(agents.clone()),
+    );
+    (agents, service)
 }
 
 /// The 2FA service over the app's ports, sealing TOTP secrets with `vault`

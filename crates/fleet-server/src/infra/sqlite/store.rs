@@ -22,7 +22,8 @@ use crate::ports::accounts::{
     AccountReads, AccountWrites, InsertAccountError, ListedAccount, McAccount,
 };
 use crate::ports::agents::{
-    Agent, AgentCert, AgentHello, AgentReads, AgentWrites, InsertAgentError, NewAgent, NewAgentCert,
+    Agent, AgentCert, AgentHello, AgentReads, AgentWrites, InsertAgentError, ListedAgent, NewAgent,
+    NewAgentCert,
 };
 use crate::ports::audit::{
     AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, FailedCodeAttempts,
@@ -206,6 +207,14 @@ impl AgentReads for Reads {
 
     async fn admissible(&self, now: DateTime<Utc>) -> Result<Vec<CertFingerprint>, StoreError> {
         agents::admissible(&self.pool, now).await
+    }
+
+    async fn list(&self, page: Page<AgentId>) -> Result<Vec<ListedAgent>, StoreError> {
+        agents::list(&self.pool, page).await
+    }
+
+    async fn listed(&self, id: AgentId) -> Result<Option<ListedAgent>, StoreError> {
+        agents::listed(&self.pool, id).await
     }
 }
 
@@ -579,6 +588,14 @@ impl AgentWrites for SqliteWriteTx {
 
     async fn record_seen(&mut self, id: AgentId, at: DateTime<Utc>) -> Result<(), StoreError> {
         agents::record_seen(&mut self.tx, id, at).await
+    }
+
+    async fn disable(&mut self, id: AgentId) -> Result<bool, StoreError> {
+        agents::disable(&mut self.tx, id).await
+    }
+
+    async fn revoke_certs(&mut self, id: AgentId, at: DateTime<Utc>) -> Result<u64, StoreError> {
+        agents::revoke_certs(&mut self.tx, id, at).await
     }
 }
 

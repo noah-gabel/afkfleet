@@ -22,7 +22,10 @@ use fleet_api_types::accounts::{
     GrantPage, GrantResponse, LinkFlowResponse, LinkFlowState, LinkStartedResponse,
     MC_NAME_MAX_CHARS, RefusalReason, USER_CODE_MAX_CHARS, VERIFICATION_URI_MAX_CHARS,
 };
-use fleet_api_types::agents::{BUNDLE_CHARS, CreatedEnrollmentTokenResponse, FINGERPRINT_CHARS};
+use fleet_api_types::agents::{
+    AGENT_NAME_MAX_CHARS, AGENT_VERSION_MAX_CHARS, AgentPage, AgentResponse, AgentStatus,
+    BUNDLE_CHARS, CreatedEnrollmentTokenResponse, FINGERPRINT_CHARS,
+};
 use fleet_api_types::auth::{
     ACCESS_TOKEN_MAX_SECS, LoginMfaRequest, LoginRequest, LoginResponse, LoginStatus,
     NEW_PASSWORD_MAX_CHARS, PASSWORD_MAX_CHARS, REFRESH_TOKEN_MAX_SECS, RefreshRequest,
@@ -67,6 +70,9 @@ fn declarations() -> BTreeMap<String, String> {
         ("AccountPage", AccountPage::decl(&config)),
         ("AccountResponse", AccountResponse::decl(&config)),
         ("AccountStatus", AccountStatus::decl(&config)),
+        ("AgentPage", AgentPage::decl(&config)),
+        ("AgentResponse", AgentResponse::decl(&config)),
+        ("AgentStatus", AgentStatus::decl(&config)),
         ("ChangeGrantRequest", ChangeGrantRequest::decl(&config)),
         (
             "CreatedEnrollmentTokenResponse",
@@ -406,6 +412,14 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::enrollment_bundle("CreatedEnrollmentTokenResponse", "bundle", BUNDLE_CHARS)]
 #[case::enrollment_ca("CreatedEnrollmentTokenResponse", "ca_fingerprint", FINGERPRINT_CHARS)]
 #[case::enrollment_expires_at("CreatedEnrollmentTokenResponse", "expires_at", TIMESTAMP_CHARS)]
+#[case::agent_id("AgentResponse", "id", ID_CHARS)]
+#[case::agent_name("AgentResponse", "name", AGENT_NAME_MAX_CHARS)]
+#[case::agent_version("AgentResponse", "version", AGENT_VERSION_MAX_CHARS)]
+#[case::agent_connected_since("AgentResponse", "connected_since", TIMESTAMP_CHARS)]
+#[case::agent_last_seen_at("AgentResponse", "last_seen_at", TIMESTAMP_CHARS)]
+#[case::agent_not_after("AgentResponse", "not_after", TIMESTAMP_CHARS)]
+#[case::agent_created_at("AgentResponse", "created_at", TIMESTAMP_CHARS)]
+#[case::agent_page_next("AgentPage", "next", ID_CHARS)]
 fn a_text_field_is_capped_at_its_constant(
     #[case] component: &str,
     #[case] field: &str,
@@ -493,6 +507,14 @@ fn every_text_field_has_its_cap_checked() {
         ("CreatedEnrollmentTokenResponse", "bundle"),
         ("CreatedEnrollmentTokenResponse", "ca_fingerprint"),
         ("CreatedEnrollmentTokenResponse", "expires_at"),
+        ("AgentResponse", "id"),
+        ("AgentResponse", "name"),
+        ("AgentResponse", "version"),
+        ("AgentResponse", "connected_since"),
+        ("AgentResponse", "last_seen_at"),
+        ("AgentResponse", "not_after"),
+        ("AgentResponse", "created_at"),
+        ("AgentPage", "next"),
     ]);
     let components = components_json();
 

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE agent_certs SET revoked_at = ? WHERE agent_id = ? AND revoked_at IS NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "04e359b58b5869b0dce64b8e7980b220502912f5d9790a5b25a09fdc365bd8f4"
+}

@@ -29,7 +29,7 @@ use crate::accounts::{
     CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
     LinkFlowResponse, LinkStartedResponse,
 };
-use crate::agents::CreatedEnrollmentTokenResponse;
+use crate::agents::{AgentPage, AgentResponse, AgentStatus, CreatedEnrollmentTokenResponse};
 use crate::auth::{
     LoginMfaRequest, LoginRequest, LoginResponse, RefreshRequest, RegisterRequest,
     RegisterResponse, StepUpRequest, TokenResponse,
@@ -80,6 +80,9 @@ pub fn components() -> BTreeMap<String, RefOr<Schema>> {
     add::<GrantResponse>(&mut schemas);
     add::<GrantPage>(&mut schemas);
     add::<CreatedEnrollmentTokenResponse>(&mut schemas);
+    add::<AgentStatus>(&mut schemas);
+    add::<AgentResponse>(&mut schemas);
+    add::<AgentPage>(&mut schemas);
     schemas.into_iter().collect()
 }
 

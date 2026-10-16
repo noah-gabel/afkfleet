@@ -20,9 +20,10 @@ use fleet_core::pki::CertFingerprint;
 use fleet_core::value::{AgentCapacity, AgentName, AgentVersion};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::agents::{
-    Agent, AgentCert, AgentHello, InsertAgentError, NewAgent, NewAgentCert,
+    Agent, AgentCert, AgentHello, InsertAgentError, ListedAgent, NewAgent, NewAgentCert,
 };
 use fleet_server::ports::audit::NewAuditEntry;
+use fleet_server::ports::page::{Page, PageLimit};
 use fleet_server::ports::store::{Store, StoreError};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
@@ -623,4 +624,133 @@ async fn the_admissible_certificates_are_unrevoked_unexpired_and_of_enabled_agen
 
     assert_eq!(sorted(before), fingerprints(&[2, 4, 5]));
     assert_eq!(sorted(at_expiry), fingerprints(&[2, 5]));
+}
+
+// --- The agents' list and disabling (P10.10) ---------------------------------------------
+
+/// Page `before` of at most `limit` agents.
+fn page(before: Option<AgentId>, limit: u32) -> Page<AgentId> {
+    Page {
+        before,
+        limit: PageLimit::new(limit).unwrap(),
+    }
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_list_pages_agents_newest_first_with_their_latest_unrevoked_not_after(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let first = new_agent(1, "agent-1");
+    let second = new_agent(2, "agent-2");
+    let third = new_agent(3, "agent-3");
+    for agent in [&first, &second, &third] {
+        insert(&db, agent).await.unwrap();
+    }
+    // agent-1: a revoked certificate valid longer, and an unrevoked one.
+    insert_cert(
+        &db,
+        &NewAgentCert {
+            not_after: at(T0 + 90 * DAY),
+            ..new_cert(1, first.id)
+        },
+    )
+    .await
+    .unwrap();
+    revoke_all(&db, first.id).await;
+    insert_cert(&db, &new_cert(4, first.id)).await.unwrap();
+    // agent-2: none left unrevoked.
+    insert_cert(&db, &new_cert(2, second.id)).await.unwrap();
+    revoke_all(&db, second.id).await;
+    // agent-3: two unrevoked; the later one counts.
+    insert_cert(&db, &new_cert(3, third.id)).await.unwrap();
+    insert_cert(
+        &db,
+        &NewAgentCert {
+            not_after: at(T0 + 70 * DAY),
+            ..new_cert(5, third.id)
+        },
+    )
+    .await
+    .unwrap();
+
+    let first_page = db.agents().list(page(None, 2)).await.unwrap();
+    let rest = db.agents().list(page(Some(second.id), 2)).await.unwrap();
+
+    let shown = |listed: &[ListedAgent]| {
+        listed
+            .iter()
+            .map(|listed| (listed.agent.name.as_str().to_owned(), listed.not_after))
+            .collect::<Vec<_>>()
+    };
+    // One past the limit: another page follows.
+    assert_eq!(
+        shown(&first_page),
+        [
+            ("agent-3".to_owned(), Some(at(T0 + 70 * DAY))),
+            ("agent-2".to_owned(), None),
+            ("agent-1".to_owned(), Some(at(T0 + 60 * DAY))),
+        ]
+    );
+    assert_eq!(
+        shown(&rest),
+        [("agent-1".to_owned(), Some(at(T0 + 60 * DAY)))]
+    );
+    let listed = db.agents().listed(first.id).await.unwrap().unwrap();
+    assert_eq!(listed, rest[0].clone());
+    assert_eq!(listed.agent.id, first.id);
+    assert!(listed.agent.enabled);
+    assert_eq!(
+        db.agents()
+            .listed(AgentId::new_v7(at(T0), [9; 10]).unwrap())
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn disabling_turns_the_agent_off_once_and_revokes_each_unrevoked_certificate(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let agent = new_agent(1, "agent-1");
+    insert(&db, &agent).await.unwrap();
+    insert_cert(&db, &new_cert(1, agent.id)).await.unwrap();
+    revoke_all(&db, agent.id).await;
+    insert_cert(&db, &new_cert(2, agent.id)).await.unwrap();
+    insert_cert(&db, &new_cert(3, agent.id)).await.unwrap();
+
+    let mut tx = db.write().await.unwrap();
+    let disabled = tx.agents().disable(agent.id).await.unwrap();
+    let revoked = tx
+        .agents()
+        .revoke_certs(agent.id, at(T0 + DAY))
+        .await
+        .unwrap();
+    let again = tx.agents().disable(agent.id).await.unwrap();
+    let revoked_again = tx
+        .agents()
+        .revoke_certs(agent.id, at(T0 + 2 * DAY))
+        .await
+        .unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert!(disabled);
+    assert_eq!(revoked, 2);
+    assert!(!again);
+    assert_eq!(revoked_again, 0);
+    assert!(!db.agents().find(agent.id).await.unwrap().unwrap().enabled);
+    let certs = db.agents().certs(agent.id).await.unwrap();
+    let revoked_at: Vec<_> = certs.iter().map(|cert| cert.revoked_at).collect();
+    assert_eq!(
+        revoked_at,
+        [
+            Some("2027-01-15T08:00:00Z".parse().unwrap()),
+            Some(at(T0 + DAY)),
+            Some(at(T0 + DAY)),
+        ]
+    );
 }

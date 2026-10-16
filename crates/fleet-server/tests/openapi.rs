@@ -188,6 +188,7 @@ async fn app(db: &Database, docs: ApiDocs) -> Router {
         accounts: idle_accounts(db),
         grants: idle_grants(db),
         enrollment_tokens: None,
+        agents: idle_agents(db),
     });
     router(state, &http, ids, docs)
         .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))))
@@ -383,7 +384,9 @@ async fn the_document_lists_exactly_the_api_routes(
             ("/api/v1/accounts/{id}/grants/{user}", "put"),
             ("/api/v1/accounts/{id}/refuse", "post"),
             ("/api/v1/accounts/{id}/relink", "post"),
+            ("/api/v1/agents", "get"),
             ("/api/v1/agents/enrollment-tokens", "post"),
+            ("/api/v1/agents/{id}/disable", "post"),
             ("/api/v1/auth/login", "post"),
             ("/api/v1/auth/login/mfa", "post"),
             ("/api/v1/auth/logout", "post"),
@@ -524,5 +527,19 @@ fn idle_accounts(
             allow_offline: false,
             max_per_member: core::num::NonZeroU32::MIN,
         },
+    )
+}
+
+/// The agents' service, which these tests never call (P10.10).
+fn idle_agents(
+    db: &fleet_server::infra::sqlite::Database,
+) -> fleet_server::app::agents::AgentService {
+    let clock = Arc::new(fleet_testkit::system::ManualClock::new(
+        chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+    ));
+    fleet_server::app::agents::AgentService::new(
+        clock.clone(),
+        Arc::new(db.clone()),
+        Arc::new(fleet_server::grpc::registry::AgentRegistry::new(clock)),
     )
 }

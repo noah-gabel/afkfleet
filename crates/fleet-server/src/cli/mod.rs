@@ -29,6 +29,7 @@ use std::net::IpAddr;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
+use fleet_core::id::AgentId;
 
 pub mod agent;
 pub mod healthcheck;
@@ -155,6 +156,34 @@ pub enum AgentCommand {
         /// environment variables override its keys, as for `serve`.
         #[arg(long, value_name = "PATH")]
         config: PathBuf,
+    },
+    /// Lists every agent, newest first: its ID, name, state (enabled,
+    /// expired or disabled), capacity, version, when it was last seen, when
+    /// its certificate expires and when it enrolled, tab-separated after a
+    /// header, `-` for nothing. It neither creates nor migrates the
+    /// database.
+    #[command(after_help = agent::LIST_EXIT_CODES)]
+    List {
+        /// The config file (TOML): the command reads `[database] path` and
+        /// `[log]`. `AFKFLEET_SERVER__…` environment variables override its
+        /// keys, as for `serve`.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+    },
+    /// Disables an agent for good: every certificate it holds is revoked,
+    /// so it can't connect again, and its name is free for a new
+    /// enrollment. A running server ends its stream within 5 s. It neither
+    /// creates nor migrates the database, and works without `[grpc]`.
+    #[command(after_help = agent::DISABLE_EXIT_CODES)]
+    Disable {
+        /// The config file (TOML): the command reads `[database] path` and
+        /// `[log]`. `AFKFLEET_SERVER__…` environment variables override its
+        /// keys, as for `serve`.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+        /// The agent's ID, as `agent list` shows it.
+        #[arg(long, value_name = "ID")]
+        id: AgentId,
     },
 }
 
@@ -538,6 +567,78 @@ mod tests {
         let error = Cli::try_parse_from(&args).unwrap_err();
 
         assert_eq!(exit_code(&error, args), 2, "{error}");
+    }
+
+    #[test]
+    fn list_takes_the_config_path_and_disable_the_id_too() {
+        let id = "019bcfe5-6800-7101-8101-010101010101";
+        let list = Cli::try_parse_from([
+            "afkfleet-server",
+            "agent",
+            "list",
+            "--config",
+            "server.toml",
+        ])
+        .unwrap();
+        let disable = Cli::try_parse_from([
+            "afkfleet-server",
+            "agent",
+            "disable",
+            "--config",
+            "server.toml",
+            "--id",
+            id,
+        ])
+        .unwrap();
+
+        assert_eq!(
+            list.command,
+            Command::Agent {
+                command: AgentCommand::List {
+                    config: PathBuf::from("server.toml")
+                }
+            }
+        );
+        assert_eq!(
+            disable.command,
+            Command::Agent {
+                command: AgentCommand::Disable {
+                    config: PathBuf::from("server.toml"),
+                    id: id.parse().unwrap(),
+                }
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::list_without_a_config(&["agent", "list"])]
+    #[case::disable_without_an_id(&["agent", "disable", "--config", "server.toml"])]
+    #[case::disable_with_a_v4_id(&["agent", "disable", "--config", "server.toml", "--id", "0b6b8a54-3b8a-4c2e-9a1d-6f1e2d3c4b5a"])]
+    #[case::disable_with_text(&["agent", "disable", "--config", "server.toml", "--id", "agent-1"])]
+    fn the_agents_usage_errors_exit_2(#[case] args: &[&str]) {
+        let args: Vec<OsString> = core::iter::once("afkfleet-server")
+            .chain(args.iter().copied())
+            .map(OsString::from)
+            .collect();
+        let error = Cli::try_parse_from(&args).unwrap_err();
+
+        assert_eq!(exit_code(&error, args), 2, "{error}");
+    }
+
+    #[rstest]
+    #[case::list("list", agent::LIST_EXIT_CODES)]
+    #[case::disable("disable", agent::DISABLE_EXIT_CODES)]
+    fn the_agents_helps_list_their_exit_codes(#[case] name: &str, #[case] codes: &str) {
+        let mut command = Cli::command();
+        let subcommand = command
+            .find_subcommand_mut("agent")
+            .unwrap()
+            .find_subcommand_mut(name)
+            .unwrap();
+
+        let help = subcommand.render_help().to_string();
+
+        assert!(help.contains(codes), "{help}");
     }
 
     #[test]

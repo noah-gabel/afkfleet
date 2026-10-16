@@ -13,6 +13,9 @@
 //! - **Refusals** of a certificate the server knows are audited, at most
 //!   [`MAX_AUDITED_CONNECT_REFUSALS`] per agent in any
 //!   [`CONNECT_REFUSAL_WINDOW`]; later ones are only logged.
+//! - **An agent's status** as the agents' list shows it ([`status`],
+//!   P10.10, S31): disabled, else expired when no unrevoked certificate is
+//!   valid, else online while its stream lives, else offline.
 
 use core::fmt;
 use core::time::Duration;
@@ -102,6 +105,43 @@ pub fn admit(facts: CertificateFacts, now: DateTime<Utc>) -> Result<(), ConnectR
         Err(ConnectRefusal::Disabled)
     } else {
         Ok(())
+    }
+}
+
+/// An agent's status as the agents' list shows it (P10.10; ADR-0019, S31).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum AgentStatus {
+    /// Enabled, with a valid certificate and a live stream.
+    Online,
+    /// Enabled, with a valid certificate, and no live stream.
+    Offline,
+    /// Enabled, but no unrevoked certificate is valid: it can't connect
+    /// until it enrolls again.
+    Expired,
+    /// Disabled: every certificate it had is revoked.
+    Disabled,
+}
+
+/// The status of an agent enabled or not as `enabled` says, whose latest
+/// unrevoked certificate expires at `not_after` (none: it has none), with a
+/// live stream or not, at `now`.
+#[must_use]
+pub fn status(
+    enabled: bool,
+    not_after: Option<DateTime<Utc>>,
+    live: bool,
+    now: DateTime<Utc>,
+) -> AgentStatus {
+    if !enabled {
+        return AgentStatus::Disabled;
+    }
+    if not_after.is_none_or(|not_after| certificate_expired(not_after, now)) {
+        return AgentStatus::Expired;
+    }
+    if live {
+        AgentStatus::Online
+    } else {
+        AgentStatus::Offline
     }
 }
 
@@ -207,5 +247,21 @@ mod tests {
 
             prop_assert_eq!(left == Duration::ZERO, certificate_expired(not_after, at(NOW)));
         }
+    }
+
+    #[rstest]
+    #[case::disabled_wins(false, Some(NOW + 1), true, AgentStatus::Disabled)]
+    #[case::disabled_without_a_certificate(false, None, false, AgentStatus::Disabled)]
+    #[case::no_certificate(true, None, false, AgentStatus::Expired)]
+    #[case::expired_at_its_not_after(true, Some(NOW), true, AgentStatus::Expired)]
+    #[case::valid_and_live(true, Some(NOW + 1), true, AgentStatus::Online)]
+    #[case::valid_and_quiet(true, Some(NOW + 1), false, AgentStatus::Offline)]
+    fn an_agents_status_is_disabled_then_expired_then_live_or_not(
+        #[case] enabled: bool,
+        #[case] not_after: Option<i64>,
+        #[case] live: bool,
+        #[case] expected: AgentStatus,
+    ) {
+        assert_eq!(status(enabled, not_after.map(at), live, at(NOW)), expected);
     }
 }

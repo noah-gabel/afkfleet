@@ -332,6 +332,15 @@ audit_actions! {
     /// stream's hello was accepted) and `refused_at`. At most once an hour
     /// per agent.
     SECURITY_AGENT_IDENTITY_CONFLICT = "security.agent_identity_conflict";
+
+    /// An Admin or the Owner, or the server's host, disabled an agent
+    /// (P10.10, ADR-0019, S31): `agents.enabled` off and every unrevoked
+    /// certificate revoked, in one transaction, then its live stream ended.
+    /// Outcome: Success. Actor and IP: the user's (`via` = `http`), or none
+    /// from the host (`via` = `cli`). Target: the agent. Metadata: `name`,
+    /// `certificates_revoked` and `via`. An agent disabled already is no
+    /// change, and no entry.
+    AGENT_DISABLE = "agent.disable";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

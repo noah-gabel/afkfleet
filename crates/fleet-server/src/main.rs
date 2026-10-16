@@ -28,6 +28,9 @@
 //!   carries the bundle alone, and runs
 //!   [`agent::create_enrollment_token`] on a current-thread runtime, with
 //!   the real clock and the OS's randomness.
+//! - `agent list` and `agent disable` start logging on stderr, since stdout
+//!   carries their result, and run [`agent::list`] or [`agent::disable`] on a
+//!   current-thread runtime, with the real clock.
 //! - `vault status` and `vault rotate-key` start logging and run
 //!   [`vault::status`] or [`vault::rotate_key`] on a current-thread runtime.
 //!
@@ -93,6 +96,12 @@ fn main() -> ExitCode {
         Command::Agent {
             command: AgentCommand::CreateEnrollmentToken { config },
         } => create_enrollment_token(&config),
+        Command::Agent {
+            command: AgentCommand::List { config },
+        } => run_agents(&config, AgentRun::List),
+        Command::Agent {
+            command: AgentCommand::Disable { config, id },
+        } => run_agents(&config, AgentRun::Disable(id)),
     }
 }
 
@@ -280,6 +289,43 @@ fn create_enrollment_token(path: &Path) -> ExitCode {
         &mut io::stdout(),
         &mut io::stderr(),
     ));
+    ExitCode::from(exit.code())
+}
+
+/// Which `agent` command [`run_agents`] runs.
+#[derive(Clone, Copy)]
+enum AgentRun {
+    /// `agent list`.
+    List,
+    /// `agent disable --id`.
+    Disable(fleet_core::id::AgentId),
+}
+
+/// `afkfleet-server agent list` or `agent disable`, with the real clock, on
+/// a current-thread runtime.
+fn run_agents(path: &Path, command: AgentRun) -> ExitCode {
+    let config = match config::load(path) {
+        Ok(config) => config,
+        Err(error) => return fail_early(&error),
+    };
+    // Logs to stderr: stdout carries the result.
+    if let Err(error) = init_on(&config.log, &NoRules, LogOutput::Stderr) {
+        return fail_early(&error);
+    }
+    let runtime = match current_thread() {
+        Ok(runtime) => runtime,
+        Err(error) => return fail_early(&StartError::Runtime(error)),
+    };
+    let mut out = io::stdout();
+    let mut err = io::stderr();
+    let exit = runtime.block_on(async {
+        match command {
+            AgentRun::List => agent::list(&config, Arc::new(SystemClock), &mut out, &mut err).await,
+            AgentRun::Disable(id) => {
+                agent::disable(&config, Arc::new(SystemClock), id, &mut out, &mut err).await
+            }
+        }
+    });
     ExitCode::from(exit.code())
 }
 

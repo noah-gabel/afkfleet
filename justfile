@@ -205,6 +205,26 @@ dev-owner username $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "tar
     node -e "require('node:fs').mkdirSync(require('node:path').dirname(process.argv[1]), { recursive: true })" "{{ AFKFLEET_SERVER__DATABASE__PATH }}"
     cargo run -p fleet-server --bin afkfleet-server -- user create-owner --config deploy/dev/server.toml --username "{{ username }}"
 
+# `agent list` on dev-server's database: every agent with its ID, name, state (enabled,
+# expired or disabled), capacity, version, last sign of life, certificate expiry and
+# enrollment, tab-separated after a header. It passes the same paths as dev-server (the dev
+# config's validation needs the vault key's path; nothing reads the key), never creates or
+# migrates the database, and works while dev-server runs (ADR-0019). No exit message: the
+# command prints its own error line and exit code.
+# List dev-server's agents.
+[no-exit-message]
+dev-agents $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dev-server" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dev-server" / "vault-key-1"):
+    cargo run --quiet -p fleet-server --bin afkfleet-server -- agent list --config deploy/dev/server.toml
+
+# `agent disable --id id` on dev-server's database: the agent is disabled for good, every
+# certificate it holds revoked and its name free for a new enrollment; a running dev-server
+# ends its stream within 5 s (ADR-0019, U8). The same paths as dev-agents. No exit message:
+# the command prints its own result, error line and exit code.
+# Disable dev-server's agent `id` for good.
+[no-exit-message]
+dev-disable-agent id $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dev-server" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dev-server" / "vault-key-1"):
+    cargo run --quiet -p fleet-server --bin afkfleet-server -- agent disable --config deploy/dev/server.toml --id "{{ id }}"
+
 # `vault status` on dev-server's database with its key 1: what each key ID seals, read from
 # the envelopes' headers. It reads no key file and never creates or migrates the database
 # (ADR-0018). No exit message: the command prints its own report, error line and exit code

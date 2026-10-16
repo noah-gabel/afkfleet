@@ -1,0 +1,26 @@
+---
+source: crates/fleet-server/tests/auth/agents.rs
+expression: "redacted(&all.body,\n&[(first.to_string(), \"agent-1\"), (second.to_string(), \"agent-2\"),])"
+---
+{
+  "items": [
+    {
+      "connected_since": "[T0]",
+      "created_at": "[T0]",
+      "enabled": true,
+      "id": "[agent-2]",
+      "last_seen_at": "[T0]",
+      "name": "agent-2",
+      "not_after": "[T0+5184000s]",
+      "status": "online"
+    },
+    {
+      "created_at": "[T0]",
+      "enabled": true,
+      "id": "[agent-1]",
+      "name": "agent-1",
+      "not_after": "[T0+5184000s]",
+      "status": "offline"
+    }
+  ]
+}

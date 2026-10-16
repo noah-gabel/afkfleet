@@ -39,6 +39,8 @@
 //! | `PUT /api/v1/accounts/{id}/grants/{user}` | user + step-up (Manage) | changes a grant |
 //! | `DELETE /api/v1/accounts/{id}/grants/{user}` | user + step-up (Manage) | revokes a grant |
 //! | `POST /api/v1/agents/enrollment-tokens` | user + step-up (the Owner; while `[grpc]` is configured) | a new enrollment token, in its bundle, shown this once |
+//! | `GET /api/v1/agents` | user (Admin+) | one page of agents, with their status |
+//! | `POST /api/v1/agents/{id}/disable` | user + step-up (Admin+) | disables an agent for good: every certificate revoked, its stream ended |
 //! | `GET /api/openapi.json` | public | the `OpenAPI` document, only in dev mode ([`openapi`](super::openapi)) |
 //!
 //! The health routes have no `/api/v1` prefix. Both answer `200` with an
@@ -59,6 +61,7 @@ use super::openapi::ApiDocs;
 use super::rate_limit::RateLimits;
 use super::routes::{RateClass, Routes};
 use crate::app::accounts::AccountService;
+use crate::app::agents::AgentService;
 use crate::app::auth::TokenService;
 use crate::app::enrollment::EnrollmentTokenService;
 use crate::app::grants::GrantService;
@@ -100,6 +103,8 @@ pub struct AppState {
     /// The enrollment tokens, while the control plane is on (`[grpc]`);
     /// without it, their route answers 404.
     pub(crate) enrollment_tokens: Option<EnrollmentTokenService>,
+    /// The agents: their list, and disabling one, with `[grpc]` or without.
+    pub(crate) agents: AgentService,
 }
 
 /// Every service the handlers share, by name, so each one is a line of its
@@ -129,6 +134,8 @@ pub struct Services {
     pub grants: GrantService,
     /// The enrollment tokens, while the control plane is on (`[grpc]`).
     pub enrollment_tokens: Option<EnrollmentTokenService>,
+    /// The agents: their list, and disabling one.
+    pub agents: AgentService,
 }
 
 impl AppState {
@@ -147,6 +154,7 @@ impl AppState {
             accounts,
             grants,
             enrollment_tokens,
+            agents,
         } = services;
         Self {
             health,
@@ -160,6 +168,7 @@ impl AppState {
             accounts,
             grants,
             enrollment_tokens,
+            agents,
         }
     }
 }
@@ -206,6 +215,8 @@ pub fn api_routes(routes: Routes) -> Routes {
             RateClass::Standard,
             routes!(agents::create_enrollment_token),
         )
+        .authed_route(RateClass::Standard, routes!(agents::list_agents))
+        .step_up_route(RateClass::Standard, routes!(agents::disable_agent))
 }
 
 /// Every route with `state`, behind the middleware stack with the timeout,
