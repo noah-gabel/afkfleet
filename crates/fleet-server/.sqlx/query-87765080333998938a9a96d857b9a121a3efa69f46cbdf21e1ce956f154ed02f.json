@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE bots SET last_state = ?, last_state_reason = ?, last_state_at = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "87765080333998938a9a96d857b9a121a3efa69f46cbdf21e1ce956f154ed02f"
+}

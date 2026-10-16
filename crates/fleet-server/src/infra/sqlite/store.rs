@@ -8,7 +8,9 @@ use chrono::{DateTime, Utc};
 use fleet_core::account::AccountStatus;
 use fleet_core::audit::{AuditAction, AuditTarget};
 use fleet_core::authz::{Actor, GrantLevel, Role};
-use fleet_core::id::{AccountId, AgentId, EnrollmentTokenId, InviteId, SessionId, UserId};
+use fleet_core::id::{
+    AccountId, AgentId, BotId, EnrollmentTokenId, InviteId, ModeId, SessionId, UserId,
+};
 use fleet_core::pki::CertFingerprint;
 use fleet_core::value::{AgentName, McUsername, Username};
 use sqlx::{Sqlite, SqlitePool, Transaction};
@@ -18,8 +20,9 @@ use super::{
     Database, accounts, agents, audit, enrollment_tokens, envelopes, grants, invites,
     login_attempts, mfa, sessions, users,
 };
+use super::{bots, modes};
 use crate::ports::accounts::{
-    AccountReads, AccountWrites, InsertAccountError, ListedAccount, McAccount,
+    AccountReads, AccountWrites, DeletedAccount, InsertAccountError, ListedAccount, McAccount,
 };
 use crate::ports::agents::{
     Agent, AgentCert, AgentHello, AgentReads, AgentWrites, InsertAgentError, ListedAgent, NewAgent,
@@ -29,6 +32,7 @@ use crate::ports::audit::{
     AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, FailedCodeAttempts,
     NewAuditEntry,
 };
+use crate::ports::bots::{Bot, BotReads, BotWrites, NewBot};
 use crate::ports::enrollment_tokens::{
     EnrollmentToken, EnrollmentTokenReads, EnrollmentTokenWrites, NewEnrollmentToken,
 };
@@ -41,6 +45,7 @@ use crate::ports::login_attempts::{
     AttemptKey, LoginAttempt, LoginAttemptReads, LoginAttemptWrites,
 };
 use crate::ports::mfa::{InsertMfaError, MfaReads, MfaWrites, UserMfa};
+use crate::ports::modes::{ModeReads, StoredMode};
 use crate::ports::page::Page;
 use crate::ports::recovery_codes::RecoveryCodeHash;
 use crate::ports::sessions::{
@@ -219,6 +224,24 @@ impl AgentReads for Reads {
 }
 
 #[async_trait]
+impl BotReads for Reads {
+    async fn find(&self, id: BotId) -> Result<Option<Bot>, StoreError> {
+        bots::find(&self.pool, id).await
+    }
+
+    async fn of_account(&self, account: AccountId) -> Result<Option<Bot>, StoreError> {
+        bots::of_account(&self.pool, account).await
+    }
+}
+
+#[async_trait]
+impl ModeReads for Reads {
+    async fn find(&self, id: ModeId) -> Result<Option<StoredMode>, StoreError> {
+        modes::find(&self.pool, id).await
+    }
+}
+
+#[async_trait]
 impl EnvelopeReads for Reads {
     async fn all(&self) -> Result<Vec<SealedEnvelope>, StoreError> {
         envelopes::all(&self.pool).await
@@ -330,6 +353,10 @@ impl WriteTx for SqliteWriteTx {
     }
 
     fn agents(&mut self) -> &mut dyn AgentWrites {
+        self
+    }
+
+    fn bots(&mut self) -> &mut dyn BotWrites {
         self
     }
 
@@ -489,7 +516,7 @@ impl AccountWrites for SqliteWriteTx {
         accounts::listed(&mut *self.tx, id, viewer).await
     }
 
-    async fn delete(&mut self, id: AccountId) -> Result<bool, StoreError> {
+    async fn delete(&mut self, id: AccountId) -> Result<Option<DeletedAccount>, StoreError> {
         accounts::delete(&mut self.tx, id).await
     }
 
@@ -596,6 +623,17 @@ impl AgentWrites for SqliteWriteTx {
 
     async fn revoke_certs(&mut self, id: AgentId, at: DateTime<Utc>) -> Result<u64, StoreError> {
         agents::revoke_certs(&mut self.tx, id, at).await
+    }
+}
+
+#[async_trait]
+impl BotWrites for SqliteWriteTx {
+    async fn insert(&mut self, bot: &NewBot) -> Result<(), StoreError> {
+        bots::insert(&mut self.tx, bot).await
+    }
+
+    async fn find(&mut self, id: BotId) -> Result<Option<Bot>, StoreError> {
+        bots::find(&mut *self.tx, id).await
     }
 }
 
@@ -800,6 +838,14 @@ impl Store for Database {
     }
 
     fn agents(&self) -> &dyn AgentReads {
+        &self.reads
+    }
+
+    fn bots(&self) -> &dyn BotReads {
+        &self.reads
+    }
+
+    fn modes(&self) -> &dyn ModeReads {
         &self.reads
     }
 

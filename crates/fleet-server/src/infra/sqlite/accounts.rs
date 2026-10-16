@@ -16,7 +16,9 @@ use sqlx::{SqliteConnection, SqlitePool};
 
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::{store_error, unique_violation};
-use crate::ports::accounts::{AccountCredential, InsertAccountError, ListedAccount, McAccount};
+use crate::ports::accounts::{
+    AccountCredential, DeletedAccount, InsertAccountError, ListedAccount, McAccount,
+};
 use crate::ports::page::Page;
 use crate::ports::store::StoreError;
 
@@ -332,13 +334,46 @@ pub(super) async fn awaiting_review(
 }
 
 /// Deletes the account `id`; its grants go with it.
-pub(super) async fn delete(conn: &mut SqliteConnection, id: AccountId) -> Result<bool, StoreError> {
+pub(super) async fn delete(
+    conn: &mut SqliteConnection,
+    id: AccountId,
+) -> Result<Option<DeletedAccount>, StoreError> {
     let id = id_text(id);
+    // Read before the foreign key deletes it with the account.
+    let bot = sqlx::query!(
+        r#"SELECT rowid AS "rowid!: i64", id AS "id!", agent_id AS "agent_id?"
+           FROM bots WHERE account_id = ?"#,
+        id
+    )
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(store_error)?;
     let done = sqlx::query!("DELETE FROM mc_accounts WHERE id = ?", id)
-        .execute(conn)
+        .execute(&mut *conn)
         .await
         .map_err(store_error)?;
-    Ok(done.rows_affected() == 1)
+    if done.rows_affected() != 1 {
+        return Ok(None);
+    }
+    let Some(bot) = bot else {
+        return Ok(Some(DeletedAccount {
+            bot: None,
+            agent: None,
+        }));
+    };
+    let corrupt = |column| StoreError::Corrupt {
+        table: "bots",
+        column,
+        rowid: bot.rowid,
+    };
+    Ok(Some(DeletedAccount {
+        bot: Some(parse_id(&bot.id).ok_or_else(|| corrupt("id"))?),
+        agent: bot
+            .agent_id
+            .as_deref()
+            .map(|agent| parse_id(agent).ok_or_else(|| corrupt("agent_id")))
+            .transpose()?,
+    }))
 }
 
 /// Stores a new link of the Microsoft account `id`, but only over exactly

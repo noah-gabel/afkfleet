@@ -13,12 +13,14 @@ use fleet_server::infra::sqlite::Database;
 use fleet_server::ports::accounts::{AccountReads, ListedAccount, McAccount};
 use fleet_server::ports::agents::AgentReads;
 use fleet_server::ports::audit::AuditReads;
+use fleet_server::ports::bots::BotReads;
 use fleet_server::ports::enrollment_tokens::EnrollmentTokenReads;
 use fleet_server::ports::envelopes::EnvelopeReads;
 use fleet_server::ports::grants::GrantReads;
 use fleet_server::ports::invites::InviteReads;
 use fleet_server::ports::login_attempts::LoginAttemptReads;
 use fleet_server::ports::mfa::MfaReads;
+use fleet_server::ports::modes::ModeReads;
 use fleet_server::ports::page::Page;
 use fleet_server::ports::sessions::SessionReads;
 use fleet_server::ports::store::{Store, StoreError, WriteTx};
@@ -207,6 +209,14 @@ impl Store for FlakyStore {
 
     fn agents(&self) -> &dyn AgentReads {
         self.inner.agents()
+    }
+
+    fn bots(&self) -> &dyn BotReads {
+        self.inner.bots()
+    }
+
+    fn modes(&self) -> &dyn ModeReads {
+        self.inner.modes()
     }
 
     fn envelopes(&self) -> &dyn EnvelopeReads {

@@ -8,7 +8,7 @@
 use fleet_core::account::{AccountStatus, awaits_review};
 use fleet_core::audit::{AuditAction, AuditError, AuditMetadata, AuditOutcome, AuditTarget};
 use fleet_core::authz::{AuthzError, Permission, authorize};
-use fleet_core::id::AccountId;
+use fleet_core::id::{AccountId, BotId};
 use tracing::{debug, info};
 
 use super::{AccountService, Reread, reread};
@@ -63,7 +63,7 @@ impl AccountService {
         if !tx.accounts().set_status(id, AccountStatus::Active).await? {
             return Err(ReviewError::NotFound);
         }
-        let entry = self.entry(AuditAction::ACCOUNT_APPROVE, by, &account)?;
+        let entry = self.entry(AuditAction::ACCOUNT_APPROVE, by, &account, None)?;
         tx.commit(entry).await?;
         info!(user_id = %by.actor.id, account_id = %id, "{APPROVED}");
         Ok(ListedAccount {
@@ -82,27 +82,32 @@ impl AccountService {
     pub async fn refuse(&self, by: &ActingUser, id: AccountId) -> Result<(), ReviewError> {
         let mut tx = self.store.write().await?;
         let account = reviewed(tx.as_mut(), by, id).await?;
-        if !tx.accounts().delete(id).await? {
+        let Some(deleted) = tx.accounts().delete(id).await? else {
             return Err(ReviewError::NotFound);
-        }
-        let entry = self.entry(AuditAction::ACCOUNT_REFUSE, by, &account)?;
+        };
+        let entry = self.entry(AuditAction::ACCOUNT_REFUSE, by, &account, deleted.bot)?;
         tx.commit(entry).await?;
         info!(user_id = %by.actor.id, account_id = %id, "{REFUSED}");
         Ok(())
     }
 
-    /// A review's entry: who linked which Minecraft account.
+    /// A review's entry: who linked which Minecraft account, and for a
+    /// refusal the bot that went with it.
     fn entry(
         &self,
         action: AuditAction,
         by: &ActingUser,
         account: &ListedAccount,
+        bot: Option<BotId>,
     ) -> Result<NewAuditEntry, AuditError> {
         let mut metadata = AuditMetadata::new()
             .id("owner", account.owner.id)?
             .text("name", account.name.as_str())?;
         if let Some(uuid) = account.uuid {
             metadata = metadata.id("uuid", *uuid.as_uuid())?;
+        }
+        if let Some(bot) = bot {
+            metadata = metadata.id("bot", bot)?;
         }
         Ok(self
             .audit

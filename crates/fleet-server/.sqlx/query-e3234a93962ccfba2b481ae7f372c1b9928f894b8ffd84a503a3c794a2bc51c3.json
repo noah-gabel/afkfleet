@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO bots (id, account_id, server_address, mode_id, desired_state)\n         VALUES (?, ?, NULL, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "e3234a93962ccfba2b481ae7f372c1b9928f894b8ffd84a503a3c794a2bc51c3"
+}

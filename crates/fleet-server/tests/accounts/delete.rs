@@ -45,6 +45,7 @@ async fn the_owner_deletes_their_account_with_its_grants_and_it_is_audited(
     setup
         .add_grant(id, friend.id, GrantLevel::Control, member.id)
         .await;
+    let bot = setup.add_bot(id, 3).await;
 
     let deleted = delete(&setup, &member, id).await;
 
@@ -66,7 +67,9 @@ async fn the_owner_deletes_their_account_with_its_grants_and_it_is_audited(
     assert_eq!(meta(entry, "name"), Some(text("AfkBot3")));
     assert_eq!(meta(entry, "status"), Some(text("refused")));
     assert_eq!(meta(entry, "uuid"), Some(text(&profile(3))));
-    assert_eq!(entry.metadata.entries().len(), 5);
+    assert_eq!(meta(entry, "bot"), Some(text(&bot.to_string())));
+    assert_eq!(entry.metadata.entries().len(), 6);
+    assert_eq!(setup.db.bots().find(bot).await.unwrap(), None);
 }
 
 #[sqlx::test(migrations = false)]

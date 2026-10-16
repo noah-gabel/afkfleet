@@ -4,6 +4,7 @@ use core::fmt;
 use core::str::FromStr;
 
 use super::ModeDefinition;
+use crate::id::{AFK_MODE, FARM_MODE, ModeId};
 
 /// Why a name isn't a [`ModePreset`]. The message lists the valid names and
 /// never the text that was given.
@@ -12,7 +13,8 @@ use super::ModeDefinition;
 pub struct UnknownPresetError;
 
 /// A built-in mode, named as the standalone agent's config names it
-/// (`mode = "afk"`). P11.1 gives each preset a fixed ID.
+/// (`mode = "afk"`), with the fixed ID of its row in the server's `modes`
+/// table (P11.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ModePreset {
     /// [`ModeDefinition::afk`].
@@ -31,6 +33,16 @@ impl ModePreset {
         match self {
             Self::Afk => "afk",
             Self::Farm => "farm",
+        }
+    }
+
+    /// The preset's fixed ID: its row's in the server's `modes` table, which
+    /// the migration seeds (P11.1; ADR-0019, S38).
+    #[must_use]
+    pub const fn id(self) -> ModeId {
+        match self {
+            Self::Afk => AFK_MODE,
+            Self::Farm => FARM_MODE,
         }
     }
 
@@ -112,6 +124,25 @@ mod tests {
     fn names_are_lowercase_and_unique() {
         let names = ModePreset::ALL.map(ModePreset::name);
         assert_eq!(names, ["afk", "farm"]);
+    }
+
+    #[rstest]
+    #[case::afk(ModePreset::Afk, "01a14202-2800-7000-8000-000000000001")]
+    #[case::farm(ModePreset::Farm, "01a14202-2800-7000-8000-000000000002")]
+    fn each_preset_has_its_fixed_v7_id(#[case] preset: ModePreset, #[case] text: &str) {
+        assert_eq!(preset.id().to_string(), text);
+        // Parsing accepts only a version 7 UUID.
+        assert_eq!(text.parse::<ModeId>(), Ok(preset.id()));
+    }
+
+    #[test]
+    fn the_presets_ids_are_distinct() {
+        let ids: std::collections::HashSet<_> = ModePreset::ALL.map(ModePreset::id).into();
+        assert_eq!(ids.len(), ModePreset::ALL.len());
+        assert_eq!(
+            FARM_MODE.to_string(),
+            "01a14202-2800-7000-8000-000000000002"
+        );
     }
 
     #[test]

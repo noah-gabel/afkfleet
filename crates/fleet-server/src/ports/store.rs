@@ -8,12 +8,14 @@ use async_trait::async_trait;
 use super::accounts::{AccountReads, AccountWrites};
 use super::agents::{AgentReads, AgentWrites};
 use super::audit::{AuditEntryId, AuditReads, AuditWrites, NewAuditEntry};
+use super::bots::{BotReads, BotWrites};
 use super::enrollment_tokens::{EnrollmentTokenReads, EnrollmentTokenWrites};
 use super::envelopes::{EnvelopeReads, EnvelopeWrites};
 use super::grants::{GrantReads, GrantWrites};
 use super::invites::{InviteReads, InviteWrites};
 use super::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
 use super::mfa::{MfaReads, MfaWrites};
+use super::modes::ModeReads;
 use super::sessions::{SessionReads, SessionWrites};
 use super::users::{UserReads, UserWrites};
 
@@ -94,6 +96,12 @@ pub trait Store: Send + Sync + fmt::Debug {
     /// connections.
     fn agents(&self) -> &dyn AgentReads;
 
+    /// The bots, read through the read connections.
+    fn bots(&self) -> &dyn BotReads;
+
+    /// The modes, read through the read connections.
+    fn modes(&self) -> &dyn ModeReads;
+
     /// The audit log, read through the read connections.
     fn audit(&self) -> &dyn AuditReads;
 
@@ -152,6 +160,9 @@ pub trait WriteTx: Send {
 
     /// The agents and their certificates, written in this transaction.
     fn agents(&mut self) -> &mut dyn AgentWrites;
+
+    /// The bots, read and written in this transaction.
+    fn bots(&mut self) -> &mut dyn BotWrites;
 
     /// The audit log, for a second entry in this transaction.
     fn audit(&mut self) -> &mut dyn AuditWrites;

@@ -1,16 +1,17 @@
 //! Storing a linked account (see the [module docs](super)).
 //!
-//! The account's ID is minted and its refresh token sealed for it before
-//! any transaction, and every audit entry the commit may need is built
+//! The account's ID and its bot's (from the same time) are minted and its
+//! refresh token sealed for it before any transaction, and every audit entry the commit may need is built
 //! before each one (ADR-0015). One transaction then:
 //! 1. reads the creator and the session that started the flow again: a
 //!    revoked session, a logout, or a disabled or deleted creator stores
 //!    nothing, and the flow fails;
 //! 2. counts the creator's accounts against the Member quota (`over_quota`,
 //!    recorded as an `account.link` Failure);
-//! 3. inserts the account, `pending`, or `active` for the Owner; an already
-//!    linked Minecraft account is `taken` (recorded the same way, naming
-//!    nobody in the answer);
+//! 3. inserts the account, `pending`, or `active` for the Owner, and its
+//!    bot (no server, `afk`, stopped; ADR-0019, S35); an already linked
+//!    Minecraft account is `taken` (recorded the same way, naming nobody in
+//!    the answer);
 //! 4. commits with `account.link`.
 //!
 //! Linking an account again (P9.6) seals the token for the account's own ID
@@ -31,7 +32,8 @@ use fleet_core::account::{
 };
 use fleet_core::audit::{AuditAction, AuditError, AuditMetadata, AuditOutcome, AuditTarget};
 use fleet_core::authz::{Permission, authorize};
-use fleet_core::id::AccountId;
+use fleet_core::id::{AccountId, BotId};
+use fleet_core::mode::ModePreset;
 use fleet_core::system::mint;
 use tracing::{error, info, warn};
 
@@ -40,6 +42,7 @@ use super::{Inner, LinkFlowStatus};
 use crate::app::users::recheck;
 use crate::ports::accounts::{AccountCredential, InsertAccountError, McAccount};
 use crate::ports::audit::NewAuditEntry;
+use crate::ports::bots::NewBot;
 use crate::ports::msauth::{MinecraftSession, RefreshToken};
 use crate::ports::store::StoreError;
 use crate::ports::vault::VaultPurpose;
@@ -61,6 +64,25 @@ struct Entries {
     over_quota: NewAuditEntry,
 }
 
+/// The IDs a flow's commit stores under: a new account and its bot, or the
+/// account linked again, which keeps its bot.
+#[derive(Debug, Clone, Copy)]
+enum Ids {
+    /// A new account.
+    Link { account: AccountId, bot: BotId },
+    /// An account linked again.
+    Relink { account: AccountId },
+}
+
+impl Ids {
+    /// The account's ID.
+    const fn account(self) -> AccountId {
+        match self {
+            Self::Link { account, .. } | Self::Relink { account } => account,
+        }
+    }
+}
+
 /// Stores the account `session` names with `refresh`; `None` when the flow
 /// was cancelled before a commit started.
 pub(super) async fn store(
@@ -71,17 +93,21 @@ pub(super) async fn store(
     retries: &mut Retries,
 ) -> Option<LinkFlowStatus> {
     let now = inner.ports.clock.now();
+    let random = inner.ports.random.as_ref();
     let minted = match running.target {
-        Target::Link => mint(now, inner.ports.random.as_ref()),
-        Target::Relink { account } => Ok(account),
+        // The bot's ID is drawn from the same time, right after the account's.
+        Target::Link => mint(now, random)
+            .and_then(|account| mint(now, random).map(|bot| Ids::Link { account, bot })),
+        Target::Relink { account } => Ok(Ids::Relink { account }),
     };
-    let id: AccountId = match minted {
-        Ok(id) => id,
+    let ids = match minted {
+        Ok(ids) => ids,
         Err(failure) => {
             error!(flow_id = %running.id, error = %failure, "{FAILED}");
             return Some(LinkFlowStatus::Failed);
         }
     };
+    let id = ids.account();
     let sealed = inner.ports.vault.seal(
         VaultPurpose::MsRefreshToken,
         id.into(),
@@ -99,9 +125,11 @@ pub(super) async fn store(
         if running.cancel.is_cancelled() {
             return None;
         }
-        let committed = match running.target {
-            Target::Link => commit(inner, running, id, &sealed, &session).await,
-            Target::Relink { .. } => relink(inner, running, id, &sealed, &session).await,
+        let committed = match ids {
+            Ids::Link { account, bot } => {
+                commit(inner, running, account, bot, &sealed, &session).await
+            }
+            Ids::Relink { account } => relink(inner, running, account, &sealed, &session).await,
         };
         match committed {
             Ok(status) => return Some(status),
@@ -139,11 +167,12 @@ async fn commit(
     inner: &Inner,
     running: &Running,
     id: AccountId,
+    bot: BotId,
     sealed: &[u8],
     session: &MinecraftSession,
 ) -> Result<LinkFlowStatus, Failed> {
     let creator = running.by.actor.id;
-    let entries = entries(inner, running, id, session)?;
+    let entries = entries(inner, running, id, bot, session)?;
     let mut tx = inner.ports.store.write().await?;
     let Some(acting) = recheck(tx.as_mut(), &running.by).await? else {
         info!(user_id = %creator, flow_id = %running.id, "{GONE}");
@@ -175,6 +204,13 @@ async fn commit(
         }
         Err(InsertAccountError::Store(failure)) => return Err(failure.into()),
     }
+    tx.bots()
+        .insert(&NewBot {
+            id: bot,
+            account: id,
+            mode: ModePreset::Afk.id(),
+        })
+        .await?;
     let linked = match status {
         AccountStatus::Active => entries.active,
         AccountStatus::Pending | AccountStatus::ReauthRequired | AccountStatus::Refused(_) => {
@@ -270,6 +306,7 @@ fn entries(
     inner: &Inner,
     running: &Running,
     id: AccountId,
+    bot: BotId,
     session: &MinecraftSession,
 ) -> Result<Entries, AuditError> {
     let creator = running.by.actor.id;
@@ -301,7 +338,8 @@ fn entries(
                     .text("name", session.name.as_str())?
                     .id("uuid", *session.uuid.as_uuid())?
                     .text("status", status.as_str())?
-                    .id("flow", running.id)?,
+                    .id("flow", running.id)?
+                    .id("bot", bot)?,
             ))
     };
     Ok(Entries {

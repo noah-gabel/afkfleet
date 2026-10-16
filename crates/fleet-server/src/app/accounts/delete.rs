@@ -1,7 +1,8 @@
 //! Deleting an account (Plan.md P9.6, ADR-0018): Manage, in any status and
 //! of any kind, offline ones too while `[accounts] allow_offline` is off, so
-//! a Member can free a quota slot. Its refresh token and grants go with it,
-//! and the deletion is recorded as `account.delete`. A session-token
+//! a Member can free a quota slot. Its refresh token, grants and bot go
+//! with it, and the deletion is recorded as `account.delete`, naming the
+//! bot. A session-token
 //! request for it finds the row gone (ADR-0018, group C).
 
 use fleet_core::audit::{AuditAction, AuditError, AuditMetadata, AuditOutcome, AuditTarget};
@@ -11,7 +12,7 @@ use tracing::{debug, info};
 
 use super::{AccountService, Reread, reread};
 use crate::app::users::ActingUser;
-use crate::ports::accounts::ListedAccount;
+use crate::ports::accounts::{DeletedAccount, ListedAccount};
 use crate::ports::audit::NewAuditEntry;
 use crate::ports::store::StoreError;
 
@@ -58,19 +59,21 @@ impl AccountService {
             debug!(user_id = %by.actor.id, account_id = %id, "a deletion was refused");
             DeleteAccountError::Denied(error)
         })?;
-        if !tx.accounts().delete(id).await? {
+        let Some(deleted) = tx.accounts().delete(id).await? else {
             return Err(DeleteAccountError::NotFound);
-        }
-        tx.commit(self.deleted(by, &account)?).await?;
+        };
+        tx.commit(self.deleted(by, &account, deleted)?).await?;
         info!(user_id = %by.actor.id, account_id = %id, "{DELETED}");
         Ok(())
     }
 
-    /// The deletion's entry: whose account it was, and what it was.
+    /// The deletion's entry: whose account it was, what it was, and the bot
+    /// that went with it.
     fn deleted(
         &self,
         by: &ActingUser,
         account: &ListedAccount,
+        deleted: DeletedAccount,
     ) -> Result<NewAuditEntry, AuditError> {
         let mut metadata = AuditMetadata::new()
             .id("owner", account.owner.id)?
@@ -79,6 +82,9 @@ impl AccountService {
             .text("status", account.status.as_str())?;
         if let Some(uuid) = account.uuid {
             metadata = metadata.id("uuid", *uuid.as_uuid())?;
+        }
+        if let Some(bot) = deleted.bot {
+            metadata = metadata.id("bot", bot)?;
         }
         Ok(self
             .audit

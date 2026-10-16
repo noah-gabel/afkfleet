@@ -43,6 +43,7 @@
 
 mod effect;
 mod event;
+mod last_state;
 mod restore;
 mod rules;
 mod snapshot;
@@ -52,9 +53,10 @@ mod transition;
 
 pub use effect::{BotNotification, Effect};
 pub use event::BotEvent;
+pub use last_state::{LastReport, LastState, LastStateError};
 pub use restore::restore;
 pub use rules::BotRules;
 pub use snapshot::BotSnapshot;
-pub use spec::{BotAccount, BotSpec, DesiredRunState, StickyState};
+pub use spec::{BotAccount, BotSpec, DesiredRunState, StickyState, UnknownDesiredStateError};
 pub use state::{BotState, FailReason, PauseReason};
 pub use transition::{Transition, transition};

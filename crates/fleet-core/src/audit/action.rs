@@ -229,8 +229,9 @@ audit_actions! {
     ACCOUNT_START_LINK = "account.start_link";
 
     /// A user linked a Minecraft account (P9.4, P9.7, ADR-0018), in the commit
-    /// that stores it. Success: target the new account; metadata `kind`,
-    /// `name`, `status`, and for a Microsoft account `uuid` and `flow`.
+    /// that stores it with its bot. Success: target the new account; metadata
+    /// `kind`, `name`, `status`, `bot` (the bot created with it; P11.1), and
+    /// for a Microsoft account `uuid` and `flow`.
     /// Failure (nothing stored): target the user; metadata `reason` (`taken`:
     /// the Minecraft account is already linked, or `over_quota`), `kind`,
     /// `name`, and for a Microsoft account `uuid` and `flow`.
@@ -242,15 +243,17 @@ audit_actions! {
     ACCOUNT_APPROVE = "account.approve";
 
     /// An Admin or the Owner refused a pending link (P9.6, ADR-0018), which
-    /// deletes the account, its refresh token and its grants in this commit.
-    /// Outcome: Success. Target: the account, which is gone. Metadata:
-    /// `owner` (the linker's ID), `name` and `uuid`.
+    /// deletes the account, its refresh token, its grants and its bot in this
+    /// commit. Outcome: Success. Target: the account, which is gone.
+    /// Metadata: `owner` (the linker's ID), `name`, `uuid`, and `bot` when it
+    /// had one (P11.1).
     ACCOUNT_REFUSE = "account.refuse";
 
-    /// A user deleted an account (P9.6), with its refresh token and its
-    /// grants, in this commit. Outcome: Success. Target: the account, which
-    /// is gone. Metadata: `owner` (its owner's ID), `kind`, `name`, `status`,
-    /// and for a Microsoft account `uuid`.
+    /// A user deleted an account (P9.6), with its refresh token, its grants
+    /// and its bot, in this commit. Outcome: Success. Target: the account,
+    /// which is gone. Metadata: `owner` (its owner's ID), `kind`, `name`,
+    /// `status`, for a Microsoft account `uuid`, and `bot` when it had one
+    /// (P11.1).
     ACCOUNT_DELETE = "account.delete";
 
     /// A user linked a Microsoft account again (P9.6, ADR-0018). Success, in

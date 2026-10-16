@@ -33,12 +33,14 @@ use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountCredential, AccountReads, McAccount};
 use fleet_server::ports::agents::AgentReads;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditReads, AuditRecord, NewAuditEntry};
+use fleet_server::ports::bots::BotReads;
 use fleet_server::ports::enrollment_tokens::EnrollmentTokenReads;
 use fleet_server::ports::envelopes::{EnvelopeReads, SealedEnvelope, SealedRecord};
 use fleet_server::ports::grants::GrantReads;
 use fleet_server::ports::invites::InviteReads;
 use fleet_server::ports::login_attempts::LoginAttemptReads;
 use fleet_server::ports::mfa::{MfaReads, UserMfa};
+use fleet_server::ports::modes::ModeReads;
 use fleet_server::ports::sessions::SessionReads;
 use fleet_server::ports::store::{Store, StoreError, WriteTx};
 use fleet_server::ports::users::{NewUser, PasswordHash, UserReads};
@@ -163,6 +165,14 @@ impl Store for HookedStore {
 
     fn agents(&self) -> &dyn AgentReads {
         self.inner.agents()
+    }
+
+    fn bots(&self) -> &dyn BotReads {
+        self.inner.bots()
+    }
+
+    fn modes(&self) -> &dyn ModeReads {
+        self.inner.modes()
     }
 
     fn envelopes(&self) -> &dyn EnvelopeReads {

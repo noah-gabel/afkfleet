@@ -14,11 +14,13 @@ use axum::http::Method;
 use fleet_core::account::{AccountStatus, RefusalReason};
 use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget};
 use fleet_core::authz::{GrantLevel, Role};
-use fleet_core::id::{AccountId, LinkFlowId};
+use fleet_core::id::{AccountId, BotId, LinkFlowId};
+use fleet_core::mode::ModePreset;
 use fleet_server::app::link_flows::LinkFlowStatus;
 use fleet_server::config::{AccountsConfig, LinkFlowLimits, RateLimitConfig};
 use fleet_server::infra::crypto::vault::{VaultKeys, XChaChaVault};
 use fleet_server::ports::accounts::AccountCredential;
+use fleet_server::ports::bots::NewBot;
 use fleet_server::ports::store::Store as _;
 use fleet_server::ports::vault::{Vault as _, VaultPurpose};
 use fleet_testkit::system::SeededRandom;
@@ -406,4 +408,40 @@ async fn a_relinked_account_answers_as_active_in_the_list(
 
     assert_eq!(read.body["status"], "active");
     assert!(read.body.get("reason").is_none());
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_relink_keeps_the_accounts_bot(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
+    let setup = HttpSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+    let id = setup
+        .add_account(alice.id, 3, Some(AccountStatus::Active))
+        .await;
+    let bot = NewBot {
+        id: BotId::new_v7(at(T0), [3; 10]).unwrap(),
+        account: id,
+        mode: ModePreset::Afk.id(),
+    };
+    let mut tx = setup.db.write().await.unwrap();
+    tx.bots().insert(&bot).await.unwrap();
+    tx.commit(crate::support::service::setup_entry())
+        .await
+        .unwrap();
+    script_start(&setup, "device-code-1");
+    script_approval(&setup, 1, &profile(3), "Renamed_3");
+
+    let flow = flow_of(&relink(&setup, &alice, id).await);
+    let status = ended(&setup, flow).await;
+
+    assert!(
+        matches!(status, LinkFlowStatus::Linked { .. }),
+        "{status:?}"
+    );
+    let kept = setup.db.bots().of_account(id).await.unwrap().unwrap();
+    assert_eq!(kept.id, bot.id);
+    let bots = sqlx::query_scalar!(r#"SELECT count(*) AS "count!: i64" FROM bots"#)
+        .fetch_one(setup.db.read_pool())
+        .await
+        .unwrap();
+    assert_eq!(bots, 1);
 }

@@ -23,7 +23,8 @@ use fleet_core::account::AccountStatus;
 use fleet_core::audit::{AuditAction, RecordedValue};
 use fleet_core::auth::SessionPolicy;
 use fleet_core::authz::{Actor, GrantLevel, Role};
-use fleet_core::id::{AccountId, SessionId, UserId};
+use fleet_core::id::{AccountId, BotId, SessionId, UserId};
+use fleet_core::mode::ModePreset;
 use fleet_core::system::{Clock, SecureRandom};
 use fleet_core::value::Username;
 use fleet_server::app::auth::TokenService;
@@ -332,6 +333,23 @@ impl Server {
                 name: format!("AfkBot{n}").parse().unwrap(),
                 created_at: at(T0),
                 credential,
+            })
+            .await
+            .unwrap();
+        tx.commit(setup_entry()).await.unwrap();
+        id
+    }
+
+    /// Gives `account` its bot `n` directly, as the services create one
+    /// with every account.
+    pub(crate) async fn add_bot(&self, account: AccountId, n: u8) -> BotId {
+        let id = BotId::new_v7(at(T0 + i64::from(n)), [n; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.bots()
+            .insert(&fleet_server::ports::bots::NewBot {
+                id,
+                account,
+                mode: ModePreset::Afk.id(),
             })
             .await
             .unwrap();

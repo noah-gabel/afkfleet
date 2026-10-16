@@ -51,6 +51,7 @@
 mod accounts;
 mod agents;
 mod audit;
+mod bots;
 mod connect;
 mod convert;
 mod enrollment_tokens;
@@ -61,6 +62,7 @@ mod grants;
 mod invites;
 mod login_attempts;
 mod mfa;
+mod modes;
 mod sessions;
 mod store;
 mod users;

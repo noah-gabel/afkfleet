@@ -7,6 +7,10 @@
 //!   read handles and one write transaction at a time, [`store::WriteTx`],
 //!   whose commit always records an audit entry.
 //! - [`users`]: the users.
+//! - [`bots`]: the bots, one per linked Minecraft account, with their
+//!   desired state, their agent and their last reported state (P11.1, P10.5).
+//! - [`modes`]: the modes, what a bot does while it's online; the built-in
+//!   ones seeded with fixed IDs (P11.1).
 //! - [`agents`]: the enrolled agents and the certificates the server signed
 //!   for them (P10.2, P10.3).
 //! - [`agent_connections`]: what an agent's `Connect` stream asks the app:
@@ -50,6 +54,7 @@ pub mod accounts;
 pub mod agent_connections;
 pub mod agents;
 pub mod audit;
+pub mod bots;
 pub mod enrollment_tokens;
 pub mod envelopes;
 pub mod grants;
@@ -57,6 +62,7 @@ pub mod invites;
 pub mod live_agents;
 pub mod login_attempts;
 pub mod mfa;
+pub mod modes;
 pub mod msauth;
 pub mod pace;
 pub mod page;

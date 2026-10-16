@@ -244,6 +244,7 @@ async fn refusing_deletes_the_link_with_its_grants_and_frees_the_slot_and_the_uu
     setup
         .add_grant(id, friend.id, GrantLevel::View, member.id)
         .await;
+    let bot = setup.add_bot(id, 4).await;
 
     let refused = refuse(&setup, &admin, id).await;
 
@@ -275,6 +276,8 @@ async fn refusing_deletes_the_link_with_its_grants_and_frees_the_slot_and_the_uu
     assert_eq!(meta(entry, "owner"), Some(text(&member.id.to_string())));
     assert_eq!(meta(entry, "name"), Some(text("AfkBot4")));
     assert_eq!(meta(entry, "uuid"), Some(text(&profile(4))));
+    assert_eq!(meta(entry, "bot"), Some(text(&bot.to_string())));
+    assert_eq!(setup.db.bots().find(bot).await.unwrap(), None);
 }
 
 #[sqlx::test(migrations = false)]

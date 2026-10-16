@@ -6,10 +6,14 @@
 use fleet_core::account::AccountStatus;
 use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget, RecordedValue};
 use fleet_core::authz::{Actor, AuthzError, Permission, ResourceContext, Role, UserRef, authorize};
+use fleet_core::bot::DesiredRunState;
+use fleet_core::mode::ModePreset;
 use fleet_server::app::link_flows::LinkFlowStatus;
 use fleet_server::app::users::ActingUser;
 use fleet_server::ports::accounts::AccountCredential;
 use fleet_server::ports::audit::AuditRecord;
+use fleet_server::ports::bots::Bot;
+use fleet_server::ports::store::Store as _;
 use fleet_testkit::log_buffer::LogBuffer;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
@@ -122,7 +126,9 @@ async fn account_link_records_the_creator_and_the_minecraft_account(
     assert_eq!(meta(entry, "uuid").cloned(), text(PROFILE));
     assert_eq!(meta(entry, "status").cloned(), text("pending"));
     assert_eq!(meta(entry, "flow").cloned(), text(&flow.to_string()));
-    assert_eq!(entry.metadata.entries().len(), 5);
+    let bot = setup.db.bots().of_account(account).await.unwrap().unwrap();
+    assert_eq!(meta(entry, "bot").cloned(), text(&bot.id.to_string()));
+    assert_eq!(entry.metadata.entries().len(), 6);
 }
 
 #[sqlx::test(migrations = false)]
@@ -320,6 +326,63 @@ async fn a_failed_seal_fails_the_flow_and_stores_nothing(
         &setup,
         &alice,
         |setup| setup.vault_random.fail_next(RandomError::Unavailable),
+        &logs,
+    )
+    .await;
+
+    assert_eq!(status, LinkFlowStatus::Failed);
+    assert_eq!(errors, ["ERROR"]);
+    assert_eq!(setup.owned(alice.actor.id).await, 0);
+    assert_eq!(
+        setup.entries(&AuditAction::ACCOUNT_LINK).await,
+        Vec::<AuditRecord>::new()
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_linked_account_gets_its_bot_minted_with_it(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = LinkSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+
+    let LinkFlowStatus::Linked { account, .. } = linked(&setup, &alice).await else {
+        panic!("linked");
+    };
+
+    let bot = setup.db.bots().of_account(account).await.unwrap().unwrap();
+    assert_eq!(
+        bot,
+        Bot {
+            id: bot.id,
+            account,
+            server: None,
+            mode: ModePreset::Afk.id(),
+            desired: DesiredRunState::Stopped,
+            agent: None,
+            last: None,
+        }
+    );
+    assert_ne!(bot.id.to_string(), account.to_string());
+    // Minted from the same time: the same 48-bit timestamp.
+    assert_eq!(bot.id.to_string().get(..13), account.to_string().get(..13));
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_failed_bot_id_fails_the_flow_and_stores_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (logs, _guard) = json_logs();
+    let setup = LinkSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+
+    let (status, errors) = ended_after(
+        &setup,
+        &alice,
+        // The account's ID draws first, then its bot's.
+        |setup| setup.random.fail_after(1, RandomError::Unavailable),
         &logs,
     )
     .await;
