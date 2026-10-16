@@ -3558,7 +3558,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P10.4, from Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
   > - **The gRPC port** (`grpc::listener`) serves `AgentEnrollment` alone, behind its gate (`grpc::enrollment`). `AgentControl` joins it behind a gate of its own that refuses a call without a verified client certificate (`peer_certs()`): the listener only verifies a certificate that's presented (S13).
-  > - **`max_connection_age`** (60 s plus 20 s of grace) bounds every connection while `Enroll` is the port's only service. C replaces it with a bound for connections without a client certificate, or records the residual risk (R9).
+  > - **`max_connection_age`** (60 s plus 20 s of grace) bounds every connection while `Enroll` is the port's only service. With the grace set, tonic 0.14.6 sends no GOAWAY at 60 s: it sleeps for the age plus the grace and then closes the connection forcefully, a hard cut at 80 s, calls in flight included. C replaces it with a bound for connections without a client certificate, or records the residual risk (R9). Removing the grace isn't a fix either, since tonic then polls the finished timeout future again *(the user's note at the PR #49 review)*.
   > - **`agents.enabled`** and the rule that an enabled agent's name is unique, ignoring case, come from `0011`; disabling an agent frees its name for a new enrollment.
 - [ ] **P10.5** 🔴 Server components:
   - `AgentRegistry`

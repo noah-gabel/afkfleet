@@ -105,7 +105,7 @@ One branch and one PR per group, one commit per task, in this order, each after 
 - **R6.** Ed25519 only (S10 over S14's P-256).
 - **R7.** The token route answers `{id, bundle, ca_fingerprint, expires_at}`.
 - **R8.** The agent's timeouts and its answer cap are S14's shared constants.
-- **R9.** `max_connection_age` bounds every connection while `Enroll` is the port's only service; C replaces it with a bound for connections without a client certificate, or records the residual.
+- **R9.** `max_connection_age` bounds every connection while `Enroll` is the port's only service; C replaces it with a bound for connections without a client certificate, or records the residual. As built (PR #49 review): with the grace set, tonic 0.14.6 sends no GOAWAY at 60 s but cuts the connection, calls in flight included, at 80 s; removing the grace isn't a fix either, since tonic then polls the finished timeout future again.
 - **R10 (security), decided by a review agent during the build.** `EnrollResponse` carries the certificate as `string certificate_pem` instead of `bytes certificate_der`. rcgen 0.14 can't PEM-encode a certificate it didn't make, and the agent has no `base64`; the server holds rcgen's PEM of the same DER it fingerprints and stores. The agent stores the text it received only after checking it: exactly one PEM section, a certificate, with nothing outside its `BEGIN` and `END` lines; a client certificate the pinned CA signed, valid now (rustls's client verifier, the check C's port makes); and its own key. *Rejected:* a DER file (pushes the same choice to P10.7, after the wire is merged); `base64` in the agent (needs the user's approval when a rule-respecting option exists); a hand-written encoder (works around the registry); both forms on the wire (two copies that could disagree). Cheap to change until the first release.
 
 ### As built (group B)
@@ -139,7 +139,7 @@ One branch and one PR per group, one commit per task, in this order, each after 
   - A connection needs an unrevoked, unexpired fingerprint and an enabled agent; disable revokes every fingerprint; `GET /agents` shows `not_after` and the capacity (S1, S8).
   - The dead-server note above: C decides keepalive or a server heartbeat, and tests the server's side.
   - P10.9's rejections, including an expired certificate.
-  - From group B: the agent's identity comes only from its certificate, and a `Hello` whose name differs from the record is refused (the user's note above). `AgentControl` gets a gate that refuses a call without a verified client certificate; the listener only verifies one that's presented (S13). `max_connection_age` is replaced or its residual recorded (R9).
+  - From group B: the agent's identity comes only from its certificate, and a `Hello` whose name differs from the record is refused (the user's note above). `AgentControl` gets a gate that refuses a call without a verified client certificate; the listener only verifies one that's presented (S13). `max_connection_age` is replaced or its residual recorded (R9): today it's a hard cut at 80 s with no GOAWAY, and dropping the grace isn't a fix, since tonic then polls the finished timeout future again.
 - **D (P11.1's `bots` and `modes`, P10.5):**
   - Every account gets its bot (the user's note above).
   - Free capacity counts bots until their `Removed`; an agent that comes back with less capacity has bots moved off it (S8).

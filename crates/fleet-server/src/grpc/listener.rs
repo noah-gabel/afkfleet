@@ -8,9 +8,12 @@
 //!   [`HANDSHAKE_TIMEOUT`].
 //! - **Connections** ([`router`]): at most [`MAX_CONCURRENT_STREAMS`] calls
 //!   at once on one, and none lives longer than [`MAX_CONNECTION_AGE`] plus
-//!   [`MAX_CONNECTION_AGE_GRACE`]. While `Enroll` is the port's one service
-//!   this bounds every connection; group C replaces it with a bound for
-//!   connections without a client certificate only (R9).
+//!   [`MAX_CONNECTION_AGE_GRACE`]: a hard cut at 80 s. With the grace set,
+//!   tonic 0.14.6 sends no GOAWAY at 60 s; it sleeps for the age plus the
+//!   grace, then closes the connection forcefully, with any call still
+//!   running on it. While `Enroll` is the port's one service this bounds
+//!   every connection; group C replaces it with a bound for connections
+//!   without a client certificate only (R9).
 //! - **Serving** ([`serve`]): on a listener the caller bound, until its stop
 //!   token is cancelled; then in-flight calls finish, within the server's
 //!   shutdown deadline.
@@ -29,9 +32,13 @@ use crate::infra::pki::LoadedPki;
 pub const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(10);
 /// How many calls one connection may run at once.
 pub const MAX_CONCURRENT_STREAMS: u32 = 16;
-/// How long a connection lives before the server asks it to close.
+/// A connection's age limit. With [`MAX_CONNECTION_AGE_GRACE`] set, tonic
+/// 0.14.6 doesn't ask a connection to close at this age: the grace is added,
+/// and the connection is cut then.
 pub const MAX_CONNECTION_AGE: Duration = Duration::from_secs(60);
-/// How long a connection asked to close may still finish its calls.
+/// Added to [`MAX_CONNECTION_AGE`]: at the sum, 80 s, tonic 0.14.6 closes
+/// the connection forcefully, with no GOAWAY first and whatever calls it
+/// runs.
 pub const MAX_CONNECTION_AGE_GRACE: Duration = Duration::from_secs(20);
 
 /// The enrollment service behind its gate, as [`router`] takes it.
