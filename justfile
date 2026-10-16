@@ -186,12 +186,14 @@ dev-enrollment-token $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "t
 # key and certificate go into `dir` (target/dev-agent by default, created when missing),
 # owner-only, and are never replaced: enrolling again needs another folder, or the old
 # files moved away (ADR-0019, S18). Never open agent.key.
+# One line on purpose: every recipe line gets just's stdin, so an earlier line could take
+# the bundle. scripts/dev-enroll.mjs creates the folder and runs the agent's enroll on its
+# own stdin, stdout and stderr.
 # No exit message: the command prints its own lines and exit code.
 # Enroll a dev agent with dev-server, its bundle on stdin.
 [no-exit-message]
 dev-enroll dir=(justfile_directory() / "target" / "dev-agent") $AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE=(justfile_directory() / "target" / "dev-server" / "pki" / "ca.crt") $AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE=(dir / "agent.crt") $AFKFLEET_AGENT__CONTROL_PLANE__KEY_FILE=(dir / "agent.key"):
-    node -e "require('node:fs').mkdirSync(process.argv[1], { recursive: true })" "{{ dir }}"
-    cargo run --quiet -p fleet-agent --bin afkfleet-agent -- enroll --config deploy/dev/agent.managed.toml
+    node scripts/dev-enroll.mjs "{{ dir }}"
 
 # The dev database's Owner, through `user create-owner` with the password typed twice
 # at the terminal. It passes the same paths as dev-server: the dev config's validation
