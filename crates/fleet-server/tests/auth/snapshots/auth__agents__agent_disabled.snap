@@ -1,0 +1,13 @@
+---
+source: crates/fleet-server/tests/auth/agents.rs
+expression: "redacted(&seen.body, &[(agent.to_string(), \"agent-1\")])"
+---
+{
+  "connected_since": "[T0]",
+  "created_at": "[T0]",
+  "enabled": false,
+  "id": "[agent-1]",
+  "last_seen_at": "[T0]",
+  "name": "agent-1",
+  "status": "disabled"
+}

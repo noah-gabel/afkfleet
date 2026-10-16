@@ -360,6 +360,7 @@ mod tests {
                 bind: GrpcConfig::DEFAULT_BIND,
                 pki: paths(dir),
                 agent_cert_lifetime: chrono::TimeDelta::days(60),
+                heartbeats: crate::config::Heartbeats::default(),
             }),
         }
     }

@@ -12,6 +12,7 @@ use fleet_server::app::link_flows::{FINISHED_RETENTION, LinkFlowStatus};
 use fleet_server::app::lockout::LockoutService;
 use fleet_server::cli::housekeeping::Housekeeping;
 use fleet_server::config::RateLimitConfig;
+use fleet_server::grpc::registry::AgentRegistry;
 use fleet_server::http::rate_limit::RateLimits;
 use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
@@ -104,6 +105,7 @@ async fn each_housekeeping_run_drops_the_finished_flows(
             Arc::new(Sha256Tokens::new(Arc::new(SeededRandom::new(5)))),
         ),
         setup.service.flows(),
+        AgentRegistry::new(Arc::clone(&clock)),
     );
     setup.clock.advance(FINISHED_RETENTION);
 

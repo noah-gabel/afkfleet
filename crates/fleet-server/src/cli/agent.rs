@@ -1,7 +1,22 @@
-//! `afkfleet-server agent create-enrollment-token` (Plan.md P10.3;
-//! ADR-0019, U3): the server's host operator creates an enrollment token
-//! without the API, until the app's agents screen (P11.9), and beside it
-//! afterwards.
+//! `afkfleet-server agent …` (Plan.md P10.3, P10.10; ADR-0019, U3, U8,
+//! S31): the server's host operator manages agents without the API, until
+//! the app's agents screen (P11.9), and beside it afterwards. Each command
+//! opens the database with [`sqlite::open_migrated`]: never created or
+//! migrated, so it's safe while `serve` runs, its writes waiting for the
+//! server's on SQLite's lock.
+//!
+//! `agent list` prints every agent, newest first, one tab-separated line
+//! each after a header ([`LIST_HEADER`]), `-` for nothing. Its state is
+//! `enabled`, `expired` or `disabled`: the host can't see the streams.
+//!
+//! `agent disable --id …` disables an agent for good, as the API does: every
+//! certificate revoked, its name freed, `agent.disable` with `via` = `cli`
+//! and no actor. It works without `[grpc]`. A running server ends the
+//! agent's stream within one 5 s sweep, or two when the disable lands as a
+//! stream is being welcomed (U8). An agent disabled already is
+//! no change and no entry.
+//!
+//! `agent create-enrollment-token`:
 //!
 //! - **Refused while the control plane is off** (`[grpc]` isn't
 //!   configured), before anything is read.
@@ -20,23 +35,29 @@
 //!   refusal or failure is one `afkfleet-server: …` line on stderr. Logs
 //!   per `[log]` never hold the token.
 
+use core::fmt::Write as _;
 use std::io::Write;
 use std::sync::Arc;
 
-use chrono::SecondsFormat;
+use chrono::{DateTime, SecondsFormat, Utc};
+use fleet_core::agent::AgentStatus;
+use fleet_core::id::AgentId;
 use fleet_core::system::{Clock, SecureRandom};
 use secrecy::ExposeSecret as _;
 use tracing::error;
 
 use super::DATABASE_CLOSE;
+use crate::app::agents::{AgentService, AgentView, DisableAgentError, DisabledAgent, Disabler};
 use crate::app::enrollment::{
     CreateTokenError, CreatedEnrollmentToken, Creator, EnrollmentTokenService,
 };
 use crate::config::ServerConfig;
+use crate::grpc::registry::AgentRegistry;
 use crate::http::error::chain;
 use crate::infra::crypto::tokens::Sha256Tokens;
 use crate::infra::pki::ca_fingerprint;
 use crate::infra::sqlite::{self, Database, DatabaseOptions};
+use crate::ports::page::{Page, PageLimit};
 
 /// The exit codes of `afkfleet-server agent create-enrollment-token`, shown
 /// in its help.
@@ -49,12 +70,36 @@ Exit codes:
      migrations included)
   2  usage error";
 
+/// The exit codes of `afkfleet-server agent list`, shown in its help.
+pub const LIST_EXIT_CODES: &str = "\
+Exit codes:
+  0  the agents are listed on stdout
+  1  nothing was listed: the config, logging or the database failed (a
+     missing database and pending migrations included)
+  2  usage error";
+
+/// The exit codes of `afkfleet-server agent disable`, shown in its help.
+pub const DISABLE_EXIT_CODES: &str = "\
+Exit codes:
+  0  the agent is disabled, now or before: every certificate it held is
+     revoked, and a running server ends its stream within 10 s
+  1  nothing was disabled: no agent has this ID, or the config, logging or
+     the database failed (a missing database and pending migrations
+     included)
+  2  usage error";
+
+/// The first line of `agent list`'s output: its columns.
+pub const LIST_HEADER: &str =
+    "id\tname\tstate\tcapacity\tversion\tlast_seen_at\tnot_after\tcreated_at";
+
 /// How the command ended, which decides the process's exit code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Exit {
     /// The token is created, and its bundle printed.
     Created,
-    /// Nothing was created; stderr (and the log) says why.
+    /// The list or the disable is done, and its result printed.
+    Done,
+    /// Nothing was done; stderr (and the log) says why.
     Failed,
 }
 
@@ -63,10 +108,144 @@ impl Exit {
     #[must_use]
     pub const fn code(self) -> u8 {
         match self {
-            Self::Created => 0,
+            Self::Created | Self::Done => 0,
             Self::Failed => 1,
         }
     }
+}
+
+/// `afkfleet-server agent list`: prints every agent on `out`, with `clock`'s
+/// time deciding what has expired; see the [module docs](self).
+pub async fn list(
+    config: &ServerConfig,
+    clock: Arc<dyn Clock>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Exit {
+    let database = match sqlite::open_migrated(&config.database, DatabaseOptions::default()).await {
+        Ok(database) => database,
+        Err(error) => return fail(err, "the database can't be opened", &error),
+    };
+    let agents = agent_service(&database, clock);
+    let exit = match all_agents(&agents).await {
+        Ok(views) => print_list(&views, out, err),
+        Err(error) => fail(err, "the database failed", &error),
+    };
+    close(database, exit, err).await
+}
+
+/// The agents' service over `database`: the host sees no stream, so its
+/// registry stays empty.
+fn agent_service(database: &Database, clock: Arc<dyn Clock>) -> AgentService {
+    let registry = AgentRegistry::new(Arc::clone(&clock));
+    AgentService::new(clock, Arc::new(database.clone()), Arc::new(registry))
+}
+
+/// Every agent, newest first, a page at a time.
+async fn all_agents(
+    agents: &AgentService,
+) -> Result<Vec<AgentView>, crate::ports::store::StoreError> {
+    let mut views = Vec::new();
+    let mut before = None;
+    loop {
+        let page = Page {
+            before,
+            limit: PageLimit::new(PageLimit::MAX.into())
+                .map_err(|error| crate::ports::store::StoreError::Backend(Box::new(error)))?,
+        };
+        let listed = agents.list(page).await?;
+        views.extend(listed.items);
+        match listed.next {
+            Some(next) => before = Some(next),
+            None => return Ok(views),
+        }
+    }
+}
+
+/// Prints `views` as [`LIST_HEADER`]'s lines on `out`.
+fn print_list(views: &[AgentView], out: &mut dyn Write, err: &mut dyn Write) -> Exit {
+    let mut text = format!("{LIST_HEADER}\n");
+    for view in views {
+        let agent = &view.listed.agent;
+        let state = match view.status {
+            AgentStatus::Disabled => "disabled",
+            AgentStatus::Expired => "expired",
+            AgentStatus::Online | AgentStatus::Offline => "enabled",
+        };
+        // Writing to a String can't fail.
+        let _ = writeln!(
+            text,
+            "{}\t{}\t{state}\t{}\t{}\t{}\t{}\t{}",
+            agent.id,
+            agent.name,
+            agent
+                .capacity
+                .map_or_else(|| "-".to_owned(), |capacity| capacity.get().to_string()),
+            agent
+                .version
+                .as_ref()
+                .map_or("-", |version| version.as_str()),
+            time(view.last_seen_at),
+            time(view.listed.not_after),
+            time(Some(agent.created_at)),
+        );
+    }
+    if let Err(error) = out.write_all(text.as_bytes()).and_then(|()| out.flush()) {
+        return fail(err, "the list couldn't be written to stdout", &error);
+    }
+    Exit::Done
+}
+
+/// `at` in the list's form, or `-`.
+fn time(at: Option<DateTime<Utc>>) -> String {
+    at.map_or_else(
+        || "-".to_owned(),
+        |at| at.to_rfc3339_opts(SecondsFormat::Secs, true),
+    )
+}
+
+/// `afkfleet-server agent disable --id …`: disables agent `id` at
+/// `clock`'s time, and says on `out` what changed; see the [module
+/// docs](self).
+pub async fn disable(
+    config: &ServerConfig,
+    clock: Arc<dyn Clock>,
+    id: AgentId,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Exit {
+    let database = match sqlite::open_migrated(&config.database, DatabaseOptions::default()).await {
+        Ok(database) => database,
+        Err(error) => return fail(err, "the database can't be opened", &error),
+    };
+    let agents = agent_service(&database, clock);
+    let exit = match agents.disable(Disabler::Host, id).await {
+        Ok(disabled) => print_disabled(&disabled, out, err),
+        Err(DisableAgentError::NotFound) => refuse(err, &format!("no agent has the ID {id}")),
+        Err(error) => fail(err, "the agent couldn't be disabled", &error),
+    };
+    close(database, exit, err).await
+}
+
+/// Says on `out` what disabling `disabled` changed.
+fn print_disabled(disabled: &DisabledAgent, out: &mut dyn Write, err: &mut dyn Write) -> Exit {
+    let agent = &disabled.view.listed.agent;
+    let line = match disabled.revoked {
+        Some(revoked) => format!(
+            "The agent {} ({}) is disabled: {revoked} certificate{} revoked. A running server ends its stream within 10 s.",
+            agent.name,
+            agent.id,
+            if revoked == 1 { "" } else { "s" }
+        ),
+        None => format!(
+            "The agent {} ({}) was disabled already: nothing changed.",
+            agent.name, agent.id
+        ),
+    };
+    if let Err(error) = writeln!(out, "{line}").and_then(|()| out.flush()) {
+        return fail(err, "the result couldn't be written to stdout", &error);
+    }
+    Exit::Done
 }
 
 /// `afkfleet-server agent create-enrollment-token`: creates a token with
@@ -228,6 +407,7 @@ mod tests {
                     server_key_file: dir.join("server.key"),
                 },
                 agent_cert_lifetime: chrono::TimeDelta::days(60),
+                heartbeats: crate::config::Heartbeats::default(),
             }),
         }
     }
@@ -463,5 +643,223 @@ mod tests {
             "{}",
             logs.text()
         );
+    }
+    // --- agent list and agent disable (P10.10) ------------------------------------------
+
+    /// Agent `n` (`agent-<n>`), enrolled at `NOW` with a certificate valid
+    /// `days`, in `database`.
+    async fn enroll(database: &Database, n: u8, days: i64) -> AgentId {
+        use crate::ports::agents::{NewAgent, NewAgentCert};
+        let id = AgentId::new_v7(at(NOW), [n; 10]).unwrap();
+        let mut tx = database.write().await.unwrap();
+        tx.agents()
+            .insert(&NewAgent {
+                id,
+                name: fleet_core::value::AgentName::try_from(format!("agent-{n}").as_str())
+                    .unwrap(),
+                created_at: at(NOW),
+            })
+            .await
+            .unwrap();
+        tx.agents()
+            .insert_cert(&NewAgentCert {
+                fingerprint: CertFingerprint::from_digest([n; 32]),
+                agent: id,
+                not_after: at(NOW) + chrono::TimeDelta::days(days),
+                created_at: at(NOW),
+            })
+            .await
+            .unwrap();
+        tx.commit(crate::ports::audit::NewAuditEntry::new(
+            at(NOW),
+            AuditAction::try_from("test.agents_setup").unwrap(),
+            AuditOutcome::Success,
+        ))
+        .await
+        .unwrap();
+        id
+    }
+
+    async fn open(dir: &Path) -> Database {
+        sqlite::open_migrated(&database_config(dir), DatabaseOptions::default())
+            .await
+            .unwrap()
+    }
+
+    /// Runs `agent list` over `config` at `now`.
+    async fn run_list(config: &ServerConfig, now: i64) -> Ran {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let exit = list(
+            config,
+            Arc::new(ManualClock::new(at(now))),
+            &mut out,
+            &mut err,
+        )
+        .await;
+        Ran {
+            exit,
+            out: String::from_utf8(out).unwrap(),
+            err: String::from_utf8(err).unwrap(),
+        }
+    }
+
+    /// Runs `agent disable --id id` over `config`.
+    async fn run_disable(config: &ServerConfig, id: AgentId) -> Ran {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let exit = disable(
+            config,
+            Arc::new(ManualClock::new(at(NOW))),
+            id,
+            &mut out,
+            &mut err,
+        )
+        .await;
+        Ran {
+            exit,
+            out: String::from_utf8(out).unwrap(),
+            err: String::from_utf8(err).unwrap(),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_list_is_a_header_and_a_tab_separated_line_per_agent() {
+        let dir = TempDir::new().unwrap();
+        migrate(dir.path()).await;
+        let database = open(dir.path()).await;
+        let heard = enroll(&database, 1, 60).await;
+        let expiring = enroll(&database, 2, 1).await;
+        let disabled = enroll(&database, 3, 60).await;
+        let mut tx = database.write().await.unwrap();
+        tx.agents()
+            .record_hello(&crate::ports::agents::AgentHello {
+                agent: heard,
+                capacity: fleet_core::value::AgentCapacity::try_from(10_u32).unwrap(),
+                version: fleet_core::value::AgentVersion::try_from("0.1.0").unwrap(),
+                at: at(NOW + 1_000),
+            })
+            .await
+            .unwrap();
+        assert!(tx.agents().disable(disabled).await.unwrap());
+        tx.commit(crate::ports::audit::NewAuditEntry::new(
+            at(NOW),
+            AuditAction::try_from("test.agents_setup").unwrap(),
+            AuditOutcome::Success,
+        ))
+        .await
+        .unwrap();
+        database.close().await;
+
+        // Two days on: agent-2's certificate has expired.
+        let ran = run_list(&config(dir.path(), false), NOW + 2 * 86_400_000).await;
+
+        assert_eq!(ran.exit, Exit::Done, "{}", ran.err);
+        assert_eq!(
+            ran.out,
+            format!(
+                "{LIST_HEADER}\n\
+                 {disabled}\tagent-3\tdisabled\t-\t-\t-\t2027-03-16T08:00:00Z\t2027-01-15T08:00:00Z\n\
+                 {expiring}\tagent-2\texpired\t-\t-\t-\t2027-01-16T08:00:00Z\t2027-01-15T08:00:00Z\n\
+                 {heard}\tagent-1\tenabled\t10\t0.1.0\t2027-01-15T08:00:01Z\t2027-03-16T08:00:00Z\t2027-01-15T08:00:00Z\n"
+            )
+        );
+        assert_eq!(ran.err, "");
+    }
+
+    #[tokio::test]
+    async fn an_empty_list_is_its_header() {
+        let dir = TempDir::new().unwrap();
+        migrate(dir.path()).await;
+
+        let ran = run_list(&config(dir.path(), true), NOW).await;
+
+        assert_eq!(ran.exit, Exit::Done, "{}", ran.err);
+        assert_eq!(ran.out, format!("{LIST_HEADER}\n"));
+    }
+
+    #[tokio::test]
+    async fn neither_command_creates_a_missing_database() {
+        let dir = TempDir::new().unwrap();
+        let config = config(dir.path(), false);
+
+        let listed = run_list(&config, NOW).await;
+        let disabled = run_disable(&config, AgentId::new_v7(at(NOW), [1; 10]).unwrap()).await;
+
+        for ran in [&listed, &disabled] {
+            assert_eq!(ran.exit, Exit::Failed);
+            assert_eq!(ran.out, "");
+            assert!(
+                ran.err
+                    .starts_with("afkfleet-server: the database can't be opened: "),
+                "{}",
+                ran.err
+            );
+        }
+        assert!(!dir.path().join("afkfleet.db").exists());
+    }
+
+    #[tokio::test]
+    async fn disable_revokes_records_via_cli_and_says_what_changed() {
+        let dir = TempDir::new().unwrap();
+        migrate(dir.path()).await;
+        let database = open(dir.path()).await;
+        let agent = enroll(&database, 1, 60).await;
+        database.close().await;
+        // Without [grpc]: an agent enrolled before is still disabled.
+        let config = config(dir.path(), false);
+
+        let first = run_disable(&config, agent).await;
+        let again = run_disable(&config, agent).await;
+
+        assert_eq!(first.exit, Exit::Done, "{}", first.err);
+        assert_eq!(
+            first.out,
+            format!(
+                "The agent agent-1 ({agent}) is disabled: 1 certificate revoked. A running server ends its stream within 10 s.\n"
+            )
+        );
+        assert_eq!(again.exit, Exit::Done, "{}", again.err);
+        assert_eq!(
+            again.out,
+            format!("The agent agent-1 ({agent}) was disabled already: nothing changed.\n")
+        );
+        let database = open(dir.path()).await;
+        let entries: Vec<_> = audit(&database)
+            .await
+            .into_iter()
+            .filter(|entry| entry.action == AuditAction::AGENT_DISABLE)
+            .collect();
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!(entries[0].actor, None);
+        assert_eq!(entries[0].ip, None);
+        assert_eq!(
+            entries[0].target,
+            Some(RecordedTarget::Known(AuditTarget::Agent(agent)))
+        );
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn disabling_an_unknown_agent_is_exit_1() {
+        let dir = TempDir::new().unwrap();
+        migrate(dir.path()).await;
+        let unknown = AgentId::new_v7(at(NOW), [9; 10]).unwrap();
+
+        let ran = run_disable(&config(dir.path(), true), unknown).await;
+
+        assert_eq!(ran.exit, Exit::Failed);
+        assert_eq!(ran.out, "");
+        assert_eq!(
+            ran.err,
+            format!("afkfleet-server: no agent has the ID {unknown}\n")
+        );
+    }
+
+    #[test]
+    fn done_is_exit_0() {
+        assert_eq!(Exit::Done.code(), 0);
+        assert_eq!(Exit::Created.code(), 0);
+        assert_eq!(Exit::Failed.code(), 1);
     }
 }

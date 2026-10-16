@@ -5,7 +5,8 @@
 //! Each call passes two layers:
 //! 1. **The gate** ([`EnrollGate`], tonic's interceptor), before the
 //!    request's body is read: it mints the call's request ID, takes the
-//!    peer's address from the connection (none is a wiring bug: `INTERNAL`)
+//!    peer's address from the listener's [`Connection`] (none is a wiring
+//!    bug: `INTERNAL`)
 //!    and spends the peer's `[rate_limits] enroll_per_ip_per_min`
 //!    (`RESOURCE_EXHAUSTED`, with `retry-after`).
 //! 2. **The handler** ([`EnrollmentGrpc`]): it converts the message
@@ -52,21 +53,21 @@ use fleet_proto::enrollment::{
 use fleet_proto::generated as wire;
 use fleet_proto::generated::agent_enrollment_server::{AgentEnrollment, AgentEnrollmentServer};
 use tokio::time::Instant;
-use tonic::metadata::{AsciiMetadataValue, MetadataMap};
+use tonic::metadata::AsciiMetadataValue;
 use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
+use tonic::transport::server::TlsConnectInfo;
 use tonic::{Code, Request, Response, Status};
 use tracing::{debug, error, info, warn};
+
+use super::listener::Connection;
+pub use super::status::{REQUEST_ID, RETRY_AFTER};
+use super::status::{code_name, latency_ms, refusal};
 
 use crate::app::enrollment::{EnrollError, EnrollmentService};
 use crate::http::error::{BUSY_RETRY_AFTER, chain, whole_seconds};
 use crate::http::middleware::RequestIds;
 use crate::http::rate_limit::RateLimits;
-
-/// The metadata every answer carries: the call's request ID.
-pub const REQUEST_ID: &str = fleet_proto::enrollment::REQUEST_ID;
-/// The metadata of a rate-limited or busy answer: whole seconds to wait.
-pub const RETRY_AFTER: &str = "retry-after";
 
 /// `RESOURCE_EXHAUSTED`'s message.
 pub const RATE_LIMITED: &str = "Too many enrollments from this address; try again later.";
@@ -125,7 +126,11 @@ impl Interceptor for EnrollGate {
                 return Err(Status::internal(FAILED));
             }
         };
-        let Some(peer) = request.remote_addr() else {
+        let peer = request
+            .extensions()
+            .get::<TlsConnectInfo<Connection>>()
+            .and_then(|info| info.get_ref().peer());
+        let Some(peer) = peer else {
             error!(request_id = %id, "an enrollment was refused: its connection has no peer address");
             finished(id, started, Code::Internal);
             return Err(refusal(Code::Internal, FAILED, id, None));
@@ -203,19 +208,6 @@ impl Failure {
     }
 }
 
-/// A refusal with `code` and `message`, carrying the call's request ID and,
-/// if given, `retry-after` in whole seconds.
-fn refusal(code: Code, message: &'static str, id: RequestId, retry_after: Option<u64>) -> Status {
-    let mut metadata = MetadataMap::new();
-    if let Ok(value) = AsciiMetadataValue::try_from(id.to_string()) {
-        metadata.insert(REQUEST_ID, value);
-    }
-    if let Some(seconds) = retry_after {
-        metadata.insert(RETRY_AFTER, AsciiMetadataValue::from(seconds));
-    }
-    Status::with_metadata(code, message, metadata)
-}
-
 /// Logs the call's one "an enrollment finished" line.
 fn finished(id: RequestId, started: Instant, code: Code) {
     info!(
@@ -224,34 +216,6 @@ fn finished(id: RequestId, started: Instant, code: Code) {
         latency_ms = latency_ms(started),
         "an enrollment finished"
     );
-}
-
-/// The milliseconds since `started`.
-fn latency_ms(started: Instant) -> u64 {
-    u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX)
-}
-
-/// `code`'s name in a log line, as gRPC spells it.
-const fn code_name(code: Code) -> &'static str {
-    match code {
-        Code::Ok => "ok",
-        Code::Cancelled => "cancelled",
-        Code::Unknown => "unknown",
-        Code::InvalidArgument => "invalid_argument",
-        Code::DeadlineExceeded => "deadline_exceeded",
-        Code::NotFound => "not_found",
-        Code::AlreadyExists => "already_exists",
-        Code::PermissionDenied => "permission_denied",
-        Code::ResourceExhausted => "resource_exhausted",
-        Code::FailedPrecondition => "failed_precondition",
-        Code::Aborted => "aborted",
-        Code::OutOfRange => "out_of_range",
-        Code::Unimplemented => "unimplemented",
-        Code::Internal => "internal",
-        Code::Unavailable => "unavailable",
-        Code::DataLoss => "data_loss",
-        Code::Unauthenticated => "unauthenticated",
-    }
 }
 
 /// The service's handler; see the [module docs](self).
@@ -441,13 +405,5 @@ mod tests {
             !format!("{status:?}").contains("/srv/afkfleet"),
             "{status:?}"
         );
-    }
-
-    #[test]
-    fn every_code_has_its_grpc_name() {
-        assert_eq!(code_name(Code::Ok), "ok");
-        assert_eq!(code_name(Code::ResourceExhausted), "resource_exhausted");
-        assert_eq!(code_name(Code::Unauthenticated), "unauthenticated");
-        assert_eq!(code_name(Code::DeadlineExceeded), "deadline_exceeded");
     }
 }

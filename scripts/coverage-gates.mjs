@@ -93,6 +93,22 @@ export const GATES = [
     ],
   },
   {
+    // The control plane (Phase 10, the user's choice U9, ADR-0019): the PKI
+    // and the enrollment, which hand out the agents' identities, the agents'
+    // services, which admit their certificates and disable them, and the
+    // gRPC port with its gates, sessions and registry. Later groups' code in
+    // these paths joins the gate.
+    name: "control-plane",
+    min: 90,
+    required: true,
+    prefixes: [
+      "crates/fleet-server/src/infra/pki/",
+      "crates/fleet-server/src/app/enrollment.rs",
+      "crates/fleet-server/src/app/agents/",
+      "crates/fleet-server/src/grpc/",
+    ],
+  },
+  {
     // The desktop app's client: the refresh, the session's end and the
     // certificate checks are security code (ADR-0017).
     name: "fleet-client",

@@ -52,6 +52,13 @@ disallowed-methods = [
     { path = "reqwest::Response::text_with_charset", reason = "read Microsoft's answers through the adapter's capped reader (ADR-0018)", allow-invalid = true },
     { path = "reqwest::Response::bytes", reason = "read Microsoft's answers through the adapter's capped reader (ADR-0018)" },
     { path = "reqwest::get", reason = "build and hold reqwest clients only in infra/msauth/client.rs, through the adapter's one builder (ADR-0018)" },
+    # The gRPC port bounds each connection's age itself, lifted while an agent's
+    # stream lives (the user's choice, U7; ADR-0019, R9, S22). tonic's own limits
+    # apply to every connection and every call alike: they would cut the agents'
+    # streams, which must outlive any age.
+    { path = "tonic::transport::Server::max_connection_age", reason = "the listener's Bounded connections bound the age; tonic's cuts agents' streams (ADR-0019, R9, S22)" },
+    { path = "tonic::transport::Server::max_connection_age_grace", reason = "the listener's Bounded connections bound the age; tonic's cuts agents' streams (ADR-0019, R9, S22)" },
+    { path = "tonic::transport::Server::timeout", reason = "a per-call timeout would end agents' streams; each call bounds its own work (ADR-0019, R9, S22)" },
     # Repeated from the root clippy.toml: channels are always bounded (ADR-0011).
     { path = "tokio::sync::mpsc::unbounded_channel", reason = "channels are always bounded; overload is an explicit error (CLAUDE.md, ADR-0011)", allow-invalid = true },
 ]

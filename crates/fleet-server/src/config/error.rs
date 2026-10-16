@@ -64,6 +64,13 @@ pub enum ProblemKind {
         /// The other key, without its section.
         key: &'static str,
     },
+    /// A number greater than half of another key of its section, like a
+    /// heartbeat interval over half the heartbeat timeout.
+    #[error("more than half of `{key}`")]
+    MoreThanHalfOfKey {
+        /// The other key, without its section.
+        key: &'static str,
+    },
     /// Not an IP network in strict CIDR form (`[http] trusted_proxies`).
     #[error(transparent)]
     IpNet(IpNetError),

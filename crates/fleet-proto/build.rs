@@ -39,6 +39,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .build_client(true)
         .build_server(true)
         .build_transport(false)
+        .codec_path("crate::codec::BoundedCodec")
         .skip_debug(REDACTED.map(|name| format!(".{name}")))
         .compile_fds(files)?;
     Ok(())

@@ -4,7 +4,7 @@ use core::time::Duration;
 
 use fleet_core::bot::{BotSpec, StickyState};
 use fleet_core::chat::ChatMessage;
-use fleet_core::id::{BotId, ChatRequestId};
+use fleet_core::id::{AgentId, BotId, ChatRequestId};
 use fleet_core::mc::SessionCredentials;
 
 use super::{SessionRequestId, bots_from_wire, request_number};
@@ -36,7 +36,8 @@ pub enum ServerMessage {
     SessionGrant(SessionGrant),
     /// The answer to a session request the server can't grant.
     SessionDenied(SessionDenied),
-    /// The answer to a hello the server refuses; the stream then ends.
+    /// The answer to a hello the server refuses, or the last message of a
+    /// stream whose permission ended; the stream then ends.
     Reject(RejectReason),
 }
 
@@ -46,6 +47,9 @@ pub struct Welcome {
     /// How often the agent sends a heartbeat: whole milliseconds, from
     /// [`Welcome::MIN_HEARTBEAT_INTERVAL`] to [`Welcome::MAX_HEARTBEAT_INTERVAL`].
     pub heartbeat_interval: Duration,
+    /// The agent's ID: the one its certificate names, so both ends log the
+    /// same.
+    pub agent_id: AgentId,
 }
 
 impl Welcome {
@@ -99,13 +103,23 @@ pub struct SessionDenied {
     pub retryable: bool,
 }
 
-/// Why the server refuses a hello.
+/// Why the server refuses a hello or ends a stream (ADR-0019, S24, S26, S27).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RejectReason {
     /// The server doesn't speak the agent's protocol version.
     IncompatibleProtocol,
     /// The agent is disabled.
     AgentDisabled,
+    /// The hello's name isn't the agent's.
+    NameMismatch,
+    /// The first message isn't a hello, or the hello isn't valid.
+    InvalidHello,
+    /// The agent has a live stream already.
+    AlreadyConnected,
+    /// The agent's certificate was revoked.
+    CertificateRevoked,
+    /// The agent's certificate expired.
+    CertificateExpired,
 }
 
 impl TryFrom<ServerMessage> for wire::ServerMessage {
@@ -116,6 +130,7 @@ impl TryFrom<ServerMessage> for wire::ServerMessage {
         let msg = match message {
             ServerMessage::Welcome(welcome) => Msg::Welcome(wire::Welcome {
                 heartbeat_interval_ms: heartbeat_to_wire(welcome.heartbeat_interval)?,
+                agent_id: id_to_wire(welcome.agent_id),
             }),
             ServerMessage::Reconcile(assignments) => Msg::Reconcile(wire::ReconcileFull {
                 bots: assignments.into_iter().map(Into::into).collect(),
@@ -146,6 +161,11 @@ impl TryFrom<ServerMessage> for wire::ServerMessage {
                 reason: match reason {
                     RejectReason::IncompatibleProtocol => wire::RejectReason::IncompatibleProtocol,
                     RejectReason::AgentDisabled => wire::RejectReason::AgentDisabled,
+                    RejectReason::NameMismatch => wire::RejectReason::NameMismatch,
+                    RejectReason::InvalidHello => wire::RejectReason::InvalidHello,
+                    RejectReason::AlreadyConnected => wire::RejectReason::AlreadyConnected,
+                    RejectReason::CertificateRevoked => wire::RejectReason::CertificateRevoked,
+                    RejectReason::CertificateExpired => wire::RejectReason::CertificateExpired,
                 }
                 .into(),
             }),
@@ -162,6 +182,7 @@ impl TryFrom<wire::ServerMessage> for ServerMessage {
         Ok(match required("ServerMessage.msg", message.msg)? {
             Msg::Welcome(welcome) => Self::Welcome(Welcome {
                 heartbeat_interval: heartbeat_from_wire(welcome.heartbeat_interval_ms)?,
+                agent_id: id_from_wire("Welcome.agent_id", &welcome.agent_id)?,
             }),
             Msg::Reconcile(reconcile) => Self::Reconcile(bots_from_wire(
                 "ReconcileFull.bots",
@@ -195,6 +216,11 @@ impl TryFrom<wire::ServerMessage> for ServerMessage {
                 Self::Reject(match enum_from_wire(FIELD, reject.reason)? {
                     wire::RejectReason::IncompatibleProtocol => RejectReason::IncompatibleProtocol,
                     wire::RejectReason::AgentDisabled => RejectReason::AgentDisabled,
+                    wire::RejectReason::NameMismatch => RejectReason::NameMismatch,
+                    wire::RejectReason::InvalidHello => RejectReason::InvalidHello,
+                    wire::RejectReason::AlreadyConnected => RejectReason::AlreadyConnected,
+                    wire::RejectReason::CertificateRevoked => RejectReason::CertificateRevoked,
+                    wire::RejectReason::CertificateExpired => RejectReason::CertificateExpired,
                     wire::RejectReason::Unspecified => {
                         return Err(ConvertError::new(FIELD, Problem::Missing));
                     }

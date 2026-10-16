@@ -25,6 +25,7 @@
 mod accounts;
 mod auth;
 mod error;
+mod heartbeats;
 mod rate_limits;
 mod raw;
 mod validate;
@@ -47,6 +48,7 @@ pub use fleet_startup::config::{
     KeyPath, KeySegment, LogConfig, LogFilter, LogFilterError, LogFormat, ParseError, ParseProblem,
     ParseSource, UnknownLogFormatError,
 };
+pub use heartbeats::{Heartbeats, HeartbeatsError};
 pub use rate_limits::{LinkFlowLimits, Rate, RateLimitConfig};
 
 /// The prefix of the environment variables that override config keys:
@@ -94,6 +96,10 @@ pub struct GrpcConfig {
     /// (`agent_cert_lifetime_days`, 1–365 days, default 60), read when a
     /// certificate is signed.
     pub agent_cert_lifetime: TimeDelta,
+    /// How often agents beat on their streams, and how long the server
+    /// waits for a sign of life (`heartbeat_interval_secs`,
+    /// `heartbeat_timeout_secs`; ADR-0019, S23).
+    pub heartbeats: Heartbeats,
 }
 
 impl GrpcConfig {

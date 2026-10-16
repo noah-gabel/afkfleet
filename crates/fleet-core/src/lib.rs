@@ -15,6 +15,8 @@
 //! - [`disconnect`]: why a session ended, and whether the bot retries.
 //! - [`enrollment`]: an agent's enrollment: the token's rules and the
 //!   bundle the Owner hands the agent.
+//! - [`agent`]: an agent's admission to the control plane: which of its
+//!   certificates admit it, and which refusals are audited.
 //! - [`resilience`]: retry backoff, failure windows and the circuit breaker.
 //! - [`bot`]: the bot state machine, and a bot's spec and status.
 //! - [`mode`]: what a bot does while it's online, and the presets.
@@ -69,6 +71,7 @@
 //! - **Secrets** are `SecretString`s, whose `Debug` output is redacted.
 
 pub mod account;
+pub mod agent;
 pub mod audit;
 pub mod auth;
 pub mod authz;

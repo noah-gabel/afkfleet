@@ -1,6 +1,8 @@
-//! The control plane in `serve` (Plan.md P10.3; ADR-0019, S12, S13): the
-//! gRPC port beside the API while `[grpc]` is configured, an agent enrolled
-//! over it with a token the database holds, both stopping at one signal;
+//! The control plane in `serve` (Plan.md P10.3, P10.4; ADR-0019, S12, S13,
+//! S22): the gRPC port beside the API while `[grpc]` is configured, an
+//! agent enrolled over it with a token the database holds, both stopping at
+//! one signal; an enrolled agent's stream, which that signal ends without
+//! holding up the drain;
 //! the start's lines with the port on and off; an expired server
 //! certificate logged without stopping the start; and the binary refusing a
 //! PKI it can't read.
@@ -12,12 +14,17 @@ use std::sync::Arc;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use fleet_core::system::Clock as _;
+use fleet_proto::PROTOCOL_VERSION;
+use fleet_proto::control::ServerMessage;
+use fleet_proto::generated as wire;
 use fleet_proto::generated::EnrollRequest;
+use fleet_proto::generated::agent_control_client::AgentControlClient;
 use fleet_proto::generated::agent_enrollment_client::AgentEnrollmentClient;
 use fleet_server::app::enrollment::{Creator, EnrollmentTokenService};
 use fleet_server::cli::healthcheck;
 use fleet_server::cli::serve::{self, ControlPlane, Exit};
 use fleet_server::config::{GrpcConfig, PkiPaths, ServerConfig};
+use fleet_server::grpc::control::SHUTTING_DOWN;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::pki::{CertificateAuthority, Ed25519Key, LoadedPki, ServerNames};
 use fleet_server::infra::sqlite::{self, DatabaseOptions};
@@ -29,8 +36,9 @@ use rcgen::{CertificateParams, KeyPair, PKCS_ED25519};
 use rustls::pki_types::PrivatePkcs8KeyDer;
 use secrecy::ExposeSecret as _;
 use tokio::net::TcpListener;
+use tokio_stream::wrappers::ReceiverStream;
 use tonic::Code;
-use tonic::transport::{Certificate, ClientTlsConfig, Endpoint};
+use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity};
 use zeroize::Zeroizing;
 
 use crate::support::{
@@ -39,7 +47,8 @@ use crate::support::{
 };
 
 /// What a start logs without `[grpc]`.
-const OFF: &str = "the control plane is off: [grpc] isn't configured, so no agent can enroll";
+const OFF: &str =
+    "the control plane is off: [grpc] isn't configured, so no agent can enroll or connect";
 /// What a start logs with an expired server certificate.
 const EXPIRED: &str = "the server certificate has expired: no agent can connect until `afkfleet-server pki server-cert` replaces it";
 
@@ -76,19 +85,23 @@ fn with_grpc(mut config: ServerConfig, dir: &Path, bind: std::net::SocketAddr) -
             server_key_file: dir.join("server.key"),
         },
         agent_cert_lifetime: TimeDelta::days(30),
+        heartbeats: fleet_server::config::Heartbeats::default(),
     });
     config
 }
 
-fn csr() -> Vec<u8> {
+fn agent_key() -> KeyPair {
     let der = fleet_core::pki::ed25519_pkcs8(&[9; 32]);
-    let key = KeyPair::from_pkcs8_der_and_sign_algo(
+    KeyPair::from_pkcs8_der_and_sign_algo(
         &PrivatePkcs8KeyDer::from(der.expose_secret().as_slice()),
         &PKCS_ED25519,
     )
-    .unwrap();
+    .unwrap()
+}
+
+fn csr() -> Vec<u8> {
     CertificateParams::default()
-        .serialize_request(&key)
+        .serialize_request(&agent_key())
         .unwrap()
         .der()
         .to_vec()
@@ -190,6 +203,143 @@ async fn an_agent_enrolls_over_the_grpc_port_beside_the_api_and_both_stop_at_one
         TcpListener::bind(grpc_address).await.is_ok(),
         "the port closed"
     );
+    database.close().await;
+}
+
+/// Enrolls agent-1 with `token` over the port at `grpc`, whose CA is
+/// `ca_pem`, then connects it: what it sends, and what it reads after
+/// `Welcome`.
+async fn welcomed_agent(
+    grpc: std::net::SocketAddr,
+    ca_pem: &str,
+    token: String,
+) -> (
+    tokio::sync::mpsc::Sender<wire::AgentMessage>,
+    tonic::Streaming<wire::ServerMessage>,
+) {
+    let endpoint = Endpoint::from_shared(format!("https://127.0.0.1:{}", grpc.port()))
+        .unwrap()
+        .connect_timeout(PATIENCE);
+    let tls = ClientTlsConfig::new()
+        .ca_certificate(Certificate::from_pem(ca_pem))
+        .domain_name("localhost");
+    let channel = endpoint.clone().tls_config(tls.clone()).unwrap();
+    let enrolled = AgentEnrollmentClient::new(channel.connect().await.unwrap())
+        .enroll(EnrollRequest {
+            token,
+            name: "agent-1".to_owned(),
+            csr_der: csr(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let identity = Identity::from_pem(&enrolled.certificate_pem, agent_key().serialize_pem());
+    let channel = endpoint.tls_config(tls.identity(identity)).unwrap();
+    let mut control = AgentControlClient::new(channel.connect().await.unwrap());
+    let (agent, outbox) = tokio::sync::mpsc::channel(4);
+    let mut answers = control
+        .connect(ReceiverStream::new(outbox))
+        .await
+        .unwrap()
+        .into_inner();
+    let hello = wire::Hello {
+        name: "agent-1".to_owned(),
+        agent_version: "0.1.0".to_owned(),
+        protocol_version: PROTOCOL_VERSION,
+        capacity: 10,
+        running: Vec::new(),
+    };
+    agent
+        .send(wire::AgentMessage {
+            msg: Some(wire::agent_message::Msg::Hello(hello)),
+        })
+        .await
+        .unwrap();
+    let welcome = tokio::time::timeout(PATIENCE, answers.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        ServerMessage::try_from(welcome),
+        Ok(ServerMessage::Welcome(_))
+    ));
+    (agent, answers)
+}
+
+#[tokio::test]
+async fn an_enrolled_agent_connects_and_one_signal_ends_its_stream_and_the_server() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let dir = test_dir("control_plane_connect");
+    let (http, http_address) = listener().await;
+    let grpc = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let grpc_address = grpc.local_addr().unwrap();
+    let config = with_grpc(server_config(&dir, http_address, false), &dir, grpc_address);
+    let pki = pki(SystemClock.now());
+    let ca_pem = String::from_utf8(pki.ca_cert_pem.clone()).unwrap();
+    let fingerprint = pki.ca.fingerprint();
+    // One thread: the server's lines reach this test's log.
+    let (logs, _guard) = capture();
+    let (sender, signals) = ChannelSignals::new();
+    let keys = vault_keys(&config);
+    let server = tokio::spawn({
+        let config = config.clone();
+        let plane = ControlPlane {
+            listener: grpc,
+            pki,
+        };
+        async move { serve::run(&config, http, Some(plane), signals, keys).await }
+    });
+    let ready = healthcheck::get(http_address, "/health/ready", PATIENCE)
+        .await
+        .unwrap();
+    assert_eq!(ready.status, 200);
+    let database = sqlite::open_migrated(&config.database, DatabaseOptions::default())
+        .await
+        .unwrap();
+    let random = Arc::new(OsRandom);
+    let token = EnrollmentTokenService::new(
+        Arc::new(SystemClock),
+        random.clone(),
+        Arc::new(database.clone()),
+        Arc::new(Sha256Tokens::new(random)),
+        fingerprint,
+    )
+    .create(Creator::Host)
+    .await
+    .unwrap()
+    .bundle
+    .token()
+    .expose_secret()
+    .to_owned();
+    let (_agent, mut answers) = welcomed_agent(grpc_address, &ca_pem, token).await;
+
+    sender.send(Signal::Terminate).await.unwrap();
+    let ended = tokio::time::timeout(PATIENCE, answers.message())
+        .await
+        .unwrap()
+        .unwrap_err();
+    let exit = tokio::time::timeout(PATIENCE, server)
+        .await
+        .expect("the server should stop within its deadline")
+        .unwrap();
+
+    assert_eq!(ended.code(), Code::Unavailable, "{ended:?}");
+    assert_eq!(ended.message(), SHUTTING_DOWN);
+    assert_eq!(exit, Exit::Stopped, "{}", logs.text());
+    assert_eq!(
+        logs.lines_with(
+            "connections were still open at the drain limit; the server stops waiting for them"
+        )
+        .unwrap()
+        .len(),
+        0,
+        "{}",
+        logs.text()
+    );
+    let ends = logs.lines_with("an agent's stream ended").unwrap();
+    assert_eq!(ends.len(), 1, "{}", logs.text());
+    assert_eq!(ends[0]["reason"], "server_shutdown");
     database.close().await;
 }
 
@@ -380,5 +530,38 @@ fn the_binary_prints_a_bundle_that_pins_the_ca() {
             .contains(fleet_server::cli::agent::CREATE_ENROLLMENT_TOKEN_EXIT_CODES),
         "{}",
         help.stdout
+    );
+}
+
+#[test]
+fn the_binary_lists_agents_on_stdout_and_logs_on_stderr() {
+    let dir = test_dir("agent_list");
+    let config = write_config(&dir, &config_body(&dir, closed_port()));
+    let migrated = finish(&["migrate", "--config", path_arg(&config)]);
+    assert_eq!(migrated.status.code(), Some(0), "{}", migrated.stdout);
+
+    let listed = finish(&["agent", "list", "--config", path_arg(&config)]);
+    let unknown = finish(&[
+        "agent",
+        "disable",
+        "--config",
+        path_arg(&config),
+        "--id",
+        "019bcfe5-6800-7101-8101-010101010101",
+    ]);
+
+    assert_eq!(listed.status.code(), Some(0), "{}", listed.stderr);
+    assert_eq!(
+        listed.stdout,
+        format!("{}\n", fleet_server::cli::agent::LIST_HEADER)
+    );
+    assert_eq!(unknown.status.code(), Some(1), "{}", unknown.stderr);
+    assert_eq!(unknown.stdout, "");
+    assert!(
+        unknown
+            .stderr
+            .contains("afkfleet-server: no agent has the ID 019bcfe5-6800-7101-8101-010101010101"),
+        "{}",
+        unknown.stderr
     );
 }

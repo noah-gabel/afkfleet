@@ -305,6 +305,42 @@ audit_actions! {
     /// used one, `agent` (the agent it enrolled). An unknown token is never
     /// recorded.
     AGENT_ENROLL = "agent.enroll";
+
+    /// An agent connected (P10.4, ADR-0019, S29, S30). No actor; the agent's
+    /// address; target the agent. Success, in the transaction that records
+    /// its hello's capacity and version before `Welcome`: metadata
+    /// `fingerprint` (the certificate it connected with), `version` and
+    /// `capacity`. Failure, nothing changed: a certificate the server knows
+    /// was refused; metadata `reason` (`revoked`, `expired`, `disabled`,
+    /// `san_mismatch` or `name_mismatch`) and `fingerprint`, at most 10 per
+    /// agent in any 24 hours. A certificate no agent holds is never recorded.
+    AGENT_CONNECT = "agent.connect";
+
+    /// An agent's stream ended (P10.4, ADR-0019, S29). Outcome: Success. No
+    /// actor; the agent's address; target the agent. Metadata: `reason`
+    /// (`closed`, `heartbeat_timeout`, `stream_error`, `protocol_error`,
+    /// `too_slow`, `disabled`, `certificate_revoked`, `certificate_expired`
+    /// or `server_shutdown`) and `connected_at`.
+    AGENT_DISCONNECT = "agent.disconnect";
+
+    /// Two processes hold one agent's identity (P10.5, ADR-0019, S26): a
+    /// message arrived on the agent's live stream after a second connection
+    /// with one of its certificates was refused. Outcome: Failure. No actor;
+    /// the refused connection's address; target the agent. Metadata:
+    /// `fingerprint` (the refused connection's certificate), `live_ip` (the
+    /// live stream's address, when known), `connected_at` (when the live
+    /// stream's hello was accepted) and `refused_at`. At most once an hour
+    /// per agent.
+    SECURITY_AGENT_IDENTITY_CONFLICT = "security.agent_identity_conflict";
+
+    /// An Admin or the Owner, or the server's host, disabled an agent
+    /// (P10.10, ADR-0019, S31): `agents.enabled` off and every unrevoked
+    /// certificate revoked, in one transaction, then its live stream ended.
+    /// Outcome: Success. Actor and IP: the user's (`via` = `http`), or none
+    /// from the host (`via` = `cli`). Target: the agent. Metadata: `name`,
+    /// `certificates_revoked` and `via`. An agent disabled already is no
+    /// change, and no entry.
+    AGENT_DISABLE = "agent.disable";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

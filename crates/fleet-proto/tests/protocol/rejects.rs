@@ -23,6 +23,7 @@ use secrecy::SecretString;
 use uuid::Uuid;
 
 const BOT: &str = "018bcfe5-6800-7bab-abab-abababababab";
+const AGENT: &str = "018bcfe5-6800-7ccc-8ccc-cccccccccccc";
 const OTHER_BOT: &str = "018bcfe5-6800-7cdc-8dcd-cdcdcdcdcdcd";
 const ACCOUNT: &str = "018bcfe5-6800-7ddd-8ddd-dddddddddddd";
 const REQUEST: &str = "018bcfe5-6800-7aaa-9aaa-aaaaaaaaaaaa";
@@ -481,12 +482,20 @@ fn other_spec() -> wire::BotSpec {
 #[rstest]
 #[case::no_message(wire::ServerMessage { msg: None }, error("ServerMessage.msg", Problem::Missing))]
 #[case::heartbeat_too_often(
-    server(wire::server_message::Msg::Welcome(wire::Welcome { heartbeat_interval_ms: 999 })),
+    server(wire::server_message::Msg::Welcome(wire::Welcome { heartbeat_interval_ms: 999, agent_id: bytes(AGENT) })),
     error("Welcome.heartbeat_interval_ms", Problem::OutOfRange)
 )]
 #[case::heartbeat_too_rare(
-    server(wire::server_message::Msg::Welcome(wire::Welcome { heartbeat_interval_ms: 300_001 })),
+    server(wire::server_message::Msg::Welcome(wire::Welcome { heartbeat_interval_ms: 300_001, agent_id: bytes(AGENT) })),
     error("Welcome.heartbeat_interval_ms", Problem::OutOfRange)
+)]
+#[case::welcome_without_an_agent(
+    server(wire::server_message::Msg::Welcome(wire::Welcome { heartbeat_interval_ms: 10_000, agent_id: Vec::new() })),
+    error("Welcome.agent_id", Problem::WrongLength { len: 0 })
+)]
+#[case::welcome_of_an_agent_id_that_isnt_v7(
+    server(wire::server_message::Msg::Welcome(wire::Welcome { heartbeat_interval_ms: 10_000, agent_id: bytes(V4) })),
+    error("Welcome.agent_id", Problem::NotV7)
 )]
 #[case::too_many_bots(
     server(wire::server_message::Msg::Reconcile(wire::ReconcileFull { bots: vec![assign(wire_spec()); 1001] })),
@@ -593,7 +602,7 @@ fn other_spec() -> wire::BotSpec {
     error("Reject.reason", Problem::Missing)
 )]
 #[case::reject_unknown(
-    server(wire::server_message::Msg::Reject(wire::Reject { reason: 3 })),
+    server(wire::server_message::Msg::Reject(wire::Reject { reason: 8 })),
     error("Reject.reason", Problem::Unknown)
 )]
 fn a_server_message_is_refused(#[case] wire: wire::ServerMessage, #[case] expected: ConvertError) {
@@ -630,7 +639,10 @@ fn a_snapshot_too_early_for_the_wire_isnt_sent() {
 #[case::just_under_a_second(Duration::from_millis(999))]
 #[case::just_over_five_minutes(Duration::from_millis(300_001))]
 fn a_heartbeat_interval_out_of_range_isnt_sent(#[case] heartbeat_interval: Duration) {
-    let welcome = ServerMessage::Welcome(Welcome { heartbeat_interval });
+    let welcome = ServerMessage::Welcome(Welcome {
+        heartbeat_interval,
+        agent_id: AGENT.parse().unwrap(),
+    });
     assert_eq!(
         wire::ServerMessage::try_from(welcome),
         Err(error("Welcome.heartbeat_interval_ms", Problem::OutOfRange))
@@ -641,11 +653,13 @@ fn a_heartbeat_interval_out_of_range_isnt_sent(#[case] heartbeat_interval: Durat
 fn a_heartbeat_interval_finer_than_a_millisecond_is_cut_to_it() {
     let welcome = ServerMessage::Welcome(Welcome {
         heartbeat_interval: Duration::from_micros(10_000_500),
+        agent_id: AGENT.parse().unwrap(),
     });
     assert_eq!(
         wire::ServerMessage::try_from(welcome),
         Ok(server(wire::server_message::Msg::Welcome(wire::Welcome {
-            heartbeat_interval_ms: 10_000
+            heartbeat_interval_ms: 10_000,
+            agent_id: bytes(AGENT),
         })))
     );
 }

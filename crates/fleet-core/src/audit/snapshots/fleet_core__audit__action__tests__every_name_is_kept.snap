@@ -34,5 +34,9 @@ expression: names
   "grant.revoke",
   "enrollment_token.create",
   "enrollment_token.use",
-  "agent.enroll"
+  "agent.enroll",
+  "agent.connect",
+  "agent.disconnect",
+  "security.agent_identity_conflict",
+  "agent.disable"
 ]

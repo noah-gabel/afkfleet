@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rowid AS \"rowid!: i64\", fingerprint_sha256 AS \"fingerprint_sha256!: Vec<u8>\",\n                  agent_id AS \"agent_id!\", not_after AS \"not_after!\",\n                  revoked_at AS \"revoked_at?\", created_at AS \"created_at!\"\n           FROM agent_certs WHERE fingerprint_sha256 = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "agent_certs",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "fingerprint_sha256!: Vec<u8>",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "agent_certs",
+            "name": "fingerprint_sha256"
+          }
+        }
+      },
+      {
+        "name": "agent_id!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_certs",
+            "name": "agent_id"
+          }
+        }
+      },
+      {
+        "name": "not_after!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_certs",
+            "name": "not_after"
+          }
+        }
+      },
+      {
+        "name": "revoked_at?",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_certs",
+            "name": "revoked_at"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agent_certs",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "4c1cb29be03c6f4a3daf31538f73e842248471a58c8a6db21e3091df66e2650b"
+}

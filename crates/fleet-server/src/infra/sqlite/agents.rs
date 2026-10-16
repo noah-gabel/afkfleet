@@ -13,7 +13,10 @@ use sqlx::SqliteConnection;
 
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::{store_error, unique_violation};
-use crate::ports::agents::{Agent, AgentCert, InsertAgentError, NewAgent, NewAgentCert};
+use crate::ports::agents::{
+    Agent, AgentCert, AgentHello, InsertAgentError, ListedAgent, NewAgent, NewAgentCert,
+};
+use crate::ports::page::Page;
 use crate::ports::store::StoreError;
 
 /// The tables, as errors name them.
@@ -33,6 +36,20 @@ struct AgentRow {
     version: Option<String>,
     last_seen_at: Option<String>,
     created_at: String,
+}
+
+/// An `agents` row with its latest unrevoked `not_after`, before its
+/// values are checked.
+struct ListedRow {
+    rowid: i64,
+    id: String,
+    name: String,
+    enabled: i64,
+    capacity: Option<i64>,
+    version: Option<String>,
+    last_seen_at: Option<String>,
+    created_at: String,
+    not_after: Option<String>,
 }
 
 /// An `agent_certs` row, before its values are checked.
@@ -159,6 +176,227 @@ pub(super) async fn insert_cert(
     .await
     .map(drop)
     .map_err(store_error)
+}
+
+/// The certificate whose fingerprint is `fingerprint`.
+pub(super) async fn cert<'c, E>(
+    executor: E,
+    fingerprint: CertFingerprint,
+) -> Result<Option<AgentCert>, StoreError>
+where
+    E: sqlx::SqliteExecutor<'c>,
+{
+    let fingerprint = fingerprint.as_bytes().as_slice();
+    sqlx::query_as!(
+        CertRow,
+        r#"SELECT rowid AS "rowid!: i64", fingerprint_sha256 AS "fingerprint_sha256!: Vec<u8>",
+                  agent_id AS "agent_id!", not_after AS "not_after!",
+                  revoked_at AS "revoked_at?", created_at AS "created_at!"
+           FROM agent_certs WHERE fingerprint_sha256 = ?"#,
+        fingerprint
+    )
+    .fetch_optional(executor)
+    .await
+    .map_err(store_error)?
+    .map(cert_from_row)
+    .transpose()
+}
+
+/// Every certificate that admits its agent at `now`.
+pub(super) async fn admissible<'c, E>(
+    executor: E,
+    now: DateTime<Utc>,
+) -> Result<Vec<CertFingerprint>, StoreError>
+where
+    E: sqlx::SqliteExecutor<'c>,
+{
+    let now = stored_time(now, AGENT_CERTS, "not_after")?;
+    let rows = sqlx::query!(
+        r#"SELECT c.rowid AS "rowid!: i64", c.fingerprint_sha256 AS "fingerprint_sha256!: Vec<u8>"
+           FROM agent_certs c JOIN agents a ON a.id = c.agent_id
+           WHERE c.revoked_at IS NULL AND c.not_after > ? AND a.enabled = 1"#,
+        now
+    )
+    .fetch_all(executor)
+    .await
+    .map_err(store_error)?;
+    rows.into_iter()
+        .map(|row| {
+            <[u8; 32]>::try_from(row.fingerprint_sha256)
+                .map(CertFingerprint::from_digest)
+                .map_err(|_| StoreError::Corrupt {
+                    table: AGENT_CERTS,
+                    column: "fingerprint_sha256",
+                    rowid: row.rowid,
+                })
+        })
+        .collect()
+}
+
+/// The agents of `page`, newest first, each with its latest unrevoked
+/// `not_after`.
+pub(super) async fn list(
+    pool: &sqlx::SqlitePool,
+    page: Page<AgentId>,
+) -> Result<Vec<ListedAgent>, StoreError> {
+    let before = page.before.map(|id| id_text(id).to_string());
+    let fetch = page.limit.fetch();
+    sqlx::query_as!(
+        ListedRow,
+        r#"SELECT agents.rowid AS "rowid!: i64", agents.id AS "id!", agents.name AS "name!",
+                  agents.enabled AS "enabled!: i64", agents.capacity AS "capacity?: i64",
+                  agents.version AS "version?", agents.last_seen_at AS "last_seen_at?",
+                  agents.created_at AS "created_at!",
+                  (SELECT max(agent_certs.not_after) FROM agent_certs
+                   WHERE agent_certs.agent_id = agents.id AND agent_certs.revoked_at IS NULL)
+                      AS "not_after?: String"
+           FROM agents
+           WHERE ? IS NULL OR agents.id < ?
+           ORDER BY agents.id DESC
+           LIMIT ?"#,
+        before,
+        before,
+        fetch
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(store_error)?
+    .into_iter()
+    .map(listed_from_row)
+    .collect()
+}
+
+/// The agent `id`, as the list shows it.
+pub(super) async fn listed(
+    pool: &sqlx::SqlitePool,
+    id: AgentId,
+) -> Result<Option<ListedAgent>, StoreError> {
+    let id = id_text(id);
+    sqlx::query_as!(
+        ListedRow,
+        r#"SELECT agents.rowid AS "rowid!: i64", agents.id AS "id!", agents.name AS "name!",
+                  agents.enabled AS "enabled!: i64", agents.capacity AS "capacity?: i64",
+                  agents.version AS "version?", agents.last_seen_at AS "last_seen_at?",
+                  agents.created_at AS "created_at!",
+                  (SELECT max(agent_certs.not_after) FROM agent_certs
+                   WHERE agent_certs.agent_id = agents.id AND agent_certs.revoked_at IS NULL)
+                      AS "not_after?: String"
+           FROM agents WHERE agents.id = ?"#,
+        id
+    )
+    .fetch_optional(pool)
+    .await
+    .map_err(store_error)?
+    .map(listed_from_row)
+    .transpose()
+}
+
+/// Disables agent `id` while it's enabled; whether it changed.
+pub(super) async fn disable(conn: &mut SqliteConnection, id: AgentId) -> Result<bool, StoreError> {
+    let id = id_text(id);
+    sqlx::query!(
+        "UPDATE agents SET enabled = 0 WHERE id = ? AND enabled = 1",
+        id
+    )
+    .execute(conn)
+    .await
+    .map(|done| done.rows_affected() == 1)
+    .map_err(store_error)
+}
+
+/// Revokes every unrevoked certificate of agent `id` at `at`; how many.
+pub(super) async fn revoke_certs(
+    conn: &mut SqliteConnection,
+    id: AgentId,
+    at: DateTime<Utc>,
+) -> Result<u64, StoreError> {
+    let id = id_text(id);
+    let at = stored_time(at, AGENT_CERTS, "revoked_at")?;
+    sqlx::query!(
+        "UPDATE agent_certs SET revoked_at = ? WHERE agent_id = ? AND revoked_at IS NULL",
+        at,
+        id
+    )
+    .execute(conn)
+    .await
+    .map(|done| done.rows_affected())
+    .map_err(store_error)
+}
+
+/// Records `hello` on its agent while it's enabled; `last_seen_at` only
+/// moves forward. Whether a row changed.
+pub(super) async fn record_hello(
+    conn: &mut SqliteConnection,
+    hello: &AgentHello,
+) -> Result<bool, StoreError> {
+    let id = id_text(hello.agent);
+    let capacity = i64::from(u32::from(hello.capacity));
+    let version = hello.version.as_str();
+    let at = stored_time(hello.at, AGENTS, "last_seen_at")?;
+    let done = sqlx::query!(
+        "UPDATE agents SET capacity = ?, version = ?,
+                last_seen_at = CASE WHEN last_seen_at IS NULL OR last_seen_at < ?
+                                    THEN ? ELSE last_seen_at END
+         WHERE id = ? AND enabled = 1",
+        capacity,
+        version,
+        at,
+        at,
+        id
+    )
+    .execute(conn)
+    .await
+    .map_err(store_error)?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// Moves agent `id`'s `last_seen_at` forward to `at`.
+pub(super) async fn record_seen(
+    conn: &mut SqliteConnection,
+    id: AgentId,
+    at: DateTime<Utc>,
+) -> Result<(), StoreError> {
+    let id = id_text(id);
+    let at = stored_time(at, AGENTS, "last_seen_at")?;
+    sqlx::query!(
+        "UPDATE agents SET last_seen_at = ?
+         WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)",
+        at,
+        id,
+        at
+    )
+    .execute(conn)
+    .await
+    .map(drop)
+    .map_err(store_error)
+}
+
+/// Reads a listed row back, or [`StoreError::Corrupt`] naming the first
+/// column that doesn't.
+fn listed_from_row(row: ListedRow) -> Result<ListedAgent, StoreError> {
+    let rowid = row.rowid;
+    let not_after = row
+        .not_after
+        .as_deref()
+        .map(|at| {
+            parse_time(at).ok_or(StoreError::Corrupt {
+                table: AGENT_CERTS,
+                column: "not_after",
+                rowid,
+            })
+        })
+        .transpose()?;
+    let agent = agent_from_row(AgentRow {
+        rowid,
+        id: row.id,
+        name: row.name,
+        enabled: row.enabled,
+        capacity: row.capacity,
+        version: row.version,
+        last_seen_at: row.last_seen_at,
+        created_at: row.created_at,
+    })?;
+    Ok(ListedAgent { agent, not_after })
 }
 
 /// Reads an `agents` row back, or [`StoreError::Corrupt`] naming the first

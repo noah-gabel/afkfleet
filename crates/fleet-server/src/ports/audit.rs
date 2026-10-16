@@ -227,6 +227,19 @@ pub trait AuditReads: Send + Sync + fmt::Debug {
         target: AuditTarget,
         action: &AuditAction,
     ) -> Result<u32, StoreError>;
+
+    /// How many Failure entries of `action` name `target`, recorded after
+    /// `since`: an agent's refused connections in a rolling window, which
+    /// are recorded at most 10 times a day (P10.4; ADR-0019, S30).
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn failures_on_since(
+        &self,
+        target: AuditTarget,
+        action: &AuditAction,
+        since: DateTime<Utc>,
+    ) -> Result<u32, StoreError>;
 }
 
 /// Recording in the audit log, inside a [`super::store::WriteTx`].
@@ -258,6 +271,17 @@ pub trait AuditWrites: Send {
         &mut self,
         target: AuditTarget,
         action: &AuditAction,
+    ) -> Result<u32, StoreError>;
+
+    /// [`AuditReads::failures_on_since`], read in this transaction.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn failures_on_since(
+        &mut self,
+        target: AuditTarget,
+        action: &AuditAction,
+        since: DateTime<Utc>,
     ) -> Result<u32, StoreError>;
 }
 

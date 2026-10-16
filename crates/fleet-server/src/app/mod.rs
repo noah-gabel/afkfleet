@@ -5,6 +5,8 @@
 //! - [`accounts`]: the linked Minecraft accounts' use cases beside the link
 //!   flow: creating an offline account (P9.7), listing and reading
 //!   accounts, reviewing pending links and deleting accounts (P9.6).
+//! - [`agents`]: the agents' connections: admitting a connecting agent's
+//!   certificate, recording its hello and its stream's end (P10.4).
 //! - [`audit`]: stamping audit entries, recording the ones that change
 //!   nothing, and listing the log.
 //! - [`auth`]: sessions and their tokens: issuing, refreshing with reuse
@@ -33,6 +35,7 @@
 //!   under the active key (P9.2).
 
 pub mod accounts;
+pub mod agents;
 pub mod audit;
 pub mod auth;
 pub mod challenges;

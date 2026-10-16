@@ -84,6 +84,10 @@ pub struct RateLimitConfig {
     /// (`enroll_per_ip_per_min`; ADR-0019, S14): spent before the request
     /// is read.
     pub enroll: Rate,
+    /// `Connect` calls on the gRPC port, per presented certificate
+    /// (`connect_per_cert_per_min`; ADR-0019, S30): spent before any parse
+    /// or read.
+    pub connect: Rate,
 }
 
 /// `[rate_limits]`'s caps on Microsoft link flows (P9.4, ADR-0018). Each
@@ -138,6 +142,8 @@ impl RateLimitConfig {
     pub const GRANTS_BY_NAME_PER_USER_PER_HOUR: Bounds = Bounds { min: 1, max: 100 };
     /// `enroll_per_ip_per_min`: 1 to 60. Default 5.
     pub const ENROLL_PER_IP_PER_MIN: Bounds = Bounds { min: 1, max: 60 };
+    /// `connect_per_cert_per_min`: 1 to 60. Default 10.
+    pub const CONNECT_PER_CERT_PER_MIN: Bounds = Bounds { min: 1, max: 60 };
 }
 
 impl Default for RateLimitConfig {
@@ -153,6 +159,7 @@ impl Default for RateLimitConfig {
             link_flows: LinkFlowLimits::default(),
             grants_by_name: Rate::per_hour(nonzero(10)),
             enroll: Rate::per_minute(nonzero(5)),
+            connect: Rate::per_minute(nonzero(10)),
         }
     }
 }
@@ -204,6 +211,7 @@ mod tests {
         assert_eq!(defaults.link_flows.per_user_per_day.get(), 10);
         assert_eq!(defaults.grants_by_name, Rate::per_hour(nonzero(10)));
         assert_eq!(defaults.enroll, Rate::per_minute(nonzero(5)));
+        assert_eq!(defaults.connect, Rate::per_minute(nonzero(10)));
     }
 
     #[test]

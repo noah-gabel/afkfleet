@@ -99,6 +99,11 @@ governor = { version = "0.10.4", default-features = false }
 # `zeroize`, which wipes the keyed state. RustCrypto like sha2 0.11; already in Cargo.lock
 # (ADR-0016).
 hmac = "0.13.0"
+# hyper-util: dev only. fleet-server's in-memory control-plane test hands tonic's client a
+# tokio duplex pipe through `rt::TokioIo`, so an agent's stream runs a virtual hour through
+# the real router on paused time (the user's choice, U6). Without default features; the
+# test enables `tokio` alone. Already in Cargo.lock through tonic (ADR-0019).
+hyper-util = { version = "0.1.21", default-features = false }
 # keyring-core: the desktop app's keychain entries, built from an explicit store (no global
 # default store). No default features exist besides the optional `sample` store
 # (ADR-0017).
@@ -196,6 +201,10 @@ totp-rs = { version = "6.0.0", default-features = false }
 # tokio: no default features exist; members enable only what they use (`sync`,
 # `time`, …) and `test-util` in tests.
 tokio = "1.53.2"
+# tokio-stream: fleet-server answers each agent's `Connect` with a `ReceiverStream` over its
+# bounded queue, and maps the listener's accepted sockets with `StreamExt`. Without default
+# features (`time`): neither needs one. Already in Cargo.lock through tonic and sqlx (ADR-0019).
+tokio-stream = { version = "0.1.19", default-features = false }
 # tokio-util: fleet-runtime enables no features; it uses only `CancellationToken` (ADR-0013).
 # fleet-server enables `rt` for the session-token service's `TaskTracker`, which pulls in only
 # futures-util, already in its tree (ADR-0018).

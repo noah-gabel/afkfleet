@@ -10,6 +10,7 @@
 //! - [`authority`]: the CA, which signs, and [`AgentIssuer`], the CA behind
 //!   the enrollment service's port.
 //! - [`mod@load`]: reading and checking the PKI at serve's startup.
+//! - [`names`]: the agent a connecting agent's certificate names.
 //! - [`files`]: writing `pki init`'s files without ever overwriting one.
 //!
 //! The CA key is its own secret: it lives in its file and in serve's
@@ -20,6 +21,7 @@ pub mod csr;
 pub mod files;
 pub mod keys;
 pub mod load;
+pub mod names;
 mod pem;
 pub mod profiles;
 
@@ -27,4 +29,5 @@ pub use authority::{AgentIssuer, CertificateAuthority, Issued, PkiError, fingerp
 pub use csr::{CheckedCsr, check_csr};
 pub use keys::{Ed25519Key, KeyError};
 pub use load::{LoadedPki, PkiLoadError, ca_fingerprint, load, load_ca};
+pub use names::X509AgentNames;
 pub use profiles::{ServerNames, ServerNamesError, Validity};

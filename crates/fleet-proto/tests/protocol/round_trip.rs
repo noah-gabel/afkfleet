@@ -30,9 +30,10 @@ mod every_value {
     use fleet_proto::generated as wire;
 
     use super::{infallible, over_the_wire};
-    use crate::same_server_message;
+    use crate::{REJECT_REASONS, same_server_message};
 
     const BOT: &str = "018bcfe5-6800-7bab-abab-abababababab";
+    const AGENT: &str = "018bcfe5-6800-7ccc-8ccc-cccccccccccc";
     const REQUEST: &str = "018bcfe5-6800-7aaa-9aaa-aaaaaaaaaaaa";
 
     fn event(kind: BotEventKind) -> AgentMessage {
@@ -170,11 +171,33 @@ mod every_value {
     }
 
     #[test]
+    fn every_reject_reason_crosses_as_its_own_wire_value() {
+        for reason in REJECT_REASONS {
+            let expected = match reason {
+                RejectReason::IncompatibleProtocol => wire::RejectReason::IncompatibleProtocol,
+                RejectReason::AgentDisabled => wire::RejectReason::AgentDisabled,
+                RejectReason::NameMismatch => wire::RejectReason::NameMismatch,
+                RejectReason::InvalidHello => wire::RejectReason::InvalidHello,
+                RejectReason::AlreadyConnected => wire::RejectReason::AlreadyConnected,
+                RejectReason::CertificateRevoked => wire::RejectReason::CertificateRevoked,
+                RejectReason::CertificateExpired => wire::RejectReason::CertificateExpired,
+            };
+
+            let written = wire::ServerMessage::try_from(ServerMessage::Reject(reason)).unwrap();
+
+            assert_eq!(
+                written.msg,
+                Some(wire::server_message::Msg::Reject(wire::Reject {
+                    reason: expected.into()
+                })),
+                "{reason:?}"
+            );
+        }
+    }
+
+    #[test]
     fn every_reject_reason_and_run_state_round_trips() {
-        for reason in [
-            RejectReason::IncompatibleProtocol,
-            RejectReason::AgentDisabled,
-        ] {
+        for reason in REJECT_REASONS {
             let message = ServerMessage::Reject(reason);
             let back = over_the_wire::<_, wire::ServerMessage>(message.clone()).unwrap();
             assert!(same_server_message(&back, &message));
@@ -195,6 +218,7 @@ mod every_value {
         }
         let welcome = ServerMessage::Welcome(fleet_proto::control::Welcome {
             heartbeat_interval: Duration::from_secs(10),
+            agent_id: AGENT.parse().unwrap(),
         });
         let back = over_the_wire::<_, wire::ServerMessage>(welcome.clone()).unwrap();
         assert!(same_server_message(&back, &welcome));

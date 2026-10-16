@@ -1,0 +1,117 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT agents.rowid AS \"rowid!: i64\", agents.id AS \"id!\", agents.name AS \"name!\",\n                  agents.enabled AS \"enabled!: i64\", agents.capacity AS \"capacity?: i64\",\n                  agents.version AS \"version?\", agents.last_seen_at AS \"last_seen_at?\",\n                  agents.created_at AS \"created_at!\",\n                  (SELECT max(agent_certs.not_after) FROM agent_certs\n                   WHERE agent_certs.agent_id = agents.id AND agent_certs.revoked_at IS NULL)\n                      AS \"not_after?: String\"\n           FROM agents\n           WHERE ? IS NULL OR agents.id < ?\n           ORDER BY agents.id DESC\n           LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "name!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "enabled!: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "enabled"
+          }
+        }
+      },
+      {
+        "name": "capacity?: i64",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "capacity"
+          }
+        }
+      },
+      {
+        "name": "version?",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "last_seen_at?",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "last_seen_at"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "not_after?: String",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "hash": "b0cfd31a731df6ca0b6474ed44c80369211501f7a626ca3495ea6570ba334436"
+}

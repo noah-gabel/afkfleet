@@ -9,6 +9,7 @@ use fleet_core::account::AccountStatus;
 use fleet_core::audit::{AuditAction, AuditTarget};
 use fleet_core::authz::{Actor, GrantLevel, Role};
 use fleet_core::id::{AccountId, AgentId, EnrollmentTokenId, InviteId, SessionId, UserId};
+use fleet_core::pki::CertFingerprint;
 use fleet_core::value::{AgentName, McUsername, Username};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
@@ -21,7 +22,8 @@ use crate::ports::accounts::{
     AccountReads, AccountWrites, InsertAccountError, ListedAccount, McAccount,
 };
 use crate::ports::agents::{
-    Agent, AgentCert, AgentReads, AgentWrites, InsertAgentError, NewAgent, NewAgentCert,
+    Agent, AgentCert, AgentHello, AgentReads, AgentWrites, InsertAgentError, ListedAgent, NewAgent,
+    NewAgentCert,
 };
 use crate::ports::audit::{
     AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, FailedCodeAttempts,
@@ -198,6 +200,22 @@ impl AgentReads for Reads {
     async fn certs(&self, id: AgentId) -> Result<Vec<AgentCert>, StoreError> {
         agents::certs(&self.pool, id).await
     }
+
+    async fn cert(&self, fingerprint: CertFingerprint) -> Result<Option<AgentCert>, StoreError> {
+        agents::cert(&self.pool, fingerprint).await
+    }
+
+    async fn admissible(&self, now: DateTime<Utc>) -> Result<Vec<CertFingerprint>, StoreError> {
+        agents::admissible(&self.pool, now).await
+    }
+
+    async fn list(&self, page: Page<AgentId>) -> Result<Vec<ListedAgent>, StoreError> {
+        agents::list(&self.pool, page).await
+    }
+
+    async fn listed(&self, id: AgentId) -> Result<Option<ListedAgent>, StoreError> {
+        agents::listed(&self.pool, id).await
+    }
 }
 
 #[async_trait]
@@ -254,6 +272,15 @@ impl AuditReads for Reads {
         action: &AuditAction,
     ) -> Result<u32, StoreError> {
         audit::failures_on(&self.pool, target, action).await
+    }
+
+    async fn failures_on_since(
+        &self,
+        target: AuditTarget,
+        action: &AuditAction,
+        since: DateTime<Utc>,
+    ) -> Result<u32, StoreError> {
+        audit::failures_on_since(&self.pool, target, action, since).await
     }
 }
 
@@ -543,6 +570,33 @@ impl AgentWrites for SqliteWriteTx {
     async fn insert_cert(&mut self, cert: &NewAgentCert) -> Result<(), StoreError> {
         agents::insert_cert(&mut self.tx, cert).await
     }
+
+    async fn find(&mut self, id: AgentId) -> Result<Option<Agent>, StoreError> {
+        agents::find(&mut *self.tx, id).await
+    }
+
+    async fn cert(
+        &mut self,
+        fingerprint: CertFingerprint,
+    ) -> Result<Option<AgentCert>, StoreError> {
+        agents::cert(&mut *self.tx, fingerprint).await
+    }
+
+    async fn record_hello(&mut self, hello: &AgentHello) -> Result<bool, StoreError> {
+        agents::record_hello(&mut self.tx, hello).await
+    }
+
+    async fn record_seen(&mut self, id: AgentId, at: DateTime<Utc>) -> Result<(), StoreError> {
+        agents::record_seen(&mut self.tx, id, at).await
+    }
+
+    async fn disable(&mut self, id: AgentId) -> Result<bool, StoreError> {
+        agents::disable(&mut self.tx, id).await
+    }
+
+    async fn revoke_certs(&mut self, id: AgentId, at: DateTime<Utc>) -> Result<u64, StoreError> {
+        agents::revoke_certs(&mut self.tx, id, at).await
+    }
 }
 
 #[async_trait]
@@ -690,6 +744,15 @@ impl AuditWrites for SqliteWriteTx {
         action: &AuditAction,
     ) -> Result<u32, StoreError> {
         audit::failures_on(&mut *self.tx, target, action).await
+    }
+
+    async fn failures_on_since(
+        &mut self,
+        target: AuditTarget,
+        action: &AuditAction,
+        since: DateTime<Utc>,
+    ) -> Result<u32, StoreError> {
+        audit::failures_on_since(&mut *self.tx, target, action, since).await
     }
 }
 

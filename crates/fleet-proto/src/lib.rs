@@ -11,7 +11,11 @@
 //!   limits both ends share (P10.3).
 //! - **[`control`]** holds the same messages in validated form, built from
 //!   fleet-core's types. Agent and server code handle only these, and convert
-//!   at the stream's edge.
+//!   at the stream's edge. It also holds the limits both ends share: the
+//!   message sizes, the hello's timeouts and how the first message is read.
+//! - **[`codec`]** is the codec the generated code uses: prost's, which
+//!   first counts a hello's running bots without building them, and answers
+//!   a message it can't decode with `INVALID_ARGUMENT`.
 //! - **Untrusted input.** The other side may be compromised: an agent host is
 //!   one of the attackers the threat model names. Reading a message refuses
 //!   every value fleet-core's constructors refuse, a missing field, an enum or
@@ -43,6 +47,7 @@ pub mod generated {
     include!(concat!(env!("OUT_DIR"), "/fleet.v1.rs"));
 }
 
+pub mod codec;
 mod convert;
 mod error;
 mod redact;

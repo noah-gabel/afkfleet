@@ -12,8 +12,8 @@ use chrono::TimeDelta;
 use super::raw::{RawAccounts, RawAuth, RawConfig, RawGrpc, RawLog, RawRateLimits, RawVault};
 use super::{
     AccountsConfig, Argon2Params, AuthConfig, Bounds, ConfigError, DatabaseConfig, GrpcConfig,
-    HttpConfig, KeyPath, LinkFlowLimits, LogConfig, LogFilter, LogFormat, PkiPaths, ProblemKind,
-    Problems, Rate, RateLimitConfig, ServerConfig, VaultConfig,
+    Heartbeats, HttpConfig, KeyPath, LinkFlowLimits, LogConfig, LogFilter, LogFormat, PkiPaths,
+    ProblemKind, Problems, Rate, RateLimitConfig, ServerConfig, VaultConfig,
 };
 use fleet_core::auth::{InviteTtl, LockoutPolicy, SessionPolicy};
 
@@ -129,6 +129,7 @@ fn grpc(
     };
     let section = KeyPath::root().key("grpc");
     let bind = grpc_bind(raw.bind.as_deref(), http_bind, &section, problems);
+    let heartbeats = grpc_heartbeats(raw, problems);
     // Each file in the order the section lists them, so a repeated path is
     // reported at the later key, naming the earlier one.
     let files = [
@@ -163,8 +164,13 @@ fn grpc(
     // garde has checked the lifetime's range, so only an error that can't
     // happen remains.
     let lifetime = TimeDelta::try_days(i64::from(raw.agent_cert_lifetime_days));
-    let ([ca_cert, ca_key, server_cert, server_key], true, Some(bind), Some(lifetime)) =
-        (paths.as_slice(), valid, bind, lifetime)
+    let (
+        [ca_cert, ca_key, server_cert, server_key],
+        true,
+        Some(bind),
+        Some(lifetime),
+        Some(heartbeats),
+    ) = (paths.as_slice(), valid, bind, lifetime, heartbeats)
     else {
         return Err(Invalid);
     };
@@ -177,7 +183,44 @@ fn grpc(
             server_key_file: server_key.1.clone(),
         },
         agent_cert_lifetime: lifetime,
+        heartbeats,
     }))
+}
+
+/// `[grpc]`'s heartbeat keys: each against its range, then the interval
+/// against half the timeout, which is checked only when both are in range,
+/// so one mistake isn't reported twice (ADR-0019, S23).
+fn grpc_heartbeats(raw: &RawGrpc, problems: &mut Problems) -> Option<Heartbeats> {
+    let in_range = check_ranges(
+        "grpc",
+        [
+            (
+                "heartbeat_interval_secs",
+                raw.heartbeat_interval_secs,
+                Heartbeats::INTERVAL_SECS,
+            ),
+            (
+                "heartbeat_timeout_secs",
+                raw.heartbeat_timeout_secs,
+                Heartbeats::TIMEOUT_SECS,
+            ),
+        ],
+        problems,
+    );
+    if !in_range {
+        return None;
+    }
+    let heartbeats =
+        Heartbeats::try_from_secs(raw.heartbeat_interval_secs, raw.heartbeat_timeout_secs);
+    if heartbeats.is_err() {
+        problems.push(
+            KeyPath::root().key("grpc").key("heartbeat_interval_secs"),
+            ProblemKind::MoreThanHalfOfKey {
+                key: "heartbeat_timeout_secs",
+            },
+        );
+    }
+    heartbeats.ok()
 }
 
 /// `[grpc] bind`: an IP address and a port other than 0 and other than
@@ -298,14 +341,15 @@ fn key_id(text: &str) -> Option<u32> {
     (id >= 1 && id.to_string() == text).then_some(id)
 }
 
-/// Checks each `(key, value, bounds)` of `[auth]` against its range and
+/// Checks each `(key, value, bounds)` of `section` against its range and
 /// reports every problem under its key, in garde's words ("lower than",
 /// "greater than"), like the other numeric keys. Whether all were in range.
 fn check_ranges<const N: usize>(
+    section: &'static str,
     checks: [(&'static str, u32, Bounds); N],
     problems: &mut Problems,
 ) -> bool {
-    let section = KeyPath::root().key("auth");
+    let section = KeyPath::root().key(section);
     let mut valid = true;
     for (key, value, bounds) in checks {
         let message = if value < bounds.min {
@@ -326,6 +370,7 @@ fn check_ranges<const N: usize>(
 /// in range, so one mistake isn't reported twice.
 fn sessions(raw: &RawAuth, problems: &mut Problems) -> Option<SessionPolicy> {
     let in_range = check_ranges(
+        "auth",
         [
             (
                 "access_token_ttl_secs",
@@ -377,6 +422,7 @@ fn days(n: u32) -> Duration {
 /// "greater than"), like the other numeric keys.
 fn argon2(raw: &RawAuth, problems: &mut Problems) -> Option<Argon2Params> {
     check_ranges(
+        "auth",
         [
             (
                 "argon2_memory_kib",
@@ -446,6 +492,7 @@ fn trusted_proxies(raw: &[String], problems: &mut Problems) -> Option<TrustedPro
 /// keys.
 fn lockout(raw: &RawAuth, problems: &mut Problems) -> Option<LockoutPolicy> {
     check_ranges(
+        "auth",
         [(
             "lockout_threshold",
             raw.lockout_threshold,
@@ -460,6 +507,7 @@ fn lockout(raw: &RawAuth, problems: &mut Problems) -> Option<LockoutPolicy> {
 /// keys.
 fn invites(raw: &RawAuth, problems: &mut Problems) -> Option<InviteTtl> {
     check_ranges(
+        "auth",
         [(
             "invite_ttl_hours",
             raw.invite_ttl_hours,
@@ -486,6 +534,7 @@ fn rate_limits(raw: &RawRateLimits) -> Option<RateLimitConfig> {
         },
         grants_by_name: Rate::per_hour(count(raw.grants_by_name_per_user_per_hour)?),
         enroll: Rate::per_minute(count(raw.enroll_per_ip_per_min)?),
+        connect: Rate::per_minute(count(raw.connect_per_cert_per_min)?),
     })
 }
 

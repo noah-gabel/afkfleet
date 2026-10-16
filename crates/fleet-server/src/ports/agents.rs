@@ -17,6 +17,7 @@ use fleet_core::id::AgentId;
 use fleet_core::pki::CertFingerprint;
 use fleet_core::value::{AgentCapacity, AgentName, AgentVersion};
 
+use super::page::Page;
 use super::store::StoreError;
 
 /// A stored agent.
@@ -77,6 +78,20 @@ pub struct NewAgentCert {
     pub created_at: DateTime<Utc>,
 }
 
+/// What an agent's accepted hello reported, stamped with the server's time
+/// (ADR-0019, S29).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentHello {
+    /// The agent, from its certificate.
+    pub agent: AgentId,
+    /// How many bots it may run.
+    pub capacity: AgentCapacity,
+    /// Its version.
+    pub version: AgentVersion,
+    /// When the server read the hello, by its own clock.
+    pub at: DateTime<Utc>,
+}
+
 /// Why [`AgentWrites::insert`] failed.
 #[derive(Debug, thiserror::Error)]
 pub enum InsertAgentError {
@@ -86,6 +101,17 @@ pub enum InsertAgentError {
     /// The database failed.
     #[error(transparent)]
     Store(#[from] StoreError),
+}
+
+/// An agent as the agents' list shows it: its row, and when its latest
+/// unrevoked certificate expires (ADR-0019, S31).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedAgent {
+    /// The row.
+    pub agent: Agent,
+    /// The latest `not_after` of its unrevoked certificates; none once every
+    /// one is revoked.
+    pub not_after: Option<DateTime<Utc>>,
 }
 
 /// Reading agents through the read connections.
@@ -109,6 +135,34 @@ pub trait AgentReads: Send + Sync + fmt::Debug {
     /// # Errors
     /// [`StoreError`], including [`StoreError::Corrupt`].
     async fn certs(&self, id: AgentId) -> Result<Vec<AgentCert>, StoreError>;
+
+    /// The certificate whose fingerprint is `fingerprint`: what a connecting
+    /// agent is looked up by.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn cert(&self, fingerprint: CertFingerprint) -> Result<Option<AgentCert>, StoreError>;
+
+    /// The fingerprint of every certificate that admits its agent at `now`:
+    /// unrevoked, unexpired, of an enabled agent. The live streams' sweep
+    /// reads it once (ADR-0019, S27).
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn admissible(&self, now: DateTime<Utc>) -> Result<Vec<CertFingerprint>, StoreError>;
+
+    /// The agents of `page`, newest first: one more than its limit when
+    /// another page follows.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn list(&self, page: Page<AgentId>) -> Result<Vec<ListedAgent>, StoreError>;
+
+    /// The agent `id`, as the list shows it.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn listed(&self, id: AgentId) -> Result<Option<ListedAgent>, StoreError>;
 }
 
 /// Writing agents inside a [`super::store::WriteTx`].
@@ -127,4 +181,45 @@ pub trait AgentWrites: Send {
     /// [`StoreError`]: an agent that doesn't exist, a fingerprint stored
     /// already, or a `not_after` that isn't after `created_at`.
     async fn insert_cert(&mut self, cert: &NewAgentCert) -> Result<(), StoreError>;
+
+    /// The agent `id`, read in this transaction.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn find(&mut self, id: AgentId) -> Result<Option<Agent>, StoreError>;
+
+    /// The certificate whose fingerprint is `fingerprint`, read in this
+    /// transaction.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn cert(&mut self, fingerprint: CertFingerprint)
+    -> Result<Option<AgentCert>, StoreError>;
+
+    /// Records `hello`'s capacity and version on its agent, and its time as
+    /// `last_seen_at` unless a later one is stored; only for an enabled
+    /// agent. Whether the agent was enabled and so changed.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn record_hello(&mut self, hello: &AgentHello) -> Result<bool, StoreError>;
+
+    /// Moves agent `id`'s `last_seen_at` forward to `at`; a later stored time
+    /// stays.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn record_seen(&mut self, id: AgentId, at: DateTime<Utc>) -> Result<(), StoreError>;
+
+    /// Disables agent `id` while it's enabled. Whether it changed.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn disable(&mut self, id: AgentId) -> Result<bool, StoreError>;
+
+    /// Revokes every unrevoked certificate of agent `id` at `at`; how many.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn revoke_certs(&mut self, id: AgentId, at: DateTime<Utc>) -> Result<u64, StoreError>;
 }

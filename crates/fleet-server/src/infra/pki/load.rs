@@ -428,6 +428,19 @@ mod tests {
         assert_eq!(loaded.server_not_after, pki.server_not_after);
     }
 
+    #[test]
+    fn a_loaded_pkis_debug_never_shows_the_server_key() {
+        let pki = written(1);
+        let loaded = load(&pki.paths, at(NOW)).unwrap();
+
+        let shown = format!("{loaded:?}");
+
+        let key = String::from_utf8(loaded.server_key_pem.to_vec()).unwrap();
+        let body = key.lines().nth(1).unwrap();
+        assert!(!shown.contains(body), "{shown}");
+        assert!(shown.contains("server_not_after"), "{shown}");
+    }
+
     /// The file at `path` as `secret_file` reads it: one trailing line
     /// break removed.
     fn as_read(path: &Path) -> Vec<u8> {

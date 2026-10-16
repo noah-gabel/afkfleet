@@ -28,6 +28,7 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
+mod agents;
 mod enrollment_tokens;
 mod invites;
 mod login;

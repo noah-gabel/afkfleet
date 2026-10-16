@@ -24,6 +24,7 @@ use fleet_server::config::{
     AccountsConfig, AuthConfig, DatabaseConfig, HttpConfig, LogConfig, LogFormat, RateLimitConfig,
     ServerConfig, VaultConfig,
 };
+use fleet_server::grpc::registry::AgentRegistry;
 use fleet_server::http::rate_limit::RateLimits;
 use fleet_server::http::rate_limit::TrustedProxies;
 use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
@@ -334,13 +335,14 @@ pub(crate) fn app_of(router: Router, database: &Database) -> App {
     App {
         router,
         housekeeping: Housekeeping::new(
-            RateLimits::new(&RateLimitConfig::default(), clock),
+            RateLimits::new(&RateLimitConfig::default(), Arc::clone(&clock)),
             lockout,
             challenges,
             link_flows.flows(),
+            AgentRegistry::new(clock),
         ),
         link_flows,
-        enrollment: None,
+        grpc: None,
     }
 }
 

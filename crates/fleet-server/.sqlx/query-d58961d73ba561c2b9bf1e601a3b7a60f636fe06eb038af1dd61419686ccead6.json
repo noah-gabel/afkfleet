@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE agents SET last_seen_at = ?\n         WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "d58961d73ba561c2b9bf1e601a3b7a60f636fe06eb038af1dd61419686ccead6"
+}
