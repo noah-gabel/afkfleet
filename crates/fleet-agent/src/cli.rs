@@ -52,6 +52,16 @@ pub enum Command {
         #[arg(long, value_name = "PATH")]
         config: PathBuf,
     },
+    /// Enrolls a managed agent with the server: reads an enrollment bundle
+    /// from stdin, makes the agent's key, and stores the certificate the
+    /// server signs for it. It never replaces an identity that exists.
+    #[command(after_help = crate::enroll::ENROLL_EXIT_CODES)]
+    Enroll {
+        /// The config file (TOML), with `[control_plane]`. `AFKFLEET_AGENT__…`
+        /// environment variables override its keys, as for `run`.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+    },
     /// Checks that a running agent's heartbeat is fresh, for Docker's
     /// HEALTHCHECK. Prints one line and exits 0 (healthy) or 1.
     #[command(after_help = HEALTHCHECK_EXIT_CODES)]
@@ -125,6 +135,29 @@ mod tests {
     }
 
     #[test]
+    fn enroll_takes_the_config_path() {
+        let cli =
+            Cli::try_parse_from(["afkfleet-agent", "enroll", "--config", "agent.toml"]).unwrap();
+
+        assert_eq!(
+            cli.command,
+            Command::Enroll {
+                config: PathBuf::from("agent.toml")
+            }
+        );
+    }
+
+    #[test]
+    fn the_help_of_enroll_lists_its_exit_codes() {
+        let mut command = Cli::command();
+        let enroll = command.find_subcommand_mut("enroll").unwrap();
+
+        let help = enroll.render_help().to_string();
+
+        assert!(help.contains(crate::enroll::ENROLL_EXIT_CODES), "{help}");
+    }
+
+    #[test]
     fn healthcheck_takes_the_config_path() {
         let cli = Cli::try_parse_from(["afkfleet-agent", "healthcheck", "--config", "agent.toml"])
             .unwrap();
@@ -159,6 +192,7 @@ mod tests {
     #[case::healthcheck_with_an_unknown_flag(&["healthcheck", "--config", "a.toml", "--bogus"], 1)]
     #[case::healthcheck_help(&["healthcheck", "--help"], 0)]
     #[case::run_without_a_config(&["run"], 2)]
+    #[case::enroll_without_a_config(&["enroll"], 2)]
     #[case::an_unknown_command(&["sleep"], 2)]
     #[case::no_command(&[], 2)]
     #[case::version(&["--version"], 0)]

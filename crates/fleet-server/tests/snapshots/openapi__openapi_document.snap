@@ -149,6 +149,34 @@ expression: answer.json()
         ],
         "type": "object"
       },
+      "CreatedEnrollmentTokenResponse": {
+        "description": "`POST /agents/enrollment-tokens`: the new token, in its bundle, shown\nthis once.",
+        "properties": {
+          "bundle": {
+            "maxLength": 146,
+            "type": "string"
+          },
+          "ca_fingerprint": {
+            "maxLength": 95,
+            "type": "string"
+          },
+          "expires_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "id": {
+            "maxLength": 36,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "bundle",
+          "ca_fingerprint",
+          "expires_at"
+        ],
+        "type": "object"
+      },
       "CreatedInviteResponse": {
         "description": "The new invite, with its code: shown this once.",
         "properties": {
@@ -2578,6 +2606,103 @@ expression: answer.json()
         "tags": [
           "accounts"
         ]
+      }
+    },
+    "/api/v1/agents/enrollment-tokens": {
+      "post": {
+        "operationId": "create_enrollment_token",
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatedEnrollmentTokenResponse"
+                }
+              }
+            },
+            "description": "The token, in its bundle: pipe it into `afkfleet-agent enroll` within 15 minutes."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or only the Owner creates enrollment tokens."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The server's control plane is off: `[grpc]` isn't configured."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "20 enrollment tokens are pending already."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/agents/enrollment-tokens`: a new enrollment token, in its\nbundle, shown this once. Needs a step-up.",
+        "tags": [
+          "agents"
+        ],
+        "x-step-up": true
       }
     },
     "/api/v1/auth/login": {

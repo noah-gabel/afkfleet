@@ -249,6 +249,7 @@ impl AgentCertificates for AgentIssuer {
             })?;
         Ok(IssuedCertificate {
             der: issued.der.to_vec(),
+            pem: issued.pem,
             fingerprint: issued.fingerprint,
             not_before: issued.validity.not_before,
             not_after: issued.validity.not_after,

@@ -91,7 +91,8 @@ On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: th
 | `just migrations-check` | Fails if a migration that exists on `origin/main` was modified, deleted or renamed. Needs an up-to-date `origin/main`; CI fetches it |
 | `just mc-up` / `just mc-down` | Local offline-mode Minecraft server (`itzg/minecraft-server`); `mc-down` stops the agent too and deletes the world |
 | `just stack-up` | Builds the agent's image and starts the local server plus the agent (`deploy/dev/agent.compose.toml`) in Docker, waiting until both are healthy |
-| `just dev-server` / `just dev-agent` | Run the server with `deploy/dev/server.toml` (dev mode; its database and its vault key in `target/dev-server/`, or the absolute paths given; it creates the key when it's missing and never overwrites it) / the agent with `deploy/dev/agent.toml` |
+| `just dev-server` / `just dev-agent` | Run the server with `deploy/dev/server.toml` (dev mode; its database, its vault key and its PKI in `target/dev-server/`, or the absolute paths given; it creates the key when it's missing and the PKI with `pki init` when its four files are missing, never overwriting either, and turns `[grpc]` on at `127.0.0.1:7443`; ADR-0019) / the agent with `deploy/dev/agent.toml` |
+| `just dev-enrollment-token` / `just dev-enroll [dir]` | An enrollment token in `dev-server`'s database through `agent create-enrollment-token`, the bundle alone on stdout (`$bundle = just dev-enrollment-token`) / `afkfleet-agent enroll` with `deploy/dev/agent.managed.toml`, the bundle on stdin (`$bundle \| just dev-enroll`), the key and certificate into `target/dev-agent/` or `dir`, which it creates; never replaces an identity (ADR-0019). The bundle is a secret: never print or paste it elsewhere |
 | `just dev-owner username` | Create the Owner `username` in `dev-server`'s database with `user create-owner`, the password typed twice at the terminal (same paths as `dev-server`) |
 | `just dev-vault-status` / `just dev-rotate-key` / `just dev-server-rotated` | `vault status` on `dev-server`'s database (key 1; no key file read) / copy that database to `target/dev-server/rotation/` (refused when the folder exists or a `-wal` shows `dev-server` running), create `vault-key-2` when it's missing and `vault rotate-key` the copy to it (keys 1 and 2) / serve the copy with key 2 alone. Overridable absolute paths, like `dev-server`'s (ADR-0018) |
 | `just demo-agent [minutes]` | Phase 5's demo: the compose stack (project `afkfleet-demo`) for 60 minutes, or `minutes`, with one server restart at half time; prints a summary and a verdict, saves its logs under `target/demo-agent/` (needs Docker) |
@@ -141,12 +142,12 @@ Server module layout:
 ```
 fleet-server/src/
   main.rs  lib.rs  config.rs
-  cli/        # serve, migrate, healthcheck, user create-owner, vault status, vault rotate-key, pki, backup
-  app/        # services: auth, users, accounts, bots, modes, agents, audit, events, vault
+  cli/        # serve, migrate, healthcheck, user create-owner, vault status, vault rotate-key, pki init, pki server-cert, agent create-enrollment-token, backup
+  app/        # services: auth, users, accounts, bots, modes, agents, enrollment, audit, events, vault
   ports/      # repository and provider traits
-  infra/      # sqlite/ (sqlx repos), crypto/ (vault, tokens, passwords), msauth/ (Microsoft's account flows over HTTP)
+  infra/      # sqlite/ (sqlx repos), crypto/ (vault, tokens, passwords), msauth/ (Microsoft's account flows over HTTP), pki/ (the CA, certificates, CSRs)
   http/       # router.rs, middleware/, extractors/, handlers/<resource>.rs, error.rs, openapi.rs, ws.rs
-  grpc/       # enrollment.rs, control.rs, registry.rs, scheduler.rs, reconciler.rs
+  grpc/       # listener.rs, enrollment.rs, control.rs, registry.rs, scheduler.rs, reconciler.rs
 ```
 
 ## Crate registry: one crate per concern

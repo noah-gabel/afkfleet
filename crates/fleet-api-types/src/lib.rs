@@ -34,6 +34,7 @@
 //! - [`accounts`]: the linked Minecraft accounts: starting a Microsoft link
 //!   flow, reading where it stands, creating an offline account, listing,
 //!   reviewing and sharing accounts.
+//! - [`agents`]: the agents: creating an enrollment token.
 //! - [`app`]: the desktop app's IPC types, between its Rust side and its UI;
 //!   exported to TypeScript, never on the HTTP wire.
 //! - [`auth`]: logging in, refreshing, stepping up and registering.
@@ -57,6 +58,7 @@
 //! - [`users`]: the users Admins list and change.
 
 pub mod accounts;
+pub mod agents;
 pub mod app;
 pub mod auth;
 pub mod error;
@@ -76,7 +78,7 @@ pub mod typescript;
 pub mod users;
 
 pub use error::{ErrorBody, ErrorCode, ErrorResponse, FieldError};
-pub use ids::{AccountId, InviteId, LinkFlowId, SessionId, UserId};
+pub use ids::{AccountId, EnrollmentTokenId, InviteId, LinkFlowId, SessionId, UserId};
 pub use int::{SafeInt, SafeIntError};
 pub use open::{Open, OpenEnum};
 pub use page::PageQuery;

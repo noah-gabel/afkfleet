@@ -30,6 +30,7 @@ use crate::accounts::{
     CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
     LinkFlowResponse, LinkStartedResponse,
 };
+use crate::agents::CreatedEnrollmentTokenResponse;
 use crate::app::{
     LoginStepResponse, LogoutResponse, ServerProfileRequest, ServerProfileResponse,
     ServerProfileState, SetupStepResponse,
@@ -194,7 +195,8 @@ fn write_api(config: &Config) -> Result<(), TypeScriptError> {
     CreateGrantRequest::export_all(config).map_err(TypeScriptError::Export)?;
     ChangeGrantRequest::export_all(config).map_err(TypeScriptError::Export)?;
     GrantResponse::export_all(config).map_err(TypeScriptError::Export)?;
-    GrantPage::export_all(config).map_err(TypeScriptError::Export)
+    GrantPage::export_all(config).map_err(TypeScriptError::Export)?;
+    CreatedEnrollmentTokenResponse::export_all(config).map_err(TypeScriptError::Export)
 }
 
 /// Writes the app's root IPC types, and every type they use.

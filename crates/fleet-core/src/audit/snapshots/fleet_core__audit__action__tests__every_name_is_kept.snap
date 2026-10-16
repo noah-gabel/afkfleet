@@ -31,5 +31,8 @@ expression: names
   "account.relink",
   "grant.create",
   "grant.set_level",
-  "grant.revoke"
+  "grant.revoke",
+  "enrollment_token.create",
+  "enrollment_token.use",
+  "agent.enroll"
 ]

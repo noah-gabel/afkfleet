@@ -216,6 +216,12 @@ define_id!(
     /// sent it (Plan.md P10.1; ADR-0019).
     ChatRequestId
 );
+define_id!(
+    /// Identifies an enrollment token (Plan.md P10.3; ADR-0019): what its audit
+    /// entries name, since the token itself is secret and stored only as its
+    /// hash. Like every ID it isn't a secret.
+    EnrollmentTokenId
+);
 
 #[cfg(test)]
 mod tests {
@@ -375,6 +381,7 @@ mod tests {
         assert_trait_mints_like_the_constructor(LinkFlowId::new_v7);
         assert_trait_mints_like_the_constructor(RequestId::new_v7);
         assert_trait_mints_like_the_constructor(ChatRequestId::new_v7);
+        assert_trait_mints_like_the_constructor(EnrollmentTokenId::new_v7);
     }
 
     #[test]
@@ -390,6 +397,7 @@ mod tests {
         assert_round_trips(LinkFlowId::new_v7);
         assert_round_trips(RequestId::new_v7);
         assert_round_trips(ChatRequestId::new_v7);
+        assert_round_trips(EnrollmentTokenId::new_v7);
     }
 
     #[test]

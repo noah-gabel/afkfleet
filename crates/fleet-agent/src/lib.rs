@@ -13,6 +13,8 @@
 //! - [`telemetry`]: logging, with azalea's caps and a panic hook that logs
 //!   through `tracing`.
 //! - [`diagnostics`]: fleet-mc's numbers, sampled into metrics.
+//! - [`enroll`]: the `enroll` command: the agent's key, its certificate from
+//!   the server's enrollment, and both stored owner-only.
 //! - [`signals`]: the signals that stop the agent.
 //! - [`heartbeat`]: the file the agent touches while its fleet answers.
 //! - [`healthcheck`]: the `healthcheck` command's check of that file.
@@ -27,6 +29,7 @@
 pub mod cli;
 pub mod config;
 pub mod diagnostics;
+pub mod enroll;
 pub mod healthcheck;
 pub mod heartbeat;
 pub mod run;

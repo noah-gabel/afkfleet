@@ -8,6 +8,7 @@
 //!   /api/v1/accounts/awaiting-approval`, `GET` and `DELETE
 //!   /api/v1/accounts/{id}`, `POST /api/v1/accounts/{id}/approve`,
 //!   `/refuse` and `/relink` (P9.6).
+//! - [`agents`]: `POST /api/v1/agents/enrollment-tokens` (P10.3).
 //! - [`grants`]: `GET` and `POST /api/v1/accounts/{id}/grants`, `PUT` and
 //!   `DELETE /api/v1/accounts/{id}/grants/{user}` (P9.6).
 //! - [`auth`]: `POST /api/v1/auth/login`, `/auth/login/mfa`,
@@ -24,6 +25,7 @@
 //! The helpers here turn what the services hand back into response fields.
 
 pub(super) mod accounts;
+pub(super) mod agents;
 pub(super) mod auth;
 pub(super) mod grants;
 pub(super) mod health;

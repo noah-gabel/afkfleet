@@ -340,6 +340,7 @@ pub(crate) fn app_of(router: Router, database: &Database) -> App {
             link_flows.flows(),
         ),
         link_flows,
+        enrollment: None,
     }
 }
 

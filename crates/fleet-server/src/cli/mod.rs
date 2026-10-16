@@ -16,6 +16,8 @@
 //! - [`vault`]: `vault status` and `vault rotate-key`, what the vault's keys
 //!   seal and re-encrypting it all under the active key (P9.2).
 //!
+//! - [`agent`]: `agent create-enrollment-token`, an enrollment token from
+//!   the server's host (P10.3).
 //! - [`pki`]: `pki init` and `pki server-cert`, the control plane's CA and
 //!   the gRPC listener's certificate (P10.2).
 //!
@@ -28,6 +30,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
+pub mod agent;
 pub mod healthcheck;
 pub mod housekeeping;
 pub mod migrate;
@@ -130,6 +133,28 @@ pub enum Command {
         /// What to do.
         #[command(subcommand)]
         command: PkiCommand,
+    },
+    /// Manages agents from the server's host.
+    Agent {
+        /// What to do.
+        #[command(subcommand)]
+        command: AgentCommand,
+    },
+}
+
+/// `afkfleet-server agent …`.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum AgentCommand {
+    /// Creates an enrollment token for one new agent, valid 15 minutes,
+    /// and prints its bundle on stdout for `afkfleet-agent enroll`. It
+    /// neither creates nor migrates the database.
+    #[command(after_help = agent::CREATE_ENROLLMENT_TOKEN_EXIT_CODES)]
+    CreateEnrollmentToken {
+        /// The config file (TOML): the command reads `[database] path`,
+        /// `[grpc] ca_cert_file` and `[log]`. `AFKFLEET_SERVER__…`
+        /// environment variables override its keys, as for `serve`.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
     },
 }
 
@@ -478,6 +503,58 @@ mod tests {
         let help = subcommand.render_help().to_string();
 
         assert!(help.contains(codes), "{help}");
+    }
+
+    #[test]
+    fn create_enrollment_token_takes_the_config_path() {
+        let cli = Cli::try_parse_from([
+            "afkfleet-server",
+            "agent",
+            "create-enrollment-token",
+            "--config",
+            "server.toml",
+        ])
+        .unwrap();
+
+        assert_eq!(
+            cli.command,
+            Command::Agent {
+                command: AgentCommand::CreateEnrollmentToken {
+                    config: PathBuf::from("server.toml")
+                }
+            }
+        );
+    }
+
+    #[rstest]
+    #[case::without_a_config(&["agent", "create-enrollment-token"])]
+    #[case::no_agent_command(&["agent"])]
+    #[case::an_unknown_agent_command(&["agent", "enroll", "--config", "server.toml"])]
+    fn agent_usage_errors_exit_2(#[case] args: &[&str]) {
+        let args: Vec<OsString> = core::iter::once("afkfleet-server")
+            .chain(args.iter().copied())
+            .map(OsString::from)
+            .collect();
+        let error = Cli::try_parse_from(&args).unwrap_err();
+
+        assert_eq!(exit_code(&error, args), 2, "{error}");
+    }
+
+    #[test]
+    fn create_enrollment_tokens_help_lists_its_exit_codes() {
+        let mut command = Cli::command();
+        let subcommand = command
+            .find_subcommand_mut("agent")
+            .unwrap()
+            .find_subcommand_mut("create-enrollment-token")
+            .unwrap();
+
+        let help = subcommand.render_help().to_string();
+
+        assert!(
+            help.contains(agent::CREATE_ENROLLMENT_TOKEN_EXIT_CODES),
+            "{help}"
+        );
     }
 
     #[test]

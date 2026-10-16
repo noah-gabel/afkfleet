@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE enrollment_tokens SET used_at = ?, agent_id = ?\n         WHERE id = ? AND used_at IS NULL AND expires_at > ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "b56955d8320d67fc6249e123d13bdc844dca4b55a11f883027f69125756bbfa3"
+}

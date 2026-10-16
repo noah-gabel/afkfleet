@@ -10,6 +10,8 @@
 //! - [`step_up`]: the stamp, a wrong password counted, and the re-checks.
 //! - [`users`]: the admins' list and change, P7.12's escalation and
 //!   disabling, and the re-check in the transaction.
+//! - [`enrollment_tokens`]: the Owner's enrollment token, shown once; the
+//!   step-up, the cap, the switched-off control plane and the re-checks.
 //! - [`invites`]: who may invite whom, the code shown once, the cap, the
 //!   list, revoking, and the re-check in the transaction.
 //! - [`register`]: an invite registers one user; reuse, expiry and every
@@ -26,6 +28,7 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
+mod enrollment_tokens;
 mod invites;
 mod login;
 mod logout;

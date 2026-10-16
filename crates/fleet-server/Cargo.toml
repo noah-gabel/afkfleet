@@ -39,6 +39,9 @@ clap = { workspace = true, features = ["derive"] }
 fleet-api-types.workspace = true
 # The domain types and the Clock and SecureRandom ports (ADR-0015).
 fleet-core.workspace = true
+# The control plane's wire format: the enrollment's messages and the generated service
+# (ADR-0019).
+fleet-proto.workspace = true
 # The config loader and errors, the `[log]` types and the log layer (ADR-0015).
 fleet-startup.workspace = true
 garde = { workspace = true, features = ["derive"] }
@@ -86,6 +89,10 @@ sqlx = { workspace = true, features = ["runtime-tokio", "sqlite-bundled", "macro
 thiserror.workspace = true
 # One TOTP step's code and the otpauth URI; `zeroize` wipes its Secret (ADR-0016).
 totp-rs = { workspace = true, features = ["otpauth", "zeroize"] }
+# The agents' gRPC port (grpc/): `server` serves it, `router` adds its services, and
+# `tls-aws-lc` (which turns on `tls-connect-info`) is its TLS on aws-lc-rs, the process's one
+# provider, giving each call its peer's address. Never `tls-ring` or a roots feature (ADR-0019).
+tonic = { workspace = true, features = ["router", "server", "tls-aws-lc"] }
 # Creating the database file and checking its permissions without blocking, the trace
 # layer's latency from tokio's clock, the binary's runtimes, the listener and the
 # healthcheck's TCP probe (ADR-0015), and the password service's semaphores (ADR-0016).
@@ -123,6 +130,8 @@ proptest = { workspace = true, features = ["std"] }
 rstest.workspace = true
 # A fresh folder for each database test (ADR-0015).
 tempfile.workspace = true
+# The loopback tests' client of the gRPC port, over TLS on aws-lc-rs (ADR-0019).
+tonic = { workspace = true, features = ["channel", "tls-aws-lc"] }
 # `test-util`: the request timeout's test runs on paused time (ADR-0015).
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
 # `ServiceExt::oneshot`, for requests through a router in tests (ADR-0015).

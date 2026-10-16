@@ -4,7 +4,8 @@
 //! - **JSON** (the default) writes one object per line, with the event's
 //!   fields at the top level next to `timestamp`, `level`, `target`, `span`
 //!   and `spans`. **Pretty** writes one human-readable line per event,
-//!   colored only on a terminal. Both go to stdout.
+//!   colored only on a terminal. Both go to stdout, or to stderr for a
+//!   command whose stdout carries its result alone ([`init_on`]).
 //! - **The filter** is the operator's `[log] filter`, with two rules no
 //!   binary can change (ADR-0011):
 //!   - `azalea_auth` never logs below `info`, because its `trace` lines hold
@@ -43,9 +44,19 @@ pub enum TelemetryError {
     AlreadyInstalled,
 }
 
-/// Sets up logging for the whole process: installs the global subscriber
-/// with [`layer_with`] on stdout and the `log` bridge, runs the rules'
-/// [`FilterRules::warn_at_startup`], and installs the panic hook.
+/// Where a process's log lines go.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogOutput {
+    /// stdout: every command's, unless its stdout carries its result alone.
+    Stdout,
+    /// stderr: a command whose stdout carries its result alone, such as the
+    /// bundle of `afkfleet-server agent create-enrollment-token`
+    /// (ADR-0019).
+    Stderr,
+}
+
+/// Sets up logging for the whole process on stdout: [`init_on`] with
+/// [`LogOutput::Stdout`].
 ///
 /// # Errors
 /// [`TelemetryError::AlreadyInstalled`] if a global subscriber or logger is
@@ -54,11 +65,37 @@ pub fn init_with<R>(config: &LogConfig, rules: &R) -> Result<(), TelemetryError>
 where
     R: FilterRules + ?Sized,
 {
-    let colored = std::io::stdout().is_terminal();
-    tracing_subscriber::registry()
-        .with(layer_with(config, rules, colored, std::io::stdout))
-        .try_init()
-        .map_err(|_| TelemetryError::AlreadyInstalled)?;
+    init_on(config, rules, LogOutput::Stdout)
+}
+
+/// Sets up logging for the whole process: installs the global subscriber
+/// with [`layer_with`] on `output` and the `log` bridge, runs the rules'
+/// [`FilterRules::warn_at_startup`], and installs the panic hook. Pretty
+/// lines are colored only when `output` is a terminal.
+///
+/// # Errors
+/// [`TelemetryError::AlreadyInstalled`] if a global subscriber or logger is
+/// already installed.
+pub fn init_on<R>(config: &LogConfig, rules: &R, output: LogOutput) -> Result<(), TelemetryError>
+where
+    R: FilterRules + ?Sized,
+{
+    let registry = tracing_subscriber::registry();
+    let installed = match output {
+        LogOutput::Stdout => {
+            let colored = std::io::stdout().is_terminal();
+            registry
+                .with(layer_with(config, rules, colored, std::io::stdout))
+                .try_init()
+        }
+        LogOutput::Stderr => {
+            let colored = std::io::stderr().is_terminal();
+            registry
+                .with(layer_with(config, rules, colored, std::io::stderr))
+                .try_init()
+        }
+    };
+    installed.map_err(|_| TelemetryError::AlreadyInstalled)?;
     rules.warn_at_startup(&config.filter);
     panic::install_hook();
     Ok(())

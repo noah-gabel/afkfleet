@@ -34,6 +34,16 @@ pub enum ProblemKind {
     /// A path that must be absolute isn't.
     #[error("must be an absolute path")]
     NotAbsolute,
+    /// `[control_plane] url` isn't the server's gRPC port as
+    /// `https://host:port`.
+    #[error("must be https://host:port, without credentials, a path or a query")]
+    ControlPlaneUrl,
+    /// A file is the same as another of `[control_plane]`'s.
+    #[error("is the same file as control_plane.{key}")]
+    SameFileAs {
+        /// The earlier key that names it.
+        key: &'static str,
+    },
     /// An invalid agent name.
     #[error(transparent)]
     AgentName(AgentNameError),

@@ -12,6 +12,7 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use chrono::TimeDelta;
 use figment::Jail;
 use fleet_core::auth::{InviteTtl, LockoutPolicy, SessionPolicy};
 use fleet_server::config::{
@@ -214,6 +215,7 @@ fn every_rate_limit() -> RateLimitConfig {
             per_user_per_day: nonzero(20),
         },
         grants_by_name: Rate::per_hour(nonzero(4)),
+        enroll: Rate::per_minute(nonzero(4)),
     }
 }
 
@@ -259,6 +261,7 @@ per_user_burst = 60
 link_flows_total = 5
 link_flows_per_user_per_day = 20
 grants_by_name_per_user_per_hour = 4
+enroll_per_ip_per_min = 4
 
 [accounts]
 max_per_member = 7
@@ -334,7 +337,7 @@ fn every_grpc_key_maps_to_its_setting() {
             Some(GrpcConfig {
                 bind: addr("0.0.0.0:7444"),
                 pki: pki_paths(jail),
-                agent_cert_lifetime: Duration::from_secs(30 * DAY),
+                agent_cert_lifetime: TimeDelta::days(30),
             })
         );
     });
@@ -982,6 +985,41 @@ fn the_dev_config_runs_in_dev_mode_with_the_database_and_vault_key_from_the_envi
         assert_eq!(config.log.format, LogFormat::Pretty);
         assert_eq!(config.vault, vault_config(jail));
         assert!(config.accounts.allow_offline);
+        assert_eq!(config.grpc, None);
+    });
+}
+
+/// `just dev-server` and `just dev-enrollment-token` turn the control plane
+/// on with the PKI's four paths (ADR-0019); the bind stays the default,
+/// which `just dev-enroll`'s config dials.
+#[test]
+fn the_dev_config_turns_the_control_plane_on_with_the_pki_from_the_environment() {
+    in_jail(|jail| {
+        jail.set_env("AFKFLEET_SERVER__DATABASE__PATH", db_path(jail).display());
+        jail.set_env(
+            "AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1",
+            key_path(jail, 1).display(),
+        );
+        let pki = jail.directory().join("pki");
+        for (key, file) in [
+            ("CA_CERT_FILE", "ca.crt"),
+            ("CA_KEY_FILE", "ca.key"),
+            ("SERVER_CERT_FILE", "server.crt"),
+            ("SERVER_KEY_FILE", "server.key"),
+        ] {
+            jail.set_env(
+                format!("AFKFLEET_SERVER__GRPC__{key}"),
+                pki.join(file).display(),
+            );
+        }
+
+        let config = load(&dev_config()).unwrap();
+
+        let grpc = config.grpc.unwrap();
+        assert_eq!(grpc.bind, GrpcConfig::DEFAULT_BIND);
+        assert_eq!(grpc.bind.to_string(), "127.0.0.1:7443");
+        assert_eq!(grpc.pki.ca_cert_file, pki.join("ca.crt"));
+        assert_eq!(grpc.pki.server_key_file, pki.join("server.key"));
     });
 }
 
@@ -1041,6 +1079,7 @@ fn the_dev_config_holds_neither_the_database_path_nor_the_vault_key_file() {
 #[case::link_flows_total("link_flows_total", 1, 16)]
 #[case::link_flows_per_user_per_day("link_flows_per_user_per_day", 1, 100)]
 #[case::grants_by_name("grants_by_name_per_user_per_hour", 1, 100)]
+#[case::enroll("enroll_per_ip_per_min", 1, 60)]
 fn rate_limit_keys_are_checked_against_their_range(
     #[case] key: &str,
     #[case] min: u64,
@@ -1246,7 +1285,7 @@ fn a_grpc_section_turns_the_control_plane_on_with_its_defaults() {
             Some(GrpcConfig {
                 bind: GrpcConfig::DEFAULT_BIND,
                 pki: pki_paths(jail),
-                agent_cert_lifetime: Duration::from_secs(60 * DAY),
+                agent_cert_lifetime: TimeDelta::days(60),
             })
         );
         assert_eq!(GrpcConfig::DEFAULT_BIND, addr("127.0.0.1:7443"));
@@ -1353,7 +1392,7 @@ fn an_agent_certificate_lives_1_to_365_days() {
             let config = load_toml(jail, &with(days)).unwrap();
             assert_eq!(
                 config.grpc.unwrap().agent_cert_lifetime,
-                Duration::from_secs(u64::from(days) * DAY)
+                TimeDelta::days(i64::from(days))
             );
         }
         for (days, message) in [(0, "lower than 1"), (366, "greater than 365")] {

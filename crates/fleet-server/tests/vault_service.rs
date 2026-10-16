@@ -33,6 +33,7 @@ use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountCredential, AccountReads, McAccount};
 use fleet_server::ports::agents::AgentReads;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditReads, AuditRecord, NewAuditEntry};
+use fleet_server::ports::enrollment_tokens::EnrollmentTokenReads;
 use fleet_server::ports::envelopes::{EnvelopeReads, SealedEnvelope, SealedRecord};
 use fleet_server::ports::grants::GrantReads;
 use fleet_server::ports::invites::InviteReads;
@@ -154,6 +155,10 @@ impl Store for HookedStore {
 
     fn grants(&self) -> &dyn GrantReads {
         self.inner.grants()
+    }
+
+    fn enrollment_tokens(&self) -> &dyn EnrollmentTokenReads {
+        self.inner.enrollment_tokens()
     }
 
     fn agents(&self) -> &dyn AgentReads {

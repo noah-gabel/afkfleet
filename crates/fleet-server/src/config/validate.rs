@@ -7,6 +7,8 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use chrono::TimeDelta;
+
 use super::raw::{RawAccounts, RawAuth, RawConfig, RawGrpc, RawLog, RawRateLimits, RawVault};
 use super::{
     AccountsConfig, Argon2Params, AuthConfig, Bounds, ConfigError, DatabaseConfig, GrpcConfig,
@@ -158,8 +160,11 @@ fn grpc(
             }
         }
     }
-    let ([ca_cert, ca_key, server_cert, server_key], true, Some(bind)) =
-        (paths.as_slice(), valid, bind)
+    // garde has checked the lifetime's range, so only an error that can't
+    // happen remains.
+    let lifetime = TimeDelta::try_days(i64::from(raw.agent_cert_lifetime_days));
+    let ([ca_cert, ca_key, server_cert, server_key], true, Some(bind), Some(lifetime)) =
+        (paths.as_slice(), valid, bind, lifetime)
     else {
         return Err(Invalid);
     };
@@ -171,8 +176,7 @@ fn grpc(
             server_cert_file: server_cert.1.clone(),
             server_key_file: server_key.1.clone(),
         },
-        // garde has checked the range.
-        agent_cert_lifetime: days(raw.agent_cert_lifetime_days),
+        agent_cert_lifetime: lifetime,
     }))
 }
 
@@ -481,6 +485,7 @@ fn rate_limits(raw: &RawRateLimits) -> Option<RateLimitConfig> {
             per_user_per_day: count(raw.link_flows_per_user_per_day)?,
         },
         grants_by_name: Rate::per_hour(count(raw.grants_by_name_per_user_per_hour)?),
+        enroll: Rate::per_minute(count(raw.enroll_per_ip_per_min)?),
     })
 }
 

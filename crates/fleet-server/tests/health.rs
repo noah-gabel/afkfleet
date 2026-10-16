@@ -212,6 +212,7 @@ async fn app(db: &Database) -> Router {
         link_flows: idle_link_flows(db),
         accounts: idle_accounts(db),
         grants: idle_grants(db),
+        enrollment_tokens: None,
     });
     router(state, &http, ids, ApiDocs::Hidden)
         .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))))

@@ -10,12 +10,12 @@
 //! | Module | Holds | From |
 //! |---|---|---|
 //! | `config` | `server.toml` plus `AFKFLEET_SERVER__…` environment variables | P6.2 |
-//! | `cli` | the commands: `serve` (with its periodic housekeeping), `migrate`, `healthcheck`, `user create-owner`, later `pki`, `vault rotate-key`, `backup` | P6.11 |
+//! | `cli` | the commands: `serve` (with its periodic housekeeping), `migrate`, `healthcheck`, `user create-owner`, `vault status` and `vault rotate-key`, `pki init` and `pki server-cert`, `agent create-enrollment-token`, later `backup` | P6.11 |
 //! | `app` | the services: one use case each, with its transaction and audit entry | P6.8 |
 //! | `ports` | the repository and provider traits the services depend on | P6.4 |
-//! | `infra` | the adapters: `system` (the real clock and the OS's randomness), `sqlite` (sqlx repositories), `crypto` (vault, tokens, passwords), `msauth` (Microsoft's account flows over HTTP, the adapter's own requests) | group B, P6.3, P7, P9 |
+//! | `infra` | the adapters: `system` (the real clock and the OS's randomness), `sqlite` (sqlx repositories), `crypto` (vault, tokens, passwords), `msauth` (Microsoft's account flows over HTTP, the adapter's own requests), `pki` (the control plane's CA, certificates and CSRs) | group B, P6.3, P7, P9, P10 |
 //! | `http` | the router, middleware, extractors, handlers per resource, the error type and the WebSocket | P6.5 |
-//! | `grpc` | enrollment, the control stream, the agent registry, the scheduler and the reconciler | P10 |
+//! | `grpc` | the agents' port and its TLS (`listener`), enrollment; later the control stream, the agent registry, the scheduler and the reconciler | P10 |
 //!
 //! Each module arrives with the task that first puts code in it (ADR-0015).
 //!
@@ -33,6 +33,7 @@
 pub mod app;
 pub mod cli;
 pub mod config;
+pub mod grpc;
 pub mod http;
 pub mod infra;
 pub mod ports;

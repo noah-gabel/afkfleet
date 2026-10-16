@@ -22,6 +22,7 @@ use fleet_api_types::accounts::{
     GrantPage, GrantResponse, LinkFlowResponse, LinkFlowState, LinkStartedResponse,
     MC_NAME_MAX_CHARS, RefusalReason, USER_CODE_MAX_CHARS, VERIFICATION_URI_MAX_CHARS,
 };
+use fleet_api_types::agents::{BUNDLE_CHARS, CreatedEnrollmentTokenResponse, FINGERPRINT_CHARS};
 use fleet_api_types::auth::{
     ACCESS_TOKEN_MAX_SECS, LoginMfaRequest, LoginRequest, LoginResponse, LoginStatus,
     NEW_PASSWORD_MAX_CHARS, PASSWORD_MAX_CHARS, REFRESH_TOKEN_MAX_SECS, RefreshRequest,
@@ -67,6 +68,10 @@ fn declarations() -> BTreeMap<String, String> {
         ("AccountResponse", AccountResponse::decl(&config)),
         ("AccountStatus", AccountStatus::decl(&config)),
         ("ChangeGrantRequest", ChangeGrantRequest::decl(&config)),
+        (
+            "CreatedEnrollmentTokenResponse",
+            CreatedEnrollmentTokenResponse::decl(&config),
+        ),
         ("CreateGrantRequest", CreateGrantRequest::decl(&config)),
         ("GrantLevel", GrantLevel::decl(&config)),
         ("GrantPage", GrantPage::decl(&config)),
@@ -397,6 +402,10 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::grant_username("CreateGrantRequest", "username", USERNAME_MAX_CHARS)]
 #[case::granted_at("GrantResponse", "granted_at", TIMESTAMP_CHARS)]
 #[case::grant_page_next("GrantPage", "next", ID_CHARS)]
+#[case::enrollment_id("CreatedEnrollmentTokenResponse", "id", ID_CHARS)]
+#[case::enrollment_bundle("CreatedEnrollmentTokenResponse", "bundle", BUNDLE_CHARS)]
+#[case::enrollment_ca("CreatedEnrollmentTokenResponse", "ca_fingerprint", FINGERPRINT_CHARS)]
+#[case::enrollment_expires_at("CreatedEnrollmentTokenResponse", "expires_at", TIMESTAMP_CHARS)]
 fn a_text_field_is_capped_at_its_constant(
     #[case] component: &str,
     #[case] field: &str,
@@ -480,6 +489,10 @@ fn every_text_field_has_its_cap_checked() {
         ("CreateGrantRequest", "username"),
         ("GrantResponse", "granted_at"),
         ("GrantPage", "next"),
+        ("CreatedEnrollmentTokenResponse", "id"),
+        ("CreatedEnrollmentTokenResponse", "bundle"),
+        ("CreatedEnrollmentTokenResponse", "ca_fingerprint"),
+        ("CreatedEnrollmentTokenResponse", "expires_at"),
     ]);
     let components = components_json();
 

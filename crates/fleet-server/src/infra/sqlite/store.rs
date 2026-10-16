@@ -6,16 +6,16 @@ use core::fmt;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::account::AccountStatus;
-use fleet_core::audit::AuditAction;
+use fleet_core::audit::{AuditAction, AuditTarget};
 use fleet_core::authz::{Actor, GrantLevel, Role};
-use fleet_core::id::{AccountId, AgentId, InviteId, SessionId, UserId};
+use fleet_core::id::{AccountId, AgentId, EnrollmentTokenId, InviteId, SessionId, UserId};
 use fleet_core::value::{AgentName, McUsername, Username};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use super::error::store_error;
 use super::{
-    Database, accounts, agents, audit, envelopes, grants, invites, login_attempts, mfa, sessions,
-    users,
+    Database, accounts, agents, audit, enrollment_tokens, envelopes, grants, invites,
+    login_attempts, mfa, sessions, users,
 };
 use crate::ports::accounts::{
     AccountReads, AccountWrites, InsertAccountError, ListedAccount, McAccount,
@@ -26,6 +26,9 @@ use crate::ports::agents::{
 use crate::ports::audit::{
     AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, FailedCodeAttempts,
     NewAuditEntry,
+};
+use crate::ports::enrollment_tokens::{
+    EnrollmentToken, EnrollmentTokenReads, EnrollmentTokenWrites, NewEnrollmentToken,
 };
 use crate::ports::envelopes::{EnvelopeReads, EnvelopeWrites, SealedEnvelope, SealedRecord};
 use crate::ports::grants::{AccountGrant, GrantReads, GrantWrites, InsertGrantError, ListedGrant};
@@ -176,6 +179,13 @@ impl GrantReads for Reads {
 }
 
 #[async_trait]
+impl EnrollmentTokenReads for Reads {
+    async fn find_by_hash(&self, hash: &TokenHash) -> Result<Option<EnrollmentToken>, StoreError> {
+        enrollment_tokens::find_by_hash(&self.pool, hash).await
+    }
+}
+
+#[async_trait]
 impl AgentReads for Reads {
     async fn find(&self, id: AgentId) -> Result<Option<Agent>, StoreError> {
         agents::find(&self.pool, id).await
@@ -237,6 +247,14 @@ impl AuditReads for Reads {
     ) -> Result<Vec<DateTime<Utc>>, StoreError> {
         audit::user_successes_since(&self.pool, user, action, since).await
     }
+
+    async fn failures_on(
+        &self,
+        target: AuditTarget,
+        action: &AuditAction,
+    ) -> Result<u32, StoreError> {
+        audit::failures_on(&self.pool, target, action).await
+    }
 }
 
 /// A write transaction on the one write connection. Dropping it rolls back.
@@ -277,6 +295,10 @@ impl WriteTx for SqliteWriteTx {
     }
 
     fn grants(&mut self) -> &mut dyn GrantWrites {
+        self
+    }
+
+    fn enrollment_tokens(&mut self) -> &mut dyn EnrollmentTokenWrites {
         self
     }
 
@@ -486,6 +508,33 @@ impl GrantWrites for SqliteWriteTx {
 }
 
 #[async_trait]
+impl EnrollmentTokenWrites for SqliteWriteTx {
+    async fn insert(&mut self, token: &NewEnrollmentToken) -> Result<(), StoreError> {
+        enrollment_tokens::insert(&mut self.tx, token).await
+    }
+
+    async fn find_by_hash(
+        &mut self,
+        hash: &TokenHash,
+    ) -> Result<Option<EnrollmentToken>, StoreError> {
+        enrollment_tokens::find_by_hash(&mut *self.tx, hash).await
+    }
+
+    async fn count_pending(&mut self, now: DateTime<Utc>) -> Result<u32, StoreError> {
+        enrollment_tokens::count_pending(&mut self.tx, now).await
+    }
+
+    async fn use_token(
+        &mut self,
+        id: EnrollmentTokenId,
+        agent: AgentId,
+        now: DateTime<Utc>,
+    ) -> Result<bool, StoreError> {
+        enrollment_tokens::use_token(&mut self.tx, id, agent, now).await
+    }
+}
+
+#[async_trait]
 impl AgentWrites for SqliteWriteTx {
     async fn insert(&mut self, agent: &NewAgent) -> Result<(), InsertAgentError> {
         agents::insert(&mut self.tx, agent).await
@@ -634,6 +683,14 @@ impl AuditWrites for SqliteWriteTx {
     ) -> Result<Vec<DateTime<Utc>>, StoreError> {
         audit::user_successes_since(&mut *self.tx, user, action, since).await
     }
+
+    async fn failures_on(
+        &mut self,
+        target: AuditTarget,
+        action: &AuditAction,
+    ) -> Result<u32, StoreError> {
+        audit::failures_on(&mut *self.tx, target, action).await
+    }
 }
 
 #[async_trait]
@@ -672,6 +729,10 @@ impl Store for Database {
     }
 
     fn grants(&self) -> &dyn GrantReads {
+        &self.reads
+    }
+
+    fn enrollment_tokens(&self) -> &dyn EnrollmentTokenReads {
         &self.reads
     }
 

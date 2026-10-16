@@ -111,7 +111,15 @@ impl Server {
             microsoft: Arc::new(ReqwestMicrosoftAuth::new(Arc::new(clock.clone())).unwrap()),
             pace: Arc::new(TokioPace),
         };
-        let app = app_with(&config, &database, keys, lockout_key, passwords, ports);
+        let app = app_with(
+            &config,
+            &database,
+            keys,
+            lockout_key,
+            passwords,
+            ports,
+            None,
+        );
         let db = database.clone();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url = ServerUrl::parse(&format!("http://{}", listener.local_addr().unwrap())).unwrap();
@@ -122,7 +130,7 @@ impl Server {
                 drain: Duration::from_secs(1),
                 close: Duration::from_secs(2),
             };
-            serve(listener, app, &database, signals, timeouts).await
+            serve(listener, None, app, &database, signals, timeouts).await
         });
         Self {
             url,

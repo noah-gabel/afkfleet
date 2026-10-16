@@ -12,6 +12,8 @@
 //! - [`accounts`]: the linked Minecraft accounts, Microsoft or offline
 //!   (P9.1).
 //! - [`grants`]: the grants that share an account with other users (P9.1).
+//! - [`enrollment_tokens`]: the agents' enrollment tokens, single-use and
+//!   expiring (P10.3).
 //! - [`invites`]: the invites to register, single-use and expiring (P7.1,
 //!   P7.9).
 //! - [`sessions`]: the sessions, one per login's token family (P7.1, P7.3).
@@ -41,6 +43,7 @@
 pub mod accounts;
 pub mod agents;
 pub mod audit;
+pub mod enrollment_tokens;
 pub mod envelopes;
 pub mod grants;
 pub mod invites;

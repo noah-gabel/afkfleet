@@ -407,10 +407,9 @@ async fn running_server(dir: &Path) -> (u16, AbortOnDrop<serve::Exit>) {
     let (listener, address) = listener().await;
     let config = server_config(dir, address, false);
     let keys = vault_keys(&config);
-    let task =
-        tokio::spawn(
-            async move { serve::run(&config, listener, ChannelSignals::silent(), keys).await },
-        );
+    let task = tokio::spawn(async move {
+        serve::run(&config, listener, None, ChannelSignals::silent(), keys).await
+    });
     (address.port(), AbortOnDrop(task))
 }
 

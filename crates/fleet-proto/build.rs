@@ -15,16 +15,17 @@ use std::path::PathBuf;
 use protox::prost_reflect::{Cardinality, DescriptorPool, FieldDescriptor, Kind};
 
 /// The protocol's files, relative to `proto/`.
-const PROTOS: [&str; 5] = [
+const PROTOS: [&str; 6] = [
     "fleet/v1/agent.proto",
     "fleet/v1/bot.proto",
     "fleet/v1/chat.proto",
     "fleet/v1/common.proto",
+    "fleet/v1/enrollment.proto",
     "fleet/v1/mode.proto",
 ];
 
 /// The messages that hold a secret, by their full protobuf name.
-const REDACTED: [&str; 1] = ["fleet.v1.OnlineSession"];
+const REDACTED: [&str; 2] = ["fleet.v1.EnrollRequest", "fleet.v1.OnlineSession"];
 
 fn main() -> Result<(), Box<dyn Error>> {
     // Cargo reads build-script directives from stdout, so clippy doesn't apply

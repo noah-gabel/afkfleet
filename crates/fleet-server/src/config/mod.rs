@@ -34,6 +34,8 @@ use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use chrono::TimeDelta;
+
 use raw::RawConfig;
 
 use crate::http::rate_limit::TrustedProxies;
@@ -91,7 +93,7 @@ pub struct GrpcConfig {
     /// How long an agent's certificate is valid
     /// (`agent_cert_lifetime_days`, 1–365 days, default 60), read when a
     /// certificate is signed.
-    pub agent_cert_lifetime: Duration,
+    pub agent_cert_lifetime: TimeDelta,
 }
 
 impl GrpcConfig {

@@ -107,6 +107,14 @@ message fleet.v1.DisconnectReason
   8 watchdog_timeout: fleet.v1.Unit (oneof reason)
   9 liveness_timeout: fleet.v1.Unit (oneof reason)
   10 respawn_failed: fleet.v1.Unit (oneof reason)
+message fleet.v1.EnrollRequest
+  1 token: string
+  2 name: string
+  3 csr_der: bytes
+message fleet.v1.EnrollResponse
+  1 agent_id: bytes
+  2 certificate_pem: string
+  3 not_after_unix_ms: optional int64
 message fleet.v1.Heartbeat
 message fleet.v1.Hello
   1 name: string
@@ -244,4 +252,7 @@ enum fleet.v1.SessionServerFailure
   4 SESSION_SERVER_FAILURE_UNEXPECTED
 service fleet.v1.AgentControl
   rpc Connect(stream fleet.v1.AgentMessage) returns (stream fleet.v1.ServerMessage)
+service fleet.v1.AgentEnrollment
+  rpc Enroll(fleet.v1.EnrollRequest) returns (fleet.v1.EnrollResponse)
+redacted fleet.v1.EnrollRequest
 redacted fleet.v1.OnlineSession

@@ -26,5 +26,5 @@ pub mod profiles;
 pub use authority::{AgentIssuer, CertificateAuthority, Issued, PkiError, fingerprint};
 pub use csr::{CheckedCsr, check_csr};
 pub use keys::{Ed25519Key, KeyError};
-pub use load::{LoadedPki, PkiLoadError, load, load_ca};
+pub use load::{LoadedPki, PkiLoadError, ca_fingerprint, load, load_ca};
 pub use profiles::{ServerNames, ServerNamesError, Validity};

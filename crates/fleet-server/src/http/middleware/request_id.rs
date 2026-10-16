@@ -43,8 +43,9 @@ impl RequestIds {
         Self { clock, random }
     }
 
-    /// A fresh ID and its header value.
-    fn mint(&self) -> Result<(RequestId, HeaderValue), NoRequestId> {
+    /// A fresh ID and its header value; the gRPC port mints its calls' IDs
+    /// here too.
+    pub(crate) fn mint(&self) -> Result<(RequestId, HeaderValue), NoRequestId> {
         let id: RequestId = mint(self.clock.now(), self.random.as_ref())?;
         let value = HeaderValue::try_from(id.to_string()).map_err(|_| NoRequestId::Header)?;
         Ok((id, value))
@@ -53,7 +54,7 @@ impl RequestIds {
 
 /// Why a request got no ID.
 #[derive(Debug, thiserror::Error)]
-enum NoRequestId {
+pub(crate) enum NoRequestId {
     /// Minting failed.
     #[error(transparent)]
     Mint(#[from] MintError),

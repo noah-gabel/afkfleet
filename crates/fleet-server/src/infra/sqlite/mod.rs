@@ -53,6 +53,7 @@ mod agents;
 mod audit;
 mod connect;
 mod convert;
+mod enrollment_tokens;
 mod envelopes;
 mod error;
 mod file;

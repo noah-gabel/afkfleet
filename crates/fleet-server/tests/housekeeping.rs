@@ -88,6 +88,7 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
             per_user: one,
             link_flows: LinkFlowLimits::default(),
             grants_by_name: one,
+            enroll: one,
         },
         Arc::new(clock.clone()),
     );
@@ -181,6 +182,7 @@ async fn a_run_sums_up_the_refusals_since_the_last_one_in_one_line(
     .unwrap();
     for _ in 0..2 {
         let _ = setup.limits.check_grant_by_name(grantor);
+        let _ = setup.limits.check_enroll("192.0.2.30".parse().unwrap());
     }
     for _ in 0..5 {
         setup.fail("alice").await;
@@ -202,6 +204,7 @@ async fn a_run_sums_up_the_refusals_since_the_last_one_in_one_line(
     assert_eq!(line["register"], 0);
     assert_eq!(line["per_user"], 0);
     assert_eq!(line["grants_by_name"], 1);
+    assert_eq!(line["enroll"], 1);
     assert_eq!(line["locked"], 1);
     assert_eq!(line["in_flight"], 1);
     let again = setup.run_once().await;

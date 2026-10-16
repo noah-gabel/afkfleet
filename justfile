@@ -152,19 +152,46 @@ stack-up:
 mc-down:
     docker compose --file deploy/compose.dev.yaml down --volumes
 
-# The database path and the vault key's path must be absolute, which a committed config
-# can't hold for every machine, so the recipe passes them: target/dev-server/afkfleet.db
-# and target/dev-server/vault-key-1 by default, or the absolute paths given. The server
-# refuses a missing folder, so Node creates it first, and the vault key when it's missing
-# (never overwritten, never printed; ADR-0016). Never read the key file.
+# The database path, the vault key's path and the PKI's four paths must be absolute, which
+# a committed config can't hold for every machine, so the recipe passes them:
+# target/dev-server/afkfleet.db, target/dev-server/vault-key-1 and target/dev-server/pki/
+# by default, or the absolute paths given. The server refuses a missing folder, so Node
+# creates it first, and the vault key when it's missing (never overwritten, never
+# printed; ADR-0016), then the PKI with `pki init` when its files are missing, for
+# localhost, 127.0.0.1 and ::1 (never overwritten; ADR-0019). Never read the key files.
+# With the PKI, [grpc] is on: the agents' port listens on 127.0.0.1:7443.
 # No exit message: on Windows, Ctrl+C reaches just and PowerShell too, so just would
 # call a clean stop a failure. The server logs its own errors and exit code.
-# Run the server with deploy/dev/server.toml (dev mode), a database and a vault key in target/dev-server/.
+# Run the server with deploy/dev/server.toml (dev mode), a database, a vault key and a PKI in target/dev-server/.
 [no-exit-message]
-dev-server $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dev-server" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dev-server" / "vault-key-1"):
+dev-server $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dev-server" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dev-server" / "vault-key-1") $AFKFLEET_SERVER__GRPC__CA_CERT_FILE=(justfile_directory() / "target" / "dev-server" / "pki" / "ca.crt") $AFKFLEET_SERVER__GRPC__CA_KEY_FILE=(justfile_directory() / "target" / "dev-server" / "pki" / "ca.key") $AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE=(justfile_directory() / "target" / "dev-server" / "pki" / "server.crt") $AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE=(justfile_directory() / "target" / "dev-server" / "pki" / "server.key"):
     node -e "require('node:fs').mkdirSync(require('node:path').dirname(process.argv[1]), { recursive: true })" "{{ AFKFLEET_SERVER__DATABASE__PATH }}"
     node scripts/dev-vault-key.mjs "{{ AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1 }}"
+    node scripts/dev-pki.mjs "{{ AFKFLEET_SERVER__GRPC__CA_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__CA_KEY_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE }}"
     cargo run -p fleet-server --bin afkfleet-server -- serve --config deploy/dev/server.toml
+
+# An enrollment token from the server's host (ADR-0019, U3), for dev-server's database and
+# PKI (the same paths): the bundle alone on stdout, so `$bundle = just dev-enrollment-token`
+# takes it whole; its expiry and the CA's fingerprint on stderr. It never creates or
+# migrates the database, and works while dev-server runs. Never print or paste the bundle
+# anywhere else: it's a secret for 15 minutes.
+# No exit message: the command prints its own error line and exit code.
+# Create an enrollment token in dev-server's database and print its bundle.
+[no-exit-message]
+dev-enrollment-token $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dev-server" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dev-server" / "vault-key-1") $AFKFLEET_SERVER__GRPC__CA_CERT_FILE=(justfile_directory() / "target" / "dev-server" / "pki" / "ca.crt") $AFKFLEET_SERVER__GRPC__CA_KEY_FILE=(justfile_directory() / "target" / "dev-server" / "pki" / "ca.key") $AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE=(justfile_directory() / "target" / "dev-server" / "pki" / "server.crt") $AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE=(justfile_directory() / "target" / "dev-server" / "pki" / "server.key"):
+    cargo run --quiet -p fleet-server --bin afkfleet-server -- agent create-enrollment-token --config deploy/dev/server.toml
+
+# Enrolls a dev agent with dev-server, its bundle piped in: `$bundle | just dev-enroll`.
+# deploy/dev/agent.managed.toml dials 127.0.0.1:7443 and pins dev-server's CA; the agent's
+# key and certificate go into `dir` (target/dev-agent by default, created when missing),
+# owner-only, and are never replaced: enrolling again needs another folder, or the old
+# files moved away (ADR-0019, S18). Never open agent.key.
+# No exit message: the command prints its own lines and exit code.
+# Enroll a dev agent with dev-server, its bundle on stdin.
+[no-exit-message]
+dev-enroll dir=(justfile_directory() / "target" / "dev-agent") $AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE=(justfile_directory() / "target" / "dev-server" / "pki" / "ca.crt") $AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE=(dir / "agent.crt") $AFKFLEET_AGENT__CONTROL_PLANE__KEY_FILE=(dir / "agent.key"):
+    node -e "require('node:fs').mkdirSync(process.argv[1], { recursive: true })" "{{ dir }}"
+    cargo run --quiet -p fleet-agent --bin afkfleet-agent -- enroll --config deploy/dev/agent.managed.toml
 
 # The dev database's Owner, through `user create-owner` with the password typed twice
 # at the terminal. It passes the same paths as dev-server: the dev config's validation

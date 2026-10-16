@@ -18,7 +18,8 @@ use secrecy::SecretString;
 use subtle::ConstantTimeEq as _;
 
 /// Which kind of token: a session's two, one of the login's challenges
-/// (group D), or an invite's code (group E).
+/// (group D), an invite's code (group E), or an agent's enrollment token
+/// (P10.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
     /// The access token, sent with every request: `afk_at_…`.
@@ -32,6 +33,9 @@ pub enum TokenKind {
     Setup,
     /// An invite's code, for registering: `afk_iv_…`.
     Invite,
+    /// An agent's enrollment token, for enrolling once: `afk_et_…`, the
+    /// prefix fleet-core's enrollment bundle checks (P10.3).
+    Enrollment,
 }
 
 impl TokenKind {
@@ -44,6 +48,7 @@ impl TokenKind {
             Self::Mfa => "afk_mt_",
             Self::Setup => "afk_st_",
             Self::Invite => "afk_iv_",
+            Self::Enrollment => "afk_et_",
         }
     }
 }
@@ -201,6 +206,11 @@ mod tests {
         assert_eq!(TokenKind::Mfa.prefix(), "afk_mt_");
         assert_eq!(TokenKind::Setup.prefix(), "afk_st_");
         assert_eq!(TokenKind::Invite.prefix(), "afk_iv_");
+        assert_eq!(TokenKind::Enrollment.prefix(), "afk_et_");
+        assert_eq!(
+            TokenKind::Enrollment.prefix(),
+            fleet_core::enrollment::TOKEN_PREFIX
+        );
     }
 
     #[test]

@@ -79,6 +79,9 @@ pub enum IssueError {
 pub struct IssuedCertificate {
     /// The certificate, DER-encoded.
     pub der: Vec<u8>,
+    /// The same certificate as one PEM `CERTIFICATE` section, which the
+    /// agent gets.
+    pub pem: String,
     /// SHA-256 of `der`.
     pub fingerprint: CertFingerprint,
     /// When it starts being valid.

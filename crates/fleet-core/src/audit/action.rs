@@ -280,6 +280,31 @@ audit_actions! {
     /// Success. Target: the account. Metadata: `grantee` (their ID) and
     /// `level` (the one revoked).
     GRANT_REVOKE = "grant.revoke";
+
+    /// An enrollment token was created for one new agent (P10.3, ADR-0019):
+    /// by the Owner through `POST /agents/enrollment-tokens` after stepping
+    /// up (actor: the Owner; the client's IP), or on the server's host with
+    /// `afkfleet-server agent create-enrollment-token` (no actor, no IP).
+    /// Outcome: Success. Target: the token. Metadata: `expires_at` and `via`
+    /// (`http` or `cli`); never the token or its hash.
+    ENROLLMENT_TOKEN_CREATE = "enrollment_token.create";
+
+    /// An enrollment token enrolled an agent (P10.3), in the commit that
+    /// creates the agent, with its `agent.enroll`. Outcome: Success. No
+    /// actor; the agent's address. Target: the token. Metadata: `agent` (the
+    /// new agent's ID).
+    ENROLLMENT_TOKEN_USE = "enrollment_token.use";
+
+    /// An agent enrolled with a token (P10.3, ADR-0019). No actor: whoever
+    /// holds a token may enroll; the agent's address. Success, in the commit
+    /// that creates the agent and stores its certificate's fingerprint:
+    /// target the agent; metadata `fingerprint`, `not_after`, `name` and
+    /// `enrollment` (the token's ID). Failure, nothing stored: a real token
+    /// that expired or was used already, at most 10 entries per token;
+    /// target the token; metadata `reason` (`expired` or `used`) and, for a
+    /// used one, `agent` (the agent it enrolled). An unknown token is never
+    /// recorded.
+    AGENT_ENROLL = "agent.enroll";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

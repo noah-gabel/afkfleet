@@ -11,6 +11,8 @@
 //!   detection (P7.3), and from P7.8 authenticating every request.
 //! - [`challenges`]: the login's mfa and setup tokens, held in memory
 //!   (P7.6, P7.7).
+//! - [`enrollment`]: the agents' enrollment tokens, and enrolling an agent
+//!   with one (P10.3).
 //! - [`grants`]: sharing a linked account with other users (P9.6).
 //! - [`health`]: whether the server is ready to serve requests.
 //! - [`login`]: logging in (the password step and the code step) and
@@ -34,6 +36,7 @@ pub mod accounts;
 pub mod audit;
 pub mod auth;
 pub mod challenges;
+pub mod enrollment;
 pub mod grants;
 pub mod health;
 pub mod invites;

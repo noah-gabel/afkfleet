@@ -93,7 +93,7 @@ pub fn init(
     };
     let names = match ServerNames::try_new(dns, ips) {
         Ok(names) => names,
-        Err(error) => return refuse(err, &error.to_string()),
+        Err(error) => return refuse(err, &chain(&error)),
     };
     // Keys first, the CA certificate, which agents trust, last.
     let targets = [
@@ -161,7 +161,7 @@ pub fn server_cert(
     };
     let names = match ServerNames::try_new(dns, ips) {
         Ok(names) => names,
-        Err(error) => return refuse(err, &error.to_string()),
+        Err(error) => return refuse(err, &chain(&error)),
     };
     let targets = [
         pki.server_key_file.as_path(),
@@ -173,7 +173,7 @@ pub fn server_cert(
     let now = clock.now();
     let ca = match load_ca(pki, now) {
         Ok((ca, _)) => ca,
-        Err(error) => return refuse(err, &error.to_string()),
+        Err(error) => return refuse(err, &chain(&error)),
     };
     let issued = Ed25519Key::generate(random)
         .map_err(PkiError::from)
@@ -359,7 +359,7 @@ mod tests {
             grpc: grpc.then(|| GrpcConfig {
                 bind: GrpcConfig::DEFAULT_BIND,
                 pki: paths(dir),
-                agent_cert_lifetime: Duration::from_hours(60 * 24),
+                agent_cert_lifetime: chrono::TimeDelta::days(60),
             }),
         }
     }

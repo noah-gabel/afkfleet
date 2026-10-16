@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use fleet_core::id::AgentId;
+use fleet_core::pki::CertFingerprint;
 use fleet_startup::secret_file::{self, SecretFileError};
 use rcgen::SerialNumber;
 use rustls::RootCertStore;
@@ -40,7 +41,7 @@ use secrecy::ExposeSecret as _;
 use x509_parser::prelude::{FromDer as _, GeneralName, X509Certificate};
 use zeroize::Zeroizing;
 
-use super::authority::CertificateAuthority;
+use super::authority::{CertificateAuthority, fingerprint};
 use super::keys::{Ed25519Key, KeyError};
 use super::pem::single_section;
 use crate::config::PkiPaths;
@@ -50,7 +51,7 @@ use crate::config::PkiPaths;
 pub enum PkiLoadError {
     /// The file couldn't be read, or isn't an owner-only regular file of
     /// 1 B to 64 KiB.
-    #[error("{0}; create the PKI with `afkfleet-server pki init`")]
+    #[error("a file of the PKI can't be used; `afkfleet-server pki init` creates the PKI")]
     File(#[source] SecretFileError),
     /// The file doesn't hold exactly one certificate.
     #[error("the certificate file {} must hold exactly one certificate", path.display())]
@@ -169,6 +170,26 @@ pub fn load(paths: &PkiPaths, now: DateTime<Utc>) -> Result<LoadedPki, PkiLoadEr
         server_key_pem,
         server_not_after,
     })
+}
+
+/// The fingerprint of the CA certificate at `path`, which must be one CA
+/// certificate. The CA key isn't read: `agent create-enrollment-token`
+/// needs only the bundle's pin.
+///
+/// # Errors
+/// [`PkiLoadError::File`], [`PkiLoadError::NotOneCertificate`] and
+/// [`PkiLoadError::NotACa`].
+pub fn ca_fingerprint(path: &Path) -> Result<CertFingerprint, PkiLoadError> {
+    let (der, _) = read_certificate(path)?;
+    let parsed = parse(&der).ok_or_else(|| PkiLoadError::NotOneCertificate {
+        path: path.to_owned(),
+    })?;
+    if !parsed.is_ca() {
+        return Err(PkiLoadError::NotACa {
+            path: path.to_owned(),
+        });
+    }
+    Ok(fingerprint(&der))
 }
 
 /// Reads the CA in `paths` and checks it at `now`: its certificate is a CA's
@@ -368,6 +389,33 @@ mod tests {
     }
 
     #[test]
+    fn the_ca_fingerprint_is_read_from_the_certificate_alone() {
+        let pki = written(1);
+        fs::remove_file(&pki.paths.ca_key_file).unwrap();
+
+        let read = ca_fingerprint(&pki.paths.ca_cert_file).unwrap();
+
+        assert_eq!(read, pki.ca.fingerprint());
+    }
+
+    #[test]
+    fn a_ca_fingerprint_is_only_read_from_a_ca_certificate() {
+        let pki = written(1);
+        let missing = pki.paths.ca_cert_file.with_extension("missing");
+
+        let server = ca_fingerprint(&pki.paths.server_cert_file).unwrap_err();
+        let key = ca_fingerprint(&pki.paths.ca_key_file).unwrap_err();
+        let absent = ca_fingerprint(&missing).unwrap_err();
+
+        assert!(matches!(server, PkiLoadError::NotACa { .. }), "{server:?}");
+        assert!(
+            matches!(key, PkiLoadError::NotOneCertificate { .. }),
+            "{key:?}"
+        );
+        assert!(matches!(absent, PkiLoadError::File(_)), "{absent:?}");
+    }
+
+    #[test]
     fn a_written_pki_loads_back() {
         let pki = written(1);
 
@@ -410,7 +458,7 @@ mod tests {
         let error = refusal(&pki.paths);
 
         assert!(matches!(error, PkiLoadError::File(_)), "{error:?}");
-        let shown = error.to_string();
+        let shown = crate::http::error::chain(&error);
         assert!(
             shown.contains(&pki.paths.server_key_file.display().to_string()),
             "{shown}"

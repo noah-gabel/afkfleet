@@ -17,6 +17,7 @@ use fleet_core::resilience::{CircuitPolicy, CircuitPolicyError, RetryPolicy, Ret
 use fleet_core::value::{AgentName, McUsername, ServerAddress};
 use fleet_mc::McConfig;
 use fleet_runtime::RuntimeConfig;
+use tonic::transport::Uri;
 
 use super::raw::{RawBot, RawConfig, RawControlPlane, RawLog, RawRetry, RawRuntime, RawStandalone};
 use super::{
@@ -265,24 +266,58 @@ fn control_plane_config(
     problems: &mut Problems,
 ) -> Option<ControlPlaneConfig> {
     let section = KeyPath::root().key("control_plane");
-    let url = non_empty(raw.url.as_deref(), &section.key("url"), problems);
-    let ca_cert_file = non_empty(
-        raw.ca_cert_file.as_deref(),
-        &section.key("ca_cert_file"),
-        problems,
-    );
-    let cert_file = non_empty(
-        raw.cert_file.as_deref(),
-        &section.key("cert_file"),
-        problems,
-    );
-    let key_file = non_empty(raw.key_file.as_deref(), &section.key("key_file"), problems);
+    let url_key = section.key("url");
+    let url = non_empty(raw.url.as_deref(), &url_key, problems).filter(|url| {
+        let valid = is_grpc_url(url);
+        if !valid {
+            problems.push(url_key.clone(), ProblemKind::ControlPlaneUrl);
+        }
+        valid
+    });
+    let mut files: Vec<(&'static str, PathBuf)> = Vec::new();
+    for (name, value) in [
+        ("ca_cert_file", raw.ca_cert_file.as_deref()),
+        ("cert_file", raw.cert_file.as_deref()),
+        ("key_file", raw.key_file.as_deref()),
+    ] {
+        let key = section.key(name);
+        let Some(path) = non_empty(value, &key, problems).map(PathBuf::from) else {
+            continue;
+        };
+        if !path.is_absolute() {
+            problems.push(key, ProblemKind::NotAbsolute);
+            continue;
+        }
+        if let Some((earlier, _)) = files.iter().find(|(_, seen)| *seen == path) {
+            problems.push(key, ProblemKind::SameFileAs { key: earlier });
+            continue;
+        }
+        files.push((name, path));
+    }
+    let (Some(url), [(_, ca_cert_file), (_, cert_file), (_, key_file)]) = (url, files.as_slice())
+    else {
+        return None;
+    };
     Some(ControlPlaneConfig {
-        url: url?.to_owned(),
-        ca_cert_file: PathBuf::from(ca_cert_file?),
-        cert_file: PathBuf::from(cert_file?),
-        key_file: PathBuf::from(key_file?),
+        url: url.to_owned(),
+        ca_cert_file: ca_cert_file.clone(),
+        cert_file: cert_file.clone(),
+        key_file: key_file.clone(),
     })
+}
+
+/// Whether `text` is the server's gRPC port as `https://host:port`: a host,
+/// a port other than 0, and no credentials, path (but `/`) or query.
+fn is_grpc_url(text: &str) -> bool {
+    let Ok(uri) = text.parse::<Uri>() else {
+        return false;
+    };
+    let authority_ok = uri.authority().is_some_and(|authority| {
+        !authority.as_str().contains('@')
+            && !authority.host().is_empty()
+            && authority.port_u16().is_some_and(|port| port != 0)
+    });
+    uri.scheme_str() == Some("https") && authority_ok && uri.path() == "/" && uri.query().is_none()
 }
 
 /// The value of a required key, or a [`ProblemKind::Missing`].

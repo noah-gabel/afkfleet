@@ -221,32 +221,127 @@ fn missing_keys_take_their_defaults() {
     });
 }
 
+/// `path` as a TOML literal string, which takes Windows' backslashes as they
+/// are.
+fn toml_path(path: &Path) -> String {
+    format!("'{}'", path.display())
+}
+
+/// A managed agent's config: `url`, and the three files `ca`, `cert` and
+/// `key` in the jail's folder.
+fn managed(jail: &Jail, url: &str, [ca, cert, key]: [&str; 3]) -> String {
+    let dir = jail.directory();
+    format!(
+        "name = \"agent-1\"\n[control_plane]\nurl = \"{url}\"\nca_cert_file = {}\ncert_file = {}\nkey_file = {}\n",
+        toml_path(&dir.join(ca)),
+        toml_path(&dir.join(cert)),
+        toml_path(&dir.join(key)),
+    )
+}
+
+const FILES: [&str; 3] = ["fleet_ca.crt", "agent.crt", "agent.key"];
+
 #[test]
 fn a_control_plane_section_makes_a_managed_agent() {
     in_jail(|jail| {
-        let config = load_toml(
-            jail,
-            r#"
-name = "agent-1"
+        let toml = managed(jail, "https://fleet.example.com:7443", FILES);
 
-[control_plane]
-url = "https://fleet.example.com:7443"
-ca_cert_file = "/run/secrets/fleet_ca_cert"
-cert_file = "/data/agent.crt"
-key_file = "/data/agent.key"
-"#,
-        )
-        .unwrap();
+        let config = load_toml(jail, &toml).unwrap();
 
+        let dir = jail.directory();
         assert_eq!(
             config.mode,
             AgentMode::ControlPlane(ControlPlaneConfig {
                 url: "https://fleet.example.com:7443".to_owned(),
-                ca_cert_file: PathBuf::from("/run/secrets/fleet_ca_cert"),
-                cert_file: PathBuf::from("/data/agent.crt"),
-                key_file: PathBuf::from("/data/agent.key"),
+                ca_cert_file: dir.join("fleet_ca.crt"),
+                cert_file: dir.join("agent.crt"),
+                key_file: dir.join("agent.key"),
             })
         );
+    });
+}
+
+#[rstest]
+#[case::a_name("https://fleet.example.com:7443")]
+#[case::ipv4("https://192.0.2.10:7443")]
+#[case::ipv6("https://[2001:db8::10]:7443")]
+#[case::a_trailing_slash("https://fleet.example.com:7443/")]
+fn a_control_plane_url_is_https_host_and_port(#[case] url: &str) {
+    in_jail(|jail| {
+        let toml = managed(jail, url, FILES);
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        let AgentMode::ControlPlane(plane) = config.mode else {
+            panic!("a managed agent");
+        };
+        assert_eq!(plane.url, url);
+    });
+}
+
+#[rstest]
+#[case::plain_http("http://fleet.example.com:7443")]
+#[case::no_scheme("fleet.example.com:7443")]
+#[case::no_port("https://fleet.example.com")]
+#[case::port_zero("https://fleet.example.com:0")]
+#[case::credentials("https://secretuser:secretpass@fleet.example.com:7443")]
+#[case::a_path("https://fleet.example.com:7443/secretpath")]
+#[case::a_query("https://fleet.example.com:7443/?secret=1")]
+#[case::another_scheme("grpc://fleet.example.com:7443")]
+#[case::not_a_url("not a secret url")]
+fn a_control_plane_url_that_isnt_https_host_and_port_is_refused(#[case] url: &str) {
+    in_jail(|jail| {
+        let toml = managed(jail, url, FILES);
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["control_plane.url"]);
+        assert_eq!(kinds(&problems), [ProblemKind::ControlPlaneUrl]);
+        let shown = ConfigError::Invalid(problems).to_string();
+        assert!(!shown.contains("secret"), "{shown}");
+    });
+}
+
+#[test]
+fn relative_control_plane_files_are_refused() {
+    in_jail(|jail| {
+        let toml = "name = \"agent-1\"\n[control_plane]\nurl = \"https://fleet.example.com:7443\"\n\
+                    ca_cert_file = \"ca.crt\"\ncert_file = \"agent.crt\"\nkey_file = \"agent.key\"\n";
+
+        let problems = invalid(load_toml(jail, toml));
+
+        assert_eq!(
+            keys(&problems),
+            [
+                "control_plane.ca_cert_file",
+                "control_plane.cert_file",
+                "control_plane.key_file",
+            ]
+        );
+        assert!(
+            kinds(&problems)
+                .iter()
+                .all(|kind| *kind == ProblemKind::NotAbsolute)
+        );
+    });
+}
+
+#[rstest]
+#[case::key_as_cert(["ca.crt", "agent.key", "agent.key"], "control_plane.key_file", "cert_file")]
+#[case::cert_as_ca(["agent.crt", "agent.crt", "agent.key"], "control_plane.cert_file", "ca_cert_file")]
+#[case::key_as_ca(["agent.key", "agent.crt", "agent.key"], "control_plane.key_file", "ca_cert_file")]
+fn the_control_plane_files_must_differ(
+    #[case] files: [&str; 3],
+    #[case] key: &str,
+    #[case] earlier: &'static str,
+) {
+    in_jail(|jail| {
+        let toml = managed(jail, "https://fleet.example.com:7443", files);
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), [key]);
+        assert_eq!(kinds(&problems), [ProblemKind::SameFileAs { key: earlier }]);
     });
 }
 

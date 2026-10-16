@@ -381,10 +381,14 @@ pub(crate) struct RenderedCode(pub(crate) ErrorCode);
 
 /// `Retry-After` for `delay`: whole seconds, rounded up.
 fn retry_after_seconds(delay: Duration) -> HeaderValue {
-    let seconds = delay
-        .as_secs()
-        .saturating_add(u64::from(delay.subsec_nanos() > 0));
-    HeaderValue::from(seconds)
+    HeaderValue::from(whole_seconds(delay))
+}
+
+/// `delay` in whole seconds, rounded up: `Retry-After`'s value, on the
+/// HTTP port and the gRPC port alike.
+pub(crate) const fn whole_seconds(delay: Duration) -> u64 {
+    let rounded_up = if delay.subsec_nanos() > 0 { 1 } else { 0 };
+    delay.as_secs().saturating_add(rounded_up)
 }
 
 /// The middleware that writes every error response's body: an [`ApiError`]'s,

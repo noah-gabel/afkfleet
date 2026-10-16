@@ -5,7 +5,9 @@ use uuid::Uuid;
 
 use super::AuditError;
 use super::name::{self, Dots};
-use crate::id::{AccountId, AgentId, BotId, InviteId, ModeId, SessionId, UserId};
+use crate::id::{
+    AccountId, AgentId, BotId, EnrollmentTokenId, InviteId, ModeId, SessionId, UserId,
+};
 
 /// What an entry touched, stored as `target_type` and `target_id`. Each
 /// variant holds its typed ID, so the type and the ID can never disagree.
@@ -26,6 +28,8 @@ pub enum AuditTarget {
     Session(SessionId),
     /// An invite to register (P7, group E).
     Invite(InviteId),
+    /// An agent's enrollment token (P10.3).
+    EnrollmentToken(EnrollmentTokenId),
 }
 
 impl AuditTarget {
@@ -40,6 +44,7 @@ impl AuditTarget {
             Self::Mode(_) => "mode",
             Self::Session(_) => "session",
             Self::Invite(_) => "invite",
+            Self::EnrollmentToken(_) => "enrollment_token",
         }
     }
 
@@ -54,6 +59,7 @@ impl AuditTarget {
             Self::Mode(id) => *id.as_uuid(),
             Self::Session(id) => *id.as_uuid(),
             Self::Invite(id) => *id.as_uuid(),
+            Self::EnrollmentToken(id) => *id.as_uuid(),
         }
     }
 }
@@ -114,6 +120,7 @@ impl RecordedTarget {
             "mode" => ModeId::try_from(id).map(AuditTarget::Mode),
             "session" => SessionId::try_from(id).map(AuditTarget::Session),
             "invite" => InviteId::try_from(id).map(AuditTarget::Invite),
+            "enrollment_token" => EnrollmentTokenId::try_from(id).map(AuditTarget::EnrollmentToken),
             _ => return TargetKind::try_from(kind).map(|kind| Self::Unrecognized { kind, id }),
         };
         known.map(Self::Known).map_err(|_| AuditError::TargetId)
@@ -134,7 +141,7 @@ mod tests {
         )
     }
 
-    fn every_target() -> [AuditTarget; 7] {
+    fn every_target() -> [AuditTarget; 8] {
         let (random, at) = bytes();
         [
             AuditTarget::User(UserId::new_v7(at, random).unwrap()),
@@ -144,6 +151,7 @@ mod tests {
             AuditTarget::Mode(ModeId::new_v7(at, random).unwrap()),
             AuditTarget::Session(SessionId::new_v7(at, random).unwrap()),
             AuditTarget::Invite(InviteId::new_v7(at, random).unwrap()),
+            AuditTarget::EnrollmentToken(EnrollmentTokenId::new_v7(at, random).unwrap()),
         ]
     }
 
@@ -154,7 +162,14 @@ mod tests {
         assert_eq!(
             kinds,
             [
-                "user", "account", "bot", "agent", "mode", "session", "invite"
+                "user",
+                "account",
+                "bot",
+                "agent",
+                "mode",
+                "session",
+                "invite",
+                "enrollment_token"
             ]
         );
     }

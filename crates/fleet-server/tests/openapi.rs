@@ -187,6 +187,7 @@ async fn app(db: &Database, docs: ApiDocs) -> Router {
         link_flows: idle_link_flows(db),
         accounts: idle_accounts(db),
         grants: idle_grants(db),
+        enrollment_tokens: None,
     });
     router(state, &http, ids, docs)
         .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))))
@@ -382,6 +383,7 @@ async fn the_document_lists_exactly_the_api_routes(
             ("/api/v1/accounts/{id}/grants/{user}", "put"),
             ("/api/v1/accounts/{id}/refuse", "post"),
             ("/api/v1/accounts/{id}/relink", "post"),
+            ("/api/v1/agents/enrollment-tokens", "post"),
             ("/api/v1/auth/login", "post"),
             ("/api/v1/auth/login/mfa", "post"),
             ("/api/v1/auth/logout", "post"),

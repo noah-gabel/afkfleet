@@ -101,7 +101,7 @@ async fn the_agents_and_its_bots_lines_are_in_the_agent_span() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_control_plane_config_is_refused_until_phase_10() {
+async fn a_control_plane_config_is_refused_with_a_pointer_to_enroll() {
     let mut managed = afk(&["AfkBot1"]);
     managed.mode = AgentMode::ControlPlane(ControlPlaneConfig {
         url: "https://fleet.example.com:7443".to_owned(),
@@ -121,7 +121,10 @@ async fn a_control_plane_config_is_refused_until_phase_10() {
     assert_eq!(errors.len(), 1, "{}", capture.text());
     assert_eq!(errors[0]["level"], "ERROR");
     assert!(
-        errors[0]["error"].as_str().unwrap().contains("Phase 10"),
+        errors[0]["error"]
+            .as_str()
+            .unwrap()
+            .contains("`afkfleet-agent enroll`"),
         "{}",
         errors[0]
     );

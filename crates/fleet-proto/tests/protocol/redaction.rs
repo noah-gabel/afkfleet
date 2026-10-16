@@ -168,6 +168,10 @@ fn every_field_named_like_a_secret_is_in_a_redacted_message() {
     );
     assert!(seen.contains(&"fleet.v1.Kick.key".to_owned()), "{seen:?}");
     assert!(
+        seen.contains(&"fleet.v1.EnrollRequest.token".to_owned()),
+        "{seen:?}"
+    );
+    assert!(
         flagged.is_empty(),
         "fields named like a secret outside a redacted message: {flagged:?}"
     );

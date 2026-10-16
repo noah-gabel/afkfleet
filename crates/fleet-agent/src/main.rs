@@ -12,12 +12,16 @@
 //!    SIGINT (Ctrl+C and Ctrl+Break on Windows) shut it down gracefully.
 //! 4. Its last log line, "the agent stopped", carries the exit code.
 //!
+//! `afkfleet-agent enroll` loads the same config (it must have
+//! `[control_plane]`), reads the enrollment bundle from stdin, logs to
+//! stderr and runs [`enroll`] on a current-thread runtime (P10.3).
+//!
 //! `afkfleet-agent healthcheck` loads the same config, checks its heartbeat
 //! file and prints one line, without logging; it exits only 0 or 1, since
 //! Docker reserves 2 for healthchecks.
 
 use core::fmt::Display;
-use std::io::Write as _;
+use std::io::{IsTerminal as _, Write as _};
 use std::path::Path;
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -25,12 +29,15 @@ use std::time::SystemTime;
 
 use clap::Parser as _;
 use fleet_agent::cli::{self, Cli, Command};
-use fleet_agent::config::{self, AgentConfig};
+use fleet_agent::config::{self, AgentConfig, AgentMode};
+use fleet_agent::enroll::bundle::read_bundle;
+use fleet_agent::enroll::key::OsRandom;
+use fleet_agent::enroll::{Enrollment, enroll};
 use fleet_agent::healthcheck;
 use fleet_agent::heartbeat::FileHeartbeat;
 use fleet_agent::run::{Exit, Outcome, RUNTIME_SHUTDOWN, RunParts, agent_span, run};
 use fleet_agent::signals::OsSignals;
-use fleet_agent::telemetry;
+use fleet_agent::telemetry::{self, LogOutput};
 use fleet_mc::AzaleaConnector;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use tracing::{Span, error};
@@ -48,8 +55,60 @@ fn main() -> ExitCode {
     };
     match cli.command {
         Command::Run { config } => run_agent(&config),
+        Command::Enroll { config } => enroll_agent(&config),
         Command::Healthcheck { config } => check_health(&config),
     }
+}
+
+/// `afkfleet-agent enroll`: the bundle from stdin, then the enrollment on a
+/// current-thread runtime with the OS's randomness. Logs go to stderr: stdout
+/// carries the result.
+fn enroll_agent(path: &Path) -> ExitCode {
+    let config = match config::load(path) {
+        Ok(config) => config,
+        Err(error) => return fail_early(&error),
+    };
+    let AgentMode::ControlPlane(plane) = &config.mode else {
+        return fail_early(
+            &"enroll needs a config with [control_plane]; a [standalone] agent isn't enrolled",
+        );
+    };
+    // A plain read, before any runtime exists.
+    let stdin = std::io::stdin();
+    let bundle = match read_bundle(stdin.lock(), stdin.is_terminal()) {
+        Ok(bundle) => bundle,
+        Err(error) => return fail_early(&error),
+    };
+    if let Err(error) = telemetry::init_on(&config.log, LogOutput::Stderr) {
+        return fail_early(&error);
+    }
+    if rustls::crypto::aws_lc_rs::default_provider()
+        .install_default()
+        .is_err()
+    {
+        return fail_early(&"a TLS crypto provider is already installed");
+    }
+    let runtime = match tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+    {
+        Ok(runtime) => runtime,
+        Err(error) => {
+            return fail_early(&format_args!("the async runtime can't be built: {error}"));
+        }
+    };
+    let exit = enroll(
+        Enrollment {
+            plane,
+            name: &config.name,
+            bundle,
+        },
+        &OsRandom,
+        &runtime,
+        &mut std::io::stdout(),
+        &mut std::io::stderr(),
+    );
+    ExitCode::from(exit.code())
 }
 
 /// `afkfleet-agent healthcheck`: one line on stdout, exit 0 or 1. A config

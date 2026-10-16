@@ -30,3 +30,9 @@ active_key_id = 1                        # the key in master_key_files.1, from j
 
 [accounts]
 allow_offline = true                     # dev only: offline-mode test server
+
+# [grpc]                                 # the agents' port: `just dev-server` turns it on with
+#                                        # the four AFKFLEET_SERVER__GRPC__*_FILE paths of the
+#                                        # PKI it creates in target/dev-server/pki/ (ADR-0019)
+# bind = "127.0.0.1:7443"                # an IP address and a port other than 0 and [http]'s
+# agent_cert_lifetime_days = 60          # 1–365
