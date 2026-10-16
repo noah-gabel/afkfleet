@@ -14,6 +14,7 @@ async fn the_eleventh_connect_in_a_minute_is_refused_before_any_lookup(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
+    fleet_testkit::log_capture::install().unwrap();
     let port = start(options, Settings::default()).await;
     let stranger = port.stranger(1);
     let agent = port.enroll(2, "agent-2").await;
@@ -42,6 +43,14 @@ async fn the_eleventh_connect_in_a_minute_is_refused_before_any_lookup(
         "6"
     );
     let _ = request_id(status.metadata());
+    // At `debug`: the minute's summary counts these.
+    assert_eq!(
+        fleet_testkit::log_capture::count(
+            "fleet_server::grpc::control::gate",
+            "a connect call was rate-limited"
+        ),
+        1
+    );
     port.clock.advance(Duration::from_secs(6));
     let again = port.open(&stranger).await.unwrap_err();
     assert_ne!(again.code(), Code::ResourceExhausted, "{again:?}");

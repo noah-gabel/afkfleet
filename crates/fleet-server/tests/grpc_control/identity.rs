@@ -204,3 +204,22 @@ async fn every_identity_problem_is_one_answer_and_audited_with_its_reason(
     }
     port.stop().await;
 }
+
+#[sqlx::test(migrations = false)]
+async fn a_call_whose_request_id_cant_be_minted_fails_without_one(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let port = start(options, Settings::default()).await;
+    let agent = port.enroll(1, "agent-1").await;
+    // The gate's ID is the next draw: TLS draws from aws-lc's own source.
+    port.fail_next_random();
+
+    let status = port.open(&agent).await.unwrap_err();
+
+    assert_eq!(status.code(), Code::Internal, "{status:?}");
+    assert_eq!(status.message(), fleet_server::grpc::control::FAILED);
+    assert!(status.metadata().get(REQUEST_ID).is_none(), "{status:?}");
+    assert_eq!(port.audit().await, Vec::new());
+    port.stop().await;
+}

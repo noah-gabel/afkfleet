@@ -71,12 +71,29 @@ mod tests {
 
     #[test]
     fn every_code_has_its_grpc_name() {
-        assert_eq!(code_name(Code::Ok), "ok");
-        assert_eq!(code_name(Code::ResourceExhausted), "resource_exhausted");
-        assert_eq!(code_name(Code::Unauthenticated), "unauthenticated");
-        assert_eq!(code_name(Code::DeadlineExceeded), "deadline_exceeded");
-        assert_eq!(code_name(Code::FailedPrecondition), "failed_precondition");
-        assert_eq!(code_name(Code::OutOfRange), "out_of_range");
+        let names = [
+            (Code::Ok, "ok"),
+            (Code::Cancelled, "cancelled"),
+            (Code::Unknown, "unknown"),
+            (Code::InvalidArgument, "invalid_argument"),
+            (Code::DeadlineExceeded, "deadline_exceeded"),
+            (Code::NotFound, "not_found"),
+            (Code::AlreadyExists, "already_exists"),
+            (Code::PermissionDenied, "permission_denied"),
+            (Code::ResourceExhausted, "resource_exhausted"),
+            (Code::FailedPrecondition, "failed_precondition"),
+            (Code::Aborted, "aborted"),
+            (Code::OutOfRange, "out_of_range"),
+            (Code::Unimplemented, "unimplemented"),
+            (Code::Internal, "internal"),
+            (Code::Unavailable, "unavailable"),
+            (Code::DataLoss, "data_loss"),
+            (Code::Unauthenticated, "unauthenticated"),
+        ];
+
+        for (code, name) in names {
+            assert_eq!(code_name(code), name, "{code:?}");
+        }
     }
 
     #[test]

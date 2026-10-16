@@ -148,6 +148,22 @@ mod tests {
     }
 
     #[test]
+    fn a_calls_debug_names_its_fingerprint_never_the_certificates_bytes() {
+        let call = ControlCall {
+            id: RequestId::new_v7(DateTime::UNIX_EPOCH, [1; 10]).unwrap(),
+            fingerprint: CertFingerprint::from_digest([0xCD; 32]),
+            certificate: CertificateDer::from(vec![0xAB; 40]),
+        };
+
+        let shown = format!("{call:?}");
+
+        assert!(shown.contains("CD:CD:CD"), "{shown}");
+        // Neither as hex, as rustls prints it, nor as numbers.
+        assert!(!shown.to_lowercase().contains("abab"), "{shown}");
+        assert!(!shown.contains("171"), "{shown}");
+    }
+
+    #[test]
     fn a_call_without_a_certificate_is_refused_before_it_gets_an_id() {
         let refused = gate().call(Request::new(())).unwrap_err();
 

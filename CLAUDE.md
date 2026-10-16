@@ -366,7 +366,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 **Hard rules**
 - `unwrap` and `expect` are allowed in tests, via `clippy.toml`.
 - **Never delete, `#[ignore]`, or weaken a failing test to get to green.** Fix the code or ask.
-- Coverage gates: `fleet-core` ≥ 90 %, `fleet-runtime` ≥ 85 %, auth and vault modules ≥ 90 %, `fleet-client` ≥ 90 %, the desktop crate ≥ 90 % (Windows, `just cov-desktop`), workspace ≥ 80 %.
+- Coverage gates: `fleet-core` ≥ 90 %, `fleet-runtime` ≥ 85 %, auth and vault modules ≥ 90 %, the Microsoft accounts' modules ≥ 90 % (`msauth`), the control plane ≥ 90 % (`control-plane`: fleet-server's `infra/pki/`, `app/enrollment.rs`, `app/agents/` and `grpc/`; ADR-0019), `fleet-client` ≥ 90 %, the desktop crate ≥ 90 % (Windows, `just cov-desktop`), workspace ≥ 80 %.
 
 ## Frontend rules
 **Structure**

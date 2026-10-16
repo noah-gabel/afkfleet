@@ -318,8 +318,8 @@ describe("listed files without a covered line", () => {
 });
 
 describe("the project's gates", () => {
-  it("make the auth, vault, msauth and fleet-client gates required lists of prefixes", () => {
-    for (const name of ["auth", "vault", "msauth", "fleet-client"]) {
+  it("make the auth, vault, msauth, control-plane and fleet-client gates required lists of prefixes", () => {
+    for (const name of ["auth", "vault", "msauth", "control-plane", "fleet-client"]) {
       const gate = GATES_IN_USE.find((g) => g.name === name);
       assert.ok(gate, name);
       assert.equal(gate.required, true, name);
@@ -336,6 +336,17 @@ describe("the project's gates", () => {
       "crates/fleet-server/src/infra/msauth/",
       "crates/fleet-server/src/app/session_tokens/",
       "crates/fleet-server/src/app/link_flows/",
+    ]);
+  });
+
+  it("put the PKI, the enrollment, the agents' services and the gRPC port under the control-plane gate (ADR-0019, U9)", () => {
+    const gate = GATES_IN_USE.find((g) => g.name === "control-plane");
+
+    assert.deepEqual(gate.prefixes, [
+      "crates/fleet-server/src/infra/pki/",
+      "crates/fleet-server/src/app/enrollment.rs",
+      "crates/fleet-server/src/app/agents/",
+      "crates/fleet-server/src/grpc/",
     ]);
   });
 

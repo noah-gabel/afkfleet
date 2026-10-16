@@ -261,6 +261,12 @@ impl Port {
         }
     }
 
+    /// Makes the port's next draw of randomness fail.
+    pub(crate) fn fail_next_random(&self) {
+        self.random
+            .fail_next(fleet_core::system::RandomError::Unavailable);
+    }
+
     /// Agent `n`'s ID.
     pub(crate) fn agent_id(&self, n: u8) -> AgentId {
         AgentId::new_v7(self.clock.now(), [n; 10]).unwrap()
