@@ -194,7 +194,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Microsoft / Minecraft auth | `azalea-auth` | `=0.16.0` (+mc26.1) | none directly: only through azalea's crates | **Not used by fleet-server** (P9.3, the user's decision): azalea-auth checks no status, polls in a loop that drops every refusal, can panic on an unexpected answer and prints tokens in `Debug`, so fleet-server's adapter sends its own requests with azalea-auth 0.16.0's protocol (client ID, scope, fields, headers). `deny.toml` lets it in only through `azalea`, `azalea-client`, `azalea-inventory` and `azalea-protocol` ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)). fleet-mc reaches only `azalea::auth::sessionserver` and `certs`, through azalea's re-export, never the Microsoft flows; its clippy config bans them (ADR-0011) |
 | Async runtime | `tokio` | 1.53.2 | runtime, mc, testkit, agent, server, client | `test-util` feature in dev. Clippy bans `unbounded_channel`; azalea's two mandated channels are the only exceptions (ADR-0011). The agent builds a multi-threaded runtime after loading its config (ADR-0014). fleet-server enables `fs`, to create the database file and check its permissions, `time`, for the trace layer's latency from tokio's clock, and from P6.11 `rt`, `rt-multi-thread`, `macros`, `net` and `io-util`, for its runtimes, the listener and the healthcheck's TCP probe; fleet-startup enables `signal` and `macros` for the stop signals (ADR-0015) |
 | Cancellation, task tracking | `tokio-util` | 0.7.19 | runtime, mc, agent, server | `CancellationToken`, `TaskTracker`. fleet-runtime and the agent enable no features: they use only `CancellationToken`, and their tasks live in tokio's `JoinSet`, which reports panics (ADR-0013, ADR-0014). fleet-server enables `rt` only, since P9.5: its token asks axum's server for the graceful shutdown (P6.12, ADR-0015), and the session-token service's refreshes run on a `TaskTracker` ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)) |
-| Stream adapters | `tokio-stream` | 0.1.19 | proto, agent, server | gRPC streams, broadcast → stream |
+| Stream adapters | `tokio-stream` | 0.1.19, dfo | proto, agent, server | gRPC streams, broadcast → stream. Without default features (`time`). fleet-server (P10.4): each `Connect` answers from a `ReceiverStream` over its bounded queue, and the listener maps its accepted sockets with `StreamExt`. Already in Cargo.lock through tonic and sqlx ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)) |
 | Sink/Stream extension traits | `futures-util` | 0.3.34 | client, server | WebSocket split/send |
 | Async fns in `dyn` traits | `async-trait` | 0.1.92 | server | Only for `Arc<dyn Port>`. Use generics + RPITIT elsewhere. First used by fleet-server's store ports (ADR-0015) |
 | Retry & backoff | `backon` | 1.6.0, dfo | core (policy), agent, client | Exponential backoff with jitter. The default features pull in a tokio sleeper |
@@ -221,7 +221,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | HTTP middleware | `tower-http` | 0.7.1 | server | fleet-server enables `catch-panic`, `timeout`, `limit`, `sensitive-headers` and `set-header`. Never `request-id`, which turns on uuid's `v4` and with it `rng`, nor `trace`, whose response hook can't see the route: the request-ID and trace layers are the server's own (P6.6). reqwest keeps its own 0.6.11 (ADR-0015) |
 | OpenAPI | `utoipa`, `utoipa-axum` | 6.0.0, 0.3.0 | api-types, server | P0 picked 6.x (ADR-0009); re-checked in P6.10 (2026-10-11): still the newest, MIT/Apache-2.0. utoipa without default features: fleet-api-types and fleet-server enable `macros`, and fleet-api-types `preserve_order`, so properties keep the field order ts-rs writes and a test compares the two. utoipa-axum takes axum without default features. Cargo.lock gained only utoipa, utoipa-gen, utoipa-axum and its macro helper pastey (ADR-0015) |
 | Database | `sqlx` | **0.9.0**, dfo | server | `runtime-tokio`, `sqlite-bundled`, `migrate`, `macros`, `uuid`; no TLS feature (SQLite); offline data in `crates/fleet-server/.sqlx/`. Not `sqlite`: in 0.9 it also turns on extension loading, deserialize and unlock-notify. Not `chrono`: it would turn on chrono's `clock` for the whole workspace build, so times are converted in fleet-server. Not `json` (ADR-0015) |
-| gRPC | `tonic`, `tonic-prost` | **0.14.6** | proto, agent, server | Features `tls-aws-lc`, `tls-connect-info`. Never `tls-ring` or `tls-webpki-roots`. Declared without default features (P10.1): fleet-proto enables `codegen` only, for the generated client and server; the agent and the server add the transport and TLS features in their groups ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)). Group B: fleet-server `server`, `router` (`add_service`) and `tls-aws-lc`, which turns on `tls-connect-info`, with `channel` for its loopback tests; fleet-agent `channel` and `tls-aws-lc`, with `server` and `router` for its fake port in tests |
+| gRPC | `tonic`, `tonic-prost` | **0.14.6** | proto, agent, server | Features `tls-aws-lc`, `tls-connect-info`. Never `tls-ring` or `tls-webpki-roots`. Declared without default features (P10.1): fleet-proto enables `codegen` only, for the generated client and server; the agent and the server add the transport and TLS features in their groups ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)). Group B: fleet-server `server`, `router` (`add_service`) and `tls-aws-lc`, which turns on `tls-connect-info`, with `channel` for its loopback tests; fleet-agent `channel` and `tls-aws-lc`, with `server` and `router` for its fake port in tests. Group C: no server-wide `max_connection_age`, grace or `timeout`, which fleet-server's clippy config bans (U7); its listener bounds each connection's age itself, lifted while an agent's stream lives |
 | Protobuf | `prost` | 0.14.4 | proto | Its defaults (`derive`, `std`). Already in Cargo.lock through testcontainers before P10.1 |
 | Protobuf codegen | `tonic-prost-build`, `protox` | 0.14.6, 0.9.1 | proto (`build.rs`) | Pure Rust, no system `protoc`. tonic-prost-build without default features: no transport helpers, no `cleanup-markdown`. protox 0.9.1 over 0.10.0 (2026-10-07) is the user's choice at Phase 10's planning; no advisory names it. Build-only, with prost-build, prost-reflect, protox-parse, logos, miette and prost-types, which nothing uses at run time ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)) |
 | TLS | `rustls` | 0.23.46 | agent, server, client, desktop | **Only the aws-lc-rs provider**, installed explicitly at startup. The default features select it. The agent's `main.rs` installs it before anything else runs (ADR-0014). 0.23.46 is a security floor (2026-10-14): RUSTSEC-2026-0346 (client session values' `Debug`), 0347 (ECH, never enabled here), 0348 (the `brotli` feature, never enabled here) and 0349 (a downgrade to classical key exchange on resumed client connections) |
@@ -267,6 +267,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Containers | `testcontainers` | 0.28.0, dfo | `itzg/minecraft-server`, for fleet-mc's slow tests (P3.7). The default `ring` feature turns on TLS for the Docker client, which the local socket and the Windows named pipe don't need; no feature is enabled |
 | Time control | `tokio` `test-util` | | `start_paused`, `advance` |
 | Independent IP-network check | `ipnet` | 2.12.2 | Dev only: fleet-server's property test compares its own `IpNet` (`[http] trusted_proxies`) and the /64 limiter key with it. Production code never uses it. Already in Cargo.lock through reqwest (ADR-0016) |
+| In-memory gRPC transport | `hyper-util` | 0.1.21, dfo | Dev only: fleet-server's control-plane test hands tonic's client a tokio duplex pipe through `rt::TokioIo` (`tokio` only), so an agent's stream runs a virtual hour through the real router on paused time. The user's choice in Phase 10's group C (U6). Already in Cargo.lock through tonic, axum and reqwest ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)) |
 | Temporary files | `tempfile` | 3.27.0 | fleet-server's database tests: a fresh folder per test, removed on drop. Already in the lockfile through figment and insta (ADR-0015) |
 | `log` records in tests | `log` | 0.4.34 | fleet-server's one normal use: `log::LevelFilter`, which sqlx's statement-logging levels take; clippy bans its logging macros there, so all server logging stays on tracing (ADR-0015). Otherwise a dev-dependency. fleet-testkit: its log capture's test emits a `log` record to prove that reqwest's and rustls's logs reach the redaction check through `tracing-log` (ADR-0011). fleet-agent: its telemetry test proves that the log filter and azalea's caps see a `log` record's real target (ADR-0014) |
 | Fuzzing | `libfuzzer-sys`, `arbitrary` | 0.4.13, 1.4.2 | Driven by cargo-fuzz |
@@ -460,8 +461,11 @@ The full analysis lives in `docs/threat-model.md`.
 | Microsoft link flows | 1 active per user, 3 active in total, 10/day per user | User |
 | Grants created by username (`POST /accounts/{id}/grants`) | 10/hour | User |
 | gRPC enrollment | 5/min | IP |
+| gRPC `Connect` | 10/min | Client certificate (its fingerprint) |
 
-Responses use `429` with a `Retry-After` header. The client IP is the socket peer address. `X-Forwarded-For` is honored only when the peer is in `trusted_proxies` (Caddy).
+Responses use `429` with a `Retry-After` header. The client IP is the socket peer address.
+
+> Note (§7.4, Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`Connect`'s limit** is `[rate_limits] connect_per_cert_per_min` (1–60, 10), keyed by the presented certificate's fingerprint and spent before any lookup or read; it answers `RESOURCE_EXHAUSTED` with `retry-after` and is counted in the minute's summary (S30). A call without a certificate is refused before it (S24). What an agent sends on its stream has no rate limit: HTTP/2's flow control and one message read at a time pace it (S25). `X-Forwarded-For` is honored only when the peer is in `trusted_proxies` (Caddy).
 
 > Note (§7.4, Phase 9, group D, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **The Microsoft link flows' caps.**
 > - **Config:** `[rate_limits] link_flows_total` (1–16, 3) and `link_flows_per_user_per_day` (1–100, 10). "1 active per user" is a fixed rule: a new start replaces the user's waiting flow.
@@ -3543,7 +3547,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The PR #49 review** (the user's) also gave `infra::pki::files::NewFile` a `Debug` that shows the path and the length, never the bytes, and corrected the listener's docs: with the grace set, tonic 0.14.6 cuts a connection at 80 s with no GOAWAY at 60 s (R9's note under P10.4). Each fix has a test that was red first, or, for the docs, none (ADR-0019).
   > - **Deviations:** the route takes no body, so rule 3's 422 has nothing to refuse; `PkiLoadError::File` no longer repeats its cause in its own message, and `pki server-cert` prints the whole cause chain.
   > - **Tests,** red first against compiling stubs; those a stub happened to satisfy, and those written after their code, were shown red by a temporary mutation, each reverted and checked by checksum (ADR-0019).
-- [ ] **P10.4** 🔴 `AgentControl.Connect` bidi stream. It requires:
+- [x] **P10.4** 🔴 `AgentControl.Connect` bidi stream. It requires:
   - a verified client certificate
   - an allowlisted fingerprint and an enabled agent
   - a version handshake: `Hello` gets either `Welcome` or a rejection
@@ -3561,6 +3565,17 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The gRPC port** (`grpc::listener`) serves `AgentEnrollment` alone, behind its gate (`grpc::enrollment`). `AgentControl` joins it behind a gate of its own that refuses a call without a verified client certificate (`peer_certs()`): the listener only verifies a certificate that's presented (S13).
   > - **`max_connection_age`** (60 s plus 20 s of grace) bounds every connection while `Enroll` is the port's only service. With the grace set, tonic 0.14.6 sends no GOAWAY at 60 s: it sleeps for the age plus the grace and then closes the connection forcefully, a hard cut at 80 s, calls in flight included. C replaces it with a bound for connections without a client certificate, or records the residual risk (R9). Removing the grace isn't a fix either, since tonic then polls the finished timeout future again *(the user's note at the PR #49 review)*.
   > - **`agents.enabled`** and the rule that an enabled agent's name is unique, ignoring case, come from `0011`; disabling an agent frees its name for a new enrollment.
+
+  > Note (P10.4, Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **as built.**
+  > - **The gate** (S24, S30): a call without a client certificate is `UNAUTHENTICATED` before anything else, with no request ID minted. Then the ID, then `[rate_limits] connect_per_cert_per_min` (1–60, 10), keyed by the presented certificate's fingerprint (`RESOURCE_EXHAUSTED` with `retry-after`), before anything is looked up. The certificates come from the listener's own `TlsConnectInfo<Connection>` (R18).
+  > - **Admission** (`app::agents::AgentConnectionService`, behind `ports::agent_connections`, R22): the fingerprint's row in `agent_certs`, then revoked, expired by the server's clock (`now >= not_after`), disabled, and only then the SAN, which must be one `urn:uuid:` naming the row's agent. Every failure is one `UNAUTHENTICATED` "certificate refused". A refusal of a certificate the server knows is an `agent.connect` Failure with its reason and fingerprint, at most 10 per agent in a rolling 24 hours; a certificate no agent holds is an `error` line, never audited and never parsed (R23).
+  > - **The handshake:** the first message within 10 s (`HELLO_TIMEOUT`), read by `fleet_proto::control::read_hello` (a hello, then `protocol_version` equal to `PROTOCOL_VERSION`, then the conversion), then the name byte for byte (`Reject(NameMismatch)`, audited like the identity refusals). The hello's transaction checks the certificate and the agent again, records the capacity, the version and `last_seen_at` (never backwards) and commits `agent.connect`; then `Welcome {heartbeat_interval, agent_id}`. `RejectReason` gains 3 to 7 (R14). Every answer is in `grpc::control`'s table, one fixed message each, with the call's request ID.
+  > - **Liveness** (S23): `[grpc] heartbeat_interval_secs` (1–60, 10) and `heartbeat_timeout_secs` (2–300, 30, at least twice the interval). The port's HTTP/2 keepalive pings a connection it read nothing from for an interval and closes it when the ping isn't answered by the timeout. A stream ends `DEADLINE_EXCEEDED` when no message that converts arrives within the timeout; a message that decodes but doesn't convert is dropped and keeps nothing alive.
+  > - **Sizes** (S25): 8 MiB from an agent, 128 MiB from the server. `fleet_proto::codec::BoundedCodec` counts a hello's bots before prost builds them (more than 1000 is `OUT_OF_RANGE`), and answers a message it can't decode with `INVALID_ARGUMENT`, never prost's `INTERNAL`, so a session tells a malformed message from a failed transport.
+  > - **The connections' age** (S22, R9): every accepted socket is a `grpc::listener::Bounded`, cut at 80 s unless a welcomed stream holds its `Lift`; the age starts again when that stream ends. tonic's own age and per-call timeout are gone, and fleet-server's clippy config bans them (U7).
+  > - **A stream's end:** its certificate's `not_after` (`Reject(CertificateExpired)`), the heartbeat timeout, a second hello (`FAILED_PRECONDITION`), a message over the limit (`OUT_OF_RANGE`), the agent's close or reset, or the shutdown (`UNAVAILABLE`). The end is recorded first (`last_seen_at` and `agent.disconnect` with its reason, R19), then the lift dropped, then the last answer sent, ahead of anything queued. serve ends every session at the signal and waits for them before the database closes, so no stream holds tonic's drain.
+  > - **Deviations:** the lift is taken as `Welcome` is queued, not after it leaves, so the age can't fall between the two (R13 had Welcome, then the lift). A message on a welcomed stream that can't be decoded ends it `INVALID_ARGUMENT` "a message couldn't be read" (`protocol_error`), a row S24's table didn't have. A reset is recorded as `closed`: tonic reads a request's `CANCEL` as the stream's end.
+  > - **Tests:** `tests/grpc_control/` over real TLS on `127.0.0.1` (P10.9's four rejections, every row of the answers table, a silent stream, a silent connection with and without a call through a proxy that stops forwarding, the age), U6's test on paused time (an agent's stream lives a virtual hour through the real router over in-memory pipes while a connection without a certificate is cut at 80 s), and a serve test in which one signal ends an agent's stream and the server, with no drain warning.
 - [ ] **P10.5** 🔴 Server components:
   - `AgentRegistry`
   - `Scheduler`: in v1, the first agent with free capacity, labels optional
@@ -3613,6 +3628,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **A dead server** *(the user's note at the plan review)*: the agent notices a stream that hangs without an error (P10.4's note) and reconnects and resyncs; the loopback suite tests it.
 
   > Note (P10.7, from Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the identity `enroll` leaves:** `cert_file` holds exactly the PEM the agent checked (one certificate the pinned CA signed for client authentication), and `key_file` the PKCS#8 PEM of its Ed25519 key, both owner-only on Unix. They go straight into tonic's `Identity::from_pem`; the client checks at start that they match each other and the pinned CA, as `enroll` did. `run`'s refusal of `[control_plane]` ("managed mode runs from P10.7") goes away here.
+
+  > Note (P10.7, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
+  > - **The channel** (S23, S25): HTTP/2 keepalive every 10 s with a 20 s timeout, while idle too; heartbeats on `Welcome`'s interval; decoding up to `MAX_SERVER_MESSAGE_BYTES`, encoding up to `MAX_AGENT_MESSAGE_BYTES`; `Welcome` or `Reject` awaited for `WELCOME_TIMEOUT` (30 s) from the call's start. `Welcome.agent_id` is the ID the agent logs.
+  > - **Three kinds of end** (S24): *stop* on `UNAUTHENTICATED`, `Reject(NameMismatch)` and the permission Rejects (`AgentDisabled`, `CertificateRevoked`, `CertificateExpired`), with an exit code of its own that `run`'s help lists, stopping every bot on `AgentDisabled` so two agents never run one account; *retry slowly* on `Reject(IncompatibleProtocol)` and `Reject(InvalidHello)`; *retry with backoff* on everything else, `AlreadyConnected` and `RESOURCE_EXHAUSTED`'s `retry-after` included.
+  > - **An idle channel's `UNAVAILABLE`** is routine: the port cuts a connection 80 s after its last stream ended (S22).
 - [ ] **P10.8** 🔴 Server ingest:
   - status and chat are written in batches, in transactions roughly every 500 ms
   - **no per-tick writes**
@@ -3622,6 +3642,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **P11.1's `chat_messages`** arrives in this group, its first writer *(the user's choice, U1)*, with a `truncated` column: the agent's flag OR the server's own cut (S6). The rebuilt text is what's stored.
   > - **The batched writes** need a new `commit_unaudited` exemption (`EventBatch`, which ADR-0015 anticipated): the user's approval, and its own ADR note.
   > - **A heartbeat** carries no time: the server stamps `last_seen_at` with its own `Clock` (S5).
+
+  > Note (P10.8, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **an agent's presence isn't the ingest's** (S29): the session writes `agents.capacity`, `version` and `last_seen_at` at the hello and `last_seen_at` at the stream's end, and nothing per message; `EventBatch` never carries these columns.
 - [ ] **P10.9** 🔴 Loopback tests with a test PKI. Each of these is rejected:
   - a revoked certificate
   - a certificate from the wrong CA
@@ -3633,6 +3655,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - **Server restart:** agents resync.
 
   > Note (P10.9, from Phase 10's planning) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **an expired certificate** joins the rejections (S1), and **a connection that goes silent without closing** joins the cases that must hold *(the user's note at the plan review, P10.4's note)*. The rejections are tested in group C, which builds `Connect`; the rest of the suite in H.
+
+  > Note (P10.9, Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the four rejections are done,** in `tests/grpc_control/identity.rs`: a revoked certificate gets the answer of one no agent holds (`a_revoked_certificate_is_refused_like_an_unknown_one`); a certificate from another CA and an expired one fail TLS's handshake, before any call (`a_client_certificate_from_another_ca_fails_the_handshake`, `an_expired_certificate_fails_the_handshake`); an agent that never enrolled is refused (`an_agent_that_never_enrolled_is_refused`). The server's side of a connection that goes silent is in `liveness.rs`. For H: the silent connection runs end to end through the suite's stalling proxy (`tests/grpc_control/proxy.rs`): the server frees the agent within `heartbeat_timeout`, and the agent reconnects within 30 s and resyncs.
 - [ ] **P10.10** Admin endpoints: `GET /agents`, and `POST /agents/{id}/disable`, which revokes the fingerprint and drops the stream.
 
   > Note (P10.10, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a response value that a later version may extend, such as an agent's status, is an `Open<…>` in its DTO, and a 64-bit number is a `SafeInt`.
@@ -3864,6 +3888,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P12.4** A Prometheus metrics endpoint on an internal port, with the key metrics documented.
 
   > Note (P12.4, from Phase 7, group B, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): a counter of detected refresh-token reuses belongs among the key metrics, so alerting can pick up possible token theft without anyone reading `/audit` or the logs.
+
+  > Note (P12.4, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): `afkfleet_agent_connects_refused_total` (by reason) belongs among the key metrics: past the daily cap a disabled or revoked certificate still in use shows only at `debug` (S30).
 - [ ] **P12.5** Tauri release:
   - NSIS installer.
   - Updater key pair; the private key is kept **offline**.
@@ -3887,6 +3913,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P12.6, from Phase 10, group B, the user's note at the plan review) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the server certificate's yearly renewal.** It expires after 365 days, and then every agent fails to connect. The runbook's steps: stop the server, move `server.crt` and `server.key` away, run `afkfleet-server pki server-cert --config … --dns … --ip …` with the names agents dial, start the server. The CA stays, so no agent enrolls again.
 
   > Note (P12.6, from Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **enrolling an agent:** `pki init` once (it prints the CA's fingerprint); a token from the Owner (`POST /agents/enrollment-tokens`, later the app's agents view) or from the server's host (`afkfleet-server agent create-enrollment-token`); then pipe its bundle into `afkfleet-agent enroll` within 15 minutes. A token is single-use; exit 3 means the server enrolled an agent the host didn't store, which is disabled before enrolling again with a new token.
+
+  > Note (P12.6, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **time and certificates.** The server's clock decides when an agent's certificate has expired, and TLS checks it against the real time on both hosts, so both keep NTP. An agent whose certificate expired before P13.6's renewal enrolls again: disable it first, which frees its name.
 - [ ] **P12.7** 🔴 Compose smoke test in CI, run nightly:
   1. `up`
   2. health checks pass
@@ -3917,19 +3945,27 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - mode definition deserialization + validation
   - proto → core conversions
   - the vault envelope parser
+
+  > Note (P13.2, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): the `AgentMessage` target reaches `fleet_proto::control::read_hello`, and one target runs `fleet_proto::codec`'s check of a hello's bots over arbitrary bytes (S25).
 - [ ] **P13.3** cargo-mutants on `fleet-core` and auth/vault. Add tests until no relevant mutants survive.
 - [ ] **P13.4** Load test: 200+ fake bots on one agent and 20 WebSocket clients. Measure CPU, RAM and event latency, then fix the hot spots.
+
+  > Note (P13.4, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): the gRPC port counts no connections per address (S22's residual); a cap, if the load test calls for one, goes into the listener's map of accepted sockets.
 - [ ] **P13.5** Chaos tests:
   - kill and restart the server, agent and MC containers
   - partition the network between agent and server
   - fill up the DB volume
 
   Check that everything recovers and nothing is corrupted.
+
+  > Note (P13.5, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): after a partition the server frees an agent within `[grpc] heartbeat_timeout_secs` (S23).
 - [ ] **P13.6** 🔴 Agent certificates renew automatically at 2/3 of their lifetime (`RenewCertificate` RPC). Warn when expiry gets close.
 
   > Note (P13.6, from Phase 10, group B, the user's note at the plan review) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the server certificate too.** It expires after 365 days, and then every agent fails to connect, so "warn when expiry gets close" covers it: a warning at startup and in the housekeeping line within 30 days of its `not_after`. Serve already logs an expired one at `error` (group B).
 
   > Note (P13.6, from Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): a renewal's answer carries the certificate as PEM, checked by the agent like `enroll`'s (R10): one section and nothing around it, a client certificate the pinned CA signed, for the agent's key.
+
+  > Note (P13.6, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): `RenewCertificate` sits behind `Connect`'s gate and identity check, spends the same per-certificate bucket and answers `CERTIFICATE_REFUSED` alike (S24, S30). A stream ends at its certificate's `not_after`, so an agent renews before it; an expired certificate means enrolling again. The renewed certificate carries the same SAN and is found by its fingerprint, and revoking the old one shows a stale process as `revoked` refusals, under the same daily cap.
 - [ ] **P13.7** Reviews:
   - threat model
   - dependencies (`cargo deny`, `cargo tree -d`, `pnpm audit`)
@@ -4052,6 +4088,7 @@ link_flows_total = 3                     # Microsoft link flows at once on the s
 link_flows_per_user_per_day = 10         # counted from the audit log
 grants_by_name_per_user_per_hour = 10    # grants created by username, per user
 enroll_per_ip_per_min = 5                # Enroll calls on the gRPC port, per client IP
+connect_per_cert_per_min = 10            # Connect calls on the gRPC port, per client certificate
 chat_per_bot_interval_secs = 3
 chat_per_bot_burst = 3
 chat_per_user_per_min = 20
@@ -4078,6 +4115,8 @@ command_allowlist = ["/spawn", "/home", "/afk"]   # usable with Control; every o
 > Note (Appendix A, Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): `[rate_limits]` gains `grants_by_name_per_user_per_hour` (1–100, 10 by default, the user's approval at the plan review).
 
 > Note (Appendix A, Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`[grpc]` as built** (P10.2's note): optional; without it the control plane is off. `heartbeat_interval_secs` and `heartbeat_timeout_secs` arrive with P10.4. `[rate_limits]` gains `enroll_per_ip_per_min` (1–60, 5 by default, S14). In `agent.toml`, `[control_plane] url` is `https://host:port` (no credentials, path or query), and its three files are absolute and distinct; the agent writes `cert_file` and `key_file` itself with `afkfleet-agent enroll`.
+
+> Note (Appendix A, Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): `[grpc]` gains `heartbeat_interval_secs` (1–60, 10) and `heartbeat_timeout_secs` (2–300, 30); the timeout must be at least twice the interval, and an error names both keys. `[rate_limits]` gains `connect_per_cert_per_min` (1–60, 10).
 
 `agent.toml`
 ```toml
@@ -4216,6 +4255,8 @@ message ServerMessage {
 > - **`AssignBot`** is the spec and the sticky state to restore; `ReconcileFull` a list of them. **`SessionGrant`** holds an `OnlineSession` (name, UUID, token, expiry) or an `OfflineSession` (name). **`Welcome`** carries only the heartbeat interval; P10.4 may refine it and `Reject`'s reasons.
 > - **A bot's mode** is structured messages that mirror its steps (S4); no JSON crosses the wire.
 > - **Restart, reset and resume** get a message with P11.2, in Phase 10's group E.
+
+> Note (Appendix C, Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`Welcome`** carries the heartbeat interval and the agent's ID (`bytes agent_id = 2`), no server version. **`RejectReason`**: 1 `IncompatibleProtocol`, 2 `AgentDisabled`, 3 `NameMismatch`, 4 `InvalidHello`, 5 `AlreadyConnected`, 6 `CertificateRevoked`, 7 `CertificateExpired` (R14). A `Reject` answers a hello the server refuses, or is the last message of a stream whose permission ended; the stream then ends OK. An identity failure before the stream opens is one status, never a `Reject` (S24). The numbers freeze at the first release.
 
 > Note (Appendix C, Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`AgentEnrollment` as built** (`enrollment.proto`): `Enroll(EnrollRequest {token, name, csr_der}) returns (EnrollResponse {agent_id, certificate_pem, not_after_unix_ms})`. The answer carries no CA certificate: a trust anchor can't come from the server it vouches for, so the agent pins the bundle's fingerprint instead. The certificate is PEM text (R10), the CSR DER: each end gets what its reader takes. `EnrollRequest` is in `REDACTED` (S7).
 

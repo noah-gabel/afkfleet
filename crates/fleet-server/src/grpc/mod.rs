@@ -1,15 +1,19 @@
-//! The agents' gRPC port (Plan.md §4, P10.3; ADR-0019, S13, S14): one
-//! listener on `[grpc] bind`, only while `[grpc]` is configured.
+//! The agents' gRPC port (Plan.md §4, P10.3, P10.4; ADR-0019, S13, S14,
+//! S22–S30): one listener on `[grpc] bind`, only while `[grpc]` is
+//! configured.
 //!
 //! - [`listener`]: TLS with the server certificate of `pki init`, verifying
-//!   any client certificate against the CA while not requiring one, the
-//!   connection limits, and serving until the shutdown.
+//!   any client certificate against the CA while not requiring one, each
+//!   connection's age (lifted while an agent's stream lives), HTTP/2
+//!   keepalive from `[grpc]`'s heartbeats, and serving until the shutdown.
 //! - [`enrollment`]: `AgentEnrollment.Enroll`, behind its gate (the request
-//!   ID, the peer's address and its rate limit), the one service of Phase
-//!   10's group B.
-//!
-//! Group C adds `AgentControl` behind a gate of its own that refuses a call
-//! without a verified client certificate.
+//!   ID, the peer's address and its rate limit).
+//! - [`control`]: `AgentControl.Connect`, behind a gate that refuses a call
+//!   without a client certificate first, then the stream's admission by
+//!   that certificate, its hello and its session.
+//! - [`status`]: what every answer on the port shares.
 
+pub mod control;
 pub mod enrollment;
 pub mod listener;
+pub mod status;

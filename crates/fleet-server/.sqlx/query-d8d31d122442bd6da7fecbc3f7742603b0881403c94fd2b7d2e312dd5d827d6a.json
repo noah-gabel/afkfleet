@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE agents SET capacity = ?, version = ?,\n                last_seen_at = CASE WHEN last_seen_at IS NULL OR last_seen_at < ?\n                                    THEN ? ELSE last_seen_at END\n         WHERE id = ? AND enabled = 1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "d8d31d122442bd6da7fecbc3f7742603b0881403c94fd2b7d2e312dd5d827d6a"
+}

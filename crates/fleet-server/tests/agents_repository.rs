@@ -14,12 +14,14 @@
 #![cfg(test)]
 
 use chrono::{DateTime, Utc};
-use fleet_core::audit::{AuditAction, AuditOutcome};
+use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget};
 use fleet_core::id::AgentId;
 use fleet_core::pki::CertFingerprint;
-use fleet_core::value::AgentName;
+use fleet_core::value::{AgentCapacity, AgentName, AgentVersion};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
-use fleet_server::ports::agents::{Agent, AgentCert, InsertAgentError, NewAgent, NewAgentCert};
+use fleet_server::ports::agents::{
+    Agent, AgentCert, AgentHello, InsertAgentError, NewAgent, NewAgentCert,
+};
 use fleet_server::ports::audit::NewAuditEntry;
 use fleet_server::ports::store::{Store, StoreError};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -312,5 +314,251 @@ async fn a_stored_name_that_isnt_an_agent_name_is_corrupt(
             })
         ),
         "{read:?}"
+    );
+}
+
+// --- Group C: admission and presence (P10.4; ADR-0019, S29, S30) ---------------------
+
+/// The hello agent `agent` sends at `at_millis`.
+fn hello(agent: AgentId, capacity: u32, version: &str, at_millis: i64) -> AgentHello {
+    AgentHello {
+        agent,
+        capacity: AgentCapacity::try_from(capacity).unwrap(),
+        version: AgentVersion::try_from(version).unwrap(),
+        at: at(at_millis),
+    }
+}
+
+/// Records `hello` in its own audited transaction; whether it changed a row.
+async fn record_hello(db: &Database, hello: &AgentHello) -> bool {
+    let mut tx = db.write().await.unwrap();
+    let recorded = tx.agents().record_hello(hello).await.unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+    recorded
+}
+
+/// Records that agent `agent` was last heard from at `at_millis`.
+async fn record_seen(db: &Database, agent: AgentId, at_millis: i64) {
+    let mut tx = db.write().await.unwrap();
+    tx.agents().record_seen(agent, at(at_millis)).await.unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_certificate_is_found_by_its_fingerprint(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let agent = new_agent(1, "agent-1");
+    insert(&db, &agent).await.unwrap();
+    insert_cert(&db, &new_cert(7, agent.id)).await.unwrap();
+
+    let found = db
+        .agents()
+        .cert(CertFingerprint::from_digest([7; 32]))
+        .await
+        .unwrap();
+    let unknown = db
+        .agents()
+        .cert(CertFingerprint::from_digest([8; 32]))
+        .await
+        .unwrap();
+
+    assert_eq!(
+        found,
+        Some(AgentCert {
+            fingerprint: CertFingerprint::from_digest([7; 32]),
+            agent: agent.id,
+            not_after: at(T0 + 60 * DAY),
+            revoked_at: None,
+            created_at: at(T0),
+        })
+    );
+    assert_eq!(unknown, None);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_transaction_reads_an_agent_and_a_certificate_again(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let agent = new_agent(1, "agent-1");
+    insert(&db, &agent).await.unwrap();
+    insert_cert(&db, &new_cert(7, agent.id)).await.unwrap();
+
+    let mut tx = db.write().await.unwrap();
+    let read = tx.agents().find(agent.id).await.unwrap().unwrap();
+    let cert = tx
+        .agents()
+        .cert(CertFingerprint::from_digest([7; 32]))
+        .await
+        .unwrap()
+        .unwrap();
+    let missing = tx
+        .agents()
+        .cert(CertFingerprint::from_digest([8; 32]))
+        .await
+        .unwrap();
+    drop(tx);
+
+    assert_eq!(read.id, agent.id);
+    assert!(read.enabled);
+    assert_eq!(cert.agent, agent.id);
+    assert_eq!(missing, None);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_hello_stores_the_capacity_the_version_and_when_it_was_seen(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let agent = new_agent(1, "agent-1");
+    insert(&db, &agent).await.unwrap();
+
+    let recorded = record_hello(&db, &hello(agent.id, 50, "0.1.0", T0 + DAY)).await;
+
+    let read = db.agents().find(agent.id).await.unwrap().unwrap();
+    assert!(recorded);
+    assert_eq!(
+        read.capacity,
+        Some(AgentCapacity::try_from(50_u32).unwrap())
+    );
+    assert_eq!(read.version, Some(AgentVersion::try_from("0.1.0").unwrap()));
+    assert_eq!(read.last_seen_at, Some(at(T0 + DAY)));
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_hello_of_a_disabled_agent_changes_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let agent = new_agent(1, "agent-1");
+    insert(&db, &agent).await.unwrap();
+    disable(&db, agent.id).await;
+
+    let recorded = record_hello(&db, &hello(agent.id, 50, "0.1.0", T0 + DAY)).await;
+
+    let read = db.agents().find(agent.id).await.unwrap().unwrap();
+    assert!(!recorded);
+    assert_eq!(
+        (read.capacity, read.version, read.last_seen_at),
+        (None, None, None)
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_end_of_a_stream_moves_last_seen_forward(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let agent = new_agent(1, "agent-1");
+    insert(&db, &agent).await.unwrap();
+    record_hello(&db, &hello(agent.id, 50, "0.1.0", T0 + DAY)).await;
+
+    record_seen(&db, agent.id, T0 + 2 * DAY).await;
+
+    let read = db.agents().find(agent.id).await.unwrap().unwrap();
+    assert_eq!(read.last_seen_at, Some(at(T0 + 2 * DAY)));
+    assert_eq!(
+        read.capacity,
+        Some(AgentCapacity::try_from(50_u32).unwrap())
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn last_seen_never_moves_backwards(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
+    let db = database(options).await;
+    let agent = new_agent(1, "agent-1");
+    insert(&db, &agent).await.unwrap();
+    record_seen(&db, agent.id, T0 + 2 * DAY).await;
+
+    record_seen(&db, agent.id, T0 + DAY).await;
+    record_hello(&db, &hello(agent.id, 60, "0.2.0", T0 + DAY)).await;
+
+    let read = db.agents().find(agent.id).await.unwrap().unwrap();
+    assert_eq!(read.last_seen_at, Some(at(T0 + 2 * DAY)));
+    assert_eq!(
+        read.capacity,
+        Some(AgentCapacity::try_from(60_u32).unwrap())
+    );
+    assert_eq!(read.version, Some(AgentVersion::try_from("0.2.0").unwrap()));
+}
+
+#[sqlx::test(migrations = false)]
+async fn failures_since_count_only_failures_of_the_action_on_the_target_after_the_time(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let agent = new_agent(1, "agent-1");
+    let other = new_agent(2, "agent-2");
+    let target = AuditTarget::Agent(agent.id);
+    let entry = |millis: i64, action: AuditAction, outcome: AuditOutcome, target: AuditTarget| {
+        NewAuditEntry::new(at(millis), action, outcome).target(target)
+    };
+    let mut tx = db.write().await.unwrap();
+    for record in [
+        entry(
+            T0,
+            AuditAction::AGENT_CONNECT,
+            AuditOutcome::Failure,
+            target,
+        ),
+        entry(
+            T0 + DAY,
+            AuditAction::AGENT_CONNECT,
+            AuditOutcome::Failure,
+            target,
+        ),
+        entry(
+            T0 + DAY + 1,
+            AuditAction::AGENT_CONNECT,
+            AuditOutcome::Failure,
+            target,
+        ),
+        entry(
+            T0 + DAY,
+            AuditAction::AGENT_CONNECT,
+            AuditOutcome::Success,
+            target,
+        ),
+        entry(
+            T0 + DAY,
+            AuditAction::AGENT_ENROLL,
+            AuditOutcome::Failure,
+            target,
+        ),
+        entry(
+            T0 + DAY,
+            AuditAction::AGENT_CONNECT,
+            AuditOutcome::Failure,
+            AuditTarget::Agent(other.id),
+        ),
+    ] {
+        tx.audit().record(&record).await.unwrap();
+    }
+    tx.commit(setup_entry()).await.unwrap();
+
+    let since = |millis: i64| {
+        db.audit()
+            .failures_on_since(target, &AuditAction::AGENT_CONNECT, at(millis))
+    };
+
+    assert_eq!(since(T0 - 1).await.unwrap(), 3);
+    assert_eq!(since(T0).await.unwrap(), 2, "after, not at");
+    assert_eq!(since(T0 + DAY).await.unwrap(), 1);
+    assert_eq!(since(T0 + DAY + 1).await.unwrap(), 0);
+    let mut tx = db.write().await.unwrap();
+    assert_eq!(
+        tx.audit()
+            .failures_on_since(target, &AuditAction::AGENT_CONNECT, at(T0))
+            .await
+            .unwrap(),
+        2
     );
 }

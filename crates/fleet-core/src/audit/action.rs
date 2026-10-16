@@ -305,6 +305,23 @@ audit_actions! {
     /// used one, `agent` (the agent it enrolled). An unknown token is never
     /// recorded.
     AGENT_ENROLL = "agent.enroll";
+
+    /// An agent connected (P10.4, ADR-0019, S29, S30). No actor; the agent's
+    /// address; target the agent. Success, in the transaction that records
+    /// its hello's capacity and version before `Welcome`: metadata
+    /// `fingerprint` (the certificate it connected with), `version` and
+    /// `capacity`. Failure, nothing changed: a certificate the server knows
+    /// was refused; metadata `reason` (`revoked`, `expired`, `disabled`,
+    /// `san_mismatch` or `name_mismatch`) and `fingerprint`, at most 10 per
+    /// agent in any 24 hours. A certificate no agent holds is never recorded.
+    AGENT_CONNECT = "agent.connect";
+
+    /// An agent's stream ended (P10.4, ADR-0019, S29). Outcome: Success. No
+    /// actor; the agent's address; target the agent. Metadata: `reason`
+    /// (`closed`, `heartbeat_timeout`, `stream_error`, `protocol_error`,
+    /// `too_slow`, `disabled`, `certificate_revoked`, `certificate_expired`
+    /// or `server_shutdown`) and `connected_at`.
+    AGENT_DISCONNECT = "agent.disconnect";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

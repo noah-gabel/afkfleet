@@ -15,9 +15,11 @@
 //! its answer. What is stored, shown or used by a policy is fleet-core's.
 
 mod agent;
+mod hello;
 mod server;
 
 use core::num::NonZeroU64;
+use core::time::Duration;
 use std::collections::BTreeSet;
 
 use fleet_core::id::BotId;
@@ -27,6 +29,7 @@ use crate::{ConvertError, Problem};
 pub use agent::{
     AgentMessage, BotEvent, BotEventKind, ChatFailedReason, Hello, SessionRequest, SessionRequestId,
 };
+pub use hello::{HelloRefusal, read_hello};
 pub use server::{
     Assignment, RejectReason, SendChat, ServerMessage, SessionDenied, SessionGrant, Welcome,
 };
@@ -35,6 +38,25 @@ pub use server::{
 /// reconcile's assignments. It's the largest
 /// [`AgentCapacity`](fleet_core::value::AgentCapacity).
 pub const MAX_BOTS: usize = 1000;
+
+/// The largest message an agent sends and the server reads, in bytes: a
+/// power of two above the largest legitimate hello, 1000 bots with kicks at
+/// their caps (ADR-0019, S25). Both ends set it; tonic's default of 4 MiB
+/// would refuse that hello.
+pub const MAX_AGENT_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
+
+/// The largest message the server sends and an agent reads, in bytes: a
+/// power of two above the largest legitimate full reconcile, 1000 bots
+/// whose specs are at their caps (ADR-0019, S25).
+pub const MAX_SERVER_MESSAGE_BYTES: usize = 128 * 1024 * 1024;
+
+/// How long the server waits for a stream's first message, from the moment
+/// it opens the stream (ADR-0019, S24).
+pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long an agent waits for `Welcome` or `Reject` from the call's start:
+/// longer than [`HELLO_TIMEOUT`] and the hello's write behind it.
+pub const WELCOME_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Reads a list of bots: at most [`MAX_BOTS`], each bot once. An error in an
 /// entry, or a bot that appears again, carries the entry's position.

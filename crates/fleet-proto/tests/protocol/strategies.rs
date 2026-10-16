@@ -14,20 +14,21 @@ use fleet_core::disconnect::{
     AccountRestriction, ConflictKind, ConflictTexts, ConnectFailure, DisconnectReason,
     PermanentKind, SessionServerFailure,
 };
-use fleet_core::id::{AccountId, BotId, ChatRequestId};
+use fleet_core::id::{AccountId, AgentId, BotId, ChatRequestId};
 use fleet_core::mc::SessionCredentials;
 use fleet_core::mode::{Action, HotbarSlot, ModeDefinition, ModeDraft, Schedule, Step};
 use fleet_core::value::{AgentCapacity, McUsername, ServerAddress};
 use fleet_proto::control::{
-    AgentMessage, Assignment, BotEvent, BotEventKind, ChatFailedReason, Hello, RejectReason,
-    SendChat, ServerMessage, SessionDenied, SessionGrant, SessionRequest, SessionRequestId,
-    Welcome,
+    AgentMessage, Assignment, BotEvent, BotEventKind, ChatFailedReason, Hello, SendChat,
+    ServerMessage, SessionDenied, SessionGrant, SessionRequest, SessionRequestId, Welcome,
 };
 use proptest::collection::vec;
 use proptest::prelude::*;
 use proptest::sample::select;
 use secrecy::SecretString;
 use uuid::Uuid;
+
+use crate::REJECT_REASONS;
 
 /// The earliest and latest times the wire accepts, in milliseconds.
 pub(crate) const EARLIEST_MS: i64 = -62_167_219_200_000;
@@ -53,6 +54,10 @@ pub(crate) fn bot_id() -> impl Strategy<Value = BotId> {
 
 pub(crate) fn account_id() -> impl Strategy<Value = AccountId> {
     v7().prop_map(|(at, random)| AccountId::new_v7(at, random).unwrap())
+}
+
+pub(crate) fn agent_id() -> impl Strategy<Value = AgentId> {
+    v7().prop_map(|(at, random)| AgentId::new_v7(at, random).unwrap())
 }
 
 pub(crate) fn chat_request_id() -> impl Strategy<Value = ChatRequestId> {
@@ -416,9 +421,12 @@ pub(crate) fn assignment() -> impl Strategy<Value = Assignment> {
 
 pub(crate) fn server_message() -> impl Strategy<Value = ServerMessage> {
     prop_oneof![
-        (1_000..=300_000_u64).prop_map(|millis| ServerMessage::Welcome(Welcome {
-            heartbeat_interval: Duration::from_millis(millis)
-        })),
+        (1_000..=300_000_u64, agent_id()).prop_map(|(millis, agent_id)| ServerMessage::Welcome(
+            Welcome {
+                heartbeat_interval: Duration::from_millis(millis),
+                agent_id,
+            }
+        )),
         vec(assignment(), 0..=3).prop_map(|mut assignments| {
             assignments.sort_by_key(|assignment| assignment.spec.id);
             assignments.dedup_by_key(|assignment| assignment.spec.id);
@@ -448,10 +456,6 @@ pub(crate) fn server_message() -> impl Strategy<Value = ServerMessage> {
                 retryable,
             })
         }),
-        select(vec![
-            RejectReason::IncompatibleProtocol,
-            RejectReason::AgentDisabled
-        ])
-        .prop_map(ServerMessage::Reject),
+        select(REJECT_REASONS.to_vec()).prop_map(ServerMessage::Reject),
     ]
 }

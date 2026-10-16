@@ -76,6 +76,7 @@ use tracing::{error, info, warn};
 use super::DATABASE_CLOSE;
 use super::housekeeping::Housekeeping;
 use crate::app::accounts::{AccountService, AccountSettings};
+use crate::app::agents::AgentConnectionService;
 use crate::app::auth::TokenService;
 use crate::app::challenges::Challenges;
 use crate::app::enrollment::{EnrollmentService, EnrollmentTokenService};
@@ -88,6 +89,7 @@ use crate::app::login::LoginService;
 use crate::app::mfa::{MfaPorts, MfaService};
 use crate::app::users::UserService;
 use crate::config::{HttpConfig, ServerConfig};
+use crate::grpc::control::{ControlRoute, ControlTimings, Sessions, control_service};
 use crate::grpc::enrollment::enrollment_service;
 use crate::grpc::listener::{self as grpc_listener, EnrollmentRoute};
 use crate::http::error::chain;
@@ -102,10 +104,12 @@ use crate::infra::crypto::tokens::Sha256Tokens;
 use crate::infra::crypto::totp::TotpRs;
 use crate::infra::crypto::vault::{DerivedKey, VaultKeyError, VaultKeys, XChaChaVault};
 use crate::infra::msauth::{BuildError, ReqwestMicrosoftAuth};
+use crate::infra::pki::X509AgentNames;
 use crate::infra::pki::{AgentIssuer, CertificateAuthority, LoadedPki, PkiLoadError};
 use crate::infra::qr::SvgQr;
 use crate::infra::sqlite::{self, Database, DatabaseOptions, OpenError};
 use crate::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
+use crate::ports::agent_connections::AgentConnections;
 use crate::ports::msauth::MicrosoftAuthProvider;
 use crate::ports::pace::Pace;
 use crate::ports::passwords::{HashError, Passwords};
@@ -240,9 +244,22 @@ pub struct App {
     pub housekeeping: Housekeeping,
     /// The Microsoft link flows, whose pollers run until the shutdown.
     pub link_flows: LinkFlowService,
-    /// The agents' enrollment behind its gate, while the control plane is
-    /// on: [`run`] serves it on the gRPC port.
-    pub enrollment: Option<EnrollmentRoute>,
+    /// The gRPC port's services, while the control plane is on: [`run`]
+    /// serves them on the gRPC port.
+    pub grpc: Option<GrpcRoutes>,
+}
+
+/// The gRPC port's services: the agents' enrollment and their `Connect`,
+/// each behind its gate, and the owner of the `Connect` streams' sessions,
+/// which [`serve`] ends at the shutdown.
+#[derive(Debug)]
+pub struct GrpcRoutes {
+    /// `AgentEnrollment.Enroll`.
+    pub enrollment: EnrollmentRoute,
+    /// `AgentControl.Connect`.
+    pub control: ControlRoute,
+    /// The sessions of the `Connect` streams.
+    pub sessions: Sessions,
 }
 
 /// The control plane, while `[grpc]` is configured: the listener main.rs
@@ -256,13 +273,15 @@ pub struct ControlPlane {
 }
 
 /// The gRPC port [`serve`] runs beside the API: its listener and its
-/// server, TLS and services set up.
+/// server, TLS and services set up, and the owner of its sessions.
 #[derive(Debug)]
 pub struct GrpcPort {
     /// The port's listener.
     pub listener: TcpListener,
     /// Its server.
     pub router: tonic::transport::server::Router,
+    /// The sessions of its `Connect` streams, ended at the shutdown.
+    pub sessions: Sessions,
 }
 
 /// The clocks, the randomness, Microsoft and the pacing the app runs on.
@@ -338,9 +357,10 @@ pub fn app(
 /// `passwords`, which [`run`] builds (its dummy hash is async work).
 ///
 /// With `[grpc]` and its `ca`, the control plane is on: the API creates
-/// enrollment tokens that pin the CA, and [`App::enrollment`] signs agents'
-/// certificates with it (ADR-0019). Without either, the token route answers
-/// 404 and there is no enrollment.
+/// enrollment tokens that pin the CA, and [`App::grpc`] enrolls agents,
+/// signing their certificates with it, and admits their streams
+/// (ADR-0019). Without either, the token route answers 404 and there is no
+/// gRPC port.
 #[must_use]
 pub fn app_with(
     config: &ServerConfig,
@@ -412,7 +432,7 @@ pub fn app_with(
     );
     let grants = GrantService::new(Arc::clone(&clock), Arc::clone(&store));
     let ids = RequestIds::new(Arc::clone(&clock), Arc::clone(&random));
-    let (enrollment_tokens, enrollment) = control_plane_services(
+    let (enrollment_tokens, grpc) = control_plane_services(
         config,
         ca,
         EnrollmentPorts {
@@ -446,7 +466,7 @@ pub fn app_with(
         ),
         housekeeping: Housekeeping::new(limits, lockout, challenges, link_flows.flows()),
         link_flows,
-        enrollment,
+        grpc,
     }
 }
 
@@ -486,13 +506,14 @@ struct EnrollmentPorts {
 
 /// The control plane's services over `ports`, while `config` has `[grpc]`
 /// and there is a `ca`: the enrollment tokens' for the API, pinning the
-/// CA, and the enrollment for the gRPC port, signing with the CA for
-/// `[grpc] agent_cert_lifetime_days` within [`SERVER_DEADLINE`].
+/// CA; for the gRPC port, the enrollment, signing with the CA for
+/// `[grpc] agent_cert_lifetime_days` within [`SERVER_DEADLINE`], and
+/// `Connect` with `[grpc]`'s heartbeats.
 fn control_plane_services(
     config: &ServerConfig,
     ca: Option<CertificateAuthority>,
     ports: EnrollmentPorts,
-) -> (Option<EnrollmentTokenService>, Option<EnrollmentRoute>) {
+) -> (Option<EnrollmentTokenService>, Option<GrpcRoutes>) {
     let Some((grpc, ca)) = config.grpc.as_ref().zip(ca) else {
         return (None, None);
     };
@@ -504,6 +525,20 @@ fn control_plane_services(
         ca.fingerprint(),
     );
     let issuer = AgentIssuer::new(ca, Arc::clone(&ports.random), grpc.agent_cert_lifetime);
+    let connections: Arc<dyn AgentConnections> = Arc::new(AgentConnectionService::new(
+        Arc::clone(&ports.clock),
+        Arc::clone(&ports.store),
+        Arc::new(X509AgentNames),
+    ));
+    let sessions = Sessions::new(CancellationToken::new());
+    let control = control_service(
+        connections,
+        Arc::clone(&ports.clock),
+        ports.limits.clone(),
+        ports.ids.clone(),
+        ControlTimings::new(grpc.heartbeats),
+        sessions.clone(),
+    );
     let enrollment = EnrollmentService::new(
         ports.clock,
         ports.random,
@@ -513,12 +548,11 @@ fn control_plane_services(
     );
     (
         Some(tokens),
-        Some(enrollment_service(
-            enrollment,
-            ports.limits,
-            ports.ids,
-            SERVER_DEADLINE,
-        )),
+        Some(GrpcRoutes {
+            enrollment: enrollment_service(enrollment, ports.limits, ports.ids, SERVER_DEADLINE),
+            control,
+            sessions,
+        }),
     )
 }
 
@@ -586,14 +620,16 @@ pub async fn run<S: ShutdownSignals>(
         let (opened, ca) = open(plane, SystemClock.now());
         (Some(opened), Some(ca))
     } else {
-        info!("the control plane is off: [grpc] isn't configured, so no agent can enroll");
+        info!(
+            "the control plane is off: [grpc] isn't configured, so no agent can enroll or connect"
+        );
         (None, None)
     };
     let mut app = match app(config, &database, keys, lockout_key, passwords, ca) {
         Ok(app) => app,
         Err(error) => return cant_start(&error),
     };
-    let grpc = match grpc_port(config, opened, app.enrollment.take()) {
+    let grpc = match grpc_port(config, opened, app.grpc.take()) {
         Ok(grpc) => grpc,
         Err(error) => return cant_start(&error),
     };
@@ -627,7 +663,7 @@ fn open(
     ((listener, tls), pki.ca)
 }
 
-/// The gRPC port over `opened` serving `enrollment`, when `config` has
+/// The gRPC port over `opened` serving `services`, when `config` has
 /// `[grpc]` and both are there.
 ///
 /// # Errors
@@ -636,10 +672,10 @@ fn open(
 fn grpc_port(
     config: &ServerConfig,
     opened: Option<(TcpListener, ServerTlsConfig)>,
-    enrollment: Option<EnrollmentRoute>,
+    services: Option<GrpcRoutes>,
 ) -> Result<Option<GrpcPort>, StartError> {
-    let (Some(grpc), Some((listener, tls)), Some(route)) =
-        (config.grpc.as_ref(), opened, enrollment)
+    let (Some(grpc), Some((listener, tls)), Some(services)) =
+        (config.grpc.as_ref(), opened, services)
     else {
         return Ok(None);
     };
@@ -647,9 +683,19 @@ fn grpc_port(
         address: grpc.bind,
         source,
     })?;
-    let router = grpc_listener::router(tls, route).map_err(StartError::Grpc)?;
+    let GrpcRoutes {
+        enrollment,
+        control,
+        sessions,
+    } = services;
+    let router = grpc_listener::router(tls, enrollment, control, grpc.heartbeats)
+        .map_err(StartError::Grpc)?;
     info!(%address, "the control plane is listening");
-    Ok(Some(GrpcPort { listener, router }))
+    Ok(Some(GrpcPort {
+        listener,
+        router,
+        sessions,
+    }))
 }
 
 /// What a start logs while offline accounts are kept with the switch off.
@@ -702,9 +748,18 @@ pub async fn serve<S: ShutdownSignals>(
     .into_future();
     // Boxed, so the server's future stays as small with the port as without.
     let grpc = grpc.map(|port| {
+        // The `Connect` streams end at the shutdown, so tonic's drain isn't
+        // held by them, and each records its end before the database closes.
+        let sessions_stop = shutdown.child_token();
+        let sessions = port.sessions;
+        background.spawn(async move {
+            sessions_stop.cancelled().await;
+            sessions.shutdown().await;
+        });
         Box::pin(grpc_listener::serve(
             port.router,
             port.listener,
+            grpc_listener::CONNECTION_AGE,
             shutdown.child_token(),
         ))
     });

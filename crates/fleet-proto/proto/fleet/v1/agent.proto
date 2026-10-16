@@ -153,7 +153,8 @@ message ServerMessage {
     SessionGrant session_grant = 7;
     // The answer to a session request the server can't grant.
     SessionDenied session_denied = 8;
-    // The answer to a hello the server refuses; the stream then ends.
+    // The answer to a hello the server refuses, or the last message of a
+    // stream whose permission ended; the stream then ends.
     Reject reject = 9;
   }
 }
@@ -162,6 +163,8 @@ message ServerMessage {
 message Welcome {
   // How often the agent sends a heartbeat, in milliseconds.
   uint64 heartbeat_interval_ms = 1;
+  // The agent's ID, a version 7 UUID: the one its certificate names.
+  bytes agent_id = 2;
 }
 
 // Every bot the agent should run, at most 1000, each bot once.
@@ -244,13 +247,14 @@ message SessionDenied {
   bool retryable = 3;
 }
 
-// The answer to a hello the server refuses.
+// The answer to a hello the server refuses, or the last message of a stream
+// whose permission ended.
 message Reject {
   // Why.
   RejectReason reason = 1;
 }
 
-// Why the server refuses a hello.
+// Why the server refuses a hello or ends a stream.
 enum RejectReason {
   // Not set; never valid.
   REJECT_REASON_UNSPECIFIED = 0;
@@ -258,4 +262,14 @@ enum RejectReason {
   REJECT_REASON_INCOMPATIBLE_PROTOCOL = 1;
   // The agent is disabled.
   REJECT_REASON_AGENT_DISABLED = 2;
+  // The hello's name isn't the agent's.
+  REJECT_REASON_NAME_MISMATCH = 3;
+  // The first message isn't a hello, or the hello isn't valid.
+  REJECT_REASON_INVALID_HELLO = 4;
+  // The agent has a live stream already.
+  REJECT_REASON_ALREADY_CONNECTED = 5;
+  // The agent's certificate was revoked.
+  REJECT_REASON_CERTIFICATE_REVOKED = 6;
+  // The agent's certificate expired.
+  REJECT_REASON_CERTIFICATE_EXPIRED = 7;
 }

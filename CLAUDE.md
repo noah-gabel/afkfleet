@@ -129,6 +129,10 @@ On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: th
 - Services own use cases, transactions and audit entries.
 - Writes go through `Store::write()`, a `WriteTx` on the one write connection. Its `commit(entry)` takes the audit entry, so nothing commits unaudited, except through `commit_unaudited(UnauditedWrite)`, whose named exemptions (`SessionTouch`, `SessionRotate`, `LoginAttemptsPurge`) each have an ADR note; a new one needs the user's approval and its own note (ADR-0015, ADR-0016). Keep it short: no password hashing, crypto or network calls while it's open (ADR-0015).
 
+**The gRPC port:**
+- Its listener bounds each connection's age itself: 80 s, lifted only while an agent's welcomed stream lives. fleet-server's `clippy.toml` bans tonic's server-wide `max_connection_age`, its grace and `Server::timeout`, which would cut agents' streams (ADR-0019, U7).
+- An agent's identity comes only from its client certificate's fingerprint and SAN, never from what it sends (ADR-0019).
+
 **Shared types:**
 - Every API DTO lives in `fleet-api-types` (serde + garde + ts-rs + utoipa). A test keeps its `OpenAPI` schemas equal to the TypeScript export.
 - The desktop app's IPC types (`CommandError`, the login step, the logout outcome, the server profile's types) live in `fleet-api-types::app`: exported by `just gen` with the DTOs, left out of the `OpenAPI` document (ADR-0017).
@@ -147,7 +151,7 @@ fleet-server/src/
   ports/      # repository and provider traits
   infra/      # sqlite/ (sqlx repos), crypto/ (vault, tokens, passwords), msauth/ (Microsoft's account flows over HTTP), pki/ (the CA, certificates, CSRs)
   http/       # router.rs, middleware/, extractors/, handlers/<resource>.rs, error.rs, openapi.rs, ws.rs
-  grpc/       # listener.rs, enrollment.rs, control.rs, registry.rs, scheduler.rs, reconciler.rs
+  grpc/       # listener.rs, status.rs, enrollment.rs, control/ (gate, session, outbound), registry.rs, scheduler.rs, reconciler.rs
 ```
 
 ## Crate registry: one crate per concern
@@ -208,7 +212,7 @@ fleet-server/src/
 | Desktop | Shell | `tauri` ≥ 2.11.1, `tauri-build` |
 | | Plugins | `tauri-plugin-opener`, `tauri-plugin-single-instance`, `tauri-plugin-updater` |
 | | Keychain | `keyring-core` + `windows-native-keyring-store` |
-| Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, tokio `test-util`, `log` (dev only: fleet-testkit's log capture and fleet-agent's telemetry, each to prove the `log` bridge; fleet-server's one normal use is sqlx's `LevelFilter`, and its logging macros are banned there), `tempfile` (fleet-server's database tests), `ipnet` (dev only: fleet-server's property test of its own `IpNet`) |
+| Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, tokio `test-util`, `log` (dev only: fleet-testkit's log capture and fleet-agent's telemetry, each to prove the `log` bridge; fleet-server's one normal use is sqlx's `LevelFilter`, and its logging macros are banned there), `tempfile` (fleet-server's database tests), `ipnet` (dev only: fleet-server's property test of its own `IpNet`), `hyper-util` (dev only, `tokio`: fleet-server's in-memory control-plane test hands tonic's client a pipe through `rt::TokioIo`) |
 | | Fuzzing | `libfuzzer-sys`, `arbitrary` |
 
 **Frontend packages**

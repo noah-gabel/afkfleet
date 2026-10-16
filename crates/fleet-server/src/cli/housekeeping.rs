@@ -98,6 +98,7 @@ impl Housekeeping {
                 per_user = limits.per_user,
                 grants_by_name = limits.grants_by_name,
                 enroll = limits.enroll,
+                connect = limits.connect,
                 locked = lockout.locked,
                 in_flight = lockout.in_flight,
                 "requests were refused since the last report"

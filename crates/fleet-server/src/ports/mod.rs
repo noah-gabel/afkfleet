@@ -9,6 +9,8 @@
 //! - [`users`]: the users.
 //! - [`agents`]: the enrolled agents and the certificates the server signed
 //!   for them (P10.2, P10.3).
+//! - [`agent_connections`]: what an agent's `Connect` stream asks the app:
+//!   admitting its certificate, recording its hello and its end (P10.4).
 //! - [`accounts`]: the linked Minecraft accounts, Microsoft or offline
 //!   (P9.1).
 //! - [`grants`]: the grants that share an account with other users (P9.1).
@@ -26,7 +28,8 @@
 //! - [`tokens`]: the tokens' hashes, the only form of a token the database
 //!   holds (P7.3).
 //! - [`passwords`]: hashing and checking passwords (P7.2).
-//! - [`pki`]: issuing agents' certificates from their CSRs (P10.2).
+//! - [`pki`]: issuing agents' certificates from their CSRs (P10.2), and
+//!   reading which agent a certificate names (P10.4).
 //! - [`totp`]: TOTP's crypto, a time step's code and the otpauth URI (P7.7).
 //! - [`qr`]: drawing the enrollment's QR code (P7.7).
 //! - [`vault`]: encrypting stored secrets (P7.4), and reading an envelope's
@@ -41,6 +44,7 @@
 //! - [`page`]: the keyset pages the lists share (P7.6, P7.9).
 
 pub mod accounts;
+pub mod agent_connections;
 pub mod agents;
 pub mod audit;
 pub mod enrollment_tokens;

@@ -123,3 +123,12 @@ pub trait AgentCertificates: Send + Sync + fmt::Debug {
     /// The CA certificate's fingerprint, which enrollment bundles pin.
     fn ca_fingerprint(&self) -> CertFingerprint;
 }
+
+/// Reading which agent a client certificate names (ADR-0019, S24): what
+/// `Connect` compares with the agent its fingerprint's row names. It's read
+/// only for a certificate whose fingerprint the server knows.
+pub trait AgentNames: Send + Sync + fmt::Debug {
+    /// The agent `der`'s one SAN names, `urn:uuid:` and a version 7 UUID;
+    /// `None` for anything else, whose problem is never passed on.
+    fn agent_of(&self, der: &[u8]) -> Option<AgentId>;
+}

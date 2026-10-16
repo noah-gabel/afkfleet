@@ -77,6 +77,20 @@ pub struct NewAgentCert {
     pub created_at: DateTime<Utc>,
 }
 
+/// What an agent's accepted hello reported, stamped with the server's time
+/// (ADR-0019, S29).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AgentHello {
+    /// The agent, from its certificate.
+    pub agent: AgentId,
+    /// How many bots it may run.
+    pub capacity: AgentCapacity,
+    /// Its version.
+    pub version: AgentVersion,
+    /// When the server read the hello, by its own clock.
+    pub at: DateTime<Utc>,
+}
+
 /// Why [`AgentWrites::insert`] failed.
 #[derive(Debug, thiserror::Error)]
 pub enum InsertAgentError {
@@ -109,6 +123,13 @@ pub trait AgentReads: Send + Sync + fmt::Debug {
     /// # Errors
     /// [`StoreError`], including [`StoreError::Corrupt`].
     async fn certs(&self, id: AgentId) -> Result<Vec<AgentCert>, StoreError>;
+
+    /// The certificate whose fingerprint is `fingerprint`: what a connecting
+    /// agent is looked up by.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn cert(&self, fingerprint: CertFingerprint) -> Result<Option<AgentCert>, StoreError>;
 }
 
 /// Writing agents inside a [`super::store::WriteTx`].
@@ -127,4 +148,33 @@ pub trait AgentWrites: Send {
     /// [`StoreError`]: an agent that doesn't exist, a fingerprint stored
     /// already, or a `not_after` that isn't after `created_at`.
     async fn insert_cert(&mut self, cert: &NewAgentCert) -> Result<(), StoreError>;
+
+    /// The agent `id`, read in this transaction.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn find(&mut self, id: AgentId) -> Result<Option<Agent>, StoreError>;
+
+    /// The certificate whose fingerprint is `fingerprint`, read in this
+    /// transaction.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn cert(&mut self, fingerprint: CertFingerprint)
+    -> Result<Option<AgentCert>, StoreError>;
+
+    /// Records `hello`'s capacity and version on its agent, and its time as
+    /// `last_seen_at` unless a later one is stored; only for an enabled
+    /// agent. Whether the agent was enabled and so changed.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn record_hello(&mut self, hello: &AgentHello) -> Result<bool, StoreError>;
+
+    /// Moves agent `id`'s `last_seen_at` forward to `at`; a later stored time
+    /// stays.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn record_seen(&mut self, id: AgentId, at: DateTime<Utc>) -> Result<(), StoreError>;
 }

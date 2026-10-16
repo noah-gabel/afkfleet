@@ -99,6 +99,9 @@ tonic = { workspace = true, features = ["router", "server", "tls-aws-lc"] }
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 # `ServiceBuilder`, which lists the middleware stack outermost first (ADR-0015).
 tower.workspace = true
+# Each agent's `Connect` stream answers from a `ReceiverStream` over its bounded queue, and
+# the gRPC listener maps its accepted sockets with `StreamExt` (ADR-0019).
+tokio-stream.workspace = true
 # `CancellationToken`, which asks axum's server to shut down gracefully (ADR-0015), and
 # `rt` for the `TaskTracker` that owns the session-token service's refreshes (ADR-0018).
 tokio-util = { workspace = true, features = ["rt"] }
@@ -121,6 +124,9 @@ zxcvbn.workspace = true
 # `figment::Jail`, the type `in_jail` hands each config test (ADR-0015).
 figment = { workspace = true, features = ["test"] }
 fleet-testkit.workspace = true
+# `rt::TokioIo`, which hands tonic's client an in-memory pipe in the control plane's
+# paused-time test (U6, ADR-0019).
+hyper-util = { workspace = true, features = ["tokio"] }
 # The migrations' checksum snapshot, and the error responses' JSON snapshots (ADR-0015).
 insta = { workspace = true, features = ["json"] }
 # The property test that checks IpNet against an independent implementation (ADR-0016).

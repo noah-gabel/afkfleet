@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT count(*) AS \"count!: i64\" FROM audit_log\n           WHERE target_type = ? AND target_id = ? AND action = ? AND outcome = 'failure'\n             AND at > ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "count!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5f877183abc775354211f662235701e7bcb061c75680952577433d5480fc2caf"
+}

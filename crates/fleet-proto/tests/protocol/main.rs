@@ -7,6 +7,8 @@
 //! - `rejects`: one case per rule that refuses a message, with its error.
 //! - `enrollment`: the enrollment's messages: the wire, their refusals, the
 //!   token's redaction and the shared limits.
+//! - `hello`: a stream's first message, read with its protocol version first.
+//! - `limits`: the largest legitimate messages fit the shared size limits.
 //! - `redaction`: a secret never prints, and every field named like a secret
 //!   belongs to a redacted message.
 //! - `schema`: the pinned wire schema.
@@ -18,6 +20,8 @@
 
 mod decode;
 mod enrollment;
+mod hello;
+mod limits;
 mod redaction;
 mod rejects;
 mod round_trip;
@@ -25,9 +29,20 @@ mod schema;
 mod strategies;
 
 use fleet_core::mc::SessionCredentials;
-use fleet_proto::control::{ServerMessage, SessionGrant};
+use fleet_proto::control::{RejectReason, ServerMessage, SessionGrant};
 use prost::Message;
 use secrecy::ExposeSecret;
+
+/// Every reason the server gives for refusing a hello or ending a stream.
+const REJECT_REASONS: [RejectReason; 7] = [
+    RejectReason::IncompatibleProtocol,
+    RejectReason::AgentDisabled,
+    RejectReason::NameMismatch,
+    RejectReason::InvalidHello,
+    RejectReason::AlreadyConnected,
+    RejectReason::CertificateRevoked,
+    RejectReason::CertificateExpired,
+];
 
 /// The wire schema the build script rendered from the .proto files.
 const WIRE_SCHEMA: &str = include_str!(concat!(env!("OUT_DIR"), "/wire-schema.txt"));

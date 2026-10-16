@@ -88,10 +88,21 @@ pub(crate) struct RawGrpc {
     pub(crate) server_key_file: Option<String>,
     #[garde(range(min = GrpcConfig::AGENT_CERT_LIFETIME_DAYS.min, max = GrpcConfig::AGENT_CERT_LIFETIME_DAYS.max))]
     pub(crate) agent_cert_lifetime_days: u32,
+    // Validation checks the heartbeat keys' ranges and their rule together.
+    #[garde(skip)]
+    pub(crate) heartbeat_interval_secs: u32,
+    #[garde(skip)]
+    pub(crate) heartbeat_timeout_secs: u32,
 }
 
 /// Appendix A's agent certificate lifetime.
 const DEFAULT_AGENT_CERT_LIFETIME_DAYS: u32 = 60;
+
+/// Appendix A's heartbeat interval.
+const DEFAULT_HEARTBEAT_INTERVAL_SECS: u32 = 10;
+
+/// Appendix A's heartbeat timeout.
+const DEFAULT_HEARTBEAT_TIMEOUT_SECS: u32 = 30;
 
 impl Default for RawGrpc {
     fn default() -> Self {
@@ -102,6 +113,8 @@ impl Default for RawGrpc {
             server_cert_file: None,
             server_key_file: None,
             agent_cert_lifetime_days: DEFAULT_AGENT_CERT_LIFETIME_DAYS,
+            heartbeat_interval_secs: DEFAULT_HEARTBEAT_INTERVAL_SECS,
+            heartbeat_timeout_secs: DEFAULT_HEARTBEAT_TIMEOUT_SECS,
         }
     }
 }
@@ -228,6 +241,8 @@ pub(crate) struct RawRateLimits {
     pub(crate) grants_by_name_per_user_per_hour: u32,
     #[garde(range(min = RateLimitConfig::ENROLL_PER_IP_PER_MIN.min, max = RateLimitConfig::ENROLL_PER_IP_PER_MIN.max))]
     pub(crate) enroll_per_ip_per_min: u32,
+    #[garde(range(min = RateLimitConfig::CONNECT_PER_CERT_PER_MIN.min, max = RateLimitConfig::CONNECT_PER_CERT_PER_MIN.max))]
+    pub(crate) connect_per_cert_per_min: u32,
 }
 
 impl Default for RawRateLimits {
@@ -244,6 +259,7 @@ impl Default for RawRateLimits {
             link_flows_per_user_per_day: 10,
             grants_by_name_per_user_per_hour: 10,
             enroll_per_ip_per_min: 5,
+            connect_per_cert_per_min: 10,
         }
     }
 }
@@ -600,6 +616,7 @@ mod secret_names {
             "rate_limits.link_flows_per_user_per_day",
             "rate_limits.grants_by_name_per_user_per_hour",
             "rate_limits.enroll_per_ip_per_min",
+            "rate_limits.connect_per_cert_per_min",
             "accounts",
             "accounts.max_per_member",
             "accounts.allow_offline",
@@ -610,6 +627,8 @@ mod secret_names {
             "grpc.server_cert_file",
             "grpc.server_key_file",
             "grpc.agent_cert_lifetime_days",
+            "grpc.heartbeat_interval_secs",
+            "grpc.heartbeat_timeout_secs",
         ] {
             assert!(keys.iter().any(|found| found == key), "{key} in {keys:?}");
         }

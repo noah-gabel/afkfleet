@@ -33,8 +33,11 @@ use fleet_core::value::AgentName;
 use fleet_proto::enrollment::{MAX_REQUEST_BYTES, SERVER_DEADLINE};
 use fleet_proto::generated::EnrollRequest;
 use fleet_proto::generated::agent_enrollment_client::AgentEnrollmentClient;
+use fleet_server::app::agents::AgentConnectionService;
 use fleet_server::app::enrollment::{Creator, EnrollmentService, EnrollmentTokenService};
+use fleet_server::config::Heartbeats;
 use fleet_server::config::{Rate, RateLimitConfig};
+use fleet_server::grpc::control::{ControlTimings, Sessions, control_service};
 use fleet_server::grpc::enrollment::{
     INVALID_CSR, INVALID_REQUEST, INVALID_TOKEN, NAME_TAKEN, RATE_LIMITED, REQUEST_ID, RETRY_AFTER,
     TOO_SLOW, enrollment_service,
@@ -44,7 +47,8 @@ use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::rate_limit::RateLimits;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::pki::{
-    AgentIssuer, CertificateAuthority, Ed25519Key, LoadedPki, ServerNames, fingerprint,
+    AgentIssuer, CertificateAuthority, Ed25519Key, LoadedPki, ServerNames, X509AgentNames,
+    fingerprint,
 };
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::infra::system::SystemClock;
@@ -190,14 +194,28 @@ async fn start(options: SqliteConnectOptions, settings: Settings) -> Port {
         RequestIds::new(Arc::new(clock.clone()), Arc::new(random.clone())),
         settings.deadline,
     );
-    let router = listener::router(tls, route).unwrap();
+    let control = control_service(
+        Arc::new(AgentConnectionService::new(
+            Arc::new(clock.clone()),
+            Arc::new(db.clone()),
+            Arc::new(X509AgentNames),
+        )),
+        Arc::new(clock.clone()),
+        RateLimits::new(&settings.limits, Arc::new(clock.clone())),
+        RequestIds::new(Arc::new(clock.clone()), Arc::new(random.clone())),
+        ControlTimings::new(Heartbeats::default()),
+        Sessions::new(CancellationToken::new()),
+    );
+    let router = listener::router(tls, route, control, Heartbeats::default()).unwrap();
     let bound = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = bound.local_addr().unwrap();
     let stop = CancellationToken::new();
     let mut server = JoinSet::new();
     let serving = stop.child_token();
     server.spawn(async move {
-        listener::serve(router, bound, serving).await.unwrap();
+        listener::serve(router, bound, listener::CONNECTION_AGE, serving)
+            .await
+            .unwrap();
     });
     Port {
         address,

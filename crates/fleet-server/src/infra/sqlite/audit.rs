@@ -3,6 +3,8 @@
 
 use std::net::IpAddr;
 
+use chrono::{DateTime, Utc};
+
 use fleet_core::audit::{AuditAction, AuditTarget, RecordedMetadata, RecordedTarget};
 use fleet_core::id::UserId;
 use serde_json::Value;
@@ -273,4 +275,38 @@ fn metadata_from_json(json: &str) -> Option<RecordedMetadata> {
         }
     }
     Some(metadata)
+}
+
+/// How many Failure entries of `action` name `target`, recorded after
+/// `since`.
+pub(super) async fn failures_on_since<'c, E>(
+    executor: E,
+    target: AuditTarget,
+    action: &AuditAction,
+    since: DateTime<Utc>,
+) -> Result<u32, StoreError>
+where
+    E: sqlx::SqliteExecutor<'c>,
+{
+    let kind = target.kind();
+    let id = id_text(target.id());
+    let action = action.as_str();
+    let since = time_text(since).ok_or(StoreError::Unstorable {
+        table: "audit_log",
+        column: "at",
+    })?;
+    let count = sqlx::query_scalar!(
+        r#"SELECT count(*) AS "count!: i64" FROM audit_log
+           WHERE target_type = ? AND target_id = ? AND action = ? AND outcome = 'failure'
+             AND at > ?"#,
+        kind,
+        id,
+        action,
+        since
+    )
+    .fetch_one(executor)
+    .await
+    .map_err(store_error)?;
+    // A count is never negative, and never near 2^32 entries.
+    Ok(u32::try_from(count).unwrap_or(u32::MAX))
 }

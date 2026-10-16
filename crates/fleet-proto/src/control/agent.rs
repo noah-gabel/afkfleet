@@ -193,7 +193,8 @@ impl TryFrom<wire::AgentMessage> for AgentMessage {
     }
 }
 
-fn hello_from_wire(hello: wire::Hello) -> Result<Hello, ConvertError> {
+/// Reads a hello's fields; [`super::read_hello`] checks its version first.
+pub(super) fn hello_from_wire(hello: wire::Hello) -> Result<Hello, ConvertError> {
     Ok(Hello {
         name: AgentName::try_from(hello.name.as_str())
             .map_err(|e| ConvertError::new("Hello.name", e.into()))?,

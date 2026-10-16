@@ -13,7 +13,9 @@ use sqlx::SqliteConnection;
 
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::{store_error, unique_violation};
-use crate::ports::agents::{Agent, AgentCert, InsertAgentError, NewAgent, NewAgentCert};
+use crate::ports::agents::{
+    Agent, AgentCert, AgentHello, InsertAgentError, NewAgent, NewAgentCert,
+};
 use crate::ports::store::StoreError;
 
 /// The tables, as errors name them.
@@ -154,6 +156,78 @@ pub(super) async fn insert_cert(
         agent,
         not_after,
         created_at
+    )
+    .execute(conn)
+    .await
+    .map(drop)
+    .map_err(store_error)
+}
+
+/// The certificate whose fingerprint is `fingerprint`.
+pub(super) async fn cert<'c, E>(
+    executor: E,
+    fingerprint: CertFingerprint,
+) -> Result<Option<AgentCert>, StoreError>
+where
+    E: sqlx::SqliteExecutor<'c>,
+{
+    let fingerprint = fingerprint.as_bytes().as_slice();
+    sqlx::query_as!(
+        CertRow,
+        r#"SELECT rowid AS "rowid!: i64", fingerprint_sha256 AS "fingerprint_sha256!: Vec<u8>",
+                  agent_id AS "agent_id!", not_after AS "not_after!",
+                  revoked_at AS "revoked_at?", created_at AS "created_at!"
+           FROM agent_certs WHERE fingerprint_sha256 = ?"#,
+        fingerprint
+    )
+    .fetch_optional(executor)
+    .await
+    .map_err(store_error)?
+    .map(cert_from_row)
+    .transpose()
+}
+
+/// Records `hello` on its agent while it's enabled; `last_seen_at` only
+/// moves forward. Whether a row changed.
+pub(super) async fn record_hello(
+    conn: &mut SqliteConnection,
+    hello: &AgentHello,
+) -> Result<bool, StoreError> {
+    let id = id_text(hello.agent);
+    let capacity = i64::from(u32::from(hello.capacity));
+    let version = hello.version.as_str();
+    let at = stored_time(hello.at, AGENTS, "last_seen_at")?;
+    let done = sqlx::query!(
+        "UPDATE agents SET capacity = ?, version = ?,
+                last_seen_at = CASE WHEN last_seen_at IS NULL OR last_seen_at < ?
+                                    THEN ? ELSE last_seen_at END
+         WHERE id = ? AND enabled = 1",
+        capacity,
+        version,
+        at,
+        at,
+        id
+    )
+    .execute(conn)
+    .await
+    .map_err(store_error)?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// Moves agent `id`'s `last_seen_at` forward to `at`.
+pub(super) async fn record_seen(
+    conn: &mut SqliteConnection,
+    id: AgentId,
+    at: DateTime<Utc>,
+) -> Result<(), StoreError> {
+    let id = id_text(id);
+    let at = stored_time(at, AGENTS, "last_seen_at")?;
+    sqlx::query!(
+        "UPDATE agents SET last_seen_at = ?
+         WHERE id = ? AND (last_seen_at IS NULL OR last_seen_at < ?)",
+        at,
+        id,
+        at
     )
     .execute(conn)
     .await

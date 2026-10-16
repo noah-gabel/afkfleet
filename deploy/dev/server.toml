@@ -36,3 +36,7 @@ allow_offline = true                     # dev only: offline-mode test server
 #                                        # PKI it creates in target/dev-server/pki/ (ADR-0019)
 # bind = "127.0.0.1:7443"                # an IP address and a port other than 0 and [http]'s
 # agent_cert_lifetime_days = 60          # 1–365
+# heartbeat_interval_secs = 10           # 1–60: Welcome tells the agent, and the port pings a
+#                                        # connection it read nothing from for this long
+# heartbeat_timeout_secs = 30            # 2–300, at least twice the interval: a stream that
+#                                        # sent nothing for this long ends (ADR-0019)

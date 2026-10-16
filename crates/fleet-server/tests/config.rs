@@ -16,10 +16,10 @@ use chrono::TimeDelta;
 use figment::Jail;
 use fleet_core::auth::{InviteTtl, LockoutPolicy, SessionPolicy};
 use fleet_server::config::{
-    AccountsConfig, Argon2Params, AuthConfig, ConfigError, DatabaseConfig, GrpcConfig, HttpConfig,
-    LinkFlowLimits, LogConfig, LogFilterError, LogFormat, ParseError, ParseProblem, ParseSource,
-    PkiPaths, ProblemKind, Problems, Rate, RateLimitConfig, ServerConfig, UnknownLogFormatError,
-    VaultConfig, load,
+    AccountsConfig, Argon2Params, AuthConfig, ConfigError, DatabaseConfig, GrpcConfig, Heartbeats,
+    HttpConfig, LinkFlowLimits, LogConfig, LogFilterError, LogFormat, ParseError, ParseProblem,
+    ParseSource, PkiPaths, ProblemKind, Problems, Rate, RateLimitConfig, ServerConfig,
+    UnknownLogFormatError, VaultConfig, load,
 };
 use fleet_server::http::rate_limit::{IpNet, IpNetError, TrustedProxies};
 use fleet_startup::telemetry::{NoRules, layer_with};
@@ -216,6 +216,7 @@ fn every_rate_limit() -> RateLimitConfig {
         },
         grants_by_name: Rate::per_hour(nonzero(4)),
         enroll: Rate::per_minute(nonzero(4)),
+        connect: Rate::per_minute(nonzero(7)),
     }
 }
 
@@ -262,6 +263,7 @@ link_flows_total = 5
 link_flows_per_user_per_day = 20
 grants_by_name_per_user_per_hour = 4
 enroll_per_ip_per_min = 4
+connect_per_cert_per_min = 7
 
 [accounts]
 max_per_member = 7
@@ -325,7 +327,7 @@ active_key_id = 3
 fn every_grpc_key_maps_to_its_setting() {
     in_jail(|jail| {
         let toml = format!(
-            "{}\n{}bind = \"0.0.0.0:7444\"\nagent_cert_lifetime_days = 30\n",
+            "{}\n{}bind = \"0.0.0.0:7444\"\nagent_cert_lifetime_days = 30\nheartbeat_interval_secs = 5\nheartbeat_timeout_secs = 20\n",
             minimal(jail),
             grpc(jail)
         );
@@ -338,6 +340,7 @@ fn every_grpc_key_maps_to_its_setting() {
                 bind: addr("0.0.0.0:7444"),
                 pki: pki_paths(jail),
                 agent_cert_lifetime: TimeDelta::days(30),
+                heartbeats: Heartbeats::try_from_secs(5, 20).unwrap(),
             })
         );
     });
@@ -1080,6 +1083,7 @@ fn the_dev_config_holds_neither_the_database_path_nor_the_vault_key_file() {
 #[case::link_flows_per_user_per_day("link_flows_per_user_per_day", 1, 100)]
 #[case::grants_by_name("grants_by_name_per_user_per_hour", 1, 100)]
 #[case::enroll("enroll_per_ip_per_min", 1, 60)]
+#[case::connect("connect_per_cert_per_min", 1, 60)]
 fn rate_limit_keys_are_checked_against_their_range(
     #[case] key: &str,
     #[case] min: u64,
@@ -1286,9 +1290,17 @@ fn a_grpc_section_turns_the_control_plane_on_with_its_defaults() {
                 bind: GrpcConfig::DEFAULT_BIND,
                 pki: pki_paths(jail),
                 agent_cert_lifetime: TimeDelta::days(60),
+                heartbeats: Heartbeats::default(),
             })
         );
         assert_eq!(GrpcConfig::DEFAULT_BIND, addr("127.0.0.1:7443"));
+        assert_eq!(
+            (
+                Heartbeats::default().interval(),
+                Heartbeats::default().timeout()
+            ),
+            (Duration::from_secs(10), Duration::from_secs(30))
+        );
     });
 }
 
@@ -1405,6 +1417,100 @@ fn an_agent_certificate_lives_1_to_365_days() {
                 }]
             );
         }
+    });
+}
+
+/// A heartbeat key, its value, and what's refused about it (ADR-0019, S23).
+#[rstest]
+#[case::interval_too_low("heartbeat_interval_secs", 0, "lower than 1")]
+#[case::interval_too_high("heartbeat_interval_secs", 61, "greater than 60")]
+#[case::timeout_too_low("heartbeat_timeout_secs", 1, "lower than 2")]
+#[case::timeout_too_high("heartbeat_timeout_secs", 301, "greater than 300")]
+fn grpc_heartbeats_out_of_range_are_refused(
+    #[case] key: &str,
+    #[case] value: u32,
+    #[case] message: &str,
+) {
+    in_jail(|jail| {
+        let toml = format!("{}\n{}{key} = {value}\n", minimal(jail), grpc(jail));
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), [format!("grpc.{key}")]);
+        assert_eq!(
+            kinds(&problems),
+            [ProblemKind::OutOfRange {
+                message: message.to_owned()
+            }]
+        );
+    });
+}
+
+#[test]
+fn grpc_heartbeats_take_the_ends_of_their_ranges() {
+    in_jail(|jail| {
+        let base = format!("{}\n{}", minimal(jail), grpc(jail));
+        let with = |interval: u32, timeout: u32| {
+            format!(
+                "{base}heartbeat_interval_secs = {interval}\nheartbeat_timeout_secs = {timeout}\n"
+            )
+        };
+
+        for (interval, timeout) in [(1, 2), (60, 300), (1, 300)] {
+            let heartbeats = load_toml(jail, &with(interval, timeout))
+                .unwrap()
+                .grpc
+                .unwrap()
+                .heartbeats;
+            assert_eq!(
+                (heartbeats.interval(), heartbeats.timeout()),
+                (
+                    Duration::from_secs(u64::from(interval)),
+                    Duration::from_secs(u64::from(timeout))
+                )
+            );
+        }
+    });
+}
+
+#[test]
+fn a_heartbeat_interval_over_half_the_timeout_is_refused_and_half_is_accepted() {
+    in_jail(|jail| {
+        let base = format!("{}\n{}", minimal(jail), grpc(jail));
+        let with = |interval: u32| {
+            format!("{base}heartbeat_interval_secs = {interval}\nheartbeat_timeout_secs = 30\n")
+        };
+
+        assert!(load_toml(jail, &with(15)).is_ok());
+        let problems = invalid(load_toml(jail, &with(16)));
+        assert_eq!(keys(&problems), ["grpc.heartbeat_interval_secs"]);
+        assert_eq!(
+            kinds(&problems),
+            [ProblemKind::MoreThanHalfOfKey {
+                key: "heartbeat_timeout_secs"
+            }]
+        );
+    });
+}
+
+#[test]
+fn an_out_of_range_heartbeat_isnt_also_reported_as_over_half() {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}\n{}heartbeat_interval_secs = 61\nheartbeat_timeout_secs = 30\n",
+            minimal(jail),
+            grpc(jail)
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["grpc.heartbeat_interval_secs"]);
+        assert_eq!(
+            kinds(&problems),
+            [ProblemKind::OutOfRange {
+                message: "greater than 60".to_owned()
+            }]
+        );
     });
 }
 
