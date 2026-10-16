@@ -132,6 +132,15 @@ protox = "0.9.1"
 qrcodegen = "1.8.0"
 # rand: no `sys_rng`/`thread_rng`; fleet-core takes an RNG as a parameter (ADR-0010).
 rand = { version = "0.10.3", default-features = false }
+# rcgen: the control plane's PKI. fleet-server makes the CA and the server certificate
+# (`pki init`) and signs agents' CSRs; fleet-agent makes its key and CSR (Plan.md P10.2,
+# P10.3). Without default features, which select ring: members enable `aws_lc_rs` (which
+# turns on x509-parser's `verify-aws`, never its ring `verify`), `pem`, `x509-parser` for
+# reading CSRs and the CA certificate, and `zeroize`, which wipes a key pair's PKCS#8
+# copy. Every key is Ed25519 from getrandom bytes, never `KeyPair::generate` (ADR-0019).
+# fleet-client's and the desktop app's TLS tests make test certificates with it too, since
+# no key is ever committed (ADR-0017).
+rcgen = { version = "0.14.10", default-features = false }
 # rpassword: `user create-owner`'s hidden password prompt at the terminal (ADR-0016).
 rpassword = "7.5.4"
 # reqwest: TLS is fixed here, `rustls` (aws-lc-rs + platform verifier), never native-tls.
@@ -231,6 +240,13 @@ uuid = { version = "1.27.0", default-features = false }
 # desktop app's refresh token. Without default features: `search` (and its regex) is off,
 # since the app only builds entries by service and account (ADR-0017).
 windows-native-keyring-store = { version = "1.1.0", default-features = false }
+# x509-parser: fleet-server reads the PKI's certificates with it, the CA flag, the server
+# certificate's names and validity at serve's startup, and its tests read every field of
+# the certificates it issues (the user's choice in Phase 10's group B, ADR-0019; rcgen 0.14
+# no longer parses certificates). Already built through rcgen's `x509-parser` feature.
+# Without default features (it has none); rcgen's `aws_lc_rs` turns on its `verify-aws`,
+# never its ring `verify`. Its errors are never passed on: they can quote their input.
+x509-parser = { version = "0.18.1", default-features = false }
 # zeroize: `Zeroizing` buffers for secret files and passwords read from stdin; secrecy
 # already depends on it (ADR-0016).
 zeroize = "1.9.0"
@@ -247,10 +263,6 @@ ipnet = "2.12.2"
 # `std` keeps `PROPTEST_CASES` working.
 proptest = { version = "1.11.0", default-features = false }
 rstest = { version = "0.27.0", default-features = false }
-# rcgen: fleet-client's TLS tests make a CA and server certificates with it at run time,
-# since no key is ever committed. Without default features, which select ring; the
-# member enables `aws_lc_rs` and `pem` (ADR-0017). P10's PKI will use it in production.
-rcgen = { version = "0.14.10", default-features = false }
 # serde_json: also fleet-testkit's log buffer, which parses JSON log lines (ADR-0015).
 serde_json = "1.0.151"
 # tempfile: fleet-server's database tests open real files in a fresh folder; already in

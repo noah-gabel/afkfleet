@@ -132,6 +132,7 @@ pub(crate) fn server_config(dir: &Path, bind: SocketAddr, dev_mode: bool) -> Ser
             active_key_id: 1,
         },
         accounts: AccountsConfig::default(),
+        grpc: None,
     }
 }
 

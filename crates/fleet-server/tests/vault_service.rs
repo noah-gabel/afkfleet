@@ -31,6 +31,7 @@ use fleet_server::app::vault::{
 use fleet_server::infra::crypto::vault::{VaultKeys, XChaChaVault};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountCredential, AccountReads, McAccount};
+use fleet_server::ports::agents::AgentReads;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditReads, AuditRecord, NewAuditEntry};
 use fleet_server::ports::envelopes::{EnvelopeReads, SealedEnvelope, SealedRecord};
 use fleet_server::ports::grants::GrantReads;
@@ -153,6 +154,10 @@ impl Store for HookedStore {
 
     fn grants(&self) -> &dyn GrantReads {
         self.inner.grants()
+    }
+
+    fn agents(&self) -> &dyn AgentReads {
+        self.inner.agents()
     }
 
     fn envelopes(&self) -> &dyn EnvelopeReads {

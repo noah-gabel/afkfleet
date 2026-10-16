@@ -20,6 +20,9 @@
 //! - `user create-owner` starts logging and runs [`user::create_owner`] on a
 //!   current-thread runtime, with the terminal or stdin as the password's
 //!   source.
+//! - `pki init` and `pki server-cert` start logging and run [`pki::init`]
+//!   or [`pki::server_cert`] with the real clock and the OS's randomness,
+//!   without a runtime: they only read and write files.
 //! - `vault status` and `vault rotate-key` start logging and run
 //!   [`vault::status`] or [`vault::rotate_key`] on a current-thread runtime.
 //!
@@ -27,6 +30,7 @@
 
 use core::fmt::Display;
 use std::io::{self, IsTerminal as _, Write as _};
+use std::net::IpAddr;
 use std::path::Path;
 use std::process::ExitCode;
 
@@ -34,10 +38,12 @@ use clap::Parser as _;
 use fleet_server::cli::serve::StartError;
 use fleet_server::cli::user::{self, PasswordInput, TerminalPrompt};
 use fleet_server::cli::{
-    self, Cli, Command, UserCommand, VaultCommand, healthcheck, migrate, serve, vault,
+    self, Cli, Command, PkiCommand, UserCommand, VaultCommand, healthcheck, migrate, pki, serve,
+    vault,
 };
 use fleet_server::config::{self, ServerConfig};
 use fleet_server::infra::crypto::vault::VaultKeys;
+use fleet_server::infra::system::{OsRandom, SystemClock};
 use fleet_startup::signals::OsSignals;
 use fleet_startup::telemetry::{NoRules, init_with};
 use tokio::net::TcpListener;
@@ -70,6 +76,12 @@ fn main() -> ExitCode {
         Command::Vault {
             command: VaultCommand::RotateKey { config },
         } => run_vault(&config, VaultRun::RotateKey),
+        Command::Pki {
+            command: PkiCommand::Init { config, dns, ip },
+        } => run_pki(&config, PkiRun::Init, &dns, &ip),
+        Command::Pki {
+            command: PkiCommand::ServerCert { config, dns, ip },
+        } => run_pki(&config, PkiRun::ServerCert, &dns, &ip),
     }
 }
 
@@ -228,6 +240,41 @@ fn run_vault(path: &Path, command: VaultRun) -> ExitCode {
             VaultRun::RotateKey => vault::rotate_key(&config, &mut out, &mut err).await,
         }
     });
+    ExitCode::from(exit.code())
+}
+
+/// Which `pki` command [`run_pki`] runs.
+#[derive(Debug, Clone, Copy)]
+enum PkiRun {
+    /// `pki init`.
+    Init,
+    /// `pki server-cert`.
+    ServerCert,
+}
+
+/// `afkfleet-server pki init` or `pki server-cert`, with the real clock and
+/// the OS's randomness. Plain file work: no runtime.
+fn run_pki(path: &Path, command: PkiRun, dns: &[String], ips: &[IpAddr]) -> ExitCode {
+    let config = match config::load(path) {
+        Ok(config) => config,
+        Err(error) => return fail_early(&error),
+    };
+    if let Err(error) = init_with(&config.log, &NoRules) {
+        return fail_early(&error);
+    }
+    let run = match command {
+        PkiRun::Init => pki::init,
+        PkiRun::ServerCert => pki::server_cert,
+    };
+    let exit = run(
+        &config,
+        dns,
+        ips,
+        &SystemClock,
+        &OsRandom,
+        &mut io::stdout(),
+        &mut io::stderr(),
+    );
     ExitCode::from(exit.code())
 }
 

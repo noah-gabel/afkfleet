@@ -7,11 +7,11 @@ use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use super::raw::{RawAccounts, RawAuth, RawConfig, RawLog, RawRateLimits, RawVault};
+use super::raw::{RawAccounts, RawAuth, RawConfig, RawGrpc, RawLog, RawRateLimits, RawVault};
 use super::{
-    AccountsConfig, Argon2Params, AuthConfig, Bounds, ConfigError, DatabaseConfig, HttpConfig,
-    KeyPath, LinkFlowLimits, LogConfig, LogFilter, LogFormat, ProblemKind, Problems, Rate,
-    RateLimitConfig, ServerConfig, VaultConfig,
+    AccountsConfig, Argon2Params, AuthConfig, Bounds, ConfigError, DatabaseConfig, GrpcConfig,
+    HttpConfig, KeyPath, LinkFlowLimits, LogConfig, LogFilter, LogFormat, PkiPaths, ProblemKind,
+    Problems, Rate, RateLimitConfig, ServerConfig, VaultConfig,
 };
 use fleet_core::auth::{InviteTtl, LockoutPolicy, SessionPolicy};
 
@@ -51,6 +51,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
     let invites = invites(&raw.auth, &mut problems);
     let rate_limits = rate_limits(&raw.rate_limits);
     let accounts = accounts(&raw.accounts);
+    let grpc = grpc(raw.grpc.as_ref(), bind, &mut problems);
 
     let (
         true,
@@ -65,6 +66,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         Some(vault),
         Some(rate_limits),
         Some(accounts),
+        Ok(grpc),
     ) = (
         problems.is_empty(),
         bind,
@@ -78,6 +80,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         vault,
         rate_limits,
         accounts,
+        grpc,
     )
     else {
         return Err(ConfigError::Invalid(problems.sorted()));
@@ -103,7 +106,104 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         vault,
         rate_limits,
         accounts,
+        grpc,
     })
+}
+
+/// A section with problems, each already reported.
+struct Invalid;
+
+/// `[grpc]`: absent is `Ok(None)`, the control plane off. Present, its four
+/// files are required, absolute and different from each other; `bind` is
+/// an IP address with a port other than 0 and other than `http_bind`'s.
+/// [`Invalid`] when anything is wrong.
+fn grpc(
+    raw: Option<&RawGrpc>,
+    http_bind: Option<SocketAddr>,
+    problems: &mut Problems,
+) -> Result<Option<GrpcConfig>, Invalid> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+    let section = KeyPath::root().key("grpc");
+    let bind = grpc_bind(raw.bind.as_deref(), http_bind, &section, problems);
+    // Each file in the order the section lists them, so a repeated path is
+    // reported at the later key, naming the earlier one.
+    let files = [
+        ("ca_cert_file", raw.ca_cert_file.as_deref()),
+        ("ca_key_file", raw.ca_key_file.as_deref()),
+        ("server_cert_file", raw.server_cert_file.as_deref()),
+        ("server_key_file", raw.server_key_file.as_deref()),
+    ];
+    let mut paths: Vec<(&'static str, PathBuf)> = Vec::with_capacity(files.len());
+    let mut valid = true;
+    for (name, text) in files {
+        let key = section.key(name);
+        let Some(text) = text else {
+            problems.push(key, ProblemKind::Missing);
+            valid = false;
+            continue;
+        };
+        match absolute_path(text) {
+            Ok(path) => {
+                if let Some((earlier, _)) = paths.iter().find(|(_, seen)| *seen == path) {
+                    problems.push(key, ProblemKind::SameFileAs { key: earlier });
+                    valid = false;
+                }
+                paths.push((name, path));
+            }
+            Err(kind) => {
+                problems.push(key, kind);
+                valid = false;
+            }
+        }
+    }
+    let ([ca_cert, ca_key, server_cert, server_key], true, Some(bind)) =
+        (paths.as_slice(), valid, bind)
+    else {
+        return Err(Invalid);
+    };
+    Ok(Some(GrpcConfig {
+        bind,
+        pki: PkiPaths {
+            ca_cert_file: ca_cert.1.clone(),
+            ca_key_file: ca_key.1.clone(),
+            server_cert_file: server_cert.1.clone(),
+            server_key_file: server_key.1.clone(),
+        },
+        // garde has checked the range.
+        agent_cert_lifetime: days(raw.agent_cert_lifetime_days),
+    }))
+}
+
+/// `[grpc] bind`: an IP address and a port other than 0 and other than
+/// `[http] bind`'s; missing means [`GrpcConfig::DEFAULT_BIND`].
+fn grpc_bind(
+    raw: Option<&str>,
+    http_bind: Option<SocketAddr>,
+    section: &KeyPath,
+    problems: &mut Problems,
+) -> Option<SocketAddr> {
+    let key = section.key("bind");
+    let address = match raw {
+        None => GrpcConfig::DEFAULT_BIND,
+        Some(text) => {
+            let Ok(address) = text.parse::<SocketAddr>() else {
+                problems.push(key, ProblemKind::SocketAddress);
+                return None;
+            };
+            address
+        }
+    };
+    if address.port() == 0 {
+        problems.push(key, ProblemKind::PortZero);
+        return None;
+    }
+    if http_bind.is_some_and(|http| http.port() == address.port()) {
+        problems.push(key, ProblemKind::SamePortAs { key: "http.bind" });
+        return None;
+    }
+    Some(address)
 }
 
 /// `[vault]`: both keys required; 1 to 16 key files, each under a key ID

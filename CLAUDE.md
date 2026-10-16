@@ -187,7 +187,8 @@ fleet-server/src/
 | | DB | `sqlx` (sqlite) |
 | | gRPC | `tonic`, `tonic-prost`, `prost`, `tonic-prost-build`, `protox` |
 | | TLS | `rustls` (**aws-lc-rs provider only**) |
-| | PKI | `rcgen` |
+| | PKI | `rcgen` (Ed25519 keys from getrandom bytes only, never `KeyPair::generate`; ADR-0019) |
+| | Certificate parsing | `x509-parser` (fleet-server; rcgen 0.14 no longer reads certificates; ADR-0019) |
 | | HTTP client | `reqwest` (rustls) |
 | | WS client | `tokio-tungstenite` |
 | | TS types | `ts-rs` |

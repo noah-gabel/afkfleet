@@ -131,6 +131,7 @@ fn config(limits: RateLimitConfig, accounts: AccountsConfig) -> ServerConfig {
             active_key_id: 1,
         },
         accounts,
+        grpc: None,
     }
 }
 

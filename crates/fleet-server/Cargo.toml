@@ -50,6 +50,16 @@ governor = { workspace = true, features = ["std"] }
 hmac = { workspace = true, features = ["zeroize"] }
 # The QR code of a TOTP enrollment, written as an SVG by the server (ADR-0016).
 qrcodegen.workspace = true
+# The control plane's PKI (infra::pki): the CA and the server certificate of `pki init`, and
+# agents' certificates signed from their CSRs. `aws_lc_rs` signs and verifies (x509-parser's
+# `verify-aws` checks a CSR's signature), `pem` writes and reads the files, `x509-parser`
+# reads CSRs and the CA certificate, `zeroize` wipes a key pair's PKCS#8 copy. Every key is
+# Ed25519 from the SecureRandom port (ADR-0019). The Microsoft adapter's certificate test
+# makes its CA and server certificate with it too (ADR-0018).
+rcgen = { workspace = true, features = ["aws_lc_rs", "pem", "x509-parser", "zeroize"] }
+# Reading the PKI's certificates at serve's startup: the CA flag, the server certificate's
+# names and validity (the user's choice, ADR-0019); rcgen 0.14 no longer parses certificates.
+x509-parser.workspace = true
 # Only `log::LevelFilter`, for sqlx's statement-logging levels; clippy.toml bans its
 # logging macros (ADR-0015).
 log.workspace = true
@@ -110,9 +120,6 @@ insta = { workspace = true, features = ["json"] }
 ipnet.workspace = true
 # The time conversion's round trip and order (ADR-0015).
 proptest = { workspace = true, features = ["std"] }
-# The Microsoft adapter's certificate test: a CA and a server certificate made at run
-# time, since no key is ever committed (ADR-0018).
-rcgen = { workspace = true, features = ["aws_lc_rs", "pem"] }
 rstest.workspace = true
 # A fresh folder for each database test (ADR-0015).
 tempfile.workspace = true

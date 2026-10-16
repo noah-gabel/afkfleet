@@ -15,10 +15,10 @@ use std::time::Duration;
 use figment::Jail;
 use fleet_core::auth::{InviteTtl, LockoutPolicy, SessionPolicy};
 use fleet_server::config::{
-    AccountsConfig, Argon2Params, AuthConfig, ConfigError, DatabaseConfig, HttpConfig,
+    AccountsConfig, Argon2Params, AuthConfig, ConfigError, DatabaseConfig, GrpcConfig, HttpConfig,
     LinkFlowLimits, LogConfig, LogFilterError, LogFormat, ParseError, ParseProblem, ParseSource,
-    ProblemKind, Problems, Rate, RateLimitConfig, ServerConfig, UnknownLogFormatError, VaultConfig,
-    load,
+    PkiPaths, ProblemKind, Problems, Rate, RateLimitConfig, ServerConfig, UnknownLogFormatError,
+    VaultConfig, load,
 };
 use fleet_server::http::rate_limit::{IpNet, IpNetError, TrustedProxies};
 use fleet_startup::telemetry::{NoRules, layer_with};
@@ -72,6 +72,33 @@ fn vault_config(jail: &Jail) -> VaultConfig {
         key_files: BTreeMap::from([(1, key_path(jail, 1))]),
         active_key_id: 1,
     }
+}
+
+/// An absolute path for one of the PKI's files, inside the jail. Loading the
+/// config never reads it.
+fn pki_path(jail: &Jail, name: &str) -> PathBuf {
+    jail.directory().join("pki").join(name)
+}
+
+/// The paths of [`grpc`].
+fn pki_paths(jail: &Jail) -> PkiPaths {
+    PkiPaths {
+        ca_cert_file: pki_path(jail, "ca.crt"),
+        ca_key_file: pki_path(jail, "ca.key"),
+        server_cert_file: pki_path(jail, "server.crt"),
+        server_key_file: pki_path(jail, "server.key"),
+    }
+}
+
+/// The smallest valid `[grpc]`: its four files.
+fn grpc(jail: &Jail) -> String {
+    format!(
+        "[grpc]\nca_cert_file = {}\nca_key_file = {}\nserver_cert_file = {}\nserver_key_file = {}\n",
+        toml_path(&pki_path(jail, "ca.crt")),
+        toml_path(&pki_path(jail, "ca.key")),
+        toml_path(&pki_path(jail, "server.crt")),
+        toml_path(&pki_path(jail, "server.key")),
+    )
 }
 
 fn load_toml(jail: &mut Jail, toml: &str) -> Result<ServerConfig, ConfigError> {
@@ -168,6 +195,7 @@ fn only_the_database_path_and_the_vault_are_required() {
                 vault: vault_config(jail),
                 rate_limits: RateLimitConfig::default(),
                 accounts: AccountsConfig::default(),
+                grpc: None,
             }
         );
     });
@@ -286,6 +314,28 @@ active_key_id = 3
                 max_per_member: nonzero(7),
                 allow_offline: true,
             }
+        );
+    });
+}
+
+#[test]
+fn every_grpc_key_maps_to_its_setting() {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}\n{}bind = \"0.0.0.0:7444\"\nagent_cert_lifetime_days = 30\n",
+            minimal(jail),
+            grpc(jail)
+        );
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(
+            config.grpc,
+            Some(GrpcConfig {
+                bind: addr("0.0.0.0:7444"),
+                pki: pki_paths(jail),
+                agent_cert_lifetime: Duration::from_secs(30 * DAY),
+            })
         );
     });
 }
@@ -428,10 +478,10 @@ fn a_misspelled_environment_variable_names_the_variable() {
 #[test]
 fn a_section_of_a_later_phase_is_unknown_until_that_phase() {
     in_jail(|jail| {
-        let toml = format!("{}\n[grpc]\nbind = \"0.0.0.0:7443\"\n", minimal(jail));
+        let toml = format!("{}\n[chat]\nretention_days = 14\n", minimal(jail));
         let error = parse_error(load_toml(jail, &toml));
 
-        assert_eq!(error.key().to_string(), "grpc");
+        assert_eq!(error.key().to_string(), "chat");
         assert_eq!(
             error.problem(),
             &ParseProblem::UnknownKey {
@@ -443,7 +493,8 @@ fn a_section_of_a_later_phase_is_unknown_until_that_phase() {
                     "auth",
                     "vault",
                     "rate_limits",
-                    "accounts"
+                    "accounts",
+                    "grpc"
                 ]
             }
         );
@@ -1178,5 +1229,164 @@ fn every_bad_trusted_proxy_is_reported_at_once() {
             keys(&problems),
             ["http.trusted_proxies[0]", "http.trusted_proxies[2]"]
         );
+    });
+}
+
+// --- [grpc] (P10.2) --------------------------------------------------------------------
+
+#[test]
+fn a_grpc_section_turns_the_control_plane_on_with_its_defaults() {
+    in_jail(|jail| {
+        let toml = format!("{}\n{}", minimal(jail), grpc(jail));
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(
+            config.grpc,
+            Some(GrpcConfig {
+                bind: GrpcConfig::DEFAULT_BIND,
+                pki: pki_paths(jail),
+                agent_cert_lifetime: Duration::from_secs(60 * DAY),
+            })
+        );
+        assert_eq!(GrpcConfig::DEFAULT_BIND, addr("127.0.0.1:7443"));
+    });
+}
+
+#[test]
+fn a_grpc_section_needs_its_four_files() {
+    in_jail(|jail| {
+        let toml = format!("{}\n[grpc]\nbind = \"127.0.0.1:7443\"\n", minimal(jail));
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(
+            keys(&problems),
+            [
+                "grpc.ca_cert_file",
+                "grpc.ca_key_file",
+                "grpc.server_cert_file",
+                "grpc.server_key_file",
+            ]
+        );
+        assert_eq!(kinds(&problems), vec![ProblemKind::Missing; 4]);
+    });
+}
+
+#[rstest]
+#[case::empty("", ProblemKind::Empty)]
+#[case::file_name("ca.key", ProblemKind::NotAbsolute)]
+#[case::relative("./pki/ca.key", ProblemKind::NotAbsolute)]
+fn the_pki_files_must_be_absolute(#[case] path: &str, #[case] kind: ProblemKind) {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}\n[grpc]\nca_cert_file = {}\nca_key_file = '{path}'\nserver_cert_file = {}\nserver_key_file = {}\n",
+            minimal(jail),
+            toml_path(&pki_path(jail, "ca.crt")),
+            toml_path(&pki_path(jail, "server.crt")),
+            toml_path(&pki_path(jail, "server.key")),
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["grpc.ca_key_file"]);
+        assert_eq!(kinds(&problems), [kind]);
+    });
+}
+
+#[test]
+fn the_pki_files_are_four_different_files() {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}\n[grpc]\nca_cert_file = {}\nca_key_file = {}\nserver_cert_file = {}\nserver_key_file = {}\n",
+            minimal(jail),
+            toml_path(&pki_path(jail, "ca.crt")),
+            toml_path(&pki_path(jail, "ca.key")),
+            toml_path(&pki_path(jail, "ca.crt")),
+            toml_path(&pki_path(jail, "ca.key")),
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(
+            keys(&problems),
+            ["grpc.server_cert_file", "grpc.server_key_file"]
+        );
+        assert_eq!(
+            kinds(&problems),
+            [
+                ProblemKind::SameFileAs {
+                    key: "ca_cert_file"
+                },
+                ProblemKind::SameFileAs { key: "ca_key_file" },
+            ]
+        );
+    });
+}
+
+#[rstest]
+#[case::host_name("localhost:7443", ProblemKind::SocketAddress)]
+#[case::no_port("127.0.0.1", ProblemKind::SocketAddress)]
+#[case::port_zero("127.0.0.1:0", ProblemKind::PortZero)]
+#[case::http_s_port("0.0.0.0:8080", ProblemKind::SamePortAs { key: "http.bind" })]
+fn grpc_bind_must_be_an_ip_address_with_its_own_fixed_port(
+    #[case] bind: &str,
+    #[case] kind: ProblemKind,
+) {
+    in_jail(|jail| {
+        let toml = format!("{}\n{}bind = \"{bind}\"\n", minimal(jail), grpc(jail));
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["grpc.bind"]);
+        assert_eq!(kinds(&problems), [kind]);
+    });
+}
+
+#[test]
+fn an_agent_certificate_lives_1_to_365_days() {
+    in_jail(|jail| {
+        let base = format!("{}\n{}", minimal(jail), grpc(jail));
+        let with = |days: u32| format!("{base}agent_cert_lifetime_days = {days}\n");
+
+        for days in [1, 365] {
+            let config = load_toml(jail, &with(days)).unwrap();
+            assert_eq!(
+                config.grpc.unwrap().agent_cert_lifetime,
+                Duration::from_secs(u64::from(days) * DAY)
+            );
+        }
+        for (days, message) in [(0, "lower than 1"), (366, "greater than 365")] {
+            let problems = invalid(load_toml(jail, &with(days)));
+            assert_eq!(keys(&problems), ["grpc.agent_cert_lifetime_days"]);
+            assert_eq!(
+                kinds(&problems),
+                [ProblemKind::OutOfRange {
+                    message: message.to_owned()
+                }]
+            );
+        }
+    });
+}
+
+#[test]
+fn the_grpc_section_can_come_from_the_environment() {
+    in_jail(|jail| {
+        for (key, name) in [
+            ("CA_CERT_FILE", "ca.crt"),
+            ("CA_KEY_FILE", "ca.key"),
+            ("SERVER_CERT_FILE", "server.crt"),
+            ("SERVER_KEY_FILE", "server.key"),
+        ] {
+            jail.set_env(
+                format!("AFKFLEET_SERVER__GRPC__{key}"),
+                pki_path(jail, name).display(),
+            );
+        }
+        let toml = minimal(jail);
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(config.grpc.unwrap().pki, pki_paths(jail));
     });
 }

@@ -16,10 +16,14 @@
 //! - [`vault`]: `vault status` and `vault rotate-key`, what the vault's keys
 //!   seal and re-encrypting it all under the active key (P9.2).
 //!
-//! Later phases add `pki` (P10) and `backup` (P12).
+//! - [`pki`]: `pki init` and `pki server-cert`, the control plane's CA and
+//!   the gRPC listener's certificate (P10.2).
+//!
+//! A later phase adds `backup` (P12).
 
 use core::time::Duration;
 use std::ffi::OsString;
+use std::net::IpAddr;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -27,6 +31,7 @@ use clap::{Parser, Subcommand};
 pub mod healthcheck;
 pub mod housekeeping;
 pub mod migrate;
+pub mod pki;
 pub mod serve;
 pub mod user;
 pub mod vault;
@@ -118,6 +123,56 @@ pub enum Command {
         /// What to do.
         #[command(subcommand)]
         command: VaultCommand,
+    },
+    /// Creates the control plane's PKI: the CA and the gRPC listener's
+    /// certificate. Neither command ever overwrites a file.
+    Pki {
+        /// What to do.
+        #[command(subcommand)]
+        command: PkiCommand,
+    },
+}
+
+/// `afkfleet-server pki …`.
+#[derive(Debug, Clone, PartialEq, Eq, Subcommand)]
+pub enum PkiCommand {
+    /// Creates the CA and the gRPC listener's server certificate, the four
+    /// files `[grpc]` names, and prints the CA's fingerprint. It refuses when
+    /// any of them exists: a new CA would lock out every agent.
+    #[command(after_help = pki::INIT_EXIT_CODES)]
+    Init {
+        /// The config file (TOML): the command reads `[grpc]`'s files and
+        /// `[log]`, never the database or the vault's keys.
+        /// `AFKFLEET_SERVER__…` environment variables override its keys, as
+        /// for `serve`.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+        /// A DNS name agents dial the server by, for the server certificate.
+        /// Repeat it for each; at most 8 names with --ip, no wildcards.
+        #[arg(long, value_name = "NAME")]
+        dns: Vec<String>,
+        /// An IP address agents dial the server at, for the server
+        /// certificate. Repeat it for each.
+        #[arg(long, value_name = "ADDRESS")]
+        ip: Vec<IpAddr>,
+    },
+    /// Issues a new server certificate and key from the existing CA, for the
+    /// yearly renewal. It refuses when either server file exists: move the
+    /// old pair away first. The CA's files are only read.
+    #[command(after_help = pki::SERVER_CERT_EXIT_CODES)]
+    ServerCert {
+        /// The config file (TOML): the command reads `[grpc]`'s files and
+        /// `[log]`. `AFKFLEET_SERVER__…` environment variables override its
+        /// keys, as for `serve`.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+        /// A DNS name agents dial the server by. Repeat it for each; at most
+        /// 8 names with --ip, no wildcards.
+        #[arg(long, value_name = "NAME")]
+        dns: Vec<String>,
+        /// An IP address agents dial the server at. Repeat it for each.
+        #[arg(long, value_name = "ADDRESS")]
+        ip: Vec<IpAddr>,
     },
 }
 
@@ -355,6 +410,67 @@ mod tests {
         let mut command = Cli::command();
         let subcommand = command
             .find_subcommand_mut("vault")
+            .unwrap()
+            .find_subcommand_mut(name)
+            .unwrap();
+
+        let help = subcommand.render_help().to_string();
+
+        assert!(help.contains(codes), "{help}");
+    }
+
+    #[test]
+    fn each_pki_command_takes_the_config_and_the_names() {
+        for name in ["init", "server-cert"] {
+            let cli = Cli::try_parse_from([
+                "afkfleet-server",
+                "pki",
+                name,
+                "--config",
+                "server.toml",
+                "--dns",
+                "localhost",
+                "--ip",
+                "127.0.0.1",
+                "--ip",
+                "::1",
+            ])
+            .unwrap();
+
+            let config = PathBuf::from("server.toml");
+            let dns = vec!["localhost".to_owned()];
+            let ip: Vec<IpAddr> = vec!["127.0.0.1".parse().unwrap(), "::1".parse().unwrap()];
+            let expected = if name == "init" {
+                PkiCommand::Init { config, dns, ip }
+            } else {
+                PkiCommand::ServerCert { config, dns, ip }
+            };
+            assert_eq!(cli.command, Command::Pki { command: expected }, "{name}");
+        }
+    }
+
+    #[rstest]
+    #[case::init_without_a_config(&["pki", "init", "--dns", "localhost"])]
+    #[case::server_cert_without_a_config(&["pki", "server-cert", "--dns", "localhost"])]
+    #[case::an_ip_that_isnt_one(&["pki", "init", "--config", "a.toml", "--ip", "localhost"])]
+    #[case::no_pki_command(&["pki"])]
+    fn pki_usage_errors_exit_2(#[case] args: &[&str]) {
+        let args: Vec<OsString> = core::iter::once("afkfleet-server")
+            .chain(args.iter().copied())
+            .map(OsString::from)
+            .collect();
+        let error = Cli::try_parse_from(&args).unwrap_err();
+
+        assert_eq!(exit_code(&error, args), 2, "{error}");
+    }
+
+    #[rstest]
+    #[case::init("init", pki::INIT_EXIT_CODES)]
+    #[case::server_cert("server-cert", pki::SERVER_CERT_EXIT_CODES)]
+    fn each_pki_commands_help_lists_its_exit_codes(#[case] name: &str, #[case] codes: &str) {
+        let mut command = Cli::command();
+        let subcommand = command
+            .find_subcommand_mut("pki")
             .unwrap()
             .find_subcommand_mut(name)
             .unwrap();

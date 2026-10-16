@@ -354,6 +354,7 @@ fn config(dir: &TempDir) -> ServerConfig {
             allow_offline: true,
             ..AccountsConfig::default()
         },
+        grpc: None,
     }
 }
 

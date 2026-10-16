@@ -49,6 +49,7 @@
 //! within its shutdown deadline.
 
 mod accounts;
+mod agents;
 mod audit;
 mod connect;
 mod convert;

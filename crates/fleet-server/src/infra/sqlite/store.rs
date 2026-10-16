@@ -8,16 +8,20 @@ use chrono::{DateTime, Utc};
 use fleet_core::account::AccountStatus;
 use fleet_core::audit::AuditAction;
 use fleet_core::authz::{Actor, GrantLevel, Role};
-use fleet_core::id::{AccountId, InviteId, SessionId, UserId};
-use fleet_core::value::{McUsername, Username};
+use fleet_core::id::{AccountId, AgentId, InviteId, SessionId, UserId};
+use fleet_core::value::{AgentName, McUsername, Username};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use super::error::store_error;
 use super::{
-    Database, accounts, audit, envelopes, grants, invites, login_attempts, mfa, sessions, users,
+    Database, accounts, agents, audit, envelopes, grants, invites, login_attempts, mfa, sessions,
+    users,
 };
 use crate::ports::accounts::{
     AccountReads, AccountWrites, InsertAccountError, ListedAccount, McAccount,
+};
+use crate::ports::agents::{
+    Agent, AgentCert, AgentReads, AgentWrites, InsertAgentError, NewAgent, NewAgentCert,
 };
 use crate::ports::audit::{
     AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, FailedCodeAttempts,
@@ -172,6 +176,21 @@ impl GrantReads for Reads {
 }
 
 #[async_trait]
+impl AgentReads for Reads {
+    async fn find(&self, id: AgentId) -> Result<Option<Agent>, StoreError> {
+        agents::find(&self.pool, id).await
+    }
+
+    async fn name_taken(&self, name: &AgentName) -> Result<bool, StoreError> {
+        agents::name_taken(&self.pool, name).await
+    }
+
+    async fn certs(&self, id: AgentId) -> Result<Vec<AgentCert>, StoreError> {
+        agents::certs(&self.pool, id).await
+    }
+}
+
+#[async_trait]
 impl EnvelopeReads for Reads {
     async fn all(&self) -> Result<Vec<SealedEnvelope>, StoreError> {
         envelopes::all(&self.pool).await
@@ -258,6 +277,10 @@ impl WriteTx for SqliteWriteTx {
     }
 
     fn grants(&mut self) -> &mut dyn GrantWrites {
+        self
+    }
+
+    fn agents(&mut self) -> &mut dyn AgentWrites {
         self
     }
 
@@ -463,6 +486,17 @@ impl GrantWrites for SqliteWriteTx {
 }
 
 #[async_trait]
+impl AgentWrites for SqliteWriteTx {
+    async fn insert(&mut self, agent: &NewAgent) -> Result<(), InsertAgentError> {
+        agents::insert(&mut self.tx, agent).await
+    }
+
+    async fn insert_cert(&mut self, cert: &NewAgentCert) -> Result<(), StoreError> {
+        agents::insert_cert(&mut self.tx, cert).await
+    }
+}
+
+#[async_trait]
 impl EnvelopeWrites for SqliteWriteTx {
     async fn swap(
         &mut self,
@@ -638,6 +672,10 @@ impl Store for Database {
     }
 
     fn grants(&self) -> &dyn GrantReads {
+        &self.reads
+    }
+
+    fn agents(&self) -> &dyn AgentReads {
         &self.reads
     }
 

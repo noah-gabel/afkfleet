@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use garde::Validate;
 use serde::Deserialize;
 
-use super::{AccountsConfig, Argon2Params, RateLimitConfig};
+use super::{AccountsConfig, Argon2Params, GrpcConfig, RateLimitConfig};
 
 /// A range of a numeric key, inclusive at both ends.
 pub(crate) struct Range {
@@ -65,6 +65,45 @@ pub(crate) struct RawConfig {
     #[serde(default)]
     #[garde(dive)]
     pub(crate) accounts: RawAccounts,
+    /// Absent means the control plane is off.
+    #[serde(default)]
+    #[garde(dive)]
+    pub(crate) grpc: Option<RawGrpc>,
+}
+
+/// `[grpc]`. The four files are required once the section is there;
+/// validation checks them. A missing `bind` is `127.0.0.1:7443`.
+#[derive(Debug, Deserialize, Validate)]
+#[serde(default, deny_unknown_fields, expecting = "a table of gRPC settings")]
+pub(crate) struct RawGrpc {
+    #[garde(skip)]
+    pub(crate) bind: Option<String>,
+    #[garde(skip)]
+    pub(crate) ca_cert_file: Option<String>,
+    #[garde(skip)]
+    pub(crate) ca_key_file: Option<String>,
+    #[garde(skip)]
+    pub(crate) server_cert_file: Option<String>,
+    #[garde(skip)]
+    pub(crate) server_key_file: Option<String>,
+    #[garde(range(min = GrpcConfig::AGENT_CERT_LIFETIME_DAYS.min, max = GrpcConfig::AGENT_CERT_LIFETIME_DAYS.max))]
+    pub(crate) agent_cert_lifetime_days: u32,
+}
+
+/// Appendix A's agent certificate lifetime.
+const DEFAULT_AGENT_CERT_LIFETIME_DAYS: u32 = 60;
+
+impl Default for RawGrpc {
+    fn default() -> Self {
+        Self {
+            bind: None,
+            ca_cert_file: None,
+            ca_key_file: None,
+            server_cert_file: None,
+            server_key_file: None,
+            agent_cert_lifetime_days: DEFAULT_AGENT_CERT_LIFETIME_DAYS,
+        }
+    }
 }
 
 /// `[vault]`. Both keys are required; validation checks the key IDs, the
@@ -560,6 +599,13 @@ mod secret_names {
             "accounts",
             "accounts.max_per_member",
             "accounts.allow_offline",
+            "grpc",
+            "grpc.bind",
+            "grpc.ca_cert_file",
+            "grpc.ca_key_file",
+            "grpc.server_cert_file",
+            "grpc.server_key_file",
+            "grpc.agent_cert_lifetime_days",
         ] {
             assert!(keys.iter().any(|found| found == key), "{key} in {keys:?}");
         }
