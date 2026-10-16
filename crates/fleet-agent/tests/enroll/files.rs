@@ -159,3 +159,33 @@ fn a_certificate_that_appeared_meanwhile_is_kept_and_the_key_taken_back() {
     assert_eq!(fs::read_to_string(&cert).unwrap(), "someone else's");
     assert_eq!(names(&dir), ["agent.crt"]);
 }
+
+#[test]
+fn a_key_temp_swapped_after_the_claim_never_receives_the_key() {
+    let dir = test_dir("swap_key_temp");
+    let (key, cert) = paths(&dir);
+    let claimed = Claimed::claim(&key, &cert).unwrap();
+    let moved = dir.join("moved");
+    fs::rename(temp_path(&key), &moved).unwrap();
+    fs::write(temp_path(&key), "").unwrap();
+
+    claimed.write_key(b"the key").unwrap();
+
+    assert_eq!(fs::read(temp_path(&key)).unwrap(), b"");
+    assert_eq!(fs::read(&moved).unwrap(), b"the key");
+}
+
+#[test]
+fn a_certificate_temp_swapped_after_the_claim_never_receives_the_certificate() {
+    let dir = test_dir("swap_cert_temp");
+    let (key, cert) = paths(&dir);
+    let claimed = Claimed::claim(&key, &cert).unwrap();
+    claimed.write_key(b"the key").unwrap();
+    let moved = dir.join("moved");
+    fs::rename(temp_path(&cert), &moved).unwrap();
+    fs::write(temp_path(&cert), "").unwrap();
+
+    let _ = claimed.publish(b"the certificate");
+
+    assert_eq!(fs::read(&moved).unwrap(), b"the certificate");
+}

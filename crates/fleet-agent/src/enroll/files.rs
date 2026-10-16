@@ -7,10 +7,14 @@
 //!    file, a folder, a dangling link: `symlink_metadata`), and their
 //!    folders must exist; none is created.
 //! 2. **Lock:** `<file>.tmp` is created next to each with `create_new`,
-//!    owner-only on Unix. One that exists means another `enroll` runs or one
-//!    was interrupted: refused, naming it.
+//!    owner-only on Unix, and its handle is kept. One that exists means
+//!    another `enroll` runs or one was interrupted: refused, naming it.
 //! 3. **The key first** ([`Claimed::write_key`]): written into its temp
-//!    file and synced before the call.
+//!    file and synced before the call. Every write goes through the handle
+//!    from step 2, never the path, so a temp that someone who can write the
+//!    folder swaps meanwhile never receives the key. (The links in step 4
+//!    are made by path: a swapped temp would be published in its place,
+//!    holding none of this run's bytes.)
 //! 4. **Publish** ([`Claimed::publish`]): the certificate into its temp
 //!    file, synced; then `hard_link`, which never replaces a name, the key
 //!    and after it the certificate; then the temps are removed and, on Unix,
@@ -24,7 +28,7 @@
 //! folder's permissions, their only protection there (S20).
 
 use std::ffi::OsString;
-use std::fs;
+use std::fs::{self, File};
 use std::io::{self, Write as _};
 use std::path::{Path, PathBuf};
 
@@ -108,6 +112,11 @@ pub struct Claimed {
     cert: PathBuf,
     key_temp: PathBuf,
     cert_temp: PathBuf,
+    /// The temps' handles, kept from their creation: every write goes
+    /// through them, never through the paths, which someone who can write
+    /// the folder could swap for a file of their own.
+    key_file: File,
+    cert_file: File,
 }
 
 impl Claimed {
@@ -145,16 +154,22 @@ impl Claimed {
         }
         let key_temp = temp_path(key);
         let cert_temp = temp_path(cert);
-        lock(&key_temp)?;
-        if let Err(error) = lock(&cert_temp) {
-            let _ = fs::remove_file(&key_temp);
-            return Err(error);
-        }
+        let key_file = lock(&key_temp)?;
+        let cert_file = match lock(&cert_temp) {
+            Ok(file) => file,
+            Err(error) => {
+                drop(key_file);
+                let _ = fs::remove_file(&key_temp);
+                return Err(error);
+            }
+        };
         Ok(Self {
             key: key.to_owned(),
             cert: cert.to_owned(),
             key_temp,
             cert_temp,
+            key_file,
+            cert_file,
         })
     }
 
@@ -163,7 +178,7 @@ impl Claimed {
     /// # Errors
     /// [`PublishError::Write`].
     pub fn write_key(&self, pem: &[u8]) -> Result<(), PublishError> {
-        write_synced(&self.key_temp, pem)
+        write_synced(&self.key_file, &self.key_temp, pem)
     }
 
     /// Writes `pem` into the certificate's temp file, then links the key
@@ -172,7 +187,7 @@ impl Claimed {
     /// # Errors
     /// [`PublishError`], after removing the temps and the key it linked.
     pub fn publish(self, pem: &[u8]) -> Result<(), PublishError> {
-        write_synced(&self.cert_temp, pem)?;
+        write_synced(&self.cert_file, &self.cert_temp, pem)?;
         // `hard_link` fails when the name exists: nothing is ever replaced.
         fs::hard_link(&self.key_temp, &self.key).map_err(|source| PublishError::Link {
             path: self.key.clone(),
@@ -203,9 +218,9 @@ impl Drop for Claimed {
     }
 }
 
-/// Creates the temp file at `path`, owner-only on Unix; an existing one is
-/// [`ClaimError::Locked`].
-fn lock(path: &Path) -> Result<(), ClaimError> {
+/// Creates the temp file at `path`, owner-only on Unix, and returns its
+/// handle; an existing one is [`ClaimError::Locked`].
+fn lock(path: &Path) -> Result<File, ClaimError> {
     let mut options = fs::OpenOptions::new();
     options.write(true).create_new(true);
     #[cfg(unix)]
@@ -214,7 +229,7 @@ fn lock(path: &Path) -> Result<(), ClaimError> {
         options.mode(0o600);
     }
     match options.open(path) {
-        Ok(_) => Ok(()),
+        Ok(file) => Ok(file),
         Err(error) if error.kind() == io::ErrorKind::AlreadyExists => Err(ClaimError::Locked {
             path: path.to_owned(),
         }),
@@ -225,14 +240,10 @@ fn lock(path: &Path) -> Result<(), ClaimError> {
     }
 }
 
-/// Writes `bytes` into this run's temp file at `path` and syncs it; the
-/// handle is closed before the file is linked.
-fn write_synced(path: &Path, bytes: &[u8]) -> Result<(), PublishError> {
-    let write = || -> io::Result<()> {
-        let mut file = fs::OpenOptions::new()
-            .write(true)
-            .truncate(true)
-            .open(path)?;
+/// Writes `bytes` into this run's temp file through its handle `file` (at
+/// `path`, for the error) and syncs it.
+fn write_synced(mut file: &File, path: &Path, bytes: &[u8]) -> Result<(), PublishError> {
+    let mut write = || -> io::Result<()> {
         file.write_all(bytes)?;
         file.sync_all()
     };
