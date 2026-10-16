@@ -18,8 +18,16 @@
 //!   fingerprint and uses the token, so of two enrollments with one token
 //!   exactly one gets a certificate. A certificate that loses is dropped and
 //!   never sent.
+//! - **The deadline** bounds only the token, the name, the CSR's check and
+//!   the signing, which write nothing ([`EnrollError::TooSlow`]). A
+//!   refusal's record and the enrollment's transaction run to their end,
+//!   bounded by the write pool's acquire timeout and SQLite's busy timeout:
+//!   sqlx finishes a COMMIT already sent even when its future is dropped,
+//!   so a deadline there could store an agent whose certificate is never
+//!   sent.
 
 use core::fmt;
+use core::time::Duration;
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -35,6 +43,7 @@ use fleet_core::system::{Clock, SecureRandom, mint};
 use fleet_core::value::AgentName;
 use fleet_proto::enrollment::EnrollRequest;
 use secrecy::{ExposeSecret as _, SecretString};
+use tokio::time::timeout;
 use tracing::{debug, info};
 
 use super::audit::AuditService;
@@ -267,6 +276,10 @@ pub enum EnrollError {
     /// The database stayed busy.
     #[error("the database is busy")]
     Busy,
+    /// The checks and the signing took longer than the call's deadline.
+    /// Nothing was stored.
+    #[error("the enrollment took longer than its deadline")]
+    TooSlow,
     /// Something failed on the server's side.
     #[error("the enrollment failed")]
     Internal(#[source] Box<dyn std::error::Error + Send + Sync>),
@@ -322,27 +335,61 @@ impl EnrollmentService {
         }
     }
 
-    /// Enrolls the agent of `request`, which came from `peer`; see the
-    /// [module docs](self).
+    /// Enrolls the agent of `request`, which came from `peer`, its checks
+    /// and signing within `deadline`; see the [module docs](self).
     ///
     /// # Errors
     /// [`EnrollError::Token`], [`EnrollError::NameTaken`],
-    /// [`EnrollError::Csr`], and the server's failures.
+    /// [`EnrollError::Csr`], [`EnrollError::TooSlow`], and the server's
+    /// failures.
     pub async fn enroll(
         &self,
         request: EnrollRequest,
         peer: IpAddr,
+        deadline: Duration,
     ) -> Result<Enrolled, EnrollError> {
+        let now = self.clock.now();
+        // The deadline bounds only the checks and the signing, which write
+        // nothing, so dropping them leaves nothing behind. The writes that
+        // follow run to their end, bounded by the write pool's acquire
+        // timeout and SQLite's busy timeout: sqlx finishes a COMMIT already
+        // sent even when its future is dropped, so cutting the transaction
+        // off could store an agent whose certificate is never sent.
+        let checked = timeout(deadline, self.check(request, now))
+            .await
+            .unwrap_or(Err(EnrollError::TooSlow))?;
+        let signed = match checked {
+            Checked::Signed(signed) => signed,
+            Checked::Refused(refusal) => return self.refuse(refusal, peer).await,
+        };
+        self.store_enrollment(&signed, peer, now).await?;
+        let Signed {
+            token, enrolled, ..
+        } = signed;
+        info!(agent_id = %enrolled.agent, enrollment_token_id = %token, not_after = %enrolled.not_after, "an agent enrolled");
+        Ok(enrolled)
+    }
+
+    /// S21's checks of `request` at `now`, and the signing: the token, the
+    /// name, then the CSR. Nothing here writes; a token's refusal is
+    /// recorded afterwards.
+    async fn check(
+        &self,
+        request: EnrollRequest,
+        now: DateTime<Utc>,
+    ) -> Result<Checked, EnrollError> {
         let EnrollRequest {
             token,
             name,
             csr_der,
         } = request;
-        let now = self.clock.now();
 
         // The token, on the read pool: nothing is signed for a caller without
         // a usable one.
-        let (hash, found) = self.usable_token(&token, peer, now).await?;
+        let (hash, found) = match self.usable_token(&token, now).await? {
+            Ok(usable) => usable,
+            Err(refusal) => return Ok(Checked::Refused(refusal)),
+        };
         drop(token);
 
         // The name, only for a token holder, so names can't be probed
@@ -373,32 +420,32 @@ impl EnrollmentService {
                 other => internal_enroll(other),
             })?;
 
-        let enrolled = Enrolled {
-            agent,
-            name,
-            certificate_der: issued.der,
-            certificate_pem: issued.pem,
-            not_after: issued.not_after,
-        };
-        self.store_enrollment(&hash, found.id, &enrolled, issued.fingerprint, peer, now)
-            .await?;
-        info!(agent_id = %agent, enrollment_token_id = %found.id, not_after = %enrolled.not_after, "an agent enrolled");
-        Ok(enrolled)
+        Ok(Checked::Signed(Signed {
+            hash,
+            token: found.id,
+            fingerprint: issued.fingerprint,
+            enrolled: Enrolled {
+                agent,
+                name,
+                certificate_der: issued.der,
+                certificate_pem: issued.pem,
+                not_after: issued.not_after,
+            },
+        }))
     }
 
     /// The token `presented` stands for, with its hash, if it can enroll an
-    /// agent at `now`; otherwise its refusal.
+    /// agent at `now`; otherwise its refusal, still to be recorded.
     async fn usable_token(
         &self,
         presented: &SecretString,
-        peer: IpAddr,
         now: DateTime<Utc>,
-    ) -> Result<(TokenHash, EnrollmentToken), EnrollError> {
+    ) -> Result<Result<(TokenHash, EnrollmentToken), TokenRefusal>, EnrollError> {
         let Some(hash) = self
             .tokens
             .hash_presented(TokenKind::Enrollment, presented.expose_secret())
         else {
-            return self.refuse(TokenProblem::Malformed, None, peer).await;
+            return Ok(Err(TokenRefusal::unrecorded(TokenProblem::Malformed)));
         };
         let Some(found) = self
             .store
@@ -408,31 +455,37 @@ impl EnrollmentService {
             .map_err(store_error)?
             .filter(|found| found.token_hash.ct_eq(&hash))
         else {
-            return self.refuse(TokenProblem::Unknown, None, peer).await;
+            return Ok(Err(TokenRefusal::unrecorded(TokenProblem::Unknown)));
         };
         let creator = match found.created_by {
             Some(id) => self.store.users().get(id).await.map_err(store_error)?,
             None => None,
         };
         if let Some(problem) = decide(&found, creator.as_ref(), now) {
-            return self.refuse(problem, Some((found.id, problem)), peer).await;
+            return Ok(Err(TokenRefusal {
+                answer: problem,
+                recorded: Some((found.id, problem)),
+            }));
         }
-        Ok((hash, found))
+        Ok(Ok((hash, found)))
     }
 
-    /// Stores `enrolled`, signed from token `token` (whose hash is `hash`),
-    /// in one transaction: the token again, the agent, its certificate's
-    /// `fingerprint`, and the token used, with both audit entries, or
-    /// nothing.
+    /// Stores `signed` in one transaction: the token again, the agent, its
+    /// certificate's fingerprint, and the token used, with both audit
+    /// entries, or nothing.
     async fn store_enrollment(
         &self,
-        hash: &TokenHash,
-        token: EnrollmentTokenId,
-        enrolled: &Enrolled,
-        fingerprint: CertFingerprint,
+        signed: &Signed,
         peer: IpAddr,
         now: DateTime<Utc>,
     ) -> Result<(), EnrollError> {
+        let Signed {
+            hash,
+            token,
+            fingerprint,
+            enrolled,
+        } = signed;
+        let (token, fingerprint) = (*token, *fingerprint);
         let agent = enrolled.agent;
         let mut tx = self.store.write().await.map_err(store_error)?;
         let again = tx
@@ -451,9 +504,7 @@ impl EnrollmentService {
         };
         if let Some(problem) = raced {
             drop(tx);
-            return self
-                .refuse(TokenProblem::Raced, Some((token, problem)), peer)
-                .await;
+            return self.refuse(TokenRefusal::raced(token, problem), peer).await;
         }
         match tx
             .agents()
@@ -488,11 +539,7 @@ impl EnrollmentService {
         {
             drop(tx);
             return self
-                .refuse(
-                    TokenProblem::Raced,
-                    Some((token, TokenProblem::Raced)),
-                    peer,
-                )
+                .refuse(TokenRefusal::raced(token, TokenProblem::Raced), peer)
                 .await;
         }
         let used = self
@@ -521,17 +568,13 @@ impl EnrollmentService {
         tx.commit(entry).await.map(drop).map_err(store_error)
     }
 
-    /// Refuses with `answer`, and records a real token's refusal (`token`:
-    /// its ID and what it was) as an `agent.enroll` Failure, at most
-    /// [`MAX_AUDITED_REFUSALS`] times per token.
-    async fn refuse<T>(
-        &self,
-        answer: TokenProblem,
-        token: Option<(EnrollmentTokenId, TokenProblem)>,
-        peer: IpAddr,
-    ) -> Result<T, EnrollError> {
-        debug!(reason = answer.as_str(), enrollment_token_id = ?token.map(|(id, _)| id), "an enrollment was refused");
-        let Some((id, problem)) = token else {
+    /// Refuses with `refusal`'s answer, and records a real token's refusal
+    /// as an `agent.enroll` Failure, at most [`MAX_AUDITED_REFUSALS`] times
+    /// per token.
+    async fn refuse<T>(&self, refusal: TokenRefusal, peer: IpAddr) -> Result<T, EnrollError> {
+        let TokenRefusal { answer, recorded } = refusal;
+        debug!(reason = answer.as_str(), enrollment_token_id = ?recorded.map(|(id, _)| id), "an enrollment was refused");
+        let Some((id, problem)) = recorded else {
             return Err(EnrollError::Token(answer));
         };
         let target = AuditTarget::EnrollmentToken(id);
@@ -560,6 +603,53 @@ impl EnrollmentService {
             tx.commit(entry).await.map_err(store_error)?;
         }
         Err(EnrollError::Token(answer))
+    }
+}
+
+/// What [`EnrollmentService::check`] decided.
+enum Checked {
+    /// A usable token's certificate, signed and still to be stored.
+    Signed(Signed),
+    /// The token can't enroll.
+    Refused(TokenRefusal),
+}
+
+/// A certificate signed for a usable token.
+struct Signed {
+    /// The token's hash, to find it again inside the transaction.
+    hash: TokenHash,
+    /// The token's ID.
+    token: EnrollmentTokenId,
+    /// The certificate's fingerprint, for `agent_certs`.
+    fingerprint: CertFingerprint,
+    /// The agent and its certificate.
+    enrolled: Enrolled,
+}
+
+/// A token's refusal, still to be recorded.
+#[derive(Debug, Clone, Copy)]
+struct TokenRefusal {
+    /// The caller's answer.
+    answer: TokenProblem,
+    /// For a real token: its ID and what to record.
+    recorded: Option<(EnrollmentTokenId, TokenProblem)>,
+}
+
+impl TokenRefusal {
+    /// `answer` for a token that isn't a real one, recorded nowhere.
+    const fn unrecorded(answer: TokenProblem) -> Self {
+        Self {
+            answer,
+            recorded: None,
+        }
+    }
+
+    /// A race token `token` lost to `problem`, recorded.
+    const fn raced(token: EnrollmentTokenId, problem: TokenProblem) -> Self {
+        Self {
+            answer: TokenProblem::Raced,
+            recorded: Some((token, problem)),
+        }
     }
 }
 

@@ -10,9 +10,12 @@
 //!    (`RESOURCE_EXHAUSTED`, with `retry-after`).
 //! 2. **The handler** ([`EnrollmentGrpc`]): it converts the message
 //!    (`INVALID_ARGUMENT`), then runs [`EnrollmentService::enroll`], which
-//!    checks the token, the name and the CSR in that order, within its
-//!    deadline (`DEADLINE_EXCEEDED`; the server's is
-//!    [`SERVER_DEADLINE`](fleet_proto::enrollment::SERVER_DEADLINE)).
+//!    checks the token, the name and the CSR in that order and signs it,
+//!    within its deadline (`DEADLINE_EXCEEDED`; the server's is
+//!    [`SERVER_DEADLINE`](fleet_proto::enrollment::SERVER_DEADLINE)). Its
+//!    writes after that run to their end, past the deadline, and the
+//!    answer is sent. Only the client can still drop the call there, by
+//!    resetting its stream or with a `grpc-timeout` of its own.
 //!
 //! The service's decoding limit is [`MAX_REQUEST_BYTES`] (a larger request
 //! is tonic's own `OUT_OF_RANGE`) and its encoding limit
@@ -48,7 +51,7 @@ use fleet_proto::enrollment::{
 };
 use fleet_proto::generated as wire;
 use fleet_proto::generated::agent_enrollment_server::{AgentEnrollment, AgentEnrollmentServer};
-use tokio::time::{Instant, timeout};
+use tokio::time::Instant;
 use tonic::metadata::{AsciiMetadataValue, MetadataMap};
 use tonic::service::Interceptor;
 use tonic::service::interceptor::InterceptedService;
@@ -159,8 +162,6 @@ enum Failure {
     Malformed,
     /// The service refused or failed.
     Enroll(EnrollError),
-    /// The call took longer than its deadline.
-    TooSlow,
     /// The answer didn't convert.
     Answer(ConvertError),
 }
@@ -190,13 +191,13 @@ impl Failure {
                 error!(request_id = %id, error = %chain(&error), "an enrollment failed");
                 refusal(Code::Internal, FAILED, id, None)
             }
+            Self::Enroll(EnrollError::TooSlow) => {
+                warn!(request_id = %id, "an enrollment took longer than its deadline");
+                refusal(Code::DeadlineExceeded, TOO_SLOW, id, None)
+            }
             Self::Answer(error) => {
                 error!(request_id = %id, error = %chain(&error), "an enrollment's answer couldn't be written");
                 refusal(Code::Internal, FAILED, id, None)
-            }
-            Self::TooSlow => {
-                warn!(request_id = %id, "an enrollment took longer than its deadline");
-                refusal(Code::DeadlineExceeded, TOO_SLOW, id, None)
             }
         }
     }
@@ -270,12 +271,9 @@ impl AgentEnrollment for EnrollmentGrpc {
             error!("an enrollment arrived without passing its gate");
             return Err(Status::internal(FAILED));
         };
-        // Dropping the call at its deadline is safe: an open transaction rolls
-        // back, and a certificate that was signed is never stored or sent.
-        let answer = timeout(self.deadline, self.answer(request.into_inner(), call.peer))
-            .await
-            .unwrap_or(Err(Failure::TooSlow));
-        match answer {
+        // The deadline is the service's: it bounds the checks and the signing,
+        // and the write transaction that follows runs to its end.
+        match self.answer(request.into_inner(), call.peer).await {
             Ok(message) => {
                 finished(call.id, call.started, Code::Ok);
                 let mut response = Response::new(message);
@@ -303,7 +301,7 @@ impl EnrollmentGrpc {
         let request = EnrollRequest::try_from(message).map_err(|_| Failure::Malformed)?;
         let enrolled = self
             .service
-            .enroll(request, peer)
+            .enroll(request, peer, self.deadline)
             .await
             .map_err(Failure::Enroll)?;
         wire::EnrollResponse::try_from(EnrollResponse {
@@ -413,7 +411,12 @@ mod tests {
                 FAILED,
                 None,
             ),
-            (Failure::TooSlow, Code::DeadlineExceeded, TOO_SLOW, None),
+            (
+                Failure::Enroll(EnrollError::TooSlow),
+                Code::DeadlineExceeded,
+                TOO_SLOW,
+                None,
+            ),
         ];
 
         for (failure, code, message, retry_after) in cases {

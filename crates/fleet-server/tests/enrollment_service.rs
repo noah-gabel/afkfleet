@@ -15,6 +15,7 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
+use core::time::Duration;
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -27,7 +28,7 @@ use fleet_core::id::{AgentId, SessionId, UserId};
 use fleet_core::pki::{CertFingerprint, ed25519_pkcs8};
 use fleet_core::system::Clock as _;
 use fleet_core::value::{AgentName, Username};
-use fleet_proto::enrollment::EnrollRequest;
+use fleet_proto::enrollment::{EnrollRequest, SERVER_DEADLINE};
 use fleet_server::app::enrollment::{
     CreateTokenError, Creator, EnrollError, EnrollmentService, EnrollmentTokenService, TokenProblem,
 };
@@ -56,6 +57,12 @@ const T0: &str = "2027-01-15T08:00:00Z";
 const OWNER_IP: [u8; 4] = [192, 0, 2, 10];
 /// The agent's address.
 const AGENT_IP: [u8; 4] = [192, 0, 2, 20];
+/// How long a test waits to see that an enrollment is still running.
+const STILL_RUNNING: Duration = Duration::from_secs(1);
+/// The longest a blocked signer waits to be released.
+const BOUND: Duration = Duration::from_secs(5);
+/// A deadline the tests outlast.
+const SHORT_DEADLINE: Duration = Duration::from_millis(200);
 
 fn at(text: &str) -> DateTime<Utc> {
     text.parse().unwrap()
@@ -227,7 +234,11 @@ async fn enroll(
 ) -> Result<fleet_server::app::enrollment::Enrolled, EnrollError> {
     setup
         .enrollment
-        .enroll(request(token, name, 7), IpAddr::from(AGENT_IP))
+        .enroll(
+            request(token, name, 7),
+            IpAddr::from(AGENT_IP),
+            SERVER_DEADLINE,
+        )
         .await
 }
 
@@ -659,7 +670,10 @@ async fn a_refused_csr_leaves_the_token_pending_and_unrecorded(
         csr_der: b"not a csr".to_vec(),
     };
 
-    let refused = setup.enrollment.enroll(bad, IpAddr::from(AGENT_IP)).await;
+    let refused = setup
+        .enrollment
+        .enroll(bad, IpAddr::from(AGENT_IP), SERVER_DEADLINE)
+        .await;
     let then = enroll(&setup, &token, "agent-1").await;
 
     assert!(
@@ -791,4 +805,95 @@ async fn the_clock_reads_once_per_enrollment_for_its_records(
         setup.db.agents().certs(enrolled.agent).await.unwrap()[0].created_at,
         now
     );
+}
+
+// --- The deadline --------------------------------------------------------------------
+
+#[sqlx::test(migrations = false)]
+async fn signing_past_the_deadline_is_too_slow_and_leaves_the_token_pending(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let token = host_token(&setup).await;
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    *setup.signer.meanwhile.lock().unwrap() = Some(Box::new(move |_: &Database| {
+        let _ = released.recv_timeout(BOUND);
+    }));
+
+    let refused = setup
+        .enrollment
+        .enroll(
+            request(&token, "agent-1", 7),
+            IpAddr::from(AGENT_IP),
+            SHORT_DEADLINE,
+        )
+        .await;
+    // A signer that gave up waiting has dropped its end already.
+    let _ = release.send(());
+
+    assert!(matches!(refused, Err(EnrollError::TooSlow)), "{refused:?}");
+    let all = entries(&setup.db).await;
+    assert_eq!(of(&all, &AuditAction::AGENT_ENROLL).len(), 0);
+    enroll(&setup, &token, "agent-1").await.unwrap();
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_enrollment_in_its_transaction_finishes_past_its_deadline(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let token = host_token(&setup).await;
+    // The one write connection, held so the enrollment's transaction waits
+    // for it (within the pool's 5 s acquire timeout).
+    let held = setup.db.write().await.unwrap();
+    let mut enrolling = std::pin::pin!(setup.enrollment.enroll(
+        request(&token, "agent-1", 7),
+        IpAddr::from(AGENT_IP),
+        SHORT_DEADLINE,
+    ));
+
+    let early = tokio::time::timeout(STILL_RUNNING, &mut enrolling).await;
+    assert!(early.is_err(), "it ended at its deadline: {early:?}");
+    drop(held);
+    let enrolled = enrolling.await;
+
+    let enrolled = enrolled.unwrap();
+    assert!(
+        setup
+            .db
+            .agents()
+            .find(enrolled.agent)
+            .await
+            .unwrap()
+            .is_some()
+    );
+    let all = entries(&setup.db).await;
+    assert_eq!(of(&all, &AuditAction::ENROLLMENT_TOKEN_USE).len(), 1);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_refusal_being_recorded_finishes_past_its_deadline(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let token = host_token(&setup).await;
+    setup.clock.advance(Duration::from_mins(15));
+    let held = setup.db.write().await.unwrap();
+    let mut enrolling = std::pin::pin!(setup.enrollment.enroll(
+        request(&token, "agent-1", 7),
+        IpAddr::from(AGENT_IP),
+        SHORT_DEADLINE,
+    ));
+
+    let early = tokio::time::timeout(STILL_RUNNING, &mut enrolling).await;
+    assert!(early.is_err(), "it ended at its deadline: {early:?}");
+    drop(held);
+    let refused = enrolling.await;
+
+    assert_eq!(token_problem(refused), TokenProblem::Expired);
+    let all = entries(&setup.db).await;
+    assert_eq!(of(&all, &AuditAction::AGENT_ENROLL).len(), 1);
 }
