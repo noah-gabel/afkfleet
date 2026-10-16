@@ -58,7 +58,7 @@ async fn pending_then_approved_links_after_one_interval_each(
 }
 
 #[sqlx::test(migrations = false)]
-async fn slow_down_and_a_rate_limit_each_lengthen_the_interval_by_5_s(
+async fn a_slow_down_and_a_rate_limit_each_lengthen_the_interval_by_5_s(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
