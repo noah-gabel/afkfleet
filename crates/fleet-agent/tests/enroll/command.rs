@@ -12,8 +12,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use fleet_agent::config::ControlPlaneConfig;
+use fleet_agent::enroll::client::{self, CallError};
 use fleet_agent::enroll::key::AgentKey;
-use fleet_agent::enroll::pin::fingerprint;
+use fleet_agent::enroll::pin::{PinnedCa, fingerprint};
 use fleet_agent::enroll::{Enrollment, Exit, enroll};
 use fleet_core::enrollment::EnrollmentBundle;
 use fleet_core::id::AgentId;
@@ -509,4 +510,47 @@ fn the_token_reaches_no_log() {
     let key = agent_key().to_pem();
     let body = key.lines().nth(1).unwrap();
     fleet_testkit::log_capture::check_absent(body).unwrap();
+}
+
+#[test]
+fn a_call_to_a_url_that_isnt_https_is_refused_and_sends_nothing() {
+    let ca = new_ca(1);
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let pinned = PinnedCa {
+        pem: ca.pem.clone().into_bytes(),
+        der: ca.der.clone(),
+    };
+    let request =
+        fleet_proto::generated::EnrollRequest::from(fleet_proto::enrollment::EnrollRequest {
+            token: SecretString::from(TOKEN),
+            name: AgentName::try_from("agent-1").unwrap(),
+            csr_der: vec![0x30],
+        });
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap();
+
+    let called = runtime.block_on(async {
+        tokio::time::timeout(
+            std::time::Duration::from_secs(2),
+            client::call(&url, &pinned, request),
+        )
+        .await
+    });
+
+    assert!(
+        matches!(called, Ok(Err(CallError::BadUrl))),
+        "{:?}",
+        called.map(|answer| answer.map(drop))
+    );
+    let accepted = listener.accept();
+    assert!(
+        accepted
+            .as_ref()
+            .is_err_and(|error| error.kind() == std::io::ErrorKind::WouldBlock),
+        "a connection was made: {accepted:?}"
+    );
 }

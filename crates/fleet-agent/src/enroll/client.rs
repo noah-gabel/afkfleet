@@ -41,7 +41,8 @@ pub const OVERALL_TIMEOUT: Duration = Duration::from_secs(30);
 /// Why the call didn't enroll the agent.
 #[derive(Debug, thiserror::Error)]
 pub enum CallError {
-    /// The URL can't be dialed (validation makes this unreachable).
+    /// The URL can't be dialed, or isn't `https://` (the config's
+    /// validation refuses both first).
     #[error("the control plane's URL can't be dialed")]
     BadUrl,
     /// The server couldn't be reached.
@@ -185,7 +186,8 @@ pub fn is_certificate_problem(error: &(dyn Error + 'static)) -> bool {
     false
 }
 
-/// Calls `Enroll` at `url` over TLS that trusts only `ca`, with `request`.
+/// Calls `Enroll` at `url`, which must be `https://`, over TLS that trusts
+/// only `ca`, with `request`.
 ///
 /// # Errors
 /// [`CallError`].
@@ -195,6 +197,11 @@ pub async fn call(
     request: wire::EnrollRequest,
 ) -> Result<EnrollResponse, CallError> {
     let uri: Uri = url.parse().map_err(|_| CallError::BadUrl)?;
+    // Only over TLS: tonic would dial another scheme in plaintext, token and
+    // all, though the TLS config is set.
+    if uri.scheme_str() != Some("https") {
+        return Err(CallError::BadUrl);
+    }
     let name = server_name(&uri).ok_or(CallError::BadUrl)?;
     let tls = ClientTlsConfig::new()
         .ca_certificate(Certificate::from_pem(&ca.pem))
