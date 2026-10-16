@@ -21,8 +21,10 @@
 //!
 //! **Exit codes** ([`ENROLL_EXIT_CODES`]): 0 enrolled, 1 nothing was
 //! enrolled, 2 usage, and 3 when the server enrolled the agent and used the
-//! token but this host didn't store it (steps 5 and 6): that agent must be
-//! disabled, and a new token used.
+//! token but this host didn't store it (steps 5 and 6), or may have: the
+//! request may have reached the server and no clear answer came back (step
+//! 4; [`client::Unclear`]). That agent must be disabled, and a new token
+//! used.
 //!
 //! **Output:** on success, stdout says the agent's ID, its name, the
 //! certificate's end and the two files; on Windows, stderr adds that only
@@ -51,7 +53,7 @@ use rustls::pki_types::UnixTime;
 use tokio::runtime::Runtime;
 use tracing::{error, info};
 
-use self::client::{CallError, Refusal};
+use self::client::{CallError, Refusal, Unclear};
 use self::files::Claimed;
 use self::key::AgentKey;
 use self::pin::pinned_ca;
@@ -65,8 +67,9 @@ Exit codes:
      identity that exists already, the key, or the server refused or
      wasn't reached
   2  usage error
-  3  the server enrolled the agent and used the token, but this host didn't
-     store it: disable that agent, then enroll with a new token";
+  3  the server enrolled the agent and used the token, or may have (no
+     clear answer came back after the request was sent), but this host
+     didn't store it: disable that agent, then enroll with a new token";
 
 /// How `enroll` ended, which decides the process's exit code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,6 +152,7 @@ pub fn enroll(
         Err(CallError::Answer(_)) => {
             return lost(err, None, "the server's answer isn't valid");
         }
+        Err(CallError::Unclear(unclear)) => return unclear_end(err, name, unclear),
         Err(error) => return refuse(err, &call_failure(&error, plane, name)),
     };
     // From here on, the server has enrolled the agent and used the token.
@@ -198,9 +202,13 @@ fn call_failure(error: &CallError, plane: &ControlPlaneConfig, name: &AgentName)
             "the server at {} has no certificate the pinned CA signed for its name: check [control_plane] url, and the names of the server's `pki server-cert`",
             plane.url
         ),
-        CallError::TimedOut => "the server didn't answer within 30 s; if it enrolled this agent meanwhile, its token is used: disable that agent, then create a new token".to_owned(),
+        CallError::TimedOut => {
+            "the server couldn't be reached within 30 s; nothing was sent".to_owned()
+        }
         CallError::Refused(refusal) => refused(*refusal, name),
+        // Both are exit 3, handled before.
         CallError::Answer(_) => "the server's answer isn't valid".to_owned(),
+        CallError::Unclear(_) => "no clear answer came back".to_owned(),
     }
 }
 
@@ -218,7 +226,7 @@ fn refused(refusal: Refusal, name: &AgentName) -> String {
         Refusal::RateLimited { retry_after: None } => {
             "too many enrollments from this address; try again later".to_owned()
         }
-        Refusal::Unavailable => "the server is busy, or the connection broke; try again in a moment".to_owned(),
+        Refusal::Unavailable => "the server is busy; try again in a moment".to_owned(),
         Refusal::TooSlow => "the server took too long to enroll this agent; try again".to_owned(),
         Refusal::Other(code) => format!(
             "the server failed to enroll this agent (code {}); see the server's log",
@@ -241,6 +249,26 @@ fn lost(err: &mut dyn Write, agent: Option<AgentId>, why: &str) -> Exit {
     let _ = writeln!(
         err,
         "afkfleet-agent: the server enrolled {named} and used the token, but this host didn't store it: {why}. Disable {named}, then enroll with a new token"
+    );
+    Exit::Lost
+}
+
+/// The request may have reached the server and no clear answer came back
+/// (`unclear`): the server may have enrolled the agent `name` and used the
+/// token, and this host stored nothing. One `error` and one line, exit 3.
+fn unclear_end(err: &mut dyn Write, name: &AgentName, unclear: Unclear) -> Exit {
+    let why = match unclear {
+        Unclear::TimedOut => "the server didn't answer within 30 s".to_owned(),
+        Unclear::Broken(code) => format!(
+            "the call ended without the server's answer (code {})",
+            i32::from(code)
+        ),
+        Unclear::Failed => "the server failed; see its log".to_owned(),
+    };
+    error!(reason = %why, "the server may have enrolled an agent this host didn't store");
+    let _ = writeln!(
+        err,
+        "afkfleet-agent: the server may have enrolled this agent ({name}) and used the token, but no clear answer came back: {why}. If the server has an agent named {name} now, disable it; then enroll with a new token"
     );
     Exit::Lost
 }

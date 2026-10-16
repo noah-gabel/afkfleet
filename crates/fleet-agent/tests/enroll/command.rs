@@ -110,8 +110,11 @@ fn agent() -> AgentId {
 enum Answer {
     /// A certificate with this PEM.
     Certificate(String),
-    /// This code, with `retry-after` if given.
+    /// The server's refusal with this code, with `retry-after` if given:
+    /// like every answer of the server, it carries a request ID.
     Refuse(Code, Option<&'static str>),
+    /// This code without a request ID, as a broken connection ends a call.
+    Break(Code),
     /// A certificate, after creating this file.
     CertificateAfterCreating(String, PathBuf),
 }
@@ -131,8 +134,13 @@ impl AgentEnrollment for Fake {
     ) -> Result<Response<EnrollResponse>, Status> {
         self.seen.lock().unwrap().push(request.into_inner());
         let pem = match &self.answer {
+            Answer::Break(code) => return Err(Status::new(*code, SERVER_MESSAGE)),
             Answer::Refuse(code, retry_after) => {
                 let mut metadata = MetadataMap::new();
+                metadata.insert(
+                    fleet_proto::enrollment::REQUEST_ID,
+                    AsciiMetadataValue::from_static("0190f0a8-3c00-7000-8000-000000000001"),
+                );
                 if let Some(seconds) = retry_after {
                     metadata.insert("retry-after", AsciiMetadataValue::from_static(seconds));
                 }
@@ -362,7 +370,8 @@ fn an_identity_that_exists_sends_nothing_and_makes_no_key(#[case] existing: &str
 #[case::rate_limited(Code::ResourceExhausted, Some("12"), "try again in 12 s")]
 #[case::busy(Code::Unavailable, Some("1"), "busy")]
 #[case::a_refused_request(Code::InvalidArgument, None, "refused the enrollment request")]
-#[case::a_server_failure(Code::Internal, None, "see the server's log")]
+#[case::too_slow(Code::DeadlineExceeded, None, "took too long")]
+#[case::a_code_the_server_never_sends(Code::PermissionDenied, None, "see the server's log")]
 fn each_refusal_has_its_own_text_and_leaves_nothing(
     #[case] code: Code,
     #[case] retry_after: Option<&'static str>,
@@ -377,6 +386,28 @@ fn each_refusal_has_its_own_text_and_leaves_nothing(
     assert_eq!(ran.exit, Exit::Failed);
     assert_eq!(port.seen.lock().unwrap().len(), 1);
     assert!(ran.err.contains(text), "{}", ran.err);
+    assert!(!ran.err.contains(SERVER_MESSAGE), "{}", ran.err);
+    assert_eq!(ran.out, "");
+    assert_eq!(names(&agent_setup.identity()), Vec::<String>::new());
+}
+
+#[rstest]
+#[case::unavailable_without_the_servers_answer("unavailable", Answer::Break(Code::Unavailable))]
+#[case::cancelled_as_at_the_agents_deadline("cancelled", Answer::Break(Code::Cancelled))]
+#[case::the_servers_own_failure("internal", Answer::Refuse(Code::Internal, None))]
+fn an_unclear_end_after_sending_is_exit_3_and_stores_nothing(
+    #[case] dir: &str,
+    #[case] answer: Answer,
+) {
+    let ca = new_ca(1);
+    let port = start(&ca, answer);
+    let agent_setup = agent_in(&format!("unclear_{dir}"), &ca, port.address);
+
+    let ran = run(&agent_setup, &ca.der);
+
+    assert_eq!(ran.exit, Exit::Lost);
+    assert_eq!(port.seen.lock().unwrap().len(), 1);
+    assert!(ran.err.contains("may have enrolled"), "{}", ran.err);
     assert!(!ran.err.contains(SERVER_MESSAGE), "{}", ran.err);
     assert_eq!(ran.out, "");
     assert_eq!(names(&agent_setup.identity()), Vec::<String>::new());

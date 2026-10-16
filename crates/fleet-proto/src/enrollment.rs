@@ -10,8 +10,9 @@
 //! - **The CSR** is 1 to [`MAX_CSR_BYTES`] of DER; the server's PKI checks
 //!   it.
 //! - **The limits** are constants both ends use: the request and answer
-//!   sizes, and the server's deadline below the agent's, so a token is never
-//!   used after the agent gave up waiting.
+//!   sizes, and the server's deadline for its checks and signing below the
+//!   agent's. The server's writes after that run to their end, so an agent
+//!   that gave up waiting can't tell whether it was enrolled, and says so.
 
 use core::fmt;
 use core::mem;
@@ -39,13 +40,17 @@ pub const MAX_CSR_BYTES: usize = 4096;
 /// The largest certificate an answer may carry, in bytes.
 pub const MAX_CERTIFICATE_BYTES: usize = 8 * 1024;
 
-/// How long the server works on one enrollment before it answers that it
-/// took too long.
+/// How long the server checks and signs one enrollment before it answers
+/// that it took too long; its writes after that run to their end.
 pub const SERVER_DEADLINE: Duration = Duration::from_secs(15);
 
 /// How long the agent waits for the answer: longer than the server's
 /// deadline.
 pub const CLIENT_DEADLINE: Duration = Duration::from_secs(20);
+
+/// The metadata every answer of the server carries: the call's request ID.
+/// A status without it isn't the server's answer.
+pub const REQUEST_ID: &str = "x-request-id";
 
 /// What an agent sends to enroll.
 pub struct EnrollRequest {

@@ -64,7 +64,7 @@ use crate::http::middleware::RequestIds;
 use crate::http::rate_limit::RateLimits;
 
 /// The metadata every answer carries: the call's request ID.
-pub const REQUEST_ID: &str = "x-request-id";
+pub const REQUEST_ID: &str = fleet_proto::enrollment::REQUEST_ID;
 /// The metadata of a rate-limited or busy answer: whole seconds to wait.
 pub const RETRY_AFTER: &str = "retry-after";
 

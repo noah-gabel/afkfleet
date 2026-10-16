@@ -9,14 +9,21 @@
 //!   [`HANDSHAKE_TIMEOUT`], the call [`CLIENT_DEADLINE`] (also sent as
 //!   `grpc-timeout`), all of it [`OVERALL_TIMEOUT`]; the answer at most
 //!   [`MAX_RESPONSE_BYTES`]. No retry: the token is single-use.
-//! - **Answers** become a [`CallError`] by their code alone ([`refusal`]):
-//!   the server's message is never shown.
+//! - **Answers** become a [`CallError`] by their code alone ([`answered`],
+//!   [`refusal`]): the server's message is never shown.
+//! - **Unclear ends** ([`Unclear`]): once the channel is up, the request
+//!   may reach the server, so running out of time, a status without the
+//!   server's `x-request-id` (a broken connection's `UNAVAILABLE`, tonic's
+//!   own `CANCELLED` at the deadline) and the server's `INTERNAL` (its
+//!   answer can fail after it stored the agent) can't tell whether the agent
+//!   was enrolled. Before that, nothing was sent.
 
 use core::error::Error;
+use core::sync::atomic::{AtomicBool, Ordering};
 use core::time::Duration;
 
 use fleet_proto::ConvertError;
-use fleet_proto::enrollment::{CLIENT_DEADLINE, EnrollResponse, MAX_RESPONSE_BYTES};
+use fleet_proto::enrollment::{CLIENT_DEADLINE, EnrollResponse, MAX_RESPONSE_BYTES, REQUEST_ID};
 use fleet_proto::generated as wire;
 use fleet_proto::generated::agent_enrollment_client::AgentEnrollmentClient;
 use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Uri};
@@ -50,6 +57,10 @@ pub enum CallError {
     /// The server refused.
     #[error("the server refused the enrollment")]
     Refused(Refusal),
+    /// The request may have reached the server, and no clear answer came
+    /// back: the server may have enrolled the agent.
+    #[error("no clear answer came back; the server may have enrolled the agent")]
+    Unclear(Unclear),
     /// The answer isn't a valid one.
     #[error("the server's answer isn't valid")]
     Answer(#[source] ConvertError),
@@ -72,12 +83,53 @@ pub enum Refusal {
         /// `retry-after`, in whole seconds.
         retry_after: Option<u64>,
     },
-    /// `UNAVAILABLE`: the server is busy, or the connection broke.
+    /// `UNAVAILABLE`: the server is busy.
     Unavailable,
     /// `DEADLINE_EXCEEDED`: the call took too long.
     TooSlow,
     /// Any other code.
     Other(Code),
+}
+
+/// Why a call whose request may have reached the server has no clear
+/// answer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unclear {
+    /// Nothing came back within [`OVERALL_TIMEOUT`].
+    TimedOut,
+    /// The call ended with this code, but not as the server's answer (no
+    /// `x-request-id`): the connection broke, or tonic's client gave up at
+    /// [`CLIENT_DEADLINE`] (`CANCELLED`).
+    Broken(Code),
+    /// The server failed (`INTERNAL`), perhaps after it stored the agent.
+    Failed,
+}
+
+/// What `status` means as the end of a call whose request may have reached
+/// the server.
+#[must_use]
+pub fn answered(status: &Status) -> CallError {
+    // Every answer of the server carries its request ID; a status without one
+    // came from the connection or from tonic's client, not from a decision.
+    if status.metadata().get(REQUEST_ID).is_none() {
+        return CallError::Unclear(Unclear::Broken(status.code()));
+    }
+    match status.code() {
+        // The server's answer can fail after it stored the agent.
+        Code::Internal => CallError::Unclear(Unclear::Failed),
+        _ => CallError::Refused(refusal(status)),
+    }
+}
+
+/// What running out of time means; `connected` says whether the channel
+/// was up, so that the request may have reached the server.
+#[must_use]
+pub const fn timed_out(connected: bool) -> CallError {
+    if connected {
+        CallError::Unclear(Unclear::TimedOut)
+    } else {
+        CallError::TimedOut
+    }
 }
 
 /// The refusal `status` stands for, by its code and `retry-after`.
@@ -153,6 +205,7 @@ pub async fn call(
         .map_err(|_| CallError::BadUrl)?
         .connect_timeout(CONNECT_TIMEOUT)
         .timeout(CLIENT_DEADLINE);
+    let connected = AtomicBool::new(false);
     let work = async {
         let channel = endpoint.connect().await.map_err(|error| {
             if is_certificate_problem(&error) {
@@ -161,6 +214,8 @@ pub async fn call(
                 CallError::Unreachable(error)
             }
         })?;
+        // From here on, the request may reach the server.
+        connected.store(true, Ordering::Relaxed);
         let mut client =
             AgentEnrollmentClient::new(channel).max_decoding_message_size(MAX_RESPONSE_BYTES);
         let mut request = tonic::Request::new(request);
@@ -168,13 +223,14 @@ pub async fn call(
         let answer = client
             .enroll(request)
             .await
-            .map_err(|status| CallError::Refused(refusal(&status)))?;
+            .map_err(|status| answered(&status))?;
         EnrollResponse::try_from(answer.into_inner()).map_err(CallError::Answer)
     };
     // The bound of everything, the bounds of each step inside it.
-    tokio::time::timeout(OVERALL_TIMEOUT, work)
-        .await
-        .unwrap_or(Err(CallError::TimedOut))
+    match tokio::time::timeout(OVERALL_TIMEOUT, work).await {
+        Ok(result) => result,
+        Err(_elapsed) => Err(timed_out(connected.load(Ordering::Relaxed))),
+    }
 }
 
 #[cfg(test)]
@@ -241,6 +297,76 @@ mod tests {
 
             assert_eq!(server_name(&uri).as_deref(), Some(name), "{url}");
         }
+    }
+
+    /// The server's answer with `code`: it carries a request ID.
+    fn servers(code: Code) -> Status {
+        let mut metadata = MetadataMap::new();
+        metadata.insert(
+            fleet_proto::enrollment::REQUEST_ID,
+            AsciiMetadataValue::from_static("0190f0a8-3c00-7000-8000-000000000001"),
+        );
+        Status::with_metadata(code, "a message the agent never shows", metadata)
+    }
+
+    #[test]
+    fn the_servers_refusals_are_refusals() {
+        for (code, expected) in [
+            (Code::Unauthenticated, Refusal::InvalidToken),
+            (Code::AlreadyExists, Refusal::NameTaken),
+            (Code::InvalidArgument, Refusal::Invalid),
+            (Code::Unavailable, Refusal::Unavailable),
+            (Code::DeadlineExceeded, Refusal::TooSlow),
+            (
+                Code::ResourceExhausted,
+                Refusal::RateLimited { retry_after: None },
+            ),
+        ] {
+            let answer = answered(&servers(code));
+
+            assert!(
+                matches!(answer, CallError::Refused(found) if found == expected),
+                "{code:?}: {answer:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_servers_own_failure_is_unclear() {
+        let answer = answered(&servers(Code::Internal));
+
+        assert!(
+            matches!(answer, CallError::Unclear(Unclear::Failed)),
+            "{answer:?}"
+        );
+    }
+
+    #[test]
+    fn a_status_without_the_servers_request_id_is_unclear() {
+        for code in [
+            Code::Unavailable,
+            Code::Cancelled,
+            Code::DeadlineExceeded,
+            Code::Internal,
+            Code::Unknown,
+            Code::OutOfRange,
+        ] {
+            let answer = answered(&status(code, None));
+
+            assert!(
+                matches!(answer, CallError::Unclear(Unclear::Broken(found)) if found == code),
+                "{code:?}: {answer:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn running_out_of_time_is_unclear_once_connected() {
+        assert!(matches!(timed_out(false), CallError::TimedOut));
+        assert!(matches!(
+            timed_out(true),
+            CallError::Unclear(Unclear::TimedOut)
+        ));
     }
 
     #[test]
