@@ -6,14 +6,19 @@
 //! signature's algorithm and the key's bytes from the request, and certifies
 //! exactly that pair, which the signature covered; so the check that the
 //! algorithm is Ed25519 and the key 32 bytes is the check of the key type.
-//! A request that asks for any extension is refused; its subject and any
-//! attribute are ignored, since nothing but the key is used.
+//! A request that asks for any extension is refused, and so is one that
+//! carries any attribute: rcgen reads extensions through x509-parser's
+//! `requested_extensions()`, which sees only the first extension request,
+//! so a second one could ask for what the check never sees. Its subject is
+//! ignored, since nothing but the key is used.
 
 use rcgen::{
     CertificateSigningRequestParams, IsCa, PKCS_ED25519, PublicKey, PublicKeyData,
     SignatureAlgorithm,
 };
 use rustls::pki_types::CertificateSigningRequestDer;
+use x509_parser::certification_request::X509CertificationRequest;
+use x509_parser::prelude::FromDer as _;
 
 use crate::ports::pki::CsrRefusal;
 
@@ -35,11 +40,12 @@ impl PublicKeyData for CheckedCsr {
 }
 
 /// The public key of `der`, a DER-encoded PKCS#10 request, when its
-/// signature verifies, its key is Ed25519 and it asks for no extension.
+/// signature verifies, its key is Ed25519 and it asks for no extension and
+/// carries no attribute.
 ///
 /// # Errors
 /// The [`CsrRefusal`] that applies first: its size, then whether it reads,
-/// its signature, its key type and its extensions.
+/// its signature, its key type, its extensions and its attributes.
 pub fn check_csr(der: &[u8]) -> Result<CheckedCsr, CsrRefusal> {
     if der.len() > CsrRefusal::MAX_BYTES {
         return Err(CsrRefusal::TooLarge);
@@ -65,6 +71,14 @@ pub fn check_csr(der: &[u8]) -> Result<CheckedCsr, CsrRefusal> {
         || !matches!(asked.is_ca, IsCa::NoCa)
     {
         return Err(CsrRefusal::Extensions);
+    }
+    // rcgen sees only the first extension request (x509-parser's
+    // `requested_extensions()`), so a second could hide behind it: no
+    // attribute at all is accepted. The agent's CSR carries none.
+    let (_, parsed) =
+        X509CertificationRequest::from_der(der).map_err(|_| CsrRefusal::Unparsable)?;
+    if !parsed.certification_request_info.attributes().is_empty() {
+        return Err(CsrRefusal::Attributes);
     }
     Ok(CheckedCsr(request.public_key))
 }
@@ -190,6 +204,64 @@ mod tests {
             let der = params.serialize_request(&key).unwrap().der().to_vec();
             assert_eq!(check_csr(&der).map(|_| ()), Err(CsrRefusal::Extensions));
         }
+    }
+
+    /// PKCS#9's challengePassword.
+    const CHALLENGE_PASSWORD: &[u64] = &[1, 2, 840, 113_549, 1, 9, 7];
+    /// PKCS#9's extensionRequest.
+    const EXTENSION_REQUEST: &[u64] = &[1, 2, 840, 113_549, 1, 9, 14];
+
+    /// A CSR for `key` asking for nothing, carrying `attributes`.
+    fn csr_with(key: &KeyPair, attributes: Vec<rcgen::Attribute>) -> Vec<u8> {
+        CertificateParams::default()
+            .serialize_request_with_attributes(key, attributes)
+            .unwrap()
+            .der()
+            .to_vec()
+    }
+
+    #[test]
+    fn a_csr_with_an_attribute_is_refused() {
+        let key = ed25519(7);
+        let der = csr_with(
+            &key,
+            vec![rcgen::Attribute {
+                oid: CHALLENGE_PASSWORD,
+                // SET { UTF8String "pass" }
+                values: vec![0x31, 0x06, 0x0c, 0x04, b'p', b'a', b's', b's'],
+            }],
+        );
+
+        assert_eq!(check_csr(&der).map(|_| ()), Err(CsrRefusal::Attributes));
+    }
+
+    #[test]
+    fn a_second_extension_request_is_refused() {
+        let key = ed25519(7);
+        // basicConstraints, critical, CA: the request x509-parser's
+        // requested_extensions() wouldn't see behind an empty first one.
+        let ca_extension = [
+            0x30, 0x0f, 0x06, 0x03, 0x55, 0x1d, 0x13, 0x01, 0x01, 0xff, 0x04, 0x05, 0x30, 0x03,
+            0x01, 0x01, 0xff,
+        ];
+        let mut second = vec![0x31, 0x13, 0x30, 0x11];
+        second.extend_from_slice(&ca_extension);
+        let der = csr_with(
+            &key,
+            vec![
+                rcgen::Attribute {
+                    oid: EXTENSION_REQUEST,
+                    // SET { SEQUENCE {} }: no extension
+                    values: vec![0x31, 0x02, 0x30, 0x00],
+                },
+                rcgen::Attribute {
+                    oid: EXTENSION_REQUEST,
+                    values: second,
+                },
+            ],
+        );
+
+        assert_eq!(check_csr(&der).map(|_| ()), Err(CsrRefusal::Attributes));
     }
 
     #[test]

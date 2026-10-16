@@ -36,6 +36,9 @@ pub enum CsrRefusal {
     /// It asks for an extension, such as a name or a key usage.
     #[error("the certificate request asks for extensions")]
     Extensions,
+    /// It carries an attribute, such as a second extension request.
+    #[error("the certificate request carries attributes")]
+    Attributes,
 }
 
 impl CsrRefusal {
@@ -52,6 +55,7 @@ impl CsrRefusal {
             Self::Signature => "signature",
             Self::KeyType => "key_type",
             Self::Extensions => "extensions",
+            Self::Attributes => "attributes",
         }
     }
 }
