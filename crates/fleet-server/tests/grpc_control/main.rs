@@ -10,6 +10,8 @@
 //! - `bound`: the connections' age, which a welcomed stream lifts.
 //! - `sizes`: the message limits.
 //! - `admission`: `[rate_limits] connect_per_cert_per_min`.
+//! - `registry`: one stream per agent, the ends of a permission, and what an
+//!   agent may report.
 //! - `logs`: what never reaches a log line.
 //! - `in_memory`: the one test on paused time, over an in-memory pipe with a
 //!   fake behind the port (U6).
@@ -30,6 +32,7 @@ mod in_memory;
 mod liveness;
 mod logs;
 mod proxy;
+mod registry;
 mod session;
 mod sizes;
 mod support;

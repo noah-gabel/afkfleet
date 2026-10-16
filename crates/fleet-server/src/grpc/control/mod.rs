@@ -38,6 +38,7 @@
 //! | not a hello, or a hello that doesn't convert | open | `Reject(InvalidHello)`, then OK |
 //! | another protocol version, 0 included | open | `Reject(IncompatibleProtocol)`, then OK |
 //! | a name other than the agent's | open | `Reject(NameMismatch)`, then OK |
+//! | another stream of the agent lives | open | `Reject(AlreadyConnected)`, then OK |
 //! | revoked or disabled meanwhile | the hello's write | `UNAUTHENTICATED` [`CERTIFICATE_REFUSED`] |
 //! | a second hello | after `Welcome` | `FAILED_PRECONDITION` [`ONE_HELLO`] |
 //! | nothing within the heartbeat timeout | after `Welcome` | `DEADLINE_EXCEEDED` [`HEARTBEAT_MISSED`] |
@@ -45,7 +46,8 @@
 //! | a message that can't be decoded | after `Welcome` | `INVALID_ARGUMENT` [`MESSAGE_UNREADABLE`] |
 //! | the agent closed its side, or reset the stream | after `Welcome` | OK |
 //! | the queue to the agent full | after `Welcome` | `RESOURCE_EXHAUSTED` [`TOO_SLOW`] |
-//! | the certificate expired | after `Welcome` | `Reject(CertificateExpired)`, then OK |
+//! | the certificate expired, or the sweep or a disable found the permission ended | after `Welcome`, or before it | `Reject(CertificateExpired \| CertificateRevoked \| AgentDisabled)`, then OK |
+//! | a session request | after `Welcome` | `SessionDenied`, retryable, until P10.6 |
 //! | the server shuts down | open | `UNAVAILABLE` [`SHUTTING_DOWN`] |
 //!
 //! A message after `Welcome` that decodes but doesn't convert is dropped
@@ -84,6 +86,7 @@ pub use outbound::Outbound;
 use self::gate::ControlCall;
 use self::session::Session;
 use super::listener::Connection;
+use super::registry::AgentRegistry;
 use super::status::refusal;
 use crate::config::Heartbeats;
 use crate::http::error::{BUSY_RETRY_AFTER, chain, whole_seconds};
@@ -182,6 +185,7 @@ pub struct ControlGrpc {
     clock: Arc<dyn Clock>,
     timings: ControlTimings,
     sessions: Sessions,
+    registry: AgentRegistry,
 }
 
 #[tonic::async_trait]
@@ -232,6 +236,7 @@ impl AgentControl for ControlGrpc {
             clock: Arc::clone(&self.clock),
             timings: self.timings,
             stop: self.sessions.stop.child_token(),
+            registry: self.registry.clone(),
         };
         self.sessions.tasks.spawn(session.run(last));
         let mut response = Response::new(Outbound::new(queued, lasting));
@@ -259,8 +264,9 @@ fn refused(failure: &AdmitError, id: RequestId) -> Status {
 pub type ControlRoute = InterceptedService<AgentControlServer<ControlGrpc>, ControlGate>;
 
 /// [`ControlGrpc`] over `connections`, stamping with `clock`, waiting as
-/// `timings` says and owning its sessions in `sessions`, with the shared
-/// message limits, behind a [`ControlGate`] over `limits` and `ids`.
+/// `timings` says, owning its sessions in `sessions` and keeping one
+/// stream per agent in `registry`, with the shared message limits, behind
+/// a [`ControlGate`] over `limits` and `ids`.
 #[must_use]
 pub fn control_service(
     connections: Arc<dyn AgentConnections>,
@@ -269,6 +275,7 @@ pub fn control_service(
     ids: RequestIds,
     timings: ControlTimings,
     sessions: Sessions,
+    registry: AgentRegistry,
 ) -> ControlRoute {
     InterceptedService::new(
         AgentControlServer::new(ControlGrpc {
@@ -276,6 +283,7 @@ pub fn control_service(
             clock,
             timings,
             sessions,
+            registry,
         })
         .max_decoding_message_size(MAX_AGENT_MESSAGE_BYTES)
         .max_encoding_message_size(MAX_SERVER_MESSAGE_BYTES),

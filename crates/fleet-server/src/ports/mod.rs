@@ -10,7 +10,10 @@
 //! - [`agents`]: the enrolled agents and the certificates the server signed
 //!   for them (P10.2, P10.3).
 //! - [`agent_connections`]: what an agent's `Connect` stream asks the app:
-//!   admitting its certificate, recording its hello and its end (P10.4).
+//!   admitting its certificate, recording its hello, its end and a conflict
+//!   over its identity, and checking the live streams again (P10.4, P10.5).
+//! - [`live_agents`]: what the app asks of the live streams: ending one
+//!   whose permission ended, and what's known of one (P10.5).
 //! - [`accounts`]: the linked Minecraft accounts, Microsoft or offline
 //!   (P9.1).
 //! - [`grants`]: the grants that share an account with other users (P9.1).
@@ -51,6 +54,7 @@ pub mod enrollment_tokens;
 pub mod envelopes;
 pub mod grants;
 pub mod invites;
+pub mod live_agents;
 pub mod login_attempts;
 pub mod mfa;
 pub mod msauth;

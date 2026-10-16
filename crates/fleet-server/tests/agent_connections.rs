@@ -25,10 +25,12 @@ use fleet_server::app::agents::AgentConnectionService;
 use fleet_server::infra::pki::{CertificateAuthority, Ed25519Key, X509AgentNames, fingerprint};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::agent_connections::{
-    AdmitError, Admitted, AgentConnections as _, Ended, Presented, StreamEnd,
+    AdmitError, Admitted, AgentConnections as _, Conflict, Ended, LiveCertificate, Presented,
+    StreamEnd,
 };
 use fleet_server::ports::agents::{NewAgent, NewAgentCert};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
+use fleet_server::ports::live_agents::PermissionEnd;
 use fleet_server::ports::store::Store as _;
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -632,5 +634,118 @@ fn every_end_has_its_stable_name() {
             "certificate_expired",
             "server_shutdown",
         ]
+    );
+}
+
+// --- Conflicts and the sweep (P10.5) ------------------------------------------------------
+
+#[sqlx::test(migrations = false)]
+async fn a_conflict_is_recorded_with_both_ends_of_it(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let agent = setup.enroll(1, "agent-1").await;
+    let admitted = setup.admit(&agent).await.unwrap();
+    let refused = IpAddr::from([192, 0, 2, 30]);
+    let other = CertFingerprint::from_digest([9; 32]);
+
+    setup
+        .connections
+        .conflict(
+            &admitted,
+            Conflict {
+                fingerprint: other,
+                peer: Some(refused),
+                refused_at: at(T0) + TimeDelta::seconds(2),
+                connected_at: at(T0),
+            },
+        )
+        .await;
+
+    let entries = setup.entries().await;
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    let entry = &entries[0];
+    assert_eq!(entry.action, AuditAction::SECURITY_AGENT_IDENTITY_CONFLICT);
+    assert_eq!(entry.outcome, AuditOutcome::Failure);
+    assert_eq!(
+        entry.target,
+        Some(RecordedTarget::Known(AuditTarget::Agent(agent.id)))
+    );
+    assert_eq!(entry.actor, None);
+    assert_eq!(entry.ip, Some(refused));
+    assert_eq!(text(entry, "fingerprint"), Some(other.to_string()));
+    assert_eq!(text(entry, "live_ip"), Some(peer().to_string()));
+    assert_eq!(
+        text(entry, "connected_at").as_deref(),
+        Some("2027-01-15T08:00:00.000Z")
+    );
+    assert_eq!(
+        text(entry, "refused_at").as_deref(),
+        Some("2027-01-15T08:00:02.000Z")
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_sweep_names_each_stream_whose_permission_ended_with_why(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let fine = setup.enroll(1, "agent-1").await;
+    let revoked = setup.enroll(2, "agent-2").await;
+    let disabled = setup.enroll(3, "agent-3").await;
+    let expired = setup.enroll(4, "agent-4").await;
+    setup.revoke(revoked.id).await;
+    setup.disable(disabled.id).await;
+    let unknown = LiveCertificate {
+        agent: AgentId::new_v7(at(T0), [5; 10]).unwrap(),
+        fingerprint: CertFingerprint::from_digest([5; 32]),
+    };
+    let live = |agent: &Enrolled| LiveCertificate {
+        agent: agent.id,
+        fingerprint: agent.fingerprint,
+    };
+    let streams = [live(&fine), live(&revoked), live(&disabled), unknown];
+
+    let mut ended = setup.connections.sweep(&streams).await.unwrap();
+    setup.clock.set(expired.not_after);
+    let at_expiry = setup.connections.sweep(&[live(&expired)]).await.unwrap();
+
+    ended.sort_by_key(|(agent, _)| *agent);
+    let mut expected = vec![
+        (revoked.id, PermissionEnd::CertificateRevoked),
+        (disabled.id, PermissionEnd::Disabled),
+        // A row that's gone admits nobody.
+        (unknown.agent, PermissionEnd::CertificateRevoked),
+    ];
+    expected.sort_by_key(|(agent, _)| *agent);
+    assert_eq!(ended, expected);
+    assert_eq!(
+        at_expiry,
+        vec![(expired.id, PermissionEnd::CertificateExpired)]
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_sweep_that_cant_read_is_an_error(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let agent = setup.enroll(1, "agent-1").await;
+    setup.db.close().await;
+
+    let result = setup
+        .connections
+        .sweep(&[LiveCertificate {
+            agent: agent.id,
+            fingerprint: agent.fingerprint,
+        }])
+        .await;
+
+    assert!(
+        matches!(result, Err(AdmitError::Internal(_) | AdmitError::Busy)),
+        "{result:?}"
     );
 }

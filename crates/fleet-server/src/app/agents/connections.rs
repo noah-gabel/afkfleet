@@ -18,9 +18,17 @@
 //!   recorded, and `agent.connect` commits, before `Welcome` is sent.
 //! - **A stream's end** records its last message's time and
 //!   `agent.disconnect` with its reason.
+//! - **A conflict** (two processes holding one agent's identity, which the
+//!   registry finds) is an `error` line and
+//!   `security.agent_identity_conflict`; the registry asks at most once an
+//!   hour per agent.
+//! - **The sweep** reads every admissible certificate once and judges each
+//!   live stream whose certificate isn't among them again, for why: a row
+//!   that's gone counts as revoked.
 //! - **Logs** name the request, the agent and the reason, never the peer's
 //!   address or the certificate's bytes.
 
+use std::collections::HashSet;
 use std::net::IpAddr;
 use std::sync::Arc;
 
@@ -38,8 +46,11 @@ use fleet_core::value::{AgentCapacity, AgentVersion};
 use tracing::{debug, error, info, warn};
 
 use crate::app::audit::AuditService;
-use crate::ports::agent_connections::{AdmitError, Admitted, AgentConnections, Ended, Presented};
+use crate::ports::agent_connections::{
+    AdmitError, Admitted, AgentConnections, Conflict, Ended, LiveCertificate, Presented,
+};
 use crate::ports::agents::{AgentCert, AgentHello};
+use crate::ports::live_agents::PermissionEnd;
 use crate::ports::pki::AgentNames;
 use crate::ports::store::{Store, StoreError};
 
@@ -235,6 +246,62 @@ impl AgentConnectionService {
     }
 }
 
+impl AgentConnectionService {
+    /// Writes [`AgentConnections::conflict`]'s entry.
+    async fn record_conflict(
+        &self,
+        admitted: &Admitted,
+        conflict: Conflict,
+    ) -> Result<(), RecordError> {
+        let mut metadata =
+            AuditMetadata::new().text("fingerprint", &conflict.fingerprint.to_string())?;
+        if let Some(live) = admitted.peer {
+            metadata = metadata.text("live_ip", &live.to_string())?;
+        }
+        let metadata = metadata
+            .time("connected_at", conflict.connected_at)?
+            .time("refused_at", conflict.refused_at)?;
+        let mut entry = self
+            .audit
+            .entry(
+                AuditAction::SECURITY_AGENT_IDENTITY_CONFLICT,
+                AuditOutcome::Failure,
+            )
+            .target(AuditTarget::Agent(admitted.agent))
+            .metadata(metadata);
+        if let Some(peer) = conflict.peer {
+            entry = entry.ip(peer);
+        }
+        let tx = self.store.write().await?;
+        tx.commit(entry).await?;
+        Ok(())
+    }
+
+    /// Why `stream`'s certificate, missing from the admissible ones, no
+    /// longer admits it at `now`; none if it does again.
+    async fn why_ended(
+        &self,
+        stream: &LiveCertificate,
+        now: DateTime<Utc>,
+    ) -> Result<Option<PermissionEnd>, AdmitError> {
+        let Some(cert) = self.store.agents().cert(stream.fingerprint).await? else {
+            return Ok(Some(PermissionEnd::CertificateRevoked));
+        };
+        let enabled = self
+            .store
+            .agents()
+            .find(cert.agent)
+            .await?
+            .is_some_and(|agent| agent.enabled);
+        Ok(match Self::judge(&cert, enabled, now) {
+            Ok(()) => None,
+            Err(ConnectRefusal::Expired) => Some(PermissionEnd::CertificateExpired),
+            Err(ConnectRefusal::Disabled) => Some(PermissionEnd::Disabled),
+            Err(_) => Some(PermissionEnd::CertificateRevoked),
+        })
+    }
+}
+
 /// Why an entry wasn't written.
 #[derive(Debug, thiserror::Error)]
 enum RecordError {
@@ -356,5 +423,47 @@ impl AgentConnections for AgentConnectionService {
                 "an agent's disconnect couldn't be recorded"
             );
         }
+    }
+
+    async fn conflict(&self, admitted: &Admitted, conflict: Conflict) {
+        error!(
+            request_id = %admitted.request,
+            agent_id = %admitted.agent,
+            agent = %admitted.name,
+            fingerprint = %conflict.fingerprint,
+            "two processes hold one agent's identity: its live stream spoke after a second connection was refused"
+        );
+        if let Err(failure) = self.record_conflict(admitted, conflict).await {
+            warn!(
+                request_id = %admitted.request,
+                agent_id = %admitted.agent,
+                error = %failure,
+                "an identity conflict couldn't be recorded"
+            );
+        }
+    }
+
+    async fn sweep(
+        &self,
+        live: &[LiveCertificate],
+    ) -> Result<Vec<(AgentId, PermissionEnd)>, AdmitError> {
+        let now = self.clock.now();
+        let admissible: HashSet<CertFingerprint> = self
+            .store
+            .agents()
+            .admissible(now)
+            .await?
+            .into_iter()
+            .collect();
+        let mut ended = Vec::new();
+        for stream in live
+            .iter()
+            .filter(|stream| !admissible.contains(&stream.fingerprint))
+        {
+            if let Some(why) = self.why_ended(stream, now).await? {
+                ended.push((stream.agent, why));
+            }
+        }
+        Ok(ended)
     }
 }

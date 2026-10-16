@@ -28,6 +28,7 @@ use fleet_server::config::{Heartbeats, RateLimitConfig};
 use fleet_server::grpc::control::{ControlTimings, ONE_HELLO, Sessions, control_service};
 use fleet_server::grpc::enrollment::enrollment_service;
 use fleet_server::grpc::listener::{self, Bounded, CONNECTION_AGE};
+use fleet_server::grpc::registry::AgentRegistry;
 use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::rate_limit::RateLimits;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
@@ -35,8 +36,9 @@ use fleet_server::infra::pki::{AgentIssuer, Ed25519Key};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::infra::system::SystemClock;
 use fleet_server::ports::agent_connections::{
-    AdmitError, Admitted, AgentConnections, Ended, Presented, StreamEnd,
+    AdmitError, Admitted, AgentConnections, Conflict, Ended, LiveCertificate, Presented, StreamEnd,
 };
+use fleet_server::ports::live_agents::PermissionEnd;
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use hyper_util::rt::TokioIo;
 use sqlx::sqlite::SqliteConnectOptions;
@@ -96,6 +98,15 @@ impl AgentConnections for OneAgent {
 
     async fn ended(&self, _admitted: &Admitted, ended: Ended) {
         self.ended.lock().unwrap().push(ended.reason);
+    }
+
+    async fn conflict(&self, _admitted: &Admitted, _conflict: Conflict) {}
+
+    async fn sweep(
+        &self,
+        _live: &[LiveCertificate],
+    ) -> Result<Vec<(AgentId, PermissionEnd)>, AdmitError> {
+        Ok(Vec::new())
     }
 }
 
@@ -247,11 +258,12 @@ impl Port {
         let sessions = Sessions::new(CancellationToken::new());
         let control = control_service(
             connections.clone(),
-            Arc::new(clock),
+            Arc::new(clock.clone()),
             limits,
             ids,
             ControlTimings::new(Heartbeats::default()),
             sessions.clone(),
+            AgentRegistry::new(Arc::new(clock.clone())),
         );
         let router = listener::router(tls, enrollment, control, Heartbeats::default()).unwrap();
         let (accept, incoming) = mpsc::channel(2);

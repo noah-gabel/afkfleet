@@ -43,6 +43,7 @@ use fleet_server::grpc::enrollment::{
     TOO_SLOW, enrollment_service,
 };
 use fleet_server::grpc::listener;
+use fleet_server::grpc::registry::AgentRegistry;
 use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::rate_limit::RateLimits;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
@@ -205,6 +206,7 @@ async fn start(options: SqliteConnectOptions, settings: Settings) -> Port {
         RequestIds::new(Arc::new(clock.clone()), Arc::new(random.clone())),
         ControlTimings::new(Heartbeats::default()),
         Sessions::new(CancellationToken::new()),
+        AgentRegistry::new(Arc::new(clock.clone())),
     );
     let router = listener::router(tls, route, control, Heartbeats::default()).unwrap();
     let bound = TcpListener::bind("127.0.0.1:0").await.unwrap();

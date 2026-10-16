@@ -92,6 +92,7 @@ use crate::config::{HttpConfig, ServerConfig};
 use crate::grpc::control::{ControlRoute, ControlTimings, Sessions, control_service};
 use crate::grpc::enrollment::enrollment_service;
 use crate::grpc::listener::{self as grpc_listener, EnrollmentRoute};
+use crate::grpc::registry::{AgentRegistry, SWEEP_INTERVAL};
 use crate::http::error::chain;
 use crate::http::middleware::RequestIds;
 use crate::http::openapi::ApiDocs;
@@ -260,6 +261,18 @@ pub struct GrpcRoutes {
     pub control: ControlRoute,
     /// The sessions of the `Connect` streams.
     pub sessions: Sessions,
+    /// The sweep that ends streams whose permission ended: each agent's one
+    /// stream, and what checks their certificates.
+    pub sweep: Sweep,
+}
+
+/// The sweep [`serve`] runs while the gRPC port is on (ADR-0019, S27).
+#[derive(Debug)]
+pub struct Sweep {
+    /// Each agent's one stream.
+    pub registry: AgentRegistry,
+    /// What checks the live streams' certificates.
+    pub connections: Arc<dyn AgentConnections>,
 }
 
 /// The control plane, while `[grpc]` is configured: the listener main.rs
@@ -282,6 +295,8 @@ pub struct GrpcPort {
     pub router: tonic::transport::server::Router,
     /// The sessions of its `Connect` streams, ended at the shutdown.
     pub sessions: Sessions,
+    /// The sweep of its streams, run until the shutdown.
+    pub sweep: Sweep,
 }
 
 /// The clocks, the randomness, Microsoft and the pacing the app runs on.
@@ -432,6 +447,9 @@ pub fn app_with(
     );
     let grants = GrantService::new(Arc::clone(&clock), Arc::clone(&store));
     let ids = RequestIds::new(Arc::clone(&clock), Arc::clone(&random));
+    // Without [grpc] it stays empty: the agents' services still end streams
+    // through it, and none ever lives.
+    let agents = AgentRegistry::new(Arc::clone(&clock));
     let (enrollment_tokens, grpc) = control_plane_services(
         config,
         ca,
@@ -442,6 +460,7 @@ pub fn app_with(
             tokens: token_port,
             limits: limits.clone(),
             ids: ids.clone(),
+            registry: agents.clone(),
         },
     );
     let state = AppState::new(Services {
@@ -464,7 +483,7 @@ pub fn app_with(
             ids,
             ApiDocs::for_dev_mode(config.dev_mode),
         ),
-        housekeeping: Housekeeping::new(limits, lockout, challenges, link_flows.flows()),
+        housekeeping: Housekeeping::new(limits, lockout, challenges, link_flows.flows(), agents),
         link_flows,
         grpc,
     }
@@ -502,6 +521,7 @@ struct EnrollmentPorts {
     tokens: Arc<dyn Tokens>,
     limits: RateLimits,
     ids: RequestIds,
+    registry: AgentRegistry,
 }
 
 /// The control plane's services over `ports`, while `config` has `[grpc]`
@@ -532,12 +552,13 @@ fn control_plane_services(
     ));
     let sessions = Sessions::new(CancellationToken::new());
     let control = control_service(
-        connections,
+        Arc::clone(&connections),
         Arc::clone(&ports.clock),
         ports.limits.clone(),
         ports.ids.clone(),
         ControlTimings::new(grpc.heartbeats),
         sessions.clone(),
+        ports.registry.clone(),
     );
     let enrollment = EnrollmentService::new(
         ports.clock,
@@ -552,6 +573,10 @@ fn control_plane_services(
             enrollment: enrollment_service(enrollment, ports.limits, ports.ids, SERVER_DEADLINE),
             control,
             sessions,
+            sweep: Sweep {
+                registry: ports.registry,
+                connections,
+            },
         }),
     )
 }
@@ -687,6 +712,7 @@ fn grpc_port(
         enrollment,
         control,
         sessions,
+        sweep,
     } = services;
     let router = grpc_listener::router(tls, enrollment, control, grpc.heartbeats)
         .map_err(StartError::Grpc)?;
@@ -695,6 +721,7 @@ fn grpc_port(
         listener,
         router,
         sessions,
+        sweep,
     }))
 }
 
@@ -756,6 +783,11 @@ pub async fn serve<S: ShutdownSignals>(
             sessions_stop.cancelled().await;
             sessions.shutdown().await;
         });
+        background.spawn(port.sweep.registry.sweep_every(
+            port.sweep.connections,
+            SWEEP_INTERVAL,
+            shutdown.child_token(),
+        ));
         Box::pin(grpc_listener::serve(
             port.router,
             port.listener,

@@ -50,6 +50,13 @@ pub const MAX_AGENT_MESSAGE_BYTES: usize = 8 * 1024 * 1024;
 /// whose specs are at their caps (ADR-0019, S25).
 pub const MAX_SERVER_MESSAGE_BYTES: usize = 128 * 1024 * 1024;
 
+/// The length of `message` on the wire, which a sender compares with
+/// [`MAX_SERVER_MESSAGE_BYTES`] before it queues it (ADR-0019, S25).
+#[must_use]
+pub fn server_message_len(message: &crate::generated::ServerMessage) -> usize {
+    prost::Message::encoded_len(message)
+}
+
 /// How long the server waits for a stream's first message, from the moment
 /// it opens the stream (ADR-0019, S24).
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);

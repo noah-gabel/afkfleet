@@ -322,6 +322,16 @@ audit_actions! {
     /// `too_slow`, `disabled`, `certificate_revoked`, `certificate_expired`
     /// or `server_shutdown`) and `connected_at`.
     AGENT_DISCONNECT = "agent.disconnect";
+
+    /// Two processes hold one agent's identity (P10.5, ADR-0019, S26): a
+    /// message arrived on the agent's live stream after a second connection
+    /// with one of its certificates was refused. Outcome: Failure. No actor;
+    /// the refused connection's address; target the agent. Metadata:
+    /// `fingerprint` (the refused connection's certificate), `live_ip` (the
+    /// live stream's address, when known), `connected_at` (when the live
+    /// stream's hello was accepted) and `refused_at`. At most once an hour
+    /// per agent.
+    SECURITY_AGENT_IDENTITY_CONFLICT = "security.agent_identity_conflict";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

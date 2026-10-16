@@ -22,6 +22,7 @@ use fleet_server::config::{Heartbeats, RateLimitConfig};
 use fleet_server::grpc::control::{ControlTimings, REQUEST_ID, Sessions, control_service};
 use fleet_server::grpc::enrollment::enrollment_service;
 use fleet_server::grpc::listener;
+use fleet_server::grpc::registry::{AgentRegistry, SWEEP_INTERVAL};
 use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::rate_limit::RateLimits;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
@@ -30,6 +31,7 @@ use fleet_server::infra::pki::{
 };
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::infra::system::SystemClock;
+use fleet_server::ports::agent_connections::AgentConnections;
 use fleet_server::ports::agents::{Agent as AgentRow, NewAgent, NewAgentCert};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
 use fleet_server::ports::store::Store as _;
@@ -59,6 +61,7 @@ pub(crate) struct Settings {
     pub(crate) limits: RateLimitConfig,
     pub(crate) timings: ControlTimings,
     pub(crate) age: Duration,
+    pub(crate) sweep: Duration,
 }
 
 impl Default for Settings {
@@ -67,6 +70,7 @@ impl Default for Settings {
             limits: RateLimitConfig::default(),
             timings: ControlTimings::new(Heartbeats::default()),
             age: listener::CONNECTION_AGE,
+            sweep: SWEEP_INTERVAL,
         }
     }
 }
@@ -88,6 +92,7 @@ pub(crate) struct Port {
     pub(crate) db: Database,
     pub(crate) clock: ManualClock,
     pub(crate) sessions: Sessions,
+    pub(crate) registry: AgentRegistry,
     ca: CertificateAuthority,
     ca_pem: String,
     random: SeededRandom,
@@ -178,17 +183,20 @@ pub(crate) async fn start(options: SqliteConnectOptions, settings: Settings) -> 
         fleet_proto::enrollment::SERVER_DEADLINE,
     );
     let sessions = Sessions::new(CancellationToken::new());
+    let registry = AgentRegistry::new(Arc::new(clock.clone()));
+    let connections: Arc<dyn AgentConnections> = Arc::new(AgentConnectionService::new(
+        Arc::new(clock.clone()),
+        Arc::new(db.clone()),
+        Arc::new(X509AgentNames),
+    ));
     let control = control_service(
-        Arc::new(AgentConnectionService::new(
-            Arc::new(clock.clone()),
-            Arc::new(db.clone()),
-            Arc::new(X509AgentNames),
-        )),
+        Arc::clone(&connections),
         Arc::new(clock.clone()),
         limits,
         RequestIds::new(Arc::new(clock.clone()), Arc::new(random.clone())),
         settings.timings,
         sessions.clone(),
+        registry.clone(),
     );
     let router = listener::router(tls, enrollment, control, settings.timings.heartbeats).unwrap();
     let bound = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -200,11 +208,17 @@ pub(crate) async fn start(options: SqliteConnectOptions, settings: Settings) -> 
     server.spawn(async move {
         listener::serve(router, bound, age, serving).await.unwrap();
     });
+    server.spawn(
+        registry
+            .clone()
+            .sweep_every(connections, settings.sweep, stop.child_token()),
+    );
     Port {
         address,
         db,
         clock,
         sessions,
+        registry,
         ca,
         ca_pem,
         random,

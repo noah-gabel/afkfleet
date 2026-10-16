@@ -4,24 +4,30 @@
 //! It runs on the [`Sessions`](super::Sessions) tracker, with a child of
 //! their stop token, in two parts:
 //! 1. **The handshake**: the first message within the hello timeout, read
-//!    by [`read_hello`] (the version first), the name byte for byte, then
-//!    the app's hello transaction. Every failure here is the stream's last
-//!    answer; nothing of the stream is recorded but what the app records
-//!    of a refusal.
-//! 2. **The welcomed stream**: the connection's age is lifted and `Welcome`
-//!    queued; from then on every message that converts resets the
-//!    heartbeat deadline, a message that doesn't is dropped, and the
-//!    stream ends at the deadline, at the certificate's expiry, at the
-//!    shutdown, at a second hello, or when the agent ends it. Its end is
-//!    recorded first, then the lift dropped, then the last answer sent: an
-//!    agent that sees the end finds it recorded.
+//!    by [`read_hello`] (the version first), the name byte for byte, the
+//!    agent's slot claimed in the registry (`Reject(AlreadyConnected)` while
+//!    another stream holds it), then the app's hello transaction. Every
+//!    failure here is the stream's last answer; nothing of the stream is
+//!    recorded but what the app records of a refusal.
+//! 2. **The welcomed stream**: the claim is activated (it fails if the
+//!    agent's permission ended meanwhile), the connection's age lifted and
+//!    `Welcome` queued. From then on every message that converts resets
+//!    the heartbeat deadline and passes the registry's `admit`; a message
+//!    that doesn't convert is dropped. The stream ends at the deadline, at
+//!    the certificate's expiry, when the registry ends it (a permission
+//!    that ended, a full queue), at the shutdown, at a second hello, or when
+//!    the agent ends it. Its end is recorded first, then the slot and the
+//!    lift are freed, then the last answer sent: an agent that sees the end
+//!    finds it recorded, and can connect again at once.
 
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use fleet_core::agent::certificate_time_left;
 use fleet_core::system::Clock;
-use fleet_proto::control::{AgentMessage, Hello, RejectReason, ServerMessage, Welcome, read_hello};
+use fleet_proto::control::{
+    AgentMessage, Hello, RejectReason, ServerMessage, SessionDenied, Welcome, read_hello,
+};
 use fleet_proto::generated as wire;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, sleep, timeout};
@@ -32,9 +38,10 @@ use tracing::{debug, error, info};
 use super::outbound::Last;
 use super::{
     ControlTimings, FAILED, FIRST_MESSAGE_UNREADABLE, HEARTBEAT_MISSED, HELLO_MISSING,
-    HELLO_TOO_SLOW, MESSAGE_UNREADABLE, ONE_HELLO, SHUTTING_DOWN, TOO_LARGE, refused,
+    HELLO_TOO_SLOW, MESSAGE_UNREADABLE, ONE_HELLO, SHUTTING_DOWN, TOO_LARGE, TOO_SLOW, refused,
 };
 use crate::grpc::listener::Connection;
+use crate::grpc::registry::{AgentRegistry, Lease, Verdict};
 use crate::grpc::status::refusal;
 use crate::http::error::chain;
 use crate::ports::agent_connections::{AdmitError, Admitted, AgentConnections, Ended, StreamEnd};
@@ -57,6 +64,8 @@ pub(super) struct Session {
     pub(super) timings: ControlTimings,
     /// Cancelled at the shutdown.
     pub(super) stop: CancellationToken,
+    /// Each agent's one stream.
+    pub(super) registry: AgentRegistry,
 }
 
 /// How a welcomed stream ended: why, when the agent was last heard from,
@@ -81,7 +90,7 @@ impl Session {
     /// Runs the session to its end, and sends its last answer on `last`.
     pub(super) async fn run(mut self, last: oneshot::Sender<Last>) {
         let answer = match self.handshake().await {
-            Ok(connected_at) => self.welcomed(connected_at).await,
+            Ok((lease, connected_at)) => self.welcomed(lease, connected_at).await,
             Err(answer) => Some(*answer),
         };
         if let Some(answer) = answer {
@@ -93,7 +102,7 @@ impl Session {
     /// The stream's first message up to the app's acceptance of its hello;
     /// when that was, or the stream's last answer (boxed: a `Status` is
     /// large).
-    async fn handshake(&mut self) -> Result<DateTime<Utc>, Box<Last>> {
+    async fn handshake(&mut self) -> Result<(Lease, DateTime<Utc>), Box<Last>> {
         let first = tokio::select! {
             () = self.stop.cancelled() => {
                 return Err(Box::new(Err(self.status(Code::Unavailable, SHUTTING_DOWN))));
@@ -139,14 +148,27 @@ impl Session {
         self.accept(&hello).await
     }
 
-    /// Checks `hello`'s name, then has the app accept it and record it.
-    async fn accept(&mut self, hello: &Hello) -> Result<DateTime<Utc>, Box<Last>> {
+    /// Checks `hello`'s name, claims the agent's slot, then has the app
+    /// accept the hello and record it.
+    async fn accept(&mut self, hello: &Hello) -> Result<(Lease, DateTime<Utc>), Box<Last>> {
         // Byte for byte: any other name, in any case, is another agent's
         // (S24). The app records the refusal and logs it.
         if hello.name.as_str() != self.admitted.name.as_str() {
             self.connections.name_refused(&self.admitted).await;
             return Err(Box::new(self.reject(RejectReason::NameMismatch)));
         }
+        // Not audited: a restart finds its old stream still open, and would
+        // use up the daily cap (R12). A real second holder shows as a
+        // conflict on the live stream (S26).
+        let Ok(lease) = self.registry.claim(&self.admitted) else {
+            info!(
+                request_id = %self.admitted.request,
+                agent_id = %self.admitted.agent,
+                agent = %self.admitted.name,
+                "an agent's second connection was refused: its stream lives"
+            );
+            return Err(Box::new(self.reject(RejectReason::AlreadyConnected)));
+        };
         let connected_at = self.clock.now();
         // The store's calls are bounded by the pools' acquire timeout and
         // SQLite's busy timeout.
@@ -173,17 +195,24 @@ impl Session {
             capacity = hello.capacity.get(),
             "an agent connected"
         );
-        Ok(connected_at)
+        Ok((lease, connected_at))
     }
 
-    /// The welcomed stream until it ends; its last answer.
-    async fn welcomed(&mut self, connected_at: DateTime<Utc>) -> Option<Last> {
+    /// The welcomed stream of `lease` until it ends; its last answer.
+    async fn welcomed(&mut self, lease: Lease, connected_at: DateTime<Utc>) -> Option<Last> {
         // Lifted before `Welcome` leaves, so the age can't cut the
         // connection between the two.
         let lift = self.connection.lift();
-        let end = match self.welcome() {
-            Ok(()) => self.serve(connected_at).await,
-            Err(answer) => End::new(StreamEnd::StreamError, connected_at, Some(*answer)),
+        let end = match self
+            .registry
+            .activate(&lease, self.queue.clone(), connected_at)
+        {
+            // Its permission ended during the hello's transaction (R13).
+            Err(reason) => End::new(reason, connected_at, Some(self.ended_by(reason))),
+            Ok(ended) => match self.welcome() {
+                Ok(()) => self.serve(&lease, connected_at, ended).await,
+                Err(answer) => End::new(StreamEnd::StreamError, connected_at, Some(*answer)),
+            },
         };
         self.connections
             .ended(
@@ -202,6 +231,7 @@ impl Session {
             reason = end.reason.as_str(),
             "an agent's stream ended"
         );
+        drop(lease);
         drop(lift);
         end.answer
     }
@@ -229,22 +259,35 @@ impl Session {
         queued.map_err(|()| Box::new(Err(self.status(Code::Internal, FAILED))))
     }
 
-    /// Reads the welcomed stream until something ends it.
-    async fn serve(&mut self, connected_at: DateTime<Utc>) -> End {
+    /// Reads `lease`'s welcomed stream until something ends it; `ended`
+    /// gets the registry's reason when it ends it.
+    async fn serve(
+        &mut self,
+        lease: &Lease,
+        connected_at: DateTime<Utc>,
+        mut ended: oneshot::Receiver<StreamEnd>,
+    ) -> End {
         let mut last_seen = connected_at;
         let left = certificate_time_left(self.admitted.not_after, self.clock.now());
         let expiry = sleep(left);
         let silence = sleep(self.timings.heartbeats.timeout());
         tokio::pin!(expiry, silence);
         loop {
-            // Every branch is cancel-safe: the token and the timers stay as
-            // they are, and `Streaming::message` keeps what it read.
+            // Every branch is cancel-safe: the token, the receiver and the
+            // timers stay as they are, and `Streaming::message` keeps what it
+            // read.
             let message = tokio::select! {
                 () = self.stop.cancelled() => {
                     return End::new(StreamEnd::ServerShutdown, last_seen, Some(Err(self.status(Code::Unavailable, SHUTTING_DOWN))));
                 }
+                reason = &mut ended => {
+                    // Its sender lives in the registry's slot, which this
+                    // session's lease keeps: it's never dropped unsent.
+                    let reason = reason.unwrap_or(StreamEnd::StreamError);
+                    return End::new(reason, last_seen, Some(self.ended_by(reason)));
+                }
                 () = &mut expiry => {
-                    return End::new(StreamEnd::CertificateExpired, last_seen, Some(self.reject(RejectReason::CertificateExpired)));
+                    return End::new(StreamEnd::CertificateExpired, last_seen, Some(self.ended_by(StreamEnd::CertificateExpired)));
                 }
                 () = &mut silence => {
                     return End::new(StreamEnd::HeartbeatTimeout, last_seen, Some(Err(self.status(Code::DeadlineExceeded, HEARTBEAT_MISSED))));
@@ -270,11 +313,12 @@ impl Session {
                 );
             }
             match AgentMessage::try_from(message) {
-                Ok(_) => {
+                Ok(message) => {
                     last_seen = self.clock.now();
                     silence
                         .as_mut()
                         .reset(Instant::now() + self.timings.heartbeats.timeout());
+                    self.admit(lease, &message).await;
                 }
                 Err(problem) => debug!(
                     request_id = %self.admitted.request,
@@ -283,6 +327,56 @@ impl Session {
                     "an agent's message that doesn't convert was dropped"
                 ),
             }
+        }
+    }
+
+    /// Passes `message` through the registry: records a conflict it proves,
+    /// and answers a session request.
+    async fn admit(&self, lease: &Lease, message: &AgentMessage) {
+        let (verdict, conflict) = self.registry.admit(lease, message);
+        if let Some(conflict) = conflict {
+            self.connections.conflict(&self.admitted, conflict).await;
+        }
+        match verdict {
+            Verdict::Pass => {}
+            Verdict::Dropped => debug!(
+                request_id = %self.admitted.request,
+                agent_id = %self.admitted.agent,
+                "an agent's report about a bot it doesn't hold was dropped"
+            ),
+            Verdict::DenySession(request) => {
+                let denied = ServerMessage::SessionDenied(SessionDenied {
+                    id: request.id,
+                    bot_id: request.bot_id,
+                    // `false` would fail the bot for good (S28).
+                    retryable: true,
+                });
+                // A full queue ends the stream through the registry.
+                if let Err(failure) = self.registry.send(self.admitted.agent, denied) {
+                    debug!(
+                        request_id = %self.admitted.request,
+                        agent_id = %self.admitted.agent,
+                        error = %failure,
+                        "a session request's denial wasn't queued"
+                    );
+                }
+            }
+        }
+    }
+
+    /// The last answer of a stream the registry, or its certificate's
+    /// expiry, ended for `reason`.
+    fn ended_by(&self, reason: StreamEnd) -> Last {
+        match reason {
+            StreamEnd::Disabled => self.reject(RejectReason::AgentDisabled),
+            StreamEnd::CertificateRevoked => self.reject(RejectReason::CertificateRevoked),
+            StreamEnd::CertificateExpired => self.reject(RejectReason::CertificateExpired),
+            StreamEnd::TooSlow => Err(self.status(Code::ResourceExhausted, TOO_SLOW)),
+            StreamEnd::Closed
+            | StreamEnd::HeartbeatTimeout
+            | StreamEnd::StreamError
+            | StreamEnd::ProtocolError
+            | StreamEnd::ServerShutdown => Err(self.status(Code::Internal, FAILED)),
         }
     }
 

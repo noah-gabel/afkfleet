@@ -203,6 +203,10 @@ impl AgentReads for Reads {
     async fn cert(&self, fingerprint: CertFingerprint) -> Result<Option<AgentCert>, StoreError> {
         agents::cert(&self.pool, fingerprint).await
     }
+
+    async fn admissible(&self, now: DateTime<Utc>) -> Result<Vec<CertFingerprint>, StoreError> {
+        agents::admissible(&self.pool, now).await
+    }
 }
 
 #[async_trait]

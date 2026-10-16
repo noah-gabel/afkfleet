@@ -562,3 +562,65 @@ async fn failures_since_count_only_failures_of_the_action_on_the_target_after_th
         2
     );
 }
+
+/// Revokes every certificate of `agent`, through the write pool.
+async fn revoke_all(db: &Database, agent: AgentId) {
+    let id = agent.as_uuid().hyphenated().to_string();
+    sqlx::query!(
+        "UPDATE agent_certs SET revoked_at = '2027-01-15T08:00:00.000Z' WHERE agent_id = ?",
+        id
+    )
+    .execute(db.write_pool())
+    .await
+    .unwrap();
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_admissible_certificates_are_unrevoked_unexpired_and_of_enabled_agents(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let revoked = new_agent(1, "agent-1");
+    insert(&db, &revoked).await.unwrap();
+    insert_cert(&db, &new_cert(1, revoked.id)).await.unwrap();
+    revoke_all(&db, revoked.id).await;
+    // Issued after the revocation: it admits its agent.
+    insert_cert(&db, &new_cert(5, revoked.id)).await.unwrap();
+    let fine = new_agent(2, "agent-2");
+    insert(&db, &fine).await.unwrap();
+    insert_cert(&db, &new_cert(2, fine.id)).await.unwrap();
+    let disabled = new_agent(3, "agent-3");
+    insert(&db, &disabled).await.unwrap();
+    insert_cert(&db, &new_cert(3, disabled.id)).await.unwrap();
+    disable(&db, disabled.id).await;
+    let expiring = new_agent(4, "agent-4");
+    insert(&db, &expiring).await.unwrap();
+    insert_cert(
+        &db,
+        &NewAgentCert {
+            not_after: at(T0 + DAY),
+            ..new_cert(4, expiring.id)
+        },
+    )
+    .await
+    .unwrap();
+    let sorted = |mut fingerprints: Vec<CertFingerprint>| {
+        fingerprints.sort_by_key(CertFingerprint::to_string);
+        fingerprints
+    };
+    let fingerprints = |bytes: &[u8]| {
+        sorted(
+            bytes
+                .iter()
+                .map(|&byte| CertFingerprint::from_digest([byte; 32]))
+                .collect(),
+        )
+    };
+
+    let before = db.agents().admissible(at(T0 + DAY - 1)).await.unwrap();
+    let at_expiry = db.agents().admissible(at(T0 + DAY)).await.unwrap();
+
+    assert_eq!(sorted(before), fingerprints(&[2, 4, 5]));
+    assert_eq!(sorted(at_expiry), fingerprints(&[2, 5]));
+}

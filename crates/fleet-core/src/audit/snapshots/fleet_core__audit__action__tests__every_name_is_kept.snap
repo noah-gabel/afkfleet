@@ -36,5 +36,6 @@ expression: names
   "enrollment_token.use",
   "agent.enroll",
   "agent.connect",
-  "agent.disconnect"
+  "agent.disconnect",
+  "security.agent_identity_conflict"
 ]

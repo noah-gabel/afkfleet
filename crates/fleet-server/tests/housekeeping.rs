@@ -18,19 +18,25 @@ use chrono::{TimeZone as _, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::auth::LockoutPolicy;
 use fleet_core::authz::Role;
-use fleet_core::id::{LoginStepId, UserId};
+use fleet_core::bot::{BotSnapshot, BotState};
+use fleet_core::id::{AgentId, BotId, LoginStepId, RequestId, UserId};
+use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock as _;
+use fleet_core::value::AgentName;
 use fleet_core::value::Username;
+use fleet_proto::control::AgentMessage;
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
 use fleet_server::app::link_flows::LinkFlows;
 use fleet_server::app::lockout::LockoutService;
 use fleet_server::cli::housekeeping::Housekeeping;
 use fleet_server::config::{LinkFlowLimits, LogConfig, LogFormat, Rate, RateLimitConfig};
+use fleet_server::grpc::registry::AgentRegistry;
 use fleet_server::http::rate_limit::RateLimits;
 use fleet_server::http::routes::RateClass;
 use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
+use fleet_server::ports::agent_connections::Admitted;
 use fleet_server::ports::audit::NewAuditEntry;
 use fleet_server::ports::login_attempts::{AttemptKeys as _, LoginAttempt};
 use fleet_server::ports::store::Store as _;
@@ -66,6 +72,7 @@ fn keys() -> HmacAttemptKeys {
 
 struct Setup {
     housekeeping: Housekeeping,
+    registry: AgentRegistry,
     limits: RateLimits,
     lockout: LockoutService,
     challenges: Challenges,
@@ -103,13 +110,16 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
         Arc::new(clock.clone()),
         Arc::new(Sha256Tokens::new(Arc::new(SeededRandom::new(3)))),
     );
+    let registry = AgentRegistry::new(Arc::new(clock.clone()));
     Setup {
         housekeeping: Housekeeping::new(
             limits.clone(),
             lockout.clone(),
             challenges.clone(),
             LinkFlows::new(Arc::new(clock.clone())),
+            registry.clone(),
         ),
+        registry,
         limits,
         lockout,
         challenges,
@@ -214,6 +224,50 @@ async fn a_run_sums_up_the_refusals_since_the_last_one_in_one_line(
     assert_eq!(line["in_flight"], 1);
     let again = setup.run_once().await;
     assert_eq!(again.text(), "", "nothing was refused since");
+}
+
+/// The agents' line's message.
+const DROPPED: &str =
+    "an agent's reports about bots it doesn't hold were dropped since the last report";
+
+#[sqlx::test(migrations = false)]
+async fn a_run_logs_one_line_per_agent_whose_reports_were_dropped(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let now = setup.clock.now();
+    let admitted = Admitted {
+        request: RequestId::new_v7(now, [1; 10]).unwrap(),
+        agent: AgentId::new_v7(now, [1; 10]).unwrap(),
+        name: AgentName::try_from("agent-1").unwrap(),
+        fingerprint: CertFingerprint::from_digest([1; 32]),
+        not_after: now + chrono::TimeDelta::days(60),
+        peer: None,
+    };
+    let lease = setup.registry.claim(&admitted).unwrap();
+    let (queue, _queued) = tokio::sync::mpsc::channel(1);
+    let _ended = setup.registry.activate(&lease, queue, now).unwrap();
+    let status = AgentMessage::Status(BotSnapshot {
+        bot_id: BotId::new_v7(now, [2; 10]).unwrap(),
+        state: BotState::Stopped,
+        since: now,
+        last_disconnect: None,
+    });
+    for _ in 0..3 {
+        let _ = setup.registry.admit(&lease, &status);
+    }
+
+    let logs = setup.run_once().await;
+
+    let lines = logs.lines_with(DROPPED).unwrap();
+    assert_eq!(lines.len(), 1, "{}", logs.text());
+    assert_eq!(lines[0]["level"], "INFO");
+    assert_eq!(lines[0]["agent_id"], admitted.agent.to_string());
+    assert_eq!(lines[0]["agent"], "agent-1");
+    assert_eq!(lines[0]["dropped"], 3);
+    let again = setup.run_once().await;
+    assert_eq!(again.lines_with(DROPPED).unwrap().len(), 0);
 }
 
 /// A user for a challenge; no row is needed, since the store is in memory.

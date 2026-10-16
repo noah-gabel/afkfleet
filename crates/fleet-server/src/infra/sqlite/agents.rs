@@ -187,6 +187,37 @@ where
     .transpose()
 }
 
+/// Every certificate that admits its agent at `now`.
+pub(super) async fn admissible<'c, E>(
+    executor: E,
+    now: DateTime<Utc>,
+) -> Result<Vec<CertFingerprint>, StoreError>
+where
+    E: sqlx::SqliteExecutor<'c>,
+{
+    let now = stored_time(now, AGENT_CERTS, "not_after")?;
+    let rows = sqlx::query!(
+        r#"SELECT c.rowid AS "rowid!: i64", c.fingerprint_sha256 AS "fingerprint_sha256!: Vec<u8>"
+           FROM agent_certs c JOIN agents a ON a.id = c.agent_id
+           WHERE c.revoked_at IS NULL AND c.not_after > ? AND a.enabled = 1"#,
+        now
+    )
+    .fetch_all(executor)
+    .await
+    .map_err(store_error)?;
+    rows.into_iter()
+        .map(|row| {
+            <[u8; 32]>::try_from(row.fingerprint_sha256)
+                .map(CertFingerprint::from_digest)
+                .map_err(|_| StoreError::Corrupt {
+                    table: AGENT_CERTS,
+                    column: "fingerprint_sha256",
+                    rowid: row.rowid,
+                })
+        })
+        .collect()
+}
+
 /// Records `hello` on its agent while it's enabled; `last_seen_at` only
 /// moves forward. Whether a row changed.
 pub(super) async fn record_hello(

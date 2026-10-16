@@ -1,6 +1,8 @@
-//! What an agent's `Connect` stream needs from the app (Plan.md P10.4;
-//! ADR-0019, S24, S29, S30, R22): admitting the certificate it connected
-//! with, recording its hello, and recording how its stream ended.
+//! What an agent's `Connect` stream needs from the app (Plan.md P10.4,
+//! P10.5; ADR-0019, S24, S26, S27, S29, S30, R22): admitting the certificate
+//! it connected with, recording its hello, how its stream ended and a
+//! conflict over its identity, and checking the live streams' certificates
+//! again.
 //!
 //! The gRPC port calls it through this trait, not the service itself, so a
 //! test can run the stream on paused time over an in-memory transport with a
@@ -14,6 +16,8 @@ use chrono::{DateTime, Utc};
 use fleet_core::id::{AgentId, RequestId};
 use fleet_core::pki::CertFingerprint;
 use fleet_core::value::{AgentCapacity, AgentName, AgentVersion};
+
+use super::live_agents::PermissionEnd;
 
 /// The client certificate a `Connect` call presented, and where it came
 /// from.
@@ -127,6 +131,16 @@ impl StreamEnd {
     }
 }
 
+impl From<PermissionEnd> for StreamEnd {
+    fn from(end: PermissionEnd) -> Self {
+        match end {
+            PermissionEnd::Disabled => Self::Disabled,
+            PermissionEnd::CertificateRevoked => Self::CertificateRevoked,
+            PermissionEnd::CertificateExpired => Self::CertificateExpired,
+        }
+    }
+}
+
 impl fmt::Display for StreamEnd {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
@@ -142,6 +156,41 @@ pub struct Ended {
     pub connected_at: DateTime<Utc>,
     /// When the server last heard from it, by its clock.
     pub last_seen: DateTime<Utc>,
+}
+
+/// A second connection with an agent's identity, refused while its stream
+/// lived, and that stream: proof that two processes hold the identity
+/// once the live stream speaks after it (S26).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct Conflict {
+    /// The certificate the refused connection presented.
+    pub fingerprint: CertFingerprint,
+    /// The refused connection's address, for the audit log only.
+    pub peer: Option<IpAddr>,
+    /// When it was refused, by the server's clock.
+    pub refused_at: DateTime<Utc>,
+    /// When the live stream's hello was accepted.
+    pub connected_at: DateTime<Utc>,
+}
+
+impl fmt::Debug for Conflict {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // The peer's address stays out of logs (S14).
+        f.debug_struct("Conflict")
+            .field("fingerprint", &self.fingerprint)
+            .field("refused_at", &self.refused_at)
+            .field("connected_at", &self.connected_at)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A live stream's certificate, as the sweep checks it (S27).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveCertificate {
+    /// The stream's agent.
+    pub agent: AgentId,
+    /// The certificate it connected with.
+    pub fingerprint: CertFingerprint,
 }
 
 /// What a `Connect` stream asks the app; see the [module docs](self).
@@ -178,4 +227,20 @@ pub trait AgentConnections: Send + Sync + fmt::Debug {
     /// Records how `admitted`'s stream ended: `agent.disconnect`, and its last
     /// message's time as `last_seen_at`. A failure is logged here.
     async fn ended(&self, admitted: &Admitted, ended: Ended);
+
+    /// Records that two processes hold `admitted`'s identity:
+    /// `security.agent_identity_conflict`, and an `error` line. A failure is
+    /// logged here.
+    async fn conflict(&self, admitted: &Admitted, conflict: Conflict);
+
+    /// Checks `live` against the store with one read of every admissible
+    /// certificate, and names each stream whose permission ended, with why.
+    ///
+    /// # Errors
+    /// [`AdmitError::Busy`] or [`AdmitError::Internal`] when the store fails;
+    /// the streams then stay until the next sweep.
+    async fn sweep(
+        &self,
+        live: &[LiveCertificate],
+    ) -> Result<Vec<(AgentId, PermissionEnd)>, AdmitError>;
 }

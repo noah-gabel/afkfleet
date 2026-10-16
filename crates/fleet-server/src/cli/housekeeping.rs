@@ -14,7 +14,10 @@
 //! 5. one `info` line sums up the requests the limits and the lockout
 //!    refused since the last run, only if they refused any. A refused
 //!    request's own line is at `debug`, so a flood adds one line a minute to
-//!    the log, not thousands a second.
+//!    the log, not thousands a second;
+//! 6. one `info` line per agent counts the reports about bots it doesn't
+//!    hold that its stream dropped since the last run (P10.5; ADR-0019, S28,
+//!    R21), only for an agent that sent any.
 //!
 //! The first run comes one interval after the start. [`every`] holds the
 //! timing, generic over its chore, so it's tested on paused time.
@@ -28,6 +31,7 @@ use tracing::{debug, info, warn};
 use crate::app::challenges::Challenges;
 use crate::app::link_flows::LinkFlows;
 use crate::app::lockout::LockoutService;
+use crate::grpc::registry::AgentRegistry;
 use crate::http::error::chain;
 use crate::http::rate_limit::RateLimits;
 
@@ -35,30 +39,33 @@ use crate::http::rate_limit::RateLimits;
 pub const INTERVAL: Duration = Duration::from_mins(1);
 
 /// What the housekeeping looks after: the rate limits, the lockout, the
-/// login's challenges and the link flows.
+/// login's challenges, the link flows and the agents' streams.
 #[derive(Debug, Clone)]
 pub struct Housekeeping {
     limits: RateLimits,
     lockout: LockoutService,
     challenges: Challenges,
     link_flows: LinkFlows,
+    agents: AgentRegistry,
 }
 
 impl Housekeeping {
-    /// The housekeeping of `limits`, `lockout`, `challenges` and
-    /// `link_flows`.
+    /// The housekeeping of `limits`, `lockout`, `challenges`, `link_flows`
+    /// and `agents`.
     #[must_use]
     pub const fn new(
         limits: RateLimits,
         lockout: LockoutService,
         challenges: Challenges,
         link_flows: LinkFlows,
+        agents: AgentRegistry,
     ) -> Self {
         Self {
             limits,
             lockout,
             challenges,
             link_flows,
+            agents,
         }
     }
 
@@ -102,6 +109,14 @@ impl Housekeeping {
                 locked = lockout.locked,
                 in_flight = lockout.in_flight,
                 "requests were refused since the last report"
+            );
+        }
+        for refused in self.agents.take_refused_reports() {
+            info!(
+                agent_id = %refused.agent,
+                agent = %refused.name,
+                dropped = refused.count,
+                "an agent's reports about bots it doesn't hold were dropped since the last report"
             );
         }
     }

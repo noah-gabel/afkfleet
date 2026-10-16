@@ -130,6 +130,14 @@ pub trait AgentReads: Send + Sync + fmt::Debug {
     /// # Errors
     /// [`StoreError`], including [`StoreError::Corrupt`].
     async fn cert(&self, fingerprint: CertFingerprint) -> Result<Option<AgentCert>, StoreError>;
+
+    /// The fingerprint of every certificate that admits its agent at `now`:
+    /// unrevoked, unexpired, of an enabled agent. The live streams' sweep
+    /// reads it once (ADR-0019, S27).
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn admissible(&self, now: DateTime<Utc>) -> Result<Vec<CertFingerprint>, StoreError>;
 }
 
 /// Writing agents inside a [`super::store::WriteTx`].

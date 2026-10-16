@@ -18,7 +18,7 @@ use fleet_core::value::{AgentCapacity, AgentName, AgentVersion, ServerAddress};
 use fleet_proto::PROTOCOL_VERSION;
 use fleet_proto::control::{
     AgentMessage, Assignment, BotEvent, BotEventKind, Hello, MAX_AGENT_MESSAGE_BYTES, MAX_BOTS,
-    MAX_SERVER_MESSAGE_BYTES, ServerMessage, SessionGrant, SessionRequestId,
+    MAX_SERVER_MESSAGE_BYTES, ServerMessage, SessionGrant, SessionRequestId, server_message_len,
 };
 use fleet_proto::generated as wire;
 use prost::Message as _;
@@ -214,6 +214,19 @@ fn the_largest_event_and_grant_fit_their_limits() {
 
     assert!(agent_bytes(chat) <= MAX_AGENT_MESSAGE_BYTES);
     assert!(server_bytes(grant) <= MAX_SERVER_MESSAGE_BYTES);
+}
+
+#[test]
+fn a_server_messages_length_is_what_it_encodes_to() {
+    let messages = [
+        wire::ServerMessage::try_from(largest_reconcile()).unwrap(),
+        wire::ServerMessage::try_from(ServerMessage::Unassign(bot(1))).unwrap(),
+        wire::ServerMessage::default(),
+    ];
+
+    for message in &messages {
+        assert_eq!(server_message_len(message), message.encode_to_vec().len());
+    }
 }
 
 #[test]
