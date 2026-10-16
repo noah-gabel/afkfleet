@@ -18,6 +18,7 @@
 //! Temp files sit in their target's folder, so on Windows a file inherits
 //! that folder's permissions, its only protection there (S20).
 
+use core::fmt;
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
 use std::io::{self, Write as _};
@@ -25,13 +26,23 @@ use std::path::{Path, PathBuf};
 
 use subtle::ConstantTimeEq as _;
 
-/// A file to write.
-#[derive(Debug, Clone, Copy)]
+/// A file to write. Its `Debug` shows the path and the length, never the
+/// bytes: they may be a private key.
+#[derive(Clone, Copy)]
 pub struct NewFile<'a> {
     /// Its path.
     pub path: &'a Path,
     /// Its bytes.
     pub bytes: &'a [u8],
+}
+
+impl fmt::Debug for NewFile<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NewFile")
+            .field("path", &self.path)
+            .field("len", &self.bytes.len())
+            .finish_non_exhaustive()
+    }
 }
 
 /// A reason [`check`] refuses, naming its path.
@@ -449,5 +460,21 @@ mod tests {
             "{error:?}"
         );
         assert_eq!(names(dir.path()), [format!("{PREFIX}two.key")]);
+    }
+
+    #[test]
+    fn a_new_files_debug_shows_its_path_and_never_its_bytes() {
+        let path = Path::new("ca.key");
+        let file = NewFile {
+            path,
+            bytes: b"-----BEGIN PRIVATE KEY-----\nSECRETSECRET\n-----END PRIVATE KEY-----\n",
+        };
+
+        let shown = format!("{file:?}");
+
+        assert!(shown.contains("ca.key"), "{shown}");
+        assert!(!shown.contains("PRIVATE KEY"), "{shown}");
+        assert!(!shown.contains("SECRETSECRET"), "{shown}");
+        assert!(!shown.contains("45, 45, 45"), "{shown}");
     }
 }
