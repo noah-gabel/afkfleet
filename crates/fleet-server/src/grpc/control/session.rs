@@ -13,15 +13,19 @@
 //!    agent's permission ended meanwhile), the connection's age lifted and
 //!    `Welcome` queued. From then on every message that converts resets
 //!    the heartbeat deadline and passes the registry's `admit`; a message
-//!    that doesn't convert is dropped. The stream ends at the deadline, at
+//!    that doesn't convert is dropped. A session request the registry
+//!    passes spends its bot's fresh limit if it's fresh, then joins the
+//!    stream's grant queue, whose workers the loop polls beside the reads
+//!    (P10.6; S57, S58). The stream ends at the deadline, at
 //!    the certificate's expiry, when the registry ends it (a permission
 //!    that ended, a full queue), at the shutdown, at a second hello, or when
 //!    the agent ends it. A stream that ends by itself (the agent's close,
 //!    or a failed transport) within one heartbeat interval of its deadline
 //!    ended of silence: HTTP/2 keepalive closes a silent connection then,
 //!    and tonic may read that as a clean end. At its end the stream's switch
-//!    is thrown, so nothing queued goes out any more, the slot is freed, so
-//!    the agent can connect again at once, and the last answer is sent;
+//!    is thrown, so nothing queued goes out any more, its waiting session
+//!    requests are dropped and its running ones aborted, the slot is freed,
+//!    so the agent can connect again at once, and the last answer is sent;
 //!    only then is the end recorded and the lift dropped.
 
 use core::time::Duration;
@@ -33,7 +37,7 @@ use fleet_core::bot::BotSnapshot;
 use fleet_core::system::Clock;
 use fleet_core::value::AgentCapacity;
 use fleet_proto::control::{
-    AgentMessage, Hello, RejectReason, ServerMessage, SessionDenied, Welcome, read_hello,
+    AgentMessage, Hello, RejectReason, ServerMessage, SessionRequest, Welcome, read_hello,
 };
 use fleet_proto::generated as wire;
 use tokio::sync::{mpsc, oneshot};
@@ -42,6 +46,7 @@ use tokio_util::sync::CancellationToken;
 use tonic::{Code, Status, Streaming};
 use tracing::{debug, error, info};
 
+use super::grants::{Full, GrantQueue};
 use super::outbound::Last;
 use super::{
     ControlTimings, FAILED, FIRST_MESSAGE_UNREADABLE, HEARTBEAT_MISSED, HELLO_MISSING,
@@ -51,7 +56,10 @@ use crate::grpc::listener::Connection;
 use crate::grpc::registry::{Activation, AgentRegistry, Halt, Lease, Verdict};
 use crate::grpc::status::refusal;
 use crate::http::error::chain;
+use crate::http::rate_limit::RateLimits;
 use crate::ports::agent_connections::{AdmitError, Admitted, AgentConnections, Ended, StreamEnd};
+use crate::ports::live_agents::{LiveAgents as _, SessionAnswer, SessionOutcome};
+use crate::ports::session_grants::{GrantRequest, GrantStream, SessionGrants};
 
 /// What a session owns; see the [module docs](self).
 pub(super) struct Session {
@@ -67,8 +75,14 @@ pub(super) struct Session {
     pub(super) connection: Connection,
     /// The app's side of the stream.
     pub(super) connections: Arc<dyn AgentConnections>,
+    /// What answers the stream's session requests.
+    pub(super) grants: Arc<dyn SessionGrants>,
+    /// The stream's session requests, waiting or running.
+    pub(super) requests: GrantQueue,
     /// The server's clock.
     pub(super) clock: Arc<dyn Clock>,
+    /// The limits, of which a fresh session request spends its bot's.
+    pub(super) limits: RateLimits,
     /// The hello timeout and the heartbeats.
     pub(super) timings: ControlTimings,
     /// Cancelled at the shutdown.
@@ -261,8 +275,9 @@ impl Session {
         };
         // Nothing queued leaves after this, and the agent's slot is free
         // before it hears of the end; the answer doesn't wait for the
-        // database.
+        // database. Session requests die with their stream (S57).
         self.halt.halt();
+        self.requests.shutdown().await;
         let held = lease.free();
         match end.answer {
             // An agent that's gone dropped the receiver; nothing to tell.
@@ -325,11 +340,15 @@ impl Session {
         tokio::pin!(expiry, silence);
         loop {
             // Every branch is cancel-safe: the token, the receiver and the
-            // timers stay as they are, and `Streaming::message` keeps what it
-            // read.
+            // timers stay as they are, `Streaming::message` keeps what it
+            // read, and the grant queue's `JoinSet` keeps a task that ended.
             let message = tokio::select! {
                 () = self.stop.cancelled() => {
                     return End::new(StreamEnd::ServerShutdown, last_seen, Some(Err(self.status(Code::Unavailable, SHUTTING_DOWN))));
+                }
+                _ = self.requests.finished(), if self.requests.is_busy() => {
+                    self.dispatch(lease);
+                    continue;
                 }
                 reason = &mut ended => {
                     // Its sender lives in the registry's slot, which this
@@ -401,8 +420,8 @@ impl Session {
     }
 
     /// Passes `message` through the registry: records a conflict it proves,
-    /// and answers a session request.
-    async fn admit(&self, lease: &Lease, message: &AgentMessage) {
+    /// and queues or denies a session request.
+    async fn admit(&mut self, lease: &Lease, message: &AgentMessage) {
         let (verdict, conflict) = self.registry.admit(lease, message);
         if let Some(conflict) = conflict {
             self.connections.conflict(&self.admitted, conflict).await;
@@ -414,23 +433,97 @@ impl Session {
                 agent_id = %self.admitted.agent,
                 "an agent's report about a bot it doesn't hold was dropped"
             ),
+            Verdict::Session(request) => self.queue_session(lease, request),
             Verdict::DenySession(request) => {
-                let denied = ServerMessage::SessionDenied(SessionDenied {
-                    id: request.id,
-                    bot_id: request.bot_id,
-                    // `false` would fail the bot for good (S28).
-                    retryable: true,
-                });
-                // A full queue ends the stream through the registry.
-                if let Err(failure) = self.registry.send(self.admitted.agent, denied) {
-                    debug!(
-                        request_id = %self.admitted.request,
-                        agent_id = %self.admitted.agent,
-                        error = %failure,
-                        "a session request's denial wasn't queued"
-                    );
-                }
+                debug!(
+                    request_id = %self.admitted.request,
+                    agent_id = %self.admitted.agent,
+                    bot_id = %request.bot_id,
+                    session_request = request.id.get().get(),
+                    "a session request for a bot the stream doesn't hold was denied"
+                );
+                self.deny(lease, request);
             }
+        }
+    }
+
+    /// Queues `request`, which the registry passed: a fresh one spends its
+    /// bot's limit first (S58); past it, or with the queue full, it's denied.
+    fn queue_session(&mut self, lease: &Lease, request: SessionRequest) {
+        if request.fresh && self.limits.check_fresh_session(request.bot_id).is_err() {
+            debug!(
+                request_id = %self.admitted.request,
+                agent_id = %self.admitted.agent,
+                bot_id = %request.bot_id,
+                session_request = request.id.get().get(),
+                "a fresh session request was refused by its bot's limit"
+            );
+            self.deny(lease, request);
+            return;
+        }
+        if self.requests.push(request) == Err(Full) {
+            self.registry.count_denied_session(lease);
+            debug!(
+                request_id = %self.admitted.request,
+                agent_id = %self.admitted.agent,
+                bot_id = %request.bot_id,
+                session_request = request.id.get().get(),
+                "a session request was denied: the stream's grant queue is full"
+            );
+            self.deny(lease, request);
+            return;
+        }
+        self.dispatch(lease);
+    }
+
+    /// Starts the queue's waiting requests while it has room, each asking
+    /// the grants for its answer until the server shuts down; the stream's
+    /// end aborts them.
+    fn dispatch(&mut self, lease: &Lease) {
+        let stream = GrantStream {
+            agent: lease.agent(),
+            generation: lease.generation(),
+            fingerprint: self.admitted.fingerprint,
+            request: self.admitted.request,
+        };
+        while let Some(request) = self.requests.next() {
+            let grants = Arc::clone(&self.grants);
+            let stop = self.stop.child_token();
+            let ask = GrantRequest {
+                number: request.id.get(),
+                bot: request.bot_id,
+                fresh: request.fresh,
+            };
+            self.requests.run(request.bot_id, async move {
+                tokio::select! {
+                    // Dropping the grant's future sends nothing, and a session
+                    // being minted for it is kept for the next request.
+                    () = stop.cancelled() => {}
+                    () = grants.grant(stream, ask) => {}
+                }
+            });
+        }
+    }
+
+    /// Denies `request` on `lease`'s stream, retryable: a passing problem
+    /// must never fail the bot (S60).
+    fn deny(&self, lease: &Lease, request: SessionRequest) {
+        let answer = SessionAnswer {
+            number: request.id.get(),
+            bot: request.bot_id,
+            outcome: SessionOutcome::Denied { retryable: true },
+        };
+        // A full queue ends the stream through the registry.
+        if let Err(failure) =
+            self.registry
+                .answer_session(lease.agent(), lease.generation(), answer)
+        {
+            debug!(
+                request_id = %self.admitted.request,
+                agent_id = %self.admitted.agent,
+                error = %failure,
+                "a session request's denial wasn't queued"
+            );
         }
     }
 

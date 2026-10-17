@@ -318,12 +318,13 @@ The user answered group C's questions one at a time and added three requirements
   - The same holds for a failed seal or an entry that can't be built.
   - A restart loses the token, like any crash.
 - **A disabled owner** *(the user's choice)*: `OwnerDisabled`, not retryable. Nothing is stored, so enabling the owner restores the account. A missing owner, which the foreign key forbids, counts as disabled.
+  - *Amended by P10.6 (the user's choice U14, ADR-0019):* the session grants answer this error retryable. A grant that waits for an earlier refresh of the same account finds a disabled owner as this error, while one its own check finds is retryable, so the bot came back without a Reset in one case and not the other. `retryable()` stays as it is; every other error keeps the mapping.
 - **Only active Microsoft accounts get a session.** Unknown, offline, pending, `reauth_required` and `refused` accounts are refused before any call. The account and its owner are read on every request, so a cached session is withheld once the account stops being usable.
 - **The wait bound** *(the user's choice, with an addition)*:
   - `WAIT_BOUND` is 2 minutes, above the flight's worst case: a 20 s refresh, a 60 s session and a few 5 s acquires.
   - One deadline covers the lock (`InFlight`) and the answer (`TimedOut`). Past it the flight goes on, and the next request finds its result.
   - **The addition:** `with_wait_bound` only shortens it. Zero and anything above `WAIT_BOUND` are `WaitBoundError`, so no caller can make the wait longer or unbounded. It's documented as for tests.
-- **serve doesn't build it** *(the user's choice)*: P10.6 wires it over D's adapter, with a child of serve's shutdown token, and calls `shutdown()` within serve's deadline.
+- **serve doesn't build it** *(the user's choice)*: P10.6 wires it over D's adapter, with a child of serve's shutdown token, and calls `shutdown()` within serve's deadline. *(As built in P10.6, ADR-0019 S64: while `[grpc]` is on; `shutdown()` gets the drain's time, and refreshes still running then are left with one `warn`.)*
 - **Hands-on** *(the user's choice)*: none. Everything new is local logic the fake drives, and Microsoft's side hasn't changed since B.
 - **Readings of these decisions** (in the plan the user approved, or found while building):
   - **Compare-and-set.** Every write reads its row inside its own `BEGIN IMMEDIATE` transaction first, and the audit entry is built and the token sealed before that (ADR-0015).

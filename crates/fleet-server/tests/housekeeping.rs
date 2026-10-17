@@ -24,7 +24,7 @@ use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock as _;
 use fleet_core::value::AgentName;
 use fleet_core::value::Username;
-use fleet_proto::control::AgentMessage;
+use fleet_proto::control::{AgentMessage, SessionRequest, SessionRequestId};
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
 use fleet_server::app::link_flows::LinkFlows;
 use fleet_server::app::lockout::LockoutService;
@@ -98,6 +98,7 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
             enroll: one,
             connect: one,
             bot_actions: one,
+            fresh_sessions: one,
         },
         Arc::new(clock.clone()),
     );
@@ -198,13 +199,13 @@ async fn a_run_sums_up_the_refusals_since_the_last_one_in_one_line(
         let _ = setup
             .limits
             .check_connect(fleet_core::pki::CertFingerprint::from_digest([9; 32]));
-        let _ = setup.limits.check_bot_action(
-            fleet_core::id::BotId::new_v7(
-                Utc.with_ymd_and_hms(2027, 1, 15, 8, 0, 0).unwrap(),
-                [9; 10],
-            )
-            .unwrap(),
-        );
+        let bot = fleet_core::id::BotId::new_v7(
+            Utc.with_ymd_and_hms(2027, 1, 15, 8, 0, 0).unwrap(),
+            [9; 10],
+        )
+        .unwrap();
+        let _ = setup.limits.check_bot_action(bot);
+        let _ = setup.limits.check_fresh_session(bot);
     }
     for _ in 0..5 {
         setup.fail("alice").await;
@@ -229,6 +230,7 @@ async fn a_run_sums_up_the_refusals_since_the_last_one_in_one_line(
     assert_eq!(line["enroll"], 1);
     assert_eq!(line["connect"], 1);
     assert_eq!(line["bot_actions"], 1);
+    assert_eq!(line["fresh_sessions"], 1);
     assert_eq!(line["locked"], 1);
     assert_eq!(line["in_flight"], 1);
     let again = setup.run_once().await;
@@ -236,11 +238,10 @@ async fn a_run_sums_up_the_refusals_since_the_last_one_in_one_line(
 }
 
 /// The agents' line's message.
-const DROPPED: &str =
-    "an agent's reports about bots it doesn't hold were dropped since the last report";
+const DROPPED: &str = "an agent's reports and session requests were refused since the last report";
 
 #[sqlx::test(migrations = false)]
-async fn a_run_logs_one_line_per_agent_whose_reports_were_dropped(
+async fn a_run_logs_one_line_per_agent_whose_reports_or_session_requests_were_refused(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
@@ -279,6 +280,15 @@ async fn a_run_logs_one_line_per_agent_whose_reports_were_dropped(
     for _ in 0..3 {
         let _ = setup.registry.admit(&lease, &status);
     }
+    // A session request for a bot the stream doesn't hold, twice.
+    let request = AgentMessage::SessionRequest(SessionRequest {
+        id: SessionRequestId::new(core::num::NonZeroU64::MIN),
+        bot_id: BotId::new_v7(now, [3; 10]).unwrap(),
+        fresh: false,
+    });
+    for _ in 0..2 {
+        let _ = setup.registry.admit(&lease, &request);
+    }
 
     let logs = setup.run_once().await;
 
@@ -288,6 +298,7 @@ async fn a_run_logs_one_line_per_agent_whose_reports_were_dropped(
     assert_eq!(lines[0]["agent_id"], admitted.agent.to_string());
     assert_eq!(lines[0]["agent"], "agent-1");
     assert_eq!(lines[0]["dropped"], 3);
+    assert_eq!(lines[0]["sessions_denied"], 2);
     let again = setup.run_once().await;
     assert_eq!(again.lines_with(DROPPED).unwrap().len(), 0);
 }

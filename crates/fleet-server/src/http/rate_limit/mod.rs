@@ -26,6 +26,11 @@
 //!   handler right after `authorize()`, so it never tells a stranger the bot
 //!   exists; stopping never spends it ([`RateLimits::check_bot_action`];
 //!   ADR-0019, S52).
+//! - **A fresh session request on the gRPC port spends its bot's limit**,
+//!   in its stream's session, once the registry found the stream holding the
+//!   bot assigned, and before the request is queued: each fresh session the
+//!   server mints costs a Microsoft refresh
+//!   ([`RateLimits::check_fresh_session`]; ADR-0019, S58).
 //! - **Keys:** an IPv4 client by its address, an IPv6 client by its /64
 //!   ([`limiter_key`]); a user by their ID; a client certificate by its
 //!   fingerprint; a bot by its ID.
@@ -147,6 +152,8 @@ pub struct Refusals {
     pub connect: u64,
     /// The per-bot limit of actions that make its account join a server.
     pub bot_actions: u64,
+    /// The per-bot limit of fresh session requests on the gRPC port.
+    pub fresh_sessions: u64,
 }
 
 impl Refusals {
@@ -162,6 +169,7 @@ impl Refusals {
             && self.enroll == 0
             && self.connect == 0
             && self.bot_actions == 0
+            && self.fresh_sessions == 0
     }
 }
 
@@ -177,6 +185,7 @@ struct Counters {
     enroll: AtomicU64,
     connect: AtomicU64,
     bot_actions: AtomicU64,
+    fresh_sessions: AtomicU64,
 }
 
 /// Every limiter, built from `[rate_limits]`.
@@ -191,6 +200,7 @@ struct Limiters {
     enroll: Limiter<IpAddr>,
     connect: Limiter<CertFingerprint>,
     bot_actions: Limiter<BotId>,
+    fresh_sessions: Limiter<BotId>,
     refused: Counters,
 }
 
@@ -231,6 +241,7 @@ impl RateLimits {
             enroll: limiter(config.enroll, &clock),
             connect: limiter(config.connect, &clock),
             bot_actions: limiter(config.bot_actions, &clock),
+            fresh_sessions: limiter(config.fresh_sessions, &clock),
             refused: Counters::default(),
             clock,
         }))
@@ -327,6 +338,22 @@ impl RateLimits {
         )
     }
 
+    /// Spends one of `bot`'s fresh session requests, which a `Connect`
+    /// stream does once it found itself holding the bot assigned, before
+    /// the request is queued (ADR-0019, S58).
+    ///
+    /// # Errors
+    /// [`Refused`] when its bucket is empty.
+    pub fn check_fresh_session(&self, bot: BotId) -> Result<(), Refused> {
+        let limits = &self.0;
+        spend(
+            &limits.fresh_sessions,
+            &limits.clock,
+            &bot,
+            &limits.refused.fresh_sessions,
+        )
+    }
+
     /// Spends one of `user`'s authed requests.
     ///
     /// # Errors
@@ -354,6 +381,7 @@ impl RateLimits {
         limits.enroll.retain_recent();
         limits.connect.retain_recent();
         limits.bot_actions.retain_recent();
+        limits.fresh_sessions.retain_recent();
     }
 
     /// How many keys the limiters hold.
@@ -369,6 +397,7 @@ impl RateLimits {
             + limits.enroll.len()
             + limits.connect.len()
             + limits.bot_actions.len()
+            + limits.fresh_sessions.len()
     }
 
     /// The refusals since the last call, and starts counting again.
@@ -386,6 +415,7 @@ impl RateLimits {
             enroll: take(&refused.enroll),
             connect: take(&refused.connect),
             bot_actions: take(&refused.bot_actions),
+            fresh_sessions: take(&refused.fresh_sessions),
         }
     }
 }
@@ -511,6 +541,7 @@ mod tests {
             enroll: rate,
             connect: rate,
             bot_actions: rate,
+            fresh_sessions: rate,
         }
     }
 
@@ -678,6 +709,25 @@ mod tests {
     }
 
     #[test]
+    fn fresh_sessions_are_refused_past_their_burst_per_bot_apart_from_bot_actions() {
+        let clock = ManualClock::new(start());
+        let limits = RateLimits::new(&tight(), Arc::new(clock.clone()));
+        limits.check_fresh_session(bot(1)).unwrap();
+        limits.check_fresh_session(bot(1)).unwrap();
+
+        assert_eq!(
+            limits.check_fresh_session(bot(1)),
+            Err(Refused {
+                retry_after: Duration::from_millis(500)
+            })
+        );
+        assert_eq!(limits.check_fresh_session(bot(2)), Ok(()));
+        assert_eq!(limits.check_bot_action(bot(1)), Ok(()));
+        clock.advance(Duration::from_millis(500));
+        assert_eq!(limits.check_fresh_session(bot(1)), Ok(()));
+    }
+
+    #[test]
     fn the_standard_class_spends_nothing() {
         let limits = RateLimits::new(&tight(), Arc::new(ManualClock::new(start())));
 
@@ -742,6 +792,9 @@ mod tests {
         for _ in 0..7 {
             let _ = limits.check_bot_action(bot(1));
         }
+        for _ in 0..8 {
+            let _ = limits.check_fresh_session(bot(1));
+        }
         let _ = limits.check_class(RateClass::Refresh, ip("192.0.2.10"));
 
         assert_eq!(
@@ -756,6 +809,7 @@ mod tests {
                 enroll: 1,
                 connect: 4,
                 bot_actions: 5,
+                fresh_sessions: 6,
             }
         );
         assert_eq!(limits.take_refusals(), Refusals::default());
@@ -801,6 +855,10 @@ mod tests {
                 bot_actions: 1,
                 ..Refusals::default()
             },
+            Refusals {
+                fresh_sessions: 1,
+                ..Refusals::default()
+            },
         ] {
             assert!(!refusals.is_empty(), "{refusals:?}");
         }
@@ -819,14 +877,15 @@ mod tests {
         limits.check_enroll(ip("192.0.2.10")).unwrap();
         limits.check_connect(fingerprint(1)).unwrap();
         limits.check_bot_action(bot(1)).unwrap();
+        limits.check_fresh_session(bot(1)).unwrap();
         clock.advance(Duration::from_millis(400));
         limits.check_ip(ip("198.51.100.10")).unwrap();
-        assert_eq!(limits.tracked(), 8);
-        // The first seven are full again at 500 ms, the later one at 900 ms;
+        assert_eq!(limits.tracked(), 9);
+        // The first eight are full again at 500 ms, the later one at 900 ms;
         // each is dropped one 500 ms interval after that.
         clock.advance(Duration::from_millis(599));
         limits.retain_recent();
-        assert_eq!(limits.tracked(), 8, "a millisecond short");
+        assert_eq!(limits.tracked(), 9, "a millisecond short");
 
         clock.advance(Duration::from_millis(1));
         limits.retain_recent();

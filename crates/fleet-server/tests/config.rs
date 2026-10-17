@@ -220,6 +220,7 @@ fn every_rate_limit() -> RateLimitConfig {
         enroll: Rate::per_minute(nonzero(4)),
         connect: Rate::per_minute(nonzero(7)),
         bot_actions: Rate::per_minute(nonzero(3)),
+        fresh_sessions: Rate::per_hour(nonzero(2)),
     }
 }
 
@@ -268,6 +269,7 @@ grants_by_name_per_user_per_hour = 4
 enroll_per_ip_per_min = 4
 connect_per_cert_per_min = 7
 bot_actions_per_bot_per_min = 3
+fresh_sessions_per_bot_per_hour = 2
 
 [accounts]
 max_per_member = 7
@@ -1117,6 +1119,7 @@ fn the_dev_config_holds_neither_the_database_path_nor_the_vault_key_file() {
 #[case::enroll("enroll_per_ip_per_min", 1, 60)]
 #[case::connect("connect_per_cert_per_min", 1, 60)]
 #[case::bot_actions("bot_actions_per_bot_per_min", 1, 60)]
+#[case::fresh_sessions("fresh_sessions_per_bot_per_hour", 1, 60)]
 fn rate_limit_keys_are_checked_against_their_range(
     #[case] key: &str,
     #[case] min: u64,

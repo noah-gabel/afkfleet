@@ -344,6 +344,7 @@ pub(crate) fn app_of(router: Router, database: &Database) -> App {
         ),
         link_flows,
         grpc: None,
+        shutdown: tokio_util::sync::CancellationToken::new(),
     }
 }
 

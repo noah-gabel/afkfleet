@@ -15,6 +15,8 @@
 //! - `logs`: what never reaches a log line.
 //! - `reconcile`: the reconciler over the port: which agent runs which bot,
 //!   and what an agent hears of it (P10.5).
+//! - `grants`: the session grants: only to the stream that holds a bot,
+//!   never a later one, and their bounds (P10.6).
 //! - `in_memory`: the one test on paused time, over an in-memory pipe with a
 //!   fake behind the port (U6).
 //!
@@ -28,6 +30,8 @@
 
 mod admission;
 mod bound;
+mod grant_checks;
+mod grants;
 mod handshake;
 mod identity;
 mod in_memory;

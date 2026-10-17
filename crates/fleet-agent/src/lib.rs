@@ -18,6 +18,8 @@
 //! - [`signals`]: the signals that stop the agent.
 //! - [`heartbeat`]: the file the agent touches while its fleet answers.
 //! - [`healthcheck`]: the `healthcheck` command's check of that file.
+//! - [`managed`]: managed mode: the session credentials the server grants
+//!   (P10.6); the control stream's client comes with P10.7.
 //! - [`run`]: the fleet's run, from the first bot to the exit code.
 //!
 //! The binary (`src/main.rs`) only wires these together: it loads the
@@ -32,6 +34,7 @@ pub mod diagnostics;
 pub mod enroll;
 pub mod healthcheck;
 pub mod heartbeat;
+pub mod managed;
 pub mod run;
 pub mod signals;
 pub mod telemetry;

@@ -1,4 +1,4 @@
-//! The agents' use cases (Plan.md P10.4, P10.5, P10.10; ADR-0019).
+//! The agents' use cases (Plan.md P10.4, P10.5, P10.6, P10.10; ADR-0019).
 //!
 //! - [`connections`]: admitting the certificate a connecting agent presents,
 //!   recording its accepted hello, how its stream ended and a conflict over
@@ -7,6 +7,10 @@
 //!   port the gRPC port calls.
 //! - [`assignments`]: the bots' assignments as the reconciler changes them,
 //!   each change in its own audited transaction (P10.5, S36).
+//! - [`session_grants`]: the answers to an agent's session requests, the
+//!   one place Minecraft tokens leave the server (P10.6, S57–S61), behind
+//!   the [`SessionGrants`](crate::ports::session_grants::SessionGrants)
+//!   port the gRPC port calls.
 //! - [`AgentService`]: the agents' list, disabling one (P10.10, S31), and
 //!   releasing a disabled one's bots from the server's host (P10.5, S32).
 //!   - **The list** shows every agent, newest first, with its status
@@ -23,6 +27,7 @@
 
 pub mod assignments;
 pub mod connections;
+pub mod session_grants;
 
 use std::sync::Arc;
 
@@ -37,6 +42,7 @@ use tracing::{debug, info};
 
 pub use assignments::AssignmentService;
 pub use connections::AgentConnectionService;
+pub use session_grants::SessionGrantService;
 
 use super::audit::AuditService;
 use super::users::{ActingUser, recheck};

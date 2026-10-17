@@ -152,7 +152,7 @@ fleet-server/src/
   ports/      # repository and provider traits
   infra/      # sqlite/ (sqlx repos), crypto/ (vault, tokens, passwords), msauth/ (Microsoft's account flows over HTTP), pki/ (the CA, certificates, CSRs)
   http/       # router.rs, middleware/, extractors/, handlers/<resource>.rs, error.rs, openapi.rs, ws.rs
-  grpc/       # listener.rs, status.rs, enrollment.rs, control/ (gate, session, outbound), registry.rs, reconciler.rs (the scheduler's choice is fleet-core's placement)
+  grpc/       # listener.rs, status.rs, enrollment.rs, control/ (gate, session, grants, outbound), registry.rs, reconciler.rs (the scheduler's choice is fleet-core's placement)
 ```
 
 ## Crate registry: one crate per concern

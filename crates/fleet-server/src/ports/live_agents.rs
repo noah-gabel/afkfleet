@@ -1,8 +1,9 @@
-//! What the app asks of the agents' live streams (Plan.md P10.5, P10.10,
-//! P11.2; ADR-0019, S27, S31, S41, S48, R22): to end one whose permission
-//! ended, what the server knows of one that lives and of a bot it holds, a
-//! bot's latest report kept in memory, and a user's lifecycle command for the
-//! stream that holds a bot.
+//! What the app asks of the agents' live streams (Plan.md P10.5, P10.6,
+//! P10.10, P11.2; ADR-0019, S27, S31, S41, S48, S57, R22): to end one whose
+//! permission ended, what the server knows of one that lives and of a bot it
+//! holds, a bot's latest report kept in memory, a user's lifecycle command
+//! for the stream that holds a bot, and the answer to a session request for
+//! the stream that asked.
 //!
 //! The gRPC port's `AgentRegistry` implements it, so the app reaches the
 //! streams without knowing the port; a service calls [`LiveAgents::end`]
@@ -10,10 +11,12 @@
 //! hello's transaction.
 
 use core::fmt;
+use core::num::NonZeroU64;
 
 use chrono::{DateTime, Utc};
 use fleet_core::bot::{BotSnapshot, LastReport, LastState, Lifecycle};
 use fleet_core::id::{AgentId, BotId};
+use fleet_core::mc::SessionCredentials;
 
 /// Why an agent's permission to stream ended (S27).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -90,6 +93,49 @@ pub enum CommandRefused {
     Unsendable,
 }
 
+/// The answer to a session request, for the stream that asked (P10.6;
+/// ADR-0019, S3, S57).
+#[derive(Debug, Clone)]
+pub struct SessionAnswer {
+    /// The agent's own number of the request it answers.
+    pub number: NonZeroU64,
+    /// The bot the request asked for.
+    pub bot: BotId,
+    /// A grant or a denial.
+    pub outcome: SessionOutcome,
+}
+
+/// What a session request gets.
+#[derive(Debug, Clone)]
+pub enum SessionOutcome {
+    /// The bot's session: an online account's token, or an offline
+    /// account's name.
+    Grant(SessionCredentials),
+    /// No session; `retryable` tells the agent whether asking again later
+    /// may help, and a refusal that isn't fails the bot for good.
+    Denied {
+        /// Whether asking again later may help.
+        retryable: bool,
+    },
+}
+
+/// Why a session request's answer didn't go to its stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AnswerRefused {
+    /// A grant's stream doesn't hold the bot assigned any more.
+    #[error("the stream doesn't hold the bot")]
+    NotHeld,
+    /// The stream ended, or another one replaced it.
+    #[error("the stream ended")]
+    NotConnected,
+    /// The stream's queue was full, which ends the stream.
+    #[error("the stream's queue is full")]
+    QueueFull,
+    /// The answer couldn't be written, or is larger than an agent reads.
+    #[error("the answer can't be written")]
+    Unsendable,
+}
+
 /// The agents' live streams; see the [module docs](self).
 pub trait LiveAgents: Send + Sync + fmt::Debug {
     /// Ends `agent`'s stream for `reason`, its last message the matching
@@ -134,4 +180,20 @@ pub trait LiveAgents: Send + Sync + fmt::Debug {
         bot: BotId,
         command: Lifecycle,
     ) -> Result<(), CommandRefused>;
+
+    /// Sends `answer` through generation `generation` of `agent`'s live
+    /// stream, the one that asked: checked and queued at once, only while
+    /// that stream lives and isn't ended, and a grant only while it holds
+    /// the bot assigned; never through another stream of the agent, whose
+    /// request numbers start again at 1 (S57).
+    ///
+    /// # Errors
+    /// [`AnswerRefused`]: `NotConnected` for another, an ended or no stream;
+    /// `NotHeld` when a grant's stream doesn't hold the bot assigned.
+    fn answer_session(
+        &self,
+        agent: AgentId,
+        generation: u64,
+        answer: SessionAnswer,
+    ) -> Result<(), AnswerRefused>;
 }

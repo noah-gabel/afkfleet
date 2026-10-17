@@ -413,6 +413,95 @@ async fn a_reconciler_that_stops_with_the_shutdown_is_no_failure() {
     assert!(unasked.is_empty(), "{}", logs.text());
 }
 
+// --- The session-token service's stop (P10.6; ADR-0019, S64) ------------------
+
+/// `drive` with a close that first stops the session-token service, whose
+/// shutdown is `stopped` and which still runs `running` refreshes, then
+/// closes the database in `close_takes`: as serve joins its background
+/// tasks before the database closes.
+async fn drive_with_session_tokens(
+    stopped: impl Future<Output = ()>,
+    running: usize,
+    close_takes: Duration,
+) -> (Exit, Duration, Arc<AtomicBool>) {
+    let (sender, signals) = ChannelSignals::new();
+    let shutdown = CancellationToken::new();
+    let (close, closed) = closing(close_takes);
+    let tokens =
+        serve::stop_session_tokens(shutdown.child_token(), stopped, TIMEOUTS.drain, move || {
+            running
+        });
+    sender.send(Signal::Terminate).await.unwrap();
+    let started = Instant::now();
+    let exit = serve::drive(
+        draining(&shutdown, Duration::ZERO),
+        &shutdown,
+        async move {
+            tokens.await;
+            close.await;
+        },
+        signals,
+        TIMEOUTS,
+    )
+    .await;
+    (exit, started.elapsed(), closed)
+}
+
+#[tokio::test(start_paused = true)]
+async fn refreshes_still_running_at_the_drain_are_left_with_one_warn_and_the_database_closes() {
+    let (logs, _guard) = capture();
+
+    let (exit, took, closed) = drive_with_session_tokens(core::future::pending(), 2, secs(4)).await;
+
+    assert_eq!(exit, Exit::Stopped, "a refresh left behind is no failure");
+    assert_eq!(took, TIMEOUTS.drain + secs(4), "the drain, then the close");
+    assert!(closed.load(Ordering::SeqCst));
+    let left = logs.lines_with(serve::SESSION_TOKENS_LEFT).unwrap();
+    assert_eq!(left.len(), 1, "{}", logs.text());
+    assert_eq!(left[0]["level"], "WARN");
+    assert_eq!(left[0]["flights"], 2);
+}
+
+#[tokio::test(start_paused = true)]
+async fn refreshes_that_end_within_the_drain_leave_no_warn() {
+    let (logs, _guard) = capture();
+
+    let (exit, took, closed) =
+        drive_with_session_tokens(tokio::time::sleep(secs(3)), 0, secs(1)).await;
+
+    assert_eq!(exit, Exit::Stopped);
+    assert_eq!(took, secs(4));
+    assert!(closed.load(Ordering::SeqCst));
+    assert!(
+        logs.lines_with(serve::SESSION_TOKENS_LEFT)
+            .unwrap()
+            .is_empty(),
+        "{}",
+        logs.text()
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_session_token_service_stops_only_at_the_signal() {
+    let stop = CancellationToken::new();
+    let asked = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&asked);
+    let task = tokio::spawn(serve::stop_session_tokens(
+        stop.clone(),
+        async move { flag.store(true, Ordering::SeqCst) },
+        TIMEOUTS.drain,
+        || 0,
+    ));
+
+    tokio::time::sleep(Duration::from_hours(1)).await;
+    let before = asked.load(Ordering::SeqCst);
+    stop.cancel();
+    task.await.unwrap();
+
+    assert!(!before, "nothing stops before the signal");
+    assert!(asked.load(Ordering::SeqCst));
+}
+
 // --- both: the API and the gRPC port as one server (ADR-0019) -----------------
 
 /// A stand-in port that fails with `what` `after` it starts.

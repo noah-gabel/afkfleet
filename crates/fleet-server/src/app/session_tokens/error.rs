@@ -74,8 +74,9 @@ pub enum SessionTokenError {
 }
 
 impl SessionTokenError {
-    /// Whether asking again later may help: P10.6 maps it to
-    /// `CredentialError::retryable`.
+    /// Whether asking again later may help: the session grants (P10.6) map
+    /// it to `CredentialError::retryable`, except [`Self::OwnerDisabled`],
+    /// which they answer retryable (ADR-0019, U14).
     #[must_use]
     pub const fn retryable(&self) -> bool {
         match self {
