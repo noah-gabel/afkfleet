@@ -220,6 +220,60 @@ async fn a_removed_of_a_bot_the_server_never_released_frees_nothing(
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_removed_from_an_older_stream_never_clears_a_bot_its_newer_stream_was_given(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let port = start(options, Settings::ungated()).await;
+    let agent = port.enroll(1, "agent-1").await;
+    let bot = port.bot(1).await;
+    let (mut old, _) = port.welcomed(&agent).await;
+    assert_eq!(ids(&old.reconciled().await), [bot]);
+    // The bot is stopped and let go: held releasing on the old stream.
+    port.set_running(bot, false).await;
+    assert!(matches!(
+        old.next().await,
+        Ok(Some(ServerMessage::Update(_)))
+    ));
+    old.send(report(bot, BotState::Stopped)).await;
+    assert!(matches!(
+        old.next().await,
+        Ok(Some(ServerMessage::Unassign(id))) if id == bot
+    ));
+    // It qualifies again, and its Removed's clearing stays busy until the
+    // agent's new stream has been given its bots.
+    port.fail_detaches(u32::MAX);
+    port.set_running(bot, true).await;
+    old.send(removed(bot)).await;
+    old.send(session_request(bot)).await;
+    assert!(matches!(
+        old.next().await,
+        Ok(Some(ServerMessage::SessionDenied(_)))
+    ));
+
+    // The agent reconnects without the bot: its row still names it, so its
+    // new stream is given the bot back.
+    old.close();
+    port.disconnect(&agent).await;
+    let (mut new, _) = port.welcomed(&agent).await;
+    let given = ids(&new.reconciled().await);
+    port.fail_detaches(0);
+    // A pass after it: a canary it places shows it ran.
+    let canary = port.bot(2).await;
+    port.changed();
+    let placed = new.assigned().await.spec.id;
+
+    assert_eq!(given, [bot]);
+    assert_eq!(placed, canary);
+    assert_eq!(
+        port.bot_row(bot).await.unwrap().agent,
+        Some(agent.id),
+        "the old stream's note is stale"
+    );
+    port.stop().await;
+}
+
+#[sqlx::test(migrations = false)]
 async fn an_agent_back_with_less_room_hands_its_paused_bot_on_with_its_restore(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,

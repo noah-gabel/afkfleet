@@ -66,7 +66,7 @@ use fleet_proto::generated as wire;
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::{Instant, MissedTickBehavior, interval_at};
 use tokio_util::sync::CancellationToken;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::http::error::chain;
 use crate::ports::agent_connections::{
@@ -229,6 +229,8 @@ impl LatestReport {
 pub struct Released {
     /// The agent that no longer runs it.
     pub agent: AgentId,
+    /// The generation of the stream that sent it.
+    pub generation: u64,
     /// The bot.
     pub bot: BotId,
 }
@@ -752,10 +754,27 @@ impl AgentRegistry {
         views
     }
 
-    /// The `Removed`s of releasing bots since the last call.
+    /// The `Removed`s of releasing bots since the last call, without the
+    /// stale ones: a note is dropped once a newer stream of its agent has
+    /// been welcomed, whose welcome may have given the bot back, and while
+    /// its agent's stream holds the bot assigned. Clearing such a bot's
+    /// assignment would leave an agent that runs it unnamed.
     #[must_use]
     pub fn take_released(&self) -> Vec<Released> {
-        core::mem::take(&mut self.state().released)
+        let mut state = self.state();
+        let notes = core::mem::take(&mut state.released);
+        let (fresh, dropped): (Vec<Released>, Vec<Released>) = notes
+            .into_iter()
+            .partition(|note| !stale(&state.slots, note));
+        drop(state);
+        for note in dropped {
+            debug!(
+                agent_id = %note.agent,
+                bot_id = %note.bot,
+                "a Removed from an older stream was dropped: a newer one holds the agent's word"
+            );
+        }
+        fresh
     }
 
     /// Puts `released` back, for the next call: its clearing failed.
@@ -1014,6 +1033,23 @@ impl LiveAgents for AgentRegistry {
     }
 }
 
+/// Whether `note` no longer speaks for its agent: a newer stream of it was
+/// welcomed, or its live stream holds the bot assigned.
+fn stale(slots: &HashMap<AgentId, Slot>, note: &Released) -> bool {
+    let Some(slot) = slots.get(&note.agent) else {
+        return false;
+    };
+    let Phase::Live(live) = &slot.phase else {
+        // A hello still being accepted isn't a welcome yet.
+        return false;
+    };
+    slot.generation != note.generation
+        || live
+            .holds
+            .get(&note.bot)
+            .is_some_and(|entry| entry.hold == Hold::Assigned)
+}
+
 /// Ends `slot`'s stream for `reason`: a claim is never activated; a live
 /// stream's switch is thrown and its session gets the reason. Only the
 /// first reason counts.
@@ -1101,6 +1137,7 @@ fn judge(
                     live.holds.remove(&event.bot_id);
                     released.push(Released {
                         agent,
+                        generation,
                         bot: event.bot_id,
                     });
                     Verdict::Settled
@@ -1736,6 +1773,7 @@ mod tests {
             registry.take_released(),
             [Released {
                 agent: agent(1),
+                generation: lease.generation,
                 bot: bot(1),
             }]
         );
@@ -1793,12 +1831,74 @@ mod tests {
         let (registry, _) = registry();
         let released = Released {
             agent: agent(1),
+            generation: 1,
             bot: bot(1),
         };
 
         registry.requeue_released(released);
 
         assert_eq!(registry.take_released(), [released]);
+    }
+
+    /// Agent 1's `Removed` of bot 1 from a stream that held it releasing,
+    /// and that stream's generation; the stream has ended.
+    fn removed_on_an_ended_stream(registry: &AgentRegistry) -> u64 {
+        let (lease, _queued, _ended) = live(registry, 1, 4);
+        settle(registry, &lease, &[(1, Hold::Releasing)]);
+        let _ = registry.admit(&lease, &event(bot(1), BotEventKind::Removed));
+        let generation = lease.generation;
+        let _ = lease.free();
+        generation
+    }
+
+    #[test]
+    fn a_note_outlives_its_stream_until_a_newer_stream_of_its_agent_is_welcomed() {
+        let (registry, _) = registry();
+        let generation = removed_on_an_ended_stream(&registry);
+
+        let alone = registry.take_released();
+        for note in &alone {
+            registry.requeue_released(*note);
+        }
+        let claimed = registry.claim(&admitted(2)).unwrap();
+        let while_claimed = registry.take_released();
+        for note in &while_claimed {
+            registry.requeue_released(*note);
+        }
+        let (queue, _queued) = mpsc::channel(4);
+        let _ended = registry
+            .activate(&claimed, activation(queue, Vec::new()))
+            .unwrap();
+        let once_welcomed = registry.take_released();
+
+        let note = Released {
+            agent: agent(1),
+            generation,
+            bot: bot(1),
+        };
+        assert_eq!(alone, [note]);
+        assert_eq!(while_claimed, [note], "a hello isn't a welcome yet");
+        assert_eq!(once_welcomed, [], "a newer stream was welcomed");
+    }
+
+    #[test]
+    fn a_note_is_dropped_while_its_agents_stream_holds_the_bot_assigned() {
+        let (registry, _) = registry();
+        let generation = removed_on_an_ended_stream(&registry);
+        let (lease, _queued, _ended) = live(&registry, 2, 4);
+        settle(&registry, &lease, &[(1, Hold::Assigned)]);
+        // As if the note came from this very stream.
+        let _ = registry.take_released();
+        registry.requeue_released(Released {
+            agent: agent(1),
+            generation: lease.generation,
+            bot: bot(1),
+        });
+
+        let taken = registry.take_released();
+
+        assert!(generation < lease.generation);
+        assert_eq!(taken, []);
     }
 
     #[test]

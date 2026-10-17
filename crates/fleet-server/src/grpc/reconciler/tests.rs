@@ -433,6 +433,11 @@ fn registry() -> AgentRegistry {
     AgentRegistry::new(Arc::new(ManualClock::new(at(T0))))
 }
 
+/// The bots of a full reconcile, in order.
+fn ids_of(reconciled: Vec<(BotId, DesiredRunState, Option<StickyState>)>) -> Vec<BotId> {
+    reconciled.into_iter().map(|(bot, _, _)| bot).collect()
+}
+
 /// The bots of a full reconcile, with their desired state and restore.
 fn reconciled(
     message: Option<ServerMessage>,
@@ -813,6 +818,64 @@ async fn a_paused_surplus_bot_moves_after_its_removed_with_its_restore() {
         "{calls:?}"
     );
     assert!(calls.contains(&Call::Assign(bot(1), agent(2))));
+    running.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_removed_from_an_older_stream_never_clears_a_bot_its_newer_stream_was_given() {
+    let registry = registry();
+    let store = Store::with(vec![on(1, 1)], &[1, 2]);
+    let mut old = connect(&registry, 1, 5, vec![online(1)], 8);
+    let mut other = connect(&registry, 2, 5, Vec::new(), 8);
+    let running = start(&registry, &store, 8);
+    assert_eq!(ids_of(reconciled(old.next().await)), [bot(1)]);
+    assert_eq!(reconciled(other.next().await), []);
+    // The bot is stopped and let go: held releasing on the old stream.
+    store.change(bot(1), |record| {
+        record.bot.desired = DesiredRunState::Stopped;
+    });
+    running.hints.changed(Change::Store);
+    assert!(matches!(old.next().await, Some(ServerMessage::Update(_))));
+    let _ = registry.admit(
+        &old.lease,
+        &AgentMessage::Status(snapshot(1, BotState::Stopped)),
+    );
+    running.hints.changed(Change::Settled(agent(1)));
+    assert!(matches!(old.next().await, Some(ServerMessage::Unassign(id)) if id == bot(1)));
+    // It qualifies again, and its Removed's clearing stays busy twice.
+    store.change(bot(1), |record| {
+        record.bot.desired = DesiredRunState::Running;
+    });
+    store.state().busy_detaches = 2;
+    let _ = registry.admit(
+        &old.lease,
+        &AgentMessage::Event(BotEvent {
+            bot_id: bot(1),
+            at: at(T0),
+            kind: BotEventKind::Removed,
+        }),
+    );
+    running.hints.changed(Change::Settled(agent(1)));
+    tokio::time::sleep(NOW).await;
+
+    // The agent reconnects without the bot: its row still names it, so its
+    // new stream is given the bot back.
+    let _ = old.lease.free();
+    let mut new = connect(&registry, 1, 5, Vec::new(), 8);
+    running.hints.changed(Change::Welcomed(agent(1)));
+    let given = ids_of(reconciled(new.next().await));
+    running.hints.changed(Change::Store);
+    tokio::time::sleep(NOW).await;
+    let assigned = store.agent_of(bot(1));
+    // The new stream goes before its own Removed: nothing may place the
+    // bot elsewhere.
+    let _ = new.lease.free();
+    running.hints.changed(Change::Ended(agent(1)));
+    let elsewhere = other.next().await;
+
+    assert_eq!(given, [bot(1)]);
+    assert_eq!(assigned, Some(agent(1)), "the old stream's note is stale");
+    assert_eq!(elsewhere.map(|_| ()), None);
     running.stop().await;
 }
 

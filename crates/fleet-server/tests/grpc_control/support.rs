@@ -7,14 +7,17 @@
 use core::time::Duration;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget, RecordedValue};
 use fleet_core::authz::Role;
+use fleet_core::bot::LastReport;
 use fleet_core::bot::{BotSnapshot, BotState};
 use fleet_core::id::{AccountId, AgentId, BotId, RequestId, UserId};
 use fleet_core::mode::ModePreset;
 use fleet_core::pki::CertFingerprint;
+use fleet_core::placement::{DetachReason, UnassignReason};
 use fleet_core::system::Clock as _;
 use fleet_core::value::{AgentCapacity, AgentName, AgentVersion, Username};
 use fleet_proto::PROTOCOL_VERSION;
@@ -44,10 +47,11 @@ use fleet_server::infra::system::SystemClock;
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::agent_connections::AgentConnections;
 use fleet_server::ports::agents::{Agent as AgentRow, NewAgent, NewAgentCert};
+use fleet_server::ports::assignments::{AssignError, Assignments};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
-use fleet_server::ports::bots::{Bot, NewBot};
+use fleet_server::ports::bots::{Bot, Fleet, NewBot};
 use fleet_server::ports::reconcile::{Change, Reconcile as _};
-use fleet_server::ports::store::Store as _;
+use fleet_server::ports::store::{Store as _, StoreError};
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use secrecy::SecretString;
@@ -145,8 +149,67 @@ pub(crate) struct Port {
     settings: Settings,
     /// The reconciler's hints, while it runs.
     hints: Option<Hints>,
+    /// How many of the reconciler's next detaches fail busy.
+    failing_detaches: Arc<AtomicU32>,
     stop: CancellationToken,
     server: JoinSet<()>,
+}
+
+/// The real assignments, whose next detaches can be made to fail busy, as
+/// a database held by another writer does.
+#[derive(Debug)]
+struct FlakyDetaches {
+    real: AssignmentService,
+    failing: Arc<AtomicU32>,
+}
+
+#[async_trait::async_trait]
+impl Assignments for FlakyDetaches {
+    async fn fleet(&self) -> Result<Fleet, StoreError> {
+        self.real.fleet().await
+    }
+
+    async fn assign(&self, bot: BotId, agent: AgentId) -> Result<bool, AssignError> {
+        self.real.assign(bot, agent).await
+    }
+
+    async fn unassign(
+        &self,
+        bot: BotId,
+        agent: AgentId,
+        reason: UnassignReason,
+        last: Option<LastReport>,
+    ) -> Result<bool, AssignError> {
+        self.real.unassign(bot, agent, reason, last).await
+    }
+
+    async fn detach(
+        &self,
+        bot: BotId,
+        agent: AgentId,
+        reason: DetachReason,
+        last: Option<LastReport>,
+    ) -> Result<bool, AssignError> {
+        let failed = self
+            .failing
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok();
+        if failed {
+            return Err(AssignError::Store(StoreError::Busy));
+        }
+        self.real.detach(bot, agent, reason, last).await
+    }
+
+    async fn stray(
+        &self,
+        bot: BotId,
+        agent: AgentId,
+        assigned_to: Option<AgentId>,
+    ) -> Result<bool, AssignError> {
+        self.real.stray(bot, agent, assigned_to).await
+    }
 }
 
 /// The listener's own certificate and key, kept for a restart.
@@ -257,6 +320,7 @@ async fn serve_on(
         fleet_proto::enrollment::SERVER_DEADLINE,
     );
     let sessions = Sessions::new(CancellationToken::new());
+    let failing_detaches = Arc::new(AtomicU32::new(0));
     let (registry, reconciler) = match settings.reconcile {
         Some(timings) => {
             let (hints, inbox) = hints(HINT_QUEUE);
@@ -264,10 +328,10 @@ async fn serve_on(
                 AgentRegistry::with_reconcile(Arc::new(clock.clone()), Arc::new(hints.clone()));
             let reconciler = Reconciler::new(
                 registry.clone(),
-                Arc::new(AssignmentService::new(
-                    Arc::new(clock.clone()),
-                    Arc::new(db.clone()),
-                )),
+                Arc::new(FlakyDetaches {
+                    real: AssignmentService::new(Arc::new(clock.clone()), Arc::new(db.clone())),
+                    failing: Arc::clone(&failing_detaches),
+                }),
                 Arc::new(clock.clone()),
                 inbox,
                 timings,
@@ -322,6 +386,7 @@ async fn serve_on(
         random,
         settings,
         hints,
+        failing_detaches,
         stop,
         server,
     }
@@ -587,6 +652,27 @@ impl Port {
         };
         self.stop().await;
         serve_on(db, clock, random, pki, settings).await
+    }
+
+    /// Makes the reconciler's next `count` detaches fail busy.
+    pub(crate) fn fail_detaches(&self, count: u32) {
+        self.failing_detaches.store(count, Ordering::Release);
+    }
+
+    /// Sets `bot` running or stopped, as E's endpoints will, and tells the
+    /// reconciler.
+    pub(crate) async fn set_running(&self, bot: BotId, running: bool) {
+        let id = bot.as_uuid().hyphenated().to_string();
+        let desired = if running { "running" } else { "stopped" };
+        sqlx::query!(
+            "UPDATE bots SET desired_state = ? WHERE id = ?",
+            desired,
+            id
+        )
+        .execute(self.db.write_pool())
+        .await
+        .unwrap();
+        self.changed();
     }
 
     /// Tells the reconciler that something stored changed, as a service
