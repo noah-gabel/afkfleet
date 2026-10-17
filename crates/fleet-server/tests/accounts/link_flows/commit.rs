@@ -369,6 +369,40 @@ async fn a_linked_account_gets_its_bot_minted_with_it(
     assert_eq!(bot.id.to_string().get(..13), account.to_string().get(..13));
 }
 
+/// The milliseconds since the Unix epoch a v7 ID holds.
+fn minted_millis(id: &uuid::Uuid) -> i64 {
+    let (secs, nanos) = id.get_timestamp().unwrap().to_unix();
+    i64::try_from(secs * 1000 + u64::from(nanos / 1_000_000)).unwrap()
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_retried_commit_stores_the_account_at_the_time_its_ids_were_minted_from(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = LinkSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+    let mut wait = setup.pace.hold_next();
+    script_link(&setup, 1);
+    let flow = setup.started(&alice, "device-code-1").await;
+    wait.entered().await;
+    // Two busy commits: the pacing fake moves the clock by each backoff.
+    setup.store.fail_next_writes(2);
+
+    wait.release();
+
+    let LinkFlowStatus::Linked { account, .. } = setup.ended(flow).await else {
+        panic!("linked");
+    };
+    let stored = setup.account(account).await;
+    let bot = setup.db.bots().of_account(account).await.unwrap().unwrap();
+    let created_at = stored.created_at.timestamp_millis();
+    assert_eq!(minted_millis(account.as_uuid()), created_at);
+    assert_eq!(minted_millis(bot.id.as_uuid()), created_at);
+    // The retries ran: the clock moved on after the IDs were minted.
+    assert!(setup.clock.now() > stored.created_at);
+}
+
 #[sqlx::test(migrations = false)]
 async fn a_failed_bot_id_fails_the_flow_and_stores_nothing(
     _pool: SqlitePoolOptions,
