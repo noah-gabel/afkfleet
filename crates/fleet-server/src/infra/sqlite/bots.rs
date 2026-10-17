@@ -104,6 +104,36 @@ where
     .transpose()
 }
 
+/// The agent `id`'s row assigns it to, from that column alone.
+pub(super) async fn agent_of(
+    conn: &mut SqliteConnection,
+    id: BotId,
+) -> Result<Option<Option<AgentId>>, StoreError> {
+    let id = id_text(id);
+    let Some(row) = sqlx::query!(
+        r#"SELECT rowid AS "rowid!: i64", agent_id AS "agent_id?" FROM bots WHERE id = ?"#,
+        id
+    )
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(store_error)?
+    else {
+        return Ok(None);
+    };
+    let agent = row
+        .agent_id
+        .as_deref()
+        .map(|agent| {
+            parse_id(agent).ok_or(StoreError::Corrupt {
+                table: BOTS,
+                column: "agent_id",
+                rowid: row.rowid,
+            })
+        })
+        .transpose()?;
+    Ok(Some(agent))
+}
+
 /// The bot of the account `account`.
 pub(super) async fn of_account<'c, E>(
     executor: E,

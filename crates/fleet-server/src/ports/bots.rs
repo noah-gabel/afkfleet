@@ -157,6 +157,16 @@ pub trait BotWrites: Send {
     /// [`StoreError`], including [`StoreError::Corrupt`].
     async fn find(&mut self, id: BotId) -> Result<Option<Bot>, StoreError>;
 
+    /// The agent the bot `id`'s row assigns it to, read in this
+    /// transaction: `None` without a row, `Some(None)` when it's
+    /// unassigned. It reads no other column, so a row whose other columns
+    /// don't read back still answers.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`] for an agent ID
+    /// that doesn't read back.
+    async fn agent_of(&mut self, id: BotId) -> Result<Option<Option<AgentId>>, StoreError>;
+
     /// Assigns `bot` to `agent`, but only while it has no agent and
     /// `agent` is enabled. Whether it changed.
     ///

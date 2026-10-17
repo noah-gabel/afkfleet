@@ -653,6 +653,10 @@ impl BotWrites for SqliteWriteTx {
         bots::find(&mut *self.tx, id).await
     }
 
+    async fn agent_of(&mut self, id: BotId) -> Result<Option<Option<AgentId>>, StoreError> {
+        bots::agent_of(&mut self.tx, id).await
+    }
+
     async fn assign(&mut self, bot: BotId, agent: AgentId) -> Result<bool, StoreError> {
         bots::assign(&mut self.tx, bot, agent).await
     }

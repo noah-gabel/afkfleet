@@ -244,6 +244,15 @@ impl Setup {
             .await
     }
 
+    /// The entries of `action`.
+    async fn entries_of(&self, action: &AuditAction) -> Vec<AuditRecord> {
+        self.entries()
+            .await
+            .into_iter()
+            .filter(|record| &record.action == action)
+            .collect()
+    }
+
     async fn entries(&self) -> Vec<AuditRecord> {
         self.db
             .audit()
@@ -593,7 +602,7 @@ async fn a_hellos_reports_are_stored_for_the_bots_assigned_to_its_agent_only(
     assert_eq!(setup.last(elsewhere).await, None);
     assert_eq!(setup.last(unassigned).await, None);
     the_entry(
-        &setup.entries().await,
+        &setup.entries_of(&AuditAction::AGENT_CONNECT).await,
         &AuditAction::AGENT_CONNECT,
         AuditOutcome::Success,
         agent.id,
@@ -601,10 +610,69 @@ async fn a_hellos_reports_are_stored_for_the_bots_assigned_to_its_agent_only(
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_hellos_bots_it_wasnt_given_are_fenced_in_its_transaction(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let agent = setup.enroll(1, "agent-1").await;
+    let other = setup.enroll(2, "agent-2").await;
+    let elsewhere = setup.bot(1, Some(other.id)).await;
+    let unassigned = setup.bot(2, None).await;
+    let unknown = BotId::new_v7(at(T0), [9; 10]).unwrap();
+    let admitted = setup.admit(&agent).await.unwrap();
+
+    setup
+        .connections
+        .hello(
+            &admitted,
+            AgentCapacity::try_from(50_u32).unwrap(),
+            &AgentVersion::try_from("0.1.0").unwrap(),
+            &[paused(elsewhere), paused(unassigned), paused(unknown)],
+        )
+        .await
+        .unwrap();
+
+    let mut fenced: Vec<_> = setup
+        .db
+        .bots()
+        .fleet()
+        .await
+        .unwrap()
+        .releases
+        .iter()
+        .map(|record| (record.bot, record.agent))
+        .collect();
+    fenced.sort();
+    let mut expected = vec![(elsewhere, agent.id), (unassigned, agent.id)];
+    expected.sort();
+    assert_eq!(fenced, expected, "an unknown bot names no account to fence");
+    let strays = setup.entries_of(&AuditAction::BOT_STRAY).await;
+    assert_eq!(strays.len(), 2, "{strays:?}");
+    let of = |bot: BotId| {
+        strays
+            .iter()
+            .find(|entry| entry.target == Some(RecordedTarget::Known(AuditTarget::Bot(bot))))
+            .unwrap()
+    };
+    for bot in [elsewhere, unassigned] {
+        assert_eq!(of(bot).outcome, AuditOutcome::Failure);
+        assert_eq!(of(bot).actor, None);
+        assert_eq!(text(of(bot), "agent"), Some(agent.id.to_string()));
+    }
+    assert_eq!(
+        text(of(elsewhere), "assigned_to"),
+        Some(other.id.to_string())
+    );
+    assert_eq!(text(of(unassigned), "assigned_to"), None);
+}
+
+#[sqlx::test(migrations = false)]
 async fn a_refused_hello_stores_no_report(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
     let setup = setup(options).await;
     let agent = setup.enroll(1, "agent-1").await;
     let own = setup.bot(1, Some(agent.id)).await;
+    let unassigned = setup.bot(2, None).await;
     let admitted = setup.admit(&agent).await.unwrap();
     setup.revoke(agent.id).await;
 
@@ -614,12 +682,13 @@ async fn a_refused_hello_stores_no_report(_pool: SqlitePoolOptions, options: Sql
             &admitted,
             AgentCapacity::try_from(50_u32).unwrap(),
             &AgentVersion::try_from("0.1.0").unwrap(),
-            &[paused(own)],
+            &[paused(own), paused(unassigned)],
         )
         .await;
 
     refused(&result);
     assert_eq!(setup.last(own).await, None);
+    assert_eq!(setup.db.bots().fleet().await.unwrap().releases, []);
 }
 
 #[sqlx::test(migrations = false)]

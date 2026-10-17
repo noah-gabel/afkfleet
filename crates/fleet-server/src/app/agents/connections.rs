@@ -16,8 +16,9 @@
 //! - **An accepted hello** is one transaction: the certificate and the
 //!   agent are read again, the hello's capacity and version and the time are
 //!   recorded, each bot it lists that's assigned to the agent gets its
-//!   reported state as its last (S40), and `agent.connect` commits, before
-//!   `Welcome` is sent.
+//!   reported state as its last (S40), each other bot it lists that the
+//!   server knows gets a release record naming the agent and `bot.stray`
+//!   (S43), and `agent.connect` commits, before `Welcome` is sent.
 //! - **A stream's end** records its last message's time, the latest report
 //!   of each bot it held that's still assigned to the agent, and
 //!   `agent.disconnect` with its reason. A bot's last state never moves
@@ -43,7 +44,7 @@ use fleet_core::agent::{
 };
 use fleet_core::audit::{AuditAction, AuditMetadata, AuditOutcome, AuditTarget};
 use fleet_core::bot::{BotSnapshot, LastReport, LastState};
-use fleet_core::id::{AgentId, RequestId};
+use fleet_core::id::{AgentId, BotId, RequestId};
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock;
 use fleet_core::time::sub;
@@ -55,6 +56,7 @@ use crate::ports::agent_connections::{
     AdmitError, Admitted, AgentConnections, Conflict, Ended, LiveCertificate, Presented,
 };
 use crate::ports::agents::{AgentCert, AgentHello};
+use crate::ports::audit::NewAuditEntry;
 use crate::ports::live_agents::PermissionEnd;
 use crate::ports::pki::AgentNames;
 use crate::ports::store::{Store, StoreError};
@@ -214,16 +216,27 @@ impl AgentConnectionService {
         if !tx.agents().record_hello(&hello).await? {
             return Ok(Err(ConnectRefusal::Disabled));
         }
-        // Only where the row names this agent: a hello never speaks for a
-        // bot it wasn't given.
+        // A hello never speaks for a bot it wasn't given: its report counts
+        // only where the row names this agent, and any other bot it runs is
+        // fenced here, before the stream goes live, so the fence outlives
+        // the stream (S43).
         for snapshot in running {
-            let report = LastReport {
-                state: LastState::from(snapshot.state),
-                at: now,
-            };
-            tx.bots()
-                .record_state(snapshot.bot_id, admitted.agent, &report)
-                .await?;
+            let bot = snapshot.bot_id;
+            match tx.bots().agent_of(bot).await? {
+                Some(Some(owner)) if owner == admitted.agent => {
+                    let report = LastReport {
+                        state: LastState::from(snapshot.state),
+                        at: now,
+                    };
+                    tx.bots().record_state(bot, admitted.agent, &report).await?;
+                }
+                row => {
+                    if tx.bots().stray(bot, admitted.agent, now).await? {
+                        let entry = self.stray_entry(bot, admitted.agent, row.flatten())?;
+                        tx.audit().record(&entry).await?;
+                    }
+                }
+            }
         }
         let metadata = AuditMetadata::new()
             .text("fingerprint", &admitted.fingerprint.to_string())?
@@ -239,6 +252,25 @@ impl AgentConnectionService {
         }
         tx.commit(entry).await?;
         Ok(Ok(()))
+    }
+
+    /// `bot.stray` for `bot`, which `agent`'s hello listed while its row
+    /// names `assigned_to` or no agent: a Failure with no actor.
+    fn stray_entry(
+        &self,
+        bot: BotId,
+        agent: AgentId,
+        assigned_to: Option<AgentId>,
+    ) -> Result<NewAuditEntry, RecordError> {
+        let mut metadata = AuditMetadata::new().id("agent", agent)?;
+        if let Some(assigned_to) = assigned_to {
+            metadata = metadata.id("assigned_to", assigned_to)?;
+        }
+        Ok(self
+            .audit
+            .entry(AuditAction::BOT_STRAY, AuditOutcome::Failure)
+            .target(AuditTarget::Bot(bot))
+            .metadata(metadata))
     }
 
     /// The end's transaction; see [`AgentConnections::ended`].
