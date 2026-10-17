@@ -42,6 +42,8 @@ pub struct HeldBot {
     pub since: DateTime<Utc>,
     /// Its latest report on this stream, if any.
     pub report: Option<BotSnapshot>,
+    /// The stream's generation: a command goes only to this stream (S48).
+    pub generation: u64,
 }
 
 /// A bot's latest report from a stream that held it or listed it, which the
@@ -116,12 +118,20 @@ pub trait LiveAgents: Send + Sync + fmt::Debug {
     /// meanwhile: the clear that took it didn't commit.
     fn put_back_latest(&self, report: LatestReport);
 
-    /// Sends `command` for `bot` through `agent`'s live stream, but only
-    /// while that stream holds the bot assigned; never queued for later, so a
-    /// command dies with its stream (S48, S49).
+    /// Sends `command` for `bot` through generation `generation` of
+    /// `agent`'s live stream, the one found holding it: checked and queued
+    /// at once, and only while that stream lives, isn't ended and holds the
+    /// bot assigned; never queued for later, so a command dies with its
+    /// stream (S48, S49).
     ///
     /// # Errors
-    /// [`CommandRefused`].
-    fn command(&self, agent: AgentId, bot: BotId, command: Lifecycle)
-    -> Result<(), CommandRefused>;
+    /// [`CommandRefused`]: `NotConnected` for another, an ended or no
+    /// stream; `NotHeld` when that stream doesn't hold the bot assigned.
+    fn command(
+        &self,
+        agent: AgentId,
+        generation: u64,
+        bot: BotId,
+        command: Lifecycle,
+    ) -> Result<(), CommandRefused>;
 }

@@ -3782,6 +3782,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Also:** the per-bot limit (§7.4's note, S52); `[chat] command_allowlist`, read by the mode switch (R37); `Assignments::assign` returns the row's stored state, from which a new placement's restore comes; fleet-client's `bots`, `bot`, `patch_bot`, `set_bot_mode`, `start_bot`, `stop_bot`, `restart_bot`, `reset_bot` and `resume_bot` (S56).
   > - **SSRF** (S46): the server doesn't check where an address points; the agent will, right before it dials (P10.7's note). The `PATCH`'s OpenAPI description says so.
   > - **Hands-on:** none before G. Without the managed agent no bot runs through the server, the app has no bot screens until P11.9, and calling the API by hand would need curl or a password on a command line (ADR-0016, ADR-0017). H's DoD check calls these routes for real.
+  > - **PR #54's review** (ADR-0019): a command goes only to the stream of the generation found holding its bot, checked and queued in one critical section; a bot whose agent isn't online (disabled, its certificates revoked or expired, before its stream ends) is 409 `bot_unreachable`; a resume or reset puts the kept report back unless its commit lands (a caller dropped mid-commit included), and refuses when its clear changes nothing; a write's answer asks `authorize()` again (404 once the caller may no longer see the bot); `server_address` shows only to Control holders and above.
 - [ ] **P11.3** 🔴 Chat:
   - `POST /bots/{id}/chat`:
     - takes a `ChatMessage`
@@ -3864,7 +3865,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Texts:** the four 409 codes' messages are fixed on the server (U13); the controls' labels and the shown states' texts are the user's, asked here.
   > - **Stop on a Paused or Failed bot** is allowed: it frees the bot's slot and keeps its state (S51). Whether the controls offer it beside Resume or Reset is this task's UX.
   > - **A 409** (`bot_unreachable`, `bot_not_running`, `bot_not_paused`, `bot_not_failed`) shows its message and refetches the bot. A 202 means sent, not done: the result arrives as the bot's status.
-  > - **Every `Open<…>`** (`desired_state`, `status.kind`, `state`, `reason`, `why`, the last disconnect's kinds) has a default branch. `agent` is there only for Admins and the Owner.
+  > - **Every `Open<…>`** (`desired_state`, `status.kind`, `state`, `reason`, `why`, the last disconnect's kinds) has a default branch. `server_address` is there only for Control holders and above, `agent` only for Admins and the Owner.
   > - **Step-up:** `PATCH /bots/{id}` goes through `useStepUpAction`; the mode switch, the lifecycle calls and the reads don't need one. A per-bot 429 shows its `Retry-After`.
 
   > Note (P11.9, from Phase 10, group B, the user's choice, U3) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **enrollment tokens in the agents view.** `POST /agents/enrollment-tokens` exists (the Owner's, step-up, no body); the view shows the bundle once, for the Owner to pipe into `afkfleet-agent enroll`. The bundle is a secret for 15 minutes, so the call is a direct one through `useApiClient()`, never a TanStack query or mutation (CLAUDE.md). `afkfleet-server agent create-enrollment-token` stays for the server's host.

@@ -12,6 +12,7 @@
 //! transaction, so its next placement starts it. fleet-core's
 //! [`judge_command`] decides which.
 
+use fleet_core::agent::{AgentStatus, status};
 use fleet_core::audit::{AuditAction, AuditError, AuditMetadata};
 use fleet_core::authz::{Permission, authorize};
 use fleet_core::bot::{
@@ -19,14 +20,14 @@ use fleet_core::bot::{
     judge_command,
 };
 use fleet_core::id::BotId;
-use tracing::info;
+use tracing::{debug, info};
 
 use super::{BotService, BotWriteError, reread};
 use crate::app::users::ActingUser;
 use crate::ports::bots::Bot;
-use crate::ports::live_agents::CommandRefused;
+use crate::ports::live_agents::{CommandRefused, LatestReport, LiveAgents};
 use crate::ports::reconcile::Change;
-use crate::ports::store::WriteTx;
+use crate::ports::store::{StoreError, WriteTx};
 
 /// A user's lifecycle call.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -109,7 +110,7 @@ impl BotService {
             // It says so already; dropping the transaction writes nothing.
             return Ok(Controlled::Unchanged);
         }
-        let (_, known) = self.reach(bot);
+        let known = self.reach(bot).await?.known;
         let metadata = acted_on(known)?;
         tx.commit(self.entry(by, action, bot.id, metadata)).await?;
         self.reconcile.changed(Change::Store);
@@ -127,10 +128,11 @@ impl BotService {
         bot: &Bot,
         command: Lifecycle,
     ) -> Result<Controlled, BotWriteError> {
-        let (reach, known) = self.reach(bot);
+        let reached = self.reach(bot).await?;
+        let known = reached.known;
         let facts = CommandFacts {
             desired: bot.desired,
-            reach,
+            reach: reached.reach,
             known,
         };
         // A refusal drops the transaction: nothing is written or recorded.
@@ -147,10 +149,12 @@ impl BotService {
                 // unaudited, and a refusal after the commit keeps its entry.
                 tx.commit(self.entry(by, action, bot.id, metadata)).await?;
                 self.reconcile.changed(Change::Store);
-                let Some(agent) = bot.agent else {
+                // Only to the stream the judge found holding the bot: one that
+                // replaced it meanwhile gets nothing (S48).
+                let (Some(agent), Some(generation)) = (bot.agent, reached.stream) else {
                     return Err(BotWriteError::Refused(CommandRefusal::Unreachable));
                 };
-                match self.live.command(agent, bot.id, command) {
+                match self.live.command(agent, generation, bot.id, command) {
                     Ok(()) => {
                         info!(user_id = %by.actor.id, bot_id = %bot.id, agent_id = %agent, command = ?command, "a command was sent to a bot's agent");
                         Ok(Controlled::Sent)
@@ -165,18 +169,20 @@ impl BotService {
             }
             CommandEffect::ClearSticky => {
                 let metadata = effected(command, known, "cleared")?;
-                if let Some(last) = bot.last.filter(|last| last.state.sticky().is_some()) {
-                    tx.bots().clear_sticky(bot.id, &last).await?;
+                if let Some(last) = bot.last.filter(|last| last.state.sticky().is_some())
+                    && !tx.bots().clear_sticky(bot.id, &last).await?
+                {
+                    // The row isn't what the judge read: dropping the
+                    // transaction writes and records nothing, and no report is
+                    // taken. A retry judges it afresh.
+                    debug!(user_id = %by.actor.id, bot_id = %bot.id, command = ?command, "a resting bot's sticky state changed before it was cleared");
+                    return Err(BotWriteError::Refused(CommandRefusal::Unreachable));
                 }
                 // Taken before the commit, so no placement after it restores
-                // what this clears; put back when the commit fails (S48).
-                let taken = self.live.take_latest(bot.id);
-                if let Err(error) = tx.commit(self.entry(by, action, bot.id, metadata)).await {
-                    if let Some(taken) = taken {
-                        self.live.put_back_latest(taken);
-                    }
-                    return Err(error.into());
-                }
+                // what this clears; back unless the commit lands (S48).
+                let taken = TakenReport::take(&*self.live, bot.id);
+                tx.commit(self.entry(by, action, bot.id, metadata)).await?;
+                taken.keep_out();
                 self.reconcile.changed(Change::Store);
                 info!(user_id = %by.actor.id, bot_id = %bot.id, command = ?command, "a resting bot's sticky state was cleared");
                 Ok(Controlled::Cleared)
@@ -185,23 +191,94 @@ impl BotService {
     }
 
     /// How far the server reaches `bot`, and its known state: its stream's
-    /// report when that stream holds it, otherwise the newer of its stored
-    /// state and the report the server keeps (S50, R35).
-    fn reach(&self, bot: &Bot) -> (Reach, Option<LastState>) {
+    /// report when its agent is online and that stream holds it, otherwise
+    /// the newer of its stored state and the report the server keeps (S50,
+    /// R35). The agent's status is fleet-core's rule, as the bot's read
+    /// shows it: an agent that isn't online (disabled, its certificates
+    /// revoked or expired, while its stream waits to be ended) reads Unknown,
+    /// so nothing is sent to it. The write transaction is open, so nothing
+    /// else commits between this read and its commit.
+    async fn reach(&self, bot: &Bot) -> Result<Reached, StoreError> {
         let stored = self.last_known(bot.id, bot.last).map(|last| last.state);
-        match bot.agent {
-            None => (Reach::NoAgent, stored),
-            Some(agent) => match self.live.held(agent, bot.id) {
-                Some(held) => (
-                    Reach::Held,
-                    held.report
-                        .map(|report| LastState::from(report.state))
-                        .or(stored),
-                ),
-                None => (Reach::NotHeld, stored),
+        let Some(agent) = bot.agent else {
+            return Ok(Reached {
+                reach: Reach::NoAgent,
+                known: stored,
+                stream: None,
+            });
+        };
+        let online = self
+            .store
+            .agents()
+            .listed(agent)
+            .await?
+            .is_some_and(|listed| {
+                status(
+                    listed.agent.enabled,
+                    listed.not_after,
+                    self.live.live(agent).is_some(),
+                    self.clock.now(),
+                ) == AgentStatus::Online
+            });
+        Ok(match self.live.held(agent, bot.id).filter(|_| online) {
+            Some(held) => Reached {
+                reach: Reach::Held,
+                known: held
+                    .report
+                    .map(|report| LastState::from(report.state))
+                    .or(stored),
+                stream: Some(held.generation),
             },
+            None => Reached {
+                reach: Reach::NotHeld,
+                known: stored,
+                stream: None,
+            },
+        })
+    }
+}
+
+/// A bot's kept report, taken out of memory by a clear before its commit,
+/// and put back when dropped unless the commit landed
+/// ([`TakenReport::keep_out`]): when the commit fails, and when its caller
+/// is dropped mid-commit (a timeout, a client gone), which rolls the
+/// transaction back. Should such a commit have landed after all, the bot
+/// keeps its sticky state: a resume to repeat, never a human kicked (S48).
+struct TakenReport<'a> {
+    live: &'a dyn LiveAgents,
+    report: Option<LatestReport>,
+}
+
+impl<'a> TakenReport<'a> {
+    /// Takes `bot`'s kept report out of `live`.
+    fn take(live: &'a dyn LiveAgents, bot: BotId) -> Self {
+        Self {
+            live,
+            report: live.take_latest(bot),
         }
     }
+
+    /// The commit landed: the report stays out.
+    fn keep_out(mut self) {
+        self.report = None;
+    }
+}
+
+impl Drop for TakenReport<'_> {
+    fn drop(&mut self) {
+        if let Some(report) = self.report.take() {
+            self.live.put_back_latest(report);
+        }
+    }
+}
+
+/// How far the server reaches a bot ([`BotService::reach`]).
+struct Reached {
+    reach: Reach,
+    /// Its known state.
+    known: Option<LastState>,
+    /// The generation of the stream that holds it, when reached.
+    stream: Option<u64>,
 }
 
 /// The metadata of a call that acted on a bot in `known`: its state, and

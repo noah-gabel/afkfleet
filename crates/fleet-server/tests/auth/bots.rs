@@ -15,12 +15,15 @@ use fleet_core::bot::{BotSnapshot, BotState, LastReport, LastState, Lifecycle, P
 use fleet_core::disconnect::{ConflictKind, DisconnectReason};
 use fleet_core::id::{AccountId, AgentId, BotId, ModeId, UserId};
 use fleet_core::mode::ModePreset;
+use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock as _;
+use fleet_core::value::AgentName;
 use fleet_proto::control::{AgentMessage, LifecycleCommand, ServerMessage};
 use fleet_server::config::{Rate, RateLimitConfig};
 use fleet_server::grpc::registry::{Hold, HoldEntry, Lease};
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::agent_connections::StreamEnd;
+use fleet_server::ports::agents::{NewAgent, NewAgentCert};
 use fleet_server::ports::bots::NewBot;
 use fleet_server::ports::grants::AccountGrant;
 use fleet_server::ports::reconcile::Change;
@@ -157,6 +160,34 @@ impl Setup {
         agent
     }
 
+    /// Agent `n`, whose one certificate expires a millisecond from now, with
+    /// `bot` assigned to it.
+    async fn short_lived_agent(&self, n: u8, bot: BotId) -> AgentId {
+        let id = AgentId::new_v7(at(T0), [n; 10]).unwrap();
+        let now = self.clock.now();
+        let mut tx = self.db.write().await.unwrap();
+        tx.agents()
+            .insert(&NewAgent {
+                id,
+                name: AgentName::try_from(format!("agent-{n}").as_str()).unwrap(),
+                created_at: now,
+            })
+            .await
+            .unwrap();
+        tx.agents()
+            .insert_cert(&NewAgentCert {
+                fingerprint: CertFingerprint::from_digest([n; 32]),
+                agent: id,
+                not_after: now + TimeDelta::milliseconds(1),
+                created_at: now,
+            })
+            .await
+            .unwrap();
+        assert!(tx.bots().assign(bot, id).await.unwrap());
+        tx.commit(setup_entry()).await.unwrap();
+        id
+    }
+
     /// Agent `n`'s live stream, reconciled, holding `bots` assigned.
     fn holding(&self, n: u8, bots: &[BotId]) -> Stream {
         let (lease, queued, ended) = self.stream(n);
@@ -288,8 +319,9 @@ fn names(
 // --- What a viewer sees -----------------------------------------------------------------
 
 /// The field rule (S54): the account as the accounts' routes show it, its
-/// owner and since-when for Admins, the Owner and Manage holders, its agent
-/// for Admins and the Owner only.
+/// owner and since-when for Admins, the Owner and Manage holders, its server
+/// for Control holders and above (PR #54's review), its agent for Admins and
+/// the Owner only.
 #[sqlx::test(migrations = false)]
 async fn each_viewer_sees_a_bot_under_its_accounts_field_rule(
     _pool: SqlitePoolOptions,
@@ -301,9 +333,13 @@ async fn each_viewer_sees_a_bot_under_its_accounts_field_rule(
     let manager = setup.person(4, "manager", Role::Member).await;
     let admin = setup.person(5, "admin", Role::Admin).await;
     let the_owner = setup.person(6, "theowner", Role::Owner).await;
+    let controller = setup.person(7, "controller", Role::Member).await;
     let (account, bot) = setup.bot_of(owner.id, 10).await;
     setup
         .share(account, viewer.id, GrantLevel::View, owner.id)
+        .await;
+    setup
+        .share(account, controller.id, GrantLevel::Control, owner.id)
         .await;
     setup
         .share(account, manager.id, GrantLevel::Manage, owner.id)
@@ -315,6 +351,7 @@ async fn each_viewer_sees_a_bot_under_its_accounts_field_rule(
     for (name, person) in [
         ("owner", &owner),
         ("view", &viewer),
+        ("control", &controller),
         ("manage", &manager),
         ("admin", &admin),
         ("the_owner", &the_owner),
@@ -328,6 +365,14 @@ async fn each_viewer_sees_a_bot_under_its_accounts_field_rule(
     assert_eq!(view["account"].get("owner"), None);
     assert_eq!(view["account"].get("linked_at"), None);
     assert_eq!(view.get("agent"), None);
+    assert_eq!(
+        view.get("server_address"),
+        None,
+        "View holders see no server"
+    );
+    for name in ["control", "manage", "owner", "admin", "the_owner"] {
+        assert_eq!(seen[name]["server_address"], "mc.example.com", "{name}");
+    }
     assert_eq!(
         seen["manage"]["account"]["owner"]["id"],
         owner.id.to_string()
@@ -1045,6 +1090,63 @@ async fn a_command_for_a_bot_no_stream_holds_is_409_unreachable_and_records_noth
     );
 }
 
+/// A command for a bot whose agent's stream still holds it but whose agent
+/// isn't online any more is refused like an unknown bot's: between a
+/// disable's commit and the stream's end, or while a revoked or expired
+/// certificate's stream waits for the sweep (S41, S50; PR #54's review).
+#[sqlx::test(migrations = false)]
+async fn a_command_for_a_bot_whose_agent_isnt_online_is_409_unreachable_and_sends_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let owner = setup.person(2, "owner", Role::Member).await;
+    let paused = BotState::Paused {
+        reason: PauseReason::Conflict {
+            kind: ConflictKind::DuplicateLogin,
+        },
+    };
+    let mut cases = Vec::new();
+    for (n, how) in [(1_u8, "disabled"), (2, "revoked"), (3, "expired")] {
+        let (_, bot) = setup.bot_of(owner.id, 10 + n).await;
+        setup.running(bot).await;
+        let agent = if how == "expired" {
+            setup.short_lived_agent(n, bot).await
+        } else {
+            setup.assigned(bot, n, None).await
+        };
+        let stream = setup.holding(n, &[bot]);
+        setup.report(&stream, bot, paused, None);
+        cases.push((how, agent, bot, stream));
+    }
+    let mut tx = setup.db.write().await.unwrap();
+    assert!(tx.agents().disable(cases[0].1).await.unwrap());
+    assert_eq!(
+        tx.agents()
+            .revoke_certs(cases[1].1, setup.clock.now())
+            .await
+            .unwrap(),
+        1
+    );
+    tx.commit(setup_entry()).await.unwrap();
+    setup.clock.advance(core::time::Duration::from_secs(1));
+
+    for (how, _, bot, mut stream) in cases {
+        let read = setup.get(&bot_path(bot), Some(&owner.token)).await;
+        let answer = setup.call(bot, "resume", &owner).await;
+
+        assert_eq!(
+            read.body["status"]["kind"], "unknown",
+            "{how}: {}",
+            read.text
+        );
+        assert_eq!(answer.status, 409, "{how}: {}", answer.text);
+        assert_eq!(answer.code(), "bot_unreachable", "{how}");
+        assert!(stream.next().is_none(), "{how}: nothing was sent");
+    }
+    assert_eq!(setup.entries(&AuditAction::BOT_RESUME).await.len(), 0);
+}
+
 #[sqlx::test(migrations = false)]
 async fn a_command_goes_to_the_stream_that_holds_the_bot_recorded_first_and_answers_202(
     _pool: SqlitePoolOptions,
@@ -1244,6 +1346,36 @@ async fn a_grant_revoked_meanwhile_refuses_the_write_and_changes_nothing(
     );
     assert_eq!(setup.entries(&AuditAction::BOT_START).await.len(), 0);
     assert_eq!(setup.hints.take(), []);
+}
+
+/// A grant revoked between a write's commit and its answer: the answer is
+/// 404, as for any bot the caller may no longer see, and the write stays
+/// made (PR #54's review).
+#[sqlx::test(migrations = false)]
+async fn a_grant_revoked_right_after_the_write_is_answered_404(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let owner = setup.person(2, "owner", Role::Member).await;
+    let friend = setup.person(3, "friend", Role::Member).await;
+    let (account, bot) = setup.bot_of(owner.id, 10).await;
+    setup
+        .share(account, friend.id, GrantLevel::Control, owner.id)
+        .await;
+    setup
+        .hooked
+        .queue_after_commit(Meanwhile::RevokeGrant(account, friend.id));
+
+    let answer = setup.call(bot, "start", &friend).await;
+
+    assert_eq!(answer.status, 404, "{}", answer.text);
+    assert_eq!(answer.code(), "not_found");
+    assert_eq!(
+        setup.bot_row(bot).await.desired,
+        fleet_core::bot::DesiredRunState::Running,
+        "the start was made"
+    );
 }
 
 #[sqlx::test(migrations = false)]

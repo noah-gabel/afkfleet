@@ -46,24 +46,26 @@ use fleet_server::infra::crypto::totp::TotpRs;
 use fleet_server::infra::crypto::vault::{VaultKeys, XChaChaVault};
 use fleet_server::infra::qr::SvgQr;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
-use fleet_server::ports::accounts::AccountReads;
-use fleet_server::ports::agents::AgentReads;
-use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditReads, AuditRecord, NewAuditEntry};
-use fleet_server::ports::bots::BotReads;
-use fleet_server::ports::enrollment_tokens::EnrollmentTokenReads;
-use fleet_server::ports::envelopes::EnvelopeReads;
-use fleet_server::ports::grants::GrantReads;
-use fleet_server::ports::invites::{InviteReads, NewInvite};
-use fleet_server::ports::login_attempts::LoginAttemptReads;
-use fleet_server::ports::mfa::MfaReads;
-use fleet_server::ports::modes::ModeReads;
+use fleet_server::ports::accounts::{AccountReads, AccountWrites};
+use fleet_server::ports::agents::{AgentReads, AgentWrites};
+use fleet_server::ports::audit::{
+    AuditEntryId, AuditLimit, AuditPage, AuditReads, AuditRecord, AuditWrites, NewAuditEntry,
+};
+use fleet_server::ports::bots::{BotReads, BotWrites};
+use fleet_server::ports::enrollment_tokens::{EnrollmentTokenReads, EnrollmentTokenWrites};
+use fleet_server::ports::envelopes::{EnvelopeReads, EnvelopeWrites};
+use fleet_server::ports::grants::{GrantReads, GrantWrites};
+use fleet_server::ports::invites::{InviteReads, InviteWrites, NewInvite};
+use fleet_server::ports::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
+use fleet_server::ports::mfa::{MfaReads, MfaWrites};
+use fleet_server::ports::modes::{ModeReads, ModeWrites};
 use fleet_server::ports::passwords::{HashError, Passwords, VerifyError};
 use fleet_server::ports::reconcile::{Change, Reconcile};
-use fleet_server::ports::sessions::SessionReads;
-use fleet_server::ports::store::{Store, StoreError, WriteTx};
+use fleet_server::ports::sessions::{SessionReads, SessionWrites};
+use fleet_server::ports::store::{Store, StoreError, UnauditedWrite, WriteTx};
 use fleet_server::ports::tokens::TokenHash;
-use fleet_server::ports::users::UserReads;
 use fleet_server::ports::users::{NewUser, PasswordHash};
+use fleet_server::ports::users::{UserReads, UserWrites};
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use secrecy::{ExposeSecret as _, SecretBox, SecretString};
 use serde_json::{Value, json};
@@ -210,19 +212,26 @@ pub(crate) enum Meanwhile {
 }
 
 /// The database, with a change queued to land right before the next write
-/// transaction opens.
+/// transaction opens, or right after it commits.
 #[derive(Debug, Clone)]
 pub(crate) struct HookedStore {
     inner: Database,
     alice: UserId,
     clock: ManualClock,
     queued: Arc<Mutex<Option<Meanwhile>>>,
+    after_commit: Arc<Mutex<Option<Meanwhile>>>,
 }
 
 impl HookedStore {
     /// Queues `change` for the next write transaction.
     pub(crate) fn queue(&self, change: Meanwhile) {
         *self.queued.lock().unwrap() = Some(change);
+    }
+
+    /// Queues `change` to land right after the next write transaction
+    /// commits: before its caller reads anything again.
+    pub(crate) fn queue_after_commit(&self, change: Meanwhile) {
+        *self.after_commit.lock().unwrap() = Some(change);
     }
 
     async fn apply(&self, change: Meanwhile) {
@@ -296,6 +305,91 @@ impl HookedStore {
     }
 }
 
+/// A write transaction whose commit is followed by `after`, as if another
+/// request committed it right then.
+struct HookedTx {
+    inner: Box<dyn WriteTx>,
+    store: HookedStore,
+    after: Meanwhile,
+}
+
+#[async_trait]
+impl WriteTx for HookedTx {
+    fn users(&mut self) -> &mut dyn UserWrites {
+        self.inner.users()
+    }
+
+    fn sessions(&mut self) -> &mut dyn SessionWrites {
+        self.inner.sessions()
+    }
+
+    fn login_attempts(&mut self) -> &mut dyn LoginAttemptWrites {
+        self.inner.login_attempts()
+    }
+
+    fn mfa(&mut self) -> &mut dyn MfaWrites {
+        self.inner.mfa()
+    }
+
+    fn invites(&mut self) -> &mut dyn InviteWrites {
+        self.inner.invites()
+    }
+
+    fn accounts(&mut self) -> &mut dyn AccountWrites {
+        self.inner.accounts()
+    }
+
+    fn grants(&mut self) -> &mut dyn GrantWrites {
+        self.inner.grants()
+    }
+
+    fn envelopes(&mut self) -> &mut dyn EnvelopeWrites {
+        self.inner.envelopes()
+    }
+
+    fn enrollment_tokens(&mut self) -> &mut dyn EnrollmentTokenWrites {
+        self.inner.enrollment_tokens()
+    }
+
+    fn agents(&mut self) -> &mut dyn AgentWrites {
+        self.inner.agents()
+    }
+
+    fn bots(&mut self) -> &mut dyn BotWrites {
+        self.inner.bots()
+    }
+
+    fn modes(&mut self) -> &mut dyn ModeWrites {
+        self.inner.modes()
+    }
+
+    fn audit(&mut self) -> &mut dyn AuditWrites {
+        self.inner.audit()
+    }
+
+    async fn commit(self: Box<Self>, entry: NewAuditEntry) -> Result<AuditEntryId, StoreError> {
+        let Self {
+            inner,
+            store,
+            after,
+        } = *self;
+        let id = inner.commit(entry).await?;
+        store.apply(after).await;
+        Ok(id)
+    }
+
+    async fn commit_unaudited(self: Box<Self>, reason: UnauditedWrite) -> Result<(), StoreError> {
+        let Self {
+            inner,
+            store,
+            after,
+        } = *self;
+        inner.commit_unaudited(reason).await?;
+        store.apply(after).await;
+        Ok(())
+    }
+}
+
 #[async_trait]
 impl Store for HookedStore {
     async fn write(&self) -> Result<Box<dyn WriteTx>, StoreError> {
@@ -303,7 +397,16 @@ impl Store for HookedStore {
         if let Some(change) = queued {
             self.apply(change).await;
         }
-        self.inner.write().await
+        let tx = self.inner.write().await?;
+        let after = self.after_commit.lock().unwrap().take();
+        Ok(match after {
+            None => tx,
+            Some(after) => Box::new(HookedTx {
+                inner: tx,
+                store: self.clone(),
+                after,
+            }),
+        })
     }
 
     fn users(&self) -> &dyn UserReads {
@@ -497,6 +600,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         alice,
         clock: clock.clone(),
         queued: Arc::default(),
+        after_commit: Arc::default(),
     };
     let login = LoginService::new(
         Arc::new(clock.clone()),

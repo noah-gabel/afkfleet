@@ -29,6 +29,22 @@ expression: "redacted(&serde_json::to_value(&seen).unwrap(), &ids)"
       "kind": "unknown"
     }
   },
+  "control": {
+    "account": {
+      "id": "[account]",
+      "kind": "offline",
+      "level": "control",
+      "name": "AfkBot10",
+      "status": "active"
+    },
+    "desired_state": "running",
+    "id": "[bot]",
+    "mode_id": "[id]",
+    "server_address": "mc.example.com",
+    "status": {
+      "kind": "unknown"
+    }
+  },
   "manage": {
     "account": {
       "id": "[account]",
@@ -108,7 +124,6 @@ expression: "redacted(&serde_json::to_value(&seen).unwrap(), &ids)"
     "desired_state": "running",
     "id": "[bot]",
     "mode_id": "[id]",
-    "server_address": "mc.example.com",
     "status": {
       "kind": "unknown"
     }

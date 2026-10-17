@@ -19,7 +19,8 @@ id: string,
  */
 account: AccountResponse, 
 /**
- * The Minecraft server it joins, once one is set.
+ * The Minecraft server it joins, once one is set: for callers with
+ * Control or higher on its account only.
  */
 server_address?: string, 
 /**

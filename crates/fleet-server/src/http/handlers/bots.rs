@@ -37,7 +37,9 @@ use fleet_api_types::bots::{
     BotStatus, BotStatusKind, DesiredState, LastDisconnect, UnplacedReason,
 };
 use fleet_api_types::{BoundedText, ErrorResponse, FieldError, PageQuery};
-use fleet_core::authz::{Actor, Permission, ResourceContext, authorize};
+use fleet_core::authz::{
+    Actor, GrantLevel, Permission, ResourceContext, authorize, effective_level,
+};
 use fleet_core::bot::{BotState, CommandRefusal, LastState, Lifecycle, ShownState};
 use fleet_core::id::BotId;
 use fleet_core::value::ServerAddress;
@@ -363,13 +365,15 @@ async fn facts(state: &AppState, actor: &Actor, id: BotId) -> Result<BotView, Ap
 }
 
 /// A write's answer: the bot as `actor` reads it after the write; 404 when
-/// it's gone meanwhile.
+/// it's gone meanwhile, or `actor` may no longer see it (`ViewBot`, as
+/// `get` asks).
 async fn answered(
     state: &AppState,
     actor: &Actor,
     id: BotId,
 ) -> Result<Json<BotResponse>, ApiError> {
     let view = facts(state, actor, id).await?;
+    authorize(actor, Permission::ViewBot, &view.account.context())?;
     Ok(Json(bot_response(actor, &view)?))
 }
 
@@ -406,16 +410,20 @@ fn bot_page(viewer: &Actor, listed: &Paged<BotView, BotId>) -> Result<Json<BotPa
 }
 
 /// A bot as `viewer` sees it (S54): its account under the accounts' field
-/// rule, and its agent for Admins and the Owner only.
+/// rule, its server for Control holders and above (PR #54's review), and
+/// its agent for Admins and the Owner only.
 fn bot_response(viewer: &Actor, view: &BotView) -> Result<BotResponse, ApiError> {
     let bot = &view.record.bot;
     let sees_agents = authorize(viewer, Permission::ViewAgents, &ResourceContext::Global).is_ok();
+    let sees_server = effective_level(viewer, view.account.owner, view.account.grant)
+        .is_some_and(|level| level >= GrantLevel::Control);
     Ok(BotResponse {
         id: bot.id,
         account: account_response(viewer, &view.account)?,
         server_address: bot
             .server
             .as_ref()
+            .filter(|_| sees_server)
             .map(|server| BoundedText::new(&server.to_string())),
         mode_id: bot.mode,
         desired_state: DesiredState::from(bot.desired).into(),

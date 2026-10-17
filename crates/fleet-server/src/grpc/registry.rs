@@ -1030,6 +1030,7 @@ impl LiveAgents for AgentRegistry {
             .filter(|entry| entry.hold == Hold::Assigned)?;
         Some(HeldBot {
             since: entry.since,
+            generation: slot.generation,
             report: state
                 .latest
                 .get(&bot)
@@ -1054,27 +1055,47 @@ impl LiveAgents for AgentRegistry {
     fn command(
         &self,
         agent: AgentId,
+        generation: u64,
         bot: BotId,
         command: Lifecycle,
     ) -> Result<(), CommandRefused> {
-        if LiveAgents::held(self, agent, bot).is_none() {
-            return Err(CommandRefused::NotHeld);
-        }
-        // Through `send`, like every message the server sends (ADR-0019,
-        // S48): a stream that ended or was replaced since the check above
-        // gets nothing it doesn't hold, and a command never assigns.
-        self.send(
-            agent,
-            ServerMessage::Lifecycle(LifecycleCommand {
-                bot_id: bot,
-                command,
-            }),
-        )
-        .map_err(|error| match error {
+        let unsendable = |error| match error {
             SendError::NotConnected => CommandRefused::NotConnected,
             SendError::QueueFull => CommandRefused::QueueFull,
             SendError::TooLarge | SendError::Unwritable => CommandRefused::Unsendable,
-        })
+        };
+        let message = self
+            .wire(ServerMessage::Lifecycle(LifecycleCommand {
+                bot_id: bot,
+                command,
+            }))
+            .map_err(unsendable)?;
+        // One critical section, as `hold_and_send`'s (ADR-0019, S48): the
+        // stream the caller found holding the bot, still live, not ended and
+        // still holding it assigned, gets the command; a stream that
+        // replaced it gets nothing, and a command never assigns.
+        let mut state = self.state();
+        let Some(slot) = state
+            .slots
+            .get_mut(&agent)
+            .filter(|slot| slot.generation == generation)
+        else {
+            return Err(CommandRefused::NotConnected);
+        };
+        let Phase::Live(live) = &slot.phase else {
+            return Err(CommandRefused::NotConnected);
+        };
+        if live.halt.is_halted() {
+            return Err(CommandRefused::NotConnected);
+        }
+        if !live
+            .holds
+            .get(&bot)
+            .is_some_and(|entry| entry.hold == Hold::Assigned)
+        {
+            return Err(CommandRefused::NotHeld);
+        }
+        queue(slot, message).map_err(unsendable)
     }
 }
 
@@ -2384,10 +2405,11 @@ mod tests {
         );
         assert!(queued.try_recv().is_ok(), "the reconcile");
 
-        let sent = registry.command(agent(1), bot(1), Lifecycle::Resume);
-        let releasing = registry.command(agent(1), bot(2), Lifecycle::Resume);
-        let unheld = registry.command(agent(1), bot(3), Lifecycle::Restart);
-        let elsewhere = registry.command(agent(2), bot(1), Lifecycle::Reset);
+        let generation = lease.generation;
+        let sent = registry.command(agent(1), generation, bot(1), Lifecycle::Resume);
+        let releasing = registry.command(agent(1), generation, bot(2), Lifecycle::Resume);
+        let unheld = registry.command(agent(1), generation, bot(3), Lifecycle::Restart);
+        let elsewhere = registry.command(agent(2), generation, bot(1), Lifecycle::Reset);
 
         assert_eq!(sent, Ok(()));
         assert_eq!(
@@ -2396,7 +2418,11 @@ mod tests {
         );
         assert_eq!(releasing, Err(CommandRefused::NotHeld));
         assert_eq!(unheld, Err(CommandRefused::NotHeld));
-        assert_eq!(elsewhere, Err(CommandRefused::NotHeld));
+        assert_eq!(
+            elsewhere,
+            Err(CommandRefused::NotConnected),
+            "no stream at all"
+        );
         assert!(queued.try_recv().is_err(), "nothing else was queued");
     }
 
@@ -2405,10 +2431,10 @@ mod tests {
         let (registry, _) = registry();
         let (lease, mut queued, _ended) = live(&registry, 1, 4);
 
-        let unreconciled = registry.command(agent(1), bot(1), Lifecycle::Resume);
+        let unreconciled = registry.command(agent(1), lease.generation, bot(1), Lifecycle::Resume);
         settle(&registry, &lease, &[(1, Hold::Assigned)]);
         assert!(registry.end(agent(1), StreamEnd::StreamError));
-        let ended = registry.command(agent(1), bot(1), Lifecycle::Resume);
+        let ended = registry.command(agent(1), lease.generation, bot(1), Lifecycle::Resume);
 
         assert_eq!(unreconciled, Err(CommandRefused::NotHeld));
         assert_eq!(
@@ -2424,13 +2450,44 @@ mod tests {
         }
     }
 
+    /// The stream a command's caller found holding the bot, and no other: a
+    /// stream that replaced it, settled or not, gets nothing (S48, PR #54's
+    /// review).
+    #[test]
+    fn a_command_goes_only_to_the_generation_found_holding_its_bot() {
+        let (registry, _) = registry();
+        let (old, _old_queued, _old_ended) = live(&registry, 1, 4);
+        settle(&registry, &old, &[(1, Hold::Assigned)]);
+        let found = LiveAgents::held(&registry, agent(1), bot(1)).unwrap();
+        // The stream is replaced: the old lease freed, a new hello welcomed.
+        drop(old);
+        let (new, mut queued, _ended) = live(&registry, 1, 4);
+
+        let unsettled = registry.command(agent(1), found.generation, bot(1), Lifecycle::Resume);
+        settle(&registry, &new, &[(1, Hold::Assigned)]);
+        assert!(queued.try_recv().is_ok(), "the reconcile");
+        let settled = registry.command(agent(1), found.generation, bot(1), Lifecycle::Resume);
+        let current = registry.command(agent(1), new.generation, bot(1), Lifecycle::Restart);
+
+        assert_ne!(found.generation, new.generation);
+        assert_eq!(unsettled, Err(CommandRefused::NotConnected));
+        assert_eq!(settled, Err(CommandRefused::NotConnected));
+        assert_eq!(current, Ok(()));
+        assert_eq!(
+            queued.try_recv().unwrap(),
+            lifecycle(bot(1), Lifecycle::Restart),
+            "only the current generation's command"
+        );
+        assert!(queued.try_recv().is_err(), "nothing else was queued");
+    }
+
     #[test]
     fn a_command_to_a_full_queue_ends_the_stream_too_slow() {
         let (registry, _) = registry();
         let (lease, _queued, mut ended) = live(&registry, 1, 1);
         settle(&registry, &lease, &[(1, Hold::Assigned)]);
 
-        let refused = registry.command(agent(1), bot(1), Lifecycle::Restart);
+        let refused = registry.command(agent(1), lease.generation, bot(1), Lifecycle::Restart);
 
         assert_eq!(refused, Err(CommandRefused::QueueFull));
         assert_eq!(ended.try_recv(), Ok(StreamEnd::TooSlow));

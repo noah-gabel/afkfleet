@@ -693,7 +693,8 @@ pub struct BotResponse {
     /// Its account, as `GET /accounts/{id}` shows it to the caller: `level`
     /// says what they may do with the bot.
     pub account: AccountResponse,
-    /// The Minecraft server it joins, once one is set.
+    /// The Minecraft server it joins, once one is set: for callers with
+    /// Control or higher on its account only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(as = "Option<String>", optional)]
     #[schema(schema_with = BoundedText::<SERVER_ADDRESS_MAX_CHARS>::schema, nullable = false)]
