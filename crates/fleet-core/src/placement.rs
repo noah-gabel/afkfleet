@@ -361,6 +361,40 @@ pub struct AgentPlan {
     pub run: Vec<Run>,
     /// The bots it should let go of, in bot order.
     pub release: Vec<Let>,
+    /// Bots assigned to it that it never got and that aren't sent again:
+    /// its next hello settles them. In bot order.
+    pub undelivered: Vec<Undelivered>,
+}
+
+/// A bot assigned to an agent that never got it, and why it isn't sent
+/// again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Undelivered {
+    /// The bot.
+    pub bot: BotId,
+    /// Why.
+    pub why: UndeliveredWhy,
+}
+
+/// Why an assignment its agent never got isn't sent again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UndeliveredWhy {
+    /// The bot no longer qualifies.
+    Unqualified(Unplaced),
+    /// The agent has no room left for it.
+    NoRoom,
+}
+
+impl UndeliveredWhy {
+    /// The reason's stable name, for the logs: an [`Unplaced`] name, or
+    /// `no_room`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unqualified(why) => why.as_str(),
+            Self::NoRoom => "no_room",
+        }
+    }
 }
 
 /// A bot an agent should run.
@@ -530,6 +564,7 @@ impl<'a> Planner<'a> {
             full: true,
             run: Vec::new(),
             release: Vec::new(),
+            undelivered: Vec::new(),
         };
         let foreign = self.let_foreign_go(agent.id, &listed, &mut part);
         // Its records of bots it no longer runs close.
@@ -645,6 +680,7 @@ impl<'a> Planner<'a> {
             full: false,
             run: Vec::new(),
             release: Vec::new(),
+            undelivered: Vec::new(),
         };
         for (&bot, &held) in &holds {
             let Held::Assigned {
@@ -695,9 +731,29 @@ impl<'a> Planner<'a> {
             }
         }
         let frozen = self.frozen_on(agent.id, |bot| holds.contains_key(&bot));
-        let free = usize::from(agent.capacity.get())
+        let room = usize::from(agent.capacity.get())
             .saturating_sub(holds.len())
             .saturating_sub(frozen);
+        // Its own bots it doesn't hold: assignments whose message couldn't
+        // be sent. One that qualifies is sent again while there's room; the
+        // rest wait for the agent's next hello, which settles them.
+        let mut resent = 0_usize;
+        for facts in self.bots.values() {
+            if facts.agent != Some(agent.id) || holds.contains_key(&facts.id) {
+                continue;
+            }
+            let why = match facts.qualifies {
+                Ok(()) if resent < room => {
+                    resent = resent.saturating_add(1);
+                    part.run.push(running(facts.id, false));
+                    continue;
+                }
+                Ok(()) => UndeliveredWhy::NoRoom,
+                Err(why) => UndeliveredWhy::Unqualified(why),
+            };
+            part.undelivered.push(Undelivered { bot: facts.id, why });
+        }
+        let free = room.saturating_sub(resent);
         self.parts.insert(agent.id, (part, free));
     }
 
@@ -752,6 +808,7 @@ impl<'a> Planner<'a> {
         for (mut part, _) in self.parts.into_values() {
             part.run.sort_by_key(|run| run.bot);
             part.release.sort_by_key(|release| release.bot);
+            part.undelivered.sort_by_key(|undelivered| undelivered.bot);
             self.plan.agents.push(part);
         }
         self.plan
@@ -1070,6 +1127,7 @@ mod tests {
                 full: true,
                 run: vec![],
                 release: vec![],
+                undelivered: vec![],
             }]
         );
     }
@@ -1570,6 +1628,61 @@ mod tests {
         assert_eq!(part(&plan, 1).run, [keep(1)]);
     }
 
+    // --- Assignments an agent never got --------------------------------------------------
+
+    #[test]
+    fn an_assignment_its_live_agent_doesnt_hold_is_sent_again_and_keeps_its_slot() {
+        let plan = plan_of(
+            &[on(1, 1), waiting(2)],
+            &[],
+            &[reconciled(1, 1, &[]), reconciled(2, 5, &[])],
+        );
+
+        assert_eq!(part(&plan, 1).run, [keep(1)]);
+        assert_eq!(
+            part(&plan, 2).run,
+            [place(2)],
+            "agent-1's one slot is taken"
+        );
+    }
+
+    #[test]
+    fn an_undelivered_assignment_that_no_longer_qualifies_is_recorded_not_sent() {
+        let stopped = BotFacts {
+            qualifies: Err(Unplaced::Stopped),
+            ..on(1, 1)
+        };
+
+        let plan = plan_of(&[stopped], &[], &[reconciled(1, 5, &[])]);
+
+        assert_eq!(part(&plan, 1).run, []);
+        assert_eq!(
+            part(&plan, 1).undelivered,
+            [Undelivered {
+                bot: bot(1),
+                why: UndeliveredWhy::Unqualified(Unplaced::Stopped),
+            }]
+        );
+    }
+
+    #[test]
+    fn an_undelivered_assignment_beyond_its_agents_room_is_recorded_not_sent() {
+        let plan = plan_of(
+            &[on(1, 1), on(2, 1), on(3, 1)],
+            &[],
+            &[reconciled(1, 2, &[(1, ASSIGNED)])],
+        );
+
+        assert_eq!(part(&plan, 1).run, [keep(1), keep(2)]);
+        assert_eq!(
+            part(&plan, 1).undelivered,
+            [Undelivered {
+                bot: bot(3),
+                why: UndeliveredWhy::NoRoom,
+            }]
+        );
+    }
+
     // --- Bots that don't read back --------------------------------------------------------
 
     #[test]
@@ -1786,7 +1899,8 @@ mod tests {
                 let occupied = match &agent.phase {
                     Phase::Welcomed { listed } => listed.len()
                         + part.run.iter().filter(|run| !listed.iter().any(|listed| listed.bot == run.bot)).count(),
-                    Phase::Reconciled { holds } => holds.len() + new.len(),
+                    Phase::Reconciled { holds } => holds.len()
+                        + part.run.iter().filter(|run| !holds.iter().any(|hold| hold.bot == run.bot)).count(),
                 };
                 let before = match &agent.phase {
                     Phase::Welcomed { listed } => listed.len(),

@@ -911,6 +911,70 @@ async fn a_busy_detach_is_tried_again_on_the_next_pass() {
     running.stop().await;
 }
 
+// --- Assignments an agent never got --------------------------------------------------------
+
+#[tokio::test(start_paused = true)]
+async fn an_assignment_its_agent_never_got_is_sent_again_on_the_next_pass() {
+    let registry = registry();
+    let store = Store::with(vec![record(2)], &[1]);
+    store.change(bot(2), |record| {
+        record.bot.desired = DesiredRunState::Stopped;
+    });
+    let mut stream = connect(&registry, 1, 5, Vec::new(), 8);
+    let running = start(&registry, &store, 8);
+    assert_eq!(reconciled(stream.next().await), []);
+    // As if an earlier pass stored it but its message couldn't be sent.
+    store.change(bot(2), |record| {
+        record.bot.desired = DesiredRunState::Running;
+        record.bot.agent = Some(agent(1));
+    });
+
+    running.hints.changed(Change::Store);
+    let resent = stream.next().await;
+    running.hints.changed(Change::Store);
+    let again = stream.next().await;
+
+    assert!(
+        matches!(resent, Some(ServerMessage::Assign(ref a)) if a.spec.id == bot(2)),
+        "{resent:?}"
+    );
+    assert_eq!(again.map(|_| ()), None, "held now: sent once");
+    assert!(registry.held(agent(1), bot(2)).is_some());
+    assert_eq!(store.calls(), [], "nothing more to store");
+    running.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_undelivered_assignment_that_no_longer_qualifies_is_logged_not_sent() {
+    let buffer = LogBuffer::default();
+    let config = LogConfig {
+        format: LogFormat::Json,
+        filter: "info".parse().unwrap(),
+    };
+    let subscriber =
+        tracing_subscriber::registry().with(layer_with(&config, &NoRules, false, buffer.clone()));
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let registry = registry();
+    let store = Store::with(Vec::new(), &[1]);
+    let mut stream = connect(&registry, 1, 5, Vec::new(), 8);
+    let running = start(&registry, &store, 8);
+    assert_eq!(reconciled(stream.next().await), []);
+    let mut stopped = on(2, 1);
+    stopped.bot.desired = DesiredRunState::Stopped;
+    store.state().fleet.bots.push(stopped);
+
+    running.hints.changed(Change::Store);
+    let sent = stream.next().await;
+
+    assert_eq!(sent.map(|_| ()), None);
+    let logged = buffer
+        .lines_with("an assignment its agent never got isn't sent again: its next hello settles it")
+        .unwrap();
+    assert_eq!(logged.len(), 1, "{}", buffer.text());
+    assert_eq!(logged[0]["reason"], "stopped");
+    running.stop().await;
+}
+
 // --- Bots that don't read back ------------------------------------------------------------
 
 #[tokio::test(start_paused = true)]

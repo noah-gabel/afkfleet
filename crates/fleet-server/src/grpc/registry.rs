@@ -737,7 +737,30 @@ impl AgentRegistry {
                                     .cloned(),
                             })
                             .collect();
+                        // A Removed still to be cleared holds its slot, and
+                        // its bot is never sent again.
+                        held.extend(
+                            state
+                                .released
+                                .iter()
+                                .filter(|note| {
+                                    note.agent == *agent
+                                        && note.generation == slot.generation
+                                        && !live.holds.contains_key(&note.bot)
+                                })
+                                .map(|note| HeldView {
+                                    bot: note.bot,
+                                    entry: HoldEntry {
+                                        hold: Hold::Releasing,
+                                        since: live.last_seen,
+                                        sent: None,
+                                        stopping: None,
+                                    },
+                                    report: None,
+                                }),
+                        );
                         held.sort_by_key(|held| held.bot);
+                        held.dedup_by_key(|held| held.bot);
                         ViewPhase::Reconciled(held)
                     }
                 };
@@ -1879,6 +1902,31 @@ mod tests {
         assert_eq!(alone, [note]);
         assert_eq!(while_claimed, [note], "a hello isn't a welcome yet");
         assert_eq!(once_welcomed, [], "a newer stream was welcomed");
+    }
+
+    #[test]
+    fn a_removed_still_to_be_cleared_reads_as_releasing_in_the_view() {
+        let (registry, _) = registry();
+        let (lease, _queued, _ended) = live(&registry, 1, 4);
+        settle(&registry, &lease, &[(1, Hold::Releasing)]);
+        let _ = registry.admit(&lease, &event(bot(1), BotEventKind::Removed));
+
+        let pending = registry.placement_view();
+        let taken = registry.take_released();
+        let cleared = registry.placement_view();
+        registry.requeue_released(*taken.first().unwrap());
+        let requeued = registry.placement_view();
+
+        let holds = |view: &[LiveView]| match &view.first().unwrap().phase {
+            ViewPhase::Reconciled(held) => held
+                .iter()
+                .map(|held| (held.bot, held.entry.hold))
+                .collect::<Vec<_>>(),
+            ViewPhase::Listed(_) => panic!("reconciled"),
+        };
+        assert_eq!(holds(&pending), [(bot(1), Hold::Releasing)]);
+        assert_eq!(holds(&cleared), [], "taken: its row is being cleared");
+        assert_eq!(holds(&requeued), [(bot(1), Hold::Releasing)]);
     }
 
     #[test]

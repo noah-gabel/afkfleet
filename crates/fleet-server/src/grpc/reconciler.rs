@@ -516,6 +516,8 @@ impl Reconciler {
                 continue;
             }
             let Some(held) = known.entry(part.agent, run.bot) else {
+                // An assignment the agent never got: sent again.
+                self.resend(part, known, run, record, now);
                 continue;
             };
             let spec = spec_of(record, run, held.sent.as_ref());
@@ -536,6 +538,14 @@ impl Reconciler {
                     .hold_and_send(part.agent, part.generation, run.bot, entry, message);
             sent(part.agent, result);
         }
+        for undelivered in &part.undelivered {
+            info!(
+                bot_id = %undelivered.bot,
+                agent_id = %part.agent,
+                reason = undelivered.why.as_str(),
+                "an assignment its agent never got isn't sent again: its next hello settles it"
+            );
+        }
         for release in lets.iter().filter(|release| release.send) {
             let result = self.registry.hold_and_send(
                 part.agent,
@@ -546,6 +556,40 @@ impl Reconciler {
             );
             sent(part.agent, result);
         }
+    }
+
+    /// Sends `run`'s bot, whose row names `part`'s agent but which its stream
+    /// doesn't hold, again, and holds it.
+    fn resend(
+        &self,
+        part: &AgentPlan,
+        known: &Known<'_>,
+        run: &Run,
+        record: &BotRecord,
+        now: DateTime<Utc>,
+    ) {
+        let Some(spec) = spec_of(record, run, None) else {
+            return;
+        };
+        let entry = HoldEntry {
+            hold: Hold::Assigned,
+            since: now,
+            sent: Some(spec.clone()),
+            stopping: self.stop_state(run, None),
+        };
+        let message = ServerMessage::Assign(Assignment {
+            spec,
+            restore: known.restore(record),
+        });
+        info!(
+            bot_id = %run.bot,
+            agent_id = %part.agent,
+            "an assignment its agent never got is sent again"
+        );
+        let result =
+            self.registry
+                .hold_and_send(part.agent, part.generation, run.bot, entry, Some(message));
+        sent(part.agent, result);
     }
 
     /// The stop state of `run`, which was `before`: a bound starts once.
