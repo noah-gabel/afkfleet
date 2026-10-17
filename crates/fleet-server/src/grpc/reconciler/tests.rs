@@ -35,7 +35,7 @@ use super::*;
 use crate::grpc::registry::{Activation, Halt, Lease};
 use crate::ports::agent_connections::{Admitted, StreamEnd};
 use crate::ports::assignments::AssignError;
-use crate::ports::bots::{Bot, BotRecord, Fleet, ReleaseRecord};
+use crate::ports::bots::{Bot, BotRecord, Fleet, ReleaseRecord, UnreadableBot};
 use crate::ports::live_agents::LiveAgents as _;
 use crate::ports::store::StoreError;
 
@@ -908,6 +908,67 @@ async fn a_busy_detach_is_tried_again_on_the_next_pass() {
 
     assert_eq!(busy, Some(agent(1)), "the busy detach changed nothing");
     assert_eq!(store.agent_of(bot(1)), None, "the next pass detached it");
+    running.stop().await;
+}
+
+// --- Bots that don't read back ------------------------------------------------------------
+
+#[tokio::test(start_paused = true)]
+async fn an_unreadable_bot_is_left_alone_and_logged_each_pass_and_the_rest_reconciled() {
+    let buffer = LogBuffer::default();
+    let config = LogConfig {
+        format: LogFormat::Json,
+        filter: "info".parse().unwrap(),
+    };
+    let subscriber =
+        tracing_subscriber::registry().with(layer_with(&config, &NoRules, false, buffer.clone()));
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let registry = registry();
+    let store = Store::with(vec![record(2)], &[1]);
+    store.state().fleet.unreadable.push(UnreadableBot {
+        bot: bot(9),
+        agent: Some(agent(1)),
+        identity: None,
+        table: "bots",
+        column: "server_address",
+        rowid: 9,
+    });
+    // Its agent's stream holds it from before its row stopped reading back.
+    let mut stream = connect(&registry, 1, 2, Vec::new(), 8);
+    let generation = registry.placement_view().first().unwrap().generation;
+    registry
+        .settle(
+            agent(1),
+            generation,
+            vec![(
+                bot(9),
+                crate::grpc::registry::HoldEntry {
+                    hold: crate::grpc::registry::Hold::Assigned,
+                    since: at(T0),
+                    sent: None,
+                    stopping: None,
+                },
+            )],
+            ServerMessage::Reconcile(Vec::new()),
+        )
+        .unwrap();
+    assert_eq!(reconciled(stream.next().await), []);
+
+    let running = start(&registry, &store, 8);
+    let first = stream.next().await;
+    running.hints.changed(Change::Store);
+    let second = stream.next().await;
+
+    assert!(
+        matches!(first, Some(ServerMessage::Assign(ref a)) if a.spec.id == bot(2)),
+        "{first:?}"
+    );
+    assert_eq!(second.map(|_| ()), None, "never unassigned");
+    let logged = buffer
+        .lines_with("a bot doesn't read back: the reconciler leaves it alone until it's fixed")
+        .unwrap();
+    assert_eq!(logged.len(), 2, "once per pass");
+    assert_eq!(logged[0]["level"], "ERROR");
     running.stop().await;
 }
 

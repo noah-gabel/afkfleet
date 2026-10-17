@@ -30,9 +30,9 @@ use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountCredential, DeletedAccount, McAccount};
 use fleet_server::ports::agents::NewAgent;
 use fleet_server::ports::audit::NewAuditEntry;
-use fleet_server::ports::bots::{NewBot, ReleaseRecord};
+use fleet_server::ports::bots::{NewBot, ReleaseRecord, UnreadableBot};
 use fleet_server::ports::page::{Page, PageLimit};
-use fleet_server::ports::store::{Store, StoreError};
+use fleet_server::ports::store::Store;
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use secrecy::SecretString;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -565,12 +565,12 @@ async fn the_records_page_newest_first(_pool: SqlitePoolOptions, options: Sqlite
 }
 
 #[sqlx::test(migrations = false)]
-async fn a_bot_whose_mode_isnt_valid_makes_the_fleet_corrupt(
+async fn a_bot_whose_mode_isnt_valid_reads_as_unreadable(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
     let setup = Setup::new(options).await;
-    setup.bot(1, false).await;
+    let (_, bot) = setup.bot(1, false).await;
     let afk = ModePreset::Afk.id().to_string();
     sqlx::query!(
         r#"UPDATE modes SET definition_json = '{"steps":[{"action":{"type":"nope"}}]}' WHERE id = ?"#,
@@ -580,12 +580,87 @@ async fn a_bot_whose_mode_isnt_valid_makes_the_fleet_corrupt(
     .await
     .unwrap();
 
-    let read = setup.db.bots().fleet().await;
+    let fleet = setup.db.bots().fleet().await.unwrap();
 
-    assert!(
-        matches!(read, Err(StoreError::Corrupt { table: "modes", .. })),
-        "{read:?}"
+    assert_eq!(fleet.bots, []);
+    let unreadable = fleet.unreadable.first().unwrap();
+    assert_eq!((unreadable.bot, unreadable.table), (bot, "modes"));
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_bot_whose_row_doesnt_read_back_is_unreadable_and_the_others_read(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let (_, broken) = setup.bot(1, false).await;
+    let (_, fine) = setup.bot(2, false).await;
+    setup
+        .write(async |tx| tx.bots().assign(broken, agent(1)).await.unwrap())
+        .await;
+    let id = broken.to_string();
+    sqlx::query!(
+        "UPDATE bots SET server_address = 'not a server address' WHERE id = ?",
+        id
+    )
+    .execute(setup.db.write_pool())
+    .await
+    .unwrap();
+
+    let fleet = setup.db.bots().fleet().await.unwrap();
+
+    assert_eq!(
+        fleet
+            .bots
+            .iter()
+            .map(|record| record.bot.id)
+            .collect::<Vec<_>>(),
+        [fine]
     );
+    assert_eq!(
+        fleet.unreadable,
+        [UnreadableBot {
+            bot: broken,
+            agent: Some(agent(1)),
+            identity: Some(McIdentity::offline(&"AfkBot1".parse().unwrap())),
+            table: "bots",
+            column: "server_address",
+            rowid: fleet.unreadable[0].rowid,
+        }]
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_release_record_that_doesnt_read_back_is_unreadable(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let (account, bot) = setup.bot(1, false).await;
+    setup
+        .write(async |tx| tx.bots().assign(bot, agent(2)).await.unwrap())
+        .await;
+    setup
+        .write(async |tx| tx.accounts().delete(account, at(T0)).await.unwrap())
+        .await;
+    let id = bot.to_string();
+    sqlx::query!(
+        "UPDATE releasing_bots SET mc_name = '' WHERE bot_id = ?",
+        id
+    )
+    .execute(setup.db.write_pool())
+    .await
+    .unwrap();
+
+    let fleet = setup.db.bots().fleet().await.unwrap();
+
+    assert_eq!(fleet.releases, []);
+    let unreadable = fleet.unreadable.first().unwrap();
+    assert_eq!(
+        (unreadable.bot, unreadable.agent, &unreadable.identity),
+        (bot, Some(agent(2)), &None)
+    );
+    assert_eq!(unreadable.table, "releasing_bots");
 }
 
 #[sqlx::test(migrations = false)]

@@ -92,13 +92,33 @@ pub struct ReleaseRecord {
     pub identity: McIdentity,
 }
 
+/// A bot whose row, or whose release record, doesn't read back: the
+/// reconciler leaves it alone until it does.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadableBot {
+    /// The bot.
+    pub bot: BotId,
+    /// The agent its row, or its record, names.
+    pub agent: Option<AgentId>,
+    /// Its account as a player sees it, when that much reads back.
+    pub identity: Option<McIdentity>,
+    /// The table that doesn't read back.
+    pub table: &'static str,
+    /// Its first column that doesn't.
+    pub column: &'static str,
+    /// The row's rowid.
+    pub rowid: i64,
+}
+
 /// Everything the reconciler reads, from one snapshot of the database.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Fleet {
-    /// Every bot.
+    /// Every bot that reads back.
     pub bots: Vec<BotRecord>,
-    /// Every open release record.
+    /// Every open release record that reads back.
     pub releases: Vec<ReleaseRecord>,
+    /// Every bot, or release record, that doesn't.
+    pub unreadable: Vec<UnreadableBot>,
     /// The agents that are enabled.
     pub enabled_agents: BTreeSet<AgentId>,
 }

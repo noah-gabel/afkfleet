@@ -34,7 +34,7 @@ use fleet_core::disconnect::ConflictTexts;
 use fleet_core::id::{AgentId, BotId};
 use fleet_core::placement::{
     AgentFacts, AgentPlan, BotFacts, DetachReason, Facts, Held, HoldFacts, Let, Listed, Phase,
-    PlaceFacts, ReleaseFacts, Run, StopWhy, Stopping, placeable, plan,
+    PlaceFacts, ReleaseFacts, Run, StopWhy, Stopping, Untouchable, placeable, plan,
 };
 use fleet_core::system::Clock;
 use fleet_proto::control::{Assignment, ServerMessage};
@@ -50,6 +50,7 @@ use crate::http::error::chain;
 use crate::ports::assignments::{AssignError, Assignments};
 use crate::ports::bots::{BotRecord, Fleet};
 use crate::ports::reconcile::{Change, Reconcile};
+use crate::ports::store::StoreError;
 
 /// How often a full pass runs besides the hints.
 pub const RECONCILE_INTERVAL: Duration = Duration::from_secs(30);
@@ -277,7 +278,14 @@ impl Reconciler {
             }
         };
         let views = self.registry.placement_view();
-        let stored: HashSet<BotId> = fleet.bots.iter().map(|record| record.bot.id).collect();
+        let untouchable = untouchable(&fleet);
+        // An untouchable bot keeps what's known of it too.
+        let stored: HashSet<BotId> = fleet
+            .bots
+            .iter()
+            .map(|record| record.bot.id)
+            .chain(untouchable.iter().map(|frozen| frozen.bot))
+            .collect();
         self.registry.retain_latest(&|bot| stored.contains(&bot));
         // Only a welcomed stream is in the view: the registry starts empty.
         self.welcomed.extend(views.iter().map(|view| view.agent));
@@ -297,6 +305,7 @@ impl Reconciler {
         let plan = plan(&Facts {
             bots: &bots,
             releases: &releases,
+            untouchable: &untouchable,
             agents: &agents,
             gate_open,
         });
@@ -702,6 +711,33 @@ impl<'a> Known<'a> {
             })
             .collect()
     }
+}
+
+/// The bots of `fleet` that don't read back, as the planner leaves them
+/// alone; each is logged at `error`, once a pass.
+fn untouchable(fleet: &Fleet) -> Vec<Untouchable> {
+    fleet
+        .unreadable
+        .iter()
+        .map(|unreadable| {
+            let problem = StoreError::Corrupt {
+                table: unreadable.table,
+                column: unreadable.column,
+                rowid: unreadable.rowid,
+            };
+            error!(
+                bot_id = %unreadable.bot,
+                agent_id = ?unreadable.agent,
+                error = %problem,
+                "a bot doesn't read back: the reconciler leaves it alone until it's fixed"
+            );
+            Untouchable {
+                bot: unreadable.bot,
+                agent: unreadable.agent,
+                identity: unreadable.identity.clone(),
+            }
+        })
+        .collect()
 }
 
 /// Whether `report`'s state rests: Stopped, Paused or Failed.

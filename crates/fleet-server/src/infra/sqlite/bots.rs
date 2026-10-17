@@ -24,7 +24,7 @@ use sqlx::SqliteConnection;
 
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::store_error;
-use crate::ports::bots::{Bot, BotRecord, Fleet, NewBot, ReleaseRecord};
+use crate::ports::bots::{Bot, BotRecord, Fleet, NewBot, ReleaseRecord, UnreadableBot};
 use crate::ports::page::Page;
 use crate::ports::store::StoreError;
 
@@ -259,7 +259,7 @@ where
 /// transaction one snapshot).
 pub(super) async fn fleet(pool: &sqlx::SqlitePool) -> Result<Fleet, StoreError> {
     let mut tx = pool.begin().await.map_err(store_error)?;
-    let bots = sqlx::query_as!(
+    let bot_rows = sqlx::query_as!(
         RecordRow,
         r#"SELECT b.rowid AS "rowid!: i64", b.id AS "id!", b.account_id AS "account_id!",
                   b.server_address AS "server_address?", b.mode_id AS "mode_id!",
@@ -279,11 +279,21 @@ pub(super) async fn fleet(pool: &sqlx::SqlitePool) -> Result<Fleet, StoreError> 
     )
     .fetch_all(&mut *tx)
     .await
-    .map_err(store_error)?
-    .iter()
-    .map(record_from_row)
-    .collect::<Result<Vec<_>, _>>()?;
-    let releases = sqlx::query_as!(
+    .map_err(store_error)?;
+    let mut bots = Vec::new();
+    let mut unreadable = Vec::new();
+    for row in &bot_rows {
+        match record_from_row(row) {
+            Ok(record) => bots.push(record),
+            Err(StoreError::Corrupt {
+                table,
+                column,
+                rowid,
+            }) => unreadable.push(unreadable_bot(row, table, column, rowid)?),
+            Err(other) => return Err(other),
+        }
+    }
+    let release_rows = sqlx::query_as!(
         ReleaseRow,
         r#"SELECT rowid AS "rowid!: i64", bot_id AS "bot_id!", agent_id AS "agent_id!",
                   kind AS "kind!", mc_uuid AS "mc_uuid?", mc_name AS "mc_name!"
@@ -292,10 +302,19 @@ pub(super) async fn fleet(pool: &sqlx::SqlitePool) -> Result<Fleet, StoreError> 
     )
     .fetch_all(&mut *tx)
     .await
-    .map_err(store_error)?
-    .iter()
-    .map(release_from_row)
-    .collect::<Result<Vec<_>, _>>()?;
+    .map_err(store_error)?;
+    let mut releases = Vec::new();
+    for row in &release_rows {
+        match release_from_row(row) {
+            Ok(record) => releases.push(record),
+            Err(StoreError::Corrupt {
+                table,
+                column,
+                rowid,
+            }) => unreadable.push(unreadable_record(row, table, column, rowid)?),
+            Err(other) => return Err(other),
+        }
+    }
     let enabled_agents =
         sqlx::query!(r#"SELECT rowid AS "rowid!: i64", id AS "id!" FROM agents WHERE enabled = 1"#)
             .fetch_all(&mut *tx)
@@ -315,6 +334,7 @@ pub(super) async fn fleet(pool: &sqlx::SqlitePool) -> Result<Fleet, StoreError> 
     Ok(Fleet {
         bots,
         releases,
+        unreadable,
         enabled_agents,
     })
 }
@@ -562,6 +582,65 @@ fn record_from_row(row: &RecordRow) -> Result<BotRecord, StoreError> {
         owner_enabled,
         mode,
     })
+}
+
+/// A bot `row` whose `table`'s `column` doesn't read back, as far as it
+/// does: its ID and agent (checked by the schema, so they always do), and its
+/// account's identity if that reads.
+fn unreadable_bot(
+    row: &RecordRow,
+    table: &'static str,
+    column: &'static str,
+    rowid: i64,
+) -> Result<UnreadableBot, StoreError> {
+    let corrupt = |column| StoreError::Corrupt {
+        table: BOTS,
+        column,
+        rowid: row.rowid,
+    };
+    Ok(UnreadableBot {
+        bot: parse_id(&row.id).ok_or_else(|| corrupt("id"))?,
+        agent: row
+            .agent_id
+            .as_deref()
+            .map(|agent| parse_id(agent).ok_or_else(|| corrupt("agent_id")))
+            .transpose()?,
+        identity: identity_of(&row.kind, row.mc_uuid.as_deref(), &row.mc_name),
+        table,
+        column,
+        rowid,
+    })
+}
+
+/// A release record `row` whose `column` doesn't read back, as far as it
+/// does; see [`unreadable_bot`].
+fn unreadable_record(
+    row: &ReleaseRow,
+    table: &'static str,
+    column: &'static str,
+    rowid: i64,
+) -> Result<UnreadableBot, StoreError> {
+    let corrupt = |column| StoreError::Corrupt {
+        table: RELEASING_BOTS,
+        column,
+        rowid: row.rowid,
+    };
+    Ok(UnreadableBot {
+        bot: parse_id(&row.bot_id).ok_or_else(|| corrupt("bot_id"))?,
+        agent: Some(parse_id(&row.agent_id).ok_or_else(|| corrupt("agent_id"))?),
+        identity: identity_of(&row.kind, row.mc_uuid.as_deref(), &row.mc_name),
+        table,
+        column,
+        rowid,
+    })
+}
+
+/// The Minecraft account `kind`, `uuid` and `name` describe, if they read.
+fn identity_of(kind: &str, uuid: Option<&str>, name: &str) -> Option<McIdentity> {
+    match kind.parse::<AccountKind>().ok()? {
+        AccountKind::Microsoft => Some(McIdentity::Microsoft(uuid?.parse().ok()?)),
+        AccountKind::Offline => Some(McIdentity::offline(&McUsername::try_from(name).ok()?)),
+    }
 }
 
 /// Reads a `releasing_bots` row back, or [`StoreError::Corrupt`] naming the

@@ -24,6 +24,10 @@
 //! - **When:** right after serve starts, new placements wait until every
 //!   enabled agent has said hello, or a grace has passed ([`Facts::gate_open`],
 //!   S45).
+//! - **A bot whose facts don't read back** ([`Untouchable`]) is left alone:
+//!   never placed, unassigned, moved or sent anything; it keeps its agent's
+//!   slot and fences its account, and a welcome that lists it as its own waits
+//!   until it reads back, since no full reconcile could keep it running.
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -258,13 +262,28 @@ pub enum Stopping {
     Move,
 }
 
+/// A bot whose stored facts don't read back: it's never placed, unassigned,
+/// moved or sent anything until they do; it keeps its agent's slot and
+/// fences its account.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Untouchable {
+    /// The bot.
+    pub bot: BotId,
+    /// The agent its row, or its release record, names.
+    pub agent: Option<AgentId>,
+    /// Its account as a player sees it, when that much reads back.
+    pub identity: Option<McIdentity>,
+}
+
 /// Everything [`plan`] decides by.
 #[derive(Debug, Clone, Copy)]
 pub struct Facts<'a> {
-    /// Every stored bot.
+    /// Every stored bot that reads back.
     pub bots: &'a [BotFacts],
-    /// Every open release record.
+    /// Every open release record that reads back.
     pub releases: &'a [ReleaseFacts],
+    /// Every bot, or release record, that doesn't.
+    pub untouchable: &'a [Untouchable],
     /// Every live stream.
     pub agents: &'a [AgentFacts],
     /// Whether new placements may happen (S45).
@@ -432,6 +451,8 @@ fn stream_bots(agent: &AgentFacts) -> Vec<BotId> {
 /// A plan being built.
 struct Planner<'a> {
     bots: BTreeMap<BotId, &'a BotFacts>,
+    /// Each untouchable bot, with the agent its row names.
+    untouchable: BTreeMap<BotId, Option<AgentId>>,
     records: BTreeSet<(BotId, AgentId)>,
     /// Bots any live stream holds or lists, and bots with an open record.
     fenced_bots: HashSet<BotId>,
@@ -466,8 +487,19 @@ impl<'a> Planner<'a> {
                 fenced_accounts.insert(facts.identity.clone());
             }
         }
+        for frozen in facts.untouchable {
+            fenced_bots.insert(frozen.bot);
+            if let Some(identity) = &frozen.identity {
+                fenced_accounts.insert(identity.clone());
+            }
+        }
         Self {
             bots,
+            untouchable: facts
+                .untouchable
+                .iter()
+                .map(|frozen| (frozen.bot, frozen.agent))
+                .collect(),
             records,
             fenced_bots,
             fenced_accounts,
@@ -483,6 +515,15 @@ impl<'a> Planner<'a> {
             .iter()
             .map(|listed| (listed.bot, listed.rests))
             .collect();
+        // Its full reconcile can't keep a bot of its own that doesn't read
+        // back, and leaving it out would remove it: the welcome waits.
+        if listed
+            .keys()
+            .any(|bot| self.untouchable.get(bot) == Some(&Some(agent.id)))
+        {
+            return;
+        }
+        let frozen = self.frozen_on(agent.id, |bot| listed.contains_key(&bot));
         let mut part = AgentPlan {
             agent: agent.id,
             generation: agent.generation,
@@ -490,31 +531,7 @@ impl<'a> Planner<'a> {
             run: Vec::new(),
             release: Vec::new(),
         };
-        // Listed bots its row doesn't give it are left out; their fence is
-        // persisted unless it is already, or nothing says which account.
-        let mut foreign = 0_usize;
-        for &bot in listed.keys() {
-            if self.bots.get(&bot).and_then(|facts| facts.agent) == Some(agent.id) {
-                continue;
-            }
-            foreign = foreign.saturating_add(1);
-            part.release.push(Let {
-                bot,
-                unassign: None,
-                send: false,
-            });
-            let own_record = self.records.contains(&(bot, agent.id));
-            let other_record = self
-                .records
-                .iter()
-                .any(|&(recorded, holder)| recorded == bot && holder != agent.id);
-            if !own_record && (self.bots.contains_key(&bot) || other_record) {
-                self.plan.stray.push(Stray {
-                    bot,
-                    agent: agent.id,
-                });
-            }
-        }
+        let foreign = self.let_foreign_go(agent.id, &listed, &mut part);
         // Its records of bots it no longer runs close.
         let closed: Vec<BotId> = self
             .records
@@ -542,7 +559,7 @@ impl<'a> Planner<'a> {
         let listed_room = capacity.saturating_sub(foreign);
         // What it may run besides what it runs now: the runtime counts every
         // bot it knows until its `Removed`.
-        let new_room = capacity.saturating_sub(listed.len());
+        let new_room = capacity.saturating_sub(listed.len()).saturating_sub(frozen);
         let mut kept_listed = 0_usize;
         let mut added = 0_usize;
         for facts in own {
@@ -587,6 +604,38 @@ impl<'a> Planner<'a> {
         self.parts.insert(agent.id, (part, free));
     }
 
+    /// Lets go of the listed bots `agent`'s row doesn't give it, in `part`:
+    /// they're left out, and their fence is persisted unless it is already,
+    /// or nothing says which account. How many there were.
+    fn let_foreign_go(
+        &mut self,
+        agent: AgentId,
+        listed: &BTreeMap<BotId, bool>,
+        part: &mut AgentPlan,
+    ) -> usize {
+        let mut foreign = 0_usize;
+        for &bot in listed.keys() {
+            if self.bots.get(&bot).and_then(|facts| facts.agent) == Some(agent) {
+                continue;
+            }
+            foreign = foreign.saturating_add(1);
+            part.release.push(Let {
+                bot,
+                unassign: None,
+                send: false,
+            });
+            let own_record = self.records.contains(&(bot, agent));
+            let other_record = self
+                .records
+                .iter()
+                .any(|&(recorded, holder)| recorded == bot && holder != agent);
+            if !own_record && (self.bots.contains_key(&bot) || other_record) {
+                self.plan.stray.push(Stray { bot, agent });
+            }
+        }
+        foreign
+    }
+
     /// A reconciled stream's part.
     fn steady(&mut self, agent: &AgentFacts, holds: &[HoldFacts]) {
         let holds: BTreeMap<BotId, Held> = holds.iter().map(|hold| (hold.bot, hold.held)).collect();
@@ -606,6 +655,10 @@ impl<'a> Planner<'a> {
                 // Releasing: only its `Removed` is still expected.
                 continue;
             };
+            if self.untouchable.contains_key(&bot) {
+                // Left alone until it reads back.
+                continue;
+            }
             let row = self
                 .bots
                 .get(&bot)
@@ -641,8 +694,20 @@ impl<'a> Planner<'a> {
                 }
             }
         }
-        let free = usize::from(agent.capacity.get()).saturating_sub(holds.len());
+        let frozen = self.frozen_on(agent.id, |bot| holds.contains_key(&bot));
+        let free = usize::from(agent.capacity.get())
+            .saturating_sub(holds.len())
+            .saturating_sub(frozen);
         self.parts.insert(agent.id, (part, free));
+    }
+
+    /// How many untouchable bots name `agent` without being `counted`
+    /// already: each keeps a slot.
+    fn frozen_on(&self, agent: AgentId, counted: impl Fn(BotId) -> bool) -> usize {
+        self.untouchable
+            .iter()
+            .filter(|&(&bot, &named)| named == Some(agent) && !counted(bot))
+            .count()
     }
 
     fn detach_not_running(&mut self, bot: BotId, agent: AgentId) {
@@ -808,9 +873,31 @@ mod tests {
         plan(&Facts {
             bots,
             releases,
+            untouchable: &[],
             agents,
             gate_open: true,
         })
+    }
+
+    /// The plan with `untouchable` bots besides.
+    fn plan_with(bots: &[BotFacts], untouchable: &[Untouchable], agents: &[AgentFacts]) -> Plan {
+        plan(&Facts {
+            bots,
+            releases: &[],
+            untouchable,
+            agents,
+            gate_open: true,
+        })
+    }
+
+    /// Bot `n` of Microsoft account `n`, whose row doesn't read back,
+    /// naming agent `a`.
+    fn frozen(n: u8, a: Option<u8>) -> Untouchable {
+        Untouchable {
+            bot: bot(n),
+            agent: a.map(agent),
+            identity: Some(ms(n)),
+        }
     }
 
     /// Agent `a`'s part of `plan`.
@@ -1475,11 +1562,85 @@ mod tests {
         let plan = plan(&Facts {
             bots: &[on(1, 1), waiting(2)],
             releases: &[],
+            untouchable: &[],
             agents: &[welcomed(1, 5, &[])],
             gate_open: false,
         });
 
         assert_eq!(part(&plan, 1).run, [keep(1)]);
+    }
+
+    // --- Bots that don't read back --------------------------------------------------------
+
+    #[test]
+    fn an_untouchable_bot_its_agent_holds_is_left_alone_and_keeps_its_slot() {
+        let plan = plan_with(
+            &[waiting(2)],
+            &[frozen(1, Some(1))],
+            &[reconciled(1, 1, &[(1, ASSIGNED)]), reconciled(2, 5, &[])],
+        );
+
+        assert_eq!(part(&plan, 1).release, [], "never unassigned");
+        assert_eq!(part(&plan, 1).run, []);
+        assert_eq!(
+            part(&plan, 2).run,
+            [place(2)],
+            "its agent's one slot is taken"
+        );
+    }
+
+    #[test]
+    fn an_untouchable_bot_is_never_placed_and_fences_its_account() {
+        let twin = BotFacts {
+            identity: ms(1),
+            ..waiting(2)
+        };
+
+        let plan = plan_with(
+            &[twin, waiting(3)],
+            &[frozen(1, None)],
+            &[reconciled(1, 5, &[])],
+        );
+
+        assert_eq!(part(&plan, 1).run, [place(3)]);
+    }
+
+    #[test]
+    fn a_welcome_listing_its_own_untouchable_bot_waits_until_it_reads_back() {
+        let plan = plan_with(
+            &[on(2, 1), waiting(3)],
+            &[frozen(1, Some(1))],
+            &[welcomed(1, 5, &[(1, false), (2, false)])],
+        );
+
+        assert!(
+            plan.agents.iter().all(|part| part.agent != agent(1)),
+            "no full reconcile can keep a bot whose spec doesn't read back"
+        );
+        assert_eq!(plan.detach, []);
+    }
+
+    #[test]
+    fn a_welcome_without_its_own_untouchable_bot_keeps_it_assigned_and_counts_it() {
+        let plan = plan_with(
+            &[waiting(2), waiting(3)],
+            &[frozen(1, Some(1))],
+            &[welcomed(1, 2, &[])],
+        );
+
+        assert_eq!(plan.detach, [], "never moved");
+        assert_eq!(
+            part(&plan, 1).run,
+            [place(2)],
+            "one of its two slots is taken"
+        );
+    }
+
+    #[test]
+    fn another_agents_untouchable_bot_in_a_hello_is_let_go() {
+        let plan = plan_with(&[], &[frozen(1, Some(2))], &[welcomed(1, 5, &[(1, false)])]);
+
+        assert_eq!(part(&plan, 1).release, [left(1, None, false)]);
     }
 
     // --- Properties -----------------------------------------------------------------------
