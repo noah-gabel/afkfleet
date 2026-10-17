@@ -9,6 +9,9 @@
 //!   /api/v1/accounts/{id}`, `POST /api/v1/accounts/{id}/approve`,
 //!   `/refuse` and `/relink` (P9.6).
 //! - [`agents`]: `POST /api/v1/agents/enrollment-tokens` (P10.3).
+//! - [`bots`]: `GET /api/v1/bots`, `GET` and `PATCH /api/v1/bots/{id}`,
+//!   `PUT /api/v1/bots/{id}/mode`, and `POST /api/v1/bots/{id}/start`,
+//!   `/stop`, `/restart`, `/reset` and `/resume` (P11.2).
 //! - [`grants`]: `GET` and `POST /api/v1/accounts/{id}/grants`, `PUT` and
 //!   `DELETE /api/v1/accounts/{id}/grants/{user}` (P9.6).
 //! - [`auth`]: `POST /api/v1/auth/login`, `/auth/login/mfa`,
@@ -27,6 +30,7 @@
 pub(super) mod accounts;
 pub(super) mod agents;
 pub(super) mod auth;
+pub(super) mod bots;
 pub(super) mod grants;
 pub(super) mod health;
 pub(super) mod invites;
@@ -37,9 +41,13 @@ pub(super) mod users;
 use std::net::IpAddr;
 
 use chrono::{DateTime, Utc};
+use fleet_api_types::accounts::{
+    AccountKind, AccountResponse, AccountStatus, GrantLevel as ApiGrantLevel, RefusalReason,
+};
 use fleet_api_types::auth::USERNAME_MAX_CHARS;
 use fleet_api_types::users::UserLabel;
 use fleet_api_types::{BoundedText, FieldError, PageQuery, SecretText, Timestamp};
+use fleet_core::authz::{Actor, GrantLevel, Role, effective_level};
 use fleet_core::id::UserId;
 use fleet_core::value::Username;
 use secrecy::{ExposeSecret as _, SecretString};
@@ -47,6 +55,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use super::error::ApiError;
 use super::extractors::AuthUser;
 use crate::app::users::ActingUser;
+use crate::ports::accounts::ListedAccount;
 use crate::ports::page::{Page, PageLimit};
 use crate::ports::passwords::HashError;
 
@@ -124,5 +133,29 @@ fn page<I: Copy>(query: &PageQuery<I>) -> Result<Page<I>, ApiError> {
     Ok(Page {
         before: query.before,
         limit: PageLimit::new(query.limit_or_default()).map_err(ApiError::internal)?,
+    })
+}
+
+/// An account as `viewer` sees it (ADR-0018, group E): its own facts and
+/// the viewer's level for everyone, and who owns it and since when only
+/// for Admins, the Owner and whoever holds Manage on it.
+fn account_response(viewer: &Actor, account: &ListedAccount) -> Result<AccountResponse, ApiError> {
+    let level = effective_level(viewer, account.owner, account.grant)
+        .ok_or_else(|| ApiError::internal("an account the viewer may not see was answered"))?;
+    let shows_owner = viewer.role >= Role::Admin || level == GrantLevel::Manage;
+    Ok(AccountResponse {
+        id: account.id,
+        name: BoundedText::new(account.name.as_str()),
+        kind: AccountKind::from(account.kind).into(),
+        status: AccountStatus::from(account.status).into(),
+        reason: account
+            .status
+            .reason()
+            .map(|reason| RefusalReason::from(reason).into()),
+        level: ApiGrantLevel::from(level).into(),
+        owner: shows_owner.then(|| label(account.owner.id, &account.owner_name)),
+        linked_at: shows_owner
+            .then(|| timestamp(account.created_at))
+            .transpose()?,
     })
 }

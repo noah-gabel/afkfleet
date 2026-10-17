@@ -10,6 +10,9 @@
 //! - [`step_up`]: the stamp, a wrong password counted, and the re-checks.
 //! - [`users`]: the admins' list and change, P7.12's escalation and
 //!   disabling, and the re-check in the transaction.
+//! - [`bots`]: what each viewer sees of a bot, its server after a step-up,
+//!   its mode, and the lifecycle calls in every state; the entries, hints,
+//!   re-checks and limits.
 //! - [`enrollment_tokens`]: the Owner's enrollment token, shown once; the
 //!   step-up, the cap, the switched-off control plane and the re-checks.
 //! - [`invites`]: who may invite whom, the code shown once, the cap, the
@@ -29,6 +32,7 @@
 #![cfg(test)]
 
 mod agents;
+mod bots;
 mod enrollment_tokens;
 mod invites;
 mod login;

@@ -16,16 +16,19 @@
 use chrono::{DateTime, Utc};
 use fleet_core::account::AccountStatus;
 use fleet_core::audit::{AuditAction, AuditOutcome};
-use fleet_core::authz::Role;
+use fleet_core::authz::{Actor, GrantLevel, Role};
 use fleet_core::bot::{DesiredRunState, FailReason, LastReport, LastState, PauseReason};
 use fleet_core::disconnect::ConflictKind;
-use fleet_core::id::{AccountId, BotId, UserId};
+use fleet_core::id::{AccountId, AgentId, BotId, ModeId, UserId};
 use fleet_core::mode::ModePreset;
-use fleet_core::value::Username;
+use fleet_core::value::{AgentName, ServerAddress, Username};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions, MIGRATOR, PoolRole, connect_options};
 use fleet_server::ports::accounts::{AccountCredential, DeletedAccount, McAccount};
+use fleet_server::ports::agents::NewAgent;
 use fleet_server::ports::audit::NewAuditEntry;
-use fleet_server::ports::bots::{Bot, NewBot};
+use fleet_server::ports::bots::{Bot, ListedBot, NewBot};
+use fleet_server::ports::grants::AccountGrant;
+use fleet_server::ports::page::{Page, PageLimit};
 use fleet_server::ports::store::{Store, StoreError};
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use secrecy::SecretString;
@@ -507,4 +510,444 @@ fn the_backfills_rule_is_the_last_digits_high_bit_flipped() {
         assert!(account.parse::<AccountId>().is_ok());
         assert!(bot.parse::<BotId>().is_ok());
     }
+}
+
+// --- The bots' endpoints (P11.2; ADR-0019, S48, S54, S55) ----------------------------------
+
+/// A user `n` with `role`, named `user<n>`.
+async fn add_user_with(db: &Database, n: u8, role: Role) -> UserId {
+    let id = UserId::new_v7(at(T0), [n; 10]).unwrap();
+    let user = NewUser {
+        id,
+        username: Username::try_from(format!("user{n}").as_str()).unwrap(),
+        password_hash: PasswordHash::new(SecretString::from(PHC)).unwrap(),
+        role,
+        created_at: at(T0),
+    };
+    let mut tx = db.write().await.unwrap();
+    tx.users().insert(&user).await.unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+    id
+}
+
+/// Account `n` of `owner` with its bot `n`; the bot's ID.
+async fn add_account_with_bot(db: &Database, owner: UserId, n: u8) -> (AccountId, BotId) {
+    let account = add_account(db, owner, n).await;
+    let bot = new_bot(account, n);
+    insert(db, &bot).await.unwrap();
+    (account, bot.id)
+}
+
+/// A grant of `level` on `account` to `user`, by `by`.
+async fn add_grant(db: &Database, account: AccountId, user: UserId, level: GrantLevel, by: UserId) {
+    let mut tx = db.write().await.unwrap();
+    tx.grants()
+        .insert(&AccountGrant {
+            account,
+            user,
+            level,
+            granted_by: by,
+            granted_at: at(T0 + 1000),
+        })
+        .await
+        .unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+}
+
+/// Enabled agent `n`, with `bot` assigned to it.
+async fn assign_to_agent(db: &Database, bot: BotId, n: u8) -> AgentId {
+    let agent = AgentId::new_v7(at(T0), [n; 10]).unwrap();
+    let mut tx = db.write().await.unwrap();
+    tx.agents()
+        .insert(&NewAgent {
+            id: agent,
+            name: AgentName::try_from(format!("agent-{n}").as_str()).unwrap(),
+            created_at: at(T0),
+        })
+        .await
+        .unwrap();
+    assert!(tx.bots().assign(bot, agent).await.unwrap());
+    tx.commit(setup_entry()).await.unwrap();
+    agent
+}
+
+fn page(limit: u32) -> Page<BotId> {
+    Page {
+        before: None,
+        limit: PageLimit::new(limit).unwrap(),
+    }
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_viewer_sees_a_bot_with_its_account_and_their_own_grant_on_it(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user_with(&db, 1, Role::Member).await;
+    let friend = add_user_with(&db, 2, Role::Member).await;
+    let (account, bot) = add_account_with_bot(&db, owner, 1).await;
+    add_grant(&db, account, friend, GrantLevel::Control, owner).await;
+
+    let seen = db.bots().listed(bot, friend).await.unwrap().unwrap();
+    let own = db.bots().listed(bot, owner).await.unwrap().unwrap();
+
+    assert_eq!(seen.record, db.bots().record(bot).await.unwrap().unwrap());
+    assert_eq!(
+        seen.account,
+        db.accounts()
+            .listed(account, friend)
+            .await
+            .unwrap()
+            .unwrap()
+    );
+    assert_eq!(seen.account.grant, Some(GrantLevel::Control));
+    assert_eq!(own.account.grant, None);
+    assert_eq!(own.account.owner.id, owner);
+    assert_eq!(
+        db.bots()
+            .listed(new_bot(account, 9).id, owner)
+            .await
+            .unwrap(),
+        None
+    );
+}
+
+/// Every role, owner role and grant: the bots a viewer sees are exactly the
+/// bots of the accounts `list_visible` lists for them, in bot ID order.
+#[sqlx::test(migrations = false)]
+async fn the_visible_bots_are_exactly_the_bots_of_the_visible_accounts(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let the_owner = add_user_with(&db, 1, Role::Owner).await;
+    let admin = add_user_with(&db, 2, Role::Admin).await;
+    let other_admin = add_user_with(&db, 3, Role::Admin).await;
+    let member = add_user_with(&db, 4, Role::Member).await;
+    let other_member = add_user_with(&db, 5, Role::Member).await;
+    let people = [the_owner, admin, other_admin, member, other_member];
+    let roles = [
+        Role::Owner,
+        Role::Admin,
+        Role::Admin,
+        Role::Member,
+        Role::Member,
+    ];
+    let mut n = 10;
+    for owner in people {
+        for _ in 0..2 {
+            let (account, _) = add_account_with_bot(&db, owner, n).await;
+            // The first account of every user is shared with the next user.
+            if n % 2 == 0 {
+                let next = people[(people.iter().position(|p| *p == owner).unwrap() + 1) % 5];
+                add_grant(&db, account, next, GrantLevel::View, owner).await;
+            }
+            n += 1;
+        }
+    }
+
+    for (viewer, role) in people.into_iter().zip(roles) {
+        let actor = Actor { id: viewer, role };
+        let accounts = db
+            .accounts()
+            .list_visible(
+                actor,
+                Page {
+                    before: None,
+                    limit: PageLimit::new(100).unwrap(),
+                },
+            )
+            .await
+            .unwrap();
+        let bots = db.bots().visible(actor, page(100)).await.unwrap();
+
+        let mut expected: Vec<AccountId> = accounts.iter().map(|account| account.id).collect();
+        expected.sort();
+        let mut seen: Vec<AccountId> = bots.iter().map(|bot| bot.account.id).collect();
+        seen.sort();
+        assert_eq!(seen, expected, "{role:?}");
+        assert!(!seen.is_empty(), "{role:?}");
+        for listed in &bots {
+            assert_eq!(listed.record.bot.account, listed.account.id);
+            assert_eq!(
+                Some(listed.account.clone()),
+                db.accounts()
+                    .listed(listed.account.id, viewer)
+                    .await
+                    .unwrap()
+            );
+        }
+        let ids: Vec<BotId> = bots.iter().map(|bot| bot.record.bot.id).collect();
+        let mut descending = ids.clone();
+        descending.sort_by(|a, b| b.cmp(a));
+        assert_eq!(ids, descending, "newest first");
+    }
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_visible_bots_page_before_a_cursor_with_one_more_than_the_limit(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user_with(&db, 1, Role::Member).await;
+    let mut bots = Vec::new();
+    for n in 1..=4 {
+        bots.push(add_account_with_bot(&db, owner, n).await.1);
+    }
+    let actor = Actor {
+        id: owner,
+        role: Role::Member,
+    };
+
+    let first = db.bots().visible(actor, page(2)).await.unwrap();
+    let rest = db
+        .bots()
+        .visible(
+            actor,
+            Page {
+                before: Some(bots[2]),
+                limit: PageLimit::new(2).unwrap(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let ids = |page: &[ListedBot]| page.iter().map(|bot| bot.record.bot.id).collect::<Vec<_>>();
+    assert_eq!(ids(&first), [bots[3], bots[2], bots[1]]);
+    assert_eq!(ids(&rest), [bots[1], bots[0]]);
+}
+
+#[sqlx::test(migrations = false)]
+async fn setting_the_server_writes_its_written_form_and_says_whether_it_changed(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (db, _, bot) = with_bot(options).await;
+    let first: ServerAddress = "MC.Example.com:25566".parse().unwrap();
+    let other: ServerAddress = "192.0.2.10".parse().unwrap();
+
+    let mut tx = db.write().await.unwrap();
+    assert!(tx.bots().set_server(bot.id, &first).await.unwrap());
+    assert!(
+        !tx.bots().set_server(bot.id, &first).await.unwrap(),
+        "the same address"
+    );
+    tx.commit(setup_entry()).await.unwrap();
+    let stored = db.bots().find(bot.id).await.unwrap().unwrap();
+    let mut tx = db.write().await.unwrap();
+    assert!(tx.bots().set_server(bot.id, &other).await.unwrap());
+    let unknown = new_bot(bot.account, 9).id;
+    assert!(
+        !tx.bots().set_server(unknown, &first).await.unwrap(),
+        "no such bot"
+    );
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert_eq!(stored.server, Some(first));
+    let written: Option<String> = sqlx::query_scalar!("SELECT server_address FROM bots")
+        .fetch_one(db.write_pool())
+        .await
+        .unwrap();
+    assert_eq!(written.as_deref(), Some("192.0.2.10"));
+    assert_eq!(
+        db.bots().find(bot.id).await.unwrap().unwrap().server,
+        Some(other)
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn switching_the_mode_says_whether_it_changed_and_needs_a_mode_that_exists(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (db, _, bot) = with_bot(options).await;
+    let farm = ModePreset::Farm.id();
+
+    let mut tx = db.write().await.unwrap();
+    assert!(tx.bots().set_mode(bot.id, farm).await.unwrap());
+    assert!(
+        !tx.bots().set_mode(bot.id, farm).await.unwrap(),
+        "the same mode"
+    );
+    let missing = ModeId::new_v7(at(T0), [9; 10]).unwrap();
+    assert!(tx.bots().set_mode(bot.id, missing).await.is_err());
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert_eq!(db.bots().find(bot.id).await.unwrap().unwrap().mode, farm);
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_desired_state_changes_only_to_the_other_one(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (db, _, bot) = with_bot(options).await;
+
+    let mut tx = db.write().await.unwrap();
+    assert!(
+        !tx.bots()
+            .set_desired(bot.id, DesiredRunState::Stopped)
+            .await
+            .unwrap()
+    );
+    assert!(
+        tx.bots()
+            .set_desired(bot.id, DesiredRunState::Running)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !tx.bots()
+            .set_desired(bot.id, DesiredRunState::Running)
+            .await
+            .unwrap()
+    );
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert_eq!(
+        db.bots().find(bot.id).await.unwrap().unwrap().desired,
+        DesiredRunState::Running
+    );
+}
+
+/// A Resume or a Reset clears a stored sticky state only while the bot runs
+/// nowhere and its state is still the one the call judged (S48).
+#[sqlx::test(migrations = false)]
+async fn a_sticky_state_is_cleared_only_with_no_agent_and_while_it_is_the_judged_one(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (db, _, bot) = with_bot(options).await;
+    set_state(
+        db.write_pool(),
+        bot.id,
+        Some("paused"),
+        Some("duplicate_login"),
+        Some("2027-01-15T08:00:00.000Z"),
+    )
+    .await
+    .unwrap();
+    let paused = LastReport {
+        state: LastState::Paused(PauseReason::Conflict {
+            kind: ConflictKind::DuplicateLogin,
+        }),
+        at: "2027-01-15T08:00:00Z".parse().unwrap(),
+    };
+    let failed = LastReport {
+        state: LastState::Failed(FailReason::Auth),
+        ..paused
+    };
+    let later = LastReport {
+        at: "2027-01-15T08:00:01Z".parse().unwrap(),
+        ..paused
+    };
+
+    let mut tx = db.write().await.unwrap();
+    assert!(
+        !tx.bots().clear_sticky(bot.id, &failed).await.unwrap(),
+        "another state"
+    );
+    assert!(
+        !tx.bots().clear_sticky(bot.id, &later).await.unwrap(),
+        "another time"
+    );
+    assert!(tx.bots().clear_sticky(bot.id, &paused).await.unwrap());
+    assert!(
+        !tx.bots().clear_sticky(bot.id, &paused).await.unwrap(),
+        "cleared already"
+    );
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert_eq!(db.bots().find(bot.id).await.unwrap().unwrap().last, None);
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_assigned_bots_sticky_state_is_never_cleared(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (db, _, bot) = with_bot(options).await;
+    set_state(
+        db.write_pool(),
+        bot.id,
+        Some("failed"),
+        Some("auth"),
+        Some("2027-01-15T08:00:00.000Z"),
+    )
+    .await
+    .unwrap();
+    assign_to_agent(&db, bot.id, 1).await;
+    let failed = LastReport {
+        state: LastState::Failed(FailReason::Auth),
+        at: "2027-01-15T08:00:00Z".parse().unwrap(),
+    };
+
+    let mut tx = db.write().await.unwrap();
+    assert!(!tx.bots().clear_sticky(bot.id, &failed).await.unwrap());
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert_eq!(
+        db.bots().find(bot.id).await.unwrap().unwrap().last,
+        Some(failed)
+    );
+}
+
+/// Only the reconciler assigns (S36): no write of a user's ever changes a
+/// bot's agent.
+#[sqlx::test(migrations = false)]
+async fn no_bot_write_of_a_users_changes_its_agent(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (db, _, bot) = with_bot(options).await;
+    let agent = assign_to_agent(&db, bot.id, 1).await;
+
+    let mut tx = db.write().await.unwrap();
+    assert!(
+        tx.bots()
+            .set_server(bot.id, &"mc.example.com".parse().unwrap())
+            .await
+            .unwrap()
+    );
+    assert!(
+        tx.bots()
+            .set_mode(bot.id, ModePreset::Farm.id())
+            .await
+            .unwrap()
+    );
+    assert!(
+        tx.bots()
+            .set_desired(bot.id, DesiredRunState::Running)
+            .await
+            .unwrap()
+    );
+    tx.commit(setup_entry()).await.unwrap();
+
+    let stored = db.bots().find(bot.id).await.unwrap().unwrap();
+    assert_eq!(stored.agent, Some(agent));
+    assert_eq!(stored.desired, DesiredRunState::Running);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_transaction_reads_a_mode_as_the_read_pool_does(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let afk = ModePreset::Afk.id();
+
+    let mut tx = db.write().await.unwrap();
+    let in_tx = tx.modes().find(afk).await.unwrap();
+    let missing = tx
+        .modes()
+        .find(ModeId::new_v7(at(T0), [9; 10]).unwrap())
+        .await
+        .unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert_eq!(in_tx, db.modes().find(afk).await.unwrap());
+    assert!(in_tx.is_some());
+    assert_eq!(missing, None);
 }

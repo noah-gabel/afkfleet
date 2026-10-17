@@ -1,6 +1,7 @@
 //! Why the server's config is invalid: its kinds of problems, and its names
 //! for fleet-startup's generic error types (ADR-0015).
 
+use fleet_core::authz::CommandAllowlistError;
 use fleet_startup::config::{LogFilterError, UnknownLogFormatError};
 
 use crate::http::rate_limit::IpNetError;
@@ -90,6 +91,11 @@ pub enum ProblemKind {
         /// The other key, without its section.
         key: &'static str,
     },
+    /// A command allowlist entry that isn't `/` and a command name, or too
+    /// many of them (`[chat] command_allowlist`); the entry's text is never
+    /// shown.
+    #[error(transparent)]
+    CommandAllowlist(CommandAllowlistError),
     /// A listener's port that another listener already uses
     /// (`[grpc] bind` and `[http] bind`).
     #[error("uses the same port as `{key}`")]

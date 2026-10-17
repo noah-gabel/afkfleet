@@ -71,6 +71,16 @@ pub enum ErrorCode {
     Internal,
     /// The server is busy; `Retry-After` says when to try again (503).
     Busy,
+    /// The bot's agent has no live stream that holds it, so a restart,
+    /// reset or resume can't reach it now (409).
+    BotUnreachable,
+    /// A restart of a bot that isn't running: it should be stopped, runs
+    /// nowhere, or is paused or failed (409).
+    BotNotRunning,
+    /// A resume of a bot that isn't paused (409).
+    BotNotPaused,
+    /// A reset of a bot that hasn't failed (409).
+    BotNotFailed,
 }
 
 impl ErrorCode {
@@ -96,6 +106,10 @@ impl ErrorCode {
                 "Something went wrong on the server. Quote the request ID when reporting it."
             }
             Self::Busy => "The server is busy. Try again shortly.",
+            Self::BotUnreachable => "The bot can't be reached right now. Try again later.",
+            Self::BotNotRunning => "Only a running bot can be restarted.",
+            Self::BotNotPaused => "Only a paused bot can be resumed.",
+            Self::BotNotFailed => "Only a failed bot can be reset.",
         }
     }
 }
@@ -117,6 +131,10 @@ impl OpenEnum for ErrorCode {
         Self::RateLimited,
         Self::Internal,
         Self::Busy,
+        Self::BotUnreachable,
+        Self::BotNotRunning,
+        Self::BotNotPaused,
+        Self::BotNotFailed,
     ];
 
     fn as_str(self) -> &'static str {
@@ -136,6 +154,10 @@ impl OpenEnum for ErrorCode {
             Self::RateLimited => "rate_limited",
             Self::Internal => "internal",
             Self::Busy => "busy",
+            Self::BotUnreachable => "bot_unreachable",
+            Self::BotNotRunning => "bot_not_running",
+            Self::BotNotPaused => "bot_not_paused",
+            Self::BotNotFailed => "bot_not_failed",
         }
     }
 }
@@ -237,10 +259,14 @@ mod tests {
             ErrorCode::RateLimited => 12,
             ErrorCode::Internal => 13,
             ErrorCode::Busy => 14,
+            ErrorCode::BotUnreachable => 15,
+            ErrorCode::BotNotRunning => 16,
+            ErrorCode::BotNotPaused => 17,
+            ErrorCode::BotNotFailed => 18,
         }
     }
 
-    const CODES: usize = 15;
+    const CODES: usize = 19;
 
     #[test]
     fn all_lists_every_code_exactly_once() {
@@ -318,6 +344,26 @@ mod tests {
         "Something went wrong on the server. Quote the request ID when reporting it."
     )]
     #[case(ErrorCode::Busy, "busy", "The server is busy. Try again shortly.")]
+    #[case(
+        ErrorCode::BotUnreachable,
+        "bot_unreachable",
+        "The bot can't be reached right now. Try again later."
+    )]
+    #[case(
+        ErrorCode::BotNotRunning,
+        "bot_not_running",
+        "Only a running bot can be restarted."
+    )]
+    #[case(
+        ErrorCode::BotNotPaused,
+        "bot_not_paused",
+        "Only a paused bot can be resumed."
+    )]
+    #[case(
+        ErrorCode::BotNotFailed,
+        "bot_not_failed",
+        "Only a failed bot can be reset."
+    )]
     fn every_code_has_its_name_and_fixed_message(
         #[case] code: ErrorCode,
         #[case] name: &str,

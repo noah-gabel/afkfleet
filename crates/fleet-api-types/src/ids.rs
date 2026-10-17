@@ -1,6 +1,6 @@
 //! IDs in DTOs (Plan.md P7.6, P7.9, P9.4, P10.3, P10.10, ADR-0016): fleet-core's
 //! typed IDs (`UserId`, `InviteId`, `SessionId`, `AccountId`, `LinkFlowId`,
-//! `EnrollmentTokenId`, `AgentId`), each
+//! `EnrollmentTokenId`, `AgentId`, `BotId`, `ModeId`), each
 //! a version 7 UUID that
 //! serializes as its lowercase hyphenated text and reads back only as a
 //! version 7 UUID.
@@ -18,7 +18,7 @@ use utoipa::openapi::schema::{ObjectBuilder, Schema, Type};
 /// depend on (ADR-0017). A DTO that carries another core type re-exports
 /// it too.
 pub use fleet_core::id::{
-    AccountId, AgentId, EnrollmentTokenId, InviteId, LinkFlowId, SessionId, UserId,
+    AccountId, AgentId, BotId, EnrollmentTokenId, InviteId, LinkFlowId, ModeId, SessionId, UserId,
 };
 
 /// The characters of an ID's text.

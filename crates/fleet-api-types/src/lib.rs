@@ -38,6 +38,8 @@
 //! - [`app`]: the desktop app's IPC types, between its Rust side and its UI;
 //!   exported to TypeScript, never on the HTTP wire.
 //! - [`auth`]: logging in, refreshing, stepping up and registering.
+//! - [`bots`]: the bots, their status, and the server and mode a user
+//!   sets.
 //! - [`error`]: the error envelope that every failed request answers with.
 //! - [`ids`]: fleet-core's typed IDs in DTOs, re-exported, and their schema.
 //! - [`int`]: the 64-bit integer type, [`SafeInt`], and the schema of a
@@ -61,6 +63,7 @@ pub mod accounts;
 pub mod agents;
 pub mod app;
 pub mod auth;
+pub mod bots;
 pub mod error;
 pub mod ids;
 pub mod int;
@@ -78,7 +81,9 @@ pub mod typescript;
 pub mod users;
 
 pub use error::{ErrorBody, ErrorCode, ErrorResponse, FieldError};
-pub use ids::{AccountId, EnrollmentTokenId, InviteId, LinkFlowId, SessionId, UserId};
+pub use ids::{
+    AccountId, BotId, EnrollmentTokenId, InviteId, LinkFlowId, ModeId, SessionId, UserId,
+};
 pub use int::{SafeInt, SafeIntError};
 pub use open::{Open, OpenEnum};
 pub use page::PageQuery;

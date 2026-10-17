@@ -130,6 +130,9 @@ message fleet.v1.IncomingChat
 message fleet.v1.Kick
   1 key: optional string
   2 message: string
+message fleet.v1.LifecycleCommand
+  1 bot_id: bytes
+  2 command: fleet.v1.Lifecycle
 message fleet.v1.ModeChatSent
   1 message: string
 message fleet.v1.ModeDefinition
@@ -165,6 +168,7 @@ message fleet.v1.ServerMessage
   7 session_grant: fleet.v1.SessionGrant (oneof msg)
   8 session_denied: fleet.v1.SessionDenied (oneof msg)
   9 reject: fleet.v1.Reject (oneof msg)
+  10 lifecycle: fleet.v1.LifecycleCommand (oneof msg)
 message fleet.v1.SessionDenied
   1 id: uint64
   2 bot_id: bytes
@@ -238,6 +242,11 @@ enum fleet.v1.FailReason
   6 FAIL_REASON_AUTH
   7 FAIL_REASON_SESSION_DENIED
   8 FAIL_REASON_CRASH_LOOP
+enum fleet.v1.Lifecycle
+  0 LIFECYCLE_UNSPECIFIED
+  1 LIFECYCLE_RESTART
+  2 LIFECYCLE_RESET
+  3 LIFECYCLE_RESUME
 enum fleet.v1.PauseReason
   0 PAUSE_REASON_UNSPECIFIED
   1 PAUSE_REASON_DUPLICATE_LOGIN

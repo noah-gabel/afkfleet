@@ -45,7 +45,7 @@ use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
 use fleet_server::app::health::HealthService;
 use fleet_server::app::login::LoginService;
 use fleet_server::app::mfa::{MfaPorts, MfaService};
-use fleet_server::config::{HttpConfig, RateLimitConfig};
+use fleet_server::config::{HttpConfig, Rate, RateLimitConfig};
 use fleet_server::http::extractors::AuthUser;
 use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::openapi::{ApiDocs, OPENAPI_PATH};
@@ -122,9 +122,21 @@ fn clock() -> ManualClock {
     ManualClock::new(start())
 }
 
-/// The default limits, on the tests' clock.
+/// The default limits, on the tests' clock, but the per-IP one loose: one
+/// request to every route from one address on a clock that never moves
+/// would outrun its burst, which isn't what these tests check.
 fn limits() -> RateLimits {
-    RateLimits::new(&RateLimitConfig::default(), Arc::new(clock()))
+    let loose = Rate::per_second(
+        core::num::NonZeroU32::new(1000).unwrap(),
+        core::num::NonZeroU32::new(10_000).unwrap(),
+    );
+    RateLimits::new(
+        &RateLimitConfig {
+            per_ip: loose,
+            ..RateLimitConfig::default()
+        },
+        Arc::new(clock()),
+    )
 }
 
 /// What a test needs besides the router: the services that make
@@ -257,6 +269,7 @@ async fn build(db: &Database, docs: ApiDocs, extra: impl FnOnce(Routes) -> Route
         grants: idle_grants(db),
         enrollment_tokens: None,
         agents: idle_agents(db),
+        bots: idle_bots(db),
     });
     let ids = RequestIds::new(Arc::new(clock()), Arc::new(SeededRandom::new(5)));
     let (app, entries) = extra(api_routes(Routes::new(&limits))).finish(state, &http(), ids, docs);
@@ -517,6 +530,7 @@ async fn the_setup_and_step_up_routes_are_registered_with_their_access_and_class
                 "/api/v1/accounts/{id}/grants/{user}",
                 RateClass::Standard
             ),
+            entry(Method::PATCH, "/api/v1/bots/{id}", RateClass::Standard),
         ])
     );
     db.close().await;
@@ -572,6 +586,22 @@ async fn the_authed_routes_are_registered_with_their_class(
             entry(
                 Method::GET,
                 "/api/v1/accounts/{id}/grants",
+                RateClass::Standard
+            ),
+            entry(Method::GET, "/api/v1/bots", RateClass::Standard),
+            entry(Method::GET, "/api/v1/bots/{id}", RateClass::Standard),
+            entry(Method::PUT, "/api/v1/bots/{id}/mode", RateClass::Standard),
+            entry(Method::POST, "/api/v1/bots/{id}/start", RateClass::Standard),
+            entry(Method::POST, "/api/v1/bots/{id}/stop", RateClass::Standard),
+            entry(
+                Method::POST,
+                "/api/v1/bots/{id}/restart",
+                RateClass::Standard
+            ),
+            entry(Method::POST, "/api/v1/bots/{id}/reset", RateClass::Standard),
+            entry(
+                Method::POST,
+                "/api/v1/bots/{id}/resume",
                 RateClass::Standard
             ),
         ])
@@ -981,5 +1011,18 @@ fn idle_agents(
         clock.clone(),
         Arc::new(db.clone()),
         Arc::new(fleet_server::grpc::registry::AgentRegistry::new(clock)),
+    )
+}
+
+/// The bots' service, which these tests never call (P11.2).
+fn idle_bots(db: &fleet_server::infra::sqlite::Database) -> fleet_server::app::bots::BotService {
+    let clock = Arc::new(fleet_testkit::system::ManualClock::new(
+        chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+    ));
+    fleet_server::app::bots::BotService::new(
+        clock.clone(),
+        Arc::new(db.clone()),
+        Arc::new(fleet_server::grpc::registry::AgentRegistry::new(clock)),
+        false,
     )
 }

@@ -27,7 +27,7 @@ use fleet_server::grpc::registry::AgentRegistry;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::agents::NewAgent;
-use fleet_server::ports::assignments::Assignments as _;
+use fleet_server::ports::assignments::{Assigned, Assignments as _};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
 use fleet_server::ports::bots::NewBot;
 use fleet_server::ports::store::Store as _;
@@ -205,8 +205,8 @@ async fn an_assignment_commits_one_entry_and_a_repeat_writes_nothing(
     let first = setup.assignments.assign(id, agent(1)).await.unwrap();
     let again = setup.assignments.assign(id, agent(2)).await.unwrap();
 
-    assert!(first);
-    assert!(!again);
+    assert_eq!(first, Some(Assigned { last: None }));
+    assert_eq!(again, None);
     assert_eq!(setup.agent_of(id).await, Some(agent(1)));
     let entries = setup.entries(&AuditAction::BOT_ASSIGN).await;
     assert_eq!(entries.len(), 1);

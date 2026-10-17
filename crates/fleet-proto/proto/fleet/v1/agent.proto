@@ -156,6 +156,8 @@ message ServerMessage {
     // The answer to a hello the server refuses, or the last message of a
     // stream whose permission ended; the stream then ends.
     Reject reject = 9;
+    // A user's restart, reset or resume of a bot the agent runs.
+    LifecycleCommand lifecycle = 10;
   }
 }
 
@@ -254,6 +256,17 @@ message Reject {
   RejectReason reason = 1;
 }
 
+// A user's restart, reset or resume of a bot the agent runs. The agent acts
+// on it once, through the bot's state machine, and never answers: the effect
+// shows in the bot's next status. The server sends it only to the stream
+// that holds the bot; an agent drops one for a bot it doesn't run.
+message LifecycleCommand {
+  // The bot's ID, a version 7 UUID.
+  bytes bot_id = 1;
+  // What to do.
+  Lifecycle command = 2;
+}
+
 // Why the server refuses a hello or ends a stream.
 enum RejectReason {
   // Not set; never valid.
@@ -272,4 +285,17 @@ enum RejectReason {
   REJECT_REASON_CERTIFICATE_REVOKED = 6;
   // The agent's certificate expired.
   REJECT_REASON_CERTIFICATE_EXPIRED = 7;
+}
+
+// A user's one-shot lifecycle command for a bot.
+enum Lifecycle {
+  // Not set; never valid.
+  LIFECYCLE_UNSPECIFIED = 0;
+  // Stop the bot's run and start it again. Nothing happens while the bot
+  // should be stopped, or is paused or failed.
+  LIFECYCLE_RESTART = 1;
+  // Try a failed bot again.
+  LIFECYCLE_RESET = 2;
+  // Connect a paused bot again.
+  LIFECYCLE_RESUME = 3;
 }

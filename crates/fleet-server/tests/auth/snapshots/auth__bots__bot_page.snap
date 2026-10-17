@@ -1,0 +1,47 @@
+---
+source: crates/fleet-server/tests/auth/bots.rs
+expression: "redacted(&members.body, &page_names)"
+---
+{
+  "items": [
+    {
+      "account": {
+        "id": "[shared_account]",
+        "kind": "offline",
+        "level": "control",
+        "name": "AfkBot11",
+        "status": "active"
+      },
+      "desired_state": "stopped",
+      "id": "[shared_bot]",
+      "mode_id": "[id]",
+      "status": {
+        "kind": "unplaced",
+        "state": "stopped",
+        "why": "no_server"
+      }
+    },
+    {
+      "account": {
+        "id": "[own_account]",
+        "kind": "offline",
+        "level": "manage",
+        "linked_at": "[T0+10ms]",
+        "name": "AfkBot10",
+        "owner": {
+          "id": "[member]",
+          "username": "member"
+        },
+        "status": "active"
+      },
+      "desired_state": "stopped",
+      "id": "[own_bot]",
+      "mode_id": "[id]",
+      "status": {
+        "kind": "unplaced",
+        "state": "stopped",
+        "why": "no_server"
+      }
+    }
+  ]
+}

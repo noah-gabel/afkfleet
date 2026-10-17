@@ -1,0 +1,39 @@
+---
+source: crates/fleet-server/tests/auth/bots.rs
+expression: statuses
+---
+{
+  "awaiting_report": {
+    "kind": "awaiting_report",
+    "since": "2027-01-15T08:00:15.000Z"
+  },
+  "reported_online": {
+    "attempt": 2,
+    "kind": "reported",
+    "last_disconnect": {
+      "key": "multiplayer.disconnect.server_shutdown",
+      "kind": "kicked",
+      "message": "Server closed"
+    },
+    "online_since": "2027-01-15T08:00:19.000Z",
+    "since": "2027-01-15T08:00:20.000Z",
+    "state": "online"
+  },
+  "unknown_failed": {
+    "kind": "unknown",
+    "reason": "auth",
+    "since": "2027-01-15T08:00:17.000Z",
+    "state": "failed"
+  },
+  "unplaced_awaiting_agent_paused": {
+    "kind": "unplaced",
+    "reason": "duplicate_login",
+    "state": "paused",
+    "why": "awaiting_agent"
+  },
+  "unplaced_no_server": {
+    "kind": "unplaced",
+    "state": "stopped",
+    "why": "no_server"
+  }
+}

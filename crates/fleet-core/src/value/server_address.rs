@@ -68,6 +68,9 @@ impl ServerAddress {
     pub const DEFAULT_PORT: u16 = 25_565;
     /// The longest host name DNS allows.
     pub const MAX_HOST_LEN: usize = 253;
+    /// The longest address, in characters: a full-length host, `:` and a
+    /// 5-digit port.
+    pub const MAX_LEN: usize = Self::MAX_HOST_LEN + 6;
 
     /// Returns the host.
     #[must_use]
@@ -91,8 +94,8 @@ impl ServerAddress {
     }
 }
 
-/// The longest input worth parsing: a full-length host, `:` and a 5-digit port.
-const MAX_INPUT_LEN: usize = ServerAddress::MAX_HOST_LEN + 6;
+/// The longest input worth parsing.
+const MAX_INPUT_LEN: usize = ServerAddress::MAX_LEN;
 
 impl TryFrom<&str> for ServerAddress {
     type Error = ServerAddressError;
@@ -318,6 +321,19 @@ mod tests {
         let label = "a".repeat(63);
         let host = format!("{label}.{label}.{label}.{}", "b".repeat(62));
         assert_eq!(parse(&host), Err(ServerAddressError::TooLong { len: 254 }));
+    }
+
+    /// `MAX_LEN` is the longest written form, which the API's limit names.
+    #[test]
+    fn the_longest_address_is_max_len_characters_and_writes_back_whole() {
+        let label = "a".repeat(63);
+        let host = format!("{label}.{label}.{label}.{}", "b".repeat(61));
+        let text = format!("{host}:65535");
+
+        let address = parse(&text).unwrap();
+
+        assert_eq!(text.len(), ServerAddress::MAX_LEN);
+        assert_eq!(address.to_string(), text);
     }
 
     #[test]

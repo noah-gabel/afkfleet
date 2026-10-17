@@ -314,7 +314,7 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        AccountsConfig, AuthConfig, DatabaseConfig, GrpcConfig, HttpConfig, PkiPaths,
+        AccountsConfig, AuthConfig, ChatConfig, DatabaseConfig, GrpcConfig, HttpConfig, PkiPaths,
         RateLimitConfig, VaultConfig,
     };
     use crate::http::rate_limit::TrustedProxies;
@@ -356,6 +356,7 @@ mod tests {
                 active_key_id: 1,
             },
             accounts: AccountsConfig::default(),
+            chat: ChatConfig::default(),
             grpc: grpc.then(|| GrpcConfig {
                 bind: GrpcConfig::DEFAULT_BIND,
                 pki: paths(dir),

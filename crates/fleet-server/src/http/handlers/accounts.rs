@@ -32,15 +32,15 @@ use axum::extract::State;
 use axum::http::StatusCode;
 use fleet_api_types::accounts::{
     AccountKind, AccountPage, AccountResponse, AccountStatus, CreateOfflineAccountRequest,
-    CreatedOfflineAccountResponse, GrantLevel as ApiGrantLevel, LinkFlowResponse, LinkFlowState,
-    LinkStartedResponse, RefusalReason,
+    CreatedOfflineAccountResponse, LinkFlowResponse, LinkFlowState, LinkStartedResponse,
+    RefusalReason,
 };
 use fleet_api_types::{BoundedText, ErrorResponse, PageQuery, SecretText};
-use fleet_core::authz::{Actor, GrantLevel, Permission, ResourceContext, Role, effective_level};
+use fleet_core::authz::{Actor, Permission, ResourceContext};
 use fleet_core::id::{AccountId, LinkFlowId};
 use fleet_core::value::McUsername;
 
-use super::{acting, label, page, timestamp};
+use super::{account_response, acting, page, timestamp};
 use crate::app::accounts::{
     CreateOfflineError, DeleteAccountError, ListAccountsError, ReviewError,
 };
@@ -488,30 +488,6 @@ fn account_page(
             .collect::<Result<_, _>>()?,
         next: listed.next,
     }))
-}
-
-/// An account as `viewer` sees it (ADR-0018, group E): its own facts and
-/// the viewer's level for everyone, and who owns it and since when only
-/// for Admins, the Owner and whoever holds Manage on it.
-fn account_response(viewer: &Actor, account: &ListedAccount) -> Result<AccountResponse, ApiError> {
-    let level = effective_level(viewer, account.owner, account.grant)
-        .ok_or_else(|| ApiError::internal("an account the viewer may not see was answered"))?;
-    let shows_owner = viewer.role >= Role::Admin || level == GrantLevel::Manage;
-    Ok(AccountResponse {
-        id: account.id,
-        name: BoundedText::new(account.name.as_str()),
-        kind: AccountKind::from(account.kind).into(),
-        status: AccountStatus::from(account.status).into(),
-        reason: account
-            .status
-            .reason()
-            .map(|reason| RefusalReason::from(reason).into()),
-        level: ApiGrantLevel::from(level).into(),
-        owner: shows_owner.then(|| label(account.owner.id, &account.owner_name)),
-        linked_at: shows_owner
-            .then(|| timestamp(account.created_at))
-            .transpose()?,
-    })
 }
 
 /// A started flow's answer: its code, this once.

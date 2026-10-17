@@ -227,6 +227,7 @@ The user answered every open question in the Phase 2 plan on 2026-10-06. This AD
   - Only Manage edits grants, so "nobody grants above their own level" always holds; a test pins it.
   - Nobody grants to themselves. Otherwise an Admin could turn implicit Manage into a grant that outlives the Member's promotion to Admin.
   - The server address and auto-start need Manage, because Appendix B's `PATCH /bots/{id}` needs Manage except for the mode.
+    - *Amended in Phase 10, group E ([ADR-0019](0019-control-plane-conventions-and-phase-10-refinements.md), the user's choice, U12): there's no auto-start, so `ConfigureBot` covers the server address alone. The mode left `PATCH` for its own route, `PUT /bots/{id}/mode`, which needs Control (S47).*
 - **Allowlist** *(group D)*:
   - Entries are written the way they're typed in chat (`"/spawn"`). Each must be a valid `ChatMessage`: `/` plus a non-empty command name without arguments. At most 64 entries; a missing key means an empty list.
   - Errors carry the entry's index, never its text.

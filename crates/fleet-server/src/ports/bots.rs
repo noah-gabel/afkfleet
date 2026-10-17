@@ -20,12 +20,14 @@ use std::collections::BTreeSet;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::account::{AccountKind, AccountStatus};
+use fleet_core::authz::Actor;
 use fleet_core::bot::{BotAccount, DesiredRunState, LastReport};
-use fleet_core::id::{AccountId, AgentId, BotId, ModeId};
+use fleet_core::id::{AccountId, AgentId, BotId, ModeId, UserId};
 use fleet_core::mode::ModeDefinition;
 use fleet_core::placement::McIdentity;
 use fleet_core::value::ServerAddress;
 
+use super::accounts::ListedAccount;
 use super::page::Page;
 use super::store::StoreError;
 
@@ -79,6 +81,17 @@ pub struct BotRecord {
     pub owner_enabled: bool,
     /// Its mode's steps.
     pub mode: ModeDefinition,
+}
+
+/// A bot as one viewer sees it: its record, and its account as
+/// [`super::accounts::AccountReads::listed`] shows it to them, with their
+/// own grant on it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ListedBot {
+    /// The bot, with what its spec and its placement need.
+    pub record: BotRecord,
+    /// Its account, as the viewer sees it.
+    pub account: ListedAccount,
 }
 
 /// An open release record (S39, S43).
@@ -151,6 +164,24 @@ pub trait BotReads: Send + Sync + fmt::Debug {
     /// # Errors
     /// [`StoreError`], including [`StoreError::Corrupt`].
     async fn records(&self, page: Page<BotId>) -> Result<Vec<BotRecord>, StoreError>;
+
+    /// The bot `id` as `viewer` sees it, with their grant on its account.
+    /// The caller still asks `authorize()`.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn listed(&self, id: BotId, viewer: UserId) -> Result<Option<ListedBot>, StoreError>;
+
+    /// One page of the bots `viewer` may see, newest first: those of the
+    /// accounts [`super::accounts::AccountReads::list_visible`] lists for
+    /// them, by the owners' current roles (ADR-0010). One more than its limit
+    /// when another page follows; the caller still asks `authorize()` for
+    /// each.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn visible(&self, viewer: Actor, page: Page<BotId>)
+    -> Result<Vec<ListedBot>, StoreError>;
 
     /// Every bot, every open release record and the enabled agents, read in
     /// one read transaction, so they agree with each other.
@@ -236,4 +267,40 @@ pub trait BotWrites: Send {
     /// [`StoreError`], including [`StoreError::Corrupt`] for an ID that
     /// doesn't read back.
     async fn release_all(&mut self, agent: AgentId) -> Result<Vec<BotId>, StoreError>;
+
+    /// Sets `bot`'s server address to `server`, in its written form. Whether
+    /// it changed: `false` for the address it has, or no such bot. It never
+    /// touches the bot's agent.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn set_server(&mut self, bot: BotId, server: &ServerAddress) -> Result<bool, StoreError>;
+
+    /// Switches `bot` to the mode `mode`. Whether it changed: `false` for
+    /// the mode it has, or no such bot.
+    ///
+    /// # Errors
+    /// [`StoreError`]: a mode that doesn't exist, among the rest.
+    async fn set_mode(&mut self, bot: BotId, mode: ModeId) -> Result<bool, StoreError>;
+
+    /// Sets whether `bot` should run. Whether it changed: `false` when it
+    /// says so already, or no such bot.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn set_desired(
+        &mut self,
+        bot: BotId,
+        desired: DesiredRunState,
+    ) -> Result<bool, StoreError>;
+
+    /// Clears `bot`'s stored last state, but only while its row names no
+    /// agent and the stored state is still `last`: a Resume or a Reset of a
+    /// bot that runs nowhere, so its next placement starts it instead of
+    /// restoring it (ADR-0019, S48). Whether it changed.
+    ///
+    /// # Errors
+    /// [`StoreError`], or [`StoreError::Unstorable`] for a time outside the
+    /// years 0 to 9999.
+    async fn clear_sticky(&mut self, bot: BotId, last: &LastReport) -> Result<bool, StoreError>;
 }

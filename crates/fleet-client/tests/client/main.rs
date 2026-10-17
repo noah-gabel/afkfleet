@@ -9,6 +9,7 @@
 mod accounts;
 mod admin;
 mod auth;
+mod bots;
 mod link;
 mod me;
 mod mfa;

@@ -1,0 +1,326 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.rowid AS \"rowid!: i64\", b.id AS \"id!\", b.account_id AS \"account_id!\",\n                  b.server_address AS \"server_address?\", b.mode_id AS \"mode_id!\",\n                  b.desired_state AS \"desired_state!\", b.agent_id AS \"agent_id?\",\n                  b.last_state AS \"last_state?\", b.last_state_reason AS \"last_state_reason?\",\n                  b.last_state_at AS \"last_state_at?\",\n                  a.rowid AS \"account_rowid!: i64\", a.kind AS \"kind!\", a.mc_uuid AS \"mc_uuid?\",\n                  a.mc_name AS \"mc_name!\", a.status AS \"status!\",\n                  a.status_reason AS \"status_reason?\", a.created_at AS \"created_at!\",\n                  a.owner_user_id AS \"owner_user_id!\", u.role AS \"owner_role!\",\n                  u.username AS \"owner_name!\", u.rowid AS \"owner_rowid!: i64\",\n                  u.disabled AS \"owner_disabled!: i64\",\n                  m.rowid AS \"mode_rowid!: i64\", m.definition_json AS \"definition_json!\",\n                  g.level AS \"grant_level?\", g.rowid AS \"grant_rowid?: i64\"\n           FROM bots b\n           JOIN mc_accounts a ON a.id = b.account_id\n           JOIN users u ON u.id = a.owner_user_id\n           JOIN modes m ON m.id = b.mode_id\n           LEFT JOIN account_grants g ON g.account_id = a.id AND g.user_id = ?\n           WHERE b.id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "account_id!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "account_id"
+          }
+        }
+      },
+      {
+        "name": "server_address?",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "server_address"
+          }
+        }
+      },
+      {
+        "name": "mode_id!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "mode_id"
+          }
+        }
+      },
+      {
+        "name": "desired_state!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "desired_state"
+          }
+        }
+      },
+      {
+        "name": "agent_id?",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "agent_id"
+          }
+        }
+      },
+      {
+        "name": "last_state?",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "last_state"
+          }
+        }
+      },
+      {
+        "name": "last_state_reason?",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "last_state_reason"
+          }
+        }
+      },
+      {
+        "name": "last_state_at?",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "last_state_at"
+          }
+        }
+      },
+      {
+        "name": "account_rowid!: i64",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "kind!",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "mc_uuid?",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "mc_uuid"
+          }
+        }
+      },
+      {
+        "name": "mc_name!",
+        "ordinal": 13,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "mc_name"
+          }
+        }
+      },
+      {
+        "name": "status!",
+        "ordinal": 14,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "status_reason?",
+        "ordinal": 15,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "status_reason"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 16,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "owner_user_id!",
+        "ordinal": 17,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "owner_user_id"
+          }
+        }
+      },
+      {
+        "name": "owner_role!",
+        "ordinal": 18,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "name": "owner_name!",
+        "ordinal": 19,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "name": "owner_rowid!: i64",
+        "ordinal": 20,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "owner_disabled!: i64",
+        "ordinal": 21,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "disabled"
+          }
+        }
+      },
+      {
+        "name": "mode_rowid!: i64",
+        "ordinal": 22,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "definition_json!",
+        "ordinal": 23,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "definition_json"
+          }
+        }
+      },
+      {
+        "name": "grant_level?",
+        "ordinal": 24,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "account_grants",
+            "name": "level"
+          }
+        }
+      },
+      {
+        "name": "grant_rowid?: i64",
+        "ordinal": 25,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "account_grants",
+            "name": "rowid"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "a26a42cf590613b85ff6acf2fe212760706f50382b2a43dd1f60e45fbdf3e71d"
+}

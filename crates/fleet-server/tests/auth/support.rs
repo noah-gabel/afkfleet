@@ -16,13 +16,14 @@ use axum::http::Method;
 use chrono::{DateTime, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::auth::{InviteTtl, LockoutPolicy, NewPassword, SessionPolicy};
-use fleet_core::authz::Role;
-use fleet_core::id::{InviteId, SessionId, UserId};
+use fleet_core::authz::{CommandAllowlist, Role};
+use fleet_core::id::{AccountId, InviteId, SessionId, UserId};
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock as _;
 use fleet_core::value::Username;
 use fleet_server::app::agents::AgentService;
 use fleet_server::app::auth::TokenService;
+use fleet_server::app::bots::BotService;
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
 use fleet_server::app::enrollment::EnrollmentTokenService;
 use fleet_server::app::health::HealthService;
@@ -57,6 +58,7 @@ use fleet_server::ports::login_attempts::LoginAttemptReads;
 use fleet_server::ports::mfa::MfaReads;
 use fleet_server::ports::modes::ModeReads;
 use fleet_server::ports::passwords::{HashError, Passwords, VerifyError};
+use fleet_server::ports::reconcile::{Change, Reconcile};
 use fleet_server::ports::sessions::SessionReads;
 use fleet_server::ports::store::{Store, StoreError, WriteTx};
 use fleet_server::ports::tokens::TokenHash;
@@ -165,6 +167,8 @@ pub(crate) struct Options {
     /// Whether the control plane is on: the enrollment tokens' route
     /// answers 404 without it.
     pub(crate) control_plane: bool,
+    /// `[chat] command_allowlist`, which the bots' mode switch reads.
+    pub(crate) allowlist: CommandAllowlist,
 }
 
 impl Default for Options {
@@ -175,6 +179,7 @@ impl Default for Options {
             hash: None,
             invite_ttl: InviteTtl::default(),
             control_plane: false,
+            allowlist: CommandAllowlist::default(),
         }
     }
 }
@@ -200,6 +205,8 @@ pub(crate) enum Meanwhile {
     UseInvite(InviteId, UserId),
     /// Another user takes this username.
     AddUser(&'static str),
+    /// A user's grant on an account is revoked.
+    RevokeGrant(AccountId, UserId),
 }
 
 /// The database, with a change queued to land right before the next write
@@ -264,6 +271,11 @@ impl HookedStore {
             Meanwhile::UseInvite(invite, user) => {
                 let mut tx = self.inner.write().await.unwrap();
                 assert!(tx.invites().use_invite(invite, user, now).await.unwrap());
+                tx.commit(setup_entry()).await.unwrap();
+            }
+            Meanwhile::RevokeGrant(account, user) => {
+                let mut tx = self.inner.write().await.unwrap();
+                assert!(tx.grants().delete(account, user).await.unwrap());
                 tx.commit(setup_entry()).await.unwrap();
             }
             Meanwhile::AddUser(name) => {
@@ -375,6 +387,26 @@ pub(crate) struct Setup {
     pub(crate) alice: UserId,
     /// The agents' live streams, which a test claims directly.
     pub(crate) registry: AgentRegistry,
+    /// The reconciler's hints the bots' writes sent.
+    pub(crate) hints: Arc<Hinted>,
+}
+
+/// A reconciler that records the hints it gets, to check which writes send
+/// one, and only after their commit (Plan.md P10.5; ADR-0019, S37).
+#[derive(Debug, Default)]
+pub(crate) struct Hinted(Mutex<Vec<Change>>);
+
+impl Reconcile for Hinted {
+    fn changed(&self, change: Change) {
+        self.0.lock().unwrap().push(change);
+    }
+}
+
+impl Hinted {
+    /// The hints since the last call.
+    pub(crate) fn take(&self) -> Vec<Change> {
+        core::mem::take(&mut *self.0.lock().unwrap())
+    }
 }
 
 /// The 2FA service over `db`, its vault on an in-memory key.
@@ -481,6 +513,8 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         .control_plane
         .then(|| enrollment_tokens(&clock, &random, &hooked));
     let (registry, agents) = agents(&clock, &hooked);
+    let hints = Arc::new(Hinted::default());
+    let bots = bot_service(&clock, &hooked, &registry, settings.allowlist, &hints);
     let state = AppState::new(Services {
         health: HealthService::new(Arc::new(db.clone())),
         tokens: tokens.clone(),
@@ -494,6 +528,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         grants: idle_grants(&db),
         enrollment_tokens,
         agents,
+        bots,
     });
     let app = app(state, &clock);
     insert_alice(&db, alice, alice_hash).await;
@@ -510,7 +545,27 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         random,
         alice,
         registry,
+        hints,
     }
+}
+
+/// The bots' service as serve builds it, over `hooked` and `registry`,
+/// with offline accounts on, recording its hints in `hints`.
+fn bot_service(
+    clock: &ManualClock,
+    hooked: &HookedStore,
+    registry: &AgentRegistry,
+    allowlist: CommandAllowlist,
+    hints: &Arc<Hinted>,
+) -> BotService {
+    BotService::new(
+        Arc::new(clock.clone()),
+        Arc::new(hooked.clone()),
+        Arc::new(registry.clone()),
+        true,
+    )
+    .with_allowlist(allowlist)
+    .with_reconcile(Arc::clone(hints) as Arc<dyn Reconcile>)
 }
 
 /// Stores Alice, a Member, with `hash`.

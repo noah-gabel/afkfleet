@@ -210,6 +210,7 @@ async fn setup_with(options: SqliteConnectOptions, limits: RateLimitConfig) -> S
         grants: idle_grants(&db),
         enrollment_tokens: None,
         agents: idle_agents(&db),
+        bots: idle_bots(&db),
     });
     let http = HttpConfig {
         bind: HttpConfig::DEFAULT_BIND,
@@ -805,5 +806,18 @@ fn idle_agents(
         clock.clone(),
         Arc::new(db.clone()),
         Arc::new(fleet_server::grpc::registry::AgentRegistry::new(clock)),
+    )
+}
+
+/// The bots' service, which these tests never call (P11.2).
+fn idle_bots(db: &fleet_server::infra::sqlite::Database) -> fleet_server::app::bots::BotService {
+    let clock = Arc::new(fleet_testkit::system::ManualClock::new(
+        chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+    ));
+    fleet_server::app::bots::BotService::new(
+        clock.clone(),
+        Arc::new(db.clone()),
+        Arc::new(fleet_server::grpc::registry::AgentRegistry::new(clock)),
+        false,
     )
 }

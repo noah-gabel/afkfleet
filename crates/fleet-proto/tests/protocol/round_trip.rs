@@ -18,6 +18,7 @@ use crate::{over_the_wire, same_server_message};
 mod every_value {
     use core::time::Duration;
 
+    use fleet_core::bot::Lifecycle;
     use fleet_core::bot::{FailReason, PauseReason};
     use fleet_core::chat::{IncomingChat, PlayerChatKind};
     use fleet_core::disconnect::{
@@ -25,7 +26,8 @@ mod every_value {
         SessionServerFailure,
     };
     use fleet_proto::control::{
-        AgentMessage, BotEvent, BotEventKind, ChatFailedReason, RejectReason, ServerMessage,
+        AgentMessage, BotEvent, BotEventKind, ChatFailedReason, LifecycleCommand, RejectReason,
+        ServerMessage,
     };
     use fleet_proto::generated as wire;
 
@@ -192,6 +194,36 @@ mod every_value {
                 })),
                 "{reason:?}"
             );
+        }
+    }
+
+    #[test]
+    fn every_lifecycle_command_crosses_as_its_own_wire_value_and_back() {
+        for command in Lifecycle::ALL {
+            let expected = match command {
+                Lifecycle::Restart => wire::Lifecycle::Restart,
+                Lifecycle::Reset => wire::Lifecycle::Reset,
+                Lifecycle::Resume => wire::Lifecycle::Resume,
+            };
+            let message = ServerMessage::Lifecycle(LifecycleCommand {
+                bot_id: BOT.parse().unwrap(),
+                command,
+            });
+
+            let written = wire::ServerMessage::try_from(message.clone()).unwrap();
+            let back = over_the_wire::<_, wire::ServerMessage>(message.clone()).unwrap();
+
+            assert_eq!(
+                written.msg,
+                Some(wire::server_message::Msg::Lifecycle(
+                    wire::LifecycleCommand {
+                        bot_id: uuid::Uuid::parse_str(BOT).unwrap().as_bytes().to_vec(),
+                        command: expected.into(),
+                    }
+                )),
+                "{command:?}"
+            );
+            assert!(same_server_message(&back, &message), "{command:?}");
         }
     }
 

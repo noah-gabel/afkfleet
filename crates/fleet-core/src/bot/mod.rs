@@ -25,6 +25,10 @@
 //! [`BotSpec`] says what it should be doing, and its [`BotSnapshot`] what it's
 //! doing now (ADR-0013).
 //!
+//! [`judge_command`] decides what a user's restart, reset or resume does
+//! before the server acts on it: sent to the stream that holds the bot,
+//! a resting bot's sticky state cleared, or refused with why (S48–S50).
+//!
 //! [`restore`] picks a bot up after its actor crashed, from the last state it
 //! published, without skipping the backoff. A [`StickyState`] is a Paused or
 //! Failed state that outlives the actor and the agent: the server passes it
@@ -44,6 +48,7 @@
 mod effect;
 mod event;
 mod last_state;
+mod lifecycle;
 mod restore;
 mod rules;
 mod shown;
@@ -55,6 +60,7 @@ mod transition;
 pub use effect::{BotNotification, Effect};
 pub use event::BotEvent;
 pub use last_state::{LastReport, LastState, LastStateError};
+pub use lifecycle::{CommandEffect, CommandFacts, CommandRefusal, Lifecycle, Reach, judge_command};
 pub use restore::restore;
 pub use rules::BotRules;
 pub use shown::{AssignedTo, ShownFacts, ShownState, StreamFacts, UnplacedWhy, shown};

@@ -43,5 +43,12 @@ expression: names
   "bot.unassign",
   "bot.detach",
   "bot.stray",
-  "agent.release"
+  "agent.release",
+  "bot.set_server",
+  "bot.set_mode",
+  "bot.start",
+  "bot.stop",
+  "bot.restart",
+  "bot.reset",
+  "bot.resume"
 ]

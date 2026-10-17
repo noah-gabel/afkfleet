@@ -18,7 +18,7 @@ use fleet_core::placement::{DetachReason, UnassignReason};
 use fleet_core::system::Clock;
 
 use crate::app::audit::AuditService;
-use crate::ports::assignments::{AssignError, Assignments};
+use crate::ports::assignments::{AssignError, Assigned, Assignments};
 use crate::ports::audit::NewAuditEntry;
 use crate::ports::bots::Fleet;
 use crate::ports::store::{Store, StoreError};
@@ -66,13 +66,14 @@ impl Assignments for AssignmentService {
         self.store.bots().fleet().await
     }
 
-    async fn assign(&self, bot: BotId, agent: AgentId) -> Result<bool, AssignError> {
+    async fn assign(&self, bot: BotId, agent: AgentId) -> Result<Option<Assigned>, AssignError> {
         let metadata = AuditMetadata::new().id("agent", agent)?;
         let mut tx = self.store.write().await?;
         if !tx.bots().assign(bot, agent).await? {
             // Nothing changed; dropping the transaction writes nothing.
-            return Ok(false);
+            return Ok(None);
         }
+        let last = tx.bots().find(bot).await?.and_then(|row| row.last);
         tx.commit(self.entry(
             AuditAction::BOT_ASSIGN,
             AuditOutcome::Success,
@@ -80,7 +81,7 @@ impl Assignments for AssignmentService {
             metadata,
         ))
         .await?;
-        Ok(true)
+        Ok(Some(Assigned { last }))
     }
 
     async fn unassign(

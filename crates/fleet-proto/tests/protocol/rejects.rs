@@ -605,6 +605,22 @@ fn other_spec() -> wire::BotSpec {
     server(wire::server_message::Msg::Reject(wire::Reject { reason: 8 })),
     error("Reject.reason", Problem::Unknown)
 )]
+#[case::lifecycle_bot_not_v7(
+    server(wire::server_message::Msg::Lifecycle(wire::LifecycleCommand { bot_id: bytes(V4), command: wire::Lifecycle::Resume.into() })),
+    error("LifecycleCommand.bot_id", Problem::NotV7)
+)]
+#[case::lifecycle_bot_too_short(
+    server(wire::server_message::Msg::Lifecycle(wire::LifecycleCommand { bot_id: vec![7; 15], command: wire::Lifecycle::Restart.into() })),
+    error("LifecycleCommand.bot_id", Problem::WrongLength { len: 15 })
+)]
+#[case::lifecycle_unspecified(
+    server(wire::server_message::Msg::Lifecycle(wire::LifecycleCommand { bot_id: bytes(BOT), command: 0 })),
+    error("LifecycleCommand.command", Problem::Missing)
+)]
+#[case::lifecycle_unknown(
+    server(wire::server_message::Msg::Lifecycle(wire::LifecycleCommand { bot_id: bytes(BOT), command: 4 })),
+    error("LifecycleCommand.command", Problem::Unknown)
+)]
 fn a_server_message_is_refused(#[case] wire: wire::ServerMessage, #[case] expected: ConvertError) {
     assert_eq!(ServerMessage::try_from(wire).err(), Some(expected));
 }

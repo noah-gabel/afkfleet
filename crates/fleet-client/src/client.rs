@@ -22,15 +22,18 @@ use fleet_api_types::accounts::{
     LinkFlowResponse, LinkStartedResponse,
 };
 use fleet_api_types::auth::{LoginRequest, RegisterRequest, RegisterResponse, StepUpRequest};
+use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
-use fleet_api_types::{AccountId, InviteId, LinkFlowId, PageQuery, SecretText, SessionId, UserId};
+use fleet_api_types::{
+    AccountId, BotId, InviteId, LinkFlowId, PageQuery, SecretText, SessionId, UserId,
+};
 
 use crate::error::{BuildError, ClientError};
-use crate::session::Core;
+use crate::session::{BotCall, Core};
 use crate::store::SessionStore;
 use crate::transport::{ReqwestTransport, Timeouts};
 use crate::trust::Trust;
@@ -493,6 +496,110 @@ impl<S: SessionStore> Client<S> {
     /// call.
     pub async fn revoke_grant(&self, id: AccountId, user: UserId) -> Result<(), ClientError> {
         self.core.revoke_grant(id, user).await
+    }
+
+    /// `GET /bots`: a page of the bots the caller may see, newest first.
+    ///
+    /// # Errors
+    /// The server's 422 (a bad `before` or `limit`) as [`ClientError::Api`];
+    /// any other error as for every authenticated call.
+    pub async fn bots(&self, query: &PageQuery<BotId>) -> Result<BotPage, ClientError> {
+        self.core.bots(query).await
+    }
+
+    /// `GET /bots/{id}`: one bot, as the caller sees it.
+    ///
+    /// # Errors
+    /// The server's 404 (no such bot, or one the caller may not see) as
+    /// [`ClientError::Api`]; any other error as for every authenticated
+    /// call.
+    pub async fn bot(&self, id: BotId) -> Result<BotResponse, ClientError> {
+        self.core.bot(id).await
+    }
+
+    /// `PATCH /bots/{id}`: sets the bot's server address (Manage), after
+    /// [`Client::step_up`] within 5 minutes. A running bot moves to it.
+    ///
+    /// # Errors
+    /// The server's 403 (`step_up_required` without a fresh step-up,
+    /// `forbidden` below Manage), 404, 422 (an address that doesn't parse)
+    /// or 429 (the bot's own limit), as [`ClientError::Api`]; any other
+    /// error as for every authenticated call.
+    pub async fn patch_bot(
+        &self,
+        id: BotId,
+        request: &BotPatchRequest,
+    ) -> Result<BotResponse, ClientError> {
+        self.core.patch_bot(id, request).await
+    }
+
+    /// `PUT /bots/{id}/mode`: sets the bot's mode, one the caller may use.
+    ///
+    /// # Errors
+    /// The server's 403 (a mode whose commands only Manage may give), 404 or
+    /// 422 (a mode the caller can't use), as [`ClientError::Api`]; any
+    /// other error as for every authenticated call.
+    pub async fn set_bot_mode(
+        &self,
+        id: BotId,
+        request: &BotModeRequest,
+    ) -> Result<BotResponse, ClientError> {
+        self.core.set_bot_mode(id, request).await
+    }
+
+    /// `POST /bots/{id}/start`: the bot should run (Control). Where it
+    /// can't yet, it reads unplaced, with why.
+    ///
+    /// # Errors
+    /// The server's 403, 404 or 429 (the bot's own limit) as
+    /// [`ClientError::Api`]; any other error as for every authenticated
+    /// call.
+    pub async fn start_bot(&self, id: BotId) -> Result<BotResponse, ClientError> {
+        self.core.control_bot(id, BotCall::Start).await
+    }
+
+    /// `POST /bots/{id}/stop`: the bot should be stopped (Control); a
+    /// paused or failed bot stays so.
+    ///
+    /// # Errors
+    /// The server's 403 or 404 as [`ClientError::Api`]; any other error as
+    /// for every authenticated call.
+    pub async fn stop_bot(&self, id: BotId) -> Result<BotResponse, ClientError> {
+        self.core.control_bot(id, BotCall::Stop).await
+    }
+
+    /// `POST /bots/{id}/restart`: restarts a running bot's run (Control),
+    /// sent to its agent.
+    ///
+    /// # Errors
+    /// The server's 403, 404, 409 (`bot_not_running`, `bot_unreachable`) or
+    /// 429 as [`ClientError::Api`]; any other error as for every
+    /// authenticated call.
+    pub async fn restart_bot(&self, id: BotId) -> Result<BotResponse, ClientError> {
+        self.core.control_bot(id, BotCall::Restart).await
+    }
+
+    /// `POST /bots/{id}/reset`: lets a failed bot try again (Control): sent
+    /// to its agent, or, where it runs nowhere, its stored state cleared.
+    ///
+    /// # Errors
+    /// The server's 403, 404, 409 (`bot_not_failed`, `bot_unreachable`) or
+    /// 429 as [`ClientError::Api`]; any other error as for every
+    /// authenticated call.
+    pub async fn reset_bot(&self, id: BotId) -> Result<BotResponse, ClientError> {
+        self.core.control_bot(id, BotCall::Reset).await
+    }
+
+    /// `POST /bots/{id}/resume`: lets a paused bot join again (Control):
+    /// sent to its agent, or, where it runs nowhere, its stored state
+    /// cleared. A human playing the account is kicked.
+    ///
+    /// # Errors
+    /// The server's 403, 404, 409 (`bot_not_paused`, `bot_unreachable`) or
+    /// 429 as [`ClientError::Api`]; any other error as for every
+    /// authenticated call.
+    pub async fn resume_bot(&self, id: BotId) -> Result<BotResponse, ClientError> {
+        self.core.control_bot(id, BotCall::Resume).await
     }
 }
 

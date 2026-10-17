@@ -1,10 +1,13 @@
-//! Tests for the bots' reads (Plan.md P10.5; ADR-0019, S41): each bot comes
-//! with what its state reads as now, from its row, the agent its row names
-//! and that agent's live stream. A bot without an agent reads Unplaced, with
+//! Tests for the bots' reads and writes (Plan.md P10.5, P11.2; ADR-0019,
+//! S41, S48): each bot comes with what its state reads as now, from its row,
+//! the latest report the server keeps, the agent its row names and that
+//! agent's live stream. A bot without an agent reads Unplaced, with
 //! why and its sticky state; a bot whose agent has no live stream reads
 //! Unknown, with the agent's status, when it was last heard from and the
 //! bot's last known state; a bot on a live agent reads its report on that
-//! stream, or that none has come yet.
+//! stream, or that none has come yet. A Resume of a bot that runs nowhere
+//! takes the kept report with its stored state, and puts it back when its
+//! commit fails. The HTTP tests (`tests/auth/bots.rs`) cover the rest.
 //!
 //! Each test gets a fresh database from `#[sqlx::test]`. Time isn't paused:
 //! sqlx's worker threads would make paused timeouts fire early (CLAUDE.md).
@@ -14,31 +17,51 @@
 #![cfg(test)]
 
 use std::collections::HashMap;
+use std::net::IpAddr;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use fleet_core::agent::AgentStatus;
 use fleet_core::audit::{AuditAction, AuditOutcome};
-use fleet_core::authz::Role;
+use fleet_core::authz::{Actor, Role};
 use fleet_core::bot::{
-    BotSnapshot, BotState, LastReport, LastState, PauseReason, ShownState, StickyState, UnplacedWhy,
+    BotSnapshot, BotState, LastReport, LastState, Lifecycle, PauseReason, ShownState, StickyState,
+    UnplacedWhy,
 };
 use fleet_core::disconnect::ConflictKind;
-use fleet_core::id::{AccountId, AgentId, BotId, UserId};
+use fleet_core::id::{AccountId, AgentId, BotId, SessionId, UserId};
 use fleet_core::mode::ModePreset;
 use fleet_core::pki::CertFingerprint;
 use fleet_core::placement::Unplaced;
 use fleet_core::value::{AgentName, Username};
-use fleet_server::app::bots::BotService;
+use fleet_server::app::bots::{BotAction, BotService, BotWriteError, Controlled};
+use fleet_server::app::users::ActingUser;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
+use fleet_server::ports::accounts::{AccountReads, AccountWrites};
+use fleet_server::ports::agents::{AgentReads, AgentWrites};
 use fleet_server::ports::agents::{NewAgent, NewAgentCert};
 use fleet_server::ports::audit::NewAuditEntry;
+use fleet_server::ports::audit::{AuditEntryId, AuditReads, AuditWrites};
 use fleet_server::ports::bots::NewBot;
-use fleet_server::ports::live_agents::{HeldBot, LiveAgents, LiveStream, PermissionEnd};
+use fleet_server::ports::bots::{BotReads, BotWrites};
+use fleet_server::ports::enrollment_tokens::{EnrollmentTokenReads, EnrollmentTokenWrites};
+use fleet_server::ports::envelopes::{EnvelopeReads, EnvelopeWrites};
+use fleet_server::ports::grants::{GrantReads, GrantWrites};
+use fleet_server::ports::invites::{InviteReads, InviteWrites};
+use fleet_server::ports::live_agents::{
+    CommandRefused, HeldBot, LatestReport, LiveAgents, LiveStream, PermissionEnd,
+};
+use fleet_server::ports::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
+use fleet_server::ports::mfa::{MfaReads, MfaWrites};
+use fleet_server::ports::modes::{ModeReads, ModeWrites};
 use fleet_server::ports::page::{Page, PageLimit};
-use fleet_server::ports::store::{Store as _, StoreError};
-use fleet_server::ports::users::{NewUser, PasswordHash};
+use fleet_server::ports::sessions::{NewSession, SessionReads, SessionWrites};
+use fleet_server::ports::store::{Store, StoreError, UnauditedWrite, WriteTx};
+use fleet_server::ports::tokens::TokenHash;
+use fleet_server::ports::users::{NewUser, PasswordHash, UserReads, UserWrites};
 use fleet_testkit::system::ManualClock;
 use secrecy::SecretString;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -81,6 +104,8 @@ fn paused() -> LastState {
 struct Live {
     streams: Mutex<HashMap<AgentId, LiveStream>>,
     held: Mutex<HashMap<(AgentId, BotId), HeldBot>>,
+    latest: Mutex<HashMap<BotId, LatestReport>>,
+    commands: Mutex<Vec<(AgentId, BotId, Lifecycle)>>,
 }
 
 impl LiveAgents for Live {
@@ -94,6 +119,188 @@ impl LiveAgents for Live {
 
     fn held(&self, agent: AgentId, bot: BotId) -> Option<HeldBot> {
         self.held.lock().unwrap().get(&(agent, bot)).cloned()
+    }
+
+    fn latest(&self, bot: BotId) -> Option<LatestReport> {
+        self.latest.lock().unwrap().get(&bot).cloned()
+    }
+
+    fn take_latest(&self, bot: BotId) -> Option<LatestReport> {
+        self.latest.lock().unwrap().remove(&bot)
+    }
+
+    fn put_back_latest(&self, report: LatestReport) {
+        self.latest
+            .lock()
+            .unwrap()
+            .entry(report.snapshot.bot_id)
+            .or_insert(report);
+    }
+
+    fn command(
+        &self,
+        agent: AgentId,
+        bot: BotId,
+        command: Lifecycle,
+    ) -> Result<(), CommandRefused> {
+        if self.held(agent, bot).is_none() {
+            return Err(CommandRefused::NotHeld);
+        }
+        self.commands.lock().unwrap().push((agent, bot, command));
+        Ok(())
+    }
+}
+
+/// The database, whose write transactions' commits fail busy while `fail`
+/// is set: nothing they wrote is kept.
+#[derive(Debug, Clone)]
+struct FailingCommits {
+    inner: Database,
+    fail: Arc<AtomicBool>,
+}
+
+/// A write transaction whose commit fails when `fail`.
+struct FailingTx {
+    inner: Box<dyn WriteTx>,
+    fail: bool,
+}
+
+#[async_trait]
+impl WriteTx for FailingTx {
+    fn users(&mut self) -> &mut dyn UserWrites {
+        self.inner.users()
+    }
+
+    fn sessions(&mut self) -> &mut dyn SessionWrites {
+        self.inner.sessions()
+    }
+
+    fn login_attempts(&mut self) -> &mut dyn LoginAttemptWrites {
+        self.inner.login_attempts()
+    }
+
+    fn mfa(&mut self) -> &mut dyn MfaWrites {
+        self.inner.mfa()
+    }
+
+    fn invites(&mut self) -> &mut dyn InviteWrites {
+        self.inner.invites()
+    }
+
+    fn accounts(&mut self) -> &mut dyn AccountWrites {
+        self.inner.accounts()
+    }
+
+    fn grants(&mut self) -> &mut dyn GrantWrites {
+        self.inner.grants()
+    }
+
+    fn envelopes(&mut self) -> &mut dyn EnvelopeWrites {
+        self.inner.envelopes()
+    }
+
+    fn enrollment_tokens(&mut self) -> &mut dyn EnrollmentTokenWrites {
+        self.inner.enrollment_tokens()
+    }
+
+    fn agents(&mut self) -> &mut dyn AgentWrites {
+        self.inner.agents()
+    }
+
+    fn bots(&mut self) -> &mut dyn BotWrites {
+        self.inner.bots()
+    }
+
+    fn modes(&mut self) -> &mut dyn ModeWrites {
+        self.inner.modes()
+    }
+
+    fn audit(&mut self) -> &mut dyn AuditWrites {
+        self.inner.audit()
+    }
+
+    async fn commit(
+        self: Box<Self>,
+        entry: fleet_server::ports::audit::NewAuditEntry,
+    ) -> Result<AuditEntryId, StoreError> {
+        if self.fail {
+            // Dropping the transaction rolls it back.
+            return Err(StoreError::Busy);
+        }
+        self.inner.commit(entry).await
+    }
+
+    async fn commit_unaudited(self: Box<Self>, reason: UnauditedWrite) -> Result<(), StoreError> {
+        if self.fail {
+            return Err(StoreError::Busy);
+        }
+        self.inner.commit_unaudited(reason).await
+    }
+}
+
+#[async_trait]
+impl Store for FailingCommits {
+    async fn write(&self) -> Result<Box<dyn WriteTx>, StoreError> {
+        Ok(Box::new(FailingTx {
+            inner: self.inner.write().await?,
+            fail: self.fail.load(Ordering::SeqCst),
+        }))
+    }
+
+    fn users(&self) -> &dyn UserReads {
+        self.inner.users()
+    }
+
+    fn sessions(&self) -> &dyn SessionReads {
+        self.inner.sessions()
+    }
+
+    fn login_attempts(&self) -> &dyn LoginAttemptReads {
+        self.inner.login_attempts()
+    }
+
+    fn mfa(&self) -> &dyn MfaReads {
+        self.inner.mfa()
+    }
+
+    fn invites(&self) -> &dyn InviteReads {
+        self.inner.invites()
+    }
+
+    fn accounts(&self) -> &dyn AccountReads {
+        self.inner.accounts()
+    }
+
+    fn grants(&self) -> &dyn GrantReads {
+        self.inner.grants()
+    }
+
+    fn envelopes(&self) -> &dyn EnvelopeReads {
+        self.inner.envelopes()
+    }
+
+    fn enrollment_tokens(&self) -> &dyn EnrollmentTokenReads {
+        self.inner.enrollment_tokens()
+    }
+
+    fn agents(&self) -> &dyn AgentReads {
+        self.inner.agents()
+    }
+
+    fn bots(&self) -> &dyn BotReads {
+        self.inner.bots()
+    }
+
+    fn modes(&self) -> &dyn ModeReads {
+        self.inner.modes()
+    }
+
+    fn audit(&self) -> &dyn AuditReads {
+        self.inner.audit()
+    }
+
+    async fn ping(&self) -> Result<(), StoreError> {
+        self.inner.ping().await
     }
 }
 
@@ -223,12 +430,25 @@ impl Setup {
     }
 
     async fn shown(&self, bot: BotId) -> ShownState {
-        self.service(true).view(bot).await.unwrap().unwrap().shown
+        self.service(true)
+            .view(&the_owner(), bot)
+            .await
+            .unwrap()
+            .unwrap()
+            .shown
     }
 }
 
 fn owner() -> UserId {
     UserId::new_v7(at(T0), [1; 10]).unwrap()
+}
+
+/// The setup's one user, the Owner, who sees every bot.
+fn the_owner() -> Actor {
+    Actor {
+        id: owner(),
+        role: Role::Owner,
+    }
 }
 
 fn last(state: LastState, minutes: i64) -> LastReport {
@@ -291,7 +511,12 @@ async fn an_offline_bot_reads_unplaced_while_offline_accounts_are_off(
     let bot = setup.bot(1).await;
     setup.run(bot).await;
 
-    let view = setup.service(false).view(bot).await.unwrap().unwrap();
+    let view = setup
+        .service(false)
+        .view(&the_owner(), bot)
+        .await
+        .unwrap()
+        .unwrap();
 
     assert_eq!(
         view.shown,
@@ -440,7 +665,11 @@ async fn a_bot_that_doesnt_exist_reads_as_none(
 ) {
     let setup = Setup::new(options).await;
 
-    let view = setup.service(true).view(bot(9)).await.unwrap();
+    let view = setup
+        .service(true)
+        .view(&the_owner(), bot(9))
+        .await
+        .unwrap();
 
     assert_eq!(view, None);
 }
@@ -458,17 +687,23 @@ async fn the_list_pages_the_bots_newest_first_each_with_its_state(
     let service = setup.service(true);
 
     let first = service
-        .list(Page {
-            before: None,
-            limit: PageLimit::new(2).unwrap(),
-        })
+        .list(
+            &the_owner(),
+            Page {
+                before: None,
+                limit: PageLimit::new(2).unwrap(),
+            },
+        )
         .await
         .unwrap();
     let second = service
-        .list(Page {
-            before: first.next,
-            limit: PageLimit::new(2).unwrap(),
-        })
+        .list(
+            &the_owner(),
+            Page {
+                before: first.next,
+                limit: PageLimit::new(2).unwrap(),
+            },
+        )
         .await
         .unwrap();
 
@@ -498,12 +733,15 @@ async fn a_read_that_fails_is_an_error(_pool: SqlitePoolOptions, options: Sqlite
     let service = setup.service(true);
     setup.db.close().await;
 
-    let view = service.view(bot).await;
+    let view = service.view(&the_owner(), bot).await;
     let list = service
-        .list(Page {
-            before: None,
-            limit: PageLimit::new(2).unwrap(),
-        })
+        .list(
+            &the_owner(),
+            Page {
+                before: None,
+                limit: PageLimit::new(2).unwrap(),
+            },
+        )
         .await;
 
     assert!(
@@ -511,7 +749,176 @@ async fn a_read_that_fails_is_an_error(_pool: SqlitePoolOptions, options: Sqlite
         "{view:?}"
     );
     assert!(
-        matches!(list, Err(StoreError::Backend(_) | StoreError::Busy)),
+        matches!(
+            list,
+            Err(fleet_server::app::bots::ListBotsError::Store(
+                StoreError::Backend(_) | StoreError::Busy
+            ))
+        ),
         "{list:?}"
+    );
+}
+
+// --- What the server keeps in memory (R35) and the clear's put-back (S48) ------------------
+
+/// A report kept from `agent(1)`'s stream of `bot` in `state`, at `minutes`.
+fn kept(bot: BotId, state: BotState, minutes: i64) -> LatestReport {
+    LatestReport {
+        agent: agent(1),
+        generation: 1,
+        snapshot: BotSnapshot {
+            bot_id: bot,
+            state,
+            since: at(T0),
+            last_disconnect: None,
+        },
+        at: at(T0) + TimeDelta::minutes(minutes),
+    }
+}
+
+fn paused_state() -> BotState {
+    BotState::Paused {
+        reason: PauseReason::Conflict {
+            kind: ConflictKind::DuplicateLogin,
+        },
+    }
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_bot_reads_the_newer_of_its_stored_state_and_the_kept_report(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let newer = setup.bot(1).await;
+    let older = setup.bot(2).await;
+    setup.rested(newer, last(LastState::Stopped, 5)).await;
+    setup.rested(older, last(LastState::Stopped, 9)).await;
+    setup
+        .live
+        .latest
+        .lock()
+        .unwrap()
+        .insert(newer, kept(newer, paused_state(), 7));
+    setup
+        .live
+        .latest
+        .lock()
+        .unwrap()
+        .insert(older, kept(older, paused_state(), 7));
+
+    let newer = setup.shown(newer).await;
+    let older = setup.shown(older).await;
+
+    assert!(
+        matches!(
+            newer,
+            ShownState::Unplaced {
+                sticky: Some(StickyState::Paused(_)),
+                ..
+            }
+        ),
+        "the kept Paused is newer: {newer:?}"
+    );
+    assert!(
+        matches!(older, ShownState::Unplaced { sticky: None, .. }),
+        "the stored Stopped is newer: {older:?}"
+    );
+}
+
+impl Setup {
+    /// The setup's Owner acting through a live session.
+    async fn acting(&self) -> ActingUser {
+        let session = SessionId::new_v7(at(T0), [7; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.sessions()
+            .insert(&NewSession {
+                id: session,
+                user_id: owner(),
+                access_hash: TokenHash::from_bytes([1; 32]),
+                refresh_hash: TokenHash::from_bytes([2; 32]),
+                created_at: at(T0),
+            })
+            .await
+            .unwrap();
+        tx.commit(setup_entry()).await.unwrap();
+        ActingUser {
+            actor: the_owner(),
+            session_id: session,
+            ip: IpAddr::from([192, 0, 2, 10]),
+        }
+    }
+
+    fn service_over(&self, store: Arc<dyn Store>) -> BotService {
+        BotService::new(
+            Arc::new(self.clock.clone()),
+            store,
+            Arc::clone(&self.live) as Arc<dyn LiveAgents>,
+            true,
+        )
+    }
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_resume_of_a_bot_that_runs_nowhere_takes_the_kept_report_with_its_stored_state(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let bot = setup.bot(1).await;
+    setup.rested(bot, last(paused(), 5)).await;
+    setup
+        .live
+        .latest
+        .lock()
+        .unwrap()
+        .insert(bot, kept(bot, paused_state(), 5));
+    let by = setup.acting().await;
+
+    let done = setup
+        .service(true)
+        .control(&by, bot, BotAction::Command(Lifecycle::Resume))
+        .await
+        .unwrap();
+
+    assert_eq!(done, Controlled::Cleared);
+    assert_eq!(setup.db.bots().find(bot).await.unwrap().unwrap().last, None);
+    assert_eq!(setup.live.latest(bot), None);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_resume_whose_commit_fails_puts_the_kept_report_back_and_keeps_the_stored_state(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let bot = setup.bot(1).await;
+    setup.rested(bot, last(paused(), 5)).await;
+    let report = kept(bot, paused_state(), 5);
+    setup
+        .live
+        .latest
+        .lock()
+        .unwrap()
+        .insert(bot, report.clone());
+    let by = setup.acting().await;
+    let failing = FailingCommits {
+        inner: setup.db.clone(),
+        fail: Arc::new(AtomicBool::new(true)),
+    };
+
+    let refused = setup
+        .service_over(Arc::new(failing))
+        .control(&by, bot, BotAction::Command(Lifecycle::Resume))
+        .await;
+
+    assert!(
+        matches!(refused, Err(BotWriteError::Store(StoreError::Busy))),
+        "{refused:?}"
+    );
+    assert_eq!(setup.live.latest(bot), Some(report));
+    assert_eq!(
+        setup.db.bots().find(bot).await.unwrap().unwrap().last,
+        Some(last(paused(), 5))
     );
 }

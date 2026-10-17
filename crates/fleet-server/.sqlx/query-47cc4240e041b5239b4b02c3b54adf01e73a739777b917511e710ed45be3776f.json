@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT server_address FROM bots",
+  "describe": {
+    "columns": [
+      {
+        "name": "server_address",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "server_address"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "47cc4240e041b5239b4b02c3b54adf01e73a739777b917511e710ed45be3776f"
+}

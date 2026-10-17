@@ -31,7 +31,8 @@ pub use agent::{
 };
 pub use hello::{HelloRefusal, read_hello};
 pub use server::{
-    Assignment, RejectReason, SendChat, ServerMessage, SessionDenied, SessionGrant, Welcome,
+    Assignment, LifecycleCommand, RejectReason, SendChat, ServerMessage, SessionDenied,
+    SessionGrant, Welcome,
 };
 
 /// The most bots one message may carry: a hello's running bots, or a full

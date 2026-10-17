@@ -39,6 +39,7 @@ use crate::auth::{
     LoginMfaRequest, LoginRequest, LoginResponse, RefreshRequest, RegisterRequest,
     RegisterResponse, StepUpRequest, TokenResponse,
 };
+use crate::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
 use crate::error::ErrorResponse;
 use crate::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use crate::me::{MeResponse, PasswordChangeRequest};
@@ -199,7 +200,11 @@ fn write_api(config: &Config) -> Result<(), TypeScriptError> {
     CreatedEnrollmentTokenResponse::export_all(config).map_err(TypeScriptError::Export)?;
     AgentStatus::export_all(config).map_err(TypeScriptError::Export)?;
     AgentResponse::export_all(config).map_err(TypeScriptError::Export)?;
-    AgentPage::export_all(config).map_err(TypeScriptError::Export)
+    AgentPage::export_all(config).map_err(TypeScriptError::Export)?;
+    BotPage::export_all(config).map_err(TypeScriptError::Export)?;
+    BotResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    BotPatchRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    BotModeRequest::export_all(config).map_err(TypeScriptError::Export)
 }
 
 /// Writes the app's root IPC types, and every type they use.

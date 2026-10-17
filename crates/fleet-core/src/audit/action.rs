@@ -387,6 +387,55 @@ audit_actions! {
     /// Target: the agent. Metadata: `count` (how many bots and records) and
     /// `via` (`cli`). Releasing nothing is no entry.
     AGENT_RELEASE = "agent.release";
+
+    /// A user set a bot's server address (P11.2, ADR-0019, S53). Outcome:
+    /// Success. Actor and IP: the user's. Target: the bot. Metadata:
+    /// `server_host` and `server_port` (only when the address gave one), and
+    /// `previous_server_host` and `previous_server_port` the same way when
+    /// the bot had an address. Host and port are kept apart, so even the
+    /// longest address is never cut. Setting the address a bot has is no
+    /// change, and no entry.
+    BOT_SET_SERVER = "bot.set_server";
+
+    /// A user switched a bot to another mode (P11.2, ADR-0019, S53).
+    /// Outcome: Success. Actor and IP: the user's. Target: the bot.
+    /// Metadata: `mode` and `previous_mode`. Switching to the mode a bot has
+    /// is no change, and no entry.
+    BOT_SET_MODE = "bot.set_mode";
+
+    /// A user asked a stopped bot to run (P11.2, ADR-0019, S48, S53): its
+    /// desired state is now running, and the reconciler places it once it
+    /// qualifies. Outcome: Success. Actor and IP: the user's. Target: the
+    /// bot. Metadata: `state` and `state_reason`, the bot's last known state
+    /// when the server acted (when it knew one; the reason only when Paused
+    /// or Failed). Starting a bot that should run already is no entry.
+    BOT_START = "bot.start";
+
+    /// A user asked a running bot to stop (P11.2, ADR-0019, S48, S51, S53):
+    /// its desired state is now stopped. Outcome: Success. Actor and IP: the
+    /// user's. Target: the bot. Metadata: `state` and `state_reason`, as for
+    /// `bot.start`. Stopping a bot that should be stopped already is no
+    /// entry.
+    BOT_STOP = "bot.stop";
+
+    /// A user restarted a bot (P11.2, ADR-0019, S48, S53): the command was
+    /// recorded, then sent to the live stream that holds the bot. Outcome:
+    /// Success. Actor and IP: the user's. Target: the bot. Metadata: `state`
+    /// and `state_reason`, as for `bot.start`.
+    BOT_RESTART = "bot.restart";
+
+    /// A user reset a Failed bot (P11.2, ADR-0019, S48, S53). Outcome:
+    /// Success. Actor and IP: the user's. Target: the bot. Metadata: `state`
+    /// and `state_reason`, as for `bot.start`, and `effect`: `sent` (to the
+    /// live stream that holds the bot) or `cleared` (it ran nowhere, so its
+    /// stored state was cleared).
+    BOT_RESET = "bot.reset";
+
+    /// A user resumed a Paused bot (P11.2, ADR-0019, S48, S53), which may
+    /// connect over a human playing on the account. Outcome: Success. Actor
+    /// and IP: the user's. Target: the bot. Metadata: `state`,
+    /// `state_reason` and `effect`, as for `bot.reset`.
+    BOT_RESUME = "bot.resume";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

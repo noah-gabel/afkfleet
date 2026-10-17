@@ -107,6 +107,7 @@ fn same_server_message(a: &ServerMessage, b: &ServerMessage) -> bool {
         (ServerMessage::SessionGrant(a), ServerMessage::SessionGrant(b)) => same_grant(a, b),
         (ServerMessage::SessionDenied(a), ServerMessage::SessionDenied(b)) => a == b,
         (ServerMessage::Reject(a), ServerMessage::Reject(b)) => a == b,
+        (ServerMessage::Lifecycle(a), ServerMessage::Lifecycle(b)) => a == b,
         _ => false,
     }
 }

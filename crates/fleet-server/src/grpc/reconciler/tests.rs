@@ -34,7 +34,7 @@ use tracing_subscriber::layer::SubscriberExt as _;
 use super::*;
 use crate::grpc::registry::{Activation, Halt, Lease};
 use crate::ports::agent_connections::{Admitted, StreamEnd};
-use crate::ports::assignments::AssignError;
+use crate::ports::assignments::{AssignError, Assigned};
 use crate::ports::bots::{Bot, BotRecord, Fleet, ReleaseRecord, UnreadableBot};
 use crate::ports::live_agents::LiveAgents as _;
 use crate::ports::store::StoreError;
@@ -114,6 +114,9 @@ struct State {
     /// Ends this agent's stream inside the next assignment, as a stream that
     /// ends between the commit and the message.
     end_on_assign: Option<(AgentRegistry, AgentId)>,
+    /// Clears the assigned bot's stored state inside its assignment, as a
+    /// Resume that commits after the pass read the fleet (S48).
+    clear_on_assign: bool,
 }
 
 /// An in-memory store with the repository's rules.
@@ -170,26 +173,32 @@ impl Assignments for Store {
         Ok(state.fleet.clone())
     }
 
-    async fn assign(&self, bot: BotId, agent: AgentId) -> Result<bool, AssignError> {
+    async fn assign(&self, bot: BotId, agent: AgentId) -> Result<Option<Assigned>, AssignError> {
         let mut state = self.state();
         state.calls.push(Call::Assign(bot, agent));
         if let Some((registry, ending)) = state.end_on_assign.take() {
             let _ = registry.end(ending, StreamEnd::StreamError);
         }
         let enabled = state.fleet.enabled_agents.contains(&agent);
+        let clear = state.clear_on_assign;
         let Some(record) = state
             .fleet
             .bots
             .iter_mut()
             .find(|record| record.bot.id == bot && record.bot.agent.is_none())
         else {
-            return Ok(false);
+            return Ok(None);
         };
         if !enabled {
-            return Ok(false);
+            return Ok(None);
+        }
+        if clear {
+            record.bot.last = None;
         }
         record.bot.agent = Some(agent);
-        Ok(true)
+        Ok(Some(Assigned {
+            last: record.bot.last,
+        }))
     }
 
     async fn unassign(
@@ -551,6 +560,57 @@ async fn a_waiting_bot_is_placed_after_its_commit_on_a_hint() {
     assert_eq!(store.calls(), [Call::Assign(bot(2), agent(1))]);
     assert_eq!(store.agent_of(bot(2)), Some(agent(1)));
     assert!(registry.held(agent(1), bot(2)).is_some());
+    running.stop().await;
+}
+
+/// A Resume that clears a waiting bot's stored Paused after the pass read the
+/// fleet: the placement restores what its assignment read, not the pass's
+/// earlier read, so the bot starts instead of resting Paused (S48).
+#[tokio::test(start_paused = true)]
+async fn a_bot_resumed_during_a_pass_is_placed_without_the_cleared_restore() {
+    let registry = registry();
+    let store = Store::with(Vec::new(), &[1]);
+    let mut stream = connect(&registry, 1, 5, Vec::new(), 8);
+    let running = start(&registry, &store, 8);
+    assert_eq!(reconciled(stream.next().await), []);
+    let mut waiting = record(2);
+    waiting.bot.last = Some(LastReport {
+        state: paused(),
+        at: at(T0),
+    });
+    store.state().fleet.bots.push(waiting);
+    store.state().clear_on_assign = true;
+
+    running.hints.changed(Change::Store);
+
+    let Some(ServerMessage::Assign(assignment)) = stream.next().await else {
+        panic!("an assignment");
+    };
+    assert_eq!(assignment.spec.id, bot(2));
+    assert_eq!(assignment.restore, None);
+    running.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_paused_bot_still_paused_at_its_assignment_is_placed_paused() {
+    let registry = registry();
+    let store = Store::with(Vec::new(), &[1]);
+    let mut stream = connect(&registry, 1, 5, Vec::new(), 8);
+    let running = start(&registry, &store, 8);
+    assert_eq!(reconciled(stream.next().await), []);
+    let mut waiting = record(2);
+    waiting.bot.last = Some(LastReport {
+        state: paused(),
+        at: at(T0),
+    });
+    store.state().fleet.bots.push(waiting);
+
+    running.hints.changed(Change::Store);
+
+    let Some(ServerMessage::Assign(assignment)) = stream.next().await else {
+        panic!("an assignment");
+    };
+    assert!(matches!(assignment.restore, Some(StickyState::Paused(_))));
     running.stop().await;
 }
 

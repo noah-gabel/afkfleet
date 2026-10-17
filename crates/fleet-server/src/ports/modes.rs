@@ -48,3 +48,15 @@ pub trait ModeReads: Send + Sync + fmt::Debug {
     /// doesn't read back, its JSON included; the error never holds the JSON.
     async fn find(&self, id: ModeId) -> Result<Option<StoredMode>, StoreError>;
 }
+
+/// Reading modes inside a [`super::store::WriteTx`], so a write that
+/// depends on a mode decides on what its own transaction reads.
+#[async_trait]
+pub trait ModeWrites: Send {
+    /// The mode `id`, read in this transaction.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`] for a row that
+    /// doesn't read back.
+    async fn find(&mut self, id: ModeId) -> Result<Option<StoredMode>, StoreError>;
+}

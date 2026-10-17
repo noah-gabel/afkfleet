@@ -193,21 +193,21 @@ pub(super) async fn rename(
 
 /// A row of the views: an account without its envelope, its owner's role
 /// and name, and the viewer's grant.
-struct ListedRow {
-    rowid: i64,
-    id: String,
-    owner_user_id: String,
-    owner_role: String,
-    owner_name: String,
-    owner_rowid: i64,
-    kind: String,
-    mc_uuid: Option<String>,
-    mc_name: String,
-    status: String,
-    status_reason: Option<String>,
-    created_at: String,
-    grant_level: Option<String>,
-    grant_rowid: Option<i64>,
+pub(super) struct ListedRow {
+    pub(super) rowid: i64,
+    pub(super) id: String,
+    pub(super) owner_user_id: String,
+    pub(super) owner_role: String,
+    pub(super) owner_name: String,
+    pub(super) owner_rowid: i64,
+    pub(super) kind: String,
+    pub(super) mc_uuid: Option<String>,
+    pub(super) mc_name: String,
+    pub(super) status: String,
+    pub(super) status_reason: Option<String>,
+    pub(super) created_at: String,
+    pub(super) grant_level: Option<String>,
+    pub(super) grant_rowid: Option<i64>,
 }
 
 /// The account `id` as `viewer` sees it.
@@ -489,7 +489,7 @@ fn read_status(
 /// Checks every value of a view's row as [`account_from_row`] does, and the
 /// owner's role and name and the viewer's grant, each naming its own table's
 /// row when it doesn't read back.
-fn listed_from_row(row: &ListedRow) -> Result<ListedAccount, StoreError> {
+pub(super) fn listed_from_row(row: &ListedRow) -> Result<ListedAccount, StoreError> {
     let corrupt = |column| StoreError::Corrupt {
         table: MC_ACCOUNTS,
         column,

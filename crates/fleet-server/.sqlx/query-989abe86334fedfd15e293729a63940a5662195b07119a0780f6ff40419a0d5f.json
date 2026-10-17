@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE bots SET desired_state = ? WHERE id = ? AND desired_state <> ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "989abe86334fedfd15e293729a63940a5662195b07119a0780f6ff40419a0d5f"
+}
