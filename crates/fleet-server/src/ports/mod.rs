@@ -23,6 +23,9 @@
 //!   a session request's answer for the stream that asked (P10.6).
 //! - [`session_grants`]: what a `Connect` stream asks the app for a session
 //!   request: its grant or its denial, sent to that stream (P10.6).
+//! - [`ingest`]: what a `Connect` stream hands the server's ingest: the
+//!   reports about the bots it holds, and the sticky states its batches
+//!   write (P10.8).
 //! - [`assignments`]: what the reconciler asks of the store: everything it
 //!   plans from, and each change of a bot's agent, audited (P10.5).
 //! - [`reconcile`]: the hints that tell the reconciler to look again after a
@@ -69,6 +72,7 @@ pub mod chat;
 pub mod enrollment_tokens;
 pub mod envelopes;
 pub mod grants;
+pub mod ingest;
 pub mod invites;
 pub mod live_agents;
 pub mod login_attempts;

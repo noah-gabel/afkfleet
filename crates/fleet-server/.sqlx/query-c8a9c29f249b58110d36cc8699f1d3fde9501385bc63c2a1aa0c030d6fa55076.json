@@ -1,0 +1,50 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT * FROM rotated_refresh_tokens ORDER BY rowid",
+  "describe": {
+    "columns": [
+      {
+        "name": "hash",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "rotated_refresh_tokens",
+            "name": "hash"
+          }
+        }
+      },
+      {
+        "name": "session_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "rotated_refresh_tokens",
+            "name": "session_id"
+          }
+        }
+      },
+      {
+        "name": "rotated_at",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "rotated_refresh_tokens",
+            "name": "rotated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c8a9c29f249b58110d36cc8699f1d3fde9501385bc63c2a1aa0c030d6fa55076"
+}

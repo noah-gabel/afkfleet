@@ -28,11 +28,13 @@ use fleet_proto::control::{
 };
 use fleet_proto::generated as wire;
 use fleet_proto::generated::agent_control_client::AgentControlClient;
+use fleet_server::app::agents::ingest::{IngestBounds, IngestTimings, IngestWriter, Tick, ingest};
 use fleet_server::app::agents::{
     AgentConnectionService, AgentService, AssignmentService, Disabler, SessionGrantService,
 };
 use fleet_server::app::bots::BotService;
 use fleet_server::app::enrollment::EnrollmentService;
+use fleet_server::app::events::EventBus;
 use fleet_server::app::session_tokens::{MinecraftSessions, SessionTokenError};
 use fleet_server::app::users::ActingUser;
 use fleet_server::config::{Heartbeats, RateLimitConfig};
@@ -52,12 +54,14 @@ use fleet_server::infra::pki::{
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::infra::system::SystemClock;
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
-use fleet_server::ports::agent_connections::AgentConnections;
+use fleet_server::ports::agent_connections::{
+    AdmitError, Admitted, AgentConnections, Conflict, Ended, LiveCertificate, Presented,
+};
 use fleet_server::ports::agents::{Agent as AgentRow, NewAgent, NewAgentCert};
 use fleet_server::ports::assignments::{AssignError, Assigned, Assignments};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
 use fleet_server::ports::bots::{Bot, Fleet, NewBot};
-use fleet_server::ports::live_agents::LiveAgents as _;
+use fleet_server::ports::live_agents::{LiveAgents as _, PermissionEnd};
 use fleet_server::ports::msauth::{McToken, MinecraftSession};
 use fleet_server::ports::reconcile::{Change, Reconcile as _};
 use fleet_server::ports::session_grants::GrantStream;
@@ -100,6 +104,8 @@ pub(crate) struct Settings {
     pub(crate) reconcile: Option<ReconcileTimings>,
     /// `[accounts] allow_offline`, as the reconciler reads it.
     pub(crate) allow_offline: bool,
+    /// The ingest's chat queue, in all and per stream.
+    pub(crate) ingest: IngestBounds,
 }
 
 impl Default for Settings {
@@ -111,6 +117,7 @@ impl Default for Settings {
             sweep: SWEEP_INTERVAL,
             reconcile: None,
             allow_offline: true,
+            ingest: IngestBounds::default(),
         }
     }
 }
@@ -157,6 +164,10 @@ pub(crate) struct Port {
     /// Where the grants get Microsoft accounts' sessions: scripted, since
     /// no Microsoft runs here (R46).
     pub(crate) minecraft: ScriptedSessions,
+    /// The bus the ingest publishes on (S70).
+    pub(crate) events: EventBus,
+    /// The ingest's writer, which a test ticks itself.
+    ingest: tokio::sync::Mutex<IngestWriter>,
     ca: CertificateAuthority,
     ca_pem: String,
     identity: ServerIdentity,
@@ -166,6 +177,8 @@ pub(crate) struct Port {
     hints: Option<Hints>,
     /// How many of the reconciler's next detaches fail busy.
     failing_detaches: Arc<AtomicU32>,
+    /// How many of the next stream ends record nothing.
+    losing_ends: Arc<AtomicU32>,
     stop: CancellationToken,
     server: JoinSet<()>,
 }
@@ -330,6 +343,58 @@ impl Assignments for FlakyDetaches {
     }
 }
 
+/// The real connection records, whose next stream ends can be made to
+/// record nothing, as a server that dies before its end's transaction.
+#[derive(Debug)]
+struct LostEnds {
+    real: AgentConnectionService,
+    losing: Arc<AtomicU32>,
+}
+
+#[async_trait::async_trait]
+impl AgentConnections for LostEnds {
+    async fn admit(&self, presented: Presented) -> Result<Admitted, AdmitError> {
+        self.real.admit(presented).await
+    }
+
+    async fn hello(
+        &self,
+        admitted: &Admitted,
+        capacity: AgentCapacity,
+        version: &AgentVersion,
+        running: &[BotSnapshot],
+    ) -> Result<(), AdmitError> {
+        self.real.hello(admitted, capacity, version, running).await
+    }
+
+    async fn name_refused(&self, admitted: &Admitted) {
+        self.real.name_refused(admitted).await;
+    }
+
+    async fn ended(&self, admitted: &Admitted, ended: Ended) {
+        let lost = self
+            .losing
+            .try_update(Ordering::AcqRel, Ordering::Acquire, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok();
+        if !lost {
+            self.real.ended(admitted, ended).await;
+        }
+    }
+
+    async fn conflict(&self, admitted: &Admitted, conflict: Conflict) {
+        self.real.conflict(admitted, conflict).await;
+    }
+
+    async fn sweep(
+        &self,
+        live: &[LiveCertificate],
+    ) -> Result<Vec<(AgentId, PermissionEnd)>, AdmitError> {
+        self.real.sweep(live).await
+    }
+}
+
 /// The listener's own certificate and key, kept for a restart.
 #[derive(Clone)]
 struct ServerIdentity {
@@ -424,6 +489,34 @@ fn grants(
     )
 }
 
+/// A fresh registry over `db`, and the reconciler with its hints when
+/// `settings` ask for it; its detaches fail while `failing_detaches` is
+/// above zero.
+fn registry_of(
+    db: &Database,
+    clock: &ManualClock,
+    settings: &Settings,
+    failing_detaches: &Arc<AtomicU32>,
+) -> (AgentRegistry, Option<(Reconciler, Hints)>) {
+    let Some(timings) = settings.reconcile else {
+        return (AgentRegistry::new(Arc::new(clock.clone())), None);
+    };
+    let (hints, inbox) = hints(HINT_QUEUE);
+    let registry = AgentRegistry::with_reconcile(Arc::new(clock.clone()), Arc::new(hints.clone()));
+    let reconciler = Reconciler::new(
+        registry.clone(),
+        Arc::new(FlakyDetaches {
+            real: AssignmentService::new(Arc::new(clock.clone()), Arc::new(db.clone())),
+            failing: Arc::clone(failing_detaches),
+        }),
+        Arc::new(clock.clone()),
+        inbox,
+        timings,
+        settings.allow_offline,
+    );
+    (registry, Some((reconciler, hints)))
+}
+
 /// The port over `db` with `pki`: a fresh registry, and the reconciler
 /// when `settings` ask for it.
 async fn serve_on(
@@ -457,36 +550,30 @@ async fn serve_on(
     );
     let sessions = Sessions::new(CancellationToken::new());
     let failing_detaches = Arc::new(AtomicU32::new(0));
-    let (registry, reconciler) = match settings.reconcile {
-        Some(timings) => {
-            let (hints, inbox) = hints(HINT_QUEUE);
-            let registry =
-                AgentRegistry::with_reconcile(Arc::new(clock.clone()), Arc::new(hints.clone()));
-            let reconciler = Reconciler::new(
-                registry.clone(),
-                Arc::new(FlakyDetaches {
-                    real: AssignmentService::new(Arc::new(clock.clone()), Arc::new(db.clone())),
-                    failing: Arc::clone(&failing_detaches),
-                }),
-                Arc::new(clock.clone()),
-                inbox,
-                timings,
-                settings.allow_offline,
-            );
-            (registry, Some((reconciler, hints)))
-        }
-        None => (AgentRegistry::new(Arc::new(clock.clone())), None),
-    };
-    let connections: Arc<dyn AgentConnections> = Arc::new(AgentConnectionService::new(
-        Arc::new(clock.clone()),
-        Arc::new(db.clone()),
-        Arc::new(X509AgentNames),
-    ));
+    let (registry, reconciler) = registry_of(&db, &clock, &settings, &failing_detaches);
+    let losing_ends = Arc::new(AtomicU32::new(0));
+    let connections: Arc<dyn AgentConnections> = Arc::new(LostEnds {
+        real: AgentConnectionService::new(
+            Arc::new(clock.clone()),
+            Arc::new(db.clone()),
+            Arc::new(X509AgentNames),
+        ),
+        losing: Arc::clone(&losing_ends),
+    });
     let minecraft = ScriptedSessions::default();
+    let events = EventBus::new();
+    let (ingest_front, ingest_writer) = ingest(
+        Arc::new(db.clone()),
+        Arc::new(registry.clone()),
+        events.clone(),
+        IngestTimings::default(),
+        settings.ingest,
+    );
     let control = control_service(
         ControlPorts {
             connections: Arc::clone(&connections),
             grants: Arc::new(grants(&db, &clock, &registry, &minecraft, &settings)),
+            ingest: Arc::new(ingest_front),
             clock: Arc::new(clock.clone()),
         },
         limits,
@@ -521,6 +608,8 @@ async fn serve_on(
         sessions,
         registry,
         minecraft,
+        events,
+        ingest: tokio::sync::Mutex::new(ingest_writer),
         ca,
         ca_pem,
         identity,
@@ -528,6 +617,7 @@ async fn serve_on(
         settings,
         hints,
         failing_detaches,
+        losing_ends,
         stop,
         server,
     }
@@ -542,6 +632,11 @@ fn setup_entry(now: DateTime<Utc>) -> NewAuditEntry {
 }
 
 impl Port {
+    /// One tick of the ingest's writer: what waits is written, or nothing.
+    pub(crate) async fn ingest_tick(&self) -> Tick {
+        self.ingest.lock().await.tick().await
+    }
+
     /// A certificate of this CA for agent `named`, issued at `issued` for
     /// `lifetime`, with a key from the port's randomness.
     pub(crate) fn certificate(
@@ -793,6 +888,12 @@ impl Port {
         };
         self.stop().await;
         serve_on(db, clock, random, pki, settings).await
+    }
+
+    /// Makes the next `count` stream ends record nothing, as a server that
+    /// dies before their transactions.
+    pub(crate) fn lose_ends(&self, count: u32) {
+        self.losing_ends.store(count, Ordering::Release);
     }
 
     /// Makes the reconciler's next `count` detaches fail busy.
@@ -1243,6 +1344,25 @@ pub(crate) fn removed(bot: BotId) -> wire::AgentMessage {
 pub(crate) fn heartbeat() -> wire::AgentMessage {
     wire::AgentMessage {
         msg: Some(wire::agent_message::Msg::Heartbeat(wire::Heartbeat {})),
+    }
+}
+
+/// A session request for a bot no stream holds, which the registry denies
+/// at once: its answer means every message before it was handled.
+pub(crate) fn barrier() -> wire::AgentMessage {
+    let unheld = BotId::new_v7(
+        DateTime::from_timestamp_millis(1_790_000_000_000).unwrap(),
+        [0xee; 10],
+    )
+    .unwrap();
+    wire::AgentMessage {
+        msg: Some(wire::agent_message::Msg::SessionRequest(
+            wire::SessionRequest {
+                id: 7,
+                bot_id: unheld.as_uuid().as_bytes().to_vec(),
+                fresh: false,
+            },
+        )),
     }
 }
 

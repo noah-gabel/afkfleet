@@ -45,6 +45,7 @@ use fleet_server::infra::system::SystemClock;
 use fleet_server::ports::agent_connections::{
     AdmitError, Admitted, AgentConnections, Conflict, Ended, LiveCertificate, Presented, StreamEnd,
 };
+use fleet_server::ports::ingest::NoIngest;
 use fleet_server::ports::live_agents::PermissionEnd;
 use fleet_server::ports::session_grants::{GrantRequest, GrantStream, SessionGrants};
 use fleet_testkit::system::{ManualClock, SeededRandom};
@@ -312,6 +313,7 @@ impl Port {
             ControlPorts {
                 connections: connections.clone(),
                 grants: Arc::new(NoGrants),
+                ingest: Arc::new(NoIngest),
                 clock: Arc::new(clock.clone()),
             },
             limits,

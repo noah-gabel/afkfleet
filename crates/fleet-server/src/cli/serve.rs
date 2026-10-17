@@ -74,7 +74,7 @@ use fleet_proto::enrollment::SERVER_DEADLINE;
 use fleet_startup::signals::ShutdownSignals;
 use secrecy::SecretBox;
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::sync::mpsc;
 use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep_until, timeout};
 use tokio_util::sync::CancellationToken;
@@ -84,6 +84,7 @@ use tracing::{error, info, warn};
 use super::DATABASE_CLOSE;
 use super::housekeeping::Housekeeping;
 use crate::app::accounts::{AccountService, AccountSettings};
+use crate::app::agents::ingest::{IngestBounds, IngestTimings, IngestWriter, ingest};
 use crate::app::agents::{
     AgentConnectionService, AgentService, AssignmentService, SessionGrantService,
 };
@@ -91,6 +92,7 @@ use crate::app::auth::TokenService;
 use crate::app::bots::BotService;
 use crate::app::challenges::Challenges;
 use crate::app::enrollment::{EnrollmentService, EnrollmentTokenService};
+use crate::app::events::EventBus;
 use crate::app::grants::GrantService;
 use crate::app::health::HealthService;
 use crate::app::invites::InviteService;
@@ -263,6 +265,9 @@ pub struct App {
     /// The gRPC port's services, while the control plane is on: [`run`]
     /// serves them on the gRPC port.
     pub grpc: Option<GrpcRoutes>,
+    /// The internal event bus, what agents report as the ingest takes it in
+    /// (P10.8), for P11.5's live events.
+    pub events: EventBus,
     /// The shutdown's token, which [`serve`] cancels at the first signal:
     /// the session-token service keeps a child of it (ADR-0019, S64).
     pub shutdown: CancellationToken,
@@ -287,6 +292,8 @@ pub struct GrpcRoutes {
     /// The Minecraft sessions the grants hand out, stopped within the
     /// shutdown's drain (ADR-0019, S64).
     pub session_tokens: SessionTokenService,
+    /// The ingest's batch writer, stopped once every stream ended (S70).
+    pub ingest: IngestWriter,
 }
 
 /// The sweep [`serve`] runs while the gRPC port is on (ADR-0019, S27).
@@ -324,6 +331,8 @@ pub struct GrpcPort {
     pub reconciler: Reconciler,
     /// The Minecraft sessions its grants hand out, stopped within the drain.
     pub session_tokens: SessionTokenService,
+    /// The ingest's batch writer, run until every stream ended.
+    pub ingest: IngestWriter,
 }
 
 /// The clocks, the randomness, Microsoft and the pacing the app runs on.
@@ -462,6 +471,7 @@ pub fn app_with(
     let (agents, agent_service) = agent_services(&clock, &store, Arc::clone(&reconcile));
     let bots = bot_service(config, &clock, &store, &agents, reconcile);
     let shutdown = CancellationToken::new();
+    let events = EventBus::new();
     let (enrollment_tokens, grpc) = control_plane_services(
         config,
         ca,
@@ -477,6 +487,7 @@ pub fn app_with(
             vault,
             microsoft,
             shutdown: shutdown.clone(),
+            bus: events.clone(),
         },
     );
     let state = AppState::new(Services {
@@ -504,6 +515,7 @@ pub fn app_with(
         housekeeping: Housekeeping::new(limits, lockout, challenges, link_flows.flows(), agents),
         link_flows,
         grpc,
+        events,
         shutdown,
     }
 }
@@ -636,6 +648,7 @@ struct EnrollmentPorts {
     vault: Arc<dyn Vault>,
     microsoft: Arc<dyn MicrosoftAuthProvider>,
     shutdown: CancellationToken,
+    bus: EventBus,
 }
 
 /// The session-token service over `ports`' Microsoft and vault, stopping
@@ -707,10 +720,18 @@ fn control_plane_services(
     ));
     let sessions = Sessions::new(CancellationToken::new());
     let (session_tokens, grants) = session_grants(config, &ports);
+    let (ingest, ingest_writer) = ingest(
+        Arc::clone(&ports.store),
+        Arc::new(ports.registry.clone()),
+        ports.bus.clone(),
+        IngestTimings::default(),
+        IngestBounds::default(),
+    );
     let control = control_service(
         ControlPorts {
             connections: Arc::clone(&connections),
             grants,
+            ingest: Arc::new(ingest),
             clock: Arc::clone(&ports.clock),
         },
         ports.limits.clone(),
@@ -738,6 +759,7 @@ fn control_plane_services(
             },
             reconciler,
             session_tokens,
+            ingest: ingest_writer,
         }),
     )
 }
@@ -879,6 +901,7 @@ fn grpc_port(
         sweep,
         reconciler,
         session_tokens,
+        ingest,
     } = services;
     let router = grpc_listener::router(tls, enrollment, control, grpc.heartbeats)
         .map_err(StartError::Grpc)?;
@@ -890,6 +913,7 @@ fn grpc_port(
         sweep,
         reconciler,
         session_tokens,
+        ingest,
     }))
 }
 
@@ -945,12 +969,16 @@ pub async fn serve<S: ShutdownSignals>(
     let grpc = grpc.map(|port| {
         // The `Connect` streams end at the shutdown, so tonic's drain isn't
         // held by them, and each records its end before the database closes.
+        // The ingest's writer stops once they all have, so no report is
+        // admitted after its last batch (S70).
         let sessions_stop = shutdown.child_token();
         let sessions = port.sessions;
-        background.spawn(async move {
-            sessions_stop.cancelled().await;
-            sessions.shutdown().await;
-        });
+        let ingest_stop = CancellationToken::new();
+        background.spawn(end_streams_then_ingest(
+            sessions_stop,
+            async move { sessions.shutdown().await },
+            ingest_stop.clone(),
+        ));
         background.spawn(port.sweep.registry.sweep_every(
             port.sweep.connections,
             SWEEP_INTERVAL,
@@ -969,7 +997,21 @@ pub async fn serve<S: ShutdownSignals>(
         // Joined below before the database closes, like every task here,
         // and watched: an end before the shutdown stops the server.
         let stop = shutdown.child_token();
-        let watch = spawn_reconciler(&mut background, port.reconciler.run(stop.clone()), stop);
+        let (watcher, watch) = task_watch();
+        spawn_watched(
+            &mut background,
+            Watched::Reconciler,
+            port.reconciler.run(stop.clone()),
+            stop,
+            watcher.clone(),
+        );
+        spawn_watched(
+            &mut background,
+            Watched::Ingest,
+            port.ingest.run(ingest_stop.clone()),
+            ingest_stop,
+            watcher,
+        );
         Box::pin(watched(
             grpc_listener::serve(
                 port.router,
@@ -999,6 +1041,23 @@ pub async fn serve<S: ShutdownSignals>(
     .await
 }
 
+/// Waits for `stop`, then for `streams_ended`, the end of every `Connect`
+/// stream, and only then cancels `ingest_stop`, the ingest's writer's stop
+/// (P10.8; ADR-0019, S70): a stream admits reports until it has ended, so the
+/// writer's final flush comes after the last of them. Generic, so tests
+/// drive it on paused time.
+pub async fn end_streams_then_ingest<F>(
+    stop: CancellationToken,
+    streams_ended: F,
+    ingest_stop: CancellationToken,
+) where
+    F: Future<Output = ()>,
+{
+    stop.cancelled().await;
+    streams_ended.await;
+    ingest_stop.cancel();
+}
+
 /// What serve logs when the session-token service's refreshes outlast the
 /// drain.
 pub const SESSION_TOKENS_LEFT: &str = "session-token refreshes were still running when the database had to close; the server stops waiting, and a refresh token one of them rotated but hadn't stored is lost, as in a crash";
@@ -1026,56 +1085,105 @@ pub async fn stop_session_tokens<F, R>(
     }
 }
 
-/// Whether the reconciler ended before its stop was asked; see
-/// [`spawn_reconciler`].
-#[derive(Debug)]
-pub struct ReconcilerWatch(oneshot::Receiver<()>);
-
-/// Runs `reconciler` on `tasks`, which serve joins before the database
-/// closes, watched: if it ends or panics before `stop` is cancelled, that's
-/// logged at `error` and the watch tells [`watched`]. Nothing restarts it.
-pub fn spawn_reconciler<R>(
-    tasks: &mut JoinSet<()>,
-    reconciler: R,
-    stop: CancellationToken,
-) -> ReconcilerWatch
-where
-    R: Future<Output = ()> + Send + 'static,
-{
-    let (ended, watch) = oneshot::channel();
-    tasks.spawn(async move {
-        // Its own owner, so a panic comes back as a `JoinError` here.
-        let mut task = JoinSet::new();
-        task.spawn(reconciler);
-        let outcome = task.join_next().await;
-        let asked = stop.is_cancelled();
-        match outcome {
-            Some(Err(failure)) if asked => {
-                error!(error = %failure, "the reconciler failed while the server stopped");
-            }
-            Some(Err(failure)) => {
-                error!(error = %failure, "the reconciler failed; the server stops");
-            }
-            Some(Ok(())) | None if asked => return,
-            Some(Ok(())) | None => error!("the reconciler ended unasked; the server stops"),
-        }
-        if !asked {
-            // The server may have stopped meanwhile: nobody to tell.
-            let _ = ended.send(());
-        }
-    });
-    ReconcilerWatch(watch)
+/// A background task serve watches: if it ends or panics before its stop
+/// was asked, the server stops as one that ended unasked (exit 4); nothing
+/// restarts it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Watched {
+    /// The reconciler (P10.5; PR #52's review).
+    Reconciler,
+    /// The ingest's batch writer (P10.8, S70): without it, every agent's
+    /// chat would be dropped unseen.
+    Ingest,
 }
 
-/// `port` until it ends, or until `watch` says the reconciler ended
+impl Watched {
+    /// The error [`watched`] ends with when this task ended unasked.
+    #[must_use]
+    pub const fn ended(self) -> &'static str {
+        match self {
+            Self::Reconciler => RECONCILER_ENDED,
+            Self::Ingest => INGEST_ENDED,
+        }
+    }
+}
+
+/// What [`watched`] waits on: the first watched task that ended unasked.
+#[derive(Debug)]
+pub struct TaskWatch(mpsc::Receiver<Watched>);
+
+/// What a watched task's watcher tells its [`TaskWatch`] with; clones share
+/// it.
+#[derive(Debug, Clone)]
+pub struct TaskWatcher(mpsc::Sender<Watched>);
+
+/// A watch over the tasks given its watcher: [`spawn_watched`] hands each a
+/// clone.
+#[must_use]
+pub fn task_watch() -> (TaskWatcher, TaskWatch) {
+    // One slot per kind of task: each tells at most once.
+    let (watcher, watch) = mpsc::channel(2);
+    (TaskWatcher(watcher), TaskWatch(watch))
+}
+
+/// Runs `task`, the `what`, on `tasks`, which serve joins before the
+/// database closes, watched: if it ends or panics before `stop` is
+/// cancelled, that's logged at `error` and `watcher` tells [`watched`].
+/// Nothing restarts it.
+pub fn spawn_watched<T>(
+    tasks: &mut JoinSet<()>,
+    what: Watched,
+    task: T,
+    stop: CancellationToken,
+    watcher: TaskWatcher,
+) where
+    T: Future<Output = ()> + Send + 'static,
+{
+    tasks.spawn(async move {
+        // Its own owner, so a panic comes back as a `JoinError` here.
+        let mut own = JoinSet::new();
+        own.spawn(task);
+        let outcome = own.join_next().await;
+        let asked = stop.is_cancelled();
+        match (what, outcome) {
+            (Watched::Reconciler, Some(Err(failure))) if asked => {
+                error!(error = %failure, "the reconciler failed while the server stopped");
+            }
+            (Watched::Reconciler, Some(Err(failure))) => {
+                error!(error = %failure, "the reconciler failed; the server stops");
+            }
+            (Watched::Ingest, Some(Err(failure))) if asked => {
+                error!(error = %failure, "the ingest's writer failed while the server stopped");
+            }
+            (Watched::Ingest, Some(Err(failure))) => {
+                error!(error = %failure, "the ingest's writer failed; the server stops");
+            }
+            (_, Some(Ok(())) | None) if asked => return,
+            (Watched::Reconciler, Some(Ok(())) | None) => {
+                error!("the reconciler ended unasked; the server stops");
+            }
+            (Watched::Ingest, Some(Ok(())) | None) => {
+                error!("the ingest's writer ended unasked; the server stops");
+            }
+        }
+        if !asked {
+            // A full watch already tells of an earlier end, and a watch
+            // that's gone belongs to a server that stopped: either way,
+            // nothing more to tell.
+            let _ = watcher.0.try_send(what);
+        }
+    });
+}
+
+/// `port` until it ends, or until `watch` says a watched task ended
 /// unasked: then `shutdown` is cancelled, `port` drains, and the answer is
 /// an error, so serve ends like a server that ended unasked (exit 4).
 ///
 /// # Errors
-/// `port`'s error, or [`RECONCILER_ENDED`].
+/// `port`'s error, or the watched task's [`Watched::ended`].
 pub async fn watched<F, E>(
     port: F,
-    watch: ReconcilerWatch,
+    mut watch: TaskWatch,
     shutdown: CancellationToken,
 ) -> io::Result<()>
 where
@@ -1083,27 +1191,31 @@ where
     E: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
     let mut port = pin!(async { port.await.map_err(io::Error::other) });
-    // A watch whose sender is gone was a reconciler that stopped as asked.
+    // A watch whose watchers are all gone had tasks that stopped as asked.
     let ended = async {
-        if watch.0.await.is_err() {
-            core::future::pending::<()>().await;
+        match watch.0.recv().await {
+            Some(what) => what,
+            None => core::future::pending().await,
         }
     };
     tokio::select! {
         // The pinned port is polled to its end here or below, and `ended`
         // only once: cancel-safe.
         result = &mut port => result,
-        () = ended => {
+        what = ended => {
             shutdown.cancel();
             // The port drains; its own end doesn't matter any more.
             let _ = port.await;
-            Err(io::Error::other(RECONCILER_ENDED))
+            Err(io::Error::other(what.ended()))
         }
     }
 }
 
 /// The error [`watched`] ends with when the reconciler ended unasked.
 pub const RECONCILER_ENDED: &str = "the reconciler ended unasked";
+
+/// The error [`watched`] ends with when the ingest's writer ended unasked.
+pub const INGEST_ENDED: &str = "the ingest's writer ended unasked";
 
 /// `http` and, if there is one, `grpc`, as the one server [`drive`] runs:
 /// when either ends, it cancels `shutdown`, so the other drains too, and it

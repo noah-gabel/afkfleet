@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO releasing_bots\n             (bot_id, agent_id, account_id, kind, mc_name, created_at)\n         VALUES (?1, ?2, ?1, 'offline', 'gone', ?3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "10a3848d9aec3d0b47ab9c171cc027eed1b5d0067063364ab69db40fb957eae5"
+}

@@ -1,0 +1,98 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT * FROM releasing_bots ORDER BY rowid",
+  "describe": {
+    "columns": [
+      {
+        "name": "bot_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "releasing_bots",
+            "name": "bot_id"
+          }
+        }
+      },
+      {
+        "name": "agent_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "releasing_bots",
+            "name": "agent_id"
+          }
+        }
+      },
+      {
+        "name": "account_id",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "releasing_bots",
+            "name": "account_id"
+          }
+        }
+      },
+      {
+        "name": "kind",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "releasing_bots",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "mc_uuid",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "releasing_bots",
+            "name": "mc_uuid"
+          }
+        }
+      },
+      {
+        "name": "mc_name",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "releasing_bots",
+            "name": "mc_name"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "releasing_bots",
+            "name": "created_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "2f1e54cbe670cf5f6823422a436e2a47d2b0a2669b40f3a767a9475aeba69a54"
+}

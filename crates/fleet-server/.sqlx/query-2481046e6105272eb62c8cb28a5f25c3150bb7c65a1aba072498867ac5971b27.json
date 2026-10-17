@@ -1,0 +1,122 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT * FROM mc_accounts ORDER BY rowid",
+  "describe": {
+    "columns": [
+      {
+        "name": "id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "owner_user_id",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "owner_user_id"
+          }
+        }
+      },
+      {
+        "name": "kind",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "mc_uuid",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "mc_uuid"
+          }
+        }
+      },
+      {
+        "name": "mc_name",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "mc_name"
+          }
+        }
+      },
+      {
+        "name": "refresh_envelope",
+        "ordinal": 5,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "refresh_envelope"
+          }
+        }
+      },
+      {
+        "name": "status",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "created_at",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "status_reason",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "status_reason"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "2481046e6105272eb62c8cb28a5f25c3150bb7c65a1aba072498867ac5971b27"
+}

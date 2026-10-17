@@ -120,7 +120,8 @@ impl Housekeeping {
                 agent = %refused.name,
                 dropped = refused.count,
                 sessions_denied = refused.sessions_denied,
-                "an agent's reports and session requests were refused since the last report"
+                chat_dropped = refused.chat_dropped,
+                "an agent's reports, session requests or chat messages were refused since the last report"
             );
         }
     }

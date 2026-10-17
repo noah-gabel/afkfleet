@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT * FROM user_mfa ORDER BY rowid",
+  "describe": {
+    "columns": [
+      {
+        "name": "user_id",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "user_mfa",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "name": "secret_envelope",
+        "ordinal": 1,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "user_mfa",
+            "name": "secret_envelope"
+          }
+        }
+      },
+      {
+        "name": "last_used_step",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "user_mfa",
+            "name": "last_used_step"
+          }
+        }
+      },
+      {
+        "name": "confirmed_at",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "user_mfa",
+            "name": "confirmed_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7bfc7b9a47d3bf4541881b295dd0605cd59939a30fda8c7798a91b3c412a552c"
+}

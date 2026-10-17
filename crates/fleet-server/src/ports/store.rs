@@ -212,4 +212,16 @@ pub enum UnauditedWrite {
     /// failure is 24 h old and no lock runs), so an entry per batch would say
     /// nothing; no client asks for it.
     LoginAttemptsPurge,
+    /// One batch of the server's ingest (P10.8; ADR-0019, U17): at most
+    /// 1000 `chat_messages` rows, each stored only while its bot's row
+    /// names the agent that reported it, and the `bots.last_state`,
+    /// `last_state_reason` and `last_state_at` of bots whose reported state
+    /// crossed into or out of Paused or Failed (U16), written only while the
+    /// row names the agent and nothing later is stored; nothing else. The
+    /// ingest's one writer commits it at most every 500 ms while something
+    /// waits, only for reports the registry judged held (S28). The rows are
+    /// the record: an entry per batch would say only that rows were stored,
+    /// and one per row would let agent-driven volume flood the log; who
+    /// could report for which bot, and when, is audited already.
+    EventBatch,
 }

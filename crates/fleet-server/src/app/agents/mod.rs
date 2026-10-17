@@ -11,6 +11,10 @@
 //!   one place Minecraft tokens leave the server (P10.6, S57–S61), behind
 //!   the [`SessionGrants`](crate::ports::session_grants::SessionGrants)
 //!   port the gRPC port calls.
+//! - [`ingest`]: what agents report about the bots they hold, chat and
+//!   sticky states written in batches and everything published on the bus
+//!   (P10.8, S70), behind the [`Ingest`](crate::ports::ingest::Ingest) port
+//!   the gRPC port calls.
 //! - [`AgentService`]: the agents' list, disabling one (P10.10, S31), and
 //!   releasing a disabled one's bots from the server's host (P10.5, S32).
 //!   - **The list** shows every agent, newest first, with its status
@@ -27,6 +31,7 @@
 
 pub mod assignments;
 pub mod connections;
+pub mod ingest;
 pub mod session_grants;
 
 use std::sync::Arc;

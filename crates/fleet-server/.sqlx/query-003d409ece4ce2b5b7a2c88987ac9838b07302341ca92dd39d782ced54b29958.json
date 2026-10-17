@@ -1,0 +1,62 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT * FROM login_attempts ORDER BY rowid",
+  "describe": {
+    "columns": [
+      {
+        "name": "username_key",
+        "ordinal": 0,
+        "type_info": "Blob",
+        "origin": {
+          "Table": {
+            "table": "login_attempts",
+            "name": "username_key"
+          }
+        }
+      },
+      {
+        "name": "failures",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "login_attempts",
+            "name": "failures"
+          }
+        }
+      },
+      {
+        "name": "last_failure_at",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "login_attempts",
+            "name": "last_failure_at"
+          }
+        }
+      },
+      {
+        "name": "locked_until",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "login_attempts",
+            "name": "locked_until"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "003d409ece4ce2b5b7a2c88987ac9838b07302341ca92dd39d782ced54b29958"
+}

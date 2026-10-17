@@ -52,13 +52,13 @@
 
 use core::fmt;
 use core::time::Duration;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::IpAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use chrono::{DateTime, Utc};
-use fleet_core::bot::{BotSnapshot, BotSpec, LastReport, LastState, Lifecycle};
+use fleet_core::bot::{BotSnapshot, BotSpec, LastReport, LastState, Lifecycle, StickyState};
 use fleet_core::id::{AgentId, BotId};
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock;
@@ -77,6 +77,7 @@ use crate::http::error::chain;
 use crate::ports::agent_connections::{
     Admitted, AgentConnections, Conflict, LiveCertificate, StreamEnd,
 };
+use crate::ports::ingest::{StickyMarks, StickyWrite};
 pub use crate::ports::live_agents::LatestReport;
 use crate::ports::live_agents::{
     AnswerRefused, CommandRefused, HeldBot, LiveAgents, LiveStream, PermissionEnd, SessionAnswer,
@@ -123,6 +124,9 @@ struct State {
     conflicts: HashMap<AgentId, DateTime<Utc>>,
     /// Each bot's latest report from an agent that held it.
     latest: HashMap<BotId, LatestReport>,
+    /// The bots whose latest report crossed into or out of Paused or Failed
+    /// since their row stored it, for the ingest's next batch (U16).
+    sticky: BTreeSet<BotId>,
     /// The bots released streams reported `Removed` for, not yet taken.
     released: Vec<Released>,
 }
@@ -171,9 +175,19 @@ struct Live {
 /// Whether a stream's welcome was reconciled.
 enum Welcome {
     /// Not yet: the bots its hello listed, with their latest reports.
-    Listed(BTreeMap<BotId, LatestReport>),
+    Listed(BTreeMap<BotId, ListedBot>),
     /// Its full reconcile was queued.
     Reconciled,
+}
+
+/// A bot a hello listed, before its welcome is reconciled.
+struct ListedBot {
+    /// Its latest report on this stream: the hello's, or a later status.
+    report: LatestReport,
+    /// The sticky part of the hello's report, which the hello's
+    /// transaction stored for a bot assigned to this agent: a settle marks
+    /// the bot when its latest report crossed it since (U16).
+    stored: Option<StickyState>,
 }
 
 /// How an agent holds a bot (S28).
@@ -423,8 +437,19 @@ pub enum Verdict {
     /// It passes.
     Pass,
     /// It passes, and the reconciler should look again: a releasing bot's
-    /// `Removed`, or a bot being stopped that rests now.
+    /// `Removed`, or a bot being stopped that rests now on a stream that's
+    /// ending.
     Settled,
+    /// A report about a bot the stream holds assigned, on a reconciled
+    /// stream that isn't ended: it goes to the ingest, received `at` by the
+    /// server's clock (S28, S70); `settles` when it's also a resting report
+    /// of a bot being stopped, and the reconciler should look again.
+    Held {
+        /// When the server received it.
+        at: DateTime<Utc>,
+        /// Whether the reconciler should look again.
+        settles: bool,
+    },
     /// A report about a bot the agent doesn't hold: dropped and counted.
     Dropped,
     /// A session request for a bot the stream holds assigned, on a
@@ -449,6 +474,9 @@ pub struct RefusedReports {
     /// How many session requests were denied: for a bot the stream didn't
     /// hold assigned, or with its grant queue full.
     pub sessions_denied: u64,
+    /// How many chat messages the ingest dropped: past the stream's share
+    /// of its queue, or with it full (S70).
+    pub chat_dropped: u64,
 }
 
 /// One agent's refusals since the last report.
@@ -456,6 +484,7 @@ pub struct RefusedReports {
 struct RefusedCounts {
     reports: u64,
     sessions: u64,
+    chat: u64,
 }
 
 impl AgentRegistry {
@@ -568,13 +597,14 @@ impl AgentRegistry {
                     .into_iter()
                     .map(|snapshot| {
                         let bot = snapshot.bot_id;
+                        let stored = LastState::from(snapshot.state).sticky();
                         let report = LatestReport {
                             agent: lease.agent,
                             generation: lease.generation,
                             snapshot,
                             at: now,
                         };
-                        (bot, report)
+                        (bot, ListedBot { report, stored })
                     })
                     .collect();
                 let (ender, notice) = oneshot::channel();
@@ -669,7 +699,14 @@ impl AgentRegistry {
                     .get(bot)
                     .is_some_and(|entry| entry.hold == Hold::Assigned)
             });
-            state.latest.extend(assigned);
+            for (bot, listed) in assigned {
+                // A status since the hello crossed what its transaction
+                // stored: the next batch writes it (U16).
+                if LastState::from(listed.report.snapshot.state).sticky() != listed.stored {
+                    state.sticky.insert(bot);
+                }
+                state.latest.insert(bot, listed.report);
+            }
         }
         Ok(())
     }
@@ -724,9 +761,12 @@ impl AgentRegistry {
                     return None;
                 };
                 let phase = match &live.welcome {
-                    Welcome::Listed(listed) => {
-                        ViewPhase::Listed(listed.values().cloned().collect())
-                    }
+                    Welcome::Listed(listed) => ViewPhase::Listed(
+                        listed
+                            .values()
+                            .map(|listed| listed.report.clone())
+                            .collect(),
+                    ),
                     Welcome::Reconciled => {
                         let mut held: Vec<HeldView> = live
                             .holds
@@ -888,6 +928,7 @@ impl AgentRegistry {
             },
             &mut state.latest,
             &mut state.released,
+            &mut state.sticky,
             message,
         );
         if matches!(verdict, Verdict::Dropped | Verdict::DenySession(_)) {
@@ -902,7 +943,10 @@ impl AgentRegistry {
             }
         }
         drop(guard);
-        if verdict == Verdict::Settled {
+        if matches!(
+            verdict,
+            Verdict::Settled | Verdict::Held { settles: true, .. }
+        ) {
             self.shared.reconcile.changed(Change::Settled(lease.agent));
         }
         (verdict, conflict)
@@ -938,8 +982,28 @@ impl AgentRegistry {
                 name,
                 count: counts.reports,
                 sessions_denied: counts.sessions,
+                chat_dropped: counts.chat,
             })
             .collect()
+    }
+
+    /// Counts one more chat message of `lease`'s stream the ingest dropped
+    /// (S70).
+    pub fn count_dropped_chat(&self, lease: &Lease) {
+        let mut guard = self.state();
+        let state = &mut *guard;
+        let Some(slot) = state
+            .slots
+            .get(&lease.agent)
+            .filter(|slot| slot.generation == lease.generation)
+        else {
+            return;
+        };
+        let (_, counts) = state
+            .refused_reports
+            .entry(lease.agent)
+            .or_insert_with(|| (slot.name.clone(), RefusedCounts::default()));
+        counts.chat = counts.chat.saturating_add(1);
     }
 
     /// The certificates the live streams connected with.
@@ -1215,6 +1279,49 @@ impl LiveAgents for AgentRegistry {
     }
 }
 
+impl StickyMarks for AgentRegistry {
+    fn any(&self) -> bool {
+        !self.state().sticky.is_empty()
+    }
+
+    fn take(&self) -> Vec<StickyWrite> {
+        let mut guard = self.state();
+        let state = &mut *guard;
+        let marked = core::mem::take(&mut state.sticky);
+        marked
+            .into_iter()
+            .filter_map(|bot| {
+                // Still its latest, from the live, unended stream that sent
+                // it and holds the bot assigned: a resume's or a reset's
+                // clear took the report, a release or a newer stream moved
+                // the bot, and an ended stream's end records its own (S40).
+                let report = state.latest.get(&bot)?;
+                let slot = state
+                    .slots
+                    .get(&report.agent)
+                    .filter(|slot| slot.generation == report.generation)?;
+                let Phase::Live(live) = &slot.phase else {
+                    return None;
+                };
+                let held = !live.halt.is_halted()
+                    && live
+                        .holds
+                        .get(&bot)
+                        .is_some_and(|entry| entry.hold == Hold::Assigned);
+                held.then(|| StickyWrite {
+                    bot,
+                    agent: report.agent,
+                    last: report.last(),
+                })
+            })
+            .collect()
+    }
+
+    fn remark(&self, bots: &[BotId]) {
+        self.state().sticky.extend(bots.iter().copied());
+    }
+}
+
 /// Whether `note` no longer speaks for its agent: a newer stream of it was
 /// welcomed, or its live stream holds the bot assigned.
 fn stale(slots: &HashMap<AgentId, Slot>, note: &Released) -> bool {
@@ -1258,13 +1365,15 @@ struct Stream<'a> {
     now: DateTime<Utc>,
 }
 
-/// What happens to `message` from `stream` (S28, S40, S44): its reports
-/// update `latest`, and a releasing bot's `Removed` leaves a note in
-/// `released`.
+/// What happens to `message` from `stream` (S28, S40, S44, S70): its reports
+/// update `latest`, a status that crosses into or out of Paused or Failed
+/// marks its bot in `sticky` (U16), and a releasing bot's `Removed` leaves a
+/// note in `released`.
 fn judge(
     stream: Stream<'_>,
     latest: &mut HashMap<BotId, LatestReport>,
     released: &mut Vec<Released>,
+    sticky: &mut BTreeSet<BotId>,
     message: &AgentMessage,
 ) -> Verdict {
     let Stream {
@@ -1303,7 +1412,7 @@ fn judge(
             if let Welcome::Listed(listed) = &mut live.welcome {
                 return match listed.get_mut(&snapshot.bot_id) {
                     Some(listed) => {
-                        *listed = report;
+                        listed.report = report;
                         Verdict::Pass
                     }
                     None => Verdict::Dropped,
@@ -1311,14 +1420,27 @@ fn judge(
             }
             match live.holds.get(&snapshot.bot_id) {
                 Some(entry) if entry.hold == Hold::Assigned => {
-                    let rests = LastState::from(snapshot.state).rests();
-                    let stopping = entry.stopping.is_some();
+                    let state = LastState::from(snapshot.state);
+                    let settles = entry.stopping.is_some() && state.rests();
+                    let before = latest
+                        .get(&snapshot.bot_id)
+                        .and_then(|report| LastState::from(report.snapshot.state).sticky());
                     latest.insert(snapshot.bot_id, report);
-                    if stopping && rests {
-                        Verdict::Settled
-                    } else {
-                        Verdict::Pass
+                    // An ended stream's report stays its latest, which its
+                    // end records (S40), but goes nowhere else.
+                    if live.halt.is_halted() {
+                        return if settles {
+                            Verdict::Settled
+                        } else {
+                            Verdict::Pass
+                        };
                     }
+                    // Into or out of Paused or Failed, or another reason: the
+                    // next batch writes it (U16).
+                    if state.sticky() != before {
+                        sticky.insert(snapshot.bot_id);
+                    }
+                    Verdict::Held { at: now, settles }
                 }
                 Some(_) | None => Verdict::Dropped,
             }
@@ -1329,7 +1451,12 @@ fn judge(
                 // An honest agent sends it only after a removal the server
                 // asked for: it crossed a newer assignment (S44).
                 (Some(Hold::Assigned), BotEventKind::Removed) => Verdict::Dropped,
-                (Some(Hold::Assigned), _) => Verdict::Pass,
+                // Holds exist only once the welcome is reconciled.
+                (Some(Hold::Assigned), _) if live.halt.is_halted() => Verdict::Pass,
+                (Some(Hold::Assigned), _) => Verdict::Held {
+                    at: now,
+                    settles: false,
+                },
                 (Some(Hold::Releasing), BotEventKind::Removed) => {
                     live.holds.remove(&event.bot_id);
                     released.push(Released {
@@ -1900,6 +2027,7 @@ mod tests {
                 name: AgentName::try_from("agent-1").unwrap(),
                 count: 3,
                 sessions_denied: 0,
+                chat_dropped: 0,
             }]
         );
         assert_eq!(registry.take_refused_reports(), Vec::new());
@@ -1918,7 +2046,11 @@ mod tests {
         ];
         drop(lease);
 
-        assert_eq!(verdicts, [Verdict::Pass, Verdict::Pass]);
+        let held = Verdict::Held {
+            at: at("2027-01-15T08:00:03Z"),
+            settles: false,
+        };
+        assert_eq!(verdicts, [held.clone(), held]);
         let latest = registry.latest(bot(1)).unwrap();
         assert_eq!(latest.agent, agent(1));
         assert_eq!(latest.at, at("2027-01-15T08:00:03Z"));
@@ -1991,12 +2123,19 @@ mod tests {
         let after = registry.admit(&lease, &status(bot(1))).0;
 
         assert_eq!(removed, Verdict::Dropped);
-        assert_eq!(after, Verdict::Pass, "still held");
+        assert_eq!(
+            after,
+            Verdict::Held {
+                at: at(T0),
+                settles: false
+            },
+            "still held"
+        );
         assert_eq!(registry.take_released(), []);
     }
 
     #[test]
-    fn a_stopping_bots_resting_report_settles_and_a_running_one_passes() {
+    fn a_stopping_bots_resting_report_settles_and_a_running_one_is_held() {
         let (registry, _) = registry();
         let (lease, _queued, _ended) = live(&registry, 1, 4);
         registry
@@ -2021,8 +2160,20 @@ mod tests {
             )
             .0;
 
-        assert_eq!(running, Verdict::Pass);
-        assert_eq!(resting, Verdict::Settled);
+        assert_eq!(
+            running,
+            Verdict::Held {
+                at: at(T0),
+                settles: false
+            }
+        );
+        assert_eq!(
+            resting,
+            Verdict::Held {
+                at: at(T0),
+                settles: true
+            }
+        );
     }
 
     #[test]
@@ -2230,6 +2381,7 @@ mod tests {
                 name: AgentName::try_from("agent-1").unwrap(),
                 count: 1,
                 sessions_denied: 2,
+                chat_dropped: 0,
             }],
             "the unheld bot's request and the full queue; not the held bot's"
         );
@@ -2842,7 +2994,10 @@ mod tests {
         let (registry, clock) = registry();
         let (lease, _queued, _ended) = live(&registry, 1, 4);
         settle(&registry, &lease, &[(1, Hold::Assigned)]);
-        assert_eq!(registry.admit(&lease, &status(bot(1))).0, Verdict::Pass);
+        assert!(matches!(
+            registry.admit(&lease, &status(bot(1))).0,
+            Verdict::Held { .. }
+        ));
         let kept = LiveAgents::latest(&registry, bot(1)).unwrap();
 
         let taken = registry.take_latest(bot(1));
@@ -2851,7 +3006,10 @@ mod tests {
         let back = LiveAgents::latest(&registry, bot(1));
         registry.take_latest(bot(1));
         clock.advance(Duration::from_secs(1));
-        assert_eq!(registry.admit(&lease, &online(bot(1))).0, Verdict::Pass);
+        assert!(matches!(
+            registry.admit(&lease, &online(bot(1))).0,
+            Verdict::Held { .. }
+        ));
         registry.put_back_latest(kept.clone());
 
         assert_eq!(kept.snapshot.state, BotState::Stopped);
@@ -2870,5 +3028,258 @@ mod tests {
             "the newer report stays"
         );
         assert_eq!(registry.take_latest(bot(9)), None);
+    }
+
+    // --- What reaches the ingest (P10.8; S28, S70) ---------------------------------------
+
+    fn paused_state() -> BotState {
+        BotState::Paused {
+            reason: fleet_core::bot::PauseReason::Conflict {
+                kind: fleet_core::disconnect::ConflictKind::DuplicateLogin,
+            },
+        }
+    }
+
+    fn paused(bot: BotId) -> AgentMessage {
+        AgentMessage::Status(snapshot(bot, paused_state()))
+    }
+
+    fn failed(bot: BotId, reason: FailReason) -> AgentMessage {
+        AgentMessage::Status(snapshot(bot, BotState::Failed { reason }))
+    }
+
+    #[test]
+    fn a_held_bots_status_and_events_go_to_the_ingest_with_their_receipt_time() {
+        let (registry, clock) = registry();
+        let (lease, _queued, _ended) = live(&registry, 1, 4);
+        settle(&registry, &lease, &[(1, Hold::Assigned)]);
+        clock.advance(Duration::from_secs(2));
+
+        let verdicts = [
+            registry.admit(&lease, &online(bot(1))).0,
+            registry.admit(&lease, &event(bot(1), BotEventKind::Died)).0,
+            registry
+                .admit(
+                    &lease,
+                    &event(
+                        bot(1),
+                        BotEventKind::ChatReceived(fleet_core::chat::IncomingChat::system("hello")),
+                    ),
+                )
+                .0,
+        ];
+
+        let held = Verdict::Held {
+            at: at("2027-01-15T08:00:02Z"),
+            settles: false,
+        };
+        assert_eq!(verdicts, [held.clone(), held.clone(), held]);
+    }
+
+    #[test]
+    fn a_listed_releasing_or_unheld_bots_reports_never_go_to_the_ingest() {
+        let (registry, _) = registry();
+        let (lease, _queued, _ended) =
+            live_with(&registry, 1, 4, vec![snapshot(bot(1), BotState::Stopped)]);
+
+        let listed = [
+            registry.admit(&lease, &online(bot(1))).0,
+            registry.admit(&lease, &event(bot(1), BotEventKind::Died)).0,
+        ];
+        settle(&registry, &lease, &[(2, Hold::Releasing)]);
+        let after = [
+            registry.admit(&lease, &online(bot(1))).0,
+            registry.admit(&lease, &online(bot(2))).0,
+            registry.admit(&lease, &event(bot(2), BotEventKind::Died)).0,
+            registry.admit(&lease, &online(bot(3))).0,
+        ];
+
+        assert_eq!(listed, [Verdict::Pass, Verdict::Dropped]);
+        assert!(
+            after.iter().all(|verdict| *verdict == Verdict::Dropped),
+            "{after:?}"
+        );
+    }
+
+    #[test]
+    fn an_ended_streams_reports_never_go_to_the_ingest() {
+        let (registry, _) = registry();
+        let (lease, _queued, _ended) = live(&registry, 1, 4);
+        settle(&registry, &lease, &[(1, Hold::Assigned)]);
+
+        assert!(registry.end(agent(1), StreamEnd::Disabled));
+        let verdicts = [
+            registry.admit(&lease, &online(bot(1))).0,
+            registry.admit(&lease, &event(bot(1), BotEventKind::Died)).0,
+        ];
+
+        assert_eq!(verdicts, [Verdict::Pass, Verdict::Pass]);
+    }
+
+    #[test]
+    fn dropped_chat_is_counted_with_the_agents_refused_reports() {
+        let (registry, _) = registry();
+        let (lease, _queued, _ended) = live(&registry, 1, 4);
+        settle(&registry, &lease, &[(1, Hold::Assigned)]);
+
+        registry.count_dropped_chat(&lease);
+        registry.count_dropped_chat(&lease);
+
+        assert_eq!(
+            registry.take_refused_reports(),
+            vec![RefusedReports {
+                agent: agent(1),
+                name: AgentName::try_from("agent-1").unwrap(),
+                count: 0,
+                sessions_denied: 0,
+                chat_dropped: 2,
+            }]
+        );
+    }
+
+    // --- Sticky crossings (U16) ----------------------------------------------------------
+
+    fn written(bot: BotId, state: LastState) -> StickyWrite {
+        StickyWrite {
+            bot,
+            agent: agent(1),
+            last: LastReport { state, at: at(T0) },
+        }
+    }
+
+    #[test]
+    fn a_status_entering_or_leaving_paused_or_failed_marks_its_bot_once() {
+        let (registry, _) = registry();
+        let (lease, _queued, _ended) = live(&registry, 1, 4);
+        settle(
+            &registry,
+            &lease,
+            &[(1, Hold::Assigned), (2, Hold::Assigned)],
+        );
+
+        let _ = registry.admit(&lease, &online(bot(1)));
+        let none_yet = StickyMarks::any(&registry);
+        let _ = registry.admit(&lease, &paused(bot(1)));
+        let _ = registry.admit(&lease, &failed(bot(2), FailReason::Auth));
+        let entered = StickyMarks::any(&registry);
+        let first = StickyMarks::take(&registry);
+        let after_take = StickyMarks::any(&registry);
+        let _ = registry.admit(&lease, &paused(bot(1)));
+        let same_again = StickyMarks::take(&registry);
+        let _ = registry.admit(&lease, &online(bot(1)));
+        let _ = registry.admit(&lease, &failed(bot(2), FailReason::CrashLoop));
+        let second = StickyMarks::take(&registry);
+
+        assert!(!none_yet, "online crosses nothing");
+        assert!(entered);
+        assert_eq!(
+            first,
+            vec![
+                written(bot(1), LastState::from(paused_state())),
+                written(bot(2), LastState::Failed(FailReason::Auth)),
+            ]
+        );
+        assert!(!after_take);
+        assert_eq!(same_again, Vec::new(), "the same sticky state again");
+        assert_eq!(
+            second,
+            vec![
+                written(bot(1), LastState::Online),
+                written(bot(2), LastState::Failed(FailReason::CrashLoop)),
+            ],
+            "leaving it, and another reason"
+        );
+    }
+
+    #[test]
+    fn a_listed_bots_crossing_before_the_reconcile_is_marked_at_the_settle() {
+        let (registry, _) = registry();
+        let (lease, _queued, _ended) = live_with(
+            &registry,
+            1,
+            4,
+            vec![
+                snapshot(bot(1), BotState::Stopped),
+                snapshot(bot(2), BotState::Stopped),
+            ],
+        );
+
+        let _ = registry.admit(&lease, &paused(bot(1)));
+        let _ = registry.admit(&lease, &online(bot(2)));
+        let before = StickyMarks::any(&registry);
+        settle(
+            &registry,
+            &lease,
+            &[(1, Hold::Assigned), (2, Hold::Assigned)],
+        );
+        let taken = StickyMarks::take(&registry);
+
+        assert!(!before, "nothing is marked before the reconcile");
+        assert_eq!(taken.iter().map(|w| w.bot).collect::<Vec<_>>(), [bot(1)]);
+    }
+
+    #[test]
+    fn the_take_writes_only_a_bots_latest_report_from_the_stream_that_holds_it_assigned() {
+        let (registry, _) = registry();
+        let (lease, _queued, _ended) = live(&registry, 1, 8);
+        settle(
+            &registry,
+            &lease,
+            &[
+                (1, Hold::Assigned),
+                (2, Hold::Assigned),
+                (3, Hold::Assigned),
+            ],
+        );
+        for n in 1..=3 {
+            let _ = registry.admit(&lease, &paused(bot(n)));
+        }
+
+        // A resume took the first bot's kept report (S48); the second is
+        // being released.
+        let _ = registry.take_latest(bot(1));
+        registry
+            .hold_and_send(
+                agent(1),
+                lease.generation,
+                bot(2),
+                entry(Hold::Releasing, None),
+                Some(unassign(2)),
+            )
+            .unwrap();
+        let taken = StickyMarks::take(&registry);
+
+        assert_eq!(taken.iter().map(|w| w.bot).collect::<Vec<_>>(), [bot(3)]);
+        assert!(
+            !StickyMarks::any(&registry),
+            "the refused marks are dropped"
+        );
+    }
+
+    #[test]
+    fn an_ended_streams_marks_are_never_taken() {
+        let (registry, _) = registry();
+        let (lease, _queued, _ended) = live(&registry, 1, 4);
+        settle(&registry, &lease, &[(1, Hold::Assigned)]);
+        let _ = registry.admit(&lease, &paused(bot(1)));
+
+        assert!(registry.end(agent(1), StreamEnd::Disabled));
+
+        assert_eq!(StickyMarks::take(&registry), Vec::new());
+    }
+
+    #[test]
+    fn a_remark_marks_its_bots_again() {
+        let (registry, _) = registry();
+        let (lease, _queued, _ended) = live(&registry, 1, 4);
+        settle(&registry, &lease, &[(1, Hold::Assigned)]);
+        let _ = registry.admit(&lease, &paused(bot(1)));
+        let first = StickyMarks::take(&registry);
+
+        StickyMarks::remark(&registry, &[bot(1)]);
+        let again = StickyMarks::take(&registry);
+
+        assert_eq!(first.len(), 1);
+        assert_eq!(again, first);
     }
 }

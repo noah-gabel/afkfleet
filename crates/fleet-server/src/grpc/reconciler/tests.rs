@@ -815,7 +815,10 @@ async fn a_resting_report_unassigns_before_the_bound() {
     );
     running.hints.changed(Change::Settled(agent(1)));
 
-    assert_eq!(verdict, crate::grpc::registry::Verdict::Settled);
+    assert!(matches!(
+        verdict,
+        crate::grpc::registry::Verdict::Held { settles: true, .. }
+    ));
     assert!(matches!(stream.next().await, Some(ServerMessage::Unassign(id)) if id == bot(1)));
     running.stop().await;
 }

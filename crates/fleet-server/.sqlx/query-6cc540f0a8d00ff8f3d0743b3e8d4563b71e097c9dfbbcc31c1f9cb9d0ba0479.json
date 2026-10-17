@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO rotated_refresh_tokens (hash, session_id, rotated_at)\n         VALUES (zeroblob(32), ?1, ?2)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "6cc540f0a8d00ff8f3d0743b3e8d4563b71e097c9dfbbcc31c1f9cb9d0ba0479"
+}

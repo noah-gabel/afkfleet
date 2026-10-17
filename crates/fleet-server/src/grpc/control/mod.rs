@@ -107,6 +107,7 @@ use crate::http::error::{BUSY_RETRY_AFTER, chain, whole_seconds};
 use crate::http::middleware::RequestIds;
 use crate::http::rate_limit::RateLimits;
 use crate::ports::agent_connections::{AdmitError, AgentConnections, Presented};
+use crate::ports::ingest::Ingest;
 use crate::ports::session_grants::SessionGrants;
 
 /// No client certificate.
@@ -172,13 +173,16 @@ impl ControlTimings {
 }
 
 /// What the control service asks the app: the agents' connections, the
-/// session grants, and the server's clock.
+/// session grants, the ingest of what the agents report, and the server's
+/// clock.
 #[derive(Debug, Clone)]
 pub struct ControlPorts {
     /// Admitting a certificate, recording a hello and a stream's end.
     pub connections: Arc<dyn AgentConnections>,
     /// The answers to session requests (P10.6).
     pub grants: Arc<dyn SessionGrants>,
+    /// Where the reports about the bots a stream holds go (P10.8).
+    pub ingest: Arc<dyn Ingest>,
     /// The server's clock.
     pub clock: Arc<dyn Clock>,
 }
@@ -215,6 +219,7 @@ impl Sessions {
 pub struct ControlGrpc {
     connections: Arc<dyn AgentConnections>,
     grants: Arc<dyn SessionGrants>,
+    ingest: Arc<dyn Ingest>,
     clock: Arc<dyn Clock>,
     limits: RateLimits,
     timings: ControlTimings,
@@ -270,6 +275,8 @@ impl AgentControl for ControlGrpc {
             connection,
             connections: Arc::clone(&self.connections),
             grants: Arc::clone(&self.grants),
+            ingest: Arc::clone(&self.ingest),
+            share: self.ingest.share(),
             requests: GrantQueue::new(self.timings.grants),
             clock: Arc::clone(&self.clock),
             limits: self.limits.clone(),
@@ -319,12 +326,14 @@ pub fn control_service(
     let ControlPorts {
         connections,
         grants,
+        ingest,
         clock,
     } = ports;
     InterceptedService::new(
         AgentControlServer::new(ControlGrpc {
             connections,
             grants,
+            ingest,
             clock,
             limits: limits.clone(),
             timings,
