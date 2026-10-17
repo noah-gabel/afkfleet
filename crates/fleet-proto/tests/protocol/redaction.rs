@@ -94,6 +94,51 @@ fn the_validated_grant_keeps_its_token_secret() {
     }
 }
 
+fn offline_grant() -> wire::ServerMessage {
+    wire::ServerMessage {
+        msg: Some(wire::server_message::Msg::SessionGrant(
+            wire::SessionGrant {
+                id: 1,
+                bot_id: BOT.to_vec(),
+                session: Some(wire::session_grant::Session::Offline(
+                    wire::OfflineSession {
+                        username: NAME.to_owned(),
+                    },
+                )),
+            },
+        )),
+    }
+}
+
+/// The validated grant, and the message around it, print the session's
+/// kind and expiry: never the name or the UUID (the threat model), like
+/// the wire's `OnlineSession`.
+#[rstest::rstest]
+#[case::online(
+    grant(TOKEN),
+    "credentials: Online { expires_at: 2026-09-21T14:13:20Z, .. }"
+)]
+#[case::offline(offline_grant(), "credentials: Offline { .. }")]
+fn the_validated_grant_shows_its_kind_and_expiry_never_the_name_or_the_uuid(
+    #[case] message: wire::ServerMessage,
+    #[case] kind: &str,
+) {
+    let ServerMessage::SessionGrant(grant) = ServerMessage::try_from(message).unwrap() else {
+        unreachable!("a grant");
+    };
+    let message = ServerMessage::SessionGrant(grant.clone());
+
+    for output in [
+        format!("{grant:?}"),
+        format!("{grant:#?}"),
+        format!("{message:?}"),
+        format!("{message:#?}"),
+    ] {
+        assert_hides_the_session(&output);
+    }
+    assert!(format!("{grant:?}").contains(kind), "{grant:?}");
+}
+
 #[test]
 fn a_refused_token_never_shows_in_the_error() {
     let refused = format!("{TOKEN} with a space");

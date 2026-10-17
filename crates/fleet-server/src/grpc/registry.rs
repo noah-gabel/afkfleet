@@ -33,8 +33,13 @@
 //!   listed counts before the welcome is reconciled. Anything else about a
 //!   bot it doesn't hold is dropped and counted. A releasing bot passes only
 //!   its `Removed`, which ends the hold and leaves a note for the reconciler;
-//!   a `Removed` of an assigned bot frees nothing. A session request is
-//!   denied, retryable, until P10.6 grants them.
+//!   a `Removed` of an assigned bot frees nothing.
+//! - **Session requests** (P10.6; S57): one passes only while the stream is
+//!   reconciled, not ended, and holds its bot assigned; any other is denied
+//!   at once, retryable, and counted with the dropped reports. A request's
+//!   answer goes only to the stream that asked, by its generation, through
+//!   [`LiveAgents::answer_session`]: a grant only while that stream still
+//!   holds the bot assigned, checked and queued in one critical section.
 //! - **Hints** (S37): a welcome, a `Settled` verdict and a live stream's end
 //!   tell the reconciler to look again, once the lock is released.
 //! - **Conflicts** (S26): a message on the live stream after a refused claim
@@ -60,7 +65,7 @@ use fleet_core::system::Clock;
 use fleet_core::value::{AgentCapacity, AgentName};
 use fleet_proto::control::{
     AgentMessage, BotEventKind, LifecycleCommand, MAX_SERVER_MESSAGE_BYTES, ServerMessage,
-    SessionRequest, server_message_len,
+    SessionDenied, SessionGrant, SessionRequest, SessionRequestId, server_message_len,
 };
 use fleet_proto::generated as wire;
 use tokio::sync::{mpsc, oneshot};
@@ -73,7 +78,10 @@ use crate::ports::agent_connections::{
     Admitted, AgentConnections, Conflict, LiveCertificate, StreamEnd,
 };
 pub use crate::ports::live_agents::LatestReport;
-use crate::ports::live_agents::{CommandRefused, HeldBot, LiveAgents, LiveStream, PermissionEnd};
+use crate::ports::live_agents::{
+    AnswerRefused, CommandRefused, HeldBot, LiveAgents, LiveStream, PermissionEnd, SessionAnswer,
+    SessionOutcome,
+};
 use crate::ports::reconcile::{Change, NoReconcile, Reconcile};
 
 /// How often the sweep checks the live streams' certificates (S27).
@@ -108,8 +116,9 @@ struct State {
     /// The last generation handed out; the first is 1.
     generations: u64,
     slots: HashMap<AgentId, Slot>,
-    /// The reports dropped since the last report, per agent.
-    refused_reports: BTreeMap<AgentId, (AgentName, u64)>,
+    /// The reports dropped and the session requests denied since the last
+    /// report, per agent.
+    refused_reports: BTreeMap<AgentId, (AgentName, RefusedCounts)>,
     /// When each agent's last conflict was handed out.
     conflicts: HashMap<AgentId, DateTime<Utc>>,
     /// Each bot's latest report from an agent that held it.
@@ -418,20 +427,35 @@ pub enum Verdict {
     Settled,
     /// A report about a bot the agent doesn't hold: dropped and counted.
     Dropped,
-    /// A session request, which is denied, retryable, until P10.6.
+    /// A session request for a bot the stream holds assigned, on a
+    /// reconciled stream that isn't ended: its grant is worked out.
+    Session(SessionRequest),
+    /// Any other session request: denied at once, retryable, and counted
+    /// (S57).
     DenySession(SessionRequest),
 }
 
-/// How many reports one agent sent that were dropped since the last
-/// report (S28, R21).
+/// What one agent sent that was refused since the last report: reports
+/// about bots it doesn't hold (S28, R21) and session requests denied before
+/// any grant was worked out (S57, R43).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RefusedReports {
     /// The agent.
     pub agent: AgentId,
     /// Its name.
     pub name: AgentName,
-    /// How many.
+    /// How many reports were dropped.
     pub count: u64,
+    /// How many session requests were denied: for a bot the stream didn't
+    /// hold assigned, or with its grant queue full.
+    pub sessions_denied: u64,
+}
+
+/// One agent's refusals since the last report.
+#[derive(Debug, Clone, Copy, Default)]
+struct RefusedCounts {
+    reports: u64,
+    sessions: u64,
 }
 
 impl AgentRegistry {
@@ -866,12 +890,16 @@ impl AgentRegistry {
             &mut state.released,
             message,
         );
-        if verdict == Verdict::Dropped {
-            let (_, count) = state
+        if matches!(verdict, Verdict::Dropped | Verdict::DenySession(_)) {
+            let (_, counts) = state
                 .refused_reports
                 .entry(lease.agent)
-                .or_insert_with(|| (slot.name.clone(), 0));
-            *count = count.saturating_add(1);
+                .or_insert_with(|| (slot.name.clone(), RefusedCounts::default()));
+            if verdict == Verdict::Dropped {
+                counts.reports = counts.reports.saturating_add(1);
+            } else {
+                counts.sessions = counts.sessions.saturating_add(1);
+            }
         }
         drop(guard);
         if verdict == Verdict::Settled {
@@ -880,12 +908,37 @@ impl AgentRegistry {
         (verdict, conflict)
     }
 
-    /// The reports dropped since the last call, per agent.
+    /// Counts one more session request of `lease`'s stream denied before
+    /// its grant was worked out: its grant queue was full (S57, R43).
+    pub fn count_denied_session(&self, lease: &Lease) {
+        let mut guard = self.state();
+        let state = &mut *guard;
+        let Some(slot) = state
+            .slots
+            .get(&lease.agent)
+            .filter(|slot| slot.generation == lease.generation)
+        else {
+            return;
+        };
+        let (_, counts) = state
+            .refused_reports
+            .entry(lease.agent)
+            .or_insert_with(|| (slot.name.clone(), RefusedCounts::default()));
+        counts.sessions = counts.sessions.saturating_add(1);
+    }
+
+    /// The reports dropped and the session requests denied since the last
+    /// call, per agent.
     #[must_use]
     pub fn take_refused_reports(&self) -> Vec<RefusedReports> {
         core::mem::take(&mut self.state().refused_reports)
             .into_iter()
-            .map(|(agent, (name, count))| RefusedReports { agent, name, count })
+            .map(|(agent, (name, counts))| RefusedReports {
+                agent,
+                name,
+                count: counts.reports,
+                sessions_denied: counts.sessions,
+            })
             .collect()
     }
 
@@ -1097,6 +1150,69 @@ impl LiveAgents for AgentRegistry {
         }
         queue(slot, message).map_err(unsendable)
     }
+
+    fn answer_session(
+        &self,
+        agent: AgentId,
+        generation: u64,
+        answer: SessionAnswer,
+    ) -> Result<(), AnswerRefused> {
+        let unsendable = |error| match error {
+            SendError::NotConnected => AnswerRefused::NotConnected,
+            SendError::QueueFull => AnswerRefused::QueueFull,
+            SendError::TooLarge | SendError::Unwritable => AnswerRefused::Unsendable,
+        };
+        let id = SessionRequestId::new(answer.number);
+        let bot = answer.bot;
+        let (message, grant) = match answer.outcome {
+            SessionOutcome::Grant(credentials) => (
+                ServerMessage::SessionGrant(SessionGrant {
+                    id,
+                    bot_id: bot,
+                    credentials,
+                }),
+                true,
+            ),
+            SessionOutcome::Denied { retryable } => (
+                ServerMessage::SessionDenied(SessionDenied {
+                    id,
+                    bot_id: bot,
+                    retryable,
+                }),
+                false,
+            ),
+        };
+        // Written before the lock: a refused grant's wire copy of the token
+        // is wiped when it's dropped (S7).
+        let message = self.wire(message).map_err(unsendable)?;
+        // One critical section, as `command`'s (S57): the stream that asked,
+        // still live and not ended, gets the answer, and a grant only while
+        // that stream holds the bot assigned; a stream that replaced it,
+        // whose request numbers start at 1 again, gets nothing.
+        let mut state = self.state();
+        let Some(slot) = state
+            .slots
+            .get_mut(&agent)
+            .filter(|slot| slot.generation == generation)
+        else {
+            return Err(AnswerRefused::NotConnected);
+        };
+        let Phase::Live(live) = &slot.phase else {
+            return Err(AnswerRefused::NotConnected);
+        };
+        if live.halt.is_halted() {
+            return Err(AnswerRefused::NotConnected);
+        }
+        if grant
+            && !live
+                .holds
+                .get(&bot)
+                .is_some_and(|entry| entry.hold == Hold::Assigned)
+        {
+            return Err(AnswerRefused::NotHeld);
+        }
+        queue(slot, message).map_err(unsendable)
+    }
 }
 
 /// Whether `note` no longer speaks for its agent: a newer stream of it was
@@ -1159,7 +1275,22 @@ fn judge(
     } = stream;
     match message {
         AgentMessage::Hello(_) | AgentMessage::Heartbeat => Verdict::Pass,
-        AgentMessage::SessionRequest(request) => Verdict::DenySession(*request),
+        // Only a reconciled stream that isn't ended, for a bot it holds
+        // assigned: never one held releasing or listed in a hello not yet
+        // reconciled (S57).
+        AgentMessage::SessionRequest(request) => {
+            let holds = !live.halt.is_halted()
+                && matches!(live.welcome, Welcome::Reconciled)
+                && live
+                    .holds
+                    .get(&request.bot_id)
+                    .is_some_and(|entry| entry.hold == Hold::Assigned);
+            if holds {
+                Verdict::Session(*request)
+            } else {
+                Verdict::DenySession(*request)
+            }
+        }
         AgentMessage::Status(snapshot) => {
             let report = LatestReport {
                 agent,
@@ -1222,6 +1353,7 @@ mod tests {
     use async_trait::async_trait;
     use fleet_core::bot::{BotState, DesiredRunState, FailReason};
     use fleet_core::id::RequestId;
+    use fleet_core::mc::SessionCredentials;
     use fleet_core::value::{AgentCapacity, AgentVersion};
     use fleet_proto::control::{BotEvent, BotEventKind, SessionRequestId, Welcome};
     use fleet_testkit::system::ManualClock;
@@ -1767,6 +1899,7 @@ mod tests {
                 agent: agent(1),
                 name: AgentName::try_from("agent-1").unwrap(),
                 count: 3,
+                sessions_denied: 0,
             }]
         );
         assert_eq!(registry.take_refused_reports(), Vec::new());
@@ -1992,19 +2125,230 @@ mod tests {
         assert_eq!(taken, []);
     }
 
-    #[test]
-    fn a_session_request_is_denied() {
-        let (registry, _) = registry();
-        let (lease, _queued, _ended) = live(&registry, 1, 4);
-        let request = SessionRequest {
-            id: SessionRequestId::new(NonZeroU64::MIN),
-            bot_id: bot(1),
+    // --- Session requests (P10.6; S57) -------------------------------------------------
+
+    fn session_request(number: u64, bot: BotId) -> SessionRequest {
+        SessionRequest {
+            id: SessionRequestId::new(NonZeroU64::new(number).unwrap()),
+            bot_id: bot,
             fresh: false,
+        }
+    }
+
+    fn ask(registry: &AgentRegistry, lease: &Lease, request: SessionRequest) -> Verdict {
+        registry
+            .admit(lease, &AgentMessage::SessionRequest(request))
+            .0
+    }
+
+    /// An online session whose token is `token`.
+    fn online_session(token: &str) -> SessionCredentials {
+        SessionCredentials::Online {
+            username: "AfkBot1".parse().unwrap(),
+            uuid: "4566e69f-c907-48ee-8d71-d7ba5aa00d20"
+                .parse::<fleet_core::value::McUuid>()
+                .unwrap()
+                .into(),
+            access_token: secrecy::SecretString::from(token),
+            expires_at: at("2027-01-16T08:00:00Z"),
+        }
+    }
+
+    fn grant(number: u64, bot: BotId, token: &str) -> SessionAnswer {
+        SessionAnswer {
+            number: NonZeroU64::new(number).unwrap(),
+            bot,
+            outcome: SessionOutcome::Grant(online_session(token)),
+        }
+    }
+
+    fn denial(number: u64, bot: BotId, retryable: bool) -> SessionAnswer {
+        SessionAnswer {
+            number: NonZeroU64::new(number).unwrap(),
+            bot,
+            outcome: SessionOutcome::Denied { retryable },
+        }
+    }
+
+    /// The session answer `message` is, read back as the agent reads it.
+    fn answered(message: wire::ServerMessage) -> ServerMessage {
+        let answer = ServerMessage::try_from(message).unwrap();
+        assert!(
+            matches!(
+                answer,
+                ServerMessage::SessionGrant(_) | ServerMessage::SessionDenied(_)
+            ),
+            "{answer:?}"
+        );
+        answer
+    }
+
+    #[test]
+    fn a_session_request_passes_only_for_a_bot_its_reconciled_stream_holds_assigned() {
+        let (registry, _) = registry();
+        let (lease, _queued, _ended) =
+            live_with(&registry, 1, 8, vec![snapshot(bot(1), BotState::Stopped)]);
+
+        let unreconciled = ask(&registry, &lease, session_request(1, bot(1)));
+        settle(
+            &registry,
+            &lease,
+            &[(1, Hold::Assigned), (2, Hold::Releasing)],
+        );
+        let assigned = ask(&registry, &lease, session_request(2, bot(1)));
+        let releasing = ask(&registry, &lease, session_request(3, bot(2)));
+        let unknown = ask(&registry, &lease, session_request(4, bot(3)));
+        assert!(registry.end(agent(1), StreamEnd::StreamError));
+        let ended = ask(&registry, &lease, session_request(5, bot(1)));
+
+        assert_eq!(
+            unreconciled,
+            Verdict::DenySession(session_request(1, bot(1))),
+            "a hello's bot before its welcome is reconciled"
+        );
+        assert_eq!(assigned, Verdict::Session(session_request(2, bot(1))));
+        assert_eq!(releasing, Verdict::DenySession(session_request(3, bot(2))));
+        assert_eq!(unknown, Verdict::DenySession(session_request(4, bot(3))));
+        assert_eq!(ended, Verdict::DenySession(session_request(5, bot(1))));
+    }
+
+    #[test]
+    fn denied_session_requests_are_counted_with_the_agents_refused_reports() {
+        let (registry, _) = registry();
+        let (lease, _queued, _ended) = live(&registry, 1, 8);
+        settle(&registry, &lease, &[(1, Hold::Assigned)]);
+
+        let _ = ask(&registry, &lease, session_request(1, bot(2)));
+        let _ = ask(&registry, &lease, session_request(2, bot(1)));
+        registry.count_denied_session(&lease);
+        let _ = registry.admit(&lease, &status(bot(3)));
+
+        assert_eq!(
+            registry.take_refused_reports(),
+            [RefusedReports {
+                agent: agent(1),
+                name: AgentName::try_from("agent-1").unwrap(),
+                count: 1,
+                sessions_denied: 2,
+            }],
+            "the unheld bot's request and the full queue; not the held bot's"
+        );
+        assert_eq!(registry.take_refused_reports(), []);
+    }
+
+    #[test]
+    fn a_grant_goes_only_to_its_stream_while_it_holds_the_bot_assigned() {
+        let (registry, _) = registry();
+        let (lease, mut queued, _ended) = live(&registry, 1, 8);
+        settle(
+            &registry,
+            &lease,
+            &[(1, Hold::Assigned), (2, Hold::Releasing)],
+        );
+        assert!(queued.try_recv().is_ok(), "the reconcile");
+        let generation = lease.generation;
+
+        let granted = registry.answer_session(agent(1), generation, grant(7, bot(1), "token-1"));
+        let releasing = registry.answer_session(agent(1), generation, grant(8, bot(2), "token-2"));
+        let unheld = registry.answer_session(agent(1), generation, grant(9, bot(3), "token-3"));
+        let elsewhere = registry.answer_session(agent(2), generation, grant(7, bot(1), "token-1"));
+
+        assert_eq!(granted, Ok(()));
+        let ServerMessage::SessionGrant(sent) = answered(queued.try_recv().unwrap()) else {
+            unreachable!("answered checks the kind");
         };
+        assert_eq!(sent.id.get().get(), 7, "the agent's own number");
+        assert_eq!(sent.bot_id, bot(1));
+        let SessionCredentials::Online { access_token, .. } = sent.credentials else {
+            panic!("an online session");
+        };
+        assert_eq!(
+            secrecy::ExposeSecret::expose_secret(&access_token),
+            "token-1"
+        );
+        assert_eq!(releasing, Err(AnswerRefused::NotHeld));
+        assert_eq!(unheld, Err(AnswerRefused::NotHeld));
+        assert_eq!(elsewhere, Err(AnswerRefused::NotConnected));
+        assert!(queued.try_recv().is_err(), "nothing else was queued");
+    }
 
-        let (verdict, _) = registry.admit(&lease, &AgentMessage::SessionRequest(request));
+    #[test]
+    fn a_denial_goes_to_its_stream_whatever_it_holds() {
+        let (registry, _) = registry();
+        let (lease, mut queued, _ended) = live(&registry, 1, 8);
 
-        assert_eq!(verdict, Verdict::DenySession(request));
+        let denied = registry.answer_session(agent(1), lease.generation, denial(3, bot(4), true));
+
+        assert_eq!(denied, Ok(()));
+        let ServerMessage::SessionDenied(sent) = answered(queued.try_recv().unwrap()) else {
+            panic!("a denial");
+        };
+        assert_eq!(
+            sent,
+            SessionDenied {
+                id: SessionRequestId::new(NonZeroU64::new(3).unwrap()),
+                bot_id: bot(4),
+                retryable: true,
+            }
+        );
+    }
+
+    /// A newer stream of the agent numbers its requests from 1 again: an
+    /// answer for an older stream never reaches it (S57).
+    #[test]
+    fn a_session_answer_never_reaches_a_newer_or_an_ended_stream() {
+        let (registry, _) = registry();
+        let (old, _old_queued, _old_ended) = live(&registry, 1, 8);
+        settle(&registry, &old, &[(1, Hold::Assigned)]);
+        let asked = old.generation;
+        drop(old);
+        let (new, mut queued, _ended) = live(&registry, 1, 8);
+        settle(&registry, &new, &[(1, Hold::Assigned)]);
+        assert!(queued.try_recv().is_ok(), "the reconcile");
+
+        let granted = registry.answer_session(agent(1), asked, grant(1, bot(1), "token-1"));
+        let denied = registry.answer_session(agent(1), asked, denial(1, bot(1), true));
+        assert!(registry.end(agent(1), StreamEnd::StreamError));
+        let ended = registry.answer_session(agent(1), new.generation, denial(2, bot(1), true));
+
+        assert_eq!(granted, Err(AnswerRefused::NotConnected));
+        assert_eq!(denied, Err(AnswerRefused::NotConnected));
+        assert_eq!(ended, Err(AnswerRefused::NotConnected), "halted");
+        assert!(
+            queued.try_recv().is_err(),
+            "nothing reached the newer stream"
+        );
+    }
+
+    #[test]
+    fn a_session_answer_to_a_full_queue_ends_the_stream_too_slow() {
+        let (registry, _) = registry();
+        let (lease, _queued, mut ended) = live(&registry, 1, 1);
+        settle(&registry, &lease, &[(1, Hold::Assigned)]);
+
+        let refused = registry.answer_session(agent(1), lease.generation, grant(1, bot(1), "t"));
+
+        assert_eq!(refused, Err(AnswerRefused::QueueFull));
+        assert_eq!(ended.try_recv(), Ok(StreamEnd::TooSlow));
+    }
+
+    #[test]
+    fn a_session_answer_over_the_limit_is_unsendable_and_the_stream_stays() {
+        let clock = ManualClock::new(at(T0));
+        let registry = AgentRegistry::with_limit(Arc::new(clock), 64, Arc::new(NoReconcile));
+        let (lease, mut queued, mut ended) = live(&registry, 1, 8);
+        settle(&registry, &lease, &[(1, Hold::Assigned)]);
+        let _ = queued.try_recv();
+
+        let refused = registry.answer_session(
+            agent(1),
+            lease.generation,
+            grant(1, bot(1), &"t".repeat(128)),
+        );
+
+        assert_eq!(refused, Err(AnswerRefused::Unsendable));
+        assert!(queued.try_recv().is_err());
+        assert!(ended.try_recv().is_err(), "the stream stays");
     }
 
     // --- Reading the holds --------------------------------------------------------------------

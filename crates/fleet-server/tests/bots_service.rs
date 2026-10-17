@@ -51,7 +51,8 @@ use fleet_server::ports::envelopes::{EnvelopeReads, EnvelopeWrites};
 use fleet_server::ports::grants::{GrantReads, GrantWrites};
 use fleet_server::ports::invites::{InviteReads, InviteWrites};
 use fleet_server::ports::live_agents::{
-    CommandRefused, HeldBot, LatestReport, LiveAgents, LiveStream, PermissionEnd,
+    AnswerRefused, CommandRefused, HeldBot, LatestReport, LiveAgents, LiveStream, PermissionEnd,
+    SessionAnswer,
 };
 use fleet_server::ports::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
 use fleet_server::ports::mfa::{MfaReads, MfaWrites};
@@ -155,6 +156,16 @@ impl LiveAgents for Live {
         }
         self.commands.lock().unwrap().push((agent, bot, command));
         Ok(())
+    }
+
+    /// The bots' service never answers a session request.
+    fn answer_session(
+        &self,
+        _agent: AgentId,
+        _generation: u64,
+        _answer: SessionAnswer,
+    ) -> Result<(), AnswerRefused> {
+        Err(AnswerRefused::NotConnected)
     }
 }
 

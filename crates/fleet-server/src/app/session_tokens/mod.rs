@@ -1,7 +1,8 @@
 //! [`SessionTokenService`]: the server's one source of Minecraft session
-//! tokens for linked Microsoft accounts (Plan.md P9.5, ADR-0018). P10.6
-//! hands its tokens to the agent that runs an account's bot; refresh tokens
-//! never leave the server (security rule 6).
+//! tokens for linked Microsoft accounts (Plan.md P9.5, ADR-0018). The
+//! session grants (P10.6) hand its tokens to the agent that runs an
+//! account's bot, through [`MinecraftSessions`]; refresh tokens never leave
+//! the server (security rule 6).
 //!
 //! # Who gets a session
 //! Only an active Microsoft account whose owner isn't disabled. An unknown,
@@ -63,6 +64,7 @@ use core::time::Duration;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::account::AccountStatus;
 use fleet_core::id::AccountId;
@@ -98,6 +100,23 @@ pub const ACCOUNT_BACKOFF: Doubling = Doubling::new(Duration::from_secs(5), Dura
 /// Every account's pause after Microsoft rate limited the server: 30 s,
 /// doubling to 10 minutes.
 pub const GLOBAL_PAUSE: Doubling = Doubling::new(Duration::from_secs(30), Duration::from_mins(10));
+
+/// Where the session grants get an account's Minecraft session (P10.6;
+/// ADR-0019, R46): the [`SessionTokenService`] in the server, a fake in the
+/// gRPC port's tests, which run no Microsoft.
+#[async_trait]
+pub trait MinecraftSessions: Send + Sync + fmt::Debug {
+    /// A Minecraft session for `account`; with `fresh`, none minted before
+    /// this request.
+    ///
+    /// # Errors
+    /// A [`SessionTokenError`].
+    async fn session(
+        &self,
+        account: AccountId,
+        fresh: bool,
+    ) -> Result<MinecraftSession, SessionTokenError>;
+}
 
 /// The ports the service runs on.
 #[derive(Debug, Clone)]
@@ -343,12 +362,30 @@ impl SessionTokenService {
 
     /// Stops the service: no new refresh starts, a request waiting for an
     /// account's flight is refused, and this waits for every running task,
-    /// each of which ends within its own bounds. The caller bounds the wait
-    /// (P10.6: within serve's shutdown deadline).
+    /// each of which ends within its own bounds. The caller bounds the wait:
+    /// serve gives it the drain's time (ADR-0019, S64).
     pub async fn shutdown(&self) {
         self.inner.stop.cancel();
         self.inner.tasks.close();
         self.inner.tasks.wait().await;
+    }
+
+    /// How many of its tasks still run: what serve's shutdown leaves
+    /// behind when they outlast its bound.
+    #[must_use]
+    pub fn running(&self) -> usize {
+        self.inner.tasks.len()
+    }
+}
+
+#[async_trait]
+impl MinecraftSessions for SessionTokenService {
+    async fn session(
+        &self,
+        account: AccountId,
+        fresh: bool,
+    ) -> Result<MinecraftSession, SessionTokenError> {
+        Self::session(self, account, fresh).await
     }
 }
 

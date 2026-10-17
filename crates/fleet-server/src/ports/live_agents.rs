@@ -1,8 +1,9 @@
-//! What the app asks of the agents' live streams (Plan.md P10.5, P10.10,
-//! P11.2; ADR-0019, S27, S31, S41, S48, R22): to end one whose permission
-//! ended, what the server knows of one that lives and of a bot it holds, a
-//! bot's latest report kept in memory, and a user's lifecycle command for the
-//! stream that holds a bot.
+//! What the app asks of the agents' live streams (Plan.md P10.5, P10.6,
+//! P10.10, P11.2; ADR-0019, S27, S31, S41, S48, S57, R22): to end one whose
+//! permission ended, what the server knows of one that lives and of a bot it
+//! holds, a bot's latest report kept in memory, a user's lifecycle command
+//! for the stream that holds a bot, and the answer to a session request for
+//! the stream that asked.
 //!
 //! The gRPC port's `AgentRegistry` implements it, so the app reaches the
 //! streams without knowing the port; a service calls [`LiveAgents::end`]
@@ -10,10 +11,12 @@
 //! hello's transaction.
 
 use core::fmt;
+use core::num::NonZeroU64;
 
 use chrono::{DateTime, Utc};
 use fleet_core::bot::{BotSnapshot, LastReport, LastState, Lifecycle};
 use fleet_core::id::{AgentId, BotId};
+use fleet_core::mc::SessionCredentials;
 
 /// Why an agent's permission to stream ended (S27).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -90,6 +93,92 @@ pub enum CommandRefused {
     Unsendable,
 }
 
+/// The answer to a session request, for the stream that asked (P10.6;
+/// ADR-0019, S3, S57). Its `Debug` shows a grant's kind and expiry, never
+/// the token, the name or the UUID, as [`SessionOutcome`]'s does.
+#[derive(Debug, Clone)]
+pub struct SessionAnswer {
+    /// The agent's own number of the request it answers.
+    pub number: NonZeroU64,
+    /// The bot the request asked for.
+    pub bot: BotId,
+    /// A grant or a denial.
+    pub outcome: SessionOutcome,
+}
+
+/// What a session request gets. Its `Debug` shows a grant's kind and
+/// expiry, never the token, the name or the UUID.
+#[derive(Clone)]
+pub enum SessionOutcome {
+    /// The bot's session: an online account's token, or an offline
+    /// account's name.
+    Grant(SessionCredentials),
+    /// No session; `retryable` tells the agent whether asking again later
+    /// may help, and a refusal that isn't fails the bot for good.
+    Denied {
+        /// Whether asking again later may help.
+        retryable: bool,
+    },
+}
+
+/// A grant's kind and expiry, or a denial's flag; never the token, the
+/// name or the UUID (the threat model), like `MinecraftSession`.
+impl fmt::Debug for SessionOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Grant(credentials) => f
+                .debug_tuple("Grant")
+                .field(&SessionKind(credentials))
+                .finish(),
+            Self::Denied { retryable } => f
+                .debug_struct("Denied")
+                .field("retryable", retryable)
+                .finish(),
+        }
+    }
+}
+
+/// A session's kind, and an online session's expiry.
+struct SessionKind<'a>(&'a SessionCredentials);
+
+impl fmt::Debug for SessionKind<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Every field is named here, so a new one has to be placed: shown or
+        // hidden.
+        match self.0 {
+            SessionCredentials::Offline { username: _ } => {
+                f.debug_struct("Offline").finish_non_exhaustive()
+            }
+            SessionCredentials::Online {
+                username: _,
+                uuid: _,
+                access_token: _,
+                expires_at,
+            } => f
+                .debug_struct("Online")
+                .field("expires_at", expires_at)
+                .finish_non_exhaustive(),
+        }
+    }
+}
+
+/// Why a session request's answer didn't go to its stream.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum AnswerRefused {
+    /// A grant's stream doesn't hold the bot assigned any more.
+    #[error("the stream doesn't hold the bot")]
+    NotHeld,
+    /// The stream ended, or another one replaced it.
+    #[error("the stream ended")]
+    NotConnected,
+    /// The stream's queue was full, which ends the stream.
+    #[error("the stream's queue is full")]
+    QueueFull,
+    /// The answer couldn't be written, or is larger than an agent reads.
+    #[error("the answer can't be written")]
+    Unsendable,
+}
+
 /// The agents' live streams; see the [module docs](self).
 pub trait LiveAgents: Send + Sync + fmt::Debug {
     /// Ends `agent`'s stream for `reason`, its last message the matching
@@ -134,4 +223,84 @@ pub trait LiveAgents: Send + Sync + fmt::Debug {
         bot: BotId,
         command: Lifecycle,
     ) -> Result<(), CommandRefused>;
+
+    /// Sends `answer` through generation `generation` of `agent`'s live
+    /// stream, the one that asked: checked and queued at once, only while
+    /// that stream lives and isn't ended, and a grant only while it holds
+    /// the bot assigned; never through another stream of the agent, whose
+    /// request numbers start again at 1 (S57).
+    ///
+    /// # Errors
+    /// [`AnswerRefused`]: `NotConnected` for another, an ended or no stream;
+    /// `NotHeld` when a grant's stream doesn't hold the bot assigned.
+    fn answer_session(
+        &self,
+        agent: AgentId,
+        generation: u64,
+        answer: SessionAnswer,
+    ) -> Result<(), AnswerRefused>;
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone as _;
+    use rstest::rstest;
+    use secrecy::SecretString;
+    use uuid::Uuid;
+
+    use super::*;
+
+    const TOKEN: &str = "token-in-debug";
+    const NAME: &str = "HiddenName8";
+    const PROFILE: Uuid = Uuid::from_u128(0x0123_4567_89ab_4def_8123_4567_89ab_cdef);
+
+    fn online() -> SessionCredentials {
+        SessionCredentials::Online {
+            username: NAME.parse().unwrap(),
+            uuid: PROFILE,
+            access_token: SecretString::from(TOKEN),
+            expires_at: Utc.with_ymd_and_hms(2027, 1, 15, 9, 0, 0).unwrap(),
+        }
+    }
+
+    fn offline() -> SessionCredentials {
+        SessionCredentials::Offline {
+            username: NAME.parse().unwrap(),
+        }
+    }
+
+    /// A grant prints its session's kind and expiry, never its name or UUID
+    /// (the threat model), like `MinecraftSession`.
+    #[rstest]
+    #[case::online(online(), "Grant(Online { expires_at: 2027-01-15T09:00:00Z, .. })")]
+    #[case::offline(offline(), "Grant(Offline { .. })")]
+    fn a_session_answer_shows_its_grants_kind_and_expiry_never_the_name_or_the_uuid(
+        #[case] credentials: SessionCredentials,
+        #[case] shown: &str,
+    ) {
+        let outcome = SessionOutcome::Grant(credentials);
+        let answer = SessionAnswer {
+            number: NonZeroU64::MIN,
+            bot: BotId::new_v7(Utc.with_ymd_and_hms(2027, 1, 15, 8, 0, 0).unwrap(), [1; 10])
+                .unwrap(),
+            outcome: outcome.clone(),
+        };
+
+        for output in [
+            format!("{outcome:?}"),
+            format!("{outcome:#?}"),
+            format!("{answer:?}"),
+            format!("{answer:#?}"),
+        ] {
+            for secret in [
+                TOKEN.to_owned(),
+                NAME.to_owned(),
+                PROFILE.hyphenated().to_string(),
+                PROFILE.simple().to_string(),
+            ] {
+                assert!(!output.contains(&secret), "{output}");
+            }
+        }
+        assert_eq!(format!("{outcome:?}"), shown);
+    }
 }

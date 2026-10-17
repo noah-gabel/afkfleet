@@ -1,5 +1,6 @@
 //! What the server sends an agent.
 
+use core::fmt;
 use core::time::Duration;
 
 use fleet_core::bot::{BotSpec, Lifecycle, StickyState};
@@ -83,9 +84,9 @@ pub struct SendChat {
     pub message: ChatMessage,
 }
 
-/// The session credentials a bot asked for. The access token is a
-/// `SecretString`, so its `Debug` never shows it.
-#[derive(Debug, Clone)]
+/// The session credentials a bot asked for. Its `Debug` shows the session's
+/// kind and expiry, never the token, the name or the UUID.
+#[derive(Clone)]
 pub struct SessionGrant {
     /// The request's number.
     pub id: SessionRequestId,
@@ -93,6 +94,48 @@ pub struct SessionGrant {
     pub bot_id: BotId,
     /// The credentials.
     pub credentials: SessionCredentials,
+}
+
+/// Its number, its bot, and the session's kind and expiry; never the
+/// token, the name or the UUID (the threat model), like the wire's
+/// `OnlineSession`.
+impl fmt::Debug for SessionGrant {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let Self {
+            id,
+            bot_id,
+            credentials,
+        } = self;
+        f.debug_struct("SessionGrant")
+            .field("id", id)
+            .field("bot_id", bot_id)
+            .field("credentials", &SessionKind(credentials))
+            .finish()
+    }
+}
+
+/// A session's kind, and an online session's expiry.
+struct SessionKind<'a>(&'a SessionCredentials);
+
+impl fmt::Debug for SessionKind<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Every field is named here, so a new one has to be placed: shown or
+        // hidden.
+        match self.0 {
+            SessionCredentials::Offline { username: _ } => {
+                f.debug_struct("Offline").finish_non_exhaustive()
+            }
+            SessionCredentials::Online {
+                username: _,
+                uuid: _,
+                access_token: _,
+                expires_at,
+            } => f
+                .debug_struct("Online")
+                .field("expires_at", expires_at)
+                .finish_non_exhaustive(),
+        }
+    }
 }
 
 /// The answer to a session request the server can't grant.

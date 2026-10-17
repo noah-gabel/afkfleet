@@ -1,11 +1,84 @@
 //! What never reaches a log line (S24): the peer's address, the name a
-//! hello gave and the certificate's bytes, of any target.
+//! hello gave and the certificate's bytes, of any target; and a session's
+//! token, name and UUID, granted or denied (P10.6; S7, S60).
 
 use core::fmt::Write as _;
 
+use fleet_core::id::BotId;
+use fleet_core::system::Clock as _;
+use fleet_proto::control::ServerMessage;
+use fleet_server::app::session_tokens::SessionTokenError;
+use fleet_server::ports::msauth::Failure;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-use super::support::{Settings, hello, start};
+use super::support::{Settings, hello, minecraft_session, profile, session_request, start};
+
+#[sqlx::test(migrations = false)]
+async fn no_log_line_holds_a_session_token_its_name_or_its_uuid(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    const SECRET: &str = "mc-token-that-must-never-be-logged-3e9c1d";
+    const NAME: &str = "HiddenName7";
+    fleet_testkit::log_capture::install().unwrap();
+    let port = start(options, Settings::reconciling()).await;
+    let agent = port.enroll(1, "agent-1").await;
+    let (_, bot) = port.online_bot(1).await;
+    let (mut call, _) = port.welcomed(&agent).await;
+    assert_eq!(call.reconciled().await.len(), 1);
+    port.minecraft
+        .answer(Ok(minecraft_session(SECRET, &profile(1), NAME)));
+    port.minecraft
+        .answer(Err(SessionTokenError::Microsoft(Failure::RateLimited)));
+
+    call.send(session_request(1, bot, false)).await;
+    let grant = call.next().await;
+    call.send(session_request(2, bot, true)).await;
+    let refused = call.next().await;
+    let unheld_bot = BotId::new_v7(port.clock.now(), [9; 10]).unwrap();
+    call.send(session_request(3, unheld_bot, false)).await;
+    let unheld = call.next().await;
+    call.close();
+    let _ = port.disconnect(&agent).await;
+    port.stop().await;
+
+    assert!(
+        matches!(grant, Ok(Some(ServerMessage::SessionGrant(_)))),
+        "{grant:?}"
+    );
+    assert!(
+        matches!(refused, Ok(Some(ServerMessage::SessionDenied(_)))),
+        "{refused:?}"
+    );
+    assert!(
+        matches!(unheld, Ok(Some(ServerMessage::SessionDenied(_)))),
+        "{unheld:?}"
+    );
+    let uuid = profile(1);
+    for secret in [
+        SECRET,
+        NAME,
+        "AfkOnline1",
+        uuid.as_str(),
+        &uuid.replace('-', ""),
+    ] {
+        fleet_testkit::log_capture::check_absent(secret).unwrap();
+    }
+    // The lines that are there name the grant and the denials.
+    assert_eq!(
+        fleet_testkit::log_capture::count(
+            "fleet_server::app::agents::session_grants",
+            "a session was granted"
+        ),
+        1
+    );
+    assert!(
+        fleet_testkit::log_capture::count(
+            "fleet_server::app::agents::session_grants",
+            "a session request was denied"
+        ) >= 1
+    );
+}
 
 #[sqlx::test(migrations = false)]
 async fn no_log_line_holds_the_peer_a_hellos_name_or_a_certificate(

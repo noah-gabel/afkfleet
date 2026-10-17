@@ -9,6 +9,8 @@
 //! - [`backoff`]: the account's backoff and the global pause.
 //! - [`store_failures`]: a rotated token that couldn't be stored is kept.
 //! - [`envelope`]: a stored refresh token that can't be used.
+//! - [`grants`]: the session grants over the service: a link again during a
+//!   grant, the margin, fresh requests and a disabled owner (P10.6).
 //! - [`lifecycle`]: the wait bound, shutdown, a task that ends without an
 //!   answer, `Debug` and the logs' redaction.
 //!
@@ -19,6 +21,7 @@
 mod backoff;
 mod cache;
 mod envelope;
+mod grants;
 mod lifecycle;
 mod refusals;
 mod single_flight;

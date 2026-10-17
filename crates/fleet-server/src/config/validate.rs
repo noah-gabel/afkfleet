@@ -543,6 +543,7 @@ fn rate_limits(raw: &RawRateLimits) -> Option<RateLimitConfig> {
         enroll: Rate::per_minute(count(raw.enroll_per_ip_per_min)?),
         connect: Rate::per_minute(count(raw.connect_per_cert_per_min)?),
         bot_actions: Rate::per_minute(count(raw.bot_actions_per_bot_per_min)?),
+        fresh_sessions: Rate::per_hour(count(raw.fresh_sessions_per_bot_per_hour)?),
     })
 }
 

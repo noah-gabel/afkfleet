@@ -47,13 +47,22 @@
 //! | the agent closed its side, or reset the stream | after `Welcome` | OK |
 //! | the queue to the agent full | after `Welcome` | `RESOURCE_EXHAUSTED` [`TOO_SLOW`] |
 //! | the certificate expired, or the sweep or a disable found the permission ended | after `Welcome`, or before it | `Reject(CertificateExpired \| CertificateRevoked \| AgentDisabled)`, then OK |
-//! | a session request | after `Welcome` | `SessionDenied`, retryable, until P10.6 |
+//! | a session request for a bot the reconciled stream holds assigned | after `Welcome` | the [`SessionGrants`] port's `SessionGrant` or `SessionDenied`, on this stream only |
+//! | any other session request, a fresh one past its bot's limit, or one more bot's with the stream's grant queue full | after `Welcome` | `SessionDenied`, retryable |
 //! | the server shuts down | open | `UNAVAILABLE` [`SHUTTING_DOWN`] |
 //!
 //! A message after `Welcome` that decodes but doesn't convert is dropped
 //! and logged at `debug`; it's no sign of life. A close or a failed
 //! transport within one heartbeat interval of the deadline counts as the
 //! heartbeat timeout: HTTP/2 keepalive closes a silent connection then.
+//!
+//! **Session requests** (P10.6; ADR-0019, S57, S58): the registry passes
+//! one only for a bot the stream holds assigned; a fresh one spends its
+//! bot's `[rate_limits] fresh_sessions_per_bot_per_hour` next; then it
+//! joins the stream's own grant queue (`grants.rs`), whose workers ask the
+//! [`SessionGrants`] port and never hold up the stream's reads. A request's
+//! answer goes only to the stream that asked; whatever is waiting or running
+//! when the stream ends is dropped.
 //!
 //! **Logs:** never the peer's address, the hello's name or the certificate's
 //! bytes; an agent appears under its stored name and ID only. A call
@@ -62,6 +71,7 @@
 //! service's lines; a session logs its `Welcome` and its end at `info`.
 
 mod gate;
+mod grants;
 mod outbound;
 mod session;
 
@@ -83,9 +93,11 @@ use tracing::error;
 
 pub use super::status::{REQUEST_ID, RETRY_AFTER};
 pub use gate::ControlGate;
+pub use grants::{GRANT_WORKERS, GrantBounds};
 pub use outbound::Outbound;
 
 use self::gate::ControlCall;
+use self::grants::GrantQueue;
 use self::session::Session;
 use super::listener::Connection;
 use super::registry::{AgentRegistry, Halt};
@@ -95,6 +107,7 @@ use crate::http::error::{BUSY_RETRY_AFTER, chain, whole_seconds};
 use crate::http::middleware::RequestIds;
 use crate::http::rate_limit::RateLimits;
 use crate::ports::agent_connections::{AdmitError, AgentConnections, Presented};
+use crate::ports::session_grants::SessionGrants;
 
 /// No client certificate.
 pub const CERTIFICATE_REQUIRED: &str =
@@ -133,24 +146,41 @@ pub const SHUTTING_DOWN: &str = "The server is shutting down; connect again late
 pub const QUEUE_DEPTH: usize = 2048;
 
 /// How long a session waits for what: the heartbeats of `[grpc]`, and
-/// [`HELLO_TIMEOUT`] for the first message. Tests lower them.
+/// [`HELLO_TIMEOUT`] for the first message; and how many session requests
+/// it holds and works on at once. Tests lower them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ControlTimings {
     /// The agent's beat and the server's wait for a sign of life.
     pub heartbeats: Heartbeats,
     /// How long the first message may take, from the stream's opening.
     pub hello_timeout: Duration,
+    /// The stream's grant queue (S57).
+    pub grants: GrantBounds,
 }
 
 impl ControlTimings {
-    /// `heartbeats` with the protocol's [`HELLO_TIMEOUT`].
+    /// `heartbeats` with the protocol's [`HELLO_TIMEOUT`] and the default
+    /// grant queue.
     #[must_use]
-    pub const fn new(heartbeats: Heartbeats) -> Self {
+    pub fn new(heartbeats: Heartbeats) -> Self {
         Self {
             heartbeats,
             hello_timeout: HELLO_TIMEOUT,
+            grants: GrantBounds::default(),
         }
     }
+}
+
+/// What the control service asks the app: the agents' connections, the
+/// session grants, and the server's clock.
+#[derive(Debug, Clone)]
+pub struct ControlPorts {
+    /// Admitting a certificate, recording a hello and a stream's end.
+    pub connections: Arc<dyn AgentConnections>,
+    /// The answers to session requests (P10.6).
+    pub grants: Arc<dyn SessionGrants>,
+    /// The server's clock.
+    pub clock: Arc<dyn Clock>,
 }
 
 /// The owner of every session's task: each gets a child of the stop token,
@@ -184,7 +214,9 @@ impl Sessions {
 #[derive(Debug, Clone)]
 pub struct ControlGrpc {
     connections: Arc<dyn AgentConnections>,
+    grants: Arc<dyn SessionGrants>,
     clock: Arc<dyn Clock>,
+    limits: RateLimits,
     timings: ControlTimings,
     sessions: Sessions,
     registry: AgentRegistry,
@@ -237,7 +269,10 @@ impl AgentControl for ControlGrpc {
             queue,
             connection,
             connections: Arc::clone(&self.connections),
+            grants: Arc::clone(&self.grants),
+            requests: GrantQueue::new(self.timings.grants),
             clock: Arc::clone(&self.clock),
+            limits: self.limits.clone(),
             timings: self.timings,
             stop: self.sessions.stop.child_token(),
             registry: self.registry.clone(),
@@ -267,24 +302,31 @@ fn refused(failure: &AdmitError, id: RequestId) -> Status {
 /// The control service as the listener serves it, behind its gate.
 pub type ControlRoute = InterceptedService<AgentControlServer<ControlGrpc>, ControlGate>;
 
-/// [`ControlGrpc`] over `connections`, stamping with `clock`, waiting as
-/// `timings` says, owning its sessions in `sessions` and keeping one
-/// stream per agent in `registry`, with the shared message limits, behind
-/// a [`ControlGate`] over `limits` and `ids`.
+/// [`ControlGrpc`] over `ports`, waiting as `timings` says, owning its
+/// sessions in `sessions` and keeping one stream per agent in `registry`,
+/// with the shared message limits, behind a [`ControlGate`] over `limits`
+/// and `ids`; a fresh session request spends its bot's limit in `limits`
+/// too.
 #[must_use]
 pub fn control_service(
-    connections: Arc<dyn AgentConnections>,
-    clock: Arc<dyn Clock>,
+    ports: ControlPorts,
     limits: RateLimits,
     ids: RequestIds,
     timings: ControlTimings,
     sessions: Sessions,
     registry: AgentRegistry,
 ) -> ControlRoute {
+    let ControlPorts {
+        connections,
+        grants,
+        clock,
+    } = ports;
     InterceptedService::new(
         AgentControlServer::new(ControlGrpc {
             connections,
+            grants,
             clock,
+            limits: limits.clone(),
             timings,
             sessions,
             registry,
