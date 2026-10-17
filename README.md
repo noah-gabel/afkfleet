@@ -365,7 +365,7 @@ afkfleet-server agent create-enrollment-token --config server.toml   # a token f
   | 0 | Stopped by a signal |
   | 1 | Startup error: the config, logging, the vault's keys, the PKI, an address or the database |
   | 2 | Usage error |
-  | 4 | The server ended unasked, or didn't finish its shutdown by the deadline (the database didn't close) |
+  | 4 | The server, or the reconciler that places the bots, ended unasked, or the server didn't finish its shutdown by the deadline (the database didn't close) |
 - **Healthcheck:** `afkfleet-server healthcheck --config server.toml` loads the same config, environment variables included, so give it the server's variables too. It asks `GET /health/ready` on `[http] bind`, or on loopback with the same port when the bind is `0.0.0.0` or `::`, and prints one line, such as `healthy: /health/ready on 127.0.0.1:8080 answered 200`. It needs no shell or curl. Exit codes:
 
   | Code | Meaning |

@@ -51,7 +51,8 @@ Exit codes:
   0  stopped by a signal (SIGTERM or SIGINT; Ctrl+C or Ctrl+Break on Windows)
   1  startup error: the config, logging, the address or the database
   2  usage error
-  4  the server ended unasked, or didn't finish its shutdown by the deadline";
+  4  the server, or its reconciler, ended unasked, or didn't finish its
+     shutdown by the deadline";
 
 /// The exit codes of `afkfleet-server migrate`, shown in its help.
 pub const MIGRATE_EXIT_CODES: &str = "\
