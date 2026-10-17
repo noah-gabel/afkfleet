@@ -10,10 +10,11 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use chrono::{DateTime, TimeDelta, Utc};
+use fleet_core::account::AccountStatus;
 use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget, RecordedValue};
 use fleet_core::authz::{Actor, Role};
 use fleet_core::bot::LastReport;
-use fleet_core::bot::{BotSnapshot, BotState};
+use fleet_core::bot::{BotSnapshot, BotState, DesiredRunState};
 use fleet_core::id::{AccountId, AgentId, BotId, RequestId, SessionId, UserId};
 use fleet_core::mode::ModePreset;
 use fleet_core::pki::CertFingerprint;
@@ -22,18 +23,22 @@ use fleet_core::system::Clock as _;
 use fleet_core::value::{AgentCapacity, AgentName, AgentVersion, Username};
 use fleet_proto::PROTOCOL_VERSION;
 use fleet_proto::control::{
-    AgentMessage, Assignment, BotEvent, BotEventKind, Hello, RejectReason, ServerMessage, Welcome,
+    AgentMessage, Assignment, BotEvent, BotEventKind, Hello, RejectReason, ServerMessage,
+    SessionRequest, SessionRequestId, Welcome,
 };
 use fleet_proto::generated as wire;
 use fleet_proto::generated::agent_control_client::AgentControlClient;
 use fleet_server::app::agents::{
-    AgentConnectionService, AgentService, AssignmentService, Disabler,
+    AgentConnectionService, AgentService, AssignmentService, Disabler, SessionGrantService,
 };
 use fleet_server::app::bots::BotService;
 use fleet_server::app::enrollment::EnrollmentService;
+use fleet_server::app::session_tokens::{MinecraftSessions, SessionTokenError};
 use fleet_server::app::users::ActingUser;
 use fleet_server::config::{Heartbeats, RateLimitConfig};
-use fleet_server::grpc::control::{ControlTimings, REQUEST_ID, Sessions, control_service};
+use fleet_server::grpc::control::{
+    ControlPorts, ControlTimings, REQUEST_ID, Sessions, control_service,
+};
 use fleet_server::grpc::enrollment::enrollment_service;
 use fleet_server::grpc::listener;
 use fleet_server::grpc::reconciler::{HINT_QUEUE, Hints, ReconcileTimings, Reconciler, hints};
@@ -52,7 +57,10 @@ use fleet_server::ports::agents::{Agent as AgentRow, NewAgent, NewAgentCert};
 use fleet_server::ports::assignments::{AssignError, Assigned, Assignments};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
 use fleet_server::ports::bots::{Bot, Fleet, NewBot};
+use fleet_server::ports::live_agents::LiveAgents as _;
+use fleet_server::ports::msauth::{McToken, MinecraftSession};
 use fleet_server::ports::reconcile::{Change, Reconcile as _};
+use fleet_server::ports::session_grants::GrantStream;
 use fleet_server::ports::sessions::NewSession;
 use fleet_server::ports::store::{Store as _, StoreError};
 use fleet_server::ports::tokens::TokenHash;
@@ -146,6 +154,9 @@ pub(crate) struct Port {
     pub(crate) clock: ManualClock,
     pub(crate) sessions: Sessions,
     pub(crate) registry: AgentRegistry,
+    /// Where the grants get Microsoft accounts' sessions: scripted, since
+    /// no Microsoft runs here (R46).
+    pub(crate) minecraft: ScriptedSessions,
     ca: CertificateAuthority,
     ca_pem: String,
     identity: ServerIdentity,
@@ -157,6 +168,109 @@ pub(crate) struct Port {
     failing_detaches: Arc<AtomicU32>,
     stop: CancellationToken,
     server: JoinSet<()>,
+}
+
+/// The session token every unscripted session carries.
+pub(crate) const TOKEN: &str = "mc-token-for-the-loopback-suite-0123456789";
+
+/// The session-token service as the grants see it (R46): each call answers
+/// the next script, in order, or a session with [`TOKEN`] when none is
+/// left, and counts itself, so a test can wait for a call to arrive.
+#[derive(Debug, Clone)]
+pub(crate) struct ScriptedSessions {
+    scripts: Arc<std::sync::Mutex<std::collections::VecDeque<Script>>>,
+    calls: Arc<std::sync::Mutex<Vec<(AccountId, bool)>>>,
+    called: tokio::sync::watch::Sender<usize>,
+}
+
+/// One call's answer.
+#[derive(Debug)]
+pub(crate) enum Script {
+    /// This answer.
+    Answer(Result<MinecraftSession, SessionTokenError>),
+    /// What the test sends; `Interrupted` if it drops the sender.
+    Gated(tokio::sync::oneshot::Receiver<Result<MinecraftSession, SessionTokenError>>),
+}
+
+impl Default for ScriptedSessions {
+    fn default() -> Self {
+        Self {
+            scripts: Arc::default(),
+            calls: Arc::default(),
+            called: tokio::sync::watch::Sender::new(0),
+        }
+    }
+}
+
+impl ScriptedSessions {
+    /// Scripts the next call's `answer`.
+    pub(crate) fn answer(&self, answer: Result<MinecraftSession, SessionTokenError>) {
+        self.scripts
+            .lock()
+            .unwrap()
+            .push_back(Script::Answer(answer));
+    }
+
+    /// Scripts the next call to wait for what the test sends.
+    pub(crate) fn gated(
+        &self,
+    ) -> tokio::sync::oneshot::Sender<Result<MinecraftSession, SessionTokenError>> {
+        let (send, gate) = tokio::sync::oneshot::channel();
+        self.scripts.lock().unwrap().push_back(Script::Gated(gate));
+        send
+    }
+
+    /// The calls so far: each account and its `fresh`.
+    pub(crate) fn calls(&self) -> Vec<(AccountId, bool)> {
+        self.calls.lock().unwrap().clone()
+    }
+
+    /// Waits, at most [`BOUND`], until `count` calls arrived.
+    pub(crate) async fn called(&self, count: usize) {
+        let mut seen = self.called.subscribe();
+        tokio::time::timeout(BOUND, seen.wait_for(|calls| *calls >= count))
+            .await
+            .expect("the session-token service should have been called")
+            .unwrap();
+    }
+}
+
+#[async_trait::async_trait]
+impl MinecraftSessions for ScriptedSessions {
+    async fn session(
+        &self,
+        account: AccountId,
+        fresh: bool,
+    ) -> Result<MinecraftSession, SessionTokenError> {
+        self.calls.lock().unwrap().push((account, fresh));
+        let script = self.scripts.lock().unwrap().pop_front();
+        self.called.send_modify(|calls| *calls += 1);
+        match script {
+            Some(Script::Answer(answer)) => answer,
+            Some(Script::Gated(gate)) => gate.await.unwrap_or(Err(SessionTokenError::Interrupted)),
+            None => Ok(minecraft_session(TOKEN, PROFILE, "AfkOnline1")),
+        }
+    }
+}
+
+/// The profile of an unscripted session.
+pub(crate) const PROFILE: &str = "4566e69f-c907-48ee-8d71-d7ba5aa00d20";
+
+/// The profile of [`Port::online_bot`]`(n)`'s account.
+pub(crate) fn profile(n: u8) -> String {
+    format!("4566e69f-c907-48ee-8d71-d7ba5aa00e{n:02x}")
+}
+
+/// A Minecraft session for `profile`'s `name` with `token`, expiring a day
+/// after the suite's real time.
+pub(crate) fn minecraft_session(token: &str, profile: &str, name: &str) -> MinecraftSession {
+    MinecraftSession {
+        token: McToken::try_from(SecretString::from(token)).unwrap(),
+        expires_at: DateTime::from_timestamp_millis(SystemClock.now().timestamp_millis()).unwrap()
+            + TimeDelta::days(1),
+        uuid: profile.parse().unwrap(),
+        name: name.parse().unwrap(),
+    }
 }
 
 /// The real assignments, whose next detaches can be made to fail busy, as
@@ -292,6 +406,24 @@ pub(crate) async fn start(options: SqliteConnectOptions, settings: Settings) -> 
     serve_on(db, clock, random, pki, settings).await
 }
 
+/// The session grants over `db`, `registry` and `minecraft`, as serve builds
+/// them, granting offline accounts' bots as `settings` say.
+fn grants(
+    db: &Database,
+    clock: &ManualClock,
+    registry: &AgentRegistry,
+    minecraft: &ScriptedSessions,
+    settings: &Settings,
+) -> SessionGrantService {
+    SessionGrantService::new(
+        Arc::new(clock.clone()),
+        Arc::new(db.clone()),
+        Arc::new(registry.clone()),
+        Arc::new(minecraft.clone()),
+        settings.allow_offline,
+    )
+}
+
 /// The port over `db` with `pki`: a fresh registry, and the reconciler
 /// when `settings` ask for it.
 async fn serve_on(
@@ -350,9 +482,13 @@ async fn serve_on(
         Arc::new(db.clone()),
         Arc::new(X509AgentNames),
     ));
+    let minecraft = ScriptedSessions::default();
     let control = control_service(
-        Arc::clone(&connections),
-        Arc::new(clock.clone()),
+        ControlPorts {
+            connections: Arc::clone(&connections),
+            grants: Arc::new(grants(&db, &clock, &registry, &minecraft, &settings)),
+            clock: Arc::new(clock.clone()),
+        },
         limits,
         RequestIds::new(Arc::new(clock.clone()), Arc::new(random.clone())),
         settings.timings,
@@ -384,6 +520,7 @@ async fn serve_on(
         clock,
         sessions,
         registry,
+        minecraft,
         ca,
         ca_pem,
         identity,
@@ -702,6 +839,30 @@ impl Port {
         }
     }
 
+    /// The session grants over the port's database, registry and scripted
+    /// sessions, granting offline accounts' bots only while
+    /// `allow_offline`, as serve builds them.
+    pub(crate) fn grants(&self, allow_offline: bool) -> SessionGrantService {
+        SessionGrantService::new(
+            Arc::new(self.clock.clone()),
+            Arc::new(self.db.clone()),
+            Arc::new(self.registry.clone()),
+            Arc::new(self.minecraft.clone()),
+            allow_offline,
+        )
+    }
+
+    /// The stream `agent` asks on for `bot`: its live stream's, which holds
+    /// the bot assigned.
+    pub(crate) fn grant_stream(&self, agent: &Agent, bot: BotId) -> GrantStream {
+        GrantStream {
+            agent: agent.id,
+            generation: self.registry.held(agent.id, bot).unwrap().generation,
+            fingerprint: agent.fingerprint,
+            request: RequestId::new_v7(self.clock.now(), [0xaa; 10]).unwrap(),
+        }
+    }
+
     /// User `n` of [`Port::bot`], acting through a session of theirs.
     pub(crate) async fn acting(&self, n: u8) -> ActingUser {
         let now = self.clock.now();
@@ -738,6 +899,29 @@ impl Port {
     /// User `n`, their offline account `name` and its bot `n`, as
     /// [`Port::bot`].
     pub(crate) async fn bot_named(&self, n: u8, name: &str) -> (AccountId, BotId) {
+        self.bot_with(n, name, AccountCredential::Offline).await
+    }
+
+    /// User `n`, their active Microsoft account `AfkOnline<n>` of profile
+    /// [`profile`]`(n)` and its bot, as [`Port::bot`]. Its envelope is never
+    /// opened: the grants' sessions are scripted.
+    pub(crate) async fn online_bot(&self, n: u8) -> (AccountId, BotId) {
+        let credential = AccountCredential::Microsoft {
+            uuid: profile(n).parse().unwrap(),
+            refresh_envelope: vec![n; 64],
+            status: AccountStatus::Active,
+        };
+        self.bot_with(n, &format!("AfkOnline{n}"), credential).await
+    }
+
+    /// User `n`, their account `name` with `credential`, and its bot `n`, as
+    /// [`Port::bot`].
+    async fn bot_with(
+        &self,
+        n: u8,
+        name: &str,
+        credential: AccountCredential,
+    ) -> (AccountId, BotId) {
         let now = self.clock.now();
         let user = UserId::new_v7(now, [n; 10]).unwrap();
         let account = AccountId::new_v7(now, [n; 10]).unwrap();
@@ -759,7 +943,7 @@ impl Port {
                 owner: user,
                 name: name.parse().unwrap(),
                 created_at: now,
-                credential: AccountCredential::Offline,
+                credential,
             })
             .await
             .unwrap();
@@ -787,6 +971,44 @@ impl Port {
     pub(crate) async fn assign(&self, bot: BotId, agent: &Agent) {
         let mut tx = self.db.write().await.unwrap();
         assert!(tx.bots().assign(bot, agent.id).await.unwrap());
+        tx.commit(setup_entry(self.clock.now())).await.unwrap();
+    }
+
+    /// Clears `bot`'s assignment to `agent` in the database alone, as the
+    /// host's `agent release` does, telling no registry.
+    pub(crate) async fn detach(&self, bot: BotId, agent: &Agent) {
+        let mut tx = self.db.write().await.unwrap();
+        assert!(tx.bots().detach(bot, agent.id).await.unwrap());
+        tx.commit(setup_entry(self.clock.now())).await.unwrap();
+    }
+
+    /// Sets whether `bot` should run in the database alone, hinting no
+    /// reconciler: the stream keeps holding it.
+    pub(crate) async fn set_desired(&self, bot: BotId, desired: DesiredRunState) {
+        let mut tx = self.db.write().await.unwrap();
+        assert!(tx.bots().set_desired(bot, desired).await.unwrap());
+        tx.commit(setup_entry(self.clock.now())).await.unwrap();
+    }
+
+    /// Sets `account`'s status in the database.
+    pub(crate) async fn set_status(&self, account: AccountId, status: AccountStatus) {
+        let mut tx = self.db.write().await.unwrap();
+        assert!(tx.accounts().set_status(account, status).await.unwrap());
+        tx.commit(setup_entry(self.clock.now())).await.unwrap();
+    }
+
+    /// Disables or enables `account`'s owner in the database.
+    pub(crate) async fn set_owner_disabled(&self, account: AccountId, disabled: bool) {
+        let owner = self
+            .db
+            .accounts()
+            .find(account)
+            .await
+            .unwrap()
+            .unwrap()
+            .owner;
+        let mut tx = self.db.write().await.unwrap();
+        assert!(tx.users().set_disabled(owner, disabled).await.unwrap());
         tx.commit(setup_entry(self.clock.now())).await.unwrap();
     }
 
@@ -1022,6 +1244,16 @@ pub(crate) fn heartbeat() -> wire::AgentMessage {
     wire::AgentMessage {
         msg: Some(wire::agent_message::Msg::Heartbeat(wire::Heartbeat {})),
     }
+}
+
+/// The agent's session request number `number` for `bot`.
+pub(crate) fn session_request(number: u64, bot: BotId, fresh: bool) -> wire::AgentMessage {
+    wire::AgentMessage::try_from(AgentMessage::SessionRequest(SessionRequest {
+        id: SessionRequestId::new(core::num::NonZeroU64::new(number).unwrap()),
+        bot_id: bot,
+        fresh,
+    }))
+    .unwrap()
 }
 
 /// A message of exactly `total` bytes on the wire: an event whose bot ID is

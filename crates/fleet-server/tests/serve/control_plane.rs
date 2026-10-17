@@ -13,7 +13,14 @@ use std::path::Path;
 use std::sync::Arc;
 
 use chrono::{DateTime, TimeDelta, Utc};
+use fleet_core::account::AccountStatus;
+use fleet_core::audit::{AuditAction, AuditOutcome};
+use fleet_core::authz::Role;
+use fleet_core::bot::DesiredRunState;
+use fleet_core::id::{AccountId, BotId, UserId};
+use fleet_core::mode::ModePreset;
 use fleet_core::system::Clock as _;
+use fleet_core::value::{ServerAddress, Username};
 use fleet_proto::PROTOCOL_VERSION;
 use fleet_proto::control::ServerMessage;
 use fleet_proto::generated as wire;
@@ -22,14 +29,26 @@ use fleet_proto::generated::agent_control_client::AgentControlClient;
 use fleet_proto::generated::agent_enrollment_client::AgentEnrollmentClient;
 use fleet_server::app::enrollment::{Creator, EnrollmentTokenService};
 use fleet_server::cli::healthcheck;
-use fleet_server::cli::serve::{self, ControlPlane, Exit};
+use fleet_server::cli::serve::{self, ControlPlane, Exit, GrpcPort, ServerPorts, ShutdownTimeouts};
 use fleet_server::config::{GrpcConfig, PkiPaths, ServerConfig};
 use fleet_server::grpc::control::SHUTTING_DOWN;
+use fleet_server::grpc::listener as grpc_listener;
+use fleet_server::infra::crypto::passwords::Argon2Passwords;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
+use fleet_server::infra::crypto::vault::{DerivedKey, XChaChaVault};
 use fleet_server::infra::pki::{CertificateAuthority, Ed25519Key, LoadedPki, ServerNames};
 use fleet_server::infra::sqlite::{self, DatabaseOptions};
-use fleet_server::infra::system::{OsRandom, SystemClock};
+use fleet_server::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
+use fleet_server::ports::accounts::{AccountCredential, McAccount};
+use fleet_server::ports::audit::NewAuditEntry;
+use fleet_server::ports::bots::NewBot;
+use fleet_server::ports::msauth::{
+    DeviceCode, DeviceFlow, Failure, MicrosoftAuthProvider, MicrosoftTokens, MinecraftSession,
+    MsAccessToken, PollOutcome, RefreshError, RefreshToken, SessionError,
+};
 use fleet_server::ports::store::Store as _;
+use fleet_server::ports::users::{NewUser, PasswordHash};
+use fleet_server::ports::vault::{Vault as _, VaultPurpose};
 use fleet_startup::signals::Signal;
 use fleet_testkit::system::SeededRandom;
 use rcgen::{CertificateParams, KeyPair, PKCS_ED25519};
@@ -355,6 +374,328 @@ async fn an_enrolled_agent_connects_and_one_signal_ends_its_stream_and_the_serve
     assert_eq!(ends.len(), 1, "{}", logs.text());
     assert_eq!(ends[0]["reason"], "server_shutdown");
     database.close().await;
+}
+
+/// Microsoft as far as the next test needs it: a refresh that never
+/// answers, and says when it was asked.
+#[derive(Debug, Default)]
+struct HangingRefresh(tokio::sync::Notify);
+
+#[async_trait::async_trait]
+impl MicrosoftAuthProvider for HangingRefresh {
+    async fn start_device_flow(&self) -> Result<DeviceFlow, Failure> {
+        Err(Failure::Unreachable)
+    }
+
+    async fn poll(&self, _code: &DeviceCode) -> Result<PollOutcome, Failure> {
+        Err(Failure::Unreachable)
+    }
+
+    async fn refresh(&self, _token: &RefreshToken) -> Result<MicrosoftTokens, RefreshError> {
+        self.0.notify_one();
+        core::future::pending().await
+    }
+
+    async fn minecraft_session(
+        &self,
+        _access: &MsAccessToken,
+    ) -> Result<MinecraftSession, SessionError> {
+        Err(SessionError::Failed(Failure::Unreachable))
+    }
+}
+
+/// serve builds the session-token service with a child of its shutdown
+/// token and stops it within the deadline (P10.6; ADR-0019, S64): a refresh
+/// still in flight at the signal gets the drain's time, is then left with
+/// one `warn`, and the database still closes in time.
+#[tokio::test]
+async fn a_refresh_in_flight_at_the_signal_is_left_at_the_drain_and_the_server_stops_in_time() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let dir = test_dir("control_plane_refresh");
+    let (http, http_address) = listener().await;
+    let grpc = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let grpc_address = grpc.local_addr().unwrap();
+    let config = with_grpc(server_config(&dir, http_address, false), &dir, grpc_address);
+    let pki = pki(SystemClock.now());
+    let ca_pem = String::from_utf8(pki.ca_cert_pem.clone()).unwrap();
+    let fingerprint = pki.ca.fingerprint();
+    // One thread: the server's lines reach this test's log.
+    let (logs, _guard) = capture();
+    let database = sqlite::open(&config.database, DatabaseOptions::default())
+        .await
+        .unwrap();
+    let microsoft = Arc::new(HangingRefresh::default());
+    let (app, port) = app_and_port(&config, &database, pki, grpc, microsoft.clone()).await;
+    let bot = online_bot(&config, &database).await;
+    let (sender, signals) = ChannelSignals::new();
+    let timeouts = ShutdownTimeouts {
+        drain: Duration::from_secs(1),
+        close: Duration::from_secs(5),
+    };
+    let server = tokio::spawn({
+        let database = database.clone();
+        async move { serve::serve(http, Some(port), app, &database, signals, timeouts).await }
+    });
+    let token = host_token(&database, fingerprint).await;
+    let (agent, mut answers) = connected_agent(grpc_address, &ca_pem, token).await;
+    let reconcile = ServerMessage::try_from(
+        tokio::time::timeout(PATIENCE, answers.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap(),
+    );
+    assert!(
+        matches!(&reconcile, Ok(ServerMessage::Reconcile(bots)) if bots.len() == 1),
+        "{reconcile:?}"
+    );
+    agent.send(session_request(bot)).await.unwrap();
+    tokio::time::timeout(PATIENCE, microsoft.0.notified())
+        .await
+        .expect("the grant's refresh should reach Microsoft");
+
+    let started = tokio::time::Instant::now();
+    sender.send(Signal::Terminate).await.unwrap();
+    let exit = tokio::time::timeout(PATIENCE, server)
+        .await
+        .expect("the server should stop within its deadline")
+        .unwrap();
+
+    assert_eq!(exit, Exit::Stopped, "{}", logs.text());
+    assert!(
+        started.elapsed() < timeouts.deadline(),
+        "{:?}",
+        started.elapsed()
+    );
+    let left = logs.lines_with(serve::SESSION_TOKENS_LEFT).unwrap();
+    assert_eq!(left.len(), 1, "{}", logs.text());
+    assert_eq!(left[0]["level"], "WARN");
+    assert_eq!(left[0]["flights"], 1);
+    assert!(
+        logs.lines_with("the database didn't close by the shutdown deadline")
+            .unwrap()
+            .is_empty(),
+        "{}",
+        logs.text()
+    );
+    assert!(!dir.join("afkfleet.db-wal").exists(), "closed cleanly");
+}
+
+/// serve's app over `config` and `database`, with `microsoft` for its
+/// Microsoft and `pki`'s CA, and its gRPC port on `grpc`, as `run` builds
+/// them.
+async fn app_and_port(
+    config: &ServerConfig,
+    database: &sqlite::Database,
+    pki: LoadedPki,
+    grpc: TcpListener,
+    microsoft: Arc<HangingRefresh>,
+) -> (serve::App, GrpcPort) {
+    let tls = grpc_listener::tls(&pki);
+    let keys = vault_keys(config);
+    let lockout_key = keys.derive_key(DerivedKey::LoginAttempts).unwrap();
+    let passwords = Argon2Passwords::new(config.auth.argon2, Arc::new(OsRandom))
+        .await
+        .unwrap();
+    let ports = ServerPorts {
+        clock: Arc::new(SystemClock),
+        limiter_clock: Arc::new(MonotonicClock::start()),
+        random: Arc::new(OsRandom),
+        microsoft,
+        pace: Arc::new(TokioPace),
+    };
+    let mut app = serve::app_with(
+        config,
+        database,
+        keys,
+        lockout_key,
+        Arc::new(passwords),
+        ports,
+        Some(pki.ca),
+    );
+    let routes = app.grpc.take().unwrap();
+    let port = GrpcPort {
+        listener: grpc,
+        router: grpc_listener::router(
+            tls,
+            routes.enrollment,
+            routes.control,
+            fleet_server::config::Heartbeats::default(),
+        )
+        .unwrap(),
+        sessions: routes.sessions,
+        sweep: routes.sweep,
+        reconciler: routes.reconciler,
+        session_tokens: routes.session_tokens,
+    };
+    (app, port)
+}
+
+/// An enrollment token the server's host created in `database`, for the CA
+/// of `fingerprint`.
+async fn host_token(
+    database: &sqlite::Database,
+    fingerprint: fleet_core::pki::CertFingerprint,
+) -> String {
+    let random = Arc::new(OsRandom);
+    EnrollmentTokenService::new(
+        Arc::new(SystemClock),
+        random.clone(),
+        Arc::new(database.clone()),
+        Arc::new(Sha256Tokens::new(random)),
+        fingerprint,
+    )
+    .create(Creator::Host)
+    .await
+    .unwrap()
+    .bundle
+    .token()
+    .expose_secret()
+    .to_owned()
+}
+
+/// The agent's first session request, for `bot`.
+fn session_request(bot: BotId) -> wire::AgentMessage {
+    wire::AgentMessage::try_from(fleet_proto::control::AgentMessage::SessionRequest(
+        fleet_proto::control::SessionRequest {
+            id: fleet_proto::control::SessionRequestId::new(core::num::NonZeroU64::MIN),
+            bot_id: bot,
+            fresh: false,
+        },
+    ))
+    .unwrap()
+}
+
+/// A user, their active Microsoft account with a sealed refresh token, and
+/// its bot, set to run on `play.example.com`, in `database`.
+async fn online_bot(config: &ServerConfig, database: &sqlite::Database) -> BotId {
+    let now = SystemClock.now();
+    let user = UserId::new_v7(now, [1; 10]).unwrap();
+    let account = AccountId::new_v7(now, [1; 10]).unwrap();
+    let bot = BotId::new_v7(now, [1; 10]).unwrap();
+    let envelope = XChaChaVault::new(vault_keys(config), Arc::new(OsRandom))
+        .seal(
+            VaultPurpose::MsRefreshToken,
+            account.into(),
+            b"refresh-token-of-the-serve-test",
+        )
+        .unwrap();
+    let mut tx = database.write().await.unwrap();
+    tx.users()
+        .insert(&NewUser {
+            id: user,
+            username: Username::try_from("user1").unwrap(),
+            password_hash: PasswordHash::new(secrecy::SecretString::from(
+                "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g",
+            ))
+            .unwrap(),
+            role: Role::Owner,
+            created_at: now,
+        })
+        .await
+        .unwrap();
+    tx.accounts()
+        .insert(&McAccount {
+            id: account,
+            owner: user,
+            name: "AfkOnline1".parse().unwrap(),
+            created_at: now,
+            credential: AccountCredential::Microsoft {
+                uuid: "4566e69f-c907-48ee-8d71-d7ba5aa00d20".parse().unwrap(),
+                refresh_envelope: envelope,
+                status: AccountStatus::Active,
+            },
+        })
+        .await
+        .unwrap();
+    tx.bots()
+        .insert(&NewBot {
+            id: bot,
+            account,
+            mode: ModePreset::Afk.id(),
+        })
+        .await
+        .unwrap();
+    assert!(
+        tx.bots()
+            .set_server(bot, &ServerAddress::try_from("play.example.com").unwrap())
+            .await
+            .unwrap()
+    );
+    assert!(
+        tx.bots()
+            .set_desired(bot, DesiredRunState::Running)
+            .await
+            .unwrap()
+    );
+    tx.commit(NewAuditEntry::new(
+        now,
+        AuditAction::try_from("test.serve_setup").unwrap(),
+        AuditOutcome::Success,
+    ))
+    .await
+    .unwrap();
+    bot
+}
+
+/// Enrolls agent-1 with `token` and connects it, as [`welcomed_agent`]
+/// does, but stops after `Welcome`: its full reconcile is the test's.
+async fn connected_agent(
+    grpc: std::net::SocketAddr,
+    ca_pem: &str,
+    token: String,
+) -> (
+    tokio::sync::mpsc::Sender<wire::AgentMessage>,
+    tonic::Streaming<wire::ServerMessage>,
+) {
+    let endpoint = Endpoint::from_shared(format!("https://127.0.0.1:{}", grpc.port()))
+        .unwrap()
+        .connect_timeout(PATIENCE);
+    let tls = ClientTlsConfig::new()
+        .ca_certificate(Certificate::from_pem(ca_pem))
+        .domain_name("localhost");
+    let channel = endpoint.clone().tls_config(tls.clone()).unwrap();
+    let enrolled = AgentEnrollmentClient::new(channel.connect().await.unwrap())
+        .enroll(EnrollRequest {
+            token,
+            name: "agent-1".to_owned(),
+            csr_der: csr(),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    let identity = Identity::from_pem(&enrolled.certificate_pem, agent_key().serialize_pem());
+    let channel = endpoint.tls_config(tls.identity(identity)).unwrap();
+    let mut control = AgentControlClient::new(channel.connect().await.unwrap());
+    let (agent, outbox) = tokio::sync::mpsc::channel(4);
+    let mut answers = control
+        .connect(ReceiverStream::new(outbox))
+        .await
+        .unwrap()
+        .into_inner();
+    let hello = wire::Hello {
+        name: "agent-1".to_owned(),
+        agent_version: "0.1.0".to_owned(),
+        protocol_version: PROTOCOL_VERSION,
+        capacity: 10,
+        running: Vec::new(),
+    };
+    agent
+        .send(wire::AgentMessage {
+            msg: Some(wire::agent_message::Msg::Hello(hello)),
+        })
+        .await
+        .unwrap();
+    let welcome = tokio::time::timeout(PATIENCE, answers.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(matches!(
+        ServerMessage::try_from(welcome),
+        Ok(ServerMessage::Welcome(_))
+    ));
+    (agent, answers)
 }
 
 /// Starts `config`'s server with `plane`, stops it at once, and returns its

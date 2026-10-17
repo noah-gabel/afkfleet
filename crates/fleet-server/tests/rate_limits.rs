@@ -97,6 +97,7 @@ fn loose() -> RateLimitConfig {
         enroll: loose,
         connect: loose,
         bot_actions: loose,
+        fresh_sessions: loose,
     }
 }
 

@@ -37,7 +37,7 @@ use fleet_server::app::agents::AgentConnectionService;
 use fleet_server::app::enrollment::{Creator, EnrollmentService, EnrollmentTokenService};
 use fleet_server::config::Heartbeats;
 use fleet_server::config::{Rate, RateLimitConfig};
-use fleet_server::grpc::control::{ControlTimings, Sessions, control_service};
+use fleet_server::grpc::control::{ControlPorts, ControlTimings, Sessions, control_service};
 use fleet_server::grpc::enrollment::{
     INVALID_CSR, INVALID_REQUEST, INVALID_TOKEN, NAME_TAKEN, RATE_LIMITED, REQUEST_ID, RETRY_AFTER,
     TOO_SLOW, enrollment_service,
@@ -56,6 +56,7 @@ use fleet_server::infra::system::SystemClock;
 use fleet_server::ports::agents::NewAgent;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
 use fleet_server::ports::pki::{AgentCertificates, IssueError, IssuedCertificate};
+use fleet_server::ports::session_grants::{GrantRequest, GrantStream, SessionGrants};
 use fleet_server::ports::store::Store as _;
 use fleet_server::ports::tokens::{TokenKind, Tokens as _};
 use fleet_testkit::system::{ManualClock, SeededRandom};
@@ -113,6 +114,15 @@ impl AgentCertificates for Signer {
     fn ca_fingerprint(&self) -> fleet_core::pki::CertFingerprint {
         self.issuer.ca_fingerprint()
     }
+}
+
+/// Grants nothing: no agent here asks for a session.
+#[derive(Debug)]
+struct NoGrants;
+
+#[async_trait::async_trait]
+impl SessionGrants for NoGrants {
+    async fn grant(&self, _stream: GrantStream, _request: GrantRequest) {}
 }
 
 /// How a test's port is set up.
@@ -196,12 +206,15 @@ async fn start(options: SqliteConnectOptions, settings: Settings) -> Port {
         settings.deadline,
     );
     let control = control_service(
-        Arc::new(AgentConnectionService::new(
-            Arc::new(clock.clone()),
-            Arc::new(db.clone()),
-            Arc::new(X509AgentNames),
-        )),
-        Arc::new(clock.clone()),
+        ControlPorts {
+            connections: Arc::new(AgentConnectionService::new(
+                Arc::new(clock.clone()),
+                Arc::new(db.clone()),
+                Arc::new(X509AgentNames),
+            )),
+            grants: Arc::new(NoGrants),
+            clock: Arc::new(clock.clone()),
+        },
         RateLimits::new(&settings.limits, Arc::new(clock.clone())),
         RequestIds::new(Arc::new(clock.clone()), Arc::new(random.clone())),
         ControlTimings::new(Heartbeats::default()),

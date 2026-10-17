@@ -30,7 +30,9 @@ use fleet_core::value::{AgentCapacity, AgentName, AgentVersion};
 use fleet_proto::generated::agent_control_client::AgentControlClient;
 use fleet_server::app::enrollment::EnrollmentService;
 use fleet_server::config::{Heartbeats, RateLimitConfig};
-use fleet_server::grpc::control::{ControlTimings, ONE_HELLO, Sessions, control_service};
+use fleet_server::grpc::control::{
+    ControlPorts, ControlTimings, ONE_HELLO, Sessions, control_service,
+};
 use fleet_server::grpc::enrollment::enrollment_service;
 use fleet_server::grpc::listener::{self, Bounded, CONNECTION_AGE};
 use fleet_server::grpc::registry::AgentRegistry;
@@ -44,6 +46,7 @@ use fleet_server::ports::agent_connections::{
     AdmitError, Admitted, AgentConnections, Conflict, Ended, LiveCertificate, Presented, StreamEnd,
 };
 use fleet_server::ports::live_agents::PermissionEnd;
+use fleet_server::ports::session_grants::{GrantRequest, GrantStream, SessionGrants};
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use hyper_util::rt::TokioIo;
 use sqlx::sqlite::SqliteConnectOptions;
@@ -56,6 +59,15 @@ use tokio_util::sync::CancellationToken;
 use tonic::transport::{Certificate, Channel, ClientTlsConfig, Endpoint, Identity, Uri};
 
 use super::support::{BOUND, Call, heartbeat, hello, identity, pki};
+
+/// Grants nothing: no stream here asks for a session.
+#[derive(Debug)]
+struct NoGrants;
+
+#[async_trait]
+impl SessionGrants for NoGrants {
+    async fn grant(&self, _stream: GrantStream, _request: GrantRequest) {}
+}
 
 /// The fake: it admits one certificate, accepts every hello and keeps how
 /// its streams ended. With a gate, recording an end waits for
@@ -297,8 +309,11 @@ impl Port {
         let sessions = Sessions::new(CancellationToken::new());
         let registry = AgentRegistry::new(Arc::new(clock.clone()));
         let control = control_service(
-            connections.clone(),
-            Arc::new(clock.clone()),
+            ControlPorts {
+                connections: connections.clone(),
+                grants: Arc::new(NoGrants),
+                clock: Arc::new(clock.clone()),
+            },
             limits,
             ids,
             ControlTimings::new(Heartbeats::default()),

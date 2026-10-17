@@ -61,14 +61,19 @@ fn sticky_paused() -> StickyState {
     })
 }
 
-/// A session request for `bot`, which the server answers at once: an
-/// answer to it means every message before it was handled.
-fn session_request(bot: BotId) -> wire::AgentMessage {
+/// A session request for a bot no stream holds, which the registry denies
+/// at once: its answer means every message before it was handled.
+fn barrier() -> wire::AgentMessage {
+    let unheld = BotId::new_v7(
+        DateTime::from_timestamp_millis(1_790_000_000_000).unwrap(),
+        [0xee; 10],
+    )
+    .unwrap();
     wire::AgentMessage {
         msg: Some(wire::agent_message::Msg::SessionRequest(
             wire::SessionRequest {
                 id: 7,
-                bot_id: bot.as_uuid().as_bytes().to_vec(),
+                bot_id: unheld.as_uuid().as_bytes().to_vec(),
                 fresh: false,
             },
         )),
@@ -170,6 +175,7 @@ async fn a_hellos_bot_it_wasnt_given_is_left_out_and_fenced_past_its_stream_and_
             agent: holder.id,
             name: "agent-1".try_into().unwrap(),
             count: 1,
+            sessions_denied: 0,
         }]
     );
     // Its stream is gone; the record still fences the bot.
@@ -208,7 +214,7 @@ async fn a_removed_of_a_bot_the_server_never_released_frees_nothing(
     assert_eq!(ids(&call.reconciled().await), [bot]);
 
     call.send(removed(bot)).await;
-    call.send(session_request(bot)).await;
+    call.send(barrier()).await;
 
     assert!(
         matches!(call.next().await, Ok(Some(ServerMessage::SessionDenied(_)))),
@@ -247,7 +253,7 @@ async fn a_removed_from_an_older_stream_never_clears_a_bot_its_newer_stream_was_
     port.fail_detaches(u32::MAX);
     port.set_running(bot, true).await;
     old.send(removed(bot)).await;
-    old.send(session_request(bot)).await;
+    old.send(barrier()).await;
     assert!(matches!(
         old.next().await,
         Ok(Some(ServerMessage::SessionDenied(_)))
@@ -612,7 +618,7 @@ async fn a_lifecycle_command_reaches_the_stream_that_holds_the_bot_once_and_neve
     assert_eq!(ids(&call.reconciled().await), [bot]);
     call.send(report(bot, paused())).await;
     // Its answer means the report was handled.
-    call.send(session_request(bot)).await;
+    call.send(barrier()).await;
     assert!(matches!(
         call.next().await,
         Ok(Some(ServerMessage::SessionDenied(_)))
@@ -630,7 +636,7 @@ async fn a_lifecycle_command_reaches_the_stream_that_holds_the_bot_once_and_neve
         .welcomed_with(&agent, CAPACITY, vec![snapshot(bot, paused())])
         .await;
     let given = ids(&again.reconciled().await);
-    again.send(session_request(bot)).await;
+    again.send(barrier()).await;
     let after = again.next().await;
 
     assert_eq!(resumed, Controlled::Sent);

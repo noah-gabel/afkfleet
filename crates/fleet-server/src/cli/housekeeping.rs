@@ -16,8 +16,9 @@
 //!    request's own line is at `debug`, so a flood adds one line a minute to
 //!    the log, not thousands a second;
 //! 6. one `info` line per agent counts the reports about bots it doesn't
-//!    hold that its stream dropped since the last run (P10.5; ADR-0019, S28,
-//!    R21), only for an agent that sent any.
+//!    hold that its stream dropped (P10.5; ADR-0019, S28, R21), and the
+//!    session requests it denied before any grant was worked out (P10.6;
+//!    S57, R43), since the last run, only for an agent that sent any.
 //!
 //! The first run comes one interval after the start. [`every`] holds the
 //! timing, generic over its chore, so it's tested on paused time.
@@ -107,6 +108,7 @@ impl Housekeeping {
                 enroll = limits.enroll,
                 connect = limits.connect,
                 bot_actions = limits.bot_actions,
+                fresh_sessions = limits.fresh_sessions,
                 locked = lockout.locked,
                 in_flight = lockout.in_flight,
                 "requests were refused since the last report"
@@ -117,7 +119,8 @@ impl Housekeeping {
                 agent_id = %refused.agent,
                 agent = %refused.name,
                 dropped = refused.count,
-                "an agent's reports about bots it doesn't hold were dropped since the last report"
+                sessions_denied = refused.sessions_denied,
+                "an agent's reports and session requests were refused since the last report"
             );
         }
     }

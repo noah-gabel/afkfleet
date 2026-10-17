@@ -76,7 +76,7 @@ use secrecy::SecretBox;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
 use tokio::task::JoinSet;
-use tokio::time::{Instant, sleep_until};
+use tokio::time::{Instant, sleep_until, timeout};
 use tokio_util::sync::CancellationToken;
 use tonic::transport::ServerTlsConfig;
 use tracing::{error, info, warn};
@@ -84,7 +84,9 @@ use tracing::{error, info, warn};
 use super::DATABASE_CLOSE;
 use super::housekeeping::Housekeeping;
 use crate::app::accounts::{AccountService, AccountSettings};
-use crate::app::agents::{AgentConnectionService, AgentService, AssignmentService};
+use crate::app::agents::{
+    AgentConnectionService, AgentService, AssignmentService, SessionGrantService,
+};
 use crate::app::auth::TokenService;
 use crate::app::bots::BotService;
 use crate::app::challenges::Challenges;
@@ -96,9 +98,10 @@ use crate::app::link_flows::{LinkFlowPorts, LinkFlowService, LinkFlowSettings};
 use crate::app::lockout::LockoutService;
 use crate::app::login::LoginService;
 use crate::app::mfa::{MfaPorts, MfaService};
+use crate::app::session_tokens::{SessionTokenPorts, SessionTokenService};
 use crate::app::users::UserService;
 use crate::config::{HttpConfig, ServerConfig};
-use crate::grpc::control::{ControlRoute, ControlTimings, Sessions, control_service};
+use crate::grpc::control::{ControlPorts, ControlRoute, ControlTimings, Sessions, control_service};
 use crate::grpc::enrollment::enrollment_service;
 use crate::grpc::listener::{self as grpc_listener, EnrollmentRoute};
 use crate::grpc::reconciler::{HINT_QUEUE, HintInbox, ReconcileTimings, Reconciler, hints};
@@ -125,6 +128,7 @@ use crate::ports::msauth::MicrosoftAuthProvider;
 use crate::ports::pace::Pace;
 use crate::ports::passwords::{HashError, Passwords};
 use crate::ports::reconcile::{NoReconcile, Reconcile};
+use crate::ports::session_grants::SessionGrants;
 use crate::ports::store::Store;
 use crate::ports::tokens::Tokens;
 use crate::ports::vault::Vault;
@@ -259,6 +263,9 @@ pub struct App {
     /// The gRPC port's services, while the control plane is on: [`run`]
     /// serves them on the gRPC port.
     pub grpc: Option<GrpcRoutes>,
+    /// The shutdown's token, which [`serve`] cancels at the first signal:
+    /// the session-token service keeps a child of it (ADR-0019, S64).
+    pub shutdown: CancellationToken,
 }
 
 /// The gRPC port's services: the agents' enrollment and their `Connect`,
@@ -277,6 +284,9 @@ pub struct GrpcRoutes {
     pub sweep: Sweep,
     /// Which agent runs which bot, kept true.
     pub reconciler: Reconciler,
+    /// The Minecraft sessions the grants hand out, stopped within the
+    /// shutdown's drain (ADR-0019, S64).
+    pub session_tokens: SessionTokenService,
 }
 
 /// The sweep [`serve`] runs while the gRPC port is on (ADR-0019, S27).
@@ -312,6 +322,8 @@ pub struct GrpcPort {
     pub sweep: Sweep,
     /// The reconciler, run until the shutdown.
     pub reconciler: Reconciler,
+    /// The Minecraft sessions its grants hand out, stopped within the drain.
+    pub session_tokens: SessionTokenService,
 }
 
 /// The clocks, the randomness, Microsoft and the pacing the app runs on.
@@ -420,27 +432,14 @@ pub fn app_with(
             random: Arc::clone(&random),
             store: Arc::clone(&store),
             vault: Arc::clone(&vault),
-            microsoft,
+            microsoft: Arc::clone(&microsoft),
             pace,
         },
     );
     let token_port: Arc<dyn Tokens> = Arc::new(Sha256Tokens::new(Arc::clone(&random)));
-    let tokens = TokenService::new(
-        Arc::clone(&clock),
-        Arc::clone(&random),
-        Arc::clone(&store),
-        Arc::clone(&token_port),
-        config.auth.sessions,
-    );
-    let invites = InviteService::new(
-        Arc::clone(&clock),
-        Arc::clone(&random),
-        Arc::clone(&store),
-        Arc::clone(&token_port),
-        config.auth.invites,
-    );
+    let (tokens, invites) = token_services(config, &clock, &random, &store, &token_port);
     let challenges = Challenges::new(Arc::clone(&clock), Arc::clone(&token_port));
-    let mfa = mfa_service(&clock, &random, &store, vault, &challenges);
+    let mfa = mfa_service(&clock, &random, &store, Arc::clone(&vault), &challenges);
     let limits = RateLimits::new(&config.rate_limits, limiter_clock);
     let lockout = LockoutService::new(
         Arc::clone(&clock),
@@ -462,6 +461,7 @@ pub fn app_with(
     let ids = RequestIds::new(Arc::clone(&clock), Arc::clone(&random));
     let (agents, agent_service) = agent_services(&clock, &store, Arc::clone(&reconcile));
     let bots = bot_service(config, &clock, &store, &agents, reconcile);
+    let shutdown = CancellationToken::new();
     let (enrollment_tokens, grpc) = control_plane_services(
         config,
         ca,
@@ -474,6 +474,9 @@ pub fn app_with(
             limits: limits.clone(),
             ids: ids.clone(),
             registry: agents.clone(),
+            vault,
+            microsoft,
+            shutdown: shutdown.clone(),
         },
     );
     let state = AppState::new(Services {
@@ -501,7 +504,34 @@ pub fn app_with(
         housekeeping: Housekeeping::new(limits, lockout, challenges, link_flows.flows(), agents),
         link_flows,
         grpc,
+        shutdown,
     }
+}
+
+/// The sessions' and the invites' services over the app's ports, with
+/// `[auth]`'s lifetimes.
+fn token_services(
+    config: &ServerConfig,
+    clock: &Arc<dyn Clock>,
+    random: &Arc<dyn SecureRandom>,
+    store: &Arc<dyn Store>,
+    token_port: &Arc<dyn Tokens>,
+) -> (TokenService, InviteService) {
+    let tokens = TokenService::new(
+        Arc::clone(clock),
+        Arc::clone(random),
+        Arc::clone(store),
+        Arc::clone(token_port),
+        config.auth.sessions,
+    );
+    let invites = InviteService::new(
+        Arc::clone(clock),
+        Arc::clone(random),
+        Arc::clone(store),
+        Arc::clone(token_port),
+        config.auth.invites,
+    );
+    (tokens, invites)
 }
 
 /// The reconciler's one hint queue while the control plane is `on`, and
@@ -593,7 +623,8 @@ fn mfa_service(
 }
 
 /// What the control plane's services run on: the app's clock, randomness,
-/// store and tokens, the rate limits and the request IDs.
+/// store and tokens, the rate limits and the request IDs; and, for the
+/// session grants, the vault, Microsoft and serve's shutdown token.
 struct EnrollmentPorts {
     clock: Arc<dyn Clock>,
     random: Arc<dyn SecureRandom>,
@@ -602,6 +633,36 @@ struct EnrollmentPorts {
     limits: RateLimits,
     ids: RequestIds,
     registry: AgentRegistry,
+    vault: Arc<dyn Vault>,
+    microsoft: Arc<dyn MicrosoftAuthProvider>,
+    shutdown: CancellationToken,
+}
+
+/// The session-token service over `ports`' Microsoft and vault, stopping
+/// with a child of serve's shutdown token (ADR-0019, S64), and the session
+/// grants over it, an offline account's bot granted only while `[accounts]
+/// allow_offline` is on (S59).
+fn session_grants(
+    config: &ServerConfig,
+    ports: &EnrollmentPorts,
+) -> (SessionTokenService, Arc<dyn SessionGrants>) {
+    let tokens = SessionTokenService::new(
+        SessionTokenPorts {
+            clock: Arc::clone(&ports.clock),
+            store: Arc::clone(&ports.store),
+            vault: Arc::clone(&ports.vault),
+            microsoft: Arc::clone(&ports.microsoft),
+        },
+        &ports.shutdown,
+    );
+    let grants = SessionGrantService::new(
+        Arc::clone(&ports.clock),
+        Arc::clone(&ports.store),
+        Arc::new(ports.registry.clone()),
+        Arc::new(tokens.clone()),
+        config.accounts.allow_offline,
+    );
+    (tokens, Arc::new(grants))
 }
 
 /// The control plane's services over `ports`, while `config` has `[grpc]`
@@ -645,9 +706,13 @@ fn control_plane_services(
         Arc::new(X509AgentNames),
     ));
     let sessions = Sessions::new(CancellationToken::new());
+    let (session_tokens, grants) = session_grants(config, &ports);
     let control = control_service(
-        Arc::clone(&connections),
-        Arc::clone(&ports.clock),
+        ControlPorts {
+            connections: Arc::clone(&connections),
+            grants,
+            clock: Arc::clone(&ports.clock),
+        },
         ports.limits.clone(),
         ports.ids.clone(),
         ControlTimings::new(grpc.heartbeats),
@@ -672,6 +737,7 @@ fn control_plane_services(
                 connections,
             },
             reconciler,
+            session_tokens,
         }),
     )
 }
@@ -812,6 +878,7 @@ fn grpc_port(
         sessions,
         sweep,
         reconciler,
+        session_tokens,
     } = services;
     let router = grpc_listener::router(tls, enrollment, control, grpc.heartbeats)
         .map_err(StartError::Grpc)?;
@@ -822,6 +889,7 @@ fn grpc_port(
         sessions,
         sweep,
         reconciler,
+        session_tokens,
     }))
 }
 
@@ -857,7 +925,7 @@ pub async fn serve<S: ShutdownSignals>(
     signals: S,
     timeouts: ShutdownTimeouts,
 ) -> Exit {
-    let shutdown = CancellationToken::new();
+    let shutdown = app.shutdown;
     let mut background = JoinSet::new();
     background.spawn(app.housekeeping.run(shutdown.child_token()));
     let flows_stop = shutdown.child_token();
@@ -887,6 +955,16 @@ pub async fn serve<S: ShutdownSignals>(
             port.sweep.connections,
             SWEEP_INTERVAL,
             shutdown.child_token(),
+        ));
+        // Its refreshes in flight get the drain's time, so the database
+        // still gets its own (ADR-0019, S64).
+        let tokens = port.session_tokens;
+        let counted = tokens.clone();
+        background.spawn(stop_session_tokens(
+            shutdown.child_token(),
+            async move { tokens.shutdown().await },
+            timeouts.drain,
+            move || counted.running(),
         ));
         // Joined below before the database closes, like every task here,
         // and watched: an end before the shutdown stops the server.
@@ -919,6 +997,33 @@ pub async fn serve<S: ShutdownSignals>(
         timeouts,
     )
     .await
+}
+
+/// What serve logs when the session-token service's refreshes outlast the
+/// drain.
+pub const SESSION_TOKENS_LEFT: &str = "session-token refreshes were still running when the database had to close; the server stops waiting, and a refresh token one of them rotated but hadn't stored is lost, as in a crash";
+
+/// Waits for `stop`, then for `stopped`, the session-token service's
+/// shutdown, at most `bound` (ADR-0019, S64): no refresh starts after the
+/// signal, and those in flight get the drain's time, so the database still
+/// gets its own. Refreshes still running then are left with one `warn`
+/// naming how many (`running`); they end with the runtime. Generic, so
+/// tests drive it on paused time.
+pub async fn stop_session_tokens<F, R>(
+    stop: CancellationToken,
+    stopped: F,
+    bound: Duration,
+    running: R,
+) where
+    F: Future<Output = ()>,
+    R: Fn() -> usize,
+{
+    stop.cancelled().await;
+    // Dropping the wait is cancel-safe: the refreshes stay with their
+    // tracker, and end with the runtime.
+    if timeout(bound, stopped).await.is_err() {
+        warn!(flights = running(), "{SESSION_TOKENS_LEFT}");
+    }
 }
 
 /// Whether the reconciler ended before its stop was asked; see

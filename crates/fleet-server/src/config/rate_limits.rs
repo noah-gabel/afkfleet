@@ -94,6 +94,13 @@ pub struct RateLimitConfig {
     /// `authorize()`, so a refusal never tells a stranger the bot exists.
     /// Stopping a bot never spends it.
     pub bot_actions: Rate,
+    /// Fresh session requests, per bot (`fresh_sessions_per_bot_per_hour`;
+    /// ADR-0019, S58): only a request with `fresh` spends it, once the
+    /// asking stream is found holding the bot assigned, so an agent never
+    /// spends another agent's bots' limit. Each fresh session the server
+    /// mints costs a Microsoft refresh, and Microsoft's 429 pauses every
+    /// refresh.
+    pub fresh_sessions: Rate,
 }
 
 /// `[rate_limits]`'s caps on Microsoft link flows (P9.4, ADR-0018). Each
@@ -152,6 +159,8 @@ impl RateLimitConfig {
     pub const CONNECT_PER_CERT_PER_MIN: Bounds = Bounds { min: 1, max: 60 };
     /// `bot_actions_per_bot_per_min`: 1 to 60. Default 5.
     pub const BOT_ACTIONS_PER_BOT_PER_MIN: Bounds = Bounds { min: 1, max: 60 };
+    /// `fresh_sessions_per_bot_per_hour`: 1 to 60. Default 6.
+    pub const FRESH_SESSIONS_PER_BOT_PER_HOUR: Bounds = Bounds { min: 1, max: 60 };
 }
 
 impl Default for RateLimitConfig {
@@ -170,6 +179,7 @@ impl Default for RateLimitConfig {
             enroll: Rate::per_minute(nonzero(5)),
             connect: Rate::per_minute(nonzero(10)),
             bot_actions: Rate::per_minute(nonzero(5)),
+            fresh_sessions: Rate::per_hour(nonzero(6)),
         }
     }
 }
@@ -223,6 +233,7 @@ mod tests {
         assert_eq!(defaults.enroll, Rate::per_minute(nonzero(5)));
         assert_eq!(defaults.connect, Rate::per_minute(nonzero(10)));
         assert_eq!(defaults.bot_actions, Rate::per_minute(nonzero(5)));
+        assert_eq!(defaults.fresh_sessions, Rate::per_hour(nonzero(6)));
     }
 
     #[test]
