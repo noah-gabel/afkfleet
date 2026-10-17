@@ -1,8 +1,9 @@
 //! Storing a linked account (see the [module docs](super)).
 //!
-//! The account's ID and its bot's (from the same time) are minted and its
-//! refresh token sealed for it before any transaction, and every audit entry the commit may need is built
-//! before each one (ADR-0015). One transaction then:
+//! Before any transaction, the account's ID and its bot's are minted from
+//! one read of the clock, which is also the account's `created_at`, and its
+//! refresh token is sealed for it; every audit entry the commit may need is
+//! built before each one (ADR-0015). One transaction then:
 //! 1. reads the creator and the session that started the flow again: a
 //!    revoked session, a logout, or a disabled or deleted creator stores
 //!    nothing, and the flow fails;
@@ -27,6 +28,7 @@
 //! A busy database is retried with the finishing phase's backoff; any other
 //! failure ends the flow `failed` with one `error` line.
 
+use chrono::{DateTime, Utc};
 use fleet_core::account::{
     AccountKind, AccountStatus, RefusalReason, new_link_status, over_quota, relinkable,
 };
@@ -127,7 +129,7 @@ pub(super) async fn store(
         }
         let committed = match ids {
             Ids::Link { account, bot } => {
-                commit(inner, running, account, bot, &sealed, &session).await
+                commit(inner, running, account, bot, now, &sealed, &session).await
             }
             Ids::Relink { account } => relink(inner, running, account, &sealed, &session).await,
         };
@@ -162,12 +164,14 @@ enum Failed {
     Store(#[from] StoreError),
 }
 
-/// One transaction; see the [module docs](self).
+/// One transaction; see the [module docs](self). `created_at` is the time
+/// `id` and `bot` were minted from.
 async fn commit(
     inner: &Inner,
     running: &Running,
     id: AccountId,
     bot: BotId,
+    created_at: DateTime<Utc>,
     sealed: &[u8],
     session: &MinecraftSession,
 ) -> Result<LinkFlowStatus, Failed> {
@@ -189,7 +193,7 @@ async fn commit(
         id,
         owner: creator,
         name: session.name.clone(),
-        created_at: inner.ports.clock.now(),
+        created_at,
         credential: AccountCredential::Microsoft {
             uuid: session.uuid,
             refresh_envelope: sealed.to_vec(),
