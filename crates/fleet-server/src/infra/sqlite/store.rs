@@ -21,7 +21,7 @@ use super::{
     Database, accounts, agents, audit, enrollment_tokens, envelopes, grants, invites,
     login_attempts, mfa, sessions, users,
 };
-use super::{bots, modes};
+use super::{bots, chat, modes};
 use crate::ports::accounts::{
     AccountReads, AccountWrites, DeletedAccount, InsertAccountError, ListedAccount, McAccount,
 };
@@ -34,6 +34,7 @@ use crate::ports::audit::{
     NewAuditEntry,
 };
 use crate::ports::bots::{Bot, BotReads, BotRecord, BotWrites, Fleet, ListedBot, NewBot};
+use crate::ports::chat::{ChatMessageId, ChatReads, ChatRecord, ChatWrites, NewChatMessage};
 use crate::ports::enrollment_tokens::{
     EnrollmentToken, EnrollmentTokenReads, EnrollmentTokenWrites, NewEnrollmentToken,
 };
@@ -267,6 +268,17 @@ impl ModeReads for Reads {
 }
 
 #[async_trait]
+impl ChatReads for Reads {
+    async fn page(
+        &self,
+        bot: BotId,
+        page: Page<ChatMessageId>,
+    ) -> Result<Vec<ChatRecord>, StoreError> {
+        chat::page(&self.pool, bot, page).await
+    }
+}
+
+#[async_trait]
 impl EnvelopeReads for Reads {
     async fn all(&self) -> Result<Vec<SealedEnvelope>, StoreError> {
         envelopes::all(&self.pool).await
@@ -386,6 +398,10 @@ impl WriteTx for SqliteWriteTx {
     }
 
     fn modes(&mut self) -> &mut dyn ModeWrites {
+        self
+    }
+
+    fn chat(&mut self) -> &mut dyn ChatWrites {
         self
     }
 
@@ -732,6 +748,16 @@ impl ModeWrites for SqliteWriteTx {
 }
 
 #[async_trait]
+impl ChatWrites for SqliteWriteTx {
+    async fn append(
+        &mut self,
+        message: &NewChatMessage,
+    ) -> Result<Option<ChatMessageId>, StoreError> {
+        chat::append(&mut self.tx, message).await
+    }
+}
+
+#[async_trait]
 impl EnvelopeWrites for SqliteWriteTx {
     async fn swap(
         &mut self,
@@ -940,6 +966,10 @@ impl Store for Database {
     }
 
     fn modes(&self) -> &dyn ModeReads {
+        &self.reads
+    }
+
+    fn chat(&self) -> &dyn ChatReads {
         &self.reads
     }
 

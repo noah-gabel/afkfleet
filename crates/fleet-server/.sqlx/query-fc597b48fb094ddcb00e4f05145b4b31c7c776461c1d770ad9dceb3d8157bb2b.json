@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT direction, kind, sender_name, sender_uuid, text, at FROM chat_messages ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "direction",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "chat_messages",
+            "name": "direction"
+          }
+        }
+      },
+      {
+        "name": "kind",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "chat_messages",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "sender_name",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "chat_messages",
+            "name": "sender_name"
+          }
+        }
+      },
+      {
+        "name": "sender_uuid",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "chat_messages",
+            "name": "sender_uuid"
+          }
+        }
+      },
+      {
+        "name": "text",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "chat_messages",
+            "name": "text"
+          }
+        }
+      },
+      {
+        "name": "at",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "chat_messages",
+            "name": "at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "fc597b48fb094ddcb00e4f05145b4b31c7c776461c1d770ad9dceb3d8157bb2b"
+}

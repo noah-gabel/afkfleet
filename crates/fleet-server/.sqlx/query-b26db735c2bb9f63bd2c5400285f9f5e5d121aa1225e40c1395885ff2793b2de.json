@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT direction, kind, sender_name, sender_uuid, truncated AS \"truncated: i64\"\n           FROM chat_messages",
+  "describe": {
+    "columns": [
+      {
+        "name": "direction",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "chat_messages",
+            "name": "direction"
+          }
+        }
+      },
+      {
+        "name": "kind",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "chat_messages",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "sender_name",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "chat_messages",
+            "name": "sender_name"
+          }
+        }
+      },
+      {
+        "name": "sender_uuid",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "chat_messages",
+            "name": "sender_uuid"
+          }
+        }
+      },
+      {
+        "name": "truncated: i64",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "chat_messages",
+            "name": "truncated"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      true,
+      false
+    ]
+  },
+  "hash": "b26db735c2bb9f63bd2c5400285f9f5e5d121aa1225e40c1395885ff2793b2de"
+}

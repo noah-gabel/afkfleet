@@ -1,0 +1,215 @@
+//! The `chat_messages` table's SQL: appending a message inside a batch's
+//! write transaction, and one page of a bot's messages (Plan.md P11.1,
+//! P10.8; ADR-0019, S70).
+//!
+//! A row's columns follow from its [`ChatEntry`]: a received message is
+//! `in`, with fleet-core's [`ChatKind`] name and its sender, if any; a mode's
+//! message is `out` with the kind `mode`, no sender and no cut. Reading
+//! rebuilds the entry through fleet-core's constructors, so a row they
+//! refuse is [`StoreError::Corrupt`], naming the column.
+
+use core::str::FromStr;
+
+use fleet_core::chat::{ChatKind, ChatMessage, ChatSender, IncomingChat, IncomingChatError};
+use fleet_core::id::BotId;
+use sqlx::{SqliteConnection, SqlitePool};
+use uuid::Uuid;
+
+use super::convert::{id_text, parse_id, parse_time, time_text};
+use super::error::store_error;
+use crate::ports::chat::{ChatEntry, ChatMessageId, ChatRecord, NewChatMessage};
+use crate::ports::page::Page;
+use crate::ports::store::StoreError;
+
+/// The table, as errors name it.
+const TABLE: &str = "chat_messages";
+
+/// What a bot received.
+const IN: &str = "in";
+/// What a bot sent.
+const OUT: &str = "out";
+/// The kind of a message the bot's mode sent.
+const MODE: &str = "mode";
+
+/// A row as stored, before its values are checked.
+struct ChatRow {
+    id: i64,
+    bot_id: String,
+    direction: String,
+    kind: String,
+    sender_name: Option<String>,
+    sender_uuid: Option<String>,
+    text: String,
+    truncated: i64,
+    at: String,
+}
+
+/// The columns an entry is stored in.
+struct Columns<'a> {
+    direction: &'static str,
+    kind: &'static str,
+    sender_name: Option<&'a str>,
+    sender_uuid: Option<String>,
+    text: &'a str,
+    truncated: bool,
+}
+
+impl<'a> Columns<'a> {
+    fn of(entry: &'a ChatEntry) -> Self {
+        match entry {
+            ChatEntry::Received(chat) => Self {
+                direction: IN,
+                kind: chat.kind().as_str(),
+                sender_name: chat.sender().map(ChatSender::name),
+                sender_uuid: chat
+                    .sender()
+                    .and_then(ChatSender::uuid)
+                    .map(|uuid| uuid.hyphenated().to_string()),
+                text: chat.text(),
+                truncated: chat.is_truncated(),
+            },
+            ChatEntry::ModeSent(message) => Self {
+                direction: OUT,
+                kind: MODE,
+                sender_name: None,
+                sender_uuid: None,
+                text: message.as_str(),
+                truncated: false,
+            },
+        }
+    }
+}
+
+/// Appends `message` while its bot's row names its agent: one statement,
+/// whose `WHERE EXISTS` reads the row inside the same write transaction
+/// (`BEGIN IMMEDIATE` holds every other writer off), so the bot can't be
+/// deleted or moved between the check and the insert.
+pub(super) async fn append(
+    conn: &mut SqliteConnection,
+    message: &NewChatMessage,
+) -> Result<Option<ChatMessageId>, StoreError> {
+    let at = time_text(message.at).ok_or(StoreError::Unstorable {
+        table: TABLE,
+        column: "at",
+    })?;
+    let bot = id_text(message.bot);
+    let agent = id_text(message.agent);
+    let Columns {
+        direction,
+        kind,
+        sender_name,
+        sender_uuid,
+        text,
+        truncated,
+    } = Columns::of(&message.entry);
+    let truncated = i64::from(truncated);
+    let done = sqlx::query!(
+        "INSERT INTO chat_messages
+             (bot_id, direction, kind, sender_name, sender_uuid, text, truncated, at)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
+         WHERE EXISTS (SELECT 1 FROM bots WHERE id = ?1 AND agent_id = ?9)",
+        bot,
+        direction,
+        kind,
+        sender_name,
+        sender_uuid,
+        text,
+        truncated,
+        at,
+        agent
+    )
+    .execute(conn)
+    .await
+    .map_err(store_error)?;
+    Ok((done.rows_affected() == 1).then(|| ChatMessageId::new(done.last_insert_rowid())))
+}
+
+/// One page of `bot`'s messages, newest first by ID, one row more than the
+/// page holds.
+pub(super) async fn page(
+    pool: &SqlitePool,
+    bot: BotId,
+    page: Page<ChatMessageId>,
+) -> Result<Vec<ChatRecord>, StoreError> {
+    let bot = id_text(bot);
+    let before = page.before.map_or(i64::MAX, ChatMessageId::get);
+    let fetch = i64::from(page.limit.fetch());
+    sqlx::query_as!(
+        ChatRow,
+        r#"SELECT id AS "id!: i64", bot_id, direction, kind, sender_name, sender_uuid, text,
+                  truncated, at
+           FROM chat_messages WHERE bot_id = ? AND id < ? ORDER BY id DESC LIMIT ?"#,
+        bot,
+        before,
+        fetch
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(store_error)?
+    .iter()
+    .map(record_from_row)
+    .collect()
+}
+
+/// Checks every value of a stored row and rebuilds its entry.
+fn record_from_row(row: &ChatRow) -> Result<ChatRecord, StoreError> {
+    let corrupt = |column| StoreError::Corrupt {
+        table: TABLE,
+        column,
+        rowid: row.id,
+    };
+    let truncated = match row.truncated {
+        0 => false,
+        1 => true,
+        _ => return Err(corrupt("truncated")),
+    };
+    let entry = match row.direction.as_str() {
+        IN => {
+            let kind = ChatKind::from_str(&row.kind).map_err(|_| corrupt("kind"))?;
+            let uuid = row
+                .sender_uuid
+                .as_deref()
+                .map(|text| parse_id::<Uuid>(text).ok_or_else(|| corrupt("sender_uuid")))
+                .transpose()?;
+            let sender = match (row.sender_name.as_deref(), uuid) {
+                (Some(name), uuid) => Some((name, uuid)),
+                (None, None) => None,
+                (None, Some(_)) => return Err(corrupt("sender_uuid")),
+            };
+            let chat =
+                IncomingChat::from_parts(kind, sender, &row.text, truncated).map_err(|error| {
+                    match error {
+                        IncomingChatError::UnknownKind => corrupt("kind"),
+                        IncomingChatError::SenderOnSystemMessage
+                        | IncomingChatError::MissingSender => corrupt("sender_name"),
+                    }
+                })?;
+            ChatEntry::Received(chat)
+        }
+        OUT => {
+            if row.kind != MODE {
+                return Err(corrupt("kind"));
+            }
+            if row.sender_name.is_some() || row.sender_uuid.is_some() {
+                return Err(corrupt("sender_name"));
+            }
+            if truncated {
+                return Err(corrupt("truncated"));
+            }
+            // Stored exactly as the mode sent it: a text the constructor
+            // would change (untrimmed, say) didn't come from here.
+            let message = ChatMessage::try_from(row.text.as_str())
+                .ok()
+                .filter(|message| message.as_str() == row.text)
+                .ok_or_else(|| corrupt("text"))?;
+            ChatEntry::ModeSent(message)
+        }
+        _ => return Err(corrupt("direction")),
+    };
+    Ok(ChatRecord {
+        id: ChatMessageId::new(row.id),
+        bot: parse_id(&row.bot_id).ok_or_else(|| corrupt("bot_id"))?,
+        at: parse_time(&row.at).ok_or_else(|| corrupt("at"))?,
+        entry,
+    })
+}

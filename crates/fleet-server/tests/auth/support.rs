@@ -52,6 +52,7 @@ use fleet_server::ports::audit::{
     AuditEntryId, AuditLimit, AuditPage, AuditReads, AuditRecord, AuditWrites, NewAuditEntry,
 };
 use fleet_server::ports::bots::{BotReads, BotWrites};
+use fleet_server::ports::chat::{ChatReads, ChatWrites};
 use fleet_server::ports::enrollment_tokens::{EnrollmentTokenReads, EnrollmentTokenWrites};
 use fleet_server::ports::envelopes::{EnvelopeReads, EnvelopeWrites};
 use fleet_server::ports::grants::{GrantReads, GrantWrites};
@@ -363,6 +364,10 @@ impl WriteTx for HookedTx {
         self.inner.modes()
     }
 
+    fn chat(&mut self) -> &mut dyn ChatWrites {
+        self.inner.chat()
+    }
+
     fn audit(&mut self) -> &mut dyn AuditWrites {
         self.inner.audit()
     }
@@ -451,6 +456,10 @@ impl Store for HookedStore {
 
     fn modes(&self) -> &dyn ModeReads {
         self.inner.modes()
+    }
+
+    fn chat(&self) -> &dyn ChatReads {
+        self.inner.chat()
     }
 
     fn envelopes(&self) -> &dyn EnvelopeReads {

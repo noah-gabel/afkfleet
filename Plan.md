@@ -3748,7 +3748,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 > Note (P11, from Phase 8, group E, the user's request) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **Decide step-up per action, the same way as the admin writes.** Before building them, decide for each destructive or privilege-changing action of this phase whether it needs a step-up: deleting a bot, changing grants, deleting a shared mode, and anything else that loses data or widens access. The app reuses the admin screens' "send, and on `step_up_required` ask for the password and retry once".
 
-- [ ] **P11.1** 🔴 Migrations and repositories:
+- [x] **P11.1** 🔴 Migrations and repositories:
   - `bots`: 1:1 with an account; server address, mode, desired state, assigned agent
   - `modes`: owner, visibility, definition JSON (validated by core), version
   - `chat_messages`
@@ -3764,6 +3764,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P11.1, from Phase 4, group B, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Outgoing mode chat** arrives as `ModeChatSent{message}` (P4.5), so `chat_messages` can record what a mode said, with direction out, next to user chat.
 
   > Note (P11.1, from Phase 4, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Conflict texts are stored per server** in managed mode: set once in the app for all bots on that server, and sent to agents as each bot's resolved `ConflictTexts` in its spec.
+
+  > Note (P11.1, Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`chat_messages` as built** (`0016_chat_messages.sql`), which ticks P11.1; its writer is P10.8's ingest (S70).
+  > - **Columns:** `id INTEGER PRIMARY KEY AUTOINCREMENT` (a bot's chat is ordered and paged by ID, which is receipt order); `bot_id`, `ON DELETE CASCADE` from `bots`, so a bot's chat goes with its account; `direction`, `in` or `out`; `kind`, fleet-core's `ChatKind` name for what a bot received and `mode` for what its mode sent, with no CHECK (P11.3 adds kinds, and reading refuses one it doesn't know); `sender_name` and `sender_uuid`, a player message's sender as the Minecraft server claims it (Appendix D's `sender`, in two columns); `text`, fleet-core's rebuilt, cleaned text (S6); `truncated`, the agent's flag or the server's own cut; `at`, the server's time of receipt, never the agent's (S5). CHECKs: a UUID only with a name, and an outgoing row has no sender and no cut. Indexed by `(bot_id, id)` for P11.3's pages and by `at` for P11.6's retention.
+  > - **`ports::chat`:** `ChatWrites::append` stores a row only while the bot's row names the agent that reported it (`INSERT … SELECT … WHERE EXISTS` in the batch's write transaction), and answers `None` otherwise without failing the transaction, so a bot deleted or moved since its message arrived never fails a batch; `ChatReads::page` is newest first, `before` exclusive, one row more than the page. Reading rebuilds each entry through fleet-core's constructors, and a row they refuse is `StoreError::Corrupt` naming its column.
+  > - **Tests,** red first against a stub that stored nothing and found nothing (11 of 12; the CHECK test, which the migration satisfies, was shown red by dropping the `direction` CHECK, reverted and checked by checksum). The migrations' checksum snapshot gains `16 chat messages`.
 - [x] **P11.2** 🔴 Bot endpoints:
   - `GET /bots`, `GET /bots/{id}`
   - `PATCH /bots/{id}` (server, mode)
@@ -4444,6 +4449,8 @@ message ServerMessage {
 > - **`modes`** (`0013`): `id, owner_user_id, name, visibility, definition_json, version, created_at, updated_at`; `visibility` is `private` or `shared`, a built-in (no owner) is `shared`, `definition_json` is a JSON object, `version` from 1, `updated_at` not before `created_at`; indexed by owner. Seeds `afk` and `farm` (S38).
 > - **`bots`** (`0014`): `id, account_id (unique, ON DELETE CASCADE), server_address, mode_id, desired_state, agent_id, last_state, last_state_reason, last_state_at`; no `auto_start` (S34; never, U12 in group E) and no `created_at`; `desired_state` is `running` or `stopped`; `last_state` and `last_state_at` set together, `last_state_reason` only with them; indexed by mode and agent.
 > - **`releasing_bots`** (`0015`, S39, S43, R30): `bot_id, agent_id, account_id, kind, mc_uuid, mc_name, created_at`, keyed by `(bot_id, agent_id)`, no foreign key to the bot or the account (either may be gone), indexed by agent: an agent that may still run a bot whose row no longer says so, with the Minecraft account it plays.
+
+> Note (Appendix D, Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`chat_messages` as built** (`0016`): `id, bot_id, direction, kind, sender_name, sender_uuid, text, truncated, at`. Appendix D's `sender` is two columns, the name and the UUID a player message comes with; `at` is the server's time of receipt (S5). P11.1's note lists the rules.
 
 > Note (Appendix D, Phase 7, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`invites` as built** is `id, code_hash, role, created_by, created_at, expires_at, used_by, used_at, revoked_at`: `role` is `member` or `admin` only, `used_by` is unique, a revoked or used invite keeps its row, and three CHECKs keep it consistent (a use and its time together, never both used and revoked, an expiry after the creation). `0007_audit_log_target.sql` indexes the audit log by target, action and ID, for `GET /me`'s count of wrong codes.
 

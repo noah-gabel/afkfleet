@@ -9,6 +9,7 @@ use super::accounts::{AccountReads, AccountWrites};
 use super::agents::{AgentReads, AgentWrites};
 use super::audit::{AuditEntryId, AuditReads, AuditWrites, NewAuditEntry};
 use super::bots::{BotReads, BotWrites};
+use super::chat::{ChatReads, ChatWrites};
 use super::enrollment_tokens::{EnrollmentTokenReads, EnrollmentTokenWrites};
 use super::envelopes::{EnvelopeReads, EnvelopeWrites};
 use super::grants::{GrantReads, GrantWrites};
@@ -102,6 +103,9 @@ pub trait Store: Send + Sync + fmt::Debug {
     /// The modes, read through the read connections.
     fn modes(&self) -> &dyn ModeReads;
 
+    /// The bots' chat log, read through the read connections.
+    fn chat(&self) -> &dyn ChatReads;
+
     /// The audit log, read through the read connections.
     fn audit(&self) -> &dyn AuditReads;
 
@@ -166,6 +170,9 @@ pub trait WriteTx: Send {
 
     /// The modes, read in this transaction.
     fn modes(&mut self) -> &mut dyn ModeWrites;
+
+    /// The bots' chat log, appended to in this transaction.
+    fn chat(&mut self) -> &mut dyn ChatWrites;
 
     /// The audit log, for a second entry in this transaction.
     fn audit(&mut self) -> &mut dyn AuditWrites;

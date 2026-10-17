@@ -11,6 +11,8 @@
 //!   desired state, their agent and their last reported state (P11.1, P10.5).
 //! - [`modes`]: the modes, what a bot does while it's online; the built-in
 //!   ones seeded with fixed IDs (P11.1).
+//! - [`chat`]: the bots' chat log, what they received and what their modes
+//!   sent; append-only (P11.1, P10.8).
 //! - [`agents`]: the enrolled agents and the certificates the server signed
 //!   for them (P10.2, P10.3).
 //! - [`agent_connections`]: what an agent's `Connect` stream asks the app:
@@ -63,6 +65,7 @@ pub mod agents;
 pub mod assignments;
 pub mod audit;
 pub mod bots;
+pub mod chat;
 pub mod enrollment_tokens;
 pub mod envelopes;
 pub mod grants;
