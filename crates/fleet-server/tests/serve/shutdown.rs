@@ -318,6 +318,101 @@ async fn a_signal_source_that_ended_never_stops_the_server() {
     assert!(!shutdown.is_cancelled());
 }
 
+// --- The reconciler, watched (ADR-0019, PR #52's review) -----------------------
+
+/// Runs the reconciler `reconciler` makes from its stop token, watched as
+/// serve runs its own, behind a stand-in port and API; fails the test if
+/// the server doesn't stop on its own within a day.
+async fn serve_with_reconciler<R>(
+    reconciler: impl FnOnce(CancellationToken) -> R,
+    signals: ChannelSignals,
+) -> (Exit, Arc<AtomicBool>)
+where
+    R: Future<Output = ()> + Send + 'static,
+{
+    let shutdown = CancellationToken::new();
+    let mut tasks = tokio::task::JoinSet::new();
+    let stop = shutdown.child_token();
+    let watch = serve::spawn_reconciler(&mut tasks, reconciler(stop.clone()), stop);
+    let (close, closed) = closing(secs(1));
+    let close = async move {
+        close.await;
+        while tasks.join_next().await.is_some() {}
+    };
+    let exit = tokio::time::timeout(
+        secs(86_400),
+        serve::drive(
+            serve::both(
+                draining(&shutdown, secs(1)),
+                Some(serve::watched(
+                    draining(&shutdown, secs(2)),
+                    watch,
+                    shutdown.clone(),
+                )),
+                &shutdown,
+            ),
+            &shutdown,
+            close,
+            signals,
+            TIMEOUTS,
+        ),
+    )
+    .await
+    .expect("the server should stop on its own");
+    (exit, closed)
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_reconciler_that_ends_unasked_stops_the_server_with_an_error() {
+    let (logs, _guard) = capture();
+
+    let (exit, closed) = serve_with_reconciler(|_| async {}, ChannelSignals::silent()).await;
+
+    assert_eq!(exit, Exit::ServerFailed);
+    assert!(closed.load(Ordering::SeqCst));
+    let reconciler = logs
+        .lines_with("the reconciler ended unasked; the server stops")
+        .unwrap();
+    assert_eq!(reconciler.len(), 1, "{}", logs.text());
+    assert_eq!(reconciler[0]["level"], "ERROR");
+    let server = logs.lines_with("the server ended unasked").unwrap();
+    assert_eq!(server[0]["error"], serve::RECONCILER_ENDED);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_reconciler_that_panics_stops_the_server_with_an_error() {
+    let (logs, _guard) = capture();
+
+    let (exit, _closed) = serve_with_reconciler(
+        |_| async { panic!("an injected failure") },
+        ChannelSignals::silent(),
+    )
+    .await;
+
+    assert_eq!(exit, Exit::ServerFailed);
+    let failed = logs
+        .lines_with("the reconciler failed; the server stops")
+        .unwrap();
+    assert_eq!(failed.len(), 1, "{}", logs.text());
+    assert_eq!(failed[0]["level"], "ERROR");
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_reconciler_that_stops_with_the_shutdown_is_no_failure() {
+    let (logs, _guard) = capture();
+    let (sender, signals) = ChannelSignals::new();
+    sender.send(Signal::Terminate).await.unwrap();
+
+    let (exit, _closed) =
+        serve_with_reconciler(|stop| async move { stop.cancelled().await }, signals).await;
+
+    assert_eq!(exit, Exit::Stopped);
+    let unasked = logs
+        .lines_with("the reconciler ended unasked; the server stops")
+        .unwrap();
+    assert!(unasked.is_empty(), "{}", logs.text());
+}
+
 // --- both: the API and the gRPC port as one server (ADR-0019) -----------------
 
 /// A stand-in port that fails with `what` `after` it starts.

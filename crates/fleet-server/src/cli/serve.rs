@@ -34,7 +34,9 @@
 //! - **The reconciler** (P10.5), while the control plane is on, is one more
 //!   task on that `JoinSet`: the registry, the accounts' and the users'
 //!   services hint it through one bounded queue, and it stops at the first
-//!   signal, after the pass it's in (ADR-0019, S37).
+//!   signal, after the pass it's in (ADR-0019, S37). It's watched: if it
+//!   ends or panics before that, it's logged at `error` and the server
+//!   stops as one that ended unasked (exit 4); nothing restarts it.
 //!
 //! # Shutdown
 //! The first signal starts it, and one deadline bounds it,
@@ -72,6 +74,7 @@ use fleet_proto::enrollment::SERVER_DEADLINE;
 use fleet_startup::signals::ShutdownSignals;
 use secrecy::SecretBox;
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
@@ -863,13 +866,19 @@ pub async fn serve<S: ShutdownSignals>(
             SWEEP_INTERVAL,
             shutdown.child_token(),
         ));
-        // Joined below before the database closes, like every task here.
-        background.spawn(port.reconciler.run(shutdown.child_token()));
-        Box::pin(grpc_listener::serve(
-            port.router,
-            port.listener,
-            grpc_listener::CONNECTION_AGE,
-            shutdown.child_token(),
+        // Joined below before the database closes, like every task here,
+        // and watched: an end before the shutdown stops the server.
+        let stop = shutdown.child_token();
+        let watch = spawn_reconciler(&mut background, port.reconciler.run(stop.clone()), stop);
+        Box::pin(watched(
+            grpc_listener::serve(
+                port.router,
+                port.listener,
+                grpc_listener::CONNECTION_AGE,
+                shutdown.child_token(),
+            ),
+            watch,
+            shutdown.clone(),
         ))
     });
     let close = async move {
@@ -889,6 +898,85 @@ pub async fn serve<S: ShutdownSignals>(
     )
     .await
 }
+
+/// Whether the reconciler ended before its stop was asked; see
+/// [`spawn_reconciler`].
+#[derive(Debug)]
+pub struct ReconcilerWatch(oneshot::Receiver<()>);
+
+/// Runs `reconciler` on `tasks`, which serve joins before the database
+/// closes, watched: if it ends or panics before `stop` is cancelled, that's
+/// logged at `error` and the watch tells [`watched`]. Nothing restarts it.
+pub fn spawn_reconciler<R>(
+    tasks: &mut JoinSet<()>,
+    reconciler: R,
+    stop: CancellationToken,
+) -> ReconcilerWatch
+where
+    R: Future<Output = ()> + Send + 'static,
+{
+    let (ended, watch) = oneshot::channel();
+    tasks.spawn(async move {
+        // Its own owner, so a panic comes back as a `JoinError` here.
+        let mut task = JoinSet::new();
+        task.spawn(reconciler);
+        let outcome = task.join_next().await;
+        let asked = stop.is_cancelled();
+        match outcome {
+            Some(Err(failure)) if asked => {
+                error!(error = %failure, "the reconciler failed while the server stopped");
+            }
+            Some(Err(failure)) => {
+                error!(error = %failure, "the reconciler failed; the server stops");
+            }
+            Some(Ok(())) | None if asked => return,
+            Some(Ok(())) | None => error!("the reconciler ended unasked; the server stops"),
+        }
+        if !asked {
+            // The server may have stopped meanwhile: nobody to tell.
+            let _ = ended.send(());
+        }
+    });
+    ReconcilerWatch(watch)
+}
+
+/// `port` until it ends, or until `watch` says the reconciler ended
+/// unasked: then `shutdown` is cancelled, `port` drains, and the answer is
+/// an error, so serve ends like a server that ended unasked (exit 4).
+///
+/// # Errors
+/// `port`'s error, or [`RECONCILER_ENDED`].
+pub async fn watched<F, E>(
+    port: F,
+    watch: ReconcilerWatch,
+    shutdown: CancellationToken,
+) -> io::Result<()>
+where
+    F: Future<Output = Result<(), E>>,
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    let mut port = pin!(async { port.await.map_err(io::Error::other) });
+    // A watch whose sender is gone was a reconciler that stopped as asked.
+    let ended = async {
+        if watch.0.await.is_err() {
+            core::future::pending::<()>().await;
+        }
+    };
+    tokio::select! {
+        // The pinned port is polled to its end here or below, and `ended`
+        // only once: cancel-safe.
+        result = &mut port => result,
+        () = ended => {
+            shutdown.cancel();
+            // The port drains; its own end doesn't matter any more.
+            let _ = port.await;
+            Err(io::Error::other(RECONCILER_ENDED))
+        }
+    }
+}
+
+/// The error [`watched`] ends with when the reconciler ended unasked.
+pub const RECONCILER_ENDED: &str = "the reconciler ended unasked";
 
 /// `http` and, if there is one, `grpc`, as the one server [`drive`] runs:
 /// when either ends, it cancels `shutdown`, so the other drains too, and it
