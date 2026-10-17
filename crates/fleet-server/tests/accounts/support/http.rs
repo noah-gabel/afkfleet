@@ -23,7 +23,8 @@ use fleet_core::account::AccountStatus;
 use fleet_core::audit::{AuditAction, RecordedValue};
 use fleet_core::auth::SessionPolicy;
 use fleet_core::authz::{Actor, GrantLevel, Role};
-use fleet_core::id::{AccountId, SessionId, UserId};
+use fleet_core::id::{AccountId, AgentId, BotId, SessionId, UserId};
+use fleet_core::mode::ModePreset;
 use fleet_core::system::{Clock, SecureRandom};
 use fleet_core::value::Username;
 use fleet_server::app::auth::TokenService;
@@ -337,6 +338,42 @@ impl Server {
             .unwrap();
         tx.commit(setup_entry()).await.unwrap();
         id
+    }
+
+    /// Gives `account` its bot `n` directly, as the services create one
+    /// with every account.
+    pub(crate) async fn add_bot(&self, account: AccountId, n: u8) -> BotId {
+        let id = BotId::new_v7(at(T0 + i64::from(n)), [n; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.bots()
+            .insert(&fleet_server::ports::bots::NewBot {
+                id,
+                account,
+                mode: ModePreset::Afk.id(),
+            })
+            .await
+            .unwrap();
+        tx.commit(setup_entry()).await.unwrap();
+        id
+    }
+
+    /// Enrolls agent `n` (`agent-<n>`) and assigns `bot` to it, as the
+    /// reconciler does.
+    pub(crate) async fn assign_to_agent(&self, bot: BotId, n: u8) -> AgentId {
+        let agent = AgentId::new_v7(at(T0), [n; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.agents()
+            .insert(&fleet_server::ports::agents::NewAgent {
+                id: agent,
+                name: fleet_core::value::AgentName::try_from(format!("agent-{n}").as_str())
+                    .unwrap(),
+                created_at: at(T0),
+            })
+            .await
+            .unwrap();
+        assert!(tx.bots().assign(bot, agent).await.unwrap());
+        tx.commit(setup_entry()).await.unwrap();
+        agent
     }
 
     /// Gives `user` `level` on `account` directly, as set by `by`.

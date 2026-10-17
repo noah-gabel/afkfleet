@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO releasing_bots (bot_id, agent_id, account_id, kind, mc_uuid, mc_name, created_at)\n         SELECT r.bot_id, ?, r.account_id, r.kind, r.mc_uuid, r.mc_name, ?\n         FROM releasing_bots r\n         WHERE r.bot_id = ? AND r.agent_id <> ?\n           AND NOT EXISTS (SELECT 1 FROM bots WHERE bots.id = r.bot_id)\n         ORDER BY r.agent_id\n         LIMIT 1\n         ON CONFLICT (bot_id, agent_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "33af803f03a19cd4e98271483979f469016c608b28d68c4a4f9b6580dbdb10c5"
+}

@@ -267,7 +267,7 @@ Approved by the user; all are in Plan.md §5:
   - **P10:**
     - the managed credentials provider never hands out a token that expires within the connect timeout
     - the server sends the sticky state in `AssignBot`/`ReconcileFull`
-    - the server moves a bot to another agent only after the old agent's `Removed` event (or a timeout), so two agents never run the same account at once
+    - the server moves a bot to another agent only after the old agent's `Removed` event, so two agents never run the same account at once *(ADR-0019, S32 dropped "or a timeout": no timeout proves the old agent stopped. A bot leaves its agent only by that agent's `Removed` of a bot the server released, a hello of its that doesn't list the bot, or the host's `agent release` of a disabled agent.)*
   - **P11:**
     - conflict texts per server in managed mode
     - where the per-bot chat limit lives (server settings, sent to agents)

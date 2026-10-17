@@ -46,6 +46,7 @@ use super::invites::{InviteCheck, InviteService, Unusable};
 use crate::ports::audit::{FailedCodeAttempts, NewAuditEntry};
 use crate::ports::page::{Page, Paged};
 use crate::ports::passwords::{HashError, Passwords, VerifyError};
+use crate::ports::reconcile::{Change, NoReconcile, Reconcile};
 use crate::ports::store::{Store, StoreError, WriteTx};
 use crate::ports::users::{InsertUserError, ListedUser, NewUser};
 
@@ -299,6 +300,7 @@ pub struct UserService {
     store: Arc<dyn Store>,
     passwords: Arc<dyn Passwords>,
     audit: AuditService,
+    reconcile: Arc<dyn Reconcile>,
 }
 
 impl UserService {
@@ -318,7 +320,15 @@ impl UserService {
             store,
             passwords,
             audit,
+            reconcile: Arc::new(NoReconcile),
         }
+    }
+
+    /// The service, telling `reconcile` to look again after a user is
+    /// disabled or enabled, which decides whether their bots run.
+    #[must_use]
+    pub fn with_reconcile(self, reconcile: Arc<dyn Reconcile>) -> Self {
+        Self { reconcile, ..self }
     }
 
     /// Whether there's an Owner.
@@ -663,6 +673,8 @@ impl UserService {
             debug!(user_id = %by.actor.id, target = %target, "an admin's change was refused");
             SetUserError::Denied(error)
         })?;
+        // Whether the user's bots may run changes with it.
+        let hint = matches!(change, UserChange::Disabled(_));
         let entry = match change {
             UserChange::Role(role) if role == user.role => None,
             UserChange::Disabled(disabled) if disabled == user.disabled => None,
@@ -708,6 +720,9 @@ impl UserService {
                     .target(AuditTarget::User(target)),
             )
             .await?;
+            if hint {
+                self.reconcile.changed(Change::Store);
+            }
             info!(user_id = %by.actor.id, target = %target, "a user was changed");
         } else {
             // Nothing to change; dropping the transaction writes nothing.

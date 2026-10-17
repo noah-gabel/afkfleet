@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE bots SET agent_id = NULL WHERE agent_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "f1cf4da071cedd5ff395be3782ead9a03dfe2242ca05333e5ce213374fae4a84"
+}

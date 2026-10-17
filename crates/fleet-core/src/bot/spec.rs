@@ -1,5 +1,7 @@
 //! [`BotSpec`]: what a bot should be doing.
 
+use core::str::FromStr;
+
 use super::{BotState, FailReason, PauseReason};
 use crate::disconnect::ConflictTexts;
 use crate::id::{AccountId, BotId};
@@ -47,6 +49,37 @@ pub enum DesiredRunState {
     Running,
     /// The bot should be offline.
     Stopped,
+}
+
+impl DesiredRunState {
+    /// Both values, for the tests that check them all.
+    pub const ALL: [Self; 2] = [Self::Running, Self::Stopped];
+
+    /// Returns the stable name stored in `bots.desired_state`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Stopped => "stopped",
+        }
+    }
+}
+
+/// Why a name isn't a [`DesiredRunState`]. The message never repeats it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("unknown desired run state")]
+pub struct UnknownDesiredStateError;
+
+impl FromStr for DesiredRunState {
+    type Err = UnknownDesiredStateError;
+
+    /// Reads a stored name; the case must match.
+    fn from_str(name: &str) -> Result<Self, UnknownDesiredStateError> {
+        Self::ALL
+            .into_iter()
+            .find(|desired| desired.as_str() == name)
+            .ok_or(UnknownDesiredStateError)
+    }
 }
 
 /// What a bot should be doing: its desired configuration (Plan.md P4.1;
@@ -127,6 +160,34 @@ mod tests {
     ) {
         assert_eq!(first.clashes_with(&second), clash);
         assert_eq!(second.clashes_with(&first), clash, "symmetric");
+    }
+
+    #[rstest]
+    #[case::running(DesiredRunState::Running, "running")]
+    #[case::stopped(DesiredRunState::Stopped, "stopped")]
+    fn each_desired_state_has_its_stored_name(
+        #[case] desired: DesiredRunState,
+        #[case] name: &str,
+    ) {
+        assert_eq!(desired.as_str(), name);
+        assert_eq!(name.parse(), Ok(desired));
+    }
+
+    #[test]
+    fn every_desired_state_reads_back_and_nothing_else_does() {
+        for desired in DesiredRunState::ALL {
+            assert_eq!(desired.as_str().parse(), Ok(desired));
+        }
+        for name in ["Running", "stopped ", "", "paused"] {
+            assert_eq!(
+                name.parse::<DesiredRunState>(),
+                Err(UnknownDesiredStateError)
+            );
+        }
+        assert_eq!(
+            UnknownDesiredStateError.to_string(),
+            "unknown desired run state"
+        );
     }
 
     #[test]

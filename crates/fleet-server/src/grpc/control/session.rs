@@ -29,7 +29,9 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use fleet_core::agent::certificate_time_left;
+use fleet_core::bot::BotSnapshot;
 use fleet_core::system::Clock;
+use fleet_core::value::AgentCapacity;
 use fleet_proto::control::{
     AgentMessage, Hello, RejectReason, ServerMessage, SessionDenied, Welcome, read_hello,
 };
@@ -46,7 +48,7 @@ use super::{
     HELLO_TOO_SLOW, MESSAGE_UNREADABLE, ONE_HELLO, SHUTTING_DOWN, TOO_LARGE, TOO_SLOW, refused,
 };
 use crate::grpc::listener::Connection;
-use crate::grpc::registry::{AgentRegistry, Halt, Lease, Verdict};
+use crate::grpc::registry::{Activation, AgentRegistry, Halt, Lease, Verdict};
 use crate::grpc::status::refusal;
 use crate::http::error::chain;
 use crate::ports::agent_connections::{AdmitError, Admitted, AgentConnections, Ended, StreamEnd};
@@ -75,6 +77,14 @@ pub(super) struct Session {
     pub(super) registry: AgentRegistry,
 }
 
+/// What an accepted hello hands its welcome: when it was accepted, and its
+/// capacity and bots.
+struct Accepted {
+    connected_at: DateTime<Utc>,
+    capacity: AgentCapacity,
+    running: Vec<BotSnapshot>,
+}
+
 /// How a welcomed stream ended: why, when the agent was last heard from,
 /// and its last answer (none: the stream just ends, OK).
 struct End {
@@ -97,7 +107,7 @@ impl Session {
     /// Runs the session to its end, and sends its last answer on `last`.
     pub(super) async fn run(mut self, last: oneshot::Sender<Last>) {
         match self.handshake().await {
-            Ok((lease, connected_at)) => self.welcomed(lease, connected_at, last).await,
+            Ok((lease, accepted)) => self.welcomed(lease, accepted, last).await,
             Err(answer) => {
                 // An agent that's gone dropped the receiver; nothing to tell.
                 let _ = last.send(*answer);
@@ -108,7 +118,7 @@ impl Session {
     /// The stream's first message up to the app's acceptance of its hello;
     /// when that was, or the stream's last answer (boxed: a `Status` is
     /// large).
-    async fn handshake(&mut self) -> Result<(Lease, DateTime<Utc>), Box<Last>> {
+    async fn handshake(&mut self) -> Result<(Lease, Accepted), Box<Last>> {
         let first = tokio::select! {
             () = self.stop.cancelled() => {
                 return Err(Box::new(Err(self.status(Code::Unavailable, SHUTTING_DOWN))));
@@ -151,12 +161,12 @@ impl Session {
                 return Err(Box::new(self.reject(reason)));
             }
         };
-        self.accept(&hello).await
+        self.accept(hello).await
     }
 
     /// Checks `hello`'s name, claims the agent's slot, then has the app
     /// accept the hello and record it.
-    async fn accept(&mut self, hello: &Hello) -> Result<(Lease, DateTime<Utc>), Box<Last>> {
+    async fn accept(&mut self, hello: Hello) -> Result<(Lease, Accepted), Box<Last>> {
         // Byte for byte: any other name, in any case, is another agent's
         // (S24). The app records the refusal and logs it.
         if hello.name.as_str() != self.admitted.name.as_str() {
@@ -180,7 +190,12 @@ impl Session {
         // SQLite's busy timeout.
         if let Err(failure) = self
             .connections
-            .hello(&self.admitted, hello.capacity, &hello.agent_version)
+            .hello(
+                &self.admitted,
+                hello.capacity,
+                &hello.agent_version,
+                &hello.running,
+            )
             .await
         {
             if matches!(failure, AdmitError::Internal(_)) {
@@ -201,38 +216,54 @@ impl Session {
             capacity = hello.capacity.get(),
             "an agent connected"
         );
-        Ok((lease, connected_at))
+        Ok((
+            lease,
+            Accepted {
+                connected_at,
+                capacity: hello.capacity,
+                running: hello.running,
+            },
+        ))
     }
 
     /// The welcomed stream of `lease` until it ends, and its last answer on
     /// `last`.
-    async fn welcomed(
-        &mut self,
-        lease: Lease,
-        connected_at: DateTime<Utc>,
-        last: oneshot::Sender<Last>,
-    ) {
+    async fn welcomed(&mut self, lease: Lease, accepted: Accepted, last: oneshot::Sender<Last>) {
+        let connected_at = accepted.connected_at;
         // Lifted before `Welcome` leaves, so the age can't cut the
         // connection between the two.
         let lift = self.connection.lift();
-        let end = match self.registry.activate(
-            &lease,
-            self.queue.clone(),
-            self.halt.clone(),
-            connected_at,
-        ) {
-            // Its permission ended during the hello's transaction (R13).
-            Err(reason) => End::new(reason, connected_at, Some(self.ended_by(reason))),
-            Ok(ended) => match self.welcome() {
-                Ok(()) => self.serve(&lease, connected_at, ended).await,
-                Err(answer) => End::new(StreamEnd::StreamError, connected_at, Some(*answer)),
+        let end = match self.welcome() {
+            None => End::new(
+                StreamEnd::StreamError,
+                connected_at,
+                Some(Err(self.status(Code::Internal, FAILED))),
+            ),
+            // `Welcome` is queued as the claim goes live, with the hello's
+            // bots, so it's the first message and they fence every other
+            // agent at once.
+            Some(welcome) => match self.registry.activate(
+                &lease,
+                Activation {
+                    queue: self.queue.clone(),
+                    halt: self.halt.clone(),
+                    connected_at,
+                    capacity: accepted.capacity,
+                    running: accepted.running,
+                    welcome,
+                },
+            ) {
+                // Its permission ended during the hello's transaction (R13),
+                // or the stream is gone.
+                Err(reason) => End::new(reason, connected_at, Some(self.ended_by(reason))),
+                Ok(ended) => self.serve(&lease, connected_at, ended).await,
             },
         };
         // Nothing queued leaves after this, and the agent's slot is free
         // before it hears of the end; the answer doesn't wait for the
         // database.
         self.halt.halt();
-        drop(lease);
+        let held = lease.free();
         match end.answer {
             // An agent that's gone dropped the receiver; nothing to tell.
             Some(answer) => {
@@ -247,6 +278,7 @@ impl Session {
                     reason: end.reason,
                     connected_at,
                     last_seen: end.last_seen,
+                    held,
                 },
             )
             .await;
@@ -260,14 +292,14 @@ impl Session {
         drop(lift);
     }
 
-    /// Queues `Welcome`, the stream's first answer; or the stream's last
-    /// answer when it can't.
-    fn welcome(&self) -> Result<(), Box<Last>> {
+    /// The stream's `Welcome`, its first answer; none when it can't be
+    /// written, which is logged.
+    fn welcome(&self) -> Option<wire::ServerMessage> {
         let welcome = ServerMessage::Welcome(Welcome {
             heartbeat_interval: self.timings.heartbeats.interval(),
             agent_id: self.admitted.agent,
         });
-        let queued = wire::ServerMessage::try_from(welcome)
+        wire::ServerMessage::try_from(welcome)
             .map_err(|failure| {
                 error!(
                     request_id = %self.admitted.request,
@@ -275,12 +307,7 @@ impl Session {
                     "an agent's Welcome couldn't be written"
                 );
             })
-            .and_then(|message| {
-                // The queue is new and empty; only a stream already gone
-                // refuses it.
-                self.queue.try_send(message).map_err(|_| ())
-            });
-        queued.map_err(|()| Box::new(Err(self.status(Code::Internal, FAILED))))
+            .ok()
     }
 
     /// Reads `lease`'s welcomed stream until something ends it; `ended`
@@ -381,7 +408,7 @@ impl Session {
             self.connections.conflict(&self.admitted, conflict).await;
         }
         match verdict {
-            Verdict::Pass => {}
+            Verdict::Pass | Verdict::Settled => {}
             Verdict::Dropped => debug!(
                 request_id = %self.admitted.request,
                 agent_id = %self.admitted.agent,

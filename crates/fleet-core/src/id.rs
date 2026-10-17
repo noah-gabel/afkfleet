@@ -178,6 +178,16 @@ define_id!(
     /// Identifies a mode (built-in or custom).
     ModeId
 );
+
+/// The built-in `afk` mode's fixed ID, which the `modes` table's seed row has
+/// (Plan.md P11.1; ADR-0019, S38): 2026-10-16T00:00:00.000Z, then a counter.
+/// [`crate::mode::ModePreset::id`] names it.
+pub(crate) const AFK_MODE: ModeId =
+    ModeId(Uuid::from_u128(0x01a1_4202_2800_7000_8000_0000_0000_0001));
+
+/// The built-in `farm` mode's fixed ID; see [`AFK_MODE`].
+pub(crate) const FARM_MODE: ModeId =
+    ModeId(Uuid::from_u128(0x01a1_4202_2800_7000_8000_0000_0000_0002));
 define_id!(
     /// Identifies a session: one login's token family, the same across every
     /// refresh (Plan.md P7.1, P7.3). Like every ID it isn't a secret; the

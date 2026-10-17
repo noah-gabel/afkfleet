@@ -3576,7 +3576,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **A stream's end:** its certificate's `not_after` (`Reject(CertificateExpired)`), the heartbeat timeout, a second hello (`FAILED_PRECONDITION`), a message over the limit (`OUT_OF_RANGE`), the agent's close or reset, or the shutdown (`UNAVAILABLE`). At its end the stream's switch is thrown, so nothing queued goes out any more, the slot is freed and the last answer sent at once; then the end is recorded (`last_seen_at` and `agent.disconnect` with its reason, R19) and the lift dropped. A close or a failed transport within one heartbeat interval of the deadline is recorded `heartbeat_timeout`: keepalive closes a silent connection then, and tonic may read that as the agent's own end. After an accept error that isn't one connection's (`EMFILE`, `ENFILE`), the port waits 1 s (`ACCEPT_PAUSE`) before it accepts again, as axum does; tonic would try again at once. serve ends every session at the signal and waits for them before the database closes, so no stream holds tonic's drain.
   > - **Deviations:** the lift is taken before the slot is activated and `Welcome` queued, so the age can't cut the connection between them (S22 and R13 had Welcome, then the lift). A message on a welcomed stream that can't be decoded ends it `INVALID_ARGUMENT` "a message couldn't be read" (`protocol_error`), a row S24's table didn't have. A reset is recorded as `closed`: tonic reads a request's `CANCEL` as the stream's end.
   > - **Tests:** `tests/grpc_control/` over real TLS on `127.0.0.1` (P10.9's four rejections, every row of the answers table, a silent stream, a silent connection with and without a call through a proxy that stops forwarding, the age), U6's test on paused time (an agent's stream lives a virtual hour through the real router over in-memory pipes while a connection without a certificate is cut at 80 s), and a serve test in which one signal ends an agent's stream and the server, with no drain warning.
-- [ ] **P10.5** 🔴 Server components:
+- [x] **P10.5** 🔴 Server components:
   - `AgentRegistry`
   - `Scheduler`: in v1, the first agent with free capacity, labels optional
   - `Reconciler`: compares desired with reported state and sends `Assign`, `Unassign` or `UpdateSpec`
@@ -3603,6 +3603,16 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **For D:** fill the holds from the server's own assignments, never from what an agent says; treat `QueueFull` and `NotConnected` as "resync on the next connect"; an agent goes stale when its stream ends, and its bots then follow the stale path (a disabled agent never sends their `Removed`); compute `Unknown` when reading, from `last_seen_at` and the registry.
   > - **For E:** the lifecycle messages go through `send`; any new message from an agent goes through `admit`.
   > - **For H:** a restart while the old connection is still open: the new process is refused `AlreadyConnected` until the old stream ends, then welcomed, with no conflict recorded.
+
+  > Note (P10.5, Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the scheduler, the reconciler and stale agents as built.** Decided by the review agents and approved at the plan review: S32–S45; reconciliations R24–R30.
+  > - **No `Scheduler` type:** the choice is fleet-core's pure `placement::plan` (S42): live agents in enrollment order (the server-minted agent ID), first fit, never rebalanced; which bots run is `placement::placeable` (S33), offline accounts' bots only while `[accounts] allow_offline` is on.
+  > - **The reconciler** (`grpc::reconciler`, S37) is one task on serve's `JoinSet`: a pass at startup, every 30 s, on a hint (the registry's welcomes, `Settled` reports and ends; the accounts' and users' services after their commits; a bounded queue, one `warn` when full) and at the nearest bound. A pass commits each change of a bot's agent in its own audited transaction (`bot.assign`, `bot.unassign`, `bot.detach`, `bot.stray`, S36) before any message: a welcome gets one `ReconcileFull`, always, and other streams one message per bot.
+  > - **Stale agents** (S32, S41): nothing is written when an agent goes quiet; its bots keep their agent and read `Unknown` (`fleet_core::bot::shown`, computed when read by `app::bots::BotService`). No time ever moves a bot: it leaves its agent only by that agent's `Removed` of a bot the server released (a `Removed` of one it never released frees nothing, S44), a hello of its that doesn't list it, or `afkfleet-server agent release --id` of a disabled agent. The "(or a timeout)" of the Phase 4 note above is dropped.
+  > - **Two agents never run one account:** a bot is placed only when no live stream holds it or a bot of the same Minecraft account and no release record names either (S39: a deleted account's bot an agent may still run; S43: a hello's bot it wasn't given, `bot.stray`). Right after a start, nothing new is placed until every enabled agent is back or 90 s pass (S45).
+  > - **Capacity and moves** (S42): free capacity counts Assigned, Releasing and open records; an agent back with less keeps the bots it runs first, then those not paused or failed, then the lowest IDs, and the rest move after their resting report; a bot that stops qualifying is sent desired Stopped and unassigned after it rests or 60 s (S33).
+  > - **Sticky state** (S40): the last report a stream sent of each bot is kept in memory and written only in transactions D commits anyway (the hello, the stream's end, `bot.unassign`, `bot.detach`), never backwards; `AssignBot` and `ReconcileFull` carry the newer of memory and the row.
+  > - **Deviations:** the registry sends the hints (the session's `control_service` would need an eighth parameter, which clippy refuses); `ReconcileFull` may carry a spec with desired Stopped (a bot being stopped before it's unassigned).
+  > - **PR #52's review** (ADR-0019): a `Removed` note carries its stream's generation and is dropped once a newer stream of its agent is welcomed; a hello's strays are fenced in the hello's own transaction; serve watches the reconciler and stops (exit 4) if it ends unasked; `account.delete` records the bot's agent; a bot that doesn't read back is left alone, and every other bot reconciled; an assignment its agent never got is sent again.
 - [ ] **P10.6** 🔴 Session grants: `SessionRequest{bot_id}` returns `SessionGrant`, but only if the bot is assigned to *this* agent; otherwise `SessionDenied`. On the agent this backs `SessionCredentialProvider`.
 
   > Note (P10.6, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): The port is `fleet_core::mc`'s credentials provider, and the runtime doesn't check `expires_at`. The managed provider never hands out a token that expires within the connect timeout.
@@ -3619,6 +3629,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The grant** is `fleet_proto::control::SessionGrant` over core's `SessionCredentials`; the token reaches the wire only inside `OnlineSession`, whose `Debug` never prints it (S7). This group's `log_capture` test covers a grant and a denial at every level of every target (tonic, h2, hyper and rustls included).
 
   > Note (P10.6, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the registry's `DenySession` arm is F's to replace** (S28). A grant goes only after `Welcome`, to the identity the certificate gave, and only on the stream that asked: a request's answer must not reach a later stream of the same agent, whose `SessionRequestId`s start at 1 again, so F answers on the asking session's own queue (its lease's generation) rather than `send` by agent. The token is checked once it's in hand, and queued grants die with their stream. A compromised agent could send `fresh: true` requests in a loop to force Microsoft refreshes, and Microsoft's 429 pauses every refresh (ADR-0018): F bounds them per bot and answers `SessionDenied { retryable: true }` when its own queue is full.
+  > Note (P10.6, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **a grant goes only to a bot the asking stream holds Assigned** (`LiveAgents::held`), never one held Releasing or listed in an unreconciled hello; offline bots get their (offline) session from the server too.
 - [ ] **P10.7** 🔴 Agent client:
   - reconnects with backon
   - keeps bots running during outages
@@ -3645,6 +3656,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Three kinds of end** (S24): *stop* on `UNAUTHENTICATED`, `Reject(NameMismatch)` and the permission Rejects (`AgentDisabled`, `CertificateRevoked`, `CertificateExpired`), with an exit code of its own that `run`'s help lists, stopping every bot on `AgentDisabled` so two agents never run one account; *retry slowly* on `Reject(IncompatibleProtocol)` and `Reject(InvalidHello)`; *retry with backoff* on everything else, `AlreadyConnected` and `RESOURCE_EXHAUSTED`'s `retry-after` included.
   > - **An idle channel's `UNAVAILABLE`** is routine: the port cuts a connection 80 s after its last stream ended (S22).
   > - **`Reject(AlreadyConnected)`** means its own old stream still lives, after a restart for instance: retry with backoff; the old one ends within the heartbeat timeout (S26). The reports the server passes (statuses and events of assigned bots) are the ingest's to read (S28).
+  > Note (P10.7, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **what the reconciler counts on** (S33, S42, S44, S45): the agent removes a bot only on `Unassign` or its omission from a `ReconcileFull`; a spec with desired Stopped stops the bot and keeps it; a bot starts in its `restore`; a `Busy` apply is retried after the bot's `Removed`, and a `Removed` is never dropped; the hello's snapshot is sent only after the previous stream's instructions are applied; an `Unassign` of a bot it doesn't run is answered with `Removed`; the reconnect backoff stays within `fleet_proto::control::RECONNECT_DELAY_MAX` (30 s).
 - [ ] **P10.8** 🔴 Server ingest:
   - status and chat are written in batches, in transactions roughly every 500 ms
   - **no per-tick writes**
@@ -3656,6 +3668,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **A heartbeat** carries no time: the server stamps `last_seen_at` with its own `Clock` (S5).
 
   > Note (P10.8, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **an agent's presence isn't the ingest's** (S29): the session writes `agents.capacity`, `version` and `last_seen_at` at the hello and `last_seen_at` at the stream's end, and nothing per message; `EventBatch` never carries these columns.
+
+  > Note (P10.8, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **nor is a bot's `last_state`** (S40): it's written only in the hello's, the stream end's and the reconciler's transactions.
 - [ ] **P10.9** 🔴 Loopback tests with a test PKI. Each of these is rejected:
   - a revoked certificate
   - a certificate from the wrong CA
@@ -3669,6 +3683,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P10.9, from Phase 10's planning) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **an expired certificate** joins the rejections (S1), and **a connection that goes silent without closing** joins the cases that must hold *(the user's note at the plan review, P10.4's note)*. The rejections are tested in group C, which builds `Connect`; the rest of the suite in H.
 
   > Note (P10.9, Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the four rejections are done,** in `tests/grpc_control/identity.rs`: a revoked certificate gets the answer of one no agent holds (`a_revoked_certificate_is_refused_like_an_unknown_one`); a certificate from another CA and an expired one fail TLS's handshake, before any call (`a_client_certificate_from_another_ca_fails_the_handshake`, `an_expired_certificate_fails_the_handshake`); an agent that never enrolled is refused (`an_agent_that_never_enrolled_is_refused`). The server's side of a connection that goes silent is in `liveness.rs`. For H: the silent connection runs end to end through the suite's stalling proxy (`tests/grpc_control/proxy.rs`): the server frees the agent within `heartbeat_timeout`, and the agent reconnects within 30 s and resyncs.
+  > Note (P10.9, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the reconciler's loopback tests** are in `tests/grpc_control/reconcile.rs`; H adds a server restart with agents coming back in either order, and checks the threat model's B3 rows that cite D's tests.
 - [x] **P10.10** Admin endpoints: `GET /agents`, and `POST /agents/{id}/disable`, which revokes the fingerprint and drops the stream.
 
   > Note (P10.10, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a response value that a later version may extend, such as an agent's status, is an `Open<…>` in its DTO, and a 64-bit number is a `SafeInt`.
@@ -3709,6 +3724,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.1, from group C): The `modes` migration seeds the built-in modes `afk` and `farm`: fixed v7 IDs (ADR-0010), no owner, and the JSON of `ModeDefinition::afk()` and `farm()`.
 
+  > Note (P11.1, Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`bots` and `modes` as built** (`0013_modes.sql`, `0014_bots.sql`; the columns in Appendix D). Every account has its bot: created with it on both paths that create one, minted right after the account's ID (S35), and the migration gives every existing account one (its ID is the account's with the last hex digit's high bit flipped; no server, `afk`, stopped). No `auto_start` yet: it arrives with its first writer, P11.2's `PATCH` (S34). `last_state_reason` holds a paused or failed state's reason (S40). The seeds' IDs are `01a14202-2800-7000-8000-000000000001` (`afk`) and `…0002` (`farm`), `ModePreset::id()` (S38). Ticked in G, with `chat_messages`.
+
   > Note (P11.1, from Phase 4, group B, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Outgoing mode chat** arrives as `ModeChatSent{message}` (P4.5), so `chat_messages` can record what a mode said, with direction out, next to user chat.
 
   > Note (P11.1, from Phase 4, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Conflict texts are stored per server** in managed mode: set once in the app for all bots on that server, and sent to agents as each bot's resolved `ConflictTexts` in its spec.
@@ -3733,6 +3750,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Lifecycle calls** need `ControlBot`.
 
   > Note (P11.2, from Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): a bot's DTO follows its account's field rule: who owns it, and since when, only for Admins, the Owner and Manage holders. Deleting an account (P9.6) deletes its bot with it.
+
+  > Note (P11.2, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
+  > - **Reads** go through `app::bots::BotService` (`view`, `list`), after `authorize()`; a bot's state reads `Reported`, `AwaitingReport`, `Unknown` (its agent has no live stream) or `Unplaced` with why (S41).
+  > - **Every write that changes where a bot may run** (`PATCH`, start, stop, Resume, Reset, a mode's change) hints the reconciler (`Change::Store`) after its commit; the 30 s pass catches a lost hint.
+  > - **`auto_start`** arrives with `PATCH` by `ALTER TABLE … ADD COLUMN` (S34); what auto-start does for users is asked at E's planning.
+  > - **Resume and Reset of a sticky bot that isn't placed** clear its stored `last_state` in the same transaction: the reconciler restores the stored one.
+  > - **Before E:** `link_flows/commit.rs`'s two clock reads become one, in its own PR (U11).
 - [ ] **P11.3** 🔴 Chat:
   - `POST /bots/{id}/chat`:
     - takes a `ChatMessage`
@@ -3795,6 +3819,9 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   4. Stop the bot.
 - [ ] **P11.8** 🔴 Tauri: the WebSocket lives in Rust (`fleet-client` + reconnect) and is forwarded to the UI over a Tauri `Channel`. The UI patches the TanStack Query cache from the events.
 - [ ] **P11.9** 🔴 UI:
+
+  > Note (P11.9, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): the agents view shows each agent's bots count (`AgentResponse.bots`: its bots and open release records); releasing a disabled agent's bots becomes an API action (Admin or Owner, step-up, `agent.release` with `via` = `api`), with a text saying the operator vouches the agent's host is stopped. The texts for it and for the shown states are the user's.
+
   - **Dashboard:** a card per bot with a state badge, uptime, server, mode and last disconnect reason.
   - **Bot detail:**
     - controls and a mode selector
@@ -3972,6 +3999,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P13.4** Load test: 200+ fake bots on one agent and 20 WebSocket clients. Measure CPU, RAM and event latency, then fix the hot spots.
 
   > Note (P13.4, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): the gRPC port counts no connections per address (S22's residual); a cap, if the load test calls for one, goes into the listener's map of accepted sockets.
+  > Note (P12.6, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **bots on a lost agent:** disable the agent, make sure its host and its bots are stopped, then `afkfleet-server agent release --id …`; a running server places the bots within 30 s. Nothing moves them by time (S32). **After restoring a backup:** an agent may run bots the database doesn't give it; they're fenced (`bot.stray`) until the agent removes them, and the agents' bots count shows them.
 - [ ] **P13.5** Chaos tests:
   - kill and restart the server, agent and MC containers
   - partition the network between agent and server
@@ -3980,6 +4008,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   Check that everything recovers and nothing is corrupted.
 
   > Note (P13.5, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): after a partition the server frees an agent within `[grpc] heartbeat_timeout_secs` (S23).
+
+  > Note (P13.5, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): a partitioned agent's bots stay assigned to it and read `Unknown` (S32); after a server restart, nothing new is placed until every enabled agent is back or 90 s pass (S45).
 - [ ] **P13.6** 🔴 Agent certificates renew automatically at 2/3 of their lifetime (`RenewCertificate` RPC). Warn when expiry gets close.
 
   > Note (P13.6, from Phase 10, group B, the user's note at the plan review) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the server certificate too.** It expires after 365 days, and then every agent fails to connect, so "warn when expiry gets close" covers it: a warning at startup and in the housekeeping line within 30 days of its `not_after`. Serve already logs an expired one at `error` (group B).
@@ -4281,6 +4311,8 @@ message ServerMessage {
 
 > Note (Appendix C, Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`Welcome`** carries the heartbeat interval and the agent's ID (`bytes agent_id = 2`), no server version. **`RejectReason`**: 1 `IncompatibleProtocol`, 2 `AgentDisabled`, 3 `NameMismatch`, 4 `InvalidHello`, 5 `AlreadyConnected`, 6 `CertificateRevoked`, 7 `CertificateExpired` (R14). A `Reject` answers a hello the server refuses, or is the last message of a stream whose permission ended; the stream then ends OK. An identity failure before the stream opens is one status, never a `Reject` (S24). The numbers freeze at the first release.
 
+> Note (Appendix C, Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **a `ReconcileFull` may carry a spec with desired Stopped:** a bot the server is stopping before it unassigns it (S33, S42). Every welcome gets exactly one `ReconcileFull`, an empty one too. `fleet_proto::control::RECONNECT_DELAY_MAX` (30 s) bounds an agent's reconnect backoff, a constant only; the wire schema didn't change.
+
 > Note (Appendix C, Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`AgentEnrollment` as built** (`enrollment.proto`): `Enroll(EnrollRequest {token, name, csr_der}) returns (EnrollResponse {agent_id, certificate_pem, not_after_unix_ms})`. The answer carries no CA certificate: a trust anchor can't come from the server it vouches for, so the agent pins the bundle's fingerprint instead. The certificate is PEM text (R10), the CSR DER: each end gets what its reader takes. `EnrollRequest` is in `REDACTED` (S7).
 
 ### D. Database tables (SQLite)
@@ -4323,6 +4355,11 @@ message ServerMessage {
 > Note (Appendix D, from Phase 10's planning) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`agents` has no `labels`** (S8): nothing in v1 schedules by them. `agents.capacity` holds the last capacity an agent reported, NULL until its first hello, with no range CHECK (ADR-0015's rule), read back through `AgentCapacity`. **`agent_certs.agent_id`** is indexed but not unique, so P13.6's renewal can hold two certificates per agent (S1). **`chat_messages`** gains a `truncated` column (S6). The tables arrive with their first users in Phase 10's groups: `agents`, `agent_certs` and `enrollment_tokens` in B, `bots` and `modes` in D, `chat_messages` in G.
 
 > Note (Appendix D, Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`enrollment_tokens` as built** (`0012_enrollment_tokens.sql`) is `id, token_hash (unique), created_by (NULL for the server host's tokens, R1), created_at, expires_at, used_at, agent_id (unique)`, with CHECKs that `used_at` and `agent_id` are set together and that a token expires after it's created, and an index on `expires_at`. A used token keeps its row. `agents` and `agent_certs` arrived with P10.2 (`0011`; its note).
+
+> Note (Appendix D, Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`modes`, `bots` and `releasing_bots` as built.**
+> - **`modes`** (`0013`): `id, owner_user_id, name, visibility, definition_json, version, created_at, updated_at`; `visibility` is `private` or `shared`, a built-in (no owner) is `shared`, `definition_json` is a JSON object, `version` from 1, `updated_at` not before `created_at`; indexed by owner. Seeds `afk` and `farm` (S38).
+> - **`bots`** (`0014`): `id, account_id (unique, ON DELETE CASCADE), server_address, mode_id, desired_state, agent_id, last_state, last_state_reason, last_state_at`; no `auto_start` yet (S34) and no `created_at`; `desired_state` is `running` or `stopped`; `last_state` and `last_state_at` set together, `last_state_reason` only with them; indexed by mode and agent.
+> - **`releasing_bots`** (`0015`, S39, S43, R30): `bot_id, agent_id, account_id, kind, mc_uuid, mc_name, created_at`, keyed by `(bot_id, agent_id)`, no foreign key to the bot or the account (either may be gone), indexed by agent: an agent that may still run a bot whose row no longer says so, with the Minecraft account it plays.
 
 > Note (Appendix D, Phase 7, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`invites` as built** is `id, code_hash, role, created_by, created_at, expires_at, used_by, used_at, revoked_at`: `role` is `member` or `admin` only, `used_by` is unique, a revoked or used invite keeps its row, and three CHECKs keep it consistent (a use and its time together, never both used and revoked, an expiry after the creation). `0007_audit_log_target.sql` indexes the audit log by target, action and ID, for `GET /me`'s count of wrong codes.
 

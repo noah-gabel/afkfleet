@@ -138,6 +138,39 @@ fn queued_failures_are_used_in_order() {
 }
 
 #[test]
+fn fail_after_lets_its_successes_through_then_fails_once() {
+    let random = SeededRandom::new(42);
+    let expected = SeededRandom::new(42);
+    random.fail_after(2, RandomError::Os { code: 9 });
+    let mut buffer = [0; 4];
+
+    let first = bytes(&random);
+    let second = bytes(&random);
+    let third = random.fill(&mut buffer);
+
+    assert_eq!((first, second), (bytes(&expected), bytes(&expected)));
+    assert_eq!(third, Err(RandomError::Os { code: 9 }));
+    assert_eq!(
+        bytes(&random),
+        bytes(&expected),
+        "the failure doesn't move the stream"
+    );
+}
+
+#[test]
+fn fail_after_counts_from_what_is_queued_already() {
+    let random = SeededRandom::new(42);
+    random.fail_next(RandomError::Unavailable);
+    random.fail_after(1, RandomError::Os { code: 3 });
+    let mut buffer = [0; 4];
+
+    assert_eq!(random.fill(&mut buffer), Err(RandomError::Unavailable));
+    assert_eq!(random.fill(&mut buffer), Ok(()));
+    assert_eq!(random.fill(&mut buffer), Err(RandomError::Os { code: 3 }));
+    assert_eq!(random.fill(&mut buffer), Ok(()));
+}
+
+#[test]
 fn the_source_works_as_a_trait_object() {
     let random: &dyn SecureRandom = &SeededRandom::new(42);
     let mut first = [0; 16];

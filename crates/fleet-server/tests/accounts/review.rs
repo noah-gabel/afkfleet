@@ -3,7 +3,8 @@
 //! own app. Someone above the owner reviews it, by the owner's current
 //! role, after a step-up; only a pending account is reviewed; approving
 //! makes it active and refusing deletes it with its grants; each is
-//! audited, and the service re-checks everything in its transaction.
+//! audited, and the service re-checks everything in its transaction. Each
+//! review tells the reconciler to look again after its commit (P10.5).
 
 use std::sync::Arc;
 
@@ -15,10 +16,12 @@ use fleet_core::id::AccountId;
 use fleet_server::app::accounts::{AccountService, AccountSettings, ReviewError};
 use fleet_server::config::{Rate, RateLimitConfig};
 use fleet_server::ports::accounts::AccountCredential;
+use fleet_server::ports::reconcile::{Change, Reconcile};
 use fleet_server::ports::store::Store as _;
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
+use crate::support::hints::Hinted;
 use crate::support::http::{HttpSetup, Person, Seen, meta, text};
 use crate::support::service::{T0, at, profile};
 
@@ -244,6 +247,7 @@ async fn refusing_deletes_the_link_with_its_grants_and_frees_the_slot_and_the_uu
     setup
         .add_grant(id, friend.id, GrantLevel::View, member.id)
         .await;
+    let bot = setup.add_bot(id, 4).await;
 
     let refused = refuse(&setup, &admin, id).await;
 
@@ -275,6 +279,8 @@ async fn refusing_deletes_the_link_with_its_grants_and_frees_the_slot_and_the_uu
     assert_eq!(meta(entry, "owner"), Some(text(&member.id.to_string())));
     assert_eq!(meta(entry, "name"), Some(text("AfkBot4")));
     assert_eq!(meta(entry, "uuid"), Some(text(&profile(4))));
+    assert_eq!(meta(entry, "bot"), Some(text(&bot.to_string())));
+    assert_eq!(setup.db.bots().find(bot).await.unwrap(), None);
 }
 
 #[sqlx::test(migrations = false)]
@@ -302,6 +308,35 @@ async fn an_unknown_account_is_404_and_a_review_spends_the_users_limit(
     assert_eq!(first.status, 404, "{}", first.text);
     assert_eq!(second.status, 429, "{}", second.text);
     assert!(second.retry_after.is_some());
+}
+
+#[sqlx::test(migrations = false)]
+async fn each_review_hints_the_reconciler_after_its_commit_and_a_refused_one_doesnt(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let admin = setup.person(1, Role::Admin).await;
+    let member = setup.person(2, Role::Member).await;
+    let approved = setup
+        .add_account(member.id, 3, Some(AccountStatus::Pending))
+        .await;
+    let refused = setup
+        .add_account(member.id, 4, Some(AccountStatus::Pending))
+        .await;
+    let hinted = Arc::new(Hinted::default());
+    let accounts = service(&setup).with_reconcile(Arc::clone(&hinted) as Arc<dyn Reconcile>);
+
+    accounts.approve(&admin.acting(), approved).await.unwrap();
+    let after_approving = hinted.take();
+    let again = accounts.approve(&admin.acting(), approved).await;
+    let after_a_refused_review = hinted.take();
+    accounts.refuse(&admin.acting(), refused).await.unwrap();
+
+    assert_eq!(after_approving, [Change::Store]);
+    assert!(matches!(again, Err(ReviewError::NotPending)), "{again:?}");
+    assert_eq!(after_a_refused_review, []);
+    assert_eq!(hinted.take(), [Change::Store]);
 }
 
 #[sqlx::test(migrations = false)]

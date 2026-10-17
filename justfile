@@ -225,6 +225,16 @@ dev-agents $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "
 dev-disable-agent id $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dev-server" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dev-server" / "vault-key-1"):
     cargo run --quiet -p fleet-server --bin afkfleet-server -- agent disable --config deploy/dev/server.toml --id "{{ id }}"
 
+# `agent release --id id` on dev-server's database: every bot of the disabled agent `id`, and
+# every record of a bot it may still run, is cleared, so a running dev-server places the bots
+# on other agents within 30 s. Refused while the agent is enabled. Only once its host and its
+# bots are stopped (ADR-0019, S32). The same paths as dev-agents. No exit message: the command
+# prints its own result, error line and exit code.
+# Release dev-server's disabled agent `id`'s bots.
+[no-exit-message]
+dev-release-agent id $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "target" / "dev-server" / "afkfleet.db") $AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1=(justfile_directory() / "target" / "dev-server" / "vault-key-1"):
+    cargo run --quiet -p fleet-server --bin afkfleet-server -- agent release --config deploy/dev/server.toml --id "{{ id }}"
+
 # `vault status` on dev-server's database with its key 1: what each key ID seals, read from
 # the envelopes' headers. It reads no key file and never creates or migrates the database
 # (ADR-0018). No exit message: the command prints its own report, error line and exit code

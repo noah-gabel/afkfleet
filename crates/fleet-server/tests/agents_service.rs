@@ -196,7 +196,17 @@ impl Setup {
         let (queue, queued) = mpsc::channel(4);
         let ended = self
             .registry
-            .activate(&lease, queue, Halt::default(), self.clock.now())
+            .activate(
+                &lease,
+                fleet_server::grpc::registry::Activation {
+                    queue,
+                    halt: Halt::default(),
+                    connected_at: self.clock.now(),
+                    capacity: fleet_core::value::AgentCapacity::try_from(10_u32).unwrap(),
+                    running: Vec::new(),
+                    welcome: fleet_proto::generated::ServerMessage::default(),
+                },
+            )
             .unwrap();
         (lease, queued, ended)
     }
@@ -341,9 +351,17 @@ async fn a_disable_during_a_hello_keeps_the_stream_from_being_welcomed(
     setup.agents.disable(Disabler::Host, agent).await.unwrap();
 
     let (queue, _queued) = mpsc::channel(4);
-    let activated = setup
-        .registry
-        .activate(&lease, queue, Halt::default(), setup.clock.now());
+    let activated = setup.registry.activate(
+        &lease,
+        fleet_server::grpc::registry::Activation {
+            queue,
+            halt: Halt::default(),
+            connected_at: setup.clock.now(),
+            capacity: fleet_core::value::AgentCapacity::try_from(10_u32).unwrap(),
+            running: Vec::new(),
+            welcome: fleet_proto::generated::ServerMessage::default(),
+        },
+    );
     assert_eq!(activated.unwrap_err(), StreamEnd::Disabled);
 }
 

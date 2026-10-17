@@ -8,14 +8,16 @@
 //! any case; a taken name is refused without naming who holds it. It counts
 //! toward the Member quota like any account.
 //!
-//! The account's ID and every audit entry are made before the transaction,
-//! which reads the creator and their session again, then the quota, then
-//! inserts (ADR-0015). Each outcome that touches the database is audited:
+//! The account's ID, its bot's (minted from the same time) and every audit
+//! entry are made before the transaction, which reads the creator and their
+//! session again, then the quota, then inserts the account and its bot
+//! (ADR-0015; ADR-0019, S35). Each outcome that touches the database is audited:
 //! `account.link` Success, or a Failure for `taken` and `over_quota`.
 
 use fleet_core::account::{AccountKind, AccountStatus, over_quota};
 use fleet_core::audit::{AuditAction, AuditError, AuditMetadata, AuditOutcome, AuditTarget};
-use fleet_core::id::AccountId;
+use fleet_core::id::{AccountId, BotId};
+use fleet_core::mode::ModePreset;
 use fleet_core::system::{MintError, mint};
 use fleet_core::value::McUsername;
 use tracing::{debug, info};
@@ -24,6 +26,7 @@ use super::AccountService;
 use crate::app::users::{ActingUser, recheck};
 use crate::ports::accounts::{AccountCredential, InsertAccountError, McAccount};
 use crate::ports::audit::NewAuditEntry;
+use crate::ports::bots::NewBot;
 use crate::ports::store::StoreError;
 
 /// What creating an offline account logs.
@@ -44,7 +47,7 @@ pub enum CreateOfflineError {
     /// An offline account has this name already, in any case.
     #[error("the name is taken")]
     Taken,
-    /// The account's ID couldn't be minted.
+    /// The account's ID, or its bot's, couldn't be minted.
     #[error("the account's ID can't be minted")]
     Mint(#[source] MintError),
     /// An audit entry couldn't be built.
@@ -81,7 +84,8 @@ impl AccountService {
         let creator = by.actor.id;
         let now = self.clock.now();
         let id: AccountId = mint(now, self.random.as_ref()).map_err(CreateOfflineError::Mint)?;
-        let entries = self.entries(by, id, &name)?;
+        let bot: BotId = mint(now, self.random.as_ref()).map_err(CreateOfflineError::Mint)?;
+        let entries = self.entries(by, id, bot, &name)?;
         let mut tx = self.store.write().await?;
         let Some(acting) = recheck(tx.as_mut(), by).await? else {
             debug!(user_id = %creator, "an offline account was refused: the session is gone");
@@ -107,6 +111,13 @@ impl AccountService {
             }
             Err(InsertAccountError::Store(error)) => return Err(error.into()),
         }
+        tx.bots()
+            .insert(&NewBot {
+                id: bot,
+                account: id,
+                mode: ModePreset::Afk.id(),
+            })
+            .await?;
         tx.commit(entries.created).await?;
         info!(user_id = %creator, account_id = %id, "{CREATED}");
         Ok(account)
@@ -117,6 +128,7 @@ impl AccountService {
         &self,
         by: &ActingUser,
         id: AccountId,
+        bot: BotId,
         name: &McUsername,
     ) -> Result<Entries, AuditError> {
         let entry = |outcome| {
@@ -138,7 +150,11 @@ impl AccountService {
         Ok(Entries {
             created: entry(AuditOutcome::Success)
                 .target(AuditTarget::Account(id))
-                .metadata(metadata()?.text("status", AccountStatus::Active.as_str())?),
+                .metadata(
+                    metadata()?
+                        .text("status", AccountStatus::Active.as_str())?
+                        .id("bot", bot)?,
+                ),
             taken: failure("taken")?,
             over_quota: failure("over_quota")?,
         })

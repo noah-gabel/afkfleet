@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT agents.rowid AS \"rowid!: i64\", agents.id AS \"id!\", agents.name AS \"name!\",\n                  agents.enabled AS \"enabled!: i64\", agents.capacity AS \"capacity?: i64\",\n                  agents.version AS \"version?\", agents.last_seen_at AS \"last_seen_at?\",\n                  agents.created_at AS \"created_at!\",\n                  (SELECT max(agent_certs.not_after) FROM agent_certs\n                   WHERE agent_certs.agent_id = agents.id AND agent_certs.revoked_at IS NULL)\n                      AS \"not_after?: String\"\n           FROM agents\n           WHERE ? IS NULL OR agents.id < ?\n           ORDER BY agents.id DESC\n           LIMIT ?",
+  "query": "SELECT agents.rowid AS \"rowid!: i64\", agents.id AS \"id!\", agents.name AS \"name!\",\n                  agents.enabled AS \"enabled!: i64\", agents.capacity AS \"capacity?: i64\",\n                  agents.version AS \"version?\", agents.last_seen_at AS \"last_seen_at?\",\n                  agents.created_at AS \"created_at!\",\n                  (SELECT max(agent_certs.not_after) FROM agent_certs\n                   WHERE agent_certs.agent_id = agents.id AND agent_certs.revoked_at IS NULL)\n                      AS \"not_after?: String\",\n                  (SELECT count(*) FROM bots WHERE bots.agent_id = agents.id)\n                      + (SELECT count(*) FROM releasing_bots\n                         WHERE releasing_bots.agent_id = agents.id)\n                      AS \"bots!: i64\"\n           FROM agents WHERE agents.id = ?",
   "describe": {
     "columns": [
       {
@@ -94,15 +94,21 @@
       {
         "name": "not_after?: String",
         "ordinal": 8,
-        "type_info": "Text",
+        "type_info": "Null",
+        "origin": "Expression"
+      },
+      {
+        "name": "bots!: i64",
+        "ordinal": 9,
+        "type_info": "Null",
         "origin": "Expression"
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 1
     },
     "nullable": [
-      false,
+      null,
       false,
       false,
       false,
@@ -110,8 +116,9 @@
       true,
       true,
       false,
-      true
+      null,
+      null
     ]
   },
-  "hash": "b0cfd31a731df6ca0b6474ed44c80369211501f7a626ca3495ea6570ba334436"
+  "hash": "b8fda7d40da6422aef492420f37f494c8f75699f51e18bb0a8b4b67fc4a4f649"
 }

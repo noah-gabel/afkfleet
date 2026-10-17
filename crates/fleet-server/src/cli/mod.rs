@@ -51,7 +51,8 @@ Exit codes:
   0  stopped by a signal (SIGTERM or SIGINT; Ctrl+C or Ctrl+Break on Windows)
   1  startup error: the config, logging, the address or the database
   2  usage error
-  4  the server ended unasked, or didn't finish its shutdown by the deadline";
+  4  the server, or its reconciler, ended unasked, or didn't finish its
+     shutdown by the deadline";
 
 /// The exit codes of `afkfleet-server migrate`, shown in its help.
 pub const MIGRATE_EXIT_CODES: &str = "\
@@ -158,10 +159,10 @@ pub enum AgentCommand {
         config: PathBuf,
     },
     /// Lists every agent, newest first: its ID, name, state (enabled,
-    /// expired or disabled), capacity, version, when it was last seen, when
-    /// its certificate expires and when it enrolled, tab-separated after a
-    /// header, `-` for nothing. It neither creates nor migrates the
-    /// database.
+    /// expired or disabled), how many bots it holds, capacity, version, when
+    /// it was last seen, when its certificate expires and when it enrolled,
+    /// tab-separated after a header, `-` for nothing. It neither creates nor
+    /// migrates the database.
     #[command(after_help = agent::LIST_EXIT_CODES)]
     List {
         /// The config file (TOML): the command reads `[database] path` and
@@ -182,6 +183,24 @@ pub enum AgentCommand {
         #[arg(long, value_name = "PATH")]
         config: PathBuf,
         /// The agent's ID, as `agent list` shows it.
+        #[arg(long, value_name = "ID")]
+        id: AgentId,
+    },
+    /// Releases a disabled agent's bots, so the server places them on other
+    /// agents: every bot assigned to it, and every record of a bot it may
+    /// still run, is cleared. Use it only once the agent's host and its bots
+    /// are stopped: nothing can prove they are, and a bot still running
+    /// there is logged in twice until the new login kicks it. A running
+    /// server places the bots within 30 s. It neither creates nor migrates
+    /// the database, and works without `[grpc]`.
+    #[command(after_help = agent::RELEASE_EXIT_CODES)]
+    Release {
+        /// The config file (TOML): the command reads `[database] path` and
+        /// `[log]`. `AFKFLEET_SERVER__…` environment variables override its
+        /// keys, as for `serve`.
+        #[arg(long, value_name = "PATH")]
+        config: PathBuf,
+        /// The disabled agent's ID, as `agent list` shows it.
         #[arg(long, value_name = "ID")]
         id: AgentId,
     },
@@ -610,8 +629,36 @@ mod tests {
         );
     }
 
+    #[test]
+    fn release_takes_the_config_path_and_the_id() {
+        let id = "019bcfe5-6800-7101-8101-010101010101";
+
+        let release = Cli::try_parse_from([
+            "afkfleet-server",
+            "agent",
+            "release",
+            "--config",
+            "server.toml",
+            "--id",
+            id,
+        ])
+        .unwrap();
+
+        assert_eq!(
+            release.command,
+            Command::Agent {
+                command: AgentCommand::Release {
+                    config: PathBuf::from("server.toml"),
+                    id: id.parse().unwrap(),
+                }
+            }
+        );
+    }
+
     #[rstest]
     #[case::list_without_a_config(&["agent", "list"])]
+    #[case::release_without_an_id(&["agent", "release", "--config", "server.toml"])]
+    #[case::release_with_text(&["agent", "release", "--config", "server.toml", "--id", "agent-1"])]
     #[case::disable_without_an_id(&["agent", "disable", "--config", "server.toml"])]
     #[case::disable_with_a_v4_id(&["agent", "disable", "--config", "server.toml", "--id", "0b6b8a54-3b8a-4c2e-9a1d-6f1e2d3c4b5a"])]
     #[case::disable_with_text(&["agent", "disable", "--config", "server.toml", "--id", "agent-1"])]
@@ -628,6 +675,7 @@ mod tests {
     #[rstest]
     #[case::list("list", agent::LIST_EXIT_CODES)]
     #[case::disable("disable", agent::DISABLE_EXIT_CODES)]
+    #[case::release("release", agent::RELEASE_EXIT_CODES)]
     fn the_agents_helps_list_their_exit_codes(#[case] name: &str, #[case] codes: &str) {
         let mut command = Cli::command();
         let subcommand = command

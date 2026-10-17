@@ -73,7 +73,8 @@ pub struct SeededRandom {
 #[derive(Debug)]
 struct RandomState {
     rng: StdRng,
-    failures: VecDeque<RandomError>,
+    /// One entry per coming fill: a failure, or `None` to let it through.
+    failures: VecDeque<Option<RandomError>>,
 }
 
 impl SeededRandom {
@@ -92,7 +93,17 @@ impl SeededRandom {
     /// failures are used in order, one per fill, and a failed fill doesn't
     /// move the stream.
     pub fn fail_next(&self, error: RandomError) {
-        self.lock().failures.push_back(error);
+        self.lock().failures.push_back(Some(error));
+    }
+
+    /// Lets the next `successes` fills through, after any already queued
+    /// failure, then makes one fail with `error`: for a test that fails the
+    /// second of two draws (a bot's ID minted after its account's).
+    pub fn fail_after(&self, successes: usize, error: RandomError) {
+        let mut state = self.lock();
+        state
+            .failures
+            .extend(core::iter::repeat_n(None, successes).chain([Some(error)]));
     }
 
     /// Locks the state. A test that panicked while holding the lock leaves
@@ -105,7 +116,7 @@ impl SeededRandom {
 impl SecureRandom for SeededRandom {
     fn fill(&self, dest: &mut [u8]) -> Result<(), RandomError> {
         let mut state = self.lock();
-        if let Some(error) = state.failures.pop_front() {
+        if let Some(Some(error)) = state.failures.pop_front() {
             return Err(error);
         }
         state.rng.fill_bytes(dest);

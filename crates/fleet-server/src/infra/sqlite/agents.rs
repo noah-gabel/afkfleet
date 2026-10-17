@@ -50,6 +50,7 @@ struct ListedRow {
     last_seen_at: Option<String>,
     created_at: String,
     not_after: Option<String>,
+    bots: i64,
 }
 
 /// An `agent_certs` row, before its values are checked.
@@ -249,7 +250,11 @@ pub(super) async fn list(
                   agents.created_at AS "created_at!",
                   (SELECT max(agent_certs.not_after) FROM agent_certs
                    WHERE agent_certs.agent_id = agents.id AND agent_certs.revoked_at IS NULL)
-                      AS "not_after?: String"
+                      AS "not_after?: String",
+                  (SELECT count(*) FROM bots WHERE bots.agent_id = agents.id)
+                      + (SELECT count(*) FROM releasing_bots
+                         WHERE releasing_bots.agent_id = agents.id)
+                      AS "bots!: i64"
            FROM agents
            WHERE ? IS NULL OR agents.id < ?
            ORDER BY agents.id DESC
@@ -280,7 +285,11 @@ pub(super) async fn listed(
                   agents.created_at AS "created_at!",
                   (SELECT max(agent_certs.not_after) FROM agent_certs
                    WHERE agent_certs.agent_id = agents.id AND agent_certs.revoked_at IS NULL)
-                      AS "not_after?: String"
+                      AS "not_after?: String",
+                  (SELECT count(*) FROM bots WHERE bots.agent_id = agents.id)
+                      + (SELECT count(*) FROM releasing_bots
+                         WHERE releasing_bots.agent_id = agents.id)
+                      AS "bots!: i64"
            FROM agents WHERE agents.id = ?"#,
         id
     )
@@ -396,7 +405,12 @@ fn listed_from_row(row: ListedRow) -> Result<ListedAgent, StoreError> {
         last_seen_at: row.last_seen_at,
         created_at: row.created_at,
     })?;
-    Ok(ListedAgent { agent, not_after })
+    Ok(ListedAgent {
+        agent,
+        not_after,
+        // A count is never negative, and never near u32's range.
+        bots: u32::try_from(row.bots).unwrap_or(u32::MAX),
+    })
 }
 
 /// Reads an `agents` row back, or [`StoreError::Corrupt`] naming the first

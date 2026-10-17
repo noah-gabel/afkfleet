@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO modes (id, owner_user_id, name, visibility, definition_json, version, created_at, updated_at)\n             VALUES (?, ?, 'mine', ?, ?, ?, ?, ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "d231fee30d6eb38ce235f5390a0d0cf1f24ef4ecbf599b639d23e4ad6b895143"
+}

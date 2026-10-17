@@ -1,0 +1,134 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rowid AS \"rowid!: i64\", id AS \"id!\", account_id AS \"account_id!\",\n                  server_address AS \"server_address?\", mode_id AS \"mode_id!\",\n                  desired_state AS \"desired_state!\", agent_id AS \"agent_id?\",\n                  last_state AS \"last_state?\", last_state_reason AS \"last_state_reason?\",\n                  last_state_at AS \"last_state_at?\"\n           FROM bots WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "account_id!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "account_id"
+          }
+        }
+      },
+      {
+        "name": "server_address?",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "server_address"
+          }
+        }
+      },
+      {
+        "name": "mode_id!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "mode_id"
+          }
+        }
+      },
+      {
+        "name": "desired_state!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "desired_state"
+          }
+        }
+      },
+      {
+        "name": "agent_id?",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "agent_id"
+          }
+        }
+      },
+      {
+        "name": "last_state?",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "last_state"
+          }
+        }
+      },
+      {
+        "name": "last_state_reason?",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "last_state_reason"
+          }
+        }
+      },
+      {
+        "name": "last_state_at?",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "last_state_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "8f9e9c5441d309ccb0f9bc2db4c8d18f0c30285ca350efe2c69ed01ba03d223a"
+}

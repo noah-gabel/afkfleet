@@ -16,6 +16,9 @@
 //! - **Deleting an account** (P9.6): Manage, any status and kind, offline
 //!   ones too while `allow_offline` is off; its grants go with it.
 //!
+//! A deletion and a review tell the reconciler to look again after their
+//! commit ([`Reconcile`], P10.5): a bot may run, or must stop, now.
+//!
 //! Every write reads the acting user and their session again inside its
 //! transaction ([`recheck`]), then the account with
 //! its owner's current role and the actor's grant, and asks `authorize()`
@@ -39,6 +42,7 @@ use fleet_core::value::Username;
 use super::audit::AuditService;
 use super::users::{ActingUser, recheck};
 use crate::ports::accounts::ListedAccount;
+use crate::ports::reconcile::{NoReconcile, Reconcile};
 use crate::ports::store::{Store, StoreError, WriteTx};
 
 pub use delete::DeleteAccountError;
@@ -63,6 +67,7 @@ pub struct AccountService {
     store: Arc<dyn Store>,
     audit: AuditService,
     settings: AccountSettings,
+    reconcile: Arc<dyn Reconcile>,
 }
 
 impl AccountService {
@@ -82,7 +87,15 @@ impl AccountService {
             store,
             audit,
             settings,
+            reconcile: Arc::new(NoReconcile),
         }
+    }
+
+    /// The service, telling `reconcile` to look again after each write
+    /// that may change where bots run: a deletion and a review.
+    #[must_use]
+    pub fn with_reconcile(self, reconcile: Arc<dyn Reconcile>) -> Self {
+        Self { reconcile, ..self }
     }
 
     /// Whether offline accounts may be created.

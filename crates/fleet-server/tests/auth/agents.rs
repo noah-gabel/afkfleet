@@ -84,7 +84,17 @@ impl Setup {
         let (queue, queued) = mpsc::channel(4);
         let ended = self
             .registry
-            .activate(&lease, queue, Halt::default(), self.clock.now())
+            .activate(
+                &lease,
+                fleet_server::grpc::registry::Activation {
+                    queue,
+                    halt: Halt::default(),
+                    connected_at: self.clock.now(),
+                    capacity: fleet_core::value::AgentCapacity::try_from(10_u32).unwrap(),
+                    running: Vec::new(),
+                    welcome: fleet_proto::generated::ServerMessage::default(),
+                },
+            )
             .unwrap();
         (lease, queued, ended)
     }

@@ -5,7 +5,10 @@
 //!   its identity, and checking the live streams again (P10.4, P10.5),
 //!   behind the [`AgentConnections`](crate::ports::agent_connections::AgentConnections)
 //!   port the gRPC port calls.
-//! - [`AgentService`]: the agents' list and disabling one (P10.10, S31).
+//! - [`assignments`]: the bots' assignments as the reconciler changes them,
+//!   each change in its own audited transaction (P10.5, S36).
+//! - [`AgentService`]: the agents' list, disabling one (P10.10, S31), and
+//!   releasing a disabled one's bots from the server's host (P10.5, S32).
 //!   - **The list** shows every agent, newest first, with its status
 //!     (fleet-core's rule over the row, its latest unrevoked certificate and
 //!     the live stream), when its stream was welcomed, and the later of the
@@ -18,6 +21,7 @@
 //!     hello's transaction. An agent disabled already is no change and no
 //!     entry.
 
+pub mod assignments;
 pub mod connections;
 
 use std::sync::Arc;
@@ -26,16 +30,18 @@ use chrono::{DateTime, Utc};
 use fleet_core::agent::{AgentStatus, status};
 use fleet_core::audit::{AuditAction, AuditError, AuditMetadata, AuditOutcome, AuditTarget};
 use fleet_core::authz::{AuthzError, Permission, ResourceContext, authorize};
-use fleet_core::id::AgentId;
+use fleet_core::id::{AgentId, BotId};
+use fleet_core::placement::DetachReason;
 use fleet_core::system::Clock;
 use tracing::{debug, info};
 
+pub use assignments::AssignmentService;
 pub use connections::AgentConnectionService;
 
 use super::audit::AuditService;
 use super::users::{ActingUser, recheck};
 use crate::ports::agents::ListedAgent;
-use crate::ports::live_agents::{LiveAgents, PermissionEnd};
+use crate::ports::live_agents::{LiveAgents, LiveStream, PermissionEnd};
 use crate::ports::page::{Page, Paged};
 use crate::ports::store::{Store, StoreError};
 
@@ -53,6 +59,19 @@ pub struct AgentView {
     pub last_seen_at: Option<DateTime<Utc>>,
 }
 
+/// When the server last heard from an agent: the later of the stored time
+/// and its live stream's.
+#[must_use]
+pub(crate) fn last_seen(
+    stored: Option<DateTime<Utc>>,
+    live: Option<LiveStream>,
+) -> Option<DateTime<Utc>> {
+    match (stored, live) {
+        (Some(stored), Some(live)) => Some(stored.max(live.last_seen)),
+        (stored, live) => stored.or(live.map(|live| live.last_seen)),
+    }
+}
+
 /// An agent [`AgentService::disable`] disabled.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DisabledAgent {
@@ -61,6 +80,24 @@ pub struct DisabledAgent {
     /// How many certificates were revoked; none when the agent was disabled
     /// already, and nothing changed.
     pub revoked: Option<u64>,
+}
+
+/// Why a disabled agent's bots weren't released.
+#[derive(Debug, thiserror::Error)]
+pub enum ReleaseAgentError {
+    /// There's no such agent.
+    #[error("the agent doesn't exist")]
+    NotFound,
+    /// The agent is enabled: it may still run its bots, and can say so
+    /// itself. Disable it first.
+    #[error("the agent is enabled")]
+    Enabled,
+    /// An audit entry couldn't be built.
+    #[error("the audit entry can't be built")]
+    Audit(#[from] AuditError),
+    /// The database failed.
+    #[error(transparent)]
+    Store(#[from] StoreError),
 }
 
 /// Who disables an agent.
@@ -137,16 +174,61 @@ impl AgentService {
     fn view(&self, listed: ListedAgent, now: DateTime<Utc>) -> AgentView {
         let live = self.live.live(listed.agent.id);
         let status = status(listed.agent.enabled, listed.not_after, live.is_some(), now);
-        let last_seen_at = match (listed.agent.last_seen_at, live) {
-            (Some(stored), Some(live)) => Some(stored.max(live.last_seen)),
-            (stored, live) => stored.or(live.map(|live| live.last_seen)),
-        };
         AgentView {
             status,
             connected_since: live.map(|live| live.connected_at),
-            last_seen_at,
+            last_seen_at: last_seen(listed.agent.last_seen_at, live),
             listed,
         }
+    }
+
+    /// Releases the disabled agent `id`'s bots, from the server's host: every
+    /// bot assigned to it and every release record naming it cleared, in one
+    /// transaction with a `bot.detach` per bot and `agent.release`, so the
+    /// bots can be placed elsewhere (ADR-0019, S32, R25). The operator
+    /// vouches that the agent's host and its bots are stopped: nothing can
+    /// prove it. The bots released, in ID order; none is no change and no
+    /// entry. A running server places them on its next pass.
+    ///
+    /// # Errors
+    /// [`ReleaseAgentError`].
+    pub async fn release(&self, id: AgentId) -> Result<Vec<BotId>, ReleaseAgentError> {
+        let mut tx = self.store.write().await?;
+        let agent = tx
+            .agents()
+            .find(id)
+            .await?
+            .ok_or(ReleaseAgentError::NotFound)?;
+        if agent.enabled {
+            return Err(ReleaseAgentError::Enabled);
+        }
+        let released = tx.bots().release_all(id).await?;
+        if released.is_empty() {
+            // Nothing to release: dropping the transaction writes nothing.
+            return Ok(released);
+        }
+        for bot in &released {
+            let metadata = AuditMetadata::new()
+                .id("agent", id)?
+                .text("reason", DetachReason::AgentReleased.as_str())?;
+            let entry = self
+                .audit
+                .entry(AuditAction::BOT_DETACH, AuditOutcome::Success)
+                .target(AuditTarget::Bot(*bot))
+                .metadata(metadata);
+            tx.audit().record(&entry).await?;
+        }
+        let metadata = AuditMetadata::new()
+            .int("count", i64::try_from(released.len()).unwrap_or(i64::MAX))?
+            .text("via", "cli")?;
+        let entry = self
+            .audit
+            .entry(AuditAction::AGENT_RELEASE, AuditOutcome::Success)
+            .target(AuditTarget::Agent(id))
+            .metadata(metadata);
+        tx.commit(entry).await?;
+        info!(agent_id = %id, agent = %agent.name, bots = released.len(), "a disabled agent's bots were released");
+        Ok(released)
     }
 
     /// Disables agent `id` for `by` and ends its stream: the agent as the

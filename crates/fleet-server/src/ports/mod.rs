@@ -7,13 +7,21 @@
 //!   read handles and one write transaction at a time, [`store::WriteTx`],
 //!   whose commit always records an audit entry.
 //! - [`users`]: the users.
+//! - [`bots`]: the bots, one per linked Minecraft account, with their
+//!   desired state, their agent and their last reported state (P11.1, P10.5).
+//! - [`modes`]: the modes, what a bot does while it's online; the built-in
+//!   ones seeded with fixed IDs (P11.1).
 //! - [`agents`]: the enrolled agents and the certificates the server signed
 //!   for them (P10.2, P10.3).
 //! - [`agent_connections`]: what an agent's `Connect` stream asks the app:
 //!   admitting its certificate, recording its hello, its end and a conflict
 //!   over its identity, and checking the live streams again (P10.4, P10.5).
 //! - [`live_agents`]: what the app asks of the live streams: ending one
-//!   whose permission ended, and what's known of one (P10.5).
+//!   whose permission ended, and what's known of one and its bots (P10.5).
+//! - [`assignments`]: what the reconciler asks of the store: everything it
+//!   plans from, and each change of a bot's agent, audited (P10.5).
+//! - [`reconcile`]: the hints that tell the reconciler to look again after a
+//!   commit or a stream's change (P10.5).
 //! - [`accounts`]: the linked Minecraft accounts, Microsoft or offline
 //!   (P9.1).
 //! - [`grants`]: the grants that share an account with other users (P9.1).
@@ -49,7 +57,9 @@
 pub mod accounts;
 pub mod agent_connections;
 pub mod agents;
+pub mod assignments;
 pub mod audit;
+pub mod bots;
 pub mod enrollment_tokens;
 pub mod envelopes;
 pub mod grants;
@@ -57,12 +67,14 @@ pub mod invites;
 pub mod live_agents;
 pub mod login_attempts;
 pub mod mfa;
+pub mod modes;
 pub mod msauth;
 pub mod pace;
 pub mod page;
 pub mod passwords;
 pub mod pki;
 pub mod qr;
+pub mod reconcile;
 pub mod recovery_codes;
 pub mod sessions;
 pub mod store;

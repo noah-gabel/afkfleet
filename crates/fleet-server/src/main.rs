@@ -28,9 +28,10 @@
 //!   carries the bundle alone, and runs
 //!   [`agent::create_enrollment_token`] on a current-thread runtime, with
 //!   the real clock and the OS's randomness.
-//! - `agent list` and `agent disable` start logging on stderr, since stdout
-//!   carries their result, and run [`agent::list`] or [`agent::disable`] on a
-//!   current-thread runtime, with the real clock.
+//! - `agent list`, `agent disable` and `agent release` start logging on
+//!   stderr, since stdout carries their result, and run [`agent::list`],
+//!   [`agent::disable`] or [`agent::release`] on a current-thread runtime,
+//!   with the real clock.
 //! - `vault status` and `vault rotate-key` start logging and run
 //!   [`vault::status`] or [`vault::rotate_key`] on a current-thread runtime.
 //!
@@ -102,6 +103,9 @@ fn main() -> ExitCode {
         Command::Agent {
             command: AgentCommand::Disable { config, id },
         } => run_agents(&config, AgentRun::Disable(id)),
+        Command::Agent {
+            command: AgentCommand::Release { config, id },
+        } => run_agents(&config, AgentRun::Release(id)),
     }
 }
 
@@ -299,10 +303,12 @@ enum AgentRun {
     List,
     /// `agent disable --id`.
     Disable(fleet_core::id::AgentId),
+    /// `agent release --id`.
+    Release(fleet_core::id::AgentId),
 }
 
-/// `afkfleet-server agent list` or `agent disable`, with the real clock, on
-/// a current-thread runtime.
+/// `afkfleet-server agent list`, `agent disable` or `agent release`, with
+/// the real clock, on a current-thread runtime.
 fn run_agents(path: &Path, command: AgentRun) -> ExitCode {
     let config = match config::load(path) {
         Ok(config) => config,
@@ -323,6 +329,9 @@ fn run_agents(path: &Path, command: AgentRun) -> ExitCode {
             AgentRun::List => agent::list(&config, Arc::new(SystemClock), &mut out, &mut err).await,
             AgentRun::Disable(id) => {
                 agent::disable(&config, Arc::new(SystemClock), id, &mut out, &mut err).await
+            }
+            AgentRun::Release(id) => {
+                agent::release(&config, Arc::new(SystemClock), id, &mut out, &mut err).await
             }
         }
     });

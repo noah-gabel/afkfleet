@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE releasing_bots SET mc_name = '' WHERE bot_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "ab4f0c11314afc1e8efcfbe57cb075344d5f54ec1a1d979b18442a7ed0b18578"
+}

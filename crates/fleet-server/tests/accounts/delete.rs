@@ -14,10 +14,12 @@ use fleet_core::authz::{AuthzError, GrantLevel, Role};
 use fleet_core::id::AccountId;
 use fleet_server::app::accounts::{AccountService, AccountSettings, DeleteAccountError};
 use fleet_server::config::{Rate, RateLimitConfig};
+use fleet_server::ports::reconcile::{Change, Reconcile};
 use fleet_server::ports::store::Store as _;
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
+use crate::support::hints::Hinted;
 use crate::support::http::{HttpSetup, Person, Seen, meta, text};
 use crate::support::service::{T0, at, profile};
 
@@ -25,6 +27,39 @@ async fn delete(setup: &HttpSetup, by: &Person, id: AccountId) -> Seen {
     setup
         .api(Method::DELETE, &format!("/accounts/{id}"), by, None)
         .await
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_deletion_hints_the_reconciler_after_its_commit_and_a_refused_one_doesnt(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let member = setup.person(1, Role::Member).await;
+    let stranger = setup.person(2, Role::Member).await;
+    let id = setup.add_account(member.id, 3, None).await;
+    let hinted = Arc::new(Hinted::default());
+    let accounts = AccountService::new(
+        Arc::new(ManualClock::new(at(T0))),
+        Arc::new(SeededRandom::new(5)),
+        Arc::new(setup.db.clone()),
+        AccountSettings {
+            allow_offline: false,
+            max_per_member: core::num::NonZeroU32::MIN,
+        },
+    )
+    .with_reconcile(Arc::clone(&hinted) as Arc<dyn Reconcile>);
+
+    let refused = accounts.delete(&stranger.acting(), id).await;
+    let after_the_refusal = hinted.take();
+    accounts.delete(&member.acting(), id).await.unwrap();
+
+    assert!(
+        matches!(refused, Err(DeleteAccountError::Denied(_))),
+        "{refused:?}"
+    );
+    assert_eq!(after_the_refusal, []);
+    assert_eq!(hinted.take(), [Change::Store]);
 }
 
 #[sqlx::test(migrations = false)]
@@ -45,6 +80,7 @@ async fn the_owner_deletes_their_account_with_its_grants_and_it_is_audited(
     setup
         .add_grant(id, friend.id, GrantLevel::Control, member.id)
         .await;
+    let bot = setup.add_bot(id, 3).await;
 
     let deleted = delete(&setup, &member, id).await;
 
@@ -66,7 +102,29 @@ async fn the_owner_deletes_their_account_with_its_grants_and_it_is_audited(
     assert_eq!(meta(entry, "name"), Some(text("AfkBot3")));
     assert_eq!(meta(entry, "status"), Some(text("refused")));
     assert_eq!(meta(entry, "uuid"), Some(text(&profile(3))));
-    assert_eq!(entry.metadata.entries().len(), 5);
+    assert_eq!(meta(entry, "bot"), Some(text(&bot.to_string())));
+    assert_eq!(entry.metadata.entries().len(), 6);
+    assert_eq!(setup.db.bots().find(bot).await.unwrap(), None);
+}
+
+#[sqlx::test(migrations = false)]
+async fn deleting_an_account_whose_bot_an_agent_runs_records_that_agent(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let member = setup.stepped_up(1, Role::Member).await;
+    let id = setup.add_account(member.id, 3, None).await;
+    let bot = setup.add_bot(id, 3).await;
+    let agent = setup.assign_to_agent(bot, 4).await;
+
+    let deleted = delete(&setup, &member, id).await;
+
+    assert_eq!(deleted.status, 204, "{}", deleted.text);
+    let entries = setup.entries(&AuditAction::ACCOUNT_DELETE).await;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(meta(&entries[0], "bot"), Some(text(&bot.to_string())));
+    assert_eq!(meta(&entries[0], "agent"), Some(text(&agent.to_string())));
 }
 
 #[sqlx::test(migrations = false)]

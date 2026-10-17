@@ -16,6 +16,14 @@
 //! stream is being welcomed (U8). An agent disabled already is
 //! no change and no entry.
 //!
+//! `agent release --id …` releases a disabled agent's bots (S32, R25): one
+//! transaction clears every bot assigned to it and every release record
+//! naming it, with a `bot.detach` per bot and `agent.release` with `via` =
+//! `cli`, no actor. It's refused while the agent is enabled. The operator
+//! vouches that the agent's host and its bots are stopped: nothing can
+//! prove it. A running server places the bots on its next pass, within
+//! 30 s. An agent that holds no bot is no change and no entry.
+//!
 //! `agent create-enrollment-token`:
 //!
 //! - **Refused while the control plane is off** (`[grpc]` isn't
@@ -47,7 +55,9 @@ use secrecy::ExposeSecret as _;
 use tracing::error;
 
 use super::DATABASE_CLOSE;
-use crate::app::agents::{AgentService, AgentView, DisableAgentError, DisabledAgent, Disabler};
+use crate::app::agents::{
+    AgentService, AgentView, DisableAgentError, DisabledAgent, Disabler, ReleaseAgentError,
+};
 use crate::app::enrollment::{
     CreateTokenError, CreatedEnrollmentToken, Creator, EnrollmentTokenService,
 };
@@ -88,9 +98,19 @@ Exit codes:
      included)
   2  usage error";
 
+/// The exit codes of `afkfleet-server agent release`, shown in its help.
+pub const RELEASE_EXIT_CODES: &str = "\
+Exit codes:
+  0  the agent's bots are released, or it held none; a running server
+     places them within 30 s
+  1  nothing was released: no agent has this ID, the agent is enabled
+     (disable it first), or the config, logging or the database failed (a
+     missing database and pending migrations included)
+  2  usage error";
+
 /// The first line of `agent list`'s output: its columns.
 pub const LIST_HEADER: &str =
-    "id\tname\tstate\tcapacity\tversion\tlast_seen_at\tnot_after\tcreated_at";
+    "id\tname\tstate\tbots\tcapacity\tversion\tlast_seen_at\tnot_after\tcreated_at";
 
 /// How the command ended, which decides the process's exit code.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -175,9 +195,10 @@ fn print_list(views: &[AgentView], out: &mut dyn Write, err: &mut dyn Write) -> 
         // Writing to a String can't fail.
         let _ = writeln!(
             text,
-            "{}\t{}\t{state}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{state}\t{}\t{}\t{}\t{}\t{}\t{}",
             agent.id,
             agent.name,
+            view.listed.bots,
             agent
                 .capacity
                 .map_or_else(|| "-".to_owned(), |capacity| capacity.get().to_string()),
@@ -240,6 +261,47 @@ fn print_disabled(disabled: &DisabledAgent, out: &mut dyn Write, err: &mut dyn W
         None => format!(
             "The agent {} ({}) was disabled already: nothing changed.",
             agent.name, agent.id
+        ),
+    };
+    if let Err(error) = writeln!(out, "{line}").and_then(|()| out.flush()) {
+        return fail(err, "the result couldn't be written to stdout", &error);
+    }
+    Exit::Done
+}
+
+/// `afkfleet-server agent release --id …`: releases the disabled agent
+/// `id`'s bots, and says on `out` how many; see the [module docs](self).
+pub async fn release(
+    config: &ServerConfig,
+    clock: Arc<dyn Clock>,
+    id: AgentId,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Exit {
+    let database = match sqlite::open_migrated(&config.database, DatabaseOptions::default()).await {
+        Ok(database) => database,
+        Err(error) => return fail(err, "the database can't be opened", &error),
+    };
+    let agents = agent_service(&database, clock);
+    let exit = match agents.release(id).await {
+        Ok(released) => print_released(id, released.len(), out, err),
+        Err(ReleaseAgentError::NotFound) => refuse(err, &format!("no agent has the ID {id}")),
+        Err(ReleaseAgentError::Enabled) => refuse(
+            err,
+            &format!("the agent {id} is enabled: disable it first, and stop its host and its bots"),
+        ),
+        Err(error) => fail(err, "the agent's bots couldn't be released", &error),
+    };
+    close(database, exit, err).await
+}
+
+/// Says on `out` how many of agent `id`'s bots were released.
+fn print_released(id: AgentId, released: usize, out: &mut dyn Write, err: &mut dyn Write) -> Exit {
+    let line = match released {
+        0 => format!("The agent {id} holds no bots: nothing changed."),
+        1 => format!("Released 1 bot of the agent {id}: a running server places it within 30 s."),
+        n => format!(
+            "Released {n} bots of the agent {id}: a running server places them within 30 s."
         ),
     };
     if let Err(error) = writeln!(out, "{line}").and_then(|()| out.flush()) {
@@ -344,8 +406,12 @@ mod tests {
     use std::path::Path;
 
     use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget};
+    use fleet_core::authz::Role;
     use fleet_core::enrollment::{EnrollmentBundle, MAX_PENDING_TOKENS};
+    use fleet_core::id::{AccountId, BotId, UserId};
+    use fleet_core::mode::ModePreset;
     use fleet_core::pki::CertFingerprint;
+    use fleet_core::value::Username;
     use fleet_startup::config::{LogConfig, LogFormat};
     use fleet_startup::telemetry::{NoRules, layer_with};
     use fleet_testkit::log_buffer::LogBuffer;
@@ -759,9 +825,9 @@ mod tests {
             ran.out,
             format!(
                 "{LIST_HEADER}\n\
-                 {disabled}\tagent-3\tdisabled\t-\t-\t-\t2027-03-16T08:00:00Z\t2027-01-15T08:00:00Z\n\
-                 {expiring}\tagent-2\texpired\t-\t-\t-\t2027-01-16T08:00:00Z\t2027-01-15T08:00:00Z\n\
-                 {heard}\tagent-1\tenabled\t10\t0.1.0\t2027-01-15T08:00:01Z\t2027-03-16T08:00:00Z\t2027-01-15T08:00:00Z\n"
+                 {disabled}\tagent-3\tdisabled\t0\t-\t-\t-\t2027-03-16T08:00:00Z\t2027-01-15T08:00:00Z\n\
+                 {expiring}\tagent-2\texpired\t0\t-\t-\t-\t2027-01-16T08:00:00Z\t2027-01-15T08:00:00Z\n\
+                 {heard}\tagent-1\tenabled\t0\t10\t0.1.0\t2027-01-15T08:00:01Z\t2027-03-16T08:00:00Z\t2027-01-15T08:00:00Z\n"
             )
         );
         assert_eq!(ran.err, "");
@@ -853,6 +919,228 @@ mod tests {
         assert_eq!(
             ran.err,
             format!("afkfleet-server: no agent has the ID {unknown}\n")
+        );
+    }
+
+    /// Runs `agent release --id id` over `config`.
+    async fn run_release(config: &ServerConfig, id: AgentId) -> Ran {
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let exit = release(
+            config,
+            Arc::new(ManualClock::new(at(NOW))),
+            id,
+            &mut out,
+            &mut err,
+        )
+        .await;
+        Ran {
+            exit,
+            out: String::from_utf8(out).unwrap(),
+            err: String::from_utf8(err).unwrap(),
+        }
+    }
+
+    /// User `n`'s offline account `AfkBot<n>` and its bot, assigned to
+    /// `agent`.
+    async fn bot_on(database: &Database, agent: AgentId, n: u8) -> BotId {
+        use crate::ports::accounts::{AccountCredential, McAccount};
+        use crate::ports::bots::NewBot;
+        use crate::ports::users::{NewUser, PasswordHash};
+        let user = UserId::new_v7(at(NOW), [n; 10]).unwrap();
+        let account = AccountId::new_v7(at(NOW), [n; 10]).unwrap();
+        let bot = BotId::new_v7(at(NOW), [n; 10]).unwrap();
+        let mut tx = database.write().await.unwrap();
+        tx.users()
+            .insert(&NewUser {
+                id: user,
+                username: Username::try_from(format!("user{n}").as_str()).unwrap(),
+                password_hash: PasswordHash::new(secrecy::SecretString::from(
+                    "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g",
+                ))
+                .unwrap(),
+                role: Role::Member,
+                created_at: at(NOW),
+            })
+            .await
+            .unwrap();
+        tx.accounts()
+            .insert(&McAccount {
+                id: account,
+                owner: user,
+                name: format!("AfkBot{n}").parse().unwrap(),
+                created_at: at(NOW),
+                credential: AccountCredential::Offline,
+            })
+            .await
+            .unwrap();
+        tx.bots()
+            .insert(&NewBot {
+                id: bot,
+                account,
+                mode: ModePreset::Afk.id(),
+            })
+            .await
+            .unwrap();
+        assert!(tx.bots().assign(bot, agent).await.unwrap());
+        tx.commit(crate::ports::audit::NewAuditEntry::new(
+            at(NOW),
+            AuditAction::try_from("test.agents_setup").unwrap(),
+            AuditOutcome::Success,
+        ))
+        .await
+        .unwrap();
+        bot
+    }
+
+    #[tokio::test]
+    async fn release_frees_a_disabled_agents_bots_records_via_cli_and_says_how_many() {
+        let dir = TempDir::new().unwrap();
+        migrate(dir.path()).await;
+        let database = open(dir.path()).await;
+        let agent = enroll(&database, 1, 60).await;
+        let bots = [
+            bot_on(&database, agent, 1).await,
+            bot_on(&database, agent, 2).await,
+        ];
+        database.close().await;
+        let config = config(dir.path(), false);
+        assert_eq!(run_disable(&config, agent).await.exit, Exit::Done);
+        let before = run_list(&config, NOW).await;
+
+        let ran = run_release(&config, agent).await;
+
+        assert_eq!(ran.exit, Exit::Done, "{}", ran.err);
+        assert_eq!(
+            ran.out,
+            format!(
+                "Released 2 bots of the agent {agent}: a running server places them within 30 s.\n"
+            )
+        );
+        assert_eq!(ran.err, "");
+        assert!(before.out.contains("\tdisabled\t2\t"), "{}", before.out);
+        let after = run_list(&config, NOW).await;
+        assert!(after.out.contains("\tdisabled\t0\t"), "{}", after.out);
+        let database = open(dir.path()).await;
+        for bot in bots {
+            assert_eq!(
+                database.bots().find(bot).await.unwrap().unwrap().agent,
+                None
+            );
+        }
+        let entries = audit(&database).await;
+        let released: Vec<_> = entries
+            .iter()
+            .filter(|entry| entry.action == AuditAction::AGENT_RELEASE)
+            .collect();
+        assert_eq!(released.len(), 1, "{entries:?}");
+        assert_eq!(released[0].actor, None);
+        assert_eq!(
+            released[0].target,
+            Some(RecordedTarget::Known(AuditTarget::Agent(agent)))
+        );
+        let detached = entries
+            .iter()
+            .filter(|entry| entry.action == AuditAction::BOT_DETACH)
+            .count();
+        assert_eq!(detached, 2);
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn releasing_an_agent_that_holds_no_bot_changes_nothing() {
+        let dir = TempDir::new().unwrap();
+        migrate(dir.path()).await;
+        let database = open(dir.path()).await;
+        let agent = enroll(&database, 1, 60).await;
+        database.close().await;
+        let config = config(dir.path(), true);
+        assert_eq!(run_disable(&config, agent).await.exit, Exit::Done);
+
+        let ran = run_release(&config, agent).await;
+
+        assert_eq!(ran.exit, Exit::Done, "{}", ran.err);
+        assert_eq!(
+            ran.out,
+            format!("The agent {agent} holds no bots: nothing changed.\n")
+        );
+        let database = open(dir.path()).await;
+        let released = audit(&database)
+            .await
+            .into_iter()
+            .filter(|entry| entry.action == AuditAction::AGENT_RELEASE)
+            .count();
+        assert_eq!(released, 0);
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn releasing_an_enabled_agent_is_refused_and_keeps_its_bots() {
+        let dir = TempDir::new().unwrap();
+        migrate(dir.path()).await;
+        let database = open(dir.path()).await;
+        let agent = enroll(&database, 1, 60).await;
+        let bot = bot_on(&database, agent, 1).await;
+        database.close().await;
+
+        let ran = run_release(&config(dir.path(), true), agent).await;
+
+        assert_eq!(ran.exit, Exit::Failed);
+        assert_eq!(ran.out, "");
+        assert_eq!(
+            ran.err,
+            format!(
+                "afkfleet-server: the agent {agent} is enabled: disable it first, and stop its host and its bots\n"
+            )
+        );
+        let database = open(dir.path()).await;
+        assert_eq!(
+            database.bots().find(bot).await.unwrap().unwrap().agent,
+            Some(agent)
+        );
+        database.close().await;
+    }
+
+    #[tokio::test]
+    async fn releasing_an_unknown_agent_or_without_a_database_is_exit_1() {
+        let dir = TempDir::new().unwrap();
+        let unknown = AgentId::new_v7(at(NOW), [9; 10]).unwrap();
+        let config = config(dir.path(), true);
+
+        let without = run_release(&config, unknown).await;
+        migrate(dir.path()).await;
+        let ran = run_release(&config, unknown).await;
+
+        assert_eq!(without.exit, Exit::Failed);
+        assert!(
+            without
+                .err
+                .starts_with("afkfleet-server: the database can't be opened: "),
+            "{}",
+            without.err
+        );
+        assert_eq!(ran.exit, Exit::Failed);
+        assert_eq!(ran.out, "");
+        assert_eq!(
+            ran.err,
+            format!("afkfleet-server: no agent has the ID {unknown}\n")
+        );
+    }
+
+    #[test]
+    fn one_released_bot_is_said_in_the_singular() {
+        let agent = AgentId::new_v7(at(NOW), [1; 10]).unwrap();
+        let mut out = Vec::new();
+
+        let exit = print_released(agent, 1, &mut out, &mut Vec::new());
+
+        assert_eq!(exit, Exit::Done);
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            format!(
+                "Released 1 bot of the agent {agent}: a running server places it within 30 s.
+"
+            )
         );
     }
 

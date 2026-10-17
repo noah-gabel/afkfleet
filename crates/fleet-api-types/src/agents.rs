@@ -101,6 +101,11 @@ pub struct AgentResponse {
     #[ts(as = "AgentStatus")]
     #[schema(value_type = AgentStatus)]
     pub status: Open<AgentStatus>,
+    /// How many bots it holds: those assigned to it, and those it may still
+    /// run that the server released (P10.5). A disabled agent's stay until
+    /// they're released.
+    #[schema(schema_with = integer_schema::<0, { u32::MAX }>)]
+    pub bots: u32,
     /// How many bots it may run at once, as its last hello said.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -207,6 +212,7 @@ mod tests {
             "name": "agent-1",
             "enabled": true,
             "status": "online",
+            "bots": 3,
             "capacity": 10,
             "version": "0.1.0",
             "connected_since": "2027-01-15T08:00:00.000Z",
@@ -224,6 +230,7 @@ mod tests {
             "name": "agent-1",
             "enabled": false,
             "status": "disabled",
+            "bots": 0,
             "created_at": "2027-01-15T07:00:00.000Z"
         });
 

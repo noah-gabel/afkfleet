@@ -1,0 +1,110 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rowid AS \"rowid!: i64\", id AS \"id!\", owner_user_id AS \"owner_user_id?\",\n                  visibility AS \"visibility!\", definition_json AS \"definition_json!\",\n                  version AS \"version!: i64\", created_at AS \"created_at!\",\n                  updated_at AS \"updated_at!\"\n           FROM modes WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "owner_user_id?",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "owner_user_id"
+          }
+        }
+      },
+      {
+        "name": "visibility!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "visibility"
+          }
+        }
+      },
+      {
+        "name": "definition_json!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "definition_json"
+          }
+        }
+      },
+      {
+        "name": "version!: i64",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "updated_at!",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "updated_at"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "66831c2bb4a9e25866854991355fee53dc7370cfdfead3926dbdfb6bef16ec4e"
+}

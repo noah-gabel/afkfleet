@@ -249,7 +249,17 @@ async fn a_run_logs_one_line_per_agent_whose_reports_were_dropped(
     let (queue, _queued) = tokio::sync::mpsc::channel(1);
     let _ended = setup
         .registry
-        .activate(&lease, queue, Halt::default(), now)
+        .activate(
+            &lease,
+            fleet_server::grpc::registry::Activation {
+                queue,
+                halt: Halt::default(),
+                connected_at: now,
+                capacity: fleet_core::value::AgentCapacity::try_from(10_u32).unwrap(),
+                running: Vec::new(),
+                welcome: fleet_proto::generated::ServerMessage::default(),
+            },
+        )
         .unwrap();
     let status = AgentMessage::Status(BotSnapshot {
         bot_id: BotId::new_v7(now, [2; 10]).unwrap(),

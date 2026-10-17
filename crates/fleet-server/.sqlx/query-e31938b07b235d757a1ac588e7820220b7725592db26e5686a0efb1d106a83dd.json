@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM releasing_bots WHERE agent_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "e31938b07b235d757a1ac588e7820220b7725592db26e5686a0efb1d106a83dd"
+}

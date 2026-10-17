@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE bots SET server_address = 'play.example.com', desired_state = 'running' WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "ae74a7c10cc06a90ce7ee4d3f056913c279fd7ac5483ab0ef28b52cd0ae8a540"
+}

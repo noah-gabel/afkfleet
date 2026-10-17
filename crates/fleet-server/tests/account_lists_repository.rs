@@ -504,12 +504,12 @@ async fn deleting_an_account_takes_its_grants_and_nothing_else(
     grant(&db, kept.id, member.id, GrantLevel::View, owner.id).await;
     let mut tx = db.write().await.unwrap();
 
-    let deleted = tx.accounts().delete(gone.id).await.unwrap();
-    let again = tx.accounts().delete(gone.id).await.unwrap();
+    let deleted = tx.accounts().delete(gone.id, at(T0)).await.unwrap();
+    let again = tx.accounts().delete(gone.id, at(T0)).await.unwrap();
     tx.commit(setup_entry()).await.unwrap();
 
-    assert!(deleted);
-    assert!(!again);
+    assert!(deleted.is_some());
+    assert_eq!(again, None);
     assert_eq!(db.accounts().find(gone.id).await.unwrap(), None);
     assert_eq!(db.accounts().find(kept.id).await.unwrap(), Some(kept));
     assert_eq!(grant_rows(db.read_pool()).await, 1);

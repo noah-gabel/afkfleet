@@ -1,7 +1,7 @@
 //! Tests for the agents' connections (Plan.md P10.4; ADR-0019, S24, S29,
 //! S30): which presented certificate admits its agent, which refusals are
 //! audited and how many, what an accepted hello records, and what a
-//! stream's end records.
+//! stream's end records, the bots' last states included (P10.5, S40).
 //!
 //! Each test gets a fresh database from `#[sqlx::test]` and opens it with
 //! `Database::connect`. Time isn't paused: sqlx's worker threads would make
@@ -18,28 +18,38 @@ use std::sync::Arc;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget, RecordedValue};
-use fleet_core::id::{AgentId, RequestId};
+use fleet_core::authz::Role;
+use fleet_core::bot::{BotSnapshot, BotState, LastReport, LastState, PauseReason};
+use fleet_core::disconnect::ConflictKind;
+use fleet_core::id::{AccountId, AgentId, BotId, RequestId, UserId};
+use fleet_core::mode::ModePreset;
 use fleet_core::pki::CertFingerprint;
-use fleet_core::value::{AgentCapacity, AgentName, AgentVersion};
+use fleet_core::value::{AgentCapacity, AgentName, AgentVersion, Username};
 use fleet_server::app::agents::{AgentConnectionService, AgentService, Disabler};
 use fleet_server::grpc::registry::AgentRegistry;
 use fleet_server::infra::pki::{CertificateAuthority, Ed25519Key, X509AgentNames, fingerprint};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
+use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::agent_connections::{
     AdmitError, Admitted, AgentConnections as _, Conflict, Ended, LiveCertificate, Presented,
     StreamEnd,
 };
 use fleet_server::ports::agents::{NewAgent, NewAgentCert};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
+use fleet_server::ports::bots::NewBot;
 use fleet_server::ports::live_agents::PermissionEnd;
 use fleet_server::ports::store::Store as _;
+use fleet_server::ports::users::{NewUser, PasswordHash};
 use fleet_testkit::system::{ManualClock, SeededRandom};
+use secrecy::SecretString;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 const T0: &str = "2027-01-15T08:00:00Z";
 const AGENT_IP: [u8; 4] = [192, 0, 2, 20];
 /// The setup's own audit entries, which the checks leave out.
 const SETUP: &str = "test.connections_setup";
+/// A valid Argon2id PHC string (not a real hash).
+const PHC: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g";
 
 fn at(text: &str) -> DateTime<Utc> {
     text.parse().unwrap()
@@ -176,6 +186,53 @@ impl Setup {
         .unwrap();
     }
 
+    /// Adds user `n`, their offline account `AfkBot<n>` and its bot,
+    /// assigned to `agent` when given.
+    async fn bot(&self, n: u8, agent: Option<AgentId>) -> BotId {
+        let owner = UserId::new_v7(at(T0), [n; 10]).unwrap();
+        let account = AccountId::new_v7(at(T0), [n; 10]).unwrap();
+        let bot = BotId::new_v7(at(T0), [n; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.users()
+            .insert(&NewUser {
+                id: owner,
+                username: Username::try_from(format!("user{n}").as_str()).unwrap(),
+                password_hash: PasswordHash::new(SecretString::from(PHC)).unwrap(),
+                role: Role::Member,
+                created_at: at(T0),
+            })
+            .await
+            .unwrap();
+        tx.accounts()
+            .insert(&McAccount {
+                id: account,
+                owner,
+                name: format!("AfkBot{n}").parse().unwrap(),
+                created_at: at(T0),
+                credential: AccountCredential::Offline,
+            })
+            .await
+            .unwrap();
+        tx.bots()
+            .insert(&NewBot {
+                id: bot,
+                account,
+                mode: ModePreset::Afk.id(),
+            })
+            .await
+            .unwrap();
+        if let Some(agent) = agent {
+            assert!(tx.bots().assign(bot, agent).await.unwrap());
+        }
+        tx.commit(setup_entry()).await.unwrap();
+        bot
+    }
+
+    /// `bot`'s stored last state.
+    async fn last(&self, bot: BotId) -> Option<LastReport> {
+        self.db.bots().find(bot).await.unwrap().unwrap().last
+    }
+
     async fn admit(&self, enrolled: &Enrolled) -> Result<Admitted, AdmitError> {
         self.connections
             .admit(Presented {
@@ -185,6 +242,15 @@ impl Setup {
                 peer: Some(peer()),
             })
             .await
+    }
+
+    /// The entries of `action`.
+    async fn entries_of(&self, action: &AuditAction) -> Vec<AuditRecord> {
+        self.entries()
+            .await
+            .into_iter()
+            .filter(|record| &record.action == action)
+            .collect()
     }
 
     async fn entries(&self) -> Vec<AuditRecord> {
@@ -234,6 +300,30 @@ fn the_entry(
     assert_eq!(entry.actor, None);
     assert_eq!(entry.ip, Some(peer()));
     entry
+}
+
+/// A report of `bot` paused by a human's login.
+fn paused(bot: BotId) -> BotSnapshot {
+    BotSnapshot {
+        bot_id: bot,
+        state: BotState::Paused {
+            reason: PauseReason::Conflict {
+                kind: ConflictKind::DuplicateLogin,
+            },
+        },
+        since: at(T0),
+        last_disconnect: None,
+    }
+}
+
+/// The stored form of [`paused`], received at `received`.
+fn paused_at(received: DateTime<Utc>) -> LastReport {
+    LastReport {
+        state: LastState::Paused(PauseReason::Conflict {
+            kind: ConflictKind::DuplicateLogin,
+        }),
+        at: received,
+    }
 }
 
 fn refused<T: core::fmt::Debug>(result: &Result<T, AdmitError>) {
@@ -457,6 +547,7 @@ async fn an_accepted_hello_commits_agent_connect_with_the_certificate_the_versio
             &admitted,
             AgentCapacity::try_from(50_u32).unwrap(),
             &AgentVersion::try_from("0.1.0").unwrap(),
+            &[],
         )
         .await
         .unwrap();
@@ -480,6 +571,127 @@ async fn an_accepted_hello_commits_agent_connect_with_the_certificate_the_versio
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_hellos_reports_are_stored_for_the_bots_assigned_to_its_agent_only(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let agent = setup.enroll(1, "agent-1").await;
+    let other = setup.enroll(2, "agent-2").await;
+    let own = setup.bot(1, Some(agent.id)).await;
+    let elsewhere = setup.bot(2, Some(other.id)).await;
+    let unassigned = setup.bot(3, None).await;
+    let admitted = setup.admit(&agent).await.unwrap();
+    setup.clock.advance(Duration::from_secs(2));
+
+    setup
+        .connections
+        .hello(
+            &admitted,
+            AgentCapacity::try_from(50_u32).unwrap(),
+            &AgentVersion::try_from("0.1.0").unwrap(),
+            &[paused(own), paused(elsewhere), paused(unassigned)],
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        setup.last(own).await,
+        Some(paused_at(at(T0) + TimeDelta::seconds(2)))
+    );
+    assert_eq!(setup.last(elsewhere).await, None);
+    assert_eq!(setup.last(unassigned).await, None);
+    the_entry(
+        &setup.entries_of(&AuditAction::AGENT_CONNECT).await,
+        &AuditAction::AGENT_CONNECT,
+        AuditOutcome::Success,
+        agent.id,
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_hellos_bots_it_wasnt_given_are_fenced_in_its_transaction(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let agent = setup.enroll(1, "agent-1").await;
+    let other = setup.enroll(2, "agent-2").await;
+    let elsewhere = setup.bot(1, Some(other.id)).await;
+    let unassigned = setup.bot(2, None).await;
+    let unknown = BotId::new_v7(at(T0), [9; 10]).unwrap();
+    let admitted = setup.admit(&agent).await.unwrap();
+
+    setup
+        .connections
+        .hello(
+            &admitted,
+            AgentCapacity::try_from(50_u32).unwrap(),
+            &AgentVersion::try_from("0.1.0").unwrap(),
+            &[paused(elsewhere), paused(unassigned), paused(unknown)],
+        )
+        .await
+        .unwrap();
+
+    let mut fenced: Vec<_> = setup
+        .db
+        .bots()
+        .fleet()
+        .await
+        .unwrap()
+        .releases
+        .iter()
+        .map(|record| (record.bot, record.agent))
+        .collect();
+    fenced.sort();
+    let mut expected = vec![(elsewhere, agent.id), (unassigned, agent.id)];
+    expected.sort();
+    assert_eq!(fenced, expected, "an unknown bot names no account to fence");
+    let strays = setup.entries_of(&AuditAction::BOT_STRAY).await;
+    assert_eq!(strays.len(), 2, "{strays:?}");
+    let of = |bot: BotId| {
+        strays
+            .iter()
+            .find(|entry| entry.target == Some(RecordedTarget::Known(AuditTarget::Bot(bot))))
+            .unwrap()
+    };
+    for bot in [elsewhere, unassigned] {
+        assert_eq!(of(bot).outcome, AuditOutcome::Failure);
+        assert_eq!(of(bot).actor, None);
+        assert_eq!(text(of(bot), "agent"), Some(agent.id.to_string()));
+    }
+    assert_eq!(
+        text(of(elsewhere), "assigned_to"),
+        Some(other.id.to_string())
+    );
+    assert_eq!(text(of(unassigned), "assigned_to"), None);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_refused_hello_stores_no_report(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
+    let setup = setup(options).await;
+    let agent = setup.enroll(1, "agent-1").await;
+    let own = setup.bot(1, Some(agent.id)).await;
+    let unassigned = setup.bot(2, None).await;
+    let admitted = setup.admit(&agent).await.unwrap();
+    setup.revoke(agent.id).await;
+
+    let result = setup
+        .connections
+        .hello(
+            &admitted,
+            AgentCapacity::try_from(50_u32).unwrap(),
+            &AgentVersion::try_from("0.1.0").unwrap(),
+            &[paused(own), paused(unassigned)],
+        )
+        .await;
+
+    refused(&result);
+    assert_eq!(setup.last(own).await, None);
+    assert_eq!(setup.db.bots().fleet().await.unwrap().releases, []);
+}
+
+#[sqlx::test(migrations = false)]
 async fn a_hello_after_the_certificate_was_revoked_is_refused_and_recorded(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
@@ -495,6 +707,7 @@ async fn a_hello_after_the_certificate_was_revoked_is_refused_and_recorded(
             &admitted,
             AgentCapacity::try_from(50_u32).unwrap(),
             &AgentVersion::try_from("0.1.0").unwrap(),
+            &[],
         )
         .await;
 
@@ -526,6 +739,7 @@ async fn a_hello_after_the_agent_was_disabled_is_refused(
             &admitted,
             AgentCapacity::try_from(50_u32).unwrap(),
             &AgentVersion::try_from("0.1.0").unwrap(),
+            &[],
         )
         .await;
 
@@ -554,6 +768,7 @@ async fn a_hello_while_the_writer_is_held_is_busy_and_records_nothing(
             &admitted,
             AgentCapacity::try_from(50_u32).unwrap(),
             &AgentVersion::try_from("0.1.0").unwrap(),
+            &[],
         )
         .await;
     drop(held);
@@ -603,6 +818,7 @@ async fn the_end_of_a_stream_records_its_reason_and_when_it_was_last_seen(
                 reason: StreamEnd::HeartbeatTimeout,
                 connected_at,
                 last_seen,
+                held: Vec::new(),
             },
         )
         .await;
@@ -620,6 +836,42 @@ async fn the_end_of_a_stream_records_its_reason_and_when_it_was_last_seen(
     );
     let row = setup.db.agents().find(agent.id).await.unwrap().unwrap();
     assert_eq!(row.last_seen_at, Some(last_seen));
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_end_of_a_stream_stores_its_held_bots_reports_where_its_agent_still_runs_them(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let agent = setup.enroll(1, "agent-1").await;
+    let other = setup.enroll(2, "agent-2").await;
+    let own = setup.bot(1, Some(agent.id)).await;
+    let moved = setup.bot(2, Some(other.id)).await;
+    let admitted = setup.admit(&agent).await.unwrap();
+    let received = at(T0) + TimeDelta::minutes(4);
+
+    setup
+        .connections
+        .ended(
+            &admitted,
+            Ended {
+                reason: StreamEnd::HeartbeatTimeout,
+                connected_at: at(T0),
+                last_seen: at(T0) + TimeDelta::minutes(5),
+                held: vec![(own, paused_at(received)), (moved, paused_at(received))],
+            },
+        )
+        .await;
+
+    assert_eq!(setup.last(own).await, Some(paused_at(received)));
+    assert_eq!(setup.last(moved).await, None, "another agent's bot");
+    the_entry(
+        &setup.entries().await,
+        &AuditAction::AGENT_DISCONNECT,
+        AuditOutcome::Success,
+        agent.id,
+    );
 }
 
 #[test]

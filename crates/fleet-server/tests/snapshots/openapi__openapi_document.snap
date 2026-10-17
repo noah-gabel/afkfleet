@@ -111,6 +111,11 @@ expression: answer.json()
       "AgentResponse": {
         "description": "An agent as `GET /agents` lists it, and as\n`POST /agents/{id}/disable` answers.",
         "properties": {
+          "bots": {
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
           "capacity": {
             "maximum": 1000,
             "minimum": 1,
@@ -158,6 +163,7 @@ expression: answer.json()
           "name",
           "enabled",
           "status",
+          "bots",
           "created_at"
         ],
         "type": "object"

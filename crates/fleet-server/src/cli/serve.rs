@@ -31,6 +31,12 @@
 //! - **The link flows** (P9.4) poll Microsoft on their service's own
 //!   tasks; a task on the same `JoinSet` stops them at the first signal and
 //!   waits for them (ADR-0018).
+//! - **The reconciler** (P10.5), while the control plane is on, is one more
+//!   task on that `JoinSet`: the registry, the accounts' and the users'
+//!   services hint it through one bounded queue, and it stops at the first
+//!   signal, after the pass it's in (ADR-0019, S37). It's watched: if it
+//!   ends or panics before that, it's logged at `error` and the server
+//!   stops as one that ended unasked (exit 4); nothing restarts it.
 //!
 //! # Shutdown
 //! The first signal starts it, and one deadline bounds it,
@@ -44,10 +50,11 @@
 //!    logged at `warn` and left: axum owns its connection tasks, and the
 //!    runtime's shutdown ends them right after.
 //! 3. The housekeeping ends (it stopped at the signal, or after its current
-//!    purge batch), and the link flows (each stopped at the signal, or after
-//!    a commit that started), then the database closes, all with the rest of
-//!    the deadline, at least [`DATABASE_CLOSE`]. If that doesn't finish in
-//!    time, that's an `error` and exit 4.
+//!    purge batch), the link flows (each stopped at the signal, or after a
+//!    commit that started) and the reconciler (after its current pass),
+//!    then the database closes, all with the rest of the deadline, at least
+//!    [`DATABASE_CLOSE`]. If that doesn't finish in time, that's an `error`
+//!    and exit 4.
 //!
 //! A later signal is only logged: the shutdown is already running.
 //!
@@ -67,6 +74,7 @@ use fleet_proto::enrollment::SERVER_DEADLINE;
 use fleet_startup::signals::ShutdownSignals;
 use secrecy::SecretBox;
 use tokio::net::TcpListener;
+use tokio::sync::oneshot;
 use tokio::task::JoinSet;
 use tokio::time::{Instant, sleep_until};
 use tokio_util::sync::CancellationToken;
@@ -76,7 +84,7 @@ use tracing::{error, info, warn};
 use super::DATABASE_CLOSE;
 use super::housekeeping::Housekeeping;
 use crate::app::accounts::{AccountService, AccountSettings};
-use crate::app::agents::{AgentConnectionService, AgentService};
+use crate::app::agents::{AgentConnectionService, AgentService, AssignmentService};
 use crate::app::auth::TokenService;
 use crate::app::challenges::Challenges;
 use crate::app::enrollment::{EnrollmentService, EnrollmentTokenService};
@@ -92,6 +100,7 @@ use crate::config::{HttpConfig, ServerConfig};
 use crate::grpc::control::{ControlRoute, ControlTimings, Sessions, control_service};
 use crate::grpc::enrollment::enrollment_service;
 use crate::grpc::listener::{self as grpc_listener, EnrollmentRoute};
+use crate::grpc::reconciler::{HINT_QUEUE, HintInbox, ReconcileTimings, Reconciler, hints};
 use crate::grpc::registry::{AgentRegistry, SWEEP_INTERVAL};
 use crate::http::error::chain;
 use crate::http::middleware::RequestIds;
@@ -114,6 +123,7 @@ use crate::ports::agent_connections::AgentConnections;
 use crate::ports::msauth::MicrosoftAuthProvider;
 use crate::ports::pace::Pace;
 use crate::ports::passwords::{HashError, Passwords};
+use crate::ports::reconcile::{NoReconcile, Reconcile};
 use crate::ports::store::Store;
 use crate::ports::tokens::Tokens;
 use crate::ports::vault::Vault;
@@ -264,6 +274,8 @@ pub struct GrpcRoutes {
     /// The sweep that ends streams whose permission ended: each agent's one
     /// stream, and what checks their certificates.
     pub sweep: Sweep,
+    /// Which agent runs which bot, kept true.
+    pub reconciler: Reconciler,
 }
 
 /// The sweep [`serve`] runs while the gRPC port is on (ADR-0019, S27).
@@ -297,6 +309,8 @@ pub struct GrpcPort {
     pub sessions: Sessions,
     /// The sweep of its streams, run until the shutdown.
     pub sweep: Sweep,
+    /// The reconciler, run until the shutdown.
+    pub reconciler: Reconciler,
 }
 
 /// The clocks, the randomness, Microsoft and the pacing the app runs on.
@@ -374,8 +388,9 @@ pub fn app(
 /// With `[grpc]` and its `ca`, the control plane is on: the API creates
 /// enrollment tokens that pin the CA, and [`App::grpc`] enrolls agents,
 /// signing their certificates with it, and admits their streams
-/// (ADR-0019). Without either, the token route answers 404 and there is no
-/// gRPC port.
+/// (ADR-0019), and its reconciler places the bots on them (P10.5). Without
+/// either, the token route answers 404, there is no gRPC port, and nothing
+/// is hinted.
 #[must_use]
 pub fn app_with(
     config: &ServerConfig,
@@ -395,8 +410,10 @@ pub fn app_with(
     } = ports;
     let store: Arc<dyn Store> = Arc::new(database.clone());
     let vault: Arc<dyn Vault> = Arc::new(XChaChaVault::new(keys, Arc::clone(&random)));
+    let (reconcile, inbox) = hint_queue(config.grpc.is_some() && ca.is_some());
     let (link_flows, accounts) = account_services(
         config,
+        &reconcile,
         LinkFlowPorts {
             clock: Arc::clone(&clock),
             random: Arc::clone(&random),
@@ -430,12 +447,7 @@ pub fn app_with(
         Arc::new(HmacAttemptKeys::new(lockout_key)),
         config.auth.lockout,
     );
-    let users = UserService::new(
-        Arc::clone(&clock),
-        Arc::clone(&random),
-        Arc::clone(&store),
-        Arc::clone(&passwords),
-    );
+    let users = user_service(&clock, &random, &store, &passwords, &reconcile);
     let login = LoginService::new(
         Arc::clone(&clock),
         Arc::clone(&random),
@@ -447,10 +459,11 @@ pub fn app_with(
     );
     let grants = GrantService::new(Arc::clone(&clock), Arc::clone(&store));
     let ids = RequestIds::new(Arc::clone(&clock), Arc::clone(&random));
-    let (agents, agent_service) = agent_services(&clock, &store);
+    let (agents, agent_service) = agent_services(&clock, &store, reconcile);
     let (enrollment_tokens, grpc) = control_plane_services(
         config,
         ca,
+        inbox,
         EnrollmentPorts {
             clock,
             random,
@@ -488,11 +501,44 @@ pub fn app_with(
     }
 }
 
-/// Each agent's one stream, and the agents' service that ends them: the
-/// registry stays empty without `[grpc]`, where the service still disables
-/// agents and no stream ever lives.
-fn agent_services(clock: &Arc<dyn Clock>, store: &Arc<dyn Store>) -> (AgentRegistry, AgentService) {
-    let agents = AgentRegistry::new(Arc::clone(clock));
+/// The reconciler's one hint queue while the control plane is `on`, and
+/// what reads it; without it, hints go nowhere.
+fn hint_queue(on: bool) -> (Arc<dyn Reconcile>, Option<HintInbox>) {
+    if on {
+        let (hints, inbox) = hints(HINT_QUEUE);
+        (Arc::new(hints), Some(inbox))
+    } else {
+        (Arc::new(NoReconcile), None)
+    }
+}
+
+/// The users' service over the app's ports, hashing with `passwords` and
+/// hinting `reconcile` when a user is disabled or enabled.
+fn user_service(
+    clock: &Arc<dyn Clock>,
+    random: &Arc<dyn SecureRandom>,
+    store: &Arc<dyn Store>,
+    passwords: &Arc<dyn Passwords>,
+    reconcile: &Arc<dyn Reconcile>,
+) -> UserService {
+    UserService::new(
+        Arc::clone(clock),
+        Arc::clone(random),
+        Arc::clone(store),
+        Arc::clone(passwords),
+    )
+    .with_reconcile(Arc::clone(reconcile))
+}
+
+/// Each agent's one stream, hinting `reconcile`, and the agents' service
+/// that ends them: the registry stays empty without `[grpc]`, where the
+/// service still disables agents and no stream ever lives.
+fn agent_services(
+    clock: &Arc<dyn Clock>,
+    store: &Arc<dyn Store>,
+    reconcile: Arc<dyn Reconcile>,
+) -> (AgentRegistry, AgentService) {
+    let agents = AgentRegistry::with_reconcile(Arc::clone(clock), reconcile);
     let service = AgentService::new(
         Arc::clone(clock),
         Arc::clone(store),
@@ -539,16 +585,30 @@ struct EnrollmentPorts {
 /// The control plane's services over `ports`, while `config` has `[grpc]`
 /// and there is a `ca`: the enrollment tokens' for the API, pinning the
 /// CA; for the gRPC port, the enrollment, signing with the CA for
-/// `[grpc] agent_cert_lifetime_days` within [`SERVER_DEADLINE`], and
-/// `Connect` with `[grpc]`'s heartbeats.
+/// `[grpc] agent_cert_lifetime_days` within [`SERVER_DEADLINE`],
+/// `Connect` with `[grpc]`'s heartbeats, and the reconciler, hinted
+/// through `inbox`, placing offline accounts' bots only while `[accounts]
+/// allow_offline` is on.
 fn control_plane_services(
     config: &ServerConfig,
     ca: Option<CertificateAuthority>,
+    inbox: Option<HintInbox>,
     ports: EnrollmentPorts,
 ) -> (Option<EnrollmentTokenService>, Option<GrpcRoutes>) {
-    let Some((grpc, ca)) = config.grpc.as_ref().zip(ca) else {
+    let Some(((grpc, ca), inbox)) = config.grpc.as_ref().zip(ca).zip(inbox) else {
         return (None, None);
     };
+    let reconciler = Reconciler::new(
+        ports.registry.clone(),
+        Arc::new(AssignmentService::new(
+            Arc::clone(&ports.clock),
+            Arc::clone(&ports.store),
+        )),
+        Arc::clone(&ports.clock),
+        inbox,
+        ReconcileTimings::default(),
+        config.accounts.allow_offline,
+    );
     let tokens = EnrollmentTokenService::new(
         Arc::clone(&ports.clock),
         Arc::clone(&ports.random),
@@ -589,14 +649,17 @@ fn control_plane_services(
                 registry: ports.registry,
                 connections,
             },
+            reconciler,
         }),
     )
 }
 
 /// The Microsoft link flows and the other account use cases over `ports`,
-/// with `config`'s `[rate_limits]` and `[accounts]`.
+/// with `config`'s `[rate_limits]` and `[accounts]`, the latter hinting
+/// `reconcile`.
 fn account_services(
     config: &ServerConfig,
+    reconcile: &Arc<dyn Reconcile>,
     ports: LinkFlowPorts,
 ) -> (LinkFlowService, AccountService) {
     let accounts = AccountService::new(
@@ -607,7 +670,8 @@ fn account_services(
             allow_offline: config.accounts.allow_offline,
             max_per_member: config.accounts.max_per_member,
         },
-    );
+    )
+    .with_reconcile(Arc::clone(reconcile));
     let link_flows = LinkFlowService::new(
         ports,
         LinkFlowSettings {
@@ -725,6 +789,7 @@ fn grpc_port(
         control,
         sessions,
         sweep,
+        reconciler,
     } = services;
     let router = grpc_listener::router(tls, enrollment, control, grpc.heartbeats)
         .map_err(StartError::Grpc)?;
@@ -734,6 +799,7 @@ fn grpc_port(
         router,
         sessions,
         sweep,
+        reconciler,
     }))
 }
 
@@ -800,11 +866,19 @@ pub async fn serve<S: ShutdownSignals>(
             SWEEP_INTERVAL,
             shutdown.child_token(),
         ));
-        Box::pin(grpc_listener::serve(
-            port.router,
-            port.listener,
-            grpc_listener::CONNECTION_AGE,
-            shutdown.child_token(),
+        // Joined below before the database closes, like every task here,
+        // and watched: an end before the shutdown stops the server.
+        let stop = shutdown.child_token();
+        let watch = spawn_reconciler(&mut background, port.reconciler.run(stop.clone()), stop);
+        Box::pin(watched(
+            grpc_listener::serve(
+                port.router,
+                port.listener,
+                grpc_listener::CONNECTION_AGE,
+                shutdown.child_token(),
+            ),
+            watch,
+            shutdown.clone(),
         ))
     });
     let close = async move {
@@ -824,6 +898,85 @@ pub async fn serve<S: ShutdownSignals>(
     )
     .await
 }
+
+/// Whether the reconciler ended before its stop was asked; see
+/// [`spawn_reconciler`].
+#[derive(Debug)]
+pub struct ReconcilerWatch(oneshot::Receiver<()>);
+
+/// Runs `reconciler` on `tasks`, which serve joins before the database
+/// closes, watched: if it ends or panics before `stop` is cancelled, that's
+/// logged at `error` and the watch tells [`watched`]. Nothing restarts it.
+pub fn spawn_reconciler<R>(
+    tasks: &mut JoinSet<()>,
+    reconciler: R,
+    stop: CancellationToken,
+) -> ReconcilerWatch
+where
+    R: Future<Output = ()> + Send + 'static,
+{
+    let (ended, watch) = oneshot::channel();
+    tasks.spawn(async move {
+        // Its own owner, so a panic comes back as a `JoinError` here.
+        let mut task = JoinSet::new();
+        task.spawn(reconciler);
+        let outcome = task.join_next().await;
+        let asked = stop.is_cancelled();
+        match outcome {
+            Some(Err(failure)) if asked => {
+                error!(error = %failure, "the reconciler failed while the server stopped");
+            }
+            Some(Err(failure)) => {
+                error!(error = %failure, "the reconciler failed; the server stops");
+            }
+            Some(Ok(())) | None if asked => return,
+            Some(Ok(())) | None => error!("the reconciler ended unasked; the server stops"),
+        }
+        if !asked {
+            // The server may have stopped meanwhile: nobody to tell.
+            let _ = ended.send(());
+        }
+    });
+    ReconcilerWatch(watch)
+}
+
+/// `port` until it ends, or until `watch` says the reconciler ended
+/// unasked: then `shutdown` is cancelled, `port` drains, and the answer is
+/// an error, so serve ends like a server that ended unasked (exit 4).
+///
+/// # Errors
+/// `port`'s error, or [`RECONCILER_ENDED`].
+pub async fn watched<F, E>(
+    port: F,
+    watch: ReconcilerWatch,
+    shutdown: CancellationToken,
+) -> io::Result<()>
+where
+    F: Future<Output = Result<(), E>>,
+    E: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    let mut port = pin!(async { port.await.map_err(io::Error::other) });
+    // A watch whose sender is gone was a reconciler that stopped as asked.
+    let ended = async {
+        if watch.0.await.is_err() {
+            core::future::pending::<()>().await;
+        }
+    };
+    tokio::select! {
+        // The pinned port is polled to its end here or below, and `ended`
+        // only once: cancel-safe.
+        result = &mut port => result,
+        () = ended => {
+            shutdown.cancel();
+            // The port drains; its own end doesn't matter any more.
+            let _ = port.await;
+            Err(io::Error::other(RECONCILER_ENDED))
+        }
+    }
+}
+
+/// The error [`watched`] ends with when the reconciler ended unasked.
+pub const RECONCILER_ENDED: &str = "the reconciler ended unasked";
 
 /// `http` and, if there is one, `grpc`, as the one server [`drive`] runs:
 /// when either ends, it cancels `shutdown`, so the other drains too, and it
