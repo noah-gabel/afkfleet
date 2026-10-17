@@ -85,6 +85,7 @@ use fleet_api_types::auth::{
     LoginMfaRequest, LoginRequest, LoginResponse, LoginStatus, RefreshRequest, RegisterRequest,
     RegisterResponse, StepUpRequest, TokenResponse,
 };
+use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{
@@ -93,8 +94,8 @@ use fleet_api_types::mfa::{
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
 use fleet_api_types::{
-    AccountId, ErrorCode, ErrorResponse, InviteId, LinkFlowId, PageQuery, SecretText, SessionId,
-    UserId,
+    AccountId, BotId, ErrorCode, ErrorResponse, InviteId, LinkFlowId, PageQuery, SecretText,
+    SessionId, UserId,
 };
 use reqwest::{Method, Url};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -109,6 +110,44 @@ use crate::error::{ApiFailure, ClientError, Unexpected};
 use crate::store::{SessionStore, StoreError, StoreOp};
 use crate::transport::{Incoming, Outgoing, Transport, TransportError};
 use crate::url::ServerUrl;
+
+/// A bot's lifecycle call: its path segment, and the statuses that answer
+/// it (Plan.md P11.2; ADR-0019, S50).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum BotCall {
+    /// `start`: always 200.
+    Start,
+    /// `stop`: always 200.
+    Stop,
+    /// `restart`: 202, sent to its agent.
+    Restart,
+    /// `reset`: 202 when sent, 200 when its stored state was cleared.
+    Reset,
+    /// `resume`: as `reset`.
+    Resume,
+}
+
+impl BotCall {
+    /// Its path segment, after `/bots/{id}/`.
+    const fn segment(self) -> &'static str {
+        match self {
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::Restart => "restart",
+            Self::Reset => "reset",
+            Self::Resume => "resume",
+        }
+    }
+
+    /// The statuses that answer it with the bot.
+    const fn statuses(self) -> &'static [u16] {
+        match self {
+            Self::Start | Self::Stop => &[200],
+            Self::Restart => &[202],
+            Self::Reset | Self::Resume => &[200, 202],
+        }
+    }
+}
 
 /// What to do after a 401 `unauthorized`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -693,6 +732,53 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
             .api(&["accounts", &id.to_string(), "grants", &user.to_string()])
     }
 
+    // ---- Bots (Plan.md P11.2) ----
+
+    pub(crate) async fn bots(
+        self: &Arc<Self>,
+        query: &PageQuery<BotId>,
+    ) -> Result<BotPage, ClientError> {
+        let url = with_page(self.server.api(&["bots"]), query);
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn bot(self: &Arc<Self>, id: BotId) -> Result<BotResponse, ClientError> {
+        let url = self.server.api(&["bots", &id.to_string()]);
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn patch_bot(
+        self: &Arc<Self>,
+        id: BotId,
+        request: &BotPatchRequest,
+    ) -> Result<BotResponse, ClientError> {
+        let url = self.server.api(&["bots", &id.to_string()]);
+        let answer = self.authed(Method::PATCH, url, Some(json(request))).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn set_bot_mode(
+        self: &Arc<Self>,
+        id: BotId,
+        request: &BotModeRequest,
+    ) -> Result<BotResponse, ClientError> {
+        let url = self.server.api(&["bots", &id.to_string(), "mode"]);
+        let answer = self.authed(Method::PUT, url, Some(json(request))).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn control_bot(
+        self: &Arc<Self>,
+        id: BotId,
+        call: BotCall,
+    ) -> Result<BotResponse, ClientError> {
+        let url = self.server.api(&["bots", &id.to_string(), call.segment()]);
+        let answer = self.authed(Method::POST, url, None).await?;
+        expect_json_of(answer, call.statuses())
+    }
+
     // ---- Sending ----
 
     /// Sends one request.
@@ -1014,7 +1100,15 @@ fn is_unauthorized(answer: &Incoming) -> bool {
 
 /// The route's answer for `status`, read as `R`.
 fn expect_json<R: DeserializeOwned>(answer: Incoming, status: u16) -> Result<R, ClientError> {
-    let answer = with_status(answer, status)?;
+    expect_json_of(answer, &[status])
+}
+
+/// The route's answer for any of `statuses`, read as `R`.
+fn expect_json_of<R: DeserializeOwned>(
+    answer: Incoming,
+    statuses: &[u16],
+) -> Result<R, ClientError> {
+    let answer = with_status_of(answer, statuses)?;
     serde_json::from_slice(&answer.body).map_err(|error| ClientError::UnexpectedResponse {
         status: answer.status,
         reason: if error.is_syntax() || error.is_eof() {
@@ -1032,7 +1126,12 @@ fn expect_empty(answer: Incoming, status: u16) -> Result<(), ClientError> {
 
 /// `answer` if its status is `status`; otherwise what it means.
 fn with_status(answer: Incoming, status: u16) -> Result<Incoming, ClientError> {
-    if answer.status == status {
+    with_status_of(answer, &[status])
+}
+
+/// `answer` if its status is one of `statuses`; otherwise what it means.
+fn with_status_of(answer: Incoming, statuses: &[u16]) -> Result<Incoming, ClientError> {
+    if statuses.contains(&answer.status) {
         Ok(answer)
     } else if (200..300).contains(&answer.status) {
         Err(ClientError::UnexpectedResponse {
@@ -2293,6 +2392,8 @@ mod tests {
     const ACCOUNT: &str = "01900000-0000-7000-8000-00000000000a";
     const FLOW: &str = "01900000-0000-7000-8000-00000000000b";
     const GRANTEE: &str = "01900000-0000-7000-8000-00000000000c";
+    const BOT: &str = "01900000-0000-7000-8000-00000000000d";
+    const MODE: &str = "01900000-0000-7000-8000-00000000000e";
 
     fn id<T: core::str::FromStr>(text: &str) -> T
     where
@@ -2341,6 +2442,22 @@ mod tests {
             level: fleet_api_types::accounts::GrantLevel::Control.into(),
             granted_by: label("01900000-0000-7000-8000-000000000001", "alice"),
             granted_at: at(),
+        }
+    }
+
+    fn a_bot() -> BotResponse {
+        use fleet_api_types::bots::{BotStatus, BotStatusKind, DesiredState, UnplacedReason};
+        BotResponse {
+            id: id(BOT),
+            account: an_account(),
+            server_address: Some(fleet_api_types::BoundedText::new("play.example.com")),
+            mode_id: id(MODE),
+            desired_state: DesiredState::Running.into(),
+            status: BotStatus {
+                why: Some(UnplacedReason::Pending.into()),
+                ..BotStatus::of(BotStatusKind::Unplaced)
+            },
+            agent: None,
         }
     }
 
@@ -2605,5 +2722,127 @@ mod tests {
 
         assert!(is_api(&error, 403, ErrorCode::StepUpRequired), "{error:?}");
         assert_eq!(core.transport.routes(), [delete]);
+    }
+
+    #[tokio::test]
+    async fn the_bot_reads_go_to_their_routes() {
+        let core = signed_in().await;
+        let page = BotPage {
+            items: vec![a_bot()],
+            next: Some(id(BOT)),
+        };
+        let one = format!("GET /api/v1/bots/{BOT}");
+        core.transport.on("GET /api/v1/bots", Ok(dto(200, &page)));
+        core.transport.on(&one, Ok(dto(200, &a_bot())));
+
+        let listed = core.bots(&first_page()).await.unwrap();
+        let read = core.bot(id(BOT)).await.unwrap();
+
+        assert_eq!(listed, page);
+        assert_eq!(read, a_bot());
+        assert_eq!(
+            core.transport.seen(),
+            [sent("GET /api/v1/bots", None), sent(&one, None)]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_bot_settings_send_their_method_path_and_body() {
+        let core = signed_in().await;
+        let patch = format!("PATCH /api/v1/bots/{BOT}");
+        let mode = format!("PUT /api/v1/bots/{BOT}/mode");
+        core.transport.on(&patch, Ok(dto(200, &a_bot())));
+        core.transport.on(&mode, Ok(dto(200, &a_bot())));
+        let address: BotPatchRequest =
+            serde_json::from_value(json!({ "server_address": "play.example.com:25566" })).unwrap();
+        let chosen: BotModeRequest = serde_json::from_value(json!({ "mode_id": MODE })).unwrap();
+
+        let patched = core.patch_bot(id(BOT), &address).await.unwrap();
+        let moded = core.set_bot_mode(id(BOT), &chosen).await.unwrap();
+
+        assert_eq!((patched, moded), (a_bot(), a_bot()));
+        assert_eq!(
+            core.transport.seen(),
+            [
+                sent(
+                    &patch,
+                    Some(json!({ "server_address": "play.example.com:25566" }))
+                ),
+                sent(&mode, Some(json!({ "mode_id": MODE })))
+            ]
+        );
+    }
+
+    #[rstest]
+    #[case::start(BotCall::Start, "start", 200)]
+    #[case::stop(BotCall::Stop, "stop", 200)]
+    #[case::restart_sent(BotCall::Restart, "restart", 202)]
+    #[case::reset_sent(BotCall::Reset, "reset", 202)]
+    #[case::reset_cleared(BotCall::Reset, "reset", 200)]
+    #[case::resume_sent(BotCall::Resume, "resume", 202)]
+    #[case::resume_cleared(BotCall::Resume, "resume", 200)]
+    #[tokio::test]
+    async fn a_lifecycle_call_posts_without_a_body_and_reads_the_bot_from_each_answer_it_may_get(
+        #[case] call: BotCall,
+        #[case] segment: &str,
+        #[case] status: u16,
+    ) {
+        let core = signed_in().await;
+        let route = format!("POST /api/v1/bots/{BOT}/{segment}");
+        core.transport.on(&route, Ok(dto(status, &a_bot())));
+
+        let answered = core.control_bot(id(BOT), call).await.unwrap();
+
+        assert_eq!(answered, a_bot());
+        assert_eq!(core.transport.seen(), [sent(&route, None)]);
+    }
+
+    #[rstest]
+    #[case::start_accepted(BotCall::Start, "start", 202)]
+    #[case::stop_accepted(BotCall::Stop, "stop", 202)]
+    #[case::restart_done(BotCall::Restart, "restart", 200)]
+    #[case::reset_created(BotCall::Reset, "reset", 201)]
+    #[case::resume_empty(BotCall::Resume, "resume", 204)]
+    #[tokio::test]
+    async fn a_lifecycle_answer_its_call_never_gets_is_unexpected(
+        #[case] call: BotCall,
+        #[case] segment: &str,
+        #[case] status: u16,
+    ) {
+        let core = signed_in().await;
+        let route = format!("POST /api/v1/bots/{BOT}/{segment}");
+        core.transport.on(&route, Ok(dto(status, &a_bot())));
+
+        let error = core.control_bot(id(BOT), call).await.unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                ClientError::UnexpectedResponse { status: s, reason: Unexpected::Status } if s == status
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[rstest]
+    #[case::unreachable(BotCall::Restart, "restart", ErrorCode::BotUnreachable)]
+    #[case::not_running(BotCall::Restart, "restart", ErrorCode::BotNotRunning)]
+    #[case::not_failed(BotCall::Reset, "reset", ErrorCode::BotNotFailed)]
+    #[case::not_paused(BotCall::Resume, "resume", ErrorCode::BotNotPaused)]
+    #[tokio::test]
+    async fn a_refused_lifecycle_call_comes_back_with_the_servers_409_code(
+        #[case] call: BotCall,
+        #[case] segment: &str,
+        #[case] code: ErrorCode,
+    ) {
+        use fleet_api_types::OpenEnum as _;
+        let core = signed_in().await;
+        let route = format!("POST /api/v1/bots/{BOT}/{segment}");
+        core.transport.on(&route, Ok(refusal(409, code.as_str())));
+
+        let error = core.control_bot(id(BOT), call).await.unwrap_err();
+
+        assert!(is_api(&error, 409, code), "{error:?}");
+        assert_eq!(core.transport.routes(), [route]);
     }
 }

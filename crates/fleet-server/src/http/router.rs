@@ -55,7 +55,7 @@
 use axum::Router;
 use utoipa_axum::routes;
 
-use super::handlers::{accounts, agents, auth, grants, health, invites, me, mfa, users};
+use super::handlers::{accounts, agents, auth, bots, grants, health, invites, me, mfa, users};
 use super::middleware::RequestIds;
 use super::openapi::ApiDocs;
 use super::rate_limit::RateLimits;
@@ -63,6 +63,7 @@ use super::routes::{RateClass, Routes};
 use crate::app::accounts::AccountService;
 use crate::app::agents::AgentService;
 use crate::app::auth::TokenService;
+use crate::app::bots::BotService;
 use crate::app::enrollment::EnrollmentTokenService;
 use crate::app::grants::GrantService;
 use crate::app::health::HealthService;
@@ -105,6 +106,8 @@ pub struct AppState {
     pub(crate) enrollment_tokens: Option<EnrollmentTokenService>,
     /// The agents: their list, and disabling one, with `[grpc]` or without.
     pub(crate) agents: AgentService,
+    /// The bots: what each viewer sees of them, and what users change.
+    pub(crate) bots: BotService,
 }
 
 /// Every service the handlers share, by name, so each one is a line of its
@@ -136,6 +139,8 @@ pub struct Services {
     pub enrollment_tokens: Option<EnrollmentTokenService>,
     /// The agents: their list, and disabling one.
     pub agents: AgentService,
+    /// The bots: what each viewer sees of them, and what users change.
+    pub bots: BotService,
 }
 
 impl AppState {
@@ -155,6 +160,7 @@ impl AppState {
             grants,
             enrollment_tokens,
             agents,
+            bots,
         } = services;
         Self {
             health,
@@ -169,6 +175,7 @@ impl AppState {
             grants,
             enrollment_tokens,
             agents,
+            bots,
         }
     }
 }
@@ -217,6 +224,15 @@ pub fn api_routes(routes: Routes) -> Routes {
         )
         .authed_route(RateClass::Standard, routes!(agents::list_agents))
         .step_up_route(RateClass::Standard, routes!(agents::disable_agent))
+        .authed_route(RateClass::Standard, routes!(bots::list))
+        .authed_route(RateClass::Standard, routes!(bots::get))
+        .step_up_route(RateClass::Standard, routes!(bots::patch))
+        .authed_route(RateClass::Standard, routes!(bots::set_mode))
+        .authed_route(RateClass::Standard, routes!(bots::start))
+        .authed_route(RateClass::Standard, routes!(bots::stop))
+        .authed_route(RateClass::Standard, routes!(bots::restart))
+        .authed_route(RateClass::Standard, routes!(bots::reset))
+        .authed_route(RateClass::Standard, routes!(bots::resume))
 }
 
 /// Every route with `state`, behind the middleware stack with the timeout,

@@ -15,16 +15,18 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use fleet_core::account::{AccountKind, AccountStatus};
+use fleet_core::authz::Actor;
 use fleet_core::bot::{BotAccount, DesiredRunState, LastReport, LastState};
-use fleet_core::id::{AccountId, AgentId, BotId};
+use fleet_core::id::{AccountId, AgentId, BotId, ModeId, UserId};
 use fleet_core::mode::ModeDefinition;
 use fleet_core::placement::McIdentity;
 use fleet_core::value::{McUsername, McUuid, ServerAddress};
 use sqlx::SqliteConnection;
 
+use super::accounts;
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::store_error;
-use crate::ports::bots::{Bot, BotRecord, Fleet, NewBot, ReleaseRecord, UnreadableBot};
+use crate::ports::bots::{Bot, BotRecord, Fleet, ListedBot, NewBot, ReleaseRecord, UnreadableBot};
 use crate::ports::page::Page;
 use crate::ports::store::StoreError;
 
@@ -55,6 +57,37 @@ struct RecordRow {
     owner_disabled: i64,
     mode_rowid: i64,
     definition_json: String,
+}
+
+/// A bot's row with its account, owner and mode, and that account as one
+/// viewer sees it, before its values are checked.
+struct ListedBotRow {
+    rowid: i64,
+    id: String,
+    account_id: String,
+    server_address: Option<String>,
+    mode_id: String,
+    desired_state: String,
+    agent_id: Option<String>,
+    last_state: Option<String>,
+    last_state_reason: Option<String>,
+    last_state_at: Option<String>,
+    account_rowid: i64,
+    kind: String,
+    mc_uuid: Option<String>,
+    mc_name: String,
+    status: String,
+    status_reason: Option<String>,
+    created_at: String,
+    owner_user_id: String,
+    owner_role: String,
+    owner_name: String,
+    owner_rowid: i64,
+    owner_disabled: i64,
+    mode_rowid: i64,
+    definition_json: String,
+    grant_level: Option<String>,
+    grant_rowid: Option<i64>,
 }
 
 /// A `releasing_bots` row, before its values are checked.
@@ -251,6 +284,106 @@ where
     .map_err(store_error)?
     .iter()
     .map(record_from_row)
+    .collect()
+}
+
+/// The bot `id` as `viewer` sees it, with their grant on its account.
+pub(super) async fn listed<'c, E>(
+    executor: E,
+    id: BotId,
+    viewer: UserId,
+) -> Result<Option<ListedBot>, StoreError>
+where
+    E: sqlx::SqliteExecutor<'c>,
+{
+    let id = id_text(id);
+    let viewer = id_text(viewer);
+    sqlx::query_as!(
+        ListedBotRow,
+        r#"SELECT b.rowid AS "rowid!: i64", b.id AS "id!", b.account_id AS "account_id!",
+                  b.server_address AS "server_address?", b.mode_id AS "mode_id!",
+                  b.desired_state AS "desired_state!", b.agent_id AS "agent_id?",
+                  b.last_state AS "last_state?", b.last_state_reason AS "last_state_reason?",
+                  b.last_state_at AS "last_state_at?",
+                  a.rowid AS "account_rowid!: i64", a.kind AS "kind!", a.mc_uuid AS "mc_uuid?",
+                  a.mc_name AS "mc_name!", a.status AS "status!",
+                  a.status_reason AS "status_reason?", a.created_at AS "created_at!",
+                  a.owner_user_id AS "owner_user_id!", u.role AS "owner_role!",
+                  u.username AS "owner_name!", u.rowid AS "owner_rowid!: i64",
+                  u.disabled AS "owner_disabled!: i64",
+                  m.rowid AS "mode_rowid!: i64", m.definition_json AS "definition_json!",
+                  g.level AS "grant_level?", g.rowid AS "grant_rowid?: i64"
+           FROM bots b
+           JOIN mc_accounts a ON a.id = b.account_id
+           JOIN users u ON u.id = a.owner_user_id
+           JOIN modes m ON m.id = b.mode_id
+           LEFT JOIN account_grants g ON g.account_id = a.id AND g.user_id = ?
+           WHERE b.id = ?"#,
+        viewer,
+        id
+    )
+    .fetch_optional(executor)
+    .await
+    .map_err(store_error)?
+    .map(|row| listed_bot_from_row(&row))
+    .transpose()
+}
+
+/// One page of the bots `viewer` may see, newest first: those of the
+/// accounts `accounts::list_visible` lists for them. One more than its limit
+/// when another page follows.
+pub(super) async fn visible<'c, E>(
+    executor: E,
+    viewer: Actor,
+    page: Page<BotId>,
+) -> Result<Vec<ListedBot>, StoreError>
+where
+    E: sqlx::SqliteExecutor<'c>,
+{
+    let role = viewer.role.as_str();
+    let viewer = id_text(viewer.id);
+    let before = page.before.map(|id| id_text(id).to_string());
+    let fetch = page.limit.fetch();
+    sqlx::query_as!(
+        ListedBotRow,
+        r#"SELECT b.rowid AS "rowid!: i64", b.id AS "id!", b.account_id AS "account_id!",
+                  b.server_address AS "server_address?", b.mode_id AS "mode_id!",
+                  b.desired_state AS "desired_state!", b.agent_id AS "agent_id?",
+                  b.last_state AS "last_state?", b.last_state_reason AS "last_state_reason?",
+                  b.last_state_at AS "last_state_at?",
+                  a.rowid AS "account_rowid!: i64", a.kind AS "kind!", a.mc_uuid AS "mc_uuid?",
+                  a.mc_name AS "mc_name!", a.status AS "status!",
+                  a.status_reason AS "status_reason?", a.created_at AS "created_at!",
+                  a.owner_user_id AS "owner_user_id!", u.role AS "owner_role!",
+                  u.username AS "owner_name!", u.rowid AS "owner_rowid!: i64",
+                  u.disabled AS "owner_disabled!: i64",
+                  m.rowid AS "mode_rowid!: i64", m.definition_json AS "definition_json!",
+                  g.level AS "grant_level?", g.rowid AS "grant_rowid?: i64"
+           FROM bots b
+           JOIN mc_accounts a ON a.id = b.account_id
+           JOIN users u ON u.id = a.owner_user_id
+           JOIN modes m ON m.id = b.mode_id
+           LEFT JOIN account_grants g ON g.account_id = a.id AND g.user_id = ?
+           WHERE (? IS NULL OR b.id < ?)
+             AND (? = 'owner'
+                  OR a.owner_user_id = ?
+                  OR g.level IS NOT NULL
+                  OR (? = 'admin' AND u.role = 'member'))
+           ORDER BY b.id DESC
+           LIMIT ?"#,
+        viewer,
+        before,
+        before,
+        role,
+        viewer,
+        role,
+        fetch
+    )
+    .fetch_all(executor)
+    .await
+    .map_err(store_error)?
+    .iter()
+    .map(listed_bot_from_row)
     .collect()
 }
 
@@ -515,6 +648,141 @@ pub(super) async fn release_all(
         .await
         .map_err(store_error)?;
     Ok(released.into_iter().collect())
+}
+
+/// Sets `bot`'s server address to `server`'s written form, when it's
+/// another.
+pub(super) async fn set_server(
+    conn: &mut SqliteConnection,
+    bot: BotId,
+    server: &ServerAddress,
+) -> Result<bool, StoreError> {
+    let bot = id_text(bot);
+    let server = server.to_string();
+    let done = sqlx::query!(
+        "UPDATE bots SET server_address = ?
+         WHERE id = ? AND server_address IS NOT ?",
+        server,
+        bot,
+        server
+    )
+    .execute(conn)
+    .await
+    .map_err(store_error)?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// Switches `bot` to `mode`, when it's another.
+pub(super) async fn set_mode(
+    conn: &mut SqliteConnection,
+    bot: BotId,
+    mode: ModeId,
+) -> Result<bool, StoreError> {
+    let bot = id_text(bot);
+    let mode = id_text(mode);
+    let done = sqlx::query!(
+        "UPDATE bots SET mode_id = ? WHERE id = ? AND mode_id <> ?",
+        mode,
+        bot,
+        mode
+    )
+    .execute(conn)
+    .await
+    .map_err(store_error)?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// Sets whether `bot` should run, when it says otherwise.
+pub(super) async fn set_desired(
+    conn: &mut SqliteConnection,
+    bot: BotId,
+    desired: DesiredRunState,
+) -> Result<bool, StoreError> {
+    let bot = id_text(bot);
+    let desired = desired.as_str();
+    let done = sqlx::query!(
+        "UPDATE bots SET desired_state = ? WHERE id = ? AND desired_state <> ?",
+        desired,
+        bot,
+        desired
+    )
+    .execute(conn)
+    .await
+    .map_err(store_error)?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// Clears `bot`'s stored last state while it has no agent and the stored
+/// one is still `last`.
+pub(super) async fn clear_sticky(
+    conn: &mut SqliteConnection,
+    bot: BotId,
+    last: &LastReport,
+) -> Result<bool, StoreError> {
+    let bot = id_text(bot);
+    let state = last.state.as_str();
+    let reason = last.state.reason();
+    let at = time_text(last.at).ok_or(StoreError::Unstorable {
+        table: BOTS,
+        column: "last_state_at",
+    })?;
+    let done = sqlx::query!(
+        "UPDATE bots SET last_state = NULL, last_state_reason = NULL, last_state_at = NULL
+         WHERE id = ? AND agent_id IS NULL
+           AND last_state = ? AND last_state_reason IS ? AND last_state_at = ?",
+        bot,
+        state,
+        reason,
+        at
+    )
+    .execute(conn)
+    .await
+    .map_err(store_error)?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// Reads a bot as one viewer sees it back, through the same checks as its
+/// record and as the account's view.
+fn listed_bot_from_row(row: &ListedBotRow) -> Result<ListedBot, StoreError> {
+    let record = record_from_row(&RecordRow {
+        rowid: row.rowid,
+        id: row.id.clone(),
+        account_id: row.account_id.clone(),
+        server_address: row.server_address.clone(),
+        mode_id: row.mode_id.clone(),
+        desired_state: row.desired_state.clone(),
+        agent_id: row.agent_id.clone(),
+        last_state: row.last_state.clone(),
+        last_state_reason: row.last_state_reason.clone(),
+        last_state_at: row.last_state_at.clone(),
+        account_rowid: row.account_rowid,
+        kind: row.kind.clone(),
+        mc_uuid: row.mc_uuid.clone(),
+        mc_name: row.mc_name.clone(),
+        status: row.status.clone(),
+        status_reason: row.status_reason.clone(),
+        owner_rowid: row.owner_rowid,
+        owner_disabled: row.owner_disabled,
+        mode_rowid: row.mode_rowid,
+        definition_json: row.definition_json.clone(),
+    })?;
+    let account = accounts::listed_from_row(&accounts::ListedRow {
+        rowid: row.account_rowid,
+        id: row.account_id.clone(),
+        owner_user_id: row.owner_user_id.clone(),
+        owner_role: row.owner_role.clone(),
+        owner_name: row.owner_name.clone(),
+        owner_rowid: row.owner_rowid,
+        kind: row.kind.clone(),
+        mc_uuid: row.mc_uuid.clone(),
+        mc_name: row.mc_name.clone(),
+        status: row.status.clone(),
+        status_reason: row.status_reason.clone(),
+        created_at: row.created_at.clone(),
+        grant_level: row.grant_level.clone(),
+        grant_rowid: row.grant_rowid,
+    })?;
+    Ok(ListedBot { record, account })
 }
 
 /// Reads a bot's row with its account, owner and mode back, or

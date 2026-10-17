@@ -97,6 +97,7 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
             grants_by_name: one,
             enroll: one,
             connect: one,
+            bot_actions: one,
         },
         Arc::new(clock.clone()),
     );
@@ -197,6 +198,13 @@ async fn a_run_sums_up_the_refusals_since_the_last_one_in_one_line(
         let _ = setup
             .limits
             .check_connect(fleet_core::pki::CertFingerprint::from_digest([9; 32]));
+        let _ = setup.limits.check_bot_action(
+            fleet_core::id::BotId::new_v7(
+                Utc.with_ymd_and_hms(2027, 1, 15, 8, 0, 0).unwrap(),
+                [9; 10],
+            )
+            .unwrap(),
+        );
     }
     for _ in 0..5 {
         setup.fail("alice").await;
@@ -220,6 +228,7 @@ async fn a_run_sums_up_the_refusals_since_the_last_one_in_one_line(
     assert_eq!(line["grants_by_name"], 1);
     assert_eq!(line["enroll"], 1);
     assert_eq!(line["connect"], 1);
+    assert_eq!(line["bot_actions"], 1);
     assert_eq!(line["locked"], 1);
     assert_eq!(line["in_flight"], 1);
     let again = setup.run_once().await;

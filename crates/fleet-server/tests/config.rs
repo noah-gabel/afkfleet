@@ -15,11 +15,12 @@ use std::time::Duration;
 use chrono::TimeDelta;
 use figment::Jail;
 use fleet_core::auth::{InviteTtl, LockoutPolicy, SessionPolicy};
+use fleet_core::authz::{CommandAllowlist, CommandAllowlistError};
 use fleet_server::config::{
-    AccountsConfig, Argon2Params, AuthConfig, ConfigError, DatabaseConfig, GrpcConfig, Heartbeats,
-    HttpConfig, LinkFlowLimits, LogConfig, LogFilterError, LogFormat, ParseError, ParseProblem,
-    ParseSource, PkiPaths, ProblemKind, Problems, Rate, RateLimitConfig, ServerConfig,
-    UnknownLogFormatError, VaultConfig, load,
+    AccountsConfig, Argon2Params, AuthConfig, ChatConfig, ConfigError, DatabaseConfig, GrpcConfig,
+    Heartbeats, HttpConfig, LinkFlowLimits, LogConfig, LogFilterError, LogFormat, ParseError,
+    ParseProblem, ParseSource, PkiPaths, ProblemKind, Problems, Rate, RateLimitConfig,
+    ServerConfig, UnknownLogFormatError, VaultConfig, load,
 };
 use fleet_server::http::rate_limit::{IpNet, IpNetError, TrustedProxies};
 use fleet_startup::telemetry::{NoRules, layer_with};
@@ -196,6 +197,7 @@ fn only_the_database_path_and_the_vault_are_required() {
                 vault: vault_config(jail),
                 rate_limits: RateLimitConfig::default(),
                 accounts: AccountsConfig::default(),
+                chat: ChatConfig::default(),
                 grpc: None,
             }
         );
@@ -217,6 +219,7 @@ fn every_rate_limit() -> RateLimitConfig {
         grants_by_name: Rate::per_hour(nonzero(4)),
         enroll: Rate::per_minute(nonzero(4)),
         connect: Rate::per_minute(nonzero(7)),
+        bot_actions: Rate::per_minute(nonzero(3)),
     }
 }
 
@@ -264,10 +267,14 @@ link_flows_per_user_per_day = 20
 grants_by_name_per_user_per_hour = 4
 enroll_per_ip_per_min = 4
 connect_per_cert_per_min = 7
+bot_actions_per_bot_per_min = 3
 
 [accounts]
 max_per_member = 7
 allow_offline = true
+
+[chat]
+command_allowlist = ["/spawn", "/home"]
 
 [vault]
 master_key_files = {{ 3 = {} }}
@@ -318,6 +325,12 @@ active_key_id = 3
             AccountsConfig {
                 max_per_member: nonzero(7),
                 allow_offline: true,
+            }
+        );
+        assert_eq!(
+            config.chat,
+            ChatConfig {
+                command_allowlist: CommandAllowlist::try_new(&["/spawn", "/home"]).unwrap(),
             }
         );
     });
@@ -481,13 +494,31 @@ fn a_misspelled_environment_variable_names_the_variable() {
     });
 }
 
+/// `[chat]` arrived with P11.2's command allowlist; its `retention_days` is
+/// P11.6's, so it's still an unknown key.
 #[test]
-fn a_section_of_a_later_phase_is_unknown_until_that_phase() {
+fn a_key_of_a_later_phase_is_unknown_until_that_phase() {
     in_jail(|jail| {
         let toml = format!("{}\n[chat]\nretention_days = 14\n", minimal(jail));
         let error = parse_error(load_toml(jail, &toml));
 
-        assert_eq!(error.key().to_string(), "chat");
+        assert_eq!(error.key().to_string(), "chat.retention_days");
+        assert_eq!(
+            error.problem(),
+            &ParseProblem::UnknownKey {
+                expected: &["command_allowlist"]
+            }
+        );
+    });
+}
+
+#[test]
+fn an_unknown_section_names_every_known_one() {
+    in_jail(|jail| {
+        let toml = format!("{}\n[metrics]\nbind = \"127.0.0.1:9100\"\n", minimal(jail));
+        let error = parse_error(load_toml(jail, &toml));
+
+        assert_eq!(error.key().to_string(), "metrics");
         assert_eq!(
             error.problem(),
             &ParseProblem::UnknownKey {
@@ -500,6 +531,7 @@ fn a_section_of_a_later_phase_is_unknown_until_that_phase() {
                     "vault",
                     "rate_limits",
                     "accounts",
+                    "chat",
                     "grpc"
                 ]
             }
@@ -1084,6 +1116,7 @@ fn the_dev_config_holds_neither_the_database_path_nor_the_vault_key_file() {
 #[case::grants_by_name("grants_by_name_per_user_per_hour", 1, 100)]
 #[case::enroll("enroll_per_ip_per_min", 1, 60)]
 #[case::connect("connect_per_cert_per_min", 1, 60)]
+#[case::bot_actions("bot_actions_per_bot_per_min", 1, 60)]
 fn rate_limit_keys_are_checked_against_their_range(
     #[case] key: &str,
     #[case] min: u64,
@@ -1111,6 +1144,73 @@ fn rate_limit_keys_are_checked_against_their_range(
                 "{key} = {value}"
             );
         }
+    });
+}
+
+/// `[chat] command_allowlist` (Appendix A, P2.9): `/` and a command name
+/// each, at most 64, missing means empty; the first bad entry is reported
+/// under its index, never with its text.
+#[test]
+fn the_command_allowlist_holds_command_names() {
+    in_jail(|jail| {
+        let base = minimal(jail);
+        let with = |list: &str| format!("{base}\n[chat]\ncommand_allowlist = {list}\n");
+
+        let empty = load_toml(jail, &with("[]")).unwrap();
+        let listed = load_toml(jail, &with(r#"["/spawn", " /afk "]"#)).unwrap();
+        let missing = load_toml(jail, &base).unwrap();
+
+        assert_eq!(empty.chat.command_allowlist, CommandAllowlist::default());
+        assert_eq!(missing.chat.command_allowlist, CommandAllowlist::default());
+        assert_eq!(
+            listed.chat.command_allowlist,
+            CommandAllowlist::try_new(&["/spawn", "/afk"]).unwrap()
+        );
+    });
+}
+
+#[rstest]
+#[case::no_slash(r#"["/spawn", "secret_home"]"#, 1, CommandAllowlistError::MissingSlash { index: 1 })]
+#[case::arguments(r#"["/tp secret_name"]"#, 0, CommandAllowlistError::HasArguments { index: 0 })]
+#[case::no_name(r#"["/spawn", "/home", "/"]"#, 2, CommandAllowlistError::EmptyName { index: 2 })]
+fn a_bad_allowlist_entry_is_reported_under_its_index_without_its_text(
+    #[case] list: &str,
+    #[case] index: usize,
+    #[case] error: CommandAllowlistError,
+) {
+    in_jail(|jail| {
+        let toml = format!("{}\n[chat]\ncommand_allowlist = {list}\n", minimal(jail));
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(
+            keys(&problems),
+            [format!("chat.command_allowlist[{index}]")]
+        );
+        assert_eq!(kinds(&problems), [ProblemKind::CommandAllowlist(error)]);
+        assert!(!problems.to_string().contains("secret"), "{problems}");
+    });
+}
+
+#[test]
+fn an_allowlist_of_more_than_64_entries_is_refused() {
+    in_jail(|jail| {
+        let entries: Vec<String> = (0..65).map(|n| format!("\"/c{n}\"")).collect();
+        let toml = format!(
+            "{}\n[chat]\ncommand_allowlist = [{}]\n",
+            minimal(jail),
+            entries.join(", ")
+        );
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["chat.command_allowlist"]);
+        assert_eq!(
+            kinds(&problems),
+            [ProblemKind::CommandAllowlist(
+                CommandAllowlistError::TooMany { count: 65 }
+            )]
+        );
     });
 }
 

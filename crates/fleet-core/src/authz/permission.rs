@@ -26,7 +26,7 @@ pub enum Permission {
     /// off the allowlist). The caller also needs [`Permission::ViewMode`] on
     /// the mode itself.
     SetBotMode(CommandCheck),
-    /// Change the bot's server address or auto-start (Manage).
+    /// Change the bot's server address (Manage).
     ConfigureBot,
     /// List the account's grants, or revoke one (Manage).
     ManageGrants,

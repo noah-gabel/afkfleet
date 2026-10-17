@@ -21,8 +21,8 @@ use fleet_server::app::lockout::LockoutService;
 use fleet_server::cli::housekeeping::Housekeeping;
 use fleet_server::cli::serve::App;
 use fleet_server::config::{
-    AccountsConfig, AuthConfig, DatabaseConfig, HttpConfig, LogConfig, LogFormat, RateLimitConfig,
-    ServerConfig, VaultConfig,
+    AccountsConfig, AuthConfig, ChatConfig, DatabaseConfig, HttpConfig, LogConfig, LogFormat,
+    RateLimitConfig, ServerConfig, VaultConfig,
 };
 use fleet_server::grpc::registry::AgentRegistry;
 use fleet_server::http::rate_limit::RateLimits;
@@ -133,6 +133,7 @@ pub(crate) fn server_config(dir: &Path, bind: SocketAddr, dev_mode: bool) -> Ser
             active_key_id: 1,
         },
         accounts: AccountsConfig::default(),
+        chat: ChatConfig::default(),
         grpc: None,
     }
 }

@@ -400,7 +400,10 @@ The full analysis lives in `docs/threat-model.md`.
   - changing a role
   - disabling or enabling a user, creating or revoking an invite (Phase 8, group E)
   - approving or refusing a pending link, and creating, changing or revoking a grant (Phase 9, group E)
+  - setting a bot's server address (Phase 10, group E)
   - rotating keys
+
+> Note (§7.2, Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the bots' writes,** decided per action (S47; decided by the review agent, approved by the user at the plan review). `PATCH /bots/{id} {server_address}` registers with `step_up_route`: the address sends the account, its mode's actions and later its chat to a server the person at the PC picks, and it outlasts the session. The mode switch (`PUT /bots/{id}/mode`) and the five lifecycle calls are plain authed routes: Control-level, nothing lost or widened, undone by the next call. A start or a resume may kick a human playing the account once, who pauses the bot again by logging in, so a step-up on one of them alone would protect nobody. The threat model records the unlocked PC's bots as an accepted risk.
 
 > Note (§7.2, Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **the account writes.** `DELETE /accounts/{id}` (§7.2's "deleting an MC account"), `POST /accounts/{id}/approve` and `/refuse`, and every grant write (`POST /accounts/{id}/grants`, `PUT` and `DELETE /accounts/{id}/grants/{user}`) register with `step_up_route`, checked by the extractor only, as the admin writes are. Listing accounts and grants, and starting a link again (`POST /accounts/{id}/relink`), stay plain authed routes: linking again can't move an account to another Minecraft profile, and gives less than a new link, which needs none (decided by the review agent, approved by the user at the plan review).
 
@@ -456,6 +459,7 @@ The full analysis lives in `docs/threat-model.md`.
 | `POST /auth/refresh` | 30/min | IP |
 | Authenticated API | 10 req/s, burst 30 | User |
 | Sending bot chat | 1 msg / 3 s, burst 3 per bot; 20/min per user | Bot, user |
+| Bot calls that make its account join (start, restart, reset, resume, a server change) | 5/min, burst 5 | Bot |
 | `SendChat` actions inside modes | Interval ≥ 30 s | Enforced by mode validation |
 | WebSocket | 3 connections per user; ticket single-use, 30 s TTL | User |
 | Microsoft link flows | 1 active per user, 3 active in total, 10/day per user | User |
@@ -464,6 +468,8 @@ The full analysis lives in `docs/threat-model.md`.
 | gRPC `Connect` | 10/min | Client certificate (its fingerprint) |
 
 Responses use `429` with a `Retry-After` header. The client IP is the socket peer address.
+
+> Note (§7.4, Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the per-bot limit** is `[rate_limits] bot_actions_per_bot_per_min` (1–60, 5 by default: a burst of 5, then one every 12 s), keyed by the bot and spent in the handler after `authorize()`, whatever the call's outcome, so a 429 never tells a stranger a bot exists. Start, restart, reset, resume and `PATCH` spend it; stop, the mode switch and the reads don't. Without it, the per-user limit (10/s) would let one account join ten times a second: the server's throttles and bans, and Mojang join spam from the agent's address (S52, the user's approval at the plan review). Its refusals are counted in the minute's summary.
 
 > Note (§7.4, Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`Connect`'s limit** is `[rate_limits] connect_per_cert_per_min` (1–60, 10), keyed by the presented certificate's fingerprint and spent before any lookup or read; it answers `RESOURCE_EXHAUSTED` with `retry-after` and is counted in the minute's summary (S30). A call without a certificate is refused before it (S24). What an agent sends on its stream has no rate limit: HTTP/2's flow control and one message read at a time pace it (S25). `X-Forwarded-For` is honored only when the peer is in `trusted_proxies` (Caddy).
 
@@ -3657,6 +3663,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **An idle channel's `UNAVAILABLE`** is routine: the port cuts a connection 80 s after its last stream ended (S22).
   > - **`Reject(AlreadyConnected)`** means its own old stream still lives, after a restart for instance: retry with backoff; the old one ends within the heartbeat timeout (S26). The reports the server passes (statuses and events of assigned bots) are the ingest's to read (S28).
   > Note (P10.7, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **what the reconciler counts on** (S33, S42, S44, S45): the agent removes a bot only on `Unassign` or its omission from a `ReconcileFull`; a spec with desired Stopped stops the bot and keeps it; a bot starts in its `restore`; a `Busy` apply is retried after the bot's `Removed`, and a `Removed` is never dropped; the hello's snapshot is sent only after the previous stream's instructions are applied; an `Unassign` of a bot it doesn't run is answered with `Removed`; the reconnect backoff stays within `fleet_proto::control::RECONNECT_DELAY_MAX` (30 s).
+
+  > Note (P10.7, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
+  > - **The SSRF check** (S46, security): right before it dials the address of a server-sent spec, the agent classifies the socket fleet-mc resolved (`ResolvedAddr.socket`, SRV included), the one azalea dials. *Never:* unspecified, link-local (169.254.169.254 included), multicast, broadcast, reserved, benchmarking and documentation addresses, also inside IPv4-mapped, NAT64, 6to4 and IPv4-compatible forms. *Private:* loopback, RFC 1918, carrier-grade NAT and unique local, allowed only inside `[control_plane] private_targets`, a CIDR list, empty by default (`IpNet` moves to fleet-core for it). *Public:* allowed. A refusal is the new `ConnectFailure::Blocked`, transient and never dialled. Standalone mode is never checked. fleet-mc changes, so `just test-slow` runs.
+  > - **The dev and compose configs** *(the user's note at the plan review)*: `private_targets` is empty by default, so a managed agent refuses loopback and LAN servers. `deploy/dev/agent.managed.toml` (loopback) and the compose agent, whose `minecraft:25565` resolves to a Docker bridge address in `172.16.0.0/12`, list the networks they need, each with a comment saying why, so the hands-on checks don't fail on the SSRF check.
+  > - **The lifecycle message** (S49): match `ServerMessage::Lifecycle` exhaustively and apply it in stream order. For a bot the fleet runs, call exactly one `Fleet::{restart, reset, resume}`, without filtering by state; drop one for any other bot at `debug`. A command never applies, removes or respecs a bot, and is never answered: its effect comes back as the bot's `Status`. Drop the fleet's refusals; commands die with their stream.
 - [ ] **P10.8** 🔴 Server ingest:
   - status and chat are written in batches, in transactions roughly every 500 ms
   - **no per-tick writes**
@@ -3684,6 +3695,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P10.9, Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the four rejections are done,** in `tests/grpc_control/identity.rs`: a revoked certificate gets the answer of one no agent holds (`a_revoked_certificate_is_refused_like_an_unknown_one`); a certificate from another CA and an expired one fail TLS's handshake, before any call (`a_client_certificate_from_another_ca_fails_the_handshake`, `an_expired_certificate_fails_the_handshake`); an agent that never enrolled is refused (`an_agent_that_never_enrolled_is_refused`). The server's side of a connection that goes silent is in `liveness.rs`. For H: the silent connection runs end to end through the suite's stalling proxy (`tests/grpc_control/proxy.rs`): the server frees the agent within `heartbeat_timeout`, and the agent reconnects within 30 s and resyncs.
   > Note (P10.9, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the reconciler's loopback tests** are in `tests/grpc_control/reconcile.rs`; H adds a server restart with agents coming back in either order, and checks the threat model's B3 rows that cite D's tests.
+  > Note (P10.9, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the bots' loopback tests** are in `tests/grpc_control/reconcile.rs` too: a bot started through its service is placed and, stopped, taken off its agent; a paused bot's stop frees its slot and keeps it paused; a command reaches the stream that holds its bot once and never a later one; a start of a fenced bot places it nowhere. H checks the threat model's B1, B3, B4 and B7 rows that cite E's tests. **H's check against a local Minecraft container** lists that container's network in the agent's `[control_plane] private_targets`, with a comment saying why *(the user's note at the plan review)*, or the SSRF check refuses the connect (S46).
 - [x] **P10.10** Admin endpoints: `GET /agents`, and `POST /agents/{id}/disable`, which revokes the fingerprint and drops the stream.
 
   > Note (P10.10, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a response value that a later version may extend, such as an agent's status, is an `Open<…>` in its DTO, and a 64-bit number is a `SafeInt`.
@@ -3707,6 +3719,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 > Note (Phase 10's DoD, from Phase 10's planning, the user's choice, U1) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the app's part moved to Phase 11.** The DoD read "pressing Start in the app brings a bot with a real Microsoft account Online on a real server", which needs P11.9's screens. The user does this check by hand in group H, with their own account; it needs Docker for a local online-mode Minecraft server (as in P1.8), unless they point it at their own. P10.9's loopback suite is the rest of the proof.
 
+> Note (Phase 10's DoD, from group E, the user's note at the plan review) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): the check's agent lists the local Minecraft container's network in `[control_plane] private_targets` (S46), with a comment saying why, or its SSRF check refuses the connect. The check calls `PATCH /bots/{id}` (after a step-up), `POST /bots/{id}/start` and `stop` through fleet-client (`patch_bot`, `start_bot`, `stop_bot`).
+
 ---
 
 ### Phase 11: Bot operations, modes & live events
@@ -3716,7 +3730,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 > Note (P11, from Phase 8, group E, the user's request) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **Decide step-up per action, the same way as the admin writes.** Before building them, decide for each destructive or privilege-changing action of this phase whether it needs a step-up: deleting a bot, changing grants, deleting a shared mode, and anything else that loses data or widens access. The app reuses the admin screens' "send, and on `step_up_required` ask for the password and retry once".
 
 - [ ] **P11.1** 🔴 Migrations and repositories:
-  - `bots`: 1:1 with an account; server address, mode, desired state, auto-start, assigned agent
+  - `bots`: 1:1 with an account; server address, mode, desired state, assigned agent
   - `modes`: owner, visibility, definition JSON (validated by core), version
   - `chat_messages`
 
@@ -3726,12 +3740,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.1, Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`bots` and `modes` as built** (`0013_modes.sql`, `0014_bots.sql`; the columns in Appendix D). Every account has its bot: created with it on both paths that create one, minted right after the account's ID (S35), and the migration gives every existing account one (its ID is the account's with the last hex digit's high bit flipped; no server, `afk`, stopped). No `auto_start` yet: it arrives with its first writer, P11.2's `PATCH` (S34). `last_state_reason` holds a paused or failed state's reason (S40). The seeds' IDs are `01a14202-2800-7000-8000-000000000001` (`afk`) and `…0002` (`farm`), `ModePreset::id()` (S38). Ticked in G, with `chat_messages`.
 
+  > Note (P11.1, Phase 10, group E, the user's choice, U12) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **no `auto_start`, ever.** `desired_state` stays the only "should run" flag: a bot runs whenever it should and can (S33), and `start` and `stop` set it. The column never arrives and `PATCH` carries none. `0014_bots.sql`'s comment ("Auto-start arrives with its first writer") stays as merged: `migrations-check` forbids editing a merged migration.
+
   > Note (P11.1, from Phase 4, group B, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Outgoing mode chat** arrives as `ModeChatSent{message}` (P4.5), so `chat_messages` can record what a mode said, with direction out, next to user chat.
 
   > Note (P11.1, from Phase 4, the user's decision) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **Conflict texts are stored per server** in managed mode: set once in the app for all bots on that server, and sent to agents as each bot's resolved `ConflictTexts` in its spec.
-- [ ] **P11.2** 🔴 Bot endpoints:
+- [x] **P11.2** 🔴 Bot endpoints:
   - `GET /bots`, `GET /bots/{id}`
-  - `PATCH /bots/{id}` (server, mode, auto-start)
+  - `PATCH /bots/{id}` (server, mode)
   - `POST /bots/{id}/start|stop|restart|reset|resume`
 
   Every call is authorized, audited and reconciled.
@@ -3757,6 +3773,16 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **`auto_start`** arrives with `PATCH` by `ALTER TABLE … ADD COLUMN` (S34); what auto-start does for users is asked at E's planning.
   > - **Resume and Reset of a sticky bot that isn't placed** clear its stored `last_state` in the same transaction: the reconciler restores the stored one.
   > - **Before E:** `link_flows/commit.rs`'s two clock reads become one, in its own PR (U11).
+
+  > Note (P11.2, Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **as built.** The user's choices: no auto-start (U12; P11.1's note) and the four 409 texts (U13). Decided by the review agents and approved at the plan review: S46–S56; reconciliations R31–R38.
+  > - **Routes** (class Standard; Appendix B): `GET /bots` (keyset pages, newest first: the bots of the accounts the caller may View, filtered in SQL and each checked again with `authorize(ViewBot)`), `GET /bots/{id}`, `PATCH /bots/{id} {server_address}` (Manage, step-up), `PUT /bots/{id}/mode {mode_id}` (`ViewMode` on the mode, `SetBotMode(check_mode)` on the bot) and `POST /bots/{id}/start|stop|restart|reset|resume` (Control). Each answers `BotResponse {id, account, server_address?, mode_id, desired_state, status, agent?}`: the account under its field rule, `agent` for Admins and the Owner only, and `status` flat, with `kind` (`reported`, `awaiting_report`, `unknown`, `unplaced`) and the fields of its kind; every enum is an `Open<…>` (S54).
+  > - **Deviation (S47):** the mode left `PATCH` for `PUT /bots/{id}/mode`, since a step-up is per route and only the server address needs one. `PATCH` takes only a required `server_address`, and nothing clears it (R33, S55).
+  > - **The lifecycle** (S48, S50, S51): start and stop store `desired_state` and answer 200 whatever the bot reports; a bot that can't run yet reads unplaced, with why. Stopping a Paused or Failed bot frees its slot and keeps its state. Restart, and resume or reset of a bot on an agent, are one-shot commands (`ServerMessage::Lifecycle`), recorded and then sent only to the stream that holds the bot Assigned: 202 with the bot. Resume or reset of a bot that runs nowhere clears its stored state and the server's kept report in one transaction: 200. Anything else is 409 `bot_not_running`, `bot_not_paused`, `bot_not_failed` or `bot_unreachable` (fleet-core's `bot::judge_command`). A command whose send fails after its commit is 409 `bot_unreachable`, and its entry stays.
+  > - **Writes** re-read the actor, the bot, its account's grant and the mode in their transaction and authorize again, write only the changed column (never `agent_id`), commit with their entry (`bot.set_server`, `bot.set_mode`, `bot.start`, `bot.stop`, `bot.restart`, `bot.reset`, `bot.resume`; S53) and hint `Change::Store` after the commit. A write that changes nothing answers 200 with no entry and no hint. An unknown or hidden mode is one 422 on `mode_id`; a mode with a command off the allowlist needs Manage (403).
+  > - **Also:** the per-bot limit (§7.4's note, S52); `[chat] command_allowlist`, read by the mode switch (R37); `Assignments::assign` returns the row's stored state, from which a new placement's restore comes; fleet-client's `bots`, `bot`, `patch_bot`, `set_bot_mode`, `start_bot`, `stop_bot`, `restart_bot`, `reset_bot` and `resume_bot` (S56).
+  > - **SSRF** (S46): the server doesn't check where an address points; the agent will, right before it dials (P10.7's note). The `PATCH`'s OpenAPI description says so.
+  > - **Hands-on:** none before G. Without the managed agent no bot runs through the server, the app has no bot screens until P11.9, and calling the API by hand would need curl or a password on a command line (ADR-0016, ADR-0017). H's DoD check calls these routes for real.
+  > - **PR #54's review** (ADR-0019): a command goes only to the stream of the generation found holding its bot, checked and queued in one critical section; a bot whose agent isn't online (disabled, its certificates revoked or expired, before its stream ends) is 409 `bot_unreachable`; a resume or reset puts the kept report back unless its commit lands (a caller dropped mid-commit included), and refuses when its clear changes nothing; a write's answer asks `authorize()` again (404 once the caller may no longer see the bot); `server_address` shows only to Control holders and above.
 - [ ] **P11.3** 🔴 Chat:
   - `POST /bots/{id}/chat`:
     - takes a `ChatMessage`
@@ -3783,11 +3809,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P11.3, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
   > - **Mode chat follows this task's rule.** P4.5 does nothing special for commands with message arguments; whatever is decided here applies to mode chat too, through `ChatUnavailable`.
   > - **The per-bot chat limit.** §7.4 says it's configurable, and the agent's queue uses one message per 3 s, burst 3 as a default. Decide here where that setting lives (server settings, sent to agents).
+
+  > Note (P11.3, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`[chat] command_allowlist` exists** (`ServerConfig.chat`, P2.9's rules; the mode switch reads it), and `BotService` has it; `retention_days` stays P11.6's. The bot routes answer in extractor order (R38): 401, the per-user 429, a malformed path's 404, the body's 400/422, an unseen bot's 404, then 403; the chat route follows it, and re-reads the actor and the grant in its transaction as the bot writes do.
 - [ ] **P11.4** 🔴 Modes CRUD: `GET`, `POST`, `PUT`, `DELETE` on `/modes`. Core validation errors become field errors. Built-in modes are read-only.
 
   > Note (P11.4, from Phase 2): Editing a mode that's assigned to bots must re-run the command check for every one of them. A mode with a command outside the allowlist needs Manage on each bot (ADR-0010).
 
   > Note (P11.4, from group E): open question, flagged and not yet decided. `fleet-core`'s own errors never quote their input, but serde_json's do: an unknown action type or a bad field value in mode JSON comes back as e.g. ``unknown variant `…` `` or `invalid type: string "…"`, which can hold chat text. The existing rules already say: internal errors never reach clients, and chat is logged only at debug. How the server maps and logs these errors is decided here (ADR-0010).
+
+  > Note (P11.4, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **a bot's mode is switched by `PUT /bots/{id}/mode {mode_id}`** (S47, S55): `ViewMode` on the mode (an unknown or hidden one is one 422 on `mode_id`, so modes can't be probed), then `SetBotMode(check_mode)` on the bot (a command off the allowlist needs Manage, 403), both again in the transaction (`ModeWrites::find`). Editing a mode bots use re-runs that check for each (the Phase 2 note above); whether a mode's edit or deletion needs a step-up is decided here, under P11's step-up note.
 
   > Note (P11.4, from group C): `ModeDraft::validate` stops at the first error. Each `ModeError` becomes a field error at `steps[step]`: `AngleOutOfRange` names its field, and `DuplicateStep` its `LimitedStep` kind (ADR-0010).
 
@@ -3830,6 +3860,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
     - an event timeline
   - **Mode editor:** an action list with validation.
   - **Admin:** an audit-log viewer and an agents view.
+
+  > Note (P11.9, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the bot screens.**
+  > - **Texts:** the four 409 codes' messages are fixed on the server (U13); the controls' labels and the shown states' texts are the user's, asked here.
+  > - **Stop on a Paused or Failed bot** is allowed: it frees the bot's slot and keeps its state (S51). Whether the controls offer it beside Resume or Reset is this task's UX.
+  > - **A 409** (`bot_unreachable`, `bot_not_running`, `bot_not_paused`, `bot_not_failed`) shows its message and refetches the bot. A 202 means sent, not done: the result arrives as the bot's status.
+  > - **Every `Open<…>`** (`desired_state`, `status.kind`, `state`, `reason`, `why`, the last disconnect's kinds) has a default branch. `server_address` is there only for Control holders and above, `agent` only for Admins and the Owner.
+  > - **Step-up:** `PATCH /bots/{id}` goes through `useStepUpAction`; the mode switch, the lifecycle calls and the reads don't need one. A per-bot 429 shows its `Retry-After`.
 
   > Note (P11.9, from Phase 10, group B, the user's choice, U3) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **enrollment tokens in the agents view.** `POST /agents/enrollment-tokens` exists (the Owner's, step-up, no body); the view shows the bundle once, for the Owner to pipe into `afkfleet-agent enroll`. The bundle is a secret for 15 minutes, so the call is a direct one through `useApiClient()`, never a TanStack query or mutation (CLAUDE.md). `afkfleet-server agent create-enrollment-token` stays for the server's host.
 
@@ -3935,6 +3972,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P12.4, from Phase 7, group B, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): a counter of detected refresh-token reuses belongs among the key metrics, so alerting can pick up possible token theft without anyone reading `/audit` or the logs.
 
+  > Note (P12.4, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): the per-bot limit's refusals (`bot_actions` in the minute's summary) belong with the other rate limits' counts, by limit.
+
   > Note (P12.4, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): `afkfleet_agent_connects_refused_total` (by reason) and `afkfleet_agent_identity_conflicts_total` belong among the key metrics: past the daily cap a disabled or revoked certificate still in use shows only at `debug` (S30), and a conflict is recorded once an hour (S26).
 - [ ] **P12.5** Tauri release:
   - NSIS installer.
@@ -3959,6 +3998,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P12.6, from Phase 10, group B, the user's note at the plan review) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the server certificate's yearly renewal.** It expires after 365 days, and then every agent fails to connect. The runbook's steps: stop the server, move `server.crt` and `server.key` away, run `afkfleet-server pki server-cert --config … --dns … --ip …` with the names agents dial, start the server. The CA stays, so no agent enrolls again.
 
   > Note (P12.6, from Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **enrolling an agent:** `pki init` once (it prints the CA's fingerprint); a token from the Owner (`POST /agents/enrollment-tokens`, later the app's agents view) or from the server's host (`afkfleet-server agent create-enrollment-token`); then pipe its bundle into `afkfleet-agent enroll` within 15 minutes. A token is single-use; exit 3 means the server enrolled an agent the host didn't store, which is disabled before enrolling again with a new token.
+
+  > Note (P12.6, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **an agent next to a local Minecraft server** lists that network in `[control_plane] private_targets`, with a comment saying why; a bot whose last disconnect is `connect_failed` with `blocked` points at an address its agent refuses (S46). Listing a network opens it to every Manage holder of a bot on that agent (the threat model's accepted risk).
 
   > Note (P12.6, from Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **incident response for agents:** `afkfleet-server agent list` shows every agent; `agent disable --id …` disables a lost or stolen one for good from the server's host, beside the running server (its stream ends within 10 s), as the API's disable does. An agent whose `enroll` ended with exit 3 is disabled the same way.
 
@@ -3987,6 +4028,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P13.1** 🔴 **Authorization matrix test:** every endpoint × {anonymous, Member without grant, View, Control, Manage, Admin, Owner} → the expected status. The table is generated and snapshotted.
 
   > Note (P13.1, from Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): the cast steps up first, or every step-up route reads 403 `step_up_required`. The account routes need a pending account (review, grants, re-link) and a grantee with implicit Manage (the grant routes' 422 and 409).
+
+  > Note (P13.1, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the bot routes** join the matrix: every lifecycle call, `PATCH` (step-up first), and the mode switch with a mode on the allowlist and one off it. The per-bot limit is spent only after `authorize()`, so a stranger's answer stays 404; the cast needs a fresh limit per row, or rows after the fifth read 429.
 - [ ] **P13.2** Fuzz targets:
   - value-object parsers
   - the chat sanitizer
@@ -4140,6 +4183,7 @@ link_flows_per_user_per_day = 10         # counted from the audit log
 grants_by_name_per_user_per_hour = 10    # grants created by username, per user
 enroll_per_ip_per_min = 5                # Enroll calls on the gRPC port, per client IP
 connect_per_cert_per_min = 10            # Connect calls on the gRPC port, per client certificate
+bot_actions_per_bot_per_min = 5          # start, restart, reset, resume and server changes, per bot
 chat_per_bot_interval_secs = 3
 chat_per_bot_burst = 3
 chat_per_user_per_min = 20
@@ -4168,6 +4212,8 @@ command_allowlist = ["/spawn", "/home", "/afk"]   # usable with Control; every o
 > Note (Appendix A, Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`[grpc]` as built** (P10.2's note): optional; without it the control plane is off. `heartbeat_interval_secs` and `heartbeat_timeout_secs` arrive with P10.4. `[rate_limits]` gains `enroll_per_ip_per_min` (1–60, 5 by default, S14). In `agent.toml`, `[control_plane] url` is `https://host:port` (no credentials, path or query), and its three files are absolute and distinct; the agent writes `cert_file` and `key_file` itself with `afkfleet-agent enroll`.
 
 > Note (Appendix A, Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): `[grpc]` gains `heartbeat_interval_secs` (1–60, 10) and `heartbeat_timeout_secs` (2–300, 30); the timeout must be at least twice the interval, and an error names both keys. `[rate_limits]` gains `connect_per_cert_per_min` (1–60, 10).
+
+> Note (Appendix A, Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): `[rate_limits]` gains `bot_actions_per_bot_per_min` (1–60, 5 by default, S52). **`[chat]` arrives** with `command_allowlist` alone (P2.9's rules: each entry `/` and one command name, no arguments; at most 64; a missing key means an empty list; an error names the entry's index, never its text); `retention_days` comes with P11.6 (R37). In `agent.toml`, `[control_plane] private_targets` (a CIDR list, empty by default) arrives with G (S46).
 
 `agent.toml`
 ```toml
@@ -4228,7 +4274,7 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 | `POST /accounts/{id}/approve` · `/refuse` | above the owner (step-up) | Review a pending link |
 | `POST /accounts/{id}/relink` | Manage | Link the account again (a link flow) |
 | `GET/POST /accounts/{id}/grants` · `PUT/DELETE /accounts/{id}/grants/{user}` | Manage (writes: step-up) | Sharing |
-| `GET /bots` · `GET/PATCH /bots/{id}` | View / Manage | Bot specs & state (`PATCH` mode only needs Control) |
+| `GET /bots` · `GET/PATCH /bots/{id}` · `PUT /bots/{id}/mode` | View / Manage (`PATCH`: step-up) / Control | Bots and their state; the server address; the mode |
 | `POST /bots/{id}/start\|stop\|restart\|reset\|resume` | Control | Lifecycle |
 | `POST /bots/{id}/chat` · `GET /bots/{id}/chat` | Control / View | Chat |
 | `GET/POST /modes` · `PUT/DELETE /modes/{id}` | Member+ (own) / Admin+ (shared) | Modes |
@@ -4242,7 +4288,7 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 > - `POST /agents/enrollment-tokens` is Owner-only.
 > - `PATCH /users/{id}`: only the Owner changes roles; Admins disable and enable Members.
 > - `DELETE /invites/{id}`: an Admin invite is the Owner's.
-> - `PATCH /bots/{id}`: the server and auto-start need Manage, the mode Control, and a mode with a command off the allowlist Manage.
+> - `PATCH /bots/{id}`: the server needs Manage; the mode (`PUT /bots/{id}/mode` since Phase 10, group E) Control, and a mode with a command off the allowlist Manage.
 > - The `user` routes check `Personal`.
 
 > Note (Appendix B, Phase 7, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`POST /auth/step-up`** (user) joins the table in group D. It takes `{password}` and stamps the session's `stepped_up_at`; the "(step-up)" routes need that stamp to be at most 5 min old, otherwise they answer 403 `step_up_required`.
@@ -4252,6 +4298,8 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 > Note (Appendix B, Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`POST /agents/enrollment-tokens`** (the Owner, step-up, no body) answers 201 `{id, bundle, ca_fingerprint, expires_at}`, the only time the bundle is shown; 404 while `[grpc]` is off, 409 at 20 pending tokens (P10.3's note).
 
 > Note (Appendix B, Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`GET /agents`** (Admin+) pages every agent with its status (`online`, `offline`, `expired`, `disabled`), and **`POST /agents/{id}/disable`** (Admin+, step-up, no body) answers 200 with the agent, disabled for good: every certificate revoked and its stream ended (P10.10's note).
+
+> Note (Appendix B, Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the bot routes as built** (P11.2's note). `GET /bots` (keyset pages) and `GET /bots/{id}` answer `BotResponse`; `PATCH /bots/{id} {server_address}` (Manage, step-up) and `PUT /bots/{id}/mode {mode_id}` (Control) answer 200 with the bot. `start` and `stop` answer 200; `restart`, `reset` and `resume` 202 when sent to the bot's agent, 200 when a bot that runs nowhere had its state cleared, and otherwise 409 with `bot_unreachable`, `bot_not_running`, `bot_not_paused` or `bot_not_failed`. Only `PATCH` and `PUT` have a body. The answers follow the extractors' order: 401, the per-user 429, 403 `step_up_required`, a malformed path's 404, the body's 400/415/422, an unseen bot's 404, 403, the per-bot 429, 409 (R38).
 
 > Note (Appendix B, Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **the account routes as built.** P9.6's notes list them. `POST /accounts/{id}/grants {username, level}` creates a grant by exact username (Members can't list users), and `PUT /accounts/{id}/grants/{user} {level}` changes one by user ID. Approving answers 200 with the account; refusing, deleting and revoking 204. `POST /accounts/{id}/relink` answers like `POST /accounts/link`, read through `GET /accounts/link/{flow_id}`.
 
@@ -4313,6 +4361,8 @@ message ServerMessage {
 
 > Note (Appendix C, Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **a `ReconcileFull` may carry a spec with desired Stopped:** a bot the server is stopping before it unassigns it (S33, S42). Every welcome gets exactly one `ReconcileFull`, an empty one too. `fleet_proto::control::RECONNECT_DELAY_MAX` (30 s) bounds an agent's reconnect backoff, a constant only; the wire schema didn't change.
 
+> Note (Appendix C, Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`ServerMessage` gains case 10,** `LifecycleCommand lifecycle = 10`: `LifecycleCommand { bytes bot_id = 1; Lifecycle command = 2; }` and `enum Lifecycle { LIFECYCLE_UNSPECIFIED = 0; LIFECYCLE_RESTART = 1; LIFECYCLE_RESET = 2; LIFECYCLE_RESUME = 3; }`. It's one-shot and never answered, and has no correlation ID: its effect comes back as the bot's `Status` (S49). Reading refuses a non-v7 or wrong-length ID, `UNSPECIFIED` and unknown values. The wire-schema snapshot shows it; `PROTOCOL_VERSION` stays 1 until the first release (S9).
+
 > Note (Appendix C, Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`AgentEnrollment` as built** (`enrollment.proto`): `Enroll(EnrollRequest {token, name, csr_der}) returns (EnrollResponse {agent_id, certificate_pem, not_after_unix_ms})`. The answer carries no CA certificate: a trust anchor can't come from the server it vouches for, so the agent pins the bundle's fingerprint instead. The certificate is PEM text (R10), the CSR DER: each end gets what its reader takes. `EnrollRequest` is in `REDACTED` (S7).
 
 ### D. Database tables (SQLite)
@@ -4325,7 +4375,7 @@ message ServerMessage {
 | `login_attempts` | username, failures, locked_until, last_failure_at |
 | `mc_accounts` | id, owner_user_id, mc_uuid (unique), mc_name, kind, refresh_ciphertext, key_id, status, created_at |
 | `account_grants` | account_id, user_id, level, granted_by, granted_at |
-| `bots` | id, account_id (unique), server_address, mode_id, desired_state, auto_start, agent_id, last_state, last_state_at |
+| `bots` | id, account_id (unique), server_address, mode_id, desired_state, agent_id, last_state, last_state_at |
 | `modes` | id, owner_user_id (NULL = built-in), name, visibility, definition_json, version, updated_at |
 | `agents` | id, name, enabled, labels, capacity, version, last_seen_at |
 | `agent_certs` | fingerprint_sha256, agent_id, not_after, revoked_at |
@@ -4358,7 +4408,7 @@ message ServerMessage {
 
 > Note (Appendix D, Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`modes`, `bots` and `releasing_bots` as built.**
 > - **`modes`** (`0013`): `id, owner_user_id, name, visibility, definition_json, version, created_at, updated_at`; `visibility` is `private` or `shared`, a built-in (no owner) is `shared`, `definition_json` is a JSON object, `version` from 1, `updated_at` not before `created_at`; indexed by owner. Seeds `afk` and `farm` (S38).
-> - **`bots`** (`0014`): `id, account_id (unique, ON DELETE CASCADE), server_address, mode_id, desired_state, agent_id, last_state, last_state_reason, last_state_at`; no `auto_start` yet (S34) and no `created_at`; `desired_state` is `running` or `stopped`; `last_state` and `last_state_at` set together, `last_state_reason` only with them; indexed by mode and agent.
+> - **`bots`** (`0014`): `id, account_id (unique, ON DELETE CASCADE), server_address, mode_id, desired_state, agent_id, last_state, last_state_reason, last_state_at`; no `auto_start` (S34; never, U12 in group E) and no `created_at`; `desired_state` is `running` or `stopped`; `last_state` and `last_state_at` set together, `last_state_reason` only with them; indexed by mode and agent.
 > - **`releasing_bots`** (`0015`, S39, S43, R30): `bot_id, agent_id, account_id, kind, mc_uuid, mc_name, created_at`, keyed by `(bot_id, agent_id)`, no foreign key to the bot or the account (either may be gone), indexed by agent: an agent that may still run a bot whose row no longer says so, with the Minecraft account it plays.
 
 > Note (Appendix D, Phase 7, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`invites` as built** is `id, code_hash, role, created_by, created_at, expires_at, used_by, used_at, revoked_at`: `role` is `member` or `admin` only, `used_by` is unique, a revoked or used invite keeps its row, and three CHECKs keep it consistent (a use and its time together, never both used and revoked, an expiry after the creation). `0007_audit_log_target.sql` indexes the audit log by target, action and ID, for `GET /me`'s count of wrong codes.

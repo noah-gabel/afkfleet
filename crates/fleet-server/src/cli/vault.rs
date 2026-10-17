@@ -317,7 +317,8 @@ mod tests {
     use super::*;
     use crate::app::vault::{KeyUsage, PurposeCounts};
     use crate::config::{
-        AccountsConfig, AuthConfig, DatabaseConfig, HttpConfig, RateLimitConfig, VaultConfig,
+        AccountsConfig, AuthConfig, ChatConfig, DatabaseConfig, HttpConfig, RateLimitConfig,
+        VaultConfig,
     };
     use crate::http::rate_limit::TrustedProxies;
     use crate::infra::crypto::vault::{VaultKeys, XChaChaVault};
@@ -384,6 +385,7 @@ mod tests {
                 active_key_id: active,
             },
             accounts: AccountsConfig::default(),
+            chat: ChatConfig::default(),
             grpc: None,
         }
     }

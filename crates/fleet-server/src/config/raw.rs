@@ -65,6 +65,9 @@ pub(crate) struct RawConfig {
     #[serde(default)]
     #[garde(dive)]
     pub(crate) accounts: RawAccounts,
+    #[serde(default)]
+    #[garde(skip)]
+    pub(crate) chat: RawChat,
     /// Absent means the control plane is off.
     #[serde(default)]
     #[garde(dive)]
@@ -243,6 +246,8 @@ pub(crate) struct RawRateLimits {
     pub(crate) enroll_per_ip_per_min: u32,
     #[garde(range(min = RateLimitConfig::CONNECT_PER_CERT_PER_MIN.min, max = RateLimitConfig::CONNECT_PER_CERT_PER_MIN.max))]
     pub(crate) connect_per_cert_per_min: u32,
+    #[garde(range(min = RateLimitConfig::BOT_ACTIONS_PER_BOT_PER_MIN.min, max = RateLimitConfig::BOT_ACTIONS_PER_BOT_PER_MIN.max))]
+    pub(crate) bot_actions_per_bot_per_min: u32,
 }
 
 impl Default for RawRateLimits {
@@ -260,6 +265,7 @@ impl Default for RawRateLimits {
             grants_by_name_per_user_per_hour: 10,
             enroll_per_ip_per_min: 5,
             connect_per_cert_per_min: 10,
+            bot_actions_per_bot_per_min: 5,
         }
     }
 }
@@ -286,6 +292,14 @@ impl Default for RawAccounts {
             allow_offline: false,
         }
     }
+}
+
+/// `[chat]`. A missing `command_allowlist` is empty: every command needs
+/// Manage.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default, deny_unknown_fields, expecting = "a table of chat settings")]
+pub(crate) struct RawChat {
+    pub(crate) command_allowlist: Vec<String>,
 }
 
 /// `[database]`. `path` is required.
@@ -617,9 +631,12 @@ mod secret_names {
             "rate_limits.grants_by_name_per_user_per_hour",
             "rate_limits.enroll_per_ip_per_min",
             "rate_limits.connect_per_cert_per_min",
+            "rate_limits.bot_actions_per_bot_per_min",
             "accounts",
             "accounts.max_per_member",
             "accounts.allow_offline",
+            "chat",
+            "chat.command_allowlist",
             "grpc",
             "grpc.bind",
             "grpc.ca_cert_file",

@@ -78,6 +78,14 @@ expression: answer.json()
         ],
         "type": "object"
       },
+      "AccountRestriction": {
+        "description": "How Mojang refuses an account.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "banned",
+          "multiplayer_disabled"
+        ],
+        "type": "string"
+      },
       "AccountStatus": {
         "description": "Where a linked account stands.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
         "enum": [
@@ -178,6 +186,207 @@ expression: answer.json()
         ],
         "type": "string"
       },
+      "BotAgent": {
+        "description": "The agent a bot is assigned to: for Admins and the Owner only.",
+        "properties": {
+          "id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AgentStatus",
+            "description": "Its status."
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status"
+        ],
+        "type": "object"
+      },
+      "BotModeRequest": {
+        "additionalProperties": false,
+        "description": "`PUT /bots/{id}/mode`: the mode the bot runs. Needs Control on the bot,\nor Manage when the mode sends a command off the allowlist, and the mode\nmust be one the caller may see.",
+        "properties": {
+          "mode_id": {
+            "maxLength": 36,
+            "type": "string"
+          }
+        },
+        "required": [
+          "mode_id"
+        ],
+        "type": "object"
+      },
+      "BotPage": {
+        "description": "`GET /bots`: one page of the bots the caller may see, newest first.",
+        "properties": {
+          "items": {
+            "description": "The bots.",
+            "items": {
+              "$ref": "#/components/schemas/BotResponse"
+            },
+            "type": "array"
+          },
+          "next": {
+            "maxLength": 36,
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "BotPatchRequest": {
+        "additionalProperties": false,
+        "description": "`PATCH /bots/{id}`: the Minecraft server the bot joins. Needs Manage on\nthe bot and a step-up. Where the address points isn't checked here:\nthat's the agent's, on the address it resolves before it connects\n(ADR-0019, S46).",
+        "properties": {
+          "server_address": {
+            "maxLength": 259,
+            "type": "string"
+          }
+        },
+        "required": [
+          "server_address"
+        ],
+        "type": "object"
+      },
+      "BotResponse": {
+        "description": "A bot as `GET /bots` and `GET /bots/{id}` show it to the caller, and as\nevery bot write answers.",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountResponse",
+            "description": "Its account, as `GET /accounts/{id}` shows it to the caller: `level`\nsays what they may do with the bot."
+          },
+          "agent": {
+            "$ref": "#/components/schemas/BotAgent",
+            "description": "The agent it's assigned to: for Admins and the Owner only."
+          },
+          "desired_state": {
+            "$ref": "#/components/schemas/DesiredState",
+            "description": "Whether it should run."
+          },
+          "id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "mode_id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "server_address": {
+            "maxLength": 259,
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/BotStatus",
+            "description": "What the server knows of its state."
+          }
+        },
+        "required": [
+          "id",
+          "account",
+          "mode_id",
+          "desired_state",
+          "status"
+        ],
+        "type": "object"
+      },
+      "BotStateKind": {
+        "description": "A bot's lifecycle state (Plan.md Appendix E).\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "stopped",
+          "awaiting_session",
+          "connecting",
+          "online",
+          "backoff",
+          "paused",
+          "failed",
+          "stopping"
+        ],
+        "type": "string"
+      },
+      "BotStateReason": {
+        "description": "Why a bot is paused or failed.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "duplicate_login",
+          "banned",
+          "not_whitelisted",
+          "wrong_version",
+          "account_banned",
+          "multiplayer_disabled",
+          "auth",
+          "session_denied",
+          "crash_loop"
+        ],
+        "type": "string"
+      },
+      "BotStatus": {
+        "description": "What the server knows of a bot's state when it answers (ADR-0019, S41).\n`kind` says which of the other fields are there:\n- `reported`: `state` (with `reason` when paused or failed) and `since`,\n  when it entered it; `online_since` while online, `attempt` while it\n  tries, `restarting` while stopping, and `last_disconnect`.\n- `awaiting_report`: `since`, when the wait began.\n- `unknown`: `agent_last_seen_at`, and the last known `state` (with\n  `reason`) and `since`, when the server received it.\n- `unplaced`: `why`, and `state`: `paused` or `failed` (with `reason`)\n  when it rests there, otherwise `stopped`.",
+        "properties": {
+          "agent_last_seen_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "attempt": {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/BotStatusKind",
+            "description": "What the status rests on."
+          },
+          "last_disconnect": {
+            "$ref": "#/components/schemas/LastDisconnect",
+            "description": "How its last session ended."
+          },
+          "online_since": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/BotStateReason",
+            "description": "Why it's paused or failed."
+          },
+          "restarting": {
+            "description": "While stopping: whether it starts again once it has left.",
+            "type": "boolean"
+          },
+          "since": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/BotStateKind",
+            "description": "The state."
+          },
+          "why": {
+            "$ref": "#/components/schemas/UnplacedReason",
+            "description": "`unplaced`: why."
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "BotStatusKind": {
+        "description": "What a bot's status rests on.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "reported",
+          "awaiting_report",
+          "unknown",
+          "unplaced"
+        ],
+        "type": "string"
+      },
       "ChangeGrantRequest": {
         "additionalProperties": false,
         "description": "`PUT /accounts/{id}/grants/{user}`: change the user's grant.",
@@ -191,6 +400,17 @@ expression: answer.json()
           "level"
         ],
         "type": "object"
+      },
+      "ConnectFailure": {
+        "description": "Why a bot couldn't connect.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "refused",
+          "timed_out",
+          "unresolvable",
+          "host_unavailable",
+          "other"
+        ],
+        "type": "string"
       },
       "CreateGrantRequest": {
         "additionalProperties": false,
@@ -313,6 +533,30 @@ expression: answer.json()
         ],
         "type": "object"
       },
+      "DesiredState": {
+        "description": "Whether a bot should run.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "running",
+          "stopped"
+        ],
+        "type": "string"
+      },
+      "DisconnectKind": {
+        "description": "How a bot's last session ended.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "kicked",
+          "connection_closed",
+          "connect_failed",
+          "auth_rejected",
+          "account_restricted",
+          "session_server_failed",
+          "session_crashed",
+          "watchdog_timeout",
+          "liveness_timeout",
+          "respawn_failed"
+        ],
+        "type": "string"
+      },
       "ErrorBody": {
         "description": "What went wrong, for the caller.",
         "properties": {
@@ -360,7 +604,11 @@ expression: answer.json()
           "validation_failed",
           "rate_limited",
           "internal",
-          "busy"
+          "busy",
+          "bot_unreachable",
+          "bot_not_running",
+          "bot_not_paused",
+          "bot_not_failed"
         ],
         "type": "string"
       },
@@ -549,6 +797,39 @@ expression: answer.json()
           "expired"
         ],
         "type": "string"
+      },
+      "LastDisconnect": {
+        "description": "How a bot's last session ended. A kick's key and message come from the\nMinecraft server: cleaned and capped, and shown as plain text.",
+        "properties": {
+          "connect_failure": {
+            "$ref": "#/components/schemas/ConnectFailure",
+            "description": "`connect_failed`: why."
+          },
+          "key": {
+            "maxLength": 128,
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/DisconnectKind",
+            "description": "How."
+          },
+          "message": {
+            "maxLength": 1024,
+            "type": "string"
+          },
+          "restriction": {
+            "$ref": "#/components/schemas/AccountRestriction",
+            "description": "`account_restricted`: how."
+          },
+          "session_server_failure": {
+            "$ref": "#/components/schemas/SessionServerFailure",
+            "description": "`session_server_failed`: why."
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
       },
       "LinkFlowResponse": {
         "description": "`GET /accounts/link/{flow_id}`: where the flow stands. Each field but\n`status` is there only for the states its docs name.",
@@ -959,6 +1240,16 @@ expression: answer.json()
         ],
         "type": "object"
       },
+      "SessionServerFailure": {
+        "description": "Why Mojang's session server couldn't confirm a join.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "unreachable",
+          "rate_limited",
+          "timed_out",
+          "unexpected"
+        ],
+        "type": "string"
+      },
       "StepUpRequest": {
         "additionalProperties": false,
         "description": "`POST /auth/step-up`: the password again, which allows step-up actions\nin this session for 5 minutes.",
@@ -1002,6 +1293,20 @@ expression: answer.json()
           "refresh_expires_in"
         ],
         "type": "object"
+      },
+      "UnplacedReason": {
+        "description": "Why a bot runs nowhere.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
+        "enum": [
+          "no_server",
+          "stopped",
+          "owner_disabled",
+          "pending",
+          "reauth_required",
+          "refused",
+          "offline_not_allowed",
+          "awaiting_agent"
+        ],
+        "type": "string"
       },
       "UserLabel": {
         "description": "A user named next to something else, such as an invite's creator.",
@@ -3461,6 +3766,990 @@ expression: answer.json()
         "summary": "`POST /api/v1/auth/step-up`: the password again; step-up actions are\nallowed in this session for 5 minutes.",
         "tags": [
           "auth"
+        ]
+      }
+    },
+    "/api/v1/bots": {
+      "get": {
+        "operationId": "list_bots",
+        "parameters": [
+          {
+            "description": "Only items older than this ID: the `next` of the page before.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maxLength": 36,
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many items at most; 50 by default.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotPage"
+                }
+              }
+            },
+            "description": "One page of the bots the caller may see, newest first: those of their own accounts, of those shared with them, every Member's for an Admin, and all of them for the Owner."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A query that doesn't parse."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A `limit` outside 1 to 100."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/bots`: the bots the caller may see, newest first.",
+        "tags": [
+          "bots"
+        ]
+      }
+    },
+    "/api/v1/bots/{id}": {
+      "get": {
+        "operationId": "get_bot",
+        "parameters": [
+          {
+            "description": "The bot's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotResponse"
+                }
+              }
+            },
+            "description": "The bot, as the caller sees it."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such bot, or one the caller may not see."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/bots/{id}`: one bot the caller may see.",
+        "tags": [
+          "bots"
+        ]
+      },
+      "patch": {
+        "operationId": "patch_bot",
+        "parameters": [
+          {
+            "description": "The bot's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotPatchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotResponse"
+                }
+              }
+            },
+            "description": "The bot after the change, or as it was when it had that address already. Where the address points isn't checked here: that's the agent's, on the address it resolves before it connects (ADR-0019, S46)."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A body of the wrong shape."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or the caller may see the bot but not configure it (Manage)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such bot, or one the caller may not see."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "An address that isn't a host and an optional port."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests, or too many actions on this bot.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`PATCH /api/v1/bots/{id}`: the Minecraft server the bot joins. Needs\nManage and a step-up.",
+        "tags": [
+          "bots"
+        ],
+        "x-step-up": true
+      }
+    },
+    "/api/v1/bots/{id}/mode": {
+      "put": {
+        "operationId": "set_bot_mode",
+        "parameters": [
+          {
+            "description": "The bot's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BotModeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotResponse"
+                }
+              }
+            },
+            "description": "The bot after the change, or as it was when it ran that mode already."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A body of the wrong shape."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller may see the bot but not switch it to this mode: Control, or Manage for a mode that sends a command off the allowlist."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such bot, or one the caller may not see."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A mode that doesn't exist, or that the caller may not see."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`PUT /api/v1/bots/{id}/mode`: the mode the bot runs.",
+        "tags": [
+          "bots"
+        ]
+      }
+    },
+    "/api/v1/bots/{id}/reset": {
+      "post": {
+        "operationId": "reset_bot",
+        "parameters": [
+          {
+            "description": "The bot's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotResponse"
+                }
+              }
+            },
+            "description": "The bot ran nowhere: its stored failed state is cleared, and its next placement starts it."
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotResponse"
+                }
+              }
+            },
+            "description": "The command went to the bot's agent, which tries it again."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller may see the bot but not control it (Control)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such bot, or one the caller may not see."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`bot_not_failed`: the bot hasn't failed; `bot_unreachable`: its agent's stream doesn't hold it now."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests, or too many actions on this bot.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/bots/{id}/reset`: a failed bot tries again.",
+        "tags": [
+          "bots"
+        ]
+      }
+    },
+    "/api/v1/bots/{id}/restart": {
+      "post": {
+        "operationId": "restart_bot",
+        "parameters": [
+          {
+            "description": "The bot's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotResponse"
+                }
+              }
+            },
+            "description": "The command went to the bot's agent, which restarts its run; the bot is as it reads now."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller may see the bot but not control it (Control)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such bot, or one the caller may not see."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`bot_not_running`: the bot should be stopped, runs nowhere, or is paused or failed; `bot_unreachable`: its agent's stream doesn't hold it now."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests, or too many actions on this bot.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/bots/{id}/restart`: the bot's run starts again.",
+        "tags": [
+          "bots"
+        ]
+      }
+    },
+    "/api/v1/bots/{id}/resume": {
+      "post": {
+        "operationId": "resume_bot",
+        "parameters": [
+          {
+            "description": "The bot's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotResponse"
+                }
+              }
+            },
+            "description": "The bot ran nowhere: its stored paused state is cleared, and its next placement starts it."
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotResponse"
+                }
+              }
+            },
+            "description": "The command went to the bot's agent, which connects it again, even over a human still playing on the account."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller may see the bot but not control it (Control)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such bot, or one the caller may not see."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`bot_not_paused`: the bot isn't paused; `bot_unreachable`: its agent's stream doesn't hold it now."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests, or too many actions on this bot.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/bots/{id}/resume`: a paused bot connects again.",
+        "tags": [
+          "bots"
+        ]
+      }
+    },
+    "/api/v1/bots/{id}/start": {
+      "post": {
+        "operationId": "start_bot",
+        "parameters": [
+          {
+            "description": "The bot's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotResponse"
+                }
+              }
+            },
+            "description": "The bot, which should run: the server places it once it may, and a Paused or Failed one stays so until it's resumed or reset."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller may see the bot but not control it (Control)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such bot, or one the caller may not see."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests, or too many actions on this bot.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/bots/{id}/start`: the bot should run.",
+        "tags": [
+          "bots"
+        ]
+      }
+    },
+    "/api/v1/bots/{id}/stop": {
+      "post": {
+        "operationId": "stop_bot",
+        "parameters": [
+          {
+            "description": "The bot's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BotResponse"
+                }
+              }
+            },
+            "description": "The bot, which should be stopped: its agent stops it; a Paused or Failed one keeps that state."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "The caller may see the bot but not control it (Control)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such bot, or one the caller may not see."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/bots/{id}/stop`: the bot should be stopped.",
+        "tags": [
+          "bots"
         ]
       }
     },

@@ -31,6 +31,12 @@ use fleet_api_types::auth::{
     NEW_PASSWORD_MAX_CHARS, PASSWORD_MAX_CHARS, REFRESH_TOKEN_MAX_SECS, RefreshRequest,
     RegisterRequest, RegisterResponse, StepUpRequest, TokenResponse, USERNAME_MAX_CHARS,
 };
+use fleet_api_types::bots::{
+    AccountRestriction, BotAgent, BotModeRequest, BotPage, BotPatchRequest, BotResponse,
+    BotStateKind, BotStateReason, BotStatus, BotStatusKind, ConnectFailure, DesiredState,
+    DisconnectKind, KICK_KEY_MAX_CHARS, KICK_MESSAGE_MAX_CHARS, LastDisconnect,
+    SERVER_ADDRESS_MAX_CHARS, SessionServerFailure, UnplacedReason,
+};
 use fleet_api_types::error::{
     FIELD_MESSAGE_MAX_CHARS, FIELD_PATH_MAX_CHARS, MESSAGE_MAX_CHARS, REQUEST_ID_MAX_CHARS,
 };
@@ -73,6 +79,22 @@ fn declarations() -> BTreeMap<String, String> {
         ("AgentPage", AgentPage::decl(&config)),
         ("AgentResponse", AgentResponse::decl(&config)),
         ("AgentStatus", AgentStatus::decl(&config)),
+        ("AccountRestriction", AccountRestriction::decl(&config)),
+        ("BotAgent", BotAgent::decl(&config)),
+        ("BotModeRequest", BotModeRequest::decl(&config)),
+        ("BotPage", BotPage::decl(&config)),
+        ("BotPatchRequest", BotPatchRequest::decl(&config)),
+        ("BotResponse", BotResponse::decl(&config)),
+        ("BotStateKind", BotStateKind::decl(&config)),
+        ("BotStateReason", BotStateReason::decl(&config)),
+        ("BotStatus", BotStatus::decl(&config)),
+        ("BotStatusKind", BotStatusKind::decl(&config)),
+        ("ConnectFailure", ConnectFailure::decl(&config)),
+        ("DesiredState", DesiredState::decl(&config)),
+        ("DisconnectKind", DisconnectKind::decl(&config)),
+        ("LastDisconnect", LastDisconnect::decl(&config)),
+        ("SessionServerFailure", SessionServerFailure::decl(&config)),
+        ("UnplacedReason", UnplacedReason::decl(&config)),
         ("ChangeGrantRequest", ChangeGrantRequest::decl(&config)),
         (
             "CreatedEnrollmentTokenResponse",
@@ -420,6 +442,19 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::agent_not_after("AgentResponse", "not_after", TIMESTAMP_CHARS)]
 #[case::agent_created_at("AgentResponse", "created_at", TIMESTAMP_CHARS)]
 #[case::agent_page_next("AgentPage", "next", ID_CHARS)]
+#[case::bot_id("BotResponse", "id", ID_CHARS)]
+#[case::bot_server_address("BotResponse", "server_address", SERVER_ADDRESS_MAX_CHARS)]
+#[case::bot_mode_id("BotResponse", "mode_id", ID_CHARS)]
+#[case::bot_page_next("BotPage", "next", ID_CHARS)]
+#[case::bot_agent_id("BotAgent", "id", ID_CHARS)]
+#[case::bot_agent_name("BotAgent", "name", AGENT_NAME_MAX_CHARS)]
+#[case::bot_since("BotStatus", "since", TIMESTAMP_CHARS)]
+#[case::bot_online_since("BotStatus", "online_since", TIMESTAMP_CHARS)]
+#[case::bot_agent_last_seen_at("BotStatus", "agent_last_seen_at", TIMESTAMP_CHARS)]
+#[case::kick_key("LastDisconnect", "key", KICK_KEY_MAX_CHARS)]
+#[case::kick_message("LastDisconnect", "message", KICK_MESSAGE_MAX_CHARS)]
+#[case::patch_server_address("BotPatchRequest", "server_address", SERVER_ADDRESS_MAX_CHARS)]
+#[case::mode_request_id("BotModeRequest", "mode_id", ID_CHARS)]
 fn a_text_field_is_capped_at_its_constant(
     #[case] component: &str,
     #[case] field: &str,
@@ -433,89 +468,105 @@ fn a_text_field_is_capped_at_its_constant(
     );
 }
 
+/// Every text field whose cap the cases above check.
+const CHECKED_TEXTS: [(&str, &str); 91] = [
+    ("ErrorBody", "message"),
+    ("ErrorBody", "request_id"),
+    ("FieldError", "path"),
+    ("FieldError", "message"),
+    ("MfaEnrollResponse", "otpauth_uri"),
+    ("MfaEnrollResponse", "qr_svg"),
+    ("MfaEnrollResponse", "secret"),
+    ("MfaConfirmRequest", "code"),
+    ("MfaResetResponse", "setup_token"),
+    ("LoginRequest", "username"),
+    ("LoginRequest", "password"),
+    ("LoginResponse", "token"),
+    ("LoginMfaRequest", "mfa_token"),
+    ("LoginMfaRequest", "code"),
+    ("TokenResponse", "access_token"),
+    ("TokenResponse", "refresh_token"),
+    ("RefreshRequest", "refresh_token"),
+    ("StepUpRequest", "password"),
+    ("UserLabel", "id"),
+    ("UserLabel", "username"),
+    ("UserResponse", "id"),
+    ("UserResponse", "username"),
+    ("UserResponse", "created_at"),
+    ("UserResponse", "last_seen_at"),
+    ("UserPage", "next"),
+    ("InviteResponse", "id"),
+    ("InviteResponse", "created_at"),
+    ("InviteResponse", "expires_at"),
+    ("InviteResponse", "used_at"),
+    ("InviteResponse", "revoked_at"),
+    ("InvitePage", "next"),
+    ("CreatedInviteResponse", "code"),
+    ("RegisterRequest", "invite"),
+    ("RegisterRequest", "username"),
+    ("RegisterRequest", "password"),
+    ("RegisterResponse", "id"),
+    ("RegisterResponse", "username"),
+    ("MeResponse", "id"),
+    ("MeResponse", "username"),
+    ("MeResponse", "created_at"),
+    ("MeResponse", "password_changed_at"),
+    ("MeResponse", "mfa_confirmed_at"),
+    ("FailedCodeAttempts", "last_at"),
+    ("PasswordChangeRequest", "new_password"),
+    ("SessionResponse", "id"),
+    ("SessionResponse", "created_at"),
+    ("SessionResponse", "last_used_at"),
+    ("SessionResponse", "expires_at"),
+    ("SessionPage", "next"),
+    ("LinkStartedResponse", "flow_id"),
+    ("LinkStartedResponse", "user_code"),
+    ("LinkStartedResponse", "verification_uri"),
+    ("LinkStartedResponse", "expires_at"),
+    ("LinkFlowResponse", "expires_at"),
+    ("LinkFlowResponse", "account_id"),
+    ("LinkFlowResponse", "name"),
+    ("CreateOfflineAccountRequest", "name"),
+    ("CreatedOfflineAccountResponse", "id"),
+    ("CreatedOfflineAccountResponse", "name"),
+    ("AccountResponse", "id"),
+    ("AccountResponse", "name"),
+    ("AccountResponse", "linked_at"),
+    ("AccountPage", "next"),
+    ("CreateGrantRequest", "username"),
+    ("GrantResponse", "granted_at"),
+    ("GrantPage", "next"),
+    ("CreatedEnrollmentTokenResponse", "id"),
+    ("CreatedEnrollmentTokenResponse", "bundle"),
+    ("CreatedEnrollmentTokenResponse", "ca_fingerprint"),
+    ("CreatedEnrollmentTokenResponse", "expires_at"),
+    ("AgentResponse", "id"),
+    ("AgentResponse", "name"),
+    ("AgentResponse", "version"),
+    ("AgentResponse", "connected_since"),
+    ("AgentResponse", "last_seen_at"),
+    ("AgentResponse", "not_after"),
+    ("AgentResponse", "created_at"),
+    ("AgentPage", "next"),
+    ("BotResponse", "id"),
+    ("BotResponse", "server_address"),
+    ("BotResponse", "mode_id"),
+    ("BotPage", "next"),
+    ("BotAgent", "id"),
+    ("BotAgent", "name"),
+    ("BotStatus", "since"),
+    ("BotStatus", "online_since"),
+    ("BotStatus", "agent_last_seen_at"),
+    ("LastDisconnect", "key"),
+    ("LastDisconnect", "message"),
+    ("BotPatchRequest", "server_address"),
+    ("BotModeRequest", "mode_id"),
+];
+
 /// Every text field of every component: the cases above must cover them.
 #[test]
 fn every_text_field_has_its_cap_checked() {
-    let checked = BTreeSet::from([
-        ("ErrorBody", "message"),
-        ("ErrorBody", "request_id"),
-        ("FieldError", "path"),
-        ("FieldError", "message"),
-        ("MfaEnrollResponse", "otpauth_uri"),
-        ("MfaEnrollResponse", "qr_svg"),
-        ("MfaEnrollResponse", "secret"),
-        ("MfaConfirmRequest", "code"),
-        ("MfaResetResponse", "setup_token"),
-        ("LoginRequest", "username"),
-        ("LoginRequest", "password"),
-        ("LoginResponse", "token"),
-        ("LoginMfaRequest", "mfa_token"),
-        ("LoginMfaRequest", "code"),
-        ("TokenResponse", "access_token"),
-        ("TokenResponse", "refresh_token"),
-        ("RefreshRequest", "refresh_token"),
-        ("StepUpRequest", "password"),
-        ("UserLabel", "id"),
-        ("UserLabel", "username"),
-        ("UserResponse", "id"),
-        ("UserResponse", "username"),
-        ("UserResponse", "created_at"),
-        ("UserResponse", "last_seen_at"),
-        ("UserPage", "next"),
-        ("InviteResponse", "id"),
-        ("InviteResponse", "created_at"),
-        ("InviteResponse", "expires_at"),
-        ("InviteResponse", "used_at"),
-        ("InviteResponse", "revoked_at"),
-        ("InvitePage", "next"),
-        ("CreatedInviteResponse", "code"),
-        ("RegisterRequest", "invite"),
-        ("RegisterRequest", "username"),
-        ("RegisterRequest", "password"),
-        ("RegisterResponse", "id"),
-        ("RegisterResponse", "username"),
-        ("MeResponse", "id"),
-        ("MeResponse", "username"),
-        ("MeResponse", "created_at"),
-        ("MeResponse", "password_changed_at"),
-        ("MeResponse", "mfa_confirmed_at"),
-        ("FailedCodeAttempts", "last_at"),
-        ("PasswordChangeRequest", "new_password"),
-        ("SessionResponse", "id"),
-        ("SessionResponse", "created_at"),
-        ("SessionResponse", "last_used_at"),
-        ("SessionResponse", "expires_at"),
-        ("SessionPage", "next"),
-        ("LinkStartedResponse", "flow_id"),
-        ("LinkStartedResponse", "user_code"),
-        ("LinkStartedResponse", "verification_uri"),
-        ("LinkStartedResponse", "expires_at"),
-        ("LinkFlowResponse", "expires_at"),
-        ("LinkFlowResponse", "account_id"),
-        ("LinkFlowResponse", "name"),
-        ("CreateOfflineAccountRequest", "name"),
-        ("CreatedOfflineAccountResponse", "id"),
-        ("CreatedOfflineAccountResponse", "name"),
-        ("AccountResponse", "id"),
-        ("AccountResponse", "name"),
-        ("AccountResponse", "linked_at"),
-        ("AccountPage", "next"),
-        ("CreateGrantRequest", "username"),
-        ("GrantResponse", "granted_at"),
-        ("GrantPage", "next"),
-        ("CreatedEnrollmentTokenResponse", "id"),
-        ("CreatedEnrollmentTokenResponse", "bundle"),
-        ("CreatedEnrollmentTokenResponse", "ca_fingerprint"),
-        ("CreatedEnrollmentTokenResponse", "expires_at"),
-        ("AgentResponse", "id"),
-        ("AgentResponse", "name"),
-        ("AgentResponse", "version"),
-        ("AgentResponse", "connected_since"),
-        ("AgentResponse", "last_seen_at"),
-        ("AgentResponse", "not_after"),
-        ("AgentResponse", "created_at"),
-        ("AgentPage", "next"),
-    ]);
+    let checked = BTreeSet::from(CHECKED_TEXTS);
     let components = components_json();
 
     let texts: BTreeSet<(&str, &str)> = components
@@ -539,6 +590,8 @@ fn every_text_field_has_its_cap_checked() {
 #[test]
 fn a_request_schema_refuses_unknown_fields_and_responses_dont() {
     let requests = BTreeSet::from([
+        "BotModeRequest",
+        "BotPatchRequest",
         "ChangeGrantRequest",
         "CreateGrantRequest",
         "CreateInviteRequest",
@@ -647,6 +700,23 @@ fn an_open_field_lists_exactly_its_enums_known_values() {
 #[case::account_linked_at("AccountResponse", "linked_at")]
 #[case::account_page_next("AccountPage", "next")]
 #[case::grant_page_next("GrantPage", "next")]
+#[case::bot_server_address("BotResponse", "server_address")]
+#[case::bot_agent("BotResponse", "agent")]
+#[case::bot_page_next("BotPage", "next")]
+#[case::status_state("BotStatus", "state")]
+#[case::status_reason("BotStatus", "reason")]
+#[case::status_since("BotStatus", "since")]
+#[case::status_online_since("BotStatus", "online_since")]
+#[case::status_attempt("BotStatus", "attempt")]
+#[case::status_restarting("BotStatus", "restarting")]
+#[case::status_last_disconnect("BotStatus", "last_disconnect")]
+#[case::status_why("BotStatus", "why")]
+#[case::status_agent_last_seen_at("BotStatus", "agent_last_seen_at")]
+#[case::kick_key("LastDisconnect", "key")]
+#[case::kick_message("LastDisconnect", "message")]
+#[case::connect_failure("LastDisconnect", "connect_failure")]
+#[case::restriction("LastDisconnect", "restriction")]
+#[case::session_server_failure("LastDisconnect", "session_server_failure")]
 fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[case] field: &str) {
     let components = components_json();
     let schema = property(&components, component, field);
@@ -684,6 +754,16 @@ fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[ca
 #[case::account_reason("AccountResponse", "reason", "RefusalReason")]
 #[case::account_level("AccountResponse", "level", "GrantLevel")]
 #[case::grant_level("GrantResponse", "level", "GrantLevel")]
+#[case::bot_desired_state("BotResponse", "desired_state", "DesiredState")]
+#[case::bot_agent_status("BotAgent", "status", "AgentStatus")]
+#[case::status_kind("BotStatus", "kind", "BotStatusKind")]
+#[case::status_state("BotStatus", "state", "BotStateKind")]
+#[case::status_reason("BotStatus", "reason", "BotStateReason")]
+#[case::status_why("BotStatus", "why", "UnplacedReason")]
+#[case::disconnect_kind("LastDisconnect", "kind", "DisconnectKind")]
+#[case::connect_failure("LastDisconnect", "connect_failure", "ConnectFailure")]
+#[case::restriction("LastDisconnect", "restriction", "AccountRestriction")]
+#[case::session_server_failure("LastDisconnect", "session_server_failure", "SessionServerFailure")]
 fn the_new_open_fields_list_exactly_their_known_values(
     #[case] component: &str,
     #[case] field: &str,
@@ -706,6 +786,16 @@ fn the_new_open_fields_list_exactly_their_known_values(
             .collect(),
         "AccountKind" => AccountKind::ALL.iter().map(|kind| kind.as_str()).collect(),
         "GrantLevel" => GrantLevel::ALL.iter().map(|level| level.as_str()).collect(),
+        "DesiredState" => names(DesiredState::ALL),
+        "AgentStatus" => names(AgentStatus::ALL),
+        "BotStatusKind" => names(BotStatusKind::ALL),
+        "BotStateKind" => names(BotStateKind::ALL),
+        "BotStateReason" => names(BotStateReason::ALL),
+        "UnplacedReason" => names(UnplacedReason::ALL),
+        "DisconnectKind" => names(DisconnectKind::ALL),
+        "ConnectFailure" => names(ConnectFailure::ALL),
+        "AccountRestriction" => names(AccountRestriction::ALL),
+        "SessionServerFailure" => names(SessionServerFailure::ALL),
         _ => InviteState::ALL
             .iter()
             .map(|state| state.as_str())
@@ -717,6 +807,11 @@ fn the_new_open_fields_list_exactly_their_known_values(
         format!("#/components/schemas/{enumeration}")
     );
     assert_eq!(components[enumeration]["enum"], json!(known));
+}
+
+/// The names of an open enum's known values.
+fn names<E: OpenEnum>(all: &[E]) -> Vec<&'static str> {
+    all.iter().map(|value| value.as_str()).collect()
 }
 
 #[test]

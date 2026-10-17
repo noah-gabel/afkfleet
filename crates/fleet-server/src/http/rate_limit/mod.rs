@@ -21,9 +21,14 @@
 //! - **A `Connect` call spends its client certificate's limit,** in that
 //!   port's other interceptor, right after the certificate check and before
 //!   any parse or read ([`RateLimits::check_connect`]; ADR-0019, S30).
+//! - **A bot action that makes its account join a server spends the bot's
+//!   limit** (start, restart, reset, resume, a new server address), in its
+//!   handler right after `authorize()`, so it never tells a stranger the bot
+//!   exists; stopping never spends it ([`RateLimits::check_bot_action`];
+//!   ADR-0019, S52).
 //! - **Keys:** an IPv4 client by its address, an IPv6 client by its /64
 //!   ([`limiter_key`]); a user by their ID; a client certificate by its
-//!   fingerprint.
+//!   fingerprint; a bot by its ID.
 //! - **A refusal** is `ApiError::RateLimited` with governor's wait, which
 //!   the error model sends as `Retry-After` in whole seconds, rounded up.
 //!   The trace layer logs a refused request's line at `debug`, and each
@@ -50,7 +55,7 @@ use axum::extract::{ConnectInfo, FromRequestParts as _, Request, State};
 use axum::middleware::Next;
 use axum::response::{IntoResponse as _, Response};
 use chrono::{DateTime, Utc};
-use fleet_core::id::UserId;
+use fleet_core::id::{BotId, UserId};
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock;
 use fleet_core::time::elapsed;
@@ -140,6 +145,8 @@ pub struct Refusals {
     pub enroll: u64,
     /// The per-certificate limit of `Connect` calls on the gRPC port.
     pub connect: u64,
+    /// The per-bot limit of actions that make its account join a server.
+    pub bot_actions: u64,
 }
 
 impl Refusals {
@@ -154,6 +161,7 @@ impl Refusals {
             && self.grants_by_name == 0
             && self.enroll == 0
             && self.connect == 0
+            && self.bot_actions == 0
     }
 }
 
@@ -168,6 +176,7 @@ struct Counters {
     grants_by_name: AtomicU64,
     enroll: AtomicU64,
     connect: AtomicU64,
+    bot_actions: AtomicU64,
 }
 
 /// Every limiter, built from `[rate_limits]`.
@@ -181,6 +190,7 @@ struct Limiters {
     grants_by_name: Limiter<UserId>,
     enroll: Limiter<IpAddr>,
     connect: Limiter<CertFingerprint>,
+    bot_actions: Limiter<BotId>,
     refused: Counters,
 }
 
@@ -220,6 +230,7 @@ impl RateLimits {
             grants_by_name: limiter(config.grants_by_name, &clock),
             enroll: limiter(config.enroll, &clock),
             connect: limiter(config.connect, &clock),
+            bot_actions: limiter(config.bot_actions, &clock),
             refused: Counters::default(),
             clock,
         }))
@@ -301,6 +312,21 @@ impl RateLimits {
         )
     }
 
+    /// Spends one of `bot`'s actions that make its account join a server,
+    /// which its handler does right after `authorize()` (ADR-0019, S52).
+    ///
+    /// # Errors
+    /// [`Refused`] when its bucket is empty.
+    pub fn check_bot_action(&self, bot: BotId) -> Result<(), Refused> {
+        let limits = &self.0;
+        spend(
+            &limits.bot_actions,
+            &limits.clock,
+            &bot,
+            &limits.refused.bot_actions,
+        )
+    }
+
     /// Spends one of `user`'s authed requests.
     ///
     /// # Errors
@@ -327,6 +353,7 @@ impl RateLimits {
         limits.grants_by_name.retain_recent();
         limits.enroll.retain_recent();
         limits.connect.retain_recent();
+        limits.bot_actions.retain_recent();
     }
 
     /// How many keys the limiters hold.
@@ -341,6 +368,7 @@ impl RateLimits {
             + limits.grants_by_name.len()
             + limits.enroll.len()
             + limits.connect.len()
+            + limits.bot_actions.len()
     }
 
     /// The refusals since the last call, and starts counting again.
@@ -357,6 +385,7 @@ impl RateLimits {
             grants_by_name: take(&refused.grants_by_name),
             enroll: take(&refused.enroll),
             connect: take(&refused.connect),
+            bot_actions: take(&refused.bot_actions),
         }
     }
 }
@@ -481,6 +510,7 @@ mod tests {
             grants_by_name: rate,
             enroll: rate,
             connect: rate,
+            bot_actions: rate,
         }
     }
 
@@ -624,6 +654,29 @@ mod tests {
         assert_eq!(limits.check_connect(fingerprint(1)), Ok(()));
     }
 
+    fn bot(n: u8) -> BotId {
+        BotId::new_v7(start(), [n; 10]).unwrap()
+    }
+
+    #[test]
+    fn bot_actions_are_refused_past_their_burst_per_bot_apart_from_other_requests() {
+        let clock = ManualClock::new(start());
+        let limits = RateLimits::new(&tight(), Arc::new(clock.clone()));
+        limits.check_bot_action(bot(1)).unwrap();
+        limits.check_bot_action(bot(1)).unwrap();
+
+        assert_eq!(
+            limits.check_bot_action(bot(1)),
+            Err(Refused {
+                retry_after: Duration::from_millis(500)
+            })
+        );
+        assert_eq!(limits.check_bot_action(bot(2)), Ok(()));
+        assert_eq!(limits.check_user(user(1)), Ok(()));
+        clock.advance(Duration::from_millis(500));
+        assert_eq!(limits.check_bot_action(bot(1)), Ok(()));
+    }
+
     #[test]
     fn the_standard_class_spends_nothing() {
         let limits = RateLimits::new(&tight(), Arc::new(ManualClock::new(start())));
@@ -686,6 +739,9 @@ mod tests {
         for _ in 0..6 {
             let _ = limits.check_connect(fingerprint(1));
         }
+        for _ in 0..7 {
+            let _ = limits.check_bot_action(bot(1));
+        }
         let _ = limits.check_class(RateClass::Refresh, ip("192.0.2.10"));
 
         assert_eq!(
@@ -699,6 +755,7 @@ mod tests {
                 grants_by_name: 2,
                 enroll: 1,
                 connect: 4,
+                bot_actions: 5,
             }
         );
         assert_eq!(limits.take_refusals(), Refusals::default());
@@ -740,6 +797,10 @@ mod tests {
                 connect: 1,
                 ..Refusals::default()
             },
+            Refusals {
+                bot_actions: 1,
+                ..Refusals::default()
+            },
         ] {
             assert!(!refusals.is_empty(), "{refusals:?}");
         }
@@ -757,14 +818,15 @@ mod tests {
         limits.check_grant_by_name(user(1)).unwrap();
         limits.check_enroll(ip("192.0.2.10")).unwrap();
         limits.check_connect(fingerprint(1)).unwrap();
+        limits.check_bot_action(bot(1)).unwrap();
         clock.advance(Duration::from_millis(400));
         limits.check_ip(ip("198.51.100.10")).unwrap();
-        assert_eq!(limits.tracked(), 7);
-        // The first six are full again at 500 ms, the later one at 900 ms;
+        assert_eq!(limits.tracked(), 8);
+        // The first seven are full again at 500 ms, the later one at 900 ms;
         // each is dropped one 500 ms interval after that.
         clock.advance(Duration::from_millis(599));
         limits.retain_recent();
-        assert_eq!(limits.tracked(), 7, "a millisecond short");
+        assert_eq!(limits.tracked(), 8, "a millisecond short");
 
         clock.advance(Duration::from_millis(1));
         limits.retain_recent();

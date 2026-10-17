@@ -404,7 +404,9 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::config::{AccountsConfig, AuthConfig, DatabaseConfig, HttpConfig, VaultConfig};
+    use crate::config::{
+        AccountsConfig, AuthConfig, ChatConfig, DatabaseConfig, HttpConfig, VaultConfig,
+    };
     use crate::infra::crypto::passwords::Argon2Passwords;
     use crate::infra::sqlite::{self, DatabaseOptions};
     use crate::ports::audit::{AuditLimit, AuditPage};
@@ -434,6 +436,7 @@ mod tests {
                 active_key_id: 1,
             },
             accounts: AccountsConfig::default(),
+            chat: ChatConfig::default(),
             grpc: None,
         }
     }

@@ -1,0 +1,17 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 409,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "bot_unreachable",
+      "message": "The bot can't be reached right now. Try again later.",
+      "request_id": "test-request-id"
+    }
+  }
+}

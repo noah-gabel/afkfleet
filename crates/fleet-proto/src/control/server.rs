@@ -2,7 +2,7 @@
 
 use core::time::Duration;
 
-use fleet_core::bot::{BotSpec, StickyState};
+use fleet_core::bot::{BotSpec, Lifecycle, StickyState};
 use fleet_core::chat::ChatMessage;
 use fleet_core::id::{AgentId, BotId, ChatRequestId};
 use fleet_core::mc::SessionCredentials;
@@ -39,6 +39,9 @@ pub enum ServerMessage {
     /// The answer to a hello the server refuses, or the last message of a
     /// stream whose permission ended; the stream then ends.
     Reject(RejectReason),
+    /// A user's restart, reset or resume of a bot the agent runs, acted on
+    /// once and never answered (ADR-0019, S49).
+    Lifecycle(LifecycleCommand),
 }
 
 /// The answer to a hello the server accepts.
@@ -101,6 +104,17 @@ pub struct SessionDenied {
     pub bot_id: BotId,
     /// Whether asking again later may help.
     pub retryable: bool,
+}
+
+/// A user's restart, reset or resume of a bot the agent runs. The agent acts
+/// on it once, through the bot's state machine, and never answers; the
+/// server sends it only to the stream that holds the bot (ADR-0019, S48, S49).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LifecycleCommand {
+    /// The bot.
+    pub bot_id: BotId,
+    /// What to do.
+    pub command: Lifecycle,
 }
 
 /// Why the server refuses a hello or ends a stream (ADR-0019, S24, S26, S27).
@@ -169,6 +183,15 @@ impl TryFrom<ServerMessage> for wire::ServerMessage {
                 }
                 .into(),
             }),
+            ServerMessage::Lifecycle(command) => Msg::Lifecycle(wire::LifecycleCommand {
+                bot_id: id_to_wire(command.bot_id),
+                command: match command.command {
+                    Lifecycle::Restart => wire::Lifecycle::Restart,
+                    Lifecycle::Reset => wire::Lifecycle::Reset,
+                    Lifecycle::Resume => wire::Lifecycle::Resume,
+                }
+                .into(),
+            }),
         };
         Ok(Self { msg: Some(msg) })
     }
@@ -224,6 +247,20 @@ impl TryFrom<wire::ServerMessage> for ServerMessage {
                     wire::RejectReason::Unspecified => {
                         return Err(ConvertError::new(FIELD, Problem::Missing));
                     }
+                })
+            }
+            Msg::Lifecycle(lifecycle) => {
+                const FIELD: &str = "LifecycleCommand.command";
+                Self::Lifecycle(LifecycleCommand {
+                    bot_id: id_from_wire("LifecycleCommand.bot_id", &lifecycle.bot_id)?,
+                    command: match enum_from_wire(FIELD, lifecycle.command)? {
+                        wire::Lifecycle::Restart => Lifecycle::Restart,
+                        wire::Lifecycle::Reset => Lifecycle::Reset,
+                        wire::Lifecycle::Resume => Lifecycle::Resume,
+                        wire::Lifecycle::Unspecified => {
+                            return Err(ConvertError::new(FIELD, Problem::Missing));
+                        }
+                    },
                 })
             }
         })

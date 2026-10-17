@@ -16,7 +16,8 @@
 //!   unknown key (Appendix A). Phase 7 adds `[auth]`, `[vault]`,
 //!   `[rate_limits]` and `[http] trusted_proxies` (ADR-0016); Phase 9 adds
 //!   `[accounts]` and the link flows' rate limits (ADR-0018); Phase 10 adds
-//!   the optional `[grpc]` (ADR-0019).
+//!   the optional `[grpc]`, and `[chat]`'s command allowlist with the bots'
+//!   endpoints (ADR-0019).
 //! - **Secrets never go in this file.** A key for a secret names the file
 //!   that holds it and ends in `_file` or `_files`; a test checks every
 //!   key's name (security rule 4). fleet-startup's `secret_file` reads those
@@ -24,6 +25,7 @@
 
 mod accounts;
 mod auth;
+mod chat;
 mod error;
 mod heartbeats;
 mod rate_limits;
@@ -43,6 +45,7 @@ use crate::http::rate_limit::TrustedProxies;
 
 pub use accounts::AccountsConfig;
 pub use auth::{Argon2Params, Argon2ParamsError, AuthConfig, Bounds};
+pub use chat::ChatConfig;
 pub use error::{ConfigError, Problem, ProblemKind, Problems};
 pub use fleet_startup::config::{
     KeyPath, KeySegment, LogConfig, LogFilter, LogFilterError, LogFormat, ParseError, ParseProblem,
@@ -74,6 +77,8 @@ pub struct ServerConfig {
     pub rate_limits: RateLimitConfig,
     /// The linked Minecraft accounts (`[accounts]`).
     pub accounts: AccountsConfig,
+    /// What users may make the bots say (`[chat]`).
+    pub chat: ChatConfig,
     /// How the server logs (`[log]`).
     pub log: LogConfig,
     /// The agents' control plane (`[grpc]`), or `None` when the section is

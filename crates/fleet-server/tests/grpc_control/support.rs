@@ -11,10 +11,10 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget, RecordedValue};
-use fleet_core::authz::Role;
+use fleet_core::authz::{Actor, Role};
 use fleet_core::bot::LastReport;
 use fleet_core::bot::{BotSnapshot, BotState};
-use fleet_core::id::{AccountId, AgentId, BotId, RequestId, UserId};
+use fleet_core::id::{AccountId, AgentId, BotId, RequestId, SessionId, UserId};
 use fleet_core::mode::ModePreset;
 use fleet_core::pki::CertFingerprint;
 use fleet_core::placement::{DetachReason, UnassignReason};
@@ -29,7 +29,9 @@ use fleet_proto::generated::agent_control_client::AgentControlClient;
 use fleet_server::app::agents::{
     AgentConnectionService, AgentService, AssignmentService, Disabler,
 };
+use fleet_server::app::bots::BotService;
 use fleet_server::app::enrollment::EnrollmentService;
+use fleet_server::app::users::ActingUser;
 use fleet_server::config::{Heartbeats, RateLimitConfig};
 use fleet_server::grpc::control::{ControlTimings, REQUEST_ID, Sessions, control_service};
 use fleet_server::grpc::enrollment::enrollment_service;
@@ -47,11 +49,13 @@ use fleet_server::infra::system::SystemClock;
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::agent_connections::AgentConnections;
 use fleet_server::ports::agents::{Agent as AgentRow, NewAgent, NewAgentCert};
-use fleet_server::ports::assignments::{AssignError, Assignments};
+use fleet_server::ports::assignments::{AssignError, Assigned, Assignments};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
 use fleet_server::ports::bots::{Bot, Fleet, NewBot};
 use fleet_server::ports::reconcile::{Change, Reconcile as _};
+use fleet_server::ports::sessions::NewSession;
 use fleet_server::ports::store::{Store as _, StoreError};
+use fleet_server::ports::tokens::TokenHash;
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use secrecy::SecretString;
@@ -169,7 +173,7 @@ impl Assignments for FlakyDetaches {
         self.real.fleet().await
     }
 
-    async fn assign(&self, bot: BotId, agent: AgentId) -> Result<bool, AssignError> {
+    async fn assign(&self, bot: BotId, agent: AgentId) -> Result<Option<Assigned>, AssignError> {
         self.real.assign(bot, agent).await
     }
 
@@ -680,6 +684,48 @@ impl Port {
     pub(crate) fn changed(&self) {
         if let Some(hints) = &self.hints {
             hints.changed(Change::Store);
+        }
+    }
+
+    /// The bots' service over the port's database and registry, hinting
+    /// the port's reconciler after each write, as serve builds it.
+    pub(crate) fn bots(&self) -> BotService {
+        let service = BotService::new(
+            Arc::new(self.clock.clone()),
+            Arc::new(self.db.clone()),
+            Arc::new(self.registry.clone()),
+            true,
+        );
+        match &self.hints {
+            Some(hints) => service.with_reconcile(Arc::new(hints.clone())),
+            None => service,
+        }
+    }
+
+    /// User `n` of [`Port::bot`], acting through a session of theirs.
+    pub(crate) async fn acting(&self, n: u8) -> ActingUser {
+        let now = self.clock.now();
+        let user = UserId::new_v7(now, [n; 10]).unwrap();
+        let session = SessionId::new_v7(now, [n; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.sessions()
+            .insert(&NewSession {
+                id: session,
+                user_id: user,
+                access_hash: TokenHash::from_bytes([n; 32]),
+                refresh_hash: TokenHash::from_bytes([n.wrapping_add(100); 32]),
+                created_at: now,
+            })
+            .await
+            .unwrap();
+        tx.commit(setup_entry(now)).await.unwrap();
+        ActingUser {
+            actor: Actor {
+                id: user,
+                role: Role::Member,
+            },
+            session_id: session,
+            ip: IpAddr::from([192, 0, 2, 10]),
         }
     }
 

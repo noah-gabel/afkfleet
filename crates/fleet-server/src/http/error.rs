@@ -154,6 +154,18 @@ pub enum ApiError {
         /// When the client may try again; sent in whole seconds, rounded up.
         retry_after: Duration,
     },
+    /// The bot's agent has no live stream that holds it (409).
+    #[error("the bot's agent can't be reached")]
+    BotUnreachable,
+    /// A restart of a bot that isn't running (409).
+    #[error("only a running bot can be restarted")]
+    BotNotRunning,
+    /// A resume of a bot that isn't paused (409).
+    #[error("only a paused bot can be resumed")]
+    BotNotPaused,
+    /// A reset of a bot that hasn't failed (409).
+    #[error("only a failed bot can be reset")]
+    BotNotFailed,
 }
 
 impl ApiError {
@@ -191,6 +203,10 @@ impl ApiError {
             Self::RateLimited { .. } => ErrorCode::RateLimited,
             Self::Internal(_) => ErrorCode::Internal,
             Self::Busy { .. } => ErrorCode::Busy,
+            Self::BotUnreachable => ErrorCode::BotUnreachable,
+            Self::BotNotRunning => ErrorCode::BotNotRunning,
+            Self::BotNotPaused => ErrorCode::BotNotPaused,
+            Self::BotNotFailed => ErrorCode::BotNotFailed,
         }
     }
 
@@ -211,7 +227,11 @@ pub const fn status(code: ErrorCode) -> StatusCode {
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
         ErrorCode::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
         ErrorCode::Timeout => StatusCode::REQUEST_TIMEOUT,
-        ErrorCode::Conflict => StatusCode::CONFLICT,
+        ErrorCode::Conflict
+        | ErrorCode::BotUnreachable
+        | ErrorCode::BotNotRunning
+        | ErrorCode::BotNotPaused
+        | ErrorCode::BotNotFailed => StatusCode::CONFLICT,
         ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         ErrorCode::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ErrorCode::ValidationFailed => StatusCode::UNPROCESSABLE_ENTITY,
@@ -350,7 +370,11 @@ impl ApiError {
             | Self::Timeout
             | Self::Conflict
             | Self::PayloadTooLarge
-            | Self::UnsupportedMediaType => (None, None),
+            | Self::UnsupportedMediaType
+            | Self::BotUnreachable
+            | Self::BotNotRunning
+            | Self::BotNotPaused
+            | Self::BotNotFailed => (None, None),
         };
         (
             response,
@@ -634,6 +658,10 @@ mod tests {
         match code {
             ErrorCode::InvalidCredentials => ErrorCode::Unauthorized,
             ErrorCode::StepUpRequired => ErrorCode::Forbidden,
+            ErrorCode::BotUnreachable
+            | ErrorCode::BotNotRunning
+            | ErrorCode::BotNotPaused
+            | ErrorCode::BotNotFailed => ErrorCode::Conflict,
             other => other,
         }
     }

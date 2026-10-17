@@ -134,6 +134,10 @@ fn test_request_id() -> HeaderValue {
 })]
 #[case::internal("internal", || ApiError::internal(io::Error::other("disk I/O error")))]
 #[case::busy("busy", ApiError::busy)]
+#[case::bot_unreachable("bot_unreachable", || ApiError::BotUnreachable)]
+#[case::bot_not_running("bot_not_running", || ApiError::BotNotRunning)]
+#[case::bot_not_paused("bot_not_paused", || ApiError::BotNotPaused)]
+#[case::bot_not_failed("bot_not_failed", || ApiError::BotNotFailed)]
 #[tokio::test]
 async fn every_variant_answers_with_its_status_headers_and_envelope(
     #[case] code: &str,
@@ -161,6 +165,10 @@ async fn every_variant_answers_with_its_status_headers_and_envelope(
 #[case(ErrorCode::RateLimited, StatusCode::TOO_MANY_REQUESTS)]
 #[case(ErrorCode::Internal, StatusCode::INTERNAL_SERVER_ERROR)]
 #[case(ErrorCode::Busy, StatusCode::SERVICE_UNAVAILABLE)]
+#[case(ErrorCode::BotUnreachable, StatusCode::CONFLICT)]
+#[case(ErrorCode::BotNotRunning, StatusCode::CONFLICT)]
+#[case(ErrorCode::BotNotPaused, StatusCode::CONFLICT)]
+#[case(ErrorCode::BotNotFailed, StatusCode::CONFLICT)]
 fn every_code_has_its_status(#[case] code: ErrorCode, #[case] expected: StatusCode) {
     assert_eq!(status(code), expected);
 }
@@ -183,7 +191,7 @@ async fn every_401_carries_the_bearer_challenge_and_no_other_status_does() {
 }
 
 /// One constructor per code, in `ErrorCode::ALL`'s order.
-const MAKERS: [fn() -> ApiError; 15] = [
+const MAKERS: [fn() -> ApiError; 19] = [
     || ApiError::BadRequest,
     || ApiError::Unauthorized,
     || ApiError::InvalidCredentials,
@@ -201,6 +209,10 @@ const MAKERS: [fn() -> ApiError; 15] = [
     },
     || ApiError::internal("test"),
     ApiError::busy,
+    || ApiError::BotUnreachable,
+    || ApiError::BotNotRunning,
+    || ApiError::BotNotPaused,
+    || ApiError::BotNotFailed,
 ];
 
 #[rstest]

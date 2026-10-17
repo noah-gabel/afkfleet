@@ -8,12 +8,12 @@ use chrono::{DateTime, Utc};
 use fleet_core::account::AccountStatus;
 use fleet_core::audit::{AuditAction, AuditTarget};
 use fleet_core::authz::{Actor, GrantLevel, Role};
-use fleet_core::bot::LastReport;
+use fleet_core::bot::{DesiredRunState, LastReport};
 use fleet_core::id::{
     AccountId, AgentId, BotId, EnrollmentTokenId, InviteId, ModeId, SessionId, UserId,
 };
 use fleet_core::pki::CertFingerprint;
-use fleet_core::value::{AgentName, McUsername, Username};
+use fleet_core::value::{AgentName, McUsername, ServerAddress, Username};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 
 use super::error::store_error;
@@ -33,7 +33,7 @@ use crate::ports::audit::{
     AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, FailedCodeAttempts,
     NewAuditEntry,
 };
-use crate::ports::bots::{Bot, BotReads, BotRecord, BotWrites, Fleet, NewBot};
+use crate::ports::bots::{Bot, BotReads, BotRecord, BotWrites, Fleet, ListedBot, NewBot};
 use crate::ports::enrollment_tokens::{
     EnrollmentToken, EnrollmentTokenReads, EnrollmentTokenWrites, NewEnrollmentToken,
 };
@@ -46,7 +46,7 @@ use crate::ports::login_attempts::{
     AttemptKey, LoginAttempt, LoginAttemptReads, LoginAttemptWrites,
 };
 use crate::ports::mfa::{InsertMfaError, MfaReads, MfaWrites, UserMfa};
-use crate::ports::modes::{ModeReads, StoredMode};
+use crate::ports::modes::{ModeReads, ModeWrites, StoredMode};
 use crate::ports::page::Page;
 use crate::ports::recovery_codes::RecoveryCodeHash;
 use crate::ports::sessions::{
@@ -242,6 +242,18 @@ impl BotReads for Reads {
         bots::records(&self.pool, page).await
     }
 
+    async fn listed(&self, id: BotId, viewer: UserId) -> Result<Option<ListedBot>, StoreError> {
+        bots::listed(&self.pool, id, viewer).await
+    }
+
+    async fn visible(
+        &self,
+        viewer: Actor,
+        page: Page<BotId>,
+    ) -> Result<Vec<ListedBot>, StoreError> {
+        bots::visible(&self.pool, viewer, page).await
+    }
+
     async fn fleet(&self) -> Result<Fleet, StoreError> {
         bots::fleet(&self.pool).await
     }
@@ -370,6 +382,10 @@ impl WriteTx for SqliteWriteTx {
     }
 
     fn bots(&mut self) -> &mut dyn BotWrites {
+        self
+    }
+
+    fn modes(&mut self) -> &mut dyn ModeWrites {
         self
     }
 
@@ -685,6 +701,33 @@ impl BotWrites for SqliteWriteTx {
 
     async fn release_all(&mut self, agent: AgentId) -> Result<Vec<BotId>, StoreError> {
         bots::release_all(&mut self.tx, agent).await
+    }
+
+    async fn set_server(&mut self, bot: BotId, server: &ServerAddress) -> Result<bool, StoreError> {
+        bots::set_server(&mut self.tx, bot, server).await
+    }
+
+    async fn set_mode(&mut self, bot: BotId, mode: ModeId) -> Result<bool, StoreError> {
+        bots::set_mode(&mut self.tx, bot, mode).await
+    }
+
+    async fn set_desired(
+        &mut self,
+        bot: BotId,
+        desired: DesiredRunState,
+    ) -> Result<bool, StoreError> {
+        bots::set_desired(&mut self.tx, bot, desired).await
+    }
+
+    async fn clear_sticky(&mut self, bot: BotId, last: &LastReport) -> Result<bool, StoreError> {
+        bots::clear_sticky(&mut self.tx, bot, last).await
+    }
+}
+
+#[async_trait]
+impl ModeWrites for SqliteWriteTx {
+    async fn find(&mut self, id: ModeId) -> Result<Option<StoredMode>, StoreError> {
+        modes::find(&mut *self.tx, id).await
     }
 }
 

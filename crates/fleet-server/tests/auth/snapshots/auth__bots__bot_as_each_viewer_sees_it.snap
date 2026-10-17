@@ -1,0 +1,131 @@
+---
+source: crates/fleet-server/tests/auth/bots.rs
+expression: "redacted(&serde_json::to_value(&seen).unwrap(), &ids)"
+---
+{
+  "admin": {
+    "account": {
+      "id": "[account]",
+      "kind": "offline",
+      "level": "manage",
+      "linked_at": "[T0+10ms]",
+      "name": "AfkBot10",
+      "owner": {
+        "id": "[owner]",
+        "username": "member"
+      },
+      "status": "active"
+    },
+    "agent": {
+      "id": "[agent]",
+      "name": "agent-1",
+      "status": "offline"
+    },
+    "desired_state": "running",
+    "id": "[bot]",
+    "mode_id": "[id]",
+    "server_address": "mc.example.com",
+    "status": {
+      "kind": "unknown"
+    }
+  },
+  "control": {
+    "account": {
+      "id": "[account]",
+      "kind": "offline",
+      "level": "control",
+      "name": "AfkBot10",
+      "status": "active"
+    },
+    "desired_state": "running",
+    "id": "[bot]",
+    "mode_id": "[id]",
+    "server_address": "mc.example.com",
+    "status": {
+      "kind": "unknown"
+    }
+  },
+  "manage": {
+    "account": {
+      "id": "[account]",
+      "kind": "offline",
+      "level": "manage",
+      "linked_at": "[T0+10ms]",
+      "name": "AfkBot10",
+      "owner": {
+        "id": "[owner]",
+        "username": "member"
+      },
+      "status": "active"
+    },
+    "desired_state": "running",
+    "id": "[bot]",
+    "mode_id": "[id]",
+    "server_address": "mc.example.com",
+    "status": {
+      "kind": "unknown"
+    }
+  },
+  "owner": {
+    "account": {
+      "id": "[account]",
+      "kind": "offline",
+      "level": "manage",
+      "linked_at": "[T0+10ms]",
+      "name": "AfkBot10",
+      "owner": {
+        "id": "[owner]",
+        "username": "member"
+      },
+      "status": "active"
+    },
+    "desired_state": "running",
+    "id": "[bot]",
+    "mode_id": "[id]",
+    "server_address": "mc.example.com",
+    "status": {
+      "kind": "unknown"
+    }
+  },
+  "the_owner": {
+    "account": {
+      "id": "[account]",
+      "kind": "offline",
+      "level": "manage",
+      "linked_at": "[T0+10ms]",
+      "name": "AfkBot10",
+      "owner": {
+        "id": "[owner]",
+        "username": "member"
+      },
+      "status": "active"
+    },
+    "agent": {
+      "id": "[agent]",
+      "name": "agent-1",
+      "status": "offline"
+    },
+    "desired_state": "running",
+    "id": "[bot]",
+    "mode_id": "[id]",
+    "server_address": "mc.example.com",
+    "status": {
+      "kind": "unknown"
+    }
+  },
+  "view": {
+    "account": {
+      "id": "[account]",
+      "kind": "offline",
+      "level": "view",
+      "name": "AfkBot10",
+      "status": "active"
+    },
+    "desired_state": "running",
+    "id": "[bot]",
+    "mode_id": "[id]",
+    "status": {
+      "kind": "unknown"
+    }
+  }
+}

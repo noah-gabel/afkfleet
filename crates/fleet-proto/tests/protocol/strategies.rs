@@ -7,7 +7,7 @@ use core::time::Duration;
 use chrono::{DateTime, Utc};
 use fleet_core::bot::{
     BotAccount, BotNotification, BotSnapshot, BotSpec, BotState, DesiredRunState, FailReason,
-    PauseReason, StickyState,
+    Lifecycle, PauseReason, StickyState,
 };
 use fleet_core::chat::{ChatMessage, IncomingChat, PlayerChatKind};
 use fleet_core::disconnect::{
@@ -19,8 +19,9 @@ use fleet_core::mc::SessionCredentials;
 use fleet_core::mode::{Action, HotbarSlot, ModeDefinition, ModeDraft, Schedule, Step};
 use fleet_core::value::{AgentCapacity, McUsername, ServerAddress};
 use fleet_proto::control::{
-    AgentMessage, Assignment, BotEvent, BotEventKind, ChatFailedReason, Hello, SendChat,
-    ServerMessage, SessionDenied, SessionGrant, SessionRequest, SessionRequestId, Welcome,
+    AgentMessage, Assignment, BotEvent, BotEventKind, ChatFailedReason, Hello, LifecycleCommand,
+    SendChat, ServerMessage, SessionDenied, SessionGrant, SessionRequest, SessionRequestId,
+    Welcome,
 };
 use proptest::collection::vec;
 use proptest::prelude::*;
@@ -457,5 +458,8 @@ pub(crate) fn server_message() -> impl Strategy<Value = ServerMessage> {
             })
         }),
         select(REJECT_REASONS.to_vec()).prop_map(ServerMessage::Reject),
+        (bot_id(), select(Lifecycle::ALL.to_vec())).prop_map(|(bot_id, command)| {
+            ServerMessage::Lifecycle(LifecycleCommand { bot_id, command })
+        }),
     ]
 }

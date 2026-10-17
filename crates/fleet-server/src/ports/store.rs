@@ -15,7 +15,7 @@ use super::grants::{GrantReads, GrantWrites};
 use super::invites::{InviteReads, InviteWrites};
 use super::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
 use super::mfa::{MfaReads, MfaWrites};
-use super::modes::ModeReads;
+use super::modes::{ModeReads, ModeWrites};
 use super::sessions::{SessionReads, SessionWrites};
 use super::users::{UserReads, UserWrites};
 
@@ -163,6 +163,9 @@ pub trait WriteTx: Send {
 
     /// The bots, read and written in this transaction.
     fn bots(&mut self) -> &mut dyn BotWrites;
+
+    /// The modes, read in this transaction.
+    fn modes(&mut self) -> &mut dyn ModeWrites;
 
     /// The audit log, for a second entry in this transaction.
     fn audit(&mut self) -> &mut dyn AuditWrites;

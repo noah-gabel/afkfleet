@@ -86,6 +86,7 @@ use super::housekeeping::Housekeeping;
 use crate::app::accounts::{AccountService, AccountSettings};
 use crate::app::agents::{AgentConnectionService, AgentService, AssignmentService};
 use crate::app::auth::TokenService;
+use crate::app::bots::BotService;
 use crate::app::challenges::Challenges;
 use crate::app::enrollment::{EnrollmentService, EnrollmentTokenService};
 use crate::app::grants::GrantService;
@@ -459,7 +460,8 @@ pub fn app_with(
     );
     let grants = GrantService::new(Arc::clone(&clock), Arc::clone(&store));
     let ids = RequestIds::new(Arc::clone(&clock), Arc::clone(&random));
-    let (agents, agent_service) = agent_services(&clock, &store, reconcile);
+    let (agents, agent_service) = agent_services(&clock, &store, Arc::clone(&reconcile));
+    let bots = bot_service(config, &clock, &store, &agents, reconcile);
     let (enrollment_tokens, grpc) = control_plane_services(
         config,
         ca,
@@ -487,6 +489,7 @@ pub fn app_with(
         grants,
         enrollment_tokens,
         agents: agent_service,
+        bots,
     });
     App {
         router: router(
@@ -545,6 +548,25 @@ fn agent_services(
         Arc::new(agents.clone()),
     );
     (agents, service)
+}
+
+/// The bots' service over the app's ports, reading `registry`'s streams,
+/// with `[chat]`'s allowlist, and hinting `reconcile` after each write.
+fn bot_service(
+    config: &ServerConfig,
+    clock: &Arc<dyn Clock>,
+    store: &Arc<dyn Store>,
+    registry: &AgentRegistry,
+    reconcile: Arc<dyn Reconcile>,
+) -> BotService {
+    BotService::new(
+        Arc::clone(clock),
+        Arc::clone(store),
+        Arc::new(registry.clone()),
+        config.accounts.allow_offline,
+    )
+    .with_allowlist(config.chat.command_allowlist.clone())
+    .with_reconcile(reconcile)
 }
 
 /// The 2FA service over the app's ports, sealing TOTP secrets with `vault`

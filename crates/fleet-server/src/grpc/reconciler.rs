@@ -28,6 +28,8 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use std::borrow::Cow;
+
 use chrono::{DateTime, Utc};
 use fleet_core::bot::{BotSpec, LastReport, LastState, StickyState};
 use fleet_core::disconnect::ConflictTexts;
@@ -410,19 +412,28 @@ impl Reconciler {
             }
             lets.push(release);
         }
-        let mut runs: Vec<(&Run, &BotRecord)> = Vec::new();
+        let mut runs: Vec<(&Run, Cow<'_, BotRecord>)> = Vec::new();
         for run in &part.run {
             let Some(record) = known.records.get(&run.bot).copied() else {
                 continue;
             };
+            let mut record = Cow::Borrowed(record);
             if run.placed {
                 match self.store.assign(run.bot, part.agent).await {
-                    Ok(true) => info!(
-                        bot_id = %run.bot,
-                        agent_id = %part.agent,
-                        "a bot was assigned to an agent"
-                    ),
-                    Ok(false) => {
+                    Ok(Some(assigned)) => {
+                        info!(
+                            bot_id = %run.bot,
+                            agent_id = %part.agent,
+                            "a bot was assigned to an agent"
+                        );
+                        // Its restore comes from the row its assignment read:
+                        // a Resume or a Reset may have cleared the stored state
+                        // since this pass read the fleet (S48).
+                        if assigned.last != record.bot.last {
+                            record.to_mut().bot.last = assigned.last;
+                        }
+                    }
+                    Ok(None) => {
                         debug!(bot_id = %run.bot, "a bot changed before its placement");
                         continue;
                     }
@@ -446,13 +457,13 @@ impl Reconciler {
         &self,
         part: &AgentPlan,
         known: &Known<'_>,
-        runs: &[(&Run, &BotRecord)],
+        runs: &[(&Run, Cow<'_, BotRecord>)],
         lets: &[&Let],
     ) {
         let now = self.clock.now();
         let mut assignments = Vec::new();
         let mut holds = Vec::new();
-        for &(run, record) in runs {
+        for (run, record) in runs {
             let Some(spec) = spec_of(record, run, None) else {
                 // The planner lets a bot without a server go; held so its
                 // `Removed` still clears it.
@@ -486,11 +497,11 @@ impl Reconciler {
         &self,
         part: &AgentPlan,
         known: &Known<'_>,
-        runs: &[(&Run, &BotRecord)],
+        runs: &[(&Run, Cow<'_, BotRecord>)],
         lets: &[&Let],
     ) {
         let now = self.clock.now();
-        for &(run, record) in runs {
+        for (run, record) in runs {
             if run.placed {
                 let Some(spec) = spec_of(record, run, None) else {
                     continue;

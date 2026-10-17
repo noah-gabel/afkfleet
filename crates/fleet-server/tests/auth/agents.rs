@@ -37,7 +37,7 @@ fn disable_path(id: AgentId) -> String {
 impl Setup {
     /// Agent `n` named `agent-<n>`, enrolled at `T0` with a 60-day
     /// certificate `n`….
-    async fn agent(&self, n: u8) -> AgentId {
+    pub(super) async fn agent(&self, n: u8) -> AgentId {
         let id = AgentId::new_v7(at(T0), [n; 10]).unwrap();
         let mut tx = self.db.write().await.unwrap();
         tx.agents()
@@ -62,7 +62,7 @@ impl Setup {
     }
 
     /// Agent `n`'s live stream, welcomed now.
-    fn stream(
+    pub(super) fn stream(
         &self,
         n: u8,
     ) -> (

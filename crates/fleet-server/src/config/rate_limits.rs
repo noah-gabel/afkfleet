@@ -88,6 +88,12 @@ pub struct RateLimitConfig {
     /// (`connect_per_cert_per_min`; ADR-0019, S30): spent before any parse
     /// or read.
     pub connect: Rate,
+    /// The bot actions that make its account join a server (start, restart,
+    /// reset, resume, a new server address), per bot
+    /// (`bot_actions_per_bot_per_min`; ADR-0019, S52): spent after
+    /// `authorize()`, so a refusal never tells a stranger the bot exists.
+    /// Stopping a bot never spends it.
+    pub bot_actions: Rate,
 }
 
 /// `[rate_limits]`'s caps on Microsoft link flows (P9.4, ADR-0018). Each
@@ -144,11 +150,14 @@ impl RateLimitConfig {
     pub const ENROLL_PER_IP_PER_MIN: Bounds = Bounds { min: 1, max: 60 };
     /// `connect_per_cert_per_min`: 1 to 60. Default 10.
     pub const CONNECT_PER_CERT_PER_MIN: Bounds = Bounds { min: 1, max: 60 };
+    /// `bot_actions_per_bot_per_min`: 1 to 60. Default 5.
+    pub const BOT_ACTIONS_PER_BOT_PER_MIN: Bounds = Bounds { min: 1, max: 60 };
 }
 
 impl Default for RateLimitConfig {
     /// §7.4's and Appendix A's values, group E's limit on grants by
-    /// name (ADR-0018), and group B's on enrollments (ADR-0019).
+    /// name (ADR-0018), and Phase 10's on enrollments, connects and bot
+    /// actions (ADR-0019).
     fn default() -> Self {
         Self {
             per_ip: Rate::per_second(nonzero(20), nonzero(40)),
@@ -160,6 +169,7 @@ impl Default for RateLimitConfig {
             grants_by_name: Rate::per_hour(nonzero(10)),
             enroll: Rate::per_minute(nonzero(5)),
             connect: Rate::per_minute(nonzero(10)),
+            bot_actions: Rate::per_minute(nonzero(5)),
         }
     }
 }
@@ -212,6 +222,7 @@ mod tests {
         assert_eq!(defaults.grants_by_name, Rate::per_hour(nonzero(10)));
         assert_eq!(defaults.enroll, Rate::per_minute(nonzero(5)));
         assert_eq!(defaults.connect, Rate::per_minute(nonzero(10)));
+        assert_eq!(defaults.bot_actions, Rate::per_minute(nonzero(5)));
     }
 
     #[test]

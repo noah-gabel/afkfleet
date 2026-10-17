@@ -9,13 +9,16 @@ use std::time::Duration;
 
 use chrono::TimeDelta;
 
-use super::raw::{RawAccounts, RawAuth, RawConfig, RawGrpc, RawLog, RawRateLimits, RawVault};
+use super::raw::{
+    RawAccounts, RawAuth, RawChat, RawConfig, RawGrpc, RawLog, RawRateLimits, RawVault,
+};
 use super::{
-    AccountsConfig, Argon2Params, AuthConfig, Bounds, ConfigError, DatabaseConfig, GrpcConfig,
-    Heartbeats, HttpConfig, KeyPath, LinkFlowLimits, LogConfig, LogFilter, LogFormat, PkiPaths,
-    ProblemKind, Problems, Rate, RateLimitConfig, ServerConfig, VaultConfig,
+    AccountsConfig, Argon2Params, AuthConfig, Bounds, ChatConfig, ConfigError, DatabaseConfig,
+    GrpcConfig, Heartbeats, HttpConfig, KeyPath, LinkFlowLimits, LogConfig, LogFilter, LogFormat,
+    PkiPaths, ProblemKind, Problems, Rate, RateLimitConfig, ServerConfig, VaultConfig,
 };
 use fleet_core::auth::{InviteTtl, LockoutPolicy, SessionPolicy};
+use fleet_core::authz::{CommandAllowlist, CommandAllowlistError};
 
 use crate::http::rate_limit::{IpNet, TrustedProxies};
 
@@ -53,6 +56,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
     let invites = invites(&raw.auth, &mut problems);
     let rate_limits = rate_limits(&raw.rate_limits);
     let accounts = accounts(&raw.accounts);
+    let chat = chat(&raw.chat, &mut problems);
     let grpc = grpc(raw.grpc.as_ref(), bind, &mut problems);
 
     let (
@@ -68,6 +72,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         Some(vault),
         Some(rate_limits),
         Some(accounts),
+        Some(chat),
         Ok(grpc),
     ) = (
         problems.is_empty(),
@@ -82,6 +87,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         vault,
         rate_limits,
         accounts,
+        chat,
         grpc,
     )
     else {
@@ -108,6 +114,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         vault,
         rate_limits,
         accounts,
+        chat,
         grpc,
     })
 }
@@ -535,7 +542,28 @@ fn rate_limits(raw: &RawRateLimits) -> Option<RateLimitConfig> {
         grants_by_name: Rate::per_hour(count(raw.grants_by_name_per_user_per_hour)?),
         enroll: Rate::per_minute(count(raw.enroll_per_ip_per_min)?),
         connect: Rate::per_minute(count(raw.connect_per_cert_per_min)?),
+        bot_actions: Rate::per_minute(count(raw.bot_actions_per_bot_per_min)?),
     })
+}
+
+/// `[chat] command_allowlist`: the first bad entry is reported under its
+/// index, never with its text; too many under the key.
+fn chat(raw: &RawChat, problems: &mut Problems) -> Option<ChatConfig> {
+    let key = KeyPath::root().key("chat").key("command_allowlist");
+    match CommandAllowlist::try_new(&raw.command_allowlist) {
+        Ok(command_allowlist) => Some(ChatConfig { command_allowlist }),
+        Err(error) => {
+            let at = match error {
+                CommandAllowlistError::TooMany { .. } => key,
+                CommandAllowlistError::Invalid { index, .. }
+                | CommandAllowlistError::MissingSlash { index }
+                | CommandAllowlistError::EmptyName { index }
+                | CommandAllowlistError::HasArguments { index } => key.index(index),
+            };
+            problems.push(at, ProblemKind::CommandAllowlist(error));
+            None
+        }
+    }
 }
 
 /// `[accounts]`, whose ranges garde has checked: none is 0, so only an

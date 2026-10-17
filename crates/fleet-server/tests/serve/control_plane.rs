@@ -208,7 +208,9 @@ async fn an_agent_enrolls_over_the_grpc_port_beside_the_api_and_both_stop_at_one
 
 /// Enrolls agent-1 with `token` over the port at `grpc`, whose CA is
 /// `ca_pem`, then connects it: what it sends, and what it reads after
-/// `Welcome`.
+/// `Welcome` and the welcome's one full reconcile, which gives it no bots.
+/// Nothing more is due on the stream after that, so whatever comes next is
+/// the test's.
 async fn welcomed_agent(
     grpc: std::net::SocketAddr,
     ca_pem: &str,
@@ -264,6 +266,18 @@ async fn welcomed_agent(
         ServerMessage::try_from(welcome),
         Ok(ServerMessage::Welcome(_))
     ));
+    // Every welcome gets one full reconcile, an empty one too (ADR-0019,
+    // S42); read it, or it races what the test sends next.
+    let reconcile = tokio::time::timeout(PATIENCE, answers.message())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let reconcile = ServerMessage::try_from(reconcile);
+    assert!(
+        matches!(&reconcile, Ok(ServerMessage::Reconcile(bots)) if bots.is_empty()),
+        "{reconcile:?}"
+    );
     (agent, answers)
 }
 

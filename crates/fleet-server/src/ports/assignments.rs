@@ -17,6 +17,16 @@ use fleet_core::placement::{DetachReason, UnassignReason};
 use super::bots::Fleet;
 use super::store::StoreError;
 
+/// A bot just assigned, as its assignment's transaction read its row: a
+/// new placement's restore comes from this, never from the pass's earlier
+/// read, which a Resume or a Reset may have cleared meanwhile (ADR-0019,
+/// S48).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Assigned {
+    /// The bot's stored last state when it was assigned.
+    pub last: Option<LastReport>,
+}
+
 /// Why a change wasn't written.
 #[derive(Debug, thiserror::Error)]
 pub enum AssignError {
@@ -47,12 +57,12 @@ pub trait Assignments: Send + Sync + fmt::Debug {
     async fn fleet(&self) -> Result<Fleet, StoreError>;
 
     /// Assigns `bot` to `agent` while it has no agent and `agent` is
-    /// enabled, with `bot.assign`. Whether it changed; nothing is written
-    /// when it didn't.
+    /// enabled, with `bot.assign`: the bot as the assignment's transaction
+    /// read it, or `None` when nothing changed, and then nothing is written.
     ///
     /// # Errors
     /// [`AssignError`].
-    async fn assign(&self, bot: BotId, agent: AgentId) -> Result<bool, AssignError>;
+    async fn assign(&self, bot: BotId, agent: AgentId) -> Result<Option<Assigned>, AssignError>;
 
     /// Records the decision to take `bot` off `agent` for `reason`, with its
     /// latest report `last`, while its row names `agent`: `bot.unassign`.

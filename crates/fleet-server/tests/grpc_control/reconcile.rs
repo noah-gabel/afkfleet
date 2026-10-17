@@ -13,16 +13,18 @@ use chrono::DateTime;
 use fleet_core::agent::AgentStatus;
 use fleet_core::audit::AuditAction;
 use fleet_core::bot::{
-    BotAccount, BotState, DesiredRunState, LastState, PauseReason, ShownState, StickyState,
+    BotAccount, BotState, DesiredRunState, LastState, Lifecycle, PauseReason, ShownState,
+    StickyState, UnplacedWhy,
 };
 use fleet_core::disconnect::ConflictKind;
 use fleet_core::id::BotId;
 use fleet_core::mode::ModeDefinition;
+use fleet_core::placement::Unplaced;
 use fleet_core::system::Clock as _;
-use fleet_proto::control::{Assignment, ServerMessage};
+use fleet_proto::control::{Assignment, LifecycleCommand, ServerMessage};
 use fleet_proto::generated as wire;
 use fleet_server::app::agents::AgentService;
-use fleet_server::app::bots::BotService;
+use fleet_server::app::bots::{BotAction, BotService, Controlled};
 use fleet_server::grpc::control::ONE_HELLO;
 use fleet_server::grpc::registry::{AgentRegistry, RefusedReports};
 use fleet_server::ports::live_agents::LiveAgents as _;
@@ -337,7 +339,17 @@ async fn a_bot_whose_agent_went_quiet_reads_unknown_and_stays_assigned(
         Arc::new(port.registry.clone()),
         true,
     )
-    .view(bot)
+    .view(
+        &fleet_core::authz::Actor {
+            id: fleet_core::id::UserId::new_v7(
+                chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+                [1; 10],
+            )
+            .unwrap(),
+            role: fleet_core::authz::Role::Owner,
+        },
+        bot,
+    )
     .await
     .unwrap()
     .unwrap();
@@ -491,5 +503,186 @@ async fn a_disabled_agents_released_bot_goes_to_the_next_agent(
 
     assert_eq!(released, [bot]);
     assert_eq!(two.assigned().await.spec.id, bot);
+    port.stop().await;
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_bot_started_through_its_service_is_placed_and_once_stopped_is_taken_off_its_agent(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let port = start(options, Settings::reconciling()).await;
+    let agent = port.enroll(1, "agent-1").await;
+    let bot = port.bot(1).await;
+    port.set_running(bot, false).await;
+    let by = port.acting(1).await;
+    let bots = port.bots();
+    let (mut call, _) = port.welcomed(&agent).await;
+    assert_eq!(call.reconciled().await, []);
+
+    let started = bots.control(&by, bot, BotAction::Start).await.unwrap();
+    let placed = call.assigned().await;
+    assert_eq!(started, Controlled::Changed);
+    assert_eq!(placed.spec.id, bot);
+    assert_eq!(placed.spec.desired, DesiredRunState::Running);
+    assert_eq!(port.bot_row(bot).await.unwrap().agent, Some(agent.id));
+
+    call.send(report(bot, online())).await;
+    let stopped = bots.control(&by, bot, BotAction::Stop).await.unwrap();
+    let update = call.next().await;
+    call.send(report(bot, BotState::Stopped)).await;
+    let unassigned = call.next().await;
+    call.send(removed(bot)).await;
+    // The reconciler clears it on its own task.
+    let detached = port.entries_once(&AuditAction::BOT_DETACH, 1).await;
+
+    assert_eq!(stopped, Controlled::Changed);
+    assert!(
+        matches!(&update, Ok(Some(ServerMessage::Update(spec)))
+            if spec.id == bot && spec.desired == DesiredRunState::Stopped),
+        "{update:?}"
+    );
+    assert!(
+        matches!(unassigned, Ok(Some(ServerMessage::Unassign(id))) if id == bot),
+        "{unassigned:?}"
+    );
+    assert_eq!(text(&detached[0], "reason").as_deref(), Some("removed"));
+    assert_eq!(port.bot_row(bot).await.unwrap().agent, None);
+    assert_eq!(port.entries(&AuditAction::BOT_START).await.len(), 1);
+    assert_eq!(port.entries(&AuditAction::BOT_STOP).await.len(), 1);
+    port.stop().await;
+}
+
+#[sqlx::test(migrations = false)]
+async fn stopping_a_paused_bot_frees_its_agents_slot_and_keeps_it_paused(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let port = start(options, Settings::reconciling()).await;
+    let agent = port.enroll(1, "agent-1").await;
+    let paused_bot = port.bot(1).await;
+    let waiting = port.bot(2).await;
+    port.assign(paused_bot, &agent).await;
+    let by = port.acting(1).await;
+    let bots = port.bots();
+    // Room for one: the paused bot keeps it, the other bot waits.
+    let mut call = port
+        .welcomed_with(&agent, 1, vec![snapshot(paused_bot, paused())])
+        .await;
+    assert_eq!(ids(&call.reconciled().await), [paused_bot]);
+
+    let stopped = bots
+        .control(&by, paused_bot, BotAction::Stop)
+        .await
+        .unwrap();
+    let unassigned = call.next().await;
+    call.send(removed(paused_bot)).await;
+    let next = call.assigned().await;
+    let view = bots.view(&by.actor, paused_bot).await.unwrap().unwrap();
+
+    assert_eq!(stopped, Controlled::Changed);
+    assert!(
+        matches!(unassigned, Ok(Some(ServerMessage::Unassign(id))) if id == paused_bot),
+        "{unassigned:?}"
+    );
+    assert_eq!(next.spec.id, waiting);
+    assert_eq!(view.record.bot.desired, DesiredRunState::Stopped);
+    assert_eq!(view.record.bot.agent, None);
+    assert_eq!(
+        view.shown,
+        ShownState::Unplaced {
+            why: UnplacedWhy::Unqualified(Unplaced::Stopped),
+            sticky: Some(sticky_paused()),
+        }
+    );
+    port.stop().await;
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_lifecycle_command_reaches_the_stream_that_holds_the_bot_once_and_never_a_later_one(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let port = start(options, Settings::reconciling()).await;
+    let agent = port.enroll(1, "agent-1").await;
+    let bot = port.bot(1).await;
+    let by = port.acting(1).await;
+    let bots = port.bots();
+    let (mut call, _) = port.welcomed(&agent).await;
+    assert_eq!(ids(&call.reconciled().await), [bot]);
+    call.send(report(bot, paused())).await;
+    // Its answer means the report was handled.
+    call.send(session_request(bot)).await;
+    assert!(matches!(
+        call.next().await,
+        Ok(Some(ServerMessage::SessionDenied(_)))
+    ));
+
+    let resumed = bots
+        .control(&by, bot, BotAction::Command(Lifecycle::Resume))
+        .await
+        .unwrap();
+    let command = call.next().await;
+    // The agent comes back on a new stream, still paused.
+    call.close();
+    port.disconnect(&agent).await;
+    let mut again = port
+        .welcomed_with(&agent, CAPACITY, vec![snapshot(bot, paused())])
+        .await;
+    let given = ids(&again.reconciled().await);
+    again.send(session_request(bot)).await;
+    let after = again.next().await;
+
+    assert_eq!(resumed, Controlled::Sent);
+    assert!(
+        matches!(command, Ok(Some(ServerMessage::Lifecycle(LifecycleCommand {
+            bot_id,
+            command: Lifecycle::Resume,
+        }))) if bot_id == bot),
+        "{command:?}"
+    );
+    assert_eq!(given, [bot]);
+    assert!(
+        matches!(after, Ok(Some(ServerMessage::SessionDenied(_)))),
+        "not replayed: {after:?}"
+    );
+    let entries = port.entries(&AuditAction::BOT_RESUME).await;
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(text(&entries[0], "effect").as_deref(), Some("sent"));
+    port.stop().await;
+}
+
+#[sqlx::test(migrations = false)]
+async fn starting_a_bot_whose_account_a_release_record_fences_places_it_nowhere(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let port = start(options, Settings::ungated()).await;
+    let holder = port.enroll(1, "agent-1").await;
+    let other = port.enroll(2, "agent-2").await;
+    let bot = port.bot(1).await;
+    port.set_running(bot, false).await;
+    let by = port.acting(1).await;
+    let bots = port.bots();
+    // agent-1 runs the bot without the server's word: a stray, whose
+    // record fences it past its stream.
+    let mut stray = port
+        .welcomed_with(&holder, CAPACITY, vec![snapshot(bot, online())])
+        .await;
+    assert_eq!(stray.reconciled().await, []);
+    stray.close();
+    port.disconnect(&holder).await;
+    let (mut call, _) = port.welcomed(&other).await;
+    assert_eq!(call.reconciled().await, []);
+    let canary = port.bot(2).await;
+
+    let started = bots.control(&by, bot, BotAction::Start).await.unwrap();
+    let placed = call.assigned().await;
+
+    assert_eq!(started, Controlled::Changed);
+    assert_eq!(placed.spec.id, canary);
+    let row = port.bot_row(bot).await.unwrap();
+    assert_eq!(row.agent, None);
+    assert_eq!(row.desired, DesiredRunState::Running);
     port.stop().await;
 }
