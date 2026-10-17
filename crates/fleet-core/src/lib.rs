@@ -18,7 +18,10 @@
 //! - [`agent`]: an agent's admission to the control plane: which of its
 //!   certificates admit it, and which refusals are audited.
 //! - [`resilience`]: retry backoff, failure windows and the circuit breaker.
-//! - [`bot`]: the bot state machine, and a bot's spec and status.
+//! - [`bot`]: the bot state machine, a bot's spec and status, and what its
+//!   state reads as.
+//! - [`placement`]: which agent runs which bot: the scheduler's choice and
+//!   the reconciler's diff.
 //! - [`mode`]: what a bot does while it's online, and the presets.
 //! - [`mc`]: the Minecraft ports the runtime drives a session through.
 //! - [`authz`]: who may do what, decided by [`authz::authorize`].
@@ -83,6 +86,7 @@ pub mod id;
 pub mod mc;
 pub mod mode;
 pub mod pki;
+pub mod placement;
 pub mod resilience;
 pub mod system;
 pub mod text;

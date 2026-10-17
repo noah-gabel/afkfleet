@@ -15,6 +15,15 @@ use fleet_server::ports::store::Store as _;
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
+use std::net::IpAddr;
+use std::sync::{Arc, Mutex};
+
+use fleet_core::authz::Actor;
+use fleet_server::app::users::{ActingUser, UserChange, UserService};
+use fleet_server::config::Argon2Params;
+use fleet_server::infra::crypto::passwords::Argon2Passwords;
+use fleet_server::ports::reconcile::{Change, Reconcile};
+
 use super::support::{
     INVITE_TTL, LOGOUT, Meanwhile, Options, PASSWORD, Person, Setup, T0, USERS, redacted, setup,
     setup_with,
@@ -110,6 +119,22 @@ async fn one_request_each(options: SqliteConnectOptions) -> Setup {
         },
     )
     .await
+}
+
+/// The hints a service sent.
+#[derive(Debug, Default)]
+struct Hinted(Mutex<Vec<Change>>);
+
+impl Reconcile for Hinted {
+    fn changed(&self, change: Change) {
+        self.0.lock().unwrap().push(change);
+    }
+}
+
+impl Hinted {
+    fn take(&self) -> Vec<Change> {
+        core::mem::take(&mut *self.0.lock().unwrap())
+    }
 }
 
 // --- The list ------------------------------------------------------------------------
@@ -599,6 +624,57 @@ async fn disabling_an_admin_revokes_their_pending_invites(
                 .unwrap()
         )
     );
+}
+
+#[sqlx::test(migrations = false)]
+async fn disabling_or_enabling_a_user_hints_the_reconciler_and_nothing_else_does(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let cast = cast(&setup).await;
+    let hinted = Arc::new(Hinted::default());
+    let passwords = Argon2Passwords::new(Argon2Params::default(), Arc::new(setup.random.clone()))
+        .await
+        .unwrap();
+    let users = UserService::new(
+        Arc::new(setup.clock.clone()),
+        Arc::new(setup.random.clone()),
+        Arc::new(setup.db.clone()),
+        Arc::new(passwords),
+    )
+    .with_reconcile(Arc::clone(&hinted) as Arc<dyn Reconcile>);
+    let owner = ActingUser {
+        actor: Actor {
+            id: cast.owner.id,
+            role: Role::Owner,
+        },
+        session_id: cast.owner.session,
+        ip: IpAddr::from([192, 0, 2, 1]),
+    };
+
+    users
+        .set(&owner, cast.bob.id, UserChange::Disabled(true))
+        .await
+        .unwrap();
+    let disabled = hinted.take();
+    users
+        .set(&owner, cast.bob.id, UserChange::Disabled(true))
+        .await
+        .unwrap();
+    users
+        .set(&owner, cast.alice.id, UserChange::Role(Role::Admin))
+        .await
+        .unwrap();
+    let unchanged_and_role = hinted.take();
+    users
+        .set(&owner, cast.bob.id, UserChange::Disabled(false))
+        .await
+        .unwrap();
+
+    assert_eq!(disabled, [Change::Store]);
+    assert_eq!(unchanged_and_role, []);
+    assert_eq!(hinted.take(), [Change::Store]);
 }
 
 #[sqlx::test(migrations = false)]

@@ -366,7 +366,7 @@ async fn a_grant_revoked_or_an_account_deleted_during_the_flow_stores_nothing(
                 .unwrap();
         } else {
             let mut tx = setup.db.write().await.unwrap();
-            tx.accounts().delete(doomed).await.unwrap();
+            tx.accounts().delete(doomed, at(T0)).await.unwrap();
             tx.commit(crate::support::service::setup_entry())
                 .await
                 .unwrap();

@@ -114,6 +114,7 @@ impl AgentConnections for OneAgent {
         _admitted: &Admitted,
         _capacity: AgentCapacity,
         _version: &AgentVersion,
+        _running: &[fleet_core::bot::BotSnapshot],
     ) -> Result<(), AdmitError> {
         Ok(())
     }

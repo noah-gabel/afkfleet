@@ -13,10 +13,12 @@
 //!   that certificate, its hello and its session.
 //! - [`registry`]: each agent's one live stream, ended when its permission
 //!   ends, and what it may report (P10.5).
+//! - [`reconciler`]: which agent runs which bot, kept true (P10.5).
 //! - [`status`]: what every answer on the port shares.
 
 pub mod control;
 pub mod enrollment;
 pub mod listener;
+pub mod reconciler;
 pub mod registry;
 pub mod status;

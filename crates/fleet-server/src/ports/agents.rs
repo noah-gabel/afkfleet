@@ -112,6 +112,9 @@ pub struct ListedAgent {
     /// The latest `not_after` of its unrevoked certificates; none once every
     /// one is revoked.
     pub not_after: Option<DateTime<Utc>>,
+    /// How many bots it holds: those assigned to it and its open release
+    /// records, as its capacity counts them (ADR-0019, S41, R27).
+    pub bots: u32,
 }
 
 /// Reading agents through the read connections.

@@ -1,0 +1,86 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT rowid AS \"rowid!: i64\", bot_id AS \"bot_id!\", agent_id AS \"agent_id!\",\n                  kind AS \"kind!\", mc_uuid AS \"mc_uuid?\", mc_name AS \"mc_name!\"\n           FROM releasing_bots\n           ORDER BY bot_id, agent_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "releasing_bots",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "bot_id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "releasing_bots",
+            "name": "bot_id"
+          }
+        }
+      },
+      {
+        "name": "agent_id!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "releasing_bots",
+            "name": "agent_id"
+          }
+        }
+      },
+      {
+        "name": "kind!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "releasing_bots",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "mc_uuid?",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "releasing_bots",
+            "name": "mc_uuid"
+          }
+        }
+      },
+      {
+        "name": "mc_name!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "releasing_bots",
+            "name": "mc_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "e29a19323ff09049521159964d8acb56c5e59a020167c2d8a6ed3091c5d4134b"
+}

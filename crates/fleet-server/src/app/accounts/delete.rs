@@ -14,6 +14,7 @@ use super::{AccountService, Reread, reread};
 use crate::app::users::ActingUser;
 use crate::ports::accounts::{DeletedAccount, ListedAccount};
 use crate::ports::audit::NewAuditEntry;
+use crate::ports::reconcile::Change;
 use crate::ports::store::StoreError;
 
 /// What a deletion logs.
@@ -59,10 +60,11 @@ impl AccountService {
             debug!(user_id = %by.actor.id, account_id = %id, "a deletion was refused");
             DeleteAccountError::Denied(error)
         })?;
-        let Some(deleted) = tx.accounts().delete(id).await? else {
+        let Some(deleted) = tx.accounts().delete(id, self.clock.now()).await? else {
             return Err(DeleteAccountError::NotFound);
         };
         tx.commit(self.deleted(by, &account, deleted)?).await?;
+        self.reconcile.changed(Change::Store);
         info!(user_id = %by.actor.id, account_id = %id, "{DELETED}");
         Ok(())
     }

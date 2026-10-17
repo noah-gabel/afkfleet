@@ -13,6 +13,8 @@
 //! - `registry`: one stream per agent, the ends of a permission, and what an
 //!   agent may report.
 //! - `logs`: what never reaches a log line.
+//! - `reconcile`: the reconciler over the port: which agent runs which bot,
+//!   and what an agent hears of it (P10.5).
 //! - `in_memory`: the one test on paused time, over an in-memory pipe with a
 //!   fake behind the port (U6).
 //!
@@ -32,6 +34,7 @@ mod in_memory;
 mod liveness;
 mod logs;
 mod proxy;
+mod reconcile;
 mod registry;
 mod session;
 mod sizes;

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE bots SET agent_id = ?\n         WHERE id = ? AND agent_id IS NULL\n           AND EXISTS (SELECT 1 FROM agents WHERE agents.id = ? AND agents.enabled = 1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "123e6e376a2b25c6b9c3e8e9df737ed8619131c7244a72d6349326919ec74faa"
+}

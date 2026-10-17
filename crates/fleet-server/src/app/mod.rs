@@ -6,11 +6,14 @@
 //!   flow: creating an offline account (P9.7), listing and reading
 //!   accounts, reviewing pending links and deleting accounts (P9.6).
 //! - [`agents`]: the agents' connections: admitting a connecting agent's
-//!   certificate, recording its hello and its stream's end (P10.4).
+//!   certificate, recording its hello and its stream's end (P10.4); the
+//!   bots' assignments, and releasing a disabled agent's bots (P10.5).
 //! - [`audit`]: stamping audit entries, recording the ones that change
 //!   nothing, and listing the log.
 //! - [`auth`]: sessions and their tokens: issuing, refreshing with reuse
 //!   detection (P7.3), and from P7.8 authenticating every request.
+//! - [`bots`]: the bots as they read, with what their state reads as now
+//!   (P10.5).
 //! - [`challenges`]: the login's mfa and setup tokens, held in memory
 //!   (P7.6, P7.7).
 //! - [`enrollment`]: the agents' enrollment tokens, and enrolling an agent
@@ -38,6 +41,7 @@ pub mod accounts;
 pub mod agents;
 pub mod audit;
 pub mod auth;
+pub mod bots;
 pub mod challenges;
 pub mod enrollment;
 pub mod grants;

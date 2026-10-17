@@ -23,6 +23,12 @@ enabled: boolean,
  */
 status: AgentStatus, 
 /**
+ * How many bots it holds: those assigned to it, and those it may still
+ * run that the server released (P10.5). A disabled agent's stay until
+ * they're released.
+ */
+bots: number, 
+/**
  * How many bots it may run at once, as its last hello said.
  */
 capacity?: number, 

@@ -95,6 +95,7 @@ fn agent_response(view: &AgentView) -> Result<AgentResponse, ApiError> {
         name: BoundedText::new(agent.name.as_str()),
         enabled: agent.enabled,
         status: AgentStatus::from(view.status).into(),
+        bots: view.listed.bots,
         capacity: agent.capacity.map(|capacity| u32::from(capacity.get())),
         version: agent
             .version

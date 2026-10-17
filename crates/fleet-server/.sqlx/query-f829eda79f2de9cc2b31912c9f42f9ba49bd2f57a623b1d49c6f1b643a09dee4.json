@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO releasing_bots (bot_id, agent_id, account_id, kind, mc_uuid, mc_name, created_at)\n         SELECT b.id, b.agent_id, a.id, a.kind, a.mc_uuid, a.mc_name, ?\n         FROM bots b JOIN mc_accounts a ON a.id = b.account_id\n         WHERE a.id = ? AND b.agent_id IS NOT NULL\n         ON CONFLICT (bot_id, agent_id) DO NOTHING",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "f829eda79f2de9cc2b31912c9f42f9ba49bd2f57a623b1d49c6f1b643a09dee4"
+}

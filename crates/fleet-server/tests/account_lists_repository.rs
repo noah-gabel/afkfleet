@@ -504,8 +504,8 @@ async fn deleting_an_account_takes_its_grants_and_nothing_else(
     grant(&db, kept.id, member.id, GrantLevel::View, owner.id).await;
     let mut tx = db.write().await.unwrap();
 
-    let deleted = tx.accounts().delete(gone.id).await.unwrap();
-    let again = tx.accounts().delete(gone.id).await.unwrap();
+    let deleted = tx.accounts().delete(gone.id, at(T0)).await.unwrap();
+    let again = tx.accounts().delete(gone.id, at(T0)).await.unwrap();
     tx.commit(setup_entry()).await.unwrap();
 
     assert!(deleted.is_some());

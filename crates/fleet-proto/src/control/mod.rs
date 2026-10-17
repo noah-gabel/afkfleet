@@ -65,6 +65,12 @@ pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 /// longer than [`HELLO_TIMEOUT`] and the hello's write behind it.
 pub const WELCOME_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// The longest an agent waits between two attempts to connect, whatever its
+/// backoff (P10.7): with its keepalive and [`WELCOME_TIMEOUT`], it bounds how
+/// soon after the server starts every running agent has said hello again,
+/// which the server's placement waits for (ADR-0019, S45).
+pub const RECONNECT_DELAY_MAX: Duration = Duration::from_secs(30);
+
 /// Reads a list of bots: at most [`MAX_BOTS`], each bot once. An error in an
 /// entry, or a bot that appears again, carries the entry's position.
 fn bots_from_wire<W, T>(

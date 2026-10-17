@@ -8,6 +8,7 @@
 //! and `status_reason`, which only a refused account fills (P9.5); a pair
 //! that doesn't describe a status doesn't read back either.
 
+use chrono::{DateTime, Utc};
 use fleet_core::account::{AccountError, AccountKind, AccountStatus, RefusalReason};
 use fleet_core::authz::{Actor, GrantLevel, Role, UserRef};
 use fleet_core::id::{AccountId, UserId};
@@ -337,8 +338,28 @@ pub(super) async fn awaiting_review(
 pub(super) async fn delete(
     conn: &mut SqliteConnection,
     id: AccountId,
+    at: DateTime<Utc>,
 ) -> Result<Option<DeletedAccount>, StoreError> {
     let id = id_text(id);
+    let at = time_text(at).ok_or(StoreError::Unstorable {
+        table: "releasing_bots",
+        column: "created_at",
+    })?;
+    // An agent may still run the bot: its Minecraft account stays fenced
+    // until that agent no longer runs it (ADR-0019, S39). Written before the
+    // foreign key deletes the bot with the account.
+    sqlx::query!(
+        "INSERT INTO releasing_bots (bot_id, agent_id, account_id, kind, mc_uuid, mc_name, created_at)
+         SELECT b.id, b.agent_id, a.id, a.kind, a.mc_uuid, a.mc_name, ?
+         FROM bots b JOIN mc_accounts a ON a.id = b.account_id
+         WHERE a.id = ? AND b.agent_id IS NOT NULL
+         ON CONFLICT (bot_id, agent_id) DO NOTHING",
+        at,
+        id
+    )
+    .execute(&mut *conn)
+    .await
+    .map_err(store_error)?;
     // Read before the foreign key deletes it with the account.
     let bot = sqlx::query!(
         r#"SELECT rowid AS "rowid!: i64", id AS "id!", agent_id AS "agent_id?"

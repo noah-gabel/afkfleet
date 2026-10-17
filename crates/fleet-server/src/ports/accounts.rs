@@ -291,13 +291,20 @@ pub trait AccountWrites: Send {
         viewer: UserId,
     ) -> Result<Option<ListedAccount>, StoreError>;
 
-    /// Deletes the account `id`, with its grants and its bot. What it took
+    /// Deletes the account `id`, with its grants and its bot. When its bot
+    /// was assigned to an agent, that agent may still run it: a release
+    /// record of it is written at `at` first, which fences its Minecraft
+    /// account until the agent no longer runs it (ADR-0019, S39). What it took
     /// with it, or `None` when it didn't exist.
     ///
     /// # Errors
     /// [`StoreError`], including [`StoreError::Corrupt`] for a bot row that
     /// doesn't read back.
-    async fn delete(&mut self, id: AccountId) -> Result<Option<DeletedAccount>, StoreError>;
+    async fn delete(
+        &mut self,
+        id: AccountId,
+        at: DateTime<Utc>,
+    ) -> Result<Option<DeletedAccount>, StoreError>;
 
     /// Stores a new link of the Microsoft account `id`: the envelope `to`
     /// in place of `from`, the status `active` without a reason, and the

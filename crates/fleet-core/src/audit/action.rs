@@ -253,7 +253,9 @@ audit_actions! {
     /// and its bot, in this commit. Outcome: Success. Target: the account,
     /// which is gone. Metadata: `owner` (its owner's ID), `kind`, `name`,
     /// `status`, for a Microsoft account `uuid`, and `bot` when it had one
-    /// (P11.1).
+    /// (P11.1), with `agent` when that bot was assigned to one: its account
+    /// stays fenced by a release record until that agent no longer runs it
+    /// (P10.5, ADR-0019, S39).
     ACCOUNT_DELETE = "account.delete";
 
     /// A user linked a Microsoft account again (P9.6, ADR-0018). Success, in
@@ -344,6 +346,47 @@ audit_actions! {
     /// `certificates_revoked` and `via`. An agent disabled already is no
     /// change, and no entry.
     AGENT_DISABLE = "agent.disable";
+
+    /// The server placed a bot on an agent (P10.5, ADR-0019, S36): its row
+    /// gets the agent, from none, in its own transaction before the agent is
+    /// told. Outcome: Success. No actor and no IP: the server's reconciler
+    /// decided. Target: the bot. Metadata: `agent`.
+    BOT_ASSIGN = "bot.assign";
+
+    /// The server took a bot off its agent (P10.5, ADR-0019, S33, S36, S42):
+    /// the agent is told to let it go, and the row keeps the agent until the
+    /// agent no longer runs it (`bot.detach`). Outcome: Success. No actor and
+    /// no IP. Target: the bot. Metadata: `agent` and `reason`: `capacity`
+    /// (the agent came back with less), or why the bot no longer qualifies
+    /// (`no_server`, `stopped`, `owner_disabled`, `pending`,
+    /// `reauth_required`, `refused` or `offline_not_allowed`).
+    BOT_UNASSIGN = "bot.unassign";
+
+    /// An agent no longer runs a bot (P10.5, ADR-0019, S32, S36, S39): the
+    /// bot's assignment to it, or the release record naming it, cleared.
+    /// Outcome: Success. No actor and no IP. Target: the bot (which may be
+    /// gone with its account). Metadata: `agent` and `reason`: `removed` (the
+    /// agent's `Removed` of a bot the server released), `not_running` (its
+    /// hello didn't list the bot) or `agent_released` (the server's host
+    /// released the disabled agent's bots).
+    BOT_DETACH = "bot.detach";
+
+    /// An agent's hello listed a bot the server hadn't assigned to it
+    /// (P10.5, ADR-0019, S43): the bot is left out of its reconcile, and a
+    /// release record fences the bot's account until the agent no longer
+    /// runs it. Outcome: Failure. No actor and no IP. Target: the bot.
+    /// Metadata: `agent` (the agent that listed it) and `assigned_to` (the
+    /// agent its row names, when it names one).
+    BOT_STRAY = "bot.stray";
+
+    /// The server's host released a disabled agent's bots (P10.5, ADR-0019,
+    /// S32, R25): every bot assigned to it and every release record naming
+    /// it cleared in one transaction, each with its own `bot.detach`, so the
+    /// bots can be placed elsewhere. The operator vouches that the agent's
+    /// host and its bots are stopped. Outcome: Success. No actor and no IP.
+    /// Target: the agent. Metadata: `count` (how many bots and records) and
+    /// `via` (`cli`). Releasing nothing is no entry.
+    AGENT_RELEASE = "agent.release";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

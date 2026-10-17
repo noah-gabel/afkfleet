@@ -15,6 +15,7 @@ use super::{AccountService, Reread, reread};
 use crate::app::users::ActingUser;
 use crate::ports::accounts::ListedAccount;
 use crate::ports::audit::NewAuditEntry;
+use crate::ports::reconcile::Change;
 use crate::ports::store::{StoreError, WriteTx};
 
 /// What an approval logs.
@@ -65,6 +66,7 @@ impl AccountService {
         }
         let entry = self.entry(AuditAction::ACCOUNT_APPROVE, by, &account, None)?;
         tx.commit(entry).await?;
+        self.reconcile.changed(Change::Store);
         info!(user_id = %by.actor.id, account_id = %id, "{APPROVED}");
         Ok(ListedAccount {
             status: AccountStatus::Active,
@@ -82,11 +84,12 @@ impl AccountService {
     pub async fn refuse(&self, by: &ActingUser, id: AccountId) -> Result<(), ReviewError> {
         let mut tx = self.store.write().await?;
         let account = reviewed(tx.as_mut(), by, id).await?;
-        let Some(deleted) = tx.accounts().delete(id).await? else {
+        let Some(deleted) = tx.accounts().delete(id, self.clock.now()).await? else {
             return Err(ReviewError::NotFound);
         };
         let entry = self.entry(AuditAction::ACCOUNT_REFUSE, by, &account, deleted.bot)?;
         tx.commit(entry).await?;
+        self.reconcile.changed(Change::Store);
         info!(user_id = %by.actor.id, account_id = %id, "{REFUSED}");
         Ok(())
     }

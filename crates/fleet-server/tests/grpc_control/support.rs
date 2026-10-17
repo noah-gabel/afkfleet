@@ -1,6 +1,8 @@
 //! The suite's port, its agents and their calls: the real listener on
 //! `127.0.0.1:0` with a fresh PKI and database, the control service over
-//! the real `AgentConnectionService`, and tonic's client over TLS.
+//! the real `AgentConnectionService`, and tonic's client over TLS. The
+//! reconciler runs only when a test's settings ask for it, so the tests of
+//! the stream alone see no full reconcile (P10.5).
 
 use core::time::Duration;
 use std::net::{IpAddr, SocketAddr};
@@ -8,20 +10,28 @@ use std::sync::Arc;
 
 use chrono::{DateTime, TimeDelta, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget, RecordedValue};
-use fleet_core::id::{AgentId, RequestId};
+use fleet_core::authz::Role;
+use fleet_core::bot::{BotSnapshot, BotState};
+use fleet_core::id::{AccountId, AgentId, BotId, RequestId, UserId};
+use fleet_core::mode::ModePreset;
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock as _;
-use fleet_core::value::AgentName;
+use fleet_core::value::{AgentCapacity, AgentName, AgentVersion, Username};
 use fleet_proto::PROTOCOL_VERSION;
-use fleet_proto::control::{RejectReason, ServerMessage, Welcome};
+use fleet_proto::control::{
+    AgentMessage, Assignment, BotEvent, BotEventKind, Hello, RejectReason, ServerMessage, Welcome,
+};
 use fleet_proto::generated as wire;
 use fleet_proto::generated::agent_control_client::AgentControlClient;
-use fleet_server::app::agents::{AgentConnectionService, AgentService, Disabler};
+use fleet_server::app::agents::{
+    AgentConnectionService, AgentService, AssignmentService, Disabler,
+};
 use fleet_server::app::enrollment::EnrollmentService;
 use fleet_server::config::{Heartbeats, RateLimitConfig};
 use fleet_server::grpc::control::{ControlTimings, REQUEST_ID, Sessions, control_service};
 use fleet_server::grpc::enrollment::enrollment_service;
 use fleet_server::grpc::listener;
+use fleet_server::grpc::reconciler::{HINT_QUEUE, Hints, ReconcileTimings, Reconciler, hints};
 use fleet_server::grpc::registry::{AgentRegistry, SWEEP_INTERVAL};
 use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::rate_limit::RateLimits;
@@ -31,11 +41,16 @@ use fleet_server::infra::pki::{
 };
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::infra::system::SystemClock;
+use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::agent_connections::AgentConnections;
 use fleet_server::ports::agents::{Agent as AgentRow, NewAgent, NewAgentCert};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
+use fleet_server::ports::bots::{Bot, NewBot};
+use fleet_server::ports::reconcile::{Change, Reconcile as _};
 use fleet_server::ports::store::Store as _;
+use fleet_server::ports::users::{NewUser, PasswordHash};
 use fleet_testkit::system::{ManualClock, SeededRandom};
+use secrecy::SecretString;
 use sqlx::sqlite::SqliteConnectOptions;
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
@@ -54,14 +69,21 @@ const SETUP: &str = "test.control_setup";
 pub(crate) const AGENT_VERSION: &str = "0.1.0";
 /// The capacity every hello of the suite names.
 pub(crate) const CAPACITY: u32 = 10;
+/// A valid Argon2id PHC string (not a real hash).
+const PHC: &str = "$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g";
 
 /// How a test's port is set up: production values, except what a test
 /// lowers (ADR-0019, R20).
+#[derive(Clone)]
 pub(crate) struct Settings {
     pub(crate) limits: RateLimitConfig,
     pub(crate) timings: ControlTimings,
     pub(crate) age: Duration,
     pub(crate) sweep: Duration,
+    /// The reconciler's timings when it runs; it doesn't by default.
+    pub(crate) reconcile: Option<ReconcileTimings>,
+    /// `[accounts] allow_offline`, as the reconciler reads it.
+    pub(crate) allow_offline: bool,
 }
 
 impl Default for Settings {
@@ -71,11 +93,34 @@ impl Default for Settings {
             timings: ControlTimings::new(Heartbeats::default()),
             age: listener::CONNECTION_AGE,
             sweep: SWEEP_INTERVAL,
+            reconcile: None,
+            allow_offline: true,
         }
     }
 }
 
 impl Settings {
+    /// Production values with the reconciler running, offline accounts'
+    /// bots allowed.
+    pub(crate) fn reconciling() -> Self {
+        Self {
+            reconcile: Some(ReconcileTimings::default()),
+            ..Self::default()
+        }
+    }
+
+    /// [`Settings::reconciling`] with no placement gate after the start
+    /// (S45), for a test whose enabled agents don't all come back.
+    pub(crate) fn ungated() -> Self {
+        Self {
+            reconcile: Some(ReconcileTimings {
+                grace: Duration::ZERO,
+                ..ReconcileTimings::default()
+            }),
+            ..Self::default()
+        }
+    }
+
     /// Production values with heartbeats of `interval` and `timeout`
     /// seconds.
     pub(crate) fn heartbeats(interval: u32, timeout: u32) -> Self {
@@ -95,9 +140,21 @@ pub(crate) struct Port {
     pub(crate) registry: AgentRegistry,
     ca: CertificateAuthority,
     ca_pem: String,
+    identity: ServerIdentity,
     random: SeededRandom,
+    settings: Settings,
+    /// The reconciler's hints, while it runs.
+    hints: Option<Hints>,
     stop: CancellationToken,
     server: JoinSet<()>,
+}
+
+/// The listener's own certificate and key, kept for a restart.
+#[derive(Clone)]
+struct ServerIdentity {
+    cert_pem: Vec<u8>,
+    key_pem: zeroize::Zeroizing<Vec<u8>>,
+    not_after: DateTime<Utc>,
 }
 
 impl Drop for Port {
@@ -165,7 +222,24 @@ pub(crate) async fn start(options: SqliteConnectOptions, settings: Settings) -> 
     );
     let random = SeededRandom::new(41);
     let pki = pki(&random, clock.now());
+    serve_on(db, clock, random, pki, settings).await
+}
+
+/// The port over `db` with `pki`: a fresh registry, and the reconciler
+/// when `settings` ask for it.
+async fn serve_on(
+    db: Database,
+    clock: ManualClock,
+    random: SeededRandom,
+    pki: LoadedPki,
+    settings: Settings,
+) -> Port {
     let ca_pem = String::from_utf8(pki.ca_cert_pem.clone()).unwrap();
+    let identity = ServerIdentity {
+        cert_pem: pki.server_cert_pem.clone(),
+        key_pem: pki.server_key_pem.clone(),
+        not_after: pki.server_not_after,
+    };
     let tls = listener::tls(&pki);
     let ca = copy(&pki.ca);
     let issuer = AgentIssuer::new(pki.ca, Arc::new(random.clone()), TimeDelta::days(60));
@@ -183,7 +257,26 @@ pub(crate) async fn start(options: SqliteConnectOptions, settings: Settings) -> 
         fleet_proto::enrollment::SERVER_DEADLINE,
     );
     let sessions = Sessions::new(CancellationToken::new());
-    let registry = AgentRegistry::new(Arc::new(clock.clone()));
+    let (registry, reconciler) = match settings.reconcile {
+        Some(timings) => {
+            let (hints, inbox) = hints(HINT_QUEUE);
+            let registry =
+                AgentRegistry::with_reconcile(Arc::new(clock.clone()), Arc::new(hints.clone()));
+            let reconciler = Reconciler::new(
+                registry.clone(),
+                Arc::new(AssignmentService::new(
+                    Arc::new(clock.clone()),
+                    Arc::new(db.clone()),
+                )),
+                Arc::new(clock.clone()),
+                inbox,
+                timings,
+                settings.allow_offline,
+            );
+            (registry, Some((reconciler, hints)))
+        }
+        None => (AgentRegistry::new(Arc::new(clock.clone())), None),
+    };
     let connections: Arc<dyn AgentConnections> = Arc::new(AgentConnectionService::new(
         Arc::new(clock.clone()),
         Arc::new(db.clone()),
@@ -213,6 +306,10 @@ pub(crate) async fn start(options: SqliteConnectOptions, settings: Settings) -> 
             .clone()
             .sweep_every(connections, settings.sweep, stop.child_token()),
     );
+    let hints = reconciler.map(|(reconciler, hints)| {
+        server.spawn(reconciler.run(stop.child_token()));
+        hints
+    });
     Port {
         address,
         db,
@@ -221,7 +318,10 @@ pub(crate) async fn start(options: SqliteConnectOptions, settings: Settings) -> 
         registry,
         ca,
         ca_pem,
+        identity,
         random,
+        settings,
+        hints,
         stop,
         server,
     }
@@ -471,6 +571,113 @@ impl Port {
         .unwrap()
     }
 
+    /// The port again over the same database, PKI and clock, as a new
+    /// server process: its registry is empty, and its address new.
+    pub(crate) async fn restart(self) -> Self {
+        let db = self.db.clone();
+        let clock = self.clock.clone();
+        let random = self.random.clone();
+        let settings = self.settings.clone();
+        let pki = LoadedPki {
+            ca: copy(&self.ca),
+            ca_cert_pem: self.ca_pem.clone().into_bytes(),
+            server_cert_pem: self.identity.cert_pem.clone(),
+            server_key_pem: self.identity.key_pem.clone(),
+            server_not_after: self.identity.not_after,
+        };
+        self.stop().await;
+        serve_on(db, clock, random, pki, settings).await
+    }
+
+    /// Tells the reconciler that something stored changed, as a service
+    /// does after its commit.
+    pub(crate) fn changed(&self) {
+        if let Some(hints) = &self.hints {
+            hints.changed(Change::Store);
+        }
+    }
+
+    /// User `n`, their offline account `AfkBot<n>` and its bot: a server
+    /// set, running, unassigned.
+    pub(crate) async fn bot(&self, n: u8) -> BotId {
+        self.bot_named(n, &format!("AfkBot{n}")).await.1
+    }
+
+    /// User `n`, their offline account `name` and its bot `n`, as
+    /// [`Port::bot`].
+    pub(crate) async fn bot_named(&self, n: u8, name: &str) -> (AccountId, BotId) {
+        let now = self.clock.now();
+        let user = UserId::new_v7(now, [n; 10]).unwrap();
+        let account = AccountId::new_v7(now, [n; 10]).unwrap();
+        let bot = BotId::new_v7(now, [n; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.users()
+            .insert(&NewUser {
+                id: user,
+                username: Username::try_from(format!("user{n}").as_str()).unwrap(),
+                password_hash: PasswordHash::new(SecretString::from(PHC)).unwrap(),
+                role: Role::Member,
+                created_at: now,
+            })
+            .await
+            .unwrap();
+        tx.accounts()
+            .insert(&McAccount {
+                id: account,
+                owner: user,
+                name: name.parse().unwrap(),
+                created_at: now,
+                credential: AccountCredential::Offline,
+            })
+            .await
+            .unwrap();
+        tx.bots()
+            .insert(&NewBot {
+                id: bot,
+                account,
+                mode: ModePreset::Afk.id(),
+            })
+            .await
+            .unwrap();
+        tx.commit(setup_entry(now)).await.unwrap();
+        let id = bot.as_uuid().hyphenated().to_string();
+        sqlx::query!(
+            "UPDATE bots SET server_address = 'play.example.com', desired_state = 'running' WHERE id = ?",
+            id
+        )
+        .execute(self.db.write_pool())
+        .await
+        .unwrap();
+        (account, bot)
+    }
+
+    /// Assigns `bot` to `agent` in the database, as an earlier server did.
+    pub(crate) async fn assign(&self, bot: BotId, agent: &Agent) {
+        let mut tx = self.db.write().await.unwrap();
+        assert!(tx.bots().assign(bot, agent.id).await.unwrap());
+        tx.commit(setup_entry(self.clock.now())).await.unwrap();
+    }
+
+    /// `bot`'s row, if it has one.
+    pub(crate) async fn bot_row(&self, bot: BotId) -> Option<Bot> {
+        self.db.bots().find(bot).await.unwrap()
+    }
+
+    /// Opens `agent`'s stream, sends a hello with `capacity` that lists
+    /// `running`, and reads `Welcome`.
+    pub(crate) async fn welcomed_with(
+        &self,
+        agent: &Agent,
+        capacity: u32,
+        running: Vec<BotSnapshot>,
+    ) -> Call {
+        let mut call = self.open(agent).await.unwrap();
+        call.send(hello_running(&agent.name, capacity, running))
+            .await;
+        call.welcome().await;
+        call
+    }
+
     /// Stops the port as serve does: the sessions end with the server's
     /// stop, so no open stream holds tonic's drain.
     pub(crate) async fn stop(mut self) {
@@ -584,6 +791,22 @@ impl Call {
         reason
     }
 
+    /// The full reconcile that comes next.
+    pub(crate) async fn reconciled(&mut self) -> Vec<Assignment> {
+        match self.next().await {
+            Ok(Some(ServerMessage::Reconcile(assignments))) => assignments,
+            other => panic!("expected a full reconcile, got {other:?}"),
+        }
+    }
+
+    /// The bot assigned next.
+    pub(crate) async fn assigned(&mut self) -> Assignment {
+        match self.next().await {
+            Ok(Some(ServerMessage::Assign(assignment))) => assignment,
+            other => panic!("expected an assignment, got {other:?}"),
+        }
+    }
+
     /// The status the stream ends with.
     pub(crate) async fn ended(&mut self) -> Status {
         match self.next().await {
@@ -620,6 +843,47 @@ pub(crate) fn hello_with(name: &str, protocol_version: u32, capacity: u32) -> wi
             running: Vec::new(),
         })),
     }
+}
+
+/// A hello for `name` with `capacity`, listing `running`.
+pub(crate) fn hello_running(
+    name: &str,
+    capacity: u32,
+    running: Vec<BotSnapshot>,
+) -> wire::AgentMessage {
+    wire::AgentMessage::try_from(AgentMessage::Hello(Hello {
+        name: AgentName::try_from(name).unwrap(),
+        agent_version: AgentVersion::try_from(AGENT_VERSION).unwrap(),
+        protocol_version: PROTOCOL_VERSION,
+        capacity: AgentCapacity::try_from(capacity).unwrap(),
+        running,
+    }))
+    .unwrap()
+}
+
+/// `bot` in `state`.
+pub(crate) fn snapshot(bot: BotId, state: BotState) -> BotSnapshot {
+    BotSnapshot {
+        bot_id: bot,
+        state,
+        since: DateTime::from_timestamp_millis(1_790_000_000_000).unwrap(),
+        last_disconnect: None,
+    }
+}
+
+/// A status report of `bot` in `state`.
+pub(crate) fn report(bot: BotId, state: BotState) -> wire::AgentMessage {
+    wire::AgentMessage::try_from(AgentMessage::Status(snapshot(bot, state))).unwrap()
+}
+
+/// `bot`'s `Removed`: the agent no longer runs it.
+pub(crate) fn removed(bot: BotId) -> wire::AgentMessage {
+    wire::AgentMessage::try_from(AgentMessage::Event(BotEvent {
+        bot_id: bot,
+        at: DateTime::from_timestamp_millis(1_790_000_000_000).unwrap(),
+        kind: BotEventKind::Removed,
+    }))
+    .unwrap()
 }
 
 pub(crate) fn heartbeat() -> wire::AgentMessage {

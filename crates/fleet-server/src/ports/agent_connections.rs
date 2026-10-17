@@ -13,7 +13,8 @@ use std::net::IpAddr;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use fleet_core::id::{AgentId, RequestId};
+use fleet_core::bot::{BotSnapshot, LastReport};
+use fleet_core::id::{AgentId, BotId, RequestId};
 use fleet_core::pki::CertFingerprint;
 use fleet_core::value::{AgentCapacity, AgentName, AgentVersion};
 
@@ -148,7 +149,7 @@ impl fmt::Display for StreamEnd {
 }
 
 /// An admitted agent's stream as it ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Ended {
     /// Why.
     pub reason: StreamEnd,
@@ -156,6 +157,8 @@ pub struct Ended {
     pub connected_at: DateTime<Utc>,
     /// When the server last heard from it, by its clock.
     pub last_seen: DateTime<Utc>,
+    /// The latest report the stream sent of each bot it held.
+    pub held: Vec<(BotId, LastReport)>,
 }
 
 /// A second connection with an agent's identity, refused while its stream
@@ -207,7 +210,8 @@ pub trait AgentConnections: Send + Sync + fmt::Debug {
 
     /// Records `admitted`'s accepted hello in one transaction that checks the
     /// certificate and the agent again: its capacity, its version and when it
-    /// was seen, with `agent.connect`.
+    /// was seen, with `agent.connect`, and the state of each bot in `running`
+    /// whose row assigns it to this agent (ADR-0019, S40).
     ///
     /// # Errors
     /// [`AdmitError::Refused`] when the certificate or the agent stopped
@@ -218,14 +222,16 @@ pub trait AgentConnections: Send + Sync + fmt::Debug {
         admitted: &Admitted,
         capacity: AgentCapacity,
         version: &AgentVersion,
+        running: &[BotSnapshot],
     ) -> Result<(), AdmitError>;
 
     /// Records that `admitted`'s hello named another agent, like
     /// [`admit`](Self::admit)'s refusals. A failure is logged here.
     async fn name_refused(&self, admitted: &Admitted);
 
-    /// Records how `admitted`'s stream ended: `agent.disconnect`, and its last
-    /// message's time as `last_seen_at`. A failure is logged here.
+    /// Records how `admitted`'s stream ended: `agent.disconnect`, its last
+    /// message's time as `last_seen_at`, and the latest report of each bot it
+    /// held whose row still assigns it there (S40). A failure is logged here.
     async fn ended(&self, admitted: &Admitted, ended: Ended);
 
     /// Records that two processes hold `admitted`'s identity:

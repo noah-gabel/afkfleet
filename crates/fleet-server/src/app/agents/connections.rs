@@ -15,9 +15,13 @@
 //!   line, never an entry.
 //! - **An accepted hello** is one transaction: the certificate and the
 //!   agent are read again, the hello's capacity and version and the time are
-//!   recorded, and `agent.connect` commits, before `Welcome` is sent.
-//! - **A stream's end** records its last message's time and
-//!   `agent.disconnect` with its reason.
+//!   recorded, each bot it lists that's assigned to the agent gets its
+//!   reported state as its last (S40), and `agent.connect` commits, before
+//!   `Welcome` is sent.
+//! - **A stream's end** records its last message's time, the latest report
+//!   of each bot it held that's still assigned to the agent, and
+//!   `agent.disconnect` with its reason. A bot's last state never moves
+//!   backwards.
 //! - **A conflict** (two processes holding one agent's identity, which the
 //!   registry finds) is an `error` line and
 //!   `security.agent_identity_conflict`; the registry asks at most once an
@@ -38,6 +42,7 @@ use fleet_core::agent::{
     CONNECT_REFUSAL_WINDOW, CertificateFacts, ConnectRefusal, MAX_AUDITED_CONNECT_REFUSALS, admit,
 };
 use fleet_core::audit::{AuditAction, AuditMetadata, AuditOutcome, AuditTarget};
+use fleet_core::bot::{BotSnapshot, LastReport, LastState};
 use fleet_core::id::{AgentId, RequestId};
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock;
@@ -184,6 +189,7 @@ impl AgentConnectionService {
         admitted: &Admitted,
         capacity: AgentCapacity,
         version: &AgentVersion,
+        running: &[BotSnapshot],
     ) -> Result<Result<(), ConnectRefusal>, RecordError> {
         let now = self.clock.now();
         let mut tx = self.store.write().await?;
@@ -207,6 +213,17 @@ impl AgentConnectionService {
         };
         if !tx.agents().record_hello(&hello).await? {
             return Ok(Err(ConnectRefusal::Disabled));
+        }
+        // Only where the row names this agent: a hello never speaks for a
+        // bot it wasn't given.
+        for snapshot in running {
+            let report = LastReport {
+                state: LastState::from(snapshot.state),
+                at: now,
+            };
+            tx.bots()
+                .record_state(snapshot.bot_id, admitted.agent, &report)
+                .await?;
         }
         let metadata = AuditMetadata::new()
             .text("fingerprint", &admitted.fingerprint.to_string())?
@@ -233,6 +250,9 @@ impl AgentConnectionService {
         tx.agents()
             .record_seen(admitted.agent, ended.last_seen)
             .await?;
+        for (bot, report) in &ended.held {
+            tx.bots().record_state(*bot, admitted.agent, report).await?;
+        }
         let mut entry = self
             .audit
             .entry(AuditAction::AGENT_DISCONNECT, AuditOutcome::Success)
@@ -385,8 +405,12 @@ impl AgentConnections for AgentConnectionService {
         admitted: &Admitted,
         capacity: AgentCapacity,
         version: &AgentVersion,
+        running: &[BotSnapshot],
     ) -> Result<(), AdmitError> {
-        match self.record_hello(admitted, capacity, version).await? {
+        match self
+            .record_hello(admitted, capacity, version, running)
+            .await?
+        {
             Ok(()) => Ok(()),
             Err(reason) => {
                 self.refuse(Refusal {
@@ -414,11 +438,12 @@ impl AgentConnections for AgentConnectionService {
     }
 
     async fn ended(&self, admitted: &Admitted, ended: Ended) {
+        let reason = ended.reason;
         if let Err(failure) = self.record_end(admitted, ended).await {
             warn!(
                 request_id = %admitted.request,
                 agent_id = %admitted.agent,
-                reason = ended.reason.as_str(),
+                reason = reason.as_str(),
                 error = %failure,
                 "an agent's disconnect couldn't be recorded"
             );

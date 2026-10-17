@@ -5,6 +5,7 @@ expression: "redacted(&all.body,\n&[(first.to_string(), \"agent-1\"), (second.to
 {
   "items": [
     {
+      "bots": 0,
       "connected_since": "[T0]",
       "created_at": "[T0]",
       "enabled": true,
@@ -15,6 +16,7 @@ expression: "redacted(&all.body,\n&[(first.to_string(), \"agent-1\"), (second.to
       "status": "online"
     },
     {
+      "bots": 0,
       "created_at": "[T0]",
       "enabled": true,
       "id": "[agent-1]",

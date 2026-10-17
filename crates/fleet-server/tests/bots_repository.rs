@@ -222,8 +222,8 @@ async fn deleting_the_account_deletes_its_bot_and_says_which(
     let (db, account, bot) = with_bot(options).await;
     let mut tx = db.write().await.unwrap();
 
-    let deleted = tx.accounts().delete(account).await.unwrap();
-    let again = tx.accounts().delete(account).await.unwrap();
+    let deleted = tx.accounts().delete(account, at(T0)).await.unwrap();
+    let again = tx.accounts().delete(account, at(T0)).await.unwrap();
     tx.commit(setup_entry()).await.unwrap();
 
     assert_eq!(

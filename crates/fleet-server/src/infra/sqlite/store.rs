@@ -8,6 +8,7 @@ use chrono::{DateTime, Utc};
 use fleet_core::account::AccountStatus;
 use fleet_core::audit::{AuditAction, AuditTarget};
 use fleet_core::authz::{Actor, GrantLevel, Role};
+use fleet_core::bot::LastReport;
 use fleet_core::id::{
     AccountId, AgentId, BotId, EnrollmentTokenId, InviteId, ModeId, SessionId, UserId,
 };
@@ -32,7 +33,7 @@ use crate::ports::audit::{
     AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, FailedCodeAttempts,
     NewAuditEntry,
 };
-use crate::ports::bots::{Bot, BotReads, BotWrites, NewBot};
+use crate::ports::bots::{Bot, BotReads, BotRecord, BotWrites, Fleet, NewBot};
 use crate::ports::enrollment_tokens::{
     EnrollmentToken, EnrollmentTokenReads, EnrollmentTokenWrites, NewEnrollmentToken,
 };
@@ -231,6 +232,18 @@ impl BotReads for Reads {
 
     async fn of_account(&self, account: AccountId) -> Result<Option<Bot>, StoreError> {
         bots::of_account(&self.pool, account).await
+    }
+
+    async fn record(&self, id: BotId) -> Result<Option<BotRecord>, StoreError> {
+        bots::record(&self.pool, id).await
+    }
+
+    async fn records(&self, page: Page<BotId>) -> Result<Vec<BotRecord>, StoreError> {
+        bots::records(&self.pool, page).await
+    }
+
+    async fn fleet(&self) -> Result<Fleet, StoreError> {
+        bots::fleet(&self.pool).await
     }
 }
 
@@ -516,8 +529,12 @@ impl AccountWrites for SqliteWriteTx {
         accounts::listed(&mut *self.tx, id, viewer).await
     }
 
-    async fn delete(&mut self, id: AccountId) -> Result<Option<DeletedAccount>, StoreError> {
-        accounts::delete(&mut self.tx, id).await
+    async fn delete(
+        &mut self,
+        id: AccountId,
+        at: DateTime<Utc>,
+    ) -> Result<Option<DeletedAccount>, StoreError> {
+        accounts::delete(&mut self.tx, id, at).await
     }
 
     async fn relink(
@@ -634,6 +651,36 @@ impl BotWrites for SqliteWriteTx {
 
     async fn find(&mut self, id: BotId) -> Result<Option<Bot>, StoreError> {
         bots::find(&mut *self.tx, id).await
+    }
+
+    async fn assign(&mut self, bot: BotId, agent: AgentId) -> Result<bool, StoreError> {
+        bots::assign(&mut self.tx, bot, agent).await
+    }
+
+    async fn record_state(
+        &mut self,
+        bot: BotId,
+        agent: AgentId,
+        report: &LastReport,
+    ) -> Result<bool, StoreError> {
+        bots::record_state(&mut self.tx, bot, agent, report).await
+    }
+
+    async fn detach(&mut self, bot: BotId, agent: AgentId) -> Result<bool, StoreError> {
+        bots::detach(&mut self.tx, bot, agent).await
+    }
+
+    async fn stray(
+        &mut self,
+        bot: BotId,
+        agent: AgentId,
+        at: DateTime<Utc>,
+    ) -> Result<bool, StoreError> {
+        bots::stray(&mut self.tx, bot, agent, at).await
+    }
+
+    async fn release_all(&mut self, agent: AgentId) -> Result<Vec<BotId>, StoreError> {
+        bots::release_all(&mut self.tx, agent).await
     }
 }
 
