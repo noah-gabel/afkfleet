@@ -12,7 +12,10 @@
 //!    agent; then fleet-core's `placeable`, as the reconciler judges it
 //!    (a server, desired running, an enabled owner, and an active Microsoft
 //!    account, or an offline one while `[accounts] allow_offline` is on).
-//!    The account comes from that row, never from the request (S3).
+//!    The account comes from that row, never from the request (S3). Last,
+//!    in memory, the stream of that generation must still hold the bot
+//!    assigned, so a request whose bot was released or taken over by a
+//!    later stream while it waited never reaches the token service.
 //! 2. **The session:** an online account's from [`MinecraftSessions`] with
 //!    the request's `fresh`; an offline account's grant is its name.
 //! 3. **At the moment of issue, fenced:** inside a write transaction that
@@ -144,6 +147,15 @@ impl SessionGrantService {
     /// the [module docs](self).
     async fn issue(&self, stream: GrantStream, request: GrantRequest) -> Result<Issued, Denial> {
         let record = self.check(stream, request.bot).await?;
+        // The stream's own hold, right before the token service: a bot
+        // released while its request waited never costs a refresh.
+        if self
+            .live
+            .held(stream.agent, request.bot)
+            .is_none_or(|held| held.generation != stream.generation)
+        {
+            return Err(Denial::Refused(Refusal::NotHeld));
+        }
         let (credentials, issued) = match &record.account {
             BotAccount::Offline(name) => (
                 SessionCredentials::Offline {

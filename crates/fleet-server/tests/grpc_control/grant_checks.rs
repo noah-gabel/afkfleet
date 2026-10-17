@@ -320,6 +320,45 @@ async fn what_changes_while_the_session_is_minted_gives_no_grant(
     port.stop().await;
 }
 
+/// The asking stream's own hold, read before the token service: a request
+/// from a stream that no longer holds the bot assigned (its agent's later
+/// stream does now) never reaches the token service, fresh or not, so a
+/// bot released while its request waited never costs a refresh.
+#[sqlx::test(migrations = false)]
+async fn a_stream_that_no_longer_holds_the_bot_never_reaches_the_token_service(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let port = start(options, settings()).await;
+    let agent = port.enroll(1, "agent-1").await;
+    let (account, bot) = port.online_bot(1).await;
+    let mut earlier = holding(&port, &agent, bot).await;
+    let stale = port.grant_stream(&agent, bot);
+    earlier.close();
+    port.disconnect(&agent).await;
+    let mut later = holding(&port, &agent, bot).await;
+    let grants = port.grants(true);
+
+    grants.grant(stale, request(1, bot, false)).await;
+    grants.grant(stale, request(2, bot, true)).await;
+    grants
+        .grant(port.grant_stream(&agent, bot), request(3, bot, false))
+        .await;
+    let grant = granted(&mut later).await;
+
+    assert_eq!(
+        grant.id.get().get(),
+        3,
+        "nothing for the earlier stream's requests"
+    );
+    assert_eq!(
+        port.minecraft.calls(),
+        [(account, false)],
+        "only the later stream's request reached the token service"
+    );
+    port.stop().await;
+}
+
 #[sqlx::test(migrations = false)]
 async fn a_lasting_refusal_from_the_token_service_fails_the_bot_and_a_disabled_owner_doesnt(
     _pool: SqlitePoolOptions,

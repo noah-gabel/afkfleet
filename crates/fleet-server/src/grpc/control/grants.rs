@@ -7,9 +7,13 @@
 //!   answered (the agent stopped waiting for it; S3). Two requests are never
 //!   merged: a fresh request answered with a token minted before it would
 //!   fail the bot (`Failed(Auth)`).
-//! - **A newer request aborts its bot's running one** (R40): the token
-//!   flight it awaited goes on, on the session-token service's own tracker,
-//!   so nothing it stores is lost, and nothing is sent for the older one.
+//! - **A newer request aborts its bot's running one** (R40), at the older
+//!   one's next await. Stopped there, it sends nothing; the token flight it
+//!   awaited goes on, on the session-token service's own tracker, so
+//!   nothing it stores is lost. One already past its last await (the
+//!   fence's read, or a failed call it now denies) finishes and may still
+//!   queue its answer: on this same stream, for the same bot, under its own
+//!   older number, which the agent no longer waits for and drops (S3, S62).
 //! - **At most [`GrantBounds::workers`] run at once,** on the queue's own
 //!   `JoinSet`, which the session polls in its loop; at most
 //!   [`GrantBounds::cap`] requests are held, waiting or running, and one more
@@ -92,8 +96,10 @@ impl GrantQueue {
             return Ok(());
         }
         if let Some(running) = self.running.remove(&bot) {
-            // The older request is never answered; its token flight goes on
-            // on the session-token service's own tracker (R40).
+            // Stopped at its next await: one already past its last await
+            // may still queue its answer here, under its own number, which
+            // the agent drops. Its token flight goes on, on the
+            // session-token service's own tracker (R40).
             running.abort();
             self.waiting.push_back(request);
             return Ok(());

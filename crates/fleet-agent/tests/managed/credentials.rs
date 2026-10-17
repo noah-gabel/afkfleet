@@ -2,13 +2,16 @@
 //! the fake link, on paused time: the run's clock and the wait's bound move
 //! with tokio's.
 
+use core::num::NonZeroU64;
 use core::time::Duration;
 use std::sync::Arc;
 
 use chrono::{DateTime, TimeDelta, Utc};
+use fleet_agent::config::{LogConfig, LogFilter, LogFormat};
 use fleet_agent::managed::credentials::{
     LinkGeneration, ManagedCredentials, SessionAnswer, Unsent,
 };
+use fleet_agent::telemetry::layer;
 use fleet_core::bot::BotAccount;
 use fleet_core::id::{AccountId, BotId};
 use fleet_core::mc::{
@@ -17,9 +20,12 @@ use fleet_core::mc::{
 use fleet_core::value::McUuid;
 use fleet_proto::control::{SessionDenied, SessionGrant, SessionRequestId};
 use fleet_runtime::RuntimeClock;
+use fleet_testkit::log_buffer::LogBuffer;
 use rstest::rstest;
 use secrecy::{ExposeSecret as _, SecretString};
 use tokio::task::JoinHandle;
+use tracing::subscriber::DefaultGuard;
+use tracing_subscriber::layer::SubscriberExt as _;
 
 use crate::fakes::FakeLink;
 
@@ -100,6 +106,10 @@ fn denial(id: SessionRequestId, bot: BotId, retryable: bool) -> SessionAnswer {
     })
 }
 
+fn number(n: u64) -> SessionRequestId {
+    SessionRequestId::new(NonZeroU64::new(n).unwrap())
+}
+
 fn token(credentials: &SessionCredentials) -> String {
     match credentials {
         SessionCredentials::Online { access_token, .. } => access_token.expose_secret().to_owned(),
@@ -140,6 +150,21 @@ async fn holding(
 }
 
 const RETRYABLE: CredentialError = CredentialError { retryable: true };
+
+/// The `warn` for a granted token that expires within the connect timeout.
+const CLOCK_SKEW: &str = "a granted session expires within the connect timeout; the agent's or the server's clock may be off";
+
+/// Captures this thread's events as the agent's JSON lines, `debug` and up,
+/// until the guard drops; the asking tasks run on this thread too.
+fn capture_logs() -> (LogBuffer, DefaultGuard) {
+    let capture = LogBuffer::default();
+    let config = LogConfig {
+        format: LogFormat::Json,
+        filter: LogFilter::try_from("debug").unwrap(),
+    };
+    let subscriber = tracing_subscriber::registry().with(layer(&config, false, capture.clone()));
+    (capture, tracing::subscriber::set_default(subscriber))
+}
 
 // --- Correlation (S3) ------------------------------------------------------------
 
@@ -218,6 +243,7 @@ async fn a_request_waits_at_most_its_bound_and_a_later_answer_answers_nothing() 
     let started = tokio::time::Instant::now();
     let answer = asked.await.unwrap();
     let waited = started.elapsed();
+    let left = format!("{provider:?}");
     provider.answer(grant(first.id, bot(1), "too-late"));
     let again = ask(&provider, request(bot(1), false));
     let second = link.wait_sent(2).await;
@@ -226,6 +252,10 @@ async fn a_request_waits_at_most_its_bound_and_a_later_answer_answers_nothing() 
 
     assert_eq!(answer.unwrap_err(), RETRYABLE);
     assert_eq!(waited, BOUND);
+    assert!(
+        left.contains("waiting: 0"),
+        "nothing waits past its bound: {left}"
+    );
     assert!(still, "the late answer answered nothing");
     assert_eq!(token(&now(again).await.unwrap()), "in-time");
 }
@@ -268,14 +298,23 @@ async fn a_denial_answers_with_its_retryable_flag(#[case] retryable: bool) {
 
 // --- The link (S62) --------------------------------------------------------------
 
+/// A full queue fails at once even with a kept grant: only a link with no
+/// stream stands it in (S63).
 #[rstest]
-#[case::no_stream(Unsent::NoStream)]
-#[case::queue_full(Unsent::QueueFull)]
+#[case::no_stream_and_nothing_kept(Unsent::NoStream, false)]
+#[case::queue_full_with_a_kept_grant(Unsent::QueueFull, true)]
 #[tokio::test(start_paused = true)]
-async fn a_request_the_link_cant_send_fails_at_once_retryable(#[case] unsent: Unsent) {
+async fn a_request_the_link_cant_send_fails_at_once_retryable(
+    #[case] unsent: Unsent,
+    #[case] kept: bool,
+) {
     let link = FakeLink::default();
+    let provider = if kept {
+        holding(&link, bot(1), "kept").await
+    } else {
+        provider(&link)
+    };
     link.answer(Err(unsent));
-    let provider = provider(&link);
 
     let answer = now(ask(&provider, request(bot(1), false))).await;
 
@@ -324,6 +363,7 @@ async fn a_token_that_expires_within_the_connect_timeout_is_never_handed_out(
     #[case] left: TimeDelta,
     #[case] handed_out: bool,
 ) {
+    let (capture, _guard) = capture_logs();
     let link = FakeLink::default();
     let provider = provider(&link);
     let asked = ask(&provider, request(bot(1), false));
@@ -332,10 +372,18 @@ async fn a_token_that_expires_within_the_connect_timeout_is_never_handed_out(
     provider.answer(grant_until(sent.id, bot(1), "token", anchor() + left));
 
     let answer = now(asked).await;
+    let warned = capture
+        .lines_with(CLOCK_SKEW)
+        .unwrap()
+        .into_iter()
+        .filter(|line| line["level"] == "WARN" && line["bot_id"] == bot(1).to_string())
+        .count();
     if handed_out {
         assert_eq!(token(&answer.unwrap()), "token");
+        assert_eq!(warned, 0, "{}", capture.text());
     } else {
         assert_eq!(answer.unwrap_err(), RETRYABLE);
+        assert_eq!(warned, 1, "the clocks are named: {}", capture.text());
     }
 }
 
@@ -431,6 +479,38 @@ async fn a_denial_wipes_the_kept_grant() {
     assert_eq!(after.unwrap_err(), RETRYABLE);
 }
 
+/// Any denial for a bot is the server's latest word on it (S63), even one
+/// nobody waits for.
+#[tokio::test(start_paused = true)]
+async fn a_denial_nobody_waits_for_still_wipes_its_bots_kept_grant() {
+    let link = FakeLink::default();
+    let provider = holding(&link, bot(1), "kept").await;
+
+    provider.answer(denial(number(99), bot(1), true));
+    link.answer(Err(Unsent::NoStream));
+    let after = now(ask(&provider, request(bot(1), false))).await;
+
+    assert_eq!(after.unwrap_err(), RETRYABLE);
+}
+
+/// A grant that comes after its request was dropped is never kept (S3,
+/// S63): the grant handed out before it stands in.
+#[tokio::test(start_paused = true)]
+async fn a_late_answer_is_never_kept() {
+    let link = FakeLink::default();
+    let provider = holding(&link, bot(1), "handed-out").await;
+    let dropped = ask(&provider, request(bot(1), false));
+    let sent = link.wait_sent(2).await;
+    dropped.abort();
+    let _ = dropped.await;
+
+    provider.answer(grant(sent.id, bot(1), "late"));
+    link.answer(Err(Unsent::NoStream));
+    let answer = now(ask(&provider, request(bot(1), false))).await;
+
+    assert_eq!(token(&answer.unwrap()), "handed-out");
+}
+
 #[tokio::test(start_paused = true)]
 async fn forget_wipes_one_bots_kept_grant_and_forget_all_every_one() {
     let link = FakeLink::default();
@@ -450,6 +530,49 @@ async fn forget_wipes_one_bots_kept_grant_and_forget_all_every_one() {
     assert_eq!(one.unwrap_err(), RETRYABLE);
     assert_eq!(token(&two.unwrap()), "two");
     assert_eq!(two_after.unwrap_err(), RETRYABLE);
+}
+
+/// What wipes a bot's kept grant (S63).
+#[derive(Debug, Clone, Copy)]
+enum Wipe {
+    Forget,
+    ForgetAll,
+    /// A denial for the bot, of a request nobody waits for.
+    Denial,
+}
+
+/// A wipe between a grant's answer and its hand-out wins (S63): the
+/// stream's reader can hand over a grant and then handle a `Reject` before
+/// the actor's task runs again.
+#[rstest]
+#[case::forget(Wipe::Forget)]
+#[case::forget_all(Wipe::ForgetAll)]
+#[case::a_denial(Wipe::Denial)]
+#[tokio::test(start_paused = true)]
+async fn a_wipe_after_a_grant_is_answered_and_before_it_is_handed_out_wins(#[case] wipe: Wipe) {
+    let link = FakeLink::default();
+    let provider = provider(&link);
+    let asked = ask(&provider, request(bot(1), false));
+    let sent = link.wait_sent(1).await;
+
+    // In one go, as the stream's reader would: the asking task runs only
+    // when this one waits.
+    provider.answer(grant(sent.id, bot(1), "in-flight"));
+    match wipe {
+        Wipe::Forget => provider.forget(bot(1)),
+        Wipe::ForgetAll => provider.forget_all(),
+        Wipe::Denial => provider.answer(denial(number(99), bot(1), true)),
+    }
+    let handed_out = now(asked).await;
+    link.answer(Err(Unsent::NoStream));
+    let after = now(ask(&provider, request(bot(1), false))).await;
+
+    assert_eq!(
+        token(&handed_out.unwrap()),
+        "in-flight",
+        "its request still gets it"
+    );
+    assert_eq!(after.unwrap_err(), RETRYABLE, "but it isn't kept");
 }
 
 #[tokio::test(start_paused = true)]
@@ -480,6 +603,30 @@ async fn its_debug_form_shows_how_many_requests_wait_and_nothing_else() {
     for secret in ["token-in-debug", NAME, PROFILE] {
         assert!(!shown.contains(secret), "{shown}");
     }
+}
+
+/// An answer as the stream read it prints its session's kind and expiry,
+/// never its name or UUID (the threat model).
+#[rstest]
+#[case::online(grant(number(1), bot(1), "token-in-debug"), "Online { expires_at")]
+#[case::offline(SessionAnswer::Grant(SessionGrant {
+    id: number(1),
+    bot_id: bot(1),
+    credentials: SessionCredentials::Offline { username: NAME.parse().unwrap() },
+}), "Offline")]
+fn a_session_answers_debug_form_shows_no_name_or_uuid(
+    #[case] answer: SessionAnswer,
+    #[case] kind: &str,
+) {
+    let plain = format!("{answer:?}");
+    let pretty = format!("{answer:#?}");
+
+    for shown in [&plain, &pretty] {
+        for secret in ["token-in-debug", NAME, PROFILE, &PROFILE.replace('-', "")] {
+            assert!(!shown.contains(secret), "{shown}");
+        }
+    }
+    assert!(plain.contains(kind), "{plain}");
 }
 
 /// The token, the name and the UUID never reach a log line, of any level

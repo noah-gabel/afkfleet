@@ -21,19 +21,22 @@
 //!   link has no stream), for a request that isn't fresh, and while it has
 //!   more than the connect timeout left. A fresh request, any denial,
 //!   [`forget`](ManagedCredentials::forget) and
-//!   [`forget_all`](ManagedCredentials::forget_all) wipe them.
+//!   [`forget_all`](ManagedCredentials::forget_all) wipe them, and win over
+//!   a grant already answered but not yet handed out: a grant is kept only
+//!   if no wipe for its bot came since its request was noted.
 //! - **Secrets**: a token lives only in its `SecretString`, wiped when
 //!   dropped; nothing logged names a token, a name or a UUID, and the
 //!   provider's `Debug` shows only how many requests wait.
 //!
-//! One `std` mutex guards the waiting requests and the kept grants; it's
-//! never held across an `.await` or while the link sends.
+//! One `std` mutex guards the waiting requests, the kept grants and the
+//! wipes; it's never held across an `.await` or while the link sends.
 
 use core::fmt;
 use core::num::NonZeroU64;
 use core::sync::atomic::{AtomicU64, Ordering};
 use core::time::Duration;
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use fleet_core::id::BotId;
@@ -88,7 +91,9 @@ pub enum Unsent {
     QueueFull,
 }
 
-/// A session request's answer, as the stream reads it.
+/// A session request's answer, as the stream reads it. Its `Debug` shows a
+/// grant's kind and expiry, never the token, the name or the UUID, as
+/// [`SessionGrant`]'s does.
 #[derive(Debug)]
 pub enum SessionAnswer {
     /// The bot's session.
@@ -118,8 +123,41 @@ struct State {
     waiting: HashMap<SessionRequestId, Waiting>,
     /// Each bot's last grant handed out (S63).
     kept: HashMap<BotId, SessionCredentials>,
+    /// The wipes of each bot's kept grant, counted while a request for it
+    /// is out: its grant is kept only if none came since it was noted.
+    wipes: HashMap<BotId, Wipes>,
     /// The latest stream generation that ended.
     ended: Option<LinkGeneration>,
+}
+
+/// A bot's wipes while requests for it are out.
+#[derive(Default)]
+struct Wipes {
+    /// How many came; only compared, so it may wrap.
+    count: u64,
+    /// How many of the bot's requests are out: the entry goes with the
+    /// last one.
+    out: usize,
+}
+
+impl State {
+    /// Wipes `bot`'s kept grant, and the one a request for it that's out
+    /// would keep.
+    fn wipe(&mut self, bot: BotId) {
+        self.kept.remove(&bot);
+        if let Some(wipes) = self.wipes.get_mut(&bot) {
+            wipes.count = wipes.count.wrapping_add(1);
+        }
+    }
+
+    /// Wipes every kept grant, and every one a request that's out would
+    /// keep.
+    fn wipe_all(&mut self) {
+        self.kept.clear();
+        for wipes in self.wipes.values_mut() {
+            wipes.count = wipes.count.wrapping_add(1);
+        }
+    }
 }
 
 /// A request waiting for its answer.
@@ -130,16 +168,25 @@ struct Waiting {
     reply: oneshot::Sender<Result<SessionCredentials, CredentialError>>,
 }
 
-/// Removes its request from the waiting ones when dropped: the actor
-/// dropped the request, or it was answered.
+/// Removes its request from the waiting ones, and from its bot's requests
+/// out, when dropped: the actor dropped the request, or it ended.
 struct Pending<'a, L> {
     owner: &'a ManagedCredentials<L>,
     number: SessionRequestId,
+    bot: BotId,
 }
 
 impl<L> Drop for Pending<'_, L> {
     fn drop(&mut self) {
-        self.owner.state().waiting.remove(&self.number);
+        let mut state = self.owner.state();
+        state.waiting.remove(&self.number);
+        if let Entry::Occupied(mut entry) = state.wipes.entry(self.bot) {
+            let wipes = entry.get_mut();
+            wipes.out = wipes.out.saturating_sub(1);
+            if wipes.out == 0 {
+                entry.remove();
+            }
+        }
     }
 }
 
@@ -229,7 +276,7 @@ impl<L: SessionLink> ManagedCredentials<L> {
         let mut state = self.state();
         if outcome.is_err() {
             // The server's latest word on the bot (S63).
-            state.kept.remove(&bot);
+            state.wipe(bot);
         }
         let Some(waiting) = state.waiting.remove(&number) else {
             drop(state);
@@ -280,12 +327,12 @@ impl<L: SessionLink> ManagedCredentials<L> {
     /// Forgets `bot`'s kept grant: the server removed the bot, or is
     /// stopping it.
     pub fn forget(&self, bot: BotId) {
-        self.state().kept.remove(&bot);
+        self.state().wipe(bot);
     }
 
     /// Forgets every kept grant: the server refused the agent.
     pub fn forget_all(&self) {
-        self.state().kept.clear();
+        self.state().wipe_all();
     }
 
     /// Asks the server for `request`'s session; see the [module
@@ -294,24 +341,31 @@ impl<L: SessionLink> ManagedCredentials<L> {
         let bot = request.bot_id;
         if request.fresh {
             // The last session was rejected: it's never handed out again.
-            self.state().kept.remove(&bot);
+            self.state().wipe(bot);
         }
         let Some(number) = self.next_number() else {
             error!(bot_id = %bot, "the session request numbers ran out");
             return Err(CredentialError { retryable: false });
         };
         let (reply, answer) = oneshot::channel();
-        self.state().waiting.insert(
-            number,
-            Waiting {
-                bot,
-                generation: None,
-                reply,
-            },
-        );
+        let wipes = {
+            let mut state = self.state();
+            state.waiting.insert(
+                number,
+                Waiting {
+                    bot,
+                    generation: None,
+                    reply,
+                },
+            );
+            let wipes = state.wipes.entry(bot).or_default();
+            wipes.out = wipes.out.saturating_add(1);
+            wipes.count
+        };
         let pending = Pending {
             owner: self,
             number,
+            bot,
         };
         let sent = self.link.send(fleet_proto::control::SessionRequest {
             id: number,
@@ -355,7 +409,6 @@ impl<L: SessionLink> ManagedCredentials<L> {
             Ok(Ok(outcome)) => outcome,
             Ok(Err(_)) | Err(_) => Err(RETRYABLE),
         };
-        drop(pending);
         let credentials = outcome?;
         if !self.lasts(&credentials) {
             if let SessionCredentials::Online { expires_at, .. } = &credentials {
@@ -369,7 +422,15 @@ impl<L: SessionLink> ManagedCredentials<L> {
             }
             return Err(RETRYABLE);
         }
-        self.state().kept.insert(bot, credentials.clone());
+        let mut state = self.state();
+        // A wipe since the request was noted wins (S63): the stream's
+        // reader may have handled one after this grant, before this task
+        // ran again.
+        if state.wipes.get(&bot).is_some_and(|now| now.count == wipes) {
+            state.kept.insert(bot, credentials.clone());
+        }
+        drop(state);
+        drop(pending);
         Ok(credentials)
     }
 }

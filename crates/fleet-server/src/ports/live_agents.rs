@@ -94,7 +94,8 @@ pub enum CommandRefused {
 }
 
 /// The answer to a session request, for the stream that asked (P10.6;
-/// ADR-0019, S3, S57).
+/// ADR-0019, S3, S57). Its `Debug` shows a grant's kind and expiry, never
+/// the token, the name or the UUID, as [`SessionOutcome`]'s does.
 #[derive(Debug, Clone)]
 pub struct SessionAnswer {
     /// The agent's own number of the request it answers.
@@ -105,8 +106,9 @@ pub struct SessionAnswer {
     pub outcome: SessionOutcome,
 }
 
-/// What a session request gets.
-#[derive(Debug, Clone)]
+/// What a session request gets. Its `Debug` shows a grant's kind and
+/// expiry, never the token, the name or the UUID.
+#[derive(Clone)]
 pub enum SessionOutcome {
     /// The bot's session: an online account's token, or an offline
     /// account's name.
@@ -117,6 +119,47 @@ pub enum SessionOutcome {
         /// Whether asking again later may help.
         retryable: bool,
     },
+}
+
+/// A grant's kind and expiry, or a denial's flag; never the token, the
+/// name or the UUID (the threat model), like `MinecraftSession`.
+impl fmt::Debug for SessionOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Grant(credentials) => f
+                .debug_tuple("Grant")
+                .field(&SessionKind(credentials))
+                .finish(),
+            Self::Denied { retryable } => f
+                .debug_struct("Denied")
+                .field("retryable", retryable)
+                .finish(),
+        }
+    }
+}
+
+/// A session's kind, and an online session's expiry.
+struct SessionKind<'a>(&'a SessionCredentials);
+
+impl fmt::Debug for SessionKind<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        // Every field is named here, so a new one has to be placed: shown or
+        // hidden.
+        match self.0 {
+            SessionCredentials::Offline { username: _ } => {
+                f.debug_struct("Offline").finish_non_exhaustive()
+            }
+            SessionCredentials::Online {
+                username: _,
+                uuid: _,
+                access_token: _,
+                expires_at,
+            } => f
+                .debug_struct("Online")
+                .field("expires_at", expires_at)
+                .finish_non_exhaustive(),
+        }
+    }
 }
 
 /// Why a session request's answer didn't go to its stream.
@@ -196,4 +239,68 @@ pub trait LiveAgents: Send + Sync + fmt::Debug {
         generation: u64,
         answer: SessionAnswer,
     ) -> Result<(), AnswerRefused>;
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone as _;
+    use rstest::rstest;
+    use secrecy::SecretString;
+    use uuid::Uuid;
+
+    use super::*;
+
+    const TOKEN: &str = "token-in-debug";
+    const NAME: &str = "HiddenName8";
+    const PROFILE: Uuid = Uuid::from_u128(0x0123_4567_89ab_4def_8123_4567_89ab_cdef);
+
+    fn online() -> SessionCredentials {
+        SessionCredentials::Online {
+            username: NAME.parse().unwrap(),
+            uuid: PROFILE,
+            access_token: SecretString::from(TOKEN),
+            expires_at: Utc.with_ymd_and_hms(2027, 1, 15, 9, 0, 0).unwrap(),
+        }
+    }
+
+    fn offline() -> SessionCredentials {
+        SessionCredentials::Offline {
+            username: NAME.parse().unwrap(),
+        }
+    }
+
+    /// A grant prints its session's kind and expiry, never its name or UUID
+    /// (the threat model), like `MinecraftSession`.
+    #[rstest]
+    #[case::online(online(), "Grant(Online { expires_at: 2027-01-15T09:00:00Z, .. })")]
+    #[case::offline(offline(), "Grant(Offline { .. })")]
+    fn a_session_answer_shows_its_grants_kind_and_expiry_never_the_name_or_the_uuid(
+        #[case] credentials: SessionCredentials,
+        #[case] shown: &str,
+    ) {
+        let outcome = SessionOutcome::Grant(credentials);
+        let answer = SessionAnswer {
+            number: NonZeroU64::MIN,
+            bot: BotId::new_v7(Utc.with_ymd_and_hms(2027, 1, 15, 8, 0, 0).unwrap(), [1; 10])
+                .unwrap(),
+            outcome: outcome.clone(),
+        };
+
+        for output in [
+            format!("{outcome:?}"),
+            format!("{outcome:#?}"),
+            format!("{answer:?}"),
+            format!("{answer:#?}"),
+        ] {
+            for secret in [
+                TOKEN.to_owned(),
+                NAME.to_owned(),
+                PROFILE.hyphenated().to_string(),
+                PROFILE.simple().to_string(),
+            ] {
+                assert!(!output.contains(&secret), "{output}");
+            }
+        }
+        assert_eq!(format!("{outcome:?}"), shown);
+    }
 }
