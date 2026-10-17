@@ -70,7 +70,7 @@ impl AccountService {
     }
 
     /// The deletion's entry: whose account it was, what it was, and the bot
-    /// that went with it.
+    /// that went with it and the agent it was assigned to (S39).
     fn deleted(
         &self,
         by: &ActingUser,
@@ -87,6 +87,9 @@ impl AccountService {
         }
         if let Some(bot) = deleted.bot {
             metadata = metadata.id("bot", bot)?;
+        }
+        if let Some(agent) = deleted.agent {
+            metadata = metadata.id("agent", agent)?;
         }
         Ok(self
             .audit

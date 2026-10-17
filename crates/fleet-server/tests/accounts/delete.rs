@@ -108,6 +108,26 @@ async fn the_owner_deletes_their_account_with_its_grants_and_it_is_audited(
 }
 
 #[sqlx::test(migrations = false)]
+async fn deleting_an_account_whose_bot_an_agent_runs_records_that_agent(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let member = setup.stepped_up(1, Role::Member).await;
+    let id = setup.add_account(member.id, 3, None).await;
+    let bot = setup.add_bot(id, 3).await;
+    let agent = setup.assign_to_agent(bot, 4).await;
+
+    let deleted = delete(&setup, &member, id).await;
+
+    assert_eq!(deleted.status, 204, "{}", deleted.text);
+    let entries = setup.entries(&AuditAction::ACCOUNT_DELETE).await;
+    assert_eq!(entries.len(), 1);
+    assert_eq!(meta(&entries[0], "bot"), Some(text(&bot.to_string())));
+    assert_eq!(meta(&entries[0], "agent"), Some(text(&agent.to_string())));
+}
+
+#[sqlx::test(migrations = false)]
 async fn an_offline_account_is_deleted_while_offline_accounts_are_off_freeing_the_slot(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
