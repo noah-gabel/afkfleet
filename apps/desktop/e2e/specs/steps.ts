@@ -3,6 +3,15 @@ import type { Page } from "@playwright/test";
 import { type FakeBackend, PASSWORD } from "../fake/backend";
 import { expect } from "../fixtures";
 
+/**
+ * How long a wait for a link flow's end may take. The fake flow reads `waiting` first and
+ * `linked` from its second read on, and the link screen reads every 2 s
+ * (`LINK_FLOW_POLL_MS`), so the end shows a poll interval and two round trips through MSW
+ * after the code: on a loaded windows-latest runner that passed Playwright's default 5 s.
+ * Every other wait keeps the default.
+ */
+export const FLOW_END_MS = 15_000;
+
 /** The password step of the login form. */
 export async function logIn(page: Page, username: string, password = PASSWORD): Promise<void> {
   await page.getByLabel("Username").fill(username);
