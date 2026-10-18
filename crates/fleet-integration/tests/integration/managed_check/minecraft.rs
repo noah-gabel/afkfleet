@@ -86,9 +86,10 @@ impl Minecraft {
         format!("127.0.0.1:{}", self.port)
     }
 
-    /// Removes the container and its volumes; whether it went.
-    pub(crate) async fn remove(self) -> bool {
-        tokio::time::timeout(Duration::from_secs(60), self.container.rm())
+    /// Removes the container and its volumes within `within`; whether it
+    /// went.
+    pub(crate) async fn remove(self, within: Duration) -> bool {
+        tokio::time::timeout(within, self.container.rm())
             .await
             .is_ok_and(|removed| removed.is_ok())
     }

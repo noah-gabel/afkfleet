@@ -2627,6 +2627,7 @@ dependencies = [
  "fleet-client",
  "fleet-core",
  "fleet-mc",
+ "fleet-proto",
  "fleet-runtime",
  "fleet-server",
  "fleet-startup",

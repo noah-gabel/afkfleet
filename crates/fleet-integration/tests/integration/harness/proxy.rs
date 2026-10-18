@@ -1,5 +1,8 @@
 //! A TCP proxy between one agent and the server's gRPC port (ADR-0019,
-//! S72). It forwards bytes and closes; TLS runs end to end through it.
+//! S72). It forwards bytes and closes; TLS runs end to end through it. It
+//! dials the port where the server listens at each connection, which a
+//! restart moves, and pauses briefly after an accept error rather than
+//! spin.
 //!
 //! - [`Proxy::silence_open`]: the connections open now go silent both ways
 //!   and stay open, the client's close included: what the server sees of a
@@ -22,8 +25,15 @@ use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::watch;
 use tokio::task::JoinSet;
 
+use super::server::GrpcAddress;
+
 /// How long the proxy waits for the server's port to take a connection.
 const DIAL: Duration = Duration::from_secs(5);
+
+/// How long the proxy waits after an accept error before it accepts
+/// again, so one that repeats (out of file descriptors) can't spin it, as
+/// serve's own port waits (`grpc::listener`'s pace).
+const ACCEPT_PAUSE: Duration = Duration::from_millis(100);
 
 /// One agent's proxy; see the [module docs](self).
 #[derive(Debug)]
@@ -46,9 +56,17 @@ struct Connection {
     cut: watch::Sender<bool>,
 }
 
+impl Shared {
+    /// Forgets the connections whose pumps both ended.
+    fn prune(&mut self) {
+        self.open.retain(|connection| !connection.cut.is_closed());
+    }
+}
+
 impl Proxy {
-    /// A proxy on `127.0.0.1:0` to `upstream`, its gate open.
-    pub(crate) async fn start(upstream: SocketAddr) -> Self {
+    /// A proxy on `127.0.0.1:0` to the server's gRPC port wherever
+    /// `upstream` says it is at each connection, its gate open.
+    pub(crate) async fn start(upstream: GrpcAddress) -> Self {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let shared = Arc::new(Mutex::new(Shared::default()));
@@ -79,14 +97,17 @@ impl Proxy {
 
     /// The open connections go silent both ways and stay open.
     pub(crate) fn silence_open(&self) {
-        for connection in &self.shared.lock().unwrap().open {
+        let mut shared = self.shared.lock().unwrap();
+        shared.prune();
+        for connection in &shared.open {
             connection.silence.send_replace(true);
         }
     }
 
     /// The open connections close.
     pub(crate) fn cut_open(&self) {
-        for connection in self.shared.lock().unwrap().open.drain(..) {
+        let mut shared = self.shared.lock().unwrap();
+        for connection in shared.open.drain(..) {
             connection.cut.send_replace(true);
         }
     }
@@ -94,10 +115,11 @@ impl Proxy {
 
 /// Accepts connections until the proxy is dropped, which drops this task's
 /// pumps too.
-async fn accept(listener: TcpListener, upstream: SocketAddr, shared: Arc<Mutex<Shared>>) {
+async fn accept(listener: TcpListener, upstream: GrpcAddress, shared: Arc<Mutex<Shared>>) {
     let mut pumps = JoinSet::new();
     loop {
         let Ok((client, _)) = listener.accept().await else {
+            tokio::time::sleep(ACCEPT_PAUSE).await;
             continue;
         };
         while pumps.try_join_next().is_some() {}
@@ -106,17 +128,17 @@ async fn accept(listener: TcpListener, upstream: SocketAddr, shared: Arc<Mutex<S
             continue;
         }
         // A server that's down closes the agent's connection at once.
-        let Ok(Ok(server)) = tokio::time::timeout(DIAL, TcpStream::connect(upstream)).await else {
+        let dialled = TcpStream::connect(upstream.get());
+        let Ok(Ok(server)) = tokio::time::timeout(DIAL, dialled).await else {
             drop(client);
             continue;
         };
         let (silence, silenced) = watch::channel(false);
         let (cut, cuts) = watch::channel(false);
-        shared
-            .lock()
-            .unwrap()
-            .open
-            .push(Connection { silence, cut });
+        let mut held = shared.lock().unwrap();
+        held.prune();
+        held.open.push(Connection { silence, cut });
+        drop(held);
         let (client_read, client_write) = client.into_split();
         let (server_read, server_write) = server.into_split();
         pumps.spawn(pump(

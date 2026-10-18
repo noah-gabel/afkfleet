@@ -42,17 +42,25 @@ async fn a_silent_connection_frees_the_agent_and_it_reconnects_and_resyncs() {
     agent.start(
         &world.ledger,
         RunOptions {
-            capacity: 2,
             timings: SHORT,
+            ..RunOptions::capacity(2)
         },
     );
     let bot = world.owner.bot("AfkBot1").await;
     world.owner.start(bot).await;
     let first = world.online(&agent, bot, 0).await;
 
+    // Timed from the stream end after the silence, whatever ended before.
+    let ended_before = world
+        .server
+        .entries(&AuditAction::AGENT_DISCONNECT)
+        .await
+        .len();
     agent.proxy.silence_open();
     let silenced = Instant::now();
-    world.entries(&AuditAction::AGENT_DISCONNECT, 1).await;
+    world
+        .entries(&AuditAction::AGENT_DISCONNECT, ended_before + 1)
+        .await;
     let freed = silenced.elapsed();
     let again = world.online(&agent, bot, first).await;
     let back = silenced.elapsed();
@@ -60,7 +68,7 @@ async fn a_silent_connection_frees_the_agent_and_it_reconnects_and_resyncs() {
     // The server ended the stream of silence, within C's bound.
     let ended = world.server.entries(&AuditAction::AGENT_DISCONNECT).await;
     assert_eq!(
-        crate::loopback::reason(&ended[0]),
+        crate::loopback::reason(&ended[ended_before]),
         Some("heartbeat_timeout".to_owned())
     );
     let freed_by = 2 * TIMEOUT + TIMEOUT / 2 + SLACK;

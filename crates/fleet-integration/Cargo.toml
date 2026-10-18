@@ -28,6 +28,9 @@ fleet-client.workspace = true
 fleet-core.workspace = true
 # The agent's Minecraft config (`McConfig`); the bots run on fleet-testkit's fake.
 fleet-mc.workspace = true
+# The protocol's own bounds, such as RECONNECT_DELAY_MAX, which the cases
+# wait on (the user's request at PR #58's review).
+fleet-proto.workspace = true
 # The agent's runtime config.
 fleet-runtime.workspace = true
 # The real server: serve's wiring, its PKI commands, its database.

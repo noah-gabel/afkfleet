@@ -51,14 +51,24 @@ pub(crate) struct RunOptions {
     pub(crate) capacity: usize,
     /// The link's timings: the protocol's, but where a case measures them.
     pub(crate) timings: LinkTimings,
+    /// The bots' `[retry]`: 5 s to 5 min, as tests/control has it, so a
+    /// case's outages never trip the circuit breaker; a case that waits for
+    /// a bot's next attempt caps it lower.
+    pub(crate) retry: RetryPolicy,
 }
 
 impl RunOptions {
-    /// `capacity` bots, the protocol's timings.
+    /// `capacity` bots, the protocol's timings, the default retries.
     pub(crate) fn capacity(capacity: usize) -> Self {
         Self {
             capacity,
             timings: LinkTimings::default(),
+            retry: RetryPolicy::try_new(
+                Duration::from_secs(5),
+                Duration::from_mins(5),
+                Duration::from_mins(5),
+            )
+            .unwrap(),
         }
     }
 }
@@ -89,7 +99,7 @@ impl Agent {
     /// Enrolls the agent `name` with `server`, its files in `dir/name`,
     /// with a host's token; `seed` makes its key.
     pub(crate) async fn enroll(server: &Server, dir: &Path, name: &str, seed: u64) -> Self {
-        let proxy = Proxy::start(server.grpc()).await;
+        let proxy = Proxy::start(server.grpc_address()).await;
         let bundle = server.bundle().await;
         let plane = enroll_files(
             server,
@@ -98,8 +108,10 @@ impl Agent {
             &proxy.url(),
             bundle,
             SeededRandom::new(seed),
+            PATIENCE,
         )
-        .await;
+        .await
+        .unwrap_or_else(|error| panic!("{}: {}", error.why, error.output));
         let dir = dir.join(name);
         let id = server.agent_id(name).await;
         Self {
@@ -125,14 +137,9 @@ impl Agent {
                 ..RuntimeConfig::default()
             },
             mc: McConfig::default(),
-            // As tests/control has them: a case's outages never trip the
+            retry: options.retry,
+            // As tests/control has it: a case's outages never trip the
             // circuit breaker.
-            retry: RetryPolicy::try_new(
-                Duration::from_secs(5),
-                Duration::from_mins(5),
-                Duration::from_mins(5),
-            )
-            .unwrap(),
             circuit: CircuitPolicy::try_new(
                 NonZeroUsize::new(8).unwrap(),
                 Duration::from_mins(10),
@@ -203,10 +210,34 @@ impl Agent {
     }
 }
 
+/// Why an enrollment failed: a fixed text, and `enroll`'s own output for a
+/// loopback case's message. The managed check shows only the text, since
+/// the output names files and the server's address.
+#[derive(Debug)]
+pub(crate) struct EnrollError {
+    /// What failed, in fixed words.
+    pub(crate) why: &'static str,
+    /// `enroll`'s stderr, if it ran.
+    pub(crate) output: String,
+}
+
+impl EnrollError {
+    fn of(why: &'static str) -> Self {
+        Self {
+            why,
+            output: String::new(),
+        }
+    }
+}
+
 /// Enrolls the agent `name` with `server` through `bundle`, as
 /// `afkfleet-agent enroll` does, its files in `dir/name`: the CA the server
 /// signs with, and the key `random` makes with the certificate the server
-/// signed for it; returns its `[control_plane]` for `url`.
+/// signed for it; returns its `[control_plane]` for `url`. The whole
+/// enrollment is bounded by `within`.
+///
+/// # Errors
+/// [`EnrollError`] for each step that fails.
 pub(crate) async fn enroll_files(
     server: &Server,
     dir: &Path,
@@ -214,7 +245,8 @@ pub(crate) async fn enroll_files(
     url: &str,
     bundle: EnrollmentBundle,
     random: impl SecureRandom + 'static,
-) -> ControlPlaneConfig {
+    within: Duration,
+) -> Result<ControlPlaneConfig, EnrollError> {
     let dir = dir.join(name);
     let plane = ControlPlaneConfig {
         url: url.to_owned(),
@@ -223,19 +255,22 @@ pub(crate) async fn enroll_files(
         key_file: dir.join("agent.key"),
         private_targets: PrivateTargets::default(),
     };
+    let name =
+        AgentName::try_from(name).map_err(|_| EnrollError::of("the agent's name was refused"))?;
     let enrolled = {
         let plane = plane.clone();
         let ca = server.ca_cert_file();
-        let name = AgentName::try_from(name).unwrap();
         // `enroll` blocks on a runtime of its own, as the binary's command
         // does.
         tokio::task::spawn_blocking(move || {
-            std::fs::create_dir_all(&dir).unwrap();
-            std::fs::copy(ca, &plane.ca_cert_file).unwrap();
+            std::fs::create_dir_all(&dir)
+                .map_err(|_| EnrollError::of("the agent's folder couldn't be made"))?;
+            std::fs::copy(ca, &plane.ca_cert_file)
+                .map_err(|_| EnrollError::of("the CA couldn't be copied for the agent"))?;
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
-                .unwrap();
+                .map_err(|_| EnrollError::of("the enrollment's runtime couldn't be built"))?;
             let (mut out, mut err) = (Vec::new(), Vec::new());
             let exit = enroll::enroll(
                 Enrollment {
@@ -248,15 +283,22 @@ pub(crate) async fn enroll_files(
                 &mut out,
                 &mut err,
             );
-            (exit, String::from_utf8_lossy(&err).into_owned())
+            if exit == enroll::Exit::Enrolled {
+                Ok(())
+            } else {
+                Err(EnrollError {
+                    why: "the agent didn't enroll",
+                    output: String::from_utf8_lossy(&err).into_owned(),
+                })
+            }
         })
     };
-    let (exit, err) = tokio::time::timeout(PATIENCE, enrolled)
-        .await
-        .expect("the enrollment ends")
-        .unwrap();
-    assert_eq!(exit, enroll::Exit::Enrolled, "{err}");
-    plane
+    match tokio::time::timeout(within, enrolled).await {
+        Ok(Ok(Ok(()))) => Ok(plane),
+        Ok(Ok(Err(error))) => Err(error),
+        Ok(Err(_)) => Err(EnrollError::of("the enrollment's task failed")),
+        Err(_) => Err(EnrollError::of("the enrollment didn't end in time")),
+    }
 }
 
 /// Never samples anything: the fake connector has no host threads.
@@ -289,5 +331,36 @@ impl ShutdownSignals for Signals {
             Some(signal) => signal,
             None => core::future::pending().await,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::harness::server::ServerOptions;
+
+    #[tokio::test]
+    async fn an_enrollment_that_fails_is_a_fixed_text_never_a_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut server = Server::start(dir.path(), ServerOptions::default()).await;
+        let bundle = server.bundle().await;
+        // Nothing listens there.
+        let closed = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("https://127.0.0.1:{}", closed.local_addr().unwrap().port());
+        drop(closed);
+
+        let enrolled = enroll_files(
+            &server,
+            dir.path(),
+            "agent-a",
+            &url,
+            bundle,
+            SeededRandom::new(1),
+            PATIENCE,
+        )
+        .await;
+
+        assert_eq!(enrolled.unwrap_err().why, "the agent didn't enroll");
+        server.stop().await;
     }
 }

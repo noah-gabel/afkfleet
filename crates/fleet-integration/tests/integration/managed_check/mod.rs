@@ -30,7 +30,12 @@
 //! The waits are real (U22): the link's status read every 2 s for at most
 //! 4 minutes, the bot read every 2 s for at most 90 s until Online and 60 s
 //! until it's offline, the container's start at most 300 s, beside the
-//! link's wait; always inside the `manual` profile's 10 minutes.
+//! link's wait. The steps stop at [`STEPS`], and the whole check, teardown
+//! included, ends within [`WORST`], inside the `manual` profile's 10
+//! minutes.
+//!
+//! A setup step that fails is a FAIL line with a fixed text, never a panic
+//! carrying a command's output, and teardown never panics.
 
 mod minecraft;
 mod pins;
@@ -62,9 +67,11 @@ use fleet_mc::AzaleaConnector;
 use fleet_server::infra::msauth::ReqwestMicrosoftAuth;
 use fleet_server::infra::system::{OsRandom, SystemClock};
 use fleet_testkit::log_capture;
+use secrecy::zeroize::Zeroizing;
 use secrecy::{ExposeSecret as _, SecretBox, SecretString};
 use tokio::sync::{Mutex, mpsc};
 use tokio::task::JoinSet;
+use tokio::time::Instant;
 use totp_rs::Totp;
 
 use self::minecraft::{Minecraft, STARTUP};
@@ -73,16 +80,58 @@ use self::secrets::{Kind, Secrets};
 use crate::harness::agent::enroll_files;
 use crate::harness::server::{OWNER, RealSetup, Server};
 
+/// The longest the setup may take: the server with its PKI and its Owner,
+/// the enrollment, the agent's start, all local.
+const SETUP: Duration = Duration::from_secs(30);
 /// The longest wait for the user to approve the sign-in.
 const LINK_WAIT: Duration = Duration::from_mins(4);
+/// The longest the container's start may take from its spawn: its
+/// healthcheck's [`STARTUP`], and the container's creation and its port's
+/// lookup. The Owner's login and the link's wait run beside it.
+const CONTAINER: Duration = STARTUP.saturating_add(Duration::from_secs(10));
+/// The listing, the step-up, the server's patch, the start and the stop
+/// together: local requests.
+const REQUESTS: Duration = Duration::from_secs(20);
 /// The longest wait for the bot to go Online once started.
 const ONLINE_WAIT: Duration = Duration::from_secs(90);
 /// The longest wait for the bot to be off its agent once stopped.
 const OFFLINE_WAIT: Duration = Duration::from_secs(60);
 /// How often the link and the bot are read.
 const READ_EVERY: Duration = Duration::from_secs(2);
-/// The longest wait for the agent or the server to stop.
-const STOP_WAIT: Duration = Duration::from_secs(45);
+/// A wait's last read: its pause and its answer.
+const LAST_READ: Duration = Duration::from_secs(5);
+/// The longest wait for the agent to stop: its fleet's shutdown, 10 s
+/// (`[runtime] shutdown_timeout`), then the run's own end.
+const AGENT_STOP: Duration = Duration::from_secs(20);
+/// The longest wait for the server to stop: serve's own deadline, the
+/// drain's 15 s (`[http] request_timeout_secs`) and the database's 5 s.
+const SERVER_STOP: Duration = Duration::from_secs(25);
+/// The longest wait for the container and its volumes to go.
+const REMOVE: Duration = Duration::from_secs(15);
+
+/// The steps' budget, past which they're stopped and teardown runs: the
+/// setup, the container's start (the link's wait beside it), the requests,
+/// and the two waits for the bot. A request that hangs ends there, so the
+/// check never outlives [`WORST`].
+const STEPS: Duration = SETUP
+    .saturating_add(CONTAINER)
+    .saturating_add(REQUESTS)
+    .saturating_add(ONLINE_WAIT)
+    .saturating_add(LAST_READ)
+    .saturating_add(OFFLINE_WAIT)
+    .saturating_add(LAST_READ);
+/// The check's worst case: the steps, then the agent's, the server's and
+/// the container's ends. The teardown's wait for a container still
+/// starting ends by the spawn's [`CONTAINER`], inside the steps' budget.
+const WORST: Duration = STEPS
+    .saturating_add(AGENT_STOP)
+    .saturating_add(SERVER_STOP)
+    .saturating_add(REMOVE);
+// The `manual` profile kills a test at 600 s (`.config/nextest.toml`); the
+// log check and the folder's deletion take a moment of the 20 s left.
+const _: () = assert!(WORST.as_secs() + 20 <= 600);
+// The Owner's login and the link's wait fit beside the container's start.
+const _: () = assert!(LINK_WAIT.as_secs() + 30 <= CONTAINER.as_secs());
 
 /// The agent's name.
 const AGENT: &str = "check-agent";
@@ -136,6 +185,9 @@ struct Rig {
     server: Mutex<Option<Server>>,
     agent: Mutex<Option<RunningAgent>>,
     minecraft: Mutex<JoinSet<Result<Minecraft, String>>>,
+    /// When the container's start must have ended: its spawn's
+    /// [`CONTAINER`].
+    container_by: std::sync::Mutex<Option<Instant>>,
     ready: Mutex<Option<Minecraft>>,
     recording: std::sync::Mutex<Option<Arc<Recording>>>,
     secrets: std::sync::Mutex<Secrets>,
@@ -158,7 +210,11 @@ async fn manual_managed_bot_goes_online_and_offline() {
     // Another test in this process may have installed it already.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     log_capture::install().unwrap();
-    println!("The check takes at most about 9 minutes.");
+    println!(
+        "The check takes at most {} min {} s.",
+        WORST.as_secs() / 60,
+        WORST.as_secs() % 60
+    );
     let dir = tempfile::Builder::new()
         .prefix("afkfleet-managed-check-")
         .tempdir()
@@ -166,24 +222,24 @@ async fn manual_managed_bot_goes_online_and_offline() {
     let rig = Arc::new(Rig::default());
 
     // The steps run in a task of their own, so a panic comes back here as an
-    // error: everything stops and the folder goes on every end.
-    let ended = tokio::spawn(check(Arc::clone(&rig), dir.path().to_owned())).await;
+    // error and the budget can end them: everything stops and the folder
+    // goes on every end.
+    let mut checking = tokio::spawn(check(Arc::clone(&rig), dir.path().to_owned()));
+    let ended = tokio::time::timeout(STEPS, &mut checking).await;
+    if ended.is_err() {
+        checking.abort();
+        // Every await in the steps yields, so the aborted task ends at its
+        // next one; it holds nothing teardown needs after that.
+        let _ = checking.await;
+    }
     let mut teardown = Steps::default();
     tear_down(&rig, dir.path(), &mut teardown).await;
     let secrets = core::mem::take(&mut *rig.secrets.lock().unwrap());
     drop(rig);
     let deleted = dir.close().is_ok();
-    match ended {
-        Ok(mut steps) => {
-            steps.failures.append(&mut teardown.failures);
-            steps.check(
-                "temporary folder deleted",
-                deleted,
-                "it's still there: delete the afkfleet-managed-check folder in the temp directory",
-            );
-            steps.finish(&secrets);
-        }
-        Err(failed) => {
+    let mut steps = match ended {
+        Ok(Ok(steps)) => steps,
+        Ok(Err(failed)) => {
             if !deleted {
                 println!(
                     "temporary folder deleted: FAIL (delete the afkfleet-managed-check folder in the temp directory)"
@@ -191,58 +247,50 @@ async fn manual_managed_bot_goes_online_and_offline() {
             }
             std::panic::resume_unwind(failed.into_panic());
         }
-    }
+        Err(_) => {
+            let mut steps = Steps::default();
+            steps.fail(
+                "the steps within their budget",
+                format!("they didn't end within {} s", STEPS.as_secs()),
+            );
+            steps
+        }
+    };
+    steps.failures.append(&mut teardown.failures);
+    steps.check(
+        "temporary folder deleted",
+        deleted,
+        "it's still there: delete the afkfleet-managed-check folder in the temp directory",
+    );
+    steps.finish(&secrets);
 }
 
 /// The check's steps; the first that fails ends them.
 async fn check(rig: Arc<Rig>, dir: PathBuf) -> Steps {
     let mut steps = Steps::default();
-    let password = random_password();
-    rig.saw(Kind::Password, password.expose_secret());
-
-    // The server, its Microsoft adapter recorded, and the agent.
-    let Ok(adapter) = ReqwestMicrosoftAuth::new(Arc::new(SystemClock)) else {
-        steps.fail(
-            "server and agent started",
-            "Microsoft's HTTP client can't be built",
-        );
+    let Some(password) = random_password() else {
+        steps.fail("server and agent started", "the OS's randomness failed");
         return steps;
     };
-    let recording = Arc::new(Recording::new(Arc::new(adapter)));
-    *rig.recording.lock().unwrap() = Some(Arc::clone(&recording));
-    let server = Server::start_real(
-        &dir,
-        RealSetup {
-            microsoft: Arc::clone(&recording) as _,
-            password: password.clone(),
-            key: run_key(),
-        },
-    )
-    .await;
-    let url = server.url();
-    let grpc = server.grpc();
-    let bundle = server.bundle().await;
-    rig.saw(Kind::Bundle, bundle.to_text().expose_secret());
-    let plane = enroll_files(
-        &server,
-        &dir,
-        AGENT,
-        &format!("https://127.0.0.1:{}", grpc.port()),
-        bundle,
-        OsRandom,
-    )
-    .await;
-    *rig.server.lock().await = Some(server);
-    match start_agent(&dir, &plane).await {
-        Ok(agent) => *rig.agent.lock().await = Some(agent),
-        Err(why) => {
+    rig.saw(Kind::Password, password.expose_secret());
+    let url = match tokio::time::timeout(SETUP, set_up(&rig, &dir, password.clone())).await {
+        Ok(Ok(url)) => url,
+        Ok(Err(why)) => {
             steps.fail("server and agent started", why);
             return steps;
         }
-    }
+        Err(_) => {
+            steps.fail(
+                "server and agent started",
+                format!("not within {} s", SETUP.as_secs()),
+            );
+            return steps;
+        }
+    };
     Steps::pass("server and agent started (enrolled)");
 
     // The container starts while the Owner logs in and the link waits.
+    *rig.container_by.lock().unwrap() = Some(Instant::now() + CONTAINER);
     rig.minecraft.lock().await.spawn(Minecraft::start());
 
     let (client, store) = match log_in(&rig, &url, &password).await {
@@ -252,6 +300,11 @@ async fn check(rig: Arc<Rig>, dir: PathBuf) -> Steps {
             return steps;
         }
     };
+    // The client's refresh token, which no log may hold either; every
+    // other token of the server's is found by its prefix ([`secrets`]).
+    if let Ok(Some(token)) = fleet_client::SessionStore::load(&store).await {
+        rig.saw(Kind::RefreshToken, token.expose_secret());
+    }
     Steps::pass("Owner logged in with 2FA");
 
     let Some(account) = link(&rig, &client, &mut steps).await else {
@@ -283,30 +336,74 @@ async fn check(rig: Arc<Rig>, dir: PathBuf) -> Steps {
     }
     Steps::pass("stopped");
     offline(&client, bot, &mut steps).await;
-    // The client's refresh token, which no log may hold either.
-    if let Ok(Some(token)) = fleet_client::SessionStore::load(&store).await {
-        rig.saw(Kind::RefreshToken, token.expose_secret());
-    }
+    drop(store);
     steps
 }
 
-/// 24 bytes from the OS, in hex: the Owner's password, only in memory.
-fn random_password() -> SecretString {
-    let mut bytes = [0_u8; 24];
-    OsRandom.fill(&mut bytes).unwrap();
-    let hex = bytes.iter().fold(String::new(), |mut hex, byte| {
+/// The server, its Microsoft adapter recorded, then the agent enrolled with
+/// it and started: each in the rig as soon as it runs, so every end stops
+/// it. Returns the API's URL; a failure is a fixed text.
+async fn set_up(rig: &Rig, dir: &Path, password: SecretString) -> Result<String, String> {
+    let adapter = ReqwestMicrosoftAuth::new(Arc::new(SystemClock))
+        .map_err(|_| "Microsoft's HTTP client can't be built")?;
+    let recording = Arc::new(Recording::new(Arc::new(adapter)));
+    *rig.recording.lock().unwrap() = Some(Arc::clone(&recording));
+    let key = run_key().ok_or("the OS's randomness failed")?;
+    let server = Server::start_real(
+        dir,
+        RealSetup {
+            microsoft: Arc::clone(&recording) as _,
+            password,
+            key,
+        },
+    )
+    .await?;
+    let url = server.url();
+    let grpc = server.grpc();
+    let mut held = rig.server.lock().await;
+    let server = held.insert(server);
+    let bundle = server.try_bundle().await?;
+    rig.saw(Kind::Bundle, bundle.to_text().expose_secret());
+    rig.saw(Kind::EnrollmentToken, bundle.token().expose_secret());
+    let plane = enroll_files(
+        server,
+        dir,
+        AGENT,
+        &format!("https://127.0.0.1:{}", grpc.port()),
+        bundle,
+        OsRandom,
+        SETUP,
+    )
+    .await
+    // `enroll`'s output names files and the server's address: never shown.
+    .map_err(|error| error.why)?;
+    drop(held);
+    let agent = start_agent(dir, &plane).await?;
+    *rig.agent.lock().await = Some(agent);
+    Ok(url)
+}
+
+/// 24 bytes from the OS, in hex: the Owner's password, only in memory, in
+/// buffers wiped when they go; none if the OS's randomness failed.
+fn random_password() -> Option<SecretString> {
+    let mut bytes = Zeroizing::new([0_u8; 24]);
+    OsRandom.fill(bytes.as_mut_slice()).ok()?;
+    // Sized for the 48 digits, so writing them never reallocates, and the
+    // secret takes the text as it is.
+    let mut hex = Zeroizing::new(String::with_capacity(48));
+    for byte in bytes.iter() {
         // Writing into a String never fails.
         let _ = write!(hex, "{byte:02x}");
-        hex
-    });
-    bytes.fill(0);
-    SecretString::from(hex)
+    }
+    Some(SecretString::from(core::mem::take(&mut *hex)))
 }
 
 /// The vault's key for this run alone, drawn from the OS straight into its
-/// box and kept only in memory.
-fn run_key() -> SecretBox<[u8; 32]> {
-    SecretBox::init_with_mut(|key: &mut [u8; 32]| OsRandom.fill(key).unwrap())
+/// box and kept only in memory; none if the OS's randomness failed.
+fn run_key() -> Option<SecretBox<[u8; 32]>> {
+    let mut drawn = false;
+    let key = SecretBox::init_with_mut(|key: &mut [u8; 32]| drawn = OsRandom.fill(key).is_ok());
+    drawn.then_some(key)
 }
 
 /// The agent as main.rs runs it: `agent.toml` in `dir`, loaded and checked
@@ -537,7 +634,8 @@ async fn listed(
 
 /// The container's address, once it's healthy.
 async fn minecraft_address(rig: &Rig, steps: &mut Steps) -> Option<String> {
-    let started = tokio::time::timeout(STARTUP, rig.minecraft.lock().await.join_next()).await;
+    let by = (*rig.container_by.lock().unwrap()).unwrap_or_else(Instant::now);
+    let started = tokio::time::timeout_at(by, rig.minecraft.lock().await.join_next()).await;
     match started {
         Ok(Some(Ok(Ok(minecraft)))) => {
             let address = minecraft.address();
@@ -552,7 +650,7 @@ async fn minecraft_address(rig: &Rig, steps: &mut Steps) -> Option<String> {
         _ => {
             steps.fail(
                 "Minecraft server started",
-                "it didn't start within 5 minutes",
+                format!("it didn't start within {} s", CONTAINER.as_secs()),
             );
             None
         }
@@ -699,29 +797,45 @@ fn describe(error: &ClientError) -> String {
 /// bodies are read for the log check before the folder goes.
 async fn tear_down(rig: &Rig, dir: &Path, steps: &mut Steps) {
     if let Some(mut agent) = rig.agent.lock().await.take() {
-        let _ = agent.signals.send(Signal::Terminate).await;
-        let stopped = tokio::time::timeout(STOP_WAIT, agent.task.join_next()).await;
+        // Nothing else sends, so there's room.
+        let _ = agent.signals.try_send(Signal::Terminate);
+        let stopped = tokio::time::timeout(AGENT_STOP, agent.task.join_next()).await;
         let clean = matches!(&stopped, Ok(Some(Ok(outcome))) if outcome.exit == Exit::Stopped);
-        steps.check("agent stopped", clean, "it didn't stop cleanly");
+        steps.check(
+            "agent stopped",
+            clean,
+            &format!("it didn't stop cleanly within {} s", AGENT_STOP.as_secs()),
+        );
     }
     if let Some(mut server) = rig.server.lock().await.take() {
-        tokio::time::timeout(STOP_WAIT, server.stop())
-            .await
-            .map_or_else(
-                |_| steps.fail("server stopped", "not within 45 s"),
-                |()| Steps::pass("server stopped"),
-            );
+        let clean = server.try_stop(SERVER_STOP).await;
+        steps.check(
+            "server stopped",
+            clean,
+            &format!("it didn't stop cleanly within {} s", SERVER_STOP.as_secs()),
+        );
     }
-    // A start still under way ends first, so its container is removed too.
+    // A start still under way ends first, by its spawn's bound, so its
+    // container is removed too.
+    let by = *rig.container_by.lock().unwrap();
     let mut starting = rig.minecraft.lock().await;
-    while let Ok(Some(started)) = tokio::time::timeout(STARTUP, starting.join_next()).await {
-        if let Ok(Ok(minecraft)) = started {
-            *rig.ready.lock().await = Some(minecraft);
+    if let Some(by) = by {
+        while let Ok(Some(started)) = tokio::time::timeout_at(by, starting.join_next()).await {
+            if let Ok(Ok(minecraft)) = started {
+                *rig.ready.lock().await = Some(minecraft);
+            }
         }
+    }
+    if !starting.is_empty() {
+        starting.abort_all();
+        steps.fail(
+            "container removed",
+            "its start didn't end: find it with `docker ps -a`, then `docker rm -fv` it",
+        );
     }
     drop(starting);
     if let Some(minecraft) = rig.ready.lock().await.take() {
-        let removed = minecraft.remove().await;
+        let removed = minecraft.remove(REMOVE).await;
         steps.check(
             "container removed",
             removed,
@@ -737,13 +851,18 @@ async fn tear_down(rig: &Rig, dir: &Path, steps: &mut Steps) {
         "pki/server.key",
         &format!("{AGENT}/agent.key"),
     ] {
-        if let Ok(text) = tokio::fs::read_to_string(dir.join(key)).await {
-            for line in text
-                .lines()
-                .filter(|line| line.len() >= 40 && !line.starts_with("-----"))
-            {
-                secrets.saw(Kind::Key, line);
-            }
+        // Wiped when it goes, its whole capacity included.
+        let Ok(bytes) = tokio::fs::read(dir.join(key)).await.map(Zeroizing::new) else {
+            continue;
+        };
+        let Ok(text) = core::str::from_utf8(&bytes) else {
+            continue;
+        };
+        for line in text
+            .lines()
+            .filter(|line| line.len() >= 40 && !line.starts_with("-----"))
+        {
+            secrets.saw(Kind::Key, line);
         }
     }
     rig.secrets.lock().unwrap().extend(secrets);

@@ -93,6 +93,28 @@ pub(crate) struct RealSetup {
     pub(crate) key: SecretBox<[u8; 32]>,
 }
 
+/// The gRPC port's current address, which every start moves: a fresh port
+/// each time, so a port the stop freed can't be taken by another process
+/// and dialled meanwhile. The agents' proxies read it at every connection.
+/// Clones share it.
+#[derive(Debug, Clone)]
+pub(crate) struct GrpcAddress(Arc<std::sync::Mutex<SocketAddr>>);
+
+impl GrpcAddress {
+    /// Where the gRPC port listens now.
+    pub(crate) fn get(&self) -> SocketAddr {
+        *self.0.lock().unwrap()
+    }
+
+    fn set(&self, address: SocketAddr) {
+        *self.0.lock().unwrap() = address;
+    }
+}
+
+/// Why a server didn't start: a fixed text, never a path, an address or a
+/// command's output.
+pub(crate) type SetupError = &'static str;
+
 /// The server; see the [module docs](self).
 #[derive(Debug)]
 pub(crate) struct Server {
@@ -103,8 +125,12 @@ pub(crate) struct Server {
     random: Arc<dyn SecureRandom>,
     microsoft: Arc<dyn MicrosoftAuthProvider>,
     keys: Keys,
-    http: SocketAddr,
-    grpc: SocketAddr,
+    /// The API's listener, bound once for the server's whole life: each
+    /// serve gets a clone of it, so a restart never frees its port and the
+    /// Owner's client keeps its URL.
+    http: std::net::TcpListener,
+    http_address: SocketAddr,
+    grpc: GrpcAddress,
     ca_fingerprint: CertFingerprint,
     running: Option<Running>,
 }
@@ -127,12 +153,13 @@ impl core::fmt::Debug for Keys {
 }
 
 impl Keys {
-    fn take(&mut self) -> VaultKeys {
+    fn take(&mut self) -> Result<VaultKeys, SetupError> {
         let key = match self {
             Self::Fixed => SecretBox::new(Box::new([0x5A; 32])),
-            Self::Drawn(key) => key.take().expect("the DoD check's server starts once"),
+            Self::Drawn(key) => key.take().ok_or("the vault's key was used already")?,
         };
-        VaultKeys::from_keys(BTreeMap::from([(1, key)]), 1).unwrap()
+        VaultKeys::from_keys(BTreeMap::from([(1, key)]), 1)
+            .map_err(|_| "the vault's key couldn't be set up")
     }
 }
 
@@ -177,11 +204,15 @@ impl Server {
             },
         )
         .await
+        .unwrap_or_else(|why| panic!("the loopback server didn't start: {why}"))
     }
 
     /// The managed check's server with its files in `dir`; see the [module
     /// docs](self).
-    pub(crate) async fn start_real(dir: &Path, setup: RealSetup) -> Self {
+    ///
+    /// # Errors
+    /// A fixed text saying which step failed.
+    pub(crate) async fn start_real(dir: &Path, setup: RealSetup) -> Result<Self, SetupError> {
         Self::begin(
             dir,
             Begin {
@@ -199,18 +230,23 @@ impl Server {
     }
 
     /// The PKI from `pki init`, the database with its Owner, then serve.
-    async fn begin(dir: &Path, begin: Begin) -> Self {
+    async fn begin(dir: &Path, begin: Begin) -> Result<Self, SetupError> {
+        const BIND: SetupError = "the server's ports couldn't be bound";
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
-        let http = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let grpc = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let http = std::net::TcpListener::bind("127.0.0.1:0").map_err(|_| BIND)?;
+        let http_address = http.local_addr().map_err(|_| BIND)?;
+        let grpc = TcpListener::bind("127.0.0.1:0").await.map_err(|_| BIND)?;
+        let grpc_address = grpc.local_addr().map_err(|_| BIND)?;
         let config = config(
             dir,
-            http.local_addr().unwrap(),
-            grpc.local_addr().unwrap(),
+            http_address,
+            grpc_address,
             begin.heartbeats,
             begin.allow_offline,
         );
-        std::fs::create_dir_all(dir.join("pki")).unwrap();
+        std::fs::create_dir_all(dir.join("pki"))
+            .map_err(|_| "the PKI's folder couldn't be made")?;
+        // Its output names the files: never shown.
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let created = pki::init(
             &config,
@@ -221,35 +257,33 @@ impl Server {
             &mut out,
             &mut err,
         );
-        assert_eq!(
-            created,
-            pki::Exit::Created,
-            "{}",
-            String::from_utf8_lossy(&err)
-        );
+        if created != pki::Exit::Created {
+            return Err("the PKI couldn't be created");
+        }
         let database = sqlite::open(&config.database, DatabaseOptions::default())
             .await
-            .unwrap();
-        UserService::new(
+            .map_err(|_| "the database couldn't be opened")?;
+        let username = Username::try_from(OWNER).map_err(|_| "the Owner's name was refused")?;
+        let password = NewPassword::try_from(SecretString::from(begin.password.expose_secret()))
+            .map_err(|_| "the Owner's password was refused")?;
+        let created = UserService::new(
             Arc::clone(&begin.clock),
             Arc::clone(&begin.random),
             Arc::new(database.clone()),
-            passwords(&config, &begin.random).await,
+            passwords(&config, &begin.random).await?,
         )
-        .create_owner(
-            &Username::try_from(OWNER).unwrap(),
-            &NewPassword::try_from(SecretString::from(begin.password.expose_secret())).unwrap(),
-        )
-        .await
-        .unwrap();
+        .create_owner(&username, &password)
+        .await;
         database.close().await;
+        created.map_err(|_| "the Owner couldn't be created")?;
         let ca_fingerprint = load(&grpc_config(&config).pki, begin.clock.now())
-            .unwrap()
+            .map_err(|_| "the PKI couldn't be read")?
             .ca
             .fingerprint();
         let mut server = Self {
-            http: http.local_addr().unwrap(),
-            grpc: grpc.local_addr().unwrap(),
+            http,
+            http_address,
+            grpc: GrpcAddress(Arc::new(std::sync::Mutex::new(grpc_address))),
             config,
             clock: begin.clock,
             manual: begin.manual,
@@ -259,18 +293,30 @@ impl Server {
             ca_fingerprint,
             running: None,
         };
-        server.boot(http, grpc).await;
-        server
+        server.boot(grpc).await?;
+        Ok(server)
     }
 
-    /// Serve over `http` and `grpc`, on the database and PKI in the folder.
-    async fn boot(&mut self, http: TcpListener, grpc: TcpListener) {
-        let pki = load(&grpc_config(&self.config).pki, self.clock.now()).unwrap();
+    /// Serve over a clone of the API's listener and `grpc`, on the database
+    /// and PKI in the folder.
+    async fn boot(&mut self, grpc: TcpListener) -> Result<(), SetupError> {
+        let http = self
+            .http
+            .try_clone()
+            .and_then(|clone| {
+                clone.set_nonblocking(true)?;
+                TcpListener::from_std(clone)
+            })
+            .map_err(|_| "the API's listener couldn't be cloned")?;
+        let pki = load(&grpc_config(&self.config).pki, self.clock.now())
+            .map_err(|_| "the PKI couldn't be read")?;
         let database = sqlite::open(&self.config.database, DatabaseOptions::default())
             .await
-            .unwrap();
-        let keys = self.keys.take();
-        let lockout_key = keys.derive_key(DerivedKey::LoginAttempts).unwrap();
+            .map_err(|_| "the database couldn't be opened")?;
+        let keys = self.keys.take()?;
+        let lockout_key = keys
+            .derive_key(DerivedKey::LoginAttempts)
+            .map_err(|_| "the vault's key couldn't be derived")?;
         let ports = ServerPorts {
             clock: Arc::clone(&self.clock),
             limiter_clock: Arc::new(MonotonicClock::start()),
@@ -290,18 +336,19 @@ impl Server {
             &database,
             keys,
             lockout_key,
-            passwords(&self.config, &self.random).await,
+            passwords(&self.config, &self.random).await?,
             ports,
             Some(ca),
         );
         let registry = app
             .grpc
             .as_ref()
-            .expect("the control plane is on")
+            .ok_or("the control plane is off")?
             .sweep
             .registry
             .clone();
-        let port = grpc_port(&self.config, Some(opened), app.grpc.take()).unwrap();
+        let port = grpc_port(&self.config, Some(opened), app.grpc.take())
+            .map_err(|_| "the gRPC port couldn't be set up")?;
         let (stop, signals) = ChannelSignals::new();
         let timeouts = ShutdownTimeouts::of(&self.config.http);
         let db = database.clone();
@@ -313,28 +360,45 @@ impl Server {
             stop,
             serving,
         });
+        Ok(())
     }
 
-    /// Stops serve with a signal, and checks it stopped cleanly: every
-    /// stream ended and recorded, the database closed.
+    /// Stops serve with a signal within `within`: whether it stopped
+    /// cleanly, every stream ended and recorded, the database closed. It
+    /// never panics, so the managed check's teardown goes on whatever
+    /// happened; a serve still running at `within` is aborted.
+    pub(crate) async fn try_stop(&mut self, within: Duration) -> bool {
+        let Some(mut running) = self.running.take() else {
+            return false;
+        };
+        if running.stop.send(Signal::Terminate).await.is_err() {
+            return false;
+        }
+        matches!(
+            tokio::time::timeout(within, running.serving.join_next()).await,
+            Ok(Some(Ok(Exit::Stopped)))
+        )
+    }
+
+    /// [`Server::try_stop`] within [`PATIENCE`], which must stop cleanly.
     pub(crate) async fn stop(&mut self) {
-        let mut running = self.running.take().expect("the server runs");
-        running.stop.send(Signal::Terminate).await.unwrap();
-        let exit = tokio::time::timeout(PATIENCE, running.serving.join_next())
-            .await
-            .expect("the server stops")
-            .unwrap()
-            .unwrap();
-        assert_eq!(exit, Exit::Stopped);
+        assert!(self.try_stop(PATIENCE).await, "the server stops cleanly");
     }
 
-    /// Serve again, on the same database, PKI and addresses: the agents'
-    /// URLs and the Owner's session still hold.
+    /// Serve again, on the same database, PKI and API listener, the gRPC
+    /// port on a fresh port the proxies follow: the agents' URLs and the
+    /// Owner's session still hold.
     pub(crate) async fn start_again(&mut self) {
         assert!(self.running.is_none(), "the server is stopped");
-        let http = TcpListener::bind(self.http).await.unwrap();
-        let grpc = TcpListener::bind(self.grpc).await.unwrap();
-        self.boot(http, grpc).await;
+        let grpc = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = grpc.local_addr().unwrap();
+        self.grpc.set(address);
+        if let Some(plane) = self.config.grpc.as_mut() {
+            plane.bind = address;
+        }
+        self.boot(grpc)
+            .await
+            .unwrap_or_else(|why| panic!("the loopback server didn't start again: {why}"));
     }
 
     /// Stops serve and starts it again.
@@ -349,12 +413,17 @@ impl Server {
 
     /// The API's URL.
     pub(crate) fn url(&self) -> String {
-        format!("http://{}", self.http)
+        format!("http://{}", self.http_address)
     }
 
-    /// The gRPC port's address.
+    /// The gRPC port's address now.
     pub(crate) fn grpc(&self) -> SocketAddr {
-        self.grpc
+        self.grpc.get()
+    }
+
+    /// The gRPC port's address as it moves, for a proxy.
+    pub(crate) fn grpc_address(&self) -> GrpcAddress {
+        self.grpc.clone()
     }
 
     /// The CA certificate agents trust.
@@ -374,19 +443,29 @@ impl Server {
 
     /// An enrollment token's bundle, as the host's `agent
     /// create-enrollment-token` makes it.
-    pub(crate) async fn bundle(&self) -> EnrollmentBundle {
+    ///
+    /// # Errors
+    /// A fixed text when the server isn't running or the token can't be
+    /// made.
+    pub(crate) async fn try_bundle(&self) -> Result<EnrollmentBundle, SetupError> {
+        let running = self.running.as_ref().ok_or("the server isn't running")?;
         let random = Arc::clone(&self.random);
         EnrollmentTokenService::new(
             Arc::clone(&self.clock),
             Arc::clone(&random),
-            Arc::new(self.running().db.clone()),
+            Arc::new(running.db.clone()),
             Arc::new(Sha256Tokens::new(random)),
             self.ca_fingerprint,
         )
         .create(Creator::Host)
         .await
-        .unwrap()
-        .bundle
+        .map(|created| created.bundle)
+        .map_err(|_| "the enrollment token couldn't be made")
+    }
+
+    /// [`Server::try_bundle`] for a loopback case, which must succeed.
+    pub(crate) async fn bundle(&self) -> EnrollmentBundle {
+        self.try_bundle().await.unwrap()
     }
 
     /// The ID of the agent enrolled as `name`.
@@ -414,6 +493,13 @@ impl Server {
 
     /// Every audit entry of `action`, oldest first.
     pub(crate) async fn entries(&self, action: &AuditAction) -> Vec<AuditRecord> {
+        let mut all = self.audit().await;
+        all.retain(|record| &record.action == action);
+        all
+    }
+
+    /// Every audit entry, oldest first.
+    pub(crate) async fn audit(&self) -> Vec<AuditRecord> {
         let db = &self.running().db;
         let mut all = Vec::new();
         let mut before = None;
@@ -431,7 +517,6 @@ impl Server {
             all.extend(page);
         }
         all.reverse();
-        all.retain(|record| &record.action == action);
         all
     }
 }
@@ -492,12 +577,14 @@ fn grpc_config(config: &ServerConfig) -> &GrpcConfig {
     config.grpc.as_ref().expect("the control plane is on")
 }
 
-async fn passwords(config: &ServerConfig, random: &Arc<dyn SecureRandom>) -> Arc<dyn Passwords> {
-    Arc::new(
-        Argon2Passwords::new(config.auth.argon2, Arc::clone(random))
-            .await
-            .unwrap(),
-    )
+async fn passwords(
+    config: &ServerConfig,
+    random: &Arc<dyn SecureRandom>,
+) -> Result<Arc<dyn Passwords>, SetupError> {
+    Argon2Passwords::new(config.auth.argon2, Arc::clone(random))
+        .await
+        .map(|passwords| Arc::new(passwords) as Arc<dyn Passwords>)
+        .map_err(|_| "the password service couldn't start")
 }
 
 /// `at` in whole milliseconds, as the database stores times.
@@ -522,5 +609,39 @@ impl ShutdownSignals for ChannelSignals {
             Some(signal) => signal,
             None => core::future::pending().await,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn stopping_a_stopped_server_says_so_and_never_panics() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut server = Server::start(dir.path(), ServerOptions::default()).await;
+        assert!(server.try_stop(PATIENCE).await, "a running one stops");
+
+        let again = server.try_stop(PATIENCE).await;
+
+        assert!(!again);
+    }
+
+    #[tokio::test]
+    async fn a_setup_step_that_fails_is_a_fixed_text_never_a_panic() {
+        let dir = tempfile::tempdir().unwrap();
+        // A PKI's file already there: `pki init` never overwrites one.
+        std::fs::create_dir_all(dir.path().join("pki")).unwrap();
+        std::fs::write(dir.path().join("pki/ca.crt"), "placeholder").unwrap();
+        let setup = RealSetup {
+            // Never called: the setup ends before serve.
+            microsoft: Arc::new(ReqwestMicrosoftAuth::new(Arc::new(SystemClock)).unwrap()),
+            password: SecretString::from(PASSWORD),
+            key: SecretBox::new(Box::new([7; 32])),
+        };
+
+        let started = Server::start_real(dir.path(), setup).await;
+
+        assert_eq!(started.unwrap_err(), "the PKI couldn't be created");
     }
 }

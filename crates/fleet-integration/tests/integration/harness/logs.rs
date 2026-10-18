@@ -21,10 +21,9 @@ use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::fmt::MakeWriter;
 use tracing_subscriber::layer::SubscriberExt as _;
 
-/// The longest wait between two of an agent's attempts:
-/// `fleet_proto::control::RECONNECT_DELAY_MAX`, which the agent's backoff
-/// never exceeds (ADR-0019, S67).
-pub(crate) const RECONNECT_MAX: Duration = Duration::from_secs(30);
+/// The longest wait between two of an agent's attempts, which the agent's
+/// backoff never exceeds (ADR-0019, S67).
+pub(crate) const RECONNECT_MAX: Duration = fleet_proto::control::RECONNECT_DELAY_MAX;
 
 /// The longest a case waits for anything: a reconnect after the worst
 /// backoff ([`RECONNECT_MAX`]) and a whole attempt (`WELCOME_TIMEOUT`,
@@ -68,6 +67,17 @@ impl Logs {
     /// How many lines say `message`.
     pub(crate) fn count(&self, message: &str) -> usize {
         self.buffer.lines_with(message).unwrap().len()
+    }
+
+    /// How many lines' messages `matches` takes.
+    pub(crate) fn count_where(&self, matches: impl Fn(&str) -> bool) -> usize {
+        self.buffer
+            .json_lines()
+            .unwrap()
+            .iter()
+            .filter_map(|line| line.get("message")?.as_str())
+            .filter(|message| matches(message))
+            .count()
     }
 
     /// Waits until `done`, looking again at every line and every

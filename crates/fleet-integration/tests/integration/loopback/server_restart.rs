@@ -5,6 +5,8 @@
 //! Once both are back, the new bot goes to the first agent with room, in
 //! enrollment order (S42).
 
+use std::collections::BTreeSet;
+
 use fleet_core::audit::AuditAction;
 use rstest::rstest;
 
@@ -56,16 +58,28 @@ async fn agents_resync_after_a_server_restart_in_either_order(#[case] first: Fir
         First::High => (&high, &low),
     };
     back.proxy.open_gate();
-    world.reconciled(back, 0).await;
+    let (_, back_holds) = world.reconciled_holding(back, 0).await;
     // The first agent back is reconciled with exactly its own bots, and the
     // new bot waits for the other, though this one has room.
     let placed_early = world.server.bot(four).await.agent;
     later.proxy.open_gate();
+    let (_, later_holds) = world.reconciled_holding(later, 0).await;
     world.online(&low, four, 0).await;
     world.online(&low, one, 0).await;
     world.online(&low, two, 0).await;
     world.online(&high, three, 0).await;
 
+    // The low agent's own bots, and the high one's; the low one, first with
+    // room, also gets the new bot once both are back: in the pass that
+    // reconciles it when it's back second, since its welcome opens the gate
+    // (fleet-core's `plan` places waiting bots on a welcomed agent too).
+    let (low_own, high_own) = (BTreeSet::from([one, two]), BTreeSet::from([three]));
+    let (back_expected, later_expected) = match first {
+        First::Low => (low_own, high_own),
+        First::High => (high_own, BTreeSet::from([one, two, four])),
+    };
+    assert_eq!(back_holds, back_expected, "the first back: its own bots");
+    assert_eq!(later_holds, later_expected, "the second back");
     assert_eq!(
         placed_early, None,
         "nothing new placed before every agent was back"
