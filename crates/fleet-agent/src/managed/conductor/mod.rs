@@ -25,8 +25,10 @@
 //! - **The fleet's answers** follow the `mapping` module's tables: `Busy` and
 //!   `TimedOut` stay pending and are tried again after any `Removed` and
 //!   every [`RETRY_TICK`], which tries busy removals first (a bot the stream
-//!   gives again leaves them); `AtCapacity` and `AccountInUse` wait for a
-//!   `Removed`, with one `warn`; `AccountChanged` is an `error` naming the
+//!   gives again leaves them; a busy removal is one `debug` line);
+//!   `AtCapacity` and `AccountInUse` wait for a `Removed`, with one `warn`
+//!   when the wait starts and `debug` for every retry that finds it still
+//!   waiting; `AccountChanged` is an `error` naming the
 //!   bot; `ShuttingDown` is dropped.
 //! - **Events** go to the outbox; a `Removed` forgets the bot's kept grant.
 //!   A lag is one `warn` with the count and a resync from `snapshot_all`: a
@@ -289,7 +291,8 @@ impl Conductor {
             Instruction::Reconcile(assignments) => self.reconcile(generation, assignments).await,
             Instruction::Assign(assignment) => {
                 self.book.tell(assignment.spec.id);
-                self.apply(assignment.spec, assignment.restore).await;
+                let prior = self.book.pending_wait(assignment.spec.id);
+                self.apply(assignment.spec, assignment.restore, prior).await;
             }
             Instruction::Unassign(bot) => {
                 self.book.untell(bot);
@@ -302,7 +305,8 @@ impl Conductor {
                     return;
                 }
                 let restore = self.book.pending_restore(spec.id);
-                self.apply(spec, restore).await;
+                let prior = self.book.pending_wait(spec.id);
+                self.apply(spec, restore, prior).await;
             }
             Instruction::SendChat(chat) => self.send_chat(generation, chat).await,
             Instruction::Lifecycle(command) => self.lifecycle(generation, command).await,
@@ -322,7 +326,8 @@ impl Conductor {
         }
         let mut assignments = assignments.into_iter();
         while let Some(assignment) = assignments.next() {
-            if self.apply(assignment.spec, assignment.restore).await == Outcome::EndsBatch {
+            let prior = self.book.pending_wait(assignment.spec.id);
+            if self.apply(assignment.spec, assignment.restore, prior).await == Outcome::EndsBatch {
                 // The fleet is slow: the rest waits for the tick.
                 for rest in assignments.by_ref() {
                     self.hold(rest.spec, rest.restore, Wait::Retry);
@@ -332,8 +337,14 @@ impl Conductor {
     }
 
     /// Applies `spec` with `restore`, keeping it pending when the fleet
-    /// says to try again.
-    async fn apply(&mut self, spec: BotSpec, restore: Option<StickyState>) -> Outcome {
+    /// says to try again. `prior` is what it waited for, if it was pending:
+    /// a bot that already waited for a `Removed` was warned about once.
+    async fn apply(
+        &mut self,
+        spec: BotSpec,
+        restore: Option<StickyState>,
+        prior: Option<Wait>,
+    ) -> Outcome {
         let bot = spec.id;
         if spec.desired == DesiredRunState::Stopped {
             // The bot stops and stays; its session is over (S63).
@@ -354,7 +365,12 @@ impl Conductor {
                 }
             }
             Unapplied::AwaitRemoved => {
-                warn!(bot_id = %bot, %error, "a bot waits for another bot's removal");
+                // One warn per wait, not one per retry: every Removed retries.
+                if prior == Some(Wait::Removed) {
+                    debug!(bot_id = %bot, %error, "a bot still waits for another bot's removal");
+                } else {
+                    warn!(bot_id = %bot, %error, "a bot waits for another bot's removal");
+                }
                 self.hold(spec, restore, Wait::Removed);
             }
             Unapplied::Rejected => {
@@ -384,7 +400,10 @@ impl Conductor {
             Err(FleetError::UnknownBot) => {
                 self.outbox.removed(bot, self.clock.now());
             }
-            Err(FleetError::Busy | FleetError::TimedOut) => self.book.unremoved(bot),
+            Err(error @ (FleetError::Busy | FleetError::TimedOut)) => {
+                debug!(bot_id = %bot, %error, "a bot's removal waits for the next tick");
+                self.book.unremoved(bot);
+            }
             Err(
                 error @ (FleetError::ShuttingDown
                 | FleetError::AtCapacity
@@ -459,7 +478,11 @@ impl Conductor {
     async fn retry(&mut self, removed: bool) {
         let mut due = self.book.due(removed).into_iter();
         while let Some(pending) = due.next() {
-            if self.apply(pending.spec, pending.restore).await == Outcome::EndsBatch {
+            if self
+                .apply(pending.spec, pending.restore, Some(pending.wait))
+                .await
+                == Outcome::EndsBatch
+            {
                 for rest in due.by_ref() {
                     self.hold(rest.spec, rest.restore, rest.wait);
                 }

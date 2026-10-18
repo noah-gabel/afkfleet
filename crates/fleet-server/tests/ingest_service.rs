@@ -769,6 +769,7 @@ async fn a_sticky_write_never_goes_backwards(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
+    let (logs, _guard) = capture();
     let world = World::new(options).await;
     let marks = Arc::new(ScriptedMarks::default());
     let bus = EventBus::new();
@@ -799,16 +800,91 @@ async fn a_sticky_write_never_goes_backwards(
 
     let tick = writer.tick().await;
 
+    // Nothing was written, so nothing committed and nothing says it did.
+    assert_eq!(tick, Tick::Idle);
+    let row = world.db.bots().find(world.bot).await.unwrap().unwrap();
+    assert_eq!(row.last.unwrap().state, LastState::Online);
     assert_eq!(
-        tick,
+        logs.lines_with("the ingest wrote a batch").unwrap().len(),
+        0,
+        "{}",
+        logs.text()
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn after_failed_batches_a_tick_that_wrote_nothing_waits_for_a_real_write_to_say_so(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (logs, _guard) = capture();
+    let world = World::new(options).await;
+    let marks = Arc::new(ScriptedMarks::default());
+    let bus = EventBus::new();
+    let (front, mut writer) = world.ingest(marks.clone(), &bus, 10, IngestBounds::default());
+    let share = front.share();
+    // A time no column can store fails its batch, which isn't a busy one.
+    let far = DateTime::<Utc>::from_timestamp(253_402_300_800, 0).unwrap();
+    front
+        .take(
+            &share,
+            Report {
+                received_at: far,
+                ..world.report(T0, received("lost"))
+            },
+        )
+        .unwrap();
+    let failed = writer.tick().await;
+    // A sticky crossing older than the row's state: record_state refuses it.
+    let mut tx = world.db.write().await.unwrap();
+    assert!(
+        tx.bots()
+            .record_state(
+                world.bot,
+                world.agent,
+                &LastReport {
+                    state: LastState::Online,
+                    at: at(T0 + 10),
+                },
+            )
+            .await
+            .unwrap()
+    );
+    tx.commit(setup_entry()).await.unwrap();
+    marks.mark(StickyWrite {
+        bot: world.bot,
+        agent: world.agent,
+        last: LastReport {
+            state: paused(),
+            at: at(T0 + 5),
+        },
+    });
+    let refused = writer.tick().await;
+    let quiet = logs
+        .lines_with("the ingest writes again; chat messages were lost meanwhile")
+        .unwrap()
+        .len();
+    front
+        .take(&share, world.report(T0, received("kept")))
+        .unwrap();
+    let written = writer.tick().await;
+
+    assert_eq!(failed, Tick::Dropped { rows: 1 });
+    assert_eq!(refused, Tick::Idle);
+    assert_eq!(quiet, 0, "nothing was written yet: {}", logs.text());
+    assert_eq!(
+        written,
         Tick::Written {
-            stored: 0,
+            stored: 1,
             skipped: 0,
             sticky: 0
         }
     );
-    let row = world.db.bots().find(world.bot).await.unwrap().unwrap();
-    assert_eq!(row.last.unwrap().state, LastState::Online);
+    let recovery = logs
+        .lines_with("the ingest writes again; chat messages were lost meanwhile")
+        .unwrap();
+    assert_eq!(recovery.len(), 1, "{}", logs.text());
+    assert_eq!(recovery[0]["lost"], 1);
 }
 
 #[sqlx::test(migrations = false)]
@@ -994,12 +1070,13 @@ impl World {
     }
 
     /// The front and the writer over `store`, waiting up to `wait` for the
-    /// write connection.
+    /// write connection, holding at most `bounds`.
     fn ingest_over(
         store: Arc<dyn Store>,
         marks: Arc<dyn StickyMarks>,
         bus: &EventBus,
         wait: Duration,
+        bounds: IngestBounds,
     ) -> (impl Ingest, IngestWriter) {
         ingest(
             store,
@@ -1010,7 +1087,7 @@ impl World {
                 batch_rows: NonZeroUsize::new(10).unwrap(),
                 wait,
             },
-            IngestBounds::default(),
+            bounds,
         )
     }
 }
@@ -1036,7 +1113,8 @@ async fn the_marks_are_taken_only_once_the_write_transaction_is_open(
         },
     });
     let bus = EventBus::new();
-    let (_front, mut writer) = World::ingest_over(store, marks, &bus, WAIT);
+    let (_front, mut writer) =
+        World::ingest_over(store, marks, &bus, WAIT, IngestBounds::default());
 
     let tick = writer.tick().await;
 
@@ -1068,7 +1146,13 @@ async fn a_tick_whose_marks_the_fence_refused_commits_nothing(
     let log = Log::default();
     let (store, _requested) = world.observed(&log);
     let bus = EventBus::new();
-    let (_front, mut writer) = World::ingest_over(store, Arc::new(FencedMarks), &bus, WAIT);
+    let (_front, mut writer) = World::ingest_over(
+        store,
+        Arc::new(FencedMarks),
+        &bus,
+        WAIT,
+        IngestBounds::default(),
+    );
 
     let tick = writer.tick().await;
 
@@ -1092,8 +1176,13 @@ async fn a_batch_whose_rows_were_all_skipped_commits_nothing(
     let log = Log::default();
     let (store, _requested) = world.observed(&log);
     let bus = EventBus::new();
-    let (front, mut writer) =
-        World::ingest_over(store, Arc::new(ScriptedMarks::default()), &bus, WAIT);
+    let (front, mut writer) = World::ingest_over(
+        store,
+        Arc::new(ScriptedMarks::default()),
+        &bus,
+        WAIT,
+        IngestBounds::default(),
+    );
     let share = front.share();
     let mut report = world.report(T0, received("not this agent's bot"));
     report.bot = elsewhere;
@@ -1257,8 +1346,13 @@ async fn a_resume_or_reset_clear_that_lands_while_a_tick_waits_is_never_undone(
     let log = Log::default();
     let (store, requested) = world.observed(&log);
     let bus = EventBus::new();
-    let (_front, mut writer) =
-        World::ingest_over(store, registry.clone(), &bus, Duration::from_secs(5));
+    let (_front, mut writer) = World::ingest_over(
+        store,
+        registry.clone(),
+        &bus,
+        Duration::from_secs(5),
+        IngestBounds::default(),
+    );
     // The clear holds the write connection while the tick asks for it.
     let mut clear = world.db.write().await.unwrap();
     let tick = tokio::spawn(async move { writer.tick().await });
@@ -1285,4 +1379,161 @@ async fn a_resume_or_reset_clear_that_lands_while_a_tick_waits_is_never_undone(
     let row = world.db.bots().find(world.bot).await.unwrap().unwrap();
     assert_eq!(row.last, None, "the clear stands");
     assert_eq!(tick, Tick::Idle);
+}
+
+/// Marks that always hold bot 1's crossing: every tick writes it again, as
+/// the row's time allows one at the same time (S74's flush count).
+#[derive(Debug)]
+struct EverMarked(StickyWrite);
+
+impl StickyMarks for EverMarked {
+    fn any(&self) -> bool {
+        true
+    }
+
+    fn take(&self) -> Vec<StickyWrite> {
+        vec![self.0]
+    }
+
+    fn remark(&self, _bots: &[BotId]) {}
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_batch_the_database_kept_holds_its_places_in_the_queue(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let world = World::new(options).await;
+    let bus = EventBus::new();
+    let (front, mut writer) =
+        world.ingest(Arc::new(ScriptedMarks::default()), &bus, 2, bounds(4, 10));
+    let share = front.share();
+    for text in ["a", "b"] {
+        front
+            .take(&share, world.report(T0, received(text)))
+            .unwrap();
+    }
+    let held = world.db.write().await.unwrap();
+    let kept = writer.tick().await;
+    drop(held);
+
+    let meanwhile =
+        ["c", "d", "e"].map(|text| front.take(&share, world.report(T0, received(text))));
+    let written = writer.tick().await;
+    let after = front.take(&share, world.report(T0, received("f")));
+
+    assert_eq!(kept, Tick::Kept { rows: 2 });
+    assert_eq!(meanwhile, [Ok(()), Ok(()), Err(NotTaken::QueueFull)]);
+    assert_eq!(
+        written,
+        Tick::Written {
+            stored: 2,
+            skipped: 0,
+            sticky: 0
+        }
+    );
+    assert_eq!(after, Ok(()), "the written rows freed their places");
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_batch_being_written_holds_its_places_in_the_queue(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let world = World::new(options).await;
+    let log = Log::default();
+    let (store, requested) = world.observed(&log);
+    let bus = EventBus::new();
+    let (front, mut writer) = World::ingest_over(
+        store,
+        Arc::new(ScriptedMarks::default()),
+        &bus,
+        Duration::from_secs(5),
+        bounds(2, 10),
+    );
+    let share = front.share();
+    for text in ["a", "b"] {
+        front
+            .take(&share, world.report(T0, received(text)))
+            .unwrap();
+    }
+    // The tick has taken both rows off the queue and waits for the write
+    // connection.
+    let held = world.db.write().await.unwrap();
+    // The task hands the writer back: dropping it would close the queue.
+    let tick = tokio::spawn(async move { (writer.tick().await, writer) });
+    requested.notified().await;
+
+    let meanwhile = front.take(&share, world.report(T0, received("c")));
+    drop(held);
+    let (written, _writer) = tick.await.unwrap();
+    let after = front.take(&share, world.report(T0, received("d")));
+
+    assert_eq!(meanwhile, Err(NotTaken::QueueFull));
+    assert_eq!(
+        written,
+        Tick::Written {
+            stored: 2,
+            skipped: 0,
+            sticky: 0
+        }
+    );
+    assert_eq!(after, Ok(()));
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_final_flush_commits_at_most_its_queues_batches_and_one_for_the_marks(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let world = World::new(options).await;
+    let log = Log::default();
+    let (store, _requested) = world.observed(&log);
+    let marks = Arc::new(EverMarked(StickyWrite {
+        bot: world.bot,
+        agent: world.agent,
+        last: LastReport {
+            state: paused(),
+            at: at(T0 + 5),
+        },
+    }));
+    let bus = EventBus::new();
+    let (front, mut writer) = ingest(
+        store,
+        marks,
+        bus.clone(),
+        IngestTimings {
+            interval: Duration::from_millis(500),
+            batch_rows: NonZeroUsize::new(2).unwrap(),
+            wait: WAIT,
+        },
+        bounds(4, 10),
+    );
+    let share = front.share();
+    for text in ["a", "b"] {
+        front
+            .take(&share, world.report(T0, received(text)))
+            .unwrap();
+    }
+    // A batch the database kept, then the queue filled behind it.
+    let held = world.db.write().await.unwrap();
+    assert_eq!(writer.tick().await, Tick::Kept { rows: 2 });
+    drop(held);
+    for text in ["c", "d", "e", "f"] {
+        let _ = front.take(&share, world.report(T0, received(text)));
+    }
+    let before = lines(&log).len();
+    let stop = CancellationToken::new();
+    stop.cancel();
+
+    tokio::time::timeout(Duration::from_secs(5), writer.run(stop))
+        .await
+        .expect("the flush ends");
+
+    // Four rows held in all: two batches of chat, and one for the marks.
+    let commits = lines(&log)[before..]
+        .iter()
+        .filter(|line| **line == "committed")
+        .count();
+    assert_eq!(commits, 3, "{:?}", lines(&log));
 }

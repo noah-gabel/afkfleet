@@ -127,6 +127,11 @@ impl Book {
         self.pending.remove(&bot)
     }
 
+    /// What `bot`'s pending apply waits for, if it has one.
+    pub(crate) fn pending_wait(&self, bot: BotId) -> Option<Wait> {
+        self.pending.get(&bot).map(|pending| pending.wait)
+    }
+
     /// `bot`'s pending restore, if it has a pending apply.
     pub(crate) fn pending_restore(&self, bot: BotId) -> Option<StickyState> {
         self.pending.get(&bot).and_then(|pending| pending.restore)

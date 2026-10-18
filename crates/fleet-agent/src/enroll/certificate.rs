@@ -4,8 +4,9 @@
 //!
 //! - **One PEM section and nothing around it:** the text starts with its
 //!   `BEGIN` line and ends after its `END` line (one line break allowed),
-//!   and holds exactly one section, a certificate. The file is exactly the
-//!   text that was checked.
+//!   holds no other `BEGIN` or `END` marker, and its one section is a
+//!   certificate (the `pem` module's frame). The file is exactly the text
+//!   that was checked.
 //! - **Signed by the pinned CA, for client authentication,** at the current
 //!   time: rustls's client verifier with the pinned CA as its one root, the
 //!   check the server's port makes when the agent connects (group C).
@@ -22,12 +23,8 @@ use rustls::server::WebPkiClientVerifier;
 use rustls::sign::CertifiedKey;
 
 use super::key::AgentKey;
+use super::pem::framed;
 use super::pin::one_certificate;
-
-/// A certificate's PEM begins with this line.
-const BEGIN: &str = "-----BEGIN CERTIFICATE-----";
-/// And ends with this one.
-const END: &str = "-----END CERTIFICATE-----";
 
 /// Why the agent won't store the certificate it got.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -72,11 +69,7 @@ pub fn check(
     key: &AgentKey,
     now: UnixTime,
 ) -> Result<Vec<u8>, CertificateProblem> {
-    let framed = pem
-        .strip_suffix("\r\n")
-        .or_else(|| pem.strip_suffix('\n'))
-        .unwrap_or(pem);
-    if !framed.starts_with(BEGIN) || !framed.ends_with(END) {
+    if !framed(pem.as_bytes(), "CERTIFICATE") {
         return Err(CertificateProblem::NotOnePem);
     }
     let der = one_certificate(pem.as_bytes()).ok_or(CertificateProblem::NotOnePem)?;
@@ -236,6 +229,10 @@ mod tests {
             format!("{pem}trailing"),
             format!("{pem}{pem}"),
             format!("{pem}\n\n"),
+            // Text after the END line, then a stray END line: the reader
+            // skips both, so only the frame can refuse them.
+            format!("{pem}trailing\n-----END CERTIFICATE-----\n"),
+            format!("{pem}-----BEGIN UNKNOWN-----\nAAAA\n-----END UNKNOWN-----\n"),
             String::new(),
             pem.replace("CERTIFICATE", "PRIVATE KEY"),
         ] {

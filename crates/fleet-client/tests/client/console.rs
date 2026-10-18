@@ -230,7 +230,13 @@ async fn offline_adds_an_account_whose_bot_bots_lists_unplaced_without_a_server(
         .filter(|line| line.contains("AfkBot9"))
         .collect();
     assert_eq!(listed.len(), 2, "{}", terminal.text());
-    assert!(listed[0].starts_with("account "), "{}", listed[0]);
+    // The account and the bot each named with their IDs, which look alike.
+    assert!(
+        listed[0].starts_with("account ") && listed[0].contains("); bot "),
+        "{}",
+        listed[0]
+    );
+    assert!(listed[1].starts_with("bot "), "{}", listed[1]);
     assert!(listed[1].contains("unplaced"), "{}", listed[1]);
     assert!(listed[1].contains("why=no_server"), "{}", listed[1]);
     server.stop().await;
@@ -313,10 +319,13 @@ async fn start_stop_and_bot_answer_with_the_bot() {
     let stopped = &terminal.said[3];
     let json = &terminal.said[4];
     assert!(
-        started.starts_with(&bot.to_string()) && started.contains("why=no_server"),
+        started.starts_with(&format!("bot {bot} ")) && started.contains("why=no_server"),
         "{started}"
     );
-    assert!(stopped.contains("unplaced"), "{stopped}");
+    assert!(
+        stopped.starts_with(&format!("bot {bot} ")) && stopped.contains("unplaced"),
+        "{stopped}"
+    );
     assert_eq!(
         owner.bot(bot).await.unwrap().desired_state.known(),
         Some(fleet_api_types::bots::DesiredState::Stopped)
@@ -472,7 +481,10 @@ async fn bots_lists_every_page_of_the_callers_bots() {
     for n in 0..51 {
         let name = format!(" AfkBot{n} ");
         assert!(
-            terminal.said.iter().any(|line| line.contains(&name)),
+            terminal
+                .said
+                .iter()
+                .any(|line| line.starts_with("bot ") && line.contains(&name)),
             "{name}: {}",
             terminal.text()
         );

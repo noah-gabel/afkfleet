@@ -55,6 +55,8 @@ fn capture() -> (LogBuffer, DefaultGuard) {
 
 const WAITS: &str = "a bot waits for another bot's removal";
 
+const REMOVAL_WAITS: &str = "a bot's removal waits for the next tick";
+
 #[tokio::test(start_paused = true)]
 async fn a_reconciled_bot_runs_and_its_status_goes_out() {
     let mut rig = Rig::new();
@@ -413,6 +415,7 @@ async fn a_full_queue_refuses_the_next_instruction() {
 
 #[tokio::test(start_paused = true)]
 async fn a_busy_removal_never_stops_a_bot_the_next_reconcile_gives() {
+    let (logs, _guard) = capture();
     // One call fits the supervisor's queue: a second is refused Busy.
     let mut config = runtime();
     config.supervisor_queue = NonZeroUsize::MIN;
@@ -436,7 +439,7 @@ async fn a_busy_removal_never_stops_a_bot_the_next_reconcile_gives() {
 
     // The stream drops; the hello lists bot 1, and its reconcile gives it
     // again.
-    rig.hello().await;
+    let listed = rig.hello().await;
     let before = rig.sent.len();
     rig.instruct(Instruction::Reconcile(vec![assign(
         spec(1),
@@ -446,6 +449,15 @@ async fn a_busy_removal_never_stops_a_bot_the_next_reconcile_gives() {
     tokio::time::sleep(secs(3)).await;
     rig.pump().await;
 
+    // The removal was refused Busy, and the hello listed the bot it kept.
+    let deferred = logs.lines_with(REMOVAL_WAITS).unwrap();
+    assert_eq!(deferred.len(), 1, "{}", logs.text());
+    assert_eq!(deferred[0]["bot_id"], bot(1).to_string());
+    assert_eq!(deferred[0]["error"], FleetError::Busy.to_string());
+    assert_eq!(
+        listed.iter().map(|bot| bot.bot_id).collect::<Vec<_>>(),
+        [bot(1)]
+    );
     assert_eq!(rig.running().await, [bot(1)], "it keeps running");
     let removed: Vec<&AgentMessage> = rig.sent[before..]
         .iter()
@@ -483,6 +495,39 @@ async fn a_bot_past_the_fleets_capacity_waits_for_a_removed_with_one_warn() {
     let warned = logs.lines_with(WAITS).unwrap();
     assert_eq!(warned.len(), 1, "{}", logs.text());
     assert_eq!(warned[0]["level"], "WARN");
+    rig.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn bots_past_the_fleets_capacity_warn_once_each_however_many_removals_come() {
+    let (logs, _guard) = capture();
+    let mut rig = Rig::new();
+    rig.hello().await;
+
+    // Four bots fill the fleet; the fifth and the sixth wait.
+    rig.instruct(Instruction::Reconcile(
+        (1..=6).map(|n| assign(spec(n), Some(paused()))).collect(),
+    ))
+    .await;
+    tokio::time::sleep(secs(3)).await;
+    rig.pump().await;
+    // One removal makes room for one: the fifth runs, the sixth waits on.
+    rig.instruct(Instruction::Unassign(bot(1))).await;
+    rig.pump().await;
+    let after_one = rig.running().await;
+    rig.instruct(Instruction::Unassign(bot(2))).await;
+    rig.pump().await;
+
+    assert_eq!(after_one, [bot(2), bot(3), bot(4), bot(5)]);
+    assert_eq!(rig.running().await, [bot(3), bot(4), bot(5), bot(6)]);
+    let warned = logs.lines_with(WAITS).unwrap();
+    let of = |n: u8| {
+        warned
+            .iter()
+            .filter(|line| line["bot_id"] == bot(n).to_string())
+            .count()
+    };
+    assert_eq!((of(5), of(6)), (1, 1), "{}", logs.text());
     rig.stop().await;
 }
 
