@@ -145,7 +145,8 @@ afkfleet/
 │   ├── fleet-server/          # server binary: HTTP API, auth, vault, persistence, gRPC control plane, CLI
 │   ├── fleet-client/          # typed HTTP + WS client (used by the Tauri backend and integration tests)
 │   ├── fleet-startup/         # the binaries' start-up code: config loader and errors, [log], log layer, panic hook, stop signals, secret-file loader
-│   └── fleet-testkit/         # fakes, fixtures, builders (dev-dependency only)
+│   ├── fleet-testkit/         # fakes, fixtures, builders (dev-dependency only)
+│   └── fleet-integration/     # tests only: the real server with the real managed agent (P10.9, the DoD check, P11.7)
 ├── apps/
 │   └── desktop/               # Tauri app: src-tauri/ (Rust, workspace member) + thin TS entry and TauriApiClient
 ├── packages/
@@ -175,6 +176,7 @@ Crates are created in the phase that first needs them, not up front.
 | `fleet-client` | `fleet-api-types` (its tests: `fleet-server`, `fleet-startup`, `fleet-core` and `fleet-testkit`, as dev-dependencies) |
 | `apps/desktop/src-tauri` | `fleet-client`, `fleet-api-types` |
 | `fleet-testkit` | `fleet-core` (dev-dependency for everyone else) |
+| `fleet-integration` (tests only) | Nothing as a normal dependency; its tests: `fleet-agent`, `fleet-server`, `fleet-client`, `fleet-core`, `fleet-api-types`, `fleet-mc`, `fleet-runtime`, `fleet-startup` and `fleet-testkit`, as dev-dependencies. Nothing depends on it ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), the user's choice, U19) |
 
 Binaries stay thin: `main.rs` parses the CLI and config and wires adapters together, and all logic lives in the crate's library part.
 
@@ -268,7 +270,7 @@ Binaries stay thin: `main.rs` parses the CLI and config and wires adapters toget
 | Time control | `tokio` `test-util` | | `start_paused`, `advance` |
 | Independent IP-network check | `ipnet` | 2.12.2 | Dev only: fleet-server's property test compares its own `IpNet` (`[http] trusted_proxies`) and the /64 limiter key with it. Production code never uses it. Already in Cargo.lock through reqwest (ADR-0016) |
 | In-memory gRPC transport | `hyper-util` | 0.1.21, dfo | Dev only: fleet-server's control-plane test hands tonic's client a tokio duplex pipe through `rt::TokioIo` (`tokio` only), so an agent's stream runs a virtual hour through the real router on paused time. The user's choice in Phase 10's group C (U6). Already in Cargo.lock through tonic, axum and reqwest ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)) |
-| Temporary files | `tempfile` | 3.27.0 | fleet-server's database tests: a fresh folder per test, removed on drop. Already in the lockfile through figment and insta (ADR-0015) |
+| Temporary files | `tempfile` | 3.27.0 | fleet-server's database tests: a fresh folder per test, removed on drop; fleet-integration's cases keep a server's database, PKI and agents' identities in one (ADR-0019, U21). Already in the lockfile through figment and insta (ADR-0015) |
 | `log` records in tests | `log` | 0.4.34 | fleet-server's one normal use: `log::LevelFilter`, which sqlx's statement-logging levels take; clippy bans its logging macros there, so all server logging stays on tracing (ADR-0015). Otherwise a dev-dependency. fleet-testkit: its log capture's test emits a `log` record to prove that reqwest's and rustls's logs reach the redaction check through `tracing-log` (ADR-0011). fleet-agent: its telemetry test proves that the log filter and azalea's caps see a `log` record's real target (ADR-0014) |
 | Fuzzing | `libfuzzer-sys`, `arbitrary` | 0.4.13, 1.4.2 | Driven by cargo-fuzz |
 

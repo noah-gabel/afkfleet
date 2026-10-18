@@ -117,6 +117,7 @@ On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: th
   - The Microsoft flows (device code, Microsoft tokens, refresh, the Minecraft session) belong to `fleet-server` alone, in its own adapter (`infra/msauth`, reqwest with its own requests; ADR-0018). `fleet-mc`'s `clippy.toml` bans azalea's Microsoft flows (ADR-0011).
   - Only `infra/msauth/client.rs` names reqwest's client types, through the one builder; fleet-server's `clippy.toml` bans them elsewhere, along with reqwest's unbounded body readers (ADR-0018).
 - azalea code runs only on the MC host threads in `fleet-mc` (current-thread runtime + `LocalSet`). Never call azalea from a normal tokio task.
+- `fleet-integration` holds only tests: the real server and the real managed agent together, in-process (P10.9's loopback suite, Phase 10's DoD check, P11.7's full flow). Nothing depends on it, and everything it uses is a dev-dependency; it isn't in `stable_crates`, since azalea comes in through fleet-agent (ADR-0019, U19, U21).
 - `fleet-startup` holds only the binaries' process start-up and lifecycle code: the config loader and its errors, the `[log]` types, the log layer, the panic hook, the stop signals (`OsSignals`) and the secret-file loader (`secret_file`, which reads every `*_file` secret of both binaries with one set of rules; ADR-0016). Internally it depends only on `fleet-core`. Its filter always caps `azalea_auth` at `info` and lets panic reports through; a binary only adds rules through `FilterRules` (ADR-0015).
 
 **Bot lifecycle:**
@@ -215,7 +216,7 @@ fleet-server/src/
 | Desktop | Shell | `tauri` ≥ 2.11.1, `tauri-build` |
 | | Plugins | `tauri-plugin-opener`, `tauri-plugin-single-instance`, `tauri-plugin-updater` |
 | | Keychain | `keyring-core` + `windows-native-keyring-store` |
-| Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, tokio `test-util`, `log` (dev only: fleet-testkit's log capture and fleet-agent's telemetry, each to prove the `log` bridge; fleet-server's one normal use is sqlx's `LevelFilter`, and its logging macros are banned there), `tempfile` (fleet-server's database tests), `ipnet` (dev only: fleet-server's property test of fleet-core's `IpNet`), `hyper-util` (dev only, `tokio`: fleet-server's in-memory control-plane test hands tonic's client a pipe through `rt::TokioIo`) |
+| Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, tokio `test-util`, `log` (dev only: fleet-testkit's log capture and fleet-agent's telemetry, each to prove the `log` bridge; fleet-server's one normal use is sqlx's `LevelFilter`, and its logging macros are banned there), `tempfile` (fleet-server's database tests, fleet-integration's cases), `ipnet` (dev only: fleet-server's property test of fleet-core's `IpNet`), `hyper-util` (dev only, `tokio`: fleet-server's in-memory control-plane test hands tonic's client a pipe through `rt::TokioIo`) |
 | | Fuzzing | `libfuzzer-sys`, `arbitrary` |
 
 **Frontend packages**

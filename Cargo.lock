@@ -2617,6 +2617,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "fleet-integration"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "fleet-agent",
+ "fleet-api-types",
+ "fleet-client",
+ "fleet-core",
+ "fleet-mc",
+ "fleet-runtime",
+ "fleet-server",
+ "fleet-startup",
+ "fleet-testkit",
+ "rstest",
+ "rustls",
+ "secrecy",
+ "tempfile",
+ "tokio",
+ "totp-rs",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "fleet-mc"
 version = "0.1.0"
 dependencies = [
