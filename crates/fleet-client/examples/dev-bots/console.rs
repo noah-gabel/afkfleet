@@ -34,6 +34,20 @@ pub(crate) trait Terminal {
     fn say(&mut self, text: &str);
 }
 
+/// `just dev-server`'s API.
+pub(crate) const DEV_SERVER: &str = "http://127.0.0.1:8080";
+
+/// The console's arguments, after the program's name: the username, then
+/// the server's URL, [`DEV_SERVER`] when it's left out; none for anything
+/// else.
+pub(crate) fn arguments(args: &[String]) -> Option<(&str, &str)> {
+    match args {
+        [username] => Some((username.as_str(), DEV_SERVER)),
+        [username, server] => Some((username.as_str(), server.as_str())),
+        _ => None,
+    }
+}
+
 /// The commands, as the console lists them.
 pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | start <id> | stop <id> | quit";
 

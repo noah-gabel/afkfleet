@@ -21,8 +21,8 @@ Exit codes:
   4  the fleet's supervisor ended unasked, or didn't end when asked; or a
      managed agent's conductor or link ended unasked
   5  the server refused this agent: its certificate is unknown, revoked or
-     expired, the agent is disabled, or its name isn't the enrolled one;
-     every bot was stopped first";
+     expired, the agent is disabled, or its name isn't the enrolled one; or
+     its certificate expired by its own clock; every bot was stopped first";
 
 /// The exit codes of `afkfleet-agent healthcheck`, shown in its help. Docker
 /// reserves 2 for healthchecks, so it's never used.

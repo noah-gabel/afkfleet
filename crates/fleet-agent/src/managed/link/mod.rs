@@ -81,18 +81,36 @@ impl Default for LinkTimings {
     }
 }
 
+/// Why [`endpoint`] couldn't build the endpoint. Neither names the URL.
+#[derive(Debug, thiserror::Error)]
+pub enum EndpointError {
+    /// The URL isn't `https`: the control stream never goes in clear text.
+    #[error("the server's URL isn't https")]
+    NotHttps,
+    /// tonic refused the URL or the TLS config.
+    #[error("the endpoint can't be built")]
+    Transport(#[source] tonic::transport::Error),
+}
+
 /// The endpoint of the server's gRPC port at `url` (`https://host:port`),
 /// over `tls`, with `timings`' keepalive; see the [module docs](self).
 ///
 /// # Errors
-/// tonic's, when the URL or the TLS config can't be used.
+/// [`EndpointError::NotHttps`] for any other scheme, though the config
+/// checks it already; [`EndpointError::Transport`] when tonic can't use
+/// the URL or the TLS config.
 pub fn endpoint(
     url: &str,
     tls: ClientTlsConfig,
     timings: LinkTimings,
-) -> Result<Endpoint, tonic::transport::Error> {
-    Ok(Endpoint::from_shared(url.to_owned())?
-        .tls_config(tls)?
+) -> Result<Endpoint, EndpointError> {
+    let endpoint = Endpoint::from_shared(url.to_owned()).map_err(EndpointError::Transport)?;
+    if endpoint.uri().scheme_str() != Some("https") {
+        return Err(EndpointError::NotHttps);
+    }
+    Ok(endpoint
+        .tls_config(tls)
+        .map_err(EndpointError::Transport)?
         .connect_timeout(CONNECT_TIMEOUT)
         .http2_keep_alive_interval(timings.keepalive_interval)
         .keep_alive_timeout(timings.keepalive_timeout)
@@ -227,8 +245,10 @@ impl Link {
         let streamed = self
             .stream(generation, channel, outbound, deadline, stop)
             .await;
+        // An overflow ends the stream as the agent's own backoff, but never
+        // hides the server's refusal: a stop stays a stop.
         let attempted = streamed.map(|(end, welcomed)| Attempted {
-            end: if self.parts.outbox.overflowed() {
+            end: if self.parts.outbox.overflowed() && !matches!(end.next, Next::Stop(_)) {
                 End::own(Cause::Overflow)
             } else {
                 end
@@ -435,6 +455,11 @@ impl Link {
             return;
         }
         match end.next {
+            Next::Stop(Refusal::OwnCertificateExpired) => error!(
+                cause,
+                refusal = Refusal::OwnCertificateExpired.as_str(),
+                "this agent's certificate expired by its own clock; every bot stops, then the agent exits: enroll it again, or fix the clock (NTP)"
+            ),
             Next::Stop(refusal) => error!(
                 cause,
                 refusal = refusal.as_str(),
@@ -455,5 +480,21 @@ impl Link {
                 wait_ms, "the control stream ended; the agent reconnects"
             ),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn an_endpoint_refuses_a_url_that_isnt_https() {
+        let endpoint_of = |url: &str| endpoint(url, ClientTlsConfig::new(), LinkTimings::default());
+
+        assert!(matches!(
+            endpoint_of("http://127.0.0.1:7443"),
+            Err(EndpointError::NotHttps)
+        ));
+        assert!(endpoint_of("https://127.0.0.1:7443").is_ok());
     }
 }

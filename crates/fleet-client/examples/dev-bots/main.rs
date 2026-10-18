@@ -18,10 +18,7 @@ use fleet_client::{Client, ClientConfig, MemoryStore, ServerUrl, Trust};
 use fleet_server::cli::user::{PasswordPrompt as _, TerminalPrompt};
 use secrecy::SecretString;
 
-use self::console::{Ended, Terminal};
-
-/// `just dev-server`'s API.
-const DEV_SERVER: &str = "http://127.0.0.1:8080";
+use self::console::{DEV_SERVER, Ended, Terminal};
 
 /// The process's terminal.
 struct StdTerminal;
@@ -53,15 +50,11 @@ fn complain(text: &str) {
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let (username, server) = match args.as_slice() {
-        [username] => (username.as_str(), DEV_SERVER),
-        [username, server] => (username.as_str(), server.as_str()),
-        _ => {
-            complain(&format!(
-                "usage: dev-bots <username> [server URL, by default {DEV_SERVER}]"
-            ));
-            return ExitCode::from(2);
-        }
+    let Some((username, server)) = console::arguments(&args) else {
+        complain(&format!(
+            "usage: dev-bots <username> [server URL, by default {DEV_SERVER}]"
+        ));
+        return ExitCode::from(2);
     };
     if !io::stdin().is_terminal() {
         complain("needs a terminal: the password and the codes are typed hidden, never piped");

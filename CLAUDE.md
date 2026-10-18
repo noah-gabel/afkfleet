@@ -174,7 +174,7 @@ fleet-server/src/
 | | MS auth | fleet-server's own adapter over `reqwest`; never `azalea-auth` directly (ADR-0018) |
 | | Async runtime | `tokio` |
 | | Cancellation | `tokio-util` (`CancellationToken`, `TaskTracker`) |
-| | Streams | `tokio-stream` |
+| | Streams | `tokio-stream` (fleet-server's and fleet-agent's gRPC streams) |
 | | Sink/Stream traits | `futures-util` |
 | | dyn async ports | `async-trait` |
 | | Retry | `backon` |

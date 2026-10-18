@@ -134,6 +134,20 @@ impl Call {
         }
     }
 
+    /// Reads until the agent ends its request stream, within `within`: every
+    /// message read meanwhile, heartbeats included; none when it didn't end.
+    pub(crate) async fn until_ended(&mut self, within: Duration) -> Option<Vec<AgentMessage>> {
+        let deadline = tokio::time::Instant::now() + within;
+        let mut read = Vec::new();
+        loop {
+            match tokio::time::timeout_at(deadline, self.incoming.message()).await {
+                Err(_elapsed) => return None,
+                Ok(Ok(Some(message))) => read.push(AgentMessage::try_from(message).unwrap()),
+                Ok(Ok(None) | Err(_)) => return Some(read),
+            }
+        }
+    }
+
     /// Reads until `pick` takes a message, answering as [`Call::next`].
     pub(crate) async fn until<T>(&mut self, mut pick: impl FnMut(&AgentMessage) -> Option<T>) -> T {
         loop {

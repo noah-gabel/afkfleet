@@ -18,8 +18,10 @@
 //!   the agent that reported it; the sticky crossings the registry marked
 //!   (U16), taken inside the transaction and written only while the row
 //!   names the agent and nothing later is stored; then
-//!   `commit_unaudited(EventBatch)` (U17). Stored chat is published with its
-//!   row's ID once the batch committed.
+//!   `commit_unaudited(EventBatch)` (U17), only when a row or a state was
+//!   written: a tick whose marks the fence refused, with no chat, is idle,
+//!   and a batch that stored nothing rolls back. Stored chat is published
+//!   with its row's ID once the batch committed.
 //! - **Failures:** a database that's busy keeps the batch, which is written
 //!   first at the next tick; any other failure drops the batch, logged once
 //!   per run of failures, and the recovery logs how many rows were lost.
@@ -255,10 +257,12 @@ impl From<StoreError> for Failure {
     }
 }
 
-/// What a committed batch stored.
+/// What a batch stored; it committed only when it stored something.
 struct Committed {
     /// Each row's ID, or none when it was skipped.
     ids: Vec<Option<ChatMessageId>>,
+    /// The marks the fence let through.
+    taken: usize,
     /// The sticky states written.
     sticky: usize,
 }
@@ -266,6 +270,10 @@ struct Committed {
 /// What the stop logs when its last batch finds the database busy.
 const LAST_BATCH_BUSY: &str =
     "the ingest's last batch found the database busy; its chat messages are lost";
+
+/// What the stop logs when its last batch, with no chat waiting, finds the
+/// database busy: the streams' ends recorded the bots' states (S40).
+const LAST_BATCH_BUSY_NO_CHAT: &str = "the ingest's last batch found the database busy; no chat message waited, and the bots' states stay as their streams' ends recorded them";
 
 /// The ingest's writer; see the [module docs](self).
 pub struct IngestWriter {
@@ -305,7 +313,9 @@ impl IngestWriter {
         }
         let rows = batch.len();
         match self.write(&batch).await {
-            Ok(Committed { ids, sticky }) => {
+            // No chat, and the fence refused every mark: nothing was written.
+            Ok(Committed { taken: 0, .. }) if batch.is_empty() => Tick::Idle,
+            Ok(Committed { ids, sticky, .. }) => {
                 if let Some(lost) = self.lost.take() {
                     warn!(
                         lost,
@@ -384,8 +394,17 @@ impl IngestWriter {
                     sticky += 1;
                 }
             }
-            tx.commit_unaudited(UnauditedWrite::EventBatch).await?;
-            Ok::<_, StoreError>(Committed { ids, sticky })
+            // A commit only when rows were written (U17): when the fence
+            // refused every mark and no row was stored, dropping the
+            // transaction rolls it back.
+            if sticky > 0 || ids.iter().any(Option::is_some) {
+                tx.commit_unaudited(UnauditedWrite::EventBatch).await?;
+            }
+            Ok::<_, StoreError>(Committed {
+                ids,
+                taken: marked.len(),
+                sticky,
+            })
         }
         .await;
         written.map_err(|failure| {
@@ -433,7 +452,11 @@ impl IngestWriter {
                     let left = rows + self.queued.len();
                     self.kept.clear();
                     while self.queued.try_recv().is_ok() {}
-                    warn!(rows = left, "{LAST_BATCH_BUSY}");
+                    if left == 0 {
+                        warn!(rows = left, "{LAST_BATCH_BUSY_NO_CHAT}");
+                    } else {
+                        warn!(rows = left, "{LAST_BATCH_BUSY}");
+                    }
                     return;
                 }
             }

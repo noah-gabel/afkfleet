@@ -3,21 +3,27 @@
 //! test playing the link and the server.
 
 use chrono::DateTime;
+use core::num::NonZeroUsize;
 use fleet_agent::config::{LogConfig, LogFilter, LogFormat};
-use fleet_agent::managed::conductor::{INBOUND_QUEUE, InboxError, Instruction};
+
+use fleet_agent::managed::conductor::{BarrierError, INBOUND_QUEUE, InboxError, Instruction};
 use fleet_agent::managed::credentials::LinkGeneration;
 use fleet_agent::telemetry::layer;
 use fleet_core::bot::{BotState, DesiredRunState, Lifecycle, PauseReason, StickyState};
-use fleet_core::chat::ChatMessage;
+use fleet_core::chat::{ChatMessage, IncomingChat};
 use fleet_core::disconnect::ConflictKind;
 use fleet_core::id::ChatRequestId;
-use fleet_core::mc::{SessionCredentialProvider as _, SessionRequest};
-use fleet_proto::control::{BotEventKind, ChatFailedReason, LifecycleCommand, SendChat};
+use fleet_core::mc::{SessionCredentialProvider as _, SessionEvent, SessionRequest};
+use fleet_proto::control::{
+    AgentMessage, BotEventKind, ChatFailedReason, LifecycleCommand, SendChat,
+};
+use fleet_runtime::FleetError;
 use fleet_testkit::log_buffer::LogBuffer;
+use fleet_testkit::mc::EmitOutcome;
 use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::layer::SubscriberExt as _;
 
-use crate::rig::{Rig, assign, bot, runtime, spec, spec_on};
+use crate::rig::{Rig, assign, bot, runtime, secs, settle, spec, spec_on};
 
 fn paused() -> StickyState {
     StickyState::Paused(PauseReason::Conflict {
@@ -402,5 +408,173 @@ async fn a_full_queue_refuses_the_next_instruction() {
         .instruction(generation, Instruction::Unassign(bot(9)));
 
     assert_eq!(refused, Err(InboxError::Full));
+    rig.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_busy_removal_never_stops_a_bot_the_next_reconcile_gives() {
+    // One call fits the supervisor's queue: a second is refused Busy.
+    let mut config = runtime();
+    config.supervisor_queue = NonZeroUsize::MIN;
+    let mut rig = Rig::parked(config);
+    rig.conduct();
+    rig.hello().await;
+    rig.instruct(Instruction::Reconcile(vec![assign(
+        spec(1),
+        Some(paused()),
+    )]))
+    .await;
+    // The supervisor is held, and a call fills its queue: the removal the
+    // unassignment asks for is refused.
+    rig.supervisor_gate.close();
+    let fleet = rig.fleet.clone();
+    let filler = tokio::spawn(async move { fleet.snapshot_all().await });
+    settle().await;
+    rig.instruct(Instruction::Unassign(bot(1))).await;
+    rig.supervisor_gate.open();
+    let _ = filler.await;
+
+    // The stream drops; the hello lists bot 1, and its reconcile gives it
+    // again.
+    rig.hello().await;
+    let before = rig.sent.len();
+    rig.instruct(Instruction::Reconcile(vec![assign(
+        spec(1),
+        Some(paused()),
+    )]))
+    .await;
+    tokio::time::sleep(secs(3)).await;
+    rig.pump().await;
+
+    assert_eq!(rig.running().await, [bot(1)], "it keeps running");
+    let removed: Vec<&AgentMessage> = rig.sent[before..]
+        .iter()
+        .filter(|message| {
+            matches!(message, AgentMessage::Event(event) if event.kind == BotEventKind::Removed)
+        })
+        .collect();
+    assert_eq!(removed, Vec::<&AgentMessage>::new());
+    rig.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_bot_past_the_fleets_capacity_waits_for_a_removed_with_one_warn() {
+    let (logs, _guard) = capture();
+    let mut rig = Rig::new();
+    rig.hello().await;
+
+    // Four bots fill the fleet; the fifth waits.
+    rig.instruct(Instruction::Reconcile(
+        (1..=5).map(|n| assign(spec(n), Some(paused()))).collect(),
+    ))
+    .await;
+    tokio::time::sleep(secs(3)).await;
+    rig.pump().await;
+    let waiting = rig.running().await;
+    rig.instruct(Instruction::Unassign(bot(1))).await;
+    rig.pump().await;
+
+    assert_eq!(
+        waiting,
+        [bot(1), bot(2), bot(3), bot(4)],
+        "not tried on the tick"
+    );
+    assert_eq!(rig.running().await, [bot(2), bot(3), bot(4), bot(5)]);
+    let warned = logs.lines_with(WAITS).unwrap();
+    assert_eq!(warned.len(), 1, "{}", logs.text());
+    assert_eq!(warned[0]["level"], "WARN");
+    rig.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_lag_answers_with_removed_only_for_a_bot_being_removed_that_the_snapshot_lacks() {
+    let mut config = runtime();
+    config.event_buffer = NonZeroUsize::new(4).unwrap();
+    let mut rig = Rig::parked(config);
+    rig.conduct();
+    rig.hello().await;
+    rig.instruct(Instruction::Reconcile(vec![
+        assign(spec(1), None),
+        assign(spec(2), None),
+        assign(spec(3), None),
+    ]))
+    .await;
+    for index in 0..3 {
+        rig.join(index).await;
+    }
+    let session_of = |n: u8| {
+        let index = rig
+            .fake
+            .connects()
+            .iter()
+            .position(|connect| connect.bot_id == bot(n))
+            .unwrap();
+        rig.fake.try_session(index).unwrap()
+    };
+    let (first, second, third) = (session_of(1), session_of(2), session_of(3));
+    // Bot 1 leaves within a second, bot 2 within a minute.
+    first.delay_disconnect(secs(1));
+    second.delay_disconnect(secs(60));
+    rig.instruct(Instruction::Unassign(bot(1))).await;
+    rig.instruct(Instruction::Unassign(bot(2))).await;
+
+    // The conductor reads nothing while bot 1's Removed and then bot 3's
+    // chat fill the fleet's buffer: the Removed is lost in a lag.
+    rig.conductor_gate.close();
+    tokio::time::sleep(secs(2)).await;
+    for n in 0..8 {
+        assert_eq!(
+            third.emit(SessionEvent::Chat(IncomingChat::system(&format!(
+                "line {n}"
+            )))),
+            EmitOutcome::Queued
+        );
+    }
+    settle().await;
+    rig.conductor_gate.open();
+    rig.pump().await;
+
+    assert!(rig.removed(1), "bot 1 is gone: {:?}", rig.sent);
+    assert!(!rig.removed(2), "bot 2 is still leaving: {:?}", rig.sent);
+    tokio::time::sleep(secs(60)).await;
+    rig.pump().await;
+    assert!(rig.removed(2), "its own Removed: {:?}", rig.sent);
+    rig.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_timed_out_apply_ends_the_reconciles_batch() {
+    let mut rig = Rig::new();
+    rig.hello().await;
+    let reply_timeout = runtime().reply_timeout;
+
+    // The supervisor answers nothing: the first apply times out, and the
+    // rest wait for the tick instead of timing out one by one.
+    rig.supervisor_gate.close();
+    let started = tokio::time::Instant::now();
+    rig.inbox
+        .instruction(
+            rig.generation(),
+            Instruction::Reconcile((1..=3).map(|n| assign(spec(n), Some(paused()))).collect()),
+        )
+        .unwrap();
+    // Behind the reconcile in the FIFO; its own snapshot times out too.
+    let barrier = rig.inbox.barrier().await;
+    let took = started.elapsed();
+    rig.supervisor_gate.open();
+    tokio::time::sleep(secs(3)).await;
+    rig.pump().await;
+
+    assert_eq!(
+        barrier,
+        Err(BarrierError::Fleet(FleetError::TimedOut)),
+        "the snapshot timed out"
+    );
+    assert!(took < reply_timeout * 3, "{took:?}");
+    assert_eq!(
+        rig.running().await,
+        [bot(1), bot(2), bot(3)],
+        "on the ticks"
+    );
     rig.stop().await;
 }

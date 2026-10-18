@@ -4,9 +4,12 @@
 //! server, answering every session request with an offline grant.
 
 use core::num::NonZeroUsize;
+use core::pin::Pin;
+use core::sync::atomic::{AtomicBool, Ordering};
+use core::task::{Context, Poll, Waker};
 use core::time::Duration;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use fleet_agent::managed::conductor::{self, Conductor, ConductorParts, Inbox, Instruction};
@@ -77,6 +80,59 @@ pub(crate) fn runtime() -> RuntimeConfig {
     }
 }
 
+/// A switch that holds a task back: while it's closed, the task's future
+/// isn't polled, so the supervisor answers nothing or the conductor reads
+/// nothing, and everything else runs on.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct Gate(Arc<GateState>);
+
+#[derive(Debug, Default)]
+struct GateState {
+    closed: AtomicBool,
+    waker: Mutex<Option<Waker>>,
+}
+
+impl Gate {
+    /// Holds the task back from its next poll on.
+    pub(crate) fn close(&self) {
+        self.0.closed.store(true, Ordering::SeqCst);
+    }
+
+    /// Lets the task run again.
+    pub(crate) fn open(&self) {
+        self.0.closed.store(false, Ordering::SeqCst);
+        if let Some(waker) = self.0.waker.lock().unwrap().take() {
+            waker.wake();
+        }
+    }
+
+    /// `future`, behind this gate.
+    fn guard<F: Future>(&self, future: F) -> Gated<F> {
+        Gated {
+            gate: self.clone(),
+            inner: Box::pin(future),
+        }
+    }
+}
+
+/// A future behind a [`Gate`].
+struct Gated<F: Future> {
+    gate: Gate,
+    inner: Pin<Box<F>>,
+}
+
+impl<F: Future> Future for Gated<F> {
+    type Output = F::Output;
+
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
+        if self.gate.0.closed.load(Ordering::SeqCst) {
+            *self.gate.0.waker.lock().unwrap() = Some(cx.waker().clone());
+            return Poll::Pending;
+        }
+        self.inner.as_mut().poll(cx)
+    }
+}
+
 /// The rig; see the [module docs](self).
 pub(crate) struct Rig {
     pub(crate) fleet: Fleet,
@@ -84,6 +140,10 @@ pub(crate) struct Rig {
     pub(crate) outbox: Outbox,
     pub(crate) credentials: Arc<ManagedCredentials<Outbox>>,
     pub(crate) inbox: Inbox,
+    /// Holds the supervisor back: every Fleet call waits, then times out.
+    pub(crate) supervisor_gate: Gate,
+    /// Holds the conductor back: it reads no instruction and no event.
+    pub(crate) conductor_gate: Gate,
     stop: CancellationToken,
     tasks: JoinSet<()>,
     /// The conductor, while a test holds it back.
@@ -139,14 +199,17 @@ impl Rig {
             event_buffer: config.event_buffer.get(),
         });
         let stop = CancellationToken::new();
+        let supervisor_gate = Gate::default();
         let mut tasks = JoinSet::new();
-        tasks.spawn(supervisor.run(stop.child_token()));
+        tasks.spawn(supervisor_gate.guard(supervisor.run(stop.child_token())));
         Self {
             fleet,
             fake,
             outbox,
             credentials,
             inbox,
+            supervisor_gate,
+            conductor_gate: Gate::default(),
             stop,
             tasks,
             parked: Some(conductor),
@@ -159,7 +222,10 @@ impl Rig {
     /// Starts the conductor's task.
     pub(crate) fn conduct(&mut self) {
         if let Some(conductor) = self.parked.take() {
-            self.tasks.spawn(conductor.run(self.stop.child_token()));
+            self.tasks.spawn(
+                self.conductor_gate
+                    .guard(conductor.run(self.stop.child_token())),
+            );
         }
     }
 
@@ -311,6 +377,8 @@ impl Rig {
 
     /// Stops the conductor and the fleet.
     pub(crate) async fn stop(mut self) {
+        self.supervisor_gate.open();
+        self.conductor_gate.open();
         self.stop.cancel();
         self.tasks.shutdown().await;
     }

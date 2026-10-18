@@ -29,6 +29,7 @@ use tracing::{error, info, warn};
 
 use super::watch::Reason;
 use super::{Exit, Outcome};
+use crate::managed::link::ends::Refusal;
 use crate::signals::{ShutdownSignals, Signal};
 
 /// How long a shutdown may take.
@@ -78,6 +79,13 @@ pub(crate) async fn finish<S: ShutdownSignals>(
             Exit::AbandonedLimit
         }
         Reason::StartupFailed => Exit::StartupFailed,
+        Reason::Refused(Refusal::OwnCertificateExpired) => {
+            error!(
+                refusal = Refusal::OwnCertificateExpired.as_str(),
+                "this agent's certificate expired by its own clock; shutting down: enroll it again, or fix the clock (NTP)"
+            );
+            Exit::Refused
+        }
         Reason::Refused(refusal) => {
             error!(
                 refusal = refusal.as_str(),
@@ -748,6 +756,36 @@ mod tests {
         assert_eq!(refused.len(), 1, "{}", capture.text());
         assert_eq!(refused[0]["level"], "ERROR");
         assert_eq!(refused[0]["refusal"], "certificate_revoked");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_certificate_expired_by_the_agents_own_clock_is_said_so_never_a_servers_refusal() {
+        let (capture, _guard) = json_on_this_thread();
+        let mut setup = Setup::new(64);
+        let mut supervisor = setup.run_supervisor();
+
+        let (outcome, _took) = setup
+            .finish(
+                Reason::Refused(crate::managed::link::ends::Refusal::OwnCertificateExpired),
+                &mut supervisor,
+            )
+            .await;
+
+        assert_eq!(outcome.exit, Exit::Refused);
+        let expired = capture
+            .lines_with("this agent's certificate expired by its own clock; shutting down: enroll it again, or fix the clock (NTP)")
+            .unwrap();
+        assert_eq!(expired.len(), 1, "{}", capture.text());
+        assert_eq!(expired[0]["level"], "ERROR");
+        assert_eq!(
+            capture
+                .lines_with("the server refused this agent; shutting down: its certificate is unknown, revoked or expired, the agent is disabled, or its name isn't the enrolled one")
+                .unwrap()
+                .len(),
+            0,
+            "{}",
+            capture.text()
+        );
     }
 
     #[tokio::test(start_paused = true)]

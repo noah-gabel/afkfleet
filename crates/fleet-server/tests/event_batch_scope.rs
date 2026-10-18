@@ -7,7 +7,10 @@
 //!
 //! Every table is dumped whole with `SELECT *`, so a column added later is
 //! compared too; [`every_table_is_dumped`] fails when a table is added
-//! without being dumped here. The database is a fresh one from
+//! without being dumped here. The list of tables is fixed, one query each:
+//! a dump that built its SQL from the schema's names would break rule 8
+//! (never SQL from strings), and the fixed list costs nothing that test
+//! doesn't catch. The database is a fresh one from
 //! `#[sqlx::test]`, on real time (sqlx's worker threads, CLAUDE.md).
 // Integration tests are test code, but clippy only applies the test allowances
 // of clippy.toml (unwrap, panic, …) inside `#[cfg(test)]`; without this, the
@@ -178,6 +181,25 @@ impl Filled {
         let two = agent(&db, 2).await;
         let (account, held) = bot(&db, owner, 1, one).await;
         let (_, other) = bot(&db, owner, 2, two).await;
+        // Another agent's bot, paused earlier: a batch that wrote its state
+        // too would change its time alone.
+        let mut tx = db.write().await.unwrap();
+        assert!(
+            tx.bots()
+                .record_state(
+                    other,
+                    two,
+                    &LastReport {
+                        state: LastState::Paused(PauseReason::Conflict {
+                            kind: ConflictKind::DuplicateLogin,
+                        }),
+                        at: at(T0),
+                    },
+                )
+                .await
+                .unwrap()
+        );
+        tx.commit(setup_entry()).await.unwrap();
         let filled = Self {
             db,
             agent: one,
@@ -406,16 +428,26 @@ async fn dump(pool: &SqlitePool) -> BTreeMap<&'static str, Vec<String>> {
     ])
 }
 
+/// A bot's ID and its three `last_state*` columns, as stored.
+type StoredState = (String, Option<String>, Option<String>, Option<String>);
+
 /// Every row of `bots` with its last state left out, as `Debug` text, and
-/// each bot's last state.
-async fn bots_without_state(pool: &SqlitePool) -> (Vec<String>, Vec<(String, Option<String>)>) {
+/// each bot's `last_state`, `last_state_reason` and `last_state_at`.
+async fn bots_without_state(pool: &SqlitePool) -> (Vec<String>, Vec<StoredState>) {
     let rows = sqlx::query!("SELECT * FROM bots ORDER BY rowid")
         .fetch_all(pool)
         .await
         .unwrap();
     let states = rows
         .iter()
-        .map(|row| (row.id.clone(), row.last_state.clone()))
+        .map(|row| {
+            (
+                row.id.clone(),
+                row.last_state.clone(),
+                row.last_state_reason.clone(),
+                row.last_state_at.clone(),
+            )
+        })
         .collect();
     let masked = rows
         .into_iter()
@@ -564,11 +596,18 @@ async fn an_event_batch_changes_only_chat_messages_and_the_held_bots_last_state(
         "a column besides last_state* changed"
     );
     let held = filled.held.to_string();
-    let changed: Vec<_> = states_before
+    // All three columns of every bot: only the held one's may change.
+    let changed: Vec<&StoredState> = states_after
         .iter()
-        .zip(&states_after)
-        .filter(|(old, new)| old != new)
-        .map(|(_, (id, state))| (id.clone(), state.clone()))
+        .zip(&states_before)
+        .filter(|(new, old)| new != old)
+        .map(|(new, _)| new)
         .collect();
-    assert_eq!(changed, [(held, Some("paused".to_owned()))]);
+    let expected: StoredState = (
+        held,
+        Some("paused".to_owned()),
+        paused.reason().map(str::to_owned),
+        Some("2027-01-15T08:00:00.005Z".to_owned()),
+    );
+    assert_eq!(changed, [&expected]);
 }

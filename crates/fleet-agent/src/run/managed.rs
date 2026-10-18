@@ -11,7 +11,9 @@
 //!    supervisor's end, the server's refusal (exit 5, every bot stopped
 //!    first), or the conductor's or the link's unasked end (exit 4).
 //! 4. The link and the conductor stop first, so no instruction reaches the
-//!    fleet while it shuts down; then the fleet's shutdown, as standalone.
+//!    fleet while it shuts down, and the outbox closes the stream the link
+//!    may have left open, so the server sees it end; then the fleet's
+//!    shutdown, as standalone.
 
 use std::sync::Arc;
 
@@ -67,6 +69,8 @@ where
         conductor,
         link,
         inbox,
+        outbox,
+        credentials,
     } = match build(&config, plane, connector, anchor, seed, managed) {
         Ok(built) => built,
         Err(error) => {
@@ -119,6 +123,11 @@ where
     // No instruction reaches the fleet while it shuts down.
     tasks_stop.cancel();
     tasks.link.shutdown().await;
+    // The aborted link may leave its stream open, and hyper would keep
+    // sending its heartbeats while the bots stop: the server sees it end.
+    if let Some(generation) = outbox.close() {
+        credentials.link_ended(generation);
+    }
     tasks.conductor.shutdown().await;
     drop(inbox);
     let outcome = finish(
@@ -143,6 +152,10 @@ struct Built<C> {
     link: Link,
     /// Kept until the end, so the conductor's FIFO never closes before.
     inbox: Inbox,
+    /// The outbox, whose stream the run's end closes.
+    outbox: Outbox,
+    /// The credentials, told of that end.
+    credentials: Arc<ManagedCredentials<Outbox>>,
 }
 
 /// Builds a managed agent's fleet, conductor and link.
@@ -221,8 +234,8 @@ fn build<C: MinecraftConnector>(
             agent_version,
             capacity,
         },
-        outbox,
-        credentials,
+        outbox: outbox.clone(),
+        credentials: Arc::clone(&credentials),
         inbox: inbox.clone(),
         clock,
         backoff: Backoff::new(policy, managed.seed),
@@ -234,5 +247,7 @@ fn build<C: MinecraftConnector>(
         conductor,
         link,
         inbox,
+        outbox,
+        credentials,
     })
 }

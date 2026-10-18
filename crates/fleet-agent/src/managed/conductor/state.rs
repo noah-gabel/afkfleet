@@ -59,16 +59,19 @@ impl Book {
     }
 
     /// A hello listed `listed`: the stream starts over, and what was
-    /// pending or told goes, since its reconcile resends what still holds.
+    /// pending, told or busy to remove goes, since its reconcile resends what
+    /// still holds and takes away what doesn't: a busy removal kept past it
+    /// could stop a bot the reconcile gives again.
     pub(crate) fn barrier(&mut self, listed: BTreeSet<BotId>) {
         self.listed = listed;
         self.told.clear();
         self.pending.clear();
+        self.unremoved.clear();
     }
 
     /// The bots a reconcile giving `given` takes away, in ID order: those the
     /// hello listed or the stream told, that it leaves out. The stream has
-    /// told `given` from here on.
+    /// told `given` from here on, and a busy removal of a bot it gives goes.
     pub(crate) fn reconcile(&mut self, given: &BTreeSet<BotId>) -> Vec<BotId> {
         let leaving = self
             .listed
@@ -79,12 +82,14 @@ impl Book {
         self.listed.clear();
         self.told.clone_from(given);
         self.pending.retain(|bot, _| given.contains(bot));
+        self.unremoved.retain(|bot| !given.contains(bot));
         leaving
     }
 
-    /// The stream gave `bot`.
+    /// The stream gave `bot`: a busy removal of it goes.
     pub(crate) fn tell(&mut self, bot: BotId) {
         self.told.insert(bot);
+        self.unremoved.remove(&bot);
     }
 
     /// The stream took `bot` away: it's no longer told, and its pending
@@ -299,6 +304,21 @@ mod tests {
 
         assert_eq!(book.take_unremoved(), [bot(1), bot(2)]);
         assert_eq!(book.take_unremoved(), []);
+    }
+
+    #[test]
+    fn a_busy_removal_is_dropped_by_a_hello_and_by_the_stream_giving_its_bot() {
+        let mut book = Book::new(8);
+        book.unremoved(bot(1));
+        book.barrier([bot(1)].into());
+        assert_eq!(book.take_unremoved(), [], "the reconcile decides");
+
+        book.unremoved(bot(2));
+        book.unremoved(bot(3));
+        let _ = book.reconcile(&[bot(2)].into());
+        book.tell(bot(3));
+
+        assert_eq!(book.take_unremoved(), [], "given again");
     }
 
     #[test]

@@ -9,8 +9,9 @@
 //!   barrier behind what's queued, so the previous stream's instructions are
 //!   applied first; the barrier drains the fleet's ready events, prepares the
 //!   outbox, and answers with `snapshot_all` (bots being removed included),
-//!   never with the conductor's own view. It clears what was pending and
-//!   told: the reconcile resends what still holds.
+//!   never with the conductor's own view. It clears what was pending, told
+//!   or busy to remove: the reconcile resends what still holds and takes
+//!   away what doesn't.
 //! - **Instructions:** a full reconcile opens the outbox's gate first (R49),
 //!   removes every bot the hello listed or the stream told that it leaves
 //!   out, in ID order, then applies in message order; an assignment applies
@@ -23,7 +24,8 @@
 //!   ticket is mapped inline, so its outcome can't beat it.
 //! - **The fleet's answers** follow the `mapping` module's tables: `Busy` and
 //!   `TimedOut` stay pending and are tried again after any `Removed` and
-//!   every [`RETRY_TICK`]; `AtCapacity` and `AccountInUse` wait for a
+//!   every [`RETRY_TICK`], which tries busy removals first (a bot the stream
+//!   gives again leaves them); `AtCapacity` and `AccountInUse` wait for a
 //!   `Removed`, with one `warn`; `AccountChanged` is an `error` naming the
 //!   bot; `ShuttingDown` is dropped.
 //! - **Events** go to the outbox; a `Removed` forgets the bot's kept grant.
@@ -440,12 +442,13 @@ impl Conductor {
         }
     }
 
-    /// The retry tick: pending applies, busy removals and an owed resync.
+    /// The retry tick: busy removals first, as a reconcile removes before it
+    /// applies; then pending applies and an owed resync.
     async fn tick(&mut self) {
-        self.retry(false).await;
         for bot in self.book.take_unremoved() {
             self.remove(bot).await;
         }
+        self.retry(false).await;
         if self.resync_owed {
             self.resync().await;
         }

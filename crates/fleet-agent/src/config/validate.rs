@@ -338,6 +338,13 @@ fn private_targets(raw: &[String], problems: &mut Problems) -> Option<PrivateTar
                 let index = original(index);
                 (key.index(index), PrivateTargetsError::NotPrivate { index })
             }
+            PrivateTargetsError::NeverDialled { index } => {
+                let index = original(index);
+                (
+                    key.index(index),
+                    PrivateTargetsError::NeverDialled { index },
+                )
+            }
             PrivateTargetsError::Duplicate { index } => {
                 let index = original(index);
                 (key.index(index), PrivateTargetsError::Duplicate { index })

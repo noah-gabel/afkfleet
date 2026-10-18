@@ -173,6 +173,18 @@ impl Outbox {
         inner.wake();
     }
 
+    /// Ends whichever stream is current, at the run's end: its request
+    /// stream ends at its next poll, even when the link that opened it was
+    /// aborted, so no heartbeat follows (R51). Its generation, if one was
+    /// open, for the credentials.
+    #[must_use]
+    pub fn close(&self) -> Option<LinkGeneration> {
+        let mut inner = self.lock();
+        let closed = inner.state.close();
+        inner.wake();
+        closed.map(LinkGeneration::new)
+    }
+
     /// Whether the stream of `generation` is welcomed and hasn't ended: a
     /// one-shot of its applies only then.
     #[must_use]

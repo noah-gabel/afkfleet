@@ -25,15 +25,23 @@ use fleet_core::bot::{
 };
 use fleet_core::chat::{ChatMessage, IncomingChat, PlayerChatKind};
 use fleet_core::disconnect::ConflictKind;
+use fleet_core::id::RequestId;
 use fleet_core::id::{AccountId, AgentId, BotId, ChatRequestId, UserId};
 use fleet_core::mode::ModePreset;
+use fleet_core::pki::CertFingerprint;
+use fleet_core::value::AgentCapacity;
 use fleet_core::value::{AgentName, Username};
-use fleet_proto::control::ChatFailedReason;
+use fleet_proto::control::{AgentMessage, ChatFailedReason, ServerMessage, Welcome};
+use fleet_proto::generated as wire;
 use fleet_server::app::agents::ingest::{IngestBounds, IngestTimings, IngestWriter, Tick, ingest};
 use fleet_server::app::events::{EventBus, LiveEvent, LiveEventKind};
 use fleet_server::config::{LogConfig, LogFormat};
+use fleet_server::grpc::registry::{
+    Activation, AgentRegistry, Halt, Hold, HoldEntry, Lease, Verdict,
+};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
+use fleet_server::ports::agent_connections::Admitted;
 use fleet_server::ports::agents::NewAgent;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, NewAuditEntry};
 use fleet_server::ports::bots::NewBot;
@@ -41,16 +49,25 @@ use fleet_server::ports::chat::{ChatEntry, ChatMessageId, ChatRecord};
 use fleet_server::ports::ingest::{
     Ingest, NotTaken, Report, Reported, StickyMarks, StickyWrite, StreamShare,
 };
+use fleet_server::ports::live_agents::LiveAgents as _;
 use fleet_server::ports::page::{Page, PageLimit};
 use fleet_server::ports::store::Store;
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use fleet_startup::telemetry::{NoRules, layer_with};
 use fleet_testkit::log_buffer::LogBuffer;
+use fleet_testkit::system::ManualClock;
 use secrecy::SecretString;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use tokio::sync::Notify;
 use tokio::sync::broadcast::error::TryRecvError;
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::layer::SubscriberExt as _;
+
+#[path = "ingest_service/observed.rs"]
+mod observed;
+
+use self::observed::{Log, ObservedStore, lines};
 
 /// The time everything starts at, in milliseconds.
 const T0: i64 = 1_800_000_000_000;
@@ -924,4 +941,348 @@ async fn a_share_is_released_when_its_row_is_dropped(
     let after = front.take(&share, world.report(T0, received("next")));
 
     assert_eq!(after, Ok(()));
+}
+
+/// [`ScriptedMarks`] whose takes are logged with the store's writes.
+#[derive(Debug)]
+struct LoggedMarks {
+    inner: ScriptedMarks,
+    log: Log,
+}
+
+impl StickyMarks for LoggedMarks {
+    fn any(&self) -> bool {
+        self.inner.any()
+    }
+
+    fn take(&self) -> Vec<StickyWrite> {
+        self.log.lock().unwrap().push("marks taken");
+        self.inner.take()
+    }
+
+    fn remark(&self, bots: &[BotId]) {
+        self.inner.remark(bots);
+    }
+}
+
+/// Marks whose fence refuses them all: something is marked, nothing taken.
+#[derive(Debug)]
+struct FencedMarks;
+
+impl StickyMarks for FencedMarks {
+    fn any(&self) -> bool {
+        true
+    }
+
+    fn take(&self) -> Vec<StickyWrite> {
+        Vec::new()
+    }
+
+    fn remark(&self, _bots: &[BotId]) {}
+}
+
+impl World {
+    /// The database, its writes logged in `log`.
+    fn observed(&self, log: &Log) -> (Arc<ObservedStore>, Arc<Notify>) {
+        let requested = Arc::new(Notify::new());
+        let store = Arc::new(ObservedStore {
+            inner: self.db.clone(),
+            log: Arc::clone(log),
+            requested: Arc::clone(&requested),
+        });
+        (store, requested)
+    }
+
+    /// The front and the writer over `store`, waiting up to `wait` for the
+    /// write connection.
+    fn ingest_over(
+        store: Arc<dyn Store>,
+        marks: Arc<dyn StickyMarks>,
+        bus: &EventBus,
+        wait: Duration,
+    ) -> (impl Ingest, IngestWriter) {
+        ingest(
+            store,
+            marks,
+            bus.clone(),
+            IngestTimings {
+                interval: Duration::from_millis(500),
+                batch_rows: NonZeroUsize::new(10).unwrap(),
+                wait,
+            },
+            IngestBounds::default(),
+        )
+    }
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_marks_are_taken_only_once_the_write_transaction_is_open(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let world = World::new(options).await;
+    let log = Log::default();
+    let (store, _requested) = world.observed(&log);
+    let marks = Arc::new(LoggedMarks {
+        inner: ScriptedMarks::default(),
+        log: Arc::clone(&log),
+    });
+    marks.inner.mark(StickyWrite {
+        bot: world.bot,
+        agent: world.agent,
+        last: LastReport {
+            state: paused(),
+            at: at(T0 + 5),
+        },
+    });
+    let bus = EventBus::new();
+    let (_front, mut writer) = World::ingest_over(store, marks, &bus, WAIT);
+
+    let tick = writer.tick().await;
+
+    assert_eq!(
+        tick,
+        Tick::Written {
+            stored: 0,
+            skipped: 0,
+            sticky: 1
+        }
+    );
+    assert_eq!(
+        lines(&log),
+        [
+            "write requested",
+            "write opened",
+            "marks taken",
+            "committed"
+        ]
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_tick_whose_marks_the_fence_refused_commits_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let world = World::new(options).await;
+    let log = Log::default();
+    let (store, _requested) = world.observed(&log);
+    let bus = EventBus::new();
+    let (_front, mut writer) = World::ingest_over(store, Arc::new(FencedMarks), &bus, WAIT);
+
+    let tick = writer.tick().await;
+
+    assert_eq!(tick, Tick::Idle);
+    assert_eq!(
+        lines(&log),
+        ["write requested", "write opened"],
+        "no commit"
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_batch_whose_rows_were_all_skipped_commits_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let world = World::new(options).await;
+    let elsewhere = world
+        .add_bot(2, Some(World::agent(&world.db, 2).await))
+        .await;
+    let log = Log::default();
+    let (store, _requested) = world.observed(&log);
+    let bus = EventBus::new();
+    let (front, mut writer) =
+        World::ingest_over(store, Arc::new(ScriptedMarks::default()), &bus, WAIT);
+    let share = front.share();
+    let mut report = world.report(T0, received("not this agent's bot"));
+    report.bot = elsewhere;
+    front.take(&share, report).unwrap();
+
+    let tick = writer.tick().await;
+
+    assert_eq!(
+        tick,
+        Tick::Written {
+            stored: 0,
+            skipped: 1,
+            sticky: 0
+        }
+    );
+    assert_eq!(
+        lines(&log),
+        ["write requested", "write opened"],
+        "no commit"
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_final_flush_without_chat_that_finds_the_database_busy_never_says_chat_was_lost(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (logs, _guard) = capture();
+    let world = World::new(options).await;
+    let marks = Arc::new(ScriptedMarks::default());
+    marks.mark(StickyWrite {
+        bot: world.bot,
+        agent: world.agent,
+        last: LastReport {
+            state: paused(),
+            at: at(T0 + 5),
+        },
+    });
+    let bus = EventBus::new();
+    let (_front, writer) = world.ingest(marks, &bus, 10, IngestBounds::default());
+    let held = world.db.write().await.unwrap();
+    let stop = CancellationToken::new();
+    stop.cancel();
+
+    tokio::time::timeout(Duration::from_secs(5), writer.run(stop))
+        .await
+        .expect("the flush ends");
+    drop(held);
+
+    assert_eq!(
+        logs.lines_with(
+            "the ingest's last batch found the database busy; its chat messages are lost"
+        )
+        .unwrap()
+        .len(),
+        0,
+        "{}",
+        logs.text()
+    );
+    let warned = logs
+        .lines_with(
+            "the ingest's last batch found the database busy; no chat message waited, and the bots' states stay as their streams' ends recorded them",
+        )
+        .unwrap();
+    assert_eq!(warned.len(), 1, "{}", logs.text());
+    assert_eq!(warned[0]["level"], "WARN");
+}
+
+/// The registry of a live stream of the world's agent, reconciled, holding
+/// its bot assigned, whose hello listed it online and which reported it
+/// paused since: its crossing is marked (U16, R54). The caller keeps the
+/// lease and the queue, so the stream lives.
+fn held_registry(
+    world: &World,
+) -> (
+    Arc<AgentRegistry>,
+    Lease,
+    mpsc::Receiver<wire::ServerMessage>,
+) {
+    let registry = Arc::new(AgentRegistry::new(Arc::new(ManualClock::new(at(T0)))));
+    let lease = registry
+        .claim(&Admitted {
+            request: RequestId::new_v7(at(T0), [1; 10]).unwrap(),
+            agent: world.agent,
+            name: AgentName::try_from("agent-1").unwrap(),
+            fingerprint: CertFingerprint::from_digest([1; 32]),
+            not_after: at(T0 + 86_400_000),
+            peer: None,
+        })
+        .unwrap();
+    let (queue, queued) = mpsc::channel(16);
+    let snapshot = |state: BotState, millis: i64| BotSnapshot {
+        bot_id: world.bot,
+        state,
+        since: at(millis),
+        last_disconnect: None,
+    };
+    let welcome = wire::ServerMessage::try_from(ServerMessage::Welcome(Welcome {
+        heartbeat_interval: Duration::from_secs(10),
+        agent_id: world.agent,
+    }))
+    .unwrap();
+    let _ended = registry
+        .activate(
+            &lease,
+            Activation {
+                queue,
+                halt: Halt::default(),
+                connected_at: at(T0),
+                capacity: AgentCapacity::try_from(4_u32).unwrap(),
+                running: vec![snapshot(
+                    BotState::Online {
+                        since: at(T0),
+                        attempt: core::num::NonZeroU32::MIN,
+                    },
+                    T0,
+                )],
+                welcome,
+            },
+        )
+        .unwrap();
+    registry
+        .settle(
+            world.agent,
+            lease.generation(),
+            vec![(
+                world.bot,
+                HoldEntry {
+                    hold: Hold::Assigned,
+                    since: at(T0),
+                    sent: None,
+                    stopping: None,
+                },
+            )],
+            ServerMessage::Reconcile(Vec::new()),
+        )
+        .unwrap();
+    let (verdict, _conflict) = registry.admit(
+        &lease,
+        &AgentMessage::Status(snapshot(
+            BotState::Paused {
+                reason: PauseReason::Conflict {
+                    kind: ConflictKind::DuplicateLogin,
+                },
+            },
+            T0 + 5,
+        )),
+    );
+    assert!(matches!(verdict, Verdict::Held { .. }), "{verdict:?}");
+    assert!(registry.any(), "the crossing is marked");
+    (registry, lease, queued)
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_resume_or_reset_clear_that_lands_while_a_tick_waits_is_never_undone(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let world = World::new(options).await;
+    let (registry, _lease, _queued) = held_registry(&world);
+    let log = Log::default();
+    let (store, requested) = world.observed(&log);
+    let bus = EventBus::new();
+    let (_front, mut writer) =
+        World::ingest_over(store, registry.clone(), &bus, Duration::from_secs(5));
+    // The clear holds the write connection while the tick asks for it.
+    let mut clear = world.db.write().await.unwrap();
+    let tick = tokio::spawn(async move { writer.tick().await });
+    requested.notified().await;
+
+    // Meanwhile the bot was paused, unplaced and resumed: the clear takes
+    // the kept report and clears the row; then the bot is placed on its
+    // agent again (S48).
+    let report = registry.take_latest(world.bot).expect("the paused report");
+    let last = report.last();
+    assert!(
+        clear
+            .bots()
+            .record_state(world.bot, world.agent, &last)
+            .await
+            .unwrap()
+    );
+    assert!(clear.bots().detach(world.bot, world.agent).await.unwrap());
+    assert!(clear.bots().clear_sticky(world.bot, &last).await.unwrap());
+    assert!(clear.bots().assign(world.bot, world.agent).await.unwrap());
+    clear.commit(setup_entry()).await.unwrap();
+    let tick = tick.await.unwrap();
+
+    let row = world.db.bots().find(world.bot).await.unwrap().unwrap();
+    assert_eq!(row.last, None, "the clear stands");
+    assert_eq!(tick, Tick::Idle);
 }

@@ -913,8 +913,8 @@ fn a_standalone_agent_dials_every_address() {
 #[case::everything("0.0.0.0/0", ProblemKind::IpNet(IpNetError::Everything))]
 #[case::mapped("::ffff:127.0.0.1/128", ProblemKind::IpNet(IpNetError::MappedIpv4))]
 #[case::public("8.8.8.0/24", ProblemKind::PrivateTargets(PrivateTargetsError::NotPrivate { index: 1 }))]
-#[case::metadata("169.254.169.254/32", ProblemKind::PrivateTargets(PrivateTargetsError::NotPrivate { index: 1 }))]
-#[case::alibaba("100.100.100.200/32", ProblemKind::PrivateTargets(PrivateTargetsError::NotPrivate { index: 1 }))]
+#[case::metadata("169.254.169.254/32", ProblemKind::PrivateTargets(PrivateTargetsError::NeverDialled { index: 1 }))]
+#[case::alibaba("100.100.100.200/32", ProblemKind::PrivateTargets(PrivateTargetsError::NeverDialled { index: 1 }))]
 #[case::twice("127.0.0.1/32", ProblemKind::PrivateTargets(PrivateTargetsError::Duplicate { index: 1 }))]
 fn a_private_target_that_isnt_a_private_network_is_refused_by_its_index(
     #[case] entry: &str,

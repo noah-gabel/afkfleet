@@ -126,7 +126,7 @@ Each later group asks its own implementation-level questions in its session: tok
   | 2 | clap's own usage errors, left as they are |
   | 3 | The abandoned-thread limit was reached, after shutting down |
   | 4 | The supervisor ended without a requested shutdown, or didn't end when asked *(group B, the user's decision)*; from Phase 10, group G also a managed agent's conductor or link ending unasked (S65, S67) |
-  | 5 | The server refused the managed agent for good: an unknown, revoked or expired certificate, a disabled agent, or a name that isn't the enrolled one; every bot was stopped first *(Phase 10, group G, S67)* |
+  | 5 | The server refused the managed agent for good: an unknown, revoked or expired certificate, a disabled agent, or a name that isn't the enrolled one; or its certificate expired by its own clock (R52); every bot was stopped first *(Phase 10, group G, S67)* |
 
 - **Fleet events.** In standalone mode, one subscriber task logs `ChatReceived` and `ModeChatSent` at `debug`, and `Lagged` at `debug` with its count. Nothing else, since the actor already logs every state change.
 - **Signals.** A signal calls `Fleet::shutdown(shutdown_timeout)`, which returns the `ShutdownReport` for the log. Cancelling the token gives no report.

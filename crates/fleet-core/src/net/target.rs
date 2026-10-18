@@ -177,8 +177,8 @@ const V4: [(IpNet, AddressClass); 18] = [
         AddressClass::Never(Range::Broadcast),
     ),
     (v4(240, 0, 0, 0, 4), AddressClass::Never(Range::Reserved)),
-    // Unreachable after the rows above, and kept so the table states it:
-    // what's left of IPv4 is public.
+    // The lower half's public addresses match here and the upper half's
+    // match no row: either way, what's left of IPv4 is public.
     (v4(0, 0, 0, 0, 1), AddressClass::Public),
 ];
 
@@ -291,11 +291,21 @@ pub enum PrivateTargetsError {
         max: usize,
     },
     /// A network that isn't inside one private range (loopback, RFC 1918,
-    /// shared address space, unique local), or is a never-dialled address.
+    /// shared address space, unique local).
     #[error(
         "must lie inside a private range: loopback, 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10 or fc00::/7"
     )]
     NotPrivate {
+        /// Its index in the list.
+        index: usize,
+    },
+    /// A network the agent never dials, whatever the list says: a cloud's
+    /// metadata address, though it lies inside a private range, or one
+    /// inside a never-dialled range (link-local, documentation, …).
+    #[error(
+        "is never dialled, whatever the list says: a metadata, link-local, documentation or other special address"
+    )]
+    NeverDialled {
         /// Its index in the list.
         index: usize,
     },
@@ -315,7 +325,8 @@ impl PrivateTargets {
     ///
     /// # Errors
     /// [`PrivateTargetsError::TooMany`] past [`PrivateTargets::MAX`], or
-    /// the first entry that's [`PrivateTargetsError::NotPrivate`] or a
+    /// the first entry that's [`PrivateTargetsError::NotPrivate`],
+    /// [`PrivateTargetsError::NeverDialled`] or a
     /// [`PrivateTargetsError::Duplicate`].
     pub fn try_new(networks: Vec<IpNet>) -> Result<Self, PrivateTargetsError> {
         match Self::problems(&networks).first() {
@@ -333,9 +344,18 @@ impl PrivateTargets {
             problems.push(PrivateTargetsError::TooMany { max: Self::MAX });
         }
         for (index, network) in networks.iter().enumerate() {
-            if !is_private_range(network) {
-                problems.push(PrivateTargetsError::NotPrivate { index });
-            } else if networks
+            match standing(network) {
+                Standing::NotPrivate => {
+                    problems.push(PrivateTargetsError::NotPrivate { index });
+                    continue;
+                }
+                Standing::NeverDialled => {
+                    problems.push(PrivateTargetsError::NeverDialled { index });
+                    continue;
+                }
+                Standing::Private => {}
+            }
+            if networks
                 .iter()
                 .take(index)
                 .any(|earlier| earlier == network)
@@ -359,16 +379,33 @@ impl PrivateTargets {
     }
 }
 
-/// Whether every address of `network` lies inside one private row of the
-/// table, and it isn't a never-class row itself (the metadata addresses).
-fn is_private_range(network: &IpNet) -> bool {
-    let mut rows = V4.iter().chain(V6.iter());
-    let inside_private = rows
-        .clone()
+/// Where a listed network stands.
+enum Standing {
+    /// Inside one private row of the table.
+    Private,
+    /// A never-class row itself (the metadata addresses, inside a private
+    /// range), or inside a never-class row and no private one.
+    NeverDialled,
+    /// Neither: public, or across ranges.
+    NotPrivate,
+}
+
+/// Where `network` stands: every address of it inside one private row and
+/// it not a never-class row itself is private; one a never-class row covers
+/// is never dialled; the rest isn't private.
+fn standing(network: &IpNet) -> Standing {
+    let rows = || V4.iter().chain(V6.iter());
+    let inside_private = rows()
         .any(|(range, class)| matches!(class, AddressClass::Private(_)) && range.covers(network));
     let a_never_row =
-        rows.any(|(range, class)| matches!(class, AddressClass::Never(_)) && range == network);
-    inside_private && !a_never_row
+        rows().any(|(range, class)| matches!(class, AddressClass::Never(_)) && range == network);
+    let inside_never = rows()
+        .any(|(range, class)| matches!(class, AddressClass::Never(_)) && range.covers(network));
+    match (inside_private, a_never_row, inside_never) {
+        (true, false, _) => Standing::Private,
+        (true, true, _) | (false, _, true) => Standing::NeverDialled,
+        (false, _, false) => Standing::NotPrivate,
+    }
 }
 
 /// Whether a bot may dial an address: a process's policy, set where fleet-mc's
@@ -774,12 +811,23 @@ mod tests {
 
     #[rstest]
     #[case::public("8.8.8.0/24", PrivateTargetsError::NotPrivate { index: 0 })]
-    #[case::link_local("169.254.0.0/16", PrivateTargetsError::NotPrivate { index: 0 })]
-    #[case::documentation("192.0.2.0/24", PrivateTargetsError::NotPrivate { index: 0 })]
+    #[case::link_local("169.254.0.0/16", PrivateTargetsError::NeverDialled { index: 0 })]
+    #[case::metadata_link_local(
+        "169.254.169.254/32",
+        PrivateTargetsError::NeverDialled { index: 0 }
+    )]
+    #[case::documentation("192.0.2.0/24", PrivateTargetsError::NeverDialled { index: 0 })]
     #[case::wider_than_its_range("10.0.0.0/7", PrivateTargetsError::NotPrivate { index: 0 })]
     #[case::across_two_ranges("172.0.0.0/8", PrivateTargetsError::NotPrivate { index: 0 })]
-    #[case::alibaba_metadata("100.100.100.200/32", PrivateTargetsError::NotPrivate { index: 0 })]
-    #[case::aws_metadata("fd00:ec2::254/128", PrivateTargetsError::NotPrivate { index: 0 })]
+    #[case::alibaba_metadata(
+        "100.100.100.200/32",
+        PrivateTargetsError::NeverDialled { index: 0 }
+    )]
+    #[case::aws_metadata(
+        "fd00:ec2::254/128",
+        PrivateTargetsError::NeverDialled { index: 0 }
+    )]
+    #[case::multicast_v6("ff02::/16", PrivateTargetsError::NeverDialled { index: 0 })]
     #[case::ipv6_public("2001:4860::/32", PrivateTargetsError::NotPrivate { index: 0 })]
     #[case::nat64("64:ff9b::/96", PrivateTargetsError::NotPrivate { index: 0 })]
     fn a_network_outside_every_private_range_is_refused_by_its_index(
@@ -791,6 +839,9 @@ mod tests {
         let shifted = match error {
             PrivateTargetsError::NotPrivate { index } => {
                 PrivateTargetsError::NotPrivate { index: index + 1 }
+            }
+            PrivateTargetsError::NeverDialled { index } => {
+                PrivateTargetsError::NeverDialled { index: index + 1 }
             }
             other => other,
         };
@@ -844,6 +895,7 @@ mod tests {
         for error in [
             PrivateTargetsError::TooMany { max: 32 },
             PrivateTargetsError::NotPrivate { index: 31_415 },
+            PrivateTargetsError::NeverDialled { index: 31_415 },
             PrivateTargetsError::Duplicate { index: 31_415 },
         ] {
             let message = error.to_string();

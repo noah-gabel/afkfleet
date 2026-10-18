@@ -306,6 +306,19 @@ impl State {
         self.lane.clear();
     }
 
+    /// Ends whichever stream is current, as [`State::ended`] does: its
+    /// generation, if one was open.
+    pub(crate) fn close(&mut self) -> Option<u64> {
+        let generation = match self.phase {
+            Phase::Closed => return None,
+            Phase::Opened { generation, .. }
+            | Phase::Welcomed { generation, .. }
+            | Phase::Reconciled { generation, .. } => generation,
+        };
+        self.ended(generation);
+        Some(generation)
+    }
+
     /// Queues `request` for the welcomed stream: its generation. A newer
     /// request for a bot replaces its unsent one.
     pub(crate) fn request(&mut self, request: SessionRequest) -> Result<u64, LaneRefusal> {
@@ -872,6 +885,20 @@ mod tests {
 
         assert_eq!(refused, Pushed::Refused);
         assert_eq!(state.next(generation), Next::End);
+    }
+
+    #[test]
+    fn closing_ends_whichever_stream_is_current_and_its_lane() {
+        let (mut state, generation) = reconciled(&[1]);
+        assert_eq!(state.request(request(1, 1)), Ok(generation));
+
+        let closed = state.close();
+
+        assert_eq!(closed, Some(generation));
+        assert_eq!(state.next(generation), Next::End);
+        assert_eq!(state.live(), None);
+        assert_eq!(state.waiting()[0], 0, "the lane closed");
+        assert_eq!(state.close(), None, "nothing is open any more");
     }
 
     #[test]

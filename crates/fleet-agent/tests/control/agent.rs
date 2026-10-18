@@ -1,6 +1,7 @@
 //! The real managed run under test: fleet-testkit's fake connector for the
-//! bots, an identity from the seeded test PKI, the test's signals, short
-//! link timings, and its log lines captured.
+//! bots, an identity from the seeded test PKI, the test's signals, the
+//! protocol's link timings (short ones only where a test measures them), and
+//! its log lines captured.
 
 use core::num::NonZeroUsize;
 use core::time::Duration;
@@ -8,6 +9,8 @@ use std::io;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use chrono::{DateTime, Utc};
 
 use fleet_agent::config::{AgentConfig, AgentMode, LogConfig, LogFilter, LogFormat};
 use fleet_agent::diagnostics::{HostDiagnostics, HostSample};
@@ -38,13 +41,37 @@ pub(crate) fn agent() -> AgentId {
     agent_id(1)
 }
 
-/// Short timings, so a missing welcome or a silent connection shows within
-/// seconds.
-pub(crate) const TIMINGS: LinkTimings = LinkTimings {
+/// Short timings, for the tests that measure the welcome timeout or the
+/// keepalive: a missing welcome or a silent connection shows within seconds.
+/// Every other test runs the protocol's, so a slow machine can't end its
+/// stream early.
+pub(crate) const SHORT: LinkTimings = LinkTimings {
     welcome: Duration::from_secs(2),
     keepalive_interval: Duration::from_secs(1),
     keepalive_timeout: Duration::from_secs(2),
 };
+
+/// How a test runs the agent.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct Options {
+    /// `[runtime] max_bots`.
+    pub(crate) max_bots: usize,
+    /// The link's timings.
+    pub(crate) timings: LinkTimings,
+    /// The run's start, which its clock counts from: R52's check reads it.
+    pub(crate) anchor: DateTime<Utc>,
+}
+
+/// Four bots, the protocol's timings, the run starting now.
+impl Default for Options {
+    fn default() -> Self {
+        Self {
+            max_bots: 4,
+            timings: LinkTimings::default(),
+            anchor: Utc::now(),
+        }
+    }
+}
 
 /// Never samples anything.
 #[derive(Debug, Clone, Default)]
@@ -125,11 +152,11 @@ impl Agent {
     /// Starts a managed agent for the server at `url`, of the test CA
     /// `ca`, its files in `dir`.
     pub(crate) fn start(dir: &Path, url: &str, ca: &TestCa) -> Self {
-        Self::start_with(dir, url, ca, 4)
+        Self::launch(dir, url, ca, Options::default())
     }
 
-    /// [`Agent::start`] with at most `max_bots`.
-    pub(crate) fn start_with(dir: &Path, url: &str, ca: &TestCa, max_bots: usize) -> Self {
+    /// [`Agent::start`] as `options` say.
+    pub(crate) fn launch(dir: &Path, url: &str, ca: &TestCa, options: Options) -> Self {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let logs = LogBuffer::default();
         let log = LogConfig {
@@ -138,7 +165,7 @@ impl Agent {
         };
         let subscriber = tracing_subscriber::registry().with(layer(&log, false, logs.clone()));
         let guard = tracing::subscriber::set_default(subscriber);
-        let config = config(dir, url, ca, max_bots);
+        let config = config(dir, url, ca, options.max_bots);
         let AgentMode::ControlPlane(plane) = &config.mode else {
             unreachable!("managed");
         };
@@ -152,12 +179,12 @@ impl Agent {
                 diagnostics: Quiet,
                 signals: Signals(receiver),
                 heartbeat: Beats::default(),
-                anchor: chrono::Utc::now(),
+                anchor: options.anchor,
                 seed: 1,
                 managed: Some(Managed {
                     identity,
                     seed: 7,
-                    timings: TIMINGS,
+                    timings: options.timings,
                 }),
             })
             .in_current_span(),

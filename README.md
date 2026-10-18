@@ -282,7 +282,7 @@ afkfleet-agent run --config agent.toml
   | 2 | Usage error |
   | 3 | Too many Minecraft host threads hung (the abandoned-thread limit); the agent shut its bots down first, so Docker can restart it |
   | 4 | The fleet's supervisor ended unasked, or didn't end when asked; or a managed agent's own tasks ended unasked |
-  | 5 | The server refused this managed agent: its certificate is unknown, revoked or expired, the agent is disabled, or its name isn't the enrolled one. Every bot was stopped first. Disable the agent and enroll it again, or fix its name |
+  | 5 | The server refused this managed agent: its certificate is unknown, revoked or expired, the agent is disabled, or its name isn't the enrolled one; or its certificate expired by the agent's own clock. Every bot was stopped first. Disable the agent and enroll it again, fix its name, or fix the host's clock |
 - **Heartbeat:** while its fleet answers, the agent touches its heartbeat file right after it starts and then every 10 s. The file is `[runtime] heartbeat_file`, an absolute path; by default it's `afkfleet-agent.alive` in the OS's temp directory, which is `/tmp` on Linux. A hung fleet stops the beats even while the process lives on. The agent never truncates or deletes the file.
 - **Healthcheck:** `afkfleet-agent healthcheck --config agent.toml` loads the same config (environment variables included) and prints one line, such as `healthy: the heartbeat is 4 s old`. It works without a shell or curl, so it runs in the distroless image. Exit codes, also listed by `afkfleet-agent healthcheck --help`:
 
