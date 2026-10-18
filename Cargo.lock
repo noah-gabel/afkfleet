@@ -2620,6 +2620,7 @@ dependencies = [
 name = "fleet-integration"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "chrono",
  "fleet-agent",
  "fleet-api-types",
@@ -2634,6 +2635,7 @@ dependencies = [
  "rustls",
  "secrecy",
  "tempfile",
+ "testcontainers",
  "tokio",
  "totp-rs",
  "tracing",

@@ -9,5 +9,9 @@
 //! agents back in either order, a connection gone silent, and a server
 //! outage with sessions to grant.
 //!
+//! **Phase 10's managed check** (`tests/integration/managed_check/`): a
+//! manual test only the user runs, with their real Microsoft account against
+//! a local online-mode Minecraft server (`just test-managed-account`).
+//!
 //! P11.7's full-flow test joins the same test binary. Nothing depends on
 //! this crate, and it has no API: this library is only its documentation.

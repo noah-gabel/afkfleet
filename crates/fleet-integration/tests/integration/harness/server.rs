@@ -1,19 +1,25 @@
-//! The real server, in-process (ADR-0019, S72): `app_with` over a manual
-//! clock and seeded randomness, then serve's own `open`, `grpc_port` and
-//! `serve`, so its wiring is serve's: the HTTP API, the gRPC port with its
-//! sweep, the reconciler, the grants, the ingest and the shutdown order.
+//! The real server, in-process (ADR-0019, S72, S73): `app_with` over the
+//! case's ports, then serve's own `open`, `grpc_port` and `serve`, so its
+//! wiring is serve's: the HTTP API, the gRPC port with its sweep, the
+//! reconciler, the grants, the ingest and the shutdown order.
 //!
 //! - **Its files** live in the case's folder: the database, and the PKI
 //!   `afkfleet-server pki init` writes and serve's loader reads at every
 //!   start. The vault key comes from memory.
-//! - **Its clock** is a [`ManualClock`] at the real time, for TOTP steps;
-//!   TLS checks certificates on real time, and the certificates are valid
-//!   from an hour before the clock's time. The rate limiters measure real
-//!   intervals, as in production, so a case's requests and reconnects
-//!   refill their buckets.
+//! - **A loopback case's server** ([`Server::start`]) runs on a
+//!   [`ManualClock`] at the real time, for TOTP steps, and seeded
+//!   randomness, with offline accounts on; TLS checks certificates on real
+//!   time, and the certificates are valid from an hour before the clock's
+//!   time. The rate limiters measure real intervals, as in production, so a
+//!   case's requests and reconnects refill their buckets.
+//! - **The managed check's server** ([`Server::start_real`]) runs on the real
+//!   clock, the OS's randomness and the Microsoft adapter it's given, with
+//!   offline accounts off, the Owner's password and the vault's key the
+//!   check drew for its run.
 //! - **A restart** ([`Server::restart`]) stops serve with a signal, as an
 //!   operator does, and starts it again on the same database, PKI and
-//!   addresses, with the same clock and randomness.
+//!   addresses, with the same clock and randomness: a loopback case's
+//!   server only, since the managed check's key is used once.
 
 use core::time::Duration;
 use std::collections::BTreeMap;
@@ -27,7 +33,7 @@ use fleet_core::auth::NewPassword;
 use fleet_core::enrollment::EnrollmentBundle;
 use fleet_core::id::{AgentId, BotId};
 use fleet_core::pki::CertFingerprint;
-use fleet_core::system::Clock as _;
+use fleet_core::system::{Clock, SecureRandom};
 use fleet_core::value::Username;
 use fleet_server::app::enrollment::{Creator, EnrollmentTokenService};
 use fleet_server::app::users::UserService;
@@ -47,15 +53,16 @@ use fleet_server::infra::crypto::vault::{DerivedKey, VaultKeys};
 use fleet_server::infra::msauth::ReqwestMicrosoftAuth;
 use fleet_server::infra::pki::load;
 use fleet_server::infra::sqlite::{self, Database, DatabaseOptions};
-use fleet_server::infra::system::{MonotonicClock, SystemClock, TokioPace};
+use fleet_server::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord};
 use fleet_server::ports::bots::Bot;
+use fleet_server::ports::msauth::MicrosoftAuthProvider;
 use fleet_server::ports::page::{Page, PageLimit};
 use fleet_server::ports::passwords::Passwords;
 use fleet_server::ports::store::Store as _;
 use fleet_startup::signals::{ShutdownSignals, Signal};
 use fleet_testkit::system::{ManualClock, SeededRandom};
-use secrecy::{SecretBox, SecretString};
+use secrecy::{ExposeSecret as _, SecretBox, SecretString};
 use tokio::net::TcpListener;
 use tokio::sync::mpsc;
 use tokio::task::JoinSet;
@@ -64,10 +71,10 @@ use super::logs::PATIENCE;
 
 /// The Owner's name.
 pub(crate) const OWNER: &str = "owner";
-/// The Owner's password: strong, so the server takes it.
+/// A loopback case's Owner's password: strong, so the server takes it.
 pub(crate) const PASSWORD: &str = "correct horse battery staple";
 
-/// How a case's server runs.
+/// How a loopback case's server runs.
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct ServerOptions {
     /// `[grpc] heartbeat_interval_secs` and `heartbeat_timeout_secs`: the
@@ -75,16 +82,58 @@ pub(crate) struct ServerOptions {
     pub(crate) heartbeats: Heartbeats,
 }
 
+/// What the managed check's server runs on, beside the real clock and the OS's
+/// randomness.
+pub(crate) struct RealSetup {
+    /// Microsoft's account flows.
+    pub(crate) microsoft: Arc<dyn MicrosoftAuthProvider>,
+    /// The Owner's password.
+    pub(crate) password: SecretString,
+    /// The vault's one key, drawn for the run.
+    pub(crate) key: SecretBox<[u8; 32]>,
+}
+
 /// The server; see the [module docs](self).
 #[derive(Debug)]
 pub(crate) struct Server {
     config: ServerConfig,
-    clock: ManualClock,
-    random: SeededRandom,
+    clock: Arc<dyn Clock>,
+    /// A loopback case's clock, which the Owner's TOTP steps move.
+    manual: Option<ManualClock>,
+    random: Arc<dyn SecureRandom>,
+    microsoft: Arc<dyn MicrosoftAuthProvider>,
+    keys: Keys,
     http: SocketAddr,
     grpc: SocketAddr,
     ca_fingerprint: CertFingerprint,
     running: Option<Running>,
+}
+
+/// Where the vault's key comes from.
+enum Keys {
+    /// The same bytes at every start: a loopback case's.
+    Fixed,
+    /// The managed check's, used once.
+    Drawn(Option<SecretBox<[u8; 32]>>),
+}
+
+impl core::fmt::Debug for Keys {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.write_str(match self {
+            Self::Fixed => "Fixed",
+            Self::Drawn(_) => "Drawn(..)",
+        })
+    }
+}
+
+impl Keys {
+    fn take(&mut self) -> VaultKeys {
+        let key = match self {
+            Self::Fixed => SecretBox::new(Box::new([0x5A; 32])),
+            Self::Drawn(key) => key.take().expect("the DoD check's server starts once"),
+        };
+        VaultKeys::from_keys(BTreeMap::from([(1, key)]), 1).unwrap()
+    }
 }
 
 /// A serve that runs.
@@ -96,10 +145,61 @@ struct Running {
     serving: JoinSet<Exit>,
 }
 
+/// Everything a first start needs.
+struct Begin {
+    heartbeats: Heartbeats,
+    allow_offline: bool,
+    clock: Arc<dyn Clock>,
+    manual: Option<ManualClock>,
+    random: Arc<dyn SecureRandom>,
+    microsoft: Arc<dyn MicrosoftAuthProvider>,
+    keys: Keys,
+    password: SecretString,
+}
+
 impl Server {
-    /// A new server with its files in `dir`: the PKI from `pki init`, the
-    /// database with its Owner, then serve.
+    /// A loopback case's server with its files in `dir`; see the [module
+    /// docs](self).
     pub(crate) async fn start(dir: &Path, options: ServerOptions) -> Self {
+        let manual = ManualClock::new(whole_millis(SystemClock.now()));
+        Self::begin(
+            dir,
+            Begin {
+                heartbeats: options.heartbeats,
+                allow_offline: true,
+                clock: Arc::new(manual.clone()),
+                // Never called: the cases' accounts are offline ones.
+                microsoft: Arc::new(ReqwestMicrosoftAuth::new(Arc::new(manual.clone())).unwrap()),
+                manual: Some(manual),
+                random: Arc::new(SeededRandom::new(11)),
+                keys: Keys::Fixed,
+                password: SecretString::from(PASSWORD),
+            },
+        )
+        .await
+    }
+
+    /// The managed check's server with its files in `dir`; see the [module
+    /// docs](self).
+    pub(crate) async fn start_real(dir: &Path, setup: RealSetup) -> Self {
+        Self::begin(
+            dir,
+            Begin {
+                heartbeats: Heartbeats::default(),
+                allow_offline: false,
+                clock: Arc::new(SystemClock),
+                manual: None,
+                random: Arc::new(OsRandom),
+                microsoft: setup.microsoft,
+                keys: Keys::Drawn(Some(setup.key)),
+                password: setup.password,
+            },
+        )
+        .await
+    }
+
+    /// The PKI from `pki init`, the database with its Owner, then serve.
+    async fn begin(dir: &Path, begin: Begin) -> Self {
         let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let http = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let grpc = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -107,18 +207,17 @@ impl Server {
             dir,
             http.local_addr().unwrap(),
             grpc.local_addr().unwrap(),
-            options.heartbeats,
+            begin.heartbeats,
+            begin.allow_offline,
         );
-        let clock = ManualClock::new(whole_millis(SystemClock.now()));
-        let random = SeededRandom::new(11);
         std::fs::create_dir_all(dir.join("pki")).unwrap();
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let created = pki::init(
             &config,
             &["localhost".to_owned()],
             &[IpAddr::from([127, 0, 0, 1])],
-            &clock,
-            &random,
+            &*begin.clock,
+            &*begin.random,
             &mut out,
             &mut err,
         );
@@ -132,19 +231,19 @@ impl Server {
             .await
             .unwrap();
         UserService::new(
-            Arc::new(clock.clone()),
-            Arc::new(random.clone()),
+            Arc::clone(&begin.clock),
+            Arc::clone(&begin.random),
             Arc::new(database.clone()),
-            passwords(&config, &random).await,
+            passwords(&config, &begin.random).await,
         )
         .create_owner(
             &Username::try_from(OWNER).unwrap(),
-            &NewPassword::try_from(SecretString::from(PASSWORD)).unwrap(),
+            &NewPassword::try_from(SecretString::from(begin.password.expose_secret())).unwrap(),
         )
         .await
         .unwrap();
         database.close().await;
-        let ca_fingerprint = load(&grpc_config(&config).pki, clock.now())
+        let ca_fingerprint = load(&grpc_config(&config).pki, begin.clock.now())
             .unwrap()
             .ca
             .fingerprint();
@@ -152,8 +251,11 @@ impl Server {
             http: http.local_addr().unwrap(),
             grpc: grpc.local_addr().unwrap(),
             config,
-            clock,
-            random,
+            clock: begin.clock,
+            manual: begin.manual,
+            random: begin.random,
+            microsoft: begin.microsoft,
+            keys: begin.keys,
             ca_fingerprint,
             running: None,
         };
@@ -167,14 +269,13 @@ impl Server {
         let database = sqlite::open(&self.config.database, DatabaseOptions::default())
             .await
             .unwrap();
-        let keys = vault_keys();
+        let keys = self.keys.take();
         let lockout_key = keys.derive_key(DerivedKey::LoginAttempts).unwrap();
         let ports = ServerPorts {
-            clock: Arc::new(self.clock.clone()),
+            clock: Arc::clone(&self.clock),
             limiter_clock: Arc::new(MonotonicClock::start()),
-            random: Arc::new(self.random.clone()),
-            // Never called: the cases' accounts are offline ones.
-            microsoft: Arc::new(ReqwestMicrosoftAuth::new(Arc::new(self.clock.clone())).unwrap()),
+            random: Arc::clone(&self.random),
+            microsoft: Arc::clone(&self.microsoft),
             pace: Arc::new(TokioPace),
         };
         let (opened, ca) = open(
@@ -261,9 +362,9 @@ impl Server {
         grpc_config(&self.config).pki.ca_cert_file.clone()
     }
 
-    /// The server's clock: the Owner's TOTP steps move it.
+    /// A loopback case's clock: the Owner's TOTP steps move it.
     pub(crate) fn clock(&self) -> &ManualClock {
-        &self.clock
+        self.manual.as_ref().expect("a loopback case's server")
     }
 
     /// The running server's agents' streams.
@@ -274,10 +375,10 @@ impl Server {
     /// An enrollment token's bundle, as the host's `agent
     /// create-enrollment-token` makes it.
     pub(crate) async fn bundle(&self) -> EnrollmentBundle {
-        let random = Arc::new(self.random.clone());
+        let random = Arc::clone(&self.random);
         EnrollmentTokenService::new(
-            Arc::new(self.clock.clone()),
-            random.clone(),
+            Arc::clone(&self.clock),
+            Arc::clone(&random),
             Arc::new(self.running().db.clone()),
             Arc::new(Sha256Tokens::new(random)),
             self.ca_fingerprint,
@@ -336,10 +437,16 @@ impl Server {
 }
 
 /// The production config, but for what a case sets: its addresses, its
-/// files in `dir`, `heartbeats`, and offline accounts on, the only accounts
-/// a case can make without Microsoft. The vault key comes from memory, so
-/// its file is never read.
-fn config(dir: &Path, http: SocketAddr, grpc: SocketAddr, heartbeats: Heartbeats) -> ServerConfig {
+/// files in `dir`, `heartbeats`, and whether offline accounts are on (a
+/// loopback case's only accounts, since it has no Microsoft). The vault key
+/// comes from memory, so its file is never read.
+fn config(
+    dir: &Path,
+    http: SocketAddr,
+    grpc: SocketAddr,
+    heartbeats: Heartbeats,
+    allow_offline: bool,
+) -> ServerConfig {
     let pki = dir.join("pki");
     ServerConfig {
         dev_mode: false,
@@ -363,7 +470,7 @@ fn config(dir: &Path, http: SocketAddr, grpc: SocketAddr, heartbeats: Heartbeats
             active_key_id: 1,
         },
         accounts: AccountsConfig {
-            allow_offline: true,
+            allow_offline,
             ..AccountsConfig::default()
         },
         chat: ChatConfig::default(),
@@ -385,18 +492,9 @@ fn grpc_config(config: &ServerConfig) -> &GrpcConfig {
     config.grpc.as_ref().expect("the control plane is on")
 }
 
-/// The vault's one key, the same at every start.
-fn vault_keys() -> VaultKeys {
-    VaultKeys::from_keys(
-        BTreeMap::from([(1, SecretBox::new(Box::new([0x5A; 32])))]),
-        1,
-    )
-    .unwrap()
-}
-
-async fn passwords(config: &ServerConfig, random: &SeededRandom) -> Arc<dyn Passwords> {
+async fn passwords(config: &ServerConfig, random: &Arc<dyn SecureRandom>) -> Arc<dyn Passwords> {
     Arc::new(
-        Argon2Passwords::new(config.auth.argon2, Arc::new(random.clone()))
+        Argon2Passwords::new(config.auth.argon2, Arc::clone(random))
             .await
             .unwrap(),
     )

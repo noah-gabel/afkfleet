@@ -23,10 +23,11 @@ use fleet_agent::managed::identity::ManagedIdentity;
 use fleet_agent::managed::link::LinkTimings;
 use fleet_agent::run::{Exit, Managed, Outcome, RunParts, run};
 use fleet_agent::signals::{ShutdownSignals, Signal};
+use fleet_core::enrollment::EnrollmentBundle;
 use fleet_core::id::AgentId;
 use fleet_core::net::PrivateTargets;
 use fleet_core::resilience::{CircuitPolicy, RetryPolicy};
-use fleet_core::system::Clock as _;
+use fleet_core::system::{Clock as _, SecureRandom};
 use fleet_core::value::AgentName;
 use fleet_mc::McConfig;
 use fleet_runtime::RuntimeConfig;
@@ -89,49 +90,17 @@ impl Agent {
     /// with a host's token; `seed` makes its key.
     pub(crate) async fn enroll(server: &Server, dir: &Path, name: &str, seed: u64) -> Self {
         let proxy = Proxy::start(server.grpc()).await;
-        let dir = dir.join(name);
-        let plane = ControlPlaneConfig {
-            url: proxy.url(),
-            ca_cert_file: dir.join("ca.crt"),
-            cert_file: dir.join("agent.crt"),
-            key_file: dir.join("agent.key"),
-            private_targets: PrivateTargets::default(),
-        };
         let bundle = server.bundle().await;
-        let enrolled = {
-            let plane = plane.clone();
-            let dir = dir.clone();
-            let ca = server.ca_cert_file();
-            let name = AgentName::try_from(name).unwrap();
-            // `enroll` blocks on a runtime of its own, as the binary's
-            // command does.
-            tokio::task::spawn_blocking(move || {
-                std::fs::create_dir_all(&dir).unwrap();
-                std::fs::copy(ca, &plane.ca_cert_file).unwrap();
-                let runtime = tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .unwrap();
-                let (mut out, mut err) = (Vec::new(), Vec::new());
-                let exit = enroll::enroll(
-                    Enrollment {
-                        plane: &plane,
-                        name: &name,
-                        bundle,
-                    },
-                    &SeededRandom::new(seed),
-                    &runtime,
-                    &mut out,
-                    &mut err,
-                );
-                (exit, String::from_utf8_lossy(&err).into_owned())
-            })
-        };
-        let (exit, err) = tokio::time::timeout(PATIENCE, enrolled)
-            .await
-            .expect("the enrollment ends")
-            .unwrap();
-        assert_eq!(exit, enroll::Exit::Enrolled, "{err}");
+        let plane = enroll_files(
+            server,
+            dir,
+            name,
+            &proxy.url(),
+            bundle,
+            SeededRandom::new(seed),
+        )
+        .await;
+        let dir = dir.join(name);
         let id = server.agent_id(name).await;
         Self {
             name: name.to_owned(),
@@ -232,6 +201,62 @@ impl Agent {
         while running.task.join_next().await.is_some() {}
         ledger.dead(running.connector.run());
     }
+}
+
+/// Enrolls the agent `name` with `server` through `bundle`, as
+/// `afkfleet-agent enroll` does, its files in `dir/name`: the CA the server
+/// signs with, and the key `random` makes with the certificate the server
+/// signed for it; returns its `[control_plane]` for `url`.
+pub(crate) async fn enroll_files(
+    server: &Server,
+    dir: &Path,
+    name: &str,
+    url: &str,
+    bundle: EnrollmentBundle,
+    random: impl SecureRandom + 'static,
+) -> ControlPlaneConfig {
+    let dir = dir.join(name);
+    let plane = ControlPlaneConfig {
+        url: url.to_owned(),
+        ca_cert_file: dir.join("ca.crt"),
+        cert_file: dir.join("agent.crt"),
+        key_file: dir.join("agent.key"),
+        private_targets: PrivateTargets::default(),
+    };
+    let enrolled = {
+        let plane = plane.clone();
+        let ca = server.ca_cert_file();
+        let name = AgentName::try_from(name).unwrap();
+        // `enroll` blocks on a runtime of its own, as the binary's command
+        // does.
+        tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::copy(ca, &plane.ca_cert_file).unwrap();
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap();
+            let (mut out, mut err) = (Vec::new(), Vec::new());
+            let exit = enroll::enroll(
+                Enrollment {
+                    plane: &plane,
+                    name: &name,
+                    bundle,
+                },
+                &random,
+                &runtime,
+                &mut out,
+                &mut err,
+            );
+            (exit, String::from_utf8_lossy(&err).into_owned())
+        })
+    };
+    let (exit, err) = tokio::time::timeout(PATIENCE, enrolled)
+        .await
+        .expect("the enrollment ends")
+        .unwrap();
+    assert_eq!(exit, enroll::Exit::Enrolled, "{err}");
+    plane
 }
 
 /// Never samples anything: the fake connector has no host threads.

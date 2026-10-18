@@ -66,6 +66,19 @@ test-real-account:
 test-ms-account *filter:
     cargo nextest run -p fleet-server --profile manual --no-capture {{ filter }}
 
+# The user's Phase 10 check (ADR-0019, S73): in managed mode, a bot with the user's
+# own Microsoft account goes Online on a local online-mode Minecraft container
+# through the API, and offline through stop (needs Docker). The server and the agent
+# run in-process; the database, the PKI and the agent's identity live in a temporary
+# folder, deleted at every end, sealed with a vault key drawn for the run and kept in
+# memory. It prints a link and a code to enter, then pass or FAIL per step, never a
+# token, a name or a UUID. It needs the user's real account, so only the user runs
+# it; the AI never does. The image is pulled first, so the pull never eats into the
+# timed run.
+test-managed-account:
+    docker compose --file deploy/compose.dev.yaml pull minecraft
+    cargo nextest run -p fleet-integration --profile manual --no-capture manual_managed_bot_goes_online_and_offline
+
 # Coverage, checked against the gates from Plan.md §8.
 cov:
     cargo llvm-cov nextest --workspace {{ linux_exclude }} --no-report

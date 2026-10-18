@@ -102,6 +102,9 @@ async fn a_restart_while_the_old_connection_lives_is_refused_until_it_ends_and_r
     world.online(&agent, two, first).await;
 
     assert!(refused_while_live, "the old stream still held the bots");
+    // The slot frees before the end is recorded, so the new stream may come
+    // first.
+    world.entries(&AuditAction::AGENT_DISCONNECT, 1).await;
     // The old stream ended of silence, and only then was the new one
     // welcomed.
     let ended = world.server.entries(&AuditAction::AGENT_DISCONNECT).await;

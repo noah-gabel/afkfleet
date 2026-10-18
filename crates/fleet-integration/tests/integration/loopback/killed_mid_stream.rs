@@ -33,6 +33,8 @@ async fn a_connection_cut_mid_stream_reconciles_what_changed_meanwhile() {
 
     let again = world.online(&agent, started, first).await;
     world.entries(&AuditAction::BOT_UNASSIGN, 1).await;
+    // Its Removed detaches it, after the unassignment.
+    world.entries(&AuditAction::BOT_DETACH, 1).await;
     world
         .logs
         .until("the stopped bot left the agent", async || {

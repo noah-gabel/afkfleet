@@ -409,6 +409,7 @@ just test-slow # pull the server image, build the agent's image, then the slow t
 just demo-agent # the Phase 5 demo: the Docker agent's five bots for an hour with one server restart
 just test-real-account # the real-account check: you only (see below)
 just test-ms-account # the Microsoft check with your own account: you only (see below)
+just test-managed-account # the managed check: your own account's bot Online through the control plane, you only (see below)
 just db-prepare # after changing a query or adding a migration: refresh crates/fleet-server/.sqlx/
 just gen       # after changing an API type: refresh packages/ui/src/generated/
 just dev-app   # run the desktop app with Vite's dev server (hot reload)
@@ -462,6 +463,24 @@ When the test ends, its container is removed together with its volumes, which ho
    The account and declined checks wait at most 8 minutes each, the link flow at most 4 minutes per code.
 2. It never prints a token, your Minecraft name or your UUID. A failed step names the rule Microsoft's answer broke, never a value from it.
 3. Report every step's pass or FAIL, with a FAIL's text.
+
+**The managed check** (Phase 10 on) is the control plane's definition of done: in managed mode, a bot with your own Microsoft account, started through `POST /bots/{id}/start`, goes Online on a real online-mode Minecraft server and goes offline through stop. It needs your real account, so only you run it; the AI never does. The server and a managed agent run in process, and everything happens through the API's own client: the Owner logs in with 2FA, links your account, points its bot at a local online-mode Minecraft 26.1 server in Docker after a step-up, starts it and stops it. The agent enrolls with the server for real and lists only `127.0.0.1/32` in `private_targets`, the container's published port. The database, the control plane's keys and the agent's identity live in a fresh `afkfleet-managed-check-…` folder in your temp directory, sealed with a vault key drawn for the run and kept only in memory, and the folder is deleted at every end: pass, FAIL or panic. The container is removed with its volumes, which hold your Minecraft name.
+1. Have Docker Desktop running, internet, a Microsoft account that owns Minecraft: Java Edition with a profile, and nobody playing on it: a second login pauses the bot. You need no file.
+2. Run `just test-managed-account`. It pulls the server image, then runs the check, about 9 minutes at most. It prints a link (Microsoft's `microsoft.com/link` page) and a code: open the link, enter the code, sign in with that account and approve. It then prints pass or FAIL for each step:
+   - the server and the agent started (enrolled)
+   - the Owner logged in with 2FA
+   - the link started; linked, active
+   - the account's bot listed (`unplaced`, `no_server`)
+   - the Minecraft server started
+   - the server set after a step-up
+   - started; Online (with the states it saw, for information)
+   - stopped; offline (`unplaced`, `stopped`)
+   - the agent stopped, the server stopped, the container removed, the temporary folder deleted
+   - no secret in any log
+3. It never prints a token, your Minecraft name, your UUID or a path; a failed step names a state, a reason or an API code. A leak names only what kind of secret it was and the log line's level and target. Report every step's pass or FAIL, with a FAIL's text.
+
+Only Ctrl+C, or the profile's 10-minute limit, can leave things behind. If they do, delete the `afkfleet-managed-check-…` folder in your temp directory (it holds your Minecraft name and UUID as plain text; the token in it can't be opened, since its key ended with the run), and remove the container: find it with `docker ps -a`, then `docker rm -fv <id>`. To end the sign-in's consent at Microsoft too, remove the app under Privacy, Apps and services, in your Microsoft account.
+
 `just --list` shows every recipe; [`CLAUDE.md`](CLAUDE.md) describes them and the project's working rules.
 
 Every change goes through a pull request; nobody commits to `main`.

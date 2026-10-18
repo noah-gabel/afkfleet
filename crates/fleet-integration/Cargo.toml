@@ -13,6 +13,9 @@ workspace = true
 # Nothing but its tests: nothing depends on this crate, and everything it uses is a
 # dev-dependency (the user's choices, ADR-0019, U19 and U21).
 [dev-dependencies]
+# The DoD check's recording wrapper around the Microsoft adapter, a port
+# fleet-server holds as Arc<dyn …>.
+async-trait.workspace = true
 # Bot IDs and the agent's run anchor.
 chrono.workspace = true
 # The real managed agent, run in-process: its config, enrollment and run.
@@ -40,8 +43,11 @@ rustls.workspace = true
 secrecy.workspace = true
 # Each test's folder: the database, the PKI, the agents' identities.
 tempfile.workspace = true
-# `net` and `io-util` for the stalling proxy.
-tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "sync", "time"] }
+# The DoD check's online-mode Minecraft server in Docker.
+testcontainers.workspace = true
+# `net` and `io-util` for the stalling proxy; `rt-multi-thread` and `fs` for the
+# DoD check, beside azalea's host threads.
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
 # The Owner's authenticator: codes from the enroll answer's otpauth URI.
 totp-rs = { workspace = true, features = ["otpauth"] }
 tracing.workspace = true

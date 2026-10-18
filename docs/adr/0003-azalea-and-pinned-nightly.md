@@ -39,7 +39,7 @@ One pull request changes all of these together, never one alone:
 1. **azalea:** pick the new azalea release on crates.io and note its Minecraft version.
 2. **Pins:** update `azalea`/`azalea-auth` (and `azalea-chat`/`azalea-language`, which fleet-mc uses directly) in Plan.md §5, `Cargo.toml` (once used) and `spikes/toolchain-check/Cargo.toml`. *(Phase 9, group B)* No member depends on azalea-auth directly any more; its pin in §5 follows azalea's ([ADR-0018](0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)).
 3. **Nightly:** start with the newest nightly whose `rustfmt`, `clippy` and `llvm-tools-preview` exist for `x86_64-pc-windows-msvc` and `x86_64-unknown-linux-gnu`. If azalea fails to build, bisect back to the newest nightly that works, counting only the azalea error as "bad".
-4. **Test server:** update `VERSION` (and, if needed, the pinned `itzg/minecraft-server` image) in `deploy/compose.dev.yaml` (from P1.1), and the same pins in fleet-mc's slow-test harness (`crates/fleet-mc/tests/minecraft/harness.rs`). A fast test (`pins`) fails while the two differ (ADR-0011).
+4. **Test server:** update `VERSION` (and, if needed, the pinned `itzg/minecraft-server` image) in `deploy/compose.dev.yaml` (from P1.1), and the same pins in fleet-mc's slow-test harness (`crates/fleet-mc/tests/minecraft/harness.rs`) and in Phase 10's managed check (`crates/fleet-integration/tests/integration/managed_check/minecraft.rs`, ADR-0019). Each crate's fast `pins` test fails while its copy differs from compose's (ADR-0011).
 5. **Verify:**
    - build `spikes/toolchain-check` on Windows and in a Linux container
    - run `cargo deny` against its graph
