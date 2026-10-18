@@ -48,7 +48,9 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use fleet_agent::config::{self as agent_config, AgentMode};
+use fleet_agent::config::{
+    self as agent_config, AgentConfig, AgentMode, ConfigError, ControlPlaneConfig,
+};
 use fleet_agent::heartbeat::Heartbeat;
 use fleet_agent::managed::identity::ManagedIdentity;
 use fleet_agent::managed::link::LinkTimings;
@@ -414,8 +416,47 @@ async fn start_agent(
     plane: &fleet_agent::config::ControlPlaneConfig,
 ) -> Result<RunningAgent, String> {
     let path = dir.join("agent.toml");
-    let toml = format!(
+    tokio::fs::write(&path, agent_toml(dir, plane))
+        .await
+        .map_err(|_| "agent.toml couldn't be written".to_owned())?;
+    let config = load_agent_config(&path)?;
+    let AgentMode::ControlPlane(plane) = &config.mode else {
+        return Err("the agent's config isn't managed".to_owned());
+    };
+    let identity = ManagedIdentity::load(plane, rustls::pki_types::UnixTime::now())
+        .map_err(|_| "the agent's identity doesn't load".to_owned())?;
+    let connector = AzaleaConnector::new(&config.mc).with_targets(config.mode.target_policy());
+    let (signals, receiver) = mpsc::channel(4);
+    let mut seed = [0_u8; 8];
+    OsRandom
+        .fill(&mut seed)
+        .map_err(|_| "the OS's randomness failed".to_owned())?;
+    let seed = u64::from_le_bytes(seed);
+    let mut task = JoinSet::new();
+    task.spawn(run(RunParts {
+        config,
+        connector: Arc::new(connector.clone()),
+        diagnostics: connector,
+        signals: Signals(receiver),
+        heartbeat: Beats,
+        anchor: SystemClock.now(),
+        seed,
+        managed: Some(Managed {
+            identity,
+            seed,
+            timings: LinkTimings::default(),
+        }),
+    }));
+    Ok(RunningAgent { signals, task })
+}
+
+/// `agent.toml` for an agent whose files are in `dir` and `plane`, as an
+/// operator writes it.
+fn agent_toml(dir: &Path, plane: &ControlPlaneConfig) -> String {
+    format!(
         r#"name = "{AGENT}"
+
+[runtime]
 heartbeat_file = "{heartbeat}"
 
 [control_plane]
@@ -434,38 +475,18 @@ private_targets = ["127.0.0.1/32"]
         ca = toml_path(&plane.ca_cert_file),
         cert = toml_path(&plane.cert_file),
         key = toml_path(&plane.key_file),
-    );
-    tokio::fs::write(&path, toml)
-        .await
-        .map_err(|_| "agent.toml couldn't be written".to_owned())?;
-    let config =
-        agent_config::load(&path).map_err(|_| "the agent's config isn't valid".to_owned())?;
-    let AgentMode::ControlPlane(plane) = &config.mode else {
-        return Err("the agent's config isn't managed".to_owned());
-    };
-    let identity = ManagedIdentity::load(plane, rustls::pki_types::UnixTime::now())
-        .map_err(|_| "the agent's identity doesn't load".to_owned())?;
-    let connector = AzaleaConnector::new(&config.mc).with_targets(config.mode.target_policy());
-    let (signals, receiver) = mpsc::channel(4);
-    let mut seed = [0_u8; 8];
-    OsRandom.fill(&mut seed).unwrap();
-    let seed = u64::from_le_bytes(seed);
-    let mut task = JoinSet::new();
-    task.spawn(run(RunParts {
-        config,
-        connector: Arc::new(connector.clone()),
-        diagnostics: connector,
-        signals: Signals(receiver),
-        heartbeat: Beats,
-        anchor: SystemClock.now(),
-        seed,
-        managed: Some(Managed {
-            identity,
-            seed,
-            timings: LinkTimings::default(),
-        }),
-    }));
-    Ok(RunningAgent { signals, task })
+    )
+}
+
+/// The config at `path`, through the agent's own loader. A failure is a
+/// fixed text, or validation's problems, which name keys and rules but
+/// never a value; a parse error's text may hold a path, so it's left out.
+fn load_agent_config(path: &Path) -> Result<AgentConfig, String> {
+    agent_config::load(path).map_err(|error| match error {
+        ConfigError::Invalid(problems) => format!("the agent's config isn't valid: {problems}"),
+        ConfigError::Parse(_) => "the agent's config can't be read".to_owned(),
+        ConfigError::NotFound { .. } => "agent.toml isn't there".to_owned(),
+    })
 }
 
 /// `path` as a TOML basic string's content.
@@ -888,5 +909,88 @@ impl ShutdownSignals for Signals {
             Some(signal) => signal,
             None => core::future::pending().await,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use fleet_core::net::PrivateTargets;
+    use fleet_testkit::jail::in_jail;
+
+    use fleet_core::audit::AuditAction;
+
+    use super::*;
+    use crate::harness::logs::{Logs, PATIENCE};
+
+    /// The check's own setup, login and teardown, on the real path but for
+    /// Microsoft and Docker: the server on the real clock and the OS's
+    /// randomness, the agent enrolled and run from its `agent.toml` with the
+    /// azalea connector, the Owner through 2FA. No account is linked, so no
+    /// bot runs and Microsoft is never asked.
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn the_checks_setup_login_and_teardown_pass_without_an_account() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        log_capture::install().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let rig = Rig::default();
+        let password = random_password().unwrap();
+        rig.saw(Kind::Password, password.expose_secret());
+        // Only for its bounded wait: every line goes to the capture.
+        let logs = Logs::default();
+
+        let ran = tokio::time::timeout(PATIENCE, async {
+            let url = set_up(&rig, dir.path(), password.clone()).await?;
+            log_in(&rig, &url, &password).await.map(drop)
+        })
+        .await;
+        if let (Ok(Ok(())), Some(server)) = (&ran, rig.server.lock().await.as_ref()) {
+            // The agent's identity holds over mTLS: the server welcomed it.
+            logs.until("the agent connected", async || {
+                !server.entries(&AuditAction::AGENT_CONNECT).await.is_empty()
+            })
+            .await;
+        }
+        let mut teardown = Steps::default();
+        tear_down(&rig, dir.path(), &mut teardown).await;
+        let findings = rig.secrets.lock().unwrap().findings();
+
+        assert_eq!(ran, Ok(Ok(())), "set up and logged in");
+        assert_eq!(teardown.failures, Vec::<String>::new());
+        // The password, the TOTP secret, the recovery codes, the bundle, its
+        // token, the refresh token and the three keys, and every token by
+        // its shape.
+        assert_eq!(findings, Vec::<String>::new(), "no secret in any log");
+    }
+
+    #[test]
+    fn the_agents_config_loads_as_the_check_writes_it() {
+        in_jail(|jail| {
+            let dir = jail.directory().to_owned();
+            let plane = ControlPlaneConfig {
+                url: "https://127.0.0.1:7443".to_owned(),
+                ca_cert_file: dir.join(AGENT).join("ca.crt"),
+                cert_file: dir.join(AGENT).join("agent.crt"),
+                key_file: dir.join(AGENT).join("agent.key"),
+                private_targets: PrivateTargets::default(),
+            };
+            let path = dir.join("agent.toml");
+            std::fs::write(&path, agent_toml(&dir, &plane)).unwrap();
+
+            let loaded = load_agent_config(&path);
+
+            let config = loaded.unwrap();
+            let AgentMode::ControlPlane(loaded) = &config.mode else {
+                panic!("a managed agent");
+            };
+            assert_eq!(loaded.url, plane.url);
+            assert_eq!(loaded.key_file, plane.key_file);
+            assert_eq!(config.heartbeat_file, dir.join("agent.alive"));
+            assert_eq!(loaded.private_targets.networks().len(), 1);
+            assert!(
+                loaded
+                    .private_targets
+                    .contains(core::net::IpAddr::from([127, 0, 0, 1]))
+            );
+        });
     }
 }

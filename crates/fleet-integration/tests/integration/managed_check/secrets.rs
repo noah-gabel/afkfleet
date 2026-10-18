@@ -16,8 +16,9 @@
 //!   level are looked in too. The name
 //!   counts only as a whole word, so a short one never matches a field such
 //!   as `max_bots`; the UUID in both its forms.
-//! - **Every token of the server's** is also found by its prefix
-//!   ([`SERVER_TOKENS`]), seen or not: fleet-client never shows its access
+//! - **Every token of the server's** is also found by its shape, its
+//!   prefix ([`SERVER_TOKENS`]) and the 43 characters of its random part,
+//!   seen or not: fleet-client never shows its access
 //!   tokens, and a refresh rotates the refresh token.
 //! - **"PRIVATE KEY"** reaches a log only where azalea-auth logs the chat
 //!   certificate's response at TRACE, P1.8's accepted risk.
@@ -161,7 +162,10 @@ impl Secrets {
             }
         }
         for kind in SERVER_TOKENS {
-            if let Err(SecretLeak { levels, .. }) = log_capture::check_absent(kind.prefix()) {
+            let prefix = kind.prefix();
+            if let Err(SecretLeak { levels, .. }) =
+                log_capture::find(|text| holds_token(text, prefix))
+            {
                 for ((target, level), lines) in levels {
                     findings.insert(format!(
                         "a server token ({}): {level} {target} ({lines} lines)",
@@ -179,6 +183,27 @@ impl Secrets {
         }
         findings.into_iter().collect()
     }
+}
+
+/// A token's random part: 32 bytes as base64url without padding, as
+/// fleet-server mints it.
+const TOKEN_SECRET_CHARS: usize = 43;
+
+/// Whether `text` holds a whole token behind `prefix`: the prefix, then at
+/// least the 43 base64url characters of its random part. A bare prefix, as
+/// a migration's comment names a format (`afk_iv_…`) and sqlx logs it at
+/// `debug`, isn't one.
+fn holds_token(text: &str, prefix: &str) -> bool {
+    let base64url = |c: &char| c.is_ascii_alphanumeric() || *c == '-' || *c == '_';
+    text.match_indices(prefix).any(|(at, _)| {
+        text.get(at + prefix.len()..).is_some_and(|tail| {
+            tail.chars()
+                .take(TOKEN_SECRET_CHARS)
+                .filter(base64url)
+                .count()
+                == TOKEN_SECRET_CHARS
+        })
+    })
 }
 
 /// Whether `word` appears in `text` with no name character on either side:
@@ -293,6 +318,22 @@ mod tests {
             "never the token"
         );
         assert!(!report.contains("bearer"), "never the line");
+    }
+
+    #[test]
+    fn a_prefix_that_isnt_a_whole_token_is_no_finding() {
+        log_capture::install().unwrap();
+        // sqlx logs each migration's SQL at debug, comments included.
+        tracing::debug!(
+            target: "sqlx::query",
+            "-- SHA-256 of the code's text (`afk_iv_…`), prefix included."
+        );
+        let short = format!("{}{}", TokenKind::Enrollment.prefix(), "Z".repeat(42));
+        tracing::debug!(target: "fleet_planted_short", "{short}");
+
+        let findings = Secrets::default().findings();
+
+        assert_eq!(findings, Vec::<String>::new());
     }
 
     #[test]
