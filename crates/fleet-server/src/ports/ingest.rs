@@ -83,7 +83,8 @@ pub enum NotTaken {
     /// The stream has its share of rows in flight already.
     #[error("the stream's share of the chat queue is full")]
     StreamFull,
-    /// The chat queue is full.
+    /// The chat queue is full: its rows in all, queued, kept by a busy
+    /// database or being written.
     #[error("the chat queue is full")]
     QueueFull,
     /// The ingest's writer has ended.

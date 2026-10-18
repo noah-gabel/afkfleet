@@ -859,7 +859,12 @@ pub async fn run<S: ShutdownSignals>(
 /// The gRPC port's listener and TLS, and the CA, from `plane`. A server
 /// certificate that expired by `now` is logged at `error`: agents can't
 /// connect, but the API keeps working (ADR-0019, S12).
-fn open(
+///
+/// [`run`] calls it before [`app_with`], which takes the CA, and
+/// [`grpc_port`] after; tests that build the app over their own ports call
+/// both too, so their wiring is serve's (ADR-0019, S72).
+#[must_use]
+pub fn open(
     plane: ControlPlane,
     now: DateTime<Utc>,
 ) -> ((TcpListener, ServerTlsConfig), CertificateAuthority) {
@@ -875,12 +880,13 @@ fn open(
 }
 
 /// The gRPC port over `opened` serving `services`, when `config` has
-/// `[grpc]` and both are there.
+/// `[grpc]` and both are there: `[grpc]`'s heartbeats, the listener's TLS
+/// from [`open`], the services from [`App::grpc`].
 ///
 /// # Errors
 /// [`StartError::Listen`] when the listener's address can't be read, and
 /// [`StartError::Grpc`] when its TLS can't be set up.
-fn grpc_port(
+pub fn grpc_port(
     config: &ServerConfig,
     opened: Option<(TcpListener, ServerTlsConfig)>,
     services: Option<GrpcRoutes>,

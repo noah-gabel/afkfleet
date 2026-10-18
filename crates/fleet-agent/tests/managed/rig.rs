@@ -5,7 +5,6 @@
 
 use core::num::NonZeroUsize;
 use core::pin::Pin;
-use core::sync::atomic::{AtomicBool, Ordering};
 use core::task::{Context, Poll, Waker};
 use core::time::Duration;
 use std::collections::HashMap;
@@ -86,22 +85,31 @@ pub(crate) fn runtime() -> RuntimeConfig {
 #[derive(Debug, Clone, Default)]
 pub(crate) struct Gate(Arc<GateState>);
 
+/// Whether the gate is closed, and the waker of the task it holds back:
+/// one lock, so an `open` can't slip between a poll's check and its waker.
 #[derive(Debug, Default)]
-struct GateState {
-    closed: AtomicBool,
-    waker: Mutex<Option<Waker>>,
+struct GateState(Mutex<Held>);
+
+#[derive(Debug, Default)]
+struct Held {
+    closed: bool,
+    waker: Option<Waker>,
 }
 
 impl Gate {
     /// Holds the task back from its next poll on.
     pub(crate) fn close(&self) {
-        self.0.closed.store(true, Ordering::SeqCst);
+        self.0.0.lock().unwrap().closed = true;
     }
 
     /// Lets the task run again.
     pub(crate) fn open(&self) {
-        self.0.closed.store(false, Ordering::SeqCst);
-        if let Some(waker) = self.0.waker.lock().unwrap().take() {
+        let waker = {
+            let mut held = self.0.0.lock().unwrap();
+            held.closed = false;
+            held.waker.take()
+        };
+        if let Some(waker) = waker {
             waker.wake();
         }
     }
@@ -125,9 +133,12 @@ impl<F: Future> Future for Gated<F> {
     type Output = F::Output;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<F::Output> {
-        if self.gate.0.closed.load(Ordering::SeqCst) {
-            *self.gate.0.waker.lock().unwrap() = Some(cx.waker().clone());
-            return Poll::Pending;
+        {
+            let mut held = self.gate.0.0.lock().unwrap();
+            if held.closed {
+                held.waker = Some(cx.waker().clone());
+                return Poll::Pending;
+            }
         }
         self.inner.as_mut().poll(cx)
     }

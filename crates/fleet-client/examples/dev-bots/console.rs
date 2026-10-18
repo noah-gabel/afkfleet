@@ -329,9 +329,16 @@ async fn server<S: SessionStore>(
     Ok(())
 }
 
-/// A bot as one line: its ID, its account's name and its status.
+/// A bot as one line: its ID, its account's name and its status. The ID is
+/// labelled: a bot's and its account's are minted from the same time and
+/// look almost alike.
 fn line_of(bot: &BotResponse) -> String {
-    format!("{} {} {}", bot.id, bot.account.name, status_of(&bot.status))
+    format!(
+        "bot {} {} {}",
+        bot.id,
+        bot.account.name,
+        status_of(&bot.status)
+    )
 }
 
 /// A status as `kind[/state][ reason=…][ why=…]`.

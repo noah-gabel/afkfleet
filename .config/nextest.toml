@@ -4,7 +4,8 @@
 # path (e.g. `tests::slow_join`), hence `(^|::)` instead of `^`.
 # Manual tests (`manual_*`) need the user's real credentials, so only the user
 # runs them: fleet-mc's with `just test-real-account` (ADR-0011), fleet-server's
-# Microsoft check with `just test-ms-account` (ADR-0018). No other profile
+# Microsoft check with `just test-ms-account` (ADR-0018), fleet-integration's
+# Phase 10 check with `just test-managed-account` (ADR-0019). No other profile
 # includes them.
 
 [profile.default]

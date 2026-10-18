@@ -73,13 +73,17 @@ impl AgentKey {
     }
 
     /// The key in `pem`, a key file's text: exactly one PKCS#8 `PRIVATE KEY`
-    /// section of an Ed25519 key, as [`AgentKey::to_pem`] writes it (ADR-0019,
-    /// S68). The DER is wiped once the key pair holds it.
+    /// section of an Ed25519 key and nothing else, one line break allowed
+    /// after it, as [`AgentKey::to_pem`] writes it (ADR-0019, S68). The DER
+    /// is wiped once the key pair holds it.
     ///
     /// # Errors
     /// [`KeyError::NotOnePem`] for any other text, and [`KeyError::Key`] for a
     /// key that isn't Ed25519.
     pub fn from_pem(pem: &[u8]) -> Result<Self, KeyError> {
+        if !super::pem::framed(pem, "PRIVATE KEY") {
+            return Err(KeyError::NotOnePem);
+        }
         let mut sections = SliceIter::<(SectionKind, Vec<u8>)>::new(pem);
         // Every section read is wiped, the refused ones too.
         let first = sections
@@ -233,6 +237,55 @@ mod tests {
             assert!(
                 matches!(refused, Err(KeyError::NotOnePem)),
                 "{text}: {refused:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn text_around_the_key_or_a_section_beside_it_is_refused() {
+        let key = AgentKey::generate(&SeededRandom::new(1)).unwrap();
+        let pem = key.to_pem();
+        let pem = pem.as_str();
+
+        for text in [
+            format!("a comment\n{pem}"),
+            format!("{pem}trailing"),
+            format!("{pem}\n\n"),
+            // Text after the END line, then a stray END line: the reader
+            // skips both, so only the frame can refuse them.
+            format!("{pem}trailing\n-----END PRIVATE KEY-----\n"),
+            format!("{pem}-----BEGIN UNKNOWN-----\nAAAA\n-----END UNKNOWN-----\n"),
+            format!("-----BEGIN UNKNOWN-----\nAAAA\n-----END UNKNOWN-----\n{pem}"),
+        ] {
+            let refused = AgentKey::from_pem(text.as_bytes());
+
+            assert!(
+                matches!(refused, Err(KeyError::NotOnePem)),
+                "{text}: {refused:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_key_reads_back_with_one_line_break_or_none_and_with_crlf() {
+        let key = AgentKey::generate(&SeededRandom::new(1)).unwrap();
+        // rcgen writes CRLF; a file edited elsewhere may hold LF.
+        let crlf = key.to_pem().as_str().to_owned();
+        let lf = crlf.replace("\r\n", "\n");
+        // `secret_file` takes one trailing line break off the key file.
+        let bare = |text: &str| {
+            text.strip_suffix("\r\n")
+                .or_else(|| text.strip_suffix('\n'))
+                .unwrap()
+                .to_owned()
+        };
+
+        for text in [bare(&crlf), bare(&lf), crlf.clone(), lf.clone()] {
+            let read = AgentKey::from_pem(text.as_bytes());
+
+            assert!(
+                read.is_ok_and(|read| read.public_key_raw() == key.public_key_raw()),
+                "{text:?}"
             );
         }
     }

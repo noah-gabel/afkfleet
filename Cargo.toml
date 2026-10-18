@@ -24,6 +24,9 @@ repository = "https://github.com/noah-gabel/afkfleet"
 # by the member that uses the crate.
 [workspace.dependencies]
 # Workspace crates, by path (unpublished, so no version).
+# fleet-agent: fleet-integration's tests run the managed agent in-process against the
+# real server (the user's choice, ADR-0019, U19).
+fleet-agent = { path = "crates/fleet-agent" }
 fleet-api-types = { path = "crates/fleet-api-types" }
 # fleet-client: the desktop app's Rust side talks to the server only through it (ADR-0017).
 fleet-client = { path = "crates/fleet-client" }
@@ -274,12 +277,14 @@ proptest = { version = "1.11.0", default-features = false }
 rstest = { version = "0.27.0", default-features = false }
 # serde_json: also fleet-testkit's log buffer, which parses JSON log lines (ADR-0015).
 serde_json = "1.0.151"
-# tempfile: fleet-server's database tests open real files in a fresh folder; already in
-# the lockfile through figment and insta (ADR-0015).
+# tempfile: fleet-server's database tests open real files in a fresh folder, and
+# fleet-integration's tests keep each server's database, PKI and agents' identities in
+# one; already in the lockfile through figment and insta (ADR-0015, ADR-0019 U21).
 tempfile = "3.27.0"
 # testcontainers: no default features, since `ring` turns on TLS for the Docker client,
 # which the local socket and named pipe don't need (and deny.toml bans ring). fleet-mc's
-# slow tests start itzg/minecraft-server with it (ADR-0011).
+# slow tests start itzg/minecraft-server with it (ADR-0011), and so does
+# fleet-integration's Phase 10 DoD check, an online-mode one (ADR-0019, U21).
 testcontainers = { version = "0.28.0", default-features = false }
 
 [workspace.lints.rust]

@@ -5,11 +5,12 @@
 //! - **The front** ([`IngestService`], the [`Ingest`] port): it takes only
 //!   what the registry judged held, and never waits. A status, a death, an
 //!   alert or a chat outcome is published at once and never queued, so chat
-//!   can't drop or delay them. A chat row goes into one bounded queue of
-//!   [`INGEST_QUEUE`] rows, each stream at most [`STREAM_ROWS`] of them in
-//!   flight through its [`StreamShare`], so one flooding agent can't crowd
-//!   out the others; a row that doesn't fit is dropped, and the session
-//!   counts it.
+//!   can't drop or delay them. A chat row goes into one bounded queue: at
+//!   most [`INGEST_QUEUE`] rows held in all, queued, kept by a busy database
+//!   or being written, through one row budget (S74), and each stream at most
+//!   [`STREAM_ROWS`] of them through its [`StreamShare`], so one flooding
+//!   agent can't crowd out the others; a row that doesn't fit is dropped,
+//!   and the session counts it.
 //! - **The writer** ([`IngestWriter`]): one task, owned and watched by
 //!   serve. Every [`INGEST_INTERVAL`] it writes what waits in one short
 //!   transaction, and an idle tick writes nothing: the wait for the write
@@ -19,8 +20,9 @@
 //!   (U16), taken inside the transaction and written only while the row
 //!   names the agent and nothing later is stored; then
 //!   `commit_unaudited(EventBatch)` (U17), only when a row or a state was
-//!   written: a tick whose marks the fence refused, with no chat, is idle,
-//!   and a batch that stored nothing rolls back. Stored chat is published
+//!   written: a tick with no chat whose marks wrote nothing (the fence
+//!   refused them, or each row had a later state) is idle, and a batch that
+//!   stored nothing rolls back. Stored chat is published
 //!   with its row's ID once the batch committed.
 //! - **Failures:** a database that's busy keeps the batch, which is written
 //!   first at the next tick; any other failure drops the batch, logged once
@@ -38,7 +40,7 @@ use core::num::NonZeroUsize;
 use core::time::Duration;
 use std::sync::Arc;
 
-use tokio::sync::{OwnedSemaphorePermit, mpsc};
+use tokio::sync::{OwnedSemaphorePermit, Semaphore, mpsc};
 use tokio::time::{Instant, MissedTickBehavior, interval_at, timeout};
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
@@ -54,8 +56,17 @@ pub const INGEST_INTERVAL: Duration = Duration::from_millis(500);
 /// The most chat rows one batch writes, as the lockout purge's batches.
 pub const BATCH_ROWS: NonZeroUsize = NonZeroUsize::new(1000).unwrap();
 
-/// How many chat rows wait at most, from every stream.
+/// How many chat rows are held at most, from every stream: queued, kept by
+/// a busy database or being written.
 pub const INGEST_QUEUE: NonZeroUsize = NonZeroUsize::new(4096).unwrap();
+
+// The stop's flush writes every held row a batch at a time, and one more
+// batch for the marks: U17 approved at most 6 flush commits, so the rows
+// fill at most 5.
+const _: () = assert!(
+    INGEST_QUEUE.get().div_ceil(BATCH_ROWS.get()) < 6,
+    "the stop's flush would commit more than U17's 6 batches"
+);
 
 /// How many of one stream's chat rows wait or are written at most: a
 /// 1000-bot agent's server-wide broadcast, one line per bot, fits.
@@ -89,7 +100,7 @@ impl Default for IngestTimings {
 /// How many chat rows wait at most, in all and per stream. Tests lower them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct IngestBounds {
-    /// In all.
+    /// In all: queued, kept by a busy database or being written.
     pub queue: NonZeroUsize,
     /// Per stream, queued or being written.
     pub stream: NonZeroUsize,
@@ -115,9 +126,12 @@ pub fn ingest(
     bounds: IngestBounds,
 ) -> (IngestService, IngestWriter) {
     let (rows, queued) = mpsc::channel(bounds.queue.get());
+    let held = bounds.queue.get().min(Semaphore::MAX_PERMITS);
     (
         IngestService {
             rows,
+            budget: Arc::new(Semaphore::new(held)),
+            queue: held,
             bus: bus.clone(),
             stream: bounds.stream,
         },
@@ -134,17 +148,22 @@ pub fn ingest(
 }
 
 /// A chat row waiting for its batch, holding its place in its stream's
-/// share until it's written or dropped.
+/// share and in the ingest's budget until it's written or dropped.
 struct Row {
     message: NewChatMessage,
     generation: u64,
     _place: OwnedSemaphorePermit,
+    _held: OwnedSemaphorePermit,
 }
 
 /// The ingest's front; clones share its queue. See the [module docs](self).
 #[derive(Clone)]
 pub struct IngestService {
     rows: mpsc::Sender<Row>,
+    /// The places of every row held, queued, kept or being written (S74).
+    budget: Arc<Semaphore>,
+    /// The budget's size.
+    queue: usize,
     bus: EventBus,
     stream: NonZeroUsize,
 }
@@ -153,8 +172,8 @@ impl fmt::Debug for IngestService {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("IngestService")
             .field(
-                "waiting",
-                &(self.rows.max_capacity() - self.rows.capacity()),
+                "held",
+                &self.queue.saturating_sub(self.budget.available_permits()),
             )
             .finish_non_exhaustive()
     }
@@ -197,6 +216,9 @@ impl Ingest for IngestService {
         let place = Arc::clone(share.semaphore())
             .try_acquire_owned()
             .map_err(|_| NotTaken::StreamFull)?;
+        let held = Arc::clone(&self.budget)
+            .try_acquire_owned()
+            .map_err(|_| NotTaken::QueueFull)?;
         let row = Row {
             message: NewChatMessage {
                 bot,
@@ -206,8 +228,11 @@ impl Ingest for IngestService {
             },
             generation,
             _place: place,
+            _held: held,
         };
         self.rows.try_send(row).map_err(|refused| match refused {
+            // The budget is the channel's size, and a queued row holds its
+            // place: a full channel can't happen, and would be a full queue.
             mpsc::error::TrySendError::Full(_) => NotTaken::QueueFull,
             mpsc::error::TrySendError::Closed(_) => NotTaken::Closed,
         })
@@ -219,7 +244,8 @@ impl Ingest for IngestService {
 pub enum Tick {
     /// Nothing waited; nothing was written.
     Idle,
-    /// A batch committed.
+    /// A batch was written: it committed when it stored a row or a state,
+    /// and rolled back when every row was skipped.
     Written {
         /// Chat rows stored.
         stored: usize,
@@ -261,8 +287,6 @@ impl From<StoreError> for Failure {
 struct Committed {
     /// Each row's ID, or none when it was skipped.
     ids: Vec<Option<ChatMessageId>>,
-    /// The marks the fence let through.
-    taken: usize,
     /// The sticky states written.
     sticky: usize,
 }
@@ -313,8 +337,9 @@ impl IngestWriter {
         }
         let rows = batch.len();
         match self.write(&batch).await {
-            // No chat, and the fence refused every mark: nothing was written.
-            Ok(Committed { taken: 0, .. }) if batch.is_empty() => Tick::Idle,
+            // No chat, and no mark wrote a state (the fence refused them, or
+            // each row had a later one): nothing was written.
+            Ok(Committed { sticky: 0, .. }) if batch.is_empty() => Tick::Idle,
             Ok(Committed { ids, sticky, .. }) => {
                 if let Some(lost) = self.lost.take() {
                     warn!(
@@ -394,17 +419,13 @@ impl IngestWriter {
                     sticky += 1;
                 }
             }
-            // A commit only when rows were written (U17): when the fence
-            // refused every mark and no row was stored, dropping the
-            // transaction rolls it back.
+            // A commit only when rows were written (U17): when no mark wrote
+            // a state and no row was stored, dropping the transaction rolls
+            // it back.
             if sticky > 0 || ids.iter().any(Option::is_some) {
                 tx.commit_unaudited(UnauditedWrite::EventBatch).await?;
             }
-            Ok::<_, StoreError>(Committed {
-                ids,
-                taken: marked.len(),
-                sticky,
-            })
+            Ok::<_, StoreError>(Committed { ids, sticky })
         }
         .await;
         written.map_err(|failure| {

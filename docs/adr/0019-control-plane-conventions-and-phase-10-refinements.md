@@ -457,6 +457,107 @@ The user's review found three bugs and asked for missing tests; each fix came wi
 - **`tests/control`'s timings:** the managed run there uses the protocol's welcome timeout and keepalive; only the two tests that measure them (the missing welcome, the silent connection) run the short ones, so a slow CI machine can't end a stream early.
 - **New tests also cover** the ends end to end (a slow retry waiting the plateau, a refusal before the welcome, `CertificateExpired`, `UNAUTHENTICATED` with the server's request ID), R52 on the run's clock (expired: exit 5 with the wipe; not yet valid: a backoff with one `error` line), the conductor waiting for a `Removed` at capacity, a lag answered with a synthesized `Removed` only for a bot the snapshot lacks, a timed-out apply ending the reconcile's batch, and the console's paging, lost session, arguments and tokens.
 
+### Group H: the user's choices
+- **U19, resolved: a new test-only crate.** Asked first at H's planning, with the trade-offs: fleet-agent dev-depending on fleet-server, or a new crate.
+  - The real agent against the real server lives in `crates/fleet-integration`: `publish = false`, a `src/lib.rs` that's only its documentation, and one test binary, `tests/integration/`. Nothing depends on it.
+  - It isn't in `stable_crates`, since azalea comes in through fleet-agent; fleet-server and fleet-client keep building without azalea.
+  - CI picks it up through `crates/*`, with no new job. P11.7's full flow becomes a module of the same binary.
+  - Chosen over fleet-agent's dev-dependencies, which would make every `-p fleet-agent` build compile fleet-server and would leave P11.7 in the agent's tests (fleet-client can't host it, since its `--all-targets` stable check would pull in azalea).
+- **U21. The crate's dev-dependencies, approved as listed.**
+  - The list:
+    - fleet-agent, through a new path entry in `[workspace.dependencies]`;
+    - fleet-server, fleet-client, fleet-testkit, fleet-core, fleet-api-types, fleet-startup, fleet-mc and fleet-runtime;
+    - tokio (`fs`, `io-util`, `macros`, `net`, `rt`, `rt-multi-thread`, `sync`, `time`), rustls, secrecy, chrono, tempfile, tracing, tracing-subscriber, rstest and totp-rs (`otpauth`);
+    - testcontainers, for the managed check's container, and async-trait, for its recording Microsoft wrapper.
+  - Every one was already in the workspace, so Cargo.lock gains only the new member. CLAUDE.md's and §5's rows for tempfile and testcontainers name the crate.
+  - **The user's conditions on the managed check's log check:**
+    - a finding names only the secret's kind and the line's level and target, never the secret, the line or any part of it;
+    - the wrapper keeps what it captures in `SecretString`s, never in `Debug` or a panic, never on disk, dropped at the run's end;
+    - a default-profile test plants a fake secret and proves the check fails without its report holding it.
+- **U22. CLAUDE.md's time rule names the managed check** as the fourth manual test with real waits: its link read every 2 s for at most 4 minutes, its bot every 2 s for at most 90 s until Online and 60 s until it's offline, beside the container's start of at most 300 s.
+
+### Group H: decided by the review agents *(approved by the user at the plan review)*
+One read-only agent per question, each given the options neutrally.
+- **S72 (security). The harness** (`tests/integration/harness/`).
+  - **The server** goes through the production `app_with`, then serve's `open` and `grpc_port`, made public so no copy of serve's wiring can drift, then `serve`. The case keeps `app.events` and the one `AgentRegistry`.
+    - A loopback case's server runs on a `ManualClock` at the real time and `SeededRandom`. TLS judges real time, and the certificates are valid from an hour before the clock's.
+    - Its PKI is written by `cli::pki::init` into the case's folder and read by `infra::pki::load` at every start.
+    - A restart reopens the same database and PKI. *(Corrected at PR #58's review:)* it binds the gRPC port afresh, which the proxies follow, and keeps the API's listener, bound once, with each serve on a clone of it; rebinding the same addresses could lose a port a stop freed to another process.
+  - **Bots** change only through fleet-client over the real HTTP listener: the Owner logs in with 2FA, steps up once, and creates offline accounts. Every change hints the reconciler, as a user's does.
+  - **Agents** are enrolled for real (`EnrollmentTokenService::create(Creator::Host)`, then `fleet_agent::enroll::enroll` on a blocking thread with its own runtime) and run in-process through `fleet_agent::run::run` over a `Ledger` connector: one fake connector per run, and a violation whenever an account connects while an earlier session of it is still live.
+  - **One stalling proxy per agent**: silence the open connections (the client's close included), cut them, or close a gate that drops new connections at once.
+  - **Waits** are event-driven, and never API polling.
+  - *Rejected:* `serve::run` (no handle on the bus or the registry, and the real clock); services the test builds (they can't hint the reconciler); agent rows written directly (they bypass the trust chain); the two existing proxies (test-private, and they lack the per-connection controls).
+- **S73 (security). The managed check** (`managed_check::manual_managed_bot_goes_online_and_offline`).
+  - **The container** is the crate's own online-mode `itzg/minecraft-server` harness, published on `127.0.0.1` only. A default-profile `pins` test keeps its image, tag and `VERSION` equal to compose's, and ADR-0003's bump step names it.
+  - **The server** is the harness's, on `ServerPorts`' real clock and the OS's randomness, with a recording wrapper around the real `ReqwestMicrosoftAuth` (U21's conditions). The vault key is drawn by `OsRandom` straight into its `SecretBox`, and offline accounts are off.
+  - **The sequence:** the container starts while the Owner logs in and the link waits; then the step-up, `patch_bot` (`127.0.0.1:<port>`), `start_bot`, Online, `stop_bot`, and offline (`unplaced`, `stopped`). *(Corrected at PR #58's review, from "about 525 s", which left out the requests and the teardown: about 615 s.)* The steps stop at 520 s: the setup 30 s; the container's 310 s from its spawn, with the login and the link's 4 minutes beside it; 20 s of requests; Online 90 + 5 s; offline 60 + 5 s. Then the agent 20 s, the server 25 s and the container's removal 15 s: 580 s at worst, and a `const` assertion keeps 20 s of the profile's 600 s.
+  - **The Owner's credentials:** the password is 24 bytes from the OS, in memory only; TOTP comes from the enroll answer, and the second login uses a recovery code.
+  - **The agent** reads `agent.toml` through `fleet_agent::config::load` and lists exactly `127.0.0.1/32` with a comment saying why; its wiring is main.rs's (`AzaleaConnector::with_targets`).
+  - **Every end tears down** in the same order (the agent, the server, the container), then the folder goes. Only pass or FAIL lines are printed, never a path, address, name, UUID or token.
+  - **The recipe**, `test-managed-account`, pulls the image first and then runs only this test's filter.
+  - *Rejected:* fleet-mc's harness by `#[path]` (dead code in this binary, and one crate tied to another's test internals); a container the recipe starts (a failed run would leave it behind); the user's own server (personal data in the address); `serve::run` (nowhere to put the wrapper).
+- **S74 (security). The ingest holds 4096 rows in all.**
+  - One row budget (a `Semaphore`) covers rows that are queued, kept by a busy database, or being written. `take` stays synchronous and refuses `QueueFull`, counted as before.
+  - Before, a kept or in-flight batch freed its channel places, so up to 5096 rows were held, and the stop's flush could commit 7 batches. U17 says at most 6 flush commits, and S70 says 4096 in all.
+  - A `const` assertion ties `INGEST_QUEUE` to U17's 6, so raising it past 5000 needs U17 changed, which is the user's.
+  - *Rejected:* rewording the docs to 5096 and 7, which would overturn U17's and S70's text; a channel sized 3096, which ties the bounds to the timings and cuts normal capacity; reserving channel slots for kept rows, which races; a manual counter, which needs a decrement on every drop path.
+
+### Group H: deviations, and one difference with a review agent
+- **My one difference from S72** (approved in the plan): in case 2b's crash, the old stream ends by the server's own heartbeat timeout (S26), as a host's real half-open connection would, not by cutting it. It costs up to about 60 s more *(corrected at PR #58's review, from "about 30 s")*, bounded at 90 s. The review agent's view, cutting it with `cut_open()`, is faster and was rejected for fidelity.
+- **Deviations from S72, found while building:**
+  - *The rate limiters measure real intervals* (`MonotonicClock`), not the frozen `ManualClock`: with a frozen limiter clock no bucket ever refills, and a case's reconnects and requests would hit the burst limits. The loopback cases test no limit.
+  - *A wait wakes on every log line and looks again every 100 ms*, bounded by `PATIENCE` (90 s), instead of a bounded loop that yields, which would spin a core through the 30–60 s waits on CI. It never sleeps a fixed time to let something happen. **Settled at PR #58's review:** U23 allows it, narrowly, in CLAUDE.md's time rule.
+  - *The server harness serves the managed check too* (`Server::start_real`): the same wiring over the real ports, a drawn key used once, offline accounts off.
+- **Deviations from S73:**
+  - The check logs in with fleet-client directly rather than the harness's `Owner`, which advances a manual clock.
+  - The account's name is matched as a whole word (`log_capture::find`, new), so a short name never matches a field such as `max_bots`.
+  - In doc comments it's "the managed check": clippy's `doc_markdown` reads "DoD" as an unticked identifier.
+- **Case 5, as the code behaves** (recorded, not changed; accepted for now, U24):
+  - After a refused login, the bot's fresh request finds no stream, wipes the kept grant and fails at once. After its backoff, fleet-core's transition asks again *without* `fresh`; with no stream nothing is kept, so it waits; with the server back, the next grant comes.
+  - So F's "a fresh request waits" holds as: the kept grant never answers it, and nothing connects until the server grants.
+  - For an online account the server's cached session, still valid by the 10-minute rule, could be handed out once more after that backoff, costing one more refused join before the next fresh request.
+- **Two mutations were absorbed by a second layer**, each recorded in commit 2's message:
+  - moving a stale agent's bots in fleet-core's placement alone is refused by the store's conditional assign, so the mutation that turned case 2a red releases the bots at the stream's end instead;
+  - handing the kept grant to a fresh request changes nothing, since the fresh request wipes it first, so the wipe's own mutation turned case 5 red.
+
+### As built (group H)
+- **Commit 1, the follow-ups from PR #56's review:**
+  - dev-bots labels its IDs (`bot <id> …`, `account <id> (…); bot <id> …`);
+  - a tick that wrote nothing is `Idle` (`Committed::taken` is gone);
+  - the rig's `Gate` keeps its state under one lock;
+  - the busy-removal test asserts the hello and the deferral, with a new `debug` line, "a bot's removal waits for the next tick";
+  - the conductor warns once per wait, passing `apply` the wait the spec came from;
+  - `enroll::pem::framed` makes `AgentKey::from_pem` and `certificate::check` take exactly one PEM section and nothing else, which closes `check`'s gap for text and a stray END line after the first;
+  - S74's row budget.
+- **Commit 2, the crate and the loopback suite** (`loopback::killed_mid_stream`, `agent_restart`, `server_restart`, `silent_connection`, `outage`):
+  - `harness::{server, agent, client, proxy, ledger, logs, world}`;
+  - serve's `open` and `grpc_port` made public;
+  - eight cases in nextest's default profile, about 51 s in all, three clean runs in a row; each was shown red by a mutation, reverted from a saved copy and checked by checksum.
+- **Commit 3, the managed check** (`managed_check::{mod, minecraft, pins, recording, secrets}`):
+  - fleet-testkit's `log_capture` gains counts by level (`SecretLeak::levels`) and `find`, red first against a stub;
+  - the recipe `test-managed-account`;
+  - CLAUDE.md's commands table, "Manual tests" line and time rule (U22);
+  - the README's paragraph, and ADR-0003's step 4.
+- **The managed check's own run** is the user's; its outcome is recorded here once they've run it.
+  - **The user's first run (2026-10-18)** failed at setup, before anything reached Microsoft: the check's `agent.toml` put `heartbeat_file` at the top level, where the agent's loader refuses it as an unknown key (it belongs under `[runtime]`), and the log check counted two migration comments naming a token's format (`afk_iv_…`, `afk_et_…`), which sqlx logs at `debug`, as server tokens. Fixed, red first: the TOML's `[runtime]`; the token check now looks for a token's shape, its prefix and the 43 characters of its random part; and two default-profile tests now run the check's own config, setup, login, teardown and log check on the real path but for Microsoft and Docker (`managed_check::tests::the_agents_config_loads_as_the_check_writes_it`, `managed_check::tests::the_checks_setup_login_and_teardown_pass_without_an_account`).
+  - **The user's second run (2026-10-18) passed every line**, in 55 s: started and enrolled, logged in with 2FA, the link started, linked and active, the bot listed (`unplaced`, `no_server`), the Minecraft server started, the server set after a step-up, started, Online, stopped, offline (`unplaced`, `stopped`), the agent, the server and the container stopped or removed, the folder deleted, and no secret in any log. The bot's states, for information: its first read already showed a backoff after a kick, then connecting, then Online (the check shows a kick's kind, never its key or text). **Phase 10's DoD is met.**
+  - *The user's re-review, after it:* case 6's denials include "a fresh session request was refused by its bot's limit"; `Minecraft::remove` past its 15 s releases the container's handle undropped (testcontainers 0.28's `Drop` removes again and waits for Docker with no bound, `block_in_place`) and prints a FAIL line telling the user to remove it by hand; a panic in the steps still runs the log check before it goes on; the rig's locks are poison-tolerant on the teardown path; U23 names the proxy's pause.
+
+### Group H: the review of PR #58
+- **U23, the user's choice: the 100 ms re-check is allowed, narrowly.** CLAUDE.md's time rule names it: only fleet-integration's wait helper (`Logs::until`), re-checking in-process state at most every 100 ms, always bounded by `PATIENCE`, never a fixed delay before an assertion. *(Widened at the user's re-review:)* it names the harness proxy's 100 ms pause after an accept error too (`ACCEPT_PAUSE`), as serve's own port pauses, so a repeating error can't spin it.
+- **U24, the user's choice: case 5's behaviour is accepted for now.** Phase 11's first group makes a bot's next session request after a refused login stay fresh until a fresh grant arrives, with its own test, and then tightens case 5 (Plan.md, P11's note).
+- **The managed check:**
+  - *The name check* exempts exact (target, level) pairs: `fleet_mc::events::bridge` and `fleet_agent::run::events` at `DEBUG` only. Before, the bridge's chat line failed a correct run. A default-profile test allows each at `DEBUG` and flags each at `INFO`.
+  - *The audit of every other log call* that can carry the account's name or UUID (listed in the PR): afkfleet logs a UUID nowhere; the name only in those two chat lines and in fleet-runtime's `debug` "the full reason for the session's end", whose kick text may name the player. That one isn't exempt: it fires only after a session ended on its own, which a correct run never has, so a finding there is a real one to read. azalea's own `warn` "Got disconnect packet" may hold a kick text too; it's outside afkfleet's targets, which the name check reads.
+  - *Every token of the server's* is found by its shape (`TokenKind::prefix`, every kind, then the 43 base64url characters of its random part; corrected after the user's first run, below), seen or not: fleet-client never shows its access tokens (ADR-0017), and a refresh rotates the refresh token. The bundle's enrollment token is recorded alone too, and the refresh token right after the login.
+  - *A setup step that fails* is a FAIL line with a fixed text: `Server::start_real` and `enroll_files` answer `Result`s, the server is in the rig as soon as it runs, and `pki init`'s and `enroll`'s output, which name files and the server's address, are never shown. Teardown never panics: `Server::try_stop` answers whether it stopped.
+  - *The budget* (S73, corrected above): the steps run under a 520 s timeout and are aborted past it, with "the steps within their budget: FAIL"; the teardown's wait for a container still starting ends at its spawn's 310 s.
+  - *Key files* are read into `Zeroizing` buffers, and the password's hex is written into a pre-sized `Zeroizing` string the secret takes as it is.
+- **The harness:** the ports (S72, corrected above); the proxy pauses 100 ms after an accept error, like serve's own port, and forgets ended connections; `RECONNECT_MAX` is `fleet_proto::control::RECONNECT_DELAY_MAX` (fleet-proto a dev-dependency, the user's request).
+- **The cases:** `World::end` checks the assignment trail (per bot, no second `bot.assign` without a `bot.unassign` or `bot.detach` in between); case 3 asserts each first reconcile's bots exactly, and when the high agent is back first the low one's first reconcile holds the new bot too, since its welcome opens S45's gate and fleet-core's `plan` places waiting bots on a welcomed agent in the same pass; case 4 times from the `agent.disconnect` after the silence (the count before it plus one); case 5 caps its bot's retries at 5–10 s, so the attempt after the restart can't fall past `PATIENCE`; case 6 counts every denial line, the full grant queue's included.
+- **Red first:** new tests against compiling stubs (the token prefixes, the trail, the denial matcher); the rest through mutations, each reverted from a saved copy and checked by checksum: S45's gate always open turns case 3 red in both orders; an earlier stream end staged before the silence turns case 4 red (it read the cut's `stream_error`); the old panics (`try_stop`'s `expect`, `pki init`'s and `enroll`'s asserts) turn the three new harness tests red.
+
 ### Notes for later groups
 - **B (P10.2, P10.3):** done; see above.
 - **B, as planned (kept for the record):**
@@ -542,6 +643,12 @@ The user's review found three bugs and asked for missing tests; each fix came wi
   - **P12.6:** the "connecting to a server" section for friends *(the user's note on the app's CA field)*: the address; an empty CA field with Caddy and Let's Encrypt; for a server without a public domain, the operator's export of the HTTPS CA (never `pki init`'s agent CA) and the friends' fingerprint check. Also exit 5, the identity's start errors, `private_targets`' rules.
   - **P13.2:** fuzz `IpNet` and `PrivateTargets`. **P13.4:** the conductor and the ingest under load, and chat's stored size. **P13.5:** partitions and kills mid-batch. **P13.6:** the identity's swap under a running agent, and the near-expiry warning.
 
+- **From group H, for later groups:**
+  - **P11.7:** a module of fleet-integration's test binary, over the same harness (`World`, the Owner, agents enrolled for real over the `Ledger` connector, the log the waits wake on); its WebSocket client comes with P11.5's `tokio-tungstenite`, a new dev-dependency of the crate then.
+  - **P11.6:** retention deletes in short batches: a kept batch now holds its places in the ingest's 4096 while the database is busy (S74).
+  - **P13.4:** raising `INGEST_QUEUE` past 5000 trips the `const` assertion, since the flush would commit more than U17's 6 batches: that's the user's U17 to change. **P13.5:** the loopback harness is the base for partition and kill tests (its proxy silences, cuts and gates connections; a crash aborts a run while its connection stays open).
+  - **Proposed, not done** (each its own change): serve's own control-plane test onto the public `open` and `grpc_port`, so it stops repeating them; the three stalling proxies (fleet-server's, fleet-agent's, fleet-integration's) merged into fleet-testkit; the online-mode Minecraft harness into fleet-testkit once a third crate needs it.
+  - **Observed, not changed:** after a refused login, fleet-core's transition asks for the session after its backoff without `fresh`, so an online account's cached session could be handed out once more, costing one refused join before the next fresh request (group H's case 5).
 - **Later phases, from group B:** P11.9's agents view shows the bundle through a direct call (CLAUDE.md's secret rule); P12.1, P12.2 and P12.6 get notes in Plan.md (the gRPC port unpublished without remote agents, the PKI's files owner-only, `pki init` once, the yearly `pki server-cert`, enrolling); P13.6 warns about the server certificate's expiry too (the user's note above), and a renewal's PEM is checked like `enroll`'s.
 
 ## Consequences

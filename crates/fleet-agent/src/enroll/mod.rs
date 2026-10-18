@@ -37,6 +37,7 @@ pub mod certificate;
 pub mod client;
 pub mod files;
 pub mod key;
+mod pem;
 pub mod pin;
 
 use std::io::Write;
