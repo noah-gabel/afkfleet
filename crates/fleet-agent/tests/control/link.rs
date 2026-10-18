@@ -430,11 +430,8 @@ fn largest(n: u16) -> Assignment {
 
 #[tokio::test]
 async fn a_reconcile_past_tonics_default_4_mib_is_read() {
-    let dir = test_dir("control", "large_reconcile");
-    let ca = TestCa::new(1);
-    let mut server = FakeServer::start(&ca).await;
-    let running = Agent::start(&dir, &server.url(), &ca);
-    let mut call = server.pending().await.accept();
+    // Built and measured before the agent dials: encoding it takes seconds
+    // in a slow debug build, and the welcome timeout counts from the dial.
     let assignments: Vec<Assignment> = (0..400).map(largest).collect();
     let first = assignments[0].spec.id;
     let wire = fleet_proto::generated::ServerMessage::try_from(ServerMessage::Reconcile(
@@ -445,6 +442,11 @@ async fn a_reconcile_past_tonics_default_4_mib_is_read() {
         fleet_proto::control::server_message_len(&wire) > 4 * 1024 * 1024,
         "the reconcile is past the default"
     );
+    let dir = test_dir("control", "large_reconcile");
+    let ca = TestCa::new(1);
+    let mut server = FakeServer::start(&ca).await;
+    let running = Agent::start(&dir, &server.url(), &ca);
+    let mut call = server.pending().await.accept();
 
     call.welcome(agent(), secs(10)).await;
     call.reconcile(assignments).await;
