@@ -4,7 +4,7 @@
 use fleet_core::authz::CommandAllowlistError;
 use fleet_startup::config::{LogFilterError, UnknownLogFormatError};
 
-use crate::http::rate_limit::IpNetError;
+use fleet_core::net::IpNetError;
 
 /// Why [`load`](super::load) failed.
 pub type ConfigError = fleet_startup::config::ConfigError<ProblemKind>;
@@ -73,7 +73,7 @@ pub enum ProblemKind {
         key: &'static str,
     },
     /// Not an IP network in strict CIDR form (`[http] trusted_proxies`).
-    #[error(transparent)]
+    #[error("{}", proxy_network(*.0))]
     IpNet(IpNetError),
     /// A list with more entries than allowed.
     #[error("must list at most {max} entries")]
@@ -105,6 +105,21 @@ pub enum ProblemKind {
     },
 }
 
+/// `error` as `[http] trusted_proxies` words it: a /0 would trust every
+/// address, past every per-IP limit (ADR-0016).
+fn proxy_network(error: IpNetError) -> String {
+    match error {
+        IpNetError::Everything => {
+            "a prefix length of 0 would trust every address; list only your proxies' own networks"
+                .to_owned()
+        }
+        IpNetError::Shape
+        | IpNetError::PrefixLength { .. }
+        | IpNetError::HostBits
+        | IpNetError::MappedIpv4 => error.to_string(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use fleet_startup::config::KeyPath;
@@ -130,5 +145,22 @@ mod tests {
              - database.path: must be an absolute path\n  \
              - http.bind: port 0 isn't allowed: the server needs a fixed port"
         );
+    }
+
+    #[test]
+    fn a_zero_prefix_proxy_says_it_would_trust_every_address() {
+        let everything = ProblemKind::IpNet(IpNetError::Everything).to_string();
+
+        assert_eq!(
+            everything,
+            "a prefix length of 0 would trust every address; list only your proxies' own networks"
+        );
+        for other in [
+            IpNetError::Shape,
+            IpNetError::HostBits,
+            IpNetError::MappedIpv4,
+        ] {
+            assert_eq!(ProblemKind::IpNet(other).to_string(), other.to_string());
+        }
     }
 }

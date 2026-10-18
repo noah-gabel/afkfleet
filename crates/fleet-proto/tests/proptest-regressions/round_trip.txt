@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 6bb73a97d9acdf54eb8a942dfa5c58192ffec490af0aa08a3d83bd03f98bf87b # shrinks to reason = ConnectFailed { failure: Blocked }
+cc 92d236b707c7fb6963b336c55b4862d20017b9cfe9dc79ff222bbbb8accbcb12 # shrinks to message = Status(BotSnapshot { bot_id: BotId(00000000-0000-7000-8000-000000000000), state: Stopped, since: 1970-01-01T00:00:00Z, last_disconnect: Some(ConnectFailed { failure: Blocked }) })

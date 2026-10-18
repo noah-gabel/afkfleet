@@ -19,6 +19,7 @@ use fleet_agent::config::{
 use fleet_core::bot::BotAccount;
 use fleet_core::disconnect::{ConflictTexts, ConflictTextsError};
 use fleet_core::mode::{ModePreset, UnknownPresetError};
+use fleet_core::net::{IpNetError, PrivateTargets, PrivateTargetsError, TargetPolicy};
 use fleet_core::resilience::{CircuitPolicy, RetryPolicy, RetryPolicyError};
 use fleet_core::value::{AgentNameError, McUsernameError};
 use fleet_mc::McConfig;
@@ -256,6 +257,7 @@ fn a_control_plane_section_makes_a_managed_agent() {
                 ca_cert_file: dir.join("fleet_ca.crt"),
                 cert_file: dir.join("agent.crt"),
                 key_file: dir.join("agent.key"),
+                private_targets: PrivateTargets::default(),
             })
         );
     });
@@ -838,5 +840,166 @@ fn a_bad_conflict_text_names_its_bot_and_position() {
             )]
         );
         assert!(!problems.to_string().contains("a\u{a7}b"));
+    });
+}
+
+// --- [control_plane] private_targets (ADR-0019, S46, S69) ---
+
+/// `managed`'s config with `private_targets = targets`.
+fn with_targets(jail: &Jail, targets: &[&str]) -> String {
+    let list = targets
+        .iter()
+        .map(|target| format!("\"{target}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{}private_targets = [{list}]\n",
+        managed(jail, "https://fleet.example.com:7443", FILES)
+    )
+}
+
+fn plane(config: &AgentConfig) -> &ControlPlaneConfig {
+    let AgentMode::ControlPlane(plane) = &config.mode else {
+        panic!("a managed agent");
+    };
+    plane
+}
+
+#[test]
+fn a_managed_agent_lists_no_private_targets_by_default_and_checks_every_address() {
+    in_jail(|jail| {
+        let toml = managed(jail, "https://fleet.example.com:7443", FILES);
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(plane(&config).private_targets, PrivateTargets::default());
+        assert_eq!(
+            config.mode.target_policy(),
+            TargetPolicy::Checked(PrivateTargets::default())
+        );
+    });
+}
+
+#[test]
+fn listed_private_targets_are_read_into_the_policy() {
+    in_jail(|jail| {
+        let toml = with_targets(jail, &["127.0.0.1/32", "10.0.0.0/8", "fd00::/8"]);
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        let expected = PrivateTargets::try_new(vec![
+            "127.0.0.1/32".parse().unwrap(),
+            "10.0.0.0/8".parse().unwrap(),
+            "fd00::/8".parse().unwrap(),
+        ])
+        .unwrap();
+        assert_eq!(plane(&config).private_targets, expected);
+        assert_eq!(config.mode.target_policy(), TargetPolicy::Checked(expected));
+    });
+}
+
+#[test]
+fn a_standalone_agent_dials_every_address() {
+    in_jail(|jail| {
+        let config = load_toml(jail, MINIMAL).unwrap();
+
+        assert_eq!(config.mode.target_policy(), TargetPolicy::Unchecked);
+    });
+}
+
+#[rstest]
+#[case::host_bits("10.0.0.1/8", ProblemKind::IpNet(IpNetError::HostBits))]
+#[case::no_length("10.0.0.1", ProblemKind::IpNet(IpNetError::Shape))]
+#[case::everything("0.0.0.0/0", ProblemKind::IpNet(IpNetError::Everything))]
+#[case::mapped("::ffff:127.0.0.1/128", ProblemKind::IpNet(IpNetError::MappedIpv4))]
+#[case::public("8.8.8.0/24", ProblemKind::PrivateTargets(PrivateTargetsError::NotPrivate { index: 1 }))]
+#[case::metadata("169.254.169.254/32", ProblemKind::PrivateTargets(PrivateTargetsError::NotPrivate { index: 1 }))]
+#[case::alibaba("100.100.100.200/32", ProblemKind::PrivateTargets(PrivateTargetsError::NotPrivate { index: 1 }))]
+#[case::twice("127.0.0.1/32", ProblemKind::PrivateTargets(PrivateTargetsError::Duplicate { index: 1 }))]
+fn a_private_target_that_isnt_a_private_network_is_refused_by_its_index(
+    #[case] entry: &str,
+    #[case] kind: ProblemKind,
+) {
+    in_jail(|jail| {
+        let toml = with_targets(jail, &["127.0.0.1/32", entry]);
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(keys(&problems), ["control_plane.private_targets[1]"]);
+        assert_eq!(kinds(&problems), [kind]);
+        let shown = ConfigError::Invalid(problems).to_string();
+        assert!(!shown.contains(entry), "{shown}");
+    });
+}
+
+#[test]
+fn more_than_32_private_targets_are_refused_with_every_other_problem() {
+    in_jail(|jail| {
+        let mut targets: Vec<String> = (0..33).map(|n| format!("10.{n}.0.0/16")).collect();
+        targets.push("8.8.8.0/24".to_owned());
+        let refs: Vec<&str> = targets.iter().map(String::as_str).collect();
+        let toml = with_targets(jail, &refs);
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(
+            keys(&problems),
+            [
+                "control_plane.private_targets",
+                "control_plane.private_targets[33]"
+            ]
+        );
+        assert_eq!(
+            kinds(&problems),
+            [
+                ProblemKind::PrivateTargets(PrivateTargetsError::TooMany { max: 32 }),
+                ProblemKind::PrivateTargets(PrivateTargetsError::NotPrivate { index: 33 }),
+            ]
+        );
+    });
+}
+
+#[test]
+fn private_targets_under_standalone_is_a_parse_error() {
+    in_jail(|jail| {
+        let toml = r#"
+name = "agent-1"
+
+[standalone]
+private_targets = ["127.0.0.1/32"]
+
+[[standalone.bots]]
+username = "AfkBot1"
+server = "localhost:25565"
+mode = "afk"
+"#;
+
+        let error = parse_error(load_toml(jail, toml));
+
+        assert!(error.to_string().contains("private_targets"), "{error}");
+    });
+}
+
+#[test]
+fn a_refused_private_target_is_named_by_its_own_index_after_one_that_didnt_parse() {
+    in_jail(|jail| {
+        let toml = with_targets(jail, &["not a network", "8.8.8.0/24", "10.0.0.0/8"]);
+
+        let problems = invalid(load_toml(jail, &toml));
+
+        assert_eq!(
+            keys(&problems),
+            [
+                "control_plane.private_targets[0]",
+                "control_plane.private_targets[1]"
+            ]
+        );
+        assert_eq!(
+            kinds(&problems),
+            [
+                ProblemKind::IpNet(IpNetError::Shape),
+                ProblemKind::PrivateTargets(PrivateTargetsError::NotPrivate { index: 1 }),
+            ]
+        );
     });
 }

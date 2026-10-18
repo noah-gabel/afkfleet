@@ -3,6 +3,7 @@
 
 use fleet_core::disconnect::ConflictTextsError;
 use fleet_core::mode::UnknownPresetError;
+use fleet_core::net::{IpNetError, PrivateTargetsError};
 use fleet_core::resilience::{CircuitPolicyError, RetryPolicyError};
 use fleet_core::value::{AgentNameError, McUsernameError, ServerAddressError};
 use fleet_startup::config::{LogFilterError, UnknownLogFormatError};
@@ -88,6 +89,14 @@ pub enum ProblemKind {
         /// The limit.
         max: usize,
     },
+    /// An entry of `[control_plane] private_targets` that isn't an IP network
+    /// in strict CIDR form.
+    #[error(transparent)]
+    IpNet(IpNetError),
+    /// `[control_plane] private_targets` lists too many networks, or an entry
+    /// outside every private range, or one twice.
+    #[error(transparent)]
+    PrivateTargets(PrivateTargetsError),
     /// Two bots use the same account.
     #[error("clashes with standalone.bots[{with}] (names compare ignoring case)")]
     Clash {

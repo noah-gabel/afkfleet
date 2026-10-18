@@ -17,6 +17,7 @@ use fleet_core::pki::{ED25519_SEED_LEN, ed25519_pkcs8};
 use fleet_core::system::{RandomError, SecureRandom};
 use rcgen::{CertificateParams, DistinguishedName, KeyPair, PKCS_ED25519};
 use rustls::pki_types::PrivatePkcs8KeyDer;
+use rustls::pki_types::pem::{SectionKind, SliceIter};
 use secrecy::ExposeSecret as _;
 use zeroize::Zeroizing;
 
@@ -44,6 +45,11 @@ pub enum KeyError {
     /// rcgen couldn't write the CSR.
     #[error("the certificate request can't be made")]
     Csr,
+    /// A key file's text isn't exactly one PKCS#8 `PRIVATE KEY` section.
+    #[error(
+        "must hold exactly one PKCS#8 private key (`BEGIN PRIVATE KEY`), as `afkfleet-agent enroll` writes it"
+    )]
+    NotOnePem,
 }
 
 /// The agent's Ed25519 key; see the [module docs](self).
@@ -60,6 +66,35 @@ impl AgentKey {
         let der = ed25519_pkcs8(&seed);
         KeyPair::from_pkcs8_der_and_sign_algo(
             &PrivatePkcs8KeyDer::from(der.expose_secret().as_slice()),
+            &PKCS_ED25519,
+        )
+        .map(|pair| Self(Zeroizing::new(pair)))
+        .map_err(|_| KeyError::Key)
+    }
+
+    /// The key in `pem`, a key file's text: exactly one PKCS#8 `PRIVATE KEY`
+    /// section of an Ed25519 key, as [`AgentKey::to_pem`] writes it (ADR-0019,
+    /// S68). The DER is wiped once the key pair holds it.
+    ///
+    /// # Errors
+    /// [`KeyError::NotOnePem`] for any other text, and [`KeyError::Key`] for a
+    /// key that isn't Ed25519.
+    pub fn from_pem(pem: &[u8]) -> Result<Self, KeyError> {
+        let mut sections = SliceIter::<(SectionKind, Vec<u8>)>::new(pem);
+        // Every section read is wiped, the refused ones too.
+        let first = sections
+            .next()
+            .map(|section| section.map(|(kind, der)| (kind, Zeroizing::new(der))));
+        let more = sections
+            .next()
+            .map(|section| section.map(|(kind, der)| (kind, Zeroizing::new(der))))
+            .is_some();
+        let der = match first {
+            Some(Ok((SectionKind::PrivateKey, der))) if !more => der,
+            _ => return Err(KeyError::NotOnePem),
+        };
+        KeyPair::from_pkcs8_der_and_sign_algo(
+            &PrivatePkcs8KeyDer::from(der.as_slice()),
             &PKCS_ED25519,
         )
         .map(|pair| Self(Zeroizing::new(pair)))
@@ -172,5 +207,49 @@ mod tests {
         assert!(pem.starts_with("-----BEGIN PRIVATE KEY-----"), "PEM");
         assert_eq!(pem.matches("-----BEGIN").count(), 1);
         assert_eq!(format!("{key:?}"), "AgentKey(..)");
+    }
+
+    #[test]
+    fn a_key_reads_back_from_its_pem() {
+        let key = AgentKey::generate(&SeededRandom::new(1)).unwrap();
+
+        let read = AgentKey::from_pem(key.to_pem().as_bytes()).unwrap();
+
+        assert_eq!(read.public_key_raw(), key.public_key_raw());
+        assert_eq!(read.pkcs8_der(), key.pkcs8_der());
+    }
+
+    #[test]
+    fn a_pem_that_isnt_one_private_key_is_refused() {
+        let key = AgentKey::generate(&SeededRandom::new(1)).unwrap();
+        let other = AgentKey::generate(&SeededRandom::new(2)).unwrap();
+        let two = format!("{}{}", key.to_pem().as_str(), other.to_pem().as_str());
+        let certificate = "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n";
+        let sec1 = "-----BEGIN EC PRIVATE KEY-----\nAAAA\n-----END EC PRIVATE KEY-----\n";
+
+        for text in [two.as_str(), certificate, sec1, "", "not a pem"] {
+            let refused = AgentKey::from_pem(text.as_bytes());
+
+            assert!(
+                matches!(refused, Err(KeyError::NotOnePem)),
+                "{text}: {refused:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_private_key_section_that_isnt_ed25519_is_refused() {
+        let garbage = "-----BEGIN PRIVATE KEY-----\nAAECAwQFBgcICQ==\n-----END PRIVATE KEY-----\n";
+
+        let refused = AgentKey::from_pem(garbage.as_bytes());
+
+        assert!(matches!(refused, Err(KeyError::Key)), "{refused:?}");
+    }
+
+    #[test]
+    fn no_refusal_names_the_text() {
+        for error in [KeyError::NotOnePem, KeyError::Key] {
+            assert!(!error.to_string().contains("AAEC"), "{error}");
+        }
     }
 }

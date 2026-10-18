@@ -75,7 +75,9 @@ services:
     # fleet-agent test checks it against agent.compose.toml.
     stop_grace_period: 20s
     # Exit 3 (abandoned-thread limit) and 4 (supervisor) restart the agent; a
-    # stop by a signal (0) stays stopped.
+    # stop by a signal (0) stays stopped. A managed agent's exit 5 (the server
+    # refused it) would restart it into the same refusal; this one is
+    # standalone and never exits 5, and P12.2 sets a managed agent's policy.
     restart: on-failure
     read_only: true
     # The heartbeat file's default directory.

@@ -195,6 +195,25 @@ dev-enrollment-token $AFKFLEET_SERVER__DATABASE__PATH=(justfile_directory() / "t
 dev-enroll dir=(justfile_directory() / "target" / "dev-agent") $AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE=(justfile_directory() / "target" / "dev-server" / "pki" / "ca.crt") $AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE=(dir / "agent.crt") $AFKFLEET_AGENT__CONTROL_PLANE__KEY_FILE=(dir / "agent.key"):
     node scripts/dev-enroll.mjs "{{ dir }}"
 
+# No exit message: on Windows, Ctrl+C reaches just and PowerShell too, so just
+# would call a clean stop a failure. The agent logs its own errors and exit code.
+# The identity is the one `dev-enroll` left in `dir` (target/dev-agent by default), with
+# dev-server's CA; its heartbeat file goes into `dir` too (ADR-0019, S71). Its bots dial
+# only public addresses and 127.0.0.1.
+# Run a managed agent with deploy/dev/agent.managed.toml against dev-server's control plane.
+[no-exit-message]
+dev-managed-agent dir=(justfile_directory() / "target" / "dev-agent") $AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE=(justfile_directory() / "target" / "dev-server" / "pki" / "ca.crt") $AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE=(dir / "agent.crt") $AFKFLEET_AGENT__CONTROL_PLANE__KEY_FILE=(dir / "agent.key") $AFKFLEET_AGENT__RUNTIME__HEARTBEAT_FILE=(dir / "agent.alive"):
+    cargo run -p fleet-agent --bin afkfleet-agent -- run --config deploy/dev/agent.managed.toml
+
+# No exit message: the console prints its own errors, and on Windows Ctrl+C reaches just
+# and PowerShell too. It needs a terminal, so the AI never runs it.
+# The password, the 2FA code and a step-up are typed hidden, never an argument (ADR-0019,
+# S71); a user without 2FA sets it up in `just dev-app` first. `server` is dev-server's API.
+# A console for dev-server's bot endpoints: bots, bot, offline, server, start, stop, quit.
+[no-exit-message]
+dev-bots username server="http://127.0.0.1:8080":
+    cargo run --quiet -p fleet-client --example dev-bots -- "{{ username }}" "{{ server }}"
+
 # The dev database's Owner, through `user create-owner` with the password typed twice
 # at the terminal. It passes the same paths as dev-server: the dev config's validation
 # needs the vault key's path too, though create-owner never reads the key (ADR-0016).

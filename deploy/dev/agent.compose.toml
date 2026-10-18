@@ -17,6 +17,12 @@
 # The compose e2e test and `just demo-agent` run these bots and judge them by
 # deploy/dev/stack-checks.json, which mirrors this config's retry windows and
 # connect timeout; a fleet-agent test fails when the two disagree.
+#
+# No `[control_plane] private_targets` here (ADR-0019, U15): standalone mode is
+# never checked against them (S46), and a `[control_plane]` key can't sit in a
+# standalone config. The first managed agent in compose lists its Docker
+# network then, with that network's subnet pinned: Docker hands out
+# 192.168.0.0/16 too, not only 172.16.0.0/12.
 
 name = "compose-agent"
 

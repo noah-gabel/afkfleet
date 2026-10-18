@@ -192,10 +192,30 @@ pub(crate) struct RawControlPlane {
     pub(crate) ca_cert_file: Option<String>,
     pub(crate) cert_file: Option<String>,
     pub(crate) key_file: Option<String>,
+    /// The private networks the bots may dial (ADR-0019, S46, S69).
+    #[serde(default)]
+    pub(crate) private_targets: Vec<String>,
 }
 
 /// A count as a config number. A `usize` always fits into a `u64` on the
 /// platforms afkfleet builds for; anything larger is clamped.
 fn count(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+mod tests {
+    use fleet_core::value::AgentCapacity;
+
+    use super::*;
+
+    /// A managed agent's hello names `max_bots` as its capacity, which the
+    /// wire reads as an `AgentCapacity` (Phase 10, group A's note).
+    #[test]
+    fn max_bots_is_exactly_an_agents_capacity() {
+        assert_eq!(
+            (MAX_BOTS.min, MAX_BOTS.max),
+            (u64::from(AgentCapacity::MIN), u64::from(AgentCapacity::MAX))
+        );
+    }
 }

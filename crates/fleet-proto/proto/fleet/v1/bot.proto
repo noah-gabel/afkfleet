@@ -205,6 +205,9 @@ enum ConnectFailure {
   CONNECT_FAILURE_HOST_UNAVAILABLE = 4;
   // Any other network error.
   CONNECT_FAILURE_OTHER = 5;
+  // The managed agent's target check refused the resolved address before
+  // dialling it (ADR-0019, S46).
+  CONNECT_FAILURE_BLOCKED = 6;
 }
 
 // Why the session server refused the account for good.

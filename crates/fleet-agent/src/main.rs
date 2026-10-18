@@ -5,8 +5,9 @@
 //!    runtime exists, since loading reads a file.
 //! 2. Errors up to here can't be logged yet: they go to stderr as plain
 //!    text, and the agent exits with 1.
-//! 3. It sets up logging, installs the aws-lc-rs TLS provider and the
-//!    Prometheus recorder (before the fleet registers its metrics), and runs
+//! 3. It sets up logging, installs the aws-lc-rs TLS provider, loads and
+//!    checks a managed agent's identity (P10.7), installs the Prometheus
+//!    recorder (before the fleet registers its metrics), and runs
 //!    the fleet on a multi-threaded tokio runtime, with fleet-mc's
 //!    `AzaleaConnector` as the connector and the diagnostics. SIGTERM and
 //!    SIGINT (Ctrl+C and Ctrl+Break on Windows) shut it down gracefully.
@@ -35,11 +36,14 @@ use fleet_agent::enroll::key::OsRandom;
 use fleet_agent::enroll::{Enrollment, enroll};
 use fleet_agent::healthcheck;
 use fleet_agent::heartbeat::FileHeartbeat;
-use fleet_agent::run::{Exit, Outcome, RUNTIME_SHUTDOWN, RunParts, agent_span, run};
+use fleet_agent::managed::identity::ManagedIdentity;
+use fleet_agent::managed::link::LinkTimings;
+use fleet_agent::run::{Exit, Managed, Outcome, RUNTIME_SHUTDOWN, RunParts, agent_span, run};
 use fleet_agent::signals::OsSignals;
 use fleet_agent::telemetry::{self, LogOutput};
 use fleet_mc::AzaleaConnector;
 use metrics_exporter_prometheus::PrometheusBuilder;
+use rustls::pki_types::UnixTime;
 use tracing::{Span, error};
 
 fn main() -> ExitCode {
@@ -148,6 +152,18 @@ fn start(config: AgentConfig, span: &Span) -> Outcome {
     {
         return cant_start(span, &"a TLS crypto provider is already installed");
     }
+    // A managed agent's identity: read and checked once, before any runtime,
+    // as plain file IO (ADR-0019, S68). Any problem is a startup error.
+    let identity = match &config.mode {
+        AgentMode::ControlPlane(plane) => match ManagedIdentity::load(plane, UnixTime::now()) {
+            Ok(identity) => {
+                span.in_scope(|| identity.log_loaded());
+                Some(identity)
+            }
+            Err(error) => return cant_start(span, &error),
+        },
+        AgentMode::Standalone(_) => None,
+    };
     // The fleet registers its metrics in the recorder installed when it's
     // built, so this comes first. The handle isn't kept: nothing serves it
     // until P12.4, and without histograms the recorder needs no upkeep.
@@ -169,16 +185,23 @@ fn start(config: AgentConfig, span: &Span) -> Outcome {
             );
         }
     };
-    let seed = match getrandom::u64() {
-        Ok(seed) => seed,
-        Err(error) => {
+    let (seed, reconnect) = match (getrandom::u64(), getrandom::u64()) {
+        (Ok(seed), Ok(reconnect)) => (seed, reconnect),
+        (Err(error), _) | (_, Err(error)) => {
             return cant_start(
                 span,
                 &format_args!("the OS's random source failed: {error}"),
             );
         }
     };
-    let connector = AzaleaConnector::new(&config.mc);
+    let managed = identity.map(|identity| Managed {
+        identity,
+        seed: reconnect,
+        timings: LinkTimings::default(),
+    });
+    // Standalone dials what the operator configured; managed only public
+    // addresses and the listed private ones (ADR-0019, S46, S69).
+    let connector = AzaleaConnector::new(&config.mc).with_targets(config.mode.target_policy());
     let heartbeat = FileHeartbeat::new(config.heartbeat_file.clone());
     let outcome = runtime.block_on(async {
         // Inside the runtime, which tokio's signal handling needs, and before
@@ -200,6 +223,7 @@ fn start(config: AgentConfig, span: &Span) -> Outcome {
             heartbeat,
             anchor: chrono::Utc::now(),
             seed,
+            managed,
         })
         .await
     });

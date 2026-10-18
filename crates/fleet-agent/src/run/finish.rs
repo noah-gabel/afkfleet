@@ -13,6 +13,10 @@
 //!
 //! A signal that arrives meanwhile is only logged: the shutdown is already
 //! running, and the deadline stays as it is.
+//!
+//! A managed agent the server refused, or whose conductor or link ended
+//! unasked, shuts the fleet down the same way: every bot stops before the
+//! process exits 5, or 4 (ADR-0019, S65, S67, R57).
 
 use core::pin::{Pin, pin};
 use core::time::Duration;
@@ -74,6 +78,20 @@ pub(crate) async fn finish<S: ShutdownSignals>(
             Exit::AbandonedLimit
         }
         Reason::StartupFailed => Exit::StartupFailed,
+        Reason::Refused(refusal) => {
+            error!(
+                refusal = refusal.as_str(),
+                "the server refused this agent; shutting down: its certificate is unknown, revoked or expired, the agent is disabled, or its name isn't the enrolled one"
+            );
+            Exit::Refused
+        }
+        Reason::TaskEnded { task, panicked } => {
+            error!(
+                task = task.as_str(),
+                panicked, "a task of the managed agent ended unasked; shutting down"
+            );
+            Exit::SupervisorFailed
+        }
     };
     // `sleep` saturates far in the future instead of overflowing.
     let deadline = pin!(tokio::time::sleep(
@@ -689,5 +707,89 @@ mod tests {
             capture.lines_with(DIDNT_CONFIRM).unwrap(),
             Vec::<Value>::new()
         );
+    }
+
+    // --- A managed agent (ADR-0019, S65, S67) ---
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refusal_shuts_the_fleet_down_and_exits_refused_with_the_report() {
+        let (capture, _guard) = json_on_this_thread();
+        let mut setup = Setup::new(64);
+        let mut supervisor = setup.run_supervisor();
+        setup.one_bot_online().await;
+
+        let (outcome, took) = setup
+            .finish(
+                Reason::Refused(crate::managed::link::ends::Refusal::CertificateRevoked),
+                &mut supervisor,
+            )
+            .await;
+
+        assert_eq!(
+            outcome,
+            Outcome {
+                exit: Exit::Refused,
+                report: Some(ShutdownReport {
+                    stopped: 1,
+                    aborted: 0,
+                    crashed: 0
+                })
+            }
+        );
+        assert_eq!(outcome.exit.code(), 5);
+        assert_eq!(took, Duration::ZERO);
+        assert!(
+            setup.fake.try_session(0).unwrap().is_torn_down(),
+            "every bot stopped"
+        );
+        let refused = capture
+            .lines_with("the server refused this agent; shutting down: its certificate is unknown, revoked or expired, the agent is disabled, or its name isn't the enrolled one")
+            .unwrap();
+        assert_eq!(refused.len(), 1, "{}", capture.text());
+        assert_eq!(refused[0]["level"], "ERROR");
+        assert_eq!(refused[0]["refusal"], "certificate_revoked");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_refusal_whose_shutdown_times_out_exits_supervisor_failed() {
+        let mut setup = Setup::new(64);
+        let mut supervisor = setup.hold_until_cancelled();
+
+        let (outcome, took) = setup
+            .finish(
+                Reason::Refused(crate::managed::link::ends::Refusal::Unauthenticated),
+                &mut supervisor,
+            )
+            .await;
+
+        assert_eq!(outcome.exit, Exit::SupervisorFailed);
+        assert_eq!(took, DEADLINE);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_managed_task_that_ended_unasked_shuts_the_fleet_down_and_exits_4() {
+        let (capture, _guard) = json_on_this_thread();
+        let mut setup = Setup::new(64);
+        let mut supervisor = setup.run_supervisor();
+        setup.one_bot_online().await;
+
+        let (outcome, _took) = setup
+            .finish(
+                Reason::TaskEnded {
+                    task: crate::run::watch::Task::Conductor,
+                    panicked: true,
+                },
+                &mut supervisor,
+            )
+            .await;
+
+        assert_eq!(outcome.exit, Exit::SupervisorFailed);
+        assert_eq!(outcome.report.map(|report| report.stopped), Some(1));
+        let ended = capture
+            .lines_with("a task of the managed agent ended unasked; shutting down")
+            .unwrap();
+        assert_eq!(ended.len(), 1, "{}", capture.text());
+        assert_eq!(ended[0]["task"], "conductor");
+        assert_eq!(ended[0]["panicked"], true);
     }
 }

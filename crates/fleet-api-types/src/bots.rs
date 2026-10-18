@@ -399,6 +399,9 @@ pub enum ConnectFailure {
     HostUnavailable,
     /// Another network error.
     Other,
+    /// The agent refused the server's address before dialling it: one it never
+    /// dials, or a private one its config doesn't list.
+    Blocked,
 }
 
 impl OpenEnum for ConnectFailure {
@@ -408,6 +411,7 @@ impl OpenEnum for ConnectFailure {
         Self::Unresolvable,
         Self::HostUnavailable,
         Self::Other,
+        Self::Blocked,
     ];
 
     fn as_str(self) -> &'static str {
@@ -417,6 +421,7 @@ impl OpenEnum for ConnectFailure {
             Self::Unresolvable => "unresolvable",
             Self::HostUnavailable => "host_unavailable",
             Self::Other => "other",
+            Self::Blocked => "blocked",
         }
     }
 }
@@ -429,6 +434,7 @@ impl From<CoreConnectFailure> for ConnectFailure {
             CoreConnectFailure::Unresolvable => Self::Unresolvable,
             CoreConnectFailure::HostUnavailable => Self::HostUnavailable,
             CoreConnectFailure::Other => Self::Other,
+            CoreConnectFailure::Blocked => Self::Blocked,
         }
     }
 }
@@ -861,6 +867,7 @@ mod tests {
     #[case(CoreConnectFailure::Unresolvable, "unresolvable")]
     #[case(CoreConnectFailure::HostUnavailable, "host_unavailable")]
     #[case(CoreConnectFailure::Other, "other")]
+    #[case(CoreConnectFailure::Blocked, "blocked")]
     fn every_connect_failure_has_its_name(#[case] failure: CoreConnectFailure, #[case] name: &str) {
         let reason = DisconnectReason::ConnectFailed { failure };
 

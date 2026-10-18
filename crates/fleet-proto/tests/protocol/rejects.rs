@@ -271,7 +271,7 @@ fn a_bot_state_is_refused(#[case] wire: wire::BotState, #[case] expected: Conver
 #[case::time_out_of_range(|s: &mut wire::BotSnapshot| s.since_unix_ms = Some(i64::MIN), error("BotSnapshot.since_unix_ms", Problem::OutOfRange))]
 #[case::empty_disconnect(|s: &mut wire::BotSnapshot| s.last_disconnect = Some(wire::DisconnectReason { reason: None }), error("DisconnectReason.reason", Problem::Missing))]
 #[case::connect_failure_unknown(
-    |s: &mut wire::BotSnapshot| s.last_disconnect = Some(wire::DisconnectReason { reason: Some(wire::disconnect_reason::Reason::ConnectFailed(6)) }),
+    |s: &mut wire::BotSnapshot| s.last_disconnect = Some(wire::DisconnectReason { reason: Some(wire::disconnect_reason::Reason::ConnectFailed(7)) }),
     error("DisconnectReason.connect_failed", Problem::Unknown)
 )]
 #[case::restriction_unspecified(

@@ -25,6 +25,7 @@ use fleet_core::mc::{
     SessionEvent, SessionEvents, SessionHandle,
 };
 use fleet_core::mode::GameAction;
+use fleet_core::net::{PrivateTargets, TargetPolicy};
 use fleet_mc::{AzaleaConnector, McConfig, McEvents, McSession, ShutdownOutcome};
 
 const BOT: &str = "018bcfe5-6800-7bab-abab-abababababab";
@@ -41,8 +42,10 @@ fn bot() -> BotId {
     BOT.parse().unwrap()
 }
 
+/// A connector that dials loopback: these tests' servers are local, and
+/// the target check has tests of its own below.
 fn connector() -> AzaleaConnector {
-    AzaleaConnector::new(&McConfig::default())
+    AzaleaConnector::new(&McConfig::default()).with_targets(TargetPolicy::Unchecked)
 }
 
 fn params(port: u16, connect_timeout: Duration) -> ConnectParams {
@@ -128,6 +131,70 @@ async fn a_closed_port_fails_with_refused() {
     assert_eq!(
         event,
         Some(SessionEvent::ConnectionFailed(ConnectFailure::Refused))
+    );
+    within(session.disconnect()).await;
+}
+
+// --- The target check (ADR-0019, S46, S69) ---
+
+/// `127.0.0.1/32` listed.
+fn loopback_listed() -> TargetPolicy {
+    TargetPolicy::Checked(PrivateTargets::try_new(vec!["127.0.0.1/32".parse().unwrap()]).unwrap())
+}
+
+#[tokio::test]
+async fn the_default_connector_never_dials_an_unlisted_loopback_server() {
+    let connector = AzaleaConnector::new(&McConfig::default());
+    let (listener, port) = silent_server();
+    listener.set_nonblocking(true).unwrap();
+    let (session, mut events) = connect(&connector, params(port, LONG_CONNECT)).await;
+
+    let event = within(events.next()).await;
+    let worlds = connector.live_worlds();
+    let dialled = listener.accept().map(drop).map_err(|error| error.kind());
+
+    assert_eq!(
+        event,
+        Some(SessionEvent::ConnectionFailed(ConnectFailure::Blocked))
+    );
+    assert_eq!(worlds, 0, "no World was started");
+    assert_eq!(
+        dialled,
+        Err(std::io::ErrorKind::WouldBlock),
+        "never dialled"
+    );
+    assert_eq!(within(events.next()).await, None);
+    within(session.disconnect()).await;
+}
+
+#[tokio::test]
+async fn a_listed_loopback_server_is_dialled() {
+    let connector = AzaleaConnector::new(&McConfig::default()).with_targets(loopback_listed());
+    let (session, mut events) = connect(&connector, params(closed_port(), LONG_CONNECT)).await;
+
+    let event = within(events.next()).await;
+
+    assert_eq!(
+        event,
+        Some(SessionEvent::ConnectionFailed(ConnectFailure::Refused))
+    );
+    within(session.disconnect()).await;
+}
+
+#[tokio::test]
+async fn a_mapped_loopback_literal_is_judged_as_loopback() {
+    let connector = AzaleaConnector::new(&McConfig::default());
+    let mut mapped = params(closed_port(), LONG_CONNECT);
+    mapped.server = format!("[::ffff:127.0.0.1]:{}", closed_port())
+        .parse()
+        .unwrap();
+    let (session, mut events) = connect(&connector, mapped).await;
+
+    let event = within(events.next()).await;
+
+    assert_eq!(
+        event,
+        Some(SessionEvent::ConnectionFailed(ConnectFailure::Blocked))
     );
     within(session.disconnect()).await;
 }

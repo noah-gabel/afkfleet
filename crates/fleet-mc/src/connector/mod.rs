@@ -28,6 +28,7 @@ use azalea::app::App;
 #[cfg(feature = "fault-injection")]
 use fleet_core::id::BotId;
 use fleet_core::mc::{ConnectError, ConnectParams, MinecraftConnector, SessionCredentials};
+use fleet_core::net::TargetPolicy;
 use tokio::sync::{oneshot, watch};
 use tracing::warn;
 
@@ -53,6 +54,8 @@ pub struct AzaleaConnector {
     pool: McHostPool,
     counters: Arc<EventCounters>,
     worlds: Arc<Worlds>,
+    /// Which resolved addresses its sessions may dial (ADR-0019, S46, S69).
+    targets: Arc<TargetPolicy>,
     #[cfg(feature = "fault-injection")]
     hook: Option<AppHook>,
 }
@@ -62,12 +65,16 @@ impl fmt::Debug for AzaleaConnector {
         f.debug_struct("AzaleaConnector")
             .field("config", &self.config)
             .field("pool", &self.pool)
+            .field("targets", &self.targets)
             .finish_non_exhaustive()
     }
 }
 
 impl AzaleaConnector {
     /// Creates a connector with its own host pool, both tuned by `config`.
+    /// Its sessions dial only what [`TargetPolicy::default`], the strictest,
+    /// allows, until [`AzaleaConnector::with_targets`] sets the process's
+    /// policy: a connector nobody configured fails closed (ADR-0019, S69).
     #[must_use]
     pub fn new(config: &McConfig) -> Self {
         Self {
@@ -75,9 +82,21 @@ impl AzaleaConnector {
             pool: McHostPool::new(config),
             counters: Arc::default(),
             worlds: Arc::default(),
+            targets: Arc::default(),
             #[cfg(feature = "fault-injection")]
             hook: None,
         }
+    }
+
+    /// The connector with `targets` deciding which resolved addresses its
+    /// sessions may dial: [`TargetPolicy::Unchecked`] in standalone mode,
+    /// the agent's `[control_plane] private_targets` in managed mode. A
+    /// refused address is never dialled; the session ends with
+    /// [`ConnectFailure::Blocked`](fleet_core::disconnect::ConnectFailure::Blocked).
+    #[must_use]
+    pub fn with_targets(mut self, targets: TargetPolicy) -> Self {
+        self.targets = Arc::new(targets);
+        self
     }
 
     /// The host pool the sessions run on, with its thread counts.
@@ -136,6 +155,7 @@ impl AzaleaConnector {
         let driver = Driver {
             bot_id,
             server,
+            targets: Arc::clone(&self.targets),
             started,
             connect_timeout,
             account,

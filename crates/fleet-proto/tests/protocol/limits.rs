@@ -234,3 +234,15 @@ fn the_limits_hold_a_power_of_two_above_their_largest_message() {
     assert_eq!(MAX_AGENT_MESSAGE_BYTES, 8 * 1024 * 1024);
     assert_eq!(MAX_SERVER_MESSAGE_BYTES, 128 * 1024 * 1024);
 }
+
+#[test]
+fn an_agent_notices_a_dead_server_within_its_longest_reconnect_wait() {
+    let noticed =
+        fleet_proto::control::KEEPALIVE_INTERVAL + fleet_proto::control::KEEPALIVE_TIMEOUT;
+
+    assert!(
+        noticed <= fleet_proto::control::RECONNECT_DELAY_MAX,
+        "{noticed:?}"
+    );
+    assert!(fleet_proto::control::WELCOME_TIMEOUT > fleet_proto::control::HELLO_TIMEOUT);
+}

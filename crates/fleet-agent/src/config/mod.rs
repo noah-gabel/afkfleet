@@ -15,7 +15,9 @@
 //! - **Standalone accounts are offline accounts** by construction: a bot
 //!   entry only has a `username`.
 //!
-//! Secrets never go in this file; Phase 10's keys only name files.
+//! Secrets never go in this file; Phase 10's keys only name files, and
+//! `[control_plane] private_targets` lists the private networks a managed
+//! agent's bots may dial.
 //!
 //! The loader, the generic error types and the `[log]` types come from
 //! fleet-startup (ADR-0015); this module re-exports them under their old
@@ -30,6 +32,7 @@ use std::path::{Path, PathBuf};
 use fleet_core::bot::BotAccount;
 use fleet_core::disconnect::ConflictTexts;
 use fleet_core::mode::ModePreset;
+use fleet_core::net::{PrivateTargets, TargetPolicy};
 use fleet_core::resilience::{CircuitPolicy, RetryPolicy};
 use fleet_core::value::{AgentName, McUsername, ServerAddress};
 use fleet_mc::McConfig;
@@ -83,6 +86,19 @@ pub enum AgentMode {
     ControlPlane(ControlPlaneConfig),
 }
 
+impl AgentMode {
+    /// Which addresses its bots may dial: every one in standalone mode,
+    /// whose servers the operator names; public ones and the listed private
+    /// ones in managed mode, whose servers users set (ADR-0019, S46, S69).
+    #[must_use]
+    pub fn target_policy(&self) -> TargetPolicy {
+        match self {
+            Self::Standalone(_) => TargetPolicy::Unchecked,
+            Self::ControlPlane(plane) => TargetPolicy::Checked(plane.private_targets.clone()),
+        }
+    }
+}
+
 /// One `[[standalone.bots]]` entry. It has no ID yet: the agent mints one
 /// at every start (P5.3).
 #[derive(Debug, Clone, PartialEq)]
@@ -117,6 +133,10 @@ pub struct ControlPlaneConfig {
     pub cert_file: PathBuf,
     /// The agent's private key.
     pub key_file: PathBuf,
+    /// The private networks its bots may dial, empty by default: a public
+    /// address is always dialled, a never-class one never (ADR-0019, S46,
+    /// S69).
+    pub private_targets: PrivateTargets,
 }
 
 /// Loads the config from the file at `path`, then from `AFKFLEET_AGENT__…`

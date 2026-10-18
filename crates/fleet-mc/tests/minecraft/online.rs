@@ -8,6 +8,7 @@ use std::time::Instant;
 
 use fleet_core::disconnect::{DisconnectClass, DisconnectReason, TranslationKey};
 use fleet_core::mc::{SessionCredentials, SessionEvent, SessionHandle};
+use fleet_core::net::TargetPolicy;
 use fleet_mc::{AzaleaConnector, McConfig};
 use fleet_testkit::log_capture;
 use secrecy::SecretString;
@@ -34,7 +35,10 @@ fn garbage_token() -> SessionCredentials {
 async fn slow_online_mode_scenario() {
     log_capture::install().unwrap();
     let server = Server::start(Mode::Online).await;
-    let connector = AzaleaConnector::new(&McConfig::default());
+    // The container is published on 127.0.0.1, which only the offline
+    // scenario checks (ADR-0019, S69).
+    let connector =
+        AzaleaConnector::new(&McConfig::default()).with_targets(TargetPolicy::Unchecked);
 
     // 1. The session server refuses a garbage token at once.
     let started = Instant::now();

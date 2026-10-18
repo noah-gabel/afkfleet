@@ -62,9 +62,20 @@ pub fn server_message_len(message: &crate::generated::ServerMessage) -> usize {
 /// it opens the stream (ADR-0019, S24).
 pub const HELLO_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// How long an agent waits for `Welcome` or `Reject` from the call's start:
-/// longer than [`HELLO_TIMEOUT`] and the hello's write behind it.
+/// How long an agent's attempt may take until `Welcome` or `Reject`, dialing
+/// and the TLS handshake included: longer than [`HELLO_TIMEOUT`] and the
+/// hello's write behind it. Bounding the whole attempt keeps S45's grace
+/// exact (ADR-0019, S67).
 pub const WELCOME_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// How often an agent's HTTP/2 keepalive pings its connection to the
+/// server, while idle too (ADR-0019, S67): a dead server is noticed within
+/// [`KEEPALIVE_INTERVAL`] plus [`KEEPALIVE_TIMEOUT`].
+pub const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(10);
+
+/// How long an agent's keepalive waits for a ping's answer before it closes
+/// the connection (ADR-0019, S67).
+pub const KEEPALIVE_TIMEOUT: Duration = Duration::from_secs(20);
 
 /// The longest an agent waits between two attempts to connect, whatever its
 /// backoff (P10.7): with its keepalive and [`WELCOME_TIMEOUT`], it bounds how

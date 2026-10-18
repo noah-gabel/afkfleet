@@ -45,6 +45,9 @@ sha2.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }
 tokio-util.workspace = true
+# The outbox's `Connect` request body is a `Stream`, which tonic pulls when HTTP/2 has
+# room (the user's choice, ADR-0019, U18).
+tokio-stream.workspace = true
 # `enroll`'s client of the server's gRPC port: `channel` dials it, `tls-aws-lc` its TLS on
 # aws-lc-rs, trusting only the pinned CA. Never `tls-ring` or a roots feature (ADR-0019).
 tonic = { workspace = true, features = ["channel", "tls-aws-lc"] }

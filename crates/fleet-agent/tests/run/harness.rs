@@ -3,7 +3,6 @@
 
 use core::num::NonZeroUsize;
 use core::time::Duration;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
@@ -70,11 +69,6 @@ pub(crate) fn config(bots: &[(&str, ModePreset)]) -> AgentConfig {
 pub(crate) fn afk(names: &[&str]) -> AgentConfig {
     let bots: Vec<_> = names.iter().map(|&name| (name, ModePreset::Afk)).collect();
     config(&bots)
-}
-
-/// A path for `[control_plane]`'s files; nothing reads them.
-pub(crate) fn unread_file(name: &str) -> PathBuf {
-    std::env::temp_dir().join(name)
 }
 
 // --- Time ---
@@ -154,6 +148,7 @@ impl Agent {
             heartbeat: heartbeat.clone(),
             anchor: anchor(),
             seed: 1,
+            managed: None,
         }));
         settle().await;
         Self {

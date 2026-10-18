@@ -408,7 +408,8 @@ expression: answer.json()
           "timed_out",
           "unresolvable",
           "host_unavailable",
-          "other"
+          "other",
+          "blocked"
         ],
         "type": "string"
       },

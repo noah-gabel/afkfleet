@@ -5,4 +5,4 @@
  * This union lists the values this version knows; a newer server may send
  * others, so code that branches on it keeps a default branch.
  */
-export type ConnectFailure = "refused" | "timed_out" | "unresolvable" | "host_unavailable" | "other";
+export type ConnectFailure = "refused" | "timed_out" | "unresolvable" | "host_unavailable" | "other" | "blocked";

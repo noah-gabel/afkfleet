@@ -324,12 +324,13 @@ mod tests {
     /// `now` in the example tests.
     const NOW: i64 = 10_000;
 
-    const CONNECT_FAILURES: [ConnectFailure; 5] = [
+    const CONNECT_FAILURES: [ConnectFailure; 6] = [
         ConnectFailure::Refused,
         ConnectFailure::TimedOut,
         ConnectFailure::Unresolvable,
         ConnectFailure::HostUnavailable,
         ConnectFailure::Other,
+        ConnectFailure::Blocked,
     ];
 
     const SESSION_SERVER_FAILURES: [SessionServerFailure; 4] = [

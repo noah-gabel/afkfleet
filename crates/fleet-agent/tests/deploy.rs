@@ -199,6 +199,16 @@ fn the_managed_dev_config_loads_with_dev_enrolls_paths() {
     };
     assert_eq!(plane.url, "https://127.0.0.1:7443");
     assert!(plane.key_file.ends_with("agent.key"));
+    // Exactly `just mc-up`'s published address (ADR-0019, S69, R58).
+    assert_eq!(
+        plane
+            .private_targets
+            .networks()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["127.0.0.1/32"]
+    );
     assert!(
         bare.unwrap().is_err(),
         "the paths come only from the recipe"
