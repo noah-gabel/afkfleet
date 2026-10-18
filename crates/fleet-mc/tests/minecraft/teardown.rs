@@ -25,6 +25,7 @@ use std::time::Instant;
 
 use fleet_core::disconnect::DisconnectReason;
 use fleet_core::mc::{SessionEvent, SessionEvents, SessionHandle};
+use fleet_core::net::TargetPolicy;
 use fleet_mc::{AzaleaConnector, McConfig, McEvents, McSession};
 
 use crate::harness::{Mode, Server, bot, connect, offline, wait_for, within};
@@ -54,7 +55,10 @@ struct Online {
 #[tokio::test]
 async fn slow_teardown_scenario() {
     let server = Server::start(Mode::Offline).await;
-    let connector = AzaleaConnector::new(&McConfig::default());
+    // The container is published on 127.0.0.1, which only the offline
+    // scenario checks (ADR-0019, S69).
+    let connector =
+        AzaleaConnector::new(&McConfig::default()).with_targets(TargetPolicy::Unchecked);
 
     cycle(&connector, &server, 0).await;
     nothing_left(&connector, "the warm-up").await;

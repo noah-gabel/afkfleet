@@ -176,6 +176,7 @@ async fn reports_about_bots_the_agent_doesnt_hold_are_dropped_and_the_stream_sta
             name: "agent-1".try_into().unwrap(),
             count: 2,
             sessions_denied: 0,
+            chat_dropped: 0,
         }]
     );
     port.stop().await;

@@ -99,12 +99,16 @@ impl RetryPolicy {
     /// every time. The result always lies within [`RetryPolicy::bounds`].
     #[must_use]
     pub fn delay<R: Rng + ?Sized>(&self, attempt: NonZeroU32, rng: &mut R) -> Duration {
-        let jittered = self.nth_delay(
-            self.builder()
-                .with_jitter()
-                .with_jitter_seed(rng.next_u64()),
-            attempt,
-        );
+        self.seeded_delay(attempt, rng.next_u64())
+    }
+
+    /// [`RetryPolicy::delay`] with its jitter seeded from `seed`, for a caller
+    /// that draws its own randomness (the managed agent's reconnect backoff,
+    /// ADR-0019 S67): the same seed gives the same delay, within
+    /// [`RetryPolicy::bounds`].
+    #[must_use]
+    pub fn seeded_delay(&self, attempt: NonZeroU32, seed: u64) -> Duration {
+        let jittered = self.nth_delay(self.builder().with_jitter().with_jitter_seed(seed), attempt);
         // backon computes in f32; this only absorbs its rounding.
         let (lower, upper) = self.bounds(attempt);
         jittered.max(lower).min(upper)
@@ -150,8 +154,8 @@ impl RetryPolicy {
 mod tests {
     use super::*;
     use proptest::prelude::*;
-    use rand::SeedableRng;
     use rand::rngs::StdRng;
+    use rand::{Rng, SeedableRng};
     use rstest::rstest;
 
     const fn secs(secs: u64) -> Duration {
@@ -248,6 +252,37 @@ mod tests {
         assert_eq!(first, second);
     }
 
+    #[test]
+    fn a_seeded_delay_is_the_delay_of_an_rng_that_draws_that_seed() {
+        let policy = defaults();
+        for n in [1, 3, 6] {
+            let seed = StdRng::seed_from_u64(9).next_u64();
+
+            assert_eq!(
+                policy.seeded_delay(attempt(n), seed),
+                policy.delay(attempt(n), &mut StdRng::seed_from_u64(9))
+            );
+        }
+    }
+
+    #[rstest]
+    #[case::first(1, secs(1), secs(2))]
+    #[case::second(2, secs(2), secs(4))]
+    #[case::third(3, secs(4), secs(8))]
+    #[case::fourth(4, secs(8), secs(16))]
+    #[case::plateau(5, secs(15), secs(30))]
+    fn the_agents_reconnect_waits_double_to_their_plateau(
+        #[case] n: u32,
+        #[case] lower: Duration,
+        #[case] upper: Duration,
+    ) {
+        let policy = RetryPolicy::try_new(secs(1), secs(30), secs(60)).unwrap();
+
+        assert_eq!(policy.bounds(attempt(n)), (lower, upper));
+        let delay = policy.seeded_delay(attempt(n), 77);
+        assert!(lower <= delay && delay <= upper, "{delay:?}");
+    }
+
     #[rstest]
     #[case::not_yet(299, false)]
     #[case::exactly_at_the_period(300, true)]
@@ -277,6 +312,8 @@ mod tests {
             prop_assert!(lower <= delay && delay <= upper);
             prop_assert!(delay <= max);
             prop_assert!(lower >= base);
+            let seeded = policy.seeded_delay(attempt(n), seed);
+            prop_assert!(lower <= seeded && seeded <= upper);
         }
     }
 }

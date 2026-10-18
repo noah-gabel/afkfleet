@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO enrollment_tokens\n             (id, token_hash, created_by, created_at, expires_at, used_at, agent_id)\n         VALUES (?1, zeroblob(32), ?2, ?3, ?4, ?3, ?5)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": []
+  },
+  "hash": "dd32fbb2a05606cf8676c131ce633aa568dd3cf7106306f5a4fd78c23c428aa6"
+}

@@ -257,6 +257,7 @@ pub(crate) fn disconnect_reason() -> impl Strategy<Value = DisconnectReason> {
             ConnectFailure::Unresolvable,
             ConnectFailure::HostUnavailable,
             ConnectFailure::Other,
+            ConnectFailure::Blocked,
         ])
         .prop_map(|failure| DisconnectReason::ConnectFailed { failure }),
         Just(DisconnectReason::AuthRejected),

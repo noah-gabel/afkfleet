@@ -41,7 +41,8 @@ tracing.workspace = true
 chrono.workspace = true
 # The Owner's username and password for `UserService::create_owner`.
 fleet-core.workspace = true
-# The in-process server the integration tests run against (ADR-0017).
+# The in-process server the integration tests run against (ADR-0017), and the hidden
+# prompt (`cli::user::TerminalPrompt`) of the dev-bots example (ADR-0019, S71).
 fleet-server.workspace = true
 # The signal source that stops the in-process server.
 fleet-startup.workspace = true

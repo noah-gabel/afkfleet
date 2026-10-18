@@ -14,10 +14,15 @@ use clap::{Parser, Subcommand};
 pub const RUN_EXIT_CODES: &str = "\
 Exit codes:
   0  stopped by a signal (SIGTERM or SIGINT; Ctrl+C or Ctrl+Break on Windows)
-  1  startup error: the config, logging, or the fleet's setup
+  1  startup error: the config, logging, a managed agent's identity (its
+     key, certificate or CA), or the fleet's setup
   2  usage error
   3  the abandoned-thread limit was reached; the agent shut down first
-  4  the fleet's supervisor ended unasked, or didn't end when asked";
+  4  the fleet's supervisor ended unasked, or didn't end when asked; or a
+     managed agent's conductor or link ended unasked
+  5  the server refused this agent: its certificate is unknown, revoked or
+     expired, the agent is disabled, or its name isn't the enrolled one; or
+     its certificate expired by its own clock; every bot was stopped first";
 
 /// The exit codes of `afkfleet-agent healthcheck`, shown in its help. Docker
 /// reserves 2 for healthchecks, so it's never used.

@@ -22,6 +22,7 @@ use fleet_core::chat::ChatKind;
 use fleet_core::id::BotId;
 use fleet_core::mc::{SessionEvent, SessionHandle};
 use fleet_core::mode::{GameAction, HotbarSlot};
+use fleet_core::net::TargetPolicy;
 use fleet_mc::{AzaleaConnector, McConfig, McEvents, McSession};
 
 use crate::checks::{data_floats, score, ticks_pass};
@@ -387,12 +388,11 @@ async fn slow_actions_scenario() {
     let server = Server::start(Mode::Offline).await;
     let swings = Arc::new(AtomicUsize::new(0));
     let loads = Arc::new(AtomicUsize::new(0));
-    let connector = AzaleaConnector::new(&McConfig::default()).with_app_hook(watch_the_scene(
-        bot(1),
-        &loads,
-        bot(2),
-        &swings,
-    ));
+    // The container is published on 127.0.0.1, which only the offline
+    // scenario checks (ADR-0019, S69).
+    let connector = AzaleaConnector::new(&McConfig::default())
+        .with_targets(TargetPolicy::Unchecked)
+        .with_app_hook(watch_the_scene(bot(1), &loads, bot(2), &swings));
     let (session, mut events) = connect(&connector, &server, bot(1), offline(NAME)).await;
     wait_for(&mut events, "the bot's join", |event| {
         *event == SessionEvent::Joined

@@ -13,8 +13,10 @@
 
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use rustls::RootCertStore;
 
+use rustls::CertificateError;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, UnixTime};
 use rustls::server::WebPkiClientVerifier;
 use rustls::sign::CertifiedKey;
@@ -40,19 +42,36 @@ pub enum CertificateProblem {
     /// It's for another key.
     #[error("the certificate isn't for this agent's key")]
     NotOurKey,
+    /// The pinned CA signed it for the key, and it expired: it was valid
+    /// until `not_after`, and it's `now` by this host's clock.
+    #[error("the certificate expired at {not_after}; it's {now} by this host's clock")]
+    Expired {
+        /// Its end.
+        not_after: DateTime<Utc>,
+        /// The time it was checked at.
+        now: DateTime<Utc>,
+    },
+    /// The pinned CA signed it for the key, and it isn't valid yet by this
+    /// host's clock.
+    #[error("the certificate isn't valid yet by this host's clock")]
+    NotYetValid,
 }
 
 /// Checks `pem` against the pinned CA's `ca_der` and the agent's `key` at
-/// `now`; see the [module docs](self).
+/// `now`, and returns the certificate's DER; see the [module docs](self).
+/// The time is judged last: a certificate that's only out of its validity
+/// is checked again at the bound it crossed, so another CA's certificate
+/// or another key's is never reported as expired (ADR-0019, S68).
 ///
 /// # Errors
-/// The first [`CertificateProblem`].
+/// The first [`CertificateProblem`], in the order `NotOnePem`,
+/// `NotFromTheCa`, `NotOurKey`, then `Expired` or `NotYetValid`.
 pub fn check(
     pem: &str,
     ca_der: &[u8],
     key: &AgentKey,
     now: UnixTime,
-) -> Result<(), CertificateProblem> {
+) -> Result<Vec<u8>, CertificateProblem> {
     let framed = pem
         .strip_suffix("\r\n")
         .or_else(|| pem.strip_suffix('\n'))
@@ -61,23 +80,78 @@ pub fn check(
         return Err(CertificateProblem::NotOnePem);
     }
     let der = one_certificate(pem.as_bytes()).ok_or(CertificateProblem::NotOnePem)?;
-    let certificate = CertificateDer::from(der);
+    let timing = chain_at(&der, ca_der, now)?;
+    let provider = rustls::crypto::aws_lc_rs::default_provider();
+    let key_der = PrivateKeyDer::Pkcs8(key.pkcs8_der().to_vec().into());
+    CertifiedKey::from_der(vec![CertificateDer::from(der.clone())], key_der, &provider)
+        .and_then(|certified| certified.keys_match())
+        .map_err(|_| CertificateProblem::NotOurKey)?;
+    timing.map_or(Ok(der), Err)
+}
+
+/// Whether `cert_der` is a client certificate `ca_der` signed, valid at
+/// `now`: the managed agent's check of its kept certificate before each
+/// attempt to connect, without the key (ADR-0019, R52).
+///
+/// # Errors
+/// [`CertificateProblem::NotFromTheCa`], then `Expired` or `NotYetValid`.
+pub fn validity(cert_der: &[u8], ca_der: &[u8], now: UnixTime) -> Result<(), CertificateProblem> {
+    chain_at(cert_der, ca_der, now)?.map_or(Ok(()), Err)
+}
+
+/// rustls's client verifier, `ca_der` its one root: the check the server's
+/// port makes (group C) at `now`. Anything but the time is
+/// [`CertificateProblem::NotFromTheCa`]; a certificate out of its validity
+/// alone is checked again at the bound it crossed, and comes back as its
+/// time problem.
+fn chain_at(
+    cert_der: &[u8],
+    ca_der: &[u8],
+    now: UnixTime,
+) -> Result<Option<CertificateProblem>, CertificateProblem> {
     let provider = Arc::new(rustls::crypto::aws_lc_rs::default_provider());
     let mut roots = RootCertStore::empty();
     roots
         .add(CertificateDer::from(ca_der.to_vec()))
         .map_err(|_| CertificateProblem::NotFromTheCa)?;
-    let verifier =
-        WebPkiClientVerifier::builder_with_provider(Arc::new(roots), Arc::clone(&provider))
-            .build()
-            .map_err(|_| CertificateProblem::NotFromTheCa)?;
-    verifier
-        .verify_client_cert(&certificate, &[], now)
+    let verifier = WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider)
+        .build()
         .map_err(|_| CertificateProblem::NotFromTheCa)?;
-    let key_der = PrivateKeyDer::Pkcs8(key.pkcs8_der().to_vec().into());
-    CertifiedKey::from_der(vec![certificate], key_der, &provider)
-        .and_then(|certified| certified.keys_match())
-        .map_err(|_| CertificateProblem::NotOurKey)
+    let certificate = CertificateDer::from(cert_der);
+    let verify = |time| {
+        verifier
+            .verify_client_cert(&certificate, &[], time)
+            .map(drop)
+    };
+    let (bound, problem) = match verify(now) {
+        Ok(()) => return Ok(None),
+        Err(rustls::Error::InvalidCertificate(CertificateError::ExpiredContext {
+            not_after,
+            ..
+        })) => (
+            not_after,
+            CertificateProblem::Expired {
+                not_after: date(not_after),
+                now: date(now),
+            },
+        ),
+        Err(rustls::Error::InvalidCertificate(CertificateError::NotValidYetContext {
+            not_before,
+            ..
+        })) => (not_before, CertificateProblem::NotYetValid),
+        Err(_) => return Err(CertificateProblem::NotFromTheCa),
+    };
+    // Valid at its bound, both of which count: only its time is wrong.
+    verify(bound).map_err(|_| CertificateProblem::NotFromTheCa)?;
+    Ok(Some(problem))
+}
+
+/// `time` as a date; one past chrono's range is its last date.
+fn date(time: UnixTime) -> DateTime<Utc> {
+    i64::try_from(time.as_secs())
+        .ok()
+        .and_then(|secs| DateTime::from_timestamp(secs, 0))
+        .unwrap_or(DateTime::<Utc>::MAX_UTC)
 }
 
 #[cfg(test)]
@@ -148,7 +222,7 @@ mod tests {
 
         let checked = check(&pem, &ca_der, &key, UnixTime::now());
 
-        assert_eq!(checked, Ok(()));
+        assert_eq!(checked, Ok(one_certificate(pem.as_bytes()).unwrap()));
     }
 
     #[test]
@@ -205,5 +279,113 @@ mod tests {
         let checked = check(&pem, &ca_der, &key, UnixTime::now());
 
         assert_eq!(checked, Err(CertificateProblem::NotOurKey));
+    }
+
+    // --- Its time (ADR-0019, S68, R52) ---
+
+    /// 2026-01-01 and 2026-06-01, midnight UTC.
+    const START: u64 = 1_767_225_600;
+    const END: u64 = 1_780_272_000;
+
+    fn at(secs: u64) -> UnixTime {
+        UnixTime::since_unix_epoch(core::time::Duration::from_secs(secs))
+    }
+
+    fn date(secs: u64) -> DateTime<Utc> {
+        DateTime::from_timestamp(i64::try_from(secs).unwrap(), 0).unwrap()
+    }
+
+    /// A client certificate for `key` that `issuer` signs, valid from START
+    /// to END.
+    fn dated(key: &AgentKey, issuer: &Issuer<'static, KeyPair>) -> String {
+        let mut params = CertificateParams::default();
+        params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+        params.not_before = rcgen::date_time_ymd(2026, 1, 1);
+        params.not_after = rcgen::date_time_ymd(2026, 6, 1);
+        params.signed_by(&pair_of(key), issuer).unwrap().pem()
+    }
+
+    #[rstest::rstest]
+    #[case::its_first_second(START)]
+    #[case::inside(START + 86_400)]
+    #[case::its_last_second(END)]
+    fn a_certificate_is_valid_from_its_start_to_its_end_inclusive(#[case] now: u64) {
+        let (ca_der, issuer) = ca(1);
+        let key = agent_key(1);
+        let pem = dated(&key, &issuer);
+
+        assert!(check(&pem, &ca_der, &key, at(now)).is_ok());
+        assert_eq!(
+            validity(&one_certificate(pem.as_bytes()).unwrap(), &ca_der, at(now)),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn an_expired_certificate_says_when_it_ended() {
+        let (ca_der, issuer) = ca(1);
+        let key = agent_key(1);
+        let pem = dated(&key, &issuer);
+        let expired = CertificateProblem::Expired {
+            not_after: date(END),
+            now: date(END + 1),
+        };
+
+        assert_eq!(check(&pem, &ca_der, &key, at(END + 1)), Err(expired));
+        assert_eq!(
+            validity(
+                &one_certificate(pem.as_bytes()).unwrap(),
+                &ca_der,
+                at(END + 1)
+            ),
+            Err(expired)
+        );
+    }
+
+    #[test]
+    fn a_certificate_before_its_start_isnt_valid_yet() {
+        let (ca_der, issuer) = ca(1);
+        let key = agent_key(1);
+        let pem = dated(&key, &issuer);
+
+        assert_eq!(
+            check(&pem, &ca_der, &key, at(START - 1)),
+            Err(CertificateProblem::NotYetValid)
+        );
+        assert_eq!(
+            validity(
+                &one_certificate(pem.as_bytes()).unwrap(),
+                &ca_der,
+                at(START - 1)
+            ),
+            Err(CertificateProblem::NotYetValid)
+        );
+    }
+
+    #[test]
+    fn another_cas_or_another_keys_expired_certificate_is_refused_as_that() {
+        let (ca_der, _) = ca(1);
+        let (_, other) = ca(2);
+        let (_, issuer) = ca(1);
+        let key = agent_key(1);
+        let foreign = dated(&key, &other);
+        let anothers = dated(&agent_key(2), &issuer);
+
+        assert_eq!(
+            check(&foreign, &ca_der, &key, at(END + 1)),
+            Err(CertificateProblem::NotFromTheCa)
+        );
+        assert_eq!(
+            validity(
+                &one_certificate(foreign.as_bytes()).unwrap(),
+                &ca_der,
+                at(END + 1)
+            ),
+            Err(CertificateProblem::NotFromTheCa)
+        );
+        assert_eq!(
+            check(&anothers, &ca_der, &key, at(END + 1)),
+            Err(CertificateProblem::NotOurKey)
+        );
     }
 }

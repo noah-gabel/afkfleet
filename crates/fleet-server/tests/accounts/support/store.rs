@@ -14,6 +14,7 @@ use fleet_server::ports::accounts::{AccountReads, ListedAccount, McAccount};
 use fleet_server::ports::agents::AgentReads;
 use fleet_server::ports::audit::AuditReads;
 use fleet_server::ports::bots::BotReads;
+use fleet_server::ports::chat::ChatReads;
 use fleet_server::ports::enrollment_tokens::EnrollmentTokenReads;
 use fleet_server::ports::envelopes::EnvelopeReads;
 use fleet_server::ports::grants::GrantReads;
@@ -217,6 +218,10 @@ impl Store for FlakyStore {
 
     fn modes(&self) -> &dyn ModeReads {
         self.inner.modes()
+    }
+
+    fn chat(&self) -> &dyn ChatReads {
+        self.inner.chat()
     }
 
     fn envelopes(&self) -> &dyn EnvelopeReads {

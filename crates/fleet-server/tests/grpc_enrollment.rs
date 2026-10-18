@@ -55,6 +55,7 @@ use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::infra::system::SystemClock;
 use fleet_server::ports::agents::NewAgent;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
+use fleet_server::ports::ingest::NoIngest;
 use fleet_server::ports::pki::{AgentCertificates, IssueError, IssuedCertificate};
 use fleet_server::ports::session_grants::{GrantRequest, GrantStream, SessionGrants};
 use fleet_server::ports::store::Store as _;
@@ -213,6 +214,7 @@ async fn start(options: SqliteConnectOptions, settings: Settings) -> Port {
                 Arc::new(X509AgentNames),
             )),
             grants: Arc::new(NoGrants),
+            ingest: Arc::new(NoIngest),
             clock: Arc::new(clock.clone()),
         },
         RateLimits::new(&settings.limits, Arc::new(clock.clone())),

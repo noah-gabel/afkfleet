@@ -13,6 +13,7 @@ use std::time::Duration;
 use fleet_core::bot::BotAccount;
 use fleet_core::disconnect::ConflictTexts;
 use fleet_core::mode::ModePreset;
+use fleet_core::net::{IpNet, PrivateTargets, PrivateTargetsError};
 use fleet_core::resilience::{CircuitPolicy, CircuitPolicyError, RetryPolicy, RetryPolicyError};
 use fleet_core::value::{AgentName, McUsername, ServerAddress};
 use fleet_mc::McConfig;
@@ -294,7 +295,9 @@ fn control_plane_config(
         }
         files.push((name, path));
     }
-    let (Some(url), [(_, ca_cert_file), (_, cert_file), (_, key_file)]) = (url, files.as_slice())
+    let private_targets = private_targets(&raw.private_targets, problems);
+    let (Some(url), [(_, ca_cert_file), (_, cert_file), (_, key_file)], Some(private_targets)) =
+        (url, files.as_slice(), private_targets)
     else {
         return None;
     };
@@ -303,7 +306,57 @@ fn control_plane_config(
         ca_cert_file: ca_cert_file.clone(),
         cert_file: cert_file.clone(),
         key_file: key_file.clone(),
+        private_targets,
     })
+}
+
+/// `[control_plane] private_targets`: every entry an IP network in strict
+/// CIDR form, inside one private range, listed once, at most
+/// [`PrivateTargets::MAX`] of them. Each problem names the entry's index,
+/// never its text.
+fn private_targets(raw: &[String], problems: &mut Problems) -> Option<PrivateTargets> {
+    let key = KeyPath::root().key("control_plane").key("private_targets");
+    let mut networks = Vec::with_capacity(raw.len());
+    let mut valid = true;
+    for (index, text) in raw.iter().enumerate() {
+        match text.parse::<IpNet>() {
+            Ok(network) => networks.push((index, network)),
+            Err(error) => {
+                problems.push(key.index(index), ProblemKind::IpNet(error));
+                valid = false;
+            }
+        }
+    }
+    let parsed: Vec<IpNet> = networks.iter().map(|(_, network)| *network).collect();
+    // `problems` counts the entries that parsed; the config names the list's
+    // own index.
+    let original = |index: usize| networks.get(index).map_or(index, |(original, _)| *original);
+    for problem in PrivateTargets::problems(&parsed) {
+        let (at, problem) = match problem {
+            PrivateTargetsError::TooMany { .. } => (key.clone(), problem),
+            PrivateTargetsError::NotPrivate { index } => {
+                let index = original(index);
+                (key.index(index), PrivateTargetsError::NotPrivate { index })
+            }
+            PrivateTargetsError::NeverDialled { index } => {
+                let index = original(index);
+                (
+                    key.index(index),
+                    PrivateTargetsError::NeverDialled { index },
+                )
+            }
+            PrivateTargetsError::Duplicate { index } => {
+                let index = original(index);
+                (key.index(index), PrivateTargetsError::Duplicate { index })
+            }
+        };
+        problems.push(at, ProblemKind::PrivateTargets(problem));
+        valid = false;
+    }
+    if !valid {
+        return None;
+    }
+    PrivateTargets::try_new(parsed).ok()
 }
 
 /// Whether `text` is the server's gRPC port as `https://host:port`: a host,

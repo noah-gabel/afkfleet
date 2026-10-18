@@ -3,7 +3,6 @@
 
 use std::collections::BTreeSet;
 
-use fleet_agent::config::{AgentMode, ControlPlaneConfig};
 use fleet_agent::run::{Exit, Outcome};
 use fleet_core::id::BotId;
 use fleet_core::mode::ModePreset;
@@ -11,7 +10,7 @@ use fleet_runtime::ShutdownReport;
 use rstest::rstest;
 use serde_json::Value;
 
-use crate::harness::{AGENT, Agent, afk, config, unread_file};
+use crate::harness::{AGENT, Agent, afk, config};
 
 const STARTING: &str = "starting a standalone bot";
 const RUNNING: &str = "the agent is running";
@@ -98,36 +97,6 @@ async fn the_agents_and_its_bots_lines_are_in_the_agent_span() {
         assert_eq!(spans[0]["agent"], AGENT, "{line}");
         assert_eq!(line["span"]["name"], "bot", "{line}");
     }
-}
-
-#[tokio::test(start_paused = true)]
-async fn a_control_plane_config_is_refused_with_a_pointer_to_enroll() {
-    let mut managed = afk(&["AfkBot1"]);
-    managed.mode = AgentMode::ControlPlane(ControlPlaneConfig {
-        url: "https://fleet.example.com:7443".to_owned(),
-        ca_cert_file: unread_file("ca.crt"),
-        cert_file: unread_file("agent.crt"),
-        key_file: unread_file("agent.key"),
-    });
-    let agent = Agent::start(managed).await;
-    let capture = agent.capture.clone();
-    let fake = agent.fake.clone();
-
-    let outcome = agent.outcome().await;
-
-    assert_eq!(outcome, Outcome::startup_failed());
-    assert_eq!(fake.connects().len(), 0);
-    let errors = crate::harness::lines_with(&capture, CANT_START);
-    assert_eq!(errors.len(), 1, "{}", capture.text());
-    assert_eq!(errors[0]["level"], "ERROR");
-    assert!(
-        errors[0]["error"]
-            .as_str()
-            .unwrap()
-            .contains("`afkfleet-agent enroll`"),
-        "{}",
-        errors[0]
-    );
 }
 
 #[tokio::test(start_paused = true)]

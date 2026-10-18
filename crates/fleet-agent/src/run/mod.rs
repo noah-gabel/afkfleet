@@ -1,5 +1,6 @@
 //! The agent's run: fleet-mc's connector wired to fleet-runtime's fleet, for
-//! the bots of a standalone config (Plan.md P5.3, ADR-0014).
+//! the bots of a standalone config (Plan.md P5.3, ADR-0014), or for the ones
+//! the server's control stream gives a managed agent (`managed`, P10.7).
 //!
 //! [`run`] is generic over the connector, the diagnostics, the signals and
 //! the heartbeat, so tests drive it with fleet-testkit's fakes, a signal
@@ -7,7 +8,7 @@
 //! `AzaleaConnector` for the first two, the OS's signals and the heartbeat
 //! file.
 //!
-//! 1. A `[control_plane]` config is refused until Phase 10.
+//! 1. A `[control_plane]` config runs managed (`managed`): see there.
 //! 2. Each standalone bot gets a fresh random v7 ID.
 //! 3. The fleet starts, with offline credentials. Its supervisor runs in a
 //!    task the run owns, and one more task logs chat at `debug`.
@@ -26,6 +27,7 @@
 mod events;
 mod finish;
 mod heartbeat;
+mod managed;
 mod specs;
 #[cfg(test)]
 mod testing;
@@ -46,11 +48,14 @@ use tracing::{Instrument as _, Span, error, info, info_span};
 
 use self::finish::{Timeouts, finish};
 use self::heartbeat::beat;
+use self::managed::run_managed;
 use self::specs::{StartupError, os_random, standalone_specs};
 use self::watch::{Reason, watch};
 use crate::config::{AgentConfig, AgentMode, StandaloneBot};
 use crate::diagnostics::{self, HostDiagnostics};
 use crate::heartbeat::Heartbeat;
+use crate::managed::identity::ManagedIdentity;
+use crate::managed::link::LinkTimings;
 use crate::signals::ShutdownSignals;
 
 /// How long the binary gives the async runtime's remaining tasks once the
@@ -80,6 +85,28 @@ pub struct RunParts<C, D, S, H> {
     pub anchor: DateTime<Utc>,
     /// The seed of the runtime's randomness.
     pub seed: u64,
+    /// A managed agent's identity and its link's seed, which main.rs
+    /// loads before the runtime starts; none for a standalone agent.
+    pub managed: Option<Managed>,
+}
+
+/// What a managed agent's run needs beside the config (ADR-0019, S67, S68).
+pub struct Managed {
+    /// The identity, loaded and checked at start.
+    pub identity: ManagedIdentity,
+    /// The seed of the reconnect backoff's jitter.
+    pub seed: u64,
+    /// The link's timings: the protocol's, but in tests.
+    pub timings: LinkTimings,
+}
+
+impl fmt::Debug for Managed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Managed")
+            .field("identity", &self.identity)
+            .field("timings", &self.timings)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<C, D, S, H> fmt::Debug for RunParts<C, D, S, H> {
@@ -88,6 +115,7 @@ impl<C, D, S, H> fmt::Debug for RunParts<C, D, S, H> {
             .field("config", &self.config)
             .field("anchor", &self.anchor)
             .field("seed", &self.seed)
+            .field("managed", &self.managed)
             .finish_non_exhaustive()
     }
 }
@@ -102,8 +130,12 @@ pub enum Exit {
     StartupFailed,
     /// The abandoned-thread limit was reached; the agent shut down first.
     AbandonedLimit,
-    /// The fleet's supervisor ended unasked, or didn't end when asked.
+    /// The fleet's supervisor ended unasked, or didn't end when asked; or a
+    /// managed agent's conductor or link ended unasked.
     SupervisorFailed,
+    /// The server refused the managed agent for good: every bot was
+    /// stopped first (ADR-0019, S67).
+    Refused,
 }
 
 impl Exit {
@@ -115,6 +147,7 @@ impl Exit {
             Self::StartupFailed => 1,
             Self::AbandonedLimit => 3,
             Self::SupervisorFailed => 4,
+            Self::Refused => 5,
         }
     }
 }
@@ -183,6 +216,13 @@ where
     S: ShutdownSignals,
     H: Heartbeat,
 {
+    let bots = match &parts.config.mode {
+        AgentMode::Standalone(bots) => bots.clone(),
+        AgentMode::ControlPlane(plane) => {
+            let plane = plane.clone();
+            return run_managed(parts, &plane).await;
+        }
+    };
     let RunParts {
         config,
         connector,
@@ -191,13 +231,13 @@ where
         heartbeat,
         anchor,
         seed,
+        managed: _,
     } = parts;
     let Built {
-        bots,
         specs,
         fleet,
         supervisor,
-    } = match build(&config, connector, anchor, seed) {
+    } = match build(&config, &bots, connector, anchor, seed) {
         Ok(built) => built,
         Err(error) => {
             error!(%error, "the agent can't start");
@@ -212,7 +252,7 @@ where
     // In the agent's span, so every bot's span nests in it.
     supervisor_task.spawn(supervisor.run(cancel.child_token()).in_current_span());
 
-    let reason = if apply_all(&fleet, bots, specs).await {
+    let reason = if apply_all(&fleet, &bots, specs).await {
         info!(bots = bots.len(), "the agent is running");
         let beats = cancel.child_token();
         let mut heartbeat_task = JoinSet::new();
@@ -227,6 +267,7 @@ where
         );
         let reason = watch(
             &mut supervisor_task,
+            None,
             &mut signals,
             &diagnostics,
             config.mc.max_abandoned_threads,
@@ -254,9 +295,7 @@ where
 }
 
 /// A fleet built for a config's standalone bots.
-struct Built<'a, C> {
-    /// The config's bots.
-    bots: &'a [StandaloneBot],
+struct Built<C> {
     /// Their specs, in the same order, with new IDs.
     specs: Vec<BotSpec>,
     /// The fleet's handle.
@@ -265,20 +304,17 @@ struct Built<'a, C> {
     supervisor: Supervisor<C, OfflineCredentials>,
 }
 
-/// Builds the fleet for `config`'s standalone bots, with their new IDs.
+/// Builds the fleet for `config`'s standalone `bots`, with their new IDs.
 ///
 /// # Errors
-/// [`StartupError::ManagedMode`] for a `[control_plane]` config, then the
-/// errors of [`standalone_specs`] and [`StartupError::Setup`].
+/// The errors of [`standalone_specs`] and [`StartupError::Setup`].
 fn build<C: MinecraftConnector>(
     config: &AgentConfig,
+    bots: &[StandaloneBot],
     connector: Arc<C>,
     anchor: DateTime<Utc>,
     seed: u64,
-) -> Result<Built<'_, C>, StartupError> {
-    let AgentMode::Standalone(bots) = &config.mode else {
-        return Err(StartupError::ManagedMode);
-    };
+) -> Result<Built<C>, StartupError> {
     let specs = standalone_specs(bots, anchor, os_random)?;
     let (fleet, supervisor) = Fleet::new(FleetParts {
         connector,
@@ -292,7 +328,6 @@ fn build<C: MinecraftConnector>(
     .map_err(StartupError::Setup)?;
     diagnostics::register();
     Ok(Built {
-        bots,
         specs,
         fleet,
         supervisor,
@@ -337,6 +372,7 @@ mod tests {
     #[case::startup_failed(Exit::StartupFailed, 1)]
     #[case::abandoned_limit(Exit::AbandonedLimit, 3)]
     #[case::supervisor_failed(Exit::SupervisorFailed, 4)]
+    #[case::refused(Exit::Refused, 5)]
     fn each_exit_has_its_code(#[case] exit: Exit, #[case] code: u8) {
         assert_eq!(exit.code(), code);
     }

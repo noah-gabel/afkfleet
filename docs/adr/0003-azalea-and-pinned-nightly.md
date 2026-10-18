@@ -49,6 +49,7 @@ One pull request changes all of these together, never one alone:
    - run `just ci`, `just test-slow` and `just demo-agent` (an hour with one server restart, ADR-0014), and put the demo's `summary.txt` in the bump's pull request
    - *(from Phase 9, group B, [ADR-0018](0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md))* run `just deny`: a new azalea crate that depends on azalea-auth is named there, and `deny.toml`'s azalea-auth wrapper list is updated together with a note in ADR-0018
    - *(from Phase 9, group B)* compare fleet-server's Microsoft adapter (`crates/fleet-server/src/infra/msauth/`) with the new azalea-auth's `auth.rs`: its endpoints, client ID, scope, fields and headers. The adapter sends its own requests with azalea-auth's protocol, so a change there isn't picked up by the bump
+   - *(from Phase 10, group G, [ADR-0019](0019-control-plane-conventions-and-phase-10-refinements.md), the user's note)* check that azalea still ignores `ClientboundTransfer` in the configuration and the game state (azalea-client's `plugins/packet/{config,game}/mod.rs`) and still downloads no resource pack (`ClientboundResourcePackPush` only emits `ResourcePackEvent`, and `accept_resource_packs` fetches nothing): the managed agent's SSRF check (S46, S69) covers only the address fleet-mc resolves before the connect. If azalea starts following transfers or fetching packs, the same check must cover that dial before the bump merges
 6. **Record:** update this ADR, or supersede it, and `docs/runbook.md` (from P12).
 
 ## Consequences

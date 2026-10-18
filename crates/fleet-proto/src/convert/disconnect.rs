@@ -75,6 +75,7 @@ const fn connect_failure_to_wire(failure: ConnectFailure) -> wire::ConnectFailur
         ConnectFailure::Unresolvable => wire::ConnectFailure::Unresolvable,
         ConnectFailure::HostUnavailable => wire::ConnectFailure::HostUnavailable,
         ConnectFailure::Other => wire::ConnectFailure::Other,
+        ConnectFailure::Blocked => wire::ConnectFailure::Blocked,
     }
 }
 
@@ -86,6 +87,7 @@ fn connect_failure_from_wire(number: i32) -> Result<ConnectFailure, ConvertError
         wire::ConnectFailure::Unresolvable => ConnectFailure::Unresolvable,
         wire::ConnectFailure::HostUnavailable => ConnectFailure::HostUnavailable,
         wire::ConnectFailure::Other => ConnectFailure::Other,
+        wire::ConnectFailure::Blocked => ConnectFailure::Blocked,
         wire::ConnectFailure::Unspecified => {
             return Err(ConvertError::new(FIELD, Problem::Missing));
         }

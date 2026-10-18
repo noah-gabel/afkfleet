@@ -106,3 +106,34 @@ describe("just dev-enroll", () => {
     assert.deepEqual(recipeBody("dev-enroll"), ['node scripts/dev-enroll.mjs "{{ dir }}"']);
   });
 });
+
+/** The parameters of `recipe`'s header, by name, each with its default. */
+function recipeParameters(recipe) {
+  const header = readFileSync(JUSTFILE, "utf8")
+    .split("\n")
+    .find((line) => line.startsWith(`${recipe} `));
+  assert.ok(header, `the justfile has no recipe ${recipe}`);
+  const parameters = {};
+  for (const [, name, value] of header.matchAll(
+    /(\$?[A-Za-z_][A-Za-z0-9_]*)=(\((?:[^()]|\([^()]*\))*\)|"[^"]*")/g,
+  )) {
+    parameters[name] = value;
+  }
+  return parameters;
+}
+
+describe("just dev-managed-agent", () => {
+  it("runs the identity dev-enroll leaves: the same folder, CA, key and certificate", () => {
+    const enroll = recipeParameters("dev-enroll");
+    const managed = recipeParameters("dev-managed-agent");
+    for (const name of [
+      "dir",
+      "$AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE",
+      "$AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE",
+      "$AFKFLEET_AGENT__CONTROL_PLANE__KEY_FILE",
+    ]) {
+      assert.ok(enroll[name], `dev-enroll has ${name}`);
+      assert.equal(managed[name], enroll[name], name);
+    }
+  });
+});

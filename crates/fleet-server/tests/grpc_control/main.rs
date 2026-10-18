@@ -17,6 +17,8 @@
 //!   and what an agent hears of it (P10.5).
 //! - `grants`: the session grants: only to the stream that holds a bot,
 //!   never a later one, and their bounds (P10.6).
+//! - `ingest`: what a stream reports about the bots it holds, through the
+//!   ingest to the chat log, the sticky states and the bus (P10.8).
 //! - `in_memory`: the one test on paused time, over an in-memory pipe with a
 //!   fake behind the port (U6).
 //!
@@ -35,6 +37,7 @@ mod grants;
 mod handshake;
 mod identity;
 mod in_memory;
+mod ingest;
 mod liveness;
 mod logs;
 mod proxy;

@@ -1,13 +1,15 @@
-//! Sessions against an offline-mode server: joins and their messages, chat, a
-//! kick, and a reconnect (Plan.md P3.7).
+//! Sessions against an offline-mode server: the target check (ADR-0019,
+//! S69), joins and their messages, chat, a kick, and a reconnect (Plan.md
+//! P3.7).
 //!
 //! A bot never sees its own join message: the server broadcasts it before it
 //! adds the new player, so a second bot, the watcher, sees it instead (as in
 //! the spike, P1.4).
 
 use fleet_core::chat::ChatKind;
-use fleet_core::disconnect::{DisconnectClass, DisconnectReason, TranslationKey};
+use fleet_core::disconnect::{ConnectFailure, DisconnectClass, DisconnectReason, TranslationKey};
 use fleet_core::mc::{SessionEvent, SessionEvents, SessionHandle};
+use fleet_core::net::{PrivateTargets, TargetPolicy};
 use fleet_mc::{AzaleaConnector, McConfig, McEvents};
 
 use crate::harness::{Mode, Server, bot, connect, is_chat, offline, wait_for, within};
@@ -33,7 +35,19 @@ async fn sees_join_of(events: &mut McEvents, name: &str) {
 #[tokio::test]
 async fn slow_offline_server_scenario() {
     let server = Server::start(Mode::Offline).await;
-    let connector = AzaleaConnector::new(&McConfig::default());
+    // 0. The target check (ADR-0019, S46, S69): the container is published
+    // on 127.0.0.1, which a connector with the strictest policy never dials,
+    // and one that lists 127.0.0.1/32, as the dev agent does, joins below.
+    let strict = AzaleaConnector::new(&McConfig::default());
+    let (refused, mut refused_events) = connect(&strict, &server, bot(3), offline("AfkBot3")).await;
+    assert_eq!(
+        within("the refusal", refused_events.next()).await,
+        Some(SessionEvent::ConnectionFailed(ConnectFailure::Blocked))
+    );
+    within("the refusal's teardown", refused.disconnect()).await;
+    let connector = AzaleaConnector::new(&McConfig::default()).with_targets(TargetPolicy::Checked(
+        PrivateTargets::try_new(vec!["127.0.0.1/32".parse().unwrap()]).unwrap(),
+    ));
 
     // 1. Join, and see the next player's join message.
     let (session, mut events) = connect(&connector, &server, bot(1), offline(NAME)).await;

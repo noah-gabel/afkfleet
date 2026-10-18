@@ -21,6 +21,7 @@ use std::{fs, io};
 use fleet_core::chat::ChatKind;
 use fleet_core::disconnect::DisconnectReason;
 use fleet_core::mc::{SessionCredentials, SessionEvent, SessionEvents, SessionHandle};
+use fleet_core::net::TargetPolicy;
 use fleet_mc::{AzaleaConnector, McConfig, McEvents, McSession};
 use fleet_testkit::log_capture;
 use secrecy::{ExposeSecret as _, SecretString};
@@ -310,7 +311,10 @@ async fn manual_real_account_scenario() {
     let token = access_token.clone();
     log_capture::install().unwrap();
     let server = Server::start(Mode::Online).await;
-    let connector = AzaleaConnector::new(&McConfig::default());
+    // The container is published on 127.0.0.1, which only the offline
+    // scenario checks (ADR-0019, S69).
+    let connector =
+        AzaleaConnector::new(&McConfig::default()).with_targets(TargetPolicy::Unchecked);
 
     // 1 to 3. The session's steps, which record their results.
     let (session, mut events) = connect(&connector, &server, bot(1), credentials).await;

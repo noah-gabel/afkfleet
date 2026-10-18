@@ -502,3 +502,29 @@ fn enroll_reads_stdin_unbuffered_and_at_most_one_byte_past_its_limit() {
         u64::try_from(limit).unwrap()
     );
 }
+
+#[test]
+fn a_managed_run_before_enroll_exits_1_naming_the_key_and_enroll() {
+    let dir = test_dir("run_before_enroll");
+    let config = managed_config(&dir);
+    // The CA is there, as `pki init` hands it out; the identity isn't yet.
+    std::fs::write(
+        dir.join("ca.crt"),
+        "-----BEGIN CERTIFICATE-----\nAAAA\n-----END CERTIFICATE-----\n",
+    )
+    .unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(dir.join("ca.crt"), std::fs::Permissions::from_mode(0o600))
+            .unwrap();
+    }
+
+    let finished = finish(&["run", "--config", path_arg(&config)]);
+
+    assert_eq!(finished.status.code(), Some(1), "{}", finished.stderr);
+    let said = format!("{}{}", finished.stdout, finished.stderr);
+    assert!(said.contains("the agent can't start"), "{said}");
+    assert!(said.contains("agent.key"), "{said}");
+    assert!(said.contains("afkfleet-agent enroll"), "{said}");
+}

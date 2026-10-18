@@ -233,7 +233,15 @@ impl Setup {
                 last_disconnect: last,
             }),
         );
-        assert_eq!(verdict, fleet_server::grpc::registry::Verdict::Pass);
+        // Held: a reconciled stream's report of a bot it holds goes on to the
+        // ingest (S70), which this harness has none of.
+        assert!(
+            matches!(
+                verdict,
+                fleet_server::grpc::registry::Verdict::Held { settles: false, .. }
+            ),
+            "{verdict:?}"
+        );
     }
 
     async fn bot_row(&self, bot: BotId) -> fleet_server::ports::bots::Bot {

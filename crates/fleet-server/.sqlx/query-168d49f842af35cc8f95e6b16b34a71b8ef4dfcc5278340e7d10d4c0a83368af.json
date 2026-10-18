@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO agent_certs (fingerprint_sha256, agent_id, not_after, created_at)\n         VALUES (zeroblob(32), ?1, ?2, ?3)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "168d49f842af35cc8f95e6b16b34a71b8ef4dfcc5278340e7d10d4c0a83368af"
+}

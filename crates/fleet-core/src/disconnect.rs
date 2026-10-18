@@ -82,6 +82,10 @@ pub enum ConnectFailure {
     HostUnavailable,
     /// Any other network error.
     Other,
+    /// The managed agent's target check refused the resolved address before
+    /// dialling it: a never-dialled address, or a private one outside
+    /// `[control_plane] private_targets` (ADR-0019, S46, S69).
+    Blocked,
 }
 
 /// Why the session server refused the account for good (ADR-0011). Retrying
@@ -534,6 +538,10 @@ mod tests {
     )]
     #[case::host_unavailable(
         DisconnectReason::ConnectFailed { failure: ConnectFailure::HostUnavailable },
+        DisconnectClass::Transient
+    )]
+    #[case::blocked(
+        DisconnectReason::ConnectFailed { failure: ConnectFailure::Blocked },
         DisconnectClass::Transient
     )]
     #[case::auth_rejected(DisconnectReason::AuthRejected, DisconnectClass::AuthInvalid)]

@@ -109,6 +109,17 @@ export const GATES = [
     ],
   },
   {
+    // The agent's control plane (Phase 10, group G, the user's choice U20, ADR-0019):
+    // its identity, the enrollment that makes it, and the managed mode's credentials,
+    // outbox, conductor and link, apart from the server's gate, so well-covered server
+    // code can't hide the agent's gaps. Set after a measurement (93.8 %), never reached by
+    // excluding code.
+    name: "agent-control-plane",
+    min: 90,
+    required: true,
+    prefixes: ["crates/fleet-agent/src/managed/", "crates/fleet-agent/src/enroll/"],
+  },
+  {
     // The desktop app's client: the refresh, the session's end and the
     // certificate checks are security code (ADR-0017).
     name: "fleet-client",

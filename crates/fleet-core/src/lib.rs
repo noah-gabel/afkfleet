@@ -23,6 +23,8 @@
 //! - [`placement`]: which agent runs which bot: the scheduler's choice and
 //!   the reconciler's diff.
 //! - [`mode`]: what a bot does while it's online, and the presets.
+//! - [`net`]: IP networks, and which addresses a managed agent's bots may
+//!   dial.
 //! - [`mc`]: the Minecraft ports the runtime drives a session through.
 //! - [`authz`]: who may do what, decided by [`authz::authorize`].
 //! - [`pki`]: the control plane's keys and certificate fingerprints, shared by the
@@ -85,6 +87,7 @@ pub mod enrollment;
 pub mod id;
 pub mod mc;
 pub mod mode;
+pub mod net;
 pub mod pki;
 pub mod placement;
 pub mod resilience;

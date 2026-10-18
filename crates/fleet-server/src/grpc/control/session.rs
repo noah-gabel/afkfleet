@@ -34,10 +34,12 @@ use std::sync::Arc;
 use chrono::{DateTime, Utc};
 use fleet_core::agent::certificate_time_left;
 use fleet_core::bot::BotSnapshot;
+use fleet_core::id::BotId;
 use fleet_core::system::Clock;
 use fleet_core::value::AgentCapacity;
 use fleet_proto::control::{
-    AgentMessage, Hello, RejectReason, ServerMessage, SessionRequest, Welcome, read_hello,
+    AgentMessage, BotEvent, BotEventKind, Hello, RejectReason, ServerMessage, SessionRequest,
+    Welcome, read_hello,
 };
 use fleet_proto::generated as wire;
 use tokio::sync::{mpsc, oneshot};
@@ -58,6 +60,7 @@ use crate::grpc::status::refusal;
 use crate::http::error::chain;
 use crate::http::rate_limit::RateLimits;
 use crate::ports::agent_connections::{AdmitError, Admitted, AgentConnections, Ended, StreamEnd};
+use crate::ports::ingest::{Ingest, Report, Reported, StreamShare};
 use crate::ports::live_agents::{LiveAgents as _, SessionAnswer, SessionOutcome};
 use crate::ports::session_grants::{GrantRequest, GrantStream, SessionGrants};
 
@@ -77,6 +80,10 @@ pub(super) struct Session {
     pub(super) connections: Arc<dyn AgentConnections>,
     /// What answers the stream's session requests.
     pub(super) grants: Arc<dyn SessionGrants>,
+    /// Where the reports about the bots the stream holds go (S70).
+    pub(super) ingest: Arc<dyn Ingest>,
+    /// The stream's share of the ingest's chat queue.
+    pub(super) share: StreamShare,
     /// The stream's session requests, waiting or running.
     pub(super) requests: GrantQueue,
     /// The server's clock.
@@ -393,7 +400,7 @@ impl Session {
                     silence
                         .as_mut()
                         .reset(Instant::now() + self.timings.heartbeats.timeout());
-                    self.admit(lease, &message).await;
+                    self.admit(lease, message).await;
                 }
                 Err(problem) => debug!(
                     request_id = %self.admitted.request,
@@ -421,13 +428,14 @@ impl Session {
 
     /// Passes `message` through the registry: records a conflict it proves,
     /// and queues or denies a session request.
-    async fn admit(&mut self, lease: &Lease, message: &AgentMessage) {
-        let (verdict, conflict) = self.registry.admit(lease, message);
+    async fn admit(&mut self, lease: &Lease, message: AgentMessage) {
+        let (verdict, conflict) = self.registry.admit(lease, &message);
         if let Some(conflict) = conflict {
             self.connections.conflict(&self.admitted, conflict).await;
         }
         match verdict {
             Verdict::Pass | Verdict::Settled => {}
+            Verdict::Held { at, .. } => self.ingest(lease, at, message),
             Verdict::Dropped => debug!(
                 request_id = %self.admitted.request,
                 agent_id = %self.admitted.agent,
@@ -444,6 +452,32 @@ impl Session {
                 );
                 self.deny(lease, request);
             }
+        }
+    }
+
+    /// Hands `message`, which the registry judged held and received `at`,
+    /// to the ingest (S70): it never waits, and a chat message it refuses is
+    /// dropped and counted with the agent's refused reports.
+    fn ingest(&self, lease: &Lease, at: DateTime<Utc>, message: AgentMessage) {
+        let Some((bot, reported)) = reported(message) else {
+            return;
+        };
+        let report = Report {
+            agent: lease.agent(),
+            generation: lease.generation(),
+            bot,
+            received_at: at,
+            reported,
+        };
+        if let Err(why) = self.ingest.take(&self.share, report) {
+            self.registry.count_dropped_chat(lease);
+            debug!(
+                request_id = %self.admitted.request,
+                agent_id = %self.admitted.agent,
+                bot_id = %bot,
+                why = %why,
+                "an agent's chat message was dropped"
+            );
         }
     }
 
@@ -603,6 +637,31 @@ const fn read_failure(code: Code) -> (StreamEnd, Option<(Code, &'static str)>) {
         ),
         // The transport failed: no one is left to answer.
         _ => (StreamEnd::StreamError, None),
+    }
+}
+
+/// What `message`, judged held, reports, and about which bot: a status or
+/// any event but `Removed`, which is the reconciler's alone. The event's
+/// own time, the agent's clock, is left behind: the ingest stamps the
+/// server's (S5).
+fn reported(message: AgentMessage) -> Option<(BotId, Reported)> {
+    match message {
+        AgentMessage::Status(snapshot) => Some((snapshot.bot_id, Reported::Status(snapshot))),
+        AgentMessage::Event(BotEvent { bot_id, kind, .. }) => {
+            let reported = match kind {
+                BotEventKind::Died => Reported::Died,
+                BotEventKind::ChatReceived(chat) => Reported::ChatReceived(chat),
+                BotEventKind::ChatSent { request } => Reported::ChatSent(request),
+                BotEventKind::ChatFailed { request, reason } => {
+                    Reported::ChatFailed(request, reason)
+                }
+                BotEventKind::ModeChatSent(message) => Reported::ModeChatSent(message),
+                BotEventKind::Alert(notification) => Reported::Alert(notification),
+                BotEventKind::Removed => return None,
+            };
+            Some((bot_id, reported))
+        }
+        AgentMessage::Hello(_) | AgentMessage::Heartbeat | AgentMessage::SessionRequest(_) => None,
     }
 }
 

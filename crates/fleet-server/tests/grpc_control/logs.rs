@@ -1,12 +1,17 @@
 //! What never reaches a log line (S24): the peer's address, the name a
 //! hello gave and the certificate's bytes, of any target; and a session's
-//! token, name and UUID, granted or denied (P10.6; S7, S60).
+//! token, name and UUID, granted or denied (P10.6; S7, S60); a chat's text
+//! and sender, stored or dropped (P10.8; S70).
 
 use core::fmt::Write as _;
 
+use chrono::DateTime;
+use fleet_core::chat::{ChatMessage, IncomingChat, PlayerChatKind};
 use fleet_core::id::BotId;
 use fleet_core::system::Clock as _;
-use fleet_proto::control::ServerMessage;
+use fleet_proto::control::{AgentMessage, BotEvent, BotEventKind, ServerMessage};
+use fleet_proto::generated as wire;
+use fleet_server::app::agents::ingest::{IngestBounds, Tick};
 use fleet_server::app::session_tokens::SessionTokenError;
 use fleet_server::ports::msauth::Failure;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -133,4 +138,84 @@ async fn no_log_line_holds_the_peer_a_hellos_name_or_a_certificate(
         fleet_testkit::log_capture::count("fleet_server::grpc::control::session", "agent-1") >= 2,
         "the stream's lines name the agent"
     );
+}
+
+#[sqlx::test(migrations = false)]
+async fn no_log_line_holds_a_chats_text_or_sender(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    const TEXT: &str = "chat-text-never-logged-5b2e";
+    const SENDER: &str = "HiddenSender9";
+    const COMMAND: &str = "/mode-command-never-logged-c41a";
+    fleet_testkit::log_capture::install().unwrap();
+    let port = start(
+        options,
+        Settings {
+            ingest: IngestBounds {
+                queue: 10.try_into().unwrap(),
+                stream: 2.try_into().unwrap(),
+            },
+            ..Settings::reconciling()
+        },
+    )
+    .await;
+    let agent = port.enroll(1, "agent-1").await;
+    let bot = port.bot(1).await;
+    let (mut call, _) = port.welcomed(&agent).await;
+    assert_eq!(call.reconciled().await.len(), 1);
+    let unheld_bot = BotId::new_v7(port.clock.now(), [9; 10]).unwrap();
+    let whisper = IncomingChat::player(PlayerChatKind::Whisper, SENDER, None, TEXT);
+
+    // Stored, stored, past the stream's share, and of a bot it doesn't hold.
+    call.send(chat(bot, BotEventKind::ChatReceived(whisper.clone())))
+        .await;
+    call.send(chat(
+        bot,
+        BotEventKind::ModeChatSent(ChatMessage::try_from(COMMAND).unwrap()),
+    ))
+    .await;
+    call.send(chat(bot, BotEventKind::ChatReceived(whisper.clone())))
+        .await;
+    call.send(chat(unheld_bot, BotEventKind::ChatReceived(whisper)))
+        .await;
+    call.send(session_request(1, unheld_bot, false)).await;
+    let barrier = call.next().await;
+    let tick = port.ingest_tick().await;
+    call.close();
+    let _ = port.disconnect(&agent).await;
+    port.stop().await;
+
+    assert!(
+        matches!(barrier, Ok(Some(ServerMessage::SessionDenied(_)))),
+        "{barrier:?}"
+    );
+    assert_eq!(
+        tick,
+        Tick::Written {
+            stored: 2,
+            skipped: 0,
+            sticky: 0
+        }
+    );
+    for secret in [TEXT, SENDER, COMMAND] {
+        fleet_testkit::log_capture::check_absent(secret).unwrap();
+    }
+    // The drop is logged, by IDs alone.
+    assert_eq!(
+        fleet_testkit::log_capture::count(
+            "fleet_server::grpc::control::session",
+            "an agent's chat message was dropped"
+        ),
+        1
+    );
+}
+
+fn chat(bot: BotId, kind: BotEventKind) -> wire::AgentMessage {
+    wire::AgentMessage::try_from(AgentMessage::Event(BotEvent {
+        bot_id: bot,
+        at: DateTime::from_timestamp_millis(1_790_000_000_000).unwrap(),
+        kind,
+    }))
+    .unwrap()
 }

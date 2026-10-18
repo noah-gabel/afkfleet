@@ -11,6 +11,8 @@
 //!   desired state, their agent and their last reported state (P11.1, P10.5).
 //! - [`modes`]: the modes, what a bot does while it's online; the built-in
 //!   ones seeded with fixed IDs (P11.1).
+//! - [`chat`]: the bots' chat log, what they received and what their modes
+//!   sent; append-only (P11.1, P10.8).
 //! - [`agents`]: the enrolled agents and the certificates the server signed
 //!   for them (P10.2, P10.3).
 //! - [`agent_connections`]: what an agent's `Connect` stream asks the app:
@@ -21,6 +23,9 @@
 //!   a session request's answer for the stream that asked (P10.6).
 //! - [`session_grants`]: what a `Connect` stream asks the app for a session
 //!   request: its grant or its denial, sent to that stream (P10.6).
+//! - [`ingest`]: what a `Connect` stream hands the server's ingest: the
+//!   reports about the bots it holds, and the sticky states its batches
+//!   write (P10.8).
 //! - [`assignments`]: what the reconciler asks of the store: everything it
 //!   plans from, and each change of a bot's agent, audited (P10.5).
 //! - [`reconcile`]: the hints that tell the reconciler to look again after a
@@ -63,9 +68,11 @@ pub mod agents;
 pub mod assignments;
 pub mod audit;
 pub mod bots;
+pub mod chat;
 pub mod enrollment_tokens;
 pub mod envelopes;
 pub mod grants;
+pub mod ingest;
 pub mod invites;
 pub mod live_agents;
 pub mod login_attempts;

@@ -18,8 +18,8 @@ use fleet_core::pki::CertFingerprint;
 use fleet_core::placement::{DetachReason, McIdentity, UnassignReason, Unplaced};
 use fleet_core::value::{AgentCapacity, AgentName};
 use fleet_proto::control::{
-    AgentMessage, BotEvent, BotEventKind, RECONNECT_DELAY_MAX, ServerMessage, WELCOME_TIMEOUT,
-    Welcome,
+    AgentMessage, BotEvent, BotEventKind, KEEPALIVE_INTERVAL, KEEPALIVE_TIMEOUT,
+    RECONNECT_DELAY_MAX, ServerMessage, WELCOME_TIMEOUT, Welcome,
 };
 use fleet_proto::generated as wire;
 use fleet_startup::config::{LogConfig, LogFormat};
@@ -815,7 +815,10 @@ async fn a_resting_report_unassigns_before_the_bound() {
     );
     running.hints.changed(Change::Settled(agent(1)));
 
-    assert_eq!(verdict, crate::grpc::registry::Verdict::Settled);
+    assert!(matches!(
+        verdict,
+        crate::grpc::registry::Verdict::Held { settles: true, .. }
+    ));
     assert!(matches!(stream.next().await, Some(ServerMessage::Unassign(id)) if id == bot(1)));
     running.stop().await;
 }
@@ -1175,9 +1178,9 @@ async fn a_disabled_agent_never_holds_the_gate() {
 
 #[test]
 fn the_grace_covers_an_agents_way_back_after_a_restart() {
-    // Its keepalive notices the old server (10 s and 20 s), it reconnects,
-    // and its hello is welcomed.
-    let way_back = Duration::from_secs(30) + RECONNECT_DELAY_MAX + WELCOME_TIMEOUT;
+    // Its keepalive notices the old server, it reconnects, and its hello is
+    // welcomed.
+    let way_back = KEEPALIVE_INTERVAL + KEEPALIVE_TIMEOUT + RECONNECT_DELAY_MAX + WELCOME_TIMEOUT;
 
     assert!(
         PLACEMENT_GRACE >= way_back,

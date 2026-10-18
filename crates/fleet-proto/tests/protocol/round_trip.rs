@@ -128,6 +128,7 @@ mod every_value {
                 ConnectFailure::Unresolvable,
                 ConnectFailure::HostUnavailable,
                 ConnectFailure::Other,
+                ConnectFailure::Blocked,
             ]
             .map(|failure| DisconnectReason::ConnectFailed { failure }),
         )

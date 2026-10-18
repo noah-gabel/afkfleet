@@ -22,7 +22,6 @@ use fleet_core::mode::ModeDefinition;
 use fleet_core::placement::Unplaced;
 use fleet_core::system::Clock as _;
 use fleet_proto::control::{Assignment, LifecycleCommand, ServerMessage};
-use fleet_proto::generated as wire;
 use fleet_server::app::agents::AgentService;
 use fleet_server::app::bots::{BotAction, BotService, Controlled};
 use fleet_server::grpc::control::ONE_HELLO;
@@ -31,7 +30,7 @@ use fleet_server::ports::live_agents::LiveAgents as _;
 use fleet_server::ports::store::Store as _;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-use super::support::{CAPACITY, Settings, hello, removed, report, snapshot, start, text};
+use super::support::{CAPACITY, Settings, barrier, hello, removed, report, snapshot, start, text};
 
 fn ids(assignments: &[Assignment]) -> Vec<BotId> {
     assignments
@@ -59,25 +58,6 @@ fn sticky_paused() -> StickyState {
     StickyState::Paused(PauseReason::Conflict {
         kind: ConflictKind::DuplicateLogin,
     })
-}
-
-/// A session request for a bot no stream holds, which the registry denies
-/// at once: its answer means every message before it was handled.
-fn barrier() -> wire::AgentMessage {
-    let unheld = BotId::new_v7(
-        DateTime::from_timestamp_millis(1_790_000_000_000).unwrap(),
-        [0xee; 10],
-    )
-    .unwrap();
-    wire::AgentMessage {
-        msg: Some(wire::agent_message::Msg::SessionRequest(
-            wire::SessionRequest {
-                id: 7,
-                bot_id: unheld.as_uuid().as_bytes().to_vec(),
-                fresh: false,
-            },
-        )),
-    }
 }
 
 #[sqlx::test(migrations = false)]
@@ -176,6 +156,7 @@ async fn a_hellos_bot_it_wasnt_given_is_left_out_and_fenced_past_its_stream_and_
             name: "agent-1".try_into().unwrap(),
             count: 1,
             sessions_denied: 0,
+            chat_dropped: 0,
         }]
     );
     // Its stream is gone; the record still fences the bot.

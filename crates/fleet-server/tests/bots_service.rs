@@ -46,6 +46,7 @@ use fleet_server::ports::audit::{AuditEntryId, AuditReads, AuditWrites};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, NewAuditEntry};
 use fleet_server::ports::bots::{Bot, NewBot};
 use fleet_server::ports::bots::{BotReads, BotWrites};
+use fleet_server::ports::chat::{ChatReads, ChatWrites};
 use fleet_server::ports::enrollment_tokens::{EnrollmentTokenReads, EnrollmentTokenWrites};
 use fleet_server::ports::envelopes::{EnvelopeReads, EnvelopeWrites};
 use fleet_server::ports::grants::{GrantReads, GrantWrites};
@@ -248,6 +249,10 @@ impl WriteTx for FailingTx {
         self.inner.modes()
     }
 
+    fn chat(&mut self) -> &mut dyn ChatWrites {
+        self.inner.chat()
+    }
+
     fn audit(&mut self) -> &mut dyn AuditWrites {
         self.inner.audit()
     }
@@ -401,6 +406,10 @@ impl Store for FailingCommits {
 
     fn modes(&self) -> &dyn ModeReads {
         self.inner.modes()
+    }
+
+    fn chat(&self) -> &dyn ChatReads {
+        self.inner.chat()
     }
 
     fn audit(&self) -> &dyn AuditReads {

@@ -18,7 +18,7 @@ use axum::Router;
 use axum::extract::State;
 use axum::routing::get;
 use fleet_server::cli::healthcheck;
-use fleet_server::cli::serve::{self, Exit, ShutdownTimeouts};
+use fleet_server::cli::serve::{self, Exit, ShutdownTimeouts, Watched};
 use fleet_server::config::DatabaseConfig;
 use fleet_server::infra::sqlite::{self, Database, DatabaseOptions};
 use fleet_startup::signals::Signal;
@@ -320,20 +320,38 @@ async fn a_signal_source_that_ended_never_stops_the_server() {
 
 // --- The reconciler, watched (ADR-0019, PR #52's review) -----------------------
 
-/// Runs the reconciler `reconciler` makes from its stop token, watched as
-/// serve runs its own, behind a stand-in port and API; fails the test if
-/// the server doesn't stop on its own within a day.
-async fn serve_with_reconciler<R>(
+/// Runs the reconciler and the ingest's writer that `reconciler` and
+/// `ingest` make from their stop tokens, watched by one watch as serve runs
+/// them, behind a stand-in port and API; fails the test if the server
+/// doesn't stop on its own within a day.
+async fn serve_watching<R, I>(
     reconciler: impl FnOnce(CancellationToken) -> R,
+    ingest: impl FnOnce(CancellationToken) -> I,
     signals: ChannelSignals,
 ) -> (Exit, Arc<AtomicBool>)
 where
     R: Future<Output = ()> + Send + 'static,
+    I: Future<Output = ()> + Send + 'static,
 {
     let shutdown = CancellationToken::new();
     let mut tasks = tokio::task::JoinSet::new();
+    let (watcher, watch) = serve::task_watch();
     let stop = shutdown.child_token();
-    let watch = serve::spawn_reconciler(&mut tasks, reconciler(stop.clone()), stop);
+    serve::spawn_watched(
+        &mut tasks,
+        Watched::Reconciler,
+        reconciler(stop.clone()),
+        stop,
+        watcher.clone(),
+    );
+    let stop = shutdown.child_token();
+    serve::spawn_watched(
+        &mut tasks,
+        Watched::Ingest,
+        ingest(stop.clone()),
+        stop,
+        watcher,
+    );
     let (close, closed) = closing(secs(1));
     let close = async move {
         close.await;
@@ -360,6 +378,23 @@ where
     .await
     .expect("the server should stop on its own");
     (exit, closed)
+}
+
+/// A watched task that stops only when asked.
+async fn until_stopped(stop: CancellationToken) {
+    stop.cancelled().await;
+}
+
+/// [`serve_watching`] with the reconciler `reconciler` makes and an ingest
+/// that stops when asked.
+async fn serve_with_reconciler<R>(
+    reconciler: impl FnOnce(CancellationToken) -> R,
+    signals: ChannelSignals,
+) -> (Exit, Arc<AtomicBool>)
+where
+    R: Future<Output = ()> + Send + 'static,
+{
+    serve_watching(reconciler, until_stopped, signals).await
 }
 
 #[tokio::test(start_paused = true)]
@@ -411,6 +446,86 @@ async fn a_reconciler_that_stops_with_the_shutdown_is_no_failure() {
         .lines_with("the reconciler ended unasked; the server stops")
         .unwrap();
     assert!(unasked.is_empty(), "{}", logs.text());
+}
+
+// --- The ingest's writer, watched (P10.8; ADR-0019, S70) ----------------------
+
+#[tokio::test(start_paused = true)]
+async fn an_ingest_writer_that_ends_unasked_stops_the_server_with_an_error() {
+    let (logs, _guard) = capture();
+
+    let (exit, closed) =
+        serve_watching(until_stopped, |_| async {}, ChannelSignals::silent()).await;
+
+    assert_eq!(exit, Exit::ServerFailed);
+    assert!(closed.load(Ordering::SeqCst));
+    let ingest = logs
+        .lines_with("the ingest's writer ended unasked; the server stops")
+        .unwrap();
+    assert_eq!(ingest.len(), 1, "{}", logs.text());
+    assert_eq!(ingest[0]["level"], "ERROR");
+    let server = logs.lines_with("the server ended unasked").unwrap();
+    assert_eq!(server[0]["error"], serve::INGEST_ENDED);
+    let reconciler = logs.lines_with("the reconciler ended unasked").unwrap();
+    assert!(reconciler.is_empty(), "{}", logs.text());
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_ingest_writer_that_panics_stops_the_server_with_an_error() {
+    let (logs, _guard) = capture();
+
+    let (exit, _closed) = serve_watching(
+        until_stopped,
+        |_| async { panic!("an injected failure") },
+        ChannelSignals::silent(),
+    )
+    .await;
+
+    assert_eq!(exit, Exit::ServerFailed);
+    let failed = logs
+        .lines_with("the ingest's writer failed; the server stops")
+        .unwrap();
+    assert_eq!(failed.len(), 1, "{}", logs.text());
+    assert_eq!(failed[0]["level"], "ERROR");
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_ingest_writer_that_stops_with_the_shutdown_is_no_failure() {
+    let (logs, _guard) = capture();
+    let (sender, signals) = ChannelSignals::new();
+    sender.send(Signal::Terminate).await.unwrap();
+
+    let (exit, _closed) = serve_watching(until_stopped, until_stopped, signals).await;
+
+    assert_eq!(exit, Exit::Stopped);
+    let unasked = logs
+        .lines_with("the ingest's writer ended unasked; the server stops")
+        .unwrap();
+    assert!(unasked.is_empty(), "{}", logs.text());
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_ingests_writer_stops_only_once_every_stream_has_ended() {
+    let stop = CancellationToken::new();
+    let ingest_stop = CancellationToken::new();
+    let task = tokio::spawn(serve::end_streams_then_ingest(
+        stop.clone(),
+        // The streams take 3 s to end, from the signal on.
+        async { tokio::time::sleep(secs(3)).await },
+        ingest_stop.clone(),
+    ));
+
+    tokio::time::sleep(Duration::from_hours(1)).await;
+    let before_the_signal = ingest_stop.is_cancelled();
+    stop.cancel();
+    tokio::time::sleep(Duration::from_millis(2_999)).await;
+    let while_streams_end = ingest_stop.is_cancelled();
+    tokio::time::sleep(Duration::from_millis(1)).await;
+    task.await.unwrap();
+
+    assert!(!before_the_signal, "nothing stops before the signal");
+    assert!(!while_streams_end, "not while a stream may still admit");
+    assert!(ingest_stop.is_cancelled());
 }
 
 // --- The session-token service's stop (P10.6; ADR-0019, S64) ------------------

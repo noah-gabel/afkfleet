@@ -9,4 +9,8 @@
 //! with P10.7, which implements the link and wires the provider into the
 //! fleet.
 
+pub mod conductor;
 pub mod credentials;
+pub mod identity;
+pub mod link;
+pub mod outbound;

@@ -1,13 +1,13 @@
-# The managed agent's development config, for `just dev-enroll` on the host only:
-# it enrolls with `just dev-server`'s control plane on 127.0.0.1:7443, whose
-# server certificate names localhost, 127.0.0.1 and ::1.
+# The managed agent's development config: `just dev-enroll` enrolls it with
+# `just dev-server`'s control plane on 127.0.0.1:7443, whose server
+# certificate names localhost, 127.0.0.1 and ::1, and `just dev-managed-agent`
+# runs it (P10.7).
 #
 # DEVELOPMENT ONLY. The three files must be absolute paths, which a committed
-# file can't hold for every machine, so they aren't set here: `just dev-enroll`
-# passes AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE (dev-server's CA,
+# file can't hold for every machine, so they aren't set here: both recipes
+# pass AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE (dev-server's CA,
 # target/dev-server/pki/ca.crt), and AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE and
-# __KEY_FILE in its folder (target/dev-agent/ by default). `afkfleet-agent run`
-# refuses this config until managed mode runs (P10.7); `enroll` uses it.
+# __KEY_FILE in its folder (target/dev-agent/ by default).
 
 name = "dev-agent"
 
@@ -17,3 +17,9 @@ filter = "info"
 
 [control_plane]
 url = "https://127.0.0.1:7443"
+# The bots may dial `just mc-up`'s server, which publishes only on 127.0.0.1:
+# give a bot the server 127.0.0.1:25565, since `localhost` may resolve to ::1,
+# which isn't listed. Public addresses need no entry, and the never-dialled
+# ones (link-local, documentation, a cloud's metadata) can't be listed
+# (ADR-0019, S46, S69).
+private_targets = ["127.0.0.1/32"]

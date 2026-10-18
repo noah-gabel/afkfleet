@@ -52,6 +52,7 @@ mod accounts;
 mod agents;
 mod audit;
 mod bots;
+mod chat;
 mod connect;
 mod convert;
 mod enrollment_tokens;

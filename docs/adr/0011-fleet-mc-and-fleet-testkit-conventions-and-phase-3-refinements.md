@@ -211,6 +211,8 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
     The options are to sign commands, which needs the server's command tree, or to refuse such commands on enforcing servers with an error. P11.3 decides it for user commands and P4.5 for mode chat; command signing isn't built in Phase 3 *(the user's decision)*. The real-account check expects the rejection, and fails if the emote's echo ever arrives.
     - *Decided for mode chat in P4.5 ([ADR-0013](0013-fleet-runtime-conventions-and-phase-4-refinements.md), the user's decision): nothing special in Phase 4. P11.3's rule for user commands applies to mode chat too, through `ChatUnavailable`.*
 
+- **The target check** *(Phase 10, group G, [ADR-0019](0019-control-plane-conventions-and-phase-10-refinements.md), S46, S69)*. `AzaleaConnector::with_targets(TargetPolicy)` sets which resolved addresses its sessions may dial; `new()` defaults to the strictest policy (checked, no private network listed), so a connector nobody configured fails closed. The agent passes `Unchecked` in standalone mode and `Checked(private_targets)` in managed mode. `Driver::drive` checks the socket `resolve` returned, the one azalea dials, right after resolving and before the ECS starts: a refusal is one `warn` in the bot's span (the server, the socket, the class and the range) and `ConnectionFailed(Blocked)`, never dialled, no World made. Tests that dial loopback opt out with `Unchecked`; the offline slow scenario first shows a strict connector refused, then runs with `127.0.0.1/32` listed.
+
 ### Events (P3.5)
 - **Chat:**
   - The sender comes only from `Player` and `Disguised` packets (ADR-0008 §7).

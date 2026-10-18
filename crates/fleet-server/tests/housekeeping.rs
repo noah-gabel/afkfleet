@@ -238,10 +238,11 @@ async fn a_run_sums_up_the_refusals_since_the_last_one_in_one_line(
 }
 
 /// The agents' line's message.
-const DROPPED: &str = "an agent's reports and session requests were refused since the last report";
+const DROPPED: &str =
+    "an agent's reports, session requests or chat messages were refused since the last report";
 
 #[sqlx::test(migrations = false)]
-async fn a_run_logs_one_line_per_agent_whose_reports_or_session_requests_were_refused(
+async fn a_run_logs_one_line_per_agent_whose_reports_session_requests_or_chat_were_refused(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
@@ -289,6 +290,8 @@ async fn a_run_logs_one_line_per_agent_whose_reports_or_session_requests_were_re
     for _ in 0..2 {
         let _ = setup.registry.admit(&lease, &request);
     }
+    // A chat message the ingest dropped (S70).
+    setup.registry.count_dropped_chat(&lease);
 
     let logs = setup.run_once().await;
 
@@ -299,6 +302,7 @@ async fn a_run_logs_one_line_per_agent_whose_reports_or_session_requests_were_re
     assert_eq!(lines[0]["agent"], "agent-1");
     assert_eq!(lines[0]["dropped"], 3);
     assert_eq!(lines[0]["sessions_denied"], 2);
+    assert_eq!(lines[0]["chat_dropped"], 1);
     let again = setup.run_once().await;
     assert_eq!(again.lines_with(DROPPED).unwrap().len(), 0);
 }

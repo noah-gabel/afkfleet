@@ -17,12 +17,13 @@ use fleet_core::account::AccountStatus;
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::authz::Role;
 use fleet_core::bot::DesiredRunState;
+use fleet_core::chat::{IncomingChat, PlayerChatKind};
 use fleet_core::id::{AccountId, BotId, UserId};
 use fleet_core::mode::ModePreset;
 use fleet_core::system::Clock as _;
 use fleet_core::value::{ServerAddress, Username};
 use fleet_proto::PROTOCOL_VERSION;
-use fleet_proto::control::ServerMessage;
+use fleet_proto::control::{BotEvent, BotEventKind, ServerMessage};
 use fleet_proto::generated as wire;
 use fleet_proto::generated::EnrollRequest;
 use fleet_proto::generated::agent_control_client::AgentControlClient;
@@ -42,10 +43,12 @@ use fleet_server::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPa
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::audit::NewAuditEntry;
 use fleet_server::ports::bots::NewBot;
+use fleet_server::ports::chat::ChatEntry;
 use fleet_server::ports::msauth::{
     DeviceCode, DeviceFlow, Failure, MicrosoftAuthProvider, MicrosoftTokens, MinecraftSession,
     MsAccessToken, PollOutcome, RefreshError, RefreshToken, SessionError,
 };
+use fleet_server::ports::page::{Page, PageLimit};
 use fleet_server::ports::store::Store as _;
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use fleet_server::ports::vault::{Vault as _, VaultPurpose};
@@ -481,6 +484,115 @@ async fn a_refresh_in_flight_at_the_signal_is_left_at_the_drain_and_the_server_s
     assert!(!dir.join("afkfleet.db-wal").exists(), "closed cleanly");
 }
 
+/// serve's ingest over a real port and database (P10.8; ADR-0019, S70): a
+/// chat message the server admitted before the signal is in the database
+/// once serve has returned, whether a tick or the final flush wrote it.
+#[tokio::test]
+async fn chat_admitted_before_the_signal_is_stored_before_the_database_closes() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let dir = test_dir("control_plane_chat");
+    let (http, http_address) = listener().await;
+    let grpc = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let grpc_address = grpc.local_addr().unwrap();
+    let config = with_grpc(server_config(&dir, http_address, false), &dir, grpc_address);
+    let pki = pki(SystemClock.now());
+    let ca_pem = String::from_utf8(pki.ca_cert_pem.clone()).unwrap();
+    let fingerprint = pki.ca.fingerprint();
+    let (logs, _guard) = capture();
+    let database = sqlite::open(&config.database, DatabaseOptions::default())
+        .await
+        .unwrap();
+    let microsoft = Arc::new(HangingRefresh::default());
+    let (app, port) = app_and_port(&config, &database, pki, grpc, microsoft).await;
+    let bot = online_bot(&config, &database).await;
+    let http_config = config.http.clone();
+    let (sender, signals) = ChannelSignals::new();
+    let server = tokio::spawn({
+        let database = database.clone();
+        async move {
+            serve::serve(
+                http,
+                Some(port),
+                app,
+                &database,
+                signals,
+                ShutdownTimeouts::of(&http_config),
+            )
+            .await
+        }
+    });
+    let token = host_token(&database, fingerprint).await;
+    let (agent, mut answers) = connected_agent(grpc_address, &ca_pem, token).await;
+    let reconcile = ServerMessage::try_from(
+        tokio::time::timeout(PATIENCE, answers.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap(),
+    );
+    assert!(
+        matches!(&reconcile, Ok(ServerMessage::Reconcile(bots)) if bots.len() == 1),
+        "{reconcile:?}"
+    );
+    let chat = IncomingChat::player(PlayerChatKind::Whisper, "Steve", None, "hello");
+    agent
+        .send(
+            wire::AgentMessage::try_from(fleet_proto::control::AgentMessage::Event(BotEvent {
+                bot_id: bot,
+                at: SystemClock.now(),
+                kind: BotEventKind::ChatReceived(chat.clone()),
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    // A session request for a bot it doesn't hold: its denial means the
+    // chat before it was admitted.
+    let unheld = BotId::new_v7(SystemClock.now(), [9; 10]).unwrap();
+    agent.send(session_request(unheld)).await.unwrap();
+    let denied = ServerMessage::try_from(
+        tokio::time::timeout(PATIENCE, answers.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap(),
+    );
+    assert!(
+        matches!(denied, Ok(ServerMessage::SessionDenied(_))),
+        "{denied:?}"
+    );
+
+    sender.send(Signal::Terminate).await.unwrap();
+    let exit = tokio::time::timeout(PATIENCE, server)
+        .await
+        .expect("the server should stop within its deadline")
+        .unwrap();
+    let reopened = sqlite::open(&config.database, DatabaseOptions::default())
+        .await
+        .unwrap();
+    let stored = reopened
+        .chat()
+        .page(
+            bot,
+            Page {
+                before: None,
+                limit: PageLimit::new(10).unwrap(),
+            },
+        )
+        .await
+        .unwrap();
+    reopened.close().await;
+
+    assert_eq!(exit, Exit::Stopped, "{}", logs.text());
+    assert_eq!(
+        stored
+            .into_iter()
+            .map(|record| record.entry)
+            .collect::<Vec<_>>(),
+        [ChatEntry::Received(chat)]
+    );
+}
+
 /// serve's app over `config` and `database`, with `microsoft` for its
 /// Microsoft and `pki`'s CA, and its gRPC port on `grpc`, as `run` builds
 /// them.
@@ -527,6 +639,7 @@ async fn app_and_port(
         sweep: routes.sweep,
         reconciler: routes.reconciler,
         session_tokens: routes.session_tokens,
+        ingest: routes.ingest,
     };
     (app, port)
 }

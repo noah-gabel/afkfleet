@@ -225,6 +225,7 @@ fn agent_in(name: &str, ca: &Ca, address: SocketAddr) -> Agent {
             ca_cert_file: ca_file,
             cert_file: identity.join("agent.crt"),
             key_file: identity.join("agent.key"),
+            private_targets: fleet_core::net::PrivateTargets::default(),
         },
         dir,
     }

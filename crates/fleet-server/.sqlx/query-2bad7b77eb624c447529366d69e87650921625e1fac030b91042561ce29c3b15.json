@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO login_attempts (username_key, failures, last_failure_at)\n         VALUES (zeroblob(32), 1, ?1)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "2bad7b77eb624c447529366d69e87650921625e1fac030b91042561ce29c3b15"
+}

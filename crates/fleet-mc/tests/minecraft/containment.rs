@@ -10,6 +10,7 @@ use fleet_core::disconnect::DisconnectReason;
 use fleet_core::id::BotId;
 use fleet_core::mc::{SessionEvent, SessionHandle};
 use fleet_core::mode::GameAction;
+use fleet_core::net::TargetPolicy;
 use fleet_mc::{AzaleaConnector, McConfig};
 
 use crate::harness::{Mode, Server, bot, connect, is_chat, offline, wait_for, within};
@@ -36,7 +37,10 @@ fn panic_on_trigger(
 async fn slow_fault_containment_scenario() {
     let server = Server::start(Mode::Offline).await;
     let trigger = Arc::new(AtomicBool::new(false));
+    // The container is published on 127.0.0.1, which only the offline
+    // scenario checks (ADR-0019, S69).
     let connector = AzaleaConnector::new(&McConfig::default())
+        .with_targets(TargetPolicy::Unchecked)
         .with_app_hook(panic_on_trigger(bot(1), &trigger));
     let (victim, mut victim_events) =
         connect(&connector, &server, bot(1), offline("AfkBot1")).await;

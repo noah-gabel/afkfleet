@@ -95,6 +95,8 @@ On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: th
 | `just dev-enrollment-token` / `just dev-enroll [dir]` | An enrollment token in `dev-server`'s database through `agent create-enrollment-token`, the bundle alone on stdout (`$bundle = just dev-enrollment-token`) / `afkfleet-agent enroll` with `deploy/dev/agent.managed.toml`, the bundle on stdin (`$bundle \| just dev-enroll`), the key and certificate into `target/dev-agent/` or `dir`, which it creates; never replaces an identity (ADR-0019). Its one line runs `scripts/dev-enroll.mjs`, which creates the folder and starts the agent on its own stdin: every recipe line gets just's stdin, so an earlier line could take the bundle. The bundle is a secret: never print or paste it elsewhere |
 | `just dev-agents` / `just dev-disable-agent id` / `just dev-release-agent id` | `agent list` on `dev-server`'s database: every agent with its bots count, tab-separated after a header / `agent disable --id id` there: the agent disabled for good, its certificates revoked; a running `dev-server` ends its stream within 10 s / `agent release --id id` there: the disabled agent's bots released, which a running `dev-server` places within 30 s; only once its host and bots are stopped (ADR-0019). Same paths as `dev-server`; none creates or migrates the database |
 | `just dev-owner username` | Create the Owner `username` in `dev-server`'s database with `user create-owner`, the password typed twice at the terminal (same paths as `dev-server`) |
+| `just dev-managed-agent [dir]` | A managed agent with `deploy/dev/agent.managed.toml`: the identity `dev-enroll` left in `dir` (`target/dev-agent` by default), dev-server's CA, its heartbeat file in `dir`; its bots dial only public addresses and `127.0.0.1` (ADR-0019, S71) |
+| `just dev-bots username [server]` | A console for dev-server's bot endpoints over fleet-client's `Client`: the password, the 2FA code and a step-up typed hidden, never an argument; `bots`, `bot <id>`, `offline <name>`, `server <id> <address>`, `start <id>`, `stop <id>`, `quit`. It needs a terminal, so the AI doesn't run it (ADR-0019, S71) |
 | `just dev-vault-status` / `just dev-rotate-key` / `just dev-server-rotated` | `vault status` on `dev-server`'s database (key 1; no key file read) / copy that database to `target/dev-server/rotation/` (refused when the folder exists or a `-wal` shows `dev-server` running), create `vault-key-2` when it's missing and `vault rotate-key` the copy to it (keys 1 and 2) / serve the copy with key 2 alone. Overridable absolute paths, like `dev-server`'s (ADR-0018) |
 | `just demo-agent [minutes]` | Phase 5's demo: the compose stack (project `afkfleet-demo`) for 60 minutes, or `minutes`, with one server restart at half time; prints a summary and a verdict, saves its logs under `target/demo-agent/` (needs Docker) |
 | `just dev-app` | `tauri dev` in `apps/desktop`: Vite's dev server on `localhost:1420` and the app, with hot reload |
@@ -128,7 +130,7 @@ On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: th
 **Server layering:** `http/handlers` → `app` services → `ports` → `infra`.
 - Handlers only parse input, authorize, call a service and map the result. No business logic, no SQL.
 - Services own use cases, transactions and audit entries.
-- Writes go through `Store::write()`, a `WriteTx` on the one write connection. Its `commit(entry)` takes the audit entry, so nothing commits unaudited, except through `commit_unaudited(UnauditedWrite)`, whose named exemptions (`SessionTouch`, `SessionRotate`, `LoginAttemptsPurge`) each have an ADR note; a new one needs the user's approval and its own note (ADR-0015, ADR-0016). Keep it short: no password hashing, crypto or network calls while it's open (ADR-0015).
+- Writes go through `Store::write()`, a `WriteTx` on the one write connection. Its `commit(entry)` takes the audit entry, so nothing commits unaudited, except through `commit_unaudited(UnauditedWrite)`, whose named exemptions (`SessionTouch`, `SessionRotate`, `LoginAttemptsPurge`, and the ingest's `EventBatch`, which writes only chat rows and a held bot's sticky crossing, U17) each have an ADR note; a new one needs the user's approval and its own note (ADR-0015, ADR-0016, ADR-0019). Keep it short: no password hashing, crypto or network calls while it's open (ADR-0015).
 
 **The gRPC port:**
 - Its listener bounds each connection's age itself: 80 s, lifted only while an agent's welcomed stream lives. fleet-server's `clippy.toml` bans tonic's server-wide `max_connection_age`, its grace and `Server::timeout`, which would cut agents' streams (ADR-0019, U7).
@@ -172,7 +174,7 @@ fleet-server/src/
 | | MS auth | fleet-server's own adapter over `reqwest`; never `azalea-auth` directly (ADR-0018) |
 | | Async runtime | `tokio` |
 | | Cancellation | `tokio-util` (`CancellationToken`, `TaskTracker`) |
-| | Streams | `tokio-stream` |
+| | Streams | `tokio-stream` (fleet-server's and fleet-agent's gRPC streams) |
 | | Sink/Stream traits | `futures-util` |
 | | dyn async ports | `async-trait` |
 | | Retry | `backon` |
@@ -213,7 +215,7 @@ fleet-server/src/
 | Desktop | Shell | `tauri` ≥ 2.11.1, `tauri-build` |
 | | Plugins | `tauri-plugin-opener`, `tauri-plugin-single-instance`, `tauri-plugin-updater` |
 | | Keychain | `keyring-core` + `windows-native-keyring-store` |
-| Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, tokio `test-util`, `log` (dev only: fleet-testkit's log capture and fleet-agent's telemetry, each to prove the `log` bridge; fleet-server's one normal use is sqlx's `LevelFilter`, and its logging macros are banned there), `tempfile` (fleet-server's database tests), `ipnet` (dev only: fleet-server's property test of its own `IpNet`), `hyper-util` (dev only, `tokio`: fleet-server's in-memory control-plane test hands tonic's client a pipe through `rt::TokioIo`) |
+| Tests | Testing crates | `rstest`, `proptest`, `insta`, `mockall`, `testcontainers`, tokio `test-util`, `log` (dev only: fleet-testkit's log capture and fleet-agent's telemetry, each to prove the `log` bridge; fleet-server's one normal use is sqlx's `LevelFilter`, and its logging macros are banned there), `tempfile` (fleet-server's database tests), `ipnet` (dev only: fleet-server's property test of fleet-core's `IpNet`), `hyper-util` (dev only, `tokio`: fleet-server's in-memory control-plane test hands tonic's client a pipe through `rt::TokioIo`) |
 | | Fuzzing | `libfuzzer-sys`, `arbitrary` |
 
 **Frontend packages**
@@ -366,7 +368,7 @@ Don't silence lints with `#[allow]`. If an exception is truly needed, use `#[exp
 **Hard rules**
 - `unwrap` and `expect` are allowed in tests, via `clippy.toml`.
 - **Never delete, `#[ignore]`, or weaken a failing test to get to green.** Fix the code or ask.
-- Coverage gates: `fleet-core` ≥ 90 %, `fleet-runtime` ≥ 85 %, auth and vault modules ≥ 90 %, the Microsoft accounts' modules ≥ 90 % (`msauth`), the control plane ≥ 90 % (`control-plane`: fleet-server's `infra/pki/`, `app/enrollment.rs`, `app/agents/` and `grpc/`; ADR-0019), `fleet-client` ≥ 90 %, the desktop crate ≥ 90 % (Windows, `just cov-desktop`), workspace ≥ 80 %.
+- Coverage gates: `fleet-core` ≥ 90 %, `fleet-runtime` ≥ 85 %, auth and vault modules ≥ 90 %, the Microsoft accounts' modules ≥ 90 % (`msauth`), the control plane ≥ 90 % (`control-plane`: fleet-server's `infra/pki/`, `app/enrollment.rs`, `app/agents/` and `grpc/`; ADR-0019), the agent's control plane ≥ 90 % (`agent-control-plane`: fleet-agent's `managed/` and `enroll/`; ADR-0019, U20), `fleet-client` ≥ 90 %, the desktop crate ≥ 90 % (Windows, `just cov-desktop`), workspace ≥ 80 %.
 
 ## Frontend rules
 **Structure**

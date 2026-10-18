@@ -18,6 +18,8 @@
 //!   (P7.6, P7.7).
 //! - [`enrollment`]: the agents' enrollment tokens, and enrolling an agent
 //!   with one (P10.3).
+//! - [`events`]: the internal event bus: what agents report about their
+//!   bots, for the live events P11.5 sends on (P10.8).
 //! - [`grants`]: sharing a linked account with other users (P9.6).
 //! - [`health`]: whether the server is ready to serve requests.
 //! - [`login`]: logging in (the password step and the code step) and
@@ -44,6 +46,7 @@ pub mod auth;
 pub mod bots;
 pub mod challenges;
 pub mod enrollment;
+pub mod events;
 pub mod grants;
 pub mod health;
 pub mod invites;

@@ -316,12 +316,11 @@ impl<L: SessionLink> ManagedCredentials<L> {
             .retain(|_, waiting| waiting.generation.is_none_or(|sent| sent > generation));
         let failed = before.saturating_sub(state.waiting.len());
         drop(state);
-        if failed > 0 {
-            debug!(
-                failed,
-                "the session requests a stream carried failed with its end"
-            );
-        }
+        // Every end, so a refusal's wipe shows before it (S63).
+        debug!(
+            generation = generation.get(),
+            failed, "the control stream's end was noted"
+        );
     }
 
     /// Forgets `bot`'s kept grant: the server removed the bot, or is
@@ -332,7 +331,11 @@ impl<L: SessionLink> ManagedCredentials<L> {
 
     /// Forgets every kept grant: the server refused the agent.
     pub fn forget_all(&self) {
-        self.state().wipe_all();
+        let mut state = self.state();
+        let forgotten = state.kept.len();
+        state.wipe_all();
+        drop(state);
+        debug!(forgotten, "every kept session grant was forgotten");
     }
 
     /// Asks the server for `request`'s session; see the [module

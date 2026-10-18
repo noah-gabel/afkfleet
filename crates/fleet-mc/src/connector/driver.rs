@@ -23,6 +23,7 @@ use azalea::join::{ConnectOpts, StartJoinServerEvent};
 use azalea::protocol::address::{ResolvedAddr, ServerAddr};
 use fleet_core::disconnect::{ConnectFailure, DisconnectReason};
 use fleet_core::id::BotId;
+use fleet_core::net::{Range, TargetPolicy};
 use fleet_core::value::{Host, ServerAddress};
 use tokio::sync::{mpsc, oneshot, watch};
 use tokio::time::{self, Instant};
@@ -110,6 +111,8 @@ impl Worlds {
 pub(super) struct Driver {
     pub(super) bot_id: BotId,
     pub(super) server: ServerAddress,
+    /// Which resolved addresses it may dial (ADR-0019, S46, S69).
+    pub(super) targets: Arc<TargetPolicy>,
     /// When `connect()` was called. The connect timeout runs from here, in
     /// std time, so a paused clock on the caller's runtime can't move it.
     pub(super) started: std::time::Instant,
@@ -146,6 +149,7 @@ impl Driver {
         let Self {
             bot_id,
             server,
+            targets,
             started,
             connect_timeout,
             account,
@@ -169,6 +173,11 @@ impl Driver {
         let Some(address) = resolve(&server, deadline, &mut stop, &sink).await else {
             return;
         };
+        // The socket azalea would dial, checked before anything starts: a
+        // refused one is never dialled, and no World is made (S46, S69).
+        if !permitted(&targets, &server, &address, &sink) {
+            return;
+        }
 
         // The bot's events: azalea gets the sender the moment it spawns the
         // bot, so nothing it reports in that same frame is lost (found in CI
@@ -260,6 +269,30 @@ async fn resolve(
             None
         }
     }
+}
+
+/// Whether `targets` allow the socket `address` resolved `server` to. A
+/// refusal is one `warn` in the bot's span and the session's end as
+/// [`ConnectFailure::Blocked`]: never dialled, the credentials unused.
+fn permitted(
+    targets: &TargetPolicy,
+    server: &ServerAddress,
+    address: &ResolvedAddr,
+    sink: &EventSink,
+) -> bool {
+    let Err(refused) = targets.check(address.socket.ip()) else {
+        return true;
+    };
+    let class = refused.class();
+    warn!(
+        server = %server,
+        socket = %address.socket,
+        class = class.as_str(),
+        range = class.range().map_or("", Range::as_str),
+        "the server's address is refused before dialling: it's never dialled, or private and not in [control_plane] private_targets"
+    );
+    sink.terminate(Terminal::ConnectionFailed(ConnectFailure::Blocked));
+    false
 }
 
 /// The session's App, with the test's hook if one is set.
@@ -873,6 +906,66 @@ mod tests {
         let end = run_loop(&sink, &mut rx, &mut inputs).await;
 
         assert_eq!(end, LoopEnd::Ended);
+    }
+
+    // --- The target check (ADR-0019, S46, S69) ---
+
+    fn resolved(server: &ServerAddress, socket: &str) -> ResolvedAddr {
+        ResolvedAddr {
+            server: server_addr(server),
+            socket: socket.parse().unwrap(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_refused_socket_ends_the_session_as_blocked() {
+        let (sink, mut events) = open();
+        let server: ServerAddress = "mc.example.com".parse().unwrap();
+
+        let allowed = permitted(
+            &TargetPolicy::default(),
+            &server,
+            &resolved(&server, "127.0.0.1:25565"),
+            &sink,
+        );
+
+        assert!(!allowed);
+        assert_eq!(
+            drain(&mut events).await,
+            [SessionEvent::ConnectionFailed(ConnectFailure::Blocked)]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_permitted_socket_leaves_the_session_going() {
+        let (sink, mut events) = open();
+        let server: ServerAddress = "mc.example.com".parse().unwrap();
+        let listed = TargetPolicy::Checked(
+            fleet_core::net::PrivateTargets::try_new(vec!["127.0.0.1/32".parse().unwrap()])
+                .unwrap(),
+        );
+
+        let public = permitted(
+            &TargetPolicy::default(),
+            &server,
+            &resolved(&server, "8.8.8.8:25565"),
+            &sink,
+        );
+        let private = permitted(
+            &listed,
+            &server,
+            &resolved(&server, "127.0.0.1:25565"),
+            &sink,
+        );
+        let unchecked = permitted(
+            &TargetPolicy::Unchecked,
+            &server,
+            &resolved(&server, "169.254.169.254:25565"),
+            &sink,
+        );
+
+        assert!(public && private && unchecked);
+        assert_eq!(drain(&mut events).await, []);
     }
 
     // --- Pieces ---

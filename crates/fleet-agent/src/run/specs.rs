@@ -13,11 +13,22 @@ use crate::config::StandaloneBot;
 /// Why the run can't start.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum StartupError {
-    /// The config is for managed mode, which runs from P10.7 on.
-    #[error(
-        "managed mode runs from P10.7; until then this config is only for `afkfleet-agent enroll`"
-    )]
-    ManagedMode,
+    /// A managed config came without its identity: main.rs loads it.
+    #[error("a managed agent's identity wasn't loaded")]
+    NoIdentity,
+    /// `[control_plane] url` can't be dialed (its validation refuses that
+    /// first).
+    #[error("[control_plane] url can't be dialed")]
+    ServerUrl,
+    /// The reconnect backoff can't be built.
+    #[error("the reconnect backoff can't be set up: {0}")]
+    Reconnect(fleet_core::resilience::RetryPolicyError),
+    /// `[runtime] max_bots` isn't an agent's capacity (its range pins that).
+    #[error("runtime.max_bots isn't an agent's capacity")]
+    Capacity,
+    /// The agent's own version isn't one the protocol carries.
+    #[error("the agent's version can't be sent")]
+    Version,
     /// The OS's random source failed.
     #[error("the OS's random source failed: {0}")]
     Random(getrandom::Error),
