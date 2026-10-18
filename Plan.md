@@ -3737,8 +3737,9 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - *The final flush's order* is pinned on paused time through `end_streams_then_ingest`, red first against a stub that stopped the writer first, since a real-socket test can't time a report between the signal and the streams' end.
   > - **Tests,** red first against compiling stubs where a stub fails; the rest through mutations, each reverted and checked by checksum (the PR lists them): the registry's verdicts and marks (`grpc/registry.rs`), `tests/ingest_service.rs`, `tests/event_batch_scope.rs` (U17's scope pin: every table and column around a batch; the writer also updating `agent_id`, `server_address`, `mode_id` or `desired_state` turned it red, one run each), `tests/grpc_control/ingest.rs` over loopback (U19), the log check, serve's watch, stop order and flush.
   > Note (P10.8, the review of PR #56) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), "The review of PR #56"): the writer commits only what it wrote: a tick whose marks the fence refused, with no chat, is `Idle`, and a batch that stored nothing rolls back (U17). The stop's last batch, busy with no chat waiting, no longer says chat was lost. Two tests pin U16's order (the marks taken only inside the open write transaction; a resume's clear landing while a tick waits is never undone, with the real registry), and the scope pin compares all three `last_state*` columns of every bot; its table list stays fixed, as the test's header says why.
+  > Note (P10.8, from Phase 10, group H) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), S74): **4096 rows in all.** One row budget covers the rows queued, kept by a busy database or being written, so a kept or in-flight batch no longer lets the queue refill past S70's 4096, and the stop's flush commits at most U17's 6 batches; a `const` assertion ties `INGEST_QUEUE` to that 6. Before, up to 5096 rows could be held.
 
-- [ ] **P10.9** 🔴 Loopback tests with a test PKI. Each of these is rejected:
+- [x] **P10.9** 🔴 Loopback tests with a test PKI. Each of these is rejected:
   - a revoked certificate
   - a certificate from the wrong CA
   - an agent that never enrolled
@@ -3756,6 +3757,24 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P10.9, from Phase 10, group F) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the grants' loopback tests** are in `tests/grpc_control/grants.rs` and `grant_checks.rs`, the log test in `logs.rs`, the real service's in `tests/accounts/session_tokens/grants.rs`, serve's in `tests/serve/control_plane.rs` and `shutdown.rs`. H adds, with G's managed agent: a server down while a bot is kicked (it rejoins with its kept grant, and a fresh request waits), and a server restart whose agents' bots get their sessions once reconciled; and checks the threat model's B3 rows that cite F's tests.
 
   > Note (P10.9, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **for H** (U19). G tests each side against a scripted peer over real mTLS on loopback: fleet-server's `tests/grpc_control/ingest.rs`, fleet-agent's `tests/control/`. A real agent against a real server stays H's question to the user (fleet-agent dev-depending on fleet-server, or a new test crate), for H's cases, the DoD check and P11.7. The threat model gained G's agent and ingest rows; H reviews them with its own. G's residuals are in ADR-0019 and the threat model: tonic's buffers hold the identity's key PEM unwiped; a notice handed to tonic is lost when its connection breaks (no acknowledgement); a power loss can undo the last batch (U16).
+  > Note (P10.9, Phase 10, group H) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **as built** (the user's choices U19, U21 and U22; S72–S74, decided by the review agents and approved at the plan review).
+  > - **Where:** `crates/fleet-integration`, a test-only crate (U19), one test binary, `tests/integration/`.
+  >   - `harness/`: serve's wiring over a `ManualClock` and `SeededRandom` (`app_with`, then serve's `open` and `grpc_port`, made public, then `serve`); agents enrolled for real and run in-process over a `Ledger` connector, one fake per run, which fails a case that ever runs one account twice; one stalling proxy per agent; the Owner through fleet-client with 2FA; one log that wakes the waits.
+  >   - `loopback/`: the cases.
+  >   - `managed_check/`: Phase 10's DoD check (below).
+  > - **The cases**, in nextest's default profile, each shown red by a mutation:
+  >   - `killed_mid_stream::a_connection_cut_mid_stream_reconciles_what_changed_meanwhile`: the kept bot runs on untouched, the bot stopped meanwhile stops and is unassigned after its `Removed`, the one started meanwhile is placed.
+  >   - `agent_restart::a_restarted_agent_runs_its_bots_once`: no move, no other agent.
+  >   - `agent_restart::a_restart_while_the_old_connection_lives_is_refused_until_it_ends_and_records_no_conflict`: C's note for H.
+  >   - `server_restart::agents_resync_after_a_server_restart_in_either_order`: D's note; S45's gate holds a new bot until both are back.
+  >   - `silent_connection::a_silent_connection_frees_the_agent_and_it_reconnects_and_resyncs`: C's note, the one case on short timings.
+  >   - `outage::a_bot_kicked_while_the_server_is_down_rejoins_with_its_kept_grant_and_a_fresh_request_waits` and `outage::bots_get_their_sessions_once_reconciled_after_a_server_restart`: F's note.
+  > - **Deviations:**
+  >   - The limiters measure real intervals.
+  >   - A wait wakes on every log line and looks again every 100 ms, instead of yielding in a loop. It's for the user's review whether this counts as a sleep.
+  >   - Case 2b's old stream ends by the server's heartbeat timeout, not by a cut.
+  >   - Case 5 records how the code behaves: after a refused login, the request after the backoff isn't fresh; with no stream nothing is kept, so it waits for the server.
+  > - **Follow-ups from G's review** are commit 1: dev-bots labels its IDs; a tick that wrote nothing is `Idle`; the rig's `Gate` keeps one lock; the busy-removal test asserts the hello and the deferral; the conductor warns once per wait; `AgentKey::from_pem` and `certificate::check` take exactly one PEM section; the ingest holds 4096 rows in all (S74).
 - [x] **P10.10** Admin endpoints: `GET /agents`, and `POST /agents/{id}/disable`, which revokes the fingerprint and drops the stream.
 
   > Note (P10.10, from Phase 6, group C) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): a response value that a later version may extend, such as an agent's status, is an `Open<…>` in its DTO, and a 64-bit number is a `SafeInt`.
@@ -3780,6 +3799,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 > Note (Phase 10's DoD, from Phase 10's planning, the user's choice, U1) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the app's part moved to Phase 11.** The DoD read "pressing Start in the app brings a bot with a real Microsoft account Online on a real server", which needs P11.9's screens. The user does this check by hand in group H, with their own account; it needs Docker for a local online-mode Minecraft server (as in P1.8), unless they point it at their own. P10.9's loopback suite is the rest of the proof.
 
 > Note (Phase 10's DoD, from group E, the user's note at the plan review) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): the check's agent lists the local Minecraft container's network in `[control_plane] private_targets` (S46), with a comment saying why, or its SSRF check refuses the connect. The check calls `PATCH /bots/{id}` (after a step-up), `POST /bots/{id}/start` and `stop` through fleet-client (`patch_bot`, `start_bot`, `stop_bot`).
+
+> Note (Phase 10's DoD, group H) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), S73, U21, U22): **the check is written; the user runs it** with `just test-managed-account`: `managed_check::manual_managed_bot_goes_online_and_offline` in fleet-integration, Phase 9 group D's pattern (a vault key drawn for the run and kept in memory, a temporary folder deleted at every end, only this test's filter, nothing secret on a command line, in a variable or in a log). Its agent lists exactly `127.0.0.1/32`, the container's published port, with a comment saying why. Its outcome is recorded here once the user has run it.
 
 ---
 
@@ -3913,11 +3934,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P11.6, from Phase 6, group B) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): decide `secure_delete` here, so deleted chat and old audit entries are overwritten instead of lingering in free pages.
 
   > Note (P11.6, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)) *(the user's note at G's plan review)*: **retention must also bound size,** for example the newest N rows per bot, not only `retention_days`: up to about 2000 rows a second of up to 1024 characters can reach the ingest, and every bot on one Minecraft server stores its own copy. The limit itself is the user's decision here. `chat_messages` has the `(at)` and `(bot_id, id)` indexes both need.
+  > Note (P11.6, from Phase 10, group H) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), S74): a retention delete holds the write connection; meanwhile the ingest's ticks find it busy and keep their batch, which now holds up to 1000 of the 4096 places, so more chat drops while a long delete runs. Delete in short batches, as the lockout purge does (1000).
 - [ ] **P11.7** 🔴 Full-flow integration test: in-process server + in-process agent with `FakeConnector`.
   1. Start a bot via `fleet-client`.
   2. A WebSocket client sees `Online`.
   3. Chat flows in and out.
   4. Stop the bot.
+
+  > Note (P11.7, from Phase 10, group H) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), U19): **it lives in `crates/fleet-integration`**, a module of its one test binary beside `loopback/`, over the same harness: `World` (the server through serve's wiring, the Owner through fleet-client with 2FA), agents enrolled for real and run over the `Ledger` connector, and the log the waits wake on. The WebSocket client it needs arrives with P11.5 (`tokio-tungstenite`), a new dev-dependency of the crate then.
 - [ ] **P11.8** 🔴 Tauri: the WebSocket lives in Rust (`fleet-client` + reconnect) and is forwarded to the UI over a Tauri `Channel`. The UI patches the TanStack Query cache from the events.
 - [ ] **P11.9** 🔴 UI:
 
