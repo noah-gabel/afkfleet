@@ -5,7 +5,7 @@
 
 import { LINK_CODE, MEMBER, NEW_USER, OWNER, PASSWORD } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
-import { enterCode, logIn } from "./steps";
+import { enterCode, FLOW_END_MS, logIn } from "./steps";
 
 test("a Member's link waits for the Owner's approval, then is shared and deleted", async ({
   page,
@@ -28,7 +28,7 @@ test("a Member's link waits for the Owner's approval, then is shared and deleted
     page.getByText("AfkBot1 is linked. It waits for an Admin's or the Owner's approval", {
       exact: false,
     }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: FLOW_END_MS });
   await expect(page.getByText(LINK_CODE, { exact: true })).toHaveCount(0);
   await page.getByRole("link", { name: "Back to accounts" }).click();
   await expect(page.getByText("Microsoft · Waiting for approval · Manage")).toBeVisible();

@@ -4,7 +4,7 @@
 
 import { LINK_CODE, MEMBER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
-import { enterCode, logIn } from "./steps";
+import { enterCode, FLOW_END_MS, logIn } from "./steps";
 
 test("an account that needs a new sign-in is linked again", async ({ page, context }) => {
   const backend = await fakeBackend(context);
@@ -26,7 +26,7 @@ test("an account that needs a new sign-in is linked again", async ({ page, conte
   await page.getByRole("button", { name: "Get a code" }).click();
   await expect(page.getByText(LINK_CODE, { exact: true })).toBeVisible();
 
-  await expect(page.getByText("AfkBot1 is linked again.")).toBeVisible();
+  await expect(page.getByText("AfkBot1 is linked again.")).toBeVisible({ timeout: FLOW_END_MS });
   await page.getByRole("link", { name: "Open account" }).click();
   await expect(page.getByText("Active", { exact: true })).toBeVisible();
   await expect.poll(() => backend.opened()).toBe(1);
