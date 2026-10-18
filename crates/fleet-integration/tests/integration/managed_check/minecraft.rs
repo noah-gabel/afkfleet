@@ -7,8 +7,11 @@
 //!
 //! It's removed by [`Minecraft::remove`] at the check's end, its volumes
 //! with it: they hold the account's name in the server's usercache and
-//! logs. Dropping it is the fallback.
+//! logs. Past the removal's bound, its handle is released undropped and the
+//! user removes it by hand, since testcontainers' `Drop` would wait for
+//! Docker with no bound.
 
+use core::mem::ManuallyDrop;
 use core::time::Duration;
 
 use testcontainers::core::{IntoContainerPort as _, WaitFor};
@@ -86,11 +89,91 @@ impl Minecraft {
         format!("127.0.0.1:{}", self.port)
     }
 
-    /// Removes the container and its volumes within `within`; whether it
-    /// went.
-    pub(crate) async fn remove(self, within: Duration) -> bool {
-        tokio::time::timeout(within, self.container.rm())
-            .await
-            .is_ok_and(|removed| removed.is_ok())
+    /// Removes the container and its volumes within `within`.
+    ///
+    /// # Errors
+    /// A fixed text when Docker refused, or didn't answer within `within`.
+    /// Then the handle is released, never dropped: testcontainers 0.28's
+    /// `Drop` removes the container again and waits for Docker with no
+    /// bound (`block_in_place` on this runtime), which would break the
+    /// check's budget. The container is left for the user to remove.
+    pub(crate) async fn remove(self, within: Duration) -> Result<(), &'static str> {
+        match ended_or_released(tokio::time::sleep(within), self.container.rm()).await {
+            Some(Ok(())) => Ok(()),
+            // Its handle went inside `rm`, whose `Drop` asked Docker once
+            // more: bounded only by Docker's answer, which just came.
+            Some(Err(_)) => Err("Docker refused to remove it"),
+            None => Err("Docker didn't remove it in time"),
+        }
+    }
+}
+
+/// `future`'s output if it ends before `bound`. Past the bound, the future
+/// is released without being dropped, so a `Drop` that would wait without a
+/// bound never runs.
+async fn ended_or_released<F: Future>(
+    bound: impl Future<Output = ()>,
+    future: F,
+) -> Option<F::Output> {
+    // Boxed, so it stays where it was polled when it's released.
+    let mut future = ManuallyDrop::new(Box::pin(future));
+    let ended = tokio::select! {
+        biased;
+        // Cancel-safe: polled through a reference, so losing the race drops
+        // nothing.
+        output = &mut *future => Some(output),
+        () = bound => None,
+    };
+    if ended.is_some() {
+        // It ended, so dropping it now runs only what it still holds.
+        drop(ManuallyDrop::into_inner(future));
+    }
+    ended
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use super::*;
+
+    /// Says when it's dropped.
+    struct Flag(Arc<AtomicBool>);
+
+    impl Drop for Flag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_removal_past_its_bound_is_released_and_never_dropped() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let held = Flag(Arc::clone(&dropped));
+        let hangs = async move {
+            let _held = held;
+            core::future::pending::<()>().await;
+        };
+
+        let ended = ended_or_released(core::future::ready(()), hangs).await;
+
+        assert_eq!(ended, None);
+        assert!(!dropped.load(Ordering::SeqCst), "its Drop never ran");
+    }
+
+    #[tokio::test]
+    async fn a_removal_before_its_bound_ends_and_is_dropped() {
+        let dropped = Arc::new(AtomicBool::new(false));
+        let held = Flag(Arc::clone(&dropped));
+        let ends = async move {
+            let _held = held;
+            tokio::task::yield_now().await;
+        };
+
+        let ended = ended_or_released(core::future::pending(), ends).await;
+
+        assert_eq!(ended, Some(()));
+        assert!(dropped.load(Ordering::SeqCst));
     }
 }

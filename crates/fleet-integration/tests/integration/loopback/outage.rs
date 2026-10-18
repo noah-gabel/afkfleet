@@ -30,9 +30,12 @@ const GRANTED: &str = "a session was granted";
 const DENIED: &str = "a session request was denied";
 
 /// Whether `message` is one of the server's session denials: its own, a
-/// request for a bot the stream doesn't hold (yet), a full grant queue.
+/// request for a bot the stream doesn't hold (yet), a fresh request past
+/// its bot's limit, a full grant queue.
 fn is_denial(message: &str) -> bool {
-    message.starts_with("a session request") && message.contains("was denied")
+    let request =
+        message.starts_with("a session request") || message.starts_with("a fresh session request");
+    request && (message.contains("was denied") || message.contains("was refused"))
 }
 
 #[tokio::test]
@@ -176,6 +179,12 @@ async fn bots_get_their_sessions_once_reconciled_after_a_server_restart() {
 #[case::its_own(DENIED, true)]
 #[case::not_held("a session request for a bot the stream doesn't hold was denied", true)]
 #[case::queue_full("a session request was denied: the stream's grant queue is full", true)]
+#[case::fresh_limit("a fresh session request was refused by its bot's limit", true)]
+// Counts refusals of reports and chat too; each denial has its own line.
+#[case::refusals_summary(
+    "an agent's reports, session requests or chat messages were refused since the last report",
+    false
+)]
 #[case::a_grant(GRANTED, false)]
 #[case::unsent(UNSENT, false)]
 fn every_denial_line_of_the_servers_counts(#[case] message: &str, #[case] denial: bool) {

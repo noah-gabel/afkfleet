@@ -42,6 +42,7 @@ mod pins;
 mod recording;
 mod secrets;
 
+use core::any::Any;
 use core::fmt::{Display, Write as _};
 use core::time::Duration;
 use std::io;
@@ -72,8 +73,9 @@ use fleet_testkit::log_capture;
 use secrecy::zeroize::Zeroizing;
 use secrecy::{ExposeSecret as _, SecretBox, SecretString};
 use tokio::sync::{Mutex, mpsc};
-use tokio::task::JoinSet;
+use tokio::task::{JoinError, JoinSet};
 use tokio::time::Instant;
+use tokio::time::error::Elapsed;
 use totp_rs::Totp;
 
 use self::minecraft::{Minecraft, STARTUP};
@@ -162,9 +164,8 @@ impl Steps {
         }
     }
 
-    /// Checks every log line for every secret the run saw, then fails the
-    /// test if any step failed.
-    fn finish(mut self, secrets: &Secrets) {
+    /// Checks every log line for every secret the run saw.
+    fn check_logs(&mut self, secrets: &Secrets) {
         let findings = secrets.findings();
         if findings.is_empty() {
             Self::pass("no secret in any log");
@@ -173,6 +174,10 @@ impl Steps {
                 self.fail("no secret in any log", finding);
             }
         }
+    }
+
+    /// Fails the test if any step failed.
+    fn assert_passed(self) {
         assert!(
             self.failures.is_empty(),
             "steps failed: {:#?}",
@@ -197,8 +202,16 @@ struct Rig {
 
 impl Rig {
     fn saw(&self, kind: Kind, value: &str) {
-        self.secrets.lock().unwrap().saw(kind, value);
+        lock(&self.secrets).saw(kind, value);
     }
+}
+
+/// `mutex`'s guard even when a step panicked while holding it, so teardown
+/// and the log check go on with what it holds.
+fn lock<T>(mutex: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// The agent's run.
@@ -236,18 +249,39 @@ async fn manual_managed_bot_goes_online_and_offline() {
     }
     let mut teardown = Steps::default();
     tear_down(&rig, dir.path(), &mut teardown).await;
-    let secrets = core::mem::take(&mut *rig.secrets.lock().unwrap());
+    let secrets = core::mem::take(&mut *lock(&rig.secrets));
     drop(rig);
     let deleted = dir.close().is_ok();
-    let mut steps = match ended {
-        Ok(Ok(steps)) => steps,
+    let (steps, panic) = conclude(ended, teardown, deleted, &secrets);
+    if let Some(panic) = panic {
+        std::panic::resume_unwind(panic);
+    }
+    steps.assert_passed();
+}
+
+/// What the steps' task ended with: their report, a panic, or nothing within
+/// their budget.
+type Ended = Result<Result<Steps, JoinError>, Elapsed>;
+
+/// How the check ends once everything's torn down: the steps' report with
+/// teardown's, the folder's and the log check's lines, and the steps' panic,
+/// if they panicked, to go on with once those are printed.
+fn conclude(
+    ended: Ended,
+    mut teardown: Steps,
+    deleted: bool,
+    secrets: &Secrets,
+) -> (Steps, Option<Box<dyn Any + Send>>) {
+    let (mut steps, panic) = match ended {
+        Ok(Ok(steps)) => (steps, None),
         Ok(Err(failed)) => {
-            if !deleted {
-                println!(
-                    "temporary folder deleted: FAIL (delete the afkfleet-managed-check folder in the temp directory)"
-                );
+            if let Ok(panic) = failed.try_into_panic() {
+                (Steps::default(), Some(panic))
+            } else {
+                let mut steps = Steps::default();
+                steps.fail("the steps ended", "their task was cancelled");
+                (steps, None)
             }
-            std::panic::resume_unwind(failed.into_panic());
         }
         Err(_) => {
             let mut steps = Steps::default();
@@ -255,7 +289,7 @@ async fn manual_managed_bot_goes_online_and_offline() {
                 "the steps within their budget",
                 format!("they didn't end within {} s", STEPS.as_secs()),
             );
-            steps
+            (steps, None)
         }
     };
     steps.failures.append(&mut teardown.failures);
@@ -264,7 +298,8 @@ async fn manual_managed_bot_goes_online_and_offline() {
         deleted,
         "it's still there: delete the afkfleet-managed-check folder in the temp directory",
     );
-    steps.finish(&secrets);
+    steps.check_logs(secrets);
+    (steps, panic)
 }
 
 /// The check's steps; the first that fails ends them.
@@ -292,7 +327,7 @@ async fn check(rig: Arc<Rig>, dir: PathBuf) -> Steps {
     Steps::pass("server and agent started (enrolled)");
 
     // The container starts while the Owner logs in and the link waits.
-    *rig.container_by.lock().unwrap() = Some(Instant::now() + CONTAINER);
+    *lock(&rig.container_by) = Some(Instant::now() + CONTAINER);
     rig.minecraft.lock().await.spawn(Minecraft::start());
 
     let (client, store) = match log_in(&rig, &url, &password).await {
@@ -349,7 +384,7 @@ async fn set_up(rig: &Rig, dir: &Path, password: SecretString) -> Result<String,
     let adapter = ReqwestMicrosoftAuth::new(Arc::new(SystemClock))
         .map_err(|_| "Microsoft's HTTP client can't be built")?;
     let recording = Arc::new(Recording::new(Arc::new(adapter)));
-    *rig.recording.lock().unwrap() = Some(Arc::clone(&recording));
+    *lock(&rig.recording) = Some(Arc::clone(&recording));
     let key = run_key().ok_or("the OS's randomness failed")?;
     let server = Server::start_real(
         dir,
@@ -655,7 +690,7 @@ async fn listed(
 
 /// The container's address, once it's healthy.
 async fn minecraft_address(rig: &Rig, steps: &mut Steps) -> Option<String> {
-    let by = (*rig.container_by.lock().unwrap()).unwrap_or_else(Instant::now);
+    let by = (*lock(&rig.container_by)).unwrap_or_else(Instant::now);
     let started = tokio::time::timeout_at(by, rig.minecraft.lock().await.join_next()).await;
     match started {
         Ok(Some(Ok(Ok(minecraft)))) => {
@@ -838,7 +873,7 @@ async fn tear_down(rig: &Rig, dir: &Path, steps: &mut Steps) {
     }
     // A start still under way ends first, by its spawn's bound, so its
     // container is removed too.
-    let by = *rig.container_by.lock().unwrap();
+    let by = *lock(&rig.container_by);
     let mut starting = rig.minecraft.lock().await;
     if let Some(by) = by {
         while let Ok(Some(started)) = tokio::time::timeout_at(by, starting.join_next()).await {
@@ -856,15 +891,19 @@ async fn tear_down(rig: &Rig, dir: &Path, steps: &mut Steps) {
     }
     drop(starting);
     if let Some(minecraft) = rig.ready.lock().await.take() {
-        let removed = minecraft.remove(REMOVE).await;
-        steps.check(
-            "container removed",
-            removed,
-            "find it with `docker ps -a`, then `docker rm -fv` it",
-        );
+        match minecraft.remove(REMOVE).await {
+            Ok(()) => Steps::pass("container removed"),
+            Err(why) => steps.fail(
+                "container removed",
+                format!(
+                    "{why} (within {} s): remove it by hand: find it with `docker ps -a`, then `docker rm -fv` it",
+                    REMOVE.as_secs()
+                ),
+            ),
+        }
     }
     let mut secrets = Secrets::default();
-    if let Some(recording) = rig.recording.lock().unwrap().take() {
+    if let Some(recording) = lock(&rig.recording).take() {
         secrets.extend(recording.take());
     }
     for key in [
@@ -886,7 +925,7 @@ async fn tear_down(rig: &Rig, dir: &Path, steps: &mut Steps) {
             secrets.saw(Kind::Key, line);
         }
     }
-    rig.secrets.lock().unwrap().extend(secrets);
+    lock(&rig.secrets).extend(secrets);
 }
 
 /// A heartbeat nobody reads.
@@ -952,7 +991,7 @@ mod tests {
         }
         let mut teardown = Steps::default();
         tear_down(&rig, dir.path(), &mut teardown).await;
-        let findings = rig.secrets.lock().unwrap().findings();
+        let findings = lock(&rig.secrets).findings();
 
         assert_eq!(ran, Ok(Ok(())), "set up and logged in");
         assert_eq!(teardown.failures, Vec::<String>::new());
@@ -960,6 +999,53 @@ mod tests {
         // token, the refresh token and the three keys, and every token by
         // its shape.
         assert_eq!(findings, Vec::<String>::new(), "no secret in any log");
+    }
+
+    /// A fake secret, as a test plants it: never a real one.
+    const PLANTED: &str = "planted-0c4e8a1f6b2d93";
+
+    #[tokio::test]
+    async fn a_panic_in_the_steps_still_runs_the_log_check_and_then_goes_on() {
+        log_capture::install().unwrap();
+        tracing::warn!(target: "fleet_planted", "a line that leaks {PLANTED}");
+        let mut secrets = Secrets::default();
+        secrets.saw(Kind::MinecraftToken, PLANTED);
+        let panicked = tokio::spawn(async { panic!("a step panicked") }).await;
+
+        let (steps, panic) = conclude(
+            Ok(panicked.map(|()| Steps::default())),
+            Steps::default(),
+            true,
+            &secrets,
+        );
+
+        assert!(panic.is_some(), "the panic goes on");
+        assert_eq!(
+            steps.failures,
+            ["no secret in any log: a Minecraft token: WARN fleet_planted (1 lines)"]
+        );
+    }
+
+    #[tokio::test]
+    async fn teardown_goes_on_though_a_panicking_step_poisoned_its_locks() {
+        let dir = tempfile::tempdir().unwrap();
+        let rig = Arc::new(Rig::default());
+        let step = Arc::clone(&rig);
+        let panicked = std::thread::spawn(move || {
+            let _held = (
+                step.secrets.lock().unwrap(),
+                step.recording.lock().unwrap(),
+                step.container_by.lock().unwrap(),
+            );
+            panic!("a step panicked holding the locks");
+        })
+        .join();
+        assert!(panicked.is_err() && rig.secrets.is_poisoned());
+        let mut teardown = Steps::default();
+
+        tear_down(&rig, dir.path(), &mut teardown).await;
+
+        assert_eq!(teardown.failures, Vec::<String>::new());
     }
 
     #[test]
