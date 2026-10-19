@@ -3,8 +3,9 @@
 //! - **A bot kicked while the server is down** rejoins with the grant its
 //!   agent kept, since no stream can ask for one. Once its login is refused,
 //!   its fresh request wipes that grant and fails at once without a stream,
-//!   and the requests after its backoff find nothing kept either: it waits
-//!   for the server, and connects only with the server's next grant.
+//!   and every request after its backoffs stays fresh (ADR-0020, U24, S1):
+//!   it waits for the server, and connects only with the server's next
+//!   grant, a fresh one, never the cached session that was just refused.
 //! - **A server restart:** the agents' bots get their sessions only once
 //!   their streams are reconciled, never a denial first, though the
 //!   restart's placement gate is still closed (S45): a restarted agent's
@@ -16,6 +17,7 @@ use fleet_core::audit::AuditAction;
 use fleet_core::disconnect::DisconnectReason;
 use fleet_core::mc::SessionCredentials;
 use fleet_core::resilience::RetryPolicy;
+use fleet_testkit::log_buffer::LogBuffer;
 use rstest::rstest;
 
 use crate::harness::agent::RunOptions;
@@ -36,6 +38,63 @@ fn is_denial(message: &str) -> bool {
     let request =
         message.starts_with("a session request") || message.starts_with("a fresh session request");
     request && (message.contains("was denied") || message.contains("was refused"))
+}
+
+/// Asserts U24 (ADR-0020, S1) over `log`'s lines from line `before` on, after
+/// a refused login of bot `id`: its states until its next connect each
+/// fresh, with a fresh request after a backoff among them, and that connect
+/// with a fresh session; every request that found no stream fresh; the
+/// server's one grant fresh; and no fresh request past its bot's limit.
+fn stayed_fresh_until_granted(log: &LogBuffer, before: usize, id: &str) {
+    let text = log.text();
+    let after = log.json_lines().unwrap().split_off(before);
+    let states: Vec<&str> = after
+        .iter()
+        .filter(|line| line["message"] == "the bot's state changed" && line["span"]["bot_id"] == id)
+        .filter_map(|line| line["state"].as_str())
+        .collect();
+    let connecting = states
+        .iter()
+        .position(|state| state.starts_with("Connecting"))
+        .unwrap_or_else(|| panic!("no connect after the refusal: {states:?}\n{text}"));
+    let waiting = &states[..connecting];
+    assert!(
+        waiting
+            .iter()
+            .filter(|state| state.starts_with("AwaitingSession") || state.starts_with("Backoff"))
+            .all(|state| state.contains("fresh: true")),
+        "{states:?}"
+    );
+    let requests = waiting
+        .iter()
+        .filter(|state| state.starts_with("AwaitingSession"))
+        .count();
+    assert!(
+        waiting.iter().any(|state| state.starts_with("Backoff")) && requests >= 2,
+        "a fresh request after a backoff: {states:?}"
+    );
+    assert!(
+        states[connecting].contains("auth_retried: true"),
+        "{states:?}"
+    );
+    let of_bot = |message: &str| {
+        after
+            .iter()
+            .filter(|line| line["message"] == message && line["bot_id"] == id)
+            .collect::<Vec<_>>()
+    };
+    let unsent = of_bot(UNSENT);
+    assert!(
+        unsent.len() >= 2 && unsent.iter().all(|line| line["fresh"] == true),
+        "{text}"
+    );
+    let granted = of_bot(GRANTED);
+    assert_eq!(granted.len(), 1, "{text}");
+    assert_eq!(granted[0]["fresh"], true, "{text}");
+    assert!(
+        of_bot("a fresh session request was refused by its bot's limit").is_empty(),
+        "{text}"
+    );
 }
 
 #[tokio::test]
@@ -88,9 +147,10 @@ async fn a_bot_kicked_while_the_server_is_down_rejoins_with_its_kept_grant_and_a
         .await;
     let rejoined = agent.fake().connects().last().unwrap().credentials.clone();
     // Its login is refused: its fresh request finds no stream and wipes the
-    // kept grant, and the request after its backoff finds nothing kept.
+    // kept grant, and the fresh request after its backoff finds nothing kept.
     let unsent = lines_for(UNSENT);
     let granted = lines_for(GRANTED);
+    let before = world.logs.buffer().json_lines().unwrap().len();
     world.ledger.end(bot, DisconnectReason::AuthRejected);
     world
         .logs
@@ -107,19 +167,7 @@ async fn a_bot_kicked_while_the_server_is_down_rejoins_with_its_kept_grant_and_a
         matches!(&rejoined, SessionCredentials::Offline { username } if username.as_str() == "AfkBot1"),
         "{rejoined:?}"
     );
-    let asked_fresh = world
-        .logs
-        .buffer()
-        .lines_with("the bot's state changed")
-        .unwrap()
-        .iter()
-        .any(|line| {
-            line["span"]["bot_id"] == id.as_str()
-                && line["state"]
-                    .as_str()
-                    .is_some_and(|state| state.contains("fresh: true"))
-        });
-    assert!(asked_fresh, "{}", world.logs.buffer().text());
+    stayed_fresh_until_granted(world.logs.buffer(), before, &id);
     assert_eq!(while_down, 2, "no connect without the server");
     // Back with the server's next grant, its third session.
     assert_eq!(lines_for(GRANTED), granted + 1);

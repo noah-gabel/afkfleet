@@ -43,6 +43,10 @@ pub enum BotState {
     Backoff {
         /// The attempt that failed.
         attempt: NonZeroU32,
+        /// Whether the next attempt asks for a fresh session: the server
+        /// rejected the bot's last session, and no session has arrived since
+        /// (ADR-0020, S1).
+        fresh: bool,
     },
     /// Stopped by itself because a human is playing on the account. Only
     /// `Resume` lets it connect again.

@@ -423,6 +423,17 @@ fn start_with(
     depth: usize,
     allow_offline: bool,
 ) -> Running {
+    start_at(registry, store, depth, allow_offline, ChatRate::default())
+}
+
+/// [`start_with`], every bot chatting at `chat_rate`.
+fn start_at(
+    registry: &AgentRegistry,
+    store: &Arc<Store>,
+    depth: usize,
+    allow_offline: bool,
+    chat_rate: ChatRate,
+) -> Running {
     let (hints, inbox) = hints(depth);
     let clock = ManualClock::new(at(T0));
     let reconciler = Reconciler::new(
@@ -432,6 +443,7 @@ fn start_with(
         inbox,
         ReconcileTimings::default(),
         allow_offline,
+        chat_rate,
     );
     let stop = CancellationToken::new();
     let task = tokio::spawn(reconciler.run(stop.clone()));
@@ -540,6 +552,34 @@ async fn a_stray_that_cant_be_written_holds_back_the_reconcile_until_the_next_pa
 }
 
 // --- Placing ----------------------------------------------------------------------------------
+
+/// Every spec carries `[rate_limits]`' chat rate, in a welcome's reconcile
+/// and in a later placement (ADR-0020, S3).
+#[tokio::test(start_paused = true)]
+async fn every_spec_carries_the_configured_chat_rate() {
+    let registry = registry();
+    let store = Store::with(vec![on(1, 1)], &[1]);
+    let mut stream = connect(&registry, 1, 5, Vec::new(), 8);
+    let rate = ChatRate::try_new(5, 2).unwrap();
+    let running = start_at(&registry, &store, 8, true, rate);
+    let Some(ServerMessage::Reconcile(welcomed)) = stream.next().await else {
+        panic!("a reconcile");
+    };
+
+    store.state().fleet.bots.push(record(2));
+    running.hints.changed(Change::Store);
+    let Some(ServerMessage::Assign(placed)) = stream.next().await else {
+        panic!("an assignment");
+    };
+
+    let rates: Vec<ChatRate> = welcomed
+        .iter()
+        .chain([&placed])
+        .map(|assignment| assignment.spec.chat_rate)
+        .collect();
+    assert_eq!(rates, [rate, rate]);
+    running.stop().await;
+}
 
 #[tokio::test(start_paused = true)]
 async fn a_waiting_bot_is_placed_after_its_commit_on_a_hint() {

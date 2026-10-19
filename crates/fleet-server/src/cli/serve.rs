@@ -704,6 +704,7 @@ fn control_plane_services(
         inbox,
         ReconcileTimings::default(),
         config.accounts.allow_offline,
+        config.rate_limits.chat_per_bot,
     );
     let tokens = EnrollmentTokenService::new(
         Arc::clone(&ports.clock),

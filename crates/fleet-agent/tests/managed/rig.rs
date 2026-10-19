@@ -51,6 +51,7 @@ pub(crate) fn spec_on(n: u8, account: u8) -> BotSpec {
         mode: ModePreset::Afk.definition(),
         desired: DesiredRunState::Running,
         conflict_texts: ConflictTexts::default(),
+        chat_rate: fleet_core::chat::ChatRate::default(),
     }
 }
 

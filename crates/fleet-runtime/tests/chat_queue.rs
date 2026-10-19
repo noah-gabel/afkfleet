@@ -7,11 +7,11 @@
 
 mod common;
 
-use core::num::{NonZeroU32, NonZeroUsize};
+use core::num::NonZeroUsize;
 use core::time::Duration;
 
 use chrono::{DateTime, Utc};
-use fleet_core::chat::ChatMessage;
+use fleet_core::chat::{ChatMessage, ChatRate};
 use fleet_core::id::BotId;
 use fleet_core::mc::{
     ConnectParams, MinecraftConnector, SessionCredentials, SessionError, SessionEvent,
@@ -67,14 +67,23 @@ const fn failed(ticket: ChatTicket, reason: ChatFailure) -> FleetEventKind {
     FleetEventKind::ChatFailed { ticket, reason }
 }
 
-/// The chat settings: one message per `interval_ms`, `burst` at once, and a
-/// queue of `queue`.
-fn config(interval_ms: u64, burst: u32, queue: usize) -> RuntimeConfig {
-    RuntimeConfig {
-        chat_interval: Duration::from_millis(interval_ms),
-        chat_burst: NonZeroU32::new(burst).unwrap(),
-        chat_queue: NonZeroUsize::new(queue).unwrap(),
-        ..RuntimeConfig::default()
+/// A bot's chat settings: the runtime's config, and the rate its spec sets
+/// (ADR-0020, S3).
+#[derive(Debug, Default, Clone, Copy)]
+struct Settings {
+    config: RuntimeConfig,
+    rate: ChatRate,
+}
+
+/// The chat settings: one message per `interval_secs`, `burst` at once, and
+/// a queue of `queue`.
+fn config(interval_secs: u32, burst: u32, queue: usize) -> Settings {
+    Settings {
+        config: RuntimeConfig {
+            chat_queue: NonZeroUsize::new(queue).unwrap(),
+            ..RuntimeConfig::default()
+        },
+        rate: ChatRate::try_new(interval_secs, burst).unwrap(),
     }
 }
 
@@ -107,12 +116,12 @@ struct Bot {
 }
 
 impl Bot {
-    fn new(config: RuntimeConfig) -> Self {
-        Self::with_tickets(config, ChatTickets::new())
+    fn new(settings: Settings) -> Self {
+        Self::with_tickets(settings, ChatTickets::new())
     }
 
-    fn with_tickets(config: RuntimeConfig, tickets: ChatTickets) -> Self {
-        let bucket = ChatBucket::new(config.chat_interval, config.chat_burst).unwrap();
+    fn with_tickets(Settings { config, rate }: Settings, tickets: ChatTickets) -> Self {
+        let bucket = ChatBucket::new(rate);
         let (events, subscriber) = broadcast::channel(64);
         Self {
             queue: ChatQueue::new(bot_id(), config.chat_queue, bucket, tickets),
@@ -173,7 +182,7 @@ impl Bot {
 
 #[tokio::test(start_paused = true)]
 async fn chat_is_refused_with_not_online_while_the_queue_is_closed() {
-    let mut bot = Bot::new(RuntimeConfig::default());
+    let mut bot = Bot::new(Settings::default());
     assert_eq!(bot.queue.send(message("hello")), Err(ChatError::NotOnline));
 
     let (mode_chat, controller) = bot.open().await;
@@ -188,7 +197,7 @@ async fn chat_is_refused_with_not_online_while_the_queue_is_closed() {
 
 #[tokio::test(start_paused = true)]
 async fn closing_a_closed_queue_does_nothing() {
-    let mut bot = Bot::new(RuntimeConfig::default());
+    let mut bot = Bot::new(Settings::default());
 
     bot.queue.close();
     bot.queue.close();
@@ -198,7 +207,7 @@ async fn closing_a_closed_queue_does_nothing() {
 
 #[tokio::test(start_paused = true)]
 async fn a_queued_message_is_sent_and_its_ticket_reported() {
-    let mut bot = Bot::new(RuntimeConfig::default());
+    let mut bot = Bot::new(Settings::default());
     let (_mode_chat, controller) = bot.open().await;
     tokio::time::advance(Duration::from_secs(5)).await;
 
@@ -215,7 +224,7 @@ async fn a_queued_message_is_sent_and_its_ticket_reported() {
 
 #[tokio::test(start_paused = true)]
 async fn messages_are_sent_in_the_order_they_were_queued() {
-    let mut bot = Bot::new(RuntimeConfig::default());
+    let mut bot = Bot::new(Settings::default());
     let (mode_chat, controller) = bot.open().await;
 
     let first = bot.queue.send(message("one")).unwrap();
@@ -241,7 +250,7 @@ async fn messages_are_sent_in_the_order_they_were_queued() {
 
 #[tokio::test(start_paused = true)]
 async fn the_bucket_lets_3_messages_through_at_once_then_one_every_3_s() {
-    let mut bot = Bot::new(RuntimeConfig::default());
+    let mut bot = Bot::new(Settings::default());
     let (_mode_chat, controller) = bot.open().await;
 
     for text in ["one", "two", "three"] {
@@ -264,7 +273,7 @@ async fn the_bucket_lets_3_messages_through_at_once_then_one_every_3_s() {
 
 #[tokio::test(start_paused = true)]
 async fn a_full_queue_refuses_with_queue_full_and_uses_no_token() {
-    let mut bot = Bot::new(config(3_000, 2, 1));
+    let mut bot = Bot::new(config(3, 2, 1));
     let (delivery, _mode_chat, controller) = bot.open_unspawned().await;
 
     bot.queue.send(message("one")).unwrap();
@@ -281,7 +290,7 @@ async fn a_full_queue_refuses_with_queue_full_and_uses_no_token() {
 
 #[tokio::test(start_paused = true)]
 async fn a_rate_limited_message_holds_no_queue_slot() {
-    let mut bot = Bot::new(config(3_000, 1, 2));
+    let mut bot = Bot::new(config(3, 1, 2));
     let (_delivery, _mode_chat, _controller) = bot.open_unspawned().await;
 
     bot.queue.send(message("one")).unwrap();
@@ -296,7 +305,7 @@ async fn a_rate_limited_message_holds_no_queue_slot() {
 
 #[tokio::test(start_paused = true)]
 async fn chat_that_cant_be_signed_fails_without_retry_or_refund() {
-    let mut bot = Bot::new(RuntimeConfig::default());
+    let mut bot = Bot::new(Settings::default());
     let (_mode_chat, controller) = bot.open().await;
     controller.fail_chat(SessionError::ChatUnavailable);
 
@@ -332,7 +341,7 @@ async fn a_failed_send_is_reported_with_its_reason(
     #[case] error: SessionError,
     #[case] reason: ChatFailure,
 ) {
-    let mut bot = Bot::new(RuntimeConfig::default());
+    let mut bot = Bot::new(Settings::default());
     let (_mode_chat, controller) = bot.open().await;
     controller.fail_chat(error);
 
@@ -344,7 +353,7 @@ async fn a_failed_send_is_reported_with_its_reason(
 
 #[tokio::test(start_paused = true)]
 async fn chat_in_a_session_that_ended_fails_as_disconnected() {
-    let mut bot = Bot::new(RuntimeConfig::default());
+    let mut bot = Bot::new(Settings::default());
     let (_mode_chat, controller) = bot.open().await;
     let kicked =
         SessionEvent::Disconnected(fleet_core::disconnect::DisconnectReason::ConnectionClosed);
@@ -361,7 +370,7 @@ async fn chat_in_a_session_that_ended_fails_as_disconnected() {
 
 #[tokio::test(start_paused = true)]
 async fn closing_the_queue_fails_every_queued_message_as_disconnected_in_order() {
-    let mut bot = Bot::new(RuntimeConfig::default());
+    let mut bot = Bot::new(Settings::default());
     let (mode_chat, controller) = bot.open().await;
     let first = bot.queue.send(message("one")).unwrap();
     mode_chat.send(message("two")).unwrap();
@@ -383,7 +392,7 @@ async fn closing_the_queue_fails_every_queued_message_as_disconnected_in_order()
 
 #[tokio::test(start_paused = true)]
 async fn mode_chat_is_sent_and_published_as_mode_chat_sent() {
-    let mut bot = Bot::new(RuntimeConfig::default());
+    let mut bot = Bot::new(Settings::default());
     let (mode_chat, controller) = bot.open().await;
     tokio::time::advance(Duration::from_secs(30)).await;
 
@@ -404,7 +413,7 @@ async fn mode_chat_is_sent_and_published_as_mode_chat_sent() {
 
 #[tokio::test(start_paused = true)]
 async fn mode_chat_shares_the_bucket_with_user_chat() {
-    let mut bot = Bot::new(RuntimeConfig::default());
+    let mut bot = Bot::new(Settings::default());
     let (mode_chat, _controller) = bot.open().await;
 
     for _ in 0..3 {
@@ -425,7 +434,7 @@ async fn mode_chat_shares_the_bucket_with_user_chat() {
 
 #[tokio::test(start_paused = true)]
 async fn mode_chat_shares_the_queue_with_user_chat() {
-    let mut bot = Bot::new(config(3_000, 3, 1));
+    let mut bot = Bot::new(config(3, 3, 1));
     let (_delivery, mode_chat, _controller) = bot.open_unspawned().await;
 
     bot.queue.send(message("hello")).unwrap();
@@ -439,7 +448,7 @@ async fn mode_chat_shares_the_queue_with_user_chat() {
 #[case::closed(SessionError::Closed)]
 #[tokio::test(start_paused = true)]
 async fn mode_chat_that_isnt_sent_publishes_nothing(#[case] error: SessionError) {
-    let mut bot = Bot::new(RuntimeConfig::default());
+    let mut bot = Bot::new(Settings::default());
     let (mode_chat, controller) = bot.open().await;
     controller.fail_chat(error);
 
@@ -454,7 +463,7 @@ async fn mode_chat_that_isnt_sent_publishes_nothing(#[case] error: SessionError)
 async fn mode_chat_in_a_session_that_ended_logs_below_warn() {
     let levels = Levels::default();
     let _guard = tracing::subscriber::set_default(levels.clone());
-    let mut bot = Bot::new(RuntimeConfig::default());
+    let mut bot = Bot::new(Settings::default());
     let (mode_chat, controller) = bot.open().await;
     let ended =
         SessionEvent::Disconnected(fleet_core::disconnect::DisconnectReason::ConnectionClosed);
@@ -480,7 +489,7 @@ async fn mode_chat_in_a_session_that_ended_logs_below_warn() {
 
 #[tokio::test(start_paused = true)]
 async fn the_bucket_carries_over_to_the_next_session() {
-    let mut bot = Bot::new(RuntimeConfig::default());
+    let mut bot = Bot::new(Settings::default());
     let (_mode_chat, _first) = bot.open().await;
     for _ in 0..3 {
         bot.queue.send(message("hello")).unwrap();
@@ -503,7 +512,7 @@ async fn the_bucket_carries_over_to_the_next_session() {
 
 #[tokio::test(start_paused = true)]
 async fn opening_again_closes_the_previous_session_first() {
-    let mut bot = Bot::new(RuntimeConfig::default());
+    let mut bot = Bot::new(Settings::default());
     let (first_mode_chat, first) = bot.open().await;
     let queued = bot.queue.send(message("one")).unwrap();
 
@@ -530,8 +539,8 @@ async fn opening_again_closes_the_previous_session_first() {
 #[tokio::test(start_paused = true)]
 async fn queues_that_share_a_ticket_counter_never_repeat_a_ticket() {
     let tickets = ChatTickets::new();
-    let mut first = Bot::with_tickets(RuntimeConfig::default(), tickets.clone());
-    let mut second = Bot::with_tickets(RuntimeConfig::default(), tickets);
+    let mut first = Bot::with_tickets(Settings::default(), tickets.clone());
+    let mut second = Bot::with_tickets(Settings::default(), tickets);
     let _first_session = first.open().await;
     let _second_session = second.open().await;
 
@@ -579,7 +588,7 @@ proptest! {
             .build()
             .unwrap();
         runtime.block_on(async {
-            let mut bot = Bot::new(config(Gcra::INTERVAL, 3, 256));
+            let mut bot = Bot::new(config(3, 3, 256));
             let _session = bot.open().await;
             let mut model = Gcra { arrival: 0 };
             let (mut elapsed, mut admitted) = (0_u64, 0_u64);

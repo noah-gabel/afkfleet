@@ -417,7 +417,8 @@ mod tests {
         BotState::Online { since: DateTime::UNIX_EPOCH, attempt: n(1) },
         LastState::Online
     )]
-    #[case::backoff(BotState::Backoff { attempt: n(4) }, LastState::Backoff)]
+    #[case::backoff(BotState::Backoff { attempt: n(4), fresh: false }, LastState::Backoff)]
+    #[case::fresh_backoff(BotState::Backoff { attempt: n(4), fresh: true }, LastState::Backoff)]
     #[case::paused(BotState::Paused { reason: DUPLICATE_LOGIN }, LastState::Paused(DUPLICATE_LOGIN))]
     #[case::failed(
         BotState::Failed { reason: FailReason::CrashLoop },
@@ -459,7 +460,8 @@ mod tests {
                     attempt,
                 }
             }),
-            attempt.prop_map(|attempt| BotState::Backoff { attempt }),
+            (attempt, any::<bool>())
+                .prop_map(|(attempt, fresh)| BotState::Backoff { attempt, fresh }),
             Just(BotState::Paused {
                 reason: DUPLICATE_LOGIN
             }),

@@ -42,6 +42,7 @@ fn assignment(n: u8) -> Assignment {
             mode: ModePreset::Afk.definition(),
             desired: DesiredRunState::Running,
             conflict_texts: ConflictTexts::default(),
+            chat_rate: fleet_core::chat::ChatRate::default(),
         },
         restore: None,
     }
@@ -532,6 +533,7 @@ fn largest(n: u16) -> Assignment {
             mode: ModeDraft { steps }.validate().unwrap(),
             desired: DesiredRunState::Running,
             conflict_texts: ConflictTexts::try_new(&texts).unwrap(),
+            chat_rate: fleet_core::chat::ChatRate::default(),
         },
         restore: Some(StickyState::Failed(FailReason::Permanent {
             kind: PermanentKind::Banned,

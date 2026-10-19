@@ -63,6 +63,7 @@ pub(crate) fn spec(bot: &str, name: &str, desired: DesiredRunState) -> BotSpec {
         mode: mode(Vec::new()),
         desired,
         conflict_texts: ConflictTexts::default(),
+        chat_rate: fleet_core::chat::ChatRate::default(),
     }
 }
 
@@ -117,7 +118,10 @@ pub(crate) const fn connecting(attempt: NonZeroU32) -> BotState {
 }
 
 pub(crate) const fn backoff(attempt: NonZeroU32) -> BotState {
-    BotState::Backoff { attempt }
+    BotState::Backoff {
+        attempt,
+        fresh: false,
+    }
 }
 
 pub(crate) fn kick(key: &str) -> SessionEvent {

@@ -14,16 +14,13 @@ use core::time::Duration;
 /// limits, so no setting can make the runtime panic (ADR-0013).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeConfig {
-    /// A bot's chat bucket gains one message per this interval (Plan.md
-    /// §7.4).
-    pub chat_interval: Duration,
-    /// How many messages a full chat bucket lets through at once (§7.4).
-    pub chat_burst: NonZeroU32,
     /// How many messages a bot's chat queue holds. A message beyond that is
     /// refused with `QueueFull` instead of waiting.
     pub chat_queue: NonZeroUsize,
     /// How long a bot waits for its session credentials. A request that
-    /// takes longer counts as a retryable failure (ADR-0010).
+    /// takes longer counts as a retryable failure (ADR-0010). Longer than the
+    /// server may take to mint a session (ADR-0020, S1): a bot that gave up
+    /// first would ask fresh again and never take the session just minted.
     pub session_request_timeout: Duration,
     /// How long a session may take from `connect()` until the bot has
     /// joined (Appendix A, ADR-0011). The actor also bounds `connect()`
@@ -92,10 +89,8 @@ impl Default for RuntimeConfig {
         // Adding to `MIN` gives a non-zero constant without unwrapping the
         // `Option` that `NonZero*::new` returns.
         Self {
-            chat_interval: Duration::from_secs(3),
-            chat_burst: NonZeroU32::MIN.saturating_add(2),
             chat_queue: NonZeroUsize::MIN.saturating_add(15),
-            session_request_timeout: Duration::from_secs(30),
+            session_request_timeout: Duration::from_secs(150),
             connect_timeout: Duration::from_secs(30),
             actor_inbox: NonZeroUsize::MIN.saturating_add(31),
             respawn_interval: Duration::from_secs(5),
@@ -123,10 +118,8 @@ mod tests {
     fn defaults_are_the_ones_adr_0013_decided() {
         let config = RuntimeConfig::default();
 
-        assert_eq!(config.chat_interval, Duration::from_secs(3));
-        assert_eq!(config.chat_burst.get(), 3);
         assert_eq!(config.chat_queue.get(), 16);
-        assert_eq!(config.session_request_timeout, Duration::from_secs(30));
+        assert_eq!(config.session_request_timeout, Duration::from_secs(150));
         assert_eq!(config.connect_timeout, Duration::from_secs(30));
         assert_eq!(config.actor_inbox.get(), 32);
         assert_eq!(config.respawn_interval, Duration::from_secs(5));

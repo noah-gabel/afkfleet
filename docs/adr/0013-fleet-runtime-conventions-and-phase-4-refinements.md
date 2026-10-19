@@ -47,7 +47,7 @@ The queue and the mode runner are built against the fake before the actor, so th
 
 ### Credentials (P4.3)
 - **The port lives in `fleet_core::mc`**, next to `SessionCredentials`: `session(SessionRequest { bot_id, account, fresh })` returns `SessionCredentials` or `CredentialError { retryable }`. Its fake is in fleet-testkit, `OfflineCredentials` in fleet-runtime, and the managed implementation in fleet-agent (P10).
-- **The session-request timeout** is 30 s, a `RuntimeConfig` default. The runtime doesn't check `expires_at`; the managed provider doesn't hand out a token that expires within the connect timeout (P10).
+- **The session-request timeout** is 30 s, a `RuntimeConfig` default. *(150 s from Phase 11, [ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S1: longer than the server may take to mint a session.)* The runtime doesn't check `expires_at`; the managed provider doesn't hand out a token that expires within the connect timeout (P10).
 
 ### Chat queue (P4.5)
 - 16 messages, with one governor bucket per bot: one message every 3 s, burst 3 (§7.4's per-bot value). The bucket is checked when a message is queued. A full bucket returns `RateLimited`, a full queue `QueueFull`; it never waits.
@@ -57,7 +57,7 @@ The queue and the mode runner are built against the fake before the actor, so th
 - On a disconnect or teardown, queued messages fail with `ChatFailed{Disconnected}`.
 - A mode chat step that's rate-limited or finds the queue full is skipped and logged, and runs again at its next scheduled time.
 - A token isn't refunded when a send fails.
-- **Commands with message arguments** (`/me`, `/msg`, …) on servers that enforce secure chat get nothing special in Phase 4: they go out and the server rejects them. P11.3's rule for user commands applies to mode chat too, through `ChatUnavailable`, because only fleet-mc knows whether a session signs.
+- **Commands with message arguments** (`/me`, `/msg`, …) on servers that enforce secure chat get nothing special in Phase 4: they go out and the server rejects them. P11.3's rule for user commands applies to mode chat too, through `ChatUnavailable`, because only fleet-mc knows whether a session signs. *(Decided in Phase 11, [ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S2: fleet-mc refuses such a command where chat must be signed, so the mode's step is skipped at `debug`.)*
 - *(group B, the user's decisions)* What the queue looks like as built:
   - **Events.** `FleetEvent` is defined in P4.5 with all its kinds (see Actor), so the queue's `ChatDelivery` publishes `ChatSent` and `ChatFailed` on the fleet's `broadcast` itself. The `RuntimeClock` stamps them, which makes the queue the clock's first user.
   - **Tickets** come from one fleet-wide counter, `ChatTickets`. A ticket never repeats while the agent runs, even across actor restarts, so the agent can map it to the control plane's request id.
@@ -122,6 +122,7 @@ It checks every 1 s while Online. A tick stall gives `WatchdogTimeout`, a packet
   - The supervisor keeps each bot's spec, snapshot `watch`, restart window and circuit breaker. The actor writes a copy of its breaker into a private `watch` after each breaker effect, so a panic doesn't reset it.
   - A pure `fleet_core::bot::restore(&BotState, now, &BotRules) -> Transition` decides the restored state and its effects:
     - AwaitingSession, Connecting, Online and Backoff come back as `Backoff{attempt}` with `ScheduleRetry`; an Online bot that had lasted the stable period comes back as `Backoff{1}`
+      - *Amended in Phase 11 ([ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S1): a fresh AwaitingSession or Backoff comes back as a fresh Backoff, since no session arrived after the rejected one; Connecting and Online come back non-fresh.*
     - Paused, Failed and Stopped stay
     - Stopping becomes Stopped
 
@@ -135,6 +136,7 @@ It checks every 1 s while Online. A tick stall gives `WatchdogTimeout`, a packet
     - The chat rate limit becomes a `ChatQuota` (`try_new`), checked once. Every bot's bucket is `ChatBucket::with_quota(quota)`, which can't fail; `ChatBucket::new` stays and is built on the two.
     - Every capacity handed to tokio is checked against tokio's documented limit, since tokio panics above it: `event_buffer` against `usize::MAX / 2` (`broadcast`), and `supervisor_queue`, `actor_inbox` and `chat_queue` against `Semaphore::MAX_PERMITS` (`mpsc`). `broadcast` allocates its whole buffer up front, so a huge value that passes can still run out of memory; `mpsc` allocates as it fills.
     - Errors: `FleetSetupError::ChatQuota(ChatBucketError)` and `CapacityTooLarge { setting: CapacitySetting }`, which names the field.
+    - *Amended in Phase 11 ([ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S3): `ChatQuota`, `ChatBucketError` and `FleetSetupError::ChatQuota` are gone, with `RuntimeConfig`'s `chat_interval` and `chat_burst`. Each bot's bucket is `ChatBucket::new(spec.chat_rate)`, built from fleet-core's `ChatRate`, which is valid by its type, so the setup checks only the capacities.*
   - **Calls.** A `Fleet` call `try_send`s to the supervisor's queue: full is `Busy` at once. It then waits for the answer up to `reply_timeout` (5 s, no config key): `TimedOut`. A closed queue or a dropped reply means the supervisor has ended: `ShuttingDown`. `TimedOut` is only for a live supervisor that doesn't answer in time.
   - **Forwarding.** The supervisor forwards one `BotCommand` per call with `try_send` and never waits for an actor. When that fails (`Full`, or `Closed` in the short race before an actor's exit is handled), the call is `Busy`, and `apply` doesn't store the spec, so a restart never starts from a spec the caller was told failed. For `send_chat` the supervisor answers with the receiver the actor answers on; an actor that ends before it answers also gives `Busy`. `send_chat` returns `Result<ChatTicket, SendChatError>`, with `Fleet(FleetError)` and `Chat(ChatError)`.
   - **`apply` for a new bot.** It's refused with `AccountInUse` when a live bot's account clashes, by the new `BotAccount::clashes_with`: offline names compare ignoring ASCII case, since Minecraft names are unique whatever their case, and online accounts by `AccountId`. If only a bot that's being removed holds the account, the answer is `Busy`, since the account is free once its `Removed` goes out. `max_bots` (50) counts every bot the fleet knows, in any state, until its `Removed`.
@@ -226,8 +228,8 @@ They're `RuntimeConfig` fields with defaults, like fleet-mc's `McConfig`, and P5
 
 | Setting | Default |
 |---|---|
-| Session-request timeout | 30 s |
-| Chat bucket | 1 message per 3 s, burst 3 |
+| Session-request timeout | 30 s *(150 s from Phase 11, [ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S1)* |
+| Chat bucket | 1 message per 3 s, burst 3 *(amended in Phase 11, [ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S3: each bot's spec sets it, the server's `[rate_limits]`; this is the default a standalone agent uses)* |
 | Chat queue | 16 |
 | Actor inbox | 32 |
 | Supervisor command queue | 64 |

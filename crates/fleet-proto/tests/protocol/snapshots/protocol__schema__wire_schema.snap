@@ -66,6 +66,7 @@ message fleet.v1.BotSpec
   4 mode: fleet.v1.ModeDefinition
   5 desired: fleet.v1.DesiredRunState
   6 conflict_texts: repeated string
+  7 chat_rate: fleet.v1.ChatRate
 message fleet.v1.BotState
   1 stopped: fleet.v1.Unit (oneof state)
   2 awaiting_session: fleet.v1.BotState.AwaitingSession (oneof state)
@@ -80,6 +81,7 @@ message fleet.v1.BotState.AwaitingSession
   2 fresh: bool
 message fleet.v1.BotState.Backoff
   1 attempt: uint32
+  2 fresh: bool
 message fleet.v1.BotState.Connecting
   1 attempt: uint32
   2 auth_retried: bool
@@ -91,6 +93,9 @@ message fleet.v1.BotState.Stopping
 message fleet.v1.ChatFailed
   1 request_id: bytes
   2 reason: fleet.v1.ChatFailedReason
+message fleet.v1.ChatRate
+  1 interval_secs: uint32
+  2 burst: uint32
 message fleet.v1.ChatSender
   1 name: string
   2 uuid: optional bytes

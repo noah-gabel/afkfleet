@@ -21,6 +21,17 @@ message BotSpec {
   DesiredRunState desired = 5;
   // Kick texts that count as a duplicate login on its server.
   repeated string conflict_texts = 6;
+  // How fast it may chat: the server's setting (ADR-0020, S3).
+  ChatRate chat_rate = 7;
+}
+
+// A bot's chat rate: a bucket that holds `burst` messages and gains one every
+// `interval_secs` seconds.
+message ChatRate {
+  // Seconds between two messages, 1 to 60.
+  uint32 interval_secs = 1;
+  // Messages at once, 1 to 8.
+  uint32 burst = 2;
 }
 
 // The account a bot plays as.
@@ -94,6 +105,9 @@ message BotState {
   message Backoff {
     // The attempt that failed.
     uint32 attempt = 1;
+    // Whether the next attempt asks for a fresh session: the last session was
+    // rejected, and none has arrived since.
+    bool fresh = 2;
   }
 
   // The session is being torn down.

@@ -17,9 +17,10 @@ use tracing::{debug, warn};
 
 use super::driver::ClientSlot;
 use crate::actions;
+use crate::command_tree::MessageCommands;
 use crate::events::{BridgeControl, LivenessStamps, Phase};
 use crate::host::HostThread;
-use crate::signing::{self, Decision, SigningState};
+use crate::signing::{self, Decision, Kind, SigningState};
 
 /// How much longer than the driver's own wait for azalea's runner
 /// [`disconnect`](McSession::disconnect) waits for the driver to end, before
@@ -54,10 +55,15 @@ struct Inner {
     driver_wait: Duration,
     /// Where the session's chat signing is, published by its App.
     signing: watch::Receiver<SigningState>,
+    /// The server's commands with a message argument, published by its App.
+    commands: watch::Receiver<MessageCommands>,
     /// How long after the game state chat may wait for signing.
     chat_signing_timeout: Duration,
     /// Whether unavailable chat was logged at `warn` already.
     warned_chat_unavailable: AtomicBool,
+    /// Whether a refused command with a message was logged at `warn`
+    /// already.
+    warned_command_unavailable: AtomicBool,
 }
 
 impl fmt::Debug for McSession {
@@ -80,6 +86,7 @@ pub(super) struct Parts {
     pub(super) driver_ended: watch::Receiver<()>,
     pub(super) app_exit_timeout: Duration,
     pub(super) signing: watch::Receiver<SigningState>,
+    pub(super) commands: watch::Receiver<MessageCommands>,
     pub(super) chat_signing_timeout: Duration,
 }
 
@@ -96,8 +103,10 @@ impl McSession {
                 driver_ended: parts.driver_ended,
                 driver_wait: parts.app_exit_timeout.saturating_add(DRIVER_GRACE),
                 signing: parts.signing,
+                commands: parts.commands,
                 chat_signing_timeout: parts.chat_signing_timeout,
                 warned_chat_unavailable: AtomicBool::new(false),
+                warned_command_unavailable: AtomicBool::new(false),
             }),
         }
     }
@@ -146,6 +155,32 @@ impl McSession {
         }
     }
 
+    /// Logs, once per session, that commands with a message argument can't
+    /// go out on this server: it requires signed chat, and azalea signs no
+    /// command (ADR-0020, S2). Never the command itself; later refusals only
+    /// return the error.
+    fn command_unavailable(&self) {
+        if !self
+            .inner
+            .warned_command_unavailable
+            .swap(true, Ordering::Relaxed)
+        {
+            warn!(
+                bot_id = %self.inner.bot_id,
+                "the server requires signed chat, and a command with a message can't be signed, so such commands fail on this server"
+            );
+        }
+    }
+
+    /// Logs the refusal of a message of `kind` once per session, in its own
+    /// words.
+    fn unavailable(&self, kind: Kind) {
+        match kind {
+            Kind::CommandWithMessage => self.command_unavailable(),
+            Kind::Chat | Kind::Command => self.chat_unavailable(),
+        }
+    }
+
     /// Locks the stop signal, poison-tolerantly: it holds a plain value.
     fn lock_stop(&self) -> MutexGuard<'_, Option<oneshot::Sender<()>>> {
         self.inner
@@ -180,8 +215,10 @@ impl SessionHandle for McSession {
     /// azalea's chat-signing session, at most until `chat_signing_timeout`
     /// after the bot entered the game, and fails with
     /// [`SessionError::ChatUnavailable`] if it can't be signed: azalea would
-    /// send it unsigned, and the server would drop it (ADR-0011). Commands
-    /// and offline accounts never wait.
+    /// send it unsigned, and the server would drop it (ADR-0011). A command
+    /// with a message argument, by the server's command tree, fails the same
+    /// way there at once, since azalea signs no command (ADR-0020, S2).
+    /// Other commands and offline accounts never wait.
     fn send_chat(
         &self,
         message: ChatMessage,
@@ -189,10 +226,9 @@ impl SessionHandle for McSession {
         let session = self.clone();
         async move {
             // azalea sends text starting with `/` as a command, never signed
-            // (ADR-0008 §7).
-            let command = message.as_str().starts_with('/');
+            // (ADR-0008 §7): only plain chat waits for signing.
             let timeout = session.inner.chat_signing_timeout;
-            if !command && session.inner.control.phase() == Phase::Joined {
+            if !message.is_command() && session.inner.control.phase() == Phase::Joined {
                 let mut signing = session.inner.signing.clone();
                 let ready = signing::signed_chat_ready(&mut signing, timeout).await;
                 if ready == Err(SessionError::ChatUnavailable) {
@@ -201,24 +237,28 @@ impl SessionHandle for McSession {
                 ready?;
             }
             let signing = session.inner.signing.clone();
+            let commands = session.inner.commands.clone();
             // `ChatMessage` already keeps to azalea's limits, so nothing is
             // dropped or cut silently. The text is only queued for the next
             // tick, which can't fail.
             let sent = session
                 .call(move |client| {
-                    // Checked again on the host thread, right before the
-                    // message is queued, so unsigned chat never slips out.
-                    if !command && !sendable(&signing, timeout) {
-                        return Err(SessionError::ChatUnavailable);
+                    // Decided on the host thread, right before the message is
+                    // queued, so neither unsigned chat nor a command whose
+                    // message needs a signature ever slips out. A refusal
+                    // names the kind decided here, so its warning has the
+                    // right words (PR #59's review).
+                    let decided = sendable(&signing, &commands, &message, timeout);
+                    if decided.is_ok() {
+                        client.chat(message.as_str());
                     }
-                    client.chat(message.as_str());
-                    Ok(())
+                    Ok(decided)
                 })
-                .await;
-            if sent == Err(SessionError::ChatUnavailable) {
-                session.chat_unavailable();
-            }
-            sent
+                .await?;
+            sent.map_err(|kind| {
+                session.unavailable(kind);
+                SessionError::ChatUnavailable
+            })
         }
     }
 
@@ -264,15 +304,73 @@ impl SessionHandle for McSession {
     }
 }
 
-/// Whether a chat message can go out now, given the session's `signing`.
-fn sendable(signing: &watch::Receiver<SigningState>, timeout: Duration) -> bool {
+/// Whether `message` can go out now, given the session's `signing` and the
+/// server's `commands` with a message argument: the host job's last check,
+/// right before azalea queues it.
+fn sendable(
+    signing: &watch::Receiver<SigningState>,
+    commands: &watch::Receiver<MessageCommands>,
+    message: &ChatMessage,
+    timeout: Duration,
+) -> Result<(), Kind> {
     let state = *signing.borrow();
+    let kind = signing::kind(message, &commands.borrow());
     let now = tokio::time::Instant::now();
     let past_deadline = now >= signing::deadline(state, now, timeout);
-    signing::decide(state.signing, false, past_deadline) == Decision::Send
+    if signing::decide(state.signing, kind, past_deadline) == Decision::Send {
+        Ok(())
+    } else {
+        Err(kind)
+    }
 }
 
 /// Waits until `receiver`'s sender is gone. It never sends.
 async fn closed(mut receiver: watch::Receiver<()>) {
     while receiver.changed().await.is_ok() {}
+}
+
+#[cfg(test)]
+mod tests {
+    use rstest::rstest;
+
+    use super::*;
+    use crate::signing::Signing;
+
+    const TIMEOUT: Duration = Duration::from_secs(10);
+
+    /// Plain chat goes out only once signing allows it; a command with a
+    /// message, only where signing isn't needed (ADR-0020, S2); any other
+    /// command always. A refusal names the kind the job decided, so its
+    /// warning has the right words (PR #59's review).
+    #[rstest]
+    #[case::chat_signed("hello", &["me"], Signing::Ready, Ok(()))]
+    #[case::chat_unsigned_where_it_must_be("hello", &["me"], Signing::Failed, Err(Kind::Chat))]
+    #[case::an_emote_where_chat_is_signed(
+        "/me waves",
+        &["me"],
+        Signing::Ready,
+        Err(Kind::CommandWithMessage)
+    )]
+    #[case::an_emote_where_it_isnt_needed("/me waves", &["me"], Signing::NotNeeded, Ok(()))]
+    #[case::a_command_without_a_message("/spawn", &["me"], Signing::Failed, Ok(()))]
+    #[case::an_emote_before_the_tree("/me waves", &[], Signing::Ready, Ok(()))]
+    #[tokio::test(start_paused = true)]
+    async fn the_host_job_queues_only_what_the_server_takes(
+        #[case] text: &str,
+        #[case] names: &[&str],
+        #[case] signing: Signing,
+        #[case] expected: Result<(), Kind>,
+    ) {
+        let (_state, state_rx) = watch::channel(SigningState {
+            signing,
+            in_game_since: Some(tokio::time::Instant::now()),
+        });
+        let (_commands, commands_rx) = watch::channel(MessageCommands::from_names(names));
+        let message: ChatMessage = text.parse().unwrap();
+
+        assert_eq!(
+            sendable(&state_rx, &commands_rx, &message, TIMEOUT),
+            expected
+        );
+    }
 }

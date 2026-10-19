@@ -100,6 +100,7 @@ fn spec(desired: DesiredRunState) -> BotSpec {
         mode: idle(),
         desired,
         conflict_texts: ConflictTexts::default(),
+        chat_rate: fleet_core::chat::ChatRate::default(),
     }
 }
 
@@ -158,7 +159,10 @@ const fn connecting(attempt: NonZeroU32) -> BotState {
 }
 
 const fn backoff(attempt: NonZeroU32) -> BotState {
-    BotState::Backoff { attempt }
+    BotState::Backoff {
+        attempt,
+        fresh: false,
+    }
 }
 
 fn emit(controller: &SessionController, event: SessionEvent) {
@@ -243,7 +247,7 @@ impl Setup {
             self.breaker
                 .unwrap_or_else(|| CircuitBreaker::new(self.circuit)),
         );
-        let bucket = ChatBucket::new(self.config.chat_interval, self.config.chat_burst).unwrap();
+        let bucket = ChatBucket::new(self.spec.chat_rate);
         let (actor, inbox) = BotActor::new(BotActorParts {
             spec: self.spec,
             connector: Arc::new(connector),
@@ -789,12 +793,13 @@ async fn incoming_chat_and_deaths_are_published() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_session_request_that_never_answers_times_out_after_30_s() {
+async fn a_session_request_that_never_answers_times_out_at_its_bound() {
     let setup = Setup::new(running());
+    let limit = setup.config.session_request_timeout;
     setup.credentials.push_never_answer();
     let bot = setup.start().await;
 
-    advance(ms(29_999)).await;
+    advance(limit.saturating_sub(ms(1))).await;
     assert_eq!(bot.state(), awaiting(n(1)));
     advance(ms(1)).await;
 
@@ -837,6 +842,58 @@ async fn a_rejected_session_is_retried_once_with_a_fresh_token_then_fails() {
         attempt: n(1),
         fresh: true
     }));
+}
+
+/// U24 (ADR-0020, S1): after a refused login, every request stays fresh
+/// through the backoffs until a session arrives, so the server never hands
+/// out the cached session it just refused. The fresh session is refused too,
+/// which fails the bot: §6 row 5's one fresh token.
+#[tokio::test(start_paused = true)]
+async fn a_refused_logins_requests_stay_fresh_through_its_backoffs_until_a_grant_arrives() {
+    let mut bot = Setup::new(running()).start().await;
+    let first = bot.session(0).await;
+    bot.credentials
+        .push_answer(Err(CredentialError { retryable: true }));
+    bot.credentials
+        .push_answer(Err(CredentialError { retryable: true }));
+
+    emit(
+        &first,
+        SessionEvent::Disconnected(DisconnectReason::AuthRejected),
+    );
+    settle().await;
+    // The first and second backoffs wait 5–10 s and 10–20 s.
+    advance(ms(10_000)).await;
+    advance(ms(20_000)).await;
+    let second = bot.session(1).await;
+    emit(
+        &second,
+        SessionEvent::Disconnected(DisconnectReason::AuthRejected),
+    );
+    settle().await;
+
+    let fresh: Vec<bool> = bot
+        .credentials
+        .requests()
+        .iter()
+        .map(|request| request.fresh)
+        .collect();
+    assert_eq!(fresh, [false, true, true, true]);
+    assert_eq!(bot.connects(), 2);
+    assert_eq!(
+        bot.state(),
+        BotState::Failed {
+            reason: FailReason::Auth
+        }
+    );
+    let states = bot.states();
+    for attempt in [n(1), n(2)] {
+        let backoff = BotState::Backoff {
+            attempt,
+            fresh: true,
+        };
+        assert!(states.contains(&backoff), "{backoff:?} in {states:?}");
+    }
 }
 
 #[tokio::test(start_paused = true)]
@@ -1094,17 +1151,18 @@ async fn a_restart_during_backoff_starts_over_and_drops_the_old_timer() {
 #[tokio::test(start_paused = true)]
 async fn a_restart_while_waiting_for_a_session_drops_the_old_request() {
     let setup = Setup::new(running());
+    let third = setup.config.session_request_timeout / 3;
     setup.credentials.push_never_answer();
     setup.credentials.push_never_answer();
     let bot = setup.start().await;
-    advance(secs(10)).await;
+    advance(third).await;
 
     bot.send(BotCommand::Restart).await;
-    advance(secs(20) + ms(1)).await;
+    advance(third * 2 + ms(1)).await;
 
     assert_eq!(bot.credentials.requests().len(), 2);
     assert_eq!(bot.state(), awaiting(n(1)), "the old timeout must not fire");
-    advance(secs(10)).await;
+    advance(third).await;
     assert_eq!(bot.state(), backoff(n(1)));
 }
 

@@ -9,8 +9,13 @@
 //! timeout.
 //!
 //! - [`SigningPlugin`] publishes the session's [`SigningState`] every frame,
-//!   from the bot's components and the server's login packet.
-//! - [`decide`] says whether a message goes out now, waits, or can't go out.
+//!   from the bot's components and the server's login packet, and the
+//!   commands with a message argument from the server's command tree
+//!   ([`MessageCommands`]).
+//! - [`kind`] tells plain chat, a command and a command with a message
+//!   argument apart; [`decide`] says whether a message goes out now, waits,
+//!   or can't go out. azalea signs no command, so a command with a message
+//!   argument can't go out where signing is needed (ADR-0020, S2).
 //! - [`signed_chat_ready`] waits on the caller's side, never on the host
 //!   thread, until the message can go out or the deadline passes.
 
@@ -27,9 +32,12 @@ use azalea::entity::LocalEntity;
 use azalea::login::IsAuthenticated;
 use azalea::packet::game::ReceiveGamePacketEvent;
 use azalea::protocol::packets::game::ClientboundGamePacket;
+use fleet_core::chat::ChatMessage;
 use fleet_core::mc::SessionError;
 use tokio::sync::watch;
 use tokio::time::{self, Instant};
+
+use crate::command_tree::MessageCommands;
 
 /// Where a session's chat signing is.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,6 +132,29 @@ type SigningComponents = (
     Has<OnlyRefreshCertsAfter>,
 );
 
+/// What a message is, for [`decide`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Kind {
+    /// Plain chat, which azalea signs once its chat-signing session is set
+    /// up.
+    Chat,
+    /// A command without a message argument, which needs no signature.
+    Command,
+    /// A command with a message argument, which azalea can't sign (ADR-0020,
+    /// S2).
+    CommandWithMessage,
+}
+
+/// What `message` is, given the server's `commands` with a message argument.
+#[must_use]
+pub(crate) fn kind(message: &ChatMessage, commands: &MessageCommands) -> Kind {
+    match message.command_name() {
+        None => Kind::Chat,
+        Some(name) if commands.contains(name) => Kind::CommandWithMessage,
+        Some(_) => Kind::Command,
+    }
+}
+
 /// What `send_chat` does with a message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Decision {
@@ -135,17 +166,21 @@ pub(crate) enum Decision {
     Unavailable,
 }
 
-/// What to do with a message, given the session's `signing`: a `command`
-/// (azalea never signs commands, ADR-0008 §7) goes out as it is, and a
-/// pending signing counts as unavailable `past_deadline`.
+/// What to do with a message of `kind`, given the session's `signing`: a
+/// command without a message goes out as it is (azalea never signs commands,
+/// ADR-0008 §7), and a pending signing counts as unavailable
+/// `past_deadline`.
 #[must_use]
-pub(crate) const fn decide(signing: Signing, command: bool, past_deadline: bool) -> Decision {
-    match signing {
-        _ if command => Decision::Send,
-        Signing::NotNeeded | Signing::Ready => Decision::Send,
-        Signing::Failed => Decision::Unavailable,
-        Signing::Pending if past_deadline => Decision::Unavailable,
-        Signing::Pending => Decision::Wait,
+pub(crate) const fn decide(signing: Signing, kind: Kind, past_deadline: bool) -> Decision {
+    match (kind, signing) {
+        (Kind::Command, _) | (_, Signing::NotNeeded) | (Kind::Chat, Signing::Ready) => {
+            Decision::Send
+        }
+        // A command's message can't be signed even once azalea's
+        // chat-signing session is set up (ADR-0020, S2).
+        (Kind::CommandWithMessage, _) | (Kind::Chat, Signing::Failed) => Decision::Unavailable,
+        (Kind::Chat, Signing::Pending) if past_deadline => Decision::Unavailable,
+        (Kind::Chat, Signing::Pending) => Decision::Wait,
     }
 }
 
@@ -174,7 +209,7 @@ pub(crate) async fn signed_chat_ready(
     loop {
         let state = *signing.borrow_and_update();
         let deadline = deadline(state, called, timeout);
-        match decide(state.signing, false, Instant::now() >= deadline) {
+        match decide(state.signing, Kind::Chat, Instant::now() >= deadline) {
             Decision::Send => return Ok(()),
             Decision::Unavailable => return Err(SessionError::ChatUnavailable),
             // A new state or the deadline: decide again. `changed` is
@@ -187,19 +222,23 @@ pub(crate) async fn signed_chat_ready(
     }
 }
 
-/// Publishes the session's [`SigningState`] on `state`, every frame. One App
-/// runs one session, so its system holds that session's sender; the sender
-/// goes with the App, which ends the waits of [`signed_chat_ready`].
+/// Publishes the session's [`SigningState`] on `state`, every frame, and the
+/// commands with a message argument on `commands` whenever the server sends
+/// its command tree. One App runs one session, so its system holds that
+/// session's senders; they go with the App, which ends the waits of
+/// [`signed_chat_ready`].
 pub(crate) struct SigningPlugin {
     /// The account is an online one.
     pub(crate) online: bool,
     pub(crate) state: Arc<watch::Sender<SigningState>>,
+    pub(crate) commands: Arc<watch::Sender<MessageCommands>>,
 }
 
 impl Plugin for SigningPlugin {
     fn build(&self, app: &mut App) {
         let online = self.online;
         let state = Arc::clone(&self.state);
+        let commands = Arc::clone(&self.commands);
         // azalea registers the message too; registering it again is a no-op
         // (as in the liveness plugin). The login packet comes before the bot
         // spawns, and messages live for two frames, so it isn't missed.
@@ -210,8 +249,14 @@ impl Plugin for SigningPlugin {
                   mut enforces: Local<Option<bool>>,
                   mut in_game_since: Local<Option<Instant>>| {
                 for received in packets.read() {
-                    if let ClientboundGamePacket::Login(login) = &*received.packet {
-                        *enforces = Some(login.enforces_secure_chat);
+                    match &*received.packet {
+                        ClientboundGamePacket::Login(login) => {
+                            *enforces = Some(login.enforces_secure_chat);
+                        }
+                        ClientboundGamePacket::Commands(tree) => {
+                            commands.send_replace(MessageCommands::of(tree));
+                        }
+                        _ => {}
                     }
                 }
                 let Some((in_game, authenticated, session, failed)) = bots.iter().next() else {
@@ -247,7 +292,12 @@ mod tests {
     use azalea::login::IsAuthenticated;
     use azalea::packet::game::ReceiveGamePacketEvent;
     use azalea::protocol::packets::common::CommonPlayerSpawnInfo;
-    use azalea::protocol::packets::game::{ClientboundGamePacket, ClientboundLogin};
+    use azalea::protocol::packets::game::c_commands::{
+        BrigadierNodeStub, BrigadierParser, NodeType,
+    };
+    use azalea::protocol::packets::game::{
+        ClientboundCommands, ClientboundGamePacket, ClientboundLogin,
+    };
     use azalea::registry::DataRegistry as _;
     use azalea::registry::data::DimensionKind;
     use azalea::registry::identifier::Identifier;
@@ -312,15 +362,64 @@ mod tests {
         #[case] past_deadline: bool,
         #[case] expected: Decision,
     ) {
-        assert_eq!(decide(signing, false, past_deadline), expected);
+        assert_eq!(decide(signing, Kind::Chat, past_deadline), expected);
     }
 
     #[rstest]
+    #[case::not_needed(Signing::NotNeeded, false)]
     #[case::pending(Signing::Pending, false)]
     #[case::pending_past_the_deadline(Signing::Pending, true)]
+    #[case::ready(Signing::Ready, false)]
     #[case::failed(Signing::Failed, false)]
-    fn commands_always_go_out(#[case] signing: Signing, #[case] past_deadline: bool) {
-        assert_eq!(decide(signing, true, past_deadline), Decision::Send);
+    fn commands_without_a_message_always_go_out(
+        #[case] signing: Signing,
+        #[case] past_deadline: bool,
+    ) {
+        assert_eq!(
+            decide(signing, Kind::Command, past_deadline),
+            Decision::Send
+        );
+    }
+
+    /// azalea signs no command, so where signing is needed, even once it's
+    /// set up, the server would reject a command's message (ADR-0020, S2).
+    #[rstest]
+    #[case::not_needed(Signing::NotNeeded, false, Decision::Send)]
+    #[case::pending(Signing::Pending, false, Decision::Unavailable)]
+    #[case::pending_past_the_deadline(Signing::Pending, true, Decision::Unavailable)]
+    #[case::ready(Signing::Ready, false, Decision::Unavailable)]
+    #[case::failed(Signing::Failed, false, Decision::Unavailable)]
+    fn a_command_with_a_message_goes_out_only_where_signing_isnt_needed(
+        #[case] signing: Signing,
+        #[case] past_deadline: bool,
+        #[case] expected: Decision,
+    ) {
+        assert_eq!(
+            decide(signing, Kind::CommandWithMessage, past_deadline),
+            expected
+        );
+    }
+
+    // --- kind ---
+
+    #[rstest]
+    #[case::chat("hello there", &["me", "msg"], Kind::Chat)]
+    #[case::a_command_without_a_message("/spawn", &["me", "msg"], Kind::Command)]
+    #[case::an_emote("/me waves", &["me", "msg"], Kind::CommandWithMessage)]
+    #[case::a_whisper("/msg AfkBot2 hi", &["me", "msg"], Kind::CommandWithMessage)]
+    #[case::a_name_the_tree_doesnt_have("/minecraft:me waves", &["me", "msg"], Kind::Command)]
+    #[case::before_the_tree("/me waves", &[], Kind::Command)]
+    fn a_message_is_chat_a_command_or_a_command_with_a_message(
+        #[case] text: &str,
+        #[case] commands: &[&str],
+        #[case] expected: Kind,
+    ) {
+        let message: ChatMessage = text.parse().unwrap();
+
+        assert_eq!(
+            kind(&message, &MessageCommands::from_names(commands)),
+            expected
+        );
     }
 
     // --- deadline ---
@@ -453,15 +552,101 @@ mod tests {
 
     // --- SigningPlugin ---
 
-    /// An App with the plugin, and the receiver of what it publishes.
+    /// An App with the plugin, and the receiver of the signing state it
+    /// publishes.
     fn app(online: bool) -> (App, watch::Receiver<SigningState>) {
+        let (app, rx, _commands) = app_with_commands(online);
+        (app, rx)
+    }
+
+    /// [`app`], and the receiver of the message commands it publishes.
+    fn app_with_commands(
+        online: bool,
+    ) -> (
+        App,
+        watch::Receiver<SigningState>,
+        watch::Receiver<MessageCommands>,
+    ) {
         let (tx, rx) = watch::channel(SigningState::new(online));
+        let (commands_tx, commands_rx) = watch::channel(MessageCommands::default());
         let mut app = App::new();
         app.add_plugins(SigningPlugin {
             online,
             state: Arc::new(tx),
+            commands: Arc::new(commands_tx),
         });
-        (app, rx)
+        (app, rx, commands_rx)
+    }
+
+    /// A command tree with `names`, each with one message argument.
+    fn commands_packet(names: &[&str]) -> ReceiveGamePacketEvent {
+        let mut entries = vec![BrigadierNodeStub {
+            is_executable: false,
+            children: (1..=names.len())
+                .map(|at| u32::try_from(2 * at - 1).unwrap())
+                .collect(),
+            redirect_node: None,
+            node_type: NodeType::Root,
+            is_restricted: false,
+        }];
+        for (at, name) in names.iter().enumerate() {
+            entries.push(BrigadierNodeStub {
+                is_executable: false,
+                children: vec![u32::try_from(2 * at + 2).unwrap()],
+                redirect_node: None,
+                node_type: NodeType::Literal {
+                    name: (*name).to_owned(),
+                },
+                is_restricted: false,
+            });
+            entries.push(BrigadierNodeStub {
+                is_executable: true,
+                children: Vec::new(),
+                redirect_node: None,
+                node_type: NodeType::Argument {
+                    name: "message".to_owned(),
+                    parser: BrigadierParser::Message,
+                    suggestions_type: None,
+                },
+                is_restricted: false,
+            });
+        }
+        ReceiveGamePacketEvent {
+            entity: Entity::PLACEHOLDER,
+            packet: Arc::new(ClientboundGamePacket::Commands(ClientboundCommands {
+                entries,
+                root_index: 0,
+            })),
+        }
+    }
+
+    #[test]
+    fn the_servers_command_tree_publishes_its_message_commands() {
+        let (mut app, _rx, commands) = app_with_commands(true);
+        spawn_authenticated_bot(&mut app);
+
+        app.world_mut()
+            .write_message(commands_packet(&["me", "msg"]));
+        app.update();
+
+        assert_eq!(
+            *commands.borrow(),
+            MessageCommands::from_names(&["me", "msg"])
+        );
+    }
+
+    #[test]
+    fn a_new_command_tree_replaces_the_message_commands() {
+        let (mut app, _rx, commands) = app_with_commands(true);
+        spawn_authenticated_bot(&mut app);
+        app.world_mut()
+            .write_message(commands_packet(&["me", "msg"]));
+        app.update();
+
+        app.world_mut().write_message(commands_packet(&["say"]));
+        app.update();
+
+        assert_eq!(*commands.borrow(), MessageCommands::from_names(&["say"]));
     }
 
     /// A login packet that says whether the server enforces secure chat.

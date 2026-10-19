@@ -15,6 +15,8 @@ use super::{BotRules, BotState, Effect, Transition};
 ///   that had lasted the stable period comes back as `Backoff{1}`, and its
 ///   session counts as a success for the circuit breaker, as when it ends any
 ///   other way.
+/// - A fresh request, waited for or due after a backoff, stays fresh: no
+///   session arrived since the rejected one (ADR-0020, S1).
 /// - `Paused`, `Failed` and `Stopped` stay as they are.
 /// - `Stopping` becomes `Stopped`: the old actor's session is gone.
 ///
@@ -23,12 +25,14 @@ use super::{BotRules, BotState, Effect, Transition};
 pub fn restore(state: &BotState, now: DateTime<Utc>, rules: &BotRules) -> Transition {
     match *state {
         BotState::Online { since, .. } if rules.retry.is_stable(since, now) => {
-            back_off(NonZeroU32::MIN, vec![Effect::RecordSuccess])
+            back_off(NonZeroU32::MIN, false, vec![Effect::RecordSuccess])
         }
-        BotState::AwaitingSession { attempt, .. }
-        | BotState::Connecting { attempt, .. }
-        | BotState::Online { attempt, .. }
-        | BotState::Backoff { attempt } => back_off(attempt, Vec::new()),
+        BotState::AwaitingSession { attempt, fresh } | BotState::Backoff { attempt, fresh } => {
+            back_off(attempt, fresh, Vec::new())
+        }
+        BotState::Connecting { attempt, .. } | BotState::Online { attempt, .. } => {
+            back_off(attempt, false, Vec::new())
+        }
         BotState::Stopping { .. } => Transition {
             state: BotState::Stopped,
             effects: Vec::new(),
@@ -40,11 +44,12 @@ pub fn restore(state: &BotState, now: DateTime<Utc>, rules: &BotRules) -> Transi
     }
 }
 
-/// Backs off after attempt `attempt`, after `effects`.
-fn back_off(attempt: NonZeroU32, mut effects: Vec<Effect>) -> Transition {
+/// Backs off after attempt `attempt`, after `effects`; the next request asks
+/// for a fresh session if `fresh`.
+fn back_off(attempt: NonZeroU32, fresh: bool, mut effects: Vec<Effect>) -> Transition {
     effects.push(Effect::ScheduleRetry { attempt });
     Transition {
-        state: BotState::Backoff { attempt },
+        state: BotState::Backoff { attempt, fresh },
         effects,
     }
 }
@@ -89,6 +94,15 @@ mod tests {
     fn backoff(attempt: u32) -> BotState {
         BotState::Backoff {
             attempt: n(attempt),
+            fresh: false,
+        }
+    }
+
+    /// A backoff whose next attempt asks for a fresh session (ADR-0020, S1).
+    fn fresh_backoff(attempt: u32) -> BotState {
+        BotState::Backoff {
+            attempt: n(attempt),
+            fresh: true,
         }
     }
 
@@ -116,9 +130,11 @@ mod tests {
         BotState::AwaitingSession { attempt: n(3), fresh: false },
         to(backoff(3), &[retry(3)])
     )]
+    // No session arrived after the rejected one, so the next request stays
+    // fresh (ADR-0020, S1).
     #[case::awaiting_a_fresh_session(
         BotState::AwaitingSession { attempt: n(3), fresh: true },
-        to(backoff(3), &[retry(3)])
+        to(fresh_backoff(3), &[retry(3)])
     )]
     #[case::connecting(
         BotState::Connecting { attempt: n(4), auth_retried: false },
@@ -141,6 +157,7 @@ mod tests {
         to(backoff(5), &[retry(5)])
     )]
     #[case::backoff(backoff(6), to(backoff(6), &[retry(6)]))]
+    #[case::fresh_backoff(fresh_backoff(6), to(fresh_backoff(6), &[retry(6)]))]
     #[case::paused(PAUSED, to(PAUSED, &[]))]
     #[case::failed(
         BotState::Failed { reason: FailReason::Permanent { kind: PermanentKind::Banned } },
@@ -203,7 +220,8 @@ mod tests {
             }),
             (time_strategy(), attempt_strategy())
                 .prop_map(|(since, attempt)| BotState::Online { since, attempt }),
-            attempt_strategy().prop_map(|attempt| BotState::Backoff { attempt }),
+            (attempt_strategy(), any::<bool>())
+                .prop_map(|(attempt, fresh)| BotState::Backoff { attempt, fresh }),
             sticky_strategy(),
             any::<bool>().prop_map(|restart| BotState::Stopping { restart }),
         ]
@@ -251,7 +269,7 @@ mod tests {
                 .copied()
                 .collect();
             match restored.state {
-                BotState::Backoff { attempt } => {
+                BotState::Backoff { attempt, .. } => {
                     prop_assert_eq!(retries, vec![Effect::ScheduleRetry { attempt }]);
                     prop_assert_eq!(restored.effects.last(), Some(&Effect::ScheduleRetry { attempt }));
                 }
@@ -264,6 +282,23 @@ mod tests {
         #[test]
         fn sticky_states_stay_as_they_are(state in sticky_strategy(), now in time_strategy()) {
             prop_assert_eq!(restore(&state, now, &rules()), to(state, &[]));
+        }
+
+        #[test]
+        fn a_restart_keeps_a_fresh_request_only_until_a_session_arrives(
+            state in state_strategy(),
+            now in time_strategy(),
+        ) {
+            let restored = restore(&state, now, &rules());
+
+            if let BotState::Backoff { fresh, .. } = restored.state {
+                let asked_fresh = matches!(
+                    state,
+                    BotState::AwaitingSession { fresh: true, .. }
+                        | BotState::Backoff { fresh: true, .. }
+                );
+                prop_assert_eq!(fresh, asked_fresh, "restored {:?} from {:?}", restored.state, state);
+            }
         }
 
         #[test]

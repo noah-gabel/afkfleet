@@ -1,6 +1,7 @@
 //! The user's real-account check (ADR-0011): a session with a real Minecraft
 //! token joins a local online-mode server and sends signed chat, then `/me`,
-//! which the server rejects (a known limit, see the step). Neither the token
+//! which fleet-mc refuses before sending, since azalea can't sign a
+//! command's message (ADR-0020, S2; see the step). Neither the token
 //! nor a chat-signing private key may reach a log, except where azalea-auth
 //! logs the certificate response at TRACE (an accepted risk that P5.2 caps).
 //!
@@ -20,7 +21,9 @@ use std::{fs, io};
 
 use fleet_core::chat::ChatKind;
 use fleet_core::disconnect::DisconnectReason;
-use fleet_core::mc::{SessionCredentials, SessionEvent, SessionEvents, SessionHandle};
+use fleet_core::mc::{
+    SessionCredentials, SessionError, SessionEvent, SessionEvents, SessionHandle,
+};
 use fleet_core::net::TargetPolicy;
 use fleet_mc::{AzaleaConnector, McConfig, McEvents, McSession};
 use fleet_testkit::log_capture;
@@ -38,9 +41,12 @@ const ACCOUNT_FILE: &str = concat!(
 const ACCOUNT_FILE_NAME: &str = "secrets/p1.8-account.txt";
 /// The chat the bot sends, signed.
 const CHAT: &str = "hello from the afkfleet real-account check";
-/// The `/me` command the bot sends, and the text its echo would have.
+/// The `/me` command the bot tries, and the text its echo would have.
 const EMOTE: &str = "/me waves from the afkfleet real-account check";
 const EMOTE_TEXT: &str = "waves from the afkfleet real-account check";
+/// The signed chat sent after `/me`, whose echo comes after any answer to
+/// `/me` had it gone out.
+const AFTER_EMOTE: &str = "still here after /me, from the afkfleet real-account check";
 /// The translation key of a server's answer to an unsigned command that
 /// needs signed arguments.
 const REJECTED_COMMAND: &str = "chat.disabled.invalid_command_signature";
@@ -225,31 +231,63 @@ async fn echoed(
     .map(drop)
 }
 
-/// Sends `/me` and expects the server to reject it: the known limit (Plan.md
-/// P11.3, ADR-0011). azalea sends every command unsigned, and a server that
-/// enforces secure chat answers a command with message arguments with one
-/// system message, logs an error, and drops it, while `send_chat` returns
-/// `Ok`. The bot stays up. If the emote's echo ever arrives instead, azalea
-/// signs commands now.
-async fn emote_rejected(
+/// Tries `/me` and expects fleet-mc to refuse it before sending (ADR-0020,
+/// S2): the server enforces secure chat, azalea signs no command, and the
+/// server would reject its message. Then a signed chat line must echo before
+/// any rejection of `/me` or its echo: the server answers in order, so either
+/// would come first had `/me` gone out. The bot stays up.
+async fn emote_refused(
     session: &McSession,
     events: &mut McEvents,
     name: &str,
 ) -> Result<(), String> {
-    let sent = session.send_chat(EMOTE.parse().unwrap()).await;
-    if let Err(error) = sent {
-        return Err(format!("sending /me failed: {error}"));
+    let tried = session.send_chat(EMOTE.parse().unwrap()).await;
+    if let Err(error) = session.send_chat(AFTER_EMOTE.parse().unwrap()).await {
+        return Err(format!("sending the chat after /me failed: {error}"));
     }
-    // fleet-mc renders the server's translation with azalea-language, or
-    // shows the key where it has none.
-    let rejection = azalea_language::get(REJECTED_COMMAND).unwrap_or(REJECTED_COMMAND);
-    let answer = wait_quietly(events, "/me's rejection", |event| {
+    let rejection = rejection();
+    let first = wait_quietly(events, "the chat after /me", |event| {
         is_chat(event, ChatKind::Emote, Some(name), EMOTE_TEXT)
             || is_chat(event, ChatKind::System, None, rejection)
+            || is_chat(event, ChatKind::Chat, Some(name), AFTER_EMOTE)
     })
     .await?;
-    if is_chat(&answer, ChatKind::Emote, Some(name), EMOTE_TEXT) {
-        return Err("azalea now signs commands: update this step and the P11 note".to_owned());
+    emote_verdict(tried, &first, name)
+}
+
+/// The server's answer to an unsigned command that needs signed arguments,
+/// as fleet-mc renders it: with azalea-language, or the key where it has
+/// none.
+fn rejection() -> &'static str {
+    azalea_language::get(REJECTED_COMMAND).unwrap_or(REJECTED_COMMAND)
+}
+
+/// The `/me` step's verdict: `send_chat` refused it as `tried`, and the
+/// first event the step waited for, `first`, is the later chat's echo, never
+/// the server's rejection or the emote's echo.
+fn emote_verdict(
+    tried: Result<(), SessionError>,
+    first: &SessionEvent,
+    name: &str,
+) -> Result<(), String> {
+    match tried {
+        Err(SessionError::ChatUnavailable) => {}
+        Ok(()) => {
+            return Err(
+                "fleet-mc sent /me; it should refuse a command with a message where chat must be signed (ADR-0020, S2)"
+                    .to_owned(),
+            );
+        }
+        Err(error) => return Err(format!("trying /me failed otherwise: {error}")),
+    }
+    if is_chat(first, ChatKind::Emote, Some(name), EMOTE_TEXT) {
+        return Err(
+            "the emote's echo arrived, so /me went out signed: azalea may sign commands now; update this step and ADR-0020's S2"
+                .to_owned(),
+        );
+    }
+    if is_chat(first, ChatKind::System, None, rejection()) {
+        return Err("the server rejected /me, so it went out unsigned".to_owned());
     }
     Ok(())
 }
@@ -262,8 +300,8 @@ struct Outcome {
     emote: Result<(), String>,
 }
 
-/// Joins, sends signed chat, then `/me`, which the server rejects. Nothing
-/// here fails the test: the
+/// Joins, sends signed chat, then tries `/me`, which fleet-mc refuses.
+/// Nothing here fails the test: the
 /// teardown and the log checks must run whatever happens (the user's
 /// decision, after a failed chat once skipped them).
 async fn session_steps(session: &McSession, events: &mut McEvents, name: &str) -> Outcome {
@@ -290,9 +328,9 @@ async fn session_steps(session: &McSession, events: &mut McEvents, name: &str) -
         name,
     )
     .await;
-    // 3. `/me` is rejected, the known limit (see `emote_rejected`). Its
-    // result is checked last.
-    let emote = emote_rejected(session, events, name).await;
+    // 3. `/me` is refused before it's sent (see `emote_refused`). Its result
+    // is checked last.
+    let emote = emote_refused(session, events, name).await;
     Outcome { join, chat, emote }
 }
 
@@ -353,9 +391,47 @@ async fn manual_real_account_scenario() {
 }
 
 mod tests {
+    use fleet_core::chat::IncomingChat;
     use rstest::rstest;
 
     use super::*;
+
+    // --- The `/me` step's verdict (ADR-0020, S2), without an account ---
+
+    fn chat(kind: ChatKind, sender: Option<&str>, text: &str) -> SessionEvent {
+        let sender = sender.map(|name| (name, None));
+        SessionEvent::Chat(IncomingChat::from_parts(kind, sender, text, false).unwrap())
+    }
+
+    #[test]
+    fn a_refused_emote_followed_by_the_later_chat_passes() {
+        let first = chat(ChatKind::Chat, Some(NAME), AFTER_EMOTE);
+
+        let verdict = emote_verdict(Err(SessionError::ChatUnavailable), &first, NAME);
+
+        assert_eq!(verdict, Ok(()));
+    }
+
+    #[rstest]
+    #[case::sent(Ok(()), chat(ChatKind::Chat, Some(NAME), AFTER_EMOTE))]
+    #[case::failed_otherwise(
+        Err(SessionError::Closed),
+        chat(ChatKind::Chat, Some(NAME), AFTER_EMOTE)
+    )]
+    #[case::the_emote_echoed(
+        Err(SessionError::ChatUnavailable),
+        chat(ChatKind::Emote, Some(NAME), EMOTE_TEXT)
+    )]
+    #[case::the_server_rejected_it(
+        Err(SessionError::ChatUnavailable),
+        chat(ChatKind::System, None, rejection())
+    )]
+    fn an_emote_that_went_out_or_failed_otherwise_fails_the_step(
+        #[case] tried: Result<(), SessionError>,
+        #[case] first: SessionEvent,
+    ) {
+        assert!(emote_verdict(tried, &first, NAME).is_err());
+    }
 
     const NAME: &str = "AfkBot1";
     const UUID: &str = "01234567-89ab-4def-8123-456789abcdef";

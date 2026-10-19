@@ -476,6 +476,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
 > Note (§7.4, Phase 10, group F) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the per-bot limit on fresh sessions** is `[rate_limits] fresh_sessions_per_bot_per_hour` (1–60, 6 by default: a burst of 6, then one every 10 minutes), keyed by the bot, across streams and agents. Only a `SessionRequest` with `fresh` spends it, once the registry found the asking stream holding the bot assigned, and before the request is queued; past it, the answer is `SessionDenied { retryable: true }` and the session-token service isn't called. Each fresh session the server mints costs a Microsoft refresh, and Microsoft's 429 pauses every refresh, so a compromised agent could otherwise stall every account (S58, the user's approval at the plan review). Its refusals are counted in the minute's summary.
 
+> Note (§7.4, Phase 11, group A) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S3, the user's approval at the plan review): **the per-bot chat rate** is the server's setting, `[rate_limits] chat_per_bot_interval_secs` (1–60, 3 by default) and `chat_per_bot_burst` (1–8, 3), sent to agents in each bot's spec, so the agent's bucket, which mode chat shares, keeps the same rate as the server's own limit on chat through the API (group B). The burst stops at 8 (the user's decision at PR #59's review, U2): vanilla's chat throttle adds 20 for each message and kicks once its count reaches 200, so 10 in one tick are kicked, and the agent enforces the rate too; a slow test proves a full burst of 8 isn't. A spec with another rate never refills the bucket: it keeps what it held, up to the new burst. A standalone agent uses the default. `chat_per_user_per_min` (1–60, 20) arrives with group B's routes.
+
 > Note (§7.4, Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **the per-bot limit** is `[rate_limits] bot_actions_per_bot_per_min` (1–60, 5 by default: a burst of 5, then one every 12 s), keyed by the bot and spent in the handler after `authorize()`, whatever the call's outcome, so a 429 never tells a stranger a bot exists. Start, restart, reset, resume and `PATCH` spend it; stop, the mode switch and the reads don't. Without it, the per-user limit (10/s) would let one account join ten times a second: the server's throttles and bans, and Mojang join spam from the agent's address (S52, the user's approval at the plan review). Its refusals are counted in the minute's summary.
 
 > Note (§7.4, Phase 10, group C) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`Connect`'s limit** is `[rate_limits] connect_per_cert_per_min` (1–60, 10), keyed by the presented certificate's fingerprint and spent before any lookup or read; it answers `RESOURCE_EXHAUSTED` with `retry-after` and is counted in the minute's summary (S30). A call without a certificate is refused before it (S24). What an agent sends on its stream has no rate limit: HTTP/2's flow control and one message read at a time pace it (S25). `X-Forwarded-For` is honored only when the peer is in `trusted_proxies` (Caddy).
@@ -978,7 +980,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P2.6): Decided in the Phase 2 plan and built in group B (ADR-0010):
   > - **Signature.** `transition(&state, event, now, &RetryPolicy)`.
-  > - **State fields.** `Online{since, attempt}`, `AwaitingSession{attempt, fresh}`, `Connecting{attempt, auth_retried}`, `Stopping{restart}`.
+  > - **State fields.** `Online{since, attempt}`, `AwaitingSession{attempt, fresh}`, `Connecting{attempt, auth_retried}`, `Stopping{restart}`; *from Phase 11 (ADR-0020, U24, S1)* `Backoff{attempt, fresh}`.
   > - **New event.** `CrashLoop`.
   > - **Auth.** The state machine owns "request one fresh token, then `Failed(Auth)`".
   > - **Stop.** Without a session, `Stop` goes straight to `Stopped`. The first invariant reads "Stop, then SessionClosed, ends in Stopped".
@@ -1351,7 +1353,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Refusing.** `Failed`, or still `Pending` at that deadline, gives the new `SessionError::ChatUnavailable`, logged at `warn` once. The session stays up.
   > - **The fake** gains `fail_chat`.
   > - **A key fetch that hangs** keeps chat unavailable until the next reconnect, since azalea never retries it.
-  > - **Commands** are never signed by azalea. A server that enforces secure chat rejects those with message arguments, while `send_chat` returns `Ok` (found by the user's real-account check; flagged under P4.5 and P11.3).
+  > - **Commands** are never signed by azalea. A server that enforces secure chat rejects those with message arguments, while `send_chat` returns `Ok` (found by the user's real-account check; flagged under P4.5 and P11.3). *Decided in Phase 11, group A ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2): fleet-mc refuses such a command with `ChatUnavailable` before sending, wherever chat must be signed, judged by the server's command tree.*
 - [x] **P3.8** 🔴 Clean-up test: after the full teardown from ADR-0008 §10 (not just `disconnect()`), the thread count and the number of live Worlds go back to baseline.
 
   > Note (P3.8, from the Phase 3 plan) (ADR-0011):
@@ -1389,7 +1391,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - The token must not appear in any log, and `PRIVATE KEY` only under `azalea_auth::certs` (azalea-auth 0.16.0 logs the certificate response at `trace`, which P5.2 caps).
   >   - Only the nextest `manual` profile includes `manual_` tests. Only the user runs `just test-real-account` (CLAUDE.md).
   >   - Errors name only a line number and the expected key, and a failed wait names only the step and event kinds. A rejected token says it may have expired, since `fetch-token` writes no expiry.
-  >   - It also sends `/me` and expects the server to reject it: the known limit under P11.3. If the emote's echo arrives instead, the step fails with "azalea now signs commands: update this step and the P11 note".
+  >   - It also sends `/me` and expects the server to reject it: the known limit under P11.3. If the emote's echo arrives instead, the step fails with "azalea now signs commands: update this step and the P11 note". *Changed in Phase 11, group A ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2, the user's approval): the step, now `emote_refused`, expects fleet-mc's `ChatUnavailable` and a later signed chat's echo before any rejection or emote echo; its verdict is a pure function with default-profile tests. Only the user runs the check.*
   >   - The steps only record their results: the teardown and the log checks always run, and failed steps are reported after them. The first run failed at the signed chat (see P3.7's note) and skipped the log checks.
   >   - **The user's results** (2026-10-07, after the P3.7 fix):
   >     - passed: the join, the signed chat, the token absent from every log at every level, and `PRIVATE KEY` only under `azalea_auth::certs`
@@ -1508,7 +1510,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Holds after a respawn** aren't re-applied; that's a known limit. A repeating `HoldUse{on: true}` step does re-apply a hold after a death. P11.4 decides about "on respawn" steps.
   > - **A failed `respawn()`** is retried every 5 s while the session lives; the first failure logs at `warn`, the retries at `debug`. After 12 failed calls in a row the session ends with the new `DisconnectReason::RespawnFailed` (Transient, added to fleet-core in this task), so the bot reconnects and respawns on join.
   > - **Events.** `FleetEvent { bot_id, at, kind }` with `StateChanged(BotSnapshot)`, `Died`, `ChatReceived`, `ChatSent{ticket}` and `ChatFailed{ticket, reason}`, on one bounded `broadcast` per fleet.
-  > - **The session-request timeout** is 30 s, a `RuntimeConfig` default.
+  > - **The session-request timeout** is 30 s, a `RuntimeConfig` default. *(150 s from Phase 11, ADR-0020, S1, PR #59's review: longer than the server may take to mint a session, so a bot asking fresh after a refused login takes the session minted for it.)*
 
   > Note (P4.2, from group B, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
   > - **`FleetEvent` already exists** (P4.5), with every kind above plus `ModeChatSent{message}`.
@@ -1564,7 +1566,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P4.5, from Phase 3, group E): **flagged, not decided.** `send_chat` can fail with `SessionError::ChatUnavailable` when an online session can't sign chat for a server that enforces it. The session stays up, and a later call may succeed. This task decides what the queue does then, for user chat and mode chat (ADR-0011).
   >
-  > Mode chat with a command that takes message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) is rejected by a server that enforces secure chat, while `send_chat` returns `Ok`. That's undecided here too; see P11.3's note.
+  > Mode chat with a command that takes message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) is rejected by a server that enforces secure chat, while `send_chat` returns `Ok`. That's undecided here too; see P11.3's note. *Decided in Phase 11 ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2): fleet-mc refuses it with `ChatUnavailable`, so the mode's step is skipped at `debug`.*
 
   > Note (P4.5, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
   > - **Admission.** The bucket (one message per 3 s, burst 3) is checked when a message is queued. User chat while the bot isn't Online returns `NotOnline`.
@@ -3814,9 +3816,37 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** Full day-to-day management from the app: start and stop, modes, live chat and history.
 **Introduces:** `tokio-tungstenite`, `futures-util` (WebSocket client).
 
+> Note (P11, Phase 11's planning, 2026-10-19) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)):
+> - **Thirteen group branches.** Phase 11 is built in group PRs like Phases 2–10: one branch and one commit per task, in this order, each after the previous PR is merged. Backend first; each screen comes after the endpoints it needs.
+>
+>   | Group | Branch | Tasks |
+>   |---|---|---|
+>   | A | `p11/u24-p11.3-fresh-requests-and-agent-chat` | U24 (ADR-0019), then P11.3's agent side: commands that need a signature, and the chat rate in each bot's spec |
+>   | B | `p11/p11.3-chat-endpoints` | P11.3's API (ticked here) |
+>   | C | `p11/p11.4-modes` | P11.4 |
+>   | D | `p11/p11.5-live-events` | P11.5 |
+>   | E | `p11/p11.6-p11.7-retention-and-full-flow` | P11.6, P11.7 |
+>   | F | `p11/p11.9-admin-endpoints` | P11.9's backend: `GET /audit`, `agent release` over the API, the grants review at a role change |
+>   | G | `p11/p11.8-events-in-the-app` | P11.8 |
+>   | H | `p11/p11.9-bot-screens` | P11.9's dashboard and bot detail; the DoD's first check |
+>   | I | `p11/p11.9-mode-editor` | P11.9's mode editor |
+>   | J | `p11/p11.9-admin-screens` | P11.9's admin screens (ticked here) |
+>   | K | `p11/p11.10-dark-mode` | P11.10 |
+>   | L | `p11/p11.11-design-pass` | P11.11 |
+>   | M | `p11/p11-wrap-up` | The threat model, the README, the DoD's 24-hour run |
+>
+>   - **P11.3 is spread over A and B**, and **P11.9 over F, H, I and J**, each ticked in its last group, as P10.5 was over C and D. Each group aims at Phase 10's F or H in size (about 5,300 lines); one that grows past it is split at its plan review.
+>   - **New dependencies** arrive with their group, each shown to the user with its version, license and release date: axum's `ws` feature (tokio-tungstenite and tungstenite 0.29.0, which axum 0.8.9 pins), tokio-tungstenite as fleet-server's dev-dependency, and futures-util and moka only if D needs them; tokio-tungstenite as fleet-integration's dev-dependency in E; tokio-tungstenite and futures-util in fleet-client in G, its TLS features G's question; single Radix packages in H, I and J; bundled fonts in L.
+>   - **Who decides what:** the review agents decide each group's open questions (CLAUDE.md's step 10); the user decides P11.6's size bound (E), P11.11's stable screenshots and visual direction (L), every text friends read (one table per group plan), the looks and UX questions, and whether the chat console names who sent each line (B).
+> - **The DoD's two checks** are the user's, with their own accounts. The first ("pressing Start in the app …") in H, once the bot screens exist; the second (24 h) in M, after the design pass. Each manual check gets default-profile tests that run its own setup, config and log check without the account (Phase 10's lesson).
+> - **The DoD checks' own data folder** *(the user's addition at the plan review, U1)*. Linking a real account stores its Microsoft refresh token in the server's database, sealed by a vault key file beside it. So both checks use one folder of their own, `target/dod-run/` (the database, the vault key, the PKI, the agent's identity, the logs), through recipes of their own that H adds, never the everyday `target/dev-server/`, so the account linked in H stays for M. They log at the default `info`, so no chat text reaches the disk. A cleanup recipe deletes the whole folder when the user is done, with a default-profile test that it removes everything inside, touches nothing outside, follows no link and refuses any other path. The steps say: unlink the accounts in the app first, then run the cleanup, then optionally end the app's consent in the Microsoft account. This mirrors production, where the key file lives on the server's host; `target/` is never committed.
+> - **Decided by the review agents** *(approved by the user at the plan review)*, S1–S6 in ADR-0020: U24 in fleet-core's state (S1); commands that need a signature refused where chat must be signed (S2); one chat rate per bot, the server's, sent in its spec (S3); a step-up route for commands off the allowlist (S4); the send's bounded answer (S5); a user's message stored as a chat row, audited without its text (S6). The chat limits' ranges (S3) are the user's approval at the plan review (rule 10).
+
 > Note (P11, from Phase 8, group E, the user's request) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **Decide step-up per action, the same way as the admin writes.** Before building them, decide for each destructive or privilege-changing action of this phase whether it needs a step-up: deleting a bot, changing grants, deleting a shared mode, and anything else that loses data or widens access. The app reuses the admin screens' "send, and on `step_up_required` ask for the password and retry once".
 
 > Note (P11, from Phase 10, group H, the user's choice at PR #58's review, U24) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **Phase 11's first group, first:** after a refused login, a bot's next session request stays fresh until a fresh grant arrives, so a backoff never asks without `fresh` and the server never hands out the cached session that was just refused. It gets its own test, and P10.9's case 5 (`outage::a_bot_kicked_while_the_server_is_down_rejoins_with_its_kept_grant_and_a_fresh_request_waits`) is then tightened to expect it.
+>
+> *Done in group A ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S1):* fleet-core's `BotState::Backoff { attempt, fresh }` carries a fresh request through each backoff until a session arrives, and `restore` keeps it; the proto's `Backoff` gains `fresh = 2`. A fresh session that's refused again fails the bot `Failed(Auth)`. The agent's "a session request couldn't be sent" line names `fresh`. Tests: fleet-core's `transition::a_refused_logins_requests_stay_fresh_through_its_backoffs_until_a_session_arrives` and the properties beside it, the runtime's `bot_actor::a_refused_logins_requests_stay_fresh_through_its_backoffs_until_a_grant_arrives` and `supervisor::a_crash_during_a_fresh_backoff_keeps_the_next_request_fresh`, the chaos test's stricter rule and its target "fresh retry after a backoff", and case 5, which now asserts every state and unsent request after the refusal fresh, the server's one grant after the outage fresh, the next `Connecting` with `auth_retried: true` and no fresh-limit refusal. *Residual:* a deliberate restart, a server change or an agent restart after a refusal asks once without `fresh`.
 
 - [x] **P11.1** 🔴 Migrations and repositories:
   - `bots`: 1:1 with an account; server address, mode, desired state, assigned agent
@@ -3889,7 +3919,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.3, from group D): The handler checks `SendChat(allowlist.check(&message))` and then sends that same message. An allowlisted command passes with any arguments (threat model). Reading the history needs `ViewBot` (ADR-0010).
 
-  > Note (P11.3, from Phase 3, group E, found by the user's real-account check): **flagged, not decided.**
+  > Note (P11.3, Phase 11, group A) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2, S3): **P11.3's agent side as built** (P11.3 is ticked in group B, with the API).
+  > - **Secure chat (S2):** wherever fleet-mc's `needs_signing` holds, a command whose name can reach a `message` argument in the server's command tree is refused before sending, with `ChatUnavailable`, even once chat is signed: azalea signs no command. The tree is read by `command_tree::MessageCommands`, one backward pass, each node at most once, a redirect to the root not followed, indexes out of range ignored; until a tree arrives commands go out as before. User chat gets `ChatFailed{ChatUnavailable}`; mode chat is skipped at `debug`; fleet-mc warns once per session, never naming the command. No wire change.
+  > - **The chat rate (S3):** `fleet_core::chat::ChatRate` (interval 1–60 s, burst 1–8 since PR #59's review, U2, 3 s and 3 by default), the server's `[rate_limits] chat_per_bot_interval_secs` and `chat_per_bot_burst`, sent in each bot's spec (`BotSpec.chat_rate`, wire field 7) by the reconciler. The agent's runtime builds each bot's bucket from its spec and swaps it for every clone when a spec brings another rate, keeping what it held up to the new burst (never a refill, PR #59's review); the same rate keeps it. The runtime's fleet-wide `chat_interval` and `chat_burst` and `FleetSetupError::ChatQuota` are gone; their zero-interval check is `ChatRate`'s. A standalone agent uses the default. The HTTP limits that spend it come with the API (B).
+
+  > Note (P11.3, from Phase 3, group E, found by the user's real-account check): **flagged, not decided.** *Decided in Phase 11, group A: see the note above (S2).*
   > - **The limit.** On a server that enforces secure chat, azalea's unsigned commands with message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) are rejected.
   >   - The bot gets one system message and stays up.
   >   - The server logs an ERROR each time.
@@ -3902,7 +3936,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.3, from Phase 4) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
   > - **Mode chat follows this task's rule.** P4.5 does nothing special for commands with message arguments; whatever is decided here applies to mode chat too, through `ChatUnavailable`.
-  > - **The per-bot chat limit.** §7.4 says it's configurable, and the agent's queue uses one message per 3 s, burst 3 as a default. Decide here where that setting lives (server settings, sent to agents).
+  > - **The per-bot chat limit.** §7.4 says it's configurable, and the agent's queue uses one message per 3 s, burst 3 as a default. Decide here where that setting lives (server settings, sent to agents). *Decided in Phase 11, group A ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S3): the server's `[rate_limits]`, sent in each bot's spec.*
 
   > Note (P11.3, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`[chat] command_allowlist` exists** (`ServerConfig.chat`, P2.9's rules; the mode switch reads it), and `BotService` has it; `retention_days` stays P11.6's. The bot routes answer in extractor order (R38): 401, the per-user 429, a malformed path's 404, the body's 400/422, an unseen bot's 404, then 403; the chat route follows it, and re-reads the actor and the grant in its transaction as the bot writes do.
 
@@ -4021,6 +4055,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 ### Phase 12: Deployment & operations
 **Goal:** A reproducible, hardened production deployment and a desktop app that can be distributed.
 **Introduces:** `tauri-plugin-updater`. Tools: cargo-chef, Docker Compose, Caddy.
+
+> Note (P12, from Phase 11, group A) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S3, PR #59's review): **the server is deployed before its agents.** Phase 11 adds `BotSpec.chat_rate`, which an agent of that version requires: it refuses a spec without one, so an older server's assignments would be refused. Until the first release freezes the protocol (ADR-0019, S9), an upgrade updates the server first, then the agents; P12.6's runbook says so, and a later protocol change says which side goes first.
 
 - [ ] **P12.1** Dockerfiles for the server and the agent:
   - multi-stage with cargo-chef
@@ -4354,6 +4390,8 @@ command_allowlist = ["/spawn", "/home", "/afk"]   # usable with Control; every o
 
 > Note (Appendix A, Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`[control_plane] private_targets` as built** (S69): at most 32 IP networks in strict CIDR form (as `[http] trusted_proxies`), each inside one private range (loopback, RFC 1918, 100.64.0.0/10, fc00::/7), none a never-dialled address, none twice; each problem names its index, never its text. Empty by default, so a managed agent dials only public addresses; a parse error under `[standalone]`, which is never checked.
 
+> Note (Appendix A, Phase 11, group A) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S3): `[rate_limits]` gains `chat_per_bot_interval_secs` (1–60, 3 by default) and `chat_per_bot_burst` (1–8, 3; U2), each bot's chat rate, which the server sends in its spec; an error names the key. `agent.toml` gets no chat key: a standalone agent's bots use the default.
+
 `agent.toml`
 ```toml
 name = "agent-1"
@@ -4505,6 +4543,8 @@ message ServerMessage {
 
 > Note (Appendix C, Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`ConnectFailure` gains `CONNECT_FAILURE_BLOCKED = 6`** (S69): the agent refused the resolved address before dialling it. `fleet_proto::control` gains `KEEPALIVE_INTERVAL` (10 s) and `KEEPALIVE_TIMEOUT` (20 s), the agent's HTTP/2 keepalive, which the server's placement grace counts on (S45, S67); `WELCOME_TIMEOUT` bounds the agent's whole attempt, dialing included. `PROTOCOL_VERSION` stays 1 (S9).
 
+> Note (Appendix C, Phase 11, group A) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S1, S3): **`BotState.Backoff` gains `bool fresh = 2`**: the next attempt asks for a fresh session (U24). **`BotSpec` gains `ChatRate chat_rate = 7`** (`ChatRate { uint32 interval_secs = 1; uint32 burst = 2; }`): the bot's chat rate, the server's `[rate_limits]` setting. Reading refuses a missing rate, a 0 as missing and a value past its range (60 s, 8 messages) as out of range, never clamped. The wire-schema snapshot shows both; `PROTOCOL_VERSION` stays 1 until the first release (S9).
+
 > Note (Appendix C, Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`AgentEnrollment` as built** (`enrollment.proto`): `Enroll(EnrollRequest {token, name, csr_der}) returns (EnrollResponse {agent_id, certificate_pem, not_after_unix_ms})`. The answer carries no CA certificate: a trust anchor can't come from the server it vouches for, so the agent pins the bundle's fingerprint instead. The certificate is PEM text (R10), the CSR DER: each end gets what its reader takes. `EnrollRequest` is in `REDACTED` (S7).
 
 ### D. Database tables (SQLite)
@@ -4594,6 +4634,8 @@ message ServerMessage {
  permanent kick / auth invalid twice / crash loop / circuit open too long ──▶ Failed ──Reset──▶ AwaitingSession
  duplicate login (a human is playing)                                      ──▶ Paused ──Resume──▶ AwaitingSession
 ```
+
+> Note (Appendix E, Phase 11, group A) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U24, S1): **`Backoff{attempt, fresh}`.** A backoff entered from a fresh `AwaitingSession` stays fresh, and `RetryDue` asks as it says, until a session arrives: a refused login's requests never ask without `fresh`. Every other backoff is non-fresh. The list of states above stays the original sketch, without any state's fields (`AwaitingSession{attempt}` has no `fresh` there either), as the P2.6 note below says; the built fields are in P2.6's notes and ADR-0010, `Backoff`'s among them.
 
 > Note (P2.6): The built state machine (`fleet_core::bot`) refines this chart. The changes are listed in ADR-0010:
 > - state fields, the `CrashLoop` event and `Stopping{restart}`

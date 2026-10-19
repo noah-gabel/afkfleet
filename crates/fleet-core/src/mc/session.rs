@@ -24,7 +24,9 @@ pub enum SessionError {
     #[error("the bot isn't in a world")]
     NotInWorld,
     /// The server requires signed chat and the session can't sign it, so the
-    /// message wasn't sent. The session itself stays up (ADR-0011).
+    /// message wasn't sent: plain chat before the chat-signing session is set
+    /// up, or a command with a message argument, which azalea never signs
+    /// (ADR-0020, S2). The session itself stays up (ADR-0011).
     #[error("the server requires signed chat, and the session can't sign it")]
     ChatUnavailable,
 }
@@ -51,7 +53,8 @@ pub trait SessionHandle: Clone + Send + Sync + 'static {
     /// # Errors
     /// As for [`perform`](Self::perform), and
     /// [`SessionError::ChatUnavailable`] for a chat message the server would
-    /// drop because the session can't sign it.
+    /// drop because the session can't sign it, a command with a message
+    /// argument included.
     fn send_chat(
         &self,
         message: ChatMessage,

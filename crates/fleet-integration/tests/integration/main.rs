@@ -9,6 +9,8 @@
 //! - [`loopback`]: P10.9's cases over mTLS on `127.0.0.1`.
 //! - [`managed_check`]: Phase 10's managed check, a manual test only the
 //!   user runs, with their own Microsoft account.
+//! - [`timing`]: the timing contracts between the agent and the server,
+//!   over their constants.
 //!
 //! Every loopback case runs on real time on one thread: the sockets, TLS
 //! and SQLite need it, and every task of the server and of the agents logs
@@ -19,3 +21,4 @@
 mod harness;
 mod loopback;
 mod managed_check;
+mod timing;

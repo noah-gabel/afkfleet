@@ -92,6 +92,14 @@ pub(crate) fn chat_message() -> impl Strategy<Value = ChatMessage> {
     })
 }
 
+/// A chat rate, weighted toward the ranges' edges (ADR-0020, S3).
+pub(crate) fn chat_rate() -> impl Strategy<Value = fleet_core::chat::ChatRate> {
+    let interval = prop_oneof![Just(1_u32), Just(60), 1..=60_u32];
+    let burst = prop_oneof![Just(1_u32), Just(8), 1..=8_u32];
+    (interval, burst)
+        .prop_map(|(interval, burst)| fleet_core::chat::ChatRate::try_new(interval, burst).unwrap())
+}
+
 pub(crate) fn conflict_texts() -> impl Strategy<Value = ConflictTexts> {
     vec("[A-Za-z0-9 .!]{1,40}", 0..=4).prop_map(|texts| ConflictTexts::try_new(&texts).unwrap())
 }
@@ -159,15 +167,17 @@ pub(crate) fn bot_spec() -> impl Strategy<Value = BotSpec> {
             Just(DesiredRunState::Stopped)
         ],
         conflict_texts(),
+        chat_rate(),
     )
         .prop_map(
-            |(id, account, server, mode, desired, conflict_texts)| BotSpec {
+            |(id, account, server, mode, desired, conflict_texts, chat_rate)| BotSpec {
                 id,
                 account,
                 server,
                 mode,
                 desired,
                 conflict_texts,
+                chat_rate,
             },
         )
 }
@@ -208,7 +218,8 @@ pub(crate) fn bot_state() -> impl Strategy<Value = BotState> {
             auth_retried
         }),
         (time(), attempt()).prop_map(|(since, attempt)| BotState::Online { since, attempt }),
-        attempt().prop_map(|attempt| BotState::Backoff { attempt }),
+        (attempt(), any::<bool>())
+            .prop_map(|(attempt, fresh)| BotState::Backoff { attempt, fresh }),
         pause_reason().prop_map(|reason| BotState::Paused { reason }),
         fail_reason().prop_map(|reason| BotState::Failed { reason }),
         any::<bool>().prop_map(|restart| BotState::Stopping { restart }),

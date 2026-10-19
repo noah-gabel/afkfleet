@@ -580,7 +580,7 @@ mod tests {
 
     fn closed(at: &str, bot_id: &str) -> String {
         format!(
-            r#"{{"timestamp":"{at}","level":"WARN","message":"the session ended; the bot connects again","reason":"ConnectionClosed","state":"Backoff {{ attempt: 1 }}","target":"fleet_runtime::actor::effects","span":{{"bot_id":"{bot_id}","name":"bot"}}}}"#
+            r#"{{"timestamp":"{at}","level":"WARN","message":"the session ended; the bot connects again","reason":"ConnectionClosed","state":"Backoff {{ attempt: 1, fresh: false }}","target":"fleet_runtime::actor::effects","span":{{"bot_id":"{bot_id}","name":"bot"}}}}"#
         )
     }
 

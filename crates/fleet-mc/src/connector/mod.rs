@@ -36,6 +36,7 @@ use self::driver::{ClientSlot, Driver, Worlds};
 pub use self::session::McSession;
 use self::session::Parts;
 use crate::account::account;
+use crate::command_tree::MessageCommands;
 use crate::events::{EventCounters, LivenessStamps, McEvents, bridge};
 use crate::signing::{SigningPlugin, SigningState};
 use crate::{McConfig, McHostPool};
@@ -148,6 +149,7 @@ impl AzaleaConnector {
         let control = sink.control();
         let online = matches!(credentials, SessionCredentials::Online { .. });
         let (signing_tx, signing_rx) = watch::channel(SigningState::new(online));
+        let (commands_tx, commands_rx) = watch::channel(MessageCommands::default());
         let (account, reports) = account(credentials, bot_id, self.config.session_join_timeout);
         let slot = Arc::new(ClientSlot::default());
         let (stop_tx, stop_rx) = oneshot::channel();
@@ -165,6 +167,7 @@ impl AzaleaConnector {
             signing: SigningPlugin {
                 online,
                 state: Arc::new(signing_tx),
+                commands: Arc::new(commands_tx),
             },
             slot: Arc::clone(&slot),
             worlds: Arc::clone(&self.worlds),
@@ -189,6 +192,7 @@ impl AzaleaConnector {
             driver_ended: ended_rx,
             app_exit_timeout: self.config.app_exit_timeout,
             signing: signing_rx,
+            commands: commands_rx,
             chat_signing_timeout: self.config.chat_signing_timeout,
         });
         Ok((session, events))
