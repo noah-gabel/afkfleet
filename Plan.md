@@ -3817,12 +3817,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Introduces:** `tokio-tungstenite`, `futures-util` (WebSocket client).
 
 > Note (P11, Phase 11's planning, 2026-10-19) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)):
-> - **Thirteen group branches.** Phase 11 is built in group PRs like Phases 2–10: one branch and one commit per task, in this order, each after the previous PR is merged. Backend first; each screen comes after the endpoints it needs.
+> - **Fourteen group branches** (thirteen groups, group B in two PRs since its planning). Phase 11 is built in group PRs like Phases 2–10: one branch and one commit per task, in this order, each after the previous PR is merged. Backend first; each screen comes after the endpoints it needs.
 >
 >   | Group | Branch | Tasks |
 >   |---|---|---|
 >   | A | `p11/u24-p11.3-fresh-requests-and-agent-chat` | U24 (ADR-0019), then P11.3's agent side: commands that need a signature, and the chat rate in each bot's spec |
->   | B | `p11/p11.3-chat-endpoints` | P11.3's API (ticked here) |
+>   | B1 | `p11/p11.3-chat-send` | P11.3's API, sending: `POST /bots/{id}/chat` and `/command`, the limits, the wait, the audit, the stored line with its sender |
+>   | B2 | `p11/p11.3-chat-history` | P11.3's API, reading: `GET /bots/{id}/chat` and its field rules (ticked here) |
 >   | C | `p11/p11.4-modes` | P11.4 |
 >   | D | `p11/p11.5-live-events` | P11.5 |
 >   | E | `p11/p11.6-p11.7-retention-and-full-flow` | P11.6, P11.7 |
@@ -3835,7 +3836,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   | L | `p11/p11.11-design-pass` | P11.11 |
 >   | M | `p11/p11-wrap-up` | The threat model, the README, the DoD's 24-hour run |
 >
->   - **P11.3 is spread over A and B**, and **P11.9 over F, H, I and J**, each ticked in its last group, as P10.5 was over C and D. Each group aims at Phase 10's F or H in size (about 5,300 lines); one that grows past it is split at its plan review.
+>   - **P11.3 is spread over A, B1 and B2** (B was split at its plan review: about 8,000–9,000 lines in one; ADR-0020, group B), and **P11.9 over F, H, I and J**, each ticked in its last group, as P10.5 was over C and D. Each group aims at Phase 10's F or H in size (about 5,300 lines); one that grows past it is split at its plan review.
 >   - **New dependencies** arrive with their group, each shown to the user with its version, license and release date: axum's `ws` feature (tokio-tungstenite and tungstenite 0.29.0, which axum 0.8.9 pins), tokio-tungstenite as fleet-server's dev-dependency, and futures-util and moka only if D needs them; tokio-tungstenite as fleet-integration's dev-dependency in E; tokio-tungstenite and futures-util in fleet-client in G, its TLS features G's question; single Radix packages in H, I and J; bundled fonts in L.
 >   - **Who decides what:** the review agents decide each group's open questions (CLAUDE.md's step 10); the user decides P11.6's size bound (E), P11.11's stable screenshots and visual direction (L), every text friends read (one table per group plan), the looks and UX questions, and whether the chat console names who sent each line (B).
 > - **The DoD's two checks** are the user's, with their own accounts. The first ("pressing Start in the app …") in H, once the bot screens exist; the second (24 h) in M, after the design pass. Each manual check gets default-profile tests that run its own setup, config and log check without the account (Phase 10's lesson).
@@ -3922,6 +3923,12 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P11.3, Phase 11, group A) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2, S3): **P11.3's agent side as built** (P11.3 is ticked in group B, with the API).
   > - **Secure chat (S2):** wherever fleet-mc's `needs_signing` holds, a command whose name can reach a `message` argument in the server's command tree is refused before sending, with `ChatUnavailable`, even once chat is signed: azalea signs no command. The tree is read by `command_tree::MessageCommands`, one backward pass, each node at most once, a redirect to the root not followed, indexes out of range ignored; until a tree arrives commands go out as before. User chat gets `ChatFailed{ChatUnavailable}`; mode chat is skipped at `debug`; fleet-mc warns once per session, never naming the command. No wire change.
   > - **The chat rate (S3):** `fleet_core::chat::ChatRate` (interval 1–60 s, burst 1–8 since PR #59's review, U2, 3 s and 3 by default), the server's `[rate_limits] chat_per_bot_interval_secs` and `chat_per_bot_burst`, sent in each bot's spec (`BotSpec.chat_rate`, wire field 7) by the reconciler. The agent's runtime builds each bot's bucket from its spec and swaps it for every clone when a spec brings another rate, keeping what it held up to the new burst (never a refill, PR #59's review); the same rate keeps it. The runtime's fleet-wide `chat_interval` and `chat_burst` and `FleetSetupError::ChatQuota` are gone; their zero-interval check is `ChatRate`'s. A standalone agent uses the default. The HTTP limits that spend it come with the API (B).
+
+  > Note (P11.3, Phase 11, group B's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U3, S7–S9): **the API in two PRs**: B1 (`p11/p11.3-chat-send`) sends, B2 (`p11/p11.3-chat-history`) reads and ticks P11.3.
+  > - **Who sent a line** *(the user's answer, U3)*: a user's line stores its sender (`chat_messages.sent_by`, `ON DELETE SET NULL`, B1). The history shows the sender's username only to the viewers who see the account's owner (Admins, the Owner, the account's Manage holders); every viewer sees their own lines marked `mine`; a deleted user's lines show no name. S6's rule for command arguments stays.
+  > - **A stored line never changes after the send** (S7): whether it went out is told only in the send's answer and in D's live `ChatSent`/`ChatFailed`; no delivery column.
+  > - **`/command`** (S8) takes commands only (a plain line is 422 on `message`, checked with the body) and authorizes them exactly as `/chat` does, `SendChat(allowlist.check(&message))`: Control for an allowlisted command, Manage for an unlisted one, behind the route's step-up.
+  > - **Hidden arguments** (S9, B2): below Manage, a command line's `text` is `/` and its name, and `arguments_hidden` says something was left out; `mine` doesn't lift it.
 
   > Note (P11.3, from Phase 3, group E, found by the user's real-account check): **flagged, not decided.** *Decided in Phase 11, group A: see the note above (S2).*
   > - **The limit.** On a server that enforces secure chat, azalea's unsigned commands with message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) are rejected.

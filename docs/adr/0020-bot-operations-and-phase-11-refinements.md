@@ -18,7 +18,8 @@ One branch and one PR per group, one commit per task, in this order, each after 
 | Group | Branch | Tasks |
 |---|---|---|
 | A | `p11/u24-p11.3-fresh-requests-and-agent-chat` | U24, then P11.3's agent side: commands that need a signature (S2), the chat rate in each bot's spec (S3) |
-| B | `p11/p11.3-chat-endpoints` | P11.3's API (S4–S6), ticked here |
+| B1 | `p11/p11.3-chat-send` | P11.3's API, sending (S4–S8): split from B at its plan review |
+| B2 | `p11/p11.3-chat-history` | P11.3's API, reading (S6, S9, U3), ticked here |
 | C | `p11/p11.4-modes` | P11.4 |
 | D | `p11/p11.5-live-events` | P11.5 |
 | E | `p11/p11.6-p11.7-retention-and-full-flow` | P11.6, P11.7 |
@@ -31,7 +32,7 @@ One branch and one PR per group, one commit per task, in this order, each after 
 | L | `p11/p11.11-design-pass` | P11.11 |
 | M | `p11/p11-wrap-up` | The threat model, the README, the DoD's 24-hour run |
 
-- **P11.3 is spread over A and B.** With the chat rate travelling in each bot's spec (S3) and secure chat in fleet-mc (S2), one group would have been about 10,000 lines; Phase 10's group G (about 17,000) was too much for one review, and F and H (about 5,300 each) read well. **P11.9 is spread over F, H, I and J**, ticked in J.
+- **P11.3 is spread over A, B1 and B2.** B was one group until its plan review, which split it (below). With the chat rate travelling in each bot's spec (S3) and secure chat in fleet-mc (S2), one group would have been about 10,000 lines; Phase 10's group G (about 17,000) was too much for one review, and F and H (about 5,300 each) read well. **P11.9 is spread over F, H, I and J**, ticked in J.
 - **New dependencies** arrive with their group, each with the user's approval of its version, license and release date (checked on crates.io at the planning):
   - D: axum's `ws` feature, which brings tokio-tungstenite 0.29.0 (MIT, 2026-03-17) and tungstenite 0.29.0 (MIT OR Apache-2.0, 2026-03-17), since axum 0.8.9 pins `tokio-tungstenite = "0.29.0"`; tokio-tungstenite as fleet-server's dev-dependency; futures-util 0.3.34 and moka 0.12.16 only if D needs them. 0.30.0 exists but would build a second tungstenite.
   - E: tokio-tungstenite as fleet-integration's dev-dependency (ADR-0019's note for P11.7).
@@ -134,6 +135,35 @@ Each fix with a test red first, or a mutation recorded here; the record also in 
 4. **Small ones:**
    - *The host job decides the message's kind and returns it with a refusal*, so a refused command's warning never takes plain chat's words, nor sets plain chat's once-per-session flag and hides that warning later. Only plain chat waits for signing before the job, decided by its `/`. Red: the gate's test, now answering the refused kind, against a stub that called every refusal plain chat.
    - *Docs:* S2 says it refuses slightly more than vanilla; S1 lists the new residuals; the threat model's row on fresh requests forcing refreshes reflects U24; Plan.md's P2.6 state list and Appendix E; ADR-0013's amendment for the removed `ChatQuota`; and, for deployment, the server goes first: an agent of this version refuses a spec without `chat_rate`, so it would refuse an older server's assignments (Plan.md's P12 note).
+
+### Group B's planning
+B's plan measured about 8,000–9,000 lines (P11.2, the same machinery, came to about 11,100), so it was split before coding, with the user's approval at the plan review: **B1** sends (both `POST` routes, the limits, the wait, the audit, the stored line with its sender), **B2** reads (`GET /bots/{id}/chat` and its field rules) and ticks P11.3. CLAUDE.md's step 3 counts fourteen group branches.
+
+- **U3. The chat history names a user's lines under the account rule, and marks the viewer's own** *(the user's answer to S6's flagged question)*.
+  - The sender's username shows only to the viewers who already see the account's owner: Admins, the Owner and the account's Manage holders (`account_response`'s rule). Every other viewer sees no name.
+  - Every viewer sees their own lines marked (`mine`), never another user's name.
+  - The sender is stored from B1 on, in `chat_messages.sent_by` (`REFERENCES users ON DELETE SET NULL`): a deleted user's lines keep no sender and show no name.
+  - S6's rule for command arguments stays as it is.
+  - Tests cover each viewer kind: the Owner, an Admin, Manage, Control and View grantees, the sender, and a deleted sender.
+- **The texts** *(the user's approval at the plan review)*: B's three error texts as drafted (above), and four field messages on `message`, which name the rule, never the text: "must not be empty"; "must be one line, without control characters, § or text-direction marks"; "must be at most 256 characters, an emoji counting as 2"; and on `/command` "must be a command, starting with /".
+
+*Decided by the review agents, approved by the user at the plan review:*
+- **S7 (security). A user's stored line never changes after the send.** The row records what the user asked the bot to send. Whether it went out is told only in the send's answer and in D's live `ChatSent`/`ChatFailed`, which carry the request ID.
+  - *Why:* P11.2's commands work the same way (a refusal after the commit keeps its entry). A delivery state would come from the agent, so a compromised agent could put false claims on users' rows, and `ChatSent` only means the connection took the line. Answers after the wait (an outage's outbox) would leave "unknown" exactly where it matters. The audit entry stays complete, and a delivery column can come later in a new migration.
+  - *Rejected:* a delivery column written by a second, audited write (agent claims stored as facts; a lost second write leaves "unknown"); the same through `commit_unaudited` (a new exemption, the user's, not needed); deleting the row on a failure (an agent's answer would erase what a user asked; S6 rejected the like); the ingest recording outcomes (widens U17, the user's).
+  - *For later groups:* D takes the request ID from the send path, not the row; H must not show user lines as what the bot said (the wording is the user's then); E deletes user rows like other chat.
+- **S8 (security). `/command` takes commands only, authorized exactly as `/chat` authorizes them.**
+  - A line that doesn't start with `/` is 422 on `message`, checked with the body, before the bot is looked up: a plain line to an unseen bot is 422, not 404.
+  - A command is authorized with `SendChat(allowlist.check(&message))`, in the handler and again in the transaction: Control for an allowlisted command, Manage for an unlisted one. The step-up is the route's own gate (`SteppedUpUser`), as on every step-up route.
+  - *Why:* "Manage for every command" adds no security, since a Control holder can send an allowlisted command through `/chat` with no step-up. It needs no fleet-core change (no new `Permission`; the `CommandCheck` invariant and the authorization matrix stay), and keeps §7.3 and P11.3 ("allowlisted commands: Control"). S4's "any command, Manage" is §7.3's own wording for an unlisted command.
+  - *Rejected:* Manage for every command (a new permission or a `CommandCheck` that misstates its message; the level would depend on the route); plain chat too (contradicts "any command", and `bot.send_command` with `command: none` blurs S6's record); only unlisted commands (an allowlist change between the pointer and the resend would bounce the app between routes).
+  - *For later groups:* H resends the same message to `/command` on the pointer, its zod schema mirroring the leading `/`; the audit reads `bot.send_command` with `allowlisted` or `unlisted` and `bot.send_chat` with `none` or `allowlisted`; P13.1's route matrix gains `/command`'s rows.
+- **S9 (security, built in B2). A hidden command reads `/name`, with a flag that something was left out.**
+  - `ChatLine.arguments_hidden: bool`, always present, true only when something after the command name was withheld from this viewer; the arguments never reach a viewer below Manage.
+  - *Edge cases:* plain chat and received lines are never cut; `/spawn` shows whole with `false`; `/login pw` shows `/login` with `true`, in user and mode rows; a lone `/` shows `/` with `false`, `/ x` shows `/` with `true`; `//wand pos` shows `//wand` with `true`. The cut falls at `command_name()`'s split (any Unicode whitespace: stricter than Minecraft's space, never looser). Manage is `effective_level == Manage` when the history is read, so a lowered grant hides old rows' arguments too. `mine` doesn't lift it (U3 kept S6). `truncated` isn't reused: it's the row's stored length cut.
+  - *Why:* the protection is entirely in `text`; the flag is one bit, the same for View and Control, and a client that ignores it shows the bare name, never more. It follows S54 and ADR-0018 (flat, a field left out rather than masked, no client parsing server text), and H can show that `/login` wasn't typed bare. One pure fleet-core function lets D's live events apply it identically.
+  - *Rejected:* `/name` alone (`/login` reads as if typed bare); a server-appended ` …` (a user can type `…` themselves, and it puts a text friends read into the API); a separate `command` field with `text` optional (every client rebuilds the line).
+  - *For later groups:* D builds each live `Chat` event per subscriber through the same function; H marks the line outside the text (the wording is the user's then); C weighs whether `GET /modes` shows a shared mode's command arguments that S6 hides in chat rows.
 
 ### Notes for later groups
 - **B (P11.3's API):** S4–S6; the HTTP chat limits (S3); the answers' order as R38: 401, the per-user 429, the step-up's 403 on `/command`, a malformed path's 404, the body's 400/422, an unseen bot's 404, 403 `forbidden`, the 403 pointer on `/chat`, the chat 429s, 409; fleet-client's `send_chat`, `send_command` and the history; `just dev-bots`' `chat`, `command` and `history`.
