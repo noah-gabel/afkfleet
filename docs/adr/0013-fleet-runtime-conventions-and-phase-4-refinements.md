@@ -57,7 +57,7 @@ The queue and the mode runner are built against the fake before the actor, so th
 - On a disconnect or teardown, queued messages fail with `ChatFailed{Disconnected}`.
 - A mode chat step that's rate-limited or finds the queue full is skipped and logged, and runs again at its next scheduled time.
 - A token isn't refunded when a send fails.
-- **Commands with message arguments** (`/me`, `/msg`, …) on servers that enforce secure chat get nothing special in Phase 4: they go out and the server rejects them. P11.3's rule for user commands applies to mode chat too, through `ChatUnavailable`, because only fleet-mc knows whether a session signs.
+- **Commands with message arguments** (`/me`, `/msg`, …) on servers that enforce secure chat get nothing special in Phase 4: they go out and the server rejects them. P11.3's rule for user commands applies to mode chat too, through `ChatUnavailable`, because only fleet-mc knows whether a session signs. *(Decided in Phase 11, [ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S2: fleet-mc refuses such a command where chat must be signed, so the mode's step is skipped at `debug`.)*
 - *(group B, the user's decisions)* What the queue looks like as built:
   - **Events.** `FleetEvent` is defined in P4.5 with all its kinds (see Actor), so the queue's `ChatDelivery` publishes `ChatSent` and `ChatFailed` on the fleet's `broadcast` itself. The `RuntimeClock` stamps them, which makes the queue the clock's first user.
   - **Tickets** come from one fleet-wide counter, `ChatTickets`. A ticket never repeats while the agent runs, even across actor restarts, so the agent can map it to the control plane's request id.

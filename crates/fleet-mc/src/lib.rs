@@ -39,6 +39,7 @@ compile_error!(
 
 mod account;
 mod actions;
+mod command_tree;
 mod config;
 mod connector;
 mod events;

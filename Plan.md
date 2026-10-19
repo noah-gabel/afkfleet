@@ -1351,7 +1351,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Refusing.** `Failed`, or still `Pending` at that deadline, gives the new `SessionError::ChatUnavailable`, logged at `warn` once. The session stays up.
   > - **The fake** gains `fail_chat`.
   > - **A key fetch that hangs** keeps chat unavailable until the next reconnect, since azalea never retries it.
-  > - **Commands** are never signed by azalea. A server that enforces secure chat rejects those with message arguments, while `send_chat` returns `Ok` (found by the user's real-account check; flagged under P4.5 and P11.3).
+  > - **Commands** are never signed by azalea. A server that enforces secure chat rejects those with message arguments, while `send_chat` returns `Ok` (found by the user's real-account check; flagged under P4.5 and P11.3). *Decided in Phase 11, group A ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2): fleet-mc refuses such a command with `ChatUnavailable` before sending, wherever chat must be signed, judged by the server's command tree.*
 - [x] **P3.8** 🔴 Clean-up test: after the full teardown from ADR-0008 §10 (not just `disconnect()`), the thread count and the number of live Worlds go back to baseline.
 
   > Note (P3.8, from the Phase 3 plan) (ADR-0011):
@@ -1389,7 +1389,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - The token must not appear in any log, and `PRIVATE KEY` only under `azalea_auth::certs` (azalea-auth 0.16.0 logs the certificate response at `trace`, which P5.2 caps).
   >   - Only the nextest `manual` profile includes `manual_` tests. Only the user runs `just test-real-account` (CLAUDE.md).
   >   - Errors name only a line number and the expected key, and a failed wait names only the step and event kinds. A rejected token says it may have expired, since `fetch-token` writes no expiry.
-  >   - It also sends `/me` and expects the server to reject it: the known limit under P11.3. If the emote's echo arrives instead, the step fails with "azalea now signs commands: update this step and the P11 note".
+  >   - It also sends `/me` and expects the server to reject it: the known limit under P11.3. If the emote's echo arrives instead, the step fails with "azalea now signs commands: update this step and the P11 note". *Changed in Phase 11, group A ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2, the user's approval): the step, now `emote_refused`, expects fleet-mc's `ChatUnavailable` and a later signed chat's echo before any rejection or emote echo; its verdict is a pure function with default-profile tests. Only the user runs the check.*
   >   - The steps only record their results: the teardown and the log checks always run, and failed steps are reported after them. The first run failed at the signed chat (see P3.7's note) and skipped the log checks.
   >   - **The user's results** (2026-10-07, after the P3.7 fix):
   >     - passed: the join, the signed chat, the token absent from every log at every level, and `PRIVATE KEY` only under `azalea_auth::certs`
@@ -1564,7 +1564,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P4.5, from Phase 3, group E): **flagged, not decided.** `send_chat` can fail with `SessionError::ChatUnavailable` when an online session can't sign chat for a server that enforces it. The session stays up, and a later call may succeed. This task decides what the queue does then, for user chat and mode chat (ADR-0011).
   >
-  > Mode chat with a command that takes message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) is rejected by a server that enforces secure chat, while `send_chat` returns `Ok`. That's undecided here too; see P11.3's note.
+  > Mode chat with a command that takes message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) is rejected by a server that enforces secure chat, while `send_chat` returns `Ok`. That's undecided here too; see P11.3's note. *Decided in Phase 11 ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2): fleet-mc refuses it with `ChatUnavailable`, so the mode's step is skipped at `debug`.*
 
   > Note (P4.5, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
   > - **Admission.** The bucket (one message per 3 s, burst 3) is checked when a message is queued. User chat while the bot isn't Online returns `NotOnline`.
@@ -3917,7 +3917,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.3, from group D): The handler checks `SendChat(allowlist.check(&message))` and then sends that same message. An allowlisted command passes with any arguments (threat model). Reading the history needs `ViewBot` (ADR-0010).
 
-  > Note (P11.3, from Phase 3, group E, found by the user's real-account check): **flagged, not decided.**
+  > Note (P11.3, Phase 11, group A) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S2, S3): **P11.3's agent side as built** (P11.3 is ticked in group B, with the API).
+  > - **Secure chat (S2):** wherever fleet-mc's `needs_signing` holds, a command whose name can reach a `message` argument in the server's command tree is refused before sending, with `ChatUnavailable`, even once chat is signed: azalea signs no command. The tree is read by `command_tree::MessageCommands`, one backward pass, each node at most once, a redirect to the root not followed, indexes out of range ignored; until a tree arrives commands go out as before. User chat gets `ChatFailed{ChatUnavailable}`; mode chat is skipped at `debug`; fleet-mc warns once per session, never naming the command. No wire change.
+
+  > Note (P11.3, from Phase 3, group E, found by the user's real-account check): **flagged, not decided.** *Decided in Phase 11, group A: see the note above (S2).*
   > - **The limit.** On a server that enforces secure chat, azalea's unsigned commands with message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) are rejected.
   >   - The bot gets one system message and stays up.
   >   - The server logs an ERROR each time.

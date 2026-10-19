@@ -115,6 +115,9 @@ mod tests {
         SigningPlugin {
             online: false,
             state: Arc::new(tokio::sync::watch::Sender::new(SigningState::new(false))),
+            commands: Arc::new(tokio::sync::watch::Sender::new(
+                crate::command_tree::MessageCommands::default(),
+            )),
         }
     }
 
