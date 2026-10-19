@@ -1,9 +1,13 @@
 //! `[rate_limits]`: §7.4's request limits (Plan.md P7.10, Appendix A,
-//! ADR-0016), and the Microsoft link flows' caps (P9.4, ADR-0018). The chat
-//! keys and `ws_connections_per_user` arrive with P11.
+//! ADR-0016), the Microsoft link flows' caps (P9.4, ADR-0018), and each bot's
+//! chat rate, which the server sends in its spec (P11.3; ADR-0020, S3). The
+//! per-user chat key and `ws_connections_per_user` arrive with their routes
+//! in Phase 11.
 
 use core::num::NonZeroU32;
 use core::time::Duration;
+
+use fleet_core::chat::ChatRate;
 
 use super::Bounds;
 
@@ -101,6 +105,11 @@ pub struct RateLimitConfig {
     /// mints costs a Microsoft refresh, and Microsoft's 429 pauses every
     /// refresh.
     pub fresh_sessions: Rate,
+    /// Each bot's chat rate (`chat_per_bot_interval_secs`,
+    /// `chat_per_bot_burst`; ADR-0020, S3): sent in its spec, so the
+    /// agent's bucket, which mode chat shares, keeps the same rate as the
+    /// server's own limit on chat sent through the API.
+    pub chat_per_bot: ChatRate,
 }
 
 /// `[rate_limits]`'s caps on Microsoft link flows (P9.4, ADR-0018). Each
@@ -161,6 +170,16 @@ impl RateLimitConfig {
     pub const BOT_ACTIONS_PER_BOT_PER_MIN: Bounds = Bounds { min: 1, max: 60 };
     /// `fresh_sessions_per_bot_per_hour`: 1 to 60. Default 6.
     pub const FRESH_SESSIONS_PER_BOT_PER_HOUR: Bounds = Bounds { min: 1, max: 60 };
+    /// `chat_per_bot_interval_secs`: 1 to 60. Default 3.
+    pub const CHAT_PER_BOT_INTERVAL_SECS: Bounds = Bounds {
+        min: ChatRate::MIN_INTERVAL_SECS,
+        max: ChatRate::MAX_INTERVAL_SECS,
+    };
+    /// `chat_per_bot_burst`: 1 to 10. Default 3.
+    pub const CHAT_PER_BOT_BURST: Bounds = Bounds {
+        min: ChatRate::MIN_BURST,
+        max: ChatRate::MAX_BURST,
+    };
 }
 
 impl Default for RateLimitConfig {
@@ -180,6 +199,7 @@ impl Default for RateLimitConfig {
             connect: Rate::per_minute(nonzero(10)),
             bot_actions: Rate::per_minute(nonzero(5)),
             fresh_sessions: Rate::per_hour(nonzero(6)),
+            chat_per_bot: ChatRate::default(),
         }
     }
 }

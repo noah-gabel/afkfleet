@@ -7,12 +7,13 @@ use core::num::{NonZeroU32, NonZeroUsize};
 use core::time::Duration;
 
 use fleet_core::bot::{BotNotification, BotState, FailReason, PauseReason, StickyState};
+use fleet_core::chat::ChatRate;
 use fleet_core::disconnect::ConflictKind;
 use fleet_core::id::BotId;
 use fleet_core::mc::{ConnectError, SessionEvent};
 use fleet_core::mode::{Action, Schedule, Step};
 use fleet_runtime::{ChatError, Fleet, FleetError, FleetEventKind, SendChatError, ShutdownReport};
-use fleet_testkit::mc::Performed;
+use fleet_testkit::mc::{Performed, SessionController};
 use tracing::Level;
 
 use crate::common::Levels;
@@ -454,13 +455,95 @@ async fn the_breaker_keeps_its_failures_across_a_restart() {
     assert_eq!(fleet.connector.attempts(), 4);
 }
 
+/// `bot` running at `rate`, online on session `index`.
+async fn online_at(fleet: &Harness, rate: ChatRate, index: usize) -> SessionController {
+    let mut spec = running(BOT, "AfkBot1");
+    spec.chat_rate = rate;
+    fleet.apply(spec).await;
+    let controller = fleet.session(index).await;
+    emit(&controller, SessionEvent::Joined);
+    settle().await;
+    assert!(matches!(fleet.state(BOT).await, BotState::Online { .. }));
+    controller
+}
+
+/// One message a minute: a bucket that refills slower than any test waits.
+fn slow(burst: u32) -> ChatRate {
+    ChatRate::try_new(60, burst).unwrap()
+}
+
+/// The bucket keeps the rate of the bot's spec, the server's setting
+/// (ADR-0020, S3).
+#[tokio::test(start_paused = true)]
+async fn the_specs_chat_rate_governs_the_bucket() {
+    let fleet = Setup::new().start().await;
+    let _session = online_at(&fleet, slow(1), 0).await;
+
+    let first = fleet.fleet.send_chat(id(BOT), message("hi")).await;
+    let second = fleet.fleet.send_chat(id(BOT), message("again")).await;
+
+    assert!(first.is_ok(), "{first:?}");
+    assert_eq!(second, Err(SendChatError::Chat(ChatError::RateLimited)));
+}
+
+/// A spec with another rate gives the bot a full bucket at it, which a
+/// restart then keeps.
+#[tokio::test(start_paused = true)]
+async fn a_new_chat_rate_swaps_the_bucket_and_a_restart_keeps_it() {
+    let fleet = Setup::new().start().await;
+    let first = online_at(&fleet, slow(1), 0).await;
+    fleet.fleet.send_chat(id(BOT), message("hi")).await.unwrap();
+    let mut spec = running(BOT, "AfkBot1");
+    spec.chat_rate = slow(2);
+    fleet.apply(spec).await;
+    settle().await;
+    for text in ["one", "two"] {
+        fleet.fleet.send_chat(id(BOT), message(text)).await.unwrap();
+    }
+    fleet.connector.panic_on_connect(2);
+
+    emit(&first, kick("multiplayer.disconnect.server_shutdown"));
+    settle().await;
+    advance(policy().bounds(n(1)).1).await;
+    advance(policy().bounds(n(2)).1).await;
+    let second = fleet.session(1).await;
+    emit(&second, SessionEvent::Joined);
+    settle().await;
+
+    assert_eq!(
+        fleet.fleet.send_chat(id(BOT), message("three")).await,
+        Err(SendChatError::Chat(ChatError::RateLimited))
+    );
+}
+
+/// A spec whose rate didn't change, though something else did, never
+/// refills the bucket.
+#[tokio::test(start_paused = true)]
+async fn a_spec_with_the_same_chat_rate_keeps_the_bucket() {
+    let fleet = Setup::new().start().await;
+    let _session = online_at(&fleet, slow(1), 0).await;
+    fleet.fleet.send_chat(id(BOT), message("hi")).await.unwrap();
+    let mut spec = running(BOT, "AfkBot1");
+    spec.chat_rate = slow(1);
+    spec.mode = mode(vec![Step {
+        action: Action::Jump,
+        schedule: Schedule::AtStart,
+        probability: 100,
+    }]);
+
+    fleet.apply(spec).await;
+    settle().await;
+
+    assert_eq!(
+        fleet.fleet.send_chat(id(BOT), message("again")).await,
+        Err(SendChatError::Chat(ChatError::RateLimited))
+    );
+}
+
 #[tokio::test(start_paused = true)]
 async fn a_restart_does_not_refill_the_chat_bucket() {
-    let mut setup = Setup::new();
-    setup.config.chat_interval = secs(3_600);
-    setup.config.chat_burst = NonZeroU32::MIN;
-    let fleet = setup.start().await;
-    let first = fleet.online(BOT, "AfkBot1", 0).await;
+    let fleet = Setup::new().start().await;
+    let first = online_at(&fleet, slow(1), 0).await;
     fleet.fleet.send_chat(id(BOT), message("hi")).await.unwrap();
     fleet.connector.panic_on_connect(2);
 

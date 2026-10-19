@@ -513,6 +513,7 @@ fn registry_of(
         inbox,
         timings,
         settings.allow_offline,
+        fleet_core::chat::ChatRate::default(),
     );
     (registry, Some((reconciler, hints)))
 }

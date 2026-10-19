@@ -6,6 +6,7 @@ use fleet_core::bot::{
     BotAccount, BotNotification, BotSnapshot, BotSpec, BotState, DesiredRunState, FailReason,
     PauseReason, StickyState,
 };
+use fleet_core::chat::{ChatRate, ChatRateError};
 use fleet_core::disconnect::{ConflictKind, ConflictTexts, PermanentKind};
 use fleet_core::value::{McUsername, ServerAddress};
 
@@ -35,6 +36,10 @@ impl From<BotSpec> for wire::BotSpec {
             }
             .into(),
             conflict_texts: spec.conflict_texts.iter().map(str::to_owned).collect(),
+            chat_rate: Some(wire::ChatRate {
+                interval_secs: spec.chat_rate.interval_secs(),
+                burst: spec.chat_rate.burst().get(),
+            }),
         }
     }
 }
@@ -76,8 +81,24 @@ impl TryFrom<wire::BotSpec> for BotSpec {
             mode,
             desired,
             conflict_texts,
+            chat_rate: chat_rate_from_wire(required("BotSpec.chat_rate", spec.chat_rate)?)?,
         })
     }
+}
+
+/// Reads a chat rate (ADR-0020, S3): refused outside its ranges, never
+/// clamped. A 0 is missing, as for every number that counts from 1.
+fn chat_rate_from_wire(rate: wire::ChatRate) -> Result<ChatRate, ConvertError> {
+    ChatRate::try_new(rate.interval_secs, rate.burst).map_err(|error| match error {
+        ChatRateError::Interval { secs: 0 } => {
+            ConvertError::new("ChatRate.interval_secs", Problem::Missing)
+        }
+        ChatRateError::Interval { .. } => {
+            ConvertError::new("ChatRate.interval_secs", Problem::OutOfRange)
+        }
+        ChatRateError::Burst { burst: 0 } => ConvertError::new("ChatRate.burst", Problem::Missing),
+        ChatRateError::Burst { .. } => ConvertError::new("ChatRate.burst", Problem::OutOfRange),
+    })
 }
 
 /// Reads a server address, which must arrive exactly as the type writes it:

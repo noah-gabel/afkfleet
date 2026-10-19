@@ -100,6 +100,7 @@ fn spec(desired: DesiredRunState) -> BotSpec {
         mode: idle(),
         desired,
         conflict_texts: ConflictTexts::default(),
+        chat_rate: fleet_core::chat::ChatRate::default(),
     }
 }
 
@@ -246,7 +247,7 @@ impl Setup {
             self.breaker
                 .unwrap_or_else(|| CircuitBreaker::new(self.circuit)),
         );
-        let bucket = ChatBucket::new(self.config.chat_interval, self.config.chat_burst).unwrap();
+        let bucket = ChatBucket::new(self.spec.chat_rate);
         let (actor, inbox) = BotActor::new(BotActorParts {
             spec: self.spec,
             connector: Arc::new(connector),

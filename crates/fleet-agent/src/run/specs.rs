@@ -69,6 +69,8 @@ pub(crate) fn standalone_specs(
                 mode: bot.mode.definition(),
                 desired: DesiredRunState::Running,
                 conflict_texts: bot.conflict_texts.clone(),
+                // No server sets it here: the default (ADR-0020, S3).
+                chat_rate: fleet_core::chat::ChatRate::default(),
             })
         })
         .collect()
@@ -120,6 +122,7 @@ mod tests {
             assert_eq!(spec.mode, bot.mode.definition());
             assert_eq!(spec.desired, DesiredRunState::Running);
             assert_eq!(spec.conflict_texts, bot.conflict_texts);
+            assert_eq!(spec.chat_rate, fleet_core::chat::ChatRate::default());
         }
     }
 

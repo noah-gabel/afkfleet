@@ -39,7 +39,7 @@ pub use error::{CapacitySetting, FleetError, FleetSetupError, SendChatError, Shu
 pub use supervisor::Supervisor;
 
 use self::command::{Command, Lifecycle, Reply};
-use crate::chat::{ChatQuota, ChatTicket};
+use crate::chat::ChatTicket;
 use crate::config::RuntimeConfig;
 use crate::event::FleetEvent;
 use crate::metrics;
@@ -86,14 +86,12 @@ impl Fleet {
     /// # Errors
     /// - [`FleetSetupError::CapacityTooLarge`] if a channel capacity in
     ///   `config` is larger than tokio allows.
-    /// - [`FleetSetupError::ChatQuota`] if the chat rate limit is invalid.
     pub fn new<C: MinecraftConnector, P: SessionCredentialProvider>(
         parts: FleetParts<C, P>,
     ) -> Result<(Self, Supervisor<C, P>), FleetSetupError> {
         // Checked before any channel is built: tokio panics on a capacity
         // that's too large.
         check_capacities(&parts.config)?;
-        let quota = ChatQuota::try_new(parts.config.chat_interval, parts.config.chat_burst)?;
         // Into the recorder installed now; the agent installs its exporter
         // first (P5.3).
         metrics::register();
@@ -104,7 +102,7 @@ impl Fleet {
             events: events.clone(),
             reply_timeout: parts.config.reply_timeout,
         };
-        let supervisor = Supervisor::new(parts, quota, inbox, events);
+        let supervisor = Supervisor::new(parts, inbox, events);
         Ok((fleet, supervisor))
     }
 
@@ -326,7 +324,7 @@ mod tests {
     use tokio::sync::oneshot;
 
     use super::*;
-    use crate::chat::{ChatBucketError, ChatError};
+    use crate::chat::ChatError;
 
     /// The largest `broadcast` capacity tokio accepts, as its docs say.
     const TOKIO_BROADCAST_MAX: usize = usize::MAX / 2;
@@ -416,21 +414,6 @@ mod tests {
             Some(FleetSetupError::CapacityTooLarge {
                 setting: CapacitySetting::EventBuffer
             })
-        );
-    }
-
-    #[test]
-    fn a_fleet_with_a_zero_chat_interval_is_never_built() {
-        let config = RuntimeConfig {
-            chat_interval: Duration::ZERO,
-            ..RuntimeConfig::default()
-        };
-
-        let built = Fleet::new(parts(config));
-
-        assert_eq!(
-            built.err(),
-            Some(FleetSetupError::ChatQuota(ChatBucketError::ZeroInterval))
         );
     }
 

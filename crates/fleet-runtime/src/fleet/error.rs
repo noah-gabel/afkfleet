@@ -3,7 +3,7 @@
 
 use core::fmt;
 
-use crate::chat::{ChatBucketError, ChatError};
+use crate::chat::ChatError;
 
 /// Why a [`Fleet`](super::Fleet) call failed (ADR-0013). Nothing waits for
 /// room: overload is an error.
@@ -75,9 +75,6 @@ impl fmt::Display for CapacitySetting {
 /// settings.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum FleetSetupError {
-    /// The chat rate limit is invalid.
-    #[error("the chat rate limit is invalid: {0}")]
-    ChatQuota(#[from] ChatBucketError),
     /// A channel capacity is larger than tokio allows, so building the
     /// channel would panic.
     #[error("`{setting}` is larger than tokio allows")]
@@ -147,14 +144,6 @@ mod tests {
         assert_eq!(
             FleetSetupError::CapacityTooLarge { setting }.to_string(),
             message
-        );
-    }
-
-    #[test]
-    fn a_quota_error_says_why() {
-        assert_eq!(
-            FleetSetupError::from(ChatBucketError::ZeroInterval).to_string(),
-            "the chat rate limit is invalid: the chat interval is zero"
         );
     }
 }

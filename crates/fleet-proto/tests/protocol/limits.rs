@@ -154,6 +154,7 @@ fn largest_reconcile() -> ServerMessage {
                     mode: mode.clone(),
                     desired: DesiredRunState::Running,
                     conflict_texts: conflict_texts.clone(),
+                    chat_rate: fleet_core::chat::ChatRate::default(),
                 },
                 restore: Some(StickyState::Failed(FailReason::Permanent {
                     kind: PermanentKind::Banned,

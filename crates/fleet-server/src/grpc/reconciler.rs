@@ -32,6 +32,7 @@ use std::borrow::Cow;
 
 use chrono::{DateTime, Utc};
 use fleet_core::bot::{BotSpec, LastReport, LastState, StickyState};
+use fleet_core::chat::ChatRate;
 use fleet_core::disconnect::ConflictTexts;
 use fleet_core::id::{AgentId, BotId};
 use fleet_core::placement::{
@@ -158,6 +159,8 @@ pub struct Reconciler {
     inbox: HintInbox,
     timings: ReconcileTimings,
     allow_offline: bool,
+    /// Every bot's chat rate, sent in its spec (ADR-0020, S3).
+    chat_rate: ChatRate,
     /// When the task was made: the placement gate's start.
     started: Instant,
     /// When the last pass started. A bound it found passed was acted on, or
@@ -175,7 +178,8 @@ pub struct Reconciler {
 impl Reconciler {
     /// The reconciler of `registry`'s streams over `store`, stamping with
     /// `clock`, hinted through `inbox`, timed by `timings`; offline accounts'
-    /// bots run only when `allow_offline`.
+    /// bots run only when `allow_offline`, and every bot chats at
+    /// `chat_rate`, `[rate_limits]`' setting.
     #[must_use]
     pub fn new(
         registry: AgentRegistry,
@@ -184,6 +188,7 @@ impl Reconciler {
         inbox: HintInbox,
         timings: ReconcileTimings,
         allow_offline: bool,
+        chat_rate: ChatRate,
     ) -> Self {
         Self {
             registry,
@@ -192,6 +197,7 @@ impl Reconciler {
             inbox,
             timings,
             allow_offline,
+            chat_rate,
             started: Instant::now(),
             last_pass: Instant::now(),
             welcomed: HashSet::new(),
@@ -464,7 +470,7 @@ impl Reconciler {
         let mut assignments = Vec::new();
         let mut holds = Vec::new();
         for (run, record) in runs {
-            let Some(spec) = spec_of(record, run, None) else {
+            let Some(spec) = spec_of(record, run, None, self.chat_rate) else {
                 // The planner lets a bot without a server go; held so its
                 // `Removed` still clears it.
                 holds.push((run.bot, releasing(now)));
@@ -503,7 +509,7 @@ impl Reconciler {
         let now = self.clock.now();
         for (run, record) in runs {
             if run.placed {
-                let Some(spec) = spec_of(record, run, None) else {
+                let Some(spec) = spec_of(record, run, None, self.chat_rate) else {
                     continue;
                 };
                 let entry = HoldEntry {
@@ -531,7 +537,7 @@ impl Reconciler {
                 self.resend(part, known, run, record, now);
                 continue;
             };
-            let spec = spec_of(record, run, held.sent.as_ref());
+            let spec = spec_of(record, run, held.sent.as_ref(), self.chat_rate);
             let entry = HoldEntry {
                 hold: Hold::Assigned,
                 since: held.since,
@@ -579,7 +585,7 @@ impl Reconciler {
         record: &BotRecord,
         now: DateTime<Utc>,
     ) {
-        let Some(spec) = spec_of(record, run, None) else {
+        let Some(spec) = spec_of(record, run, None, self.chat_rate) else {
             return;
         };
         let entry = HoldEntry {
@@ -801,8 +807,13 @@ fn rests(report: &LatestReport) -> bool {
 }
 
 /// `run`'s spec from `record`, with the server of the spec last sent while
-/// the bot has none any more.
-fn spec_of(record: &BotRecord, run: &Run, sent: Option<&BotSpec>) -> Option<BotSpec> {
+/// the bot has none any more, and `chat_rate`.
+fn spec_of(
+    record: &BotRecord,
+    run: &Run,
+    sent: Option<&BotSpec>,
+    chat_rate: ChatRate,
+) -> Option<BotSpec> {
     let server = record
         .bot
         .server
@@ -815,6 +826,7 @@ fn spec_of(record: &BotRecord, run: &Run, sent: Option<&BotSpec>) -> Option<BotS
         mode: record.mode.clone(),
         desired: run.desired,
         conflict_texts: ConflictTexts::default(),
+        chat_rate,
     })
 }
 

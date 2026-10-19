@@ -3,6 +3,7 @@
 use core::str::FromStr;
 
 use super::{BotState, FailReason, PauseReason};
+use crate::chat::ChatRate;
 use crate::disconnect::ConflictTexts;
 use crate::id::{AccountId, BotId};
 use crate::mode::ModeDefinition;
@@ -103,6 +104,9 @@ pub struct BotSpec {
     pub desired: DesiredRunState,
     /// Kick texts that count as a duplicate login on its server.
     pub conflict_texts: ConflictTexts,
+    /// How fast it may chat: the server's `[rate_limits]` setting, or the
+    /// default for a standalone agent (ADR-0020, S3).
+    pub chat_rate: ChatRate,
 }
 
 /// A state that outlives the actor that reached it: the bot stopped by itself,

@@ -204,6 +204,7 @@ mod tests {
             mode: ModePreset::Afk.definition(),
             desired: DesiredRunState::Running,
             conflict_texts: ConflictTexts::default(),
+            chat_rate: fleet_core::chat::ChatRate::default(),
         }
     }
 

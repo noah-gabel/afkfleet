@@ -63,6 +63,7 @@ pub(crate) fn spec(bot: &str, name: &str, desired: DesiredRunState) -> BotSpec {
         mode: mode(Vec::new()),
         desired,
         conflict_texts: ConflictTexts::default(),
+        chat_rate: fleet_core::chat::ChatRate::default(),
     }
 }
 

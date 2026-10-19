@@ -145,7 +145,7 @@ impl Runner {
         assert_eq!(controller.emit(SessionEvent::Joined), EmitOutcome::Queued);
 
         let config = RuntimeConfig::default();
-        let bucket = ChatBucket::new(config.chat_interval, config.chat_burst).unwrap();
+        let bucket = ChatBucket::new(fleet_core::chat::ChatRate::default());
         let mut queue = ChatQueue::new(
             params().bot_id,
             config.chat_queue,

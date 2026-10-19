@@ -14,11 +14,6 @@ use core::time::Duration;
 /// limits, so no setting can make the runtime panic (ADR-0013).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RuntimeConfig {
-    /// A bot's chat bucket gains one message per this interval (Plan.md
-    /// §7.4).
-    pub chat_interval: Duration,
-    /// How many messages a full chat bucket lets through at once (§7.4).
-    pub chat_burst: NonZeroU32,
     /// How many messages a bot's chat queue holds. A message beyond that is
     /// refused with `QueueFull` instead of waiting.
     pub chat_queue: NonZeroUsize,
@@ -92,8 +87,6 @@ impl Default for RuntimeConfig {
         // Adding to `MIN` gives a non-zero constant without unwrapping the
         // `Option` that `NonZero*::new` returns.
         Self {
-            chat_interval: Duration::from_secs(3),
-            chat_burst: NonZeroU32::MIN.saturating_add(2),
             chat_queue: NonZeroUsize::MIN.saturating_add(15),
             session_request_timeout: Duration::from_secs(30),
             connect_timeout: Duration::from_secs(30),
@@ -123,8 +116,6 @@ mod tests {
     fn defaults_are_the_ones_adr_0013_decided() {
         let config = RuntimeConfig::default();
 
-        assert_eq!(config.chat_interval, Duration::from_secs(3));
-        assert_eq!(config.chat_burst.get(), 3);
         assert_eq!(config.chat_queue.get(), 16);
         assert_eq!(config.session_request_timeout, Duration::from_secs(30));
         assert_eq!(config.connect_timeout, Duration::from_secs(30));

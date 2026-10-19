@@ -45,8 +45,7 @@ pub use actor::{
     ActorExit, BotActor, BotActorParts, BotCommand, BotInbox, CrashedTask, InboxError,
 };
 pub use chat::{
-    ChatBucket, ChatBucketError, ChatDelivery, ChatError, ChatFailure, ChatQueue, ChatQuota,
-    ChatTicket, ChatTickets, ModeChat,
+    ChatBucket, ChatDelivery, ChatError, ChatFailure, ChatQueue, ChatTicket, ChatTickets, ModeChat,
 };
 pub use clock::RuntimeClock;
 pub use config::RuntimeConfig;

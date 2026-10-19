@@ -228,7 +228,7 @@ They're `RuntimeConfig` fields with defaults, like fleet-mc's `McConfig`, and P5
 | Setting | Default |
 |---|---|
 | Session-request timeout | 30 s |
-| Chat bucket | 1 message per 3 s, burst 3 |
+| Chat bucket | 1 message per 3 s, burst 3 *(amended in Phase 11, [ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S3: each bot's spec sets it, the server's `[rate_limits]`; this is the default a standalone agent uses)* |
 | Chat queue | 16 |
 | Actor inbox | 32 |
 | Supervisor command queue | 64 |

@@ -51,6 +51,8 @@ fn spec() -> BotSpec {
         mode: ModeDefinition::farm(),
         desired: DesiredRunState::Running,
         conflict_texts: ConflictTexts::try_new(&["Logged in from another location"]).unwrap(),
+        // Not the default, so a reader that ignored the field would show.
+        chat_rate: fleet_core::chat::ChatRate::try_new(5, 2).unwrap(),
     }
 }
 
@@ -167,6 +169,23 @@ fn the_fixtures_are_valid() {
 #[case::too_many_conflict_texts(
     |s: &mut wire::BotSpec| s.conflict_texts = (0..17).map(|n| n.to_string()).collect(),
     error("BotSpec.conflict_texts", Problem::ConflictTexts(ConflictTextsError::TooMany { count: 17 }))
+)]
+#[case::no_chat_rate(|s: &mut wire::BotSpec| s.chat_rate = None, error("BotSpec.chat_rate", Problem::Missing))]
+#[case::chat_interval_0(
+    |s: &mut wire::BotSpec| s.chat_rate = Some(wire::ChatRate { interval_secs: 0, burst: 3 }),
+    error("ChatRate.interval_secs", Problem::Missing)
+)]
+#[case::chat_interval_past_a_minute(
+    |s: &mut wire::BotSpec| s.chat_rate = Some(wire::ChatRate { interval_secs: 61, burst: 3 }),
+    error("ChatRate.interval_secs", Problem::OutOfRange)
+)]
+#[case::chat_burst_0(
+    |s: &mut wire::BotSpec| s.chat_rate = Some(wire::ChatRate { interval_secs: 3, burst: 0 }),
+    error("ChatRate.burst", Problem::Missing)
+)]
+#[case::chat_burst_past_ten(
+    |s: &mut wire::BotSpec| s.chat_rate = Some(wire::ChatRate { interval_secs: 3, burst: 11 }),
+    error("ChatRate.burst", Problem::OutOfRange)
 )]
 fn a_bot_spec_is_refused(#[case] mutate: fn(&mut wire::BotSpec), #[case] expected: ConvertError) {
     let mut spec = wire_spec();

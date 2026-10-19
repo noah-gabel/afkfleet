@@ -16,6 +16,7 @@ use chrono::TimeDelta;
 use figment::Jail;
 use fleet_core::auth::{InviteTtl, LockoutPolicy, SessionPolicy};
 use fleet_core::authz::{CommandAllowlist, CommandAllowlistError};
+use fleet_core::chat::ChatRate;
 use fleet_server::config::{
     AccountsConfig, Argon2Params, AuthConfig, ChatConfig, ConfigError, DatabaseConfig, GrpcConfig,
     Heartbeats, HttpConfig, LinkFlowLimits, LogConfig, LogFilterError, LogFormat, ParseError,
@@ -204,6 +205,27 @@ fn only_the_database_path_and_the_vault_are_required() {
     });
 }
 
+/// `every_key_maps_to_its_setting`'s `[rate_limits]` section, which
+/// [`every_rate_limit`] reads back.
+const EVERY_RATE_LIMIT: &str = "[rate_limits]
+per_ip_per_sec = 50
+per_ip_burst = 100
+login_per_ip_per_min = 10
+refresh_per_ip_per_min = 60
+register_per_ip_per_hour = 2
+per_user_per_sec = 20
+per_user_burst = 60
+link_flows_total = 5
+link_flows_per_user_per_day = 20
+grants_by_name_per_user_per_hour = 4
+enroll_per_ip_per_min = 4
+connect_per_cert_per_min = 7
+bot_actions_per_bot_per_min = 3
+fresh_sessions_per_bot_per_hour = 2
+chat_per_bot_interval_secs = 5
+chat_per_bot_burst = 2
+";
+
 /// The `[rate_limits]` that `every_key_maps_to_its_setting`'s file sets.
 fn every_rate_limit() -> RateLimitConfig {
     RateLimitConfig {
@@ -221,6 +243,7 @@ fn every_rate_limit() -> RateLimitConfig {
         connect: Rate::per_minute(nonzero(7)),
         bot_actions: Rate::per_minute(nonzero(3)),
         fresh_sessions: Rate::per_hour(nonzero(2)),
+        chat_per_bot: ChatRate::try_new(5, 2).unwrap(),
     }
 }
 
@@ -255,22 +278,7 @@ refresh_token_absolute_days = 60
 lockout_threshold = 7
 invite_ttl_hours = 24
 
-[rate_limits]
-per_ip_per_sec = 50
-per_ip_burst = 100
-login_per_ip_per_min = 10
-refresh_per_ip_per_min = 60
-register_per_ip_per_hour = 2
-per_user_per_sec = 20
-per_user_burst = 60
-link_flows_total = 5
-link_flows_per_user_per_day = 20
-grants_by_name_per_user_per_hour = 4
-enroll_per_ip_per_min = 4
-connect_per_cert_per_min = 7
-bot_actions_per_bot_per_min = 3
-fresh_sessions_per_bot_per_hour = 2
-
+{}
 [accounts]
 max_per_member = 7
 allow_offline = true
@@ -283,6 +291,7 @@ master_key_files = {{ 3 = {} }}
 active_key_id = 3
 "#,
             toml_path(&db_path(jail)),
+            EVERY_RATE_LIMIT,
             toml_path(&key_path(jail, 3))
         );
 
@@ -1120,6 +1129,8 @@ fn the_dev_config_holds_neither_the_database_path_nor_the_vault_key_file() {
 #[case::connect("connect_per_cert_per_min", 1, 60)]
 #[case::bot_actions("bot_actions_per_bot_per_min", 1, 60)]
 #[case::fresh_sessions("fresh_sessions_per_bot_per_hour", 1, 60)]
+#[case::chat_per_bot_interval("chat_per_bot_interval_secs", 1, 60)]
+#[case::chat_per_bot_burst("chat_per_bot_burst", 1, 10)]
 fn rate_limit_keys_are_checked_against_their_range(
     #[case] key: &str,
     #[case] min: u64,

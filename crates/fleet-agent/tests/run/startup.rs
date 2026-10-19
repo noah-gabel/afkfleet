@@ -102,7 +102,10 @@ async fn the_agents_and_its_bots_lines_are_in_the_agent_span() {
 #[tokio::test(start_paused = true)]
 async fn a_fleet_that_cant_be_set_up_fails_the_start() {
     let mut invalid = afk(&["AfkBot1"]);
-    invalid.runtime.chat_interval = core::time::Duration::ZERO;
+    // More than tokio allows, which the fleet's setup checks; the chat rate
+    // the test used before is now each spec's, valid by its type
+    // (ADR-0020, S3).
+    invalid.runtime.chat_queue = core::num::NonZeroUsize::MAX;
     let agent = Agent::start(invalid).await;
     let capture = agent.capture.clone();
     let fake = agent.fake.clone();
@@ -115,7 +118,7 @@ async fn a_fleet_that_cant_be_set_up_fails_the_start() {
     assert_eq!(errors.len(), 1, "{}", capture.text());
     assert_eq!(
         errors[0]["error"],
-        "the fleet can't be set up: the chat rate limit is invalid: the chat interval is zero"
+        "the fleet can't be set up: `chat_queue` is larger than tokio allows"
     );
 }
 

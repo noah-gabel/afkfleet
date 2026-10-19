@@ -542,6 +542,7 @@ mod tests {
             connect: rate,
             bot_actions: rate,
             fresh_sessions: rate,
+            chat_per_bot: fleet_core::chat::ChatRate::default(),
         }
     }
 

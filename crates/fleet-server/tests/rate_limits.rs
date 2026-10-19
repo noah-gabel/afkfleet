@@ -98,6 +98,7 @@ fn loose() -> RateLimitConfig {
         connect: loose,
         bot_actions: loose,
         fresh_sessions: loose,
+        chat_per_bot: fleet_core::chat::ChatRate::default(),
     }
 }
 

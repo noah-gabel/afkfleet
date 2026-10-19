@@ -19,6 +19,7 @@ use super::{
 };
 use fleet_core::auth::{InviteTtl, LockoutPolicy, SessionPolicy};
 use fleet_core::authz::{CommandAllowlist, CommandAllowlistError};
+use fleet_core::chat::ChatRate;
 
 use crate::http::rate_limit::{IpNet, TrustedProxies};
 
@@ -544,6 +545,8 @@ fn rate_limits(raw: &RawRateLimits) -> Option<RateLimitConfig> {
         connect: Rate::per_minute(count(raw.connect_per_cert_per_min)?),
         bot_actions: Rate::per_minute(count(raw.bot_actions_per_bot_per_min)?),
         fresh_sessions: Rate::per_hour(count(raw.fresh_sessions_per_bot_per_hour)?),
+        chat_per_bot: ChatRate::try_new(raw.chat_per_bot_interval_secs, raw.chat_per_bot_burst)
+            .ok()?,
     })
 }
 

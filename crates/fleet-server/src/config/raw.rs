@@ -250,6 +250,10 @@ pub(crate) struct RawRateLimits {
     pub(crate) bot_actions_per_bot_per_min: u32,
     #[garde(range(min = RateLimitConfig::FRESH_SESSIONS_PER_BOT_PER_HOUR.min, max = RateLimitConfig::FRESH_SESSIONS_PER_BOT_PER_HOUR.max))]
     pub(crate) fresh_sessions_per_bot_per_hour: u32,
+    #[garde(range(min = RateLimitConfig::CHAT_PER_BOT_INTERVAL_SECS.min, max = RateLimitConfig::CHAT_PER_BOT_INTERVAL_SECS.max))]
+    pub(crate) chat_per_bot_interval_secs: u32,
+    #[garde(range(min = RateLimitConfig::CHAT_PER_BOT_BURST.min, max = RateLimitConfig::CHAT_PER_BOT_BURST.max))]
+    pub(crate) chat_per_bot_burst: u32,
 }
 
 impl Default for RawRateLimits {
@@ -269,6 +273,8 @@ impl Default for RawRateLimits {
             connect_per_cert_per_min: 10,
             bot_actions_per_bot_per_min: 5,
             fresh_sessions_per_bot_per_hour: 6,
+            chat_per_bot_interval_secs: 3,
+            chat_per_bot_burst: 3,
         }
     }
 }
@@ -636,6 +642,8 @@ mod secret_names {
             "rate_limits.connect_per_cert_per_min",
             "rate_limits.bot_actions_per_bot_per_min",
             "rate_limits.fresh_sessions_per_bot_per_hour",
+            "rate_limits.chat_per_bot_interval_secs",
+            "rate_limits.chat_per_bot_burst",
             "accounts",
             "accounts.max_per_member",
             "accounts.allow_offline",

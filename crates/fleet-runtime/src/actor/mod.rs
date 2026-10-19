@@ -714,6 +714,7 @@ mod tests {
             mode: ModeDraft { steps: Vec::new() }.validate().unwrap(),
             desired: DesiredRunState::Running,
             conflict_texts: ConflictTexts::default(),
+            chat_rate: fleet_core::chat::ChatRate::default(),
         };
         let config = RuntimeConfig::default();
         let clock = RuntimeClock::new(DateTime::from_timestamp(1_700_000_000, 0).unwrap());
@@ -743,7 +744,7 @@ mod tests {
             clock,
             rng: StdRng::seed_from_u64(1),
             events: broadcast::channel(64).0,
-            bucket: ChatBucket::new(config.chat_interval, config.chat_burst).unwrap(),
+            bucket: ChatBucket::new(fleet_core::chat::ChatRate::default()),
             tickets: ChatTickets::new(),
             snapshot: snapshots.publisher(),
             breaker: watch::Sender::new(CircuitBreaker::new(policy)),

@@ -2697,6 +2697,7 @@ mod tests {
             mode: fleet_core::mode::ModeDefinition::afk(),
             desired: DesiredRunState::Running,
             conflict_texts: fleet_core::disconnect::ConflictTexts::default(),
+            chat_rate: fleet_core::chat::ChatRate::default(),
         };
 
         registry

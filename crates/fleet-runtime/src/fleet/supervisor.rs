@@ -25,7 +25,7 @@ use tracing::{Span, debug, error, info, info_span, warn};
 use super::command::{ChatAnswer, Command, Lifecycle, Reply};
 use super::{FleetError, FleetParts, SendChatError, ShutdownReport};
 use crate::actor::{ActorExit, BotActor, BotActorParts, BotCommand, BotInbox, CrashedTask};
-use crate::chat::{ChatBucket, ChatError, ChatQuota, ChatTickets};
+use crate::chat::{ChatBucket, ChatError, ChatTickets};
 use crate::clock::RuntimeClock;
 use crate::config::RuntimeConfig;
 use crate::event::{FleetEvent, FleetEventKind};
@@ -76,7 +76,6 @@ pub struct Supervisor<C, P> {
     circuit: CircuitPolicy,
     config: RuntimeConfig,
     clock: RuntimeClock,
-    quota: ChatQuota,
     rng: StdRng,
     events: broadcast::Sender<FleetEvent>,
     tickets: ChatTickets,
@@ -98,11 +97,10 @@ impl<C, P> fmt::Debug for Supervisor<C, P> {
 }
 
 impl<C: MinecraftConnector, P: SessionCredentialProvider> Supervisor<C, P> {
-    /// Builds the supervisor from its parts, the checked chat quota, its
-    /// command queue and the fleet's events.
+    /// Builds the supervisor from its parts, its command queue and the
+    /// fleet's events.
     pub(super) fn new(
         parts: FleetParts<C, P>,
-        quota: ChatQuota,
         commands: mpsc::Receiver<Command>,
         events: broadcast::Sender<FleetEvent>,
     ) -> Self {
@@ -122,7 +120,6 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> Supervisor<C, P> {
             circuit,
             config,
             clock: RuntimeClock::new(anchor),
-            quota,
             rng: StdRng::seed_from_u64(seed),
             events,
             tickets: ChatTickets::new(),
@@ -233,7 +230,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> Supervisor<C, P> {
                 last_disconnect: None,
             }),
             breaker: watch::Sender::new(CircuitBreaker::new(self.circuit)),
-            bucket: ChatBucket::with_quota(self.quota),
+            bucket: ChatBucket::new(spec.chat_rate),
             crashes: FailureWindow::new(self.config.restart_limit, self.config.restart_window),
             actor: None,
             crash_looped: false,
@@ -609,6 +606,9 @@ fn update(
             .try_send(BotCommand::UpdateSpec(Box::new(spec.clone())))
             .map_err(|_| FleetError::Busy)?;
     }
+    // Its actor shares the bucket, so a new rate reaches it at once; the
+    // same rate keeps the bucket as it is (ADR-0020, S3).
+    entry.bucket.set_rate(spec.chat_rate);
     entry.spec = spec;
     Ok(())
 }
@@ -709,6 +709,7 @@ mod tests {
             mode: ModeDraft { steps: Vec::new() }.validate().unwrap(),
             desired,
             conflict_texts: ConflictTexts::default(),
+            chat_rate: fleet_core::chat::ChatRate::default(),
         }
     }
 
