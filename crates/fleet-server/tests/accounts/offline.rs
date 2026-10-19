@@ -37,7 +37,7 @@ fn allowed(max: u32) -> AccountsConfig {
 }
 
 async fn on(options: SqliteConnectOptions, max: u32) -> HttpSetup {
-    HttpSetup::with(options, RateLimitConfig::default(), allowed(max)).await
+    HttpSetup::with(options, &RateLimitConfig::default(), allowed(max)).await
 }
 
 async fn create(setup: &HttpSetup, by: &Person, body: Value) -> Seen {
@@ -309,7 +309,7 @@ async fn it_spends_the_users_request_limit(
         per_user: Rate::per_second(NonZeroU32::MIN, NonZeroU32::MIN),
         ..RateLimitConfig::default()
     };
-    let setup = HttpSetup::with(options, limits, allowed(3)).await;
+    let setup = HttpSetup::with(options, &limits, allowed(3)).await;
     let alice = setup.person(1, Role::Member).await;
 
     let first = create(&setup, &alice, json!({ "name": "AfkBot1" })).await;

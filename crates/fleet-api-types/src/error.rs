@@ -81,6 +81,16 @@ pub enum ErrorCode {
     BotNotPaused,
     /// A reset of a bot that hasn't failed (409).
     BotNotFailed,
+    /// A chat line for a bot that isn't online: it should be stopped, runs
+    /// nowhere, or isn't in the game now (409).
+    BotNotOnline,
+    /// The bot's Minecraft server takes only signed chat, and the bot can't
+    /// sign this line: a command with a message, such as `/msg` or `/me`
+    /// (409).
+    ChatUnavailable,
+    /// A command off the server's allowlist, sent to `/chat` by someone who
+    /// may send it: send it again to `/command`, after a step-up (403).
+    CommandNeedsStepUp,
 }
 
 impl ErrorCode {
@@ -110,6 +120,13 @@ impl ErrorCode {
             Self::BotNotRunning => "Only a running bot can be restarted.",
             Self::BotNotPaused => "Only a paused bot can be resumed.",
             Self::BotNotFailed => "Only a failed bot can be reset.",
+            Self::BotNotOnline => "Only an online bot can send chat.",
+            Self::ChatUnavailable => {
+                "This Minecraft server only accepts signed chat, and the bot can't sign this message. Commands with a message, such as /msg or /me, can't be signed."
+            }
+            Self::CommandNeedsStepUp => {
+                "This command needs your password: confirm it's you to send it."
+            }
         }
     }
 }
@@ -135,6 +152,9 @@ impl OpenEnum for ErrorCode {
         Self::BotNotRunning,
         Self::BotNotPaused,
         Self::BotNotFailed,
+        Self::BotNotOnline,
+        Self::ChatUnavailable,
+        Self::CommandNeedsStepUp,
     ];
 
     fn as_str(self) -> &'static str {
@@ -158,6 +178,9 @@ impl OpenEnum for ErrorCode {
             Self::BotNotRunning => "bot_not_running",
             Self::BotNotPaused => "bot_not_paused",
             Self::BotNotFailed => "bot_not_failed",
+            Self::BotNotOnline => "bot_not_online",
+            Self::ChatUnavailable => "chat_unavailable",
+            Self::CommandNeedsStepUp => "command_needs_step_up",
         }
     }
 }
@@ -263,10 +286,13 @@ mod tests {
             ErrorCode::BotNotRunning => 16,
             ErrorCode::BotNotPaused => 17,
             ErrorCode::BotNotFailed => 18,
+            ErrorCode::BotNotOnline => 19,
+            ErrorCode::ChatUnavailable => 20,
+            ErrorCode::CommandNeedsStepUp => 21,
         }
     }
 
-    const CODES: usize = 19;
+    const CODES: usize = 22;
 
     #[test]
     fn all_lists_every_code_exactly_once() {
@@ -363,6 +389,21 @@ mod tests {
         ErrorCode::BotNotFailed,
         "bot_not_failed",
         "Only a failed bot can be reset."
+    )]
+    #[case(
+        ErrorCode::BotNotOnline,
+        "bot_not_online",
+        "Only an online bot can send chat."
+    )]
+    #[case(
+        ErrorCode::ChatUnavailable,
+        "chat_unavailable",
+        "This Minecraft server only accepts signed chat, and the bot can't sign this message. Commands with a message, such as /msg or /me, can't be signed."
+    )]
+    #[case(
+        ErrorCode::CommandNeedsStepUp,
+        "command_needs_step_up",
+        "This command needs your password: confirm it's you to send it."
     )]
     fn every_code_has_its_name_and_fixed_message(
         #[case] code: ErrorCode,

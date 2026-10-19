@@ -1,9 +1,9 @@
 //! What the app asks of the agents' live streams (Plan.md P10.5, P10.6,
-//! P10.10, P11.2; ADR-0019, S27, S31, S41, S48, S57, R22): to end one whose
-//! permission ended, what the server knows of one that lives and of a bot it
-//! holds, a bot's latest report kept in memory, a user's lifecycle command
-//! for the stream that holds a bot, and the answer to a session request for
-//! the stream that asked.
+//! P10.10, P11.2, P11.3; ADR-0019, S27, S31, S41, S48, S57, R22; ADR-0020,
+//! S5): to end one whose permission ended, what the server knows of one that
+//! lives and of a bot it holds, a bot's latest report kept in memory, a
+//! user's lifecycle command or chat line for the stream that holds a bot,
+//! and the answer to a session request for the stream that asked.
 //!
 //! The gRPC port's `AgentRegistry` implements it, so the app reaches the
 //! streams without knowing the port; a service calls [`LiveAgents::end`]
@@ -15,7 +15,8 @@ use core::num::NonZeroU64;
 
 use chrono::{DateTime, Utc};
 use fleet_core::bot::{BotSnapshot, LastReport, LastState, Lifecycle};
-use fleet_core::id::{AgentId, BotId};
+use fleet_core::chat::ChatMessage;
+use fleet_core::id::{AgentId, BotId, ChatRequestId};
 use fleet_core::mc::SessionCredentials;
 
 /// Why an agent's permission to stream ended (S27).
@@ -75,7 +76,7 @@ impl LatestReport {
     }
 }
 
-/// Why a lifecycle command didn't go to a stream.
+/// Why a lifecycle command or a chat line didn't go to a stream.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum CommandRefused {
     /// No live stream of the agent holds the bot assigned.
@@ -88,8 +89,9 @@ pub enum CommandRefused {
     /// connects again and resyncs.
     #[error("the stream's queue is full")]
     QueueFull,
-    /// The message couldn't be written, which a command never is.
-    #[error("the command can't be written")]
+    /// The message couldn't be written, which a command or a valid chat
+    /// line never is.
+    #[error("the message can't be written")]
     Unsendable,
 }
 
@@ -222,6 +224,23 @@ pub trait LiveAgents: Send + Sync + fmt::Debug {
         generation: u64,
         bot: BotId,
         command: Lifecycle,
+    ) -> Result<(), CommandRefused>;
+
+    /// Sends a user's chat line `message` for `bot`, as request `request`,
+    /// through generation `generation` of `agent`'s live stream, the one
+    /// found holding it: checked and queued at once as
+    /// [`LiveAgents::command`] is, and never queued for later, so a line dies
+    /// with its stream (ADR-0019, S65; ADR-0020, S5).
+    ///
+    /// # Errors
+    /// [`CommandRefused`], as [`LiveAgents::command`]'s.
+    fn send_chat(
+        &self,
+        agent: AgentId,
+        generation: u64,
+        bot: BotId,
+        request: ChatRequestId,
+        message: &ChatMessage,
     ) -> Result<(), CommandRefused>;
 
     /// Sends `answer` through generation `generation` of `agent`'s live

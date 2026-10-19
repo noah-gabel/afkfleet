@@ -166,6 +166,17 @@ pub enum ApiError {
     /// A reset of a bot that hasn't failed (409).
     #[error("only a failed bot can be reset")]
     BotNotFailed,
+    /// A chat line for a bot that isn't online (409).
+    #[error("only an online bot can send chat")]
+    BotNotOnline,
+    /// The bot's Minecraft server takes only signed chat, and the bot can't
+    /// sign the line (409).
+    #[error("the bot can't sign this line")]
+    ChatUnavailable,
+    /// A command off the allowlist sent to `/chat` by someone who may send
+    /// it: it goes to `/command`, after a step-up (403).
+    #[error("the command needs a step-up")]
+    CommandNeedsStepUp,
 }
 
 impl ApiError {
@@ -207,6 +218,9 @@ impl ApiError {
             Self::BotNotRunning => ErrorCode::BotNotRunning,
             Self::BotNotPaused => ErrorCode::BotNotPaused,
             Self::BotNotFailed => ErrorCode::BotNotFailed,
+            Self::BotNotOnline => ErrorCode::BotNotOnline,
+            Self::ChatUnavailable => ErrorCode::ChatUnavailable,
+            Self::CommandNeedsStepUp => ErrorCode::CommandNeedsStepUp,
         }
     }
 
@@ -223,7 +237,9 @@ pub const fn status(code: ErrorCode) -> StatusCode {
     match code {
         ErrorCode::BadRequest => StatusCode::BAD_REQUEST,
         ErrorCode::Unauthorized | ErrorCode::InvalidCredentials => StatusCode::UNAUTHORIZED,
-        ErrorCode::Forbidden | ErrorCode::StepUpRequired => StatusCode::FORBIDDEN,
+        ErrorCode::Forbidden | ErrorCode::StepUpRequired | ErrorCode::CommandNeedsStepUp => {
+            StatusCode::FORBIDDEN
+        }
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
         ErrorCode::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
         ErrorCode::Timeout => StatusCode::REQUEST_TIMEOUT,
@@ -231,7 +247,9 @@ pub const fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::BotUnreachable
         | ErrorCode::BotNotRunning
         | ErrorCode::BotNotPaused
-        | ErrorCode::BotNotFailed => StatusCode::CONFLICT,
+        | ErrorCode::BotNotFailed
+        | ErrorCode::BotNotOnline
+        | ErrorCode::ChatUnavailable => StatusCode::CONFLICT,
         ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         ErrorCode::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ErrorCode::ValidationFailed => StatusCode::UNPROCESSABLE_ENTITY,
@@ -374,7 +392,10 @@ impl ApiError {
             | Self::BotUnreachable
             | Self::BotNotRunning
             | Self::BotNotPaused
-            | Self::BotNotFailed => (None, None),
+            | Self::BotNotFailed
+            | Self::BotNotOnline
+            | Self::ChatUnavailable
+            | Self::CommandNeedsStepUp => (None, None),
         };
         (
             response,
@@ -657,11 +678,13 @@ mod tests {
     const fn bare_of(code: ErrorCode) -> ErrorCode {
         match code {
             ErrorCode::InvalidCredentials => ErrorCode::Unauthorized,
-            ErrorCode::StepUpRequired => ErrorCode::Forbidden,
+            ErrorCode::StepUpRequired | ErrorCode::CommandNeedsStepUp => ErrorCode::Forbidden,
             ErrorCode::BotUnreachable
             | ErrorCode::BotNotRunning
             | ErrorCode::BotNotPaused
-            | ErrorCode::BotNotFailed => ErrorCode::Conflict,
+            | ErrorCode::BotNotFailed
+            | ErrorCode::BotNotOnline
+            | ErrorCode::ChatUnavailable => ErrorCode::Conflict,
             other => other,
         }
     }

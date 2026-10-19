@@ -401,6 +401,65 @@ expression: answer.json()
         ],
         "type": "object"
       },
+      "ChatCommandRequest": {
+        "additionalProperties": false,
+        "description": "`POST /bots/{id}/command`: a command for the bot to send, after a\nstep-up.",
+        "properties": {
+          "message": {
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      },
+      "ChatSendOutcome": {
+        "description": "What came of a line the server sent to its bot's agent.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on one always keeps a default branch.",
+        "enum": [
+          "sent",
+          "pending"
+        ],
+        "type": "string"
+      },
+      "ChatSendRequest": {
+        "additionalProperties": false,
+        "description": "`POST /bots/{id}/chat`: a line for the bot to send, plain chat or a\ncommand on the server's allowlist.",
+        "properties": {
+          "message": {
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "message"
+        ],
+        "type": "object"
+      },
+      "ChatSendResponse": {
+        "description": "The answer to a line that went to its bot's agent.",
+        "properties": {
+          "message_id": {
+            "$ref": "#/components/schemas/SafeInt",
+            "description": "The line's ID in the bot's chat history."
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/ChatSendOutcome",
+            "description": "What came of it."
+          },
+          "request_id": {
+            "maxLength": 36,
+            "type": "string"
+          }
+        },
+        "required": [
+          "request_id",
+          "message_id",
+          "outcome"
+        ],
+        "type": "object"
+      },
       "ConnectFailure": {
         "description": "Why a bot couldn't connect.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on it keeps a default branch.",
         "enum": [
@@ -609,7 +668,10 @@ expression: answer.json()
           "bot_unreachable",
           "bot_not_running",
           "bot_not_paused",
-          "bot_not_failed"
+          "bot_not_failed",
+          "bot_not_online",
+          "chat_unavailable",
+          "command_needs_step_up"
         ],
         "type": "string"
       },
@@ -1187,6 +1249,11 @@ expression: answer.json()
           "role"
         ],
         "type": "object"
+      },
+      "SafeInt": {
+        "maximum": 9007199254740991,
+        "minimum": -9007199254740991,
+        "type": "integer"
       },
       "SessionPage": {
         "description": "`GET /me/sessions`: one page of live sessions, newest first.",
@@ -4086,6 +4153,301 @@ expression: answer.json()
           }
         ],
         "summary": "`PATCH /api/v1/bots/{id}`: the Minecraft server the bot joins. Needs\nManage and a step-up.",
+        "tags": [
+          "bots"
+        ],
+        "x-step-up": true
+      }
+    },
+    "/api/v1/bots/{id}/chat": {
+      "post": {
+        "operationId": "send_bot_chat",
+        "parameters": [
+          {
+            "description": "The bot's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatSendRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSendResponse"
+                }
+              }
+            },
+            "description": "The bot's agent said the bot sent the line. The line is in the bot's chat as the caller's, which records what was asked, not that it reached the Minecraft server."
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSendResponse"
+                }
+              }
+            },
+            "description": "The line went to the bot's agent, and no answer came in time: it may yet be sent or refused."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A body of the wrong shape."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`command_needs_step_up`: a command off the allowlist, which only `POST /bots/{id}/command` sends, after a step-up; `forbidden`: the caller may see the bot but not chat through it (Control), or not send that command (Manage)."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such bot, or one the caller may not see."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`bot_not_online`: the bot isn't online; `chat_unavailable`: its Minecraft server takes only signed chat, and the bot can't sign this line; `bot_unreachable`: its agent can't be reached, or didn't get the line through."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A line that's empty, more than one line, too long, or holds `§` or text-direction marks."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests, too many lines from the caller or to this bot, or the bot's agent is at its chat rate.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/bots/{id}/chat`: a line for the bot to send.",
+        "tags": [
+          "bots"
+        ]
+      }
+    },
+    "/api/v1/bots/{id}/command": {
+      "post": {
+        "operationId": "send_bot_command",
+        "parameters": [
+          {
+            "description": "The bot's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChatCommandRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSendResponse"
+                }
+              }
+            },
+            "description": "The bot's agent said the bot sent the command. It's in the bot's chat as the caller's, which records what was asked, not that it reached the Minecraft server."
+          },
+          "202": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatSendResponse"
+                }
+              }
+            },
+            "description": "The command went to the bot's agent, and no answer came in time: it may yet be sent or refused."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A body of the wrong shape."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or the caller may see the bot but not send this command: Control for one on the allowlist, Manage for any other."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such bot, or one the caller may not see."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`bot_not_online`: the bot isn't online; `chat_unavailable`: its Minecraft server takes only signed chat, and the bot can't sign this command; `bot_unreachable`: its agent can't be reached, or didn't get the command through."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A line that isn't a command, or that's empty, more than one line, too long, or holds `§` or text-direction marks."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests, too many lines from the caller or to this bot, or the bot's agent is at its chat rate.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/bots/{id}/command`: a command for the bot to send, after a\nstep-up.",
         "tags": [
           "bots"
         ],

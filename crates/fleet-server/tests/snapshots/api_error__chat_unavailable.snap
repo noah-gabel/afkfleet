@@ -1,0 +1,17 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 409,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "chat_unavailable",
+      "message": "This Minecraft server only accepts signed chat, and the bot can't sign this message. Commands with a message, such as /msg or /me, can't be signed.",
+      "request_id": "test-request-id"
+    }
+  }
+}

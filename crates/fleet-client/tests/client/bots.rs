@@ -21,7 +21,7 @@ fn all() -> PageQuery<BotId> {
 }
 
 /// `client`'s new offline account `name`, and the bot it comes with.
-async fn bot_of(client: &Client<MemoryStore>, name: &str) -> (AccountId, BotId) {
+pub(crate) async fn bot_of(client: &Client<MemoryStore>, name: &str) -> (AccountId, BotId) {
     let account = client
         .create_offline_account(&CreateOfflineAccountRequest {
             name: SecretText::new(name.to_owned()),

@@ -50,5 +50,7 @@ expression: names
   "bot.stop",
   "bot.restart",
   "bot.reset",
-  "bot.resume"
+  "bot.resume",
+  "bot.send_chat",
+  "bot.send_command"
 ]

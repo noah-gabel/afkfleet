@@ -37,6 +37,9 @@ use fleet_api_types::bots::{
     DisconnectKind, KICK_KEY_MAX_CHARS, KICK_MESSAGE_MAX_CHARS, LastDisconnect,
     SERVER_ADDRESS_MAX_CHARS, SessionServerFailure, UnplacedReason,
 };
+use fleet_api_types::chat::{
+    CHAT_MESSAGE_MAX_UNITS, ChatCommandRequest, ChatSendOutcome, ChatSendRequest, ChatSendResponse,
+};
 use fleet_api_types::error::{
     FIELD_MESSAGE_MAX_CHARS, FIELD_PATH_MAX_CHARS, MESSAGE_MAX_CHARS, REQUEST_ID_MAX_CHARS,
 };
@@ -96,6 +99,11 @@ fn declarations() -> BTreeMap<String, String> {
         ("SessionServerFailure", SessionServerFailure::decl(&config)),
         ("UnplacedReason", UnplacedReason::decl(&config)),
         ("ChangeGrantRequest", ChangeGrantRequest::decl(&config)),
+        ("ChatCommandRequest", ChatCommandRequest::decl(&config)),
+        ("ChatSendOutcome", ChatSendOutcome::decl(&config)),
+        ("ChatSendRequest", ChatSendRequest::decl(&config)),
+        ("ChatSendResponse", ChatSendResponse::decl(&config)),
+        ("SafeInt", SafeInt::decl(&config)),
         (
             "CreatedEnrollmentTokenResponse",
             CreatedEnrollmentTokenResponse::decl(&config),
@@ -455,6 +463,9 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::kick_message("LastDisconnect", "message", KICK_MESSAGE_MAX_CHARS)]
 #[case::patch_server_address("BotPatchRequest", "server_address", SERVER_ADDRESS_MAX_CHARS)]
 #[case::mode_request_id("BotModeRequest", "mode_id", ID_CHARS)]
+#[case::chat_message("ChatSendRequest", "message", CHAT_MESSAGE_MAX_UNITS)]
+#[case::command_message("ChatCommandRequest", "message", CHAT_MESSAGE_MAX_UNITS)]
+#[case::chat_request_id("ChatSendResponse", "request_id", ID_CHARS)]
 fn a_text_field_is_capped_at_its_constant(
     #[case] component: &str,
     #[case] field: &str,
@@ -469,7 +480,7 @@ fn a_text_field_is_capped_at_its_constant(
 }
 
 /// Every text field whose cap the cases above check.
-const CHECKED_TEXTS: [(&str, &str); 91] = [
+const CHECKED_TEXTS: [(&str, &str); 94] = [
     ("ErrorBody", "message"),
     ("ErrorBody", "request_id"),
     ("FieldError", "path"),
@@ -561,6 +572,9 @@ const CHECKED_TEXTS: [(&str, &str); 91] = [
     ("LastDisconnect", "message"),
     ("BotPatchRequest", "server_address"),
     ("BotModeRequest", "mode_id"),
+    ("ChatSendRequest", "message"),
+    ("ChatCommandRequest", "message"),
+    ("ChatSendResponse", "request_id"),
 ];
 
 /// Every text field of every component: the cases above must cover them.
@@ -593,6 +607,8 @@ fn a_request_schema_refuses_unknown_fields_and_responses_dont() {
         "BotModeRequest",
         "BotPatchRequest",
         "ChangeGrantRequest",
+        "ChatCommandRequest",
+        "ChatSendRequest",
         "CreateGrantRequest",
         "CreateInviteRequest",
         "CreateOfflineAccountRequest",
@@ -764,6 +780,7 @@ fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[ca
 #[case::connect_failure("LastDisconnect", "connect_failure", "ConnectFailure")]
 #[case::restriction("LastDisconnect", "restriction", "AccountRestriction")]
 #[case::session_server_failure("LastDisconnect", "session_server_failure", "SessionServerFailure")]
+#[case::chat_outcome("ChatSendResponse", "outcome", "ChatSendOutcome")]
 fn the_new_open_fields_list_exactly_their_known_values(
     #[case] component: &str,
     #[case] field: &str,
@@ -796,6 +813,7 @@ fn the_new_open_fields_list_exactly_their_known_values(
         "ConnectFailure" => names(ConnectFailure::ALL),
         "AccountRestriction" => names(AccountRestriction::ALL),
         "SessionServerFailure" => names(SessionServerFailure::ALL),
+        "ChatSendOutcome" => names(ChatSendOutcome::ALL),
         _ => InviteState::ALL
             .iter()
             .map(|state| state.as_str())

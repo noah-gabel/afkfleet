@@ -1,6 +1,7 @@
 //! Tests for the bots' chat log, `chat_messages` (Plan.md P11.1, P10.8,
-//! Appendix D; ADR-0019, S5, S6, S70): a received message and a mode's
-//! message read back as they were appended; a message is stored only while
+//! P11.3, Appendix D; ADR-0019, S5, S6, S70; ADR-0020, S6, U3): a received
+//! message, a mode's message and a user's line read back as they were
+//! appended, the line with its sender until that user is deleted; a message is stored only while
 //! its bot's row names the agent that reported it, and is skipped otherwise
 //! without failing the transaction; a bot's messages page newest first by
 //! ID; a bot's chat goes with its account; the table refuses what its CHECKs
@@ -147,6 +148,29 @@ fn mode_chat(text: &str) -> ChatEntry {
     ChatEntry::ModeSent(ChatMessage::try_from(text).unwrap())
 }
 
+fn user_line(text: &str, by: Option<UserId>) -> ChatEntry {
+    ChatEntry::UserSent {
+        message: ChatMessage::try_from(text).unwrap(),
+        by,
+    }
+}
+
+/// Member `n`, named `name`, who sends chat.
+async fn add_sender(db: &Database, n: u8, name: &str) -> UserId {
+    let id = UserId::new_v7(at(T0), [n; 10]).unwrap();
+    let user = NewUser {
+        id,
+        username: Username::try_from(name).unwrap(),
+        password_hash: PasswordHash::new(SecretString::from(PHC)).unwrap(),
+        role: Role::Member,
+        created_at: at(T0),
+    };
+    let mut tx = db.write().await.unwrap();
+    tx.users().insert(&user).await.unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+    id
+}
+
 fn message(bot: BotId, agent: AgentId, millis: i64, entry: ChatEntry) -> NewChatMessage {
     NewChatMessage {
         bot,
@@ -265,6 +289,90 @@ async fn mode_chat_reads_back_as_outgoing_without_a_sender(
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_users_line_reads_back_as_outgoing_with_its_sender(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (db, agent, bot) = with_bot(options).await;
+    let sender = add_sender(&db, 2, "sender").await;
+
+    let ids = append_all(
+        &db,
+        &[message(
+            bot,
+            agent,
+            T0 + 1,
+            user_line("/spawn now", Some(sender)),
+        )],
+    )
+    .await;
+    let stored = sqlx::query!(
+        r#"SELECT direction, kind, sender_name, sender_uuid, sent_by,
+                  truncated AS "truncated: i64"
+           FROM chat_messages"#
+    )
+    .fetch_one(db.read_pool())
+    .await
+    .unwrap();
+
+    assert_eq!(
+        all(&db, bot).await,
+        vec![ChatRecord {
+            id: ids.first().unwrap().unwrap(),
+            bot,
+            at: at(T0 + 1),
+            entry: user_line("/spawn now", Some(sender)),
+        }]
+    );
+    assert_eq!(
+        (
+            stored.direction.as_str(),
+            stored.kind.as_str(),
+            stored.sender_name,
+            stored.sender_uuid,
+            stored.sent_by,
+            stored.truncated
+        ),
+        ("out", "user", None, None, Some(sender.to_string()), 0)
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_users_line_keeps_no_sender_once_that_user_is_deleted(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (db, agent, bot) = with_bot(options).await;
+    let sender = add_sender(&db, 2, "sender").await;
+    let kept = add_sender(&db, 3, "kept").await;
+    append_all(
+        &db,
+        &[
+            message(bot, agent, T0 + 1, user_line("hello", Some(sender))),
+            message(bot, agent, T0 + 2, user_line("hi", Some(kept))),
+        ],
+    )
+    .await;
+    let id = sender.to_string();
+
+    // The write pool's connections have the foreign keys on, as the app's.
+    sqlx::query!("DELETE FROM users WHERE id = ?", id)
+        .execute(db.write_pool())
+        .await
+        .unwrap();
+
+    let entries: Vec<ChatEntry> = all(&db, bot)
+        .await
+        .into_iter()
+        .map(|record| record.entry)
+        .collect();
+    assert_eq!(
+        entries,
+        [user_line("hi", Some(kept)), user_line("hello", None)]
+    );
+}
+
+#[sqlx::test(migrations = false)]
 async fn received_chat_is_stored_with_its_direction_and_kind_names(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
@@ -350,7 +458,9 @@ async fn ids_follow_the_order_of_appends_across_transactions(
         .into_iter()
         .map(|record| match record.entry {
             ChatEntry::Received(chat) => chat.text().to_owned(),
-            ChatEntry::ModeSent(chat) => chat.as_str().to_owned(),
+            ChatEntry::ModeSent(chat) | ChatEntry::UserSent { message: chat, .. } => {
+                chat.as_str().to_owned()
+            }
         })
         .collect();
     assert_eq!(texts, ["three", "two", "one"]);
@@ -542,6 +652,7 @@ struct Raw<'a> {
     text: &'a str,
     truncated: i64,
     at: &'a str,
+    sent_by: Option<&'a str>,
 }
 
 /// A system message received at T0, which the table accepts.
@@ -553,6 +664,15 @@ const FINE: Raw<'static> = Raw {
     text: "text",
     truncated: 0,
     at: "2027-01-15T08:00:00.000Z",
+    sent_by: None,
+};
+
+/// A user's line without a sender (one who was deleted), which the table
+/// accepts.
+const LINE: Raw<'static> = Raw {
+    direction: "out",
+    kind: "user",
+    ..FINE
 };
 
 /// Inserts `row` for `bot` through the write pool.
@@ -565,11 +685,12 @@ async fn insert_raw(db: &Database, bot: &str, row: Raw<'_>) -> Result<(), sqlx::
         text,
         truncated,
         at,
+        sent_by,
     } = row;
     sqlx::query!(
         "INSERT INTO chat_messages
-             (bot_id, direction, kind, sender_name, sender_uuid, text, truncated, at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+             (bot_id, direction, kind, sender_name, sender_uuid, text, truncated, at, sent_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         bot,
         direction,
         kind,
@@ -577,7 +698,8 @@ async fn insert_raw(db: &Database, bot: &str, row: Raw<'_>) -> Result<(), sqlx::
         sender_uuid,
         text,
         truncated,
-        at
+        at,
+        sent_by
     )
     .execute(db.write_pool())
     .await
@@ -591,7 +713,39 @@ async fn the_table_refuses_what_its_checks_forbid(
 ) {
     let (db, _, bot) = with_bot(options).await;
     let bot = bot.to_string();
+    let sender = add_sender(&db, 2, "sender").await.to_string();
+    let sender = sender.as_str();
+    let upper = sender.to_uppercase();
     let cases = [
+        (
+            "a sender on a received message",
+            Raw {
+                sent_by: Some(sender),
+                ..FINE
+            },
+        ),
+        (
+            "a sender on a mode's message",
+            Raw {
+                kind: "mode",
+                sent_by: Some(sender),
+                ..LINE
+            },
+        ),
+        (
+            "a sender in another form",
+            Raw {
+                sent_by: Some(upper.as_str()),
+                ..LINE
+            },
+        ),
+        (
+            "a sender who isn't a user",
+            Raw {
+                sent_by: Some("018bcfe5-6800-7cdc-8dcd-cdcdcdcdcdcd"),
+                ..LINE
+            },
+        ),
         (
             "an unknown direction",
             Raw {
@@ -665,6 +819,16 @@ async fn the_table_refuses_what_its_checks_forbid(
     assert!(unknown_bot.is_err(), "a row for an unknown bot was stored");
     let fine = insert_raw(&db, &bot, FINE).await;
     assert!(fine.is_ok(), "{fine:?}");
+    for line in [
+        LINE,
+        Raw {
+            sent_by: Some(sender),
+            ..LINE
+        },
+    ] {
+        let stored = insert_raw(&db, &bot, line).await;
+        assert!(stored.is_ok(), "{line:?}: {stored:?}");
+    }
 }
 
 #[sqlx::test(migrations = false)]
@@ -675,6 +839,20 @@ async fn a_row_that_doesnt_read_back_is_corrupt_naming_its_column(
     let db = database(options).await;
     let owner = add_user(&db).await;
     let agent = add_agent(&db, 1).await;
+    // A user whose ID has the shape but isn't version 7: only a hand-written
+    // row could name one.
+    let not_v7 = "018bcfe5-6800-4cdc-8dcd-cdcdcdcdcdcd";
+    sqlx::query!(
+        "INSERT INTO users
+             (id, username, password_hash, role, disabled, created_at, password_changed_at)
+         VALUES (?, 'notv7', ?, 'member', 0, '2027-01-15T08:00:00.000Z',
+                 '2027-01-15T08:00:00.000Z')",
+        not_v7,
+        PHC
+    )
+    .execute(db.write_pool())
+    .await
+    .unwrap();
     let cases = [
         (
             Raw {
@@ -713,6 +891,20 @@ async fn a_row_that_doesnt_read_back_is_corrupt_naming_its_column(
                 ..FINE
             },
             "text",
+        ),
+        (
+            Raw {
+                text: " not trimmed",
+                ..LINE
+            },
+            "text",
+        ),
+        (
+            Raw {
+                sent_by: Some(not_v7),
+                ..LINE
+            },
+            "sent_by",
         ),
     ];
 

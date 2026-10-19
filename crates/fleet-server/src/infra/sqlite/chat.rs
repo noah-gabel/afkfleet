@@ -1,10 +1,12 @@
-//! The `chat_messages` table's SQL: appending a message inside a batch's
-//! write transaction, and one page of a bot's messages (Plan.md P11.1,
-//! P10.8; ADR-0019, S70).
+//! The `chat_messages` table's SQL: appending a message inside a write
+//! transaction (a batch's, or a user's send), and one page of a bot's
+//! messages (Plan.md P11.1, P10.8, P11.3; ADR-0019, S70; ADR-0020, S6, U3).
 //!
 //! A row's columns follow from its [`ChatEntry`]: a received message is
 //! `in`, with fleet-core's [`ChatKind`] name and its sender, if any; a mode's
-//! message is `out` with the kind `mode`, no sender and no cut. Reading
+//! message is `out` with the kind `mode`, no sender and no cut; a user's line
+//! is `out` with the kind `user`, no Minecraft sender, no cut, and the user
+//! who sent it in `sent_by` (`NULL` once that user is deleted). Reading
 //! rebuilds the entry through fleet-core's constructors, so a row they
 //! refuse is [`StoreError::Corrupt`], naming the column.
 
@@ -14,6 +16,7 @@ use fleet_core::chat::{ChatKind, ChatMessage, ChatSender, IncomingChat, Incoming
 use fleet_core::id::BotId;
 use sqlx::{SqliteConnection, SqlitePool};
 use uuid::Uuid;
+use uuid::fmt::Hyphenated;
 
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::store_error;
@@ -30,6 +33,8 @@ const IN: &str = "in";
 const OUT: &str = "out";
 /// The kind of a message the bot's mode sent.
 const MODE: &str = "mode";
+/// The kind of a line a user sent through the API.
+const USER: &str = "user";
 
 /// A row as stored, before its values are checked.
 struct ChatRow {
@@ -42,6 +47,7 @@ struct ChatRow {
     text: String,
     truncated: i64,
     at: String,
+    sent_by: Option<String>,
 }
 
 /// The columns an entry is stored in.
@@ -52,6 +58,7 @@ struct Columns<'a> {
     sender_uuid: Option<String>,
     text: &'a str,
     truncated: bool,
+    sent_by: Option<Hyphenated>,
 }
 
 impl<'a> Columns<'a> {
@@ -67,6 +74,7 @@ impl<'a> Columns<'a> {
                     .map(|uuid| uuid.hyphenated().to_string()),
                 text: chat.text(),
                 truncated: chat.is_truncated(),
+                sent_by: None,
             },
             ChatEntry::ModeSent(message) => Self {
                 direction: OUT,
@@ -75,6 +83,16 @@ impl<'a> Columns<'a> {
                 sender_uuid: None,
                 text: message.as_str(),
                 truncated: false,
+                sent_by: None,
+            },
+            ChatEntry::UserSent { message, by } => Self {
+                direction: OUT,
+                kind: USER,
+                sender_name: None,
+                sender_uuid: None,
+                text: message.as_str(),
+                truncated: false,
+                sent_by: by.map(id_text),
             },
         }
     }
@@ -101,12 +119,13 @@ pub(super) async fn append(
         sender_uuid,
         text,
         truncated,
+        sent_by,
     } = Columns::of(&message.entry);
     let truncated = i64::from(truncated);
     let done = sqlx::query!(
         "INSERT INTO chat_messages
-             (bot_id, direction, kind, sender_name, sender_uuid, text, truncated, at)
-         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8
+             (bot_id, direction, kind, sender_name, sender_uuid, text, truncated, at, sent_by)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?10
          WHERE EXISTS (SELECT 1 FROM bots WHERE id = ?1 AND agent_id = ?9)",
         bot,
         direction,
@@ -116,7 +135,8 @@ pub(super) async fn append(
         text,
         truncated,
         at,
-        agent
+        agent,
+        sent_by
     )
     .execute(conn)
     .await
@@ -137,7 +157,7 @@ pub(super) async fn page(
     sqlx::query_as!(
         ChatRow,
         r#"SELECT id AS "id!: i64", bot_id, direction, kind, sender_name, sender_uuid, text,
-                  truncated, at
+                  truncated, at, sent_by
            FROM chat_messages WHERE bot_id = ? AND id < ? ORDER BY id DESC LIMIT ?"#,
         bot,
         before,
@@ -187,22 +207,31 @@ fn record_from_row(row: &ChatRow) -> Result<ChatRecord, StoreError> {
             ChatEntry::Received(chat)
         }
         OUT => {
-            if row.kind != MODE {
-                return Err(corrupt("kind"));
-            }
             if row.sender_name.is_some() || row.sender_uuid.is_some() {
                 return Err(corrupt("sender_name"));
             }
             if truncated {
                 return Err(corrupt("truncated"));
             }
-            // Stored exactly as the mode sent it: a text the constructor
-            // would change (untrimmed, say) didn't come from here.
+            // Stored exactly as the mode or the user sent it: a text the
+            // constructor would change (untrimmed, say) didn't come from here.
             let message = ChatMessage::try_from(row.text.as_str())
                 .ok()
                 .filter(|message| message.as_str() == row.text)
                 .ok_or_else(|| corrupt("text"))?;
-            ChatEntry::ModeSent(message)
+            match row.kind.as_str() {
+                MODE => ChatEntry::ModeSent(message),
+                USER => ChatEntry::UserSent {
+                    message,
+                    // The table's CHECK keeps a sender on user lines only.
+                    by: row
+                        .sent_by
+                        .as_deref()
+                        .map(|text| parse_id(text).ok_or_else(|| corrupt("sent_by")))
+                        .transpose()?,
+                },
+                _ => return Err(corrupt("kind")),
+            }
         }
         _ => return Err(corrupt("direction")),
     };

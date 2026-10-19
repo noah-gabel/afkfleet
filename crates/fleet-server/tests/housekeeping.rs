@@ -99,7 +99,8 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
             connect: one,
             bot_actions: one,
             fresh_sessions: one,
-            chat_per_bot: fleet_core::chat::ChatRate::default(),
+            chat_per_bot: fleet_core::chat::ChatRate::try_new(60, 1).unwrap(),
+            chat_per_user: one,
         },
         Arc::new(clock.clone()),
     );
@@ -207,6 +208,8 @@ async fn a_run_sums_up_the_refusals_since_the_last_one_in_one_line(
         .unwrap();
         let _ = setup.limits.check_bot_action(bot);
         let _ = setup.limits.check_fresh_session(bot);
+        let _ = setup.limits.check_chat_user(grantor);
+        let _ = setup.limits.check_chat_bot(bot);
     }
     for _ in 0..5 {
         setup.fail("alice").await;
@@ -232,6 +235,8 @@ async fn a_run_sums_up_the_refusals_since_the_last_one_in_one_line(
     assert_eq!(line["connect"], 1);
     assert_eq!(line["bot_actions"], 1);
     assert_eq!(line["fresh_sessions"], 1);
+    assert_eq!(line["chat_per_user"], 1);
+    assert_eq!(line["chat_per_bot"], 1);
     assert_eq!(line["locked"], 1);
     assert_eq!(line["in_flight"], 1);
     let again = setup.run_once().await;

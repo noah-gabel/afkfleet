@@ -7,7 +7,11 @@
 //! bot's last known state; a bot on a live agent reads its report on that
 //! stream, or that none has come yet. A Resume of a bot that runs nowhere
 //! takes the kept report with its stored state, and puts it back when its
-//! commit fails. The HTTP tests (`tests/auth/bots.rs`) cover the rest.
+//! commit fails. A user's chat line is judged, stored with its sender and
+//! recorded before it's sent, and answered as its agent says; a refusal
+//! before the commit writes nothing, and one after it keeps the row and the
+//! entry (ADR-0020, S5–S7). The HTTP tests (`tests/auth/bots.rs`,
+//! `tests/auth/chat.rs`) cover the rest.
 //!
 //! Each test gets a fresh database from `#[sqlx::test]`. Time isn't paused:
 //! sqlx's worker threads would make paused timeouts fire early (CLAUDE.md).
@@ -16,37 +20,46 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
-use std::collections::HashMap;
+use core::num::NonZeroU32;
+use core::time::Duration;
+use std::collections::{BTreeMap, HashMap};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use fleet_core::agent::AgentStatus;
-use fleet_core::audit::{AuditAction, AuditOutcome};
-use fleet_core::authz::{Actor, Role};
+use fleet_core::audit::{AuditAction, AuditOutcome, RecordedValue};
+use fleet_core::authz::{Actor, CommandAllowlist, Role};
 use fleet_core::bot::{
-    BotSnapshot, BotState, CommandRefusal, DesiredRunState, LastReport, LastState, Lifecycle,
-    PauseReason, ShownState, StickyState, UnplacedWhy,
+    BotSnapshot, BotState, ChatRefusal, CommandRefusal, DesiredRunState, LastReport, LastState,
+    Lifecycle, PauseReason, ShownState, StickyState, UnplacedWhy,
 };
+use fleet_core::chat::ChatMessage;
 use fleet_core::disconnect::ConflictKind;
-use fleet_core::id::{AccountId, AgentId, BotId, ModeId, SessionId, UserId};
+use fleet_core::id::{AccountId, AgentId, BotId, ChatRequestId, ModeId, SessionId, UserId};
 use fleet_core::mode::ModePreset;
 use fleet_core::pki::CertFingerprint;
 use fleet_core::placement::Unplaced;
+use fleet_core::system::RandomError;
 use fleet_core::value::{AgentName, ServerAddress, Username};
-use fleet_server::app::bots::{BotAction, BotService, BotWriteError, Controlled};
+use fleet_proto::control::ChatFailedReason;
+use fleet_server::app::bots::{
+    BotAction, BotService, BotWriteError, ChatOutcome, ChatRoute, ChatSendError, ChatWait,
+    Controlled,
+};
+use fleet_server::app::events::{EventBus, LiveEvent, LiveEventKind};
 use fleet_server::app::users::ActingUser;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::accounts::{AccountReads, AccountWrites};
 use fleet_server::ports::agents::{AgentReads, AgentWrites};
 use fleet_server::ports::agents::{NewAgent, NewAgentCert};
-use fleet_server::ports::audit::{AuditEntryId, AuditReads, AuditWrites};
+use fleet_server::ports::audit::{AuditEntryId, AuditReads, AuditRecord, AuditWrites};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, NewAuditEntry};
 use fleet_server::ports::bots::{Bot, NewBot};
 use fleet_server::ports::bots::{BotReads, BotWrites};
-use fleet_server::ports::chat::{ChatReads, ChatWrites};
+use fleet_server::ports::chat::{ChatEntry, ChatMessageId, ChatReads, ChatWrites, NewChatMessage};
 use fleet_server::ports::enrollment_tokens::{EnrollmentTokenReads, EnrollmentTokenWrites};
 use fleet_server::ports::envelopes::{EnvelopeReads, EnvelopeWrites};
 use fleet_server::ports::grants::{GrantReads, GrantWrites};
@@ -63,10 +76,11 @@ use fleet_server::ports::sessions::{NewSession, SessionReads, SessionWrites};
 use fleet_server::ports::store::{Store, StoreError, UnauditedWrite, WriteTx};
 use fleet_server::ports::tokens::TokenHash;
 use fleet_server::ports::users::{NewUser, PasswordHash, UserReads, UserWrites};
-use fleet_testkit::system::ManualClock;
+use fleet_testkit::system::{ManualClock, SeededRandom};
 use secrecy::SecretString;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::Notify;
+use tokio::time::Instant;
 
 const T0: &str = "2027-01-15T08:00:00Z";
 /// How long a test waits for what must come: bounded, never a sleep.
@@ -110,6 +124,13 @@ struct Live {
     held: Mutex<HashMap<(AgentId, BotId), HeldBot>>,
     latest: Mutex<HashMap<BotId, LatestReport>>,
     commands: Mutex<Vec<(AgentId, BotId, Lifecycle)>>,
+    /// The chat lines queued, in order.
+    chats: Mutex<Vec<(AgentId, BotId, ChatRequestId, ChatMessage)>>,
+    /// How the next chat line is refused, when a test says so.
+    chat_refusal: Mutex<Option<CommandRefused>>,
+    /// How the agent answers a line, on which bus, when a test says so: at
+    /// once, as the ingest publishes a `ChatSent` or `ChatFailed`.
+    chat_reply: Mutex<Option<(EventBus, LiveEventKind)>>,
 }
 
 impl LiveAgents for Live {
@@ -159,6 +180,45 @@ impl LiveAgents for Live {
         Ok(())
     }
 
+    fn send_chat(
+        &self,
+        agent: AgentId,
+        generation: u64,
+        bot: BotId,
+        request: ChatRequestId,
+        message: &ChatMessage,
+    ) -> Result<(), CommandRefused> {
+        if let Some(refusal) = self.chat_refusal.lock().unwrap().take() {
+            return Err(refusal);
+        }
+        match self.held(agent, bot) {
+            None => return Err(CommandRefused::NotHeld),
+            Some(held) if held.generation != generation => {
+                return Err(CommandRefused::NotConnected);
+            }
+            Some(_) => {}
+        }
+        self.chats
+            .lock()
+            .unwrap()
+            .push((agent, bot, request, message.clone()));
+        if let Some((bus, reply)) = self.chat_reply.lock().unwrap().take() {
+            let kind = match reply {
+                LiveEventKind::ChatSent(_) => LiveEventKind::ChatSent(request),
+                LiveEventKind::ChatFailed(_, reason) => LiveEventKind::ChatFailed(request, reason),
+                other => other,
+            };
+            bus.publish(LiveEvent {
+                bot,
+                agent,
+                generation: 2,
+                at: at(T0),
+                kind,
+            });
+        }
+        Ok(())
+    }
+
     /// The bots' service never answers a session request.
     fn answer_session(
         &self,
@@ -187,6 +247,9 @@ enum Script {
     HangCommit(Arc<Notify>),
     /// Its `clear_sticky` answers that it changed nothing.
     ClearNothing,
+    /// Its chat `append` stores nothing, as for a bot whose row no longer
+    /// names the agent.
+    AppendNothing,
 }
 
 /// A write transaction that follows `script`.
@@ -250,7 +313,11 @@ impl WriteTx for FailingTx {
     }
 
     fn chat(&mut self) -> &mut dyn ChatWrites {
-        self.inner.chat()
+        if matches!(self.script, Script::AppendNothing) {
+            self
+        } else {
+            self.inner.chat()
+        }
     }
 
     fn audit(&mut self) -> &mut dyn AuditWrites {
@@ -268,7 +335,7 @@ impl WriteTx for FailingTx {
                 started.notify_one();
                 std::future::pending().await
             }
-            Script::ClearNothing => self.inner.commit(entry).await,
+            Script::ClearNothing | Script::AppendNothing => self.inner.commit(entry).await,
         }
     }
 
@@ -279,8 +346,21 @@ impl WriteTx for FailingTx {
                 started.notify_one();
                 std::future::pending().await
             }
-            Script::ClearNothing => self.inner.commit_unaudited(reason).await,
+            Script::ClearNothing | Script::AppendNothing => {
+                self.inner.commit_unaudited(reason).await
+            }
         }
+    }
+}
+
+/// The chat log, storing nothing ([`Script::AppendNothing`]).
+#[async_trait]
+impl ChatWrites for FailingTx {
+    async fn append(
+        &mut self,
+        _message: &NewChatMessage,
+    ) -> Result<Option<ChatMessageId>, StoreError> {
+        Ok(None)
     }
 }
 
@@ -425,6 +505,8 @@ struct Setup {
     db: Database,
     live: Arc<Live>,
     clock: ManualClock,
+    random: SeededRandom,
+    events: EventBus,
 }
 
 impl Setup {
@@ -469,14 +551,18 @@ impl Setup {
             db,
             live: Arc::new(Live::default()),
             clock: ManualClock::new(at(T0) + TimeDelta::hours(1)),
+            random: SeededRandom::new(5),
+            events: EventBus::new(),
         }
     }
 
     fn service(&self, allow_offline: bool) -> BotService {
         BotService::new(
             Arc::new(self.clock.clone()),
+            Arc::new(self.random.clone()),
             Arc::new(self.db.clone()),
             Arc::clone(&self.live) as Arc<dyn LiveAgents>,
+            self.events.clone(),
             allow_offline,
         )
     }
@@ -986,8 +1072,10 @@ impl Setup {
     fn service_over(&self, store: Arc<dyn Store>) -> BotService {
         BotService::new(
             Arc::new(self.clock.clone()),
+            Arc::new(self.random.clone()),
             store,
             Arc::clone(&self.live) as Arc<dyn LiveAgents>,
+            self.events.clone(),
             true,
         )
     }
@@ -1135,4 +1223,490 @@ async fn a_resume_whose_clear_changes_nothing_is_refused_and_takes_nothing(
     );
     assert_eq!(setup.live.latest(bot), Some(report));
     assert_eq!(setup.resumes().await, 0, "no entry");
+}
+
+// --- Chat (P11.3; ADR-0020, S5–S7) ------------------------------------------------------
+
+impl Setup {
+    /// Makes `bot` run on agent 1's live stream, generation 1, which
+    /// reported it in `state`.
+    async fn held_in(&self, bot: BotId, state: BotState) {
+        self.run(bot).await;
+        self.assign(bot, agent(1), None).await;
+        self.live.streams.lock().unwrap().insert(
+            agent(1),
+            LiveStream {
+                connected_at: at(T0),
+                last_seen: at(T0),
+            },
+        );
+        self.live.held.lock().unwrap().insert(
+            (agent(1), bot),
+            HeldBot {
+                since: at(T0),
+                report: Some(BotSnapshot {
+                    bot_id: bot,
+                    state,
+                    since: at(T0),
+                    last_disconnect: None,
+                }),
+                generation: 1,
+            },
+        );
+    }
+
+    /// The agent answers the next line with `reply`.
+    fn reply(&self, reply: LiveEventKind) {
+        *self.live.chat_reply.lock().unwrap() = Some((self.events.clone(), reply));
+    }
+
+    /// The service, waiting 50 ms for an answer, with `/spawn` listed.
+    fn chatting(&self) -> BotService {
+        self.chatting_over(Arc::new(self.db.clone()))
+    }
+
+    fn chatting_over(&self, store: Arc<dyn Store>) -> BotService {
+        self.service_over(store)
+            .with_allowlist(CommandAllowlist::try_new(&["/spawn"]).unwrap())
+            .with_chat_wait(ChatWait::default().with_answer(Duration::from_millis(50)))
+    }
+
+    /// `bot`'s chat, newest first.
+    async fn lines(&self, bot: BotId) -> Vec<ChatEntry> {
+        self.db
+            .chat()
+            .page(
+                bot,
+                Page {
+                    before: None,
+                    limit: PageLimit::new(100).unwrap(),
+                },
+            )
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|record| record.entry)
+            .collect()
+    }
+
+    /// The chat entries in the audit log, oldest first.
+    async fn chat_entries(&self) -> Vec<AuditRecord> {
+        let mut records: Vec<AuditRecord> = self
+            .db
+            .audit()
+            .list(AuditPage {
+                before: None,
+                limit: AuditLimit::new(100).unwrap(),
+            })
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|record| {
+                record.action == AuditAction::BOT_SEND_CHAT
+                    || record.action == AuditAction::BOT_SEND_COMMAND
+            })
+            .collect();
+        records.reverse();
+        records
+    }
+}
+
+fn online() -> BotState {
+    BotState::Online {
+        since: at(T0),
+        attempt: NonZeroU32::MIN,
+    }
+}
+
+fn line(text: &str) -> ChatMessage {
+    ChatMessage::try_from(text).unwrap()
+}
+
+fn users_line(text: &str) -> ChatEntry {
+    ChatEntry::UserSent {
+        message: line(text),
+        by: Some(owner()),
+    }
+}
+
+/// An entry's metadata as text values by key.
+fn metadata(record: &AuditRecord) -> BTreeMap<String, String> {
+    record
+        .metadata
+        .entries()
+        .iter()
+        .map(|(key, value)| {
+            let value = match value {
+                RecordedValue::Text(text) | RecordedValue::Unrecognized(text) => text.clone(),
+                RecordedValue::Int(int) => int.to_string(),
+                RecordedValue::Bool(flag) => flag.to_string(),
+            };
+            (key.clone(), value)
+        })
+        .collect()
+}
+
+/// A request ID the fake agent replaces with the line's own.
+fn any_request() -> ChatRequestId {
+    ChatRequestId::new_v7(at(T0), [0; 10]).unwrap()
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_line_is_stored_and_recorded_before_it_is_sent_and_reads_sent_when_its_agent_says_so(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let bot = setup.bot(1).await;
+    setup.held_in(bot, online()).await;
+    setup.reply(LiveEventKind::ChatSent(any_request()));
+    let by = setup.acting().await;
+
+    let done = setup
+        .chatting()
+        .send_chat(&by, bot, &line("hello"), ChatRoute::Chat, Instant::now())
+        .await
+        .unwrap();
+
+    assert_eq!(done.outcome, ChatOutcome::Sent);
+    let sent = setup.live.chats.lock().unwrap().clone();
+    assert_eq!(sent, [(agent(1), bot, done.request, line("hello"))]);
+    assert_eq!(setup.lines(bot).await, [users_line("hello")]);
+    let entries = setup.chat_entries().await;
+    assert_eq!(entries.len(), 1);
+    let entry = entries.first().unwrap();
+    assert_eq!(entry.action, AuditAction::BOT_SEND_CHAT);
+    assert_eq!(entry.actor, Some(owner()));
+    assert_eq!(
+        metadata(entry),
+        BTreeMap::from([
+            ("request".to_owned(), done.request.to_string()),
+            ("message".to_owned(), done.message.get().to_string()),
+            ("command".to_owned(), "none".to_owned()),
+        ])
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_line_without_an_answer_in_time_reads_pending_and_is_kept(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let bot = setup.bot(1).await;
+    setup.held_in(bot, online()).await;
+    let by = setup.acting().await;
+
+    let done = setup
+        .chatting()
+        .send_chat(&by, bot, &line("anyone?"), ChatRoute::Chat, Instant::now())
+        .await
+        .unwrap();
+
+    assert_eq!(done.outcome, ChatOutcome::Pending);
+    assert_eq!(setup.lines(bot).await, [users_line("anyone?")]);
+    assert_eq!(setup.chat_entries().await.len(), 1);
+}
+
+/// What the agent answered comes back as it is, and the row and the entry
+/// stay: the line is what the user asked (S7).
+#[sqlx::test(migrations = false)]
+async fn an_agents_refusal_comes_back_with_its_reason_and_keeps_the_row_and_entry(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let by = setup.acting().await;
+    let reasons = [
+        ChatFailedReason::RateLimited,
+        ChatFailedReason::ChatUnavailable,
+    ];
+
+    for (n, reason) in (1_u8..).zip(reasons) {
+        let bot = setup.bot(n).await;
+        setup.held_in(bot, online()).await;
+        setup.reply(LiveEventKind::ChatFailed(any_request(), reason));
+
+        let refused = setup
+            .chatting()
+            .send_chat(
+                &by,
+                bot,
+                &line("/me waves"),
+                ChatRoute::Command,
+                Instant::now(),
+            )
+            .await;
+
+        assert!(
+            matches!(refused, Err(ChatSendError::Failed(found)) if found == reason),
+            "{reason:?}: {refused:?}"
+        );
+        assert_eq!(setup.lines(bot).await, [users_line("/me waves")]);
+        assert_eq!(setup.chat_entries().await.len(), usize::from(n));
+    }
+}
+
+/// A bot that isn't online: refused before the transaction writes or
+/// records anything, and nothing is sent.
+#[sqlx::test(migrations = false)]
+async fn a_bot_that_isnt_online_refuses_a_line_before_anything_is_written(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let by = setup.acting().await;
+    let stopped = setup.bot(1).await;
+    let connecting = setup.bot(2).await;
+    setup
+        .held_in(
+            connecting,
+            BotState::Connecting {
+                attempt: NonZeroU32::MIN,
+                auth_retried: false,
+            },
+        )
+        .await;
+
+    for bot in [stopped, connecting] {
+        let refused = setup
+            .chatting()
+            .send_chat(&by, bot, &line("hello"), ChatRoute::Chat, Instant::now())
+            .await;
+
+        assert!(
+            matches!(refused, Err(ChatSendError::Refused(ChatRefusal::NotOnline))),
+            "{refused:?}"
+        );
+        assert_eq!(setup.lines(bot).await, Vec::<ChatEntry>::new());
+    }
+    assert_eq!(setup.chat_entries().await.len(), 0);
+    assert_eq!(setup.live.chats.lock().unwrap().len(), 0);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_bot_whose_agents_stream_is_gone_refuses_a_line_before_anything_is_written(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let bot = setup.bot(1).await;
+    setup.held_in(bot, online()).await;
+    setup.live.streams.lock().unwrap().clear();
+    let by = setup.acting().await;
+
+    let refused = setup
+        .chatting()
+        .send_chat(&by, bot, &line("hello"), ChatRoute::Chat, Instant::now())
+        .await;
+
+    assert!(
+        matches!(
+            refused,
+            Err(ChatSendError::Refused(ChatRefusal::Unreachable))
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(setup.lines(bot).await, Vec::<ChatEntry>::new());
+    assert_eq!(setup.chat_entries().await.len(), 0);
+    assert_eq!(setup.live.chats.lock().unwrap().len(), 0);
+}
+
+/// A stream that ended between the commit and the send: the line was
+/// stored and recorded, and stays (S7).
+#[sqlx::test(migrations = false)]
+async fn a_refusal_after_the_commit_keeps_the_row_and_the_entry(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let by = setup.acting().await;
+    let refusals = [
+        CommandRefused::NotHeld,
+        CommandRefused::NotConnected,
+        CommandRefused::QueueFull,
+        CommandRefused::Unsendable,
+    ];
+
+    for (n, refusal) in (1_u8..).zip(refusals) {
+        let bot = setup.bot(n).await;
+        setup.held_in(bot, online()).await;
+        *setup.live.chat_refusal.lock().unwrap() = Some(refusal);
+
+        let refused = setup
+            .chatting()
+            .send_chat(&by, bot, &line("hello"), ChatRoute::Chat, Instant::now())
+            .await;
+
+        let as_expected = match refusal {
+            CommandRefused::Unsendable => matches!(
+                refused,
+                Err(ChatSendError::Write(BotWriteError::Unsendable))
+            ),
+            CommandRefused::NotHeld | CommandRefused::NotConnected | CommandRefused::QueueFull => {
+                matches!(
+                    refused,
+                    Err(ChatSendError::Refused(ChatRefusal::Unreachable))
+                )
+            }
+        };
+        assert!(as_expected, "{refusal:?}: {refused:?}");
+        assert_eq!(setup.lines(bot).await, [users_line("hello")]);
+        assert_eq!(setup.chat_entries().await.len(), usize::from(n));
+    }
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_line_whose_bot_no_longer_names_the_agent_is_refused_and_nothing_is_kept(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let bot = setup.bot(1).await;
+    setup.held_in(bot, online()).await;
+    let by = setup.acting().await;
+    let service = setup.chatting_over(Arc::new(FailingCommits {
+        inner: setup.db.clone(),
+        script: Script::AppendNothing,
+    }));
+
+    let refused = service
+        .send_chat(&by, bot, &line("hello"), ChatRoute::Chat, Instant::now())
+        .await;
+
+    assert!(
+        matches!(
+            refused,
+            Err(ChatSendError::Refused(ChatRefusal::Unreachable))
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(setup.chat_entries().await.len(), 0);
+    assert_eq!(setup.live.chats.lock().unwrap().len(), 0);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_line_whose_commit_fails_is_never_sent(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let bot = setup.bot(1).await;
+    setup.held_in(bot, online()).await;
+    let by = setup.acting().await;
+    let service = setup.chatting_over(Arc::new(FailingCommits {
+        inner: setup.db.clone(),
+        script: Script::FailCommit,
+    }));
+
+    let refused = service
+        .send_chat(&by, bot, &line("hello"), ChatRoute::Chat, Instant::now())
+        .await;
+
+    assert!(
+        matches!(
+            refused,
+            Err(ChatSendError::Write(BotWriteError::Store(StoreError::Busy)))
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(setup.lines(bot).await, Vec::<ChatEntry>::new());
+    assert_eq!(setup.live.chats.lock().unwrap().len(), 0);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_failing_random_source_writes_and_sends_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let bot = setup.bot(1).await;
+    setup.held_in(bot, online()).await;
+    let by = setup.acting().await;
+    setup.random.fail_next(RandomError::Unavailable);
+
+    let refused = setup
+        .chatting()
+        .send_chat(&by, bot, &line("hello"), ChatRoute::Chat, Instant::now())
+        .await;
+
+    assert!(
+        matches!(refused, Err(ChatSendError::Mint(_))),
+        "{refused:?}"
+    );
+    assert_eq!(setup.lines(bot).await, Vec::<ChatEntry>::new());
+    assert_eq!(setup.chat_entries().await.len(), 0);
+    assert_eq!(setup.live.chats.lock().unwrap().len(), 0);
+}
+
+/// The entry names the route, whether the line is a command, whether the
+/// allowlist lists it, and only a listed command's name: never the text
+/// (S6).
+#[sqlx::test(migrations = false)]
+async fn a_lines_entry_names_its_route_and_command_kind_never_its_text(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let bot = setup.bot(1).await;
+    setup.held_in(bot, online()).await;
+    let by = setup.acting().await;
+    let cases = [
+        (
+            ChatRoute::Chat,
+            "hello there",
+            AuditAction::BOT_SEND_CHAT,
+            "none",
+            None,
+        ),
+        (
+            ChatRoute::Chat,
+            "/spawn now",
+            AuditAction::BOT_SEND_CHAT,
+            "allowlisted",
+            Some("/spawn"),
+        ),
+        (
+            ChatRoute::Command,
+            "/spawn",
+            AuditAction::BOT_SEND_COMMAND,
+            "allowlisted",
+            Some("/spawn"),
+        ),
+        (
+            ChatRoute::Command,
+            "/op AfkBot2",
+            AuditAction::BOT_SEND_COMMAND,
+            "unlisted",
+            None,
+        ),
+    ];
+
+    for (route, text, action, command, name) in cases {
+        let done = setup
+            .chatting()
+            .send_chat(&by, bot, &line(text), route, Instant::now())
+            .await
+            .unwrap();
+
+        let entries = setup.chat_entries().await;
+        let entry = entries.last().unwrap();
+        let mut expected = BTreeMap::from([
+            ("request".to_owned(), done.request.to_string()),
+            ("message".to_owned(), done.message.get().to_string()),
+            ("command".to_owned(), command.to_owned()),
+        ]);
+        if let Some(name) = name {
+            expected.insert("command_name".to_owned(), name.to_owned());
+        }
+        assert_eq!(entry.action, action, "{text}");
+        assert_eq!(metadata(entry), expected, "{text}");
+        let recorded = format!("{:?}", entry.metadata);
+        assert!(
+            !recorded.contains("there")
+                && !recorded.contains("AfkBot2")
+                && !recorded.contains("now"),
+            "{recorded}"
+        );
+    }
 }

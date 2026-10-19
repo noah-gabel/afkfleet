@@ -297,7 +297,7 @@ async fn a_relink_shares_the_users_one_flow_and_daily_cap_and_has_no_quota(
         max_per_member: NonZeroU32::MIN,
         allow_offline: false,
     };
-    let setup = HttpSetup::with(options, limits, quota).await;
+    let setup = HttpSetup::with(options, &limits, quota).await;
     let alice = setup.person(1, Role::Member).await;
     let id = setup
         .add_account(alice.id, 2, Some(AccountStatus::Active))

@@ -86,6 +86,7 @@ use fleet_api_types::auth::{
     RegisterResponse, StepUpRequest, TokenResponse,
 };
 use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
+use fleet_api_types::chat::{ChatCommandRequest, ChatSendRequest, ChatSendResponse};
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{
@@ -777,6 +778,37 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         let url = self.server.api(&["bots", &id.to_string(), call.segment()]);
         let answer = self.authed(Method::POST, url, None).await?;
         expect_json_of(answer, call.statuses())
+    }
+
+    // ---- Chat (Plan.md P11.3) ----
+
+    pub(crate) async fn send_chat(
+        self: &Arc<Self>,
+        id: BotId,
+        request: &ChatSendRequest,
+    ) -> Result<ChatSendResponse, ClientError> {
+        self.send_line(id, "chat", json(request)).await
+    }
+
+    pub(crate) async fn send_command(
+        self: &Arc<Self>,
+        id: BotId,
+        request: &ChatCommandRequest,
+    ) -> Result<ChatSendResponse, ClientError> {
+        self.send_line(id, "command", json(request)).await
+    }
+
+    /// Posts a line's `body` to the bot `id`'s `segment`: 200 when its agent
+    /// said the bot sent it, 202 when no answer came in time.
+    async fn send_line(
+        self: &Arc<Self>,
+        id: BotId,
+        segment: &str,
+        body: Vec<u8>,
+    ) -> Result<ChatSendResponse, ClientError> {
+        let url = self.server.api(&["bots", &id.to_string(), segment]);
+        let answer = self.authed(Method::POST, url, Some(body)).await?;
+        expect_json_of(answer, &[200, 202])
     }
 
     // ---- Sending ----
@@ -2821,6 +2853,129 @@ mod tests {
                 ClientError::UnexpectedResponse { status: s, reason: Unexpected::Status } if s == status
             ),
             "{error:?}"
+        );
+    }
+
+    fn a_chat_answer(outcome: fleet_api_types::chat::ChatSendOutcome) -> ChatSendResponse {
+        ChatSendResponse {
+            request_id: id("01900000-0000-7000-8000-0000000000c1"),
+            message_id: fleet_api_types::SafeInt::try_new(41).unwrap(),
+            outcome: outcome.into(),
+        }
+    }
+
+    #[rstest]
+    #[case::chat_sent("chat", 200)]
+    #[case::chat_pending("chat", 202)]
+    #[case::command_sent("command", 200)]
+    #[case::command_pending("command", 202)]
+    #[tokio::test]
+    async fn a_line_posts_its_body_to_its_route_and_reads_either_answer(
+        #[case] segment: &str,
+        #[case] status: u16,
+    ) {
+        use fleet_api_types::chat::ChatSendOutcome;
+        let core = signed_in().await;
+        let route = format!("POST /api/v1/bots/{BOT}/{segment}");
+        let outcome = if status == 200 {
+            ChatSendOutcome::Sent
+        } else {
+            ChatSendOutcome::Pending
+        };
+        core.transport
+            .on(&route, Ok(dto(status, &a_chat_answer(outcome))));
+
+        let answered = if segment == "chat" {
+            core.send_chat(
+                id(BOT),
+                &ChatSendRequest {
+                    message: "/spawn now".to_owned(),
+                },
+            )
+            .await
+        } else {
+            core.send_command(
+                id(BOT),
+                &ChatCommandRequest {
+                    message: "/spawn now".to_owned(),
+                },
+            )
+            .await
+        };
+
+        assert_eq!(answered.unwrap(), a_chat_answer(outcome));
+        assert_eq!(
+            core.transport.seen(),
+            [sent(&route, Some(json!({ "message": "/spawn now" })))]
+        );
+    }
+
+    #[rstest]
+    #[case::created(201)]
+    #[case::empty(204)]
+    #[tokio::test]
+    async fn a_chat_answer_a_line_never_gets_is_unexpected(#[case] status: u16) {
+        use fleet_api_types::chat::ChatSendOutcome;
+        let core = signed_in().await;
+        let route = format!("POST /api/v1/bots/{BOT}/chat");
+        core.transport.on(
+            &route,
+            Ok(dto(status, &a_chat_answer(ChatSendOutcome::Sent))),
+        );
+
+        let error = core
+            .send_chat(
+                id(BOT),
+                &ChatSendRequest {
+                    message: "hello".to_owned(),
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                ClientError::UnexpectedResponse { status: s, reason: Unexpected::Status } if s == status
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[rstest]
+    #[case::pointer(403, ErrorCode::CommandNeedsStepUp)]
+    #[case::not_online(409, ErrorCode::BotNotOnline)]
+    #[case::unavailable(409, ErrorCode::ChatUnavailable)]
+    #[case::limited(429, ErrorCode::RateLimited)]
+    #[tokio::test]
+    async fn a_refused_line_comes_back_with_the_servers_code_and_wait(
+        #[case] status: u16,
+        #[case] code: ErrorCode,
+    ) {
+        use fleet_api_types::OpenEnum as _;
+        let core = signed_in().await;
+        let route = format!("POST /api/v1/bots/{BOT}/chat");
+        let mut refused = refusal(status, code.as_str());
+        refused.retry_after = (status == 429).then_some(Duration::from_secs(3));
+        core.transport.on(&route, Ok(refused));
+
+        let error = core
+            .send_chat(
+                id(BOT),
+                &ChatSendRequest {
+                    message: "hello".to_owned(),
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert!(is_api(&error, status, code), "{error:?}");
+        let ClientError::Api(failure) = error else {
+            panic!("not an API failure");
+        };
+        assert_eq!(
+            failure.retry_after,
+            (status == 429).then_some(Duration::from_secs(3))
         );
     }
 

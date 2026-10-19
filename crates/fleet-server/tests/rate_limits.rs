@@ -99,6 +99,7 @@ fn loose() -> RateLimitConfig {
         bot_actions: loose,
         fresh_sessions: loose,
         chat_per_bot: fleet_core::chat::ChatRate::default(),
+        chat_per_user: loose,
     }
 }
 
@@ -243,7 +244,7 @@ async fn accounts(
     (users, invites)
 }
 
-async fn setup(options: SqliteConnectOptions, config: RateLimitConfig, proxies: &[&str]) -> Setup {
+async fn setup(options: SqliteConnectOptions, config: &RateLimitConfig, proxies: &[&str]) -> Setup {
     let db = Database::connect(options, DatabaseOptions::default())
         .await
         .unwrap();
@@ -256,7 +257,7 @@ async fn setup(options: SqliteConnectOptions, config: RateLimitConfig, proxies: 
         Arc::new(Sha256Tokens::new(Arc::new(random.clone()))),
         SessionPolicy::default(),
     );
-    let limits = RateLimits::new(&config, Arc::new(clock.clone()));
+    let limits = RateLimits::new(config, Arc::new(clock.clone()));
     let mfa = mfa(&db);
     let logins = login_service(&db, &service, &mfa).await;
     let (users, invites) = accounts(&db).await;
@@ -467,7 +468,7 @@ async fn a_clients_burst_is_allowed_then_refused_until_its_bucket_refills(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let setup = setup(options, per_ip_2_burst_3(), &[]).await;
+    let setup = setup(options, &per_ip_2_burst_3(), &[]).await;
     for _ in 0..3 {
         assert_eq!(setup.get("/health/live", CLIENT).await.status, 200);
     }
@@ -486,7 +487,7 @@ async fn a_refusal_is_the_error_envelope_with_its_request_id(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let setup = setup(options, per_ip_2_burst_3(), &[]).await;
+    let setup = setup(options, &per_ip_2_burst_3(), &[]).await;
     for _ in 0..3 {
         setup.get("/health/live", CLIENT).await;
     }
@@ -509,7 +510,7 @@ async fn retry_after_is_the_wait_in_whole_seconds_rounded_up(
         login: Rate::per_minute(nonzero(5)),
         ..loose()
     };
-    let setup = setup(options, config, &[]).await;
+    let setup = setup(options, &config, &[]).await;
     for _ in 0..5 {
         assert_eq!(setup.post("/test/login", CLIENT).await.status, 200);
     }
@@ -526,7 +527,7 @@ async fn unmatched_paths_and_wrong_methods_spend_the_per_ip_limit(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let setup = setup(options, per_ip_2_burst_3(), &[]).await;
+    let setup = setup(options, &per_ip_2_burst_3(), &[]).await;
 
     assert_eq!(setup.get("/no/such/route", CLIENT).await.status, 404);
     assert_eq!(setup.post("/health/live", CLIENT).await.status, 405);
@@ -537,7 +538,7 @@ async fn unmatched_paths_and_wrong_methods_spend_the_per_ip_limit(
 
 #[sqlx::test(migrations = false)]
 async fn each_client_has_its_own_bucket(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
-    let setup = setup(options, per_ip_2_burst_3(), &[]).await;
+    let setup = setup(options, &per_ip_2_burst_3(), &[]).await;
     for _ in 0..3 {
         setup.get("/health/live", CLIENT).await;
     }
@@ -551,7 +552,7 @@ async fn an_ipv6_client_is_counted_by_its_64(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let setup = setup(options, per_ip_2_burst_3(), &[]).await;
+    let setup = setup(options, &per_ip_2_burst_3(), &[]).await;
     for address in ["2001:db8:0:1::1", "2001:db8:0:1::2", "2001:db8:0:1:ab::3"] {
         assert_eq!(setup.get("/health/live", address).await.status, 200);
     }
@@ -568,7 +569,7 @@ async fn a_request_without_its_peer_address_is_an_internal_error(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let setup = setup(options, loose(), &[]).await;
+    let setup = setup(options, &loose(), &[]).await;
     let (logs, guard) = capture("info");
     let request = Request::builder()
         .uri("/health/live")
@@ -601,7 +602,7 @@ async fn an_untrusted_peers_forwarded_for_is_ignored(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let setup = setup(options, per_ip_2_burst_3(), &["198.51.100.1/32"]).await;
+    let setup = setup(options, &per_ip_2_burst_3(), &["198.51.100.1/32"]).await;
 
     assert_eq!(setup.client_of(CLIENT, &[OTHER]).await, CLIENT);
     assert_eq!(setup.client_of(CLIENT, &["203.0.113.21"]).await, CLIENT);
@@ -626,7 +627,7 @@ async fn a_trusted_proxys_forwarded_for_names_the_client(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let setup = setup(options, loose(), &["198.51.100.0/24"]).await;
+    let setup = setup(options, &loose(), &["198.51.100.0/24"]).await;
 
     assert_eq!(setup.client_of(PROXY, &[CLIENT]).await, CLIENT);
     assert_eq!(
@@ -649,7 +650,7 @@ async fn clients_behind_a_trusted_proxy_have_their_own_buckets(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let setup = setup(options, per_ip_2_burst_3(), &["198.51.100.0/24"]).await;
+    let setup = setup(options, &per_ip_2_burst_3(), &["198.51.100.0/24"]).await;
     let through = |client: &'static str| {
         request(
             Method::GET,
@@ -678,7 +679,7 @@ async fn the_two_login_routes_share_one_bucket(
         login: Rate::per_minute(nonzero(5)),
         ..loose()
     };
-    let setup = setup(options, config, &[]).await;
+    let setup = setup(options, &config, &[]).await;
     for path in [
         "/test/login",
         "/test/login/mfa",
@@ -704,7 +705,7 @@ async fn refresh_and_register_have_their_own_limits(
         register: Rate::per_hour(nonzero(1)),
         ..loose()
     };
-    let setup = setup(options, config, &[]).await;
+    let setup = setup(options, &config, &[]).await;
     for _ in 0..2 {
         assert_eq!(setup.post("/test/refresh", CLIENT).await.status, 200);
     }
@@ -725,7 +726,7 @@ async fn a_wrong_method_spends_no_class_token(
         login: Rate::per_minute(nonzero(1)),
         ..loose()
     };
-    let setup = setup(options, config, &[]).await;
+    let setup = setup(options, &config, &[]).await;
     for _ in 0..5 {
         assert_eq!(setup.get("/test/login", CLIENT).await.status, 405);
     }
@@ -744,7 +745,7 @@ async fn a_users_burst_is_allowed_then_refused_and_users_dont_share(
         per_user: Rate::per_second(nonzero(1), nonzero(2)),
         ..loose()
     };
-    let setup = setup(options, config, &[]).await;
+    let setup = setup(options, &config, &[]).await;
     let (first, first_token) = setup.session(1).await;
     let (_, second_token) = setup.session(2).await;
     for _ in 0..2 {
@@ -768,7 +769,7 @@ async fn a_request_without_credentials_spends_no_users_limit(
         per_user: Rate::per_second(nonzero(1), nonzero(1)),
         ..loose()
     };
-    let setup = setup(options, config, &[]).await;
+    let setup = setup(options, &config, &[]).await;
     let (_, token) = setup.session(1).await;
     for _ in 0..3 {
         assert_eq!(setup.get("/test/whoami", CLIENT).await.status, 401);
@@ -784,7 +785,7 @@ async fn every_refusal_is_counted_and_its_line_is_at_debug(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let setup = setup(options, per_ip_2_burst_3(), &[]).await;
+    let setup = setup(options, &per_ip_2_burst_3(), &[]).await;
     let (info, info_guard) = capture("info");
     for _ in 0..10 {
         setup.get("/health/live", OTHER).await;
@@ -910,8 +911,10 @@ fn idle_bots(db: &fleet_server::infra::sqlite::Database) -> fleet_server::app::b
     ));
     fleet_server::app::bots::BotService::new(
         clock.clone(),
+        Arc::new(fleet_testkit::system::SeededRandom::new(1)),
         Arc::new(db.clone()),
         Arc::new(fleet_server::grpc::registry::AgentRegistry::new(clock)),
+        fleet_server::app::events::EventBus::new(),
         false,
     )
 }

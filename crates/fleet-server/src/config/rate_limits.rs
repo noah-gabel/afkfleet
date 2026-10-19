@@ -1,8 +1,8 @@
 //! `[rate_limits]`: §7.4's request limits (Plan.md P7.10, Appendix A,
-//! ADR-0016), the Microsoft link flows' caps (P9.4, ADR-0018), and each bot's
-//! chat rate, which the server sends in its spec (P11.3; ADR-0020, S3). The
-//! per-user chat key and `ws_connections_per_user` arrive with their routes
-//! in Phase 11.
+//! ADR-0016), the Microsoft link flows' caps (P9.4, ADR-0018), each bot's
+//! chat rate, which the server sends in its spec and spends on chat through
+//! the API, and each user's (P11.3; ADR-0020, S3). `ws_connections_per_user`
+//! arrives with its route in Phase 11.
 
 use core::num::NonZeroU32;
 use core::time::Duration;
@@ -62,6 +62,17 @@ impl Rate {
     }
 }
 
+impl From<ChatRate> for Rate {
+    /// A bot's chat rate as a limit: its burst at once, then one line per
+    /// interval.
+    fn from(rate: ChatRate) -> Self {
+        Self {
+            interval: rate.interval(),
+            burst: rate.burst(),
+        }
+    }
+}
+
 /// `[rate_limits]`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RateLimitConfig {
@@ -110,6 +121,11 @@ pub struct RateLimitConfig {
     /// agent's bucket, which mode chat shares, keeps the same rate as the
     /// server's own limit on chat sent through the API.
     pub chat_per_bot: ChatRate,
+    /// Chat lines sent through the API, per user (`chat_per_user_per_min`;
+    /// ADR-0020, S3): spent after `authorize()` on both chat routes, before
+    /// the bot's own rate, so a refusal never tells a stranger the bot
+    /// exists.
+    pub chat_per_user: Rate,
 }
 
 /// `[rate_limits]`'s caps on Microsoft link flows (P9.4, ADR-0018). Each
@@ -180,6 +196,8 @@ impl RateLimitConfig {
         min: ChatRate::MIN_BURST,
         max: ChatRate::MAX_BURST,
     };
+    /// `chat_per_user_per_min`: 1 to 60. Default 20.
+    pub const CHAT_PER_USER_PER_MIN: Bounds = Bounds { min: 1, max: 60 };
 }
 
 impl Default for RateLimitConfig {
@@ -200,6 +218,7 @@ impl Default for RateLimitConfig {
             bot_actions: Rate::per_minute(nonzero(5)),
             fresh_sessions: Rate::per_hour(nonzero(6)),
             chat_per_bot: ChatRate::default(),
+            chat_per_user: Rate::per_minute(nonzero(20)),
         }
     }
 }
@@ -254,6 +273,16 @@ mod tests {
         assert_eq!(defaults.connect, Rate::per_minute(nonzero(10)));
         assert_eq!(defaults.bot_actions, Rate::per_minute(nonzero(5)));
         assert_eq!(defaults.fresh_sessions, Rate::per_hour(nonzero(6)));
+        assert_eq!(defaults.chat_per_bot, ChatRate::default());
+        assert_eq!(defaults.chat_per_user, Rate::per_minute(nonzero(20)));
+    }
+
+    #[test]
+    fn a_chat_rate_is_its_burst_then_one_line_per_interval() {
+        let rate = Rate::from(ChatRate::try_new(5, 2).unwrap());
+
+        assert_eq!(rate.interval(), Duration::from_secs(5));
+        assert_eq!(rate.burst().get(), 2);
     }
 
     #[test]

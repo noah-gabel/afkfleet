@@ -531,6 +531,11 @@ async fn the_setup_and_step_up_routes_are_registered_with_their_access_and_class
                 RateClass::Standard
             ),
             entry(Method::PATCH, "/api/v1/bots/{id}", RateClass::Standard),
+            entry(
+                Method::POST,
+                "/api/v1/bots/{id}/command",
+                RateClass::Standard
+            ),
         ])
     );
     db.close().await;
@@ -604,6 +609,7 @@ async fn the_authed_routes_are_registered_with_their_class(
                 "/api/v1/bots/{id}/resume",
                 RateClass::Standard
             ),
+            entry(Method::POST, "/api/v1/bots/{id}/chat", RateClass::Standard),
         ])
     );
     db.close().await;
@@ -1021,8 +1027,10 @@ fn idle_bots(db: &fleet_server::infra::sqlite::Database) -> fleet_server::app::b
     ));
     fleet_server::app::bots::BotService::new(
         clock.clone(),
+        Arc::new(fleet_testkit::system::SeededRandom::new(1)),
         Arc::new(db.clone()),
         Arc::new(fleet_server::grpc::registry::AgentRegistry::new(clock)),
+        fleet_server::app::events::EventBus::new(),
         false,
     )
 }

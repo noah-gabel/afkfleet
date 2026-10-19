@@ -123,7 +123,7 @@ async fn login(db: &Database, tokens: &TokenService, mfa: &MfaService) -> LoginS
 }
 
 async fn setup(options: SqliteConnectOptions) -> Setup {
-    setup_with(options, RateLimitConfig::default()).await
+    setup_with(options, &RateLimitConfig::default()).await
 }
 
 /// The users' and invites' services over `db`. No test here uses them, but
@@ -162,7 +162,7 @@ async fn accounts(
     (users, invites)
 }
 
-async fn setup_with(options: SqliteConnectOptions, limits: RateLimitConfig) -> Setup {
+async fn setup_with(options: SqliteConnectOptions, limits: &RateLimitConfig) -> Setup {
     let db = Database::connect(options, DatabaseOptions::default())
         .await
         .unwrap();
@@ -194,7 +194,7 @@ async fn setup_with(options: SqliteConnectOptions, limits: RateLimitConfig) -> S
         },
         challenges.clone(),
     );
-    let limits = RateLimits::new(&limits, Arc::new(clock.clone()));
+    let limits = RateLimits::new(limits, Arc::new(clock.clone()));
     let login = login(&db, &tokens, &mfa).await;
     let (users, invites) = accounts(&db).await;
     let state = AppState::new(Services {
@@ -450,7 +450,7 @@ async fn enroll_spends_the_users_limit(_pool: SqlitePoolOptions, options: Sqlite
     let one = Rate::per_second(nonzero(1), nonzero(1));
     let setup = setup_with(
         options,
-        RateLimitConfig {
+        &RateLimitConfig {
             per_user: one,
             ..RateLimitConfig::default()
         },
@@ -711,7 +711,7 @@ async fn reset_spends_the_users_limit(_pool: SqlitePoolOptions, options: SqliteC
     let one = Rate::per_second(nonzero(1), nonzero(1));
     let setup = setup_with(
         options,
-        RateLimitConfig {
+        &RateLimitConfig {
             per_user: one,
             ..RateLimitConfig::default()
         },
@@ -816,8 +816,10 @@ fn idle_bots(db: &fleet_server::infra::sqlite::Database) -> fleet_server::app::b
     ));
     fleet_server::app::bots::BotService::new(
         clock.clone(),
+        Arc::new(fleet_testkit::system::SeededRandom::new(1)),
         Arc::new(db.clone()),
         Arc::new(fleet_server::grpc::registry::AgentRegistry::new(clock)),
+        fleet_server::app::events::EventBus::new(),
         false,
     )
 }

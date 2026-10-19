@@ -28,6 +28,8 @@
 //! [`judge_command`] decides what a user's restart, reset or resume does
 //! before the server acts on it: sent to the stream that holds the bot,
 //! a resting bot's sticky state cleared, or refused with why (S48–S50).
+//! [`judge_chat`] decides the same for a user's chat line: it goes only to a
+//! held bot that should run and is Online (ADR-0020, S5).
 //!
 //! [`restore`] picks a bot up after its actor crashed, from the last state it
 //! published, without skipping the backoff. A [`StickyState`] is a Paused or
@@ -45,6 +47,7 @@
 //!
 //! [`ConflictTexts::classify`]: crate::disconnect::ConflictTexts::classify
 
+mod chat;
 mod effect;
 mod event;
 mod last_state;
@@ -57,6 +60,7 @@ mod spec;
 mod state;
 mod transition;
 
+pub use chat::{ChatFacts, ChatRefusal, judge_chat};
 pub use effect::{BotNotification, Effect};
 pub use event::BotEvent;
 pub use last_state::{LastReport, LastState, LastStateError};

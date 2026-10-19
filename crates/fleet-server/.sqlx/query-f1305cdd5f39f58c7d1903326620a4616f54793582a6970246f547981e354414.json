@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO chat_messages\n             (bot_id, direction, kind, sender_name, sender_uuid, text, truncated, at, sent_by)\n         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?10\n         WHERE EXISTS (SELECT 1 FROM bots WHERE id = ?1 AND agent_id = ?9)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 10
+    },
+    "nullable": []
+  },
+  "hash": "f1305cdd5f39f58c7d1903326620a4616f54793582a6970246f547981e354414"
+}

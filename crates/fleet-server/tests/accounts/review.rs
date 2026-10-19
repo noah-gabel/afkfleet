@@ -295,7 +295,7 @@ async fn an_unknown_account_is_404_and_a_review_spends_the_users_limit(
     };
     let setup = HttpSetup::with(
         options,
-        limits,
+        &limits,
         fleet_server::config::AccountsConfig::default(),
     )
     .await;

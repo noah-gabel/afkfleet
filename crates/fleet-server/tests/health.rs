@@ -548,8 +548,10 @@ fn idle_bots(db: &fleet_server::infra::sqlite::Database) -> fleet_server::app::b
     ));
     fleet_server::app::bots::BotService::new(
         clock.clone(),
+        Arc::new(fleet_testkit::system::SeededRandom::new(1)),
         Arc::new(db.clone()),
         Arc::new(fleet_server::grpc::registry::AgentRegistry::new(clock)),
+        fleet_server::app::events::EventBus::new(),
         false,
     )
 }

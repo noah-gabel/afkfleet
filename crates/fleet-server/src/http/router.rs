@@ -41,6 +41,8 @@
 //! | `POST /api/v1/agents/enrollment-tokens` | user + step-up (the Owner; while `[grpc]` is configured) | a new enrollment token, in its bundle, shown this once |
 //! | `GET /api/v1/agents` | user (Admin+) | one page of agents, with their status |
 //! | `POST /api/v1/agents/{id}/disable` | user + step-up (Admin+) | disables an agent for good: every certificate revoked, its stream ended |
+//! | `POST /api/v1/bots/{id}/chat` | user (Control; a command off the allowlist: pointed to `/command`) | a line for the bot to send: 200 sent, 202 pending |
+//! | `POST /api/v1/bots/{id}/command` | user + step-up (Control for an allowlisted command, Manage for any other) | a command for the bot to send: 200 sent, 202 pending |
 //! | `GET /api/openapi.json` | public | the `OpenAPI` document, only in dev mode ([`openapi`](super::openapi)) |
 //!
 //! The health routes have no `/api/v1` prefix. Both answer `200` with an
@@ -55,7 +57,9 @@
 use axum::Router;
 use utoipa_axum::routes;
 
-use super::handlers::{accounts, agents, auth, bots, grants, health, invites, me, mfa, users};
+use super::handlers::{
+    accounts, agents, auth, bots, chat, grants, health, invites, me, mfa, users,
+};
 use super::middleware::RequestIds;
 use super::openapi::ApiDocs;
 use super::rate_limit::RateLimits;
@@ -233,6 +237,8 @@ pub fn api_routes(routes: Routes) -> Routes {
         .authed_route(RateClass::Standard, routes!(bots::restart))
         .authed_route(RateClass::Standard, routes!(bots::reset))
         .authed_route(RateClass::Standard, routes!(bots::resume))
+        .authed_route(RateClass::Standard, routes!(chat::send))
+        .step_up_route(RateClass::Standard, routes!(chat::command))
 }
 
 /// Every route with `state`, behind the middleware stack with the timeout,

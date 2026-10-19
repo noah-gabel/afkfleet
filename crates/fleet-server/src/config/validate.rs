@@ -547,6 +547,7 @@ fn rate_limits(raw: &RawRateLimits) -> Option<RateLimitConfig> {
         fresh_sessions: Rate::per_hour(count(raw.fresh_sessions_per_bot_per_hour)?),
         chat_per_bot: ChatRate::try_new(raw.chat_per_bot_interval_secs, raw.chat_per_bot_burst)
             .ok()?,
+        chat_per_user: Rate::per_minute(count(raw.chat_per_user_per_min)?),
     })
 }
 

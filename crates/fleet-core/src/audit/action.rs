@@ -436,6 +436,23 @@ audit_actions! {
     /// and IP: the user's. Target: the bot. Metadata: `state`,
     /// `state_reason` and `effect`, as for `bot.reset`.
     BOT_RESUME = "bot.resume";
+
+    /// A user sent a bot a chat line or an allowlisted command through
+    /// `POST /bots/{id}/chat` (P11.3, ADR-0020, S6): recorded with the line's
+    /// row before it's sent, whatever then happens to it (S7). Outcome:
+    /// Success. Actor and IP: the user's. Target: the bot. Metadata:
+    /// `request` (the chat request's ID), `message` (the row's ID),
+    /// `command` (`none` or `allowlisted`) and, for an allowlisted command,
+    /// `command_name`. Never the text or its length. A line refused before
+    /// it's recorded is no entry.
+    BOT_SEND_CHAT = "bot.send_chat";
+
+    /// A user sent a bot a command through `POST /bots/{id}/command`, after
+    /// a step-up (P11.3, ADR-0020, S4, S6, S8). Outcome: Success. Actor and
+    /// IP: the user's. Target: the bot. Metadata: as for `bot.send_chat`,
+    /// `command` being `allowlisted` or `unlisted`, and `command_name` only
+    /// for an allowlisted one.
+    BOT_SEND_COMMAND = "bot.send_command";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

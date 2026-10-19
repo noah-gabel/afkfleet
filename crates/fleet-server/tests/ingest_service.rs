@@ -283,7 +283,9 @@ fn texts(records: &[ChatRecord]) -> Vec<String> {
         .rev()
         .map(|record| match &record.entry {
             ChatEntry::Received(chat) => chat.text().to_owned(),
-            ChatEntry::ModeSent(message) => message.as_str().to_owned(),
+            ChatEntry::ModeSent(message) | ChatEntry::UserSent { message, .. } => {
+                message.as_str().to_owned()
+            }
         })
         .collect()
 }

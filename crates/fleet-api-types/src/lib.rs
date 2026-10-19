@@ -40,6 +40,7 @@
 //! - [`auth`]: logging in, refreshing, stepping up and registering.
 //! - [`bots`]: the bots, their status, and the server and mode a user
 //!   sets.
+//! - [`chat`]: a line a user sends a bot, and the server's answer.
 //! - [`error`]: the error envelope that every failed request answers with.
 //! - [`ids`]: fleet-core's typed IDs in DTOs, re-exported, and their schema.
 //! - [`int`]: the 64-bit integer type, [`SafeInt`], and the schema of a
@@ -64,6 +65,7 @@ pub mod agents;
 pub mod app;
 pub mod auth;
 pub mod bots;
+pub mod chat;
 pub mod error;
 pub mod ids;
 pub mod int;

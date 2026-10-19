@@ -23,6 +23,7 @@ use fleet_api_types::accounts::{
 };
 use fleet_api_types::auth::{LoginRequest, RegisterRequest, RegisterResponse, StepUpRequest};
 use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
+use fleet_api_types::chat::{ChatCommandRequest, ChatSendRequest, ChatSendResponse};
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
@@ -600,6 +601,44 @@ impl<S: SessionStore> Client<S> {
     /// authenticated call.
     pub async fn resume_bot(&self, id: BotId) -> Result<BotResponse, ClientError> {
         self.core.control_bot(id, BotCall::Resume).await
+    }
+
+    /// `POST /bots/{id}/chat`: an online bot sends a line, plain chat or a
+    /// command on the server's allowlist (Control). The answer says
+    /// whether its agent said it went out (`sent`) or no answer came in time
+    /// (`pending`); either way it's in the bot's chat as the caller's.
+    ///
+    /// # Errors
+    /// The server's 403 (`command_needs_step_up` for a command off the
+    /// allowlist, which [`Client::send_command`] sends; `forbidden` below
+    /// Control), 404, 409 (`bot_not_online`, `chat_unavailable`,
+    /// `bot_unreachable`), 422 or 429 (with its wait) as
+    /// [`ClientError::Api`]; any other error as for every authenticated
+    /// call.
+    pub async fn send_chat(
+        &self,
+        id: BotId,
+        request: &ChatSendRequest,
+    ) -> Result<ChatSendResponse, ClientError> {
+        self.core.send_chat(id, request).await
+    }
+
+    /// `POST /bots/{id}/command`: an online bot sends a command, after
+    /// [`Client::step_up`] within 5 minutes: Control for one on the
+    /// allowlist, Manage for any other. It answers as
+    /// [`Client::send_chat`] does.
+    ///
+    /// # Errors
+    /// The server's 403 (`step_up_required` without a fresh step-up,
+    /// `forbidden` below the level the command needs), 404, 409, 422 (a line
+    /// that isn't a command) or 429 as [`ClientError::Api`]; any other error
+    /// as for every authenticated call.
+    pub async fn send_command(
+        &self,
+        id: BotId,
+        request: &ChatCommandRequest,
+    ) -> Result<ChatSendResponse, ClientError> {
+        self.core.send_command(id, request).await
     }
 }
 
