@@ -1,6 +1,6 @@
-//! Every game action, the respawn and a chat command have their effect on a
-//! real server, checked through RCON (Plan.md P3.6, P3.9; ADR-0008 §8,
-//! ADR-0011).
+//! Every game action, the respawn, a chat command and a full chat burst have
+//! their effect on a real server, checked through RCON (Plan.md P3.6, P3.9,
+//! P11.3; ADR-0008 §8, ADR-0011, ADR-0020).
 //!
 //! The server keeps no state for an arm swing, so a second bot, the watcher,
 //! counts the swing animations it receives, through a test-only system that
@@ -18,9 +18,10 @@ use azalea::entity::HasClientLoaded;
 use azalea::packet::game::ReceiveGamePacketEvent;
 use azalea::protocol::packets::game::ClientboundGamePacket;
 use azalea::protocol::packets::game::c_animate::AnimationAction;
-use fleet_core::chat::ChatKind;
+use fleet_core::chat::{ChatKind, ChatRate};
+use fleet_core::disconnect::{DisconnectReason, TranslationKey};
 use fleet_core::id::BotId;
-use fleet_core::mc::{SessionEvent, SessionHandle};
+use fleet_core::mc::{SessionEvent, SessionEvents, SessionHandle};
 use fleet_core::mode::{GameAction, HotbarSlot};
 use fleet_core::net::TargetPolicy;
 use fleet_mc::{AzaleaConnector, McConfig, McEvents, McSession};
@@ -355,6 +356,46 @@ async fn chat_command(scene: &mut Scene) {
     .await;
 }
 
+/// A full chat burst, `ChatRate::MAX_BURST` messages sent back to back, is
+/// never kicked for spam: vanilla's chat throttle adds 20 a message and kicks
+/// at 200, so 10 in one tick are (the user's choice of 8, ADR-0020, U2).
+/// Every message echoes, and the session never ends `disconnect.spam`.
+async fn chat_burst(scene: &mut Scene) {
+    let texts: Vec<String> = (1..=ChatRate::MAX_BURST)
+        .map(|n| format!("burst message {n}"))
+        .collect();
+    for text in &texts {
+        assert_eq!(scene.session.send_chat(text.parse().unwrap()).await, Ok(()));
+    }
+    let mut waiting: Vec<&str> = texts.iter().map(String::as_str).collect();
+    let events = &mut scene.events;
+    within("every burst message's echo", async {
+        while !waiting.is_empty() {
+            match events.next().await {
+                Some(SessionEvent::Disconnected(DisconnectReason::Kicked(kick)))
+                    if kick.key().map(TranslationKey::as_str) == Some(SPAM_KICK) =>
+                {
+                    panic!(
+                        "a full burst of {} was kicked for spam",
+                        ChatRate::MAX_BURST
+                    );
+                }
+                Some(event) => {
+                    waiting.retain(|text| !is_chat(&event, ChatKind::Chat, Some(NAME), text));
+                }
+                None => panic!(
+                    "the session ended during the burst; {} echoes missing",
+                    waiting.len()
+                ),
+            }
+        }
+    })
+    .await;
+}
+
+/// The translation key of vanilla's kick for chat spam.
+const SPAM_KICK: &str = "disconnect.spam";
+
 /// Respawn: back to full health, and the next death is reported again.
 async fn respawn(scene: &mut Scene) {
     scene.server.rcon(&format!("kill {NAME}")).await;
@@ -433,6 +474,7 @@ async fn slow_actions_scenario() {
     attack(&scene).await;
     chat_command(&mut scene).await;
     respawn(&mut scene).await;
+    chat_burst(&mut scene).await;
 
     within("the teardown", scene.session.disconnect()).await;
     within("the watcher's teardown", watcher.disconnect()).await;

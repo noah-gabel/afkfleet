@@ -5,20 +5,26 @@
 //! be signed, and azalea 0.16 signs no command (its chat handler's "TODO:
 //! commands that require chat signing"), so the server would reject it. The
 //! vanilla client decides what to sign from this same tree, and the server
-//! checks against its own copy, so [`MessageCommands`] names exactly the
-//! commands it would reject: a root literal that can reach a `message`
-//! argument through children and redirects. A redirect to the root, as in
-//! `/execute … run`, isn't followed: vanilla's own check stops there too.
+//! checks against its own copy, so [`MessageCommands`] names the commands
+//! it would reject: a root literal that can reach a `message` argument
+//! through children and redirects. A redirect to the root, as in
+//! `/execute … run`, isn't followed: vanilla's own check stops there too. It
+//! names slightly more than vanilla rejects: a whole command, so `/kick` and
+//! `/ban`, whose reason is an optional message, and a `/msg` without its
+//! message are refused too.
 //!
-//! The tree is untrusted input. The names are marked in one pass backwards
-//! from the message arguments, each node at most once, and an index out of
-//! range is ignored, so a tree built to be slow costs one pass.
+//! The tree is untrusted input, and its cost stays linear in the packet:
+//! the names are marked in one pass backwards from the message arguments,
+//! each node at most once, an index out of range is ignored, and each of the
+//! root's children is named once however often the root lists it, so each
+//! name is copied once (PR #59's review).
 
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
 use azalea::protocol::packets::game::ClientboundCommands;
 use azalea::protocol::packets::game::c_commands::{BrigadierParser, NodeType};
+use tracing::debug;
 
 /// The commands with a message argument, by the names the server's tree
 /// gives them (`me`, `msg`, `tell`, `minecraft:msg`, …). Empty until a tree
@@ -31,7 +37,15 @@ impl MessageCommands {
     /// The commands of `tree` with a message argument.
     #[must_use]
     pub(crate) fn of(tree: &ClientboundCommands) -> Self {
-        mark(tree).0
+        let pass = mark(tree);
+        // Counts only, never a name: the tree is the server's text.
+        debug!(
+            nodes = tree.entries.len(),
+            visited = pass.visited,
+            copied = pass.copied,
+            "the server's command tree was read"
+        );
+        pass.commands
     }
 
     /// Whether the command `name` has a message argument.
@@ -49,13 +63,28 @@ impl MessageCommands {
     }
 }
 
-/// The commands of `tree` with a message argument, and how many nodes the
-/// pass visited: each at most once.
-fn mark(tree: &ClientboundCommands) -> (MessageCommands, usize) {
+/// What one pass over a tree found, and what it cost.
+#[derive(Debug)]
+struct Pass {
+    /// The commands with a message argument.
+    commands: MessageCommands,
+    /// How many nodes it visited: each at most once.
+    visited: usize,
+    /// How many names it copied: each at most once.
+    copied: usize,
+}
+
+/// The commands of `tree` with a message argument, and what finding them
+/// cost.
+fn mark(tree: &ClientboundCommands) -> Pass {
     let nodes = &tree.entries;
     let index = |raw: u32| usize::try_from(raw).ok().filter(|&at| at < nodes.len());
     let Some(root) = index(tree.root_index) else {
-        return (MessageCommands::default(), 0);
+        return Pass {
+            commands: MessageCommands::default(),
+            visited: 0,
+            copied: 0,
+        };
     };
     // For each node, the nodes that lead to it: its parents, and the nodes
     // that redirect to it, unless it's the root.
@@ -101,17 +130,34 @@ fn mark(tree: &ClientboundCommands) -> (MessageCommands, usize) {
             }
         }
     }
-    let names = nodes
+    // Each of the root's children once, however often it lists one: a name
+    // is copied at most once, so the cost stays linear in the packet
+    // (PR #59's review).
+    let mut taken = vec![false; nodes.len()];
+    let mut copied = 0;
+    let mut names = BTreeSet::new();
+    let children = nodes
         .get(root)
         .into_iter()
-        .flat_map(|root| root.children.iter().copied().filter_map(index))
-        .filter(|&child| reaches.get(child).copied().unwrap_or(false))
-        .filter_map(|child| match &nodes.get(child)?.node_type {
-            NodeType::Literal { name } => Some(name.clone()),
-            NodeType::Root | NodeType::Argument { .. } => None,
-        })
-        .collect();
-    (MessageCommands(Arc::new(names)), visited)
+        .flat_map(|root| root.children.iter().copied().filter_map(index));
+    for child in children {
+        let Some(slot) = taken.get_mut(child) else {
+            continue;
+        };
+        if *slot || !reaches.get(child).copied().unwrap_or(false) {
+            continue;
+        }
+        *slot = true;
+        if let Some(NodeType::Literal { name }) = nodes.get(child).map(|node| &node.node_type) {
+            copied += 1;
+            names.insert(name.clone());
+        }
+    }
+    Pass {
+        commands: MessageCommands(Arc::new(names)),
+        visited,
+        copied,
+    }
 }
 
 #[cfg(test)]
@@ -329,7 +375,7 @@ mod tests {
         let commands = tree(root_index, vec![root(&[1]), literal("me", &[2]), message()]);
 
         assert_eq!(names(&commands), Vec::<String>::new());
-        assert_eq!(mark(&commands).1, 0);
+        assert_eq!(mark(&commands).visited, 0);
     }
 
     #[test]
@@ -350,10 +396,10 @@ mod tests {
         entries.push(message());
         let commands = tree(0, entries);
 
-        let (found, visited) = mark(&commands);
+        let pass = mark(&commands);
 
-        assert!(found.contains("l1"));
-        assert_eq!(visited, commands.entries.len());
+        assert!(pass.commands.contains("l1"));
+        assert_eq!(pass.visited, commands.entries.len());
     }
 
     /// 1000 commands sharing 100 arguments that all lead to one message:
@@ -375,10 +421,27 @@ mod tests {
         entries.push(message());
         let commands = tree(0, entries);
 
-        let (found, visited) = mark(&commands);
+        let pass = mark(&commands);
 
-        assert_eq!(found.0.len(), 1_000);
-        assert_eq!(visited, commands.entries.len());
+        assert_eq!(pass.commands.0.len(), 1_000);
+        assert_eq!(pass.visited, commands.entries.len());
+    }
+
+    /// A root that lists one command 100 000 times, as a hostile server's
+    /// packet can (it compresses to almost nothing): the name is copied
+    /// once, so the cost stays linear in the packet (PR #59's review).
+    #[test]
+    fn a_command_the_root_lists_many_times_is_copied_once() {
+        let long_name = "m".repeat(32_767);
+        let commands = tree(
+            0,
+            vec![root(&[1; 100_000]), literal(&long_name, &[2]), message()],
+        );
+
+        let pass = mark(&commands);
+
+        assert_eq!(pass.copied, 1);
+        assert_eq!(pass.commands, MessageCommands::from_names(&[&long_name]));
     }
 
     #[test]

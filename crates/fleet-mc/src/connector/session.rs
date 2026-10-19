@@ -226,10 +226,9 @@ impl SessionHandle for McSession {
         let session = self.clone();
         async move {
             // azalea sends text starting with `/` as a command, never signed
-            // (ADR-0008 §7).
-            let kind = signing::kind(&message, &session.inner.commands.borrow());
+            // (ADR-0008 §7): only plain chat waits for signing.
             let timeout = session.inner.chat_signing_timeout;
-            if kind == Kind::Chat && session.inner.control.phase() == Phase::Joined {
+            if !message.is_command() && session.inner.control.phase() == Phase::Joined {
                 let mut signing = session.inner.signing.clone();
                 let ready = signing::signed_chat_ready(&mut signing, timeout).await;
                 if ready == Err(SessionError::ChatUnavailable) {
@@ -246,18 +245,20 @@ impl SessionHandle for McSession {
                 .call(move |client| {
                     // Decided on the host thread, right before the message is
                     // queued, so neither unsigned chat nor a command whose
-                    // message needs a signature ever slips out.
-                    if !sendable(&signing, &commands, &message, timeout) {
-                        return Err(SessionError::ChatUnavailable);
+                    // message needs a signature ever slips out. A refusal
+                    // names the kind decided here, so its warning has the
+                    // right words (PR #59's review).
+                    let decided = sendable(&signing, &commands, &message, timeout);
+                    if decided.is_ok() {
+                        client.chat(message.as_str());
                     }
-                    client.chat(message.as_str());
-                    Ok(())
+                    Ok(decided)
                 })
-                .await;
-            if sent == Err(SessionError::ChatUnavailable) {
+                .await?;
+            sent.map_err(|kind| {
                 session.unavailable(kind);
-            }
-            sent
+                SessionError::ChatUnavailable
+            })
         }
     }
 
@@ -311,12 +312,16 @@ fn sendable(
     commands: &watch::Receiver<MessageCommands>,
     message: &ChatMessage,
     timeout: Duration,
-) -> bool {
+) -> Result<(), Kind> {
     let state = *signing.borrow();
     let kind = signing::kind(message, &commands.borrow());
     let now = tokio::time::Instant::now();
     let past_deadline = now >= signing::deadline(state, now, timeout);
-    signing::decide(state.signing, kind, past_deadline) == Decision::Send
+    if signing::decide(state.signing, kind, past_deadline) == Decision::Send {
+        Ok(())
+    } else {
+        Err(kind)
+    }
 }
 
 /// Waits until `receiver`'s sender is gone. It never sends.
@@ -335,20 +340,26 @@ mod tests {
 
     /// Plain chat goes out only once signing allows it; a command with a
     /// message, only where signing isn't needed (ADR-0020, S2); any other
-    /// command always.
+    /// command always. A refusal names the kind the job decided, so its
+    /// warning has the right words (PR #59's review).
     #[rstest]
-    #[case::chat_signed("hello", &["me"], Signing::Ready, true)]
-    #[case::chat_unsigned_where_it_must_be("hello", &["me"], Signing::Failed, false)]
-    #[case::an_emote_where_chat_is_signed("/me waves", &["me"], Signing::Ready, false)]
-    #[case::an_emote_where_it_isnt_needed("/me waves", &["me"], Signing::NotNeeded, true)]
-    #[case::a_command_without_a_message("/spawn", &["me"], Signing::Failed, true)]
-    #[case::an_emote_before_the_tree("/me waves", &[], Signing::Ready, true)]
+    #[case::chat_signed("hello", &["me"], Signing::Ready, Ok(()))]
+    #[case::chat_unsigned_where_it_must_be("hello", &["me"], Signing::Failed, Err(Kind::Chat))]
+    #[case::an_emote_where_chat_is_signed(
+        "/me waves",
+        &["me"],
+        Signing::Ready,
+        Err(Kind::CommandWithMessage)
+    )]
+    #[case::an_emote_where_it_isnt_needed("/me waves", &["me"], Signing::NotNeeded, Ok(()))]
+    #[case::a_command_without_a_message("/spawn", &["me"], Signing::Failed, Ok(()))]
+    #[case::an_emote_before_the_tree("/me waves", &[], Signing::Ready, Ok(()))]
     #[tokio::test(start_paused = true)]
     async fn the_host_job_queues_only_what_the_server_takes(
         #[case] text: &str,
         #[case] names: &[&str],
         #[case] signing: Signing,
-        #[case] expected: bool,
+        #[case] expected: Result<(), Kind>,
     ) {
         let (_state, state_rx) = watch::channel(SigningState {
             signing,

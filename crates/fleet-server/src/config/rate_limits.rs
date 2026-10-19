@@ -175,7 +175,7 @@ impl RateLimitConfig {
         min: ChatRate::MIN_INTERVAL_SECS,
         max: ChatRate::MAX_INTERVAL_SECS,
     };
-    /// `chat_per_bot_burst`: 1 to 10. Default 3.
+    /// `chat_per_bot_burst`: 1 to 8. Default 3.
     pub const CHAT_PER_BOT_BURST: Bounds = Bounds {
         min: ChatRate::MIN_BURST,
         max: ChatRate::MAX_BURST,

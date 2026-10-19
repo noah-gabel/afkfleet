@@ -486,20 +486,30 @@ async fn the_specs_chat_rate_governs_the_bucket() {
     assert_eq!(second, Err(SendChatError::Chat(ChatError::RateLimited)));
 }
 
-/// A spec with another rate gives the bot a full bucket at it, which a
-/// restart then keeps.
+/// A spec with another rate reaches the bot without refilling its bucket,
+/// and the new interval governs from then on, across a restart (ADR-0020,
+/// S3; PR #59's review).
 #[tokio::test(start_paused = true)]
-async fn a_new_chat_rate_swaps_the_bucket_and_a_restart_keeps_it() {
+async fn a_new_chat_rate_reaches_the_bot_without_refilling_its_bucket() {
     let fleet = Setup::new().start().await;
     let first = online_at(&fleet, slow(1), 0).await;
     fleet.fleet.send_chat(id(BOT), message("hi")).await.unwrap();
     let mut spec = running(BOT, "AfkBot1");
-    spec.chat_rate = slow(2);
+    spec.chat_rate = ChatRate::try_new(10, 2).unwrap();
     fleet.apply(spec).await;
     settle().await;
-    for text in ["one", "two"] {
-        fleet.fleet.send_chat(id(BOT), message(text)).await.unwrap();
-    }
+    assert_eq!(
+        fleet.fleet.send_chat(id(BOT), message("now")).await,
+        Err(SendChatError::Chat(ChatError::RateLimited)),
+        "not refilled"
+    );
+    // One message every 10 s now, where the old rate waits a minute.
+    advance(secs(10)).await;
+    fleet
+        .fleet
+        .send_chat(id(BOT), message("later"))
+        .await
+        .unwrap();
     fleet.connector.panic_on_connect(2);
 
     emit(&first, kick("multiplayer.disconnect.server_shutdown"));
@@ -510,6 +520,10 @@ async fn a_new_chat_rate_swaps_the_bucket_and_a_restart_keeps_it() {
     emit(&second, SessionEvent::Joined);
     settle().await;
 
+    // The restart's 30 s refilled the new burst of 2, and no more.
+    for text in ["one", "two"] {
+        fleet.fleet.send_chat(id(BOT), message(text)).await.unwrap();
+    }
     assert_eq!(
         fleet.fleet.send_chat(id(BOT), message("three")).await,
         Err(SendChatError::Chat(ChatError::RateLimited))

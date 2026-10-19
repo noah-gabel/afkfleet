@@ -793,12 +793,13 @@ async fn incoming_chat_and_deaths_are_published() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_session_request_that_never_answers_times_out_after_30_s() {
+async fn a_session_request_that_never_answers_times_out_at_its_bound() {
     let setup = Setup::new(running());
+    let limit = setup.config.session_request_timeout;
     setup.credentials.push_never_answer();
     let bot = setup.start().await;
 
-    advance(ms(29_999)).await;
+    advance(limit.saturating_sub(ms(1))).await;
     assert_eq!(bot.state(), awaiting(n(1)));
     advance(ms(1)).await;
 
@@ -1150,17 +1151,18 @@ async fn a_restart_during_backoff_starts_over_and_drops_the_old_timer() {
 #[tokio::test(start_paused = true)]
 async fn a_restart_while_waiting_for_a_session_drops_the_old_request() {
     let setup = Setup::new(running());
+    let third = setup.config.session_request_timeout / 3;
     setup.credentials.push_never_answer();
     setup.credentials.push_never_answer();
     let bot = setup.start().await;
-    advance(secs(10)).await;
+    advance(third).await;
 
     bot.send(BotCommand::Restart).await;
-    advance(secs(20) + ms(1)).await;
+    advance(third * 2 + ms(1)).await;
 
     assert_eq!(bot.credentials.requests().len(), 2);
     assert_eq!(bot.state(), awaiting(n(1)), "the old timeout must not fire");
-    advance(secs(10)).await;
+    advance(third).await;
     assert_eq!(bot.state(), backoff(n(1)));
 }
 

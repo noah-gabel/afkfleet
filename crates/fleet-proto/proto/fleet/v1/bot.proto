@@ -30,7 +30,7 @@ message BotSpec {
 message ChatRate {
   // Seconds between two messages, 1 to 60.
   uint32 interval_secs = 1;
-  // Messages at once, 1 to 10.
+  // Messages at once, 1 to 8.
   uint32 burst = 2;
 }
 

@@ -183,8 +183,8 @@ fn the_fixtures_are_valid() {
     |s: &mut wire::BotSpec| s.chat_rate = Some(wire::ChatRate { interval_secs: 3, burst: 0 }),
     error("ChatRate.burst", Problem::Missing)
 )]
-#[case::chat_burst_past_ten(
-    |s: &mut wire::BotSpec| s.chat_rate = Some(wire::ChatRate { interval_secs: 3, burst: 11 }),
+#[case::chat_burst_past_eight(
+    |s: &mut wire::BotSpec| s.chat_rate = Some(wire::ChatRate { interval_secs: 3, burst: 9 }),
     error("ChatRate.burst", Problem::OutOfRange)
 )]
 fn a_bot_spec_is_refused(#[case] mutate: fn(&mut wire::BotSpec), #[case] expected: ConvertError) {

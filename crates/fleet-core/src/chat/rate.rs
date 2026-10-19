@@ -16,7 +16,7 @@ pub enum ChatRateError {
         /// The interval asked for, in seconds.
         secs: u32,
     },
-    /// The burst isn't 1 to 10 messages.
+    /// The burst isn't 1 to 8 messages.
     #[error(
         "the chat burst is {burst} messages; it must be {min} to {max}",
         min = ChatRate::MIN_BURST,
@@ -35,9 +35,11 @@ pub enum ChatRateError {
 /// `chat_per_bot_burst`) and sends it in each bot's spec, so the server's
 /// limit and the agent's bucket always agree; a standalone agent uses the
 /// [default](Self::default), one message every 3 s with a burst of 3. Values
-/// outside the range are refused, never clamped. The burst stops at 10: the
-/// agent enforces the rate too, and every allowed value stays under vanilla's
-/// spam kick.
+/// outside the range are refused, never clamped. The burst stops at 8 (the
+/// user's choice, ADR-0020, U2): vanilla's chat throttle adds 20 for each chat
+/// message or command and kicks once its count reaches 200, losing 1 a tick,
+/// so 10 messages in one tick are kicked, and a full burst of 8 sent at once
+/// stays clear of it with room to spare.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ChatRate {
     interval_secs: NonZeroU32,
@@ -52,14 +54,14 @@ impl ChatRate {
     /// The smallest burst.
     pub const MIN_BURST: u32 = 1;
     /// The largest burst.
-    pub const MAX_BURST: u32 = 10;
+    pub const MAX_BURST: u32 = 8;
 
     /// A rate of one message every `interval_secs` seconds, with a burst of
     /// `burst`.
     ///
     /// # Errors
     /// [`ChatRateError::Interval`] for an interval outside 1 to 60 s, and
-    /// [`ChatRateError::Burst`] for a burst outside 1 to 10.
+    /// [`ChatRateError::Burst`] for a burst outside 1 to 8.
     pub fn try_new(interval_secs: u32, burst: u32) -> Result<Self, ChatRateError> {
         let interval = NonZeroU32::new(interval_secs)
             .filter(|secs| secs.get() <= Self::MAX_INTERVAL_SECS)
@@ -113,7 +115,7 @@ mod tests {
     #[rstest]
     #[case::the_shortest(1, 1)]
     #[case::the_default(3, 3)]
-    #[case::the_longest_and_the_largest(60, 10)]
+    #[case::the_longest_and_the_largest(60, 8)]
     fn a_rate_within_the_ranges_is_kept_as_it_is(#[case] interval_secs: u32, #[case] burst: u32) {
         let rate = ChatRate::try_new(interval_secs, burst).unwrap();
 
@@ -132,7 +134,7 @@ mod tests {
     #[case::an_interval_past_a_minute(61, 3, ChatRateError::Interval { secs: 61 })]
     #[case::the_largest_interval(u32::MAX, 3, ChatRateError::Interval { secs: u32::MAX })]
     #[case::a_zero_burst(3, 0, ChatRateError::Burst { burst: 0 })]
-    #[case::a_burst_past_ten(3, 11, ChatRateError::Burst { burst: 11 })]
+    #[case::a_burst_past_eight(3, 9, ChatRateError::Burst { burst: 9 })]
     fn a_rate_outside_the_ranges_is_refused_never_clamped(
         #[case] interval_secs: u32,
         #[case] burst: u32,
@@ -156,8 +158,8 @@ mod tests {
         "the chat interval is 0 s; it must be 1 to 60 s"
     )]
     #[case::burst(
-        ChatRateError::Burst { burst: 11 },
-        "the chat burst is 11 messages; it must be 1 to 10"
+        ChatRateError::Burst { burst: 9 },
+        "the chat burst is 9 messages; it must be 1 to 8"
     )]
     fn an_error_names_the_number_and_the_range(#[case] error: ChatRateError, #[case] text: &str) {
         assert_eq!(error.to_string(), text);

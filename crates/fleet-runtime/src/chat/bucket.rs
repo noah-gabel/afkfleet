@@ -2,6 +2,7 @@
 //! (ADR-0020, S3).
 
 use core::fmt;
+use core::num::NonZeroU32;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use fleet_core::chat::ChatRate;
@@ -28,8 +29,8 @@ struct Shared {
 /// Clones share the same bucket. User chat and mode chat draw from it, and it
 /// outlives the bot's sessions; the supervisor keeps it across actor restarts
 /// (P4.7), so neither a reconnect nor a crash refills it. A spec with another
-/// rate swaps it for every clone, full: only an operator's change does that
-/// (ADR-0020, S3).
+/// rate swaps it for every clone without refilling it: it keeps what it
+/// held, up to the new burst (ADR-0020, S3; PR #59's review).
 #[derive(Clone)]
 pub struct ChatBucket {
     shared: Arc<Mutex<Shared>>,
@@ -53,16 +54,22 @@ impl ChatBucket {
         self.lock().rate
     }
 
-    /// Keeps `rate` from now on: another rate gives every clone a full bucket
-    /// at it, and the same rate changes nothing.
+    /// Keeps `rate` from now on, for every clone. A change never refills the
+    /// bucket: it keeps what it holds, up to the new burst (PR #59's review),
+    /// and the same rate changes nothing.
     pub fn set_rate(&self, rate: ChatRate) {
         let mut shared = self.lock();
-        if shared.rate != rate {
-            *shared = Shared {
-                rate,
-                limiter: limiter(rate),
-            };
+        if shared.rate == rate {
+            return;
         }
+        let left = remaining(&shared.limiter, shared.rate.burst());
+        let limiter = limiter(rate);
+        let spent = rate.burst().get().saturating_sub(left);
+        if let Some(spent) = NonZeroU32::new(spent) {
+            // A full new bucket always holds its burst, so this can't fail.
+            let _ = limiter.check_n(spent);
+        }
+        *shared = Shared { rate, limiter };
     }
 
     /// Takes one message's token, if the bucket has one.
@@ -75,6 +82,16 @@ impl ChatBucket {
     fn lock(&self) -> MutexGuard<'_, Shared> {
         self.shared.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// How many messages `limiter`, whose burst is `burst`, lets through now.
+/// Measuring takes them, so it's only for a limiter about to be replaced.
+fn remaining(limiter: &Limiter, burst: NonZeroU32) -> u32 {
+    (1..=burst.get())
+        .rev()
+        .filter_map(NonZeroU32::new)
+        .find(|&n| matches!(limiter.check_n(n), Ok(Ok(()))))
+        .map_or(0, NonZeroU32::get)
 }
 
 /// A full limiter at `rate`.
@@ -139,21 +156,42 @@ mod tests {
         assert!(second.try_take(), "the second bucket is still full");
     }
 
-    /// An operator's new rate reaches every clone, as a full bucket at it
-    /// (ADR-0020, S3).
+    /// An operator's new rate reaches every clone, keeping what the bucket
+    /// held, up to the new burst: a change never refills it (ADR-0020, S3;
+    /// PR #59's review).
     #[tokio::test(start_paused = true)]
-    async fn a_new_rate_gives_every_clone_a_full_bucket_at_it() {
-        let bucket = ChatBucket::new(rate(60, 1));
+    async fn a_new_rate_reaches_every_clone_keeping_what_is_left() {
+        let bucket = ChatBucket::new(rate(60, 3));
         let clone = bucket.clone();
-        assert!(bucket.try_take());
+        assert_eq!([bucket.try_take(), bucket.try_take()], [true; 2]);
 
         clone.set_rate(rate(5, 2));
 
         assert_eq!(bucket.rate(), rate(5, 2));
-        assert_eq!([bucket.try_take(), bucket.try_take()], [true; 2]);
+        assert!(bucket.try_take(), "the one message left");
         assert!(!clone.try_take());
         tokio::time::advance(Duration::from_secs(5)).await;
-        assert!(clone.try_take());
+        assert!(clone.try_take(), "one more at the new interval");
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_bot_that_used_its_burst_gets_no_new_one_when_the_rate_changes() {
+        let bucket = ChatBucket::new(rate(60, 2));
+        assert_eq!([bucket.try_take(), bucket.try_take()], [true; 2]);
+
+        bucket.set_rate(rate(60, 8));
+
+        assert!(!bucket.try_take());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_full_bucket_keeps_at_most_the_new_burst() {
+        let bucket = ChatBucket::new(rate(60, 3));
+
+        bucket.set_rate(rate(60, 2));
+
+        assert_eq!([bucket.try_take(), bucket.try_take()], [true; 2]);
+        assert!(!bucket.try_take());
     }
 
     #[tokio::test(start_paused = true)]

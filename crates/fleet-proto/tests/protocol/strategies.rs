@@ -95,7 +95,7 @@ pub(crate) fn chat_message() -> impl Strategy<Value = ChatMessage> {
 /// A chat rate, weighted toward the ranges' edges (ADR-0020, S3).
 pub(crate) fn chat_rate() -> impl Strategy<Value = fleet_core::chat::ChatRate> {
     let interval = prop_oneof![Just(1_u32), Just(60), 1..=60_u32];
-    let burst = prop_oneof![Just(1_u32), Just(10), 1..=10_u32];
+    let burst = prop_oneof![Just(1_u32), Just(8), 1..=8_u32];
     (interval, burst)
         .prop_map(|(interval, burst)| fleet_core::chat::ChatRate::try_new(interval, burst).unwrap())
 }

@@ -18,7 +18,9 @@ pub struct RuntimeConfig {
     /// refused with `QueueFull` instead of waiting.
     pub chat_queue: NonZeroUsize,
     /// How long a bot waits for its session credentials. A request that
-    /// takes longer counts as a retryable failure (ADR-0010).
+    /// takes longer counts as a retryable failure (ADR-0010). Longer than the
+    /// server may take to mint a session (ADR-0020, S1): a bot that gave up
+    /// first would ask fresh again and never take the session just minted.
     pub session_request_timeout: Duration,
     /// How long a session may take from `connect()` until the bot has
     /// joined (Appendix A, ADR-0011). The actor also bounds `connect()`
@@ -88,7 +90,7 @@ impl Default for RuntimeConfig {
         // `Option` that `NonZero*::new` returns.
         Self {
             chat_queue: NonZeroUsize::MIN.saturating_add(15),
-            session_request_timeout: Duration::from_secs(30),
+            session_request_timeout: Duration::from_secs(150),
             connect_timeout: Duration::from_secs(30),
             actor_inbox: NonZeroUsize::MIN.saturating_add(31),
             respawn_interval: Duration::from_secs(5),
@@ -117,7 +119,7 @@ mod tests {
         let config = RuntimeConfig::default();
 
         assert_eq!(config.chat_queue.get(), 16);
-        assert_eq!(config.session_request_timeout, Duration::from_secs(30));
+        assert_eq!(config.session_request_timeout, Duration::from_secs(150));
         assert_eq!(config.connect_timeout, Duration::from_secs(30));
         assert_eq!(config.actor_inbox.get(), 32);
         assert_eq!(config.respawn_interval, Duration::from_secs(5));

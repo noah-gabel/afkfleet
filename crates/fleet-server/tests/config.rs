@@ -1130,7 +1130,7 @@ fn the_dev_config_holds_neither_the_database_path_nor_the_vault_key_file() {
 #[case::bot_actions("bot_actions_per_bot_per_min", 1, 60)]
 #[case::fresh_sessions("fresh_sessions_per_bot_per_hour", 1, 60)]
 #[case::chat_per_bot_interval("chat_per_bot_interval_secs", 1, 60)]
-#[case::chat_per_bot_burst("chat_per_bot_burst", 1, 10)]
+#[case::chat_per_bot_burst("chat_per_bot_burst", 1, 8)]
 fn rate_limit_keys_are_checked_against_their_range(
     #[case] key: &str,
     #[case] min: u64,
