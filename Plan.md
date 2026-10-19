@@ -3814,6 +3814,32 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Goal:** Full day-to-day management from the app: start and stop, modes, live chat and history.
 **Introduces:** `tokio-tungstenite`, `futures-util` (WebSocket client).
 
+> Note (P11, Phase 11's planning, 2026-10-19) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)):
+> - **Thirteen group branches.** Phase 11 is built in group PRs like Phases 2–10: one branch and one commit per task, in this order, each after the previous PR is merged. Backend first; each screen comes after the endpoints it needs.
+>
+>   | Group | Branch | Tasks |
+>   |---|---|---|
+>   | A | `p11/u24-p11.3-fresh-requests-and-agent-chat` | U24 (ADR-0019), then P11.3's agent side: commands that need a signature, and the chat rate in each bot's spec |
+>   | B | `p11/p11.3-chat-endpoints` | P11.3's API (ticked here) |
+>   | C | `p11/p11.4-modes` | P11.4 |
+>   | D | `p11/p11.5-live-events` | P11.5 |
+>   | E | `p11/p11.6-p11.7-retention-and-full-flow` | P11.6, P11.7 |
+>   | F | `p11/p11.9-admin-endpoints` | P11.9's backend: `GET /audit`, `agent release` over the API, the grants review at a role change |
+>   | G | `p11/p11.8-events-in-the-app` | P11.8 |
+>   | H | `p11/p11.9-bot-screens` | P11.9's dashboard and bot detail; the DoD's first check |
+>   | I | `p11/p11.9-mode-editor` | P11.9's mode editor |
+>   | J | `p11/p11.9-admin-screens` | P11.9's admin screens (ticked here) |
+>   | K | `p11/p11.10-dark-mode` | P11.10 |
+>   | L | `p11/p11.11-design-pass` | P11.11 |
+>   | M | `p11/p11-wrap-up` | The threat model, the README, the DoD's 24-hour run |
+>
+>   - **P11.3 is spread over A and B**, and **P11.9 over F, H, I and J**, each ticked in its last group, as P10.5 was over C and D. Each group aims at Phase 10's F or H in size (about 5,300 lines); one that grows past it is split at its plan review.
+>   - **New dependencies** arrive with their group, each shown to the user with its version, license and release date: axum's `ws` feature (tokio-tungstenite and tungstenite 0.29.0, which axum 0.8.9 pins), tokio-tungstenite as fleet-server's dev-dependency, and futures-util and moka only if D needs them; tokio-tungstenite as fleet-integration's dev-dependency in E; tokio-tungstenite and futures-util in fleet-client in G, its TLS features G's question; single Radix packages in H, I and J; bundled fonts in L.
+>   - **Who decides what:** the review agents decide each group's open questions (CLAUDE.md's step 10); the user decides P11.6's size bound (E), P11.11's stable screenshots and visual direction (L), every text friends read (one table per group plan), the looks and UX questions, and whether the chat console names who sent each line (B).
+> - **The DoD's two checks** are the user's, with their own accounts. The first ("pressing Start in the app …") in H, once the bot screens exist; the second (24 h) in M, after the design pass. Each manual check gets default-profile tests that run its own setup, config and log check without the account (Phase 10's lesson).
+> - **The DoD checks' own data folder** *(the user's addition at the plan review, U1)*. Linking a real account stores its Microsoft refresh token in the server's database, sealed by a vault key file beside it. So both checks use one folder of their own, `target/dod-run/` (the database, the vault key, the PKI, the agent's identity, the logs), through recipes of their own that H adds, never the everyday `target/dev-server/`, so the account linked in H stays for M. They log at the default `info`, so no chat text reaches the disk. A cleanup recipe deletes the whole folder when the user is done, with a default-profile test that it removes everything inside, touches nothing outside, follows no link and refuses any other path. The steps say: unlink the accounts in the app first, then run the cleanup, then optionally end the app's consent in the Microsoft account. This mirrors production, where the key file lives on the server's host; `target/` is never committed.
+> - **Decided by the review agents** *(approved by the user at the plan review)*, S1–S6 in ADR-0020: U24 in fleet-core's state (S1); commands that need a signature refused where chat must be signed (S2); one chat rate per bot, the server's, sent in its spec (S3); a step-up route for commands off the allowlist (S4); the send's bounded answer (S5); a user's message stored as a chat row, audited without its text (S6). The chat limits' ranges (S3) are the user's approval at the plan review (rule 10).
+
 > Note (P11, from Phase 8, group E, the user's request) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **Decide step-up per action, the same way as the admin writes.** Before building them, decide for each destructive or privilege-changing action of this phase whether it needs a step-up: deleting a bot, changing grants, deleting a shared mode, and anything else that loses data or widens access. The app reuses the admin screens' "send, and on `step_up_required` ask for the password and retry once".
 
 > Note (P11, from Phase 10, group H, the user's choice at PR #58's review, U24) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **Phase 11's first group, first:** after a refused login, a bot's next session request stays fresh until a fresh grant arrives, so a backoff never asks without `fresh` and the server never hands out the cached session that was just refused. It gets its own test, and P10.9's case 5 (`outage::a_bot_kicked_while_the_server_is_down_rejoins_with_its_kept_grant_and_a_fresh_request_waits`) is then tightened to expect it.
