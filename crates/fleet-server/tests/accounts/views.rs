@@ -320,7 +320,7 @@ async fn the_reads_spend_the_users_request_limit(
     };
     let setup = HttpSetup::with(
         options,
-        limits,
+        &limits,
         fleet_server::config::AccountsConfig::default(),
     )
     .await;

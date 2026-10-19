@@ -482,7 +482,7 @@ async fn granting_by_name_spends_its_own_per_user_limit(
         grants_by_name: Rate::per_hour(NonZeroU32::new(2).unwrap()),
         ..RateLimitConfig::default()
     };
-    let setup = HttpSetup::with(options, limits, AccountsConfig::default()).await;
+    let setup = HttpSetup::with(options, &limits, AccountsConfig::default()).await;
     let alice = setup.stepped_up(1, Role::Member).await;
     let carol = setup.stepped_up(2, Role::Member).await;
     let id = setup.add_account(alice.id, 3, None).await;
@@ -534,7 +534,7 @@ async fn the_lists_page_and_spend_the_users_limit(
         per_user: one,
         ..RateLimitConfig::default()
     };
-    let setup = HttpSetup::with(options, limits, AccountsConfig::default()).await;
+    let setup = HttpSetup::with(options, &limits, AccountsConfig::default()).await;
     let alice = setup.person(1, Role::Member).await;
     let id = setup.add_account(alice.id, 2, None).await;
     for n in 3..=5 {

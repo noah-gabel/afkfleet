@@ -560,7 +560,7 @@ async fn manual_link_flow_member_then_owner() {
     let server = Arc::new(
         Server::start(
             SqliteConnectOptions::new().filename(&path),
-            RateLimitConfig::default(),
+            &RateLimitConfig::default(),
             AccountsConfig::default(),
             &key,
             ServerPorts {

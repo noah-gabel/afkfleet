@@ -12,6 +12,7 @@
 //! - [`bots`]: `GET /api/v1/bots`, `GET` and `PATCH /api/v1/bots/{id}`,
 //!   `PUT /api/v1/bots/{id}/mode`, and `POST /api/v1/bots/{id}/start`,
 //!   `/stop`, `/restart`, `/reset` and `/resume` (P11.2).
+//! - [`chat`]: `POST /api/v1/bots/{id}/chat` and `/command` (P11.3).
 //! - [`grants`]: `GET` and `POST /api/v1/accounts/{id}/grants`, `PUT` and
 //!   `DELETE /api/v1/accounts/{id}/grants/{user}` (P9.6).
 //! - [`auth`]: `POST /api/v1/auth/login`, `/auth/login/mfa`,
@@ -31,6 +32,7 @@ pub(super) mod accounts;
 pub(super) mod agents;
 pub(super) mod auth;
 pub(super) mod bots;
+pub(super) mod chat;
 pub(super) mod grants;
 pub(super) mod health;
 pub(super) mod invites;

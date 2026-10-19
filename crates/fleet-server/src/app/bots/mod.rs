@@ -1,5 +1,6 @@
-//! [`BotService`]: the bots as each viewer reads them, and what a user
-//! changes on one (Plan.md P10.5, P11.2; ADR-0019, S41, S46–S56).
+//! [`BotService`]: the bots as each viewer reads them, what a user changes
+//! on one, and the chat lines a user sends one (Plan.md P10.5, P11.2,
+//! P11.3; ADR-0019, S41, S46–S56; ADR-0020, S4–S8).
 //!
 //! **Reads.** A bot's state is computed when it's read, never stored as
 //! such: from its row (placeable or not, and its last stored state), the
@@ -11,13 +12,14 @@
 //! agent goes quiet. A viewer reads only the bots of the accounts they may
 //! see, with their own grant; the caller asks `authorize()`.
 //!
-//! **Writes** ([`settings`], [`lifecycle`]) each run in one short
+//! **Writes** ([`settings`], [`lifecycle`], [`chat`]) each run in one short
 //! transaction that reads the acting user, the bot and its account again and
 //! asks `authorize()` again on what it read, write only what changed, never
 //! the bot's agent (the reconciler alone assigns, S36), and commit with their
 //! audit entry; a write that changes nothing writes and records nothing. The
 //! reconciler is told after each commit (`Change::Store`).
 
+pub mod chat;
 pub mod lifecycle;
 pub mod settings;
 
@@ -33,15 +35,17 @@ use fleet_core::bot::{
 };
 use fleet_core::id::{AgentId, BotId};
 use fleet_core::placement::{PlaceFacts, placeable};
-use fleet_core::system::Clock;
+use fleet_core::system::{Clock, SecureRandom};
 use fleet_core::value::AgentName;
 use tracing::{debug, error};
 
+pub use chat::{ChatOutcome, ChatRoute, ChatSendDone, ChatSendError, ChatWait};
 pub use lifecycle::{BotAction, Controlled};
 pub use settings::Configured;
 
 use super::agents::last_seen;
 use super::audit::AuditService;
+use super::events::EventBus;
 use super::users::{ActingUser, recheck};
 use crate::ports::accounts::ListedAccount;
 use crate::ports::agents::ListedAgent;
@@ -128,40 +132,51 @@ const DISAGREEMENT: &str = "the database listed a bot authorize() refuses; nothi
 #[derive(Debug, Clone)]
 pub struct BotService {
     clock: Arc<dyn Clock>,
+    random: Arc<dyn SecureRandom>,
     store: Arc<dyn Store>,
     live: Arc<dyn LiveAgents>,
+    events: EventBus,
     audit: AuditService,
     allow_offline: bool,
     allowlist: CommandAllowlist,
     reconcile: Arc<dyn Reconcile>,
+    chat_wait: ChatWait,
 }
 
 impl BotService {
-    /// The service over `store`, reading the time from `clock` and the live
-    /// streams from `live`; offline accounts' bots qualify only when
-    /// `allow_offline`. Every command needs Manage in a mode until
-    /// [`BotService::with_allowlist`] lists it.
+    /// The service over `store`, reading the time from `clock`, the live
+    /// streams from `live` and their agents' answers to chat from `events`,
+    /// and minting chat requests' IDs from `random`; offline accounts' bots
+    /// qualify only when `allow_offline`. Every command needs Manage in a
+    /// mode and in chat until [`BotService::with_allowlist`] lists it, and a
+    /// chat line's wait is [`ChatWait::default`] until
+    /// [`BotService::with_chat_wait`] sets it.
     #[must_use]
     pub fn new(
         clock: Arc<dyn Clock>,
+        random: Arc<dyn SecureRandom>,
         store: Arc<dyn Store>,
         live: Arc<dyn LiveAgents>,
+        events: EventBus,
         allow_offline: bool,
     ) -> Self {
         let audit = AuditService::new(Arc::clone(&clock), Arc::clone(&store));
         Self {
             clock,
+            random,
             store,
             live,
+            events,
             audit,
             allow_offline,
             allowlist: CommandAllowlist::default(),
             reconcile: Arc::new(NoReconcile),
+            chat_wait: ChatWait::default(),
         }
     }
 
     /// The service, with the commands Control holders may send through a
-    /// mode (`[chat] command_allowlist`).
+    /// mode or in chat (`[chat] command_allowlist`).
     #[must_use]
     pub fn with_allowlist(self, allowlist: CommandAllowlist) -> Self {
         Self { allowlist, ..self }
@@ -171,6 +186,13 @@ impl BotService {
     #[must_use]
     pub fn with_reconcile(self, reconcile: Arc<dyn Reconcile>) -> Self {
         Self { reconcile, ..self }
+    }
+
+    /// The service, waiting for a chat line's answer as `chat_wait` says:
+    /// serve's is under its request timeout.
+    #[must_use]
+    pub fn with_chat_wait(self, chat_wait: ChatWait) -> Self {
+        Self { chat_wait, ..self }
     }
 
     /// The bot `id` as `viewer` reads it, whether or not they may: the

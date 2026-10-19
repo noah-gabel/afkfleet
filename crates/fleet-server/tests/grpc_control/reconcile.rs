@@ -322,8 +322,10 @@ async fn a_bot_whose_agent_went_quiet_reads_unknown_and_stays_assigned(
     port.disconnect(&agent).await;
     let view = BotService::new(
         Arc::new(port.clock.clone()),
+        Arc::new(fleet_testkit::system::SeededRandom::new(1)),
         Arc::new(port.db.clone()),
         Arc::new(port.registry.clone()),
+        port.events.clone(),
         true,
     )
     .view(

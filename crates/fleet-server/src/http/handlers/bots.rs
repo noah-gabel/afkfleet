@@ -360,7 +360,7 @@ async fn lifecycle(
 }
 
 /// The bot `id` as `actor` reads it, or 404.
-async fn facts(state: &AppState, actor: &Actor, id: BotId) -> Result<BotView, ApiError> {
+pub(super) async fn facts(state: &AppState, actor: &Actor, id: BotId) -> Result<BotView, ApiError> {
     state.bots.view(actor, id).await?.ok_or(ApiError::NotFound)
 }
 
@@ -378,7 +378,7 @@ async fn answered(
 }
 
 /// A bot write that wasn't made, as the API answers it.
-fn writing(error: BotWriteError) -> ApiError {
+pub(super) fn writing(error: BotWriteError) -> ApiError {
     match error {
         BotWriteError::NotFound => ApiError::NotFound,
         BotWriteError::SessionGone => ApiError::Unauthorized,

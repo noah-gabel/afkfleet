@@ -926,13 +926,15 @@ impl Port {
         }
     }
 
-    /// The bots' service over the port's database and registry, hinting
-    /// the port's reconciler after each write, as serve builds it.
+    /// The bots' service over the port's database, registry and bus,
+    /// hinting the port's reconciler after each write, as serve builds it.
     pub(crate) fn bots(&self) -> BotService {
         let service = BotService::new(
             Arc::new(self.clock.clone()),
+            Arc::new(self.random.clone()),
             Arc::new(self.db.clone()),
             Arc::new(self.registry.clone()),
+            self.events.clone(),
             true,
         );
         match &self.hints {

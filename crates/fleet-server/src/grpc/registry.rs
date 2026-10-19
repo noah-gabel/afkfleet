@@ -59,13 +59,16 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use chrono::{DateTime, Utc};
 use fleet_core::bot::{BotSnapshot, BotSpec, LastReport, LastState, Lifecycle, StickyState};
+use fleet_core::chat::ChatMessage;
+use fleet_core::id::ChatRequestId;
 use fleet_core::id::{AgentId, BotId};
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock;
 use fleet_core::value::{AgentCapacity, AgentName};
 use fleet_proto::control::{
-    AgentMessage, BotEventKind, LifecycleCommand, MAX_SERVER_MESSAGE_BYTES, ServerMessage,
-    SessionDenied, SessionGrant, SessionRequest, SessionRequestId, server_message_len,
+    AgentMessage, BotEventKind, LifecycleCommand, MAX_SERVER_MESSAGE_BYTES, SendChat,
+    ServerMessage, SessionDenied, SessionGrant, SessionRequest, SessionRequestId,
+    server_message_len,
 };
 use fleet_proto::generated as wire;
 use tokio::sync::{mpsc, oneshot};
@@ -1094,6 +1097,50 @@ impl AgentRegistry {
         Ok(message)
     }
 
+    /// Sends `message`, a user's lifecycle command or chat line for `bot`,
+    /// through generation `generation` of `agent`'s live stream (S48;
+    /// ADR-0020, S5). It's written before the lock, then checked and queued
+    /// in one critical section, as `hold_and_send`'s: the stream the caller
+    /// found holding the bot, still live, not ended and still holding it
+    /// assigned, gets it; a stream that replaced it gets nothing, and it
+    /// never assigns.
+    fn send_held(
+        &self,
+        agent: AgentId,
+        generation: u64,
+        bot: BotId,
+        message: ServerMessage,
+    ) -> Result<(), CommandRefused> {
+        let unsendable = |error| match error {
+            SendError::NotConnected => CommandRefused::NotConnected,
+            SendError::QueueFull => CommandRefused::QueueFull,
+            SendError::TooLarge | SendError::Unwritable => CommandRefused::Unsendable,
+        };
+        let message = self.wire(message).map_err(unsendable)?;
+        let mut state = self.state();
+        let Some(slot) = state
+            .slots
+            .get_mut(&agent)
+            .filter(|slot| slot.generation == generation)
+        else {
+            return Err(CommandRefused::NotConnected);
+        };
+        let Phase::Live(live) = &slot.phase else {
+            return Err(CommandRefused::NotConnected);
+        };
+        if live.halt.is_halted() {
+            return Err(CommandRefused::NotConnected);
+        }
+        if !live
+            .holds
+            .get(&bot)
+            .is_some_and(|entry| entry.hold == Hold::Assigned)
+        {
+            return Err(CommandRefused::NotHeld);
+        }
+        queue(slot, message).map_err(unsendable)
+    }
+
     fn state(&self) -> MutexGuard<'_, State> {
         lock(&self.shared)
     }
@@ -1176,43 +1223,35 @@ impl LiveAgents for AgentRegistry {
         bot: BotId,
         command: Lifecycle,
     ) -> Result<(), CommandRefused> {
-        let unsendable = |error| match error {
-            SendError::NotConnected => CommandRefused::NotConnected,
-            SendError::QueueFull => CommandRefused::QueueFull,
-            SendError::TooLarge | SendError::Unwritable => CommandRefused::Unsendable,
-        };
-        let message = self
-            .wire(ServerMessage::Lifecycle(LifecycleCommand {
+        self.send_held(
+            agent,
+            generation,
+            bot,
+            ServerMessage::Lifecycle(LifecycleCommand {
                 bot_id: bot,
                 command,
-            }))
-            .map_err(unsendable)?;
-        // One critical section, as `hold_and_send`'s (ADR-0019, S48): the
-        // stream the caller found holding the bot, still live, not ended and
-        // still holding it assigned, gets the command; a stream that
-        // replaced it gets nothing, and a command never assigns.
-        let mut state = self.state();
-        let Some(slot) = state
-            .slots
-            .get_mut(&agent)
-            .filter(|slot| slot.generation == generation)
-        else {
-            return Err(CommandRefused::NotConnected);
-        };
-        let Phase::Live(live) = &slot.phase else {
-            return Err(CommandRefused::NotConnected);
-        };
-        if live.halt.is_halted() {
-            return Err(CommandRefused::NotConnected);
-        }
-        if !live
-            .holds
-            .get(&bot)
-            .is_some_and(|entry| entry.hold == Hold::Assigned)
-        {
-            return Err(CommandRefused::NotHeld);
-        }
-        queue(slot, message).map_err(unsendable)
+            }),
+        )
+    }
+
+    fn send_chat(
+        &self,
+        agent: AgentId,
+        generation: u64,
+        bot: BotId,
+        request: ChatRequestId,
+        message: &ChatMessage,
+    ) -> Result<(), CommandRefused> {
+        self.send_held(
+            agent,
+            generation,
+            bot,
+            ServerMessage::SendChat(SendChat {
+                request,
+                bot_id: bot,
+                message: message.clone(),
+            }),
+        )
     }
 
     fn answer_session(
@@ -2988,6 +3027,165 @@ mod tests {
 
         assert_eq!(refused, Err(CommandRefused::QueueFull));
         assert_eq!(ended.try_recv(), Ok(StreamEnd::TooSlow));
+    }
+
+    /// A user's chat line for `bot` as the wire carries it.
+    fn chat_line(bot: BotId, request: u8, text: &str) -> wire::ServerMessage {
+        wire::ServerMessage::try_from(ServerMessage::SendChat(SendChat {
+            request: chat_request(request),
+            bot_id: bot,
+            message: ChatMessage::try_from(text).unwrap(),
+        }))
+        .unwrap()
+    }
+
+    fn chat_request(n: u8) -> ChatRequestId {
+        ChatRequestId::new_v7(at(T0), [n; 10]).unwrap()
+    }
+
+    fn line(text: &str) -> ChatMessage {
+        ChatMessage::try_from(text).unwrap()
+    }
+
+    #[test]
+    fn a_chat_line_goes_only_to_the_stream_that_holds_its_bot_assigned() {
+        let (registry, _) = registry();
+        let (lease, mut queued, _ended) = live(&registry, 1, 4);
+        settle(
+            &registry,
+            &lease,
+            &[(1, Hold::Assigned), (2, Hold::Releasing)],
+        );
+        assert!(queued.try_recv().is_ok(), "the reconcile");
+        let generation = lease.generation;
+
+        let sent = registry.send_chat(agent(1), generation, bot(1), chat_request(1), &line("hi"));
+        let releasing =
+            registry.send_chat(agent(1), generation, bot(2), chat_request(2), &line("hi"));
+        let unheld = registry.send_chat(agent(1), generation, bot(3), chat_request(3), &line("hi"));
+        let elsewhere =
+            registry.send_chat(agent(2), generation, bot(1), chat_request(4), &line("hi"));
+
+        assert_eq!(sent, Ok(()));
+        assert_eq!(queued.try_recv().unwrap(), chat_line(bot(1), 1, "hi"));
+        assert_eq!(releasing, Err(CommandRefused::NotHeld));
+        assert_eq!(unheld, Err(CommandRefused::NotHeld));
+        assert_eq!(
+            elsewhere,
+            Err(CommandRefused::NotConnected),
+            "no stream at all"
+        );
+        assert!(queued.try_recv().is_err(), "nothing else was queued");
+    }
+
+    #[test]
+    fn a_chat_line_never_reaches_an_unreconciled_or_ended_stream() {
+        let (registry, _) = registry();
+        let (lease, mut queued, _ended) = live(&registry, 1, 4);
+
+        let unreconciled = registry.send_chat(
+            agent(1),
+            lease.generation,
+            bot(1),
+            chat_request(1),
+            &line("hi"),
+        );
+        settle(&registry, &lease, &[(1, Hold::Assigned)]);
+        assert!(registry.end(agent(1), StreamEnd::StreamError));
+        let ended = registry.send_chat(
+            agent(1),
+            lease.generation,
+            bot(1),
+            chat_request(2),
+            &line("hi"),
+        );
+
+        assert_eq!(unreconciled, Err(CommandRefused::NotHeld));
+        assert_eq!(
+            ended,
+            Err(CommandRefused::NotConnected),
+            "halted until its lease drops"
+        );
+        while let Ok(message) = queued.try_recv() {
+            assert!(
+                !matches!(message.msg, Some(wire::server_message::Msg::SendChat(_))),
+                "no line was queued"
+            );
+        }
+    }
+
+    /// The stream the send found holding the bot, and no other: a stream
+    /// that replaced it gets nothing, as with a command (S48, ADR-0020, S5).
+    #[test]
+    fn a_chat_line_goes_only_to_the_generation_found_holding_its_bot() {
+        let (registry, _) = registry();
+        let (old, _old_queued, _old_ended) = live(&registry, 1, 4);
+        settle(&registry, &old, &[(1, Hold::Assigned)]);
+        let found = LiveAgents::held(&registry, agent(1), bot(1)).unwrap();
+        drop(old);
+        let (new, mut queued, _ended) = live(&registry, 1, 4);
+        settle(&registry, &new, &[(1, Hold::Assigned)]);
+        assert!(queued.try_recv().is_ok(), "the reconcile");
+
+        let stale = registry.send_chat(
+            agent(1),
+            found.generation,
+            bot(1),
+            chat_request(1),
+            &line("a"),
+        );
+        let current = registry.send_chat(
+            agent(1),
+            new.generation,
+            bot(1),
+            chat_request(2),
+            &line("b"),
+        );
+
+        assert_ne!(found.generation, new.generation);
+        assert_eq!(stale, Err(CommandRefused::NotConnected));
+        assert_eq!(current, Ok(()));
+        assert_eq!(queued.try_recv().unwrap(), chat_line(bot(1), 2, "b"));
+        assert!(queued.try_recv().is_err(), "nothing else was queued");
+    }
+
+    #[test]
+    fn a_chat_line_to_a_full_queue_ends_the_stream_too_slow() {
+        let (registry, _) = registry();
+        let (lease, _queued, mut ended) = live(&registry, 1, 1);
+        settle(&registry, &lease, &[(1, Hold::Assigned)]);
+
+        let refused = registry.send_chat(
+            agent(1),
+            lease.generation,
+            bot(1),
+            chat_request(1),
+            &line("hi"),
+        );
+
+        assert_eq!(refused, Err(CommandRefused::QueueFull));
+        assert_eq!(ended.try_recv(), Ok(StreamEnd::TooSlow));
+    }
+
+    #[test]
+    fn a_chat_line_over_the_limit_is_unsendable_and_the_stream_stays() {
+        let clock = ManualClock::new(at(T0));
+        let registry = AgentRegistry::with_limit(Arc::new(clock), 64, Arc::new(NoReconcile));
+        let (lease, mut queued, mut ended) = live(&registry, 1, 4);
+        settle(&registry, &lease, &[(1, Hold::Assigned)]);
+        assert!(queued.try_recv().is_ok(), "the reconcile");
+
+        let refused = registry.send_chat(
+            agent(1),
+            lease.generation,
+            bot(1),
+            chat_request(1),
+            &line(&"x".repeat(200)),
+        );
+
+        assert_eq!(refused, Err(CommandRefused::Unsendable));
+        assert!(queued.try_recv().is_err());
+        assert!(ended.try_recv().is_err());
     }
 
     #[test]

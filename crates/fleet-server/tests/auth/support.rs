@@ -16,16 +16,17 @@ use axum::http::Method;
 use chrono::{DateTime, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::auth::{InviteTtl, LockoutPolicy, NewPassword, SessionPolicy};
-use fleet_core::authz::{CommandAllowlist, Role};
+use fleet_core::authz::{CommandAllowlist, GrantLevel, Role};
 use fleet_core::id::{AccountId, InviteId, SessionId, UserId};
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock as _;
 use fleet_core::value::Username;
 use fleet_server::app::agents::AgentService;
 use fleet_server::app::auth::TokenService;
-use fleet_server::app::bots::BotService;
+use fleet_server::app::bots::{BotService, ChatWait};
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
 use fleet_server::app::enrollment::EnrollmentTokenService;
+use fleet_server::app::events::EventBus;
 use fleet_server::app::health::HealthService;
 use fleet_server::app::invites::InviteService;
 use fleet_server::app::lockout::LockoutService;
@@ -170,8 +171,12 @@ pub(crate) struct Options {
     /// Whether the control plane is on: the enrollment tokens' route
     /// answers 404 without it.
     pub(crate) control_plane: bool,
-    /// `[chat] command_allowlist`, which the bots' mode switch reads.
+    /// `[chat] command_allowlist`, which the bots' mode switch and chat
+    /// read.
     pub(crate) allowlist: CommandAllowlist,
+    /// How long a chat line waits for its agent's answer: serve's, unless a
+    /// test waits for no answer.
+    pub(crate) chat_wait: ChatWait,
 }
 
 impl Default for Options {
@@ -183,6 +188,7 @@ impl Default for Options {
             invite_ttl: InviteTtl::default(),
             control_plane: false,
             allowlist: CommandAllowlist::default(),
+            chat_wait: ChatWait::default(),
         }
     }
 }
@@ -210,6 +216,8 @@ pub(crate) enum Meanwhile {
     AddUser(&'static str),
     /// A user's grant on an account is revoked.
     RevokeGrant(AccountId, UserId),
+    /// A user's grant on an account is set to a level, by another user.
+    SetGrant(AccountId, UserId, GrantLevel, UserId),
 }
 
 /// The database, with a change queued to land right before the next write
@@ -286,6 +294,16 @@ impl HookedStore {
             Meanwhile::RevokeGrant(account, user) => {
                 let mut tx = self.inner.write().await.unwrap();
                 assert!(tx.grants().delete(account, user).await.unwrap());
+                tx.commit(setup_entry()).await.unwrap();
+            }
+            Meanwhile::SetGrant(account, user, level, by) => {
+                let mut tx = self.inner.write().await.unwrap();
+                assert!(
+                    tx.grants()
+                        .set_level(account, user, level, by, now)
+                        .await
+                        .unwrap()
+                );
                 tx.commit(setup_entry()).await.unwrap();
             }
             Meanwhile::AddUser(name) => {
@@ -501,6 +519,8 @@ pub(crate) struct Setup {
     pub(crate) registry: AgentRegistry,
     /// The reconciler's hints the bots' writes sent.
     pub(crate) hints: Arc<Hinted>,
+    /// The bus a chat send waits on, where a test answers for the agent.
+    pub(crate) events: EventBus,
 }
 
 /// A reconciler that records the hints it gets, to check which writes send
@@ -597,12 +617,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
             .await
             .unwrap(),
     };
-    let lockout = LockoutService::new(
-        Arc::new(clock.clone()),
-        Arc::new(db.clone()),
-        Arc::new(HmacAttemptKeys::new(SecretBox::new(Box::new([7; 32])))),
-        LockoutPolicy::default(),
-    );
+    let lockout = lockout_service(&clock, &db);
     let alice = UserId::new_v7(at(T0), [1; 10]).unwrap();
     let hooked = HookedStore {
         inner: db.clone(),
@@ -627,7 +642,14 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         .then(|| enrollment_tokens(&clock, &random, &hooked));
     let (registry, agents) = agents(&clock, &hooked);
     let hints = Arc::new(Hinted::default());
-    let bots = bot_service(&clock, &hooked, &registry, settings.allowlist, &hints);
+    let (bots, events) = bot_service(
+        &clock,
+        &random,
+        &hooked,
+        &registry,
+        (&settings.allowlist, settings.chat_wait),
+        &hints,
+    );
     let state = AppState::new(Services {
         health: HealthService::new(Arc::new(db.clone())),
         tokens: tokens.clone(),
@@ -659,26 +681,44 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         alice,
         registry,
         hints,
+        events,
     }
 }
 
+/// The lockout service over `db`, with a fixed attempt key.
+fn lockout_service(clock: &ManualClock, db: &Database) -> LockoutService {
+    LockoutService::new(
+        Arc::new(clock.clone()),
+        Arc::new(db.clone()),
+        Arc::new(HmacAttemptKeys::new(SecretBox::new(Box::new([7; 32])))),
+        LockoutPolicy::default(),
+    )
+}
+
 /// The bots' service as serve builds it, over `hooked` and `registry`,
-/// with offline accounts on, recording its hints in `hints`.
+/// with offline accounts on, `allowlist` and `chat_wait`, recording its
+/// hints in `hints`; and the bus it waits for chat answers on.
 fn bot_service(
     clock: &ManualClock,
+    random: &SeededRandom,
     hooked: &HookedStore,
     registry: &AgentRegistry,
-    allowlist: CommandAllowlist,
+    (allowlist, chat_wait): (&CommandAllowlist, ChatWait),
     hints: &Arc<Hinted>,
-) -> BotService {
-    BotService::new(
+) -> (BotService, EventBus) {
+    let events = EventBus::new();
+    let bots = BotService::new(
         Arc::new(clock.clone()),
+        Arc::new(random.clone()),
         Arc::new(hooked.clone()),
         Arc::new(registry.clone()),
+        events.clone(),
         true,
     )
-    .with_allowlist(allowlist)
+    .with_allowlist(allowlist.clone())
     .with_reconcile(Arc::clone(hints) as Arc<dyn Reconcile>)
+    .with_chat_wait(chat_wait);
+    (bots, events)
 }
 
 /// Stores Alice, a Member, with `hash`.

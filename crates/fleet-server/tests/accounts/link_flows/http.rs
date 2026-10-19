@@ -199,7 +199,7 @@ async fn every_other_end_reads_its_state_alone(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let setup = HttpSetup::with(options, RateLimitConfig::default(), quota(1)).await;
+    let setup = HttpSetup::with(options, &RateLimitConfig::default(), quota(1)).await;
     let owner = setup.person(9, Role::Owner).await;
     add_account(&setup, &owner, 9, PROFILE).await;
 
@@ -298,7 +298,7 @@ async fn a_member_at_the_quota_gets_409_without_asking_microsoft(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let setup = HttpSetup::with(options, RateLimitConfig::default(), quota(1)).await;
+    let setup = HttpSetup::with(options, &RateLimitConfig::default(), quota(1)).await;
     let alice = setup.person(1, Role::Member).await;
     add_account(&setup, &alice, 1, PROFILE).await;
 
@@ -314,7 +314,7 @@ async fn the_daily_cap_answers_429_until_a_start_is_a_day_old(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let setup = HttpSetup::with(options, limits(3, 1), AccountsConfig::default()).await;
+    let setup = HttpSetup::with(options, &limits(3, 1), AccountsConfig::default()).await;
     let alice = setup.person(1, Role::Member).await;
     held(&setup, &alice, "device-code-1").await;
 
@@ -352,7 +352,7 @@ async fn every_place_taken_answers_503_with_30_s(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let setup = HttpSetup::with(options, limits(1, 10), AccountsConfig::default()).await;
+    let setup = HttpSetup::with(options, &limits(1, 10), AccountsConfig::default()).await;
     let alice = setup.person(1, Role::Member).await;
     let bob = setup.person(2, Role::Member).await;
     held(&setup, &alice, "device-code-1").await;
@@ -414,7 +414,7 @@ async fn the_link_routes_spend_the_users_request_limit(
         per_user: Rate::per_second(NonZeroU32::MIN, NonZeroU32::MIN),
         ..RateLimitConfig::default()
     };
-    let setup = HttpSetup::with(options, limits, AccountsConfig::default()).await;
+    let setup = HttpSetup::with(options, &limits, AccountsConfig::default()).await;
     let alice = setup.person(1, Role::Member).await;
     let flow = held(&setup, &alice, "device-code-1").await;
 

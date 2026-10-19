@@ -224,6 +224,7 @@ bot_actions_per_bot_per_min = 3
 fresh_sessions_per_bot_per_hour = 2
 chat_per_bot_interval_secs = 5
 chat_per_bot_burst = 2
+chat_per_user_per_min = 7
 ";
 
 /// The `[rate_limits]` that `every_key_maps_to_its_setting`'s file sets.
@@ -244,6 +245,7 @@ fn every_rate_limit() -> RateLimitConfig {
         bot_actions: Rate::per_minute(nonzero(3)),
         fresh_sessions: Rate::per_hour(nonzero(2)),
         chat_per_bot: ChatRate::try_new(5, 2).unwrap(),
+        chat_per_user: Rate::per_minute(nonzero(7)),
     }
 }
 
@@ -1131,6 +1133,7 @@ fn the_dev_config_holds_neither_the_database_path_nor_the_vault_key_file() {
 #[case::fresh_sessions("fresh_sessions_per_bot_per_hour", 1, 60)]
 #[case::chat_per_bot_interval("chat_per_bot_interval_secs", 1, 60)]
 #[case::chat_per_bot_burst("chat_per_bot_burst", 1, 8)]
+#[case::chat_per_user("chat_per_user_per_min", 1, 60)]
 fn rate_limit_keys_are_checked_against_their_range(
     #[case] key: &str,
     #[case] min: u64,

@@ -89,7 +89,7 @@ use crate::app::agents::{
     AgentConnectionService, AgentService, AssignmentService, SessionGrantService,
 };
 use crate::app::auth::TokenService;
-use crate::app::bots::BotService;
+use crate::app::bots::{BotService, ChatWait};
 use crate::app::challenges::Challenges;
 use crate::app::enrollment::{EnrollmentService, EnrollmentTokenService};
 use crate::app::events::EventBus;
@@ -469,9 +469,11 @@ pub fn app_with(
     let grants = GrantService::new(Arc::clone(&clock), Arc::clone(&store));
     let ids = RequestIds::new(Arc::clone(&clock), Arc::clone(&random));
     let (agents, agent_service) = agent_services(&clock, &store, Arc::clone(&reconcile));
-    let bots = bot_service(config, &clock, &store, &agents, reconcile);
-    let shutdown = CancellationToken::new();
+    // One bus: the ingest publishes the agents' answers on it, and a chat
+    // send waits for its answer there (ADR-0020, S5).
     let events = EventBus::new();
+    let bots = bot_service(config, &clock, &random, &store, &agents, &events, reconcile);
+    let shutdown = CancellationToken::new();
     let (enrollment_tokens, grpc) = control_plane_services(
         config,
         ca,
@@ -592,23 +594,30 @@ fn agent_services(
     (agents, service)
 }
 
-/// The bots' service over the app's ports, reading `registry`'s streams,
-/// with `[chat]`'s allowlist, and hinting `reconcile` after each write.
+/// The bots' service over the app's ports, reading `registry`'s streams and
+/// the agents' answers to chat on `events`, with `[chat]`'s allowlist, a chat
+/// line's wait under the request timeout, and hinting `reconcile` after each
+/// write.
 fn bot_service(
     config: &ServerConfig,
     clock: &Arc<dyn Clock>,
+    random: &Arc<dyn SecureRandom>,
     store: &Arc<dyn Store>,
     registry: &AgentRegistry,
+    events: &EventBus,
     reconcile: Arc<dyn Reconcile>,
 ) -> BotService {
     BotService::new(
         Arc::clone(clock),
+        Arc::clone(random),
         Arc::clone(store),
         Arc::new(registry.clone()),
+        events.clone(),
         config.accounts.allow_offline,
     )
     .with_allowlist(config.chat.command_allowlist.clone())
     .with_reconcile(reconcile)
+    .with_chat_wait(ChatWait::new(config.http.request_timeout))
 }
 
 /// The 2FA service over the app's ports, sealing TOTP secrets with `vault`

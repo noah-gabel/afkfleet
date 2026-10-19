@@ -26,6 +26,12 @@
 //!   handler right after `authorize()`, so it never tells a stranger the bot
 //!   exists; stopping never spends it ([`RateLimits::check_bot_action`];
 //!   ADR-0019, S52).
+//! - **A chat line sent through the API spends its user's chat limit, then
+//!   its bot's**, in its handler right after `authorize()` and the pointer
+//!   to `/command`, whatever then happens to it, so neither tells a stranger
+//!   the bot exists ([`RateLimits::check_chat_user`],
+//!   [`RateLimits::check_chat_bot`]; ADR-0020, S3). The bot's is the chat
+//!   rate its agent enforces too, sent in its spec.
 //! - **A fresh session request on the gRPC port spends its bot's limit**,
 //!   in its stream's session, once the registry found the stream holding the
 //!   bot assigned, and before the request is queued: each fresh session the
@@ -154,6 +160,10 @@ pub struct Refusals {
     pub bot_actions: u64,
     /// The per-bot limit of fresh session requests on the gRPC port.
     pub fresh_sessions: u64,
+    /// The per-user limit of chat lines sent through the API.
+    pub chat_per_user: u64,
+    /// The per-bot limit of chat lines sent through the API.
+    pub chat_per_bot: u64,
 }
 
 impl Refusals {
@@ -170,6 +180,8 @@ impl Refusals {
             && self.connect == 0
             && self.bot_actions == 0
             && self.fresh_sessions == 0
+            && self.chat_per_user == 0
+            && self.chat_per_bot == 0
     }
 }
 
@@ -186,6 +198,8 @@ struct Counters {
     connect: AtomicU64,
     bot_actions: AtomicU64,
     fresh_sessions: AtomicU64,
+    chat_per_user: AtomicU64,
+    chat_per_bot: AtomicU64,
 }
 
 /// Every limiter, built from `[rate_limits]`.
@@ -201,6 +215,10 @@ struct Limiters {
     connect: Limiter<CertFingerprint>,
     bot_actions: Limiter<BotId>,
     fresh_sessions: Limiter<BotId>,
+    chat_per_user: Limiter<UserId>,
+    chat_per_bot: Limiter<BotId>,
+    /// How long a bot's chat bucket takes to hold one more line.
+    chat_interval: Duration,
     refused: Counters,
 }
 
@@ -242,6 +260,9 @@ impl RateLimits {
             connect: limiter(config.connect, &clock),
             bot_actions: limiter(config.bot_actions, &clock),
             fresh_sessions: limiter(config.fresh_sessions, &clock),
+            chat_per_user: limiter(config.chat_per_user, &clock),
+            chat_per_bot: limiter(Rate::from(config.chat_per_bot), &clock),
+            chat_interval: config.chat_per_bot.interval(),
             refused: Counters::default(),
             clock,
         }))
@@ -354,6 +375,44 @@ impl RateLimits {
         )
     }
 
+    /// Spends one of `user`'s chat lines, which a chat route does right
+    /// after `authorize()` (ADR-0020, S3).
+    ///
+    /// # Errors
+    /// [`Refused`] when their bucket is empty.
+    pub fn check_chat_user(&self, user: UserId) -> Result<(), Refused> {
+        let limits = &self.0;
+        spend(
+            &limits.chat_per_user,
+            &limits.clock,
+            &user,
+            &limits.refused.chat_per_user,
+        )
+    }
+
+    /// Spends one of `bot`'s chat lines, after its sender's
+    /// ([`RateLimits::check_chat_user`]): the chat rate the bot's agent
+    /// enforces too (ADR-0020, S3).
+    ///
+    /// # Errors
+    /// [`Refused`] when its bucket is empty.
+    pub fn check_chat_bot(&self, bot: BotId) -> Result<(), Refused> {
+        let limits = &self.0;
+        spend(
+            &limits.chat_per_bot,
+            &limits.clock,
+            &bot,
+            &limits.refused.chat_per_bot,
+        )
+    }
+
+    /// How long a bot's chat bucket takes to hold one more line: what a 429
+    /// says when the bot's agent refused a line for its rate (ADR-0020, S5).
+    #[must_use]
+    pub fn chat_retry_after(&self) -> Duration {
+        self.0.chat_interval
+    }
+
     /// Spends one of `user`'s authed requests.
     ///
     /// # Errors
@@ -382,6 +441,8 @@ impl RateLimits {
         limits.connect.retain_recent();
         limits.bot_actions.retain_recent();
         limits.fresh_sessions.retain_recent();
+        limits.chat_per_user.retain_recent();
+        limits.chat_per_bot.retain_recent();
     }
 
     /// How many keys the limiters hold.
@@ -398,6 +459,8 @@ impl RateLimits {
             + limits.connect.len()
             + limits.bot_actions.len()
             + limits.fresh_sessions.len()
+            + limits.chat_per_user.len()
+            + limits.chat_per_bot.len()
     }
 
     /// The refusals since the last call, and starts counting again.
@@ -416,6 +479,8 @@ impl RateLimits {
             connect: take(&refused.connect),
             bot_actions: take(&refused.bot_actions),
             fresh_sessions: take(&refused.fresh_sessions),
+            chat_per_user: take(&refused.chat_per_user),
+            chat_per_bot: take(&refused.chat_per_bot),
         }
     }
 }
@@ -543,6 +608,7 @@ mod tests {
             bot_actions: rate,
             fresh_sessions: rate,
             chat_per_bot: fleet_core::chat::ChatRate::default(),
+            chat_per_user: rate,
         }
     }
 
@@ -729,6 +795,57 @@ mod tests {
     }
 
     #[test]
+    fn chat_lines_are_refused_past_their_burst_per_user_apart_from_other_requests() {
+        let clock = ManualClock::new(start());
+        let limits = RateLimits::new(&tight(), Arc::new(clock.clone()));
+        limits.check_chat_user(user(1)).unwrap();
+        limits.check_chat_user(user(1)).unwrap();
+
+        assert_eq!(
+            limits.check_chat_user(user(1)),
+            Err(Refused {
+                retry_after: Duration::from_millis(500)
+            })
+        );
+        assert_eq!(limits.check_chat_user(user(2)), Ok(()));
+        assert_eq!(limits.check_user(user(1)), Ok(()));
+        assert_eq!(limits.check_chat_bot(bot(1)), Ok(()));
+        clock.advance(Duration::from_millis(500));
+        assert_eq!(limits.check_chat_user(user(1)), Ok(()));
+    }
+
+    #[test]
+    fn chat_lines_are_refused_past_the_bots_chat_rate_per_bot_apart_from_its_actions() {
+        let clock = ManualClock::new(start());
+        let limits = RateLimits::new(&tight(), Arc::new(clock.clone()));
+        // `tight` keeps the default chat rate: a burst of 3, one every 3 s.
+        for _ in 0..3 {
+            limits.check_chat_bot(bot(1)).unwrap();
+        }
+
+        assert_eq!(
+            limits.check_chat_bot(bot(1)),
+            Err(Refused {
+                retry_after: Duration::from_secs(3)
+            })
+        );
+        assert_eq!(limits.check_chat_bot(bot(2)), Ok(()));
+        assert_eq!(limits.check_bot_action(bot(1)), Ok(()));
+        assert_eq!(limits.check_chat_user(user(1)), Ok(()));
+        clock.advance(Duration::from_secs(3));
+        assert_eq!(limits.check_chat_bot(bot(1)), Ok(()));
+    }
+
+    #[test]
+    fn a_bots_chat_wait_is_its_chat_rates_interval() {
+        let mut config = tight();
+        config.chat_per_bot = fleet_core::chat::ChatRate::try_new(7, 2).unwrap();
+        let limits = RateLimits::new(&config, Arc::new(ManualClock::new(start())));
+
+        assert_eq!(limits.chat_retry_after(), Duration::from_secs(7));
+    }
+
+    #[test]
     fn the_standard_class_spends_nothing() {
         let limits = RateLimits::new(&tight(), Arc::new(ManualClock::new(start())));
 
@@ -796,6 +913,12 @@ mod tests {
         for _ in 0..8 {
             let _ = limits.check_fresh_session(bot(1));
         }
+        for _ in 0..9 {
+            let _ = limits.check_chat_user(user(1));
+        }
+        for _ in 0..10 {
+            let _ = limits.check_chat_bot(bot(1));
+        }
         let _ = limits.check_class(RateClass::Refresh, ip("192.0.2.10"));
 
         assert_eq!(
@@ -811,6 +934,8 @@ mod tests {
                 connect: 4,
                 bot_actions: 5,
                 fresh_sessions: 6,
+                chat_per_user: 7,
+                chat_per_bot: 7,
             }
         );
         assert_eq!(limits.take_refusals(), Refusals::default());
@@ -860,6 +985,14 @@ mod tests {
                 fresh_sessions: 1,
                 ..Refusals::default()
             },
+            Refusals {
+                chat_per_user: 1,
+                ..Refusals::default()
+            },
+            Refusals {
+                chat_per_bot: 1,
+                ..Refusals::default()
+            },
         ] {
             assert!(!refusals.is_empty(), "{refusals:?}");
         }
@@ -879,14 +1012,15 @@ mod tests {
         limits.check_connect(fingerprint(1)).unwrap();
         limits.check_bot_action(bot(1)).unwrap();
         limits.check_fresh_session(bot(1)).unwrap();
+        limits.check_chat_user(user(1)).unwrap();
         clock.advance(Duration::from_millis(400));
         limits.check_ip(ip("198.51.100.10")).unwrap();
-        assert_eq!(limits.tracked(), 9);
-        // The first eight are full again at 500 ms, the later one at 900 ms;
+        assert_eq!(limits.tracked(), 10);
+        // The first nine are full again at 500 ms, the later one at 900 ms;
         // each is dropped one 500 ms interval after that.
         clock.advance(Duration::from_millis(599));
         limits.retain_recent();
-        assert_eq!(limits.tracked(), 9, "a millisecond short");
+        assert_eq!(limits.tracked(), 10, "a millisecond short");
 
         clock.advance(Duration::from_millis(1));
         limits.retain_recent();
@@ -894,6 +1028,23 @@ mod tests {
         assert_eq!(limits.tracked(), 1, "only the later client is kept");
         clock.advance(Duration::from_millis(400));
         limits.retain_recent();
+        assert_eq!(limits.tracked(), 0);
+    }
+
+    #[test]
+    fn retain_recent_forgets_a_bots_chat_one_interval_after_its_bucket_is_full_again() {
+        let clock = ManualClock::new(start());
+        let limits = RateLimits::new(&tight(), Arc::new(clock.clone()));
+        limits.check_chat_bot(bot(1)).unwrap();
+        assert_eq!(limits.tracked(), 1);
+        // Full again 3 s after one line, and dropped one 3 s interval later.
+        clock.advance(Duration::from_millis(5999));
+        limits.retain_recent();
+        assert_eq!(limits.tracked(), 1, "a millisecond short");
+
+        clock.advance(Duration::from_millis(1));
+        limits.retain_recent();
+
         assert_eq!(limits.tracked(), 0);
     }
 

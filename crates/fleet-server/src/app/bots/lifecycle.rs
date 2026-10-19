@@ -198,7 +198,7 @@ impl BotService {
     /// revoked or expired, while its stream waits to be ended) reads Unknown,
     /// so nothing is sent to it. The write transaction is open, so nothing
     /// else commits between this read and its commit.
-    async fn reach(&self, bot: &Bot) -> Result<Reached, StoreError> {
+    pub(super) async fn reach(&self, bot: &Bot) -> Result<Reached, StoreError> {
         let stored = self.last_known(bot.id, bot.last).map(|last| last.state);
         let Some(agent) = bot.agent else {
             return Ok(Reached {
@@ -273,12 +273,12 @@ impl Drop for TakenReport<'_> {
 }
 
 /// How far the server reaches a bot ([`BotService::reach`]).
-struct Reached {
-    reach: Reach,
+pub(super) struct Reached {
+    pub(super) reach: Reach,
     /// Its known state.
-    known: Option<LastState>,
+    pub(super) known: Option<LastState>,
     /// The generation of the stream that holds it, when reached.
-    stream: Option<u64>,
+    pub(super) stream: Option<u64>,
 }
 
 /// The metadata of a call that acted on a bot in `known`: its state, and

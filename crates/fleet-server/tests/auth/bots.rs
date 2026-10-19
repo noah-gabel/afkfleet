@@ -36,6 +36,8 @@ use super::support::{
     Meanwhile, Options, Person, Seen, Setup, T0, at, redacted, setup, setup_entry, setup_with,
 };
 
+mod chat;
+
 const BOTS: &str = "/api/v1/bots";
 
 fn bot_path(id: BotId) -> String {
@@ -1442,6 +1444,16 @@ async fn every_bot_route_spends_the_users_request_limit(
         ("POST", action_path(bot, "restart"), None),
         ("POST", action_path(bot, "reset"), None),
         ("POST", action_path(bot, "resume"), None),
+        (
+            "POST",
+            action_path(bot, "chat"),
+            Some(json!({ "message": "hello" })),
+        ),
+        (
+            "POST",
+            action_path(bot, "command"),
+            Some(json!({ "message": "/spawn" })),
+        ),
     ] {
         let method: axum::http::Method = method.parse().unwrap();
         let first = setup

@@ -138,6 +138,9 @@ fn test_request_id() -> HeaderValue {
 #[case::bot_not_running("bot_not_running", || ApiError::BotNotRunning)]
 #[case::bot_not_paused("bot_not_paused", || ApiError::BotNotPaused)]
 #[case::bot_not_failed("bot_not_failed", || ApiError::BotNotFailed)]
+#[case::bot_not_online("bot_not_online", || ApiError::BotNotOnline)]
+#[case::chat_unavailable("chat_unavailable", || ApiError::ChatUnavailable)]
+#[case::command_needs_step_up("command_needs_step_up", || ApiError::CommandNeedsStepUp)]
 #[tokio::test]
 async fn every_variant_answers_with_its_status_headers_and_envelope(
     #[case] code: &str,
@@ -169,6 +172,9 @@ async fn every_variant_answers_with_its_status_headers_and_envelope(
 #[case(ErrorCode::BotNotRunning, StatusCode::CONFLICT)]
 #[case(ErrorCode::BotNotPaused, StatusCode::CONFLICT)]
 #[case(ErrorCode::BotNotFailed, StatusCode::CONFLICT)]
+#[case(ErrorCode::BotNotOnline, StatusCode::CONFLICT)]
+#[case(ErrorCode::ChatUnavailable, StatusCode::CONFLICT)]
+#[case(ErrorCode::CommandNeedsStepUp, StatusCode::FORBIDDEN)]
 fn every_code_has_its_status(#[case] code: ErrorCode, #[case] expected: StatusCode) {
     assert_eq!(status(code), expected);
 }
@@ -191,7 +197,7 @@ async fn every_401_carries_the_bearer_challenge_and_no_other_status_does() {
 }
 
 /// One constructor per code, in `ErrorCode::ALL`'s order.
-const MAKERS: [fn() -> ApiError; 19] = [
+const MAKERS: [fn() -> ApiError; 22] = [
     || ApiError::BadRequest,
     || ApiError::Unauthorized,
     || ApiError::InvalidCredentials,
@@ -213,6 +219,9 @@ const MAKERS: [fn() -> ApiError; 19] = [
     || ApiError::BotNotRunning,
     || ApiError::BotNotPaused,
     || ApiError::BotNotFailed,
+    || ApiError::BotNotOnline,
+    || ApiError::ChatUnavailable,
+    || ApiError::CommandNeedsStepUp,
 ];
 
 #[rstest]

@@ -109,7 +109,7 @@ impl Seen {
 
 /// The server's config with `limits` and `accounts`; the database's path
 /// and the vault's key file are never read here.
-fn config(limits: RateLimitConfig, accounts: AccountsConfig) -> ServerConfig {
+fn config(limits: &RateLimitConfig, accounts: AccountsConfig) -> ServerConfig {
     ServerConfig {
         dev_mode: false,
         http: HttpConfig {
@@ -126,7 +126,7 @@ fn config(limits: RateLimitConfig, accounts: AccountsConfig) -> ServerConfig {
             filter: "info".parse().unwrap(),
         },
         auth: AuthConfig::default(),
-        rate_limits: limits,
+        rate_limits: *limits,
         vault: VaultConfig {
             key_files: BTreeMap::from([(1, std::env::temp_dir().join("unused-key"))]),
             active_key_id: 1,
@@ -155,7 +155,7 @@ impl Server {
     /// key `key`; sessions are minted on the ports' clock and randomness.
     pub(crate) async fn start(
         options: SqliteConnectOptions,
-        limits: RateLimitConfig,
+        limits: &RateLimitConfig,
         accounts: AccountsConfig,
         key: &SecretBox<[u8; 32]>,
         ports: ServerPorts,
@@ -485,7 +485,7 @@ impl HttpSetup {
     pub(crate) async fn new(options: SqliteConnectOptions) -> Self {
         Self::with(
             options,
-            RateLimitConfig::default(),
+            &RateLimitConfig::default(),
             AccountsConfig::default(),
         )
         .await
@@ -493,7 +493,7 @@ impl HttpSetup {
 
     pub(crate) async fn with(
         options: SqliteConnectOptions,
-        limits: RateLimitConfig,
+        limits: &RateLimitConfig,
         accounts: AccountsConfig,
     ) -> Self {
         let clock = ManualClock::new(at(T0));
