@@ -47,7 +47,7 @@ impl LogLine {
 }
 
 /// The part of a bot's state the checks read, from its `Debug` text
-/// (`Backoff { attempt: 2 }`).
+/// (`Backoff { attempt: 2, fresh: false }`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum State {
     AwaitingSession {
@@ -192,7 +192,7 @@ mod tests {
         let log = parse_log(&state_line(
             "2026-10-10T08:00:01Z",
             "b-4",
-            "Backoff { attempt: 2 }",
+            "Backoff { attempt: 2, fresh: false }",
         ));
 
         assert_eq!(log[0].span_bot_id.as_deref(), Some("b-4"));
@@ -219,7 +219,7 @@ mod tests {
         "Online { since: 2026-10-10T08:00:05.120001234Z, attempt: 2 }",
         State::Online
     )]
-    #[case("Backoff { attempt: 12 }", State::Backoff { attempt: 12 })]
+    #[case("Backoff { attempt: 12, fresh: true }", State::Backoff { attempt: 12 })]
     #[case("Stopping { restart: false }", State::Other)]
     #[case("Stopped", State::Other)]
     #[case("Paused { reason: Conflict { kind: DuplicateLogin } }", State::Other)]

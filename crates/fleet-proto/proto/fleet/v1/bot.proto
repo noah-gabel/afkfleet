@@ -94,6 +94,9 @@ message BotState {
   message Backoff {
     // The attempt that failed.
     uint32 attempt = 1;
+    // Whether the next attempt asks for a fresh session: the last session was
+    // rejected, and none has arrived since.
+    bool fresh = 2;
   }
 
   // The session is being torn down.

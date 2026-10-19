@@ -158,7 +158,10 @@ const fn connecting(attempt: NonZeroU32) -> BotState {
 }
 
 const fn backoff(attempt: NonZeroU32) -> BotState {
-    BotState::Backoff { attempt }
+    BotState::Backoff {
+        attempt,
+        fresh: false,
+    }
 }
 
 fn emit(controller: &SessionController, event: SessionEvent) {
@@ -837,6 +840,58 @@ async fn a_rejected_session_is_retried_once_with_a_fresh_token_then_fails() {
         attempt: n(1),
         fresh: true
     }));
+}
+
+/// U24 (ADR-0020, S1): after a refused login, every request stays fresh
+/// through the backoffs until a session arrives, so the server never hands
+/// out the cached session it just refused. The fresh session is refused too,
+/// which fails the bot: §6 row 5's one fresh token.
+#[tokio::test(start_paused = true)]
+async fn a_refused_logins_requests_stay_fresh_through_its_backoffs_until_a_grant_arrives() {
+    let mut bot = Setup::new(running()).start().await;
+    let first = bot.session(0).await;
+    bot.credentials
+        .push_answer(Err(CredentialError { retryable: true }));
+    bot.credentials
+        .push_answer(Err(CredentialError { retryable: true }));
+
+    emit(
+        &first,
+        SessionEvent::Disconnected(DisconnectReason::AuthRejected),
+    );
+    settle().await;
+    // The first and second backoffs wait 5–10 s and 10–20 s.
+    advance(ms(10_000)).await;
+    advance(ms(20_000)).await;
+    let second = bot.session(1).await;
+    emit(
+        &second,
+        SessionEvent::Disconnected(DisconnectReason::AuthRejected),
+    );
+    settle().await;
+
+    let fresh: Vec<bool> = bot
+        .credentials
+        .requests()
+        .iter()
+        .map(|request| request.fresh)
+        .collect();
+    assert_eq!(fresh, [false, true, true, true]);
+    assert_eq!(bot.connects(), 2);
+    assert_eq!(
+        bot.state(),
+        BotState::Failed {
+            reason: FailReason::Auth
+        }
+    );
+    let states = bot.states();
+    for attempt in [n(1), n(2)] {
+        let backoff = BotState::Backoff {
+            attempt,
+            fresh: true,
+        };
+        assert!(states.contains(&backoff), "{backoff:?} in {states:?}");
+    }
 }
 
 #[tokio::test(start_paused = true)]

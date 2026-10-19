@@ -27,7 +27,8 @@
 //!
 //! It runs a fixed 500 cases, as an exception to `PROPTEST_CASES`, and
 //! fails if any coverage target was never reached: a crash loop, a
-//! duplicate-login pause, the fresh-token retry, a sticky re-add, a
+//! duplicate-login pause, the fresh-token retry, a fresh retry after a
+//! backoff (ADR-0020, S1), a sticky re-add, a
 //! teardown still running at a connect, a trip of each kind, and a probe
 //! while a crashed session tears down.
 
@@ -215,6 +216,7 @@ fn op() -> BoxedStrategy<Op> {
             just(Op::Credentials(Answer::Refuse { retryable: false })),
         ),
         (2, just(Op::Credentials(Answer::Never))),
+        (3, just(Op::Credentials(Answer::RefuseFresh))),
         (3, just(Op::Stall(Stall::Hang))),
         (3, just(Op::Stall(Stall::Packets))),
         (2, just(Op::Stall(Stall::Ticks))),
@@ -378,6 +380,7 @@ enum Target {
     CrashLoop,
     DuplicateLoginPause,
     FreshTokenRetry,
+    FreshRetryAfterBackoff,
     StickyReadd,
     TeardownAtConnect,
     TickTrip,
@@ -386,10 +389,11 @@ enum Target {
 }
 
 impl Target {
-    const ALL: [Self; 8] = [
+    const ALL: [Self; 9] = [
         Self::CrashLoop,
         Self::DuplicateLoginPause,
         Self::FreshTokenRetry,
+        Self::FreshRetryAfterBackoff,
         Self::StickyReadd,
         Self::TeardownAtConnect,
         Self::TickTrip,
@@ -402,6 +406,7 @@ impl Target {
             Self::CrashLoop => "crash loop",
             Self::DuplicateLoginPause => "duplicate-login pause",
             Self::FreshTokenRetry => "fresh-token retry",
+            Self::FreshRetryAfterBackoff => "fresh retry after a backoff",
             Self::StickyReadd => "sticky re-add",
             Self::TeardownAtConnect => "teardown running at a connect",
             Self::TickTrip => "tick trip",
@@ -683,32 +688,43 @@ impl<'r> Chaos<'r> {
         let previous = bot.last;
         let id = bot.id;
         match state {
+            // A fresh-token request right after the auth rejection.
             BotState::AwaitingSession {
                 attempt,
                 fresh: true,
-            } => {
-                let rejected = BotState::Connecting {
+            } if previous
+                == (BotState::Connecting {
                     attempt,
                     auth_retried: false,
-                };
-                assert_eq!(
-                    previous, rejected,
-                    "{id}: a fresh-token request must follow an auth rejection while Connecting"
-                );
-            }
-            BotState::AwaitingSession { attempt, .. } if attempt.get() == 1 => {
+                }) => {}
+            BotState::AwaitingSession {
+                attempt,
+                fresh: false,
+            } if attempt.get() == 1 => {
                 assert!(
                     bot.deliberate,
                     "{id}: a new run without a deliberate call, after {previous:?}"
                 );
             }
-            BotState::AwaitingSession { attempt, .. } => {
+            // A retry after its backoff, asking as the backoff says: fresh
+            // until a session arrives after an auth rejection (ADR-0020, S1).
+            BotState::AwaitingSession { attempt, fresh } => {
+                assert!(
+                    attempt.get() > 1,
+                    "{id}: a fresh-token request must follow an auth rejection while Connecting, after {previous:?}"
+                );
                 let before = n(attempt.get() - 1);
                 assert_eq!(
                     previous,
-                    BotState::Backoff { attempt: before },
-                    "{id}: attempt {attempt} must follow Backoff{{{before}}}"
+                    BotState::Backoff {
+                        attempt: before,
+                        fresh
+                    },
+                    "{id}: attempt {attempt} must follow Backoff{{{before}}}, as fresh as it"
                 );
+                if fresh {
+                    self.reached.insert(Target::FreshRetryAfterBackoff);
+                }
                 let (backed_off, since) = bot.backoff.expect("a published Backoff");
                 assert_eq!(backed_off, before);
                 let waited = at.signed_duration_since(since).to_std().unwrap();
@@ -738,7 +754,13 @@ impl<'r> Chaos<'r> {
                     self.reached.insert(Target::FreshTokenRetry);
                 }
             }
-            BotState::Backoff { attempt } => {
+            BotState::Backoff { attempt, fresh } => {
+                let after_a_fresh_request =
+                    matches!(previous, BotState::AwaitingSession { fresh: true, .. });
+                assert_eq!(
+                    fresh, after_a_fresh_request,
+                    "{id}: Backoff{{{attempt}}}'s fresh after {previous:?}"
+                );
                 let kept = match previous {
                     BotState::AwaitingSession { attempt: from, .. }
                     | BotState::Connecting { attempt: from, .. }

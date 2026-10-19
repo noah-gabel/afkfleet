@@ -208,7 +208,8 @@ pub(crate) fn bot_state() -> impl Strategy<Value = BotState> {
             auth_retried
         }),
         (time(), attempt()).prop_map(|(since, attempt)| BotState::Online { since, attempt }),
-        attempt().prop_map(|attempt| BotState::Backoff { attempt }),
+        (attempt(), any::<bool>())
+            .prop_map(|(attempt, fresh)| BotState::Backoff { attempt, fresh }),
         pause_reason().prop_map(|reason| BotState::Paused { reason }),
         fail_reason().prop_map(|reason| BotState::Failed { reason }),
         any::<bool>().prop_map(|restart| BotState::Stopping { restart }),

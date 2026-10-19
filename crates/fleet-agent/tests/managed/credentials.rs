@@ -421,6 +421,28 @@ async fn without_a_stream_the_kept_grant_answers_a_request_that_isnt_fresh() {
     assert_eq!(token(&answer.unwrap()), "kept");
 }
 
+/// Each unsent request says whether it was fresh, so a refused login's
+/// requests can be followed through an outage (ADR-0020, S1).
+#[rstest]
+#[case::fresh(true)]
+#[case::not_fresh(false)]
+#[tokio::test(start_paused = true)]
+async fn an_unsent_request_says_whether_it_was_fresh(#[case] fresh: bool) {
+    let (capture, _guard) = capture_logs();
+    let link = FakeLink::default();
+    let provider = provider(&link);
+    link.answer(Err(Unsent::NoStream));
+
+    let answer = now(ask(&provider, request(bot(1), fresh))).await;
+
+    assert_eq!(answer.unwrap_err(), RETRYABLE);
+    let lines = capture
+        .lines_with("a session request couldn't be sent")
+        .unwrap();
+    assert_eq!(lines.len(), 1, "{}", capture.text());
+    assert_eq!(lines[0]["fresh"], fresh, "{}", capture.text());
+}
+
 #[tokio::test(start_paused = true)]
 async fn with_a_stream_the_server_is_always_asked() {
     let link = FakeLink::default();

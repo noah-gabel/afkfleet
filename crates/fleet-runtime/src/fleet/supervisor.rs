@@ -671,9 +671,10 @@ mod tests {
 
     use chrono::DateTime;
     use fleet_core::bot::{BotAccount, BotNotification, BotState, DesiredRunState, FailReason};
-    use fleet_core::disconnect::ConflictTexts;
+    use fleet_core::disconnect::{ConflictTexts, DisconnectReason};
+    use fleet_core::mc::{CredentialError, SessionEvent};
     use fleet_core::mode::ModeDraft;
-    use fleet_testkit::mc::{FakeConnector, FakeCredentials};
+    use fleet_testkit::mc::{EmitOutcome, FakeConnector, FakeCredentials};
     use tokio::sync::oneshot;
     use tracing::field::{Field, Visit};
     use tracing::span::{Attributes, Id, Record};
@@ -718,10 +719,21 @@ mod tests {
         FakeConnector,
         broadcast::Receiver<FleetEvent>,
     ) {
+        supervisor_with(FakeCredentials::new())
+    }
+
+    /// [`supervisor`] over `credentials`, which the test scripts and reads.
+    fn supervisor_with(
+        credentials: FakeCredentials,
+    ) -> (
+        TestSupervisor,
+        FakeConnector,
+        broadcast::Receiver<FleetEvent>,
+    ) {
         let connector = FakeConnector::new();
         let (fleet, supervisor) = Fleet::new(FleetParts {
             connector: Arc::new(connector.clone()),
-            credentials: Arc::new(FakeCredentials::new()),
+            credentials: Arc::new(credentials),
             retry: RetryPolicy::try_new(
                 Duration::from_secs(5),
                 Duration::from_mins(5),
@@ -885,6 +897,7 @@ mod tests {
         assert!(entry.actor.is_some(), "restarted");
         let backoff = BotState::Backoff {
             attempt: core::num::NonZeroU32::MIN,
+            fresh: false,
         };
         assert_eq!(entry.snapshot.borrow().state, backoff, "from restore()");
         let kinds = kinds(&mut events);
@@ -895,6 +908,39 @@ mod tests {
             ),
             "{kinds:?}"
         );
+    }
+
+    /// U24 (ADR-0020, S1): a restart from a backoff after a refused login
+    /// keeps the next request fresh, since no session arrived since.
+    #[tokio::test(start_paused = true)]
+    async fn a_crash_during_a_fresh_backoff_keeps_the_next_request_fresh() {
+        let credentials = FakeCredentials::new();
+        let (mut supervisor, connector, _events) = supervisor_with(credentials.clone());
+        apply(&mut supervisor, spec(DesiredRunState::Running)).unwrap();
+        settle().await;
+        credentials.push_answer(Err(CredentialError { retryable: true }));
+        let refused = connector.session(0).await;
+        let rejected = SessionEvent::Disconnected(DisconnectReason::AuthRejected);
+        assert_eq!(refused.emit(rejected), EmitOutcome::Queued);
+        settle().await;
+        let fresh_backoff = BotState::Backoff {
+            attempt: core::num::NonZeroU32::MIN,
+            fresh: true,
+        };
+        assert_eq!(entry(&supervisor).snapshot.borrow().state, fresh_backoff);
+        end_actor_behind_its_back(&mut supervisor).await;
+
+        supervisor.exited(bot(), Ok(ActorExit::Stopped));
+        settle().await;
+        tokio::time::advance(Duration::from_secs(10)).await;
+        settle().await;
+
+        let fresh: Vec<bool> = credentials
+            .requests()
+            .iter()
+            .map(|request| request.fresh)
+            .collect();
+        assert_eq!(fresh, [false, true, true]);
     }
 
     #[tokio::test(start_paused = true)]

@@ -168,8 +168,9 @@ impl TryFrom<BotState> for wire::BotState {
                 since_unix_ms: Some(time_to_wire("BotState.Online.since_unix_ms", since)?),
                 attempt: attempt.get(),
             }),
-            BotState::Backoff { attempt } => State::Backoff(bot_state::Backoff {
+            BotState::Backoff { attempt, fresh } => State::Backoff(bot_state::Backoff {
                 attempt: attempt.get(),
+                fresh,
             }),
             BotState::Paused { reason } => State::Paused(pause_to_wire(reason).into()),
             BotState::Failed { reason } => State::Failed(fail_to_wire(reason).into()),
@@ -200,6 +201,7 @@ impl TryFrom<wire::BotState> for BotState {
             },
             State::Backoff(backoff) => Self::Backoff {
                 attempt: attempt_from_wire("BotState.Backoff.attempt", backoff.attempt)?,
+                fresh: backoff.fresh,
             },
             State::Paused(reason) => Self::Paused {
                 reason: pause_from_wire("BotState.paused", reason)?,

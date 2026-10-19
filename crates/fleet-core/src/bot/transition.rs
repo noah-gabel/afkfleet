@@ -118,10 +118,14 @@ fn session_ready(state: BotState) -> Transition {
     }
 }
 
-/// `SessionUnavailable`: back off, or fail if asking again won't help.
+/// `SessionUnavailable`: back off, or fail if asking again won't help. A
+/// fresh request stays fresh through the backoff: no session arrived since
+/// the rejected one, so the next attempt asks fresh again (ADR-0020, S1).
 fn session_unavailable(state: BotState, retryable: bool) -> Transition {
     match state {
-        BotState::AwaitingSession { attempt, .. } if retryable => back_off(attempt, Vec::new()),
+        BotState::AwaitingSession { attempt, fresh } if retryable => {
+            back_off(attempt, fresh, Vec::new())
+        }
         BotState::AwaitingSession { .. } => fail(FailReason::SessionDenied, Vec::new()),
         _ => unchanged(state),
     }
@@ -152,11 +156,12 @@ fn died(state: BotState) -> Transition {
     }
 }
 
-/// `RetryDue`: the next attempt asks for a session.
+/// `RetryDue`: the next attempt asks for a session, fresh when its backoff
+/// says so.
 fn retry_due(state: BotState) -> Transition {
     match state {
-        BotState::Backoff { attempt } => {
-            request_session(attempt.saturating_add(1), false, Vec::new())
+        BotState::Backoff { attempt, fresh } => {
+            request_session(attempt.saturating_add(1), fresh, Vec::new())
         }
         _ => unchanged(state),
     }
@@ -201,7 +206,7 @@ fn session_ended(
                 // backoff would let a server drive reconnects.
                 DisconnectClass::Transient | DisconnectClass::AuthInvalid => {
                     if policy.is_stable(since, now) {
-                        back_off(NonZeroU32::MIN, effects)
+                        back_off(NonZeroU32::MIN, false, effects)
                     } else {
                         failed_attempt(attempt, effects)
                     }
@@ -259,18 +264,20 @@ fn request_session(attempt: NonZeroU32, fresh: bool, mut effects: Vec<Effect>) -
     }
 }
 
-/// Attempt `attempt` failed: report it to the circuit breaker and back off,
-/// after `effects`.
+/// Attempt `attempt` failed after its session arrived: report it to the
+/// circuit breaker and back off, after `effects`. The next request isn't
+/// fresh.
 fn failed_attempt(attempt: NonZeroU32, mut effects: Vec<Effect>) -> Transition {
     effects.push(Effect::RecordFailure);
-    back_off(attempt, effects)
+    back_off(attempt, false, effects)
 }
 
-/// Backs off after attempt `attempt`, after `effects`.
-fn back_off(attempt: NonZeroU32, mut effects: Vec<Effect>) -> Transition {
+/// Backs off after attempt `attempt`, after `effects`; the next request asks
+/// for a fresh session if `fresh`.
+fn back_off(attempt: NonZeroU32, fresh: bool, mut effects: Vec<Effect>) -> Transition {
     effects.push(Effect::ScheduleRetry { attempt });
     Transition {
-        state: BotState::Backoff { attempt },
+        state: BotState::Backoff { attempt, fresh },
         effects,
     }
 }
@@ -442,6 +449,15 @@ mod tests {
     fn backoff(attempt: u32) -> BotState {
         BotState::Backoff {
             attempt: n(attempt),
+            fresh: false,
+        }
+    }
+
+    /// A backoff whose next attempt asks for a fresh session (ADR-0020, S1).
+    fn fresh_backoff(attempt: u32) -> BotState {
+        BotState::Backoff {
+            attempt: n(attempt),
+            fresh: true,
         }
     }
 
@@ -645,6 +661,11 @@ mod tests {
         to(BotState::Stopped, &[])
     )]
     #[case::stop_during_backoff(backoff(3), BotEvent::Stop, to(BotState::Stopped, &[]))]
+    #[case::stop_during_a_fresh_backoff(
+        fresh_backoff(3),
+        BotEvent::Stop,
+        to(BotState::Stopped, &[])
+    )]
     #[case::stop_while_connecting(
         connecting(2, false),
         BotEvent::Stop,
@@ -695,13 +716,20 @@ mod tests {
         BotEvent::SessionUnavailable { retryable: true },
         to(backoff(3), &[retry(3)])
     )]
+    // No session arrived after the rejected one, so the next request stays
+    // fresh (ADR-0020, S1).
     #[case::fresh_session_unavailable(
         awaiting(3, true),
         BotEvent::SessionUnavailable { retryable: true },
-        to(backoff(3), &[retry(3)])
+        to(fresh_backoff(3), &[retry(3)])
     )]
     #[case::session_denied(
         awaiting(3, false),
+        BotEvent::SessionUnavailable { retryable: false },
+        to(failed(FailReason::SessionDenied), &[fail(FailReason::SessionDenied)])
+    )]
+    #[case::fresh_session_denied(
+        awaiting(3, true),
         BotEvent::SessionUnavailable { retryable: false },
         to(failed(FailReason::SessionDenied), &[fail(FailReason::SessionDenied)])
     )]
@@ -712,6 +740,11 @@ mod tests {
     )]
     #[case::died(online(3), BotEvent::Died, to(online(3), &[Respawn]))]
     #[case::retry_due(backoff(3), BotEvent::RetryDue, to(awaiting(4, false), &[request(false)]))]
+    #[case::fresh_retry_due(
+        fresh_backoff(3),
+        BotEvent::RetryDue,
+        to(awaiting(4, true), &[request(true)])
+    )]
     #[case::retry_due_saturates(
         backoff(u32::MAX),
         BotEvent::RetryDue,
@@ -735,6 +768,7 @@ mod tests {
         &[StopMode, Disconnect, RecordSuccess, fail(FailReason::CrashLoop)]
     )]
     #[case::backoff(backoff(2), &[fail(FailReason::CrashLoop)])]
+    #[case::fresh_backoff(fresh_backoff(2), &[fail(FailReason::CrashLoop)])]
     #[case::paused(paused(), &[fail(FailReason::CrashLoop)])]
     #[case::failed_after_a_ban(
         failed(permanent(PermanentKind::Banned)),
@@ -1125,7 +1159,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_fresh_session_request_starts_the_auth_retry_over() {
+    fn a_failed_fresh_session_request_keeps_the_next_request_fresh() {
         let (state, effects) = run(
             connecting(1, false),
             [
@@ -1135,8 +1169,57 @@ mod tests {
             ],
         );
 
-        assert_eq!(state, awaiting(2, false));
-        assert_eq!(effects.last(), Some(&request(false)));
+        assert_eq!(state, awaiting(2, true));
+        assert_eq!(effects.last(), Some(&request(true)));
+    }
+
+    /// The requests in `effects`, each by whether it was fresh.
+    fn requests(effects: &[Effect]) -> Vec<bool> {
+        effects
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::RequestSession { fresh } => Some(*fresh),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_refused_logins_requests_stay_fresh_through_its_backoffs_until_a_session_arrives() {
+        let (state, effects) = run(
+            BotState::Stopped,
+            [
+                BotEvent::Start,
+                BotEvent::SessionReady,
+                BotEvent::Disconnected(DisconnectReason::AuthRejected),
+                BotEvent::SessionUnavailable { retryable: true },
+                BotEvent::RetryDue,
+                BotEvent::SessionUnavailable { retryable: true },
+                BotEvent::RetryDue,
+                BotEvent::SessionReady,
+                BotEvent::Disconnected(DisconnectReason::AuthRejected),
+            ],
+        );
+
+        // The fresh session was rejected too: §6 row 5's one fresh token.
+        assert_eq!(state, failed(FailReason::Auth));
+        assert_eq!(requests(&effects), [false, true, true, true]);
+        assert_eq!(count(&effects, Connect), 2);
+    }
+
+    #[test]
+    fn after_a_fresh_session_a_failed_attempt_asks_without_fresh() {
+        let (state, effects) = run(
+            awaiting(2, true),
+            [
+                BotEvent::SessionReady,
+                BotEvent::ConnectFailed(ConnectFailure::Refused),
+                BotEvent::RetryDue,
+            ],
+        );
+
+        assert_eq!(state, awaiting(3, false));
+        assert_eq!(requests(&effects), [false]);
     }
 
     #[rstest]
@@ -1236,10 +1319,41 @@ mod tests {
             }),
             (time_strategy(), attempt_strategy())
                 .prop_map(|(since, attempt)| BotState::Online { since, attempt }),
-            attempt_strategy().prop_map(|attempt| BotState::Backoff { attempt }),
+            (attempt_strategy(), any::<bool>())
+                .prop_map(|(attempt, fresh)| BotState::Backoff { attempt, fresh }),
             Just(paused()),
             fail_reason_strategy().prop_map(failed),
             any::<bool>().prop_map(stopping),
+        ]
+    }
+
+    /// The states a bot backs off from, and `Backoff` itself.
+    fn running_state_strategy() -> impl Strategy<Value = BotState> {
+        prop_oneof![
+            (attempt_strategy(), any::<bool>())
+                .prop_map(|(attempt, fresh)| BotState::AwaitingSession { attempt, fresh }),
+            (attempt_strategy(), any::<bool>()).prop_map(|(attempt, auth_retried)| {
+                BotState::Connecting {
+                    attempt,
+                    auth_retried,
+                }
+            }),
+            (time_strategy(), attempt_strategy())
+                .prop_map(|(since, attempt)| BotState::Online { since, attempt }),
+            (attempt_strategy(), any::<bool>())
+                .prop_map(|(attempt, fresh)| BotState::Backoff { attempt, fresh }),
+        ]
+    }
+
+    /// The events that end an attempt, and `RetryDue`.
+    fn ending_event_strategy() -> impl Strategy<Value = BotEvent> {
+        prop_oneof![
+            any::<bool>().prop_map(|retryable| BotEvent::SessionUnavailable { retryable }),
+            proptest::sample::select(CONNECT_FAILURES.to_vec()).prop_map(BotEvent::ConnectFailed),
+            proptest::sample::select(reasons()).prop_map(BotEvent::Disconnected),
+            Just(BotEvent::WatchdogTimeout),
+            Just(BotEvent::SessionClosed),
+            Just(BotEvent::RetryDue),
         ]
     }
 
@@ -1385,7 +1499,7 @@ mod tests {
 
             let stable = u64::try_from(online_for).is_ok_and(|online_for| online_for >= stable_after);
             let expected = if stable { NonZeroU32::MIN } else { attempt };
-            prop_assert_eq!(next.state, BotState::Backoff { attempt: expected });
+            prop_assert_eq!(next.state, BotState::Backoff { attempt: expected, fresh: false });
         }
 
         #[test]
@@ -1472,7 +1586,7 @@ mod tests {
                 .copied()
                 .collect();
             match next.state {
-                BotState::Backoff { attempt } if next.state != state => {
+                BotState::Backoff { attempt, .. } if next.state != state => {
                     prop_assert_eq!(retries, vec![Effect::ScheduleRetry { attempt }]);
                     let reports =
                         count(&next.effects, RecordFailure) + count(&next.effects, RecordSuccess);
@@ -1497,6 +1611,31 @@ mod tests {
                     next.effects
                 );
             }
+        }
+
+        // Weighted toward the states and events that back off: drawn from
+        // every state and event, a fresh request meets a retryable answer too
+        // rarely to catch a lost flag.
+        #[test]
+        fn a_backoff_is_fresh_exactly_when_it_follows_a_fresh_request(
+            state in running_state_strategy(),
+            event in ending_event_strategy(),
+            now in time_strategy(),
+        ) {
+            let next = transition(&state, event, now, &rules());
+
+            if let BotState::Backoff { fresh, .. } = next.state && next.state != state {
+                let after_a_fresh_request = matches!(state, BotState::AwaitingSession { fresh: true, .. });
+                prop_assert_eq!(fresh, after_a_fresh_request, "{:?} from {:?}", next.state, state);
+            }
+        }
+
+        #[test]
+        fn a_retry_asks_as_its_backoff_says(attempt in attempt_strategy(), fresh in any::<bool>()) {
+            let next = apply(BotState::Backoff { attempt, fresh }, BotEvent::RetryDue);
+
+            let expected = BotState::AwaitingSession { attempt: attempt.saturating_add(1), fresh };
+            prop_assert_eq!(next, to(expected, &[request(fresh)]));
         }
 
         #[test]

@@ -117,7 +117,10 @@ pub(crate) const fn connecting(attempt: NonZeroU32) -> BotState {
 }
 
 pub(crate) const fn backoff(attempt: NonZeroU32) -> BotState {
-    BotState::Backoff { attempt }
+    BotState::Backoff {
+        attempt,
+        fresh: false,
+    }
 }
 
 pub(crate) fn kick(key: &str) -> SessionEvent {

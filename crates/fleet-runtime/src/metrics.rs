@@ -235,7 +235,10 @@ mod tests {
                 since: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
                 attempt,
             },
-            BotState::Backoff { attempt },
+            BotState::Backoff {
+                attempt,
+                fresh: false,
+            },
             BotState::Paused {
                 reason: PauseReason::Conflict {
                     kind: ConflictKind::DuplicateLogin,

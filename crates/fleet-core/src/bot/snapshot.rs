@@ -38,7 +38,7 @@ impl BotSnapshot {
             BotState::AwaitingSession { attempt, .. }
             | BotState::Connecting { attempt, .. }
             | BotState::Online { attempt, .. }
-            | BotState::Backoff { attempt } => Some(attempt),
+            | BotState::Backoff { attempt, .. } => Some(attempt),
             BotState::Stopped
             | BotState::Paused { .. }
             | BotState::Failed { .. }
@@ -85,7 +85,8 @@ mod tests {
     #[case::awaiting_session(BotState::AwaitingSession { attempt: n(2), fresh: false }, Some(n(2)))]
     #[case::connecting(BotState::Connecting { attempt: n(3), auth_retried: true }, Some(n(3)))]
     #[case::online(BotState::Online { since: at(1_000), attempt: n(4) }, Some(n(4)))]
-    #[case::backoff(BotState::Backoff { attempt: n(5) }, Some(n(5)))]
+    #[case::backoff(BotState::Backoff { attempt: n(5), fresh: false }, Some(n(5)))]
+    #[case::fresh_backoff(BotState::Backoff { attempt: n(5), fresh: true }, Some(n(5)))]
     #[case::stopped(BotState::Stopped, None)]
     #[case::stopping(BotState::Stopping { restart: true }, None)]
     #[case::paused(
@@ -120,7 +121,7 @@ mod tests {
     #[rstest]
     #[case::stopped(BotState::Stopped)]
     #[case::connecting(BotState::Connecting { attempt: n(1), auth_retried: false })]
-    #[case::backoff(BotState::Backoff { attempt: n(1) })]
+    #[case::backoff(BotState::Backoff { attempt: n(1), fresh: false })]
     #[case::failed(BotState::Failed { reason: FailReason::CrashLoop })]
     fn uptime_is_none_unless_online(#[case] state: BotState) {
         assert_eq!(snapshot(state).uptime(at(2_000)), None);

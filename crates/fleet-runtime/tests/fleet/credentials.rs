@@ -22,6 +22,10 @@ pub(crate) enum Answer {
     Refuse { retryable: bool },
     /// No answer at all, until the session-request timeout gives up.
     Never,
+    /// A retryable refusal that only a fresh request takes: the request
+    /// right after an auth rejection, which then backs off fresh (ADR-0020,
+    /// S1). A request that isn't fresh passes it by.
+    RefuseFresh,
 }
 
 /// A scripted answer that a request used.
@@ -87,10 +91,14 @@ impl SessionCredentialProvider for ScriptedCredentials {
     ) -> impl Future<Output = Result<SessionCredentials, CredentialError>> + Send {
         let scripted = {
             let mut shared = self.shared.lock().unwrap();
-            let answer = shared
-                .scripts
-                .get_mut(&request.bot_id)
-                .and_then(VecDeque::pop_front);
+            let answer = shared.scripts.get_mut(&request.bot_id).and_then(|script| {
+                let waits_for_fresh = script.front() == Some(&Answer::RefuseFresh);
+                if waits_for_fresh && !request.fresh {
+                    None
+                } else {
+                    script.pop_front()
+                }
+            });
             if let Some(answer) = answer {
                 shared.used.push(Used {
                     bot: request.bot_id,
@@ -104,6 +112,7 @@ impl SessionCredentialProvider for ScriptedCredentials {
         async move {
             match scripted {
                 Some(Answer::Refuse { retryable }) => Err(CredentialError { retryable }),
+                Some(Answer::RefuseFresh) => Err(CredentialError { retryable: true }),
                 Some(Answer::Never) => core::future::pending().await,
                 None => fake.session(request).await,
             }

@@ -391,6 +391,7 @@ impl<L: SessionLink> ManagedCredentials<L> {
                 debug!(
                     bot_id = %bot,
                     session_request = number.get().get(),
+                    fresh = request.fresh,
                     error = %unsent,
                     "a session request couldn't be sent"
                 );

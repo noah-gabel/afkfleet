@@ -237,7 +237,7 @@ fn state(state: wire::bot_state::State) -> wire::BotState {
     error("BotState.Online.attempt", Problem::Missing)
 )]
 #[case::attempt_0_backoff(
-    state(wire::bot_state::State::Backoff(wire::bot_state::Backoff { attempt: 0 })),
+    state(wire::bot_state::State::Backoff(wire::bot_state::Backoff { attempt: 0, fresh: true })),
     error("BotState.Backoff.attempt", Problem::Missing)
 )]
 #[case::online_without_a_time(

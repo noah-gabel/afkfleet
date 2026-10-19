@@ -122,6 +122,7 @@ It checks every 1 s while Online. A tick stall gives `WatchdogTimeout`, a packet
   - The supervisor keeps each bot's spec, snapshot `watch`, restart window and circuit breaker. The actor writes a copy of its breaker into a private `watch` after each breaker effect, so a panic doesn't reset it.
   - A pure `fleet_core::bot::restore(&BotState, now, &BotRules) -> Transition` decides the restored state and its effects:
     - AwaitingSession, Connecting, Online and Backoff come back as `Backoff{attempt}` with `ScheduleRetry`; an Online bot that had lasted the stable period comes back as `Backoff{1}`
+      - *Amended in Phase 11 ([ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S1): a fresh AwaitingSession or Backoff comes back as a fresh Backoff, since no session arrived after the rejected one; Connecting and Online come back non-fresh.*
     - Paused, Failed and Stopped stay
     - Stopping becomes Stopped
 

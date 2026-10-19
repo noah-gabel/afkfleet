@@ -80,6 +80,7 @@ message fleet.v1.BotState.AwaitingSession
   2 fresh: bool
 message fleet.v1.BotState.Backoff
   1 attempt: uint32
+  2 fresh: bool
 message fleet.v1.BotState.Connecting
   1 attempt: uint32
   2 auth_retried: bool

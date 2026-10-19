@@ -853,7 +853,10 @@ mod tests {
     #[test]
     fn a_server_change_restarts_only_a_bot_in_a_run() {
         let attempt = core::num::NonZeroU32::MIN;
-        assert!(has_run(BotState::Backoff { attempt }));
+        assert!(has_run(BotState::Backoff {
+            attempt,
+            fresh: false
+        }));
         assert!(has_run(BotState::AwaitingSession {
             attempt,
             fresh: false

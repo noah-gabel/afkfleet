@@ -3843,6 +3843,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 > Note (P11, from Phase 8, group E, the user's request) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **Decide step-up per action, the same way as the admin writes.** Before building them, decide for each destructive or privilege-changing action of this phase whether it needs a step-up: deleting a bot, changing grants, deleting a shared mode, and anything else that loses data or widens access. The app reuses the admin screens' "send, and on `step_up_required` ask for the password and retry once".
 
 > Note (P11, from Phase 10, group H, the user's choice at PR #58's review, U24) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **Phase 11's first group, first:** after a refused login, a bot's next session request stays fresh until a fresh grant arrives, so a backoff never asks without `fresh` and the server never hands out the cached session that was just refused. It gets its own test, and P10.9's case 5 (`outage::a_bot_kicked_while_the_server_is_down_rejoins_with_its_kept_grant_and_a_fresh_request_waits`) is then tightened to expect it.
+>
+> *Done in group A ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S1):* fleet-core's `BotState::Backoff { attempt, fresh }` carries a fresh request through each backoff until a session arrives, and `restore` keeps it; the proto's `Backoff` gains `fresh = 2`. A fresh session that's refused again fails the bot `Failed(Auth)`. The agent's "a session request couldn't be sent" line names `fresh`. Tests: fleet-core's `transition::a_refused_logins_requests_stay_fresh_through_its_backoffs_until_a_session_arrives` and the properties beside it, the runtime's `bot_actor::a_refused_logins_requests_stay_fresh_through_its_backoffs_until_a_grant_arrives` and `supervisor::a_crash_during_a_fresh_backoff_keeps_the_next_request_fresh`, the chaos test's stricter rule and its target "fresh retry after a backoff", and case 5, which now asserts every state and unsent request after the refusal fresh, the server's one grant after the outage fresh, the next `Connecting` with `auth_retried: true` and no fresh-limit refusal. *Residual:* a deliberate restart, a server change or an agent restart after a refusal asks once without `fresh`.
 
 - [x] **P11.1** 🔴 Migrations and repositories:
   - `bots`: 1:1 with an account; server address, mode, desired state, assigned agent
@@ -4531,6 +4533,8 @@ message ServerMessage {
 
 > Note (Appendix C, Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`ConnectFailure` gains `CONNECT_FAILURE_BLOCKED = 6`** (S69): the agent refused the resolved address before dialling it. `fleet_proto::control` gains `KEEPALIVE_INTERVAL` (10 s) and `KEEPALIVE_TIMEOUT` (20 s), the agent's HTTP/2 keepalive, which the server's placement grace counts on (S45, S67); `WELCOME_TIMEOUT` bounds the agent's whole attempt, dialing included. `PROTOCOL_VERSION` stays 1 (S9).
 
+> Note (Appendix C, Phase 11, group A) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S1): **`BotState.Backoff` gains `bool fresh = 2`**: the next attempt asks for a fresh session (U24). The wire-schema snapshot shows it; `PROTOCOL_VERSION` stays 1 until the first release (S9).
+
 > Note (Appendix C, Phase 10, group B) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`AgentEnrollment` as built** (`enrollment.proto`): `Enroll(EnrollRequest {token, name, csr_der}) returns (EnrollResponse {agent_id, certificate_pem, not_after_unix_ms})`. The answer carries no CA certificate: a trust anchor can't come from the server it vouches for, so the agent pins the bundle's fingerprint instead. The certificate is PEM text (R10), the CSR DER: each end gets what its reader takes. `EnrollRequest` is in `REDACTED` (S7).
 
 ### D. Database tables (SQLite)
@@ -4620,6 +4624,8 @@ message ServerMessage {
  permanent kick / auth invalid twice / crash loop / circuit open too long ──▶ Failed ──Reset──▶ AwaitingSession
  duplicate login (a human is playing)                                      ──▶ Paused ──Resume──▶ AwaitingSession
 ```
+
+> Note (Appendix E, Phase 11, group A) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U24, S1): **`Backoff{attempt, fresh}`.** A backoff entered from a fresh `AwaitingSession` stays fresh, and `RetryDue` asks as it says, until a session arrives: a refused login's requests never ask without `fresh`. Every other backoff is non-fresh.
 
 > Note (P2.6): The built state machine (`fleet_core::bot`) refines this chart. The changes are listed in ADR-0010:
 > - state fields, the `CrashLoop` event and `Stopping{restart}`
