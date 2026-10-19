@@ -9,9 +9,10 @@ use core::time::Duration;
 use fleet_api_types::accounts::CreateOfflineAccountRequest;
 use fleet_api_types::auth::{LoginRequest, StepUpRequest};
 use fleet_api_types::bots::BotPatchRequest;
+use fleet_api_types::chat::{ChatSendRequest, ChatSendResponse};
 use fleet_api_types::mfa::CODE_MAX_CHARS;
 use fleet_api_types::{PageQuery, SecretText};
-use fleet_client::{Client, ClientConfig, LoginStep, MemoryStore, ServerUrl, Trust};
+use fleet_client::{Client, ClientConfig, ClientError, LoginStep, MemoryStore, ServerUrl, Trust};
 use fleet_core::id::BotId;
 use fleet_core::system::Clock as _;
 use totp_rs::Totp;
@@ -103,6 +104,22 @@ impl Owner {
     /// Stops `bot`.
     pub(crate) async fn stop(&self, bot: BotId) {
         self.client.stop_bot(bot).await.unwrap();
+    }
+
+    /// Has `bot` send `text` through `POST /bots/{id}/chat`.
+    pub(crate) async fn chat(
+        &self,
+        bot: BotId,
+        text: &str,
+    ) -> Result<ChatSendResponse, ClientError> {
+        self.client
+            .send_chat(
+                bot,
+                &ChatSendRequest {
+                    message: text.to_owned(),
+                },
+            )
+            .await
     }
 }
 

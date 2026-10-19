@@ -356,6 +356,67 @@ async fn input_that_isnt_a_command_is_never_echoed() {
     server.stop().await;
 }
 
+/// A line for a bot that runs nowhere: the server's answer is shown, and
+/// the line itself never is.
+#[tokio::test]
+async fn chat_sends_the_rest_of_the_line_and_shows_the_answer_never_the_line() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    let bot = bot_of(&owner, "AfkBot9").await;
+    let (client, _) = server.client();
+    let command = format!("chat {bot} hello there secret_label");
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &[&command]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let text = terminal.text();
+    assert!(text.contains("bot_not_online"), "{text}");
+    assert!(!text.contains("secret_label"), "{text}");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn chat_with_a_command_off_the_allowlist_shows_the_pointer_to_command() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    let bot = bot_of(&owner, "AfkBot9").await;
+    let (client, _) = server.client();
+    let command = format!("chat {bot} /op AfkBot2");
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &[&command]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let text = terminal.text();
+    assert!(text.contains("command_needs_step_up"), "{text}");
+    assert!(!text.contains("AfkBot2"), "{text}");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn command_asks_for_the_password_again_once_and_sends() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    let bot = bot_of(&owner, "AfkBot9").await;
+    let (client, _) = server.client();
+    let command = format!("command {bot} /op AfkBot2");
+    let mut terminal = Scripted::new(&[PASSWORD, &code, PASSWORD], &[&command]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    assert_eq!(terminal.secrets.len(), 0, "the step-up asked once");
+    let text = terminal.text();
+    assert!(text.contains("bot_not_online"), "past the step-up: {text}");
+    assert!(!text.contains("step_up_required"), "{text}");
+    assert!(
+        !text.contains(PASSWORD) && !text.contains("AfkBot2"),
+        "{text}"
+    );
+    server.stop().await;
+}
+
 #[tokio::test]
 async fn quit_logs_out_and_nothing_secret_was_shown_on_the_way() {
     let server = Server::start().await;

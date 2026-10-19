@@ -11,6 +11,7 @@ mod accounts;
 mod admin;
 mod auth;
 mod bots;
+mod chat;
 mod console;
 #[path = "../../examples/dev-bots/console.rs"]
 mod dev_console;

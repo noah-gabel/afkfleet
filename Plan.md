@@ -3932,6 +3932,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **`/command`** (S8) takes commands only (a plain line is 422 on `message`, checked with the body) and authorizes them exactly as `/chat` does, `SendChat(allowlist.check(&message))`: Control for an allowlisted command, Manage for an unlisted one, behind the route's step-up.
   > - **Hidden arguments** (S9, B2): below Manage, a command line's `text` is `/` and its name, and `arguments_hidden` says something was left out; `mine` doesn't lift it.
 
+  > Note (P11.3, Phase 11, group B1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)): **sending, as built** (P11.3 is ticked in B2, with the history).
+  > - **Routes:** `POST /bots/{id}/chat` (Control) and `POST /bots/{id}/command` (step-up), as Appendix B's note lists them, answering `ChatSendResponse` (200 `sent`, 202 `pending`) or 409/429 through one match over the agent's reasons without a wildcard (S5). The forbidden-character field text names formatting codes (U4).
+  > - **The send:** `BotService::send_chat` judges the bot (fleet-core's `judge_chat`), mints the `ChatRequestId`, stores the line with its sender (`chat_messages.sent_by`, Appendix D) and records `bot.send_chat` or `bot.send_command` without its text in one transaction, then subscribes to the bus, sends through `LiveAgents::send_chat` and waits up to 6 s (`ChatWait`). A refusal before the commit writes nothing; one after it keeps the row and the entry (S7).
+  > - **Limits:** `[rate_limits] chat_per_user_per_min` and the bot's chat rate (§7.4's note).
+  > - **Clients:** fleet-client's `send_chat` and `send_command`; `just dev-bots`' `chat <id> <text>` and `command <id> <text>`.
+  > - **Tests:** fleet-core's table, the DTO rules (and that each message survives the cleaning of what clients read), the registry, the wait on paused time over the bus, the service over the fake streams, 15 HTTP tests (`bots::chat`), fleet-client's scripted and in-process tests, the console, and fleet-integration's `loopback::chat` case through the real ingest. ADR-0020's "As built (B1)" lists the red runs and mutations.
+
   > Note (P11.3, from Phase 3, group E, found by the user's real-account check): **flagged, not decided.** *Decided in Phase 11, group A: see the note above (S2).*
   > - **The limit.** On a server that enforces secure chat, azalea's unsigned commands with message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) are rejected.
   >   - The bot gets one system message and stays up.
