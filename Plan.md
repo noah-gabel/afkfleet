@@ -4602,6 +4602,8 @@ message ServerMessage {
 
 > Note (Appendix D, Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`chat_messages` as built** (`0016`): `id, bot_id, direction, kind, sender_name, sender_uuid, text, truncated, at`. Appendix D's `sender` is two columns, the name and the UUID a player message comes with; `at` is the server's time of receipt (S5). P11.1's note lists the rules.
 
+> Note (Appendix D, Phase 11, group B1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S6, S7, U3): **`chat_messages.sent_by`** (`0017_chat_sent_by.sql`): the afkfleet user who sent a line through the API, on `out` rows of the new kind `user` only (a CHECK), `REFERENCES users ON DELETE SET NULL`, so a deleted user's lines keep no sender; a partial index on the lines that have one. A user's line is appended in the send's audited transaction and never changes afterwards (S7). Reading refuses a `user` row whose text the constructor would change, and a sender that isn't a version 7 ID, as `Corrupt`.
+
 > Note (Appendix D, Phase 7, group E, the user's decisions) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **`invites` as built** is `id, code_hash, role, created_by, created_at, expires_at, used_by, used_at, revoked_at`: `role` is `member` or `admin` only, `used_by` is unique, a revoked or used invite keeps its row, and three CHECKs keep it consistent (a use and its time together, never both used and revoked, an expiry after the creation). `0007_audit_log_target.sql` indexes the audit log by target, action and ID, for `GET /me`'s count of wrong codes.
 
 ### E. Bot state machine (`fleet_core::bot`)

@@ -1,33 +1,11 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!: i64\", bot_id, direction, kind, sender_name, sender_uuid, text,\n                  truncated, at\n           FROM chat_messages WHERE bot_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
+  "query": "SELECT direction, kind, sender_name, sender_uuid, sent_by,\n                  truncated AS \"truncated: i64\"\n           FROM chat_messages",
   "describe": {
     "columns": [
       {
-        "name": "id!: i64",
-        "ordinal": 0,
-        "type_info": "Integer",
-        "origin": {
-          "Table": {
-            "table": "chat_messages",
-            "name": "id"
-          }
-        }
-      },
-      {
-        "name": "bot_id",
-        "ordinal": 1,
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "chat_messages",
-            "name": "bot_id"
-          }
-        }
-      },
-      {
         "name": "direction",
-        "ordinal": 2,
+        "ordinal": 0,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -38,7 +16,7 @@
       },
       {
         "name": "kind",
-        "ordinal": 3,
+        "ordinal": 1,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -49,7 +27,7 @@
       },
       {
         "name": "sender_name",
-        "ordinal": 4,
+        "ordinal": 2,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -60,7 +38,7 @@
       },
       {
         "name": "sender_uuid",
-        "ordinal": 5,
+        "ordinal": 3,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -70,19 +48,19 @@
         }
       },
       {
-        "name": "text",
-        "ordinal": 6,
+        "name": "sent_by",
+        "ordinal": 4,
         "type_info": "Text",
         "origin": {
           "Table": {
             "table": "chat_messages",
-            "name": "text"
+            "name": "sent_by"
           }
         }
       },
       {
-        "name": "truncated",
-        "ordinal": 7,
+        "name": "truncated: i64",
+        "ordinal": 5,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -90,33 +68,19 @@
             "name": "truncated"
           }
         }
-      },
-      {
-        "name": "at",
-        "ordinal": 8,
-        "type_info": "Text",
-        "origin": {
-          "Table": {
-            "table": "chat_messages",
-            "name": "at"
-          }
-        }
       }
     ],
     "parameters": {
-      "Right": 3
+      "Right": 0
     },
     "nullable": [
       false,
       false,
-      false,
-      false,
       true,
       true,
-      false,
-      false,
+      true,
       false
     ]
   },
-  "hash": "b093c4914cee31760e849e14ed86c4efa5061908a568c2111eccb3e19e7f64d5"
+  "hash": "ea2f39566f79c4279684083457c4a8797cac78a948b6513d910400a9729b3554"
 }

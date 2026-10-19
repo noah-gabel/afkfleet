@@ -1,15 +1,19 @@
-//! The bots' chat log, `chat_messages` (Plan.md P11.1, P10.8; ADR-0019,
-//! S70): [`NewChatMessage`] to append, [`ChatRecord`] as it reads back, and
-//! the two traits. Append-only: the ingest appends inside its batch's write
-//! transaction ([`ChatWrites::append`]), P11.3 pages through a bot's chat
-//! ([`ChatReads::page`]), and P11.6's retention deletes old rows.
+//! The bots' chat log, `chat_messages` (Plan.md P11.1, P10.8, P11.3;
+//! ADR-0019, S70; ADR-0020, S6, S7, U3): [`NewChatMessage`] to append,
+//! [`ChatRecord`] as it reads back, and the two traits. Append-only: the
+//! ingest appends what bots received and what their modes said inside its
+//! batch's write transaction, a user's send appends their line inside its
+//! own audited one ([`ChatWrites::append`]), P11.3 pages through a bot's
+//! chat ([`ChatReads::page`]), and P11.6's retention deletes old rows. No
+//! row changes once written: a user's line records what they asked the bot
+//! to send, never whether it went out (S7).
 
 use core::fmt;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::chat::{ChatMessage, IncomingChat};
-use fleet_core::id::{AgentId, BotId};
+use fleet_core::id::{AgentId, BotId, UserId};
 
 use super::page::Page;
 use super::store::StoreError;
@@ -34,25 +38,36 @@ impl ChatMessageId {
     }
 }
 
-/// What a row holds: a message the bot received, or one its mode sent.
+/// What a row holds: a message the bot received, one its mode sent, or one
+/// a user asked it to send.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ChatEntry {
     /// Received from the Minecraft server, cleaned and capped (S6).
     Received(IncomingChat),
     /// Sent by the bot's mode (ADR-0013's `ModeChatSent`).
     ModeSent(ChatMessage),
+    /// A line a user asked the bot to send through the API (ADR-0020, S6):
+    /// stored before it's sent, whatever then happens to it (S7).
+    UserSent {
+        /// The line, exactly as it was checked and sent.
+        message: ChatMessage,
+        /// Who sent it: always set when it's appended, and `None` once that
+        /// user is deleted (U3).
+        by: Option<UserId>,
+    },
 }
 
-/// A message to append: what a bot's agent reported, stamped with the
-/// server's time of receipt (S5).
+/// A message to append: what a bot's agent reported, or a user's line on its
+/// way to the bot, stamped with the server's own time (S5).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewChatMessage {
     /// The bot it belongs to.
     pub bot: BotId,
-    /// The agent that reported it. The row is stored only while the bot's
-    /// row still names this agent (S28, S59).
+    /// The agent that reported it, or that a user's line goes to. The row is
+    /// stored only while the bot's row still names this agent (S28, S59).
     pub agent: AgentId,
-    /// When the server received it, by its own clock.
+    /// When the server received it, or took the user's line, by its own
+    /// clock.
     pub at: DateTime<Utc>,
     /// The message.
     pub entry: ChatEntry,
