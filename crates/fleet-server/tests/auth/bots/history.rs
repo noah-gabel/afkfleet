@@ -464,9 +464,10 @@ async fn each_viewer_sees_the_page_under_its_field_rules(
 }
 
 /// The canary: an argument planted in a mode's and a user's command never
-/// reaches a viewer below Manage, the Control sender's own line included,
-/// and does reach Manage, until that grant is lowered: the level at the
-/// time of reading decides (S9).
+/// reaches a viewer below Manage, the Control sender's own line and an
+/// Admin with only View on the Owner's bot included, and does reach
+/// Manage, until that grant is lowered: the level at the time of reading
+/// decides, never the role (S9).
 #[sqlx::test(migrations = false)]
 async fn a_planted_argument_never_reaches_a_viewer_below_manage(
     _pool: SqlitePoolOptions,
@@ -474,12 +475,41 @@ async fn a_planted_argument_never_reaches_a_viewer_below_manage(
 ) {
     let setup = setup(options).await;
     let (viewers, account, bot) = shared_bot(&setup).await;
+    let (owners_account, owners_bot, owners_agent) =
+        setup.bot_with_agent(viewers.the_owner.id, 20).await;
+    setup
+        .share(
+            owners_account,
+            viewers.admin.id,
+            GrantLevel::View,
+            viewers.the_owner.id,
+        )
+        .await;
+    setup
+        .said(
+            owners_bot,
+            owners_agent,
+            vec![
+                mode(&format!("/login {CANARY}")),
+                user(&format!("/login {CANARY}"), viewers.the_owner.id),
+            ],
+        )
+        .await;
 
     for below in [&viewers.controller, &viewers.viewer] {
         let seen = setup.history(bot, below, "").await;
         assert_eq!(seen.status, 200, "{}", seen.text);
         assert!(!seen.text.contains(CANARY), "{}", seen.text);
     }
+    let admin_with_view = setup.history(owners_bot, &viewers.admin, "").await;
+    assert_eq!(admin_with_view.status, 200, "{}", admin_with_view.text);
+    assert!(
+        !admin_with_view.text.contains(CANARY),
+        "{}",
+        admin_with_view.text
+    );
+    let owners = setup.history(owners_bot, &viewers.the_owner, "").await;
+    assert_eq!(owners.text.matches(CANARY).count(), 2, "{}", owners.text);
     let managers = setup.history(bot, &viewers.manager, "").await;
     assert_eq!(
         managers.text.matches(CANARY).count(),
@@ -506,6 +536,24 @@ async fn a_planted_argument_never_reaches_a_viewer_below_manage(
 
     assert!(!lowered.text.contains(CANARY), "{}", lowered.text);
     assert_eq!(line(&lowered.body, "hello there").get("sent_by"), None);
+}
+
+/// Reading the history is a read: it records no audit entry, whoever reads.
+#[sqlx::test(migrations = false)]
+async fn reading_the_history_writes_no_audit_entry(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let (viewers, _, bot) = shared_bot(&setup).await;
+    let before = setup.audit().await;
+
+    for reader in [&viewers.manager, &viewers.viewer] {
+        let seen = setup.history(bot, reader, "").await;
+        assert_eq!(seen.status, 200, "{}", seen.text);
+    }
+
+    assert_eq!(setup.audit().await, before);
 }
 
 /// A deleted sender's lines keep no sender: no name for anyone, and never

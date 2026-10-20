@@ -31,6 +31,7 @@ use fleet_server::ports::page::{Page, PageLimit};
 use fleet_server::ports::store::{Store, StoreError};
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use secrecy::SecretString;
+use sqlx::ConnectOptions as _;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 /// The time everything starts at, in milliseconds.
@@ -404,6 +405,49 @@ async fn a_sender_whose_username_doesnt_read_back_is_corrupt(
         )],
     )
     .await;
+
+    let result = db.chat().page(bot, page(None, 10)).await;
+
+    assert!(
+        matches!(
+            result,
+            Err(StoreError::Corrupt {
+                table: "chat_messages",
+                column: "sent_by",
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+}
+
+/// A sender reference whose user the join doesn't find is a corrupt row,
+/// never a deleted sender: deleting one sets the reference to `NULL`, so a
+/// dangling one means the database lost a user it shouldn't have.
+#[sqlx::test(migrations = false)]
+async fn a_sender_the_join_doesnt_find_is_corrupt(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (db, agent, bot) = with_bot(options.clone()).await;
+    let sender = add_sender(&db, 2, "sender").await;
+    append_all(
+        &db,
+        &[message(
+            bot,
+            agent,
+            T0 + 1,
+            user_line("hello", Some(sender)),
+        )],
+    )
+    .await;
+    // Only with the foreign keys off does the delete leave the reference.
+    let mut conn = options.foreign_keys(false).connect().await.unwrap();
+    let id = sender.to_string();
+    sqlx::query!("DELETE FROM users WHERE id = ?", id)
+        .execute(&mut conn)
+        .await
+        .unwrap();
 
     let result = db.chat().page(bot, page(None, 10)).await;
 

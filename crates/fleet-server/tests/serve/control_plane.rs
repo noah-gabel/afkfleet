@@ -677,16 +677,7 @@ async fn a_chat_lines_wait_follows_the_configured_request_timeout() {
         matches!(denied, Ok(ServerMessage::SessionDenied(_))),
         "{denied:?}"
     );
-    let request = Request::builder()
-        .method(Method::POST)
-        .uri(format!("/api/v1/bots/{bot}/chat"))
-        .header(
-            "authorization",
-            format!("Bearer {}", access.expose_secret()),
-        )
-        .header("content-type", "application/json")
-        .body(Body::from(r#"{"message":"hello"}"#))
-        .unwrap();
+    let request = chat_request(bot, &access);
     let begun = tokio::time::Instant::now();
 
     let response = router.oneshot(request).await.unwrap();
@@ -704,12 +695,30 @@ async fn a_chat_lines_wait_follows_the_configured_request_timeout() {
 
     assert_eq!(status.as_u16(), 202, "{body}");
     assert_eq!(body["outcome"], "pending");
-    assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+    // After the 1 s budget (the timeout less the margin), before the 408.
+    assert!(
+        (Duration::from_secs(1)..Duration::from_secs(3)).contains(&elapsed),
+        "{elapsed:?}"
+    );
     assert!(
         matches!(&line, Ok(ServerMessage::SendChat(sent)) if sent.message.as_str() == "hello"),
         "{line:?}"
     );
     assert_eq!(exit, Exit::Stopped);
+}
+
+/// `hello` to `bot`'s chat, as the holder of `access`.
+fn chat_request(bot: BotId, access: &secrecy::SecretString) -> Request<Body> {
+    Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/v1/bots/{bot}/chat"))
+        .header(
+            "authorization",
+            format!("Bearer {}", access.expose_secret()),
+        )
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"message":"hello"}"#))
+        .unwrap()
 }
 
 /// The next message the server sent the agent, read back.

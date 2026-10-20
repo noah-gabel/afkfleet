@@ -180,19 +180,19 @@ pub(super) async fn page(
 /// A row with its sender's username.
 fn listed_from_row(row: &ChatRow) -> Result<ListedChat, StoreError> {
     let record = record_from_row(row)?;
-    // A sender's name that doesn't read back is a corrupt line. The foreign
-    // key keeps a sender without a user from existing at all.
-    let sent_by = row
-        .sent_by_name
-        .as_deref()
-        .map(|name| {
-            Username::try_from(name).map_err(|_| StoreError::Corrupt {
-                table: TABLE,
-                column: "sent_by",
-                rowid: row.id,
-            })
-        })
-        .transpose()?;
+    let corrupt = || StoreError::Corrupt {
+        table: TABLE,
+        column: "sent_by",
+        rowid: row.id,
+    };
+    // A sender's name that doesn't read back is a corrupt line, and so is a
+    // sender the join doesn't find: deleting a user sets the reference to
+    // `NULL`, so a dangling one means the database lost a user.
+    let sent_by = match (row.sent_by.as_deref(), row.sent_by_name.as_deref()) {
+        (Some(_), Some(name)) => Some(Username::try_from(name).map_err(|_| corrupt())?),
+        (Some(_), None) => return Err(corrupt()),
+        (None, _) => None,
+    };
     Ok(ListedChat { record, sent_by })
 }
 

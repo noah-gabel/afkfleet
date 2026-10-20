@@ -632,11 +632,18 @@ mod tests {
         mine.sent_by = by.sent_by.clone();
         let unnamed = a_line("user", "hello again");
         let newer = a_line("shout", "a kind this console doesn't know");
+        let mut emote = a_line("emote", "waves");
+        emote.sender = serde_json::from_value(serde_json::json!({ "name": "Alex" })).unwrap();
+        let mut announced = a_line("announcement", "restart soon");
+        announced.sender = serde_json::from_value(serde_json::json!({ "name": "Server" })).unwrap();
+        let system = a_line("system", "Steve joined the game");
 
-        let shown: Vec<String> = [steve, cut, mode, by, mine, unnamed, newer]
-            .iter()
-            .map(chat_line_of)
-            .collect();
+        let shown: Vec<String> = [
+            steve, cut, mode, by, mine, unnamed, newer, emote, announced, system,
+        ]
+        .iter()
+        .map(chat_line_of)
+        .collect();
 
         let at = "#41 2027-01-15T08:00:01.000Z";
         assert_eq!(
@@ -649,6 +656,9 @@ mod tests {
                 format!("{at} user by you: /spawn"),
                 format!("{at} user: hello again"),
                 format!("{at} shout: a kind this console doesn't know"),
+                format!("{at} emote Alex: waves"),
+                format!("{at} announcement Server: restart soon"),
+                format!("{at} system: Steve joined the game"),
             ]
         );
     }
