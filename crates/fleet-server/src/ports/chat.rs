@@ -18,9 +18,13 @@ use fleet_core::id::{AgentId, BotId, UserId};
 use super::page::Page;
 use super::store::StoreError;
 
-/// A chat row's ID. With one writer, IDs follow the order of commits, which
-/// is the order the server received the messages in, so a bot's chat is
-/// ordered and paged by ID, never by time (ADR-0015).
+/// A chat row's ID. With one writer, IDs follow the order of commits, so a
+/// bot's chat is ordered and paged by ID, never by time (ADR-0015). That's
+/// nearly the order the server received the messages in, not quite: a
+/// user's line commits at once, while received chat commits with the
+/// ingest's next batch, so a line can get a lower ID than a message received
+/// a moment before it (ADR-0020, U5; `0016_chat_messages.sql` says "the
+/// order the server received the messages in" and stays as it is).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ChatMessageId(i64);
 
@@ -76,11 +80,13 @@ pub struct NewChatMessage {
 /// A stored message as it reads back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatRecord {
-    /// The ID, in receipt order.
+    /// The ID, in commit order.
     pub id: ChatMessageId,
     /// The bot it belongs to.
     pub bot: BotId,
-    /// When the server received it (informational: the order is the ID).
+    /// When the server received it, or a user's line was sent
+    /// (informational: the order is the ID, and neighbouring rows' times can
+    /// disagree with it by about one ingest batch).
     pub at: DateTime<Utc>,
     /// The message.
     pub entry: ChatEntry,

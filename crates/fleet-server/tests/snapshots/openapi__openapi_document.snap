@@ -4262,7 +4262,7 @@ expression: answer.json()
                 }
               }
             },
-            "description": "A line that's empty, more than one line, too long, or holds `§` or text-direction marks."
+            "description": "A line that's empty, too long, or holds a line break or another control character, `§` or text-direction marks."
           },
           "429": {
             "content": {
@@ -4409,7 +4409,7 @@ expression: answer.json()
                 }
               }
             },
-            "description": "A line that isn't a command, or that's empty, more than one line, too long, or holds `§` or text-direction marks."
+            "description": "A line that isn't a command, or that's empty, too long, or holds a line break or another control character, `§` or text-direction marks."
           },
           "429": {
             "content": {

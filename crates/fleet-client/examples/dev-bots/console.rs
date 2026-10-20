@@ -89,8 +89,11 @@ impl Command {
     /// `line` as a command; none for anything else.
     fn parse(line: &str) -> Option<Self> {
         let bot = |text: &str| text.parse::<BotId>().ok();
-        // A line's text is the rest of the line, its spaces kept.
-        if let Some((verb, id, text)) = with_text(line) {
+        // A line's text is the rest of the line, its spaces kept; a line
+        // without text is no command, never an empty line sent.
+        if let Some((verb, id, text)) =
+            with_text(line).filter(|(_, _, text)| !text.trim().is_empty())
+        {
             match verb {
                 "chat" => return bot(id).map(|id| Self::Chat(id, text.to_owned())),
                 "command" => return bot(id).map(|id| Self::Slash(id, text.to_owned())),
@@ -491,6 +494,23 @@ mod tests {
         assert_eq!(Command::parse(&format!("chat {id}")), None, "no text");
         assert_eq!(Command::parse("chat not-an-id hello"), None);
         assert_eq!(Command::parse("chatter x hello"), None);
+    }
+
+    /// A line without text is invalid input, never an empty line sent.
+    #[test]
+    fn a_chat_or_command_line_without_text_is_not_a_command() {
+        let id = "018bcfe5-6800-7bab-abab-abababababab";
+
+        for verb in ["chat", "command"] {
+            for line in [
+                format!("{verb} {id}"),
+                format!("{verb} {id} "),
+                format!("{verb} {id}    "),
+                format!("{verb} {id} \t "),
+            ] {
+                assert_eq!(Command::parse(&line), None, "{line:?}");
+            }
+        }
     }
 
     #[test]

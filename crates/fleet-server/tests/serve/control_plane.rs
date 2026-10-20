@@ -4,19 +4,24 @@
 //! one signal; an enrolled agent's stream, which that signal ends without
 //! holding up the drain;
 //! the start's lines with the port on and off; an expired server
-//! certificate logged without stopping the start; and the binary refusing a
-//! PKI it can't read.
+//! certificate logged without stopping the start; the binary refusing a
+//! PKI it can't read; and a chat line's wait under serve's own request
+//! timeout.
 
 use core::time::Duration;
 use std::net::IpAddr;
 use std::path::Path;
 use std::sync::Arc;
 
+use axum::body::{Body, to_bytes};
+use axum::extract::connect_info::MockConnectInfo;
+use axum::http::{Method, Request};
 use chrono::{DateTime, TimeDelta, Utc};
 use fleet_core::account::AccountStatus;
 use fleet_core::audit::{AuditAction, AuditOutcome};
+use fleet_core::auth::SessionPolicy;
 use fleet_core::authz::Role;
-use fleet_core::bot::DesiredRunState;
+use fleet_core::bot::{BotSnapshot, BotState, DesiredRunState};
 use fleet_core::chat::{IncomingChat, PlayerChatKind};
 use fleet_core::id::{AccountId, BotId, UserId};
 use fleet_core::mode::ModePreset;
@@ -28,6 +33,7 @@ use fleet_proto::generated as wire;
 use fleet_proto::generated::EnrollRequest;
 use fleet_proto::generated::agent_control_client::AgentControlClient;
 use fleet_proto::generated::agent_enrollment_client::AgentEnrollmentClient;
+use fleet_server::app::auth::TokenService;
 use fleet_server::app::enrollment::{Creator, EnrollmentTokenService};
 use fleet_server::cli::healthcheck;
 use fleet_server::cli::serve::{self, ControlPlane, Exit, GrpcPort, ServerPorts, ShutdownTimeouts};
@@ -61,6 +67,7 @@ use tokio::net::TcpListener;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Code;
 use tonic::transport::{Certificate, ClientTlsConfig, Endpoint, Identity};
+use tower::ServiceExt as _;
 use zeroize::Zeroizing;
 
 use crate::support::{
@@ -591,6 +598,161 @@ async fn chat_admitted_before_the_signal_is_stored_before_the_database_closes() 
             .collect::<Vec<_>>(),
         [ChatEntry::Received(chat)]
     );
+}
+
+/// serve wires the chat wait from `[http] request_timeout_secs` (ADR-0020,
+/// PR #60's review): under a 3 s request timeout, a line its agent never
+/// answers is pending after the 1 s that leaves, well before the answer's
+/// 6 s, which would run into the timeout's 408.
+#[tokio::test]
+async fn a_chat_lines_wait_follows_the_configured_request_timeout() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+    let dir = test_dir("control_plane_chat_wait");
+    let (http, http_address) = listener().await;
+    let grpc = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let grpc_address = grpc.local_addr().unwrap();
+    let mut config = with_grpc(server_config(&dir, http_address, false), &dir, grpc_address);
+    config.http.request_timeout = Duration::from_secs(3);
+    let pki = pki(SystemClock.now());
+    let ca_pem = String::from_utf8(pki.ca_cert_pem.clone()).unwrap();
+    let fingerprint = pki.ca.fingerprint();
+    let database = sqlite::open(&config.database, DatabaseOptions::default())
+        .await
+        .unwrap();
+    let microsoft = Arc::new(HangingRefresh::default());
+    let (app, port) = app_and_port(&config, &database, pki, grpc, microsoft).await;
+    let router = app
+        .router
+        .clone()
+        .layer(MockConnectInfo(std::net::SocketAddr::from((
+            [192, 0, 2, 10],
+            4711,
+        ))));
+    let bot = online_bot(&config, &database).await;
+    let access = owners_session(&database).await;
+    let http_config = config.http.clone();
+    let (sender, signals) = ChannelSignals::new();
+    let server = tokio::spawn({
+        let database = database.clone();
+        async move {
+            serve::serve(
+                http,
+                Some(port),
+                app,
+                &database,
+                signals,
+                ShutdownTimeouts::of(&http_config),
+            )
+            .await
+        }
+    });
+    let token = host_token(&database, fingerprint).await;
+    let (agent, mut answers) = connected_agent(grpc_address, &ca_pem, token).await;
+    let reconcile = received(&mut answers).await;
+    assert!(
+        matches!(&reconcile, Ok(ServerMessage::Reconcile(bots)) if bots.len() == 1),
+        "{reconcile:?}"
+    );
+    agent
+        .send(
+            wire::AgentMessage::try_from(fleet_proto::control::AgentMessage::Status(BotSnapshot {
+                bot_id: bot,
+                state: BotState::Online {
+                    since: SystemClock.now(),
+                    attempt: core::num::NonZeroU32::MIN,
+                },
+                since: SystemClock.now(),
+                last_disconnect: None,
+            }))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    // A session request for a bot it doesn't hold: its denial means the
+    // report before it was taken.
+    let unheld = BotId::new_v7(SystemClock.now(), [9; 10]).unwrap();
+    agent.send(session_request(unheld)).await.unwrap();
+    let denied = received(&mut answers).await;
+    assert!(
+        matches!(denied, Ok(ServerMessage::SessionDenied(_))),
+        "{denied:?}"
+    );
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/api/v1/bots/{bot}/chat"))
+        .header(
+            "authorization",
+            format!("Bearer {}", access.expose_secret()),
+        )
+        .header("content-type", "application/json")
+        .body(Body::from(r#"{"message":"hello"}"#))
+        .unwrap();
+    let begun = tokio::time::Instant::now();
+
+    let response = router.oneshot(request).await.unwrap();
+    let elapsed = begun.elapsed();
+    let status = response.status();
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+            .unwrap_or_default();
+    let line = received(&mut answers).await;
+    sender.send(Signal::Terminate).await.unwrap();
+    let exit = tokio::time::timeout(PATIENCE, server)
+        .await
+        .expect("the server should stop within its deadline")
+        .unwrap();
+
+    assert_eq!(status.as_u16(), 202, "{body}");
+    assert_eq!(body["outcome"], "pending");
+    assert!(elapsed < Duration::from_secs(3), "{elapsed:?}");
+    assert!(
+        matches!(&line, Ok(ServerMessage::SendChat(sent)) if sent.message.as_str() == "hello"),
+        "{line:?}"
+    );
+    assert_eq!(exit, Exit::Stopped);
+}
+
+/// The next message the server sent the agent, read back.
+async fn received(
+    answers: &mut tonic::Streaming<wire::ServerMessage>,
+) -> Result<ServerMessage, fleet_proto::ConvertError> {
+    ServerMessage::try_from(
+        tokio::time::timeout(PATIENCE, answers.message())
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap(),
+    )
+}
+
+/// A live session of [`online_bot`]'s owner, `user1`: its access token.
+async fn owners_session(database: &sqlite::Database) -> secrecy::SecretString {
+    let owner = database
+        .users()
+        .find_by_username(&Username::try_from("user1").unwrap())
+        .await
+        .unwrap()
+        .unwrap();
+    let random = Arc::new(OsRandom);
+    let prepared = TokenService::new(
+        Arc::new(SystemClock),
+        random.clone(),
+        Arc::new(database.clone()),
+        Arc::new(Sha256Tokens::new(random)),
+        SessionPolicy::default(),
+    )
+    .prepare(owner.id)
+    .unwrap();
+    let mut tx = database.write().await.unwrap();
+    tx.sessions().insert(&prepared.new_session).await.unwrap();
+    tx.commit(NewAuditEntry::new(
+        SystemClock.now(),
+        AuditAction::try_from("test.serve_setup").unwrap(),
+        AuditOutcome::Success,
+    ))
+    .await
+    .unwrap();
+    prepared.tokens.access_token
 }
 
 /// serve's app over `config` and `database`, with `microsoft` for its

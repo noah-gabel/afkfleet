@@ -144,8 +144,9 @@ pub(super) async fn append(
     Ok((done.rows_affected() == 1).then(|| ChatMessageId::new(done.last_insert_rowid())))
 }
 
-/// One page of `bot`'s messages, newest first by ID, one row more than the
-/// page holds.
+/// One page of `bot`'s messages, newest first by ID (commit order, which a
+/// user's line can lead by one ingest batch; ADR-0020, U5), one row more
+/// than the page holds.
 pub(super) async fn page(
     pool: &SqlitePool,
     bot: BotId,

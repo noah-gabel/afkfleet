@@ -4,8 +4,9 @@
 //! the trace layer logs and never logs.
 //!
 //! Every test request goes through `middleware::apply`, the server's own stack,
-//! around test routes that are slow, panic, read their body, or answer with a
-//! bare status. The time is paused, so the request timeout fires at once; the
+//! around test routes that are slow, panic, read their body, answer with a
+//! bare status, or read their request's arrival and wait from it as a chat
+//! line does. The time is paused, so the request timeout fires at once; the
 //! request IDs come from a `ManualClock` and a `SeededRandom` and are only ever
 //! compared with each other.
 // Integration tests are test code, but clippy only applies the test allowances
@@ -13,6 +14,7 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
+use core::convert::Infallible;
 use core::time::Duration;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -34,9 +36,10 @@ use fleet_api_types::BoundedText;
 use fleet_api_types::error::REQUEST_ID_MAX_CHARS;
 use fleet_core::id::RequestId;
 use fleet_core::system::RandomError;
+use fleet_server::app::bots::ChatWait;
 use fleet_server::config::{HttpConfig, LogConfig, LogFormat, RateLimitConfig};
 use fleet_server::http::error::REQUEST_ID_HEADER;
-use fleet_server::http::middleware::{self, RequestIds};
+use fleet_server::http::middleware::{self, Arrival, RequestIds};
 use fleet_server::http::rate_limit::{RateLimits, TrustedProxies};
 use fleet_startup::telemetry::{NoRules, layer_with};
 use fleet_testkit::log_buffer::LogBuffer;
@@ -44,6 +47,8 @@ use fleet_testkit::system::{ManualClock, SeededRandom};
 use rstest::rstest;
 use serde::Serialize;
 use serde_json::{Value, json};
+use tokio::time::Instant;
+use tokio_stream::StreamExt as _;
 use tower::ServiceExt as _;
 use tracing_subscriber::layer::SubscriberExt as _;
 
@@ -156,6 +161,43 @@ fn routes() -> Router {
             get(|| async { ([(REQUEST_ID_HEADER, "handler-chosen")], "x") }),
         )
         .route("/health/probe", get(|| async { "quiet" }))
+        .route("/arrival", post(arrival_age))
+}
+
+/// How long ago, in milliseconds, the request arrived, read after its body.
+async fn arrival_age(arrival: Arrival, body: Bytes) -> String {
+    drop(body);
+    arrival.instant().elapsed().as_millis().to_string()
+}
+
+/// The request timeout of the stack a chat-like wait runs behind.
+const LONG_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// Waits as a chat line does, counted from the request's arrival
+/// (`ChatWait`'s deadline under [`LONG_TIMEOUT`], no answer ever coming),
+/// after reading its body.
+async fn chat_like(arrival: Arrival, body: Bytes) -> &'static str {
+    drop(body);
+    let wait = ChatWait::new(LONG_TIMEOUT).with_answer(LONG_TIMEOUT * 10);
+    tokio::time::sleep_until(wait.deadline(arrival.instant(), Instant::now())).await;
+    "answered"
+}
+
+/// The chat-like route behind the server's stack, with [`LONG_TIMEOUT`].
+fn chat_like_stack() -> Router {
+    middleware::apply(
+        Router::new().route("/chat-like", post(chat_like)),
+        &HttpConfig {
+            request_timeout: LONG_TIMEOUT,
+            ..http_config()
+        },
+        RequestIds::new(
+            Arc::new(ManualClock::new(DateTime::UNIX_EPOCH)),
+            Arc::new(SeededRandom::new(1)),
+        ),
+        &limits(),
+    )
+    .layer(peer())
 }
 
 /// Answers long after the request timeout.
@@ -394,6 +436,20 @@ fn error_lines(buffer: &LogBuffer) -> Vec<Value> {
 
 // --- Every error the router or a layer produces -------------------------------
 
+/// A `POST uri` whose body comes `delay` after the request, as a slow
+/// client's would.
+fn late_post(uri: &str, delay: Duration) -> Request {
+    let late = tokio_stream::once(()).then(move |()| async move {
+        tokio::time::sleep(delay).await;
+        Ok::<_, Infallible>(Bytes::from_static(b"late"))
+    });
+    Request::builder()
+        .method(Method::POST)
+        .uri(uri)
+        .body(Body::from_stream(late))
+        .unwrap()
+}
+
 /// A request with a body of `len` bytes, with or without its
 /// `Content-Length`.
 fn post_echo(len: usize, with_length: bool) -> Request {
@@ -491,6 +547,63 @@ async fn a_request_within_the_timeout_is_answered() {
 
     assert_eq!(seen.status, 200);
     assert_eq!(seen.text, "in time");
+}
+
+// --- The request's arrival (P11.3; ADR-0020, U6) --------------------------------
+
+/// The arrival is the request's own instant, taken before its body came:
+/// a body 1.5 s late leaves the handler an arrival 1.5 s old.
+#[tokio::test(start_paused = true)]
+async fn a_handler_sees_its_requests_arrival_from_before_its_body() {
+    let seen = send(
+        &stack().app,
+        late_post("/arrival", Duration::from_millis(1500)),
+    )
+    .await;
+
+    assert_eq!(seen.status, 200, "{}", seen.text);
+    assert_eq!(seen.text, "1500");
+}
+
+/// An arrival the request already carries is kept: nothing on the wire can
+/// set one, so only a test does (the HTTP tests' seam).
+#[tokio::test(start_paused = true)]
+async fn an_arrival_the_request_already_carries_is_kept() {
+    let earlier = Instant::now();
+    tokio::time::advance(Duration::from_secs(30)).await;
+    let mut request = late_post("/arrival", Duration::ZERO);
+    request.extensions_mut().insert(Arrival::new(earlier));
+
+    let seen = send(&stack().app, request).await;
+
+    assert_eq!(seen.status, 200, "{}", seen.text);
+    assert_eq!(seen.text, "30000");
+}
+
+/// A wait counted from the arrival ends before the request timeout,
+/// however late the body came: at the arrival plus the timeout less the
+/// margin, or at once when the body came later still. One counted from the
+/// handler's start would run past the 408 once the body took longer than
+/// the margin.
+#[rstest]
+#[case::at_once(Duration::ZERO)]
+#[case::within_the_margin(Duration::from_secs(1))]
+#[case::past_the_margin(Duration::from_secs(5))]
+#[case::past_the_wait(Duration::from_secs(9))]
+#[tokio::test(start_paused = true)]
+async fn a_wait_from_the_arrival_answers_before_the_timeout_however_late_the_body(
+    #[case] delay: Duration,
+) {
+    let begun = Instant::now();
+
+    let seen = send(&chat_like_stack(), late_post("/chat-like", delay)).await;
+
+    assert_eq!(seen.status, 200, "{}", seen.text);
+    assert_eq!(seen.text, "answered");
+    assert_eq!(
+        begun.elapsed(),
+        delay.max(LONG_TIMEOUT.saturating_sub(ChatWait::MARGIN))
+    );
 }
 
 #[tokio::test]

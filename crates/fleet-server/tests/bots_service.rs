@@ -10,8 +10,9 @@
 //! commit fails. A user's chat line is judged, stored with its sender and
 //! recorded before it's sent, and answered as its agent says; a refusal
 //! before the commit writes nothing, and one after it keeps the row and the
-//! entry (ADR-0020, S5–S7). The HTTP tests (`tests/auth/bots.rs`,
-//! `tests/auth/chat.rs`) cover the rest.
+//! entry (ADR-0020, S5–S7); a line its route doesn't take is refused before
+//! anything is read (S10). The HTTP tests (`tests/auth/bots.rs`,
+//! `tests/auth/bots/chat.rs`) cover the rest.
 //!
 //! Each test gets a fresh database from `#[sqlx::test]`. Time isn't paused:
 //! sqlx's worker threads would make paused timeouts fire early (CLAUDE.md).
@@ -50,6 +51,7 @@ use fleet_server::app::bots::{
 };
 use fleet_server::app::events::{EventBus, LiveEvent, LiveEventKind};
 use fleet_server::app::users::ActingUser;
+use fleet_server::config::{LogConfig, LogFormat};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::accounts::{AccountReads, AccountWrites};
@@ -76,11 +78,14 @@ use fleet_server::ports::sessions::{NewSession, SessionReads, SessionWrites};
 use fleet_server::ports::store::{Store, StoreError, UnauditedWrite, WriteTx};
 use fleet_server::ports::tokens::TokenHash;
 use fleet_server::ports::users::{NewUser, PasswordHash, UserReads, UserWrites};
+use fleet_startup::telemetry::{NoRules, layer_with};
+use fleet_testkit::log_buffer::LogBuffer;
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use secrecy::SecretString;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::Notify;
 use tokio::time::Instant;
+use tracing_subscriber::layer::SubscriberExt as _;
 
 const T0: &str = "2027-01-15T08:00:00Z";
 /// How long a test waits for what must come: bounded, never a sleep.
@@ -1554,6 +1559,146 @@ async fn a_refusal_after_the_commit_keeps_the_row_and_the_entry(
         assert_eq!(setup.lines(bot).await, [users_line("hello")]);
         assert_eq!(setup.chat_entries().await.len(), usize::from(n));
     }
+}
+
+/// The message of the line a committed line that wasn't sent logs.
+const NOT_SENT: &str =
+    "a user's chat line was stored and recorded, but its stream no longer took it";
+
+/// The server's log layer at `debug` into a buffer, as this thread's
+/// default subscriber.
+fn capture() -> (LogBuffer, tracing::subscriber::DefaultGuard) {
+    let buffer = LogBuffer::default();
+    let config = LogConfig {
+        format: LogFormat::Json,
+        filter: "debug".parse().unwrap(),
+    };
+    let subscriber =
+        tracing_subscriber::registry().with(layer_with(&config, &NoRules, false, buffer.clone()));
+    let guard = tracing::subscriber::set_default(subscriber);
+    (buffer, guard)
+}
+
+/// A committed line its stream no longer took is logged at `debug` with its
+/// IDs and why, never its text: the answer alone, 409 `bot_unreachable`,
+/// doesn't tell it from a refusal before the commit.
+#[sqlx::test(migrations = false)]
+async fn a_committed_line_that_isnt_sent_is_logged_at_debug_with_its_ids_only(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let by = setup.acting().await;
+    let (logs, _guard) = capture();
+    let refusals = [
+        (CommandRefused::NotHeld, "NotHeld"),
+        (CommandRefused::NotConnected, "NotConnected"),
+        (CommandRefused::QueueFull, "QueueFull"),
+    ];
+
+    let mut sent = Vec::new();
+    for (n, (refusal, _)) in (1_u8..).zip(refusals) {
+        let bot = setup.bot(n).await;
+        setup.held_in(bot, online()).await;
+        *setup.live.chat_refusal.lock().unwrap() = Some(refusal);
+        let refused = setup
+            .chatting()
+            .send_chat(
+                &by,
+                bot,
+                &line("hello secret_label"),
+                ChatRoute::Chat,
+                Instant::now(),
+            )
+            .await;
+        assert!(
+            matches!(
+                refused,
+                Err(ChatSendError::Refused(ChatRefusal::Unreachable))
+            ),
+            "{refused:?}"
+        );
+        sent.push(bot);
+    }
+
+    let lines = logs.lines_with(NOT_SENT).unwrap();
+    assert_eq!(lines.len(), 3, "{}", logs.text());
+    for ((line, bot), (_, name)) in lines.iter().zip(&sent).zip(refusals) {
+        assert_eq!(line["level"], "DEBUG");
+        assert_eq!(line["user_id"], by.actor.id.to_string());
+        assert_eq!(line["bot_id"], bot.to_string());
+        assert_eq!(line["agent_id"], agent(1).to_string());
+        assert!(line["chat_request"].is_string(), "{line}");
+        assert!(line["chat_line"].is_i64(), "{line}");
+        assert_eq!(line["refused"], name);
+    }
+    assert!(!logs.text().contains("secret_label"), "{}", logs.text());
+}
+
+/// A line its route doesn't take reached the service only because the
+/// handler's check is missing (S10): it's refused before anything is read,
+/// so an unknown bot gets that answer too, and nothing is written, recorded
+/// or sent.
+#[sqlx::test(migrations = false)]
+async fn a_line_its_route_doesnt_take_is_refused_before_anything_is_read(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let by = setup.acting().await;
+    let held = setup.bot(1).await;
+    setup.held_in(held, online()).await;
+    let unknown = bot(99);
+    let cases = [
+        (ChatRoute::Chat, "/op AfkBot2"),
+        (ChatRoute::Command, "hello"),
+    ];
+
+    for (route, text) in cases {
+        for target in [held, unknown] {
+            let refused = setup
+                .chatting()
+                .send_chat(&by, target, &line(text), route, Instant::now())
+                .await;
+
+            assert!(
+                matches!(refused, Err(ChatSendError::WrongRoute(refused)) if refused == route),
+                "{route:?} {text:?}: {refused:?}"
+            );
+        }
+    }
+    assert_eq!(setup.lines(held).await, Vec::<ChatEntry>::new());
+    assert_eq!(setup.chat_entries().await.len(), 0);
+    assert_eq!(setup.live.chats.lock().unwrap().len(), 0);
+}
+
+/// Each route sends the lines it takes: `/chat` plain chat and allowlisted
+/// commands, `/command` every command.
+#[sqlx::test(migrations = false)]
+async fn each_route_sends_the_lines_it_takes(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let by = setup.acting().await;
+    let bot = setup.bot(1).await;
+    setup.held_in(bot, online()).await;
+    let cases = [
+        (ChatRoute::Chat, "hello"),
+        (ChatRoute::Chat, "/spawn here"),
+        (ChatRoute::Command, "/spawn here"),
+        (ChatRoute::Command, "/op AfkBot2"),
+    ];
+
+    for (route, text) in cases {
+        let sent = setup
+            .chatting()
+            .send_chat(&by, bot, &line(text), route, Instant::now())
+            .await;
+
+        assert!(sent.is_ok(), "{route:?} {text:?}: {sent:?}");
+    }
+    assert_eq!(setup.live.chats.lock().unwrap().len(), cases.len());
 }
 
 #[sqlx::test(migrations = false)]
