@@ -270,7 +270,7 @@ async fn build(db: &Database, docs: ApiDocs, extra: impl FnOnce(Routes) -> Route
         enrollment_tokens: None,
         agents: idle_agents(db),
         bots: idle_bots(db),
-        modes: fleet_server::app::modes::ModeService::new(Arc::new(db.clone())),
+        modes: idle_modes(db),
     });
     let ids = RequestIds::new(Arc::new(clock()), Arc::new(SeededRandom::new(5)));
     let (app, entries) = extra(api_routes(Routes::new(&limits))).finish(state, &http(), ids, docs);
@@ -537,6 +537,11 @@ async fn the_setup_and_step_up_routes_are_registered_with_their_access_and_class
                 "/api/v1/bots/{id}/command",
                 RateClass::Standard
             ),
+            entry(
+                Method::POST,
+                "/api/v1/modes/with-commands",
+                RateClass::Standard
+            ),
         ])
     );
     db.close().await;
@@ -613,6 +618,7 @@ async fn the_authed_routes_are_registered_with_their_class(
             entry(Method::GET, "/api/v1/bots/{id}/chat", RateClass::Standard),
             entry(Method::POST, "/api/v1/bots/{id}/chat", RateClass::Standard),
             entry(Method::GET, "/api/v1/modes", RateClass::Standard),
+            entry(Method::POST, "/api/v1/modes", RateClass::Standard),
         ])
     );
     db.close().await;
@@ -1035,5 +1041,16 @@ fn idle_bots(db: &fleet_server::infra::sqlite::Database) -> fleet_server::app::b
         Arc::new(fleet_server::grpc::registry::AgentRegistry::new(clock)),
         fleet_server::app::events::EventBus::new(),
         false,
+    )
+}
+
+/// The modes' service, which these tests never write through (P11.4).
+fn idle_modes(db: &fleet_server::infra::sqlite::Database) -> fleet_server::app::modes::ModeService {
+    fleet_server::app::modes::ModeService::new(
+        Arc::new(fleet_testkit::system::ManualClock::new(
+            chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+        )),
+        Arc::new(fleet_testkit::system::SeededRandom::new(1)),
+        Arc::new(db.clone()),
     )
 }

@@ -54,6 +54,8 @@
 //! | `POST /api/v1/bots/{id}/chat` | user (Control; a command off the allowlist: pointed to `/command`) | a line for the bot to send: 200 sent, 202 pending |
 //! | `POST /api/v1/bots/{id}/command` | user + step-up (Control for an allowlisted command, Manage for any other) | a command for the bot to send: 200 sent, 202 pending |
 //! | `GET /api/v1/modes` | user | one page of the modes the user may see, each under its field rules |
+//! | `POST /api/v1/modes` | user (a shared mode: Admin+; steps sending a command off the allowlist: pointed to `/with-commands`) | a new mode of the user's: 201 |
+//! | `POST /api/v1/modes/with-commands` | user + step-up (a shared mode: Admin+) | a new mode of the user's, whatever its steps send: 201 |
 //! | `GET /api/openapi.json` | public | the `OpenAPI` document, only in dev mode ([`openapi`](super::openapi)) |
 //!
 //! The health routes have no `/api/v1` prefix. Both answer `200` with an
@@ -259,6 +261,8 @@ pub fn api_routes(routes: Routes) -> Routes {
         .authed_route(RateClass::Standard, routes!(chat::send))
         .step_up_route(RateClass::Standard, routes!(chat::command))
         .authed_route(RateClass::Standard, routes!(modes::list))
+        .authed_route(RateClass::Standard, routes!(modes::create))
+        .step_up_route(RateClass::Standard, routes!(modes::create_with_commands))
 }
 
 /// Every route with `state`, behind the middleware stack with the timeout,

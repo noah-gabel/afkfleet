@@ -215,7 +215,7 @@ async fn app(db: &Database) -> Router {
         enrollment_tokens: None,
         agents: idle_agents(db),
         bots: idle_bots(db),
-        modes: fleet_server::app::modes::ModeService::new(Arc::new(db.clone())),
+        modes: idle_modes(db),
     });
     router(state, &http, ids, ApiDocs::Hidden)
         .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))))
@@ -554,5 +554,16 @@ fn idle_bots(db: &fleet_server::infra::sqlite::Database) -> fleet_server::app::b
         Arc::new(fleet_server::grpc::registry::AgentRegistry::new(clock)),
         fleet_server::app::events::EventBus::new(),
         false,
+    )
+}
+
+/// The modes' service, which these tests never write through (P11.4).
+fn idle_modes(db: &fleet_server::infra::sqlite::Database) -> fleet_server::app::modes::ModeService {
+    fleet_server::app::modes::ModeService::new(
+        Arc::new(fleet_testkit::system::ManualClock::new(
+            chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
+        )),
+        Arc::new(fleet_testkit::system::SeededRandom::new(1)),
+        Arc::new(db.clone()),
     )
 }

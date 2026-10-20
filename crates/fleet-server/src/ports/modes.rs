@@ -99,8 +99,38 @@ pub trait ModeReads: Send + Sync + fmt::Debug {
     ) -> Result<Vec<ListedMode>, StoreError>;
 }
 
-/// Reading modes inside a [`super::store::WriteTx`], so a write that
-/// depends on a mode decides on what its own transaction reads.
+/// A user's new mode, version 1 (P11.4).
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewMode {
+    /// The ID.
+    pub id: ModeId,
+    /// Who made it.
+    pub owner: UserId,
+    /// Its name.
+    pub name: ModeName,
+    /// Who may see it.
+    pub visibility: ModeVisibility,
+    /// Its steps.
+    pub definition: ModeDefinition,
+    /// When it was made.
+    pub created_at: DateTime<Utc>,
+}
+
+/// Why a mode wasn't stored.
+#[derive(Debug, thiserror::Error)]
+pub enum InsertModeError {
+    /// One of the owner's modes, or for a shared mode a shared one, has the
+    /// name, ASCII case ignored: the table's unique indexes refused it
+    /// (ADR-0020, S13).
+    #[error("the name is taken")]
+    NameTaken,
+    /// The database failed.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
+
+/// Reading and writing modes inside a [`super::store::WriteTx`], so a write
+/// that depends on a mode decides on what its own transaction reads.
 #[async_trait]
 pub trait ModeWrites: Send {
     /// The mode `id`, read in this transaction.
@@ -109,4 +139,31 @@ pub trait ModeWrites: Send {
     /// [`StoreError`], including [`StoreError::Corrupt`] for a row that
     /// doesn't read back.
     async fn find(&mut self, id: ModeId) -> Result<Option<StoredMode>, StoreError>;
+
+    /// How many modes `owner` owns, private and shared together (ADR-0020,
+    /// S19).
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn count_owned_by(&mut self, owner: UserId) -> Result<u32, StoreError>;
+
+    /// Whether `name` is taken for a mode of `owner`, ASCII case ignored: by
+    /// another of the owner's modes, or, when the mode is `shared`, by any
+    /// shared mode, the built-in ones included (ADR-0020, S13).
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    async fn name_taken(
+        &mut self,
+        owner: UserId,
+        name: &ModeName,
+        shared: bool,
+    ) -> Result<bool, StoreError>;
+
+    /// Stores `mode` at version 1.
+    ///
+    /// # Errors
+    /// [`InsertModeError::NameTaken`] when a unique index refuses the name,
+    /// or [`InsertModeError::Store`].
+    async fn insert(&mut self, mode: &NewMode) -> Result<(), InsertModeError>;
 }

@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT definition_json AS \"json!\" FROM modes WHERE id = ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "json!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "definition_json"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "b166bcd5193ca9c4728cd0d7333ee7c278a07556f0b53a482f45f0141b0fc1ea"
+}

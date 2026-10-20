@@ -1,0 +1,10 @@
+---
+source: crates/fleet-server/tests/auth/modes.rs
+expression: pointed.body_without_request_id()
+---
+{
+  "error": {
+    "code": "mode_needs_step_up",
+    "message": "This mode holds a command that needs your password: confirm it's you to save it."
+  }
+}

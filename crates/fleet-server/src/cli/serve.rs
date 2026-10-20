@@ -474,6 +474,8 @@ pub fn app_with(
     // send waits for its answer there (ADR-0020, S5).
     let events = EventBus::new();
     let bots = bot_service(config, &clock, &random, &store, &agents, &events, reconcile);
+    let modes = ModeService::new(Arc::clone(&clock), Arc::clone(&random), Arc::clone(&store))
+        .with_allowlist(config.chat.command_allowlist.clone());
     let shutdown = CancellationToken::new();
     let (enrollment_tokens, grpc) = control_plane_services(
         config,
@@ -493,7 +495,6 @@ pub fn app_with(
             bus: events.clone(),
         },
     );
-    let modes = ModeService::new(Arc::clone(&store));
     let state = AppState::new(Services {
         health: HealthService::new(store),
         tokens,

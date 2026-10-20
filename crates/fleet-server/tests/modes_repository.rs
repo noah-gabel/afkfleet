@@ -18,13 +18,15 @@
 use core::num::NonZeroU32;
 
 use chrono::{DateTime, Utc};
+use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::authz::{
     Actor, ModeVisibility, Permission, ResourceContext, Role, UserRef, authorize,
 };
 use fleet_core::id::{ModeId, UserId};
-use fleet_core::mode::{ModeName, ModePreset};
+use fleet_core::mode::{ModeDefinition, ModeName, ModePreset};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
-use fleet_server::ports::modes::{ListedMode, StoredMode};
+use fleet_server::ports::audit::NewAuditEntry;
+use fleet_server::ports::modes::{InsertModeError, ListedMode, NewMode, StoredMode};
 use fleet_server::ports::page::{Page, PageLimit};
 use fleet_server::ports::store::{Store, StoreError};
 use sqlx::SqlitePool;
@@ -825,4 +827,198 @@ async fn the_modes_page_newest_first_before_their_cursor(
 
     assert_eq!(first, all.get(..4).unwrap(), "a page and one row more");
     assert_eq!(second, all.get(3..7).unwrap());
+}
+
+/// The entry a test commits its writes with. A test-only name, never
+/// listed in `audit_actions!`.
+fn setup_entry() -> NewAuditEntry {
+    NewAuditEntry::new(
+        seeded(),
+        AuditAction::try_from("test.modes_setup").unwrap(),
+        AuditOutcome::Success,
+    )
+}
+
+/// A new mode of `owner` numbered `n`, named `name`, with `visibility`.
+fn new_mode(n: u8, owner: UserId, name: &str, visibility: ModeVisibility) -> NewMode {
+    let created = seeded() + chrono::Duration::minutes(i64::from(n));
+    NewMode {
+        id: ModeId::new_v7(created, [n; 10]).unwrap(),
+        owner,
+        name: ModeName::try_from(name).unwrap(),
+        visibility,
+        definition: serde_json::from_str::<ModeDefinition>(VALID).unwrap(),
+        created_at: created,
+    }
+}
+
+/// Stores `mode` in a transaction of its own.
+async fn insert(db: &Database, mode: &NewMode) -> Result<(), InsertModeError> {
+    let mut tx = db.write().await.unwrap();
+    tx.modes().insert(mode).await?;
+    tx.commit(setup_entry()).await.unwrap();
+    Ok(())
+}
+
+/// A stored mode reads back as it was given, at version 1, its definition
+/// in `serde_json`'s compact form, as the seeds are.
+#[sqlx::test(migrations = false)]
+async fn an_inserted_mode_reads_back_at_version_one(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(db.write_pool(), 21, "fisher", Role::Member).await;
+    let mode = new_mode(1, owner, "Fishing trip", ModeVisibility::Shared);
+
+    insert(&db, &mode).await.unwrap();
+
+    let found = db.modes().find(mode.id).await.unwrap();
+    assert_eq!(
+        found,
+        Some(StoredMode {
+            id: mode.id,
+            owner: Some(owner),
+            name: mode.name.clone(),
+            visibility: ModeVisibility::Shared,
+            definition: mode.definition.clone(),
+            version: NonZeroU32::MIN,
+            created_at: mode.created_at,
+            updated_at: mode.created_at,
+        })
+    );
+    let id = mode.id.to_string();
+    let json = sqlx::query_scalar!(
+        r#"SELECT definition_json AS "json!" FROM modes WHERE id = ?"#,
+        id
+    )
+    .fetch_one(db.read_pool())
+    .await
+    .unwrap();
+    assert_eq!(json, serde_json::to_string(&mode.definition).unwrap());
+}
+
+/// A name the unique indexes refuse is `NameTaken`, and nothing is stored.
+#[sqlx::test(migrations = false)]
+async fn a_name_the_indexes_refuse_is_taken_and_nothing_is_stored(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(db.write_pool(), 21, "fisher", Role::Member).await;
+    let other = add_user(db.write_pool(), 22, "other", Role::Admin).await;
+    insert(&db, &new_mode(1, owner, "Fishing", ModeVisibility::Private))
+        .await
+        .unwrap();
+    insert(&db, &new_mode(2, other, "Shared", ModeVisibility::Shared))
+        .await
+        .unwrap();
+
+    for (case, mode) in [
+        (
+            "the owner's own",
+            new_mode(3, owner, "FISHING", ModeVisibility::Private),
+        ),
+        (
+            "a shared one's",
+            new_mode(4, owner, "shared", ModeVisibility::Shared),
+        ),
+        (
+            "a built-in one's",
+            new_mode(5, owner, "Afk", ModeVisibility::Shared),
+        ),
+    ] {
+        let result = insert(&db, &mode).await;
+        assert!(
+            matches!(result, Err(InsertModeError::NameTaken)),
+            "{case}: {result:?}"
+        );
+        assert_eq!(db.modes().find(mode.id).await.unwrap(), None, "{case}");
+    }
+}
+
+/// An owner's modes are counted, private and shared together; nobody
+/// else's, and never the built-in ones (S19).
+#[sqlx::test(migrations = false)]
+async fn an_owners_modes_are_counted_private_and_shared_together(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(db.write_pool(), 21, "fisher", Role::Admin).await;
+    let other = add_user(db.write_pool(), 22, "other", Role::Member).await;
+    insert(&db, &new_mode(1, owner, "One", ModeVisibility::Private))
+        .await
+        .unwrap();
+    insert(&db, &new_mode(2, owner, "Two", ModeVisibility::Shared))
+        .await
+        .unwrap();
+    insert(&db, &new_mode(3, other, "Three", ModeVisibility::Private))
+        .await
+        .unwrap();
+
+    let mut tx = db.write().await.unwrap();
+    let counts = (
+        tx.modes().count_owned_by(owner).await.unwrap(),
+        tx.modes().count_owned_by(other).await.unwrap(),
+        tx.modes()
+            .count_owned_by(UserId::new_v7(seeded(), [99; 10]).unwrap())
+            .await
+            .unwrap(),
+    );
+
+    assert_eq!(counts, (2, 1, 0));
+}
+
+/// A name is taken by another of the owner's modes, and for a shared mode
+/// by any shared one, ASCII case ignored; a private mode may take a shared
+/// one's name, and another owner's private name is free (S13).
+#[sqlx::test(migrations = false)]
+async fn a_name_is_taken_as_the_indexes_would_refuse_it(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(db.write_pool(), 21, "fisher", Role::Admin).await;
+    let other = add_user(db.write_pool(), 22, "other", Role::Admin).await;
+    insert(&db, &new_mode(1, owner, "Fishing", ModeVisibility::Private))
+        .await
+        .unwrap();
+    insert(
+        &db,
+        &new_mode(2, other, "Shared one", ModeVisibility::Shared),
+    )
+    .await
+    .unwrap();
+    insert(&db, &new_mode(3, other, "Secret", ModeVisibility::Private))
+        .await
+        .unwrap();
+    let name = |text: &str| ModeName::try_from(text).unwrap();
+
+    let mut tx = db.write().await.unwrap();
+    let mut taken = Vec::new();
+    for (text, shared) in [
+        ("fishing", false),
+        ("FISHING", true),
+        ("shared one", true),
+        ("shared one", false),
+        ("AFK", true),
+        ("afk", false),
+        ("secret", false),
+        ("secret", true),
+        ("Fresh", true),
+    ] {
+        taken.push(
+            tx.modes()
+                .name_taken(owner, &name(text), shared)
+                .await
+                .unwrap(),
+        );
+    }
+
+    assert_eq!(
+        taken,
+        [true, true, true, false, true, false, false, false, false],
+        "the built-in names on a private mode are the service's to refuse (R4)"
+    );
 }

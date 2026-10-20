@@ -1,16 +1,22 @@
 //! The mode routes over HTTP (Plan.md P11.4; ADR-0020, S12–S16, S19):
-//! `GET /api/v1/modes` and what each viewer sees of a mode.
+//! `GET /api/v1/modes` and what each viewer sees of a mode; `POST
+//! /api/v1/modes` and its step-up twin, with the pointer, the cap, names,
+//! the re-checks and the audit entry.
 
 use std::collections::BTreeMap;
 
-use fleet_core::authz::{GrantLevel, Role};
+use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget, RecordedValue};
+use fleet_core::authz::{CommandAllowlist, GrantLevel, ModeVisibility, Role};
 use fleet_core::id::{ModeId, UserId};
-use fleet_core::mode::ModePreset;
+use fleet_core::mode::{ModeDefinition, ModeName, ModePreset};
+use fleet_server::app::modes::{CreateModeError, ModeRoute, ModeService};
+use fleet_server::app::users::ActingUser;
 use fleet_server::config::{Rate, RateLimitConfig};
+use fleet_testkit::log_capture;
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-use super::support::{Options, Person, Seen, Setup, at, redacted, setup, setup_with};
+use super::support::{Meanwhile, Options, Person, Seen, Setup, at, redacted, setup, setup_with};
 
 /// The modes' list.
 const MODES: &str = "/api/v1/modes";
@@ -448,4 +454,592 @@ async fn the_longest_page_fits_a_clients_answer_cap(
     assert_eq!(seen.status, 200);
     assert_eq!(seen.body["items"].as_array().unwrap().len(), 100);
     assert!(seen.text.len() < CLIENT_CAP, "{} bytes", seen.text.len());
+}
+
+// --- Creating (S12, S13, S16, S19) ----------------------------------------------
+
+/// The step-up twin of `POST /modes`.
+const WITH_COMMANDS: &str = "/api/v1/modes/with-commands";
+
+/// A new private mode named `name` that swings every 20 s.
+fn swinging_body(name: &str) -> Value {
+    json!({ "name": name, "visibility": "private", "steps": [
+        { "action": { "type": "swing_arm" }, "schedule": { "type": "every", "interval_ms": 20_000, "jitter_ms": 0 }, "probability": 100 },
+    ] })
+}
+
+/// A new mode named `name` with `visibility` that sends `command` at
+/// start.
+fn commanding_body(name: &str, visibility: &str, command: &str) -> Value {
+    json!({ "name": name, "visibility": visibility, "steps": [
+        { "action": { "type": "send_chat", "message": command }, "schedule": { "type": "at_start" }, "probability": 100 },
+    ] })
+}
+
+/// `role`'s person `n`, stepped up now.
+async fn stepped_up(setup: &Setup, n: u8, name: &str, role: Role) -> Person {
+    let person = setup.person(n, name, role).await;
+    setup.stamp(person.session).await;
+    person
+}
+
+/// The setup with `/spawn` on the allowlist.
+async fn with_spawn(options: SqliteConnectOptions) -> Setup {
+    setup_with(
+        options,
+        Options {
+            allowlist: CommandAllowlist::try_new(&["/spawn"]).unwrap(),
+            ..Options::default()
+        },
+    )
+    .await
+}
+
+impl Setup {
+    /// `POST /modes` with `body` as `by`.
+    async fn create(&self, by: &Person, body: Value) -> Seen {
+        self.post(MODES, Some(&by.token), Some(body)).await
+    }
+
+    /// `POST /modes/with-commands` with `body` as `by`.
+    async fn create_with_commands(&self, by: &Person, body: Value) -> Seen {
+        self.post(WITH_COMMANDS, Some(&by.token), Some(body)).await
+    }
+
+    /// How many modes the users own: every mode but the built-in ones.
+    async fn users_modes(&self) -> i64 {
+        sqlx::query_scalar!(
+            r#"SELECT count(*) AS "count!: i64" FROM modes WHERE owner_user_id IS NOT NULL"#
+        )
+        .fetch_one(self.db.read_pool())
+        .await
+        .unwrap()
+    }
+
+    /// The `mode.create` entries.
+    async fn creations(&self) -> usize {
+        self.audit()
+            .await
+            .iter()
+            .filter(|entry| entry.action == AuditAction::MODE_CREATE)
+            .count()
+    }
+}
+
+/// An entry's metadata as text values by key.
+fn metadata(entry: &fleet_server::ports::audit::AuditRecord) -> BTreeMap<String, String> {
+    entry
+        .metadata
+        .entries()
+        .iter()
+        .map(|(key, value)| {
+            let value = match value {
+                RecordedValue::Text(text) | RecordedValue::Unrecognized(text) => text.clone(),
+                RecordedValue::Int(int) => int.to_string(),
+                RecordedValue::Bool(flag) => flag.to_string(),
+            };
+            (key.clone(), value)
+        })
+        .collect()
+}
+
+#[sqlx::test(migrations = false)]
+async fn creating_a_mode_needs_a_session(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
+    let setup = setup(options).await;
+
+    for path in [MODES, WITH_COMMANDS] {
+        let seen = setup.post(path, None, Some(swinging_body("Mine"))).await;
+        assert_eq!(seen.status, 401, "{path}: {}", seen.text);
+    }
+}
+
+/// A created mode answers 201 as its creator sees it, at version 1, and
+/// is listed from then on.
+#[sqlx::test(migrations = false)]
+async fn a_created_mode_is_201_as_its_creator_sees_it_and_listed(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = with_spawn(options).await;
+    let member = setup.person(2, "member", Role::Member).await;
+    let body = json!({ "name": " Grüße, „Farm“ #2! ", "visibility": "private", "steps": [
+        { "action": { "type": "look", "yaw": -90.5, "pitch": 12.0 }, "schedule": { "type": "at_start" }, "probability": 100 },
+        { "action": { "type": "select_hotbar_slot", "slot": 8 }, "schedule": { "type": "at_start" }, "probability": 100 },
+        { "action": { "type": "send_chat", "message": "/spawn home" }, "schedule": { "type": "every", "interval_ms": 60_000, "jitter_ms": 5_000 }, "probability": 50 },
+    ] });
+
+    let seen = setup.create(&member, body).await;
+
+    assert_eq!(seen.status, 201, "{}", seen.text);
+    let id = seen.body["id"].as_str().unwrap().to_owned();
+    insta::assert_json_snapshot!(
+        "mode_created",
+        redacted(&seen.body, &[(id.clone(), "the mode")])
+    );
+    let listed = setup.modes(&member, "").await;
+    assert_eq!(listed.body["items"][0], seen.body, "listed as answered");
+}
+
+/// Each rule a field breaks is one 422 at that field's own path, and
+/// nothing is written: a sample of the mapping, which fleet-api-types
+/// tests in full.
+#[sqlx::test(migrations = false)]
+async fn a_rule_a_field_breaks_is_one_422_at_its_path_and_nothing_is_written(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let member = setup.person(2, "member", Role::Member).await;
+    let chat = |message: &str, interval: u32| json!({ "action": { "type": "send_chat", "message": message }, "schedule": { "type": "every", "interval_ms": interval, "jitter_ms": 0 }, "probability": 100 });
+    let cases = [
+        (
+            json!({ "name": "", "visibility": "private", "steps": [] }),
+            "name",
+            "must not be empty",
+        ),
+        (
+            json!({ "name": "AFK", "visibility": "private", "steps": [] }),
+            "name",
+            "is a built-in mode's name",
+        ),
+        (
+            json!({ "name": "Farm 🐄", "visibility": "private", "steps": [] }),
+            "name",
+            "must hold only letters, digits, plain spaces and punctuation, without emoji or other symbols",
+        ),
+        (
+            json!({ "name": "Fine", "visibility": "private", "steps": [chat("hi", 30_000), chat("a\nb", 30_000)] }),
+            "steps[1].action.message",
+            "must be one line, without control characters, formatting codes or text-direction marks",
+        ),
+        (
+            json!({ "name": "Fine", "visibility": "private", "steps": [chat("hi", 29_999)] }),
+            "steps[0].schedule.interval_ms",
+            "must be at least 30 seconds for chat",
+        ),
+        (
+            json!({ "name": "Fine", "visibility": "private", "steps": [{ "action": { "type": "select_hotbar_slot", "slot": 9 }, "schedule": { "type": "at_start" }, "probability": 100 }] }),
+            "steps[0].action.slot",
+            "must be a hotbar slot from 0 to 8 (the keys 1 to 9)",
+        ),
+        (
+            json!({ "name": "Fine", "visibility": "private", "steps": [{ "action": { "type": "look", "yaw": 0.0 }, "schedule": { "type": "at_start" }, "probability": 100 }] }),
+            "steps[0].action.pitch",
+            "is required for this type",
+        ),
+        (
+            json!({ "name": "Fine", "visibility": "private", "steps": vec![chat("hi", 30_000); 33] }),
+            "steps",
+            "must hold at most 32 steps",
+        ),
+    ];
+
+    for (body, path, message) in cases {
+        let seen = setup.create(&member, body).await;
+        assert_eq!(seen.status, 422, "{path}: {}", seen.text);
+        assert_eq!(
+            seen.body["error"]["fields"],
+            json!([{ "path": path, "message": message }]),
+            "{path}"
+        );
+    }
+    assert_eq!(setup.users_modes().await, 0);
+    assert_eq!(setup.creations().await, 0);
+}
+
+/// A body that doesn't parse is the bare 400, whatever text it holds:
+/// neither the answer nor any log line repeats it (S12).
+#[sqlx::test(migrations = false)]
+async fn a_body_that_doesnt_parse_is_400_and_never_repeats_what_it_read(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    log_capture::install().unwrap();
+    let setup = setup(options).await;
+    let member = setup.person(2, "member", Role::Member).await;
+    let step = |action: Value| json!({ "name": "Fine", "visibility": "private", "steps": [{ "action": action, "schedule": { "type": "at_start" }, "probability": 100 }] });
+    let bodies = [
+        step(json!({ "type": format!("say {CANARY}") })),
+        step(json!({ "type": "select_hotbar_slot", "slot": format!("slot {CANARY}") })),
+        step(json!({ "type": "jump", CANARY: true })),
+        json!({ "name": "Fine", "visibility": format!("shared {CANARY}"), "steps": [] }),
+        json!({ "name": "Fine", "visibility": "private", "steps": [], "owner": CANARY }),
+    ];
+
+    for body in bodies {
+        let seen = setup.create(&member, body).await;
+        assert_eq!(seen.status, 400, "{}", seen.text);
+        assert_eq!(seen.code(), "bad_request");
+        assert!(!seen.text.contains(CANARY), "{}", seen.text);
+    }
+    assert_eq!(setup.users_modes().await, 0);
+    log_capture::check_absent(CANARY).unwrap();
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_member_may_not_create_a_shared_mode(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let member = stepped_up(&setup, 2, "member", Role::Member).await;
+    let mut body = swinging_body("Mine");
+    body["visibility"] = json!("shared");
+
+    let plain = setup.create(&member, body.clone()).await;
+    let twin = setup.create_with_commands(&member, body).await;
+
+    assert_eq!(
+        (plain.status, plain.code()),
+        (403, "forbidden"),
+        "{}",
+        plain.text
+    );
+    assert_eq!(
+        (twin.status, twin.code()),
+        (403, "forbidden"),
+        "{}",
+        twin.text
+    );
+    assert_eq!(setup.users_modes().await, 0);
+}
+
+/// A mode whose steps send a command off the allowlist is pointed to the
+/// step-up route and nothing is written; an allowlisted command passes the
+/// plain route (S16).
+#[sqlx::test(migrations = false)]
+async fn a_command_off_the_allowlist_is_pointed_to_the_step_up_route(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = with_spawn(options).await;
+    let member = setup.person(2, "member", Role::Member).await;
+
+    let pointed = setup
+        .create(&member, commanding_body("Ops", "private", "/op AfkBot2"))
+        .await;
+    assert_eq!(setup.users_modes().await, 0, "nothing written");
+    let listed = setup
+        .create(
+            &member,
+            commanding_body("Spawner", "private", "/spawn home"),
+        )
+        .await;
+
+    assert_eq!(pointed.status, 403, "{}", pointed.text);
+    assert_eq!(pointed.code(), "mode_needs_step_up");
+    insta::assert_json_snapshot!("mode_needs_step_up", pointed.body_without_request_id());
+    assert_eq!(listed.status, 201, "{}", listed.text);
+}
+
+/// The pointer comes after `forbidden`: only a caller the twin would take
+/// sees it.
+#[sqlx::test(migrations = false)]
+async fn the_pointer_comes_after_forbidden(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = with_spawn(options).await;
+    let member = setup.person(2, "member", Role::Member).await;
+
+    let seen = setup
+        .create(&member, commanding_body("Ops", "shared", "/op AfkBot2"))
+        .await;
+
+    assert_eq!(
+        (seen.status, seen.code()),
+        (403, "forbidden"),
+        "{}",
+        seen.text
+    );
+}
+
+/// The twin needs a fresh step-up, and then takes any valid mode (S16).
+#[sqlx::test(migrations = false)]
+async fn the_step_up_route_needs_a_fresh_step_up_and_then_takes_any_mode(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = with_spawn(options).await;
+    let member = setup.person(2, "member", Role::Member).await;
+    let body = commanding_body("Ops", "private", "/op AfkBot2");
+
+    let without = setup.create_with_commands(&member, body.clone()).await;
+    setup.stamp(member.session).await;
+    let with = setup.create_with_commands(&member, body).await;
+    let swinging = setup
+        .create_with_commands(&member, swinging_body("Swinging"))
+        .await;
+
+    assert_eq!(without.code(), "step_up_required", "{}", without.text);
+    assert_eq!(with.status, 201, "{}", with.text);
+    assert_eq!(swinging.status, 201, "{}", swinging.text);
+    assert_eq!(setup.users_modes().await, 2);
+}
+
+/// The audit entry names the route, the visibility and whether the steps
+/// send commands, never the name or a step's text (S16; ADR-0016).
+#[sqlx::test(migrations = false)]
+async fn a_create_is_recorded_without_the_name_or_a_steps_text(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = with_spawn(options).await;
+    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let cases = [
+        (
+            MODES,
+            swinging_body("Quiet hunter2"),
+            "private",
+            "none",
+            "plain",
+        ),
+        (
+            MODES,
+            commanding_body("Spawn hunter2", "shared", "/spawn hunter2-secret"),
+            "shared",
+            "allowlisted",
+            "plain",
+        ),
+        (
+            WITH_COMMANDS,
+            commanding_body("Ops hunter2", "private", "/op hunter2-secret"),
+            "private",
+            "unlisted",
+            "with_commands",
+        ),
+    ];
+
+    for (path, body, visibility, commands, route) in cases {
+        let seen = setup.post(path, Some(&admin.token), Some(body)).await;
+        assert_eq!(seen.status, 201, "{}", seen.text);
+        let entry = setup.last(&AuditAction::MODE_CREATE).await;
+        assert_eq!(entry.outcome, AuditOutcome::Success);
+        assert_eq!(entry.actor, Some(admin.id));
+        assert!(entry.ip.is_some());
+        assert_eq!(
+            entry.target,
+            Some(RecordedTarget::Known(AuditTarget::Mode(
+                seen.body["id"].as_str().unwrap().parse().unwrap()
+            )))
+        );
+        assert_eq!(
+            metadata(&entry),
+            BTreeMap::from([
+                ("visibility".to_owned(), visibility.to_owned()),
+                ("commands".to_owned(), commands.to_owned()),
+                ("route".to_owned(), route.to_owned()),
+            ])
+        );
+        assert!(!format!("{entry:?}").contains("hunter2"), "{entry:?}");
+    }
+}
+
+/// An owner holds at most 50 modes, private and shared together; the 51st
+/// is 409 `conflict` and nothing is written (S19).
+#[sqlx::test(migrations = false)]
+async fn an_owner_holds_at_most_fifty_modes(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    for n in 0..49_u8 {
+        setup
+            .add_mode(n, admin.id, &format!("Mode {n}"), "private", &swinging())
+            .await;
+    }
+    setup
+        .add_mode(49, admin.id, "Shared one", "shared", &swinging())
+        .await;
+
+    let seen = setup.create(&admin, swinging_body("Fifty-first")).await;
+
+    assert_eq!(
+        (seen.status, seen.code()),
+        (409, "conflict"),
+        "{}",
+        seen.text
+    );
+    assert_eq!(setup.users_modes().await, 50);
+    assert_eq!(setup.creations().await, 0);
+}
+
+/// A name another of the owner's modes has, or for a shared mode a shared
+/// one has, ASCII case ignored, is 422 on `name` (S13).
+#[sqlx::test(migrations = false)]
+async fn a_taken_name_is_422_on_name(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    let other_admin = setup.person(3, "otheradmin", Role::Admin).await;
+    setup
+        .add_mode(1, admin.id, "Fishing", "private", &swinging())
+        .await;
+    setup
+        .add_mode(2, other_admin.id, "Shared one", "shared", &swinging())
+        .await;
+    let mut shared = swinging_body("SHARED ONE");
+    shared["visibility"] = json!("shared");
+
+    for (body, case) in [
+        (swinging_body("fishing"), "the owner's own"),
+        (shared, "a shared one's"),
+    ] {
+        let seen = setup.create(&admin, body).await;
+        assert_eq!(seen.status, 422, "{case}: {}", seen.text);
+        assert_eq!(
+            seen.body["error"]["fields"],
+            json!([{ "path": "name", "message": "is already another mode's name" }]),
+            "{case}"
+        );
+    }
+    assert_eq!(setup.users_modes().await, 2);
+}
+
+/// A name only a mode the caller can't see has is free: the check never
+/// probes another user's private modes (S13).
+#[sqlx::test(migrations = false)]
+async fn a_name_used_only_by_a_mode_the_caller_cannot_see_is_accepted(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let the_owner = setup.person(2, "theowner", Role::Owner).await;
+    let member = setup.person(3, "member", Role::Member).await;
+    let admin = setup.person(4, "admin", Role::Admin).await;
+    setup
+        .add_mode(1, the_owner.id, "Secret", "private", &swinging())
+        .await;
+    let mut shared = swinging_body("secret");
+    shared["visibility"] = json!("shared");
+
+    let members = setup.create(&member, swinging_body("SECRET")).await;
+    let admins = setup.create(&admin, shared).await;
+
+    assert_eq!(members.status, 201, "{}", members.text);
+    assert_eq!(admins.status, 201, "{}", admins.text);
+}
+
+/// The transaction asks `authorize()` again: an Admin demoted right
+/// before it may no longer create a shared mode, and nothing is written.
+#[sqlx::test(migrations = false)]
+async fn a_role_lowered_before_the_transaction_is_403_and_writes_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    let mut body = swinging_body("Shared one");
+    body["visibility"] = json!("shared");
+    setup
+        .hooked
+        .queue(Meanwhile::SetRole(admin.id, Role::Member));
+
+    let seen = setup.create(&admin, body).await;
+
+    assert_eq!(
+        (seen.status, seen.code()),
+        (403, "forbidden"),
+        "{}",
+        seen.text
+    );
+    assert_eq!(setup.users_modes().await, 0);
+    assert_eq!(setup.creations().await, 0);
+}
+
+/// A session revoked right before the transaction is 401, and nothing is
+/// written.
+#[sqlx::test(migrations = false)]
+async fn a_session_revoked_before_the_transaction_is_401_and_writes_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let member = setup.person(2, "member", Role::Member).await;
+    setup.hooked.queue(Meanwhile::RevokeSession(member.session));
+
+    let seen = setup.create(&member, swinging_body("Mine")).await;
+
+    assert_eq!(seen.status, 401, "{}", seen.text);
+    assert_eq!(setup.users_modes().await, 0);
+}
+
+#[sqlx::test(migrations = false)]
+async fn creating_spends_the_users_request_limit(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let one = Rate::per_second(core::num::NonZeroU32::MIN, core::num::NonZeroU32::MIN);
+    let setup = setup_with(
+        options,
+        Options {
+            limits: RateLimitConfig {
+                per_user: one,
+                ..RateLimitConfig::default()
+            },
+            ..Options::default()
+        },
+    )
+    .await;
+    let member = stepped_up(&setup, 2, "member", Role::Member).await;
+
+    for (n, path) in [MODES, WITH_COMMANDS].into_iter().enumerate() {
+        let body = swinging_body(&format!("Mode {n}"));
+        let first = setup
+            .post(path, Some(&member.token), Some(body.clone()))
+            .await;
+        let second = setup.post(path, Some(&member.token), Some(body)).await;
+        assert_ne!(first.status, 429, "{path}: {}", first.text);
+        assert_eq!(second.status, 429, "{path}");
+        assert_eq!(second.headers["retry-after"], "1", "{path}");
+        setup.clock.advance(core::time::Duration::from_secs(1));
+    }
+}
+
+/// The service enforces the route rule itself, before anything is read: a
+/// mode with a command off the allowlist through the plain route is
+/// `WrongRoute`, even for a session that doesn't exist (S16, as S10).
+#[sqlx::test(migrations = false)]
+async fn a_mode_its_route_doesnt_take_is_refused_before_anything_is_read(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let service = ModeService::new(
+        std::sync::Arc::new(setup.clock.clone()),
+        std::sync::Arc::new(fleet_testkit::system::SeededRandom::new(5)),
+        std::sync::Arc::new(setup.db.clone()),
+    );
+    let nobody = ActingUser {
+        actor: fleet_core::authz::Actor {
+            id: fleet_core::id::UserId::new_v7(at(super::support::T0), [0xAB; 10]).unwrap(),
+            role: Role::Owner,
+        },
+        session_id: fleet_core::id::SessionId::new_v7(at(super::support::T0), [0xAC; 10]).unwrap(),
+        ip: "192.0.2.10".parse().unwrap(),
+    };
+    let definition: ModeDefinition = serde_json::from_value(json!({ "steps": [
+        { "action": { "type": "send_chat", "message": "/op AfkBot2" }, "schedule": { "type": "at_start" }, "probability": 100 },
+    ] }))
+    .unwrap();
+
+    let result = service
+        .create(
+            &nobody,
+            ModeRoute::Plain,
+            ModeName::try_from("Ops").unwrap(),
+            ModeVisibility::Private,
+            definition,
+        )
+        .await;
+
+    assert!(
+        matches!(
+            result,
+            Err(CreateModeError::WrongRoute {
+                route: ModeRoute::Plain
+            })
+        ),
+        "{result:?}"
+    );
 }
