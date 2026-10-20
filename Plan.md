@@ -3944,6 +3944,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The service checks the route itself** (S10): `/chat` with a command off the allowlist, or `/command` with plain chat, is refused before anything is read, as an internal error, since only a missing handler check gets there.
   > - **Also:** a committed line its stream no longer took is logged at `debug` with its IDs and why; `just dev-bots` treats `chat <id>` and `command <id>` without text as invalid input; the 422 descriptions name control characters; tests pin a grant revoked before the transaction (404, nothing written or sent) and serve's wiring of the wait.
 
+  > Note (P11.3, Phase 11, group B2's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S11, U7): **the history's text, and the kick message.**
+  > - **A line's text crosses as a `BoundedText`** (S11): a received line break becomes ` | `, so a server can't make one message look like two; its cap, 3072 characters, holds a stored 1024-character text with line breaks uncut.
+  > - **The kick message's cap** *(the user's addition at the plan review, U7)*: `LastDisconnect.message` gets the same treatment (3 × `Kick::MAX_MESSAGE_LEN`), since a long kick message with line breaks was cut on its way out.
+
   > Note (P11.3, from Phase 3, group E, found by the user's real-account check): **flagged, not decided.** *Decided in Phase 11, group A: see the note above (S2).*
   > - **The limit.** On a server that enforces secure chat, azalea's unsigned commands with message arguments (`/me`, `/msg`, `/tell`, `/w`, `/say`, `/teammsg`) are rejected.
   >   - The bot gets one system message and stays up.
@@ -4295,6 +4299,18 @@ These are not scheduled. Each one needs an ADR before it starts.
 - A PostgreSQL repository implementation for larger installations.
 - Scheduled modes (time windows), bot groups and bulk actions.
 - Auto-eat and health awareness. This needs inventory knowledge, which is currently out of scope.
+- **An auto-stop timer per bot** *(the user's idea, recorded in Phase 11, group B2; after Phase 13)*:
+  - **When:** a duration (hours and minutes), or a clock time in German local time (`Europe/Berlin`, summer and winter time from the time-zone rules, never a fixed UTC offset).
+  - **What:** when it's due, the server sets the bot to Stopped as the Stop button does, audited with `via = timer`, and stored so it survives a restart.
+  - **Edge times:** a clock time that doesn't exist (spring forward) fires at the next valid minute; one that exists twice (fall back) fires at its first occurrence.
+  - **Needs:** a time-zone crate, a new dependency for the user's approval then.
+- **A sell routine** *(the user's idea, recorded in Phase 11, group B2; after Phase 13)*, modelled on the FWM mod's sell macro (https://modrinth.com/mod/fwm-mod):
+  - **The routine:** the user picks item types (e.g. `minecraft:slime_block`). The bot opens the server's sell menu with a configured command and keeps it open, and shift-clicks only stacks of those items from its inventory into it. It clicks the configured sell slot when the container is full, optionally also after a wait, and reopens the menu after a delay if it closes.
+  - **A per-server profile:** the command, the expected raw menu title, its size and the sell slot; or a menu that sells when it's closed; or a server that sells by command only.
+  - **Matching:** by item ID, optionally also by custom name or components.
+  - **Safety:** a first recon step reports what the server's menu really sends. The bot stops and alerts when the menu doesn't match, and never clicks anything else.
+  - **Stats:** optional, display-only sales stats from payout messages; chat never triggers an action.
+  - **Built on** azalea's container support: the first GUI interaction the bots would do, so it lifts §1's non-goal "inventories or container GUIs" for this routine.
 
 ---
 
