@@ -31,7 +31,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, TimeDelta, Utc};
 use fleet_core::agent::AgentStatus;
 use fleet_core::audit::{AuditAction, AuditOutcome, RecordedValue};
-use fleet_core::authz::{Actor, CommandAllowlist, Role};
+use fleet_core::authz::{Actor, AuthzError, CommandAllowlist, Role};
 use fleet_core::bot::{
     BotSnapshot, BotState, ChatRefusal, CommandRefusal, DesiredRunState, LastReport, LastState,
     Lifecycle, PauseReason, ShownState, StickyState, UnplacedWhy,
@@ -46,8 +46,8 @@ use fleet_core::system::RandomError;
 use fleet_core::value::{AgentName, ServerAddress, Username};
 use fleet_proto::control::ChatFailedReason;
 use fleet_server::app::bots::{
-    BotAction, BotService, BotWriteError, ChatOutcome, ChatRoute, ChatSendError, ChatWait,
-    Controlled,
+    BotAction, BotService, BotWriteError, ChatHistory, ChatHistoryError, ChatOutcome, ChatRoute,
+    ChatSendError, ChatWait, Controlled,
 };
 use fleet_server::app::events::{EventBus, LiveEvent, LiveEventKind};
 use fleet_server::app::users::ActingUser;
@@ -1290,7 +1290,7 @@ impl Setup {
             .await
             .unwrap()
             .into_iter()
-            .map(|record| record.entry)
+            .map(|line| line.record.entry)
             .collect()
     }
 
@@ -1559,6 +1559,103 @@ async fn a_refusal_after_the_commit_keeps_the_row_and_the_entry(
         assert_eq!(setup.lines(bot).await, [users_line("hello")]);
         assert_eq!(setup.chat_entries().await.len(), usize::from(n));
     }
+}
+
+/// The history: a bot's chat newest first, with its account as the viewer
+/// sees it, for whoever may see the bot (P11.3; ADR-0020, U3).
+#[sqlx::test(migrations = false)]
+async fn the_history_is_the_bots_chat_newest_first_with_its_account(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let bot = setup.bot(1).await;
+    setup.held_in(bot, online()).await;
+    let mut tx = setup.db.write().await.unwrap();
+    let mut stored = Vec::new();
+    for (n, text) in (1_i64..).zip(["one", "two", "three"]) {
+        let row = NewChatMessage {
+            bot,
+            agent: agent(1),
+            at: at(T0) + TimeDelta::seconds(n),
+            entry: users_line(text),
+        };
+        stored.push(tx.chat().append(&row).await.unwrap().unwrap());
+    }
+    tx.commit(setup_entry()).await.unwrap();
+
+    let first = setup
+        .chatting()
+        .chat(
+            &the_owner(),
+            bot,
+            Page {
+                before: None,
+                limit: PageLimit::new(2).unwrap(),
+            },
+        )
+        .await
+        .unwrap();
+    let rest = setup
+        .chatting()
+        .chat(
+            &the_owner(),
+            bot,
+            Page {
+                before: first.lines.next,
+                limit: PageLimit::new(2).unwrap(),
+            },
+        )
+        .await
+        .unwrap();
+
+    let ids = |page: &ChatHistory| {
+        page.lines
+            .items
+            .iter()
+            .map(|line| line.record.id)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ids(&first), [stored[2], stored[1]]);
+    assert_eq!(first.lines.next, Some(stored[1]));
+    assert_eq!(ids(&rest), [stored[0]]);
+    assert_eq!(rest.lines.next, None);
+    assert_eq!(first.account.owner.id, owner());
+    assert_eq!(
+        first.lines.items[0].sent_by.as_ref().map(Username::as_str),
+        Some("owner")
+    );
+}
+
+/// An unknown bot has no history, and one the viewer may not see is
+/// refused as unknown (`authorize()`'s 404).
+#[sqlx::test(migrations = false)]
+async fn an_unknown_or_unseen_bots_history_is_refused(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let known = setup.bot(1).await;
+    let stranger = Actor {
+        id: UserId::new_v7(at(T0), [9; 10]).unwrap(),
+        role: Role::Member,
+    };
+    let page = Page {
+        before: None,
+        limit: PageLimit::new(10).unwrap(),
+    };
+
+    let unknown = setup.chatting().chat(&the_owner(), bot(99), page).await;
+    let unseen = setup.chatting().chat(&stranger, known, page).await;
+
+    assert!(
+        matches!(unknown, Err(ChatHistoryError::NotFound)),
+        "{unknown:?}"
+    );
+    assert!(
+        matches!(unseen, Err(ChatHistoryError::Denied(AuthzError::NotFound))),
+        "{unseen:?}"
+    );
 }
 
 /// The message of the line a committed line that wasn't sent logs.

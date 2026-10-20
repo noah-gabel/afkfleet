@@ -38,7 +38,9 @@ use fleet_api_types::bots::{
     SERVER_ADDRESS_MAX_CHARS, SessionServerFailure, UnplacedReason,
 };
 use fleet_api_types::chat::{
-    CHAT_MESSAGE_MAX_UNITS, ChatCommandRequest, ChatSendOutcome, ChatSendRequest, ChatSendResponse,
+    CHAT_MESSAGE_MAX_UNITS, CHAT_SENDER_MAX_CHARS, CHAT_TEXT_MAX_CHARS, ChatCommandRequest,
+    ChatDirection, ChatLine, ChatLineKind, ChatLineSender, ChatPage, ChatSendOutcome,
+    ChatSendRequest, ChatSendResponse,
 };
 use fleet_api_types::error::{
     FIELD_MESSAGE_MAX_CHARS, FIELD_PATH_MAX_CHARS, MESSAGE_MAX_CHARS, REQUEST_ID_MAX_CHARS,
@@ -103,6 +105,11 @@ fn declarations() -> BTreeMap<String, String> {
         ("ChatSendOutcome", ChatSendOutcome::decl(&config)),
         ("ChatSendRequest", ChatSendRequest::decl(&config)),
         ("ChatSendResponse", ChatSendResponse::decl(&config)),
+        ("ChatDirection", ChatDirection::decl(&config)),
+        ("ChatLine", ChatLine::decl(&config)),
+        ("ChatLineKind", ChatLineKind::decl(&config)),
+        ("ChatLineSender", ChatLineSender::decl(&config)),
+        ("ChatPage", ChatPage::decl(&config)),
         ("SafeInt", SafeInt::decl(&config)),
         (
             "CreatedEnrollmentTokenResponse",
@@ -466,6 +473,10 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::chat_message("ChatSendRequest", "message", CHAT_MESSAGE_MAX_UNITS)]
 #[case::command_message("ChatCommandRequest", "message", CHAT_MESSAGE_MAX_UNITS)]
 #[case::chat_request_id("ChatSendResponse", "request_id", ID_CHARS)]
+#[case::chat_line_at("ChatLine", "at", TIMESTAMP_CHARS)]
+#[case::chat_line_text("ChatLine", "text", CHAT_TEXT_MAX_CHARS)]
+#[case::chat_sender_name("ChatLineSender", "name", CHAT_SENDER_MAX_CHARS)]
+#[case::chat_sender_uuid("ChatLineSender", "uuid", ID_CHARS)]
 fn a_text_field_is_capped_at_its_constant(
     #[case] component: &str,
     #[case] field: &str,
@@ -480,7 +491,7 @@ fn a_text_field_is_capped_at_its_constant(
 }
 
 /// Every text field whose cap the cases above check.
-const CHECKED_TEXTS: [(&str, &str); 94] = [
+const CHECKED_TEXTS: [(&str, &str); 98] = [
     ("ErrorBody", "message"),
     ("ErrorBody", "request_id"),
     ("FieldError", "path"),
@@ -575,6 +586,10 @@ const CHECKED_TEXTS: [(&str, &str); 94] = [
     ("ChatSendRequest", "message"),
     ("ChatCommandRequest", "message"),
     ("ChatSendResponse", "request_id"),
+    ("ChatLine", "at"),
+    ("ChatLine", "text"),
+    ("ChatLineSender", "name"),
+    ("ChatLineSender", "uuid"),
 ];
 
 /// Every text field of every component: the cases above must cover them.
@@ -733,6 +748,10 @@ fn an_open_field_lists_exactly_its_enums_known_values() {
 #[case::connect_failure("LastDisconnect", "connect_failure")]
 #[case::restriction("LastDisconnect", "restriction")]
 #[case::session_server_failure("LastDisconnect", "session_server_failure")]
+#[case::chat_line_sender("ChatLine", "sender")]
+#[case::chat_line_sent_by("ChatLine", "sent_by")]
+#[case::chat_sender_uuid("ChatLineSender", "uuid")]
+#[case::chat_page_next("ChatPage", "next")]
 fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[case] field: &str) {
     let components = components_json();
     let schema = property(&components, component, field);
@@ -781,6 +800,8 @@ fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[ca
 #[case::restriction("LastDisconnect", "restriction", "AccountRestriction")]
 #[case::session_server_failure("LastDisconnect", "session_server_failure", "SessionServerFailure")]
 #[case::chat_outcome("ChatSendResponse", "outcome", "ChatSendOutcome")]
+#[case::chat_direction("ChatLine", "direction", "ChatDirection")]
+#[case::chat_kind("ChatLine", "kind", "ChatLineKind")]
 fn the_new_open_fields_list_exactly_their_known_values(
     #[case] component: &str,
     #[case] field: &str,
@@ -814,6 +835,8 @@ fn the_new_open_fields_list_exactly_their_known_values(
         "AccountRestriction" => names(AccountRestriction::ALL),
         "SessionServerFailure" => names(SessionServerFailure::ALL),
         "ChatSendOutcome" => names(ChatSendOutcome::ALL),
+        "ChatDirection" => names(ChatDirection::ALL),
+        "ChatLineKind" => names(ChatLineKind::ALL),
         _ => InviteState::ALL
             .iter()
             .map(|state| state.as_str())

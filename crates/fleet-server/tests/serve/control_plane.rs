@@ -594,7 +594,7 @@ async fn chat_admitted_before_the_signal_is_stored_before_the_database_closes() 
     assert_eq!(
         stored
             .into_iter()
-            .map(|record| record.entry)
+            .map(|line| line.record.entry)
             .collect::<Vec<_>>(),
         [ChatEntry::Received(chat)]
     );

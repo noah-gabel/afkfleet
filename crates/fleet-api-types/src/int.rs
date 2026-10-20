@@ -12,6 +12,8 @@
 //! that range, which fields refer to, as the TypeScript fields name the
 //! `SafeInt` type.
 
+use core::fmt;
+
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use ts_rs::TS;
 use utoipa::openapi::RefOr;
@@ -70,6 +72,13 @@ impl TryFrom<i64> for SafeInt {
 impl From<SafeInt> for i64 {
     fn from(value: SafeInt) -> Self {
         value.get()
+    }
+}
+
+/// The number, as a query string carries it (fleet-client's chat cursor).
+impl fmt::Display for SafeInt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -138,6 +147,14 @@ mod tests {
     fn a_value_outside_the_safe_range_is_refused(#[case] value: i64) {
         assert_eq!(SafeInt::try_new(value), Err(SafeIntError::OutOfRange));
         assert_eq!(SafeInt::try_from(value), Err(SafeIntError::OutOfRange));
+    }
+
+    #[rstest]
+    #[case::zero(0, "0")]
+    #[case::negative(-42, "-42")]
+    #[case::max(SafeInt::MAX, "9007199254740991")]
+    fn a_value_displays_as_its_number(#[case] value: i64, #[case] shown: &str) {
+        assert_eq!(SafeInt::try_new(value).unwrap().to_string(), shown);
     }
 
     #[test]

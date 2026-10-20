@@ -27,6 +27,16 @@ pub enum ChatMessageError {
     },
 }
 
+/// A message as a viewer below Manage may see it (ADR-0020, S6, S9), from
+/// [`ChatMessage::without_arguments`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Redacted<'a> {
+    /// What's shown: a command's `/` and name, or any other message whole.
+    pub text: &'a str,
+    /// Whether anything after the command's name was left out.
+    pub arguments_hidden: bool,
+}
+
 /// Text a bot may send as chat or as a `/command`.
 ///
 /// It's trimmed, 1 to [`ChatMessage::MAX_LEN`] UTF-16 code units long, and
@@ -52,6 +62,35 @@ impl ChatMessage {
     #[must_use]
     pub fn is_command(&self) -> bool {
         self.0.starts_with('/')
+    }
+
+    /// The message without a command's arguments (ADR-0020, S9), for
+    /// viewers below Manage, whom a `/login <password>` mustn't reach.
+    ///
+    /// A command is cut at its first whitespace, any Unicode whitespace,
+    /// where [`ChatMessage::command_name`] splits it: the text is `/` and
+    /// the name, and `arguments_hidden` says whether anything followed.
+    /// `/spawn` and a lone `/` come back whole; `/login pw` reads `/login`
+    /// and `/ x` reads `/`, both hidden; `//wand pos` reads `//wand`. Any
+    /// other message comes back whole. That's stricter than Minecraft, which
+    /// splits at a space only, never looser.
+    #[must_use]
+    pub fn without_arguments(&self) -> Redacted<'_> {
+        let cut = self
+            .is_command()
+            .then(|| self.0.split_once(char::is_whitespace))
+            .flatten();
+        match cut {
+            // The message is trimmed, so something follows the whitespace.
+            Some((command, _)) => Redacted {
+                text: command,
+                arguments_hidden: true,
+            },
+            None => Redacted {
+                text: &self.0,
+                arguments_hidden: false,
+            },
+        }
     }
 
     /// Returns the command name for allowlist checks, or `None` if the message
@@ -209,6 +248,32 @@ mod tests {
         assert_eq!(message.is_command(), expected.is_some());
     }
 
+    #[rstest]
+    #[case::plain_chat("hello world", "hello world", false)]
+    #[case::a_later_slash("hello /op AfkBot2", "hello /op AfkBot2", false)]
+    #[case::a_bare_command("/spawn", "/spawn", false)]
+    #[case::a_password("/login pw", "/login", true)]
+    #[case::many_arguments("/spawn home now", "/spawn", true)]
+    #[case::a_lone_slash("/", "/", false)]
+    #[case::a_space_after_the_slash("/ x", "/", true)]
+    #[case::worldedit_double_slash("//wand pos", "//wand", true)]
+    #[case::namespaced("/minecraft:op AfkBot1", "/minecraft:op", true)]
+    #[case::a_no_break_space("/login\u{a0}pw", "/login", true)]
+    #[case::an_ideographic_space("/login\u{3000}pw", "/login", true)]
+    fn a_command_loses_its_arguments_and_anything_else_stays_whole(
+        #[case] input: &str,
+        #[case] text: &str,
+        #[case] arguments_hidden: bool,
+    ) {
+        assert_eq!(
+            message(input).without_arguments(),
+            Redacted {
+                text,
+                arguments_hidden
+            }
+        );
+    }
+
     #[test]
     fn deserialize_rejects_invalid_text() {
         assert!(serde_json::from_str::<ChatMessage>("\"a\\nb\"").is_err());
@@ -228,6 +293,28 @@ mod tests {
         #[test]
         fn never_panics(text in any::<String>()) {
             let _ = ChatMessage::try_from(text.as_str());
+        }
+
+        /// The shown text is a prefix: for a command its `/` and name, cut
+        /// exactly when something follows; anything else whole.
+        #[test]
+        fn a_command_is_shown_up_to_its_name_and_anything_else_whole(
+            text in prop_oneof![
+                "/[a-z:/]{0,8}([ \u{a0}\u{2003}\u{3000}][a-z0-9 \u{a0}]{0,12})?",
+                "[a-z][a-z /\u{a0}]{0,20}",
+            ]
+        ) {
+            if let Ok(message) = ChatMessage::try_from(text.as_str()) {
+                let shown = message.without_arguments();
+
+                prop_assert!(message.as_str().starts_with(shown.text));
+                prop_assert_eq!(shown.arguments_hidden, shown.text.len() < message.as_str().len());
+                if let Some(name) = message.command_name() {
+                    prop_assert_eq!(shown.text, format!("/{name}"));
+                } else {
+                    prop_assert_eq!(shown.text, message.as_str());
+                }
+            }
         }
 
         #[test]

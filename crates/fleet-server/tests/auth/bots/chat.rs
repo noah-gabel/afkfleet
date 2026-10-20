@@ -117,6 +117,9 @@ impl Setup {
             )
             .await
             .unwrap()
+            .into_iter()
+            .map(|line| line.record)
+            .collect()
     }
 
     /// The chat routes' entries, oldest first.

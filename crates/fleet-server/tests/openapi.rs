@@ -397,6 +397,7 @@ async fn the_document_lists_exactly_the_api_routes(
             ("/api/v1/bots/{id}/restart", "post"),
             ("/api/v1/bots/{id}/reset", "post"),
             ("/api/v1/bots/{id}/resume", "post"),
+            ("/api/v1/bots/{id}/chat", "get"),
             ("/api/v1/bots/{id}/chat", "post"),
             ("/api/v1/bots/{id}/command", "post"),
             ("/api/v1/auth/login", "post"),

@@ -41,6 +41,16 @@
 //! | `POST /api/v1/agents/enrollment-tokens` | user + step-up (the Owner; while `[grpc]` is configured) | a new enrollment token, in its bundle, shown this once |
 //! | `GET /api/v1/agents` | user (Admin+) | one page of agents, with their status |
 //! | `POST /api/v1/agents/{id}/disable` | user + step-up (Admin+) | disables an agent for good: every certificate revoked, its stream ended |
+//! | `GET /api/v1/bots` | user | one page of the bots the user may see, each under its account's field rule |
+//! | `GET /api/v1/bots/{id}` | user (View) | one bot, with what the server knows of its state |
+//! | `PATCH /api/v1/bots/{id}` | user + step-up (Manage) | the Minecraft server the bot joins |
+//! | `PUT /api/v1/bots/{id}/mode` | user (Control; a mode with a command off the allowlist: Manage) | the bot's mode |
+//! | `POST /api/v1/bots/{id}/start` | user (Control) | the bot should run: 200 |
+//! | `POST /api/v1/bots/{id}/stop` | user (Control) | the bot should stop: 200 |
+//! | `POST /api/v1/bots/{id}/restart` | user (Control) | a restart, sent to the bot's agent: 202 |
+//! | `POST /api/v1/bots/{id}/reset` | user (Control) | a failed bot reset: 202 sent to its agent, 200 cleared |
+//! | `POST /api/v1/bots/{id}/resume` | user (Control) | a paused bot resumed: 202 sent to its agent, 200 cleared |
+//! | `GET /api/v1/bots/{id}/chat` | user (View) | one page of the bot's chat, newest first, each line under its field rules |
 //! | `POST /api/v1/bots/{id}/chat` | user (Control; a command off the allowlist: pointed to `/command`) | a line for the bot to send: 200 sent, 202 pending |
 //! | `POST /api/v1/bots/{id}/command` | user + step-up (Control for an allowlisted command, Manage for any other) | a command for the bot to send: 200 sent, 202 pending |
 //! | `GET /api/openapi.json` | public | the `OpenAPI` document, only in dev mode ([`openapi`](super::openapi)) |
@@ -237,6 +247,7 @@ pub fn api_routes(routes: Routes) -> Routes {
         .authed_route(RateClass::Standard, routes!(bots::restart))
         .authed_route(RateClass::Standard, routes!(bots::reset))
         .authed_route(RateClass::Standard, routes!(bots::resume))
+        .authed_route(RateClass::Standard, routes!(chat::history))
         .authed_route(RateClass::Standard, routes!(chat::send))
         .step_up_route(RateClass::Standard, routes!(chat::command))
 }

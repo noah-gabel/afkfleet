@@ -1,0 +1,856 @@
+---
+source: crates/fleet-server/tests/auth/bots/history.rs
+expression: "redacted(&serde_json::to_value(&seen).unwrap(), &viewers.names())"
+---
+{
+  "admin": {
+    "items": [
+      {
+        "arguments_hidden": false,
+        "at": "[T0+11s]",
+        "direction": "out",
+        "id": 11,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[leaver]",
+          "username": "leaver"
+        },
+        "text": "/ x",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+10s]",
+        "direction": "out",
+        "id": 10,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[leaver]",
+          "username": "leaver"
+        },
+        "text": "/",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+9s]",
+        "direction": "out",
+        "id": 9,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[controller]",
+          "username": "controller"
+        },
+        "text": "/login hunter2-secret",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+8s]",
+        "direction": "out",
+        "id": 8,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[manager]",
+          "username": "manager"
+        },
+        "text": "/home base",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+7s]",
+        "direction": "out",
+        "id": 7,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[manager]",
+          "username": "manager"
+        },
+        "text": "/spawn",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+6s]",
+        "direction": "out",
+        "id": 6,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[manager]",
+          "username": "manager"
+        },
+        "text": "hello there",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+5s]",
+        "direction": "out",
+        "id": 5,
+        "kind": "mode",
+        "mine": false,
+        "text": "/login hunter2-secret",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+4s]",
+        "direction": "in",
+        "id": 4,
+        "kind": "system",
+        "mine": false,
+        "text": "line one | line two",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+3s]",
+        "direction": "in",
+        "id": 3,
+        "kind": "system",
+        "mine": false,
+        "text": "/spawn is disabled here",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+2s]",
+        "direction": "in",
+        "id": 2,
+        "kind": "whisper",
+        "mine": false,
+        "sender": {
+          "name": "Alex"
+        },
+        "text": "a whisper cut short",
+        "truncated": true
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+1s]",
+        "direction": "in",
+        "id": 1,
+        "kind": "chat",
+        "mine": false,
+        "sender": {
+          "name": "Steve",
+          "uuid": "00000000-0000-4000-8000-000000000001"
+        },
+        "text": "hello bot",
+        "truncated": false
+      }
+    ]
+  },
+  "admin_view_on_the_owners_bot": {
+    "items": [
+      {
+        "arguments_hidden": true,
+        "at": "[T0+2s]",
+        "direction": "out",
+        "id": 13,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[the_owner]",
+          "username": "theowner"
+        },
+        "text": "/op",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": true,
+        "at": "[T0+1s]",
+        "direction": "out",
+        "id": 12,
+        "kind": "mode",
+        "mine": false,
+        "text": "/login",
+        "truncated": false
+      }
+    ]
+  },
+  "controller": {
+    "items": [
+      {
+        "arguments_hidden": true,
+        "at": "[T0+11s]",
+        "direction": "out",
+        "id": 11,
+        "kind": "user",
+        "mine": false,
+        "text": "/",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+10s]",
+        "direction": "out",
+        "id": 10,
+        "kind": "user",
+        "mine": false,
+        "text": "/",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": true,
+        "at": "[T0+9s]",
+        "direction": "out",
+        "id": 9,
+        "kind": "user",
+        "mine": true,
+        "text": "/login",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": true,
+        "at": "[T0+8s]",
+        "direction": "out",
+        "id": 8,
+        "kind": "user",
+        "mine": false,
+        "text": "/home",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+7s]",
+        "direction": "out",
+        "id": 7,
+        "kind": "user",
+        "mine": false,
+        "text": "/spawn",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+6s]",
+        "direction": "out",
+        "id": 6,
+        "kind": "user",
+        "mine": false,
+        "text": "hello there",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": true,
+        "at": "[T0+5s]",
+        "direction": "out",
+        "id": 5,
+        "kind": "mode",
+        "mine": false,
+        "text": "/login",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+4s]",
+        "direction": "in",
+        "id": 4,
+        "kind": "system",
+        "mine": false,
+        "text": "line one | line two",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+3s]",
+        "direction": "in",
+        "id": 3,
+        "kind": "system",
+        "mine": false,
+        "text": "/spawn is disabled here",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+2s]",
+        "direction": "in",
+        "id": 2,
+        "kind": "whisper",
+        "mine": false,
+        "sender": {
+          "name": "Alex"
+        },
+        "text": "a whisper cut short",
+        "truncated": true
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+1s]",
+        "direction": "in",
+        "id": 1,
+        "kind": "chat",
+        "mine": false,
+        "sender": {
+          "name": "Steve",
+          "uuid": "00000000-0000-4000-8000-000000000001"
+        },
+        "text": "hello bot",
+        "truncated": false
+      }
+    ]
+  },
+  "manager": {
+    "items": [
+      {
+        "arguments_hidden": false,
+        "at": "[T0+11s]",
+        "direction": "out",
+        "id": 11,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[leaver]",
+          "username": "leaver"
+        },
+        "text": "/ x",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+10s]",
+        "direction": "out",
+        "id": 10,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[leaver]",
+          "username": "leaver"
+        },
+        "text": "/",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+9s]",
+        "direction": "out",
+        "id": 9,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[controller]",
+          "username": "controller"
+        },
+        "text": "/login hunter2-secret",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+8s]",
+        "direction": "out",
+        "id": 8,
+        "kind": "user",
+        "mine": true,
+        "sent_by": {
+          "id": "[manager]",
+          "username": "manager"
+        },
+        "text": "/home base",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+7s]",
+        "direction": "out",
+        "id": 7,
+        "kind": "user",
+        "mine": true,
+        "sent_by": {
+          "id": "[manager]",
+          "username": "manager"
+        },
+        "text": "/spawn",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+6s]",
+        "direction": "out",
+        "id": 6,
+        "kind": "user",
+        "mine": true,
+        "sent_by": {
+          "id": "[manager]",
+          "username": "manager"
+        },
+        "text": "hello there",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+5s]",
+        "direction": "out",
+        "id": 5,
+        "kind": "mode",
+        "mine": false,
+        "text": "/login hunter2-secret",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+4s]",
+        "direction": "in",
+        "id": 4,
+        "kind": "system",
+        "mine": false,
+        "text": "line one | line two",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+3s]",
+        "direction": "in",
+        "id": 3,
+        "kind": "system",
+        "mine": false,
+        "text": "/spawn is disabled here",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+2s]",
+        "direction": "in",
+        "id": 2,
+        "kind": "whisper",
+        "mine": false,
+        "sender": {
+          "name": "Alex"
+        },
+        "text": "a whisper cut short",
+        "truncated": true
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+1s]",
+        "direction": "in",
+        "id": 1,
+        "kind": "chat",
+        "mine": false,
+        "sender": {
+          "name": "Steve",
+          "uuid": "00000000-0000-4000-8000-000000000001"
+        },
+        "text": "hello bot",
+        "truncated": false
+      }
+    ]
+  },
+  "member": {
+    "items": [
+      {
+        "arguments_hidden": false,
+        "at": "[T0+11s]",
+        "direction": "out",
+        "id": 11,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[leaver]",
+          "username": "leaver"
+        },
+        "text": "/ x",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+10s]",
+        "direction": "out",
+        "id": 10,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[leaver]",
+          "username": "leaver"
+        },
+        "text": "/",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+9s]",
+        "direction": "out",
+        "id": 9,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[controller]",
+          "username": "controller"
+        },
+        "text": "/login hunter2-secret",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+8s]",
+        "direction": "out",
+        "id": 8,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[manager]",
+          "username": "manager"
+        },
+        "text": "/home base",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+7s]",
+        "direction": "out",
+        "id": 7,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[manager]",
+          "username": "manager"
+        },
+        "text": "/spawn",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+6s]",
+        "direction": "out",
+        "id": 6,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[manager]",
+          "username": "manager"
+        },
+        "text": "hello there",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+5s]",
+        "direction": "out",
+        "id": 5,
+        "kind": "mode",
+        "mine": false,
+        "text": "/login hunter2-secret",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+4s]",
+        "direction": "in",
+        "id": 4,
+        "kind": "system",
+        "mine": false,
+        "text": "line one | line two",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+3s]",
+        "direction": "in",
+        "id": 3,
+        "kind": "system",
+        "mine": false,
+        "text": "/spawn is disabled here",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+2s]",
+        "direction": "in",
+        "id": 2,
+        "kind": "whisper",
+        "mine": false,
+        "sender": {
+          "name": "Alex"
+        },
+        "text": "a whisper cut short",
+        "truncated": true
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+1s]",
+        "direction": "in",
+        "id": 1,
+        "kind": "chat",
+        "mine": false,
+        "sender": {
+          "name": "Steve",
+          "uuid": "00000000-0000-4000-8000-000000000001"
+        },
+        "text": "hello bot",
+        "truncated": false
+      }
+    ]
+  },
+  "the_owner": {
+    "items": [
+      {
+        "arguments_hidden": false,
+        "at": "[T0+11s]",
+        "direction": "out",
+        "id": 11,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[leaver]",
+          "username": "leaver"
+        },
+        "text": "/ x",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+10s]",
+        "direction": "out",
+        "id": 10,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[leaver]",
+          "username": "leaver"
+        },
+        "text": "/",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+9s]",
+        "direction": "out",
+        "id": 9,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[controller]",
+          "username": "controller"
+        },
+        "text": "/login hunter2-secret",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+8s]",
+        "direction": "out",
+        "id": 8,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[manager]",
+          "username": "manager"
+        },
+        "text": "/home base",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+7s]",
+        "direction": "out",
+        "id": 7,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[manager]",
+          "username": "manager"
+        },
+        "text": "/spawn",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+6s]",
+        "direction": "out",
+        "id": 6,
+        "kind": "user",
+        "mine": false,
+        "sent_by": {
+          "id": "[manager]",
+          "username": "manager"
+        },
+        "text": "hello there",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+5s]",
+        "direction": "out",
+        "id": 5,
+        "kind": "mode",
+        "mine": false,
+        "text": "/login hunter2-secret",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+4s]",
+        "direction": "in",
+        "id": 4,
+        "kind": "system",
+        "mine": false,
+        "text": "line one | line two",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+3s]",
+        "direction": "in",
+        "id": 3,
+        "kind": "system",
+        "mine": false,
+        "text": "/spawn is disabled here",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+2s]",
+        "direction": "in",
+        "id": 2,
+        "kind": "whisper",
+        "mine": false,
+        "sender": {
+          "name": "Alex"
+        },
+        "text": "a whisper cut short",
+        "truncated": true
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+1s]",
+        "direction": "in",
+        "id": 1,
+        "kind": "chat",
+        "mine": false,
+        "sender": {
+          "name": "Steve",
+          "uuid": "00000000-0000-4000-8000-000000000001"
+        },
+        "text": "hello bot",
+        "truncated": false
+      }
+    ]
+  },
+  "viewer": {
+    "items": [
+      {
+        "arguments_hidden": true,
+        "at": "[T0+11s]",
+        "direction": "out",
+        "id": 11,
+        "kind": "user",
+        "mine": false,
+        "text": "/",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+10s]",
+        "direction": "out",
+        "id": 10,
+        "kind": "user",
+        "mine": false,
+        "text": "/",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": true,
+        "at": "[T0+9s]",
+        "direction": "out",
+        "id": 9,
+        "kind": "user",
+        "mine": false,
+        "text": "/login",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": true,
+        "at": "[T0+8s]",
+        "direction": "out",
+        "id": 8,
+        "kind": "user",
+        "mine": false,
+        "text": "/home",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+7s]",
+        "direction": "out",
+        "id": 7,
+        "kind": "user",
+        "mine": false,
+        "text": "/spawn",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+6s]",
+        "direction": "out",
+        "id": 6,
+        "kind": "user",
+        "mine": false,
+        "text": "hello there",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": true,
+        "at": "[T0+5s]",
+        "direction": "out",
+        "id": 5,
+        "kind": "mode",
+        "mine": false,
+        "text": "/login",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+4s]",
+        "direction": "in",
+        "id": 4,
+        "kind": "system",
+        "mine": false,
+        "text": "line one | line two",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+3s]",
+        "direction": "in",
+        "id": 3,
+        "kind": "system",
+        "mine": false,
+        "text": "/spawn is disabled here",
+        "truncated": false
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+2s]",
+        "direction": "in",
+        "id": 2,
+        "kind": "whisper",
+        "mine": false,
+        "sender": {
+          "name": "Alex"
+        },
+        "text": "a whisper cut short",
+        "truncated": true
+      },
+      {
+        "arguments_hidden": false,
+        "at": "[T0+1s]",
+        "direction": "in",
+        "id": 1,
+        "kind": "chat",
+        "mine": false,
+        "sender": {
+          "name": "Steve",
+          "uuid": "00000000-0000-4000-8000-000000000001"
+        },
+        "text": "hello bot",
+        "truncated": false
+      }
+    ]
+  }
+}

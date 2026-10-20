@@ -609,6 +609,7 @@ async fn the_authed_routes_are_registered_with_their_class(
                 "/api/v1/bots/{id}/resume",
                 RateClass::Standard
             ),
+            entry(Method::GET, "/api/v1/bots/{id}/chat", RateClass::Standard),
             entry(Method::POST, "/api/v1/bots/{id}/chat", RateClass::Standard),
         ])
     );

@@ -34,7 +34,7 @@ use crate::ports::audit::{
     NewAuditEntry,
 };
 use crate::ports::bots::{Bot, BotReads, BotRecord, BotWrites, Fleet, ListedBot, NewBot};
-use crate::ports::chat::{ChatMessageId, ChatReads, ChatRecord, ChatWrites, NewChatMessage};
+use crate::ports::chat::{ChatMessageId, ChatReads, ChatWrites, ListedChat, NewChatMessage};
 use crate::ports::enrollment_tokens::{
     EnrollmentToken, EnrollmentTokenReads, EnrollmentTokenWrites, NewEnrollmentToken,
 };
@@ -273,7 +273,7 @@ impl ChatReads for Reads {
         &self,
         bot: BotId,
         page: Page<ChatMessageId>,
-    ) -> Result<Vec<ChatRecord>, StoreError> {
+    ) -> Result<Vec<ListedChat>, StoreError> {
         chat::page(&self.pool, bot, page).await
     }
 }

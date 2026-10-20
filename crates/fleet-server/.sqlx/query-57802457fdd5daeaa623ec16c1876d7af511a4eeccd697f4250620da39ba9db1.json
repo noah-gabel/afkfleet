@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT id AS \"id!: i64\", bot_id, direction, kind, sender_name, sender_uuid, text,\n                  truncated, at, sent_by\n           FROM chat_messages WHERE bot_id = ? AND id < ? ORDER BY id DESC LIMIT ?",
+  "query": "SELECT c.id AS \"id!: i64\", c.bot_id, c.direction, c.kind, c.sender_name,\n                  c.sender_uuid, c.text, c.truncated, c.at, c.sent_by,\n                  u.username AS sent_by_name\n           FROM chat_messages c LEFT JOIN users u ON u.id = c.sent_by\n           WHERE c.bot_id = ? AND c.id < ? ORDER BY c.id DESC LIMIT ?",
   "describe": {
     "columns": [
       {
@@ -112,6 +112,17 @@
             "name": "sent_by"
           }
         }
+      },
+      {
+        "name": "sent_by_name",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
       }
     ],
     "parameters": {
@@ -127,8 +138,9 @@
       false,
       false,
       false,
+      true,
       true
     ]
   },
-  "hash": "4783c02db7a2398bfcc29dd6961958e56d173666135278588b0b3a355f7d12b8"
+  "hash": "57802457fdd5daeaa623ec16c1876d7af511a4eeccd697f4250620da39ba9db1"
 }

@@ -37,6 +37,7 @@ use super::support::{
 };
 
 mod chat;
+mod history;
 
 const BOTS: &str = "/api/v1/bots";
 
@@ -1429,6 +1430,7 @@ async fn every_bot_route_spends_the_users_request_limit(
     for (method, path, body) in [
         ("GET", BOTS.to_owned(), None),
         ("GET", bot_path(bot), None),
+        ("GET", action_path(bot, "chat"), None),
         (
             "PATCH",
             bot_path(bot),

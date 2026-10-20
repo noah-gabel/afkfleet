@@ -68,7 +68,7 @@ async fn chat(port: &Port, bot: BotId) -> Vec<(ChatMessageId, ChatEntry)> {
         .await
         .unwrap()
         .into_iter()
-        .map(|record| (record.id, record.entry))
+        .map(|line| (line.record.id, line.record.entry))
         .collect()
 }
 
