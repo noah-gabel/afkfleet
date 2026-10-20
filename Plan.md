@@ -1123,7 +1123,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   >   - The `authz` docs list `WrongResource` (500).
   >   - One sentence in the `id` docs is fixed.
   > - **Crate docs.** The module list now includes `mc`, plus a "How it fits together" section and the conventions from ADR-0010.
-  > - **Flagged:** serde_json's own errors quote their input (see P11.4).
+  > - **Flagged:** serde_json's own errors quote their input (see P11.4). *Decided in Phase 11, group C ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S12): serde refuses only a request's shape, as the extractor's bare 400 that never shows or logs its message; every value rule is a 422 at its field.*
 
 **Security:**
 - Every constructor rejects oversized input and control characters.
@@ -1509,7 +1509,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P4.2, from P3.9): **Not decided: re-apply holds after a respawn.** A death ends a `HoldUse` hold, and only a new join runs the at-start steps again. So an at-start hold comes back after a reconnect but not after a respawn (ADR-0011).
 
   > Note (P4.2, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
-  > - **Holds after a respawn** aren't re-applied; that's a known limit. A repeating `HoldUse{on: true}` step does re-apply a hold after a death. P11.4 decides about "on respawn" steps.
+  > - **Holds after a respawn** aren't re-applied; that's a known limit. A repeating `HoldUse{on: true}` step does re-apply a hold after a death. P11.4 decides about "on respawn" steps. *Decided in Phase 11, group C ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S20): an opt-in `on_respawn` schedule after a respawn the server confirmed, built in C3.*
   > - **A failed `respawn()`** is retried every 5 s while the session lives; the first failure logs at `warn`, the retries at `debug`. After 12 failed calls in a row the session ends with the new `DisconnectReason::RespawnFailed` (Transient, added to fleet-core in this task), so the bot reconnects and respawns on join.
   > - **Events.** `FleetEvent { bot_id, at, kind }` with `StateChanged(BotSnapshot)`, `Died`, `ChatReceived`, `ChatSent{ticket}` and `ChatFailed{ticket, reason}`, on one bounded `broadcast` per fleet.
   > - **The session-request timeout** is 30 s, a `RuntimeConfig` default. *(150 s from Phase 11, ADR-0020, S1, PR #59's review: longer than the server may take to mint a session, so a bot asking fresh after a refused login takes the session minted for it.)*
@@ -3819,14 +3819,16 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Introduces:** `tokio-tungstenite`, `futures-util` (WebSocket client).
 
 > Note (P11, Phase 11's planning, 2026-10-19) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)):
-> - **Fourteen group branches** (thirteen groups, group B in two PRs since its planning). Phase 11 is built in group PRs like Phases 2–10: one branch and one commit per task, in this order, each after the previous PR is merged. Backend first; each screen comes after the endpoints it needs.
+> - **Sixteen group branches** (thirteen groups; group B in two PRs and group C in three since their planning). Phase 11 is built in group PRs like Phases 2–10: one branch and one commit per task, in this order, each after the previous PR is merged. Backend first; each screen comes after the endpoints it needs.
 >
 >   | Group | Branch | Tasks |
 >   |---|---|---|
 >   | A | `p11/u24-p11.3-fresh-requests-and-agent-chat` | U24 (ADR-0019), then P11.3's agent side: commands that need a signature, and the chat rate in each bot's spec |
 >   | B1 | `p11/p11.3-chat-send` | P11.3's API, sending: `POST /bots/{id}/chat` and `/command`, the limits, the wait, the audit, the stored line with its sender |
 >   | B2 | `p11/p11.3-chat-history` | P11.3's API, reading: `GET /bots/{id}/chat` and its field rules (ticked here) |
->   | C | `p11/p11.4-modes` | P11.4 |
+>   | C1 | `p11/p11.4-modes` | P11.4: mode names, the API's mode types, reading and creating modes |
+>   | C2 | `p11/p11.4-mode-edits` | P11.4: editing and deleting modes |
+>   | C3 | `p11/p11.4-on-respawn-steps` | P11.4: "on respawn" steps (ticked here) |
 >   | D | `p11/p11.5-live-events` | P11.5 |
 >   | E | `p11/p11.6-p11.7-retention-and-full-flow` | P11.6, P11.7 |
 >   | F | `p11/p11.9-admin-endpoints` | P11.9's backend: `GET /audit`, `agent release` over the API, the grants review at a role change |
@@ -3838,7 +3840,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   | L | `p11/p11.11-design-pass` | P11.11 |
 >   | M | `p11/p11-wrap-up` | The threat model, the README, the DoD's 24-hour run |
 >
->   - **P11.3 is spread over A, B1 and B2** (B was split at its plan review: about 8,000–9,000 lines in one; ADR-0020, group B), and **P11.9 over F, H, I and J**, each ticked in its last group, as P10.5 was over C and D. Each group aims at Phase 10's F or H in size (about 5,300 lines); one that grows past it is split at its plan review.
+>   - **P11.3 is spread over A, B1 and B2** (B was split at its plan review: about 8,000–9,000 lines in one; ADR-0020, group B), **P11.4 over C1, C2 and C3** (C was split at its plan review: about 11,500 lines in one; ADR-0020, group C), and **P11.9 over F, H, I and J**, each ticked in its last group, as P10.5 was over C and D. Each group aims at Phase 10's F or H in size (about 5,300 lines); one that grows past it is split at its plan review.
 >   - **New dependencies** arrive with their group, each shown to the user with its version, license and release date: axum's `ws` feature (tokio-tungstenite and tungstenite 0.29.0, which axum 0.8.9 pins), tokio-tungstenite as fleet-server's dev-dependency, and futures-util and moka only if D needs them; tokio-tungstenite as fleet-integration's dev-dependency in E; tokio-tungstenite and futures-util in fleet-client in G, its TLS features G's question; single Radix packages in H, I and J; bundled fonts in L.
 >   - **Who decides what:** the review agents decide each group's open questions (CLAUDE.md's step 10); the user decides P11.6's size bound (E), P11.11's stable screenshots and visual direction (L), every text friends read (one table per group plan), the looks and UX questions, and whether the chat console names who sent each line (B).
 > - **The DoD's two checks** are the user's, with their own accounts. The first ("pressing Start in the app …") in H, once the bot screens exist; the second (24 h) in M, after the design pass. Each manual check gets default-profile tests that run its own setup, config and log check without the account (Phase 10's lesson).
@@ -3990,6 +3992,13 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.4, from Phase 4, the user's request) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)): **After a respawn none of the at-start setup runs again** (look, slot, sneak, hold); only a repeating step comes back. Decide here whether modes get "on respawn" steps (e.g. `/home`, then the setup). That needs a `SessionEvent::Respawned` port event, with which the actor's respawn retry can also confirm that the bot is alive again instead of trusting an `Ok`.
   > Note (P11.4, from Phase 11, group B) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S4, S9): writing the text of a command off the allowlist into a mode needs a step-up, as sending one does (S4). And weigh here whether `GET /modes` shows a shared mode's command arguments to viewers below Manage, which a bot's chat history hides (S9).
+  > Note (P11.4, Phase 11, group C's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U8, S12–S20, R1–R5): **three PRs**: C1 (`p11/p11.4-modes`) mode names, the API's mode types, `GET /modes` and `POST /modes`; C2 (`p11/p11.4-mode-edits`) `PUT` and `DELETE`; C3 (`p11/p11.4-on-respawn-steps`) "on respawn" steps, ticking P11.4. The notes above are decided there:
+  > - **Field errors** (S12): flat mode types whose JSON is ADR-0010's; serde refuses only a shape (the extractor's bare 400, never its message, in an answer or a log); every value rule, each `ModeError` included, is one 422 at the field's own path (`steps[3].action.message`). `GET /modes` is keyset pages filtered in SQL and checked row by row; there's no `GET /modes/{id}` (R1).
+  > - **Names** (S13, U8): `fleet_core::mode::ModeName`, 1–32 letters, digits, plain spaces and punctuation, unique without ASCII case per owner and among shared modes, the built-in names reserved (migration 0018).
+  > - **What a viewer sees** (S14, S15): `built_in`, `mine`, the owner for Admins and the Owner only, the flags `editable`, `deletable` and `visibility_editable` from `authorize()`; a command's arguments only for a viewer who could edit the mode, below that `/name` and `arguments_hidden`.
+  > - **Step-up** (S16): `POST` and `PUT` are authed and point a definition with a command off the allowlist to their `/with-commands` twins (403 `mode_needs_step_up`); `DELETE` is a step-up route.
+  > - **Bots that use a mode** (S17): an edit needs `SetBotMode(check_mode)` on every one of them, else 409 `mode_in_use_by_others`, naming none; a mode in use isn't deleted (409 `mode_in_use`). An edit reaches them through `Change::Store`.
+  > - **Concurrent edits** (S18): `PUT` carries the `version` it read (409 `mode_changed`). **The cap** (S19): 50 modes an owner (409 `conflict`). **On respawn** (S20): an opt-in `on_respawn` schedule after a respawn the server confirmed.
 
 - [ ] **P11.5** 🔴 Live events:
   1. `POST /events/ticket` returns a single-use ticket valid for 30 s (moka).
@@ -4066,6 +4075,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P11.9, from Phase 11, group B) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S5, S7, S8, S9, U3, U4): **the send box.** It sends to `POST /bots/{id}/chat`; on 403 `command_needs_step_up` it resends the same line to `/command` through `useStepUpAction`, its zod schema requiring the leading `/` (S8). It waits at most the server's 6 s; a 202 reads as sent with a pending mark; `chat_unavailable` offers no "try again". The 422 texts come from the server (U4's wording for a forbidden character). **The console** shows a user's line as what the user asked, never as what the bot said (S7), a hidden command's mark outside its text (S9), the sender's name where the API gives one and the viewer's own lines marked (U3); those wordings are the user's then.
 
   > Note (P11.9, from Phase 11, group B2) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S11, U5): **the chat console reads the history** (`GET /bots/{id}/chat`, newest first, `next` for older pages). It keeps the API's order, which is commit order (U5), and never sorts by `at`. A line's text arrives with each line break as ` | ` (S11): render it as plain text, one block per message, without `white-space: pre*`. The Minecraft sender (`sender`) is the server's claim; `sent_by` and `mine` are afkfleet users.
+
+  > Note (P11.9, from Phase 11, group C's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S12–S18, R5): **the mode editor** (group I).
+  > - **Its types** are S12's flat mode types; a mode with an action or schedule `type` the app doesn't know opens read-only. Server field paths (`steps[3].action.message`) map to the form's fields.
+  > - **What the user may do** comes from each mode's `editable`, `deletable` and `visibility_editable` (S14), never from a copy of `authorize()`; creating a shared mode is Admin+, a role-only rule like the admin screens'.
+  > - **Requests are built from the form's state,** never by echoing an answer: a cut command (`arguments_hidden`, S15) is marked outside its text, and an answer sent back as it is gets a 400 (R5).
+  > - **Saving:** to the plain route; on `mode_needs_step_up` the same body again to the `/with-commands` twin through `useStepUpAction` (S16); `DELETE` through it directly. The loaded `version` goes back with each edit, and `mode_changed`, `mode_in_use_by_others`, `mode_in_use` and the cap's `conflict` each get their handling (S17–S19).
+  > - **Hotbar slots** *(the user's note at group C's plan review)*: the editor shows them as 1 to 9, the keys players know, and maps them to the API's 0 to 8.
+  > - **The user's then:** the wordings of the marks (built-in, shared, private, yours, a cut command), what each 409 offers (reload, keep the draft, "save as copy"), and whether a save warns before it asks for the password.
 
 - [ ] **P11.10** Dark mode: the app follows Windows' light or dark setting (`prefers-color-scheme` and its change event; the `.dark` class on `<html>`, set by the bundled script so the CSP allows it), and every screen is checked in both themes.
 
@@ -4512,7 +4529,7 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 | `GET /bots` · `GET/PATCH /bots/{id}` · `PUT /bots/{id}/mode` | View / Manage (`PATCH`: step-up) / Control | Bots and their state; the server address; the mode |
 | `POST /bots/{id}/start\|stop\|restart\|reset\|resume` | Control | Lifecycle |
 | `POST /bots/{id}/chat` · `POST /bots/{id}/command` · `GET /bots/{id}/chat` | Control (`/command`: step-up; a command off the allowlist: Manage) / View | Chat |
-| `GET/POST /modes` · `PUT/DELETE /modes/{id}` | Member+ (own) / Admin+ (shared) | Modes |
+| `GET/POST /modes` · `PUT/DELETE /modes/{id}` | Member+ (own) / Admin+ (shared) (`POST`, `PUT` with a command off the allowlist: their `/with-commands` step-up twins; `DELETE`: step-up) | Modes |
 | `GET /agents` · `POST /agents/enrollment-tokens` · `POST /agents/{id}/disable` | Admin+ | Agents |
 | `GET /audit` | Admin+ | Audit log (cursor-paginated) |
 | `POST /events/ticket` · `GET /events?ticket=` | user | WebSocket live events |

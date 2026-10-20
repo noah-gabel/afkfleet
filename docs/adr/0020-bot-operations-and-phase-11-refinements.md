@@ -20,7 +20,9 @@ One branch and one PR per group, one commit per task, in this order, each after 
 | A | `p11/u24-p11.3-fresh-requests-and-agent-chat` | U24, then P11.3's agent side: commands that need a signature (S2), the chat rate in each bot's spec (S3) |
 | B1 | `p11/p11.3-chat-send` | P11.3's API, sending (S4–S8): split from B at its plan review |
 | B2 | `p11/p11.3-chat-history` | P11.3's API, reading (S6, S9, U3), ticked here |
-| C | `p11/p11.4-modes` | P11.4 |
+| C1 | `p11/p11.4-modes` | P11.4: mode names, the API's mode types, reading and creating modes (split from C at its plan review) |
+| C2 | `p11/p11.4-mode-edits` | P11.4: editing and deleting modes |
+| C3 | `p11/p11.4-on-respawn-steps` | P11.4: "on respawn" steps (S20), ticked here |
 | D | `p11/p11.5-live-events` | P11.5 |
 | E | `p11/p11.6-p11.7-retention-and-full-flow` | P11.6, P11.7 |
 | F | `p11/p11.9-admin-endpoints` | P11.9's backend: `GET /audit`, `agent release` over the API, the grants review at a role change |
@@ -239,12 +241,104 @@ Eight points; a test that pins working code was shown red by a temporary mutatio
 7. **A sender the join doesn't find is `Corrupt("sent_by")`,** as B2 planned, never a deleted sender: deleting a user sets the reference to `NULL`, so a dangling one means the database lost a user. Red first: `chat_repository::a_sender_the_join_doesnt_find_is_corrupt` (the user deleted on a connection with the foreign keys off) read back a line with no sender.
 8. **The canary and the audit:** `bots::history::a_planted_argument_never_reaches_a_viewer_below_manage` also reads the Owner's bot as the Admin who holds only View on it; red by mutation H1, `chat_line` showing arguments to whoever sees the owner by role. `bots::history::reading_the_history_writes_no_audit_entry` reads the history twice and finds the audit log unchanged; red by mutation H2, the history committing an entry.
 
+### Group C's planning
+C measured at about 11,500 lines with every decision below, more than twice Phase 10's F and H, so it was split before coding, with the user's approval at the plan review:
+- **C1** (`p11/p11.4-modes`): PR #61's follow-ups, this record, mode names, the API's mode types, `GET /modes`, `POST /modes` and its step-up twin, fleet-client and the console.
+- **C2** (`p11/p11.4-mode-edits`): `PUT` and `DELETE` (S16–S18).
+- **C3** (`p11/p11.4-on-respawn-steps`): S20, ticking P11.4.
+
+CLAUDE.md's step 3 counts sixteen group branches. The decisions below cover all three groups, so C2 and C3 plan only what they build.
+
+- **U8. A mode's name holds letters, digits, plain spaces and punctuation; no emoji or other symbols** *(the user's answers at the plan review)*.
+  - Letters and digits of every script: `char::is_alphabetic` and `char::is_numeric` (`ä`, `ß`, `Ж`, `日`, `²` and `½` pass).
+  - Punctuation: all 32 ASCII punctuation characters, plus „ “ ” ‘ ’ « » – — … ¡ ¿ ·.
+  - Anything else is refused, emoji and other symbols included (`§`, `©`, `€`, `→`), with no new dependency: the standard library and one explicit list.
+- **The texts** *(the user's approval at the plan review)*: the four codes' messages and every field message, as drafted, with one change of the user's: the hotbar slot's text is "must be a hotbar slot from 0 to 8 (the keys 1 to 9)".
+
+  | Where | Text |
+  |---|---|
+  | `mode_needs_step_up` (403) | "This mode holds a command that needs your password: confirm it's you to save it." |
+  | `mode_changed` (409, C2) | "This mode changed since you opened it. Load it again to see the change." |
+  | `mode_in_use_by_others` (409, C2) | "A bot you can't set this mode on uses it, so this change can't be saved." |
+  | `mode_in_use` (409, C2) | "A bot uses this mode, so it can't be deleted. Switch every bot to another mode first." |
+  | The cap (409 `conflict`) | The existing "The request conflicts with the current state." |
+  | `name` | "must not be empty"; "must hold only letters, digits, plain spaces and punctuation, without emoji or other symbols"; "must be at most 32 characters"; "is already another mode's name"; "is a built-in mode's name" |
+  | `steps` | "must hold at most 32 steps" |
+  | A field a step's type needs, or doesn't take | "is required for this type"; "isn't used by this type" |
+  | `…action.message` | B1's three chat texts |
+  | `…action.slot` | "must be a hotbar slot from 0 to 8 (the keys 1 to 9)" |
+  | `…action.yaw`, `pitch`, `max_yaw`, `max_pitch` | "must be from -180 to 180 degrees"; "must be from -90 to 90 degrees"; "must be from 0 to 180 degrees"; "must be from 0 to 90 degrees" |
+  | `…action` (no turn) | "must turn: the largest yaw and pitch can't both be 0" |
+  | `…probability` | "must be from 1 to 100 percent" |
+  | `…schedule.interval_ms` too short | "must be at least 250 ms"; "must be at least 500 ms for attacking or the use button"; "must be at least 30 seconds for chat" |
+  | `…interval_ms`, `…jitter_ms` too long | "must be at most 24 hours" |
+  | `steps[i]`, a second limited step | "is a second chat step at start; a mode can have only one", and the same with "repeating chat step", "attack step at start", "repeating attack step", "step at start that holds the use button", "repeating step that holds the use button", "step at start that lets go of the use button", "repeating step that lets go of the use button" |
+
+*Decided by the review agents, approved by the user at the plan review:*
+- **S12 (security). The mode types are flat, and serde only ever refuses a shape.**
+  - **The JSON** is exactly ADR-0010's mode JSON. Requests: `CreateModeRequest { name, visibility, steps }`, each step `{ action { type, yaw?, pitch?, max_yaw?, max_pitch?, on?, slot?, message? }, schedule { type, interval_ms?, jitter_ms? }, probability }`, the kinds closed enums. Responses: the same fields, `type` an `Open<…>` and `message` a `BoundedText<256>`. Angles stay `f32`; fleet-api-types' equality-test renderer learns `number` (test code ADR-0015 foresaw), its "fails on" guard moving to a `number` with a `format`.
+  - **A bare 400, as the extractor answers today:** malformed JSON, an unknown field, a missing struct field, a wrong JSON type, a number its type can't hold, an unknown `type`; one `debug` line with the kind, line and column, never serde's message.
+  - **A 422:** every value rule (`ChatMessage`, `HotbarSlot`, each `ModeError`, a field missing for its kind or present without one), through one exhaustive match (`ModeSteps::definition()`), as one error at the field's own path (`steps[3].action.message`, `steps[1].schedule.interval_ms`). This refines P11.4's "at `steps[step]`": an error that belongs to one field names that field.
+  - **The list:** `GET /modes` is keyset pages, newest first (ADR-0016's list rule), filtered in SQL and checked again row by row with `authorize(ViewMode)`; a disagreement is a 500 (S54).
+  - *Why:* P11.4 asks for field errors; the extractor already keeps serde's text out of answers and logs, and stored rows already drop it as `Corrupt`, so only shape errors ever reach serde. Flat types with `Open` tags follow S54 (action and schedule tags grow: `HoldUse` came in P3.9, S20 adds one).
+  - *Rejected:* tagged unions (S54's reasons, and a missing per-kind field would stay a 400); a raw `Value` (a hand-written parser, and no generated TypeScript type); deserializing straight into `ModeDefinition` (every `ModeError` a bare 400); `GET /modes/{id}` (not in Appendix B and not needed yet; additive later).
+- **S13 (security). A mode's name is a fleet-core value, unique where everyone who could hit the rule can see.**
+  - `fleet_core::mode::ModeName`: trimmed, 1–32 characters (Unicode scalar values, as `BoundedText` counts them), U8's characters, which hold nothing `BoundedText` would strip, so a valid name always comes back unchanged.
+  - Unique without ASCII case per owner (private and shared together) and among all shared modes, the built-in ones included; a user's mode can't take `afk` or `farm`. Migration `0018_mode_names.sql`: a unique index `(owner_user_id, lower(name))`, a partial unique index `lower(name) WHERE visibility = 'shared'`, and `modes_owner_user_id` dropped, which the first one covers.
+  - Never logged or audited: a name is client text (ADR-0016).
+  - *Why:* domain values come from fleet-core constructors; everyone who could trigger a name check sees its whole domain (an owner's modes are seen by everyone who may edit them, shared ones by everyone), so it probes nothing (S54).
+  - *Rejected:* Username's ASCII set; a DTO-only `BoundedText` (it cleans silently instead of refusing); no uniqueness (a second shared "afk" holding a command could pass for the built-in); uniqueness across all modes (it leaks private names); exact case.
+  - *Residual:* look-alikes (letters of other scripts, non-ASCII case) aren't caught; a decomposed umlaut is refused, since keyboards send the composed one.
+- **S14 (security). What a mode says about its owner and the viewer's rights.**
+  - `ModeResponse` carries `built_in` and `mine` for everyone; `owner` (a `UserLabel`) only for Admins and the Owner, the role half of `sees_owner`, extracted so the rule exists once (`mine` doesn't lift it, as in U3); and `editable`, `deletable` and `visibility_editable`, each one `authorize()` call (`UpdateMode` with the mode's own visibility, `DeleteMode`, `UpdateMode` with the other one).
+  - One function, `mode_response(viewer, &ListedMode)`, beside `account_response` and `chat_line`; `ListedMode` joins the owner's current role and username.
+  - *Why:* S11 and U3 keep other users' names from Members; Admins already list users; per-resource rights come from the server, as `AccountResponse.level` does, so the UI never copies `authorize()`.
+  - *Rejected:* the owner for everyone (it names Admins and the Owner to every Member); the owner only for editors; no owner at all; no flags.
+- **S15 (security). S9's flag: only a viewer who could edit the mode sees its command arguments.**
+  - Below that, each command step reads `/name` with `arguments_hidden: true`, through fleet-core's `without_arguments()`. "Could edit" is S14's `editable`, so one `authorize()` decides both: private modes change nothing (whoever sees one may edit it), shared ones show whole to the Owner and to their creator while an Admin, built-in ones are cut for everyone (they hold no chat).
+  - One helper: the handlers' `shown()` takes `whole: bool`; `chat_line` passes Manage, `mode_response` passes `editable`. Requests have no `arguments_hidden`, so a cut answer sent back as it is gets a 400.
+  - *Why:* S6 says mode rows follow the chat rule; showing a shared mode's arguments to everyone would empty S9 for every shared mode. Tightening later can't take back what was shown.
+  - *Rejected:* everyone sees everything; no arguments in shared modes (it takes away `/warp farm`, and validation would depend on visibility); hiding all chat from non-editors.
+- **S16 (security). Step-up per mode write: S4's two routes, plus `DELETE`.**
+  - `POST /modes` and `PUT /modes/{id}` are authed and refuse a definition holding any command off the allowlist (`check_mode(..).needs_manage()`, whether that command is new, changed or kept) with 403 `mode_needs_step_up`; their step-up twins `POST /modes/with-commands` and `PUT /modes/{id}/with-commands` take any valid definition. `DELETE /modes/{id}` is a step-up route for private and shared modes alike. A visibility change needs none of its own.
+  - The pointer comes after `forbidden`, as in chat, so only a caller the twin would accept sees it. The service guard `ModeRoute { Plain, WithCommands }::takes(check)` runs before anything is read, a refusal being `WrongRoute`, the internal error (S10). One audit action per write, the route a closed-set value in its metadata.
+  - *Why:* rule 1 makes a conditional step-up two routes (S4). S47's test: an unlisted command in a mode reaches every bot that runs it, and nothing undoes `/op`; any other definition is Control-level and undone by the next edit; a delete loses data for good (only a counter survives).
+  - *Rejected:* a step-up on every write (against S47 and S4's scoping); `POST` and `PUT` always behind one; only new or changed commands (it misses a `/pay` made to run more often, and an allowlist that changed between saves); none at all (it overturns S4's note).
+  - *Known limit:* the pointer tells any user whether a command is on the allowlist; until now only Control holders learned it.
+- **S17 (security; built in C2). Editing or deleting a mode that bots use.**
+  - An edit goes through only if the editor could, right now, set the edited mode on every bot that uses it: `SetBotMode(check_mode(new))` on each bot's account (Control, or Manage for an unlisted command), the bots read in the edit's transaction through `bots_mode_id`. The first refusal stops the edit with 409 `mode_in_use_by_others`, nothing written, no bot, owner or count named: a bot the editor can't see and a visible one without the level answer byte for byte the same. It runs for any real change (steps, visibility or name), and `Change::Store` follows the commit.
+  - A delete is refused while any bot uses the mode: 409 `mode_in_use`, whatever the deleter can see (0014's comment, S38).
+  - *Why:* ADR-0010's re-run check is `SetBotMode(check_mode)`; anything less lets an editor change the chat and actions of bots they can't Control. One write connection orders an edit against a concurrent switch.
+  - *Rejected:* checking only unlisted commands; moving failing bots to `afk` (writes to bots without Control); a delete refused only for bots the deleter can't see (a probe for unseen bots).
+  - *Residual:* the one bit "some bot blocks this", which the approved delete rule already reveals.
+- **S18 (security; built in C2). Concurrent edits: `PUT` carries the `version` it read; `DELETE` doesn't.** A mismatch is 409 `mode_changed`, nothing written or audited; `UPDATE … WHERE id = ? AND version = ?` guards it again, the new version `checked_add`'s (an overflow is the internal error). A no-op edit answers 200 whatever version was sent, with no entry and no hint. Every mode answer carries `version` and `updated_at`.
+  - *Rejected:* last write wins (a stale editor would quietly put back a removed command on every bot); `ETag`/`If-Match` (outside the typed contract, and a transport change); a guarded `DELETE`.
+- **S19 (security). An owner holds at most 50 modes** (`fleet_core::mode::MAX_MODES_PER_OWNER`), private and shared together, the Owner included, built-in modes never counted; checked in the create's transaction, refused with 409 `conflict` as the invite and enrollment-token caps are, nothing written or audited, one `debug` line.
+  - *Rejected:* no cap (the per-user limit bounds speed, not the total, and nothing deletes modes); a config key (its range would be the user's, and it can come later); a rate class instead.
+  - *Residual:* a demoted Admin's shared modes keep counting toward them.
+- **S20 (security, low; built in C3). "On respawn" steps, in a group of their own.**
+  - A new schedule tag `on_respawn` (failing closed on older servers) with four new limited kinds (chat, attack, hold, release); an on-respawn chat is skipped when the last one ran less than 30 s before.
+  - fleet-mc's `SessionEvent::Respawned`, emitted only after the server's `Respawn` packet and the next `HasClientLoaded`; the actor's retry stops trusting an `Ok`: no `Respawned` within 5 s counts as a failure, and after 12 the session ends `RespawnFailed`, as today. The runner lets go, then runs the on-respawn steps; a mode without them behaves exactly as before.
+  - C1's part: the schedule types stay additive, the limited kinds' texts go through one function, and the bots' re-check reads every command through `commands()`.
+  - *Why:* ADR-0013 left it here; an opt-in tag repeats neither at-start chat nor attacks on every death (ADR-0013's rejection), and before the first release the protocol may still grow.
+  - *Rejected:* nothing (it leaves `/home` and the trusted `Ok`); inside C (size); `AtStart` also after a respawn (silently changes stored modes); only the confirmation.
+
+*Reconciliations between the agents:*
+- **R1.** There's no `GET /modes/{id}` (S12), so S15's canary covers `GET /modes` and the answers of `POST` (and `PUT` in C2).
+- **R2.** The request carries `steps`, not `definition` (S12); C2's `UpdateModeRequest` adds a required `version` of at least 1 (S18), whose 422 is garde's "lower than 1", as on the lists.
+- **R3.** The per-bot check runs only in the transaction, as S17's 409, never as a handler 403. `PUT`'s order: 401, the per-user 429, (twin) `step_up_required`, a malformed path's 404, the body's 400/415/422, an unseen mode's 404, 403 `forbidden`, the pointer; then in the transaction the re-reads and `authorize`, a no-op's 200, `mode_changed`, a taken name's 422, `mode_in_use_by_others`, the write. `POST`'s: the same up to the pointer, then the cap's 409, then a taken name's 422.
+- **R4.** Reserved names are refused with the body, not in the service (S13 ruled out only a database CHECK).
+- **R5.** A response's action carries `arguments_hidden`, so it isn't a request (S15); I's editor builds requests from its form state, never by echoing an answer.
+
 ### Notes for later groups
 - **B2 (P11.3's history):** built (above).
-- **C (P11.4):** S4's rule for modes; the serde error mapping and "on respawn" are C's questions; and whether `GET /modes` shows a shared mode's command arguments that S9 hides in chat (S9).
+- **C (P11.4):** decided at C's planning (above), built in C1, C2 and C3.
+- **C2:** `PUT /modes/{id}` and its twin (S16, S17, S18, R2, R3) and `DELETE /modes/{id}` (step-up, S17); `mode.update` (metadata `version`, `definition_changed`, `visibility`, `previous_visibility` when it changed, `commands`, `route`, a count of the bots checked) and `mode.delete` (`version`, `visibility`); the three 409 codes; `Change::Store` after an edit; a loopback case where an edited mode reaches a held bot as `Update`; fleet-client and the console.
+- **C3:** S20, with azalea-client 0.16.0's respawn handling checked on docs.rs first; P11.4 ticked.
 - **D (P11.5):** the send publishes `Chat { id, entry: UserSent }` after its commit and before the stream send, with its request ID, so live viewers pair `ChatSent` and `ChatFailed` with the line; S6's field rule, S9's function and U3's names and `mine` apply to live events per subscriber. Each live `Chat` event goes through `chat_line`, with the subscriber's level read when it's sent, and carries the same `BoundedText<3072>` text (S11).
 - **E (P11.6):** `user` rows are deleted by age and size like other chat; no chat text in the audit to scrub (S6); a deleted user's lines keep no sender (U3).
 - **H (P11.9):** the send box: a spinner of at most 6 s, a 202 as sent with a pending mark, `chat_unavailable` without a "try again", the resend to `/command` on the pointer (S8); a user's line shown as asked, never as said (S7), a hidden command's mark outside its text (S9), names and `mine` (U3), the wordings the user's; U1's folder and recipes, the cleanup and its test. The history is in commit order (U5): the console keeps the API's order and never sorts by `at`; whether to mark that a line's time disagrees with its neighbours' is the user's then. A line's text arrives with its line breaks as ` | ` (S11): plain text, one block per message, no `white-space: pre*`.
+- **I (P11.9's mode editor):** the editor binds to S12's types and opens a mode with an unknown `type` read-only; it shows a mode editable, deletable or with a visibility switch from S14's flags, and never copies `authorize()`; it builds each request from its form state, never by echoing an answer (R5), and marks a cut command outside its text (S15); on `mode_needs_step_up` it resends the same body to the `/with-commands` twin through `useStepUpAction` (S16), and `DELETE` goes through it directly; it keeps the loaded `version` and handles `mode_changed`, `mode_in_use_by_others` and `mode_in_use` (S17, S18). *The user's note at the plan review:* the editor shows hotbar slots as 1 to 9, the keys players know, and maps them to the API's 0 to 8. The wordings of its marks, the 409s' handling and "save as copy" are the user's then.
 - **M:** U1's 24-hour run on the same folder, logging JSON at `info` to files.
 
 ## Consequences
