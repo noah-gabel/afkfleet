@@ -14,8 +14,10 @@
 //!   refusal after the commit keeps the row and the entry: the row records
 //!   what the user asked to send, never whether it went out (S7).
 //! - **It waits** for the agent's `ChatSent` or `ChatFailed` until the
-//!   earlier of the send plus [`ChatWait::ANSWER`] and the handler's start
-//!   plus the request timeout less [`ChatWait::MARGIN`] (S5). The answer
+//!   earlier of the send plus [`ChatWait::ANSWER`] and the request's arrival
+//!   plus the request timeout less [`ChatWait::MARGIN`] (S5). The arrival is
+//!   the instant the request timeout counts from too, so its 408 can't fire
+//!   after a line was sent (PR #60's review). The answer
 //!   matches the request, the bot and the agent, on any of the agent's
 //!   streams, since an answer may come after a reconnect. Nothing in time,
 //!   or a subscriber that fell behind, is pending: the line may yet go out.
@@ -48,6 +50,19 @@ pub enum ChatRoute {
     Chat,
     /// `POST /bots/{id}/command`: a command, after a step-up.
     Command,
+}
+
+impl ChatRoute {
+    /// Whether this route takes `message`, whose allowlist check is `check`
+    /// (S4, S8): `/chat` takes plain chat and allowlisted commands, never a
+    /// command off the allowlist; `/command` takes commands only.
+    #[must_use]
+    pub fn takes(self, message: &ChatMessage, check: CommandCheck) -> bool {
+        match self {
+            Self::Chat => !check.needs_manage(),
+            Self::Command => message.is_command(),
+        }
+    }
 }
 
 /// What came of a line the server sent.
@@ -88,6 +103,13 @@ pub enum ChatSendError {
     /// The request's ID couldn't be minted.
     #[error("the chat request's ID can't be minted")]
     Mint(#[source] MintError),
+    /// The line isn't one its route takes ([`ChatRoute::takes`]): the
+    /// handler's own check is missing, a bug (S10). Nothing was read,
+    /// written or sent.
+    #[error(
+        "a line its route doesn't take reached the service through {0:?}: the handler's check is missing"
+    )]
+    WrongRoute(ChatRoute),
 }
 
 /// How long a send waits for its agent's answer (S5).
@@ -121,8 +143,8 @@ impl ChatWait {
         Self { answer, ..self }
     }
 
-    /// When the wait of a line sent at `sent`, for a request whose handler
-    /// started at `started`, ends.
+    /// When the wait of a line sent at `sent`, for a request that arrived at
+    /// `started`, ends.
     #[must_use]
     pub fn deadline(self, started: Instant, sent: Instant) -> Instant {
         (sent + self.answer).min(started + self.budget)
@@ -153,12 +175,13 @@ impl BotService {
     }
 
     /// Sends `message` to the bot `id` for `by`, through `route`, whose
-    /// handler started at `started`; see the [module docs](self).
+    /// request arrived at `started`; see the [module docs](self).
     ///
     /// # Errors
-    /// [`ChatSendError::Write`] for what any bot write fails with,
-    /// [`ChatSendError::Refused`] for a bot that can't take a line now,
-    /// [`ChatSendError::Failed`] with the agent's reason, and
+    /// [`ChatSendError::WrongRoute`] for a line `route` doesn't take, before
+    /// anything else; [`ChatSendError::Write`] for what any bot write fails
+    /// with, [`ChatSendError::Refused`] for a bot that can't take a line
+    /// now, [`ChatSendError::Failed`] with the agent's reason, and
     /// [`ChatSendError::Mint`].
     pub async fn send_chat(
         &self,
@@ -169,6 +192,11 @@ impl BotService {
         started: Instant,
     ) -> Result<ChatSendDone, ChatSendError> {
         let check = self.allowlist.check(message);
+        // The handler checked it already; only a bug gets here (S10), and
+        // nothing is read, written or sent for it.
+        if !route.takes(message, check) {
+            return Err(ChatSendError::WrongRoute(route));
+        }
         let mut tx = self.store.write().await.map_err(BotWriteError::from)?;
         let (actor, bot, account) = reread(tx.as_mut(), by, id).await?;
         authorize(&actor, Permission::SendChat(check), &account.context())
@@ -218,8 +246,15 @@ impl BotService {
         {
             Ok(()) => {}
             Err(
-                CommandRefused::NotHeld | CommandRefused::NotConnected | CommandRefused::QueueFull,
-            ) => return Err(ChatSendError::Refused(ChatRefusal::Unreachable)),
+                refused @ (CommandRefused::NotHeld
+                | CommandRefused::NotConnected
+                | CommandRefused::QueueFull),
+            ) => {
+                // The answer, 409 `bot_unreachable`, doesn't tell this from a
+                // refusal before the commit; the row and the entry stay (S7).
+                debug!(user_id = %by.actor.id, bot_id = %bot.id, agent_id = %agent, chat_request = %request, chat_line = stored.get(), refused = ?refused, "a user's chat line was stored and recorded, but its stream no longer took it");
+                return Err(ChatSendError::Refused(ChatRefusal::Unreachable));
+            }
             Err(CommandRefused::Unsendable) => {
                 return Err(ChatSendError::Write(BotWriteError::Unsendable));
             }
@@ -500,5 +535,33 @@ mod tests {
         assert_eq!(shortest, started, "no time left at all");
         assert_eq!(tested, sent + Duration::from_millis(50));
         assert_eq!(ChatWait::default(), ChatWait::new(Duration::from_secs(15)));
+    }
+
+    /// `/chat` takes plain chat and allowlisted commands, `/command` every
+    /// command and nothing else (S4, S8, S10).
+    #[rstest::rstest]
+    #[case::plain_chat(ChatRoute::Chat, "hello", true)]
+    #[case::a_later_slash(ChatRoute::Chat, "hello /op AfkBot2", true)]
+    #[case::a_listed_command(ChatRoute::Chat, "/spawn here", true)]
+    #[case::an_unlisted_command(ChatRoute::Chat, "/op AfkBot2", false)]
+    #[case::a_lone_slash(ChatRoute::Chat, "/", false)]
+    #[case::plain_chat_as_a_command(ChatRoute::Command, "hello", false)]
+    #[case::a_later_slash_as_a_command(ChatRoute::Command, "hello /spawn", false)]
+    #[case::a_listed_command_as_a_command(ChatRoute::Command, "/spawn here", true)]
+    #[case::an_unlisted_command_as_a_command(ChatRoute::Command, "/op AfkBot2", true)]
+    #[case::a_lone_slash_as_a_command(ChatRoute::Command, "/", true)]
+    fn each_route_takes_only_its_lines(
+        #[case] route: ChatRoute,
+        #[case] text: &str,
+        #[case] taken: bool,
+    ) {
+        let allowlist = fleet_core::authz::CommandAllowlist::try_new(&["/spawn"]).unwrap();
+        let message = ChatMessage::try_from(text).unwrap();
+
+        assert_eq!(
+            route.takes(&message, allowlist.check(&message)),
+            taken,
+            "{route:?} {text:?}"
+        );
     }
 }

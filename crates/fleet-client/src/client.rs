@@ -23,7 +23,9 @@ use fleet_api_types::accounts::{
 };
 use fleet_api_types::auth::{LoginRequest, RegisterRequest, RegisterResponse, StepUpRequest};
 use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
-use fleet_api_types::chat::{ChatCommandRequest, ChatSendRequest, ChatSendResponse};
+use fleet_api_types::chat::{
+    ChatCommandRequest, ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse,
+};
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
@@ -601,6 +603,21 @@ impl<S: SessionStore> Client<S> {
     /// authenticated call.
     pub async fn resume_bot(&self, id: BotId) -> Result<BotResponse, ClientError> {
         self.core.control_bot(id, BotCall::Resume).await
+    }
+
+    /// `GET /bots/{id}/chat`: one page of the bot's chat, newest first, as
+    /// the caller may see it: a command's arguments only for Manage holders,
+    /// who had a user's line sent only for callers who see the account's
+    /// owner, and `mine` on the caller's own lines. `query`'s `before` is
+    /// the `next` of the page before.
+    ///
+    /// # Errors
+    /// The server's 404 (no such bot, or one the caller may not see), 422
+    /// (a `limit` outside 1 to 100, a `before` below 1) or 429 (with its
+    /// wait) as [`ClientError::Api`]; [`ClientError::NoSession`] without a
+    /// session; and the transport's errors.
+    pub async fn chat(&self, id: BotId, query: &ChatPageQuery) -> Result<ChatPage, ClientError> {
+        self.core.chat(id, query).await
     }
 
     /// `POST /bots/{id}/chat`: an online bot sends a line, plain chat or a

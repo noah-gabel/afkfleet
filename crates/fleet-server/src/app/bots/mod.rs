@@ -12,6 +12,9 @@
 //! agent goes quiet. A viewer reads only the bots of the accounts they may
 //! see, with their own grant; the caller asks `authorize()`.
 //!
+//! **The chat history** ([`history`]) pages a bot's chat for a viewer who
+//! may see the bot (ADR-0020, S6, S9, U3).
+//!
 //! **Writes** ([`settings`], [`lifecycle`], [`chat`]) each run in one short
 //! transaction that reads the acting user, the bot and its account again and
 //! asks `authorize()` again on what it read, write only what changed, never
@@ -20,6 +23,7 @@
 //! reconciler is told after each commit (`Change::Store`).
 
 pub mod chat;
+pub mod history;
 pub mod lifecycle;
 pub mod settings;
 
@@ -40,6 +44,7 @@ use fleet_core::value::AgentName;
 use tracing::{debug, error};
 
 pub use chat::{ChatOutcome, ChatRoute, ChatSendDone, ChatSendError, ChatWait};
+pub use history::{ChatHistory, ChatHistoryError};
 pub use lifecycle::{BotAction, Controlled};
 pub use settings::Configured;
 

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM account_grants WHERE user_id = ? AND account_id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "dda8786371958cfaa0874f58dc69463fef0fe4f6eb5676af3410a75c915bf09e"
+}

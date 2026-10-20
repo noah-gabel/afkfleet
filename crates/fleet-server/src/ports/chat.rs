@@ -1,6 +1,7 @@
 //! The bots' chat log, `chat_messages` (Plan.md P11.1, P10.8, P11.3;
 //! ADR-0019, S70; ADR-0020, S6, S7, U3): [`NewChatMessage`] to append,
-//! [`ChatRecord`] as it reads back, and the two traits. Append-only: the
+//! [`ChatRecord`] as it reads back, [`ListedChat`] as the history lists
+//! it, and the two traits. Append-only: the
 //! ingest appends what bots received and what their modes said inside its
 //! batch's write transaction, a user's send appends their line inside its
 //! own audited one ([`ChatWrites::append`]), P11.3 pages through a bot's
@@ -14,13 +15,18 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::chat::{ChatMessage, IncomingChat};
 use fleet_core::id::{AgentId, BotId, UserId};
+use fleet_core::value::Username;
 
 use super::page::Page;
 use super::store::StoreError;
 
-/// A chat row's ID. With one writer, IDs follow the order of commits, which
-/// is the order the server received the messages in, so a bot's chat is
-/// ordered and paged by ID, never by time (ADR-0015).
+/// A chat row's ID. With one writer, IDs follow the order of commits, so a
+/// bot's chat is ordered and paged by ID, never by time (ADR-0015). That's
+/// nearly the order the server received the messages in, not quite: a
+/// user's line commits at once, while received chat commits with the
+/// ingest's next batch, so a line can get a lower ID than a message received
+/// a moment before it (ADR-0020, U5; `0016_chat_messages.sql` says "the
+/// order the server received the messages in" and stays as it is).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ChatMessageId(i64);
 
@@ -76,14 +82,27 @@ pub struct NewChatMessage {
 /// A stored message as it reads back.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatRecord {
-    /// The ID, in receipt order.
+    /// The ID, in commit order.
     pub id: ChatMessageId,
     /// The bot it belongs to.
     pub bot: BotId,
-    /// When the server received it (informational: the order is the ID).
+    /// When the server received it, or a user's line was sent
+    /// (informational: the order is the ID, and neighbouring rows' times can
+    /// disagree with it by about one ingest batch).
     pub at: DateTime<Utc>,
     /// The message.
     pub entry: ChatEntry,
+}
+
+/// A stored message as the history lists it: the record, and the username
+/// of the user who sent a user's line, while that user exists (U3).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedChat {
+    /// The message.
+    pub record: ChatRecord,
+    /// The sender's username: a user's line whose sender still exists has
+    /// one, every other line none.
+    pub sent_by: Option<Username>,
 }
 
 /// Reading the chat log.
@@ -92,7 +111,7 @@ pub trait ChatReads: Send + Sync + fmt::Debug {
     /// One page of `bot`'s messages, newest first by ID: the messages
     /// before `page.before` (from the newest without a cursor), at most
     /// `page.limit.fetch()` of them, so the caller knows whether another
-    /// page follows.
+    /// page follows; a user's line with its sender's username.
     ///
     /// # Errors
     /// [`StoreError::Corrupt`] for a row that doesn't read back, naming its
@@ -101,7 +120,7 @@ pub trait ChatReads: Send + Sync + fmt::Debug {
         &self,
         bot: BotId,
         page: Page<ChatMessageId>,
-    ) -> Result<Vec<ChatRecord>, StoreError>;
+    ) -> Result<Vec<ListedChat>, StoreError>;
 }
 
 /// Appending to the chat log, inside a [`super::store::WriteTx`].

@@ -13,8 +13,9 @@
 //! | 5 | [`render_errors`] | Inside the request-ID layer, so every error body names the ID, and inside the trace span, so its lines carry it too |
 //! | 6 | per-IP limit | [`rate_limit::per_ip`](super::rate_limit): resolves the client's address and spends its global per-IP request, before the timeout, the body or the router, so every request counts, matched or not; its refusal is an `ApiError` that `render_errors` renders |
 //! | 7 | catch-panic | A panicking handler answers with the fixed internal error, which `render_errors` renders |
-//! | 8 | timeout | `[http] request_timeout_secs`; it answers 408, which `render_errors` renders |
-//! | 9 | body limit | `[http] max_body_bytes`; it answers 413 when the `Content-Length` is too large, and fails a body read past the limit |
+//! | 8 | arrival | [`arrival`]: the request's own instant, right outside the timeout, so a wait counted from it (a chat line's, ADR-0020) ends before the timeout would, whatever the session's lookup and the body took |
+//! | 9 | timeout | `[http] request_timeout_secs`; it answers 408, which `render_errors` renders |
+//! | 10 | body limit | `[http] max_body_bytes`; it answers 413 when the `Content-Length` is too large, and fails a body read past the limit |
 //!
 //! Inside them, the router answers a path no route matches with
 //! `not_found`, and a method the matched path doesn't take with
@@ -50,9 +51,11 @@ use super::error::{ApiError, render_errors};
 use super::rate_limit::{self, PerIpLayer, RateLimits};
 use crate::config::HttpConfig;
 
+pub mod arrival;
 pub mod request_id;
 mod trace;
 
+pub use arrival::Arrival;
 pub use request_id::RequestIds;
 
 /// The request headers marked sensitive: the credentials a client sends.
@@ -104,6 +107,7 @@ pub fn apply(routes: Router, http: &HttpConfig, ids: RequestIds, limits: &RateLi
                     rate_limit::per_ip,
                 ))
                 .layer(CatchPanicLayer::custom(panic_response))
+                .layer(from_fn(arrival::set_arrival))
                 .layer(TimeoutLayer::with_status_code(
                     StatusCode::REQUEST_TIMEOUT,
                     http.request_timeout,

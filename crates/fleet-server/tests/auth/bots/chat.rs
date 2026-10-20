@@ -14,6 +14,8 @@
 use core::num::NonZeroU32;
 use core::time::Duration;
 
+use axum::body::Body;
+use axum::http::{Method, Request};
 use fleet_core::audit::{AuditAction, RecordedValue};
 use fleet_core::authz::{CommandAllowlist, GrantLevel, Role};
 use fleet_core::bot::BotState;
@@ -23,10 +25,12 @@ use fleet_proto::control::{ChatFailedReason, SendChat, ServerMessage};
 use fleet_server::app::bots::ChatWait;
 use fleet_server::app::events::{EVENT_BUS_CAPACITY, LiveEvent, LiveEventKind};
 use fleet_server::config::{Rate, RateLimitConfig};
+use fleet_server::http::middleware::Arrival;
 use fleet_server::ports::audit::AuditRecord;
 use fleet_server::ports::chat::{ChatEntry, ChatRecord};
 use fleet_server::ports::page::{Page, PageLimit};
 use fleet_server::ports::store::Store as _;
+use secrecy::ExposeSecret as _;
 use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::time::Instant;
@@ -113,6 +117,9 @@ impl Setup {
             )
             .await
             .unwrap()
+            .into_iter()
+            .map(|line| line.record)
+            .collect()
     }
 
     /// The chat routes' entries, oldest first.
@@ -365,6 +372,34 @@ async fn a_grant_lowered_before_the_transaction_is_403_and_writes_nothing(
     assert_eq!(refused.code(), "forbidden");
     assert_eq!(setup.lines(bot).await.len(), 0);
     assert_eq!(setup.chat_entries().await.len(), 0);
+}
+
+/// A grant revoked between the handler's check and the send's transaction:
+/// the transaction asks `authorize()` again, which no longer lets the user
+/// see the bot, so it's 404, and nothing is written, recorded or sent.
+#[sqlx::test(migrations = false)]
+async fn a_grant_revoked_before_the_transaction_is_404_and_nothing_is_written_or_sent(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup_with(options, quick()).await;
+    let owner = setup.person(2, "owner", Role::Member).await;
+    let controller = setup.person(3, "controller", Role::Member).await;
+    let (account, bot, mut stream) = setup.online_bot(owner.id, 10).await;
+    setup
+        .share(account, controller.id, GrantLevel::Control, owner.id)
+        .await;
+    setup
+        .hooked
+        .queue(Meanwhile::RevokeGrant(account, controller.id));
+
+    let refused = setup.chat(bot, &controller, "hello").await;
+
+    assert_eq!(refused.status, 404, "{}", refused.text);
+    assert_eq!(refused.code(), "not_found");
+    assert_eq!(setup.lines(bot).await.len(), 0);
+    assert_eq!(setup.chat_entries().await.len(), 0);
+    assert!(stream.next().is_none(), "nothing was sent");
 }
 
 // --- The body ---------------------------------------------------------------------------
@@ -675,6 +710,53 @@ async fn the_request_timeout_bounds_the_wait(
         "{:?}",
         started.elapsed()
     );
+}
+
+/// The wait counts from the request's arrival, never the handler's start
+/// (ADR-0020, U6): a request that arrived 30 s ago, under a 19 s request
+/// timeout, is answered pending at once, though its agent never answers. A
+/// handler counting from its own start would wait the answer's 6 s.
+#[sqlx::test(migrations = false)]
+async fn the_wait_counts_from_the_requests_arrival_not_the_handlers_start(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup_with(
+        options,
+        Options {
+            chat_wait: ChatWait::new(Duration::from_secs(19)),
+            ..Options::default()
+        },
+    )
+    .await;
+    let owner = setup.person(2, "owner", Role::Member).await;
+    let (_, bot, mut stream) = setup.online_bot(owner.id, 10).await;
+    // The seam: the stack keeps an arrival the request already carries.
+    let arrived = Instant::now().checked_sub(Duration::from_secs(30)).unwrap();
+    let request = Request::builder()
+        .method(Method::POST)
+        .uri(chat_path(bot))
+        .header(
+            "authorization",
+            format!("Bearer {}", owner.token.expose_secret()),
+        )
+        .header("content-type", "application/json")
+        .extension(Arrival::new(arrived))
+        .body(Body::from(json!({ "message": "hello" }).to_string()))
+        .unwrap();
+    let begun = Instant::now();
+
+    let seen = setup.send(request).await;
+
+    assert_eq!(seen.status, 202, "{}", seen.text);
+    assert_eq!(seen.body["outcome"], "pending");
+    assert!(
+        begun.elapsed() < Duration::from_secs(4),
+        "{:?}",
+        begun.elapsed()
+    );
+    let (_, sent) = stream.line().await;
+    assert_eq!(sent.as_str(), "hello");
 }
 
 // --- The audit --------------------------------------------------------------------------

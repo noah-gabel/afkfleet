@@ -12,5 +12,5 @@ mod message;
 mod rate;
 
 pub use incoming::{ChatKind, ChatSender, IncomingChat, IncomingChatError, PlayerChatKind};
-pub use message::{ChatMessage, ChatMessageError};
+pub use message::{ChatMessage, ChatMessageError, Redacted};
 pub use rate::{ChatRate, ChatRateError};

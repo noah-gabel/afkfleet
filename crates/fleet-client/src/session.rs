@@ -86,7 +86,9 @@ use fleet_api_types::auth::{
     RegisterResponse, StepUpRequest, TokenResponse,
 };
 use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
-use fleet_api_types::chat::{ChatCommandRequest, ChatSendRequest, ChatSendResponse};
+use fleet_api_types::chat::{
+    ChatCommandRequest, ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse,
+};
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{
@@ -798,6 +800,18 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         self.send_line(id, "command", json(request)).await
     }
 
+    /// One page of the bot `id`'s chat, newest first, as the caller may see
+    /// it (200).
+    pub(crate) async fn chat(
+        self: &Arc<Self>,
+        id: BotId,
+        query: &ChatPageQuery,
+    ) -> Result<ChatPage, ClientError> {
+        let url = with_chat_page(self.server.api(&["bots", &id.to_string(), "chat"]), query);
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
     /// Posts a line's `body` to the bot `id`'s `segment`: 200 when its agent
     /// said the bot sent it, 202 when no answer came in time.
     async fn send_line(
@@ -1106,6 +1120,20 @@ fn refresh_body(token: &SecretString) -> Vec<u8> {
     json(&RefreshRequest {
         refresh_token: SecretText::new(token.expose_secret().to_owned()),
     })
+}
+
+/// `url` with the chat page's parameters, if it has any.
+fn with_chat_page(mut url: Url, query: &ChatPageQuery) -> Url {
+    if query.before.is_some() || query.limit.is_some() {
+        let mut pairs = url.query_pairs_mut();
+        if let Some(before) = query.before {
+            pairs.append_pair("before", &before.to_string());
+        }
+        if let Some(limit) = query.limit {
+            pairs.append_pair("limit", &limit.to_string());
+        }
+    }
+    url
 }
 
 /// `url` with `query`'s parameters, if it has any.
@@ -2854,6 +2882,98 @@ mod tests {
             ),
             "{error:?}"
         );
+    }
+
+    fn a_chat_page() -> ChatPage {
+        use fleet_api_types::chat::{ChatDirection, ChatLine, ChatLineKind};
+        ChatPage {
+            items: vec![ChatLine {
+                id: fleet_api_types::SafeInt::try_new(41).unwrap(),
+                at: serde_json::from_value(json!("2027-01-15T08:00:00.000Z")).unwrap(),
+                direction: ChatDirection::Out.into(),
+                kind: ChatLineKind::User.into(),
+                text: fleet_api_types::BoundedText::new("/login"),
+                truncated: false,
+                arguments_hidden: true,
+                sender: None,
+                sent_by: None,
+                mine: true,
+            }],
+            next: Some(fleet_api_types::SafeInt::try_new(41).unwrap()),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_history_is_read_from_its_route() {
+        let core = signed_in().await;
+        let route = format!("GET /api/v1/bots/{BOT}/chat");
+        core.transport.on(&route, Ok(dto(200, &a_chat_page())));
+
+        let page = core
+            .chat(
+                id(BOT),
+                &ChatPageQuery {
+                    before: None,
+                    limit: None,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(page, a_chat_page());
+        assert_eq!(core.transport.seen(), [sent(&route, None)]);
+    }
+
+    #[rstest]
+    #[case::not_found(404, ErrorCode::NotFound)]
+    #[case::out_of_range(422, ErrorCode::ValidationFailed)]
+    #[case::too_many(429, ErrorCode::RateLimited)]
+    #[tokio::test]
+    async fn a_refused_history_comes_back_with_the_servers_code(
+        #[case] status: u16,
+        #[case] code: ErrorCode,
+    ) {
+        use fleet_api_types::OpenEnum as _;
+        let core = signed_in().await;
+        let route = format!("GET /api/v1/bots/{BOT}/chat");
+        core.transport
+            .on(&route, Ok(refusal(status, code.as_str())));
+
+        let error = core
+            .chat(
+                id(BOT),
+                &ChatPageQuery {
+                    before: None,
+                    limit: Some(0),
+                },
+            )
+            .await
+            .unwrap_err();
+
+        assert!(is_api(&error, status, code), "{error:?}");
+    }
+
+    #[rstest]
+    #[case::the_first_page(None, None, None)]
+    #[case::a_cursor(Some(41), None, Some("before=41"))]
+    #[case::a_limit(None, Some(10), Some("limit=10"))]
+    #[case::both(Some(41), Some(10), Some("before=41&limit=10"))]
+    fn a_history_query_carries_only_what_it_holds(
+        #[case] before: Option<i64>,
+        #[case] limit: Option<u32>,
+        #[case] query: Option<&str>,
+    ) {
+        let url: Url = "https://fleet.example.com/api/v1/bots/x/chat"
+            .parse()
+            .unwrap();
+        let chat = ChatPageQuery {
+            before: before.map(|cursor| fleet_api_types::SafeInt::try_new(cursor).unwrap()),
+            limit,
+        };
+
+        let built = with_chat_page(url, &chat);
+
+        assert_eq!(built.query(), query);
     }
 
     fn a_chat_answer(outcome: fleet_api_types::chat::ChatSendOutcome) -> ChatSendResponse {

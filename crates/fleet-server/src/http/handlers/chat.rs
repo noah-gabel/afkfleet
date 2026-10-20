@@ -1,5 +1,12 @@
-//! A bot's chat routes (Plan.md P11.3, Appendix B; ADR-0020, S3–S8).
+//! A bot's chat routes (Plan.md P11.3, Appendix B; ADR-0020, S3–S11).
 //!
+//! - **`GET /api/v1/bots/{id}/chat`** (authed) pages the bot's chat newest
+//!   first for a viewer who may see the bot (View), each line under its
+//!   field rules ([`super::chat_line`]): a command's arguments only for
+//!   Manage holders, who sent a user's line only for viewers who see the
+//!   account's owner, `mine` on the viewer's own lines. It answers in the
+//!   extractors' order: 401, the per-user 429, a malformed path's 404, the
+//!   query's 400/422, then an unseen bot's 404.
 //! - **`POST /api/v1/bots/{id}/chat`** (authed) sends plain chat or a command
 //!   on the allowlist: Control (`SendChat`). It never sends a command off the
 //!   allowlist: a Manage holder gets 403 `command_needs_step_up`, the pointer
@@ -14,29 +21,99 @@
 //! whatever then happens, so neither tells a stranger the bot exists), then
 //! what the send answers: 200 when the bot's agent said the bot sent it, 202
 //! when no answer came in time, 409 or 429 with why (S5). The line is stored
-//! as the user's and recorded either way once it's sent (S7).
+//! as the user's and recorded either way once it's sent (S7). The wait
+//! counts from the request's [`Arrival`], as the request timeout does.
 
 use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use fleet_api_types::chat::{
-    ChatCommandRequest, ChatSendOutcome, ChatSendRequest, ChatSendResponse,
+    ChatCommandRequest, ChatPage, ChatPageQuery, ChatSendOutcome, ChatSendRequest, ChatSendResponse,
 };
 use fleet_api_types::{ErrorResponse, SafeInt};
-use fleet_core::authz::Permission;
+use fleet_core::authz::{Permission, effective_level};
 use fleet_core::bot::ChatRefusal;
 use fleet_core::chat::ChatMessage;
 use fleet_core::id::BotId;
 use fleet_proto::control::ChatFailedReason;
 use tokio::time::Instant;
 
-use super::acting;
 use super::bots::{facts, writing};
-use crate::app::bots::{ChatOutcome, ChatRoute, ChatSendDone, ChatSendError};
+use super::{acting, chat_line};
+use crate::app::bots::{ChatHistoryError, ChatOutcome, ChatRoute, ChatSendDone, ChatSendError};
 use crate::http::error::ApiError;
-use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath};
+use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath, ValidQuery};
+use crate::http::middleware::Arrival;
 use crate::http::rate_limit::{ClientIp, RateLimits};
 use crate::http::router::AppState;
+use crate::ports::chat::ChatMessageId;
+use crate::ports::page::{Page, PageLimit};
+
+/// `GET /api/v1/bots/{id}/chat`: one page of the bot's chat, newest first.
+#[utoipa::path(
+    get,
+    path = "/api/v1/bots/{id}/chat",
+    operation_id = "get_bot_chat",
+    tag = "bots",
+    params(("id" = String, Path, description = "The bot's ID."), ChatPageQuery),
+    responses(
+        (status = 200, description = "One page of the bot's chat, newest first by ID, which is the order the server stored the lines in. Each line is as the caller may see it: a command's arguments only for Manage holders, and who had a user's line sent only for callers who see the account's owner.", body = ChatPage),
+        (status = 400, description = "A query that doesn't parse: an unknown parameter, one given twice, or a value that isn't a whole number the parameter can hold.", body = ErrorResponse),
+        (status = 401, description = "No valid access token.", body = ErrorResponse),
+        (status = 404, description = "No such bot, or one the caller may not see.", body = ErrorResponse),
+        (status = 422, description = "A `limit` outside 1 to 100, or a `before` below 1.", body = ErrorResponse),
+        (status = 429, description = "Too many requests.", body = ErrorResponse,
+            headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
+        (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
+    ),
+)]
+pub(crate) async fn history(
+    user: AuthUser,
+    State(state): State<AppState>,
+    ValidPath(id): ValidPath<BotId>,
+    ValidQuery(query): ValidQuery<ChatPageQuery>,
+) -> Result<Json<ChatPage>, ApiError> {
+    let actor = user.actor();
+    let history = state
+        .bots
+        .chat(&actor, id, chat_page(&query)?)
+        .await
+        .map_err(reading)?;
+    let level = effective_level(&actor, history.account.owner, history.account.grant)
+        .ok_or_else(|| ApiError::internal("a bot the viewer may not see was answered"))?;
+    let items = history
+        .lines
+        .items
+        .iter()
+        .map(|line| chat_line(&actor, level, line))
+        .collect::<Result<_, _>>()?;
+    let next = history
+        .lines
+        .next
+        .map(|cursor| SafeInt::try_new(cursor.get()))
+        .transpose()
+        .map_err(ApiError::internal)?;
+    Ok(Json(ChatPage { items, next }))
+}
+
+/// The page the chat's query asks for. garde has checked both values, so
+/// one out of range is a bug.
+fn chat_page(query: &ChatPageQuery) -> Result<Page<ChatMessageId>, ApiError> {
+    Ok(Page {
+        before: query.before.map(|cursor| ChatMessageId::new(cursor.get())),
+        limit: PageLimit::new(query.limit_or_default()).map_err(ApiError::internal)?,
+    })
+}
+
+/// A history that couldn't be read, as the API answers it: an unknown bot
+/// and one the caller may not see alike, 404.
+fn reading(error: ChatHistoryError) -> ApiError {
+    match error {
+        ChatHistoryError::NotFound => ApiError::NotFound,
+        ChatHistoryError::Denied(denied) => ApiError::from(denied),
+        ChatHistoryError::Store(store) => ApiError::from(store),
+    }
+}
 
 /// `POST /api/v1/bots/{id}/chat`: a line for the bot to send.
 #[utoipa::path(
@@ -54,7 +131,7 @@ use crate::http::router::AppState;
         (status = 403, description = "`command_needs_step_up`: a command off the allowlist, which only `POST /bots/{id}/command` sends, after a step-up; `forbidden`: the caller may see the bot but not chat through it (Control), or not send that command (Manage).", body = ErrorResponse),
         (status = 404, description = "No such bot, or one the caller may not see.", body = ErrorResponse),
         (status = 409, description = "`bot_not_online`: the bot isn't online; `chat_unavailable`: its Minecraft server takes only signed chat, and the bot can't sign this line; `bot_unreachable`: its agent can't be reached, or didn't get the line through.", body = ErrorResponse),
-        (status = 422, description = "A line that's empty, more than one line, too long, or holds `§` or text-direction marks.", body = ErrorResponse),
+        (status = 422, description = "A line that's empty, too long, or holds a line break or another control character, `§` or text-direction marks.", body = ErrorResponse),
         (status = 429, description = "Too many requests, too many lines from the caller or to this bot, or the bot's agent is at its chat rate.", body = ErrorResponse,
             headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
         (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
@@ -64,12 +141,21 @@ pub(crate) async fn send(
     user: AuthUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
+    arrival: Arrival,
     ValidPath(id): ValidPath<BotId>,
     ValidJson(request): ValidJson<ChatSendRequest>,
 ) -> Result<(StatusCode, Json<ChatSendResponse>), ApiError> {
-    let started = Instant::now();
     let message = line(&request.message)?;
-    send_line(&user, &state, ip, id, &message, ChatRoute::Chat, started).await
+    send_line(
+        &user,
+        &state,
+        ip,
+        id,
+        &message,
+        ChatRoute::Chat,
+        arrival.instant(),
+    )
+    .await
 }
 
 /// `POST /api/v1/bots/{id}/command`: a command for the bot to send, after a
@@ -89,7 +175,7 @@ pub(crate) async fn send(
         (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller may see the bot but not send this command: Control for one on the allowlist, Manage for any other.", body = ErrorResponse),
         (status = 404, description = "No such bot, or one the caller may not see.", body = ErrorResponse),
         (status = 409, description = "`bot_not_online`: the bot isn't online; `chat_unavailable`: its Minecraft server takes only signed chat, and the bot can't sign this command; `bot_unreachable`: its agent can't be reached, or didn't get the command through.", body = ErrorResponse),
-        (status = 422, description = "A line that isn't a command, or that's empty, more than one line, too long, or holds `§` or text-direction marks.", body = ErrorResponse),
+        (status = 422, description = "A line that isn't a command, or that's empty, too long, or holds a line break or another control character, `§` or text-direction marks.", body = ErrorResponse),
         (status = 429, description = "Too many requests, too many lines from the caller or to this bot, or the bot's agent is at its chat rate.", body = ErrorResponse,
             headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
         (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
@@ -99,10 +185,10 @@ pub(crate) async fn command(
     user: SteppedUpUser,
     State(state): State<AppState>,
     ClientIp(ip): ClientIp,
+    arrival: Arrival,
     ValidPath(id): ValidPath<BotId>,
     ValidJson(request): ValidJson<ChatCommandRequest>,
 ) -> Result<(StatusCode, Json<ChatSendResponse>), ApiError> {
-    let started = Instant::now();
     let message = line(&request.message)?;
     send_line(
         user.user(),
@@ -111,14 +197,15 @@ pub(crate) async fn command(
         id,
         &message,
         ChatRoute::Command,
-        started,
+        arrival.instant(),
     )
     .await
 }
 
-/// One line through `route`: authorized (`SendChat` with the allowlist's
-/// check), pointed to `/command` when `/chat` got an unlisted command, the
-/// user's and the bot's chat limits spent, then sent and answered.
+/// One line through `route`, whose request arrived at `started`: authorized
+/// (`SendChat` with the allowlist's check), pointed to `/command` when
+/// `/chat` got an unlisted command, the user's and the bot's chat limits
+/// spent, then sent and answered within the wait counted from the arrival.
 async fn send_line(
     user: &AuthUser,
     state: &AppState,
@@ -189,6 +276,40 @@ fn chatting(error: ChatSendError, limits: &RateLimits) -> ApiError {
             | ChatFailedReason::UnknownBot
             | ChatFailedReason::ShuttingDown => ApiError::BotUnreachable,
         },
-        other @ ChatSendError::Mint(_) => ApiError::internal(other),
+        // Only a missing check in a handler here gets a line to the service
+        // through a route that doesn't take it: a bug (S10).
+        other @ (ChatSendError::Mint(_) | ChatSendError::WrongRoute(_)) => {
+            ApiError::internal(other)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use chrono::DateTime;
+    use fleet_testkit::system::ManualClock;
+
+    use super::*;
+    use crate::config::RateLimitConfig;
+
+    /// A line the service refused for its route reached it only because the
+    /// handler's check is missing: a bug, the internal error (S10).
+    #[test]
+    fn a_line_off_its_routes_rule_is_the_internal_error() {
+        let limits = RateLimits::new(
+            &RateLimitConfig::default(),
+            Arc::new(ManualClock::new(DateTime::UNIX_EPOCH)),
+        );
+
+        for route in [ChatRoute::Chat, ChatRoute::Command] {
+            let answered = chatting(ChatSendError::WrongRoute(route), &limits);
+
+            assert!(
+                matches!(answered, ApiError::Internal(_)),
+                "{route:?}: {answered:?}"
+            );
+        }
     }
 }

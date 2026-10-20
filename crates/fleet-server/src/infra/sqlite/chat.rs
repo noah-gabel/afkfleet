@@ -14,13 +14,14 @@ use core::str::FromStr;
 
 use fleet_core::chat::{ChatKind, ChatMessage, ChatSender, IncomingChat, IncomingChatError};
 use fleet_core::id::BotId;
+use fleet_core::value::Username;
 use sqlx::{SqliteConnection, SqlitePool};
 use uuid::Uuid;
 use uuid::fmt::Hyphenated;
 
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::store_error;
-use crate::ports::chat::{ChatEntry, ChatMessageId, ChatRecord, NewChatMessage};
+use crate::ports::chat::{ChatEntry, ChatMessageId, ChatRecord, ListedChat, NewChatMessage};
 use crate::ports::page::Page;
 use crate::ports::store::StoreError;
 
@@ -48,6 +49,8 @@ struct ChatRow {
     truncated: i64,
     at: String,
     sent_by: Option<String>,
+    /// The sender's username, joined: `NULL` without a sender.
+    sent_by_name: Option<String>,
 }
 
 /// The columns an entry is stored in.
@@ -144,21 +147,24 @@ pub(super) async fn append(
     Ok((done.rows_affected() == 1).then(|| ChatMessageId::new(done.last_insert_rowid())))
 }
 
-/// One page of `bot`'s messages, newest first by ID, one row more than the
-/// page holds.
+/// One page of `bot`'s messages, newest first by ID (commit order, which a
+/// user's line can lead by one ingest batch; ADR-0020, U5), one row more
+/// than the page holds, each user's line with its sender's username.
 pub(super) async fn page(
     pool: &SqlitePool,
     bot: BotId,
     page: Page<ChatMessageId>,
-) -> Result<Vec<ChatRecord>, StoreError> {
+) -> Result<Vec<ListedChat>, StoreError> {
     let bot = id_text(bot);
     let before = page.before.map_or(i64::MAX, ChatMessageId::get);
     let fetch = i64::from(page.limit.fetch());
     sqlx::query_as!(
         ChatRow,
-        r#"SELECT id AS "id!: i64", bot_id, direction, kind, sender_name, sender_uuid, text,
-                  truncated, at, sent_by
-           FROM chat_messages WHERE bot_id = ? AND id < ? ORDER BY id DESC LIMIT ?"#,
+        r#"SELECT c.id AS "id!: i64", c.bot_id, c.direction, c.kind, c.sender_name,
+                  c.sender_uuid, c.text, c.truncated, c.at, c.sent_by,
+                  u.username AS sent_by_name
+           FROM chat_messages c LEFT JOIN users u ON u.id = c.sent_by
+           WHERE c.bot_id = ? AND c.id < ? ORDER BY c.id DESC LIMIT ?"#,
         bot,
         before,
         fetch
@@ -167,8 +173,27 @@ pub(super) async fn page(
     .await
     .map_err(store_error)?
     .iter()
-    .map(record_from_row)
+    .map(listed_from_row)
     .collect()
+}
+
+/// A row with its sender's username.
+fn listed_from_row(row: &ChatRow) -> Result<ListedChat, StoreError> {
+    let record = record_from_row(row)?;
+    // A sender's name that doesn't read back is a corrupt line. The foreign
+    // key keeps a sender without a user from existing at all.
+    let sent_by = row
+        .sent_by_name
+        .as_deref()
+        .map(|name| {
+            Username::try_from(name).map_err(|_| StoreError::Corrupt {
+                table: TABLE,
+                column: "sent_by",
+                rowid: row.id,
+            })
+        })
+        .transpose()?;
+    Ok(ListedChat { record, sent_by })
 }
 
 /// Checks every value of a stored row and rebuilds its entry.

@@ -242,6 +242,9 @@ impl World {
             )
             .await
             .unwrap()
+            .into_iter()
+            .map(|line| line.record)
+            .collect()
     }
 
     async fn audit_count(&self) -> usize {

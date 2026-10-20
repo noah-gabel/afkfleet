@@ -415,6 +415,120 @@ expression: answer.json()
         ],
         "type": "object"
       },
+      "ChatDirection": {
+        "description": "Whether a bot received a line or sent it.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on one always keeps a default branch.",
+        "enum": [
+          "in",
+          "out"
+        ],
+        "type": "string"
+      },
+      "ChatLine": {
+        "description": "One line of a bot's chat, as its viewer may see it (S6, S9, U3).",
+        "properties": {
+          "arguments_hidden": {
+            "description": "Whether a command's arguments were left out for this viewer (S9).",
+            "type": "boolean"
+          },
+          "at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "direction": {
+            "$ref": "#/components/schemas/ChatDirection",
+            "description": "Received or sent."
+          },
+          "id": {
+            "$ref": "#/components/schemas/SafeInt",
+            "description": "The line's ID, the history's cursor: a newer line has a greater one.\nThe order is the server's commit order, which a user's line can lead\nby a moment (ADR-0020, U5)."
+          },
+          "kind": {
+            "$ref": "#/components/schemas/ChatLineKind",
+            "description": "What kind of line it is."
+          },
+          "mine": {
+            "description": "Whether the viewer had this line sent (U3).",
+            "type": "boolean"
+          },
+          "sender": {
+            "$ref": "#/components/schemas/ChatLineSender",
+            "description": "Who sent a received player message, as the Minecraft server claims."
+          },
+          "sent_by": {
+            "$ref": "#/components/schemas/UserLabel",
+            "description": "Who had a user's line sent: for viewers who see the account's owner,\nand only while that user exists (U3)."
+          },
+          "text": {
+            "maxLength": 3072,
+            "type": "string"
+          },
+          "truncated": {
+            "description": "Whether a received text was cut where it was stored.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "direction",
+          "kind",
+          "text",
+          "truncated",
+          "arguments_hidden",
+          "mine"
+        ],
+        "type": "object"
+      },
+      "ChatLineKind": {
+        "description": "What kind of line it is: what a bot received, as its Minecraft server\nsent it, or who had it sent.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on one always keeps a default branch.",
+        "enum": [
+          "chat",
+          "emote",
+          "whisper",
+          "announcement",
+          "system",
+          "mode",
+          "user"
+        ],
+        "type": "string"
+      },
+      "ChatLineSender": {
+        "description": "Who sent a received line, as its Minecraft server claims it: never\nverified (ADR-0011).",
+        "properties": {
+          "name": {
+            "maxLength": 64,
+            "type": "string"
+          },
+          "uuid": {
+            "maxLength": 36,
+            "type": "string"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "type": "object"
+      },
+      "ChatPage": {
+        "description": "`GET /bots/{id}/chat`: one page of a bot's chat, newest first.",
+        "properties": {
+          "items": {
+            "description": "The lines.",
+            "items": {
+              "$ref": "#/components/schemas/ChatLine"
+            },
+            "type": "array"
+          },
+          "next": {
+            "$ref": "#/components/schemas/SafeInt",
+            "description": "The `before` of the next page, when one follows."
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
       "ChatSendOutcome": {
         "description": "What came of a line the server sent to its bot's agent.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on one always keeps a default branch.",
         "enum": [
@@ -877,7 +991,7 @@ expression: answer.json()
             "description": "How."
           },
           "message": {
-            "maxLength": 1024,
+            "maxLength": 3072,
             "type": "string"
           },
           "restriction": {
@@ -4160,6 +4274,133 @@ expression: answer.json()
       }
     },
     "/api/v1/bots/{id}/chat": {
+      "get": {
+        "operationId": "get_bot_chat",
+        "parameters": [
+          {
+            "description": "The bot's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only lines older than this ID: the `next` of the page before.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "How many lines at most; 50 by default.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChatPage"
+                }
+              }
+            },
+            "description": "One page of the bot's chat, newest first by ID, which is the order the server stored the lines in. Each line is as the caller may see it: a command's arguments only for Manage holders, and who had a user's line sent only for callers who see the account's owner."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A query that doesn't parse: an unknown parameter, one given twice, or a value that isn't a whole number the parameter can hold."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such bot, or one the caller may not see."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A `limit` outside 1 to 100, or a `before` below 1."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/bots/{id}/chat`: one page of the bot's chat, newest first.",
+        "tags": [
+          "bots"
+        ]
+      },
       "post": {
         "operationId": "send_bot_chat",
         "parameters": [
@@ -4262,7 +4503,7 @@ expression: answer.json()
                 }
               }
             },
-            "description": "A line that's empty, more than one line, too long, or holds `§` or text-direction marks."
+            "description": "A line that's empty, too long, or holds a line break or another control character, `§` or text-direction marks."
           },
           "429": {
             "content": {
@@ -4409,7 +4650,7 @@ expression: answer.json()
                 }
               }
             },
-            "description": "A line that isn't a command, or that's empty, more than one line, too long, or holds `§` or text-direction marks."
+            "description": "A line that isn't a command, or that's empty, too long, or holds a line break or another control character, `§` or text-direction marks."
           },
           "429": {
             "content": {

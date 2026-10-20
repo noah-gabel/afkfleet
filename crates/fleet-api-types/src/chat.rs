@@ -12,17 +12,30 @@
 //!   bot sent it, 202 when no answer came in time (S5). Either way the line
 //!   is in the bot's chat history as what the user asked it to send, never as
 //!   proof that it reached the Minecraft server (S7).
+//! - **`GET /bots/{id}/chat`** takes a [`ChatPageQuery`] and answers a
+//!   [`ChatPage`] of [`ChatLine`]s, newest first, each built for its viewer
+//!   (S6, S9, U3): a command's arguments only for Manage holders, the
+//!   sender's name only for viewers who see the account's owner, and `mine`
+//!   on the viewer's own lines. A line's text is cleaned, a line break
+//!   becoming ` | `, so no server can make one message look like two (S11).
 
-use fleet_core::chat::{ChatMessage, ChatMessageError};
+use fleet_core::chat::{ChatKind, ChatMessage, ChatMessageError, ChatSender, IncomingChat};
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
+use utoipa::IntoParams;
+use utoipa::openapi::path::{Parameter, ParameterBuilder, ParameterIn};
+use utoipa::openapi::schema::{ObjectBuilder, Type};
+use utoipa::openapi::{RefOr, Required, Schema};
 use utoipa::{PartialSchema as _, ToSchema};
 
-use crate::ids::{ChatRequestId, id_schema};
-use crate::int::SafeInt;
+use crate::ids::{ChatRequestId, ID_CHARS, id_schema};
+use crate::int::{SafeInt, integer_schema};
 use crate::open::{Open, OpenEnum};
+use crate::page::{PAGE_DEFAULT, PAGE_MAX};
 use crate::text::BoundedText;
+use crate::time::Timestamp;
+use crate::users::UserLabel;
 
 /// The most UTF-16 code units of a chat line, as Minecraft measures it: an
 /// emoji counts 2 (`ChatMessage::MAX_LEN`).
@@ -128,6 +141,236 @@ pub struct ChatSendResponse {
     #[ts(as = "ChatSendOutcome")]
     #[schema(value_type = ChatSendOutcome)]
     pub outcome: Open<ChatSendOutcome>,
+}
+
+/// The most characters of a chat line's text as the API sends it (S11): a
+/// received message keeps its line breaks, up to
+/// `IncomingChat::MAX_TEXT_LEN` characters, and each becomes the three
+/// characters ` | ` on the way, so three times that holds every stored text
+/// uncut.
+pub const CHAT_TEXT_MAX_CHARS: usize = 3 * IncomingChat::MAX_TEXT_LEN;
+
+/// The most characters of a Minecraft sender's name (`ChatSender`'s cap).
+pub const CHAT_SENDER_MAX_CHARS: usize = ChatSender::MAX_NAME_LEN;
+
+/// `GET /bots/{id}/chat?before=<id>&limit=<n>`: which page of a bot's chat
+/// to answer, newest first. Like [`crate::PageQuery`], with the chat's own
+/// cursor, a row ID, which crosses as a [`SafeInt`] (ADR-0015). A parameter
+/// that isn't one of these two, or one given twice, is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct ChatPageQuery {
+    /// Only lines older than this one: the `next` of the page before. At
+    /// least 1, as every row ID is.
+    #[garde(inner(custom(|cursor: &SafeInt, &(): &()| positive_cursor(*cursor))))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub before: Option<SafeInt>,
+    /// How many lines at most: 1 to [`PAGE_MAX`].
+    #[garde(range(min = 1, max = PAGE_MAX))]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limit: Option<u32>,
+}
+
+impl ChatPageQuery {
+    /// The page size: `limit`, or [`PAGE_DEFAULT`].
+    #[must_use]
+    pub fn limit_or_default(&self) -> u32 {
+        self.limit.unwrap_or(PAGE_DEFAULT)
+    }
+}
+
+/// The garde rule of a cursor: at least 1, in garde's own words for a range.
+fn positive_cursor(cursor: SafeInt) -> garde::Result {
+    if cursor.get() < 1 {
+        Err(garde::Error::new("lower than 1"))
+    } else {
+        Ok(())
+    }
+}
+
+impl IntoParams for ChatPageQuery {
+    fn into_params(_parameter_in_provider: impl Fn() -> Option<ParameterIn>) -> Vec<Parameter> {
+        vec![
+            ParameterBuilder::new()
+                .name("before")
+                .parameter_in(ParameterIn::Query)
+                .required(Required::False)
+                .description(Some(
+                    "Only lines older than this ID: the `next` of the page before.",
+                ))
+                .schema(Some(cursor_schema()))
+                .build(),
+            ParameterBuilder::new()
+                .name("limit")
+                .parameter_in(ParameterIn::Query)
+                .required(Required::False)
+                .description(Some("How many lines at most; 50 by default."))
+                .schema(Some(integer_schema::<1, PAGE_MAX>()))
+                .build(),
+        ]
+    }
+}
+
+/// A cursor's schema: an integer from 1 to [`SafeInt::MAX`].
+fn cursor_schema() -> RefOr<Schema> {
+    ObjectBuilder::new()
+        .schema_type(Type::Integer)
+        .minimum(Some(1))
+        .maximum(Some(SafeInt::MAX))
+        .into()
+}
+
+/// Whether a bot received a line or sent it.
+/// This union lists the values this version knows; a newer server may send
+/// others, so code that branches on one always keeps a default branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatDirection {
+    /// The bot received it from its Minecraft server.
+    In,
+    /// The bot sent it: its mode, or a user through the API.
+    Out,
+}
+
+impl OpenEnum for ChatDirection {
+    const ALL: &'static [Self] = &[Self::In, Self::Out];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::In => "in",
+            Self::Out => "out",
+        }
+    }
+}
+
+/// What kind of line it is: what a bot received, as its Minecraft server
+/// sent it, or who had it sent.
+/// This union lists the values this version knows; a newer server may send
+/// others, so code that branches on one always keeps a default branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatLineKind {
+    /// A player's chat message (received).
+    Chat,
+    /// A player's `/me` (received).
+    Emote,
+    /// A whisper to the bot (received).
+    Whisper,
+    /// A player's `/say` (received).
+    Announcement,
+    /// A system message, which has no sender (received).
+    System,
+    /// What the bot's mode sent.
+    Mode,
+    /// What a user had the bot send through the API: what was asked, not
+    /// proof that it reached the Minecraft server (S7).
+    User,
+}
+
+impl OpenEnum for ChatLineKind {
+    const ALL: &'static [Self] = &[
+        Self::Chat,
+        Self::Emote,
+        Self::Whisper,
+        Self::Announcement,
+        Self::System,
+        Self::Mode,
+        Self::User,
+    ];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Chat => "chat",
+            Self::Emote => "emote",
+            Self::Whisper => "whisper",
+            Self::Announcement => "announcement",
+            Self::System => "system",
+            Self::Mode => "mode",
+            Self::User => "user",
+        }
+    }
+}
+
+impl From<ChatKind> for ChatLineKind {
+    fn from(kind: ChatKind) -> Self {
+        match kind {
+            ChatKind::Chat => Self::Chat,
+            ChatKind::Emote => Self::Emote,
+            ChatKind::Whisper => Self::Whisper,
+            ChatKind::Announcement => Self::Announcement,
+            ChatKind::System => Self::System,
+        }
+    }
+}
+
+/// Who sent a received line, as its Minecraft server claims it: never
+/// verified (ADR-0011).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct ChatLineSender {
+    /// The display name, cleaned.
+    #[ts(type = "string")]
+    #[schema(schema_with = BoundedText::<CHAT_SENDER_MAX_CHARS>::schema)]
+    pub name: BoundedText<CHAT_SENDER_MAX_CHARS>,
+    /// The player's UUID, hyphenated, when the server gave one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional)]
+    #[schema(schema_with = BoundedText::<ID_CHARS>::schema, nullable = false)]
+    pub uuid: Option<BoundedText<ID_CHARS>>,
+}
+
+/// One line of a bot's chat, as its viewer may see it (S6, S9, U3).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct ChatLine {
+    /// The line's ID, the history's cursor: a newer line has a greater one.
+    /// The order is the server's commit order, which a user's line can lead
+    /// by a moment (ADR-0020, U5).
+    pub id: SafeInt,
+    /// When the server received it, or a user's line was sent.
+    #[ts(type = "string")]
+    #[schema(schema_with = Timestamp::schema)]
+    pub at: Timestamp,
+    /// Received or sent.
+    #[ts(as = "ChatDirection")]
+    #[schema(value_type = ChatDirection)]
+    pub direction: Open<ChatDirection>,
+    /// What kind of line it is.
+    #[ts(as = "ChatLineKind")]
+    #[schema(value_type = ChatLineKind)]
+    pub kind: Open<ChatLineKind>,
+    /// The text, cleaned, a line break as ` | ` (S11). Below Manage, a
+    /// command a mode or a user sent is only its `/` and name.
+    #[ts(type = "string")]
+    #[schema(schema_with = BoundedText::<CHAT_TEXT_MAX_CHARS>::schema)]
+    pub text: BoundedText<CHAT_TEXT_MAX_CHARS>,
+    /// Whether a received text was cut where it was stored.
+    pub truncated: bool,
+    /// Whether a command's arguments were left out for this viewer (S9).
+    pub arguments_hidden: bool,
+    /// Who sent a received player message, as the Minecraft server claims.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[schema(nullable = false)]
+    pub sender: Option<ChatLineSender>,
+    /// Who had a user's line sent: for viewers who see the account's owner,
+    /// and only while that user exists (U3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[schema(nullable = false)]
+    pub sent_by: Option<UserLabel>,
+    /// Whether the viewer had this line sent (U3).
+    pub mine: bool,
+}
+
+/// `GET /bots/{id}/chat`: one page of a bot's chat, newest first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct ChatPage {
+    /// The lines.
+    pub items: Vec<ChatLine>,
+    /// The `before` of the next page, when one follows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[schema(nullable = false)]
+    pub next: Option<SafeInt>,
 }
 
 #[cfg(test)]
@@ -322,6 +565,161 @@ mod tests {
     fn every_outcome_has_its_name(#[case] outcome: ChatSendOutcome, #[case] name: &str) {
         assert_eq!(outcome.as_str(), name);
         assert_eq!(serde_json::to_value(outcome).unwrap(), json!(name));
+    }
+
+    // --- The history (P11.3; ADR-0020, S6, S9, S11, U3) ---
+
+    fn query(before: Option<i64>, limit: Option<u32>) -> ChatPageQuery {
+        ChatPageQuery {
+            before: before.map(|id| SafeInt::try_new(id).unwrap()),
+            limit,
+        }
+    }
+
+    #[rstest]
+    #[case::the_first_page(None, None)]
+    #[case::the_smallest_cursor(Some(1), Some(1))]
+    #[case::the_largest(Some(SafeInt::MAX), Some(100))]
+    fn a_page_query_takes_a_cursor_from_1_and_a_limit_from_1_to_100(
+        #[case] before: Option<i64>,
+        #[case] limit: Option<u32>,
+    ) {
+        assert_eq!(problems(&query(before, limit)), Vec::new());
+    }
+
+    #[rstest]
+    #[case::a_zero_cursor(Some(0), None, "before", "lower than 1")]
+    #[case::a_negative_cursor(Some(-1), None, "before", "lower than 1")]
+    #[case::a_zero_limit(None, Some(0), "limit", "lower than 1")]
+    #[case::a_limit_over_100(None, Some(101), "limit", "greater than 100")]
+    fn a_value_out_of_range_names_its_rule_on_its_field(
+        #[case] before: Option<i64>,
+        #[case] limit: Option<u32>,
+        #[case] field: &str,
+        #[case] rule: &str,
+    ) {
+        assert_eq!(
+            problems(&query(before, limit)),
+            vec![(field.to_owned(), rule.to_owned())]
+        );
+    }
+
+    #[test]
+    fn a_page_query_leaves_out_what_it_lacks_and_refuses_anything_else() {
+        let empty: ChatPageQuery = serde_json::from_value(json!({})).unwrap();
+        let unknown = serde_json::from_value::<ChatPageQuery>(json!({ "before": 4, "after": 2 }));
+
+        assert_eq!(empty, query(None, None));
+        assert_eq!(empty.limit_or_default(), 50);
+        assert_eq!(query(None, Some(7)).limit_or_default(), 7);
+        assert!(unknown.is_err());
+    }
+
+    #[rstest]
+    #[case(ChatKind::Chat, ChatLineKind::Chat, "chat")]
+    #[case(ChatKind::Emote, ChatLineKind::Emote, "emote")]
+    #[case(ChatKind::Whisper, ChatLineKind::Whisper, "whisper")]
+    #[case(ChatKind::Announcement, ChatLineKind::Announcement, "announcement")]
+    #[case(ChatKind::System, ChatLineKind::System, "system")]
+    fn every_received_kind_has_its_line_kind(
+        #[case] received: ChatKind,
+        #[case] kind: ChatLineKind,
+        #[case] name: &str,
+    ) {
+        assert_eq!(ChatLineKind::from(received), kind);
+        assert_eq!(kind.as_str(), name);
+        assert_eq!(received.as_str(), name, "the stored name is the API's");
+    }
+
+    #[test]
+    fn every_kind_and_direction_has_its_name() {
+        assert_eq!(ChatLineKind::Mode.as_str(), "mode");
+        assert_eq!(ChatLineKind::User.as_str(), "user");
+        assert_eq!(ChatLineKind::ALL.len(), 7);
+        assert_eq!(ChatDirection::In.as_str(), "in");
+        assert_eq!(ChatDirection::Out.as_str(), "out");
+        for kind in ChatLineKind::ALL {
+            assert_eq!(serde_json::to_value(kind).unwrap(), json!(kind.as_str()));
+        }
+    }
+
+    fn a_line() -> ChatLine {
+        ChatLine {
+            id: SafeInt::try_new(41).unwrap(),
+            at: serde_json::from_value(json!("2027-01-15T08:00:00.000Z")).unwrap(),
+            direction: ChatDirection::Out.into(),
+            kind: ChatLineKind::User.into(),
+            text: BoundedText::new("/login"),
+            truncated: false,
+            arguments_hidden: true,
+            sender: None,
+            sent_by: None,
+            mine: true,
+        }
+    }
+
+    #[test]
+    fn a_line_leaves_out_what_it_lacks_and_round_trips() {
+        let line = a_line();
+
+        let value = serde_json::to_value(&line).unwrap();
+
+        assert_eq!(
+            value,
+            json!({
+                "id": 41,
+                "at": "2027-01-15T08:00:00.000Z",
+                "direction": "out",
+                "kind": "user",
+                "text": "/login",
+                "truncated": false,
+                "arguments_hidden": true,
+                "mine": true,
+            })
+        );
+        assert_eq!(serde_json::from_value::<ChatLine>(value).unwrap(), line);
+    }
+
+    #[test]
+    fn a_line_reads_a_kind_and_direction_it_doesnt_know() {
+        let mut value = serde_json::to_value(a_line()).unwrap();
+        value["kind"] = json!("shout");
+        value["direction"] = json!("sideways");
+
+        let read: ChatLine = serde_json::from_value(value).unwrap();
+
+        assert_eq!(read.kind.known(), None);
+        assert_eq!(read.kind.as_str(), "shout");
+        assert_eq!(read.direction.as_str(), "sideways");
+    }
+
+    /// A stored received text keeps up to 1024 characters with its line
+    /// breaks; each becomes ` | ` on the way out, and none is ever cut
+    /// (S11). The worst case is all line breaks.
+    #[rstest]
+    #[case::only_line_breaks(&"\n".repeat(1024))]
+    #[case::every_other(&"a\n".repeat(512))]
+    #[case::a_few(&format!("{}\n{}", "x".repeat(600), "y".repeat(423)))]
+    #[case::emoji_and_line_breaks(&"😀\n".repeat(512))]
+    #[case::longer_than_stored(&"\nz".repeat(700))]
+    fn a_stored_text_crosses_uncut_a_line_break_as_a_separator(#[case] raw: &str) {
+        let stored = IncomingChat::system(raw);
+
+        let sent = BoundedText::<CHAT_TEXT_MAX_CHARS>::new(stored.text());
+
+        assert_eq!(sent.as_str(), stored.text().replace('\n', " | "));
+        assert!(!sent.as_str().contains('\n'));
+    }
+
+    #[test]
+    fn the_cap_holds_a_text_of_only_line_breaks_exactly() {
+        let stored = IncomingChat::system(&"\n".repeat(IncomingChat::MAX_TEXT_LEN));
+
+        let sent = BoundedText::<CHAT_TEXT_MAX_CHARS>::new(stored.text());
+
+        assert_eq!(sent.as_str().chars().count(), CHAT_TEXT_MAX_CHARS);
+        assert_eq!(CHAT_TEXT_MAX_CHARS, 3072);
+        assert_eq!(CHAT_SENDER_MAX_CHARS, 64);
     }
 
     #[test]

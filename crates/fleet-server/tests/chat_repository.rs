@@ -26,7 +26,7 @@ use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::agents::NewAgent;
 use fleet_server::ports::audit::NewAuditEntry;
 use fleet_server::ports::bots::NewBot;
-use fleet_server::ports::chat::{ChatEntry, ChatMessageId, ChatRecord, NewChatMessage};
+use fleet_server::ports::chat::{ChatEntry, ChatMessageId, ChatRecord, ListedChat, NewChatMessage};
 use fleet_server::ports::page::{Page, PageLimit};
 use fleet_server::ports::store::{Store, StoreError};
 use fleet_server::ports::users::{NewUser, PasswordHash};
@@ -201,7 +201,12 @@ fn page(before: Option<ChatMessageId>, limit: u32) -> Page<ChatMessageId> {
 
 /// Every message of `bot`, newest first.
 async fn all(db: &Database, bot: BotId) -> Vec<ChatRecord> {
-    db.chat().page(bot, page(None, 100)).await.unwrap()
+    records(db.chat().page(bot, page(None, 100)).await.unwrap())
+}
+
+/// A page's records, without their senders' names.
+fn records(listed: Vec<ListedChat>) -> Vec<ChatRecord> {
+    listed.into_iter().map(|line| line.record).collect()
 }
 
 #[sqlx::test(migrations = false)]
@@ -337,6 +342,84 @@ async fn a_users_line_reads_back_as_outgoing_with_its_sender(
     );
 }
 
+/// The history lists a user's line with its sender's username, and every
+/// other line without one (U3).
+#[sqlx::test(migrations = false)]
+async fn a_users_line_lists_with_its_senders_username_and_every_other_line_without(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (db, agent, bot) = with_bot(options).await;
+    let sender = add_sender(&db, 2, "sender").await;
+    append_all(
+        &db,
+        &[
+            message(bot, agent, T0 + 1, whisper("hi bot")),
+            message(
+                bot,
+                agent,
+                T0 + 2,
+                ChatEntry::ModeSent(ChatMessage::try_from("/afk").unwrap()),
+            ),
+            message(bot, agent, T0 + 3, user_line("hello", Some(sender))),
+        ],
+    )
+    .await;
+
+    let listed = db.chat().page(bot, page(None, 10)).await.unwrap();
+
+    let names: Vec<Option<&str>> = listed
+        .iter()
+        .map(|line| line.sent_by.as_ref().map(Username::as_str))
+        .collect();
+    assert_eq!(names, [Some("sender"), None, None]);
+}
+
+/// A sender whose stored username doesn't read back is a corrupt row,
+/// named as the line's `sent_by`.
+#[sqlx::test(migrations = false)]
+async fn a_sender_whose_username_doesnt_read_back_is_corrupt(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (db, agent, bot) = with_bot(options).await;
+    let sender = UserId::new_v7(at(T0), [9; 10]).unwrap();
+    let id = sender.to_string();
+    sqlx::query!(
+        "INSERT INTO users (id, username, password_hash, role, disabled, created_at, password_changed_at)
+         VALUES (?, 'no spaces', '$argon2id$v=19$m=19456,t=2,p=1$c2FsdHNhbHQ$aGFzaGhhc2g', 'member', 0,
+                 '2027-01-15T08:00:00.000Z', '2027-01-15T08:00:00.000Z')",
+        id
+    )
+    .execute(db.write_pool())
+    .await
+    .unwrap();
+    append_all(
+        &db,
+        &[message(
+            bot,
+            agent,
+            T0 + 1,
+            user_line("hello", Some(sender)),
+        )],
+    )
+    .await;
+
+    let result = db.chat().page(bot, page(None, 10)).await;
+
+    assert!(
+        matches!(
+            result,
+            Err(StoreError::Corrupt {
+                table: "chat_messages",
+                column: "sent_by",
+                ..
+            })
+        ),
+        "{result:?}"
+    );
+}
+
 #[sqlx::test(migrations = false)]
 async fn a_users_line_keeps_no_sender_once_that_user_is_deleted(
     _pool: SqlitePoolOptions,
@@ -361,6 +444,13 @@ async fn a_users_line_keeps_no_sender_once_that_user_is_deleted(
         .await
         .unwrap();
 
+    let listed = db.chat().page(bot, page(None, 10)).await.unwrap();
+    assert!(
+        listed
+            .iter()
+            .all(|line| line.sent_by.as_ref().map(Username::as_str) != Some("sender")),
+        "the deleted sender's name is gone"
+    );
     let entries: Vec<ChatEntry> = all(&db, bot)
         .await
         .into_iter()
@@ -541,14 +631,15 @@ async fn pages_are_newest_first_per_bot_and_before_is_exclusive(
     let ids = append_all(&db, &sent).await;
     let mine: Vec<ChatMessageId> = ids.iter().step_by(2).map(|id| id.unwrap()).collect();
 
-    let first = db.chat().page(bot, page(None, 2)).await.unwrap();
+    let first = records(db.chat().page(bot, page(None, 2)).await.unwrap());
     let cursor = first.get(1).unwrap().id;
-    let second = db.chat().page(bot, page(Some(cursor), 2)).await.unwrap();
-    let last = db
-        .chat()
-        .page(bot, page(Some(*mine.first().unwrap()), 2))
-        .await
-        .unwrap();
+    let second = records(db.chat().page(bot, page(Some(cursor), 2)).await.unwrap());
+    let last = records(
+        db.chat()
+            .page(bot, page(Some(*mine.first().unwrap()), 2))
+            .await
+            .unwrap(),
+    );
 
     let ids_of = |records: &[ChatRecord]| records.iter().map(|r| r.id).collect::<Vec<_>>();
     // A page holds one more row than its limit, so the caller knows whether

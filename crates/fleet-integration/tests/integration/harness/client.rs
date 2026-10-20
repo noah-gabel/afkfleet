@@ -9,7 +9,7 @@ use core::time::Duration;
 use fleet_api_types::accounts::CreateOfflineAccountRequest;
 use fleet_api_types::auth::{LoginRequest, StepUpRequest};
 use fleet_api_types::bots::BotPatchRequest;
-use fleet_api_types::chat::{ChatSendRequest, ChatSendResponse};
+use fleet_api_types::chat::{ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse};
 use fleet_api_types::mfa::CODE_MAX_CHARS;
 use fleet_api_types::{PageQuery, SecretText};
 use fleet_client::{Client, ClientConfig, ClientError, LoginStep, MemoryStore, ServerUrl, Trust};
@@ -120,6 +120,20 @@ impl Owner {
                 },
             )
             .await
+    }
+
+    /// The newest page of `bot`'s chat, as this user may see it.
+    pub(crate) async fn history(&self, bot: BotId) -> ChatPage {
+        self.client
+            .chat(
+                bot,
+                &ChatPageQuery {
+                    before: None,
+                    limit: None,
+                },
+            )
+            .await
+            .unwrap()
     }
 }
 

@@ -376,6 +376,66 @@ async fn chat_sends_the_rest_of_the_line_and_shows_the_answer_never_the_line() {
     server.stop().await;
 }
 
+/// `history` shows a page oldest first and where the older lines start;
+/// a bot without chat says so.
+#[tokio::test]
+async fn history_shows_a_page_oldest_first_and_where_older_lines_start() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    let quiet = bot_of(&owner, "AfkBot8").await;
+    let bot = bot_of(&owner, "AfkBot9").await;
+    let texts: Vec<String> = (1..=52).map(|n| format!("line {n}")).collect();
+    let texts: Vec<&str> = texts.iter().map(String::as_str).collect();
+    server.said(bot, &texts).await;
+    let (client, _) = server.client();
+    let newest = format!("history {bot}");
+    let empty = format!("history {quiet}");
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &[&newest, &empty]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let said = &terminal.said;
+    let lines: Vec<&String> = said.iter().filter(|line| line.starts_with('#')).collect();
+    assert_eq!(lines.len(), 50, "{said:?}");
+    assert!(lines[0].ends_with("system: line 3"), "{said:?}");
+    assert!(lines[49].ends_with("system: line 52"), "{said:?}");
+    let older = said
+        .iter()
+        .find(|line| line.starts_with("older: history "))
+        .unwrap();
+    assert!(
+        older.starts_with(&format!("older: history {bot} ")),
+        "{older}"
+    );
+    assert!(said.iter().any(|line| line == "no chat yet"), "{said:?}");
+    server.stop().await;
+}
+
+/// `chat <id>` with only spaces after it is invalid input: nothing is sent,
+/// so the server never answers that the line is empty.
+#[tokio::test]
+async fn chat_without_text_is_invalid_input_and_never_sent() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    let bot = bot_of(&owner, "AfkBot9").await;
+    let (client, _) = server.client();
+    let chat = format!("chat {bot}   ");
+    let command = format!("command {bot} ");
+    // A third secret, which a step-up would take.
+    let mut terminal = Scripted::new(&[PASSWORD, &code, PASSWORD], &[&chat, &command]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let text = terminal.text();
+    assert_eq!(text.matches("not a command").count(), 2, "{text}");
+    assert!(!text.contains("must not be empty"), "{text}");
+    assert!(!text.contains("step_up_required"), "{text}");
+    assert_eq!(terminal.secrets.len(), 1, "no step-up was asked for");
+    server.stop().await;
+}
+
 #[tokio::test]
 async fn chat_with_a_command_off_the_allowlist_shows_the_pointer_to_command() {
     let server = Server::start().await;

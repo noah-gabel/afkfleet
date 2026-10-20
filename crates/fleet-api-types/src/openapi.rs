@@ -35,7 +35,7 @@ use crate::auth::{
     RegisterResponse, StepUpRequest, TokenResponse,
 };
 use crate::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
-use crate::chat::{ChatCommandRequest, ChatSendRequest, ChatSendResponse};
+use crate::chat::{ChatCommandRequest, ChatPage, ChatSendRequest, ChatSendResponse};
 use crate::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use crate::me::{MeResponse, PasswordChangeRequest};
 use crate::mfa::{MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse};
@@ -92,6 +92,7 @@ pub fn components() -> BTreeMap<String, RefOr<Schema>> {
     add::<ChatSendRequest>(&mut schemas);
     add::<ChatCommandRequest>(&mut schemas);
     add::<ChatSendResponse>(&mut schemas);
+    add::<ChatPage>(&mut schemas);
     schemas.into_iter().collect()
 }
 
