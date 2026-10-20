@@ -633,3 +633,125 @@ async fn a_session_lost_under_the_console_ends_it_with_a_word_and_reads_no_more(
     assert_eq!(terminal.lines.len(), 1, "nothing read after");
     server.stop().await;
 }
+
+/// The farm preset's fixed ID.
+const FARM: &str = "01a14202-2800-7000-8000-000000000002";
+
+#[tokio::test]
+async fn modes_lists_every_mode_one_line_each() {
+    let server = Server::start().await;
+    let (_owner, code) = owner_and_code(&server).await;
+    let (client, _) = server.client();
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &["modes"]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let text = terminal.text();
+    assert!(
+        text.contains(&format!("mode {FARM} farm built-in")),
+        "{text}"
+    );
+    assert!(
+        text.contains("mode 01a14202-2800-7000-8000-000000000001 afk built-in"),
+        "{text}"
+    );
+    server.stop().await;
+}
+
+/// `new-mode` creates the mode its JSON holds and shows its line, never its
+/// steps' text.
+#[tokio::test]
+async fn new_mode_creates_the_mode_and_never_shows_its_steps() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    let (client, _) = server.client();
+    let line = r#"new-mode {"name":"Greeter","visibility":"private","steps":[{"action":{"type":"send_chat","message":"hello secret-text"},"schedule":{"type":"every","interval_ms":60000,"jitter_ms":0},"probability":100}]}"#;
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &[line]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let text = terminal.text();
+    assert!(text.contains(" Greeter private mine editable"), "{text}");
+    assert!(!text.contains("secret-text"), "{text}");
+    let names: Vec<String> = owner
+        .modes(&PageQuery {
+            before: None,
+            limit: None,
+        })
+        .await
+        .unwrap()
+        .items
+        .iter()
+        .map(|mode| mode.name.as_str().to_owned())
+        .collect();
+    assert_eq!(names, ["Greeter", "farm", "afk"]);
+    server.stop().await;
+}
+
+/// A mode with a command off the allowlist asks for the password again,
+/// once, and is created through the step-up route.
+#[tokio::test]
+async fn new_mode_with_a_command_off_the_allowlist_asks_for_the_password_once() {
+    let server = Server::start().await;
+    let (_owner, code) = owner_and_code(&server).await;
+    let (client, _) = server.client();
+    let line = r#"new-mode {"name":"Ops","visibility":"private","steps":[{"action":{"type":"send_chat","message":"/op AfkBot2"},"schedule":{"type":"at_start"},"probability":100}]}"#;
+    let mut terminal = Scripted::new(&[PASSWORD, &code, PASSWORD], &[line]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    assert_eq!(terminal.secrets.len(), 0, "the step-up asked once");
+    let text = terminal.text();
+    assert!(text.contains(" Ops private mine editable"), "{text}");
+    assert!(!text.contains("mode_needs_step_up"), "{text}");
+    assert!(
+        !text.contains("AfkBot2") && !text.contains(PASSWORD),
+        "{text}"
+    );
+    server.stop().await;
+}
+
+/// JSON that isn't a mode is said so and never repeated, and nothing is
+/// sent; a mode the server refuses shows the field it names.
+#[tokio::test]
+async fn new_mode_that_isnt_a_mode_is_never_echoed_and_a_refused_one_shows_its_field() {
+    let server = Server::start().await;
+    let (_owner, code) = owner_and_code(&server).await;
+    let (client, _) = server.client();
+    let not_json = r#"new-mode {"name":"x","steps":[{"action":{"type":"say secret-text"}}]}"#;
+    let refused = r#"new-mode {"name":"AFK","visibility":"private","steps":[]}"#;
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &[not_json, refused]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let text = terminal.text();
+    assert!(text.contains("not a mode's JSON"), "{text}");
+    assert!(!text.contains("secret-text"), "{text}");
+    assert!(text.contains("name: is a built-in mode's name"), "{text}");
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn mode_switches_a_bots_mode() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    let bot = bot_of(&owner, "AfkBot9").await;
+    let (client, _) = server.client();
+    let line = format!("mode {bot} {FARM}");
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &[&line]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    assert_eq!(owner.bot(bot).await.unwrap().mode_id.to_string(), FARM);
+    assert!(
+        terminal.text().contains(&format!("bot {bot}")),
+        "{}",
+        terminal.text()
+    );
+    server.stop().await;
+}

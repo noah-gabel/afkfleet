@@ -94,11 +94,12 @@ use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{
     CODE_MAX_CHARS, MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse,
 };
+use fleet_api_types::modes::{CreateModeRequest, ModePage, ModeResponse};
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
 use fleet_api_types::{
-    AccountId, BotId, ErrorCode, ErrorResponse, InviteId, LinkFlowId, PageQuery, SecretText,
-    SessionId, UserId,
+    AccountId, BotId, ErrorCode, ErrorResponse, InviteId, LinkFlowId, ModeId, PageQuery,
+    SecretText, SessionId, UserId,
 };
 use reqwest::{Method, Url};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -823,6 +824,34 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         let url = self.server.api(&["bots", &id.to_string(), segment]);
         let answer = self.authed(Method::POST, url, Some(body)).await?;
         expect_json_of(answer, &[200, 202])
+    }
+
+    // ---- Modes (Plan.md P11.4) ----
+
+    /// One page of the modes the caller may see, newest first (200).
+    pub(crate) async fn modes(
+        self: &Arc<Self>,
+        query: &PageQuery<ModeId>,
+    ) -> Result<ModePage, ClientError> {
+        let url = with_page(self.server.api(&["modes"]), query);
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    /// A new mode through `POST /modes`, or its step-up twin when
+    /// `with_commands` (201).
+    pub(crate) async fn create_mode(
+        self: &Arc<Self>,
+        request: &CreateModeRequest,
+        with_commands: bool,
+    ) -> Result<ModeResponse, ClientError> {
+        let url = if with_commands {
+            self.server.api(&["modes", "with-commands"])
+        } else {
+            self.server.api(&["modes"])
+        };
+        let answer = self.authed(Method::POST, url, Some(json(request))).await?;
+        expect_json(answer, 201)
     }
 
     // ---- Sending ----
@@ -2949,6 +2978,118 @@ mod tests {
             )
             .await
             .unwrap_err();
+
+        assert!(is_api(&error, status, code), "{error:?}");
+    }
+
+    /// A mode as the server answers it.
+    fn a_mode() -> ModeResponse {
+        serde_json::from_value(json!({
+            "id": "018bcfe5-6800-7cdc-8dcd-cdcdcdcdcdcd",
+            "name": "Greeter",
+            "visibility": "private",
+            "ownership": "mine",
+            "editable": true,
+            "deletable": true,
+            "visibility_editable": false,
+            "version": 1,
+            "created_at": "2027-01-15T08:00:00.000Z",
+            "updated_at": "2027-01-15T08:00:00.000Z",
+            "steps": [{ "action": { "type": "send_chat", "message": "/login", "arguments_hidden": true }, "schedule": { "type": "at_start" }, "probability": 100 }],
+        }))
+        .unwrap()
+    }
+
+    /// A new private mode that swings.
+    fn a_new_mode() -> CreateModeRequest {
+        serde_json::from_value(json!({ "name": "Greeter", "visibility": "private", "steps": [
+            { "action": { "type": "swing_arm" }, "schedule": { "type": "every", "interval_ms": 20_000, "jitter_ms": 0 }, "probability": 100 },
+        ] }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_modes_are_read_from_their_route() {
+        let core = signed_in().await;
+        let route = "GET /api/v1/modes";
+        let page = ModePage {
+            items: vec![a_mode()],
+            next: None,
+        };
+        core.transport.on(route, Ok(dto(200, &page)));
+
+        let read = core
+            .modes(&PageQuery {
+                before: None,
+                limit: None,
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(read, page);
+        assert_eq!(core.transport.seen(), [sent(route, None)]);
+    }
+
+    #[rstest]
+    #[case::plain(false, "POST /api/v1/modes")]
+    #[case::with_commands(true, "POST /api/v1/modes/with-commands")]
+    #[tokio::test]
+    async fn a_mode_is_created_through_its_route(#[case] with_commands: bool, #[case] route: &str) {
+        let core = signed_in().await;
+        core.transport.on(route, Ok(dto(201, &a_mode())));
+
+        let created = core
+            .create_mode(&a_new_mode(), with_commands)
+            .await
+            .unwrap();
+
+        assert_eq!(created, a_mode());
+        assert_eq!(
+            core.transport.seen(),
+            [sent(
+                route,
+                Some(serde_json::to_value(a_new_mode()).unwrap())
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_create_answered_with_another_success_is_unexpected() {
+        let core = signed_in().await;
+        core.transport
+            .on("POST /api/v1/modes", Ok(dto(200, &a_mode())));
+
+        let error = core.create_mode(&a_new_mode(), false).await.unwrap_err();
+
+        assert!(
+            matches!(
+                error,
+                ClientError::UnexpectedResponse {
+                    status: 200,
+                    reason: Unexpected::Status
+                }
+            ),
+            "{error:?}"
+        );
+    }
+
+    #[rstest]
+    #[case::pointer(403, ErrorCode::ModeNeedsStepUp)]
+    #[case::step_up(403, ErrorCode::StepUpRequired)]
+    #[case::cap(409, ErrorCode::Conflict)]
+    #[case::field(422, ErrorCode::ValidationFailed)]
+    #[case::limited(429, ErrorCode::RateLimited)]
+    #[tokio::test]
+    async fn a_refused_create_comes_back_with_the_servers_code(
+        #[case] status: u16,
+        #[case] code: ErrorCode,
+    ) {
+        use fleet_api_types::OpenEnum as _;
+        let core = signed_in().await;
+        core.transport
+            .on("POST /api/v1/modes", Ok(refusal(status, code.as_str())));
+
+        let error = core.create_mode(&a_new_mode(), false).await.unwrap_err();
 
         assert!(is_api(&error, status, code), "{error:?}");
     }

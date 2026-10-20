@@ -18,6 +18,7 @@ mod dev_console;
 mod link;
 mod me;
 mod mfa;
+mod modes;
 mod refresh;
 mod support;
 mod tls;
