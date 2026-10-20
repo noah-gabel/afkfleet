@@ -4,7 +4,9 @@
 //!
 //! It prints IDs, names, states and the server's answers; never a token,
 //! the password or a code, never a line it didn't understand, and never a
-//! chat line back.
+//! chat line typed into it back. `history` shows a bot's chat as the server
+//! sends it to this user: cleaned, a line break as ` | `, a command's
+//! arguments only for Manage holders (ADR-0020, S9, S11, U3).
 
 use core::fmt::Write as _;
 use std::io;
@@ -13,9 +15,9 @@ use fleet_api_types::accounts::CreateOfflineAccountRequest;
 use fleet_api_types::auth::{LoginRequest, StepUpRequest};
 use fleet_api_types::bots::{BotPatchRequest, BotResponse, BotStatus};
 use fleet_api_types::chat::{
-    ChatCommandRequest, ChatSendOutcome, ChatSendRequest, ChatSendResponse,
+    ChatCommandRequest, ChatLine, ChatPageQuery, ChatSendOutcome, ChatSendRequest, ChatSendResponse,
 };
-use fleet_api_types::{BotId, ErrorCode, PageQuery, SecretText};
+use fleet_api_types::{BotId, ErrorCode, PageQuery, SafeInt, SecretText};
 use fleet_client::{Client, ClientError, LoginStep, SessionStore};
 use secrecy::{ExposeSecret as _, SecretString};
 
@@ -53,7 +55,7 @@ pub(crate) fn arguments(args: &[String]) -> Option<(&str, &str)> {
 }
 
 /// The commands, as the console lists them.
-pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | quit";
+pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | history <id> [before] | quit";
 
 /// How many 2FA codes a login may try.
 const CODES: usize = 3;
@@ -82,6 +84,8 @@ enum Command {
     Chat(BotId, String),
     /// A slash command: the rest of the line, as typed.
     Slash(BotId, String),
+    /// One page of a bot's chat: the newest, or the one before a line.
+    History(BotId, Option<SafeInt>),
     Quit,
 }
 
@@ -108,6 +112,12 @@ impl Command {
             ["server", id, address] => bot(id).map(|id| Self::Server(id, (*address).to_owned())),
             ["start", id] => bot(id).map(Self::Start),
             ["stop", id] => bot(id).map(Self::Stop),
+            ["history", id] => bot(id).map(|id| Self::History(id, None)),
+            ["history", id, before] => {
+                let before = before.parse::<i64>().ok()?;
+                let before = SafeInt::try_new(before).ok()?;
+                bot(id).map(|id| Self::History(id, Some(before)))
+            }
             ["quit"] => Some(Self::Quit),
             _ => None,
         }
@@ -249,6 +259,7 @@ async fn command_of<S: SessionStore>(
             .await
             .map(|answer| terminal.say(&answer_of(&answer))),
         Command::Slash(id, text) => send_command(client, id, text, terminal).await,
+        Command::History(id, before) => history(client, id, before, terminal).await,
         Command::Quit => Ok(()),
     };
     match done {
@@ -288,6 +299,61 @@ async fn bots<S: SessionStore>(
         terminal.say("no bots yet: `offline <name>` adds one");
     }
     Ok(())
+}
+
+/// One page of the bot `id`'s chat, the one before `before` or the newest,
+/// oldest first, and where the older lines start.
+async fn history<S: SessionStore>(
+    client: &Client<S>,
+    id: BotId,
+    before: Option<SafeInt>,
+    terminal: &mut impl Terminal,
+) -> Result<(), ClientError> {
+    let page = client
+        .chat(
+            id,
+            &ChatPageQuery {
+                before,
+                limit: None,
+            },
+        )
+        .await?;
+    if page.items.is_empty() {
+        terminal.say("no chat yet");
+    }
+    for line in page.items.iter().rev() {
+        terminal.say(&chat_line_of(line));
+    }
+    if let Some(next) = page.next {
+        terminal.say(&format!("older: history {id} {next}"));
+    }
+    Ok(())
+}
+
+/// One chat line: its ID, time and kind; who sent it (a received line's
+/// Minecraft sender, or the user who had it sent, as the server shows
+/// them); its text; and whether arguments were left out or the text cut.
+fn chat_line_of(line: &ChatLine) -> String {
+    let who = match (&line.sender, &line.sent_by) {
+        (Some(sender), _) => format!(" {}", sender.name),
+        (None, _) if line.mine => " by you".to_owned(),
+        (None, Some(by)) => format!(" by {}", by.username),
+        (None, None) => String::new(),
+    };
+    let mut shown = format!(
+        "#{} {} {}{who}: {}",
+        line.id,
+        line.at,
+        line.kind.as_str(),
+        line.text
+    );
+    if line.arguments_hidden {
+        shown.push_str(" (arguments hidden)");
+    }
+    if line.truncated {
+        shown.push_str(" (cut)");
+    }
+    shown
 }
 
 /// A new offline account `name`, and its bot.
@@ -511,6 +577,80 @@ mod tests {
                 assert_eq!(Command::parse(&line), None, "{line:?}");
             }
         }
+    }
+
+    #[test]
+    fn history_takes_a_bot_and_maybe_the_line_to_page_before() {
+        let id = "018bcfe5-6800-7bab-abab-abababababab";
+        let bot: BotId = id.parse().unwrap();
+
+        assert_eq!(
+            Command::parse(&format!("history {id}")),
+            Some(Command::History(bot, None))
+        );
+        assert_eq!(
+            Command::parse(&format!(" history {id} 41 ")),
+            Some(Command::History(bot, Some(SafeInt::try_new(41).unwrap())))
+        );
+        assert_eq!(Command::parse(&format!("history {id} x")), None);
+        assert_eq!(Command::parse(&format!("history {id} 1 2")), None);
+        assert_eq!(Command::parse("history"), None);
+        assert_eq!(Command::parse("history not-an-id"), None);
+    }
+
+    fn a_line(kind: &str, text: &str) -> ChatLine {
+        serde_json::from_value(serde_json::json!({
+            "id": 41,
+            "at": "2027-01-15T08:00:01.000Z",
+            "direction": "in",
+            "kind": kind,
+            "text": text,
+            "truncated": false,
+            "arguments_hidden": false,
+            "mine": false,
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_chat_line_shows_its_id_time_kind_sender_text_and_marks() {
+        let mut steve = a_line("chat", "hello bot");
+        steve.sender = serde_json::from_value(serde_json::json!({ "name": "Steve" })).unwrap();
+        let mut cut = a_line("whisper", "a whisper cut");
+        cut.sender = serde_json::from_value(serde_json::json!({ "name": "Alex" })).unwrap();
+        cut.truncated = true;
+        let mut mode = a_line("mode", "/login");
+        mode.arguments_hidden = true;
+        let mut by = a_line("user", "hello there");
+        by.sent_by = serde_json::from_value(serde_json::json!({
+            "id": "018bcfe5-6800-7bab-abab-abababababab",
+            "username": "manager",
+        }))
+        .unwrap();
+        let mut mine = a_line("user", "/spawn");
+        mine.mine = true;
+        mine.sent_by = by.sent_by.clone();
+        let unnamed = a_line("user", "hello again");
+        let newer = a_line("shout", "a kind this console doesn't know");
+
+        let shown: Vec<String> = [steve, cut, mode, by, mine, unnamed, newer]
+            .iter()
+            .map(chat_line_of)
+            .collect();
+
+        let at = "#41 2027-01-15T08:00:01.000Z";
+        assert_eq!(
+            shown,
+            [
+                format!("{at} chat Steve: hello bot"),
+                format!("{at} whisper Alex: a whisper cut (cut)"),
+                format!("{at} mode: /login (arguments hidden)"),
+                format!("{at} user by manager: hello there"),
+                format!("{at} user by you: /spawn"),
+                format!("{at} user: hello again"),
+                format!("{at} shout: a kind this console doesn't know"),
+            ]
+        );
     }
 
     #[test]

@@ -1,11 +1,13 @@
-//! The chat routes (Plan.md P11.3; ADR-0020, S4, S8). Without `[grpc]` no
-//! agent runs a bot, so every line here meets a bot that runs nowhere: what
-//! a bot's agent answers is tested in fleet-server's HTTP tests and in
-//! fleet-integration's chat case, and the 200 and 202 over the scripted
-//! transport in `session.rs`.
+//! The chat routes (Plan.md P11.3; ADR-0020, S4, S8, S9, U3). Without
+//! `[grpc]` no agent runs a bot, so every line here meets a bot that runs
+//! nowhere: what a bot's agent answers is tested in fleet-server's HTTP tests
+//! and in fleet-integration's chat case, and the 200 and 202 over the
+//! scripted transport in `session.rs`. The history reads rows the test
+//! writes into the server's database; the field rules per viewer are
+//! fleet-server's to test.
 
-use fleet_api_types::ErrorCode;
-use fleet_api_types::chat::{ChatCommandRequest, ChatSendRequest};
+use fleet_api_types::chat::{ChatCommandRequest, ChatPage, ChatPageQuery, ChatSendRequest};
+use fleet_api_types::{ErrorCode, SafeInt};
 
 use crate::bots::bot_of;
 use crate::support::{Server, is_api, step_up};
@@ -20,6 +22,79 @@ fn command(text: &str) -> ChatCommandRequest {
     ChatCommandRequest {
         message: text.to_owned(),
     }
+}
+
+fn query(before: Option<i64>, limit: Option<u32>) -> ChatPageQuery {
+    ChatPageQuery {
+        before: before.map(|cursor| SafeInt::try_new(cursor).unwrap()),
+        limit,
+    }
+}
+
+fn texts(page: &ChatPage) -> Vec<&str> {
+    page.items.iter().map(|line| line.text.as_str()).collect()
+}
+
+#[tokio::test]
+async fn a_bot_without_chat_has_an_empty_history() {
+    let server = Server::start().await;
+    let (owner, _, _) = server.owner().await;
+    let (_, bot) = bot_of(&owner, "AfkBot1").await;
+
+    let page = owner.chat(bot, &query(None, None)).await.unwrap();
+
+    assert_eq!(page.items, Vec::new());
+    assert_eq!(page.next, None);
+    server.stop().await;
+}
+
+/// The history pages newest first: `next` is the next page's `before`, and
+/// the last page has none.
+#[tokio::test]
+async fn the_history_pages_with_before_and_limit() {
+    let server = Server::start().await;
+    let (owner, _, _) = server.owner().await;
+    let (_, bot) = bot_of(&owner, "AfkBot1").await;
+    server.said(bot, &["one", "two", "three"]).await;
+
+    let first = owner.chat(bot, &query(None, Some(2))).await.unwrap();
+    let next = first.next.map(SafeInt::get);
+    let second = owner.chat(bot, &query(next, Some(2))).await.unwrap();
+
+    assert_eq!(texts(&first), ["three", "two"]);
+    assert!(next.is_some());
+    assert_eq!(texts(&second), ["one"]);
+    assert_eq!(second.next, None);
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn another_members_bots_history_is_404_and_a_bad_query_422() {
+    let server = Server::start().await;
+    let (owner, _, _) = server.owner().await;
+    step_up(&owner).await;
+    let (alice, _) = server.member(&owner, "alice").await;
+    let (_, bot) = bot_of(&owner, "AfkBot1").await;
+
+    let hidden = alice.chat(bot, &query(None, None)).await.unwrap_err();
+    let errors = [
+        owner.chat(bot, &query(None, Some(0))).await.unwrap_err(),
+        owner.chat(bot, &query(Some(0), None)).await.unwrap_err(),
+    ];
+
+    assert!(is_api(&hidden, 404, ErrorCode::NotFound), "{hidden:?}");
+    for (error, field) in errors.iter().zip(["limit", "before"]) {
+        assert!(is_api(error, 422, ErrorCode::ValidationFailed), "{error:?}");
+        let fields: Vec<&str> = error
+            .api()
+            .unwrap()
+            .fields
+            .iter()
+            .map(|field| field.path.as_str())
+            .collect();
+        assert_eq!(fields, [field]);
+    }
+    server.stop().await;
 }
 
 #[tokio::test]
