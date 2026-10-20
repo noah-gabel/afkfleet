@@ -47,7 +47,7 @@ use crate::ports::login_attempts::{
     AttemptKey, LoginAttempt, LoginAttemptReads, LoginAttemptWrites,
 };
 use crate::ports::mfa::{InsertMfaError, MfaReads, MfaWrites, UserMfa};
-use crate::ports::modes::{ModeReads, ModeWrites, StoredMode};
+use crate::ports::modes::{ListedMode, ModeReads, ModeWrites, StoredMode};
 use crate::ports::page::Page;
 use crate::ports::recovery_codes::RecoveryCodeHash;
 use crate::ports::sessions::{
@@ -264,6 +264,14 @@ impl BotReads for Reads {
 impl ModeReads for Reads {
     async fn find(&self, id: ModeId) -> Result<Option<StoredMode>, StoreError> {
         modes::find(&self.pool, id).await
+    }
+
+    async fn visible(
+        &self,
+        viewer: Actor,
+        page: Page<ModeId>,
+    ) -> Result<Vec<ListedMode>, StoreError> {
+        modes::visible(&self.pool, viewer, page).await
     }
 }
 

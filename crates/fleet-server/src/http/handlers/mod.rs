@@ -22,6 +22,7 @@
 //! - [`health`]: `GET /health/live` and `GET /health/ready` (P6.7).
 //! - [`invites`]: `POST` and `GET /api/v1/invites`, `DELETE
 //!   /api/v1/invites/{id}` (P7.9).
+//! - [`modes`]: `GET /api/v1/modes` (P11.4).
 //! - [`me`]: `GET /api/v1/me`, `POST /api/v1/me/password`, `GET
 //!   /api/v1/me/sessions` and `DELETE /api/v1/me/sessions/{id}` (P7.6).
 //! - [`mfa`]: `POST /api/v1/me/mfa/enroll`, `/confirm` and `/reset` (P7.7).
@@ -39,6 +40,7 @@ pub(super) mod health;
 pub(super) mod invites;
 pub(super) mod me;
 pub(super) mod mfa;
+pub(super) mod modes;
 pub(super) mod users;
 
 use std::net::IpAddr;
@@ -49,9 +51,14 @@ use fleet_api_types::accounts::{
 };
 use fleet_api_types::auth::USERNAME_MAX_CHARS;
 use fleet_api_types::chat::{ChatDirection, ChatLine, ChatLineKind, ChatLineSender};
+use fleet_api_types::modes::{
+    ModeOwnership, ModeResponse, ModeStep, ModeVisibility as ApiModeVisibility,
+};
 use fleet_api_types::users::UserLabel;
 use fleet_api_types::{BoundedText, FieldError, PageQuery, SafeInt, SecretText, Timestamp};
-use fleet_core::authz::{Actor, GrantLevel, Role, effective_level};
+use fleet_core::authz::{
+    Actor, GrantLevel, ModeVisibility, Permission, Role, authorize, effective_level,
+};
 use fleet_core::chat::{ChatMessage, ChatSender, Redacted};
 use fleet_core::id::UserId;
 use fleet_core::value::Username;
@@ -62,6 +69,7 @@ use super::extractors::AuthUser;
 use crate::app::users::ActingUser;
 use crate::ports::accounts::ListedAccount;
 use crate::ports::chat::{ChatEntry, ListedChat};
+use crate::ports::modes::ListedMode;
 use crate::ports::page::{Page, PageLimit};
 use crate::ports::passwords::HashError;
 
@@ -170,7 +178,14 @@ fn account_response(viewer: &Actor, account: &ListedAccount) -> Result<AccountRe
 /// (ADR-0018, group E) and who sent its bot's lines (ADR-0020, U3): Admins,
 /// the Owner and whoever holds Manage on it.
 fn sees_owner(viewer: &Actor, level: GrantLevel) -> bool {
-    viewer.role >= Role::Admin || level == GrantLevel::Manage
+    sees_owners_by_role(viewer) || level == GrantLevel::Manage
+}
+
+/// Whether `viewer` sees who owns anything by their role alone: Admins and
+/// the Owner, who may list every user anyway. A mode has no grants, so this
+/// is the whole of its owner rule (ADR-0020, S14).
+fn sees_owners_by_role(viewer: &Actor) -> bool {
+    viewer.role >= Role::Admin
 }
 
 /// A line of a bot's chat as `viewer`, whose level on the bot's account is
@@ -204,7 +219,7 @@ fn chat_line(viewer: &Actor, level: GrantLevel, line: &ListedChat) -> Result<Cha
             id,
             at,
             ChatLineKind::Mode,
-            shown(message, level),
+            shown(message, level == GrantLevel::Manage),
             None,
             false,
         ),
@@ -218,7 +233,7 @@ fn chat_line(viewer: &Actor, level: GrantLevel, line: &ListedChat) -> Result<Cha
                 id,
                 at,
                 ChatLineKind::User,
-                shown(message, level),
+                shown(message, level == GrantLevel::Manage),
                 sent_by,
                 mine,
             )
@@ -226,11 +241,12 @@ fn chat_line(viewer: &Actor, level: GrantLevel, line: &ListedChat) -> Result<Cha
     })
 }
 
-/// What a mode's or a user's line shows a viewer whose level is `level`
-/// (S6, S9): the whole line for Manage, else without a command's
-/// arguments.
-fn shown(message: &ChatMessage, level: GrantLevel) -> Redacted<'_> {
-    if level == GrantLevel::Manage {
+/// What a message a bot sends shows its viewer (ADR-0020): the whole
+/// message when the viewer may see it `whole`, else without a command's
+/// arguments. A chat line is whole for Manage on its bot's account (S6,
+/// S9), a mode's chat step for whoever may edit the mode (S15).
+fn shown(message: &ChatMessage, whole: bool) -> Redacted<'_> {
+    if whole {
         Redacted {
             text: message.as_str(),
             arguments_hidden: false,
@@ -238,6 +254,62 @@ fn shown(message: &ChatMessage, level: GrantLevel) -> Redacted<'_> {
     } else {
         message.without_arguments()
     }
+}
+
+/// A mode as `viewer` may see it (ADR-0020, S14, S15):
+/// - **Whose it is** for everyone: built in, the viewer's, or someone
+///   else's; who exactly owns it only for Admins and the Owner.
+/// - **What the viewer may do**, each one `authorize()` call, so no client
+///   needs a copy of the rules: change its name and steps, delete it, switch
+///   its visibility.
+/// - **A command's arguments** in a chat step only for a viewer who may
+///   edit the mode; below that `/` and the name, with `arguments_hidden`.
+///
+/// The list checked `ViewMode` already, so a mode the viewer may not see is
+/// a bug, answered as the internal error.
+fn mode_response(viewer: &Actor, listed: &ListedMode) -> Result<ModeResponse, ApiError> {
+    let context = listed.context();
+    authorize(viewer, Permission::ViewMode, &context)
+        .map_err(|_| ApiError::internal("a mode the viewer may not see was answered"))?;
+    let may = |permission| authorize(viewer, permission, &context).is_ok();
+    let mode = &listed.mode;
+    let editable = may(Permission::UpdateMode {
+        visibility: mode.visibility,
+    });
+    let switched = match mode.visibility {
+        ModeVisibility::Private => ModeVisibility::Shared,
+        ModeVisibility::Shared => ModeVisibility::Private,
+    };
+    let ownership = match &listed.owner {
+        None => ModeOwnership::BuiltIn,
+        Some(owner) if owner.user.id == viewer.id => ModeOwnership::Mine,
+        Some(_) => ModeOwnership::SomeoneElse,
+    };
+    Ok(ModeResponse {
+        id: mode.id,
+        name: BoundedText::new(mode.name.as_str()),
+        visibility: ApiModeVisibility::from(mode.visibility).into(),
+        ownership: ownership.into(),
+        owner: listed
+            .owner
+            .as_ref()
+            .filter(|_| sees_owners_by_role(viewer))
+            .map(|owner| label(owner.user.id, &owner.username)),
+        editable,
+        deletable: may(Permission::DeleteMode),
+        visibility_editable: may(Permission::UpdateMode {
+            visibility: switched,
+        }),
+        version: mode.version.get(),
+        created_at: timestamp(mode.created_at)?,
+        updated_at: timestamp(mode.updated_at)?,
+        steps: mode
+            .definition
+            .steps()
+            .iter()
+            .map(|step| ModeStep::of(step, |message| shown(message, editable)))
+            .collect(),
+    })
 }
 
 /// A line a bot sent, of `kind`, as [`chat_line`] decided to show it.
@@ -284,6 +356,7 @@ mod tests {
 
     use super::*;
     use crate::ports::chat::{ChatMessageId, ChatRecord};
+    use fleet_core::authz::UserRef;
 
     /// `stored`, a received line, as the history lists it.
     fn received(stored: &IncomingChat) -> ListedChat {
@@ -356,5 +429,117 @@ mod tests {
                 Some(kept.replace('\n', " | "))
             );
         }
+    }
+
+    /// A user of `role`, numbered `n`.
+    fn user_ref(n: u8, role: Role) -> UserRef {
+        UserRef {
+            id: UserId::new_v7(DateTime::UNIX_EPOCH, [n; 10]).unwrap(),
+            role,
+        }
+    }
+
+    /// A mode of `owner` (built in without one) with `visibility`, holding
+    /// a command with arguments.
+    fn listed_mode(owner: Option<UserRef>, visibility: ModeVisibility) -> ListedMode {
+        let at = DateTime::from_timestamp_millis(1_800_000_000_000).unwrap();
+        let definition = serde_json::from_value(serde_json::json!({ "steps": [
+            { "action": { "type": "send_chat", "message": "/login hunter2" }, "schedule": { "type": "at_start" }, "probability": 100 }
+        ] }))
+        .unwrap();
+        ListedMode {
+            mode: crate::ports::modes::StoredMode {
+                id: fleet_core::id::ModeId::new_v7(at, [9; 10]).unwrap(),
+                owner: owner.map(|owner| owner.id),
+                name: fleet_core::mode::ModeName::try_from("Mode").unwrap(),
+                visibility,
+                definition,
+                version: core::num::NonZeroU32::MIN,
+                created_at: at,
+                updated_at: at,
+            },
+            owner: owner.map(|user| crate::ports::modes::ModeOwner {
+                user,
+                username: Username::try_from("someone").unwrap(),
+            }),
+        }
+    }
+
+    /// Every flag and field rule of a mode's answer, for every viewer role,
+    /// every owner (built in, the viewer, a Member, an Admin, the Owner) and
+    /// both visibilities: each right is exactly what `authorize()` answers,
+    /// the owner shows only to Admins and the Owner, and a command's
+    /// arguments only to a viewer who may edit the mode (S14, S15).
+    #[test]
+    fn each_flag_is_what_authorize_answers_and_each_field_follows_its_rule() {
+        let mut seen = 0;
+        for role in [Role::Member, Role::Admin, Role::Owner] {
+            let viewer_ref = user_ref(1, role);
+            let viewer = Actor {
+                id: viewer_ref.id,
+                role,
+            };
+            let owners = [
+                None,
+                Some(viewer_ref),
+                Some(user_ref(2, Role::Member)),
+                Some(user_ref(3, Role::Admin)),
+                Some(user_ref(4, Role::Owner)),
+            ];
+            for owner in owners {
+                for visibility in [ModeVisibility::Private, ModeVisibility::Shared] {
+                    if owner.is_none() && visibility == ModeVisibility::Private {
+                        continue;
+                    }
+                    let listed = listed_mode(owner, visibility);
+                    let context = listed.context();
+                    if authorize(&viewer, Permission::ViewMode, &context).is_err() {
+                        assert!(mode_response(&viewer, &listed).is_err());
+                        continue;
+                    }
+                    let may = |permission| authorize(&viewer, permission, &context).is_ok();
+                    let other = match visibility {
+                        ModeVisibility::Private => ModeVisibility::Shared,
+                        ModeVisibility::Shared => ModeVisibility::Private,
+                    };
+                    let case = format!("{role:?} on {owner:?}'s {visibility:?}");
+
+                    let answer = mode_response(&viewer, &listed).unwrap();
+
+                    let editable = may(Permission::UpdateMode { visibility });
+                    assert_eq!(answer.editable, editable, "{case}");
+                    assert_eq!(answer.deletable, may(Permission::DeleteMode), "{case}");
+                    assert_eq!(
+                        answer.visibility_editable,
+                        may(Permission::UpdateMode { visibility: other }),
+                        "{case}"
+                    );
+                    assert_eq!(
+                        answer.owner.is_some(),
+                        owner.is_some() && role >= Role::Admin,
+                        "{case}"
+                    );
+                    let ownership = match owner {
+                        None => ModeOwnership::BuiltIn,
+                        Some(owner) if owner.id == viewer.id => ModeOwnership::Mine,
+                        Some(_) => ModeOwnership::SomeoneElse,
+                    };
+                    assert_eq!(answer.ownership.known(), Some(ownership), "{case}");
+                    let action = &answer.steps.first().unwrap().action;
+                    let message = action.message.as_ref().unwrap().as_str();
+                    assert_eq!(
+                        (message, action.arguments_hidden),
+                        if editable {
+                            ("/login hunter2", false)
+                        } else {
+                            ("/login", true)
+                        },
+                        "{case}"
+                    );
+                    seen += 1;
+                }
+            }
+        }
+        assert!(seen > 10, "the table reached only {seen} visible cases");
     }
 }

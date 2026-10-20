@@ -211,6 +211,7 @@ async fn setup_with(options: SqliteConnectOptions, limits: &RateLimitConfig) -> 
         enrollment_tokens: None,
         agents: idle_agents(&db),
         bots: idle_bots(&db),
+        modes: fleet_server::app::modes::ModeService::new(Arc::new(db.clone())),
     });
     let http = HttpConfig {
         bind: HttpConfig::DEFAULT_BIND,

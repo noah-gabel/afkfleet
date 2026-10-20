@@ -270,6 +270,7 @@ async fn build(db: &Database, docs: ApiDocs, extra: impl FnOnce(Routes) -> Route
         enrollment_tokens: None,
         agents: idle_agents(db),
         bots: idle_bots(db),
+        modes: fleet_server::app::modes::ModeService::new(Arc::new(db.clone())),
     });
     let ids = RequestIds::new(Arc::new(clock()), Arc::new(SeededRandom::new(5)));
     let (app, entries) = extra(api_routes(Routes::new(&limits))).finish(state, &http(), ids, docs);
@@ -611,6 +612,7 @@ async fn the_authed_routes_are_registered_with_their_class(
             ),
             entry(Method::GET, "/api/v1/bots/{id}/chat", RateClass::Standard),
             entry(Method::POST, "/api/v1/bots/{id}/chat", RateClass::Standard),
+            entry(Method::GET, "/api/v1/modes", RateClass::Standard),
         ])
     );
     db.close().await;

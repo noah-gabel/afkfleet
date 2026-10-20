@@ -190,6 +190,7 @@ async fn app(db: &Database, docs: ApiDocs) -> Router {
         enrollment_tokens: None,
         agents: idle_agents(db),
         bots: idle_bots(db),
+        modes: fleet_server::app::modes::ModeService::new(Arc::new(db.clone())),
     });
     router(state, &http, ids, docs)
         .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))))
@@ -400,6 +401,7 @@ async fn the_document_lists_exactly_the_api_routes(
             ("/api/v1/bots/{id}/chat", "get"),
             ("/api/v1/bots/{id}/chat", "post"),
             ("/api/v1/bots/{id}/command", "post"),
+            ("/api/v1/modes", "get"),
             ("/api/v1/auth/login", "post"),
             ("/api/v1/auth/login/mfa", "post"),
             ("/api/v1/auth/logout", "post"),

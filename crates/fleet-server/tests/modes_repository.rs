@@ -18,10 +18,14 @@
 use core::num::NonZeroU32;
 
 use chrono::{DateTime, Utc};
-use fleet_core::authz::ModeVisibility;
+use fleet_core::authz::{
+    Actor, ModeVisibility, Permission, ResourceContext, Role, UserRef, authorize,
+};
+use fleet_core::id::{ModeId, UserId};
 use fleet_core::mode::{ModeName, ModePreset};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
-use fleet_server::ports::modes::StoredMode;
+use fleet_server::ports::modes::{ListedMode, StoredMode};
+use fleet_server::ports::page::{Page, PageLimit};
 use fleet_server::ports::store::{Store, StoreError};
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -504,4 +508,321 @@ async fn a_shared_name_is_unique_among_shared_modes_the_built_in_ones_included(
         private.insert(pool).await.is_ok(),
         "a private namesake was refused"
     );
+}
+
+/// A user of `role`, named `name`, with an ID from `n`.
+async fn add_user(pool: &SqlitePool, n: u8, name: &str, role: Role) -> UserId {
+    let id = UserId::new_v7(seeded(), [n; 10]).unwrap();
+    let text = id.to_string();
+    let role = role.as_str();
+    sqlx::query!(
+        "INSERT INTO users (id, username, password_hash, role, disabled, created_at, password_changed_at)
+         VALUES (?, ?, ?, ?, 0, ?, ?)",
+        text,
+        name,
+        PHC,
+        role,
+        SEEDED,
+        SEEDED
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    id
+}
+
+/// Mode `n` of `owner`, named `name`, with `visibility`: a later `n` is a
+/// newer mode.
+async fn add_mode(pool: &SqlitePool, n: u8, owner: UserId, name: &str, visibility: &str) -> ModeId {
+    let created = seeded() + chrono::Duration::minutes(i64::from(n));
+    let id = ModeId::new_v7(created, [n; 10]).unwrap();
+    let text = id.to_string();
+    let owner = owner.to_string();
+    sqlx::query!(
+        "INSERT INTO modes (id, owner_user_id, name, visibility, definition_json, version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, 1, ?, ?)",
+        text,
+        owner,
+        name,
+        visibility,
+        VALID,
+        SEEDED,
+        SEEDED
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+    id
+}
+
+fn page(before: Option<ModeId>, limit: u32) -> Page<ModeId> {
+    Page {
+        before,
+        limit: PageLimit::new(limit).unwrap(),
+    }
+}
+
+/// Users of every role and modes of every kind: each user's private mode,
+/// an Admin's and the Owner's shared ones, and a shared mode of a Member
+/// (an Admin demoted since).
+struct Cast {
+    owner: Actor,
+    admin: Actor,
+    other_admin: Actor,
+    member: Actor,
+    other_member: Actor,
+}
+
+async fn cast(pool: &SqlitePool) -> Cast {
+    let actor = |id, role| Actor { id, role };
+    let owner = actor(
+        add_user(pool, 11, "theowner", Role::Owner).await,
+        Role::Owner,
+    );
+    let admin = actor(add_user(pool, 12, "admin", Role::Admin).await, Role::Admin);
+    let other_admin = actor(add_user(pool, 13, "admin2", Role::Admin).await, Role::Admin);
+    let member = actor(
+        add_user(pool, 14, "member", Role::Member).await,
+        Role::Member,
+    );
+    let other_member = actor(
+        add_user(pool, 15, "member2", Role::Member).await,
+        Role::Member,
+    );
+    let modes = [
+        (owner.id, "Owner private", "private"),
+        (owner.id, "Owner shared", "shared"),
+        (admin.id, "Admin private", "private"),
+        (admin.id, "Admin shared", "shared"),
+        (other_admin.id, "Admin2 private", "private"),
+        (member.id, "Member private", "private"),
+        (other_member.id, "Member2 private", "private"),
+        (other_member.id, "Demoted shared", "shared"),
+    ];
+    for (n, (owner, name, visibility)) in (1_u8..).zip(modes) {
+        add_mode(pool, n, owner, name, visibility).await;
+    }
+    Cast {
+        owner,
+        admin,
+        other_admin,
+        member,
+        other_member,
+    }
+}
+
+/// Every mode in the table, as `authorize()` sees it.
+async fn every_mode(db: &Database, everyone: Actor) -> Vec<ListedMode> {
+    db.modes().visible(everyone, page(None, 100)).await.unwrap()
+}
+
+/// The visible modes are exactly those `authorize(ViewMode)` lets each viewer
+/// see, the built-in ones included, newest first (ADR-0010).
+#[sqlx::test(migrations = false)]
+async fn the_visible_modes_are_exactly_those_authorize_lets_the_viewer_see(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let cast = cast(db.write_pool()).await;
+    let all = every_mode(&db, cast.owner).await;
+    assert_eq!(all.len(), 10, "the Owner sees every mode");
+
+    for viewer in [
+        cast.owner,
+        cast.admin,
+        cast.other_admin,
+        cast.member,
+        cast.other_member,
+    ] {
+        let seen: Vec<ModeId> = db
+            .modes()
+            .visible(viewer, page(None, 100))
+            .await
+            .unwrap()
+            .iter()
+            .map(|listed| listed.mode.id)
+            .collect();
+        let allowed: Vec<ModeId> = all
+            .iter()
+            .filter(|listed| authorize(&viewer, Permission::ViewMode, &listed.context()).is_ok())
+            .map(|listed| listed.mode.id)
+            .collect();
+
+        assert_eq!(seen, allowed, "{viewer:?}");
+        assert!(seen.is_sorted_by(|a, b| a > b), "newest first: {viewer:?}");
+    }
+}
+
+/// A sanity check on the rule itself, so the test above can't pass with
+/// both sides wrong: what a Member and an Admin see, by name.
+#[sqlx::test(migrations = false)]
+async fn a_member_sees_the_shared_and_their_own_and_an_admin_also_members_private_ones(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let cast = cast(db.write_pool()).await;
+    let names = |listed: Vec<ListedMode>| -> Vec<String> {
+        listed
+            .into_iter()
+            .map(|listed| listed.mode.name.as_str().to_owned())
+            .collect()
+    };
+
+    let members = names(
+        db.modes()
+            .visible(cast.member, page(None, 100))
+            .await
+            .unwrap(),
+    );
+    let admins = names(
+        db.modes()
+            .visible(cast.admin, page(None, 100))
+            .await
+            .unwrap(),
+    );
+
+    assert_eq!(
+        members,
+        [
+            "Demoted shared",
+            "Member private",
+            "Admin shared",
+            "Owner shared",
+            "farm",
+            "afk"
+        ]
+    );
+    assert_eq!(
+        admins,
+        [
+            "Demoted shared",
+            "Member2 private",
+            "Member private",
+            "Admin shared",
+            "Admin private",
+            "Owner shared",
+            "farm",
+            "afk",
+        ]
+    );
+}
+
+/// Each listed mode carries its owner's current role and username, and a
+/// built-in one none.
+#[sqlx::test(migrations = false)]
+async fn a_listed_mode_carries_its_owners_current_role_and_name(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let cast = cast(db.write_pool()).await;
+    let promoted = cast.other_member.id.to_string();
+    sqlx::query!("UPDATE users SET role = 'admin' WHERE id = ?", promoted)
+        .execute(db.write_pool())
+        .await
+        .unwrap();
+
+    let all = every_mode(&db, cast.owner).await;
+
+    let owners: Vec<(String, Option<(UserRef, String)>)> = all
+        .iter()
+        .map(|listed| {
+            (
+                listed.mode.name.as_str().to_owned(),
+                listed
+                    .owner
+                    .as_ref()
+                    .map(|owner| (owner.user, owner.username.as_str().to_owned())),
+            )
+        })
+        .collect();
+    let of = |actor: Actor, role: Role, name: &str| {
+        Some((UserRef { id: actor.id, role }, name.to_owned()))
+    };
+    assert_eq!(
+        owners,
+        [
+            (
+                "Demoted shared".to_owned(),
+                of(cast.other_member, Role::Admin, "member2")
+            ),
+            (
+                "Member2 private".to_owned(),
+                of(cast.other_member, Role::Admin, "member2")
+            ),
+            (
+                "Member private".to_owned(),
+                of(cast.member, Role::Member, "member")
+            ),
+            (
+                "Admin2 private".to_owned(),
+                of(cast.other_admin, Role::Admin, "admin2")
+            ),
+            (
+                "Admin shared".to_owned(),
+                of(cast.admin, Role::Admin, "admin")
+            ),
+            (
+                "Admin private".to_owned(),
+                of(cast.admin, Role::Admin, "admin")
+            ),
+            (
+                "Owner shared".to_owned(),
+                of(cast.owner, Role::Owner, "theowner")
+            ),
+            (
+                "Owner private".to_owned(),
+                of(cast.owner, Role::Owner, "theowner")
+            ),
+            ("farm".to_owned(), None),
+            ("afk".to_owned(), None),
+        ]
+    );
+    let built_in = all.last().unwrap();
+    assert_eq!(
+        built_in.context(),
+        ResourceContext::Mode {
+            owner: None,
+            visibility: ModeVisibility::Shared
+        }
+    );
+}
+
+/// Pages are newest first, `before` exclusive, one more row than the page
+/// holds, so the caller can tell a next page follows.
+#[sqlx::test(migrations = false)]
+async fn the_modes_page_newest_first_before_their_cursor(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let cast = cast(db.write_pool()).await;
+    let all: Vec<ModeId> = every_mode(&db, cast.owner)
+        .await
+        .iter()
+        .map(|listed| listed.mode.id)
+        .collect();
+
+    let first: Vec<ModeId> = db
+        .modes()
+        .visible(cast.owner, page(None, 3))
+        .await
+        .unwrap()
+        .iter()
+        .map(|listed| listed.mode.id)
+        .collect();
+    let after = *all.get(2).unwrap();
+    let second: Vec<ModeId> = db
+        .modes()
+        .visible(cast.owner, page(Some(after), 3))
+        .await
+        .unwrap()
+        .iter()
+        .map(|listed| listed.mode.id)
+        .collect();
+
+    assert_eq!(first, all.get(..4).unwrap(), "a page and one row more");
+    assert_eq!(second, all.get(3..7).unwrap());
 }

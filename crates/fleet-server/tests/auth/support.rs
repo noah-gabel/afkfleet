@@ -32,6 +32,7 @@ use fleet_server::app::invites::InviteService;
 use fleet_server::app::lockout::LockoutService;
 use fleet_server::app::login::LoginService;
 use fleet_server::app::mfa::{MfaPorts, MfaService};
+use fleet_server::app::modes::ModeService;
 use fleet_server::app::users::UserService;
 use fleet_server::config::{Argon2Params, HttpConfig, RateLimitConfig};
 use fleet_server::grpc::registry::AgentRegistry;
@@ -664,6 +665,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         enrollment_tokens,
         agents,
         bots,
+        modes: ModeService::new(Arc::new(hooked.clone())),
     });
     let app = app(state, &clock);
     insert_alice(&db, alice, alice_hash).await;

@@ -215,6 +215,7 @@ async fn app(db: &Database) -> Router {
         enrollment_tokens: None,
         agents: idle_agents(db),
         bots: idle_bots(db),
+        modes: fleet_server::app::modes::ModeService::new(Arc::new(db.clone())),
     });
     router(state, &http, ids, ApiDocs::Hidden)
         .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))))

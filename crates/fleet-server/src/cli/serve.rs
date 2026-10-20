@@ -100,6 +100,7 @@ use crate::app::link_flows::{LinkFlowPorts, LinkFlowService, LinkFlowSettings};
 use crate::app::lockout::LockoutService;
 use crate::app::login::LoginService;
 use crate::app::mfa::{MfaPorts, MfaService};
+use crate::app::modes::ModeService;
 use crate::app::session_tokens::{SessionTokenPorts, SessionTokenService};
 use crate::app::users::UserService;
 use crate::config::{HttpConfig, ServerConfig};
@@ -492,6 +493,7 @@ pub fn app_with(
             bus: events.clone(),
         },
     );
+    let modes = ModeService::new(Arc::clone(&store));
     let state = AppState::new(Services {
         health: HealthService::new(store),
         tokens,
@@ -506,6 +508,7 @@ pub fn app_with(
         enrollment_tokens,
         agents: agent_service,
         bots,
+        modes,
     });
     App {
         router: router(
