@@ -453,6 +453,16 @@ audit_actions! {
     /// `command` being `allowlisted` or `unlisted`, and `command_name` only
     /// for an allowlisted one.
     BOT_SEND_COMMAND = "bot.send_command";
+
+    /// A user created a mode (P11.4, ADR-0020, S16, S19), through
+    /// `POST /modes` or, after a step-up, `POST /modes/with-commands`.
+    /// Outcome: Success. Actor and IP: the user's. Target: the mode.
+    /// Metadata: `visibility` (`private` or `shared`), `commands` (`none`,
+    /// `allowlisted` or `unlisted`: whether its steps send a command, and
+    /// whether every one is on the allowlist) and `route` (`plain` or
+    /// `with_commands`). Never the name or a step's text. A create refused
+    /// before it's written (the cap, a taken name) is no entry.
+    MODE_CREATE = "mode.create";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

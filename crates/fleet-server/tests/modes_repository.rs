@@ -1,9 +1,11 @@
-//! Tests for the modes' table and repository (Plan.md P11.1, Appendix D;
-//! ADR-0019, S38): the migration seeds the built-in modes `afk` and `farm`
-//! with the fixed IDs fleet-core's `ModePreset::id` names, as exactly the
-//! JSON `serde_json` writes for each preset, which reads back through the
-//! validated deserializer as the preset; a stored mode that isn't valid reads
-//! as corrupt without its text; and the table refuses what its CHECKs forbid.
+//! Tests for the modes' table and repository (Plan.md P11.1, P11.4,
+//! Appendix D; ADR-0019, S38; ADR-0020, S13): the migration seeds the
+//! built-in modes `afk` and `farm` with the fixed IDs fleet-core's
+//! `ModePreset::id` names, as exactly the JSON `serde_json` writes for each
+//! preset, which reads back through the validated deserializer as the preset;
+//! a stored mode or name that isn't valid reads as corrupt without its text;
+//! a name is unique without ASCII case per owner and among shared modes; and
+//! the table refuses what its CHECKs forbid.
 //!
 //! Each test gets a fresh database from `#[sqlx::test]` and opens it with
 //! `Database::connect`, the production settings. Time isn't paused: sqlx's
@@ -17,7 +19,7 @@ use core::num::NonZeroU32;
 
 use chrono::{DateTime, Utc};
 use fleet_core::authz::ModeVisibility;
-use fleet_core::mode::ModePreset;
+use fleet_core::mode::{ModeName, ModePreset};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::modes::StoredMode;
 use fleet_server::ports::store::{Store, StoreError};
@@ -28,6 +30,8 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 const SEEDED: &str = "2026-10-16T00:00:00.000Z";
 /// A user's ID, the owner of the rows the CHECK tests insert.
 const OWNER: &str = "018bcfe5-6800-7bab-abab-abababababab";
+/// Another user's ID.
+const OTHER_OWNER: &str = "018bcfe5-6800-7bcb-abcb-cbcbcbcbcbcb";
 /// A mode's ID the seeds don't use.
 const OTHER: &str = "018bcfe5-6800-7cdc-8dcd-cdcdcdcdcdcd";
 /// A valid Argon2id PHC string (not a real hash).
@@ -60,11 +64,28 @@ async fn add_owner(pool: &SqlitePool) {
     .unwrap();
 }
 
+/// Adds `OWNER` and the user `OTHER_OWNER`, through the write pool.
+async fn add_owners(pool: &SqlitePool) {
+    add_owner(pool).await;
+    sqlx::query!(
+        "INSERT INTO users (id, username, password_hash, role, disabled, created_at, password_changed_at)
+         VALUES (?, 'other', ?, 'admin', 0, ?, ?)",
+        OTHER_OWNER,
+        PHC,
+        SEEDED,
+        SEEDED
+    )
+    .execute(pool)
+    .await
+    .unwrap();
+}
+
 /// A row for `modes`, changed by the test before it's inserted.
 #[derive(Debug, Clone)]
 struct Row {
     id: &'static str,
     owner: Option<&'static str>,
+    name: &'static str,
     visibility: &'static str,
     json: &'static str,
     version: i64,
@@ -78,6 +99,7 @@ impl Row {
         Self {
             id: OTHER,
             owner: Some(OWNER),
+            name: "Mine",
             visibility: "private",
             json: VALID,
             version: 1,
@@ -90,9 +112,10 @@ impl Row {
     async fn insert(&self, pool: &SqlitePool) -> Result<(), sqlx::Error> {
         sqlx::query!(
             "INSERT INTO modes (id, owner_user_id, name, visibility, definition_json, version, created_at, updated_at)
-             VALUES (?, ?, 'mine', ?, ?, ?, ?, ?)",
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             self.id,
             self.owner,
+            self.name,
             self.visibility,
             self.json,
             self.version,
@@ -118,6 +141,7 @@ async fn the_seeded_modes_read_back_through_the_validated_deserializer_as_the_pr
             Some(StoredMode {
                 id: preset.id(),
                 owner: None,
+                name: ModeName::try_from(preset.name()).unwrap(),
                 visibility: ModeVisibility::Shared,
                 definition: preset.definition(),
                 version: NonZeroU32::MIN,
@@ -191,6 +215,7 @@ async fn a_users_mode_reads_back_with_its_owner_visibility_and_version(
         Some(StoredMode {
             id: OTHER.parse().unwrap(),
             owner: Some(OWNER.parse().unwrap()),
+            name: ModeName::try_from("Mine").unwrap(),
             visibility: ModeVisibility::Shared,
             definition: serde_json::from_str(VALID).unwrap(),
             version: NonZeroU32::new(3).unwrap(),
@@ -317,9 +342,166 @@ async fn the_table_refuses_what_its_checks_forbid_and_takes_every_visibility(
         .unwrap();
         let row = Row {
             id,
+            name: ["Private one", "Shared one"].get(n).copied().unwrap(),
             visibility: visibility.as_str(),
             ..Row::valid()
         };
         assert!(row.insert(pool).await.is_ok(), "{visibility:?} was refused");
     }
+}
+
+/// A stored name the constructor refuses or changes reads as corrupt,
+/// naming its column, never the name.
+#[sqlx::test(migrations = false)]
+async fn a_stored_name_that_doesnt_read_back_is_corrupt_without_its_text(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    add_owner(db.write_pool()).await;
+
+    for (n, name) in ["secret🐄", " secret untrimmed", ""]
+        .into_iter()
+        .enumerate()
+    {
+        let id = [
+            "018bcfe5-6800-7aaa-8aaa-aaaaaaaaaab1",
+            "018bcfe5-6800-7aaa-8aaa-aaaaaaaaaab2",
+            "018bcfe5-6800-7aaa-8aaa-aaaaaaaaaab3",
+        ]
+        .get(n)
+        .copied()
+        .unwrap();
+        Row {
+            id,
+            name,
+            ..Row::valid()
+        }
+        .insert(db.write_pool())
+        .await
+        .unwrap();
+
+        let read = db.modes().find(id.parse().unwrap()).await;
+
+        match read {
+            Err(error @ StoreError::Corrupt { table, column, .. }) => {
+                assert_eq!((table, column), ("modes", "name"), "{name:?}");
+                assert!(!format!("{error:?}").contains("secret"), "{error:?}");
+            }
+            other => panic!("{name:?}: {other:?}"),
+        }
+    }
+}
+
+/// One owner's modes, private and shared together, never share a name,
+/// ASCII case ignored; another owner may use it (S13).
+#[sqlx::test(migrations = false)]
+async fn a_name_is_unique_per_owner_without_ascii_case(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let pool = db.write_pool();
+    add_owners(pool).await;
+    Row {
+        name: "Fishing",
+        ..Row::valid()
+    }
+    .insert(pool)
+    .await
+    .unwrap();
+
+    let same_owner = [
+        ("the same name", "Fishing", "private"),
+        ("another ASCII case", "fISHING", "private"),
+        ("the same name, shared", "Fishing", "shared"),
+    ];
+    for (n, (case, name, visibility)) in same_owner.into_iter().enumerate() {
+        let id = [
+            "018bcfe5-6800-7aaa-8aaa-aaaaaaaaaac1",
+            "018bcfe5-6800-7aaa-8aaa-aaaaaaaaaac2",
+            "018bcfe5-6800-7aaa-8aaa-aaaaaaaaaac3",
+        ]
+        .get(n)
+        .copied()
+        .unwrap();
+        let row = Row {
+            id,
+            name,
+            visibility,
+            ..Row::valid()
+        };
+        assert!(row.insert(pool).await.is_err(), "{case} was stored");
+    }
+    let others = Row {
+        id: "018bcfe5-6800-7aaa-8aaa-aaaaaaaaaac4",
+        owner: Some(OTHER_OWNER),
+        name: "fishing",
+        ..Row::valid()
+    };
+    assert!(
+        others.insert(pool).await.is_ok(),
+        "another owner's was refused"
+    );
+    let non_ascii_case = Row {
+        id: "018bcfe5-6800-7aaa-8aaa-aaaaaaaaaac5",
+        name: "FİSHING",
+        ..Row::valid()
+    };
+    assert!(
+        non_ascii_case.insert(pool).await.is_ok(),
+        "only ASCII case is ignored, as lower() and same_name do"
+    );
+}
+
+/// No two shared modes share a name, ASCII case ignored, the built-in ones
+/// included; a private mode may take a shared one's name (S13).
+#[sqlx::test(migrations = false)]
+async fn a_shared_name_is_unique_among_shared_modes_the_built_in_ones_included(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let pool = db.write_pool();
+    add_owners(pool).await;
+    Row {
+        name: "Fishing",
+        visibility: "shared",
+        ..Row::valid()
+    }
+    .insert(pool)
+    .await
+    .unwrap();
+
+    let refused = [
+        ("another owner's shared mode of that name", "FISHING"),
+        ("a built-in mode's name", "AFK"),
+    ];
+    for (n, (case, name)) in refused.into_iter().enumerate() {
+        let id = [
+            "018bcfe5-6800-7aaa-8aaa-aaaaaaaaaad1",
+            "018bcfe5-6800-7aaa-8aaa-aaaaaaaaaad2",
+        ]
+        .get(n)
+        .copied()
+        .unwrap();
+        let row = Row {
+            id,
+            owner: Some(OTHER_OWNER),
+            name,
+            visibility: "shared",
+            ..Row::valid()
+        };
+        assert!(row.insert(pool).await.is_err(), "{case} was stored");
+    }
+    let private = Row {
+        id: "018bcfe5-6800-7aaa-8aaa-aaaaaaaaaad3",
+        owner: Some(OTHER_OWNER),
+        name: "fishing",
+        ..Row::valid()
+    };
+    assert!(
+        private.insert(pool).await.is_ok(),
+        "a private namesake was refused"
+    );
 }

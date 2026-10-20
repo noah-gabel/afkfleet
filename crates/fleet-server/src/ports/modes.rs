@@ -15,7 +15,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::authz::ModeVisibility;
 use fleet_core::id::{ModeId, UserId};
-use fleet_core::mode::ModeDefinition;
+use fleet_core::mode::{ModeDefinition, ModeName};
 
 use super::store::StoreError;
 
@@ -26,6 +26,8 @@ pub struct StoredMode {
     pub id: ModeId,
     /// Who made it; `None` for a built-in mode.
     pub owner: Option<UserId>,
+    /// Its name (ADR-0020, S13): a built-in mode's is its preset's.
+    pub name: ModeName,
     /// Who may see it.
     pub visibility: ModeVisibility,
     /// Its steps.

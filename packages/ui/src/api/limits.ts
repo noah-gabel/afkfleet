@@ -17,3 +17,5 @@ export const CA_PEM_MAX_BYTES = 65536;
 export const STEP_UP_WINDOW_SECS = 300;
 export const MC_NAME_MIN_CHARS = 3;
 export const MC_NAME_MAX_CHARS = 16;
+export const MODE_NAME_MAX_CHARS = 32;
+export const MODE_MAX_STEPS = 32;

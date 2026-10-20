@@ -91,6 +91,10 @@ pub enum ErrorCode {
     /// A command off the server's allowlist, sent to `/chat` by someone who
     /// may send it: send it again to `/command`, after a step-up (403).
     CommandNeedsStepUp,
+    /// A mode whose steps send a command off the server's allowlist, sent
+    /// to `POST /modes` by someone who may write it: send it again to
+    /// `/with-commands`, after a step-up (403).
+    ModeNeedsStepUp,
 }
 
 impl ErrorCode {
@@ -127,6 +131,9 @@ impl ErrorCode {
             Self::CommandNeedsStepUp => {
                 "This command needs your password: confirm it's you to send it."
             }
+            Self::ModeNeedsStepUp => {
+                "This mode holds a command that needs your password: confirm it's you to save it."
+            }
         }
     }
 }
@@ -155,6 +162,7 @@ impl OpenEnum for ErrorCode {
         Self::BotNotOnline,
         Self::ChatUnavailable,
         Self::CommandNeedsStepUp,
+        Self::ModeNeedsStepUp,
     ];
 
     fn as_str(self) -> &'static str {
@@ -181,6 +189,7 @@ impl OpenEnum for ErrorCode {
             Self::BotNotOnline => "bot_not_online",
             Self::ChatUnavailable => "chat_unavailable",
             Self::CommandNeedsStepUp => "command_needs_step_up",
+            Self::ModeNeedsStepUp => "mode_needs_step_up",
         }
     }
 }
@@ -289,10 +298,11 @@ mod tests {
             ErrorCode::BotNotOnline => 19,
             ErrorCode::ChatUnavailable => 20,
             ErrorCode::CommandNeedsStepUp => 21,
+            ErrorCode::ModeNeedsStepUp => 22,
         }
     }
 
-    const CODES: usize = 22;
+    const CODES: usize = 23;
 
     #[test]
     fn all_lists_every_code_exactly_once() {
@@ -404,6 +414,11 @@ mod tests {
         ErrorCode::CommandNeedsStepUp,
         "command_needs_step_up",
         "This command needs your password: confirm it's you to send it."
+    )]
+    #[case(
+        ErrorCode::ModeNeedsStepUp,
+        "mode_needs_step_up",
+        "This mode holds a command that needs your password: confirm it's you to save it."
     )]
     fn every_code_has_its_name_and_fixed_message(
         #[case] code: ErrorCode,

@@ -52,5 +52,6 @@ expression: names
   "bot.reset",
   "bot.resume",
   "bot.send_chat",
-  "bot.send_command"
+  "bot.send_command",
+  "mode.create"
 ]

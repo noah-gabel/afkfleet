@@ -90,8 +90,9 @@ fn line(text: &str) -> Result<ChatMessage, garde::Error> {
 /// The field message of a line that isn't a command, on `/command`.
 const NOT_A_COMMAND: &str = "must be a command, starting with /";
 
-/// The field message of each way a chat line can be invalid.
-const fn message_rule(error: ChatMessageError) -> &'static str {
+/// The field message of each way a chat line can be invalid, a mode's chat
+/// step's too ([`crate::modes`]).
+pub(crate) const fn message_rule(error: ChatMessageError) -> &'static str {
     match error {
         ChatMessageError::Empty => "must not be empty",
         ChatMessageError::ForbiddenChar { .. } => {

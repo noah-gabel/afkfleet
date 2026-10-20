@@ -55,6 +55,11 @@ use fleet_api_types::mfa::{
     OTPAUTH_URI_MAX_CHARS, QR_SVG_MAX_CHARS, RECOVERY_CODE_MAX_CHARS, SETUP_TOKEN_MAX_SECS,
     TOKEN_MAX_CHARS, TOTP_SECRET_MAX_CHARS,
 };
+use fleet_api_types::modes::{
+    CreateModeRequest, MODE_MESSAGE_MAX_CHARS, MODE_NAME_MAX_CHARS, ModeAction, ModeActionKind,
+    ModeActionRequest, ModeOwnership, ModePage, ModeResponse, ModeSchedule, ModeScheduleKind,
+    ModeScheduleRequest, ModeStep, ModeStepRequest, ModeVisibility, number_schema,
+};
 use fleet_api_types::sessions::{SessionPage, SessionResponse};
 use fleet_api_types::time::TIMESTAMP_CHARS;
 use fleet_api_types::users::{UserLabel, UserPage, UserPatchRequest, UserResponse, UserRole};
@@ -171,8 +176,28 @@ fn declarations() -> BTreeMap<String, String> {
         ("UserRole", UserRole::decl(&config)),
     ]
     .into_iter()
+    .chain(mode_declarations(&config))
     .map(|(name, declaration)| (name.to_owned(), declaration))
     .collect()
+}
+
+/// ts-rs's declaration of every mode type (ADR-0020, S12).
+fn mode_declarations(config: &Config) -> [(&'static str, String); 13] {
+    [
+        ("ModeVisibility", ModeVisibility::decl(config)),
+        ("ModeOwnership", ModeOwnership::decl(config)),
+        ("ModeActionKind", ModeActionKind::decl(config)),
+        ("ModeScheduleKind", ModeScheduleKind::decl(config)),
+        ("CreateModeRequest", CreateModeRequest::decl(config)),
+        ("ModeStepRequest", ModeStepRequest::decl(config)),
+        ("ModeActionRequest", ModeActionRequest::decl(config)),
+        ("ModeScheduleRequest", ModeScheduleRequest::decl(config)),
+        ("ModeResponse", ModeResponse::decl(config)),
+        ("ModeStep", ModeStep::decl(config)),
+        ("ModeAction", ModeAction::decl(config)),
+        ("ModeSchedule", ModeSchedule::decl(config)),
+        ("ModePage", ModePage::decl(config)),
+    ]
 }
 
 /// Every component schema, by name.
@@ -306,7 +331,9 @@ fn render(schema: &RefOr<Schema>) -> Result<String, String> {
             only(node, &["type", "maxLength"])?;
             Ok("string".to_owned())
         }
-        (Some("integer"), _) => {
+        // An integer, or an `f32` such as an angle (ADR-0020, S12), with its
+        // range: never a `format`, which utoipa's own schemas would add.
+        (Some("integer" | "number"), _) => {
             only(node, &["type", "minimum", "maximum"])?;
             Ok("number".to_owned())
         }
@@ -477,6 +504,14 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::chat_line_text("ChatLine", "text", CHAT_TEXT_MAX_CHARS)]
 #[case::chat_sender_name("ChatLineSender", "name", CHAT_SENDER_MAX_CHARS)]
 #[case::chat_sender_uuid("ChatLineSender", "uuid", ID_CHARS)]
+#[case::mode_request_name("CreateModeRequest", "name", MODE_NAME_MAX_CHARS)]
+#[case::mode_request_message("ModeActionRequest", "message", MODE_MESSAGE_MAX_CHARS)]
+#[case::mode_id("ModeResponse", "id", ID_CHARS)]
+#[case::mode_name("ModeResponse", "name", MODE_NAME_MAX_CHARS)]
+#[case::mode_created_at("ModeResponse", "created_at", TIMESTAMP_CHARS)]
+#[case::mode_updated_at("ModeResponse", "updated_at", TIMESTAMP_CHARS)]
+#[case::mode_message("ModeAction", "message", MODE_MESSAGE_MAX_CHARS)]
+#[case::mode_page_next("ModePage", "next", ID_CHARS)]
 fn a_text_field_is_capped_at_its_constant(
     #[case] component: &str,
     #[case] field: &str,
@@ -491,7 +526,7 @@ fn a_text_field_is_capped_at_its_constant(
 }
 
 /// Every text field whose cap the cases above check.
-const CHECKED_TEXTS: [(&str, &str); 98] = [
+const CHECKED_TEXTS: [(&str, &str); 106] = [
     ("ErrorBody", "message"),
     ("ErrorBody", "request_id"),
     ("FieldError", "path"),
@@ -590,6 +625,14 @@ const CHECKED_TEXTS: [(&str, &str); 98] = [
     ("ChatLine", "text"),
     ("ChatLineSender", "name"),
     ("ChatLineSender", "uuid"),
+    ("CreateModeRequest", "name"),
+    ("ModeActionRequest", "message"),
+    ("ModeResponse", "id"),
+    ("ModeResponse", "name"),
+    ("ModeResponse", "created_at"),
+    ("ModeResponse", "updated_at"),
+    ("ModeAction", "message"),
+    ("ModePage", "next"),
 ];
 
 /// Every text field of every component: the cases above must cover them.
@@ -626,10 +669,14 @@ fn a_request_schema_refuses_unknown_fields_and_responses_dont() {
         "ChatSendRequest",
         "CreateGrantRequest",
         "CreateInviteRequest",
+        "CreateModeRequest",
         "CreateOfflineAccountRequest",
         "LoginMfaRequest",
         "LoginRequest",
         "MfaConfirmRequest",
+        "ModeActionRequest",
+        "ModeScheduleRequest",
+        "ModeStepRequest",
         "PasswordChangeRequest",
         "RefreshRequest",
         "RegisterRequest",
@@ -752,6 +799,26 @@ fn an_open_field_lists_exactly_its_enums_known_values() {
 #[case::chat_line_sent_by("ChatLine", "sent_by")]
 #[case::chat_sender_uuid("ChatLineSender", "uuid")]
 #[case::chat_page_next("ChatPage", "next")]
+#[case::mode_request_yaw("ModeActionRequest", "yaw")]
+#[case::mode_request_pitch("ModeActionRequest", "pitch")]
+#[case::mode_request_max_yaw("ModeActionRequest", "max_yaw")]
+#[case::mode_request_max_pitch("ModeActionRequest", "max_pitch")]
+#[case::mode_request_on("ModeActionRequest", "on")]
+#[case::mode_request_slot("ModeActionRequest", "slot")]
+#[case::mode_request_message("ModeActionRequest", "message")]
+#[case::mode_request_interval_ms("ModeScheduleRequest", "interval_ms")]
+#[case::mode_request_jitter_ms("ModeScheduleRequest", "jitter_ms")]
+#[case::mode_yaw("ModeAction", "yaw")]
+#[case::mode_pitch("ModeAction", "pitch")]
+#[case::mode_max_yaw("ModeAction", "max_yaw")]
+#[case::mode_max_pitch("ModeAction", "max_pitch")]
+#[case::mode_on("ModeAction", "on")]
+#[case::mode_slot("ModeAction", "slot")]
+#[case::mode_message("ModeAction", "message")]
+#[case::mode_interval_ms("ModeSchedule", "interval_ms")]
+#[case::mode_jitter_ms("ModeSchedule", "jitter_ms")]
+#[case::mode_owner("ModeResponse", "owner")]
+#[case::mode_page_next("ModePage", "next")]
 fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[case] field: &str) {
     let components = components_json();
     let schema = property(&components, component, field);
@@ -802,6 +869,10 @@ fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[ca
 #[case::chat_outcome("ChatSendResponse", "outcome", "ChatSendOutcome")]
 #[case::chat_direction("ChatLine", "direction", "ChatDirection")]
 #[case::chat_kind("ChatLine", "kind", "ChatLineKind")]
+#[case::mode_visibility("ModeResponse", "visibility", "ModeVisibility")]
+#[case::mode_ownership("ModeResponse", "ownership", "ModeOwnership")]
+#[case::mode_action_kind("ModeAction", "type", "ModeActionKind")]
+#[case::mode_schedule_kind("ModeSchedule", "type", "ModeScheduleKind")]
 fn the_new_open_fields_list_exactly_their_known_values(
     #[case] component: &str,
     #[case] field: &str,
@@ -837,6 +908,10 @@ fn the_new_open_fields_list_exactly_their_known_values(
         "ChatSendOutcome" => names(ChatSendOutcome::ALL),
         "ChatDirection" => names(ChatDirection::ALL),
         "ChatLineKind" => names(ChatLineKind::ALL),
+        "ModeVisibility" => names(ModeVisibility::ALL),
+        "ModeOwnership" => names(ModeOwnership::ALL),
+        "ModeActionKind" => names(ModeActionKind::ALL),
+        "ModeScheduleKind" => names(ModeScheduleKind::ALL),
         _ => InviteState::ALL
             .iter()
             .map(|state| state.as_str())
@@ -901,6 +976,9 @@ struct Probe {
     #[ts(as = "Option<String>", optional)]
     #[schema(schema_with = Timestamp::schema, nullable = false)]
     maybe_at: Option<Timestamp>,
+    /// A number with its range, such as an angle.
+    #[schema(schema_with = number_schema::<-90, 90>)]
+    angle: f32,
 }
 
 #[test]
@@ -917,7 +995,7 @@ fn every_building_block_renders_as_ts_rs_declares_it() {
 #[case::one_of(json!({ "oneOf": [{ "type": "string" }, { "type": "integer" }] }))]
 #[case::all_of(json!({ "allOf": [{ "type": "string" }] }))]
 #[case::nullable(json!({ "type": ["string", "null"] }))]
-#[case::number(json!({ "type": "number" }))]
+#[case::number_with_a_format(json!({ "type": "number", "format": "float" }))]
 #[case::string_format(json!({ "type": "string", "format": "date-time" }))]
 #[case::string_pattern(json!({ "type": "string", "pattern": "^a$" }))]
 #[case::string_min_length(json!({ "type": "string", "minLength": 1 }))]
@@ -928,8 +1006,8 @@ fn every_building_block_renders_as_ts_rs_declares_it() {
 #[case::stray_required(json!({ "type": "object", "required": ["a"], "properties": { "b": { "type": "string" } } }))]
 #[case::reference_elsewhere(json!({ "$ref": "https://example.com/schema.json" }))]
 #[case::boolean_with_a_format(json!({ "type": "boolean", "format": "flag" }))]
-#[case::nested_unknown(json!({ "type": "array", "items": { "type": "number" } }))]
-#[case::property_unknown(json!({ "type": "object", "properties": { "a": { "type": "number" } } }))]
+#[case::nested_unknown(json!({ "type": "array", "items": { "type": "number", "format": "double" } }))]
+#[case::property_unknown(json!({ "type": "object", "properties": { "a": { "type": "number", "format": "double" } } }))]
 fn the_renderer_fails_on_a_construct_it_doesnt_handle(#[case] json: Value) {
     let schema: RefOr<Schema> = serde_json::from_value(json.clone()).unwrap();
     // The case must be something utoipa can represent, or reading it would

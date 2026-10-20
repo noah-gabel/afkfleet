@@ -2,13 +2,15 @@
 //!
 //! A mode's JSON is read back only through fleet-core's validated
 //! deserializer; `serde_json`'s error, which can quote the stored text, is
-//! dropped for [`StoreError::Corrupt`], which never holds it.
+//! dropped for [`StoreError::Corrupt`], which never holds it. Its name reads
+//! back through [`ModeName`]'s constructor, and one the constructor refuses
+//! or changes is corrupt too.
 
 use core::num::NonZeroU32;
 
 use fleet_core::authz::ModeVisibility;
 use fleet_core::id::ModeId;
-use fleet_core::mode::ModeDefinition;
+use fleet_core::mode::{ModeDefinition, ModeName};
 
 use super::convert::{id_text, parse_id, parse_time};
 use super::error::store_error;
@@ -23,6 +25,7 @@ struct ModeRow {
     rowid: i64,
     id: String,
     owner_user_id: Option<String>,
+    name: String,
     visibility: String,
     definition_json: String,
     version: i64,
@@ -39,7 +42,7 @@ where
     sqlx::query_as!(
         ModeRow,
         r#"SELECT rowid AS "rowid!: i64", id AS "id!", owner_user_id AS "owner_user_id?",
-                  visibility AS "visibility!", definition_json AS "definition_json!",
+                  name AS "name!", visibility AS "visibility!", definition_json AS "definition_json!",
                   version AS "version!: i64", created_at AS "created_at!",
                   updated_at AS "updated_at!"
            FROM modes WHERE id = ?"#,
@@ -72,6 +75,12 @@ fn mode_from_row(row: &ModeRow) -> Result<StoredMode, StoreError> {
     Ok(StoredMode {
         id: parse_id(&row.id).ok_or_else(|| corrupt("id"))?,
         owner,
+        // Stored exactly as the constructor made it: a name it would change
+        // (untrimmed, say) didn't come from here.
+        name: ModeName::try_from(row.name.as_str())
+            .ok()
+            .filter(|name| name.as_str() == row.name)
+            .ok_or_else(|| corrupt("name"))?,
         visibility: row
             .visibility
             .parse::<ModeVisibility>()
