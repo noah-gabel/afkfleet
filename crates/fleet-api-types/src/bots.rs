@@ -41,8 +41,11 @@ pub const SERVER_ADDRESS_MAX_CHARS: usize = ServerAddress::MAX_LEN;
 /// The characters of a kick's translation key.
 pub const KICK_KEY_MAX_CHARS: usize = TranslationKey::MAX_LEN;
 
-/// The characters of a kick's message, which the Minecraft server wrote.
-pub const KICK_MESSAGE_MAX_CHARS: usize = Kick::MAX_MESSAGE_LEN;
+/// The characters of a kick's message, which the Minecraft server wrote: it
+/// keeps its line breaks, up to `Kick::MAX_MESSAGE_LEN` characters, and each
+/// becomes the three characters ` | ` on the way, so three times that holds
+/// every kept message uncut (ADR-0020, U7).
+pub const KICK_MESSAGE_MAX_CHARS: usize = 3 * Kick::MAX_MESSAGE_LEN;
 
 /// Whether a bot should run.
 /// This union lists the values this version knows; a newer server may send
@@ -798,7 +801,41 @@ mod tests {
     fn the_limits_are_the_core_types_lengths() {
         assert_eq!(SERVER_ADDRESS_MAX_CHARS, 259);
         assert_eq!(KICK_KEY_MAX_CHARS, 128);
-        assert_eq!(KICK_MESSAGE_MAX_CHARS, 1024);
+        assert_eq!(KICK_MESSAGE_MAX_CHARS, 3 * Kick::MAX_MESSAGE_LEN);
+        assert_eq!(KICK_MESSAGE_MAX_CHARS, 3072);
+    }
+
+    /// A kick message keeps up to 1024 characters with its line breaks;
+    /// each becomes ` | ` on the way out, and none is ever cut (ADR-0020,
+    /// U7). The worst case is all line breaks.
+    #[rstest]
+    #[case::only_line_breaks(&"\n".repeat(1024))]
+    #[case::every_other(&"a\n".repeat(512))]
+    #[case::a_few(&format!("{}\n{}", "x".repeat(600), "y".repeat(423)))]
+    #[case::emoji_and_line_breaks(&"😀\n".repeat(512))]
+    #[case::longer_than_kept(&"\nz".repeat(700))]
+    fn a_kick_message_crosses_uncut_a_line_break_as_a_separator(#[case] raw: &str) {
+        let reason = DisconnectReason::kicked(None, raw);
+        let DisconnectReason::Kicked(kick) = &reason else {
+            panic!("a kick: {reason:?}");
+        };
+
+        let shown = LastDisconnect::from(&reason);
+
+        let message = shown.message.unwrap();
+        assert_eq!(message.as_str(), kick.message().replace('\n', " | "));
+    }
+
+    #[test]
+    fn the_cap_holds_a_kick_message_of_only_line_breaks_exactly() {
+        let reason = DisconnectReason::kicked(None, &"\n".repeat(Kick::MAX_MESSAGE_LEN));
+
+        let shown = LastDisconnect::from(&reason);
+
+        assert_eq!(
+            shown.message.unwrap().as_str().chars().count(),
+            3 * Kick::MAX_MESSAGE_LEN
+        );
     }
 
     #[rstest]

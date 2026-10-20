@@ -991,7 +991,7 @@ expression: answer.json()
             "description": "How."
           },
           "message": {
-            "maxLength": 1024,
+            "maxLength": 3072,
             "type": "string"
           },
           "restriction": {

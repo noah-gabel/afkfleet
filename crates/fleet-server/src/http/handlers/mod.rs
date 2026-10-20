@@ -276,7 +276,9 @@ fn line_sender(sender: &ChatSender) -> ChatLineSender {
 #[cfg(test)]
 mod tests {
     use chrono::DateTime;
+    use fleet_api_types::bots::LastDisconnect;
     use fleet_core::chat::IncomingChat;
+    use fleet_core::disconnect::DisconnectReason;
     use fleet_core::id::BotId;
     use proptest::prelude::*;
 
@@ -327,6 +329,32 @@ mod tests {
 
             prop_assert_eq!(line.text.as_str(), stored.text().replace('\n', " | "));
             prop_assert!(!line.arguments_hidden);
+        }
+
+        /// Every kick message crosses whole, each line break as ` | `
+        /// (ADR-0020, U7): it keeps up to 1024 characters, so even one of
+        /// only line breaks fits the 3072.
+        #[test]
+        fn a_kick_message_crosses_uncut_with_its_line_breaks_as_separators(
+            raw in prop_oneof![
+                "\n{1000,1100}",
+                "[a-z\n]{900,1100}",
+                "[a-z😀 \n]{0,1100}",
+            ],
+        ) {
+            let reason = DisconnectReason::kicked(Some("multiplayer.disconnect.kicked"), &raw);
+            let kept = if let DisconnectReason::Kicked(kick) = &reason {
+                kick.message().to_owned()
+            } else {
+                String::new()
+            };
+
+            let shown = LastDisconnect::from(&reason);
+
+            prop_assert_eq!(
+                shown.message.map(|message| message.as_str().to_owned()),
+                Some(kept.replace('\n', " | "))
+            );
         }
     }
 }
