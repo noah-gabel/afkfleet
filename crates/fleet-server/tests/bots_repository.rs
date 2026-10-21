@@ -951,3 +951,78 @@ async fn a_transaction_reads_a_mode_as_the_read_pool_does(
     assert!(in_tx.is_some());
     assert_eq!(missing, None);
 }
+
+/// The accounts whose bots run a mode, in ID order, read in the
+/// transaction: none before a switch, each after it (ADR-0020, S17).
+#[sqlx::test(migrations = false)]
+async fn a_modes_accounts_are_those_whose_bots_run_it_in_id_order(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(&db, 1).await;
+    let (third, third_bot) = add_account_with_bot(&db, owner, 3).await;
+    let (first, first_bot) = add_account_with_bot(&db, owner, 1).await;
+    let (second, _) = add_account_with_bot(&db, owner, 2).await;
+    let farm = ModePreset::Farm.id();
+
+    let mut tx = db.write().await.unwrap();
+    let before = tx.bots().accounts_with_mode(farm).await.unwrap();
+    tx.bots().set_mode(third_bot, farm).await.unwrap();
+    tx.bots().set_mode(first_bot, farm).await.unwrap();
+    let after = tx.bots().accounts_with_mode(farm).await.unwrap();
+    let afk = tx
+        .bots()
+        .accounts_with_mode(ModePreset::Afk.id())
+        .await
+        .unwrap();
+
+    assert_eq!(before, []);
+    assert_eq!(after, [first, third]);
+    assert_eq!(afk, [second]);
+}
+
+/// A bot's account ID that doesn't read back as an account's is corrupt,
+/// naming the column.
+#[sqlx::test(migrations = false)]
+async fn a_modes_account_that_doesnt_read_back_is_corrupt(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(&db, 1).await.to_string();
+    // A version 4 ID: the table's checks take any UUID's form.
+    let account = "550e8400-e29b-41d4-a716-446655440000";
+    let bot = BotId::new_v7(at(T0), [7; 10]).unwrap().to_string();
+    let time = "2027-01-15T08:00:00.000Z";
+    sqlx::query!(
+        "INSERT INTO mc_accounts (id, owner_user_id, kind, mc_uuid, mc_name, refresh_envelope, status, created_at)
+         VALUES (?, ?, 'offline', NULL, 'AfkBot7', NULL, 'active', ?)",
+        account,
+        owner,
+        time
+    )
+    .execute(db.write_pool())
+    .await
+    .unwrap();
+    let farm = ModePreset::Farm.id().to_string();
+    sqlx::query!(
+        "INSERT INTO bots (id, account_id, mode_id, desired_state) VALUES (?, ?, ?, 'stopped')",
+        bot,
+        account,
+        farm
+    )
+    .execute(db.write_pool())
+    .await
+    .unwrap();
+
+    let mut tx = db.write().await.unwrap();
+    let read = tx.bots().accounts_with_mode(ModePreset::Farm.id()).await;
+
+    match read {
+        Err(StoreError::Corrupt { table, column, .. }) => {
+            assert_eq!((table, column), ("bots", "account_id"));
+        }
+        other => panic!("{other:?}"),
+    }
+}

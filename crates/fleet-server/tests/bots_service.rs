@@ -423,6 +423,10 @@ impl BotWrites for FailingTx {
         self.inner.bots().set_mode(bot, mode).await
     }
 
+    async fn accounts_with_mode(&mut self, mode: ModeId) -> Result<Vec<AccountId>, StoreError> {
+        self.inner.bots().accounts_with_mode(mode).await
+    }
+
     async fn set_desired(
         &mut self,
         bot: BotId,

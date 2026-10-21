@@ -17,7 +17,8 @@ use chrono::{DateTime, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::auth::{InviteTtl, LockoutPolicy, NewPassword, SessionPolicy};
 use fleet_core::authz::{CommandAllowlist, GrantLevel, Role};
-use fleet_core::id::{AccountId, InviteId, SessionId, UserId};
+use fleet_core::id::{AccountId, BotId, InviteId, ModeId, SessionId, UserId};
+use fleet_core::mode::ModeName;
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock as _;
 use fleet_core::value::Username;
@@ -61,7 +62,9 @@ use fleet_server::ports::grants::{GrantReads, GrantWrites};
 use fleet_server::ports::invites::{InviteReads, InviteWrites, NewInvite};
 use fleet_server::ports::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
 use fleet_server::ports::mfa::{MfaReads, MfaWrites};
-use fleet_server::ports::modes::{ModeReads, ModeWrites};
+use fleet_server::ports::modes::{
+    ListedMode, ModeChange, ModeReads, ModeWrites, NewMode, StoredMode, WriteModeError,
+};
 use fleet_server::ports::passwords::{HashError, Passwords, VerifyError};
 use fleet_server::ports::reconcile::{Change, Reconcile};
 use fleet_server::ports::sessions::{SessionReads, SessionWrites};
@@ -219,6 +222,12 @@ pub(crate) enum Meanwhile {
     RevokeGrant(AccountId, UserId),
     /// A user's grant on an account is set to a level, by another user.
     SetGrant(AccountId, UserId, GrantLevel, UserId),
+    /// A bot is switched to a mode.
+    SetBotMode(BotId, ModeId),
+    /// A mode is edited: its version is one more.
+    EditMode(ModeId),
+    /// A mode is deleted.
+    DeleteMode(ModeId),
 }
 
 /// The database, with a change queued to land right before the next write
@@ -230,9 +239,29 @@ pub(crate) struct HookedStore {
     clock: ManualClock,
     queued: Arc<Mutex<Option<Meanwhile>>>,
     after_commit: Arc<Mutex<Option<Meanwhile>>>,
+    lose_mode_update: Arc<Mutex<bool>>,
 }
 
 impl HookedStore {
+    /// `inner` with nothing queued; `alice` is the user several changes
+    /// name.
+    fn new(inner: Database, alice: UserId, clock: ManualClock) -> Self {
+        Self {
+            inner,
+            alice,
+            clock,
+            queued: Arc::default(),
+            after_commit: Arc::default(),
+            lose_mode_update: Arc::default(),
+        }
+    }
+
+    /// Makes the next write transaction's `ModeWrites::update` answer that
+    /// it matched no row, as no real one can after its own re-read did.
+    pub(crate) fn lose_next_mode_update(&self) {
+        *self.lose_mode_update.lock().unwrap() = true;
+    }
+
     /// Queues `change` for the next write transaction.
     pub(crate) fn queue(&self, change: Meanwhile) {
         *self.queued.lock().unwrap() = Some(change);
@@ -248,6 +277,25 @@ impl HookedStore {
         let now = self.clock.now();
         let id = self.alice.to_string();
         match change {
+            Meanwhile::SetBotMode(bot, mode) => {
+                let mut tx = self.inner.write().await.unwrap();
+                assert!(tx.bots().set_mode(bot, mode).await.unwrap());
+                tx.commit(setup_entry()).await.unwrap();
+            }
+            Meanwhile::EditMode(mode) => {
+                let mode = mode.to_string();
+                sqlx::query!("UPDATE modes SET version = version + 1 WHERE id = ?", mode)
+                    .execute(self.inner.write_pool())
+                    .await
+                    .unwrap();
+            }
+            Meanwhile::DeleteMode(mode) => {
+                let mode = mode.to_string();
+                sqlx::query!("DELETE FROM modes WHERE id = ?", mode)
+                    .execute(self.inner.write_pool())
+                    .await
+                    .unwrap();
+            }
             Meanwhile::RevokeSession(session) => {
                 let mut tx = self.inner.write().await.unwrap();
                 assert!(tx.sessions().revoke(session, now).await.unwrap());
@@ -414,6 +462,115 @@ impl WriteTx for HookedTx {
     }
 }
 
+/// A write transaction whose mode updates match no row: a bug a store
+/// could have, which an edit must never answer as a success.
+struct LosingTx {
+    inner: Box<dyn WriteTx>,
+}
+
+#[async_trait]
+impl WriteTx for LosingTx {
+    fn users(&mut self) -> &mut dyn UserWrites {
+        self.inner.users()
+    }
+
+    fn sessions(&mut self) -> &mut dyn SessionWrites {
+        self.inner.sessions()
+    }
+
+    fn login_attempts(&mut self) -> &mut dyn LoginAttemptWrites {
+        self.inner.login_attempts()
+    }
+
+    fn mfa(&mut self) -> &mut dyn MfaWrites {
+        self.inner.mfa()
+    }
+
+    fn invites(&mut self) -> &mut dyn InviteWrites {
+        self.inner.invites()
+    }
+
+    fn accounts(&mut self) -> &mut dyn AccountWrites {
+        self.inner.accounts()
+    }
+
+    fn grants(&mut self) -> &mut dyn GrantWrites {
+        self.inner.grants()
+    }
+
+    fn envelopes(&mut self) -> &mut dyn EnvelopeWrites {
+        self.inner.envelopes()
+    }
+
+    fn enrollment_tokens(&mut self) -> &mut dyn EnrollmentTokenWrites {
+        self.inner.enrollment_tokens()
+    }
+
+    fn agents(&mut self) -> &mut dyn AgentWrites {
+        self.inner.agents()
+    }
+
+    fn bots(&mut self) -> &mut dyn BotWrites {
+        self.inner.bots()
+    }
+
+    fn modes(&mut self) -> &mut dyn ModeWrites {
+        self
+    }
+
+    fn chat(&mut self) -> &mut dyn ChatWrites {
+        self.inner.chat()
+    }
+
+    fn audit(&mut self) -> &mut dyn AuditWrites {
+        self.inner.audit()
+    }
+
+    async fn commit(self: Box<Self>, entry: NewAuditEntry) -> Result<AuditEntryId, StoreError> {
+        self.inner.commit(entry).await
+    }
+
+    async fn commit_unaudited(self: Box<Self>, reason: UnauditedWrite) -> Result<(), StoreError> {
+        self.inner.commit_unaudited(reason).await
+    }
+}
+
+#[async_trait]
+impl ModeWrites for LosingTx {
+    async fn find(&mut self, id: ModeId) -> Result<Option<StoredMode>, StoreError> {
+        self.inner.modes().find(id).await
+    }
+
+    async fn listed(&mut self, id: ModeId) -> Result<Option<ListedMode>, StoreError> {
+        self.inner.modes().listed(id).await
+    }
+
+    async fn count_owned_by(&mut self, owner: UserId) -> Result<u32, StoreError> {
+        self.inner.modes().count_owned_by(owner).await
+    }
+
+    async fn name_taken(
+        &mut self,
+        owner: UserId,
+        name: &ModeName,
+        shared: bool,
+        except: Option<ModeId>,
+    ) -> Result<bool, StoreError> {
+        self.inner
+            .modes()
+            .name_taken(owner, name, shared, except)
+            .await
+    }
+
+    async fn insert(&mut self, mode: &NewMode) -> Result<(), WriteModeError> {
+        self.inner.modes().insert(mode).await
+    }
+
+    async fn update(&mut self, _change: &ModeChange) -> Result<bool, WriteModeError> {
+        Ok(false)
+    }
+}
+
 #[async_trait]
 impl Store for HookedStore {
     async fn write(&self) -> Result<Box<dyn WriteTx>, StoreError> {
@@ -423,13 +580,19 @@ impl Store for HookedStore {
         }
         let tx = self.inner.write().await?;
         let after = self.after_commit.lock().unwrap().take();
-        Ok(match after {
+        let tx: Box<dyn WriteTx> = match after {
             None => tx,
             Some(after) => Box::new(HookedTx {
                 inner: tx,
                 store: self.clone(),
                 after,
             }),
+        };
+        let lose = core::mem::take(&mut *self.lose_mode_update.lock().unwrap());
+        Ok(if lose {
+            Box::new(LosingTx { inner: tx })
+        } else {
+            tx
         })
     }
 
@@ -620,13 +783,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
     };
     let lockout = lockout_service(&clock, &db);
     let alice = UserId::new_v7(at(T0), [1; 10]).unwrap();
-    let hooked = HookedStore {
-        inner: db.clone(),
-        alice,
-        clock: clock.clone(),
-        queued: Arc::default(),
-        after_commit: Arc::default(),
-    };
+    let hooked = HookedStore::new(db.clone(), alice, clock.clone());
     let login = LoginService::new(
         Arc::new(clock.clone()),
         Arc::new(random.clone()),
@@ -665,7 +822,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         enrollment_tokens,
         agents,
         bots,
-        modes: mode_service(&clock, &random, &hooked, &settings.allowlist),
+        modes: mode_service(&clock, &random, &hooked, &settings.allowlist, &hints),
     });
     let app = app(state, &clock);
     insert_alice(&db, alice, alice_hash).await;
@@ -723,12 +880,14 @@ fn bot_service(
     (bots, events)
 }
 
-/// The modes' service as serve builds it, over `hooked`, with `allowlist`.
+/// The modes' service as serve builds it, over `hooked`, with `allowlist`,
+/// recording its hints in `hints`.
 fn mode_service(
     clock: &ManualClock,
     random: &SeededRandom,
     hooked: &HookedStore,
     allowlist: &CommandAllowlist,
+    hints: &Arc<Hinted>,
 ) -> ModeService {
     ModeService::new(
         Arc::new(clock.clone()),
@@ -736,6 +895,7 @@ fn mode_service(
         Arc::new(hooked.clone()),
     )
     .with_allowlist(allowlist.clone())
+    .with_reconcile(Arc::clone(hints) as Arc<dyn Reconcile>)
 }
 
 /// Stores Alice, a Member, with `hash`.

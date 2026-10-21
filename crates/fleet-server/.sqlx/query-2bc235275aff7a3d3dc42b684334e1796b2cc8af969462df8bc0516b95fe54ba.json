@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO mc_accounts (id, owner_user_id, kind, mc_uuid, mc_name, refresh_envelope, status, created_at)\n         VALUES (?, ?, 'offline', NULL, 'AfkBot7', NULL, 'active', ?)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "2bc235275aff7a3d3dc42b684334e1796b2cc8af969462df8bc0516b95fe54ba"
+}

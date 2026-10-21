@@ -49,7 +49,7 @@ use crate::ports::login_attempts::{
 };
 use crate::ports::mfa::{InsertMfaError, MfaReads, MfaWrites, UserMfa};
 use crate::ports::modes::{
-    InsertModeError, ListedMode, ModeReads, ModeWrites, NewMode, StoredMode,
+    ListedMode, ModeChange, ModeReads, ModeWrites, NewMode, StoredMode, WriteModeError,
 };
 use crate::ports::page::Page;
 use crate::ports::recovery_codes::RecoveryCodeHash;
@@ -275,6 +275,10 @@ impl ModeReads for Reads {
         page: Page<ModeId>,
     ) -> Result<Vec<ListedMode>, StoreError> {
         modes::visible(&self.pool, viewer, page).await
+    }
+
+    async fn listed(&self, id: ModeId) -> Result<Option<ListedMode>, StoreError> {
+        modes::listed(&self.pool, id).await
     }
 }
 
@@ -738,6 +742,10 @@ impl BotWrites for SqliteWriteTx {
         bots::set_mode(&mut self.tx, bot, mode).await
     }
 
+    async fn accounts_with_mode(&mut self, mode: ModeId) -> Result<Vec<AccountId>, StoreError> {
+        bots::accounts_with_mode(&mut self.tx, mode).await
+    }
+
     async fn set_desired(
         &mut self,
         bot: BotId,
@@ -757,6 +765,10 @@ impl ModeWrites for SqliteWriteTx {
         modes::find(&mut *self.tx, id).await
     }
 
+    async fn listed(&mut self, id: ModeId) -> Result<Option<ListedMode>, StoreError> {
+        modes::listed(&mut *self.tx, id).await
+    }
+
     async fn count_owned_by(&mut self, owner: UserId) -> Result<u32, StoreError> {
         modes::count_owned_by(&mut self.tx, owner).await
     }
@@ -766,12 +778,17 @@ impl ModeWrites for SqliteWriteTx {
         owner: UserId,
         name: &ModeName,
         shared: bool,
+        except: Option<ModeId>,
     ) -> Result<bool, StoreError> {
-        modes::name_taken(&mut self.tx, owner, name, shared).await
+        modes::name_taken(&mut self.tx, owner, name, shared, except).await
     }
 
-    async fn insert(&mut self, mode: &NewMode) -> Result<(), InsertModeError> {
+    async fn insert(&mut self, mode: &NewMode) -> Result<(), WriteModeError> {
         modes::insert(&mut self.tx, mode).await
+    }
+
+    async fn update(&mut self, change: &ModeChange) -> Result<bool, WriteModeError> {
+        modes::update(&mut self.tx, change).await
     }
 }
 

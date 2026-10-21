@@ -1,0 +1,30 @@
+---
+source: crates/fleet-server/tests/auth/modes/edits.rs
+expression: "redacted(&seen.body, &[(id.to_string(), \"the mode\")])"
+---
+{
+  "created_at": "[T0-15s]",
+  "deletable": true,
+  "editable": true,
+  "id": "[the mode]",
+  "name": "Grüße, „Farm“ #2!",
+  "ownership": "mine",
+  "steps": [
+    {
+      "action": {
+        "arguments_hidden": false,
+        "type": "jump"
+      },
+      "probability": 100,
+      "schedule": {
+        "interval_ms": 250,
+        "jitter_ms": 0,
+        "type": "every"
+      }
+    }
+  ],
+  "updated_at": "[T0]",
+  "version": 2,
+  "visibility": "private",
+  "visibility_editable": false
+}

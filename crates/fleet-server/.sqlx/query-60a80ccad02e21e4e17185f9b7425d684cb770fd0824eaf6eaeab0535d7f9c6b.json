@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE modes\n         SET name = ?, visibility = ?, definition_json = ?, version = ?, updated_at = ?\n         WHERE id = ? AND version = ? AND owner_user_id IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 7
+    },
+    "nullable": []
+  },
+  "hash": "60a80ccad02e21e4e17185f9b7425d684cb770fd0824eaf6eaeab0535d7f9c6b"
+}

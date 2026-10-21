@@ -542,6 +542,11 @@ async fn the_setup_and_step_up_routes_are_registered_with_their_access_and_class
                 "/api/v1/modes/with-commands",
                 RateClass::Standard
             ),
+            entry(
+                Method::PUT,
+                "/api/v1/modes/{id}/with-commands",
+                RateClass::Standard
+            ),
         ])
     );
     db.close().await;
@@ -619,6 +624,7 @@ async fn the_authed_routes_are_registered_with_their_class(
             entry(Method::POST, "/api/v1/bots/{id}/chat", RateClass::Standard),
             entry(Method::GET, "/api/v1/modes", RateClass::Standard),
             entry(Method::POST, "/api/v1/modes", RateClass::Standard),
+            entry(Method::PUT, "/api/v1/modes/{id}", RateClass::Standard),
         ])
     );
     db.close().await;
