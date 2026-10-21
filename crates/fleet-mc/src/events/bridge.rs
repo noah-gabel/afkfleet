@@ -113,6 +113,9 @@ struct State {
     queue: VecDeque<SessionEvent>,
     phase: Phase,
     death: Death,
+    /// A Respawn packet removed the bot's `Dead` since the last confirmed
+    /// respawn (ADR-0020, S27).
+    revived: bool,
     /// Chat is being dropped: the next drop continues the burst.
     dropping_chat: bool,
 }
@@ -217,11 +220,14 @@ impl State {
         true
     }
 
-    /// The session asked for a respawn; `loaded_and_alive` says whether
-    /// the bot is already back (ADR-0020, S22).
+    /// The session asked for a respawn; `loaded` says whether the bot's
+    /// entity has `HasClientLoaded` now (ADR-0020, S22, S27).
     /// A request counts only once the actor read the `Died`; a stale call
-    /// (before the read, or with no death) records nothing.
-    fn respawn_asked(&mut self, loaded_and_alive: bool) -> Delivery {
+    /// (before the read, or with no death) records nothing. A server that
+    /// respawned the bot by itself left a removal and a load behind, which
+    /// confirm it at once: the Respawn handler removes `HasClientLoaded`
+    /// with `Dead`, so a load now came after the latest removal.
+    fn respawn_asked(&mut self, loaded: bool) -> Delivery {
         if matches!(self.phase, Phase::Ended | Phase::Closed) {
             return Delivery::SessionEnded;
         }
@@ -229,30 +235,51 @@ impl State {
             return Delivery::Ignored;
         };
         self.death = Death::Taken { requested: true };
-        if loaded_and_alive {
+        if loaded && self.revived {
             self.confirm()
         } else {
             Delivery::Ignored
         }
     }
 
-    /// The bot's entity was loaded again without being dead (ADR-0020,
-    /// S22): confirms a respawn asked for, if one is pending.
-    fn loaded_and_alive(&mut self) -> Delivery {
+    /// A Respawn packet removed the bot's `Dead`, which only a Respawn does
+    /// (ADR-0020, S27). Remembered until the next confirmation, so a
+    /// Respawn that came in the death's own frame, before its `Died`
+    /// reached the bridge, still counts for it.
+    fn dead_removed(&mut self) -> Delivery {
         if matches!(self.phase, Phase::Ended | Phase::Closed) {
             return Delivery::SessionEnded;
         }
-        if self.death == (Death::Taken { requested: true }) {
-            self.confirm()
-        } else {
-            Delivery::Ignored
+        self.revived = true;
+        Delivery::Ignored
+    }
+
+    /// The bot's entity was loaded again (ADR-0020, S27): confirms a
+    /// respawn asked for after a removal of `Dead`. With no death pending,
+    /// the removal is forgotten: it was a `Dead` azalea never reported a
+    /// death for, as at a dimension change of a bot whose `Dead` azalea put
+    /// back, and must not confirm a later death before its own Respawn.
+    /// Deaths are read inside the frame, so one pending is in the bridge by
+    /// then.
+    fn loaded(&mut self) -> Delivery {
+        if matches!(self.phase, Phase::Ended | Phase::Closed) {
+            return Delivery::SessionEnded;
+        }
+        match self.death {
+            Death::Taken { requested: true } if self.revived => self.confirm(),
+            Death::None => {
+                self.revived = false;
+                Delivery::Ignored
+            }
+            Death::Held | Death::Reported | Death::Taken { .. } => Delivery::Ignored,
         }
     }
 
     /// Queues `Respawned`, once per `Died`: the next death is reported
-    /// again.
+    /// again, and waits for a removal of its own.
     fn confirm(&mut self) -> Delivery {
         self.death = Death::None;
+        self.revived = false;
         self.queue.push_back(SessionEvent::Respawned);
         Delivery::Queued
     }
@@ -261,6 +288,7 @@ impl State {
     fn close(&mut self) {
         self.phase = Phase::Closed;
         self.death = Death::None;
+        self.revived = false;
         self.queue.clear();
     }
 
@@ -450,21 +478,32 @@ impl BridgeControl {
         self.shared.phase()
     }
 
-    /// The session asked the server to respawn the bot; `loaded_and_alive`
-    /// says whether its entity is loaded and not dead right now (a server
-    /// that respawned it by itself). A request counts only after the actor
-    /// read the `Died`; `Respawned` follows once the bot is back (ADR-0020,
-    /// S22).
-    pub(crate) fn respawn_asked(&self, loaded_and_alive: bool) -> Delivery {
+    /// The session asked the server to respawn the bot; `loaded` says
+    /// whether its entity has `HasClientLoaded` right now (a server that
+    /// respawned it by itself). A request counts only after the actor read
+    /// the `Died`; `Respawned` follows once the bot is back (ADR-0020, S22,
+    /// S27).
+    pub(crate) fn respawn_asked(&self, loaded: bool) -> Delivery {
         self.shared
-            .respawn_signal(|state| state.respawn_asked(loaded_and_alive))
+            .respawn_signal(|state| state.respawn_asked(loaded))
     }
 
-    /// The bot's entity was loaded again and isn't dead: azalea added
-    /// `HasClientLoaded` without `Dead`. Confirms a respawn the session
-    /// asked for, if one is pending (ADR-0020, S22).
-    pub(crate) fn loaded_and_alive(&self) -> Delivery {
-        self.shared.respawn_signal(State::loaded_and_alive)
+    /// azalea reported the bot's death inside the frame (its `DeathEvent`),
+    /// so a report reaches the bridge before any later load (ADR-0020,
+    /// S27).
+    pub(crate) fn died(&self) -> Delivery {
+        self.shared.apply(Mapped::Death, Instant::now())
+    }
+
+    /// A Respawn packet removed the bot's `Dead` (ADR-0020, S27).
+    pub(crate) fn dead_removed(&self) -> Delivery {
+        self.shared.respawn_signal(State::dead_removed)
+    }
+
+    /// azalea added `HasClientLoaded` to the bot's entity again (ADR-0020,
+    /// S27).
+    pub(crate) fn loaded(&self) -> Delivery {
+        self.shared.respawn_signal(State::loaded)
     }
 
     /// Tears the bridge down: queued events are dropped, and
@@ -613,6 +652,7 @@ mod tests {
         assert_eq!(apply(&sink, Mapped::Death), Delivery::Queued);
         assert_eq!(apply(&sink, Mapped::Death), Delivery::DuplicateDeath);
         assert_eq!(queued(&events), [SessionEvent::Joined, SessionEvent::Died]);
+        sink.control().dead_removed();
         sink.control().respawn_asked(true);
         assert_eq!(apply(&sink, Mapped::Death), Delivery::Queued);
 
@@ -936,12 +976,12 @@ mod tests {
         assert!(matches!(events.shared.next(), Next::End));
     }
 
-    // --- Respawn (ADR-0020, S22) ---
+    // --- Respawn (ADR-0020, S22, S27) ---
 
     /// Joins, dies, and has the actor read both.
     fn joined_and_dead(sink: &EventSink, events: &McEvents) {
         apply(sink, Mapped::Spawn);
-        apply(sink, Mapped::Death);
+        assert_eq!(sink.control().died(), Delivery::Queued);
         assert_eq!(queued(events), [SessionEvent::Joined, SessionEvent::Died]);
     }
 
@@ -951,18 +991,23 @@ mod tests {
         let control = sink.control();
         joined_and_dead(&sink, &events);
 
-        let asked_while_dead = control.respawn_asked(false);
-        let loaded = control.loaded_and_alive();
-        let loaded_again = control.loaded_and_alive();
+        // The old life's client is still loaded while it's dead.
+        let asked_while_dead = control.respawn_asked(true);
+        let removed = control.dead_removed();
+        let loaded = control.loaded();
+        let loaded_again = control.loaded();
 
         assert_eq!(asked_while_dead, Delivery::Ignored);
+        assert_eq!(removed, Delivery::Ignored, "a removal alone queues nothing");
         assert_eq!(loaded, Delivery::Queued);
         assert_eq!(loaded_again, Delivery::Ignored, "once per death");
         assert_eq!(queued(&events), [SessionEvent::Respawned]);
-        assert_eq!(apply(&sink, Mapped::Death), Delivery::Queued);
+        assert_eq!(control.died(), Delivery::Queued);
         assert_eq!(queued(&events), [SessionEvent::Died]);
     }
 
+    /// A Respawn and a load that no request after a read death waits for
+    /// confirm nothing: a dimension change, or a stale call.
     #[rstest]
     #[case::alive_without_a_death(false, false)]
     #[case::dead_before_the_death_was_read(true, false)]
@@ -975,17 +1020,18 @@ mod tests {
         let control = sink.control();
         apply(&sink, Mapped::Spawn);
         if dies {
-            apply(&sink, Mapped::Death);
+            control.died();
         }
         if read {
             queued(&events);
         }
         if dies && !read {
             // Asked before the actor read the death: a stale call.
-            assert_eq!(control.respawn_asked(false), Delivery::Ignored);
+            assert_eq!(control.respawn_asked(true), Delivery::Ignored);
         }
 
-        let loaded = control.loaded_and_alive();
+        control.dead_removed();
+        let loaded = control.loaded();
 
         assert_eq!(loaded, Delivery::Ignored);
         assert!(
@@ -999,7 +1045,8 @@ mod tests {
         let (sink, events, ..) = start(8);
         let control = sink.control();
         joined_and_dead(&sink, &events);
-        assert_eq!(control.loaded_and_alive(), Delivery::Ignored);
+        control.dead_removed();
+        assert_eq!(control.loaded(), Delivery::Ignored);
 
         let asked = control.respawn_asked(true);
 
@@ -1007,15 +1054,80 @@ mod tests {
         assert_eq!(queued(&events), [SessionEvent::Respawned]);
     }
 
+    /// A server that respawns the bot at once removes `Dead` in the death's
+    /// own frame, before the death reaches the bridge: that removal still
+    /// counts for the death (S27).
+    #[test]
+    fn a_removal_before_the_death_was_queued_counts_for_it() {
+        let (sink, events, ..) = start(8);
+        let control = sink.control();
+        apply(&sink, Mapped::Spawn);
+
+        control.dead_removed();
+        control.died();
+        let loaded_before_the_read = control.loaded();
+        let read = queued(&events);
+        let asked = control.respawn_asked(true);
+
+        assert_eq!(loaded_before_the_read, Delivery::Ignored);
+        assert_eq!(read, [SessionEvent::Joined, SessionEvent::Died]);
+        assert_eq!(asked, Delivery::Queued);
+        assert_eq!(queued(&events), [SessionEvent::Respawned]);
+    }
+
+    /// A removal no death waited for, as at a dimension change of a bot
+    /// whose `Dead` azalea left behind, is forgotten at the load that
+    /// follows it, so it can't confirm a later death before its own Respawn
+    /// (S27).
+    #[test]
+    fn a_load_with_no_death_pending_forgets_a_removal() {
+        let (sink, events, ..) = start(8);
+        let control = sink.control();
+        apply(&sink, Mapped::Spawn);
+        control.dead_removed();
+        control.loaded();
+        control.died();
+        queued(&events);
+
+        let asked = control.respawn_asked(true);
+        control.dead_removed();
+        let loaded = control.loaded();
+
+        assert_eq!(asked, Delivery::Ignored, "the old removal is forgotten");
+        assert_eq!(loaded, Delivery::Queued, "its own removal and load");
+        assert_eq!(queued(&events), [SessionEvent::Respawned]);
+    }
+
+    /// Each confirmation uses its removal up: the next death waits for its
+    /// own (S27).
+    #[test]
+    fn each_confirmation_uses_its_removal_up() {
+        let (sink, events, ..) = start(8);
+        let control = sink.control();
+        joined_and_dead(&sink, &events);
+        control.respawn_asked(true);
+        control.dead_removed();
+        control.loaded();
+        control.died();
+        queued(&events);
+
+        let asked = control.respawn_asked(true);
+        let loaded = control.loaded();
+
+        assert_eq!([asked, loaded], [Delivery::Ignored; 2]);
+        assert_eq!(queued(&events), []);
+    }
+
     #[test]
     fn second_death_report_before_the_confirmation_is_dropped() {
         let (sink, events, ..) = start(8);
         let control = sink.control();
         joined_and_dead(&sink, &events);
-        control.respawn_asked(false);
+        control.respawn_asked(true);
 
-        let again = apply(&sink, Mapped::Death);
-        control.loaded_and_alive();
+        let again = control.died();
+        control.dead_removed();
+        control.loaded();
 
         assert_eq!(again, Delivery::DuplicateDeath);
         assert_eq!(queued(&events), [SessionEvent::Respawned]);
@@ -1029,18 +1141,20 @@ mod tests {
         let (sink, events, ..) = start(8);
         let control = sink.control();
         joined_and_dead(&sink, &events);
-        control.respawn_asked(false);
-        control.loaded_and_alive();
-        apply(&sink, Mapped::Death);
+        control.respawn_asked(true);
+        control.dead_removed();
+        control.loaded();
+        control.died();
 
         let stale = [
             control.respawn_asked(true),
-            control.loaded_and_alive(),
+            control.dead_removed(),
+            control.loaded(),
             control.respawn_asked(true),
         ];
         apply(&sink, Mapped::Terminal(kicked()));
 
-        assert_eq!(stale, [Delivery::Ignored; 3]);
+        assert_eq!(stale, [Delivery::Ignored; 4]);
         assert_eq!(
             queued(&events),
             [
@@ -1056,15 +1170,15 @@ mod tests {
         let (sink, events, ..) = start(8);
         let control = sink.control();
         joined_and_dead(&sink, &events);
-        control.respawn_asked(false);
+        control.respawn_asked(true);
         apply(&sink, Mapped::Terminal(kicked()));
 
-        let after_the_end = control.loaded_and_alive();
+        let after_the_end = [control.dead_removed(), control.loaded()];
         control.close();
-        let after_the_close = control.respawn_asked(true);
+        let after_the_close = [control.respawn_asked(true), control.died()];
 
-        assert_eq!(after_the_end, Delivery::SessionEnded);
-        assert_eq!(after_the_close, Delivery::SessionEnded);
+        assert_eq!(after_the_end, [Delivery::SessionEnded; 2]);
+        assert_eq!(after_the_close, [Delivery::SessionEnded; 2]);
         assert!(matches!(events.shared.next(), Next::End));
     }
 

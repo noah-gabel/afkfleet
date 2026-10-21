@@ -267,9 +267,9 @@ impl SessionHandle for McSession {
         self.call(move |client| {
             actions::respawn(client);
             // In the same job: a server that respawned the bot by itself
-            // left it loaded and alive already, so no load will follow to
-            // confirm it (ADR-0020, S22).
-            control.respawn_asked(actions::loaded_and_alive(client));
+            // left the removal and the load behind already, so no load will
+            // follow to confirm it (ADR-0020, S22, S27).
+            control.respawn_asked(actions::loaded(client));
             Ok(())
         })
     }

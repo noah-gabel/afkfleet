@@ -108,13 +108,17 @@ impl Scene {
         panic!("{what} didn't happen after 12 kills");
     }
 
-    /// Asks for a respawn and waits for the server's confirmation.
+    /// Asks for a respawn and waits for the server's confirmation, after
+    /// which no other lifecycle event follows: no second `Respawned`, and no
+    /// `Died` from the old life (PR #65's review).
     async fn respawned(&mut self, what: &str) {
         assert_eq!(within("a respawn", self.session.respawn()).await, Ok(()));
         wait_for(&mut self.events, what, |event| {
             *event == SessionEvent::Respawned
         })
         .await;
+        let after = self.ready_lifecycle_events().await;
+        assert_eq!(after, [], "after {what}");
     }
 
     /// The lifecycle events queued now: those that come within half a

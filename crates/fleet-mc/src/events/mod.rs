@@ -9,8 +9,9 @@
 //!   `Joined` is the first spawn, a death before it is held, a death is
 //!   reported once until a confirmed respawn, and the first terminal event
 //!   wins. [`McEvents`] is its consumer side.
-//! - `respawn` confirms a respawn the session asked for, once azalea has the
-//!   bot loaded again and not dead (ADR-0020, S22).
+//! - `respawn` reads the bot's deaths inside the frame, and confirms a
+//!   respawn the session asked for once a Respawn removed the bot's `Dead`
+//!   and the client loaded again (ADR-0020, S22, S27).
 //! - `liveness` holds the session's tick and packet stamps. Ticks and received
 //!   packets only stamp liveness; they're never queued.
 //! - `render` turns server text into plain text within a fixed budget, since
