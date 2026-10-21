@@ -1,0 +1,17 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 403,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "mode_needs_step_up",
+      "message": "This mode holds a command that needs your password: confirm it's you to save it.",
+      "request_id": "test-request-id"
+    }
+  }
+}

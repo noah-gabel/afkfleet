@@ -177,6 +177,11 @@ pub enum ApiError {
     /// it: it goes to `/command`, after a step-up (403).
     #[error("the command needs a step-up")]
     CommandNeedsStepUp,
+    /// A mode whose steps send a command off the allowlist, sent to a plain
+    /// mode route by someone who may write it: it goes to the route's
+    /// `/with-commands` twin, after a step-up (403; ADR-0020, S16).
+    #[error("the mode needs a step-up")]
+    ModeNeedsStepUp,
 }
 
 impl ApiError {
@@ -221,6 +226,7 @@ impl ApiError {
             Self::BotNotOnline => ErrorCode::BotNotOnline,
             Self::ChatUnavailable => ErrorCode::ChatUnavailable,
             Self::CommandNeedsStepUp => ErrorCode::CommandNeedsStepUp,
+            Self::ModeNeedsStepUp => ErrorCode::ModeNeedsStepUp,
         }
     }
 
@@ -237,9 +243,10 @@ pub const fn status(code: ErrorCode) -> StatusCode {
     match code {
         ErrorCode::BadRequest => StatusCode::BAD_REQUEST,
         ErrorCode::Unauthorized | ErrorCode::InvalidCredentials => StatusCode::UNAUTHORIZED,
-        ErrorCode::Forbidden | ErrorCode::StepUpRequired | ErrorCode::CommandNeedsStepUp => {
-            StatusCode::FORBIDDEN
-        }
+        ErrorCode::Forbidden
+        | ErrorCode::StepUpRequired
+        | ErrorCode::CommandNeedsStepUp
+        | ErrorCode::ModeNeedsStepUp => StatusCode::FORBIDDEN,
         ErrorCode::NotFound => StatusCode::NOT_FOUND,
         ErrorCode::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
         ErrorCode::Timeout => StatusCode::REQUEST_TIMEOUT,
@@ -395,7 +402,8 @@ impl ApiError {
             | Self::BotNotFailed
             | Self::BotNotOnline
             | Self::ChatUnavailable
-            | Self::CommandNeedsStepUp => (None, None),
+            | Self::CommandNeedsStepUp
+            | Self::ModeNeedsStepUp => (None, None),
         };
         (
             response,
@@ -678,7 +686,9 @@ mod tests {
     const fn bare_of(code: ErrorCode) -> ErrorCode {
         match code {
             ErrorCode::InvalidCredentials => ErrorCode::Unauthorized,
-            ErrorCode::StepUpRequired | ErrorCode::CommandNeedsStepUp => ErrorCode::Forbidden,
+            ErrorCode::StepUpRequired
+            | ErrorCode::CommandNeedsStepUp
+            | ErrorCode::ModeNeedsStepUp => ErrorCode::Forbidden,
             ErrorCode::BotUnreachable
             | ErrorCode::BotNotRunning
             | ErrorCode::BotNotPaused

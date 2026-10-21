@@ -12,6 +12,7 @@ use fleet_core::bot::{DesiredRunState, LastReport};
 use fleet_core::id::{
     AccountId, AgentId, BotId, EnrollmentTokenId, InviteId, ModeId, SessionId, UserId,
 };
+use fleet_core::mode::ModeName;
 use fleet_core::pki::CertFingerprint;
 use fleet_core::value::{AgentName, McUsername, ServerAddress, Username};
 use sqlx::{Sqlite, SqlitePool, Transaction};
@@ -47,7 +48,9 @@ use crate::ports::login_attempts::{
     AttemptKey, LoginAttempt, LoginAttemptReads, LoginAttemptWrites,
 };
 use crate::ports::mfa::{InsertMfaError, MfaReads, MfaWrites, UserMfa};
-use crate::ports::modes::{ModeReads, ModeWrites, StoredMode};
+use crate::ports::modes::{
+    InsertModeError, ListedMode, ModeReads, ModeWrites, NewMode, StoredMode,
+};
 use crate::ports::page::Page;
 use crate::ports::recovery_codes::RecoveryCodeHash;
 use crate::ports::sessions::{
@@ -264,6 +267,14 @@ impl BotReads for Reads {
 impl ModeReads for Reads {
     async fn find(&self, id: ModeId) -> Result<Option<StoredMode>, StoreError> {
         modes::find(&self.pool, id).await
+    }
+
+    async fn visible(
+        &self,
+        viewer: Actor,
+        page: Page<ModeId>,
+    ) -> Result<Vec<ListedMode>, StoreError> {
+        modes::visible(&self.pool, viewer, page).await
     }
 }
 
@@ -744,6 +755,23 @@ impl BotWrites for SqliteWriteTx {
 impl ModeWrites for SqliteWriteTx {
     async fn find(&mut self, id: ModeId) -> Result<Option<StoredMode>, StoreError> {
         modes::find(&mut *self.tx, id).await
+    }
+
+    async fn count_owned_by(&mut self, owner: UserId) -> Result<u32, StoreError> {
+        modes::count_owned_by(&mut self.tx, owner).await
+    }
+
+    async fn name_taken(
+        &mut self,
+        owner: UserId,
+        name: &ModeName,
+        shared: bool,
+    ) -> Result<bool, StoreError> {
+        modes::name_taken(&mut self.tx, owner, name, shared).await
+    }
+
+    async fn insert(&mut self, mode: &NewMode) -> Result<(), InsertModeError> {
+        modes::insert(&mut self.tx, mode).await
     }
 }
 

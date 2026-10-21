@@ -72,6 +72,7 @@ pub mod int;
 pub mod invites;
 pub mod me;
 pub mod mfa;
+pub mod modes;
 pub mod open;
 pub mod openapi;
 pub mod page;

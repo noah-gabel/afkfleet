@@ -54,6 +54,7 @@ pub mod link_flows;
 pub mod lockout;
 pub mod login;
 pub mod mfa;
+pub mod modes;
 pub mod session_tokens;
 pub mod users;
 pub mod vault;

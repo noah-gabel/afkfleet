@@ -1,0 +1,146 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT m.rowid AS \"rowid!: i64\", m.id AS \"id!\", m.owner_user_id AS \"owner_user_id?\",\n                  m.name AS \"name!\", m.visibility AS \"visibility!\",\n                  m.definition_json AS \"definition_json!\", m.version AS \"version!: i64\",\n                  m.created_at AS \"created_at!\", m.updated_at AS \"updated_at!\",\n                  u.role AS \"owner_role?\", u.username AS \"owner_name?\"\n           FROM modes m\n           LEFT JOIN users u ON u.id = m.owner_user_id\n           WHERE (? IS NULL OR m.id < ?)\n             AND (m.owner_user_id IS NULL\n                  OR m.visibility = 'shared'\n                  OR m.owner_user_id = ?\n                  OR ? = 'owner'\n                  OR (? = 'admin' AND u.role = 'member'))\n           ORDER BY m.id DESC\n           LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "owner_user_id?",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "owner_user_id"
+          }
+        }
+      },
+      {
+        "name": "name!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "visibility!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "visibility"
+          }
+        }
+      },
+      {
+        "name": "definition_json!",
+        "ordinal": 5,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "definition_json"
+          }
+        }
+      },
+      {
+        "name": "version!: i64",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "version"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "updated_at!",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "name": "owner_role?",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "name": "owner_name?",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 6
+    },
+    "nullable": [
+      false,
+      false,
+      true,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true
+    ]
+  },
+  "hash": "3433f30beb75d0d1e1fd73cec6373db26436adaef3777caa7b88950d63d32659"
+}

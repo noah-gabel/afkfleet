@@ -619,6 +619,33 @@ expression: answer.json()
         ],
         "type": "object"
       },
+      "CreateModeRequest": {
+        "additionalProperties": false,
+        "description": "`POST /modes`: a new mode, the caller's own.",
+        "properties": {
+          "name": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "steps": {
+            "description": "Its steps, at most 32, in the order they run when due together.",
+            "items": {
+              "$ref": "#/components/schemas/ModeStepRequest"
+            },
+            "type": "array"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/ModeVisibility",
+            "description": "Who may see it; a shared mode needs an Admin or the Owner."
+          }
+        },
+        "required": [
+          "name",
+          "visibility",
+          "steps"
+        ],
+        "type": "object"
+      },
       "CreateOfflineAccountRequest": {
         "additionalProperties": false,
         "description": "`POST /accounts/offline`: an offline account named `name`, while the\nserver allows them (`[accounts] allow_offline`).",
@@ -785,7 +812,8 @@ expression: answer.json()
           "bot_not_failed",
           "bot_not_online",
           "chat_unavailable",
-          "command_needs_step_up"
+          "command_needs_step_up",
+          "mode_needs_step_up"
         ],
         "type": "string"
       },
@@ -1273,6 +1301,332 @@ expression: answer.json()
           "expires_in"
         ],
         "type": "object"
+      },
+      "ModeAction": {
+        "description": "A step's action as its viewer may see it: its `type` and the fields that\ntype takes.",
+        "properties": {
+          "arguments_hidden": {
+            "description": "Whether a command's arguments were left out for this viewer (S15).",
+            "type": "boolean"
+          },
+          "max_pitch": {
+            "maximum": 90,
+            "minimum": 0,
+            "type": "number"
+          },
+          "max_yaw": {
+            "maximum": 180,
+            "minimum": 0,
+            "type": "number"
+          },
+          "message": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "on": {
+            "description": "`sneak` and `hold_use`: start or stop.",
+            "type": "boolean"
+          },
+          "pitch": {
+            "maximum": 90,
+            "minimum": -90,
+            "type": "number"
+          },
+          "slot": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ModeActionKind",
+            "description": "What it does."
+          },
+          "yaw": {
+            "maximum": 180,
+            "minimum": -180,
+            "type": "number"
+          }
+        },
+        "required": [
+          "type",
+          "arguments_hidden"
+        ],
+        "type": "object"
+      },
+      "ModeActionKind": {
+        "description": "What a step does: its action's `type` (ADR-0010).\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on one always keeps a default branch.",
+        "enum": [
+          "look",
+          "rotate_random",
+          "jump",
+          "sneak",
+          "swing_arm",
+          "use_item",
+          "hold_use",
+          "attack_facing_entity",
+          "select_hotbar_slot",
+          "send_chat"
+        ],
+        "type": "string"
+      },
+      "ModeActionRequest": {
+        "additionalProperties": false,
+        "description": "A step's action in a request: its `type` and the fields that type takes,\nno others (see `ModeActionKind`).",
+        "properties": {
+          "max_pitch": {
+            "maximum": 90,
+            "minimum": 0,
+            "type": "number"
+          },
+          "max_yaw": {
+            "maximum": 180,
+            "minimum": 0,
+            "type": "number"
+          },
+          "message": {
+            "maxLength": 256,
+            "type": "string"
+          },
+          "on": {
+            "description": "`sneak` and `hold_use`: start (true) or stop.",
+            "type": "boolean"
+          },
+          "pitch": {
+            "maximum": 90,
+            "minimum": -90,
+            "type": "number"
+          },
+          "slot": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ModeActionKind",
+            "description": "What it does."
+          },
+          "yaw": {
+            "maximum": 180,
+            "minimum": -180,
+            "type": "number"
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "ModeOwnership": {
+        "description": "Whose a mode is, as every viewer may know it (S14): who exactly owns\nsomeone else's is the mode's `owner`, for Admins and the Owner only.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on one always keeps a default branch.",
+        "enum": [
+          "built_in",
+          "mine",
+          "someone_else"
+        ],
+        "type": "string"
+      },
+      "ModePage": {
+        "description": "`GET /modes`: one page of the modes the caller may see, newest first.",
+        "properties": {
+          "items": {
+            "description": "The modes.",
+            "items": {
+              "$ref": "#/components/schemas/ModeResponse"
+            },
+            "type": "array"
+          },
+          "next": {
+            "maxLength": 36,
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "ModeResponse": {
+        "description": "A mode as its viewer may see it (S14, S15).",
+        "properties": {
+          "created_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "deletable": {
+            "description": "Whether the viewer may delete it.",
+            "type": "boolean"
+          },
+          "editable": {
+            "description": "Whether the viewer may change its name and steps.",
+            "type": "boolean"
+          },
+          "id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "owner": {
+            "$ref": "#/components/schemas/UserLabel",
+            "description": "Who owns it: for Admins and the Owner only (S14)."
+          },
+          "ownership": {
+            "$ref": "#/components/schemas/ModeOwnership",
+            "description": "Whose it is, as far as every viewer may know: built in, the\nviewer's, or someone else's (S14)."
+          },
+          "steps": {
+            "description": "Its steps. A viewer who may not edit it sees each command a chat\nstep sends as its `/` and name alone (S15).",
+            "items": {
+              "$ref": "#/components/schemas/ModeStep"
+            },
+            "type": "array"
+          },
+          "updated_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "version": {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/ModeVisibility",
+            "description": "Who may see it."
+          },
+          "visibility_editable": {
+            "description": "Whether the viewer may make it private if it's shared, or shared if\nit's private.",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "visibility",
+          "ownership",
+          "editable",
+          "deletable",
+          "visibility_editable",
+          "version",
+          "created_at",
+          "updated_at",
+          "steps"
+        ],
+        "type": "object"
+      },
+      "ModeSchedule": {
+        "description": "A step's schedule as its viewer sees it: its `type` and the fields that\ntype takes.",
+        "properties": {
+          "interval_ms": {
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "jitter_ms": {
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ModeScheduleKind",
+            "description": "When it runs."
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "ModeScheduleKind": {
+        "description": "When a step runs: its schedule's `type` (ADR-0010).\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on one always keeps a default branch.",
+        "enum": [
+          "at_start",
+          "every"
+        ],
+        "type": "string"
+      },
+      "ModeScheduleRequest": {
+        "additionalProperties": false,
+        "description": "A step's schedule in a request: its `type` and the fields that type\ntakes, no others (see `ModeScheduleKind`).",
+        "properties": {
+          "interval_ms": {
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "jitter_ms": {
+            "maximum": 4294967295,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "type": {
+            "$ref": "#/components/schemas/ModeScheduleKind",
+            "description": "When it runs."
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "ModeStep": {
+        "description": "One step of a mode as its viewer may see it.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ModeAction",
+            "description": "What it does."
+          },
+          "probability": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/ModeSchedule",
+            "description": "When it runs."
+          }
+        },
+        "required": [
+          "action",
+          "schedule",
+          "probability"
+        ],
+        "type": "object"
+      },
+      "ModeStepRequest": {
+        "additionalProperties": false,
+        "description": "One step of a mode in a request: what it does, when, and how likely.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/ModeActionRequest",
+            "description": "What it does."
+          },
+          "probability": {
+            "maximum": 255,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "schedule": {
+            "$ref": "#/components/schemas/ModeScheduleRequest",
+            "description": "When it runs."
+          }
+        },
+        "required": [
+          "action",
+          "schedule",
+          "probability"
+        ],
+        "type": "object"
+      },
+      "ModeVisibility": {
+        "description": "Who may see a mode: its owner (and those who manage the owner's\naccounts: the Owner, and Admins for Members' modes), or everyone. A\nbuilt-in mode is shared.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on one always keeps a default branch.",
+        "enum": [
+          "private",
+          "shared"
+        ],
+        "type": "string"
       },
       "PasswordChangeRequest": {
         "additionalProperties": false,
@@ -6264,6 +6618,346 @@ expression: answer.json()
         "tags": [
           "me"
         ]
+      }
+    },
+    "/api/v1/modes": {
+      "get": {
+        "operationId": "list_modes",
+        "parameters": [
+          {
+            "description": "Only items older than this ID: the `next` of the page before.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maxLength": 36,
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many items at most; 50 by default.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModePage"
+                }
+              }
+            },
+            "description": "One page of the modes the caller may see, newest first: the built-in and shared ones, their own, every Member's private one for an Admin, and every one for the Owner. A chat step's command shows its arguments only to a caller who may edit the mode."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A query that doesn't parse."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A `limit` outside 1 to 100."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/modes`: the modes the caller may see, newest first.",
+        "tags": [
+          "modes"
+        ]
+      },
+      "post": {
+        "operationId": "create_mode",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateModeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModeResponse"
+                }
+              }
+            },
+            "description": "The new mode, as its creator sees it."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A body of the wrong shape: an unknown field or `type`, a value of the wrong type, or a number its type can't hold. The answer never repeats what it read."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`mode_needs_step_up`: the steps send a command off the allowlist, which only `POST /modes/with-commands` takes, after a step-up; `forbidden`: a shared mode, which needs an Admin or the Owner."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`conflict`: the caller already owns 50 modes."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A field breaks its rule, named at its own path (`name`, `steps[3].action.message`): one error, the earliest step's first."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/modes`: a new mode of the caller's, whose steps send no\ncommand off the allowlist.",
+        "tags": [
+          "modes"
+        ]
+      }
+    },
+    "/api/v1/modes/with-commands": {
+      "post": {
+        "operationId": "create_mode_with_commands",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateModeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModeResponse"
+                }
+              }
+            },
+            "description": "The new mode, as its creator sees it."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A body of the wrong shape: an unknown field or `type`, a value of the wrong type, or a number its type can't hold. The answer never repeats what it read."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or a shared mode, which needs an Admin or the Owner."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`conflict`: the caller already owns 50 modes."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A field breaks its rule, named at its own path (`name`, `steps[3].action.message`): one error, the earliest step's first."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/modes/with-commands`: a new mode of the caller's, after a\nstep-up, whatever commands its steps send.",
+        "tags": [
+          "modes"
+        ],
+        "x-step-up": true
       }
     },
     "/api/v1/users": {

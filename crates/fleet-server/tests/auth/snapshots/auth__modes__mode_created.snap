@@ -1,0 +1,54 @@
+---
+source: crates/fleet-server/tests/auth/modes.rs
+expression: "redacted(&seen.body, &[(id.clone(), \"the mode\")])"
+---
+{
+  "created_at": "[T0]",
+  "deletable": true,
+  "editable": true,
+  "id": "[the mode]",
+  "name": "Grüße, „Farm“ #2!",
+  "ownership": "mine",
+  "steps": [
+    {
+      "action": {
+        "arguments_hidden": false,
+        "pitch": 12.0,
+        "type": "look",
+        "yaw": -90.5
+      },
+      "probability": 100,
+      "schedule": {
+        "type": "at_start"
+      }
+    },
+    {
+      "action": {
+        "arguments_hidden": false,
+        "slot": 8,
+        "type": "select_hotbar_slot"
+      },
+      "probability": 100,
+      "schedule": {
+        "type": "at_start"
+      }
+    },
+    {
+      "action": {
+        "arguments_hidden": false,
+        "message": "/spawn home",
+        "type": "send_chat"
+      },
+      "probability": 50,
+      "schedule": {
+        "interval_ms": 60000,
+        "jitter_ms": 5000,
+        "type": "every"
+      }
+    }
+  ],
+  "updated_at": "[T0]",
+  "version": 1,
+  "visibility": "private",
+  "visibility_editable": false
+}

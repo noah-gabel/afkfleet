@@ -53,6 +53,9 @@
 //! | `GET /api/v1/bots/{id}/chat` | user (View) | one page of the bot's chat, newest first, each line under its field rules |
 //! | `POST /api/v1/bots/{id}/chat` | user (Control; a command off the allowlist: pointed to `/command`) | a line for the bot to send: 200 sent, 202 pending |
 //! | `POST /api/v1/bots/{id}/command` | user + step-up (Control for an allowlisted command, Manage for any other) | a command for the bot to send: 200 sent, 202 pending |
+//! | `GET /api/v1/modes` | user | one page of the modes the user may see, each under its field rules |
+//! | `POST /api/v1/modes` | user (a shared mode: Admin+; steps sending a command off the allowlist: pointed to `/with-commands`) | a new mode of the user's: 201 |
+//! | `POST /api/v1/modes/with-commands` | user + step-up (a shared mode: Admin+) | a new mode of the user's, whatever its steps send: 201 |
 //! | `GET /api/openapi.json` | public | the `OpenAPI` document, only in dev mode ([`openapi`](super::openapi)) |
 //!
 //! The health routes have no `/api/v1` prefix. Both answer `200` with an
@@ -68,7 +71,7 @@ use axum::Router;
 use utoipa_axum::routes;
 
 use super::handlers::{
-    accounts, agents, auth, bots, chat, grants, health, invites, me, mfa, users,
+    accounts, agents, auth, bots, chat, grants, health, invites, me, mfa, modes, users,
 };
 use super::middleware::RequestIds;
 use super::openapi::ApiDocs;
@@ -85,6 +88,7 @@ use crate::app::invites::InviteService;
 use crate::app::link_flows::LinkFlowService;
 use crate::app::login::LoginService;
 use crate::app::mfa::MfaService;
+use crate::app::modes::ModeService;
 use crate::app::users::UserService;
 use crate::config::HttpConfig;
 
@@ -122,6 +126,8 @@ pub struct AppState {
     pub(crate) agents: AgentService,
     /// The bots: what each viewer sees of them, and what users change.
     pub(crate) bots: BotService,
+    /// The modes: what each viewer may see of them.
+    pub(crate) modes: ModeService,
 }
 
 /// Every service the handlers share, by name, so each one is a line of its
@@ -155,6 +161,8 @@ pub struct Services {
     pub agents: AgentService,
     /// The bots: what each viewer sees of them, and what users change.
     pub bots: BotService,
+    /// The modes: what each viewer may see of them.
+    pub modes: ModeService,
 }
 
 impl AppState {
@@ -175,6 +183,7 @@ impl AppState {
             enrollment_tokens,
             agents,
             bots,
+            modes,
         } = services;
         Self {
             health,
@@ -190,6 +199,7 @@ impl AppState {
             enrollment_tokens,
             agents,
             bots,
+            modes,
         }
     }
 }
@@ -250,6 +260,9 @@ pub fn api_routes(routes: Routes) -> Routes {
         .authed_route(RateClass::Standard, routes!(chat::history))
         .authed_route(RateClass::Standard, routes!(chat::send))
         .step_up_route(RateClass::Standard, routes!(chat::command))
+        .authed_route(RateClass::Standard, routes!(modes::list))
+        .authed_route(RateClass::Standard, routes!(modes::create))
+        .step_up_route(RateClass::Standard, routes!(modes::create_with_commands))
 }
 
 /// Every route with `state`, behind the middleware stack with the timeout,

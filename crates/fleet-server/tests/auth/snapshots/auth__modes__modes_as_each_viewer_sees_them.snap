@@ -1,0 +1,1508 @@
+---
+source: crates/fleet-server/tests/auth/modes.rs
+expression: "redacted(&serde_json::to_value(&seen).unwrap(), &ids)"
+---
+{
+  "admin": {
+    "items": [
+      {
+        "created_at": "[T0-15s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[Owner shared]",
+        "name": "Owner shared",
+        "owner": {
+          "id": "[theowner]",
+          "username": "theowner"
+        },
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "swing_arm"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 20000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[Demoted shared]",
+        "name": "Demoted shared",
+        "owner": {
+          "id": "[demoted]",
+          "username": "demoted"
+        },
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/login",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/msg",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 30000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": true,
+        "editable": true,
+        "id": "[Member private]",
+        "name": "Member private",
+        "owner": {
+          "id": "[member]",
+          "username": "member"
+        },
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "message": "/login hunter2-secret",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "message": "/msg Steve hunter2-secret",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 30000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "private",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": true,
+        "editable": true,
+        "id": "[Admin private]",
+        "name": "Admin private",
+        "owner": {
+          "id": "[admin]",
+          "username": "admin"
+        },
+        "ownership": "mine",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "swing_arm"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 20000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "private",
+        "visibility_editable": true
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": true,
+        "editable": true,
+        "id": "[Admin shared]",
+        "name": "Admin shared",
+        "owner": {
+          "id": "[admin]",
+          "username": "admin"
+        },
+        "ownership": "mine",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "message": "/login hunter2-secret",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "message": "/msg Steve hunter2-secret",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 30000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": true
+      },
+      {
+        "created_at": "[T0-7891215s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[farm]",
+        "name": "farm",
+        "ownership": "built_in",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "slot": 0,
+              "type": "select_hotbar_slot"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "attack_facing_entity"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 650,
+              "jitter_ms": 150,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-7891215s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-7891215s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[afk]",
+        "name": "afk",
+        "ownership": "built_in",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "max_pitch": 10.0,
+              "max_yaw": 30.0,
+              "type": "rotate_random"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 45000,
+              "jitter_ms": 75000,
+              "type": "every"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "swing_arm"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 20000,
+              "jitter_ms": 20000,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-7891215s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      }
+    ]
+  },
+  "demoted": {
+    "items": [
+      {
+        "created_at": "[T0-15s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[Owner shared]",
+        "name": "Owner shared",
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "swing_arm"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 20000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[Demoted shared]",
+        "name": "Demoted shared",
+        "ownership": "mine",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/login",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/msg",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 30000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[Admin shared]",
+        "name": "Admin shared",
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/login",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/msg",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 30000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-7891215s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[farm]",
+        "name": "farm",
+        "ownership": "built_in",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "slot": 0,
+              "type": "select_hotbar_slot"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "attack_facing_entity"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 650,
+              "jitter_ms": 150,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-7891215s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-7891215s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[afk]",
+        "name": "afk",
+        "ownership": "built_in",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "max_pitch": 10.0,
+              "max_yaw": 30.0,
+              "type": "rotate_random"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 45000,
+              "jitter_ms": 75000,
+              "type": "every"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "swing_arm"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 20000,
+              "jitter_ms": 20000,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-7891215s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      }
+    ]
+  },
+  "member": {
+    "items": [
+      {
+        "created_at": "[T0-15s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[Owner shared]",
+        "name": "Owner shared",
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "swing_arm"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 20000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[Demoted shared]",
+        "name": "Demoted shared",
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/login",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/msg",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 30000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": true,
+        "editable": true,
+        "id": "[Member private]",
+        "name": "Member private",
+        "ownership": "mine",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "message": "/login hunter2-secret",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "message": "/msg Steve hunter2-secret",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 30000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "private",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[Admin shared]",
+        "name": "Admin shared",
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/login",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/msg",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 30000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-7891215s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[farm]",
+        "name": "farm",
+        "ownership": "built_in",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "slot": 0,
+              "type": "select_hotbar_slot"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "attack_facing_entity"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 650,
+              "jitter_ms": 150,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-7891215s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-7891215s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[afk]",
+        "name": "afk",
+        "ownership": "built_in",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "max_pitch": 10.0,
+              "max_yaw": 30.0,
+              "type": "rotate_random"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 45000,
+              "jitter_ms": 75000,
+              "type": "every"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "swing_arm"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 20000,
+              "jitter_ms": 20000,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-7891215s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      }
+    ]
+  },
+  "other_admin": {
+    "items": [
+      {
+        "created_at": "[T0-15s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[Owner shared]",
+        "name": "Owner shared",
+        "owner": {
+          "id": "[theowner]",
+          "username": "theowner"
+        },
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "swing_arm"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 20000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[Demoted shared]",
+        "name": "Demoted shared",
+        "owner": {
+          "id": "[demoted]",
+          "username": "demoted"
+        },
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/login",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/msg",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 30000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": true,
+        "editable": true,
+        "id": "[Member private]",
+        "name": "Member private",
+        "owner": {
+          "id": "[member]",
+          "username": "member"
+        },
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "message": "/login hunter2-secret",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "message": "/msg Steve hunter2-secret",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 30000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "private",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[Admin shared]",
+        "name": "Admin shared",
+        "owner": {
+          "id": "[admin]",
+          "username": "admin"
+        },
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/login",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/msg",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 30000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-7891215s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[farm]",
+        "name": "farm",
+        "ownership": "built_in",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "slot": 0,
+              "type": "select_hotbar_slot"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "attack_facing_entity"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 650,
+              "jitter_ms": 150,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-7891215s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-7891215s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[afk]",
+        "name": "afk",
+        "ownership": "built_in",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "max_pitch": 10.0,
+              "max_yaw": 30.0,
+              "type": "rotate_random"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 45000,
+              "jitter_ms": 75000,
+              "type": "every"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "swing_arm"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 20000,
+              "jitter_ms": 20000,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-7891215s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      }
+    ]
+  },
+  "promoted": {
+    "items": [
+      {
+        "created_at": "[T0-15s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[Owner shared]",
+        "name": "Owner shared",
+        "owner": {
+          "id": "[theowner]",
+          "username": "theowner"
+        },
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "swing_arm"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 20000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": true,
+        "editable": true,
+        "id": "[Promoted private]",
+        "name": "Promoted private",
+        "owner": {
+          "id": "[promoted]",
+          "username": "promoted"
+        },
+        "ownership": "mine",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "swing_arm"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 20000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "private",
+        "visibility_editable": true
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[Demoted shared]",
+        "name": "Demoted shared",
+        "owner": {
+          "id": "[demoted]",
+          "username": "demoted"
+        },
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/login",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/msg",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 30000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": true,
+        "editable": true,
+        "id": "[Member private]",
+        "name": "Member private",
+        "owner": {
+          "id": "[member]",
+          "username": "member"
+        },
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "message": "/login hunter2-secret",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "message": "/msg Steve hunter2-secret",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 30000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "private",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[Admin shared]",
+        "name": "Admin shared",
+        "owner": {
+          "id": "[admin]",
+          "username": "admin"
+        },
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/login",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": true,
+              "message": "/msg",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 30000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-7891215s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[farm]",
+        "name": "farm",
+        "ownership": "built_in",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "slot": 0,
+              "type": "select_hotbar_slot"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "attack_facing_entity"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 650,
+              "jitter_ms": 150,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-7891215s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-7891215s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[afk]",
+        "name": "afk",
+        "ownership": "built_in",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "max_pitch": 10.0,
+              "max_yaw": 30.0,
+              "type": "rotate_random"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 45000,
+              "jitter_ms": 75000,
+              "type": "every"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "swing_arm"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 20000,
+              "jitter_ms": 20000,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-7891215s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      }
+    ]
+  },
+  "the_owner": {
+    "items": [
+      {
+        "created_at": "[T0-15s]",
+        "deletable": true,
+        "editable": true,
+        "id": "[Owner private]",
+        "name": "Owner private",
+        "owner": {
+          "id": "[theowner]",
+          "username": "theowner"
+        },
+        "ownership": "mine",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "swing_arm"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 20000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "private",
+        "visibility_editable": true
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": true,
+        "editable": true,
+        "id": "[Owner shared]",
+        "name": "Owner shared",
+        "owner": {
+          "id": "[theowner]",
+          "username": "theowner"
+        },
+        "ownership": "mine",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "swing_arm"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 20000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": true
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": true,
+        "editable": true,
+        "id": "[Promoted private]",
+        "name": "Promoted private",
+        "owner": {
+          "id": "[promoted]",
+          "username": "promoted"
+        },
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "swing_arm"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 20000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "private",
+        "visibility_editable": true
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": true,
+        "editable": true,
+        "id": "[Demoted shared]",
+        "name": "Demoted shared",
+        "owner": {
+          "id": "[demoted]",
+          "username": "demoted"
+        },
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "message": "/login hunter2-secret",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "message": "/msg Steve hunter2-secret",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 30000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": true
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": true,
+        "editable": true,
+        "id": "[Member private]",
+        "name": "Member private",
+        "owner": {
+          "id": "[member]",
+          "username": "member"
+        },
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "message": "/login hunter2-secret",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "message": "/msg Steve hunter2-secret",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 30000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "private",
+        "visibility_editable": true
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": true,
+        "editable": true,
+        "id": "[Admin private]",
+        "name": "Admin private",
+        "owner": {
+          "id": "[admin]",
+          "username": "admin"
+        },
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "swing_arm"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 20000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "private",
+        "visibility_editable": true
+      },
+      {
+        "created_at": "[T0-15s]",
+        "deletable": true,
+        "editable": true,
+        "id": "[Admin shared]",
+        "name": "Admin shared",
+        "owner": {
+          "id": "[admin]",
+          "username": "admin"
+        },
+        "ownership": "someone_else",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "message": "/login hunter2-secret",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "message": "/msg Steve hunter2-secret",
+              "type": "send_chat"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 30000,
+              "jitter_ms": 0,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-15s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": true
+      },
+      {
+        "created_at": "[T0-7891215s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[farm]",
+        "name": "farm",
+        "ownership": "built_in",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "slot": 0,
+              "type": "select_hotbar_slot"
+            },
+            "probability": 100,
+            "schedule": {
+              "type": "at_start"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "attack_facing_entity"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 650,
+              "jitter_ms": 150,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-7891215s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      },
+      {
+        "created_at": "[T0-7891215s]",
+        "deletable": false,
+        "editable": false,
+        "id": "[afk]",
+        "name": "afk",
+        "ownership": "built_in",
+        "steps": [
+          {
+            "action": {
+              "arguments_hidden": false,
+              "max_pitch": 10.0,
+              "max_yaw": 30.0,
+              "type": "rotate_random"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 45000,
+              "jitter_ms": 75000,
+              "type": "every"
+            }
+          },
+          {
+            "action": {
+              "arguments_hidden": false,
+              "type": "swing_arm"
+            },
+            "probability": 100,
+            "schedule": {
+              "interval_ms": 20000,
+              "jitter_ms": 20000,
+              "type": "every"
+            }
+          }
+        ],
+        "updated_at": "[T0-7891215s]",
+        "version": 1,
+        "visibility": "shared",
+        "visibility_editable": false
+      }
+    ]
+  }
+}

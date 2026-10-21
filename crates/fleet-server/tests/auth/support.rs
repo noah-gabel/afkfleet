@@ -32,6 +32,7 @@ use fleet_server::app::invites::InviteService;
 use fleet_server::app::lockout::LockoutService;
 use fleet_server::app::login::LoginService;
 use fleet_server::app::mfa::{MfaPorts, MfaService};
+use fleet_server::app::modes::ModeService;
 use fleet_server::app::users::UserService;
 use fleet_server::config::{Argon2Params, HttpConfig, RateLimitConfig};
 use fleet_server::grpc::registry::AgentRegistry;
@@ -664,6 +665,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         enrollment_tokens,
         agents,
         bots,
+        modes: mode_service(&clock, &random, &hooked, &settings.allowlist),
     });
     let app = app(state, &clock);
     insert_alice(&db, alice, alice_hash).await;
@@ -719,6 +721,21 @@ fn bot_service(
     .with_reconcile(Arc::clone(hints) as Arc<dyn Reconcile>)
     .with_chat_wait(chat_wait);
     (bots, events)
+}
+
+/// The modes' service as serve builds it, over `hooked`, with `allowlist`.
+fn mode_service(
+    clock: &ManualClock,
+    random: &SeededRandom,
+    hooked: &HookedStore,
+    allowlist: &CommandAllowlist,
+) -> ModeService {
+    ModeService::new(
+        Arc::new(clock.clone()),
+        Arc::new(random.clone()),
+        Arc::new(hooked.clone()),
+    )
+    .with_allowlist(allowlist.clone())
 }
 
 /// Stores Alice, a Member, with `hash`.

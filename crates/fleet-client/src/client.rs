@@ -29,10 +29,11 @@ use fleet_api_types::chat::{
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
+use fleet_api_types::modes::{CreateModeRequest, ModePage, ModeResponse};
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
 use fleet_api_types::{
-    AccountId, BotId, InviteId, LinkFlowId, PageQuery, SecretText, SessionId, UserId,
+    AccountId, BotId, InviteId, LinkFlowId, ModeId, PageQuery, SecretText, SessionId, UserId,
 };
 
 use crate::error::{BuildError, ClientError};
@@ -656,6 +657,48 @@ impl<S: SessionStore> Client<S> {
         request: &ChatCommandRequest,
     ) -> Result<ChatSendResponse, ClientError> {
         self.core.send_command(id, request).await
+    }
+
+    /// `GET /modes`: a page of the modes the caller may see, newest first,
+    /// each as the server shows it to them: who owns it only for Admins and
+    /// the Owner, what they may do with it, and a command's arguments only
+    /// when they may edit the mode.
+    ///
+    /// # Errors
+    /// The server's 422 (a `limit` outside 1 to 100), as
+    /// [`ClientError::Api`]; any other error as for every authenticated call.
+    pub async fn modes(&self, query: &PageQuery<ModeId>) -> Result<ModePage, ClientError> {
+        self.core.modes(query).await
+    }
+
+    /// `POST /modes`: a new mode of the caller's (201), whose steps send no
+    /// command off the server's allowlist; [`Client::create_mode_with_commands`]
+    /// takes one that does.
+    ///
+    /// # Errors
+    /// The server's 403 (`mode_needs_step_up` for a command off the
+    /// allowlist; `forbidden` for a shared mode below Admin), 409 (`conflict`:
+    /// the caller owns 50 modes) or 422 (a field that breaks its rule, at its
+    /// path), as [`ClientError::Api`]; any other error as for every
+    /// authenticated call.
+    pub async fn create_mode(
+        &self,
+        request: &CreateModeRequest,
+    ) -> Result<ModeResponse, ClientError> {
+        self.core.create_mode(request, false).await
+    }
+
+    /// `POST /modes/with-commands`: a new mode of the caller's (201), whatever
+    /// commands its steps send, after [`Client::step_up`] within 5 minutes.
+    ///
+    /// # Errors
+    /// As [`Client::create_mode`], and 403 `step_up_required` without a
+    /// fresh step-up instead of the pointer.
+    pub async fn create_mode_with_commands(
+        &self,
+        request: &CreateModeRequest,
+    ) -> Result<ModeResponse, ClientError> {
+        self.core.create_mode(request, true).await
     }
 }
 

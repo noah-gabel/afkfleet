@@ -100,6 +100,7 @@ use crate::app::link_flows::{LinkFlowPorts, LinkFlowService, LinkFlowSettings};
 use crate::app::lockout::LockoutService;
 use crate::app::login::LoginService;
 use crate::app::mfa::{MfaPorts, MfaService};
+use crate::app::modes::ModeService;
 use crate::app::session_tokens::{SessionTokenPorts, SessionTokenService};
 use crate::app::users::UserService;
 use crate::config::{HttpConfig, ServerConfig};
@@ -473,6 +474,8 @@ pub fn app_with(
     // send waits for its answer there (ADR-0020, S5).
     let events = EventBus::new();
     let bots = bot_service(config, &clock, &random, &store, &agents, &events, reconcile);
+    let modes = ModeService::new(Arc::clone(&clock), Arc::clone(&random), Arc::clone(&store))
+        .with_allowlist(config.chat.command_allowlist.clone());
     let shutdown = CancellationToken::new();
     let (enrollment_tokens, grpc) = control_plane_services(
         config,
@@ -506,6 +509,7 @@ pub fn app_with(
         enrollment_tokens,
         agents: agent_service,
         bots,
+        modes,
     });
     App {
         router: router(

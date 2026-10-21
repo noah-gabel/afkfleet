@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT rowid AS \"rowid!: i64\", id AS \"id!\", owner_user_id AS \"owner_user_id?\",\n                  visibility AS \"visibility!\", definition_json AS \"definition_json!\",\n                  version AS \"version!: i64\", created_at AS \"created_at!\",\n                  updated_at AS \"updated_at!\"\n           FROM modes WHERE id = ?",
+  "query": "SELECT rowid AS \"rowid!: i64\", id AS \"id!\", owner_user_id AS \"owner_user_id?\",\n                  name AS \"name!\", visibility AS \"visibility!\", definition_json AS \"definition_json!\",\n                  version AS \"version!: i64\", created_at AS \"created_at!\",\n                  updated_at AS \"updated_at!\"\n           FROM modes WHERE id = ?",
   "describe": {
     "columns": [
       {
@@ -37,8 +37,19 @@
         }
       },
       {
-        "name": "visibility!",
+        "name": "name!",
         "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "modes",
+            "name": "name"
+          }
+        }
+      },
+      {
+        "name": "visibility!",
+        "ordinal": 4,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -49,7 +60,7 @@
       },
       {
         "name": "definition_json!",
-        "ordinal": 4,
+        "ordinal": 5,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -60,7 +71,7 @@
       },
       {
         "name": "version!: i64",
-        "ordinal": 5,
+        "ordinal": 6,
         "type_info": "Integer",
         "origin": {
           "Table": {
@@ -71,7 +82,7 @@
       },
       {
         "name": "created_at!",
-        "ordinal": 6,
+        "ordinal": 7,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -82,7 +93,7 @@
       },
       {
         "name": "updated_at!",
-        "ordinal": 7,
+        "ordinal": 8,
         "type_info": "Text",
         "origin": {
           "Table": {
@@ -103,8 +114,9 @@
       false,
       false,
       false,
+      false,
       false
     ]
   },
-  "hash": "66831c2bb4a9e25866854991355fee53dc7370cfdfead3926dbdfb6bef16ec4e"
+  "hash": "add814f6da3ad154a7206b9427e27321af894201540b240bb3973d28da5e9913"
 }

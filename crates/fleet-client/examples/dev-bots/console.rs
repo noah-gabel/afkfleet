@@ -1,10 +1,12 @@
-//! The dev console's logic (Plan.md P10.7; ADR-0019, S71): log in with the
-//! password and a 2FA code, typed hidden, then commands for the bot
-//! endpoints, until `quit` or the end of input, which log out.
+//! The dev console's logic (Plan.md P10.7, P11.4; ADR-0019, S71): log in
+//! with the password and a 2FA code, typed hidden, then commands for the bot
+//! and mode endpoints, until `quit` or the end of input, which log out.
 //!
 //! It prints IDs, names, states and the server's answers; never a token,
 //! the password or a code, never a line it didn't understand, and never a
-//! chat line typed into it back. `history` shows a bot's chat as the server
+//! chat line typed into it back, nor a mode's steps: `new-mode` takes a
+//! mode's JSON and shows only its line, and JSON that isn't a mode is said
+//! so, never repeated. `history` shows a bot's chat as the server
 //! sends it to this user: cleaned, a line break as ` | `, a command's
 //! arguments only for Manage holders (ADR-0020, S9, S11, U3).
 
@@ -13,11 +15,12 @@ use std::io;
 
 use fleet_api_types::accounts::CreateOfflineAccountRequest;
 use fleet_api_types::auth::{LoginRequest, StepUpRequest};
-use fleet_api_types::bots::{BotPatchRequest, BotResponse, BotStatus};
+use fleet_api_types::bots::{BotModeRequest, BotPatchRequest, BotResponse, BotStatus};
 use fleet_api_types::chat::{
     ChatCommandRequest, ChatLine, ChatPageQuery, ChatSendOutcome, ChatSendRequest, ChatSendResponse,
 };
-use fleet_api_types::{BotId, ErrorCode, PageQuery, SafeInt, SecretText};
+use fleet_api_types::modes::{CreateModeRequest, ModeOwnership, ModeResponse, ModeVisibility};
+use fleet_api_types::{BotId, ErrorCode, ModeId, PageQuery, SafeInt, SecretText};
 use fleet_client::{Client, ClientError, LoginStep, SessionStore};
 use secrecy::{ExposeSecret as _, SecretString};
 
@@ -55,7 +58,7 @@ pub(crate) fn arguments(args: &[String]) -> Option<(&str, &str)> {
 }
 
 /// The commands, as the console lists them.
-pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | history <id> [before] | quit";
+pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | mode <id> <mode> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | history <id> [before] | modes | new-mode <json> | quit";
 
 /// How many 2FA codes a login may try.
 const CODES: usize = 3;
@@ -86,6 +89,12 @@ enum Command {
     Slash(BotId, String),
     /// One page of a bot's chat: the newest, or the one before a line.
     History(BotId, Option<SafeInt>),
+    /// A bot's mode.
+    SetMode(BotId, ModeId),
+    /// Every mode the user may see.
+    Modes,
+    /// A new mode: the rest of the line, as typed, its JSON.
+    NewMode(String),
     Quit,
 }
 
@@ -104,8 +113,20 @@ impl Command {
                 _ => {}
             }
         }
+        // A new mode's JSON is the rest of the line, as typed.
+        if let Some(("new-mode", json)) = line
+            .trim_start()
+            .split_once(char::is_whitespace)
+            .filter(|(_, json)| !json.trim().is_empty())
+        {
+            return Some(Self::NewMode(json.to_owned()));
+        }
         let words: Vec<&str> = line.split_whitespace().collect();
         match words.as_slice() {
+            ["modes"] => Some(Self::Modes),
+            ["mode", id, mode] => bot(id)
+                .zip(mode.parse::<ModeId>().ok())
+                .map(|(id, mode)| Self::SetMode(id, mode)),
             ["bots"] => Some(Self::Bots),
             ["bot", id] => bot(id).map(Self::Bot),
             ["offline", name] => Some(Self::Offline((*name).to_owned())),
@@ -260,6 +281,12 @@ async fn command_of<S: SessionStore>(
             .map(|answer| terminal.say(&answer_of(&answer))),
         Command::Slash(id, text) => send_command(client, id, text, terminal).await,
         Command::History(id, before) => history(client, id, before, terminal).await,
+        Command::SetMode(id, mode) => client
+            .set_bot_mode(id, &BotModeRequest { mode_id: mode })
+            .await
+            .map(|bot| terminal.say(&line_of(&bot))),
+        Command::Modes => modes(client, terminal).await,
+        Command::NewMode(json) => new_mode(client, &json, terminal).await,
         Command::Quit => Ok(()),
     };
     match done {
@@ -391,6 +418,77 @@ async fn offline<S: SessionStore>(
     }
     terminal.say(&format!("account {} ({})", account.id, account.name));
     Ok(())
+}
+
+/// Every page of the modes the user may see, one line each.
+async fn modes<S: SessionStore>(
+    client: &Client<S>,
+    terminal: &mut impl Terminal,
+) -> Result<(), ClientError> {
+    let mut before = None;
+    loop {
+        let page = client
+            .modes(&PageQuery {
+                before,
+                limit: None,
+            })
+            .await?;
+        for mode in &page.items {
+            terminal.say(&mode_line_of(mode));
+        }
+        match page.next {
+            Some(next) => before = Some(next),
+            None => break,
+        }
+    }
+    Ok(())
+}
+
+/// Creates the mode `json` holds, through the step-up route after the
+/// password again when its steps send a command off the allowlist, once.
+/// JSON that isn't a mode is said so, never repeated: serde's message would
+/// quote it, and its chat lines with it.
+async fn new_mode<S: SessionStore>(
+    client: &Client<S>,
+    json: &str,
+    terminal: &mut impl Terminal,
+) -> Result<(), ClientError> {
+    let Ok(request) = serde_json::from_str::<CreateModeRequest>(json) else {
+        terminal.say(
+            "not a mode's JSON: {\"name\", \"visibility\", \"steps\"}, as the README shows; nothing was sent",
+        );
+        return Ok(());
+    };
+    let mode = match client.create_mode(&request).await {
+        Err(ClientError::Api(failure)) if failure.is(ErrorCode::ModeNeedsStepUp) => {
+            if !stepped_up(client, terminal).await? {
+                return Ok(());
+            }
+            client.create_mode_with_commands(&request).await?
+        }
+        other => other?,
+    };
+    terminal.say(&mode_line_of(&mode));
+    Ok(())
+}
+
+/// One mode as a line: `mode <id> <name> <kind>`, then ` mine` and
+/// ` editable` when they hold; never its steps.
+fn mode_line_of(mode: &ModeResponse) -> String {
+    let kind = match (mode.ownership.known(), mode.visibility.known()) {
+        (Some(ModeOwnership::BuiltIn), _) => "built-in",
+        (_, Some(ModeVisibility::Private)) => "private",
+        (_, Some(ModeVisibility::Shared)) => "shared",
+        (_, None) => mode.visibility.as_str(),
+    };
+    let mut shown = format!("mode {} {} {kind}", mode.id, mode.name);
+    if mode.ownership.known() == Some(ModeOwnership::Mine) {
+        shown.push_str(" mine");
+    }
+    if mode.editable {
+        shown.push_str(" editable");
+    }
+    shown
 }
 
 /// Sends bot `id` the command `text`, with a step-up when the server asks,
@@ -632,11 +730,18 @@ mod tests {
         mine.sent_by = by.sent_by.clone();
         let unnamed = a_line("user", "hello again");
         let newer = a_line("shout", "a kind this console doesn't know");
+        let mut emote = a_line("emote", "waves");
+        emote.sender = serde_json::from_value(serde_json::json!({ "name": "Alex" })).unwrap();
+        let mut announced = a_line("announcement", "restart soon");
+        announced.sender = serde_json::from_value(serde_json::json!({ "name": "Server" })).unwrap();
+        let system = a_line("system", "Steve joined the game");
 
-        let shown: Vec<String> = [steve, cut, mode, by, mine, unnamed, newer]
-            .iter()
-            .map(chat_line_of)
-            .collect();
+        let shown: Vec<String> = [
+            steve, cut, mode, by, mine, unnamed, newer, emote, announced, system,
+        ]
+        .iter()
+        .map(chat_line_of)
+        .collect();
 
         let at = "#41 2027-01-15T08:00:01.000Z";
         assert_eq!(
@@ -649,8 +754,79 @@ mod tests {
                 format!("{at} user by you: /spawn"),
                 format!("{at} user: hello again"),
                 format!("{at} shout: a kind this console doesn't know"),
+                format!("{at} emote Alex: waves"),
+                format!("{at} announcement Server: restart soon"),
+                format!("{at} system: Steve joined the game"),
             ]
         );
+    }
+
+    #[test]
+    fn the_mode_verbs_take_their_ids_and_new_mode_the_rest_of_the_line() {
+        let id = "018bcfe5-6800-7bab-abab-abababababab";
+        let bot: BotId = id.parse().unwrap();
+        let farm = "01a14202-2800-7000-8000-000000000002";
+        let mode: ModeId = farm.parse().unwrap();
+        let json = r#"{"name": "My mode", "steps": []}"#;
+
+        assert_eq!(Command::parse("modes"), Some(Command::Modes));
+        assert_eq!(
+            Command::parse(&format!("mode {id} {farm}")),
+            Some(Command::SetMode(bot, mode))
+        );
+        assert_eq!(
+            Command::parse(&format!("new-mode {json}")),
+            Some(Command::NewMode(json.to_owned()))
+        );
+        assert_eq!(Command::parse("new-mode"), None);
+        assert_eq!(Command::parse("new-mode   "), None);
+        assert_eq!(Command::parse(&format!("mode {id}")), None);
+        assert_eq!(Command::parse(&format!("mode {id} not-a-mode")), None);
+        assert_eq!(Command::parse("modes now"), None);
+    }
+
+    fn a_mode(ownership: &str, visibility: &str, editable: bool) -> ModeResponse {
+        serde_json::from_value(serde_json::json!({
+            "id": "018bcfe5-6800-7cdc-8dcd-cdcdcdcdcdcd",
+            "name": "Fishing trip",
+            "visibility": visibility,
+            "ownership": ownership,
+            "editable": editable,
+            "deletable": editable,
+            "visibility_editable": false,
+            "version": 1,
+            "created_at": "2027-01-15T08:00:00.000Z",
+            "updated_at": "2027-01-15T08:00:00.000Z",
+            "steps": [{ "action": { "type": "send_chat", "message": "/login hunter2", "arguments_hidden": false }, "schedule": { "type": "at_start" }, "probability": 100 }],
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_mode_line_shows_its_id_name_kind_and_marks_never_its_steps() {
+        let shown: Vec<String> = [
+            a_mode("built_in", "shared", false),
+            a_mode("mine", "private", true),
+            a_mode("mine", "shared", false),
+            a_mode("someone_else", "shared", true),
+            a_mode("someone_else", "public", false),
+        ]
+        .iter()
+        .map(mode_line_of)
+        .collect();
+
+        let id = "mode 018bcfe5-6800-7cdc-8dcd-cdcdcdcdcdcd Fishing trip";
+        assert_eq!(
+            shown,
+            [
+                format!("{id} built-in"),
+                format!("{id} private mine editable"),
+                format!("{id} shared mine"),
+                format!("{id} shared editable"),
+                format!("{id} public"),
+            ]
+        );
+        assert!(shown.iter().all(|line| !line.contains("hunter2")));
     }
 
     #[test]

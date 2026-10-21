@@ -85,7 +85,7 @@ impl Stream {
 impl Setup {
     /// The offline account `AfkBot<n>` of `owner`, created now, with its bot
     /// (no server, `afk`, stopped).
-    async fn bot_of(&self, owner: UserId, n: u8) -> (AccountId, BotId) {
+    pub(super) async fn bot_of(&self, owner: UserId, n: u8) -> (AccountId, BotId) {
         let account = AccountId::new_v7(at(T0 + i64::from(n)), [n; 10]).unwrap();
         // Minted right after its account's, as every bot is (S35).
         let bot = BotId::new_v7(at(T0 + i64::from(n)), [n.wrapping_add(100); 10]).unwrap();
@@ -113,7 +113,13 @@ impl Setup {
     }
 
     /// A grant of `level` on `account` to `user`.
-    async fn share(&self, account: AccountId, user: UserId, level: GrantLevel, by: UserId) {
+    pub(super) async fn share(
+        &self,
+        account: AccountId,
+        user: UserId,
+        level: GrantLevel,
+        by: UserId,
+    ) {
         let mut tx = self.db.write().await.unwrap();
         tx.grants()
             .insert(&AccountGrant {
@@ -283,17 +289,20 @@ impl Setup {
         .await
     }
 
-    /// A mode of `owner` with `visibility`, sending `/home` at start.
+    /// A mode of `owner` with `visibility`, sending `/home` at start, named
+    /// `home <n>` so no two modes share a name (S13).
     async fn custom_mode(&self, n: u8, owner: UserId, visibility: &str) -> ModeId {
         let id = ModeId::new_v7(at(T0), [n; 10]).unwrap();
         let text = id.to_string();
         let owner = owner.to_string();
+        let name = format!("home {n}");
         let definition = r#"{"steps":[{"action":{"type":"send_chat","message":"/home"},"schedule":{"type":"at_start"},"probability":100}]}"#;
         sqlx::query!(
             "INSERT INTO modes (id, owner_user_id, name, visibility, definition_json, version, created_at, updated_at)
-             VALUES (?, ?, 'home', ?, ?, 1, '2027-01-15T08:00:00.000Z', '2027-01-15T08:00:00.000Z')",
+             VALUES (?, ?, ?, ?, ?, 1, '2027-01-15T08:00:00.000Z', '2027-01-15T08:00:00.000Z')",
             text,
             owner,
+            name,
             visibility,
             definition
         )

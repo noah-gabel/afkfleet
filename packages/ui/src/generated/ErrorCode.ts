@@ -6,4 +6,4 @@
  * others, so code that branches on a code always keeps a default branch that
  * shows the message and the request ID.
  */
-export type ErrorCode = "bad_request" | "unauthorized" | "invalid_credentials" | "forbidden" | "step_up_required" | "not_found" | "method_not_allowed" | "timeout" | "conflict" | "payload_too_large" | "unsupported_media_type" | "validation_failed" | "rate_limited" | "internal" | "busy" | "bot_unreachable" | "bot_not_running" | "bot_not_paused" | "bot_not_failed" | "bot_not_online" | "chat_unavailable" | "command_needs_step_up";
+export type ErrorCode = "bad_request" | "unauthorized" | "invalid_credentials" | "forbidden" | "step_up_required" | "not_found" | "method_not_allowed" | "timeout" | "conflict" | "payload_too_large" | "unsupported_media_type" | "validation_failed" | "rate_limited" | "internal" | "busy" | "bot_unreachable" | "bot_not_running" | "bot_not_paused" | "bot_not_failed" | "bot_not_online" | "chat_unavailable" | "command_needs_step_up" | "mode_needs_step_up";

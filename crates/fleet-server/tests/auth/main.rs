@@ -20,6 +20,7 @@
 //! - [`register`]: an invite registers one user; reuse, expiry and every
 //!   other unusable invite; the checks' order and the races.
 //! - [`me`]: the profile and the wrong codes since the previous login.
+//! - [`modes`]: the modes each viewer sees, under their field rules.
 //! - [`password`]: a new password after stepping up, and its re-checks.
 //! - [`sessions`]: the live sessions, and ending another one.
 //!
@@ -38,6 +39,7 @@ mod invites;
 mod login;
 mod logout;
 mod me;
+mod modes;
 mod password;
 mod refresh;
 mod register;
