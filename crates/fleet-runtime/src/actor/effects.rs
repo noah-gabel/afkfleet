@@ -120,6 +120,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             self.arm_watchdog();
         } else {
             self.respawn = None;
+            self.death_open = false;
             self.watchdog = None;
         }
     }
@@ -242,6 +243,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
     fn disconnect(&mut self) {
         self.session_events = None;
         self.respawn = None;
+        self.death_open = false;
         self.watchdog = None;
         if let Some(session) = self.session.take() {
             self.close_session(session);
@@ -337,11 +339,13 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
         self.queue.close();
     }
 
-    /// Starts the respawn retry for the current session.
+    /// Starts the respawn retry for the current session, which runs until
+    /// the server confirms the respawn (ADR-0020, S23).
     fn start_respawn(&mut self) {
         let Some(session) = &self.session else {
             return;
         };
+        self.death_open = true;
         self.respawn = Some(Box::pin(respawn(
             session.handle.clone(),
             self.config.respawn_interval,

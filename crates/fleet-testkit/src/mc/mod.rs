@@ -17,7 +17,12 @@
 //! can rely on the same guarantees as against fleet-mc:
 //! - after a terminal event (`Disconnected` or `ConnectionFailed`), or once
 //!   the session is torn down, [`SessionEvents::next`] returns `None`;
-//! - `Died` comes at most once until [`SessionHandle::respawn`];
+//! - `Died` comes at most once until `Respawned`, which comes at most once
+//!   per `Died`, and only after the code under test read that `Died` and
+//!   called [`SessionHandle::respawn`] since (ADR-0020, S22). The fake
+//!   confirms such a respawn at once, as a cooperative server would;
+//!   [`SessionController::withhold_respawns`] models a server that's slow
+//!   or ignores the request;
 //! - when the bounded event queue is full, only `Chat` is dropped, and it's
 //!   counted.
 //!

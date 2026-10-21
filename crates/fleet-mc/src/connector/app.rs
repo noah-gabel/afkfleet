@@ -1,7 +1,7 @@
 //! A session's Bevy App, as ADR-0008 §1 and §3 decided: azalea's plugins
 //! without auto-reconnect and auto-respawn, the packet-liveness and
-//! chat-signing plugins, the bot's event channel, and the single-threaded
-//! executor on every schedule.
+//! chat-signing plugins, the respawn watch (ADR-0020, S22), the bot's event
+//! channel, and the single-threaded executor on every schedule.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -19,7 +19,7 @@ use azalea::{DefaultPlugins, Event};
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use crate::events::{LivenessStamps, PacketLivenessPlugin};
+use crate::events::{LivenessStamps, PacketLivenessPlugin, RespawnWatchPlugin};
 use crate::signing::SigningPlugin;
 
 /// The channel azalea's `LocalPlayerEvents` sends a session's events on. The
@@ -33,14 +33,16 @@ pub(super) fn event_channel() -> (mpsc::UnboundedSender<Event>, mpsc::UnboundedR
 }
 
 /// Builds the App of one session. `events` becomes the bot's
-/// `LocalPlayerEvents` when azalea spawns it, and `signing` publishes where
-/// its chat signing is. `extra` adds to the App before the executor is set,
-/// so whatever it adds runs single-threaded too (the fault-injection hook's
-/// systems, in the slow tests).
+/// `LocalPlayerEvents` when azalea spawns it, `signing` publishes where its
+/// chat signing is, and `respawns` confirms the respawns the session asks
+/// for. `extra` adds to the App before the executor is set, so whatever it
+/// adds runs single-threaded too (the fault-injection hook's systems, in the
+/// slow tests).
 pub(super) fn build_app(
     stamps: Arc<LivenessStamps>,
     events: mpsc::UnboundedSender<Event>,
     signing: SigningPlugin,
+    respawns: RespawnWatchPlugin,
     extra: impl FnOnce(&mut App),
 ) -> App {
     let mut app = App::new();
@@ -53,6 +55,7 @@ pub(super) fn build_app(
             .disable::<AutoRespawnPlugin>(),
         PacketLivenessPlugin(stamps),
         signing,
+        respawns,
     ));
     give_events_to_the_bot(&mut app, events);
     extra(&mut app);
@@ -121,15 +124,29 @@ mod tests {
         }
     }
 
+    /// The respawn watch of a bridge nobody reads.
+    fn respawns() -> RespawnWatchPlugin {
+        let (sink, _events) = crate::events::bridge(
+            "018bcfe5-6800-7bab-abab-abababababab".parse().unwrap(),
+            core::num::NonZeroUsize::MIN,
+            Arc::default(),
+            stamps(),
+        );
+        RespawnWatchPlugin(sink.control())
+    }
+
     fn app() -> App {
         let (events, _) = event_channel();
-        build_app(stamps(), events, signing(), |_| {})
+        build_app(stamps(), events, signing(), respawns(), |_| {})
     }
 
     /// A session's App and the receiver of its bot's events.
     fn listening_app() -> (App, mpsc::UnboundedReceiver<Event>) {
         let (events, receiver) = event_channel();
-        (build_app(stamps(), events, signing(), |_| {}), receiver)
+        (
+            build_app(stamps(), events, signing(), respawns(), |_| {}),
+            receiver,
+        )
     }
 
     /// Every schedule's executor kind.
@@ -159,7 +176,7 @@ mod tests {
     #[test]
     fn what_extra_adds_runs_single_threaded_too() {
         let (events, _) = event_channel();
-        let app = build_app(stamps(), events, signing(), |app| {
+        let app = build_app(stamps(), events, signing(), respawns(), |app| {
             for (_, schedule) in app.world_mut().resource_mut::<Schedules>().iter_mut() {
                 schedule.set_executor_kind(ExecutorKind::MultiThreaded);
             }

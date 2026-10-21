@@ -30,10 +30,12 @@ pub struct RuntimeConfig {
     /// refused instead of waiting.
     pub actor_inbox: NonZeroUsize,
     /// How long the actor waits after a failed respawn before it calls
-    /// again.
+    /// again, and for the server to confirm one that went out: an `Ok` not
+    /// confirmed by then counts as a failure (ADR-0020, S23).
     pub respawn_interval: Duration,
-    /// After this many failed respawn calls in a row, the session ends with
-    /// `RespawnFailed`, so the bot respawns when it joins again.
+    /// After this many failed or unconfirmed respawn calls in a row, the
+    /// session ends with `RespawnFailed`, so the bot respawns when it joins
+    /// again.
     pub respawn_attempts: NonZeroU32,
     /// How many ready session events the actor applies, at most, before an
     /// input that ends the session, so a duplicate-login kick that's already
@@ -41,9 +43,11 @@ pub struct RuntimeConfig {
     ///
     /// fleet-mc's event queue holds 64 events before it drops chat, but it
     /// always admits a lifecycle event, and the port contract allows at most
-    /// 3 of those pending at once: `Joined`, one `Died` until the respawn,
-    /// and one terminal event. The queue is first in, first out, so 64 + 3
-    /// reads always reach every event that was queued when the input came.
+    /// 3 of those pending at once: `Joined` or `Respawned`, one `Died`, and
+    /// one terminal event (`Respawned` comes once per `Died`, only after the
+    /// actor read it; ADR-0020, S22). The queue is first in, first out, so
+    /// 64 + 3 reads always reach every event that was queued when the input
+    /// came.
     pub session_drain: NonZeroUsize,
     /// While the bot is Online, a session that hasn't ticked for this long
     /// has hung: `WatchdogTimeout` (Appendix A's

@@ -35,7 +35,7 @@
 //!             SessionEvent::Died => {
 //!                 let _ = session.respawn().await;
 //!             }
-//!             SessionEvent::Chat(_) => {}
+//!             SessionEvent::Respawned | SessionEvent::Chat(_) => {}
 //!             SessionEvent::Disconnected(_) | SessionEvent::ConnectionFailed(_) => break,
 //!         }
 //!     }

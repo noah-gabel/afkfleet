@@ -57,7 +57,8 @@ pub(crate) enum Delivery {
     ActionBarIgnored,
     /// A death before `Joined`: held until the bot has joined.
     DeathHeld,
-    /// A death already reported and not yet answered with a respawn.
+    /// A death already reported and not yet answered with a confirmed
+    /// respawn.
     DuplicateDeath,
     /// Nothing the session reports, such as a second spawn.
     Ignored,
@@ -130,16 +131,22 @@ pub(crate) enum Phase {
     Closed,
 }
 
-/// The death the session has reported, if any.
+/// The death the session has reported, if any (ADR-0020, S22).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Death {
-    /// None since the last respawn.
+    /// None since the last confirmed respawn.
     #[default]
     None,
     /// The bot died before `Joined`; `Died` is queued right after it.
     Held,
-    /// `Died` was queued and not yet answered with a respawn.
+    /// `Died` was queued and not yet read.
     Reported,
+    /// The actor read `Died`; `requested` once the session asked for a
+    /// respawn since.
+    Taken {
+        /// Whether a respawn was asked for since `Died` was read.
+        requested: bool,
+    },
 }
 
 impl State {
@@ -210,11 +217,44 @@ impl State {
         true
     }
 
-    /// The bot respawned, so its next death is reported again.
-    fn respawned(&mut self) {
-        if self.death == Death::Reported {
-            self.death = Death::None;
+    /// The session asked for a respawn; `loaded_and_alive` says whether
+    /// the bot is already back (ADR-0020, S22).
+    /// A request counts only once the actor read the `Died`; a stale call
+    /// (before the read, or with no death) records nothing.
+    fn respawn_asked(&mut self, loaded_and_alive: bool) -> Delivery {
+        if matches!(self.phase, Phase::Ended | Phase::Closed) {
+            return Delivery::SessionEnded;
         }
+        let Death::Taken { .. } = self.death else {
+            return Delivery::Ignored;
+        };
+        self.death = Death::Taken { requested: true };
+        if loaded_and_alive {
+            self.confirm()
+        } else {
+            Delivery::Ignored
+        }
+    }
+
+    /// The bot's entity was loaded again without being dead (ADR-0020,
+    /// S22): confirms a respawn asked for, if one is pending.
+    fn loaded_and_alive(&mut self) -> Delivery {
+        if matches!(self.phase, Phase::Ended | Phase::Closed) {
+            return Delivery::SessionEnded;
+        }
+        if self.death == (Death::Taken { requested: true }) {
+            self.confirm()
+        } else {
+            Delivery::Ignored
+        }
+    }
+
+    /// Queues `Respawned`, once per `Died`: the next death is reported
+    /// again.
+    fn confirm(&mut self) -> Delivery {
+        self.death = Death::None;
+        self.queue.push_back(SessionEvent::Respawned);
+        Delivery::Queued
     }
 
     /// Tears the bridge down and drops what's queued.
@@ -229,6 +269,13 @@ impl State {
             return Next::End;
         }
         match self.queue.pop_front() {
+            Some(SessionEvent::Died) => {
+                // Read now: a respawn asked for from here on counts.
+                if self.death == Death::Reported {
+                    self.death = Death::Taken { requested: false };
+                }
+                Next::Event(SessionEvent::Died)
+            }
             Some(event) => Next::Event(event),
             None if self.phase == Phase::Ended => Next::End,
             None => Next::Wait,
@@ -297,8 +344,14 @@ impl Shared {
         ended
     }
 
-    fn respawned(&self) {
-        self.lock().respawned();
+    /// Applies a respawn signal with `apply`, waking the consumer when it
+    /// queued `Respawned`.
+    fn respawn_signal(&self, apply: impl FnOnce(&mut State) -> Delivery) -> Delivery {
+        let delivery = apply(&mut self.lock());
+        if delivery == Delivery::Queued {
+            self.ready.notify_one();
+        }
+        delivery
     }
 
     fn close(&self) {
@@ -383,9 +436,9 @@ impl EventSink {
 }
 
 /// The owner's side of a session's bridge: it reads the phase, learns of
-/// respawns and tears the bridge down. Unlike an [`EventSink`], dropping it
-/// doesn't end the session, so the owner can hold one without hiding a lost
-/// host thread.
+/// respawns asked for and of loads (ADR-0020, S22) and tears the bridge
+/// down. Unlike an [`EventSink`], dropping it doesn't end the session, so
+/// the owner can hold one without hiding a lost host thread.
 #[derive(Debug, Clone)]
 pub(crate) struct BridgeControl {
     shared: Arc<Shared>,
@@ -397,9 +450,21 @@ impl BridgeControl {
         self.shared.phase()
     }
 
-    /// The bot respawned, so its next death is reported again.
-    pub(crate) fn respawned(&self) {
-        self.shared.respawned();
+    /// The session asked the server to respawn the bot; `loaded_and_alive`
+    /// says whether its entity is loaded and not dead right now (a server
+    /// that respawned it by itself). A request counts only after the actor
+    /// read the `Died`; `Respawned` follows once the bot is back (ADR-0020,
+    /// S22).
+    pub(crate) fn respawn_asked(&self, loaded_and_alive: bool) -> Delivery {
+        self.shared
+            .respawn_signal(|state| state.respawn_asked(loaded_and_alive))
+    }
+
+    /// The bot's entity was loaded again and isn't dead: azalea added
+    /// `HasClientLoaded` without `Dead`. Confirms a respawn the session
+    /// asked for, if one is pending (ADR-0020, S22).
+    pub(crate) fn loaded_and_alive(&self) -> Delivery {
+        self.shared.respawn_signal(State::loaded_and_alive)
     }
 
     /// Tears the bridge down: queued events are dropped, and
@@ -414,9 +479,11 @@ impl BridgeControl {
 ///
 /// It keeps ADR-0010's contract: only chat is dropped when the queue is full,
 /// and it's counted; `Joined` comes from the first spawn, and a death before
-/// it is held until after it; `Died` comes once until the respawn; the first
-/// terminal event is the last event, after which [`next`](Self::next)
-/// returns `None`, as it does once the session is torn down.
+/// it is held until after it; `Died` comes once until `Respawned`, which
+/// confirms, once per death, a respawn asked for after the actor read the
+/// `Died` (ADR-0020, S22); the first terminal event is the last event, after
+/// which [`next`](Self::next) returns `None`, as it does once the session is
+/// torn down.
 pub struct McEvents {
     shared: Arc<Shared>,
 }
@@ -539,18 +606,19 @@ mod tests {
     }
 
     #[test]
-    fn second_death_report_is_dropped_until_the_respawn() {
+    fn second_death_report_is_dropped_until_the_confirmed_respawn() {
         let (sink, events, ..) = start(8);
         apply(&sink, Mapped::Spawn);
 
         assert_eq!(apply(&sink, Mapped::Death), Delivery::Queued);
         assert_eq!(apply(&sink, Mapped::Death), Delivery::DuplicateDeath);
-        sink.control().respawned();
+        assert_eq!(queued(&events), [SessionEvent::Joined, SessionEvent::Died]);
+        sink.control().respawn_asked(true);
         assert_eq!(apply(&sink, Mapped::Death), Delivery::Queued);
 
         assert_eq!(
             queued(&events),
-            [SessionEvent::Joined, SessionEvent::Died, SessionEvent::Died]
+            [SessionEvent::Respawned, SessionEvent::Died]
         );
     }
 
@@ -868,20 +936,136 @@ mod tests {
         assert!(matches!(events.shared.next(), Next::End));
     }
 
+    // --- Respawn (ADR-0020, S22) ---
+
+    /// Joins, dies, and has the actor read both.
+    fn joined_and_dead(sink: &EventSink, events: &McEvents) {
+        apply(sink, Mapped::Spawn);
+        apply(sink, Mapped::Death);
+        assert_eq!(queued(events), [SessionEvent::Joined, SessionEvent::Died]);
+    }
+
     #[test]
-    fn control_respawned_reports_the_next_death_again() {
+    fn a_respawn_asked_after_the_death_was_read_is_confirmed_once_the_bot_loads() {
+        let (sink, events, ..) = start(8);
+        let control = sink.control();
+        joined_and_dead(&sink, &events);
+
+        let asked_while_dead = control.respawn_asked(false);
+        let loaded = control.loaded_and_alive();
+        let loaded_again = control.loaded_and_alive();
+
+        assert_eq!(asked_while_dead, Delivery::Ignored);
+        assert_eq!(loaded, Delivery::Queued);
+        assert_eq!(loaded_again, Delivery::Ignored, "once per death");
+        assert_eq!(queued(&events), [SessionEvent::Respawned]);
+        assert_eq!(apply(&sink, Mapped::Death), Delivery::Queued);
+        assert_eq!(queued(&events), [SessionEvent::Died]);
+    }
+
+    #[rstest]
+    #[case::alive_without_a_death(false, false)]
+    #[case::dead_before_the_death_was_read(true, false)]
+    #[case::dead_and_read_but_never_asked(true, true)]
+    fn a_load_without_a_request_after_a_read_death_confirms_nothing(
+        #[case] dies: bool,
+        #[case] read: bool,
+    ) {
         let (sink, events, ..) = start(8);
         let control = sink.control();
         apply(&sink, Mapped::Spawn);
+        if dies {
+            apply(&sink, Mapped::Death);
+        }
+        if read {
+            queued(&events);
+        }
+        if dies && !read {
+            // Asked before the actor read the death: a stale call.
+            assert_eq!(control.respawn_asked(false), Delivery::Ignored);
+        }
+
+        let loaded = control.loaded_and_alive();
+
+        assert_eq!(loaded, Delivery::Ignored);
+        assert!(
+            !queued(&events).contains(&SessionEvent::Respawned),
+            "a dimension change or a stale call confirms nothing"
+        );
+    }
+
+    #[test]
+    fn a_bot_the_server_respawned_by_itself_is_confirmed_when_the_respawn_is_asked() {
+        let (sink, events, ..) = start(8);
+        let control = sink.control();
+        joined_and_dead(&sink, &events);
+        assert_eq!(control.loaded_and_alive(), Delivery::Ignored);
+
+        let asked = control.respawn_asked(true);
+
+        assert_eq!(asked, Delivery::Queued);
+        assert_eq!(queued(&events), [SessionEvent::Respawned]);
+    }
+
+    #[test]
+    fn second_death_report_before_the_confirmation_is_dropped() {
+        let (sink, events, ..) = start(8);
+        let control = sink.control();
+        joined_and_dead(&sink, &events);
+        control.respawn_asked(false);
+
+        let again = apply(&sink, Mapped::Death);
+        control.loaded_and_alive();
+
+        assert_eq!(again, Delivery::DuplicateDeath);
+        assert_eq!(queued(&events), [SessionEvent::Respawned]);
+    }
+
+    /// The bound the actor's drain relies on: a stale retry and a reload
+    /// while the next death is still queued never add a lifecycle event, so
+    /// at most `Respawned`, one `Died` and a terminal event are pending.
+    #[test]
+    fn stale_respawn_calls_never_hold_more_than_three_lifecycle_events() {
+        let (sink, events, ..) = start(8);
+        let control = sink.control();
+        joined_and_dead(&sink, &events);
+        control.respawn_asked(false);
+        control.loaded_and_alive();
         apply(&sink, Mapped::Death);
 
-        control.respawned();
+        let stale = [
+            control.respawn_asked(true),
+            control.loaded_and_alive(),
+            control.respawn_asked(true),
+        ];
+        apply(&sink, Mapped::Terminal(kicked()));
 
-        assert_eq!(apply(&sink, Mapped::Death), Delivery::Queued);
+        assert_eq!(stale, [Delivery::Ignored; 3]);
         assert_eq!(
             queued(&events),
-            [SessionEvent::Joined, SessionEvent::Died, SessionEvent::Died]
+            [
+                SessionEvent::Respawned,
+                SessionEvent::Died,
+                SessionEvent::Disconnected(DisconnectReason::ConnectionClosed),
+            ]
         );
+    }
+
+    #[test]
+    fn nothing_is_confirmed_after_a_terminal_event_or_a_close() {
+        let (sink, events, ..) = start(8);
+        let control = sink.control();
+        joined_and_dead(&sink, &events);
+        control.respawn_asked(false);
+        apply(&sink, Mapped::Terminal(kicked()));
+
+        let after_the_end = control.loaded_and_alive();
+        control.close();
+        let after_the_close = control.respawn_asked(true);
+
+        assert_eq!(after_the_end, Delivery::SessionEnded);
+        assert_eq!(after_the_close, Delivery::SessionEnded);
+        assert!(matches!(events.shared.next(), Next::End));
     }
 
     #[test]

@@ -1279,6 +1279,133 @@ async fn each_death_warns_on_its_first_failed_respawn() {
     );
 }
 
+/// The actor no longer trusts `respawn()`'s `Ok`: with no `Respawned` within
+/// 5 s it asks again, and that counts as a failure (ADR-0020, S20, S23).
+#[tokio::test(start_paused = true)]
+async fn an_unconfirmed_respawn_counts_as_a_failure_after_5_s() {
+    let levels = Levels::default();
+    let _guard = tracing::subscriber::set_default(levels.clone());
+    let (bot, controller) = Bot::online(Setup::new(running())).await;
+    controller.withhold_respawns();
+
+    emit(&controller, SessionEvent::Died);
+    settle().await;
+    advance(ms(4_999)).await;
+    let before = controller.log();
+    advance(ms(1)).await;
+
+    assert_eq!(before, [Performed::Respawn]);
+    assert_eq!(controller.log(), [Performed::Respawn, Performed::Respawn]);
+    assert_eq!(
+        levels.of("the server didn't confirm a respawn"),
+        [Level::WARN]
+    );
+    assert!(matches!(bot.state(), BotState::Online { .. }));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_confirmation_within_5_s_ends_the_retry() {
+    let levels = Levels::default();
+    let _guard = tracing::subscriber::set_default(levels.clone());
+    let (bot, controller) = Bot::online(Setup::new(running())).await;
+    controller.withhold_respawns();
+    emit(&controller, SessionEvent::Died);
+    settle().await;
+
+    advance(secs(2)).await;
+    controller.confirm_respawns();
+    settle().await;
+    advance(secs(120)).await;
+
+    assert_eq!(controller.log(), [Performed::Respawn]);
+    assert!(matches!(bot.state(), BotState::Online { .. }));
+    assert!(!levels.any_warning());
+    assert_eq!(
+        levels.of("the server confirmed the respawn"),
+        [Level::DEBUG]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn twelve_unconfirmed_respawns_end_the_session_after_60_s() {
+    let (bot, controller) = Bot::online(Setup::new(running())).await;
+    controller.withhold_respawns();
+
+    emit(&controller, SessionEvent::Died);
+    settle().await;
+    // One call every 5 s: at 0, 5, …, 55 s.
+    for _ in 0..11 {
+        advance(secs(5)).await;
+    }
+    advance(ms(4_999)).await;
+    let still_online = matches!(bot.state(), BotState::Online { .. });
+    advance(ms(1)).await;
+
+    assert!(still_online);
+    let calls = |log: Vec<Performed>| {
+        log.iter()
+            .filter(|done| **done == Performed::Respawn)
+            .count()
+    };
+    assert_eq!(calls(controller.log()), 12);
+    assert_eq!(bot.state(), backoff(n(1)));
+    assert_eq!(bot.last_disconnect(), Some(DisconnectReason::RespawnFailed));
+    assert!(controller.is_torn_down());
+}
+
+/// Failed calls and unconfirmed ones count together: three errors, then
+/// nine calls the server never confirms, end the session 60 s after the
+/// death.
+#[tokio::test(start_paused = true)]
+async fn failed_and_unconfirmed_calls_count_together() {
+    let (bot, controller) = Bot::online(Setup::new(running())).await;
+    controller.withhold_respawns();
+    controller.fail_respawn(SessionError::TimedOut);
+
+    emit(&controller, SessionEvent::Died);
+    settle().await;
+    // Failed calls at 0, 5 and 10 s; unconfirmed ones at 15, 20, …, 55 s.
+    advance(secs(5)).await;
+    advance(secs(5)).await;
+    advance(secs(4)).await;
+    controller.succeed_respawn();
+    advance(secs(1)).await;
+    for _ in 0..8 {
+        advance(secs(5)).await;
+    }
+    advance(ms(4_999)).await;
+    let still_online = matches!(bot.state(), BotState::Online { .. });
+    advance(ms(1)).await;
+
+    assert!(still_online);
+    let calls = |log: Vec<Performed>| {
+        log.iter()
+            .filter(|done| **done == Performed::Respawn)
+            .count()
+    };
+    assert_eq!(calls(controller.log()), 9);
+    assert_eq!(bot.last_disconnect(), Some(DisconnectReason::RespawnFailed));
+}
+
+/// A bot that dies again and again (lava, a mob farm): each death is
+/// respawned once, confirmed, without a warning (ADR-0020, S23).
+#[tokio::test(start_paused = true)]
+async fn a_burst_of_deaths_respawns_each_once() {
+    let levels = Levels::default();
+    let _guard = tracing::subscriber::set_default(levels.clone());
+    let (bot, controller) = Bot::online(Setup::new(running())).await;
+
+    for _ in 0..5 {
+        emit(&controller, SessionEvent::Died);
+        settle().await;
+    }
+    advance(secs(60)).await;
+
+    assert_eq!(controller.log(), vec![Performed::Respawn; 5]);
+    assert!(matches!(bot.state(), BotState::Online { .. }));
+    assert!(!levels.any_warning());
+}
+
 // --- Commands ---
 
 #[tokio::test(start_paused = true)]

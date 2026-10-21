@@ -4,6 +4,7 @@ use fleet_core::bot::BotEvent;
 use fleet_core::disconnect::DisconnectReason;
 use fleet_core::mc::{MinecraftConnector, SessionCredentialProvider, SessionEvent, SessionEvents};
 use tokio_util::sync::CancellationToken;
+use tracing::debug;
 
 use super::BotActor;
 use crate::event::FleetEventKind;
@@ -48,6 +49,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
                 self.publish(FleetEventKind::Died);
                 self.feed(BotEvent::Died).await;
             }
+            Some(SessionEvent::Respawned) => self.respawned(),
             Some(SessionEvent::Disconnected(reason)) => {
                 self.ended(reason.clone(), BotEvent::Disconnected(reason))
                     .await;
@@ -60,6 +62,19 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
                 .await;
             }
         }
+    }
+
+    /// The server confirmed a respawn: the retry, which never ends in
+    /// success, is dropped (ADR-0020, S23). One without an open death, which
+    /// the actor stopped waiting for, changes nothing.
+    fn respawned(&mut self) {
+        if !self.death_open {
+            debug!("a respawn the bot no longer waits for was confirmed");
+            return;
+        }
+        self.death_open = false;
+        self.respawn = None;
+        debug!("the server confirmed the respawn");
     }
 
     /// The session ended on its own for `reason`: records it in the

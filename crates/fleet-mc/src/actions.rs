@@ -23,8 +23,8 @@ use azalea::core::direction::Direction as Face;
 use azalea::ecs::component::Component;
 use azalea::ecs::entity::Entity;
 use azalea::ecs::world::World;
-use azalea::entity::LookDirection;
 use azalea::entity::indexing::EntityIdIndex;
+use azalea::entity::{Dead, HasClientLoaded, LookDirection};
 use azalea::interact::pick::HitResultComponent;
 use azalea::interact::{BlockStatePredictionHandler, StartUseItemQueued, SwingArmEvent};
 use azalea::protocol::packets::ProtocolPacket as _;
@@ -207,6 +207,14 @@ pub(crate) fn respawn(client: &Client) {
     client.ecs.write().write_message(PerformRespawnEvent {
         entity: client.entity,
     });
+}
+
+/// Whether the bot is back in the world after a death, on the host thread:
+/// azalea re-adds `HasClientLoaded` only after a Respawn packet removed it
+/// together with `Dead`, so loaded and not dead means a respawn happened
+/// and the client loaded (ADR-0020, S22).
+pub(crate) fn loaded_and_alive(client: &Client) -> bool {
+    client.get_component::<HasClientLoaded>().is_some() && client.get_component::<Dead>().is_none()
 }
 
 /// Fails with [`SessionError::NotInWorld`] if the bot lacks a `T`, which
