@@ -127,8 +127,8 @@ impl<S: SessionHandle> ModeRunner<S> {
                     if respawned.is_err() {
                         return;
                     }
-                    // Several respawns since the last turn run the steps once.
-                    self.respawns.borrow_and_update();
+                    // `changed` marked the value seen, so several respawns
+                    // since the last turn run the steps once.
                     let Some(respawn) = plan.respawned(self.clock.now(), &mut self.rng) else {
                         // A mode without on-respawn steps: nothing, as before.
                         continue;

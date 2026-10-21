@@ -492,11 +492,13 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
 
     /// Every respawn failed or went unconfirmed: the session ends with
     /// `RespawnFailed`, unless a ready event ended it first, or confirmed the
-    /// respawn after all (ADR-0020, S23).
+    /// respawn after all (ADR-0020, S23). A death read after that
+    /// confirmation started a retry of its own, so it's not this one's to
+    /// end (PR #65's review).
     async fn respawn_failed(&mut self) {
         let generation = self.generation;
         self.drain().await;
-        if self.death_open && self.is_current_online(generation) {
+        if self.death_open && self.respawn.is_none() && self.is_current_online(generation) {
             self.ended(
                 DisconnectReason::RespawnFailed,
                 BotEvent::Disconnected(DisconnectReason::RespawnFailed),
@@ -848,8 +850,27 @@ mod tests {
         assert!(!controller.is_torn_down());
     }
 
+    /// A drain that reads the old death's confirmation and then a new death
+    /// leaves the new death to its own retry: the session stays (PR #65's
+    /// review).
+    #[tokio::test(start_paused = true)]
+    async fn a_new_death_read_while_the_retry_gives_up_keeps_its_own_retry() {
+        let (mut actor, snapshots, controller) = online().await;
+        dead(&mut actor, &controller).await;
+        let handle = actor.session.as_ref().unwrap().handle.clone();
+        handle.respawn().await.unwrap();
+        assert_eq!(controller.emit(SessionEvent::Died), EmitOutcome::Queued);
+
+        let _ = actor.handle(Input::Respawn(RespawnOutcome::GaveUp)).await;
+
+        assert!(matches!(snapshots.borrow().state, BotState::Online { .. }));
+        assert_eq!(snapshots.borrow().last_disconnect, None);
+        assert!(actor.respawn.is_some(), "the new death's retry runs");
+        assert!(!controller.is_torn_down());
+    }
+
     /// A `Respawned` with no death open (one the actor stopped waiting for)
-    /// changes nothing.
+    /// changes nothing, and never reaches the mode runner.
     #[tokio::test(start_paused = true)]
     async fn a_respawned_without_an_open_death_is_ignored() {
         let (mut actor, snapshots, _controller) = online().await;
@@ -858,6 +879,7 @@ mod tests {
 
         assert!(matches!(snapshots.borrow().state, BotState::Online { .. }));
         assert!(actor.respawn.is_none());
+        assert_eq!(*actor.respawns.borrow(), 0, "the runner wasn't signalled");
     }
 
     /// A confirmed respawn drops the retry: it never calls again.

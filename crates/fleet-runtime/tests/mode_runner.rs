@@ -693,8 +693,10 @@ async fn the_on_respawn_chat_memory_survives_a_mode_change() {
     advance(5_000).await;
 
     runner.respawn().await;
+    let ten_seconds_on = runner.sent();
     advance(25_000).await;
     runner.respawn().await;
 
-    assert_eq!(runner.sent(), [message("/home"), message("/spawn")]);
+    assert_eq!(ten_seconds_on, [message("/home")], "skipped 10 s on");
+    assert_eq!(runner.sent(), [message("/spawn")]);
 }

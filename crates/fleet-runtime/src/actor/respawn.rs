@@ -1,6 +1,8 @@
 //! The respawn retry: respawns a dead bot, again and again if it has to.
+
 use core::num::NonZeroU32;
 use core::time::Duration;
+
 use fleet_core::mc::{SessionError, SessionHandle};
 use tracing::{debug, warn};
 
