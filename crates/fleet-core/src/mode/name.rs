@@ -14,6 +14,24 @@ const OTHER_PUNCTUATION: [char; 13] = [
     '„', '“', '”', '‘', '’', '«', '»', '–', '—', '…', '¡', '¿', '·',
 ];
 
+/// What a name refuses although Unicode counts it as a letter or a digit
+/// (U8, refined at PR #62's review): emoji, enclosed letters and digits,
+/// letters that show nothing, and the combining diacritics, which stack on
+/// other letters. Kept apart from fleet-core's invisible characters, which
+/// chat's cleaning strips. The marks of scripts that need them (Arabic,
+/// Hebrew, Indic) stay allowed.
+const REFUSED: [(char, char); 9] = [
+    ('\u{0300}', '\u{036F}'),   // combining diacritical marks
+    ('\u{1AB0}', '\u{1AFF}'),   // combining diacritical marks extended
+    ('\u{1DC0}', '\u{1DFF}'),   // combining diacritical marks supplement
+    ('\u{20D0}', '\u{20FF}'),   // combining diacritical marks for symbols
+    ('\u{2139}', '\u{2139}'),   // information source, a letter that's an emoji
+    ('\u{2460}', '\u{24FF}'),   // enclosed alphanumerics, Ⓜ an emoji
+    ('\u{FE20}', '\u{FE2F}'),   // combining half marks
+    ('\u{13441}', '\u{13442}'), // Egyptian full and half blank, letters that show nothing
+    ('\u{1F100}', '\u{1F1FF}'), // enclosed alphanumeric supplement, 🅰 🅱 🅾 🅿 emoji
+];
+
 /// Why text isn't a valid [`ModeName`]. Like every fleet-core error, it
 /// names the rule and a position, never the text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -78,6 +96,10 @@ impl ModeName {
     /// punctuation, or one of a few others (`„ “ ” ‘ ’ « » – — … ¡ ¿ ·`).
     /// Never an invisible character, though a few letters are (the Hangul
     /// fillers), so nothing a name holds is stripped when it's displayed.
+    /// Nor what those properties count as letters or digits but U8 doesn't:
+    /// emoji (`ℹ`, `Ⓜ`, `🅰`), enclosed letters and digits (`①`), letters
+    /// that show nothing (Egyptian blanks) and the combining diacritics
+    /// (U+0300–U+036F and the blocks like it), which stack on letters.
     #[must_use]
     pub fn allows(c: char) -> bool {
         let wanted = c.is_alphabetic()
@@ -85,7 +107,10 @@ impl ModeName {
             || c == ' '
             || c.is_ascii_punctuation()
             || OTHER_PUNCTUATION.contains(&c);
-        wanted && !text::is_invisible(c)
+        let refused = REFUSED
+            .iter()
+            .any(|&(first, last)| (first..=last).contains(&c));
+        wanted && !refused && !text::is_invisible(c)
     }
 }
 
@@ -161,6 +186,9 @@ mod tests {
     )]
     #[case::listed_punctuation("„a“ ”‘’ «b» – — … ¡ ¿ ·", "„a“ ”‘’ «b» – — … ¡ ¿ ·")]
     #[case::a_built_in_name("afk", "afk")]
+    #[case::arabic_with_its_vowel_marks("خ\u{64E}وخ", "خ\u{64E}وخ")]
+    #[case::hebrew_with_its_points("ח\u{5B7}ו\u{5B8}\u{5BC}ה", "ח\u{5B7}ו\u{5B8}\u{5BC}ה")]
+    #[case::devanagari_with_a_vowel_sign("ख\u{947}त", "ख\u{947}त")]
     fn accepts_and_trims(#[case] input: &str, #[case] expected: &str) {
         assert_eq!(name(input).as_str(), expected);
     }
@@ -196,6 +224,54 @@ mod tests {
         assert_eq!(
             ModeName::try_from(input),
             Err(ModeNameError::ForbiddenChar { index })
+        );
+    }
+
+    /// Letters and digits by Unicode's properties that U8 still refuses
+    /// (PR #62's review): emoji, enclosed letters and digits, marks that
+    /// stack on other letters, and letters that show nothing.
+    #[rstest]
+    #[case::combining_grave_the_blocks_first("a\u{300}b")]
+    #[case::combining_ypogegrammeni("a\u{345}b")]
+    #[case::combining_small_a("a\u{363}b")]
+    #[case::combining_small_x_the_blocks_last("a\u{36F}b")]
+    #[case::extended_first("a\u{1AB0}b")]
+    #[case::extended_combining_small_w("a\u{1ABF}b")]
+    #[case::extended_combining_small_insular_t("a\u{1ACE}b")]
+    #[case::extended_last("a\u{1AFF}b")]
+    #[case::supplement_first("a\u{1DC0}b")]
+    #[case::supplement_combining_small_ae("a\u{1DD3}b")]
+    #[case::supplement_combining_small_r_rotunda("a\u{1DE7}b")]
+    #[case::supplement_combining_small_u_with_diaeresis("a\u{1DF4}b")]
+    #[case::supplement_last("a\u{1DFF}b")]
+    #[case::for_symbols_first("a\u{20D0}b")]
+    #[case::for_symbols_last_assigned("a\u{20F0}b")]
+    #[case::for_symbols_last("a\u{20FF}b")]
+    #[case::information_source_an_emoji_letter("a\u{2139}b")]
+    #[case::circled_digit_one_the_blocks_first("a\u{2460}b")]
+    #[case::circled_capital_a("a\u{24B6}b")]
+    #[case::circled_capital_m_an_emoji("a\u{24C2}b")]
+    #[case::circled_small_z("a\u{24E9}b")]
+    #[case::negative_circled_digit_zero_the_blocks_last("a\u{24FF}b")]
+    #[case::half_marks_first("a\u{FE20}b")]
+    #[case::half_marks_last("a\u{FE2F}b")]
+    #[case::egyptian_full_blank("a\u{13441}b")]
+    #[case::egyptian_half_blank("a\u{13442}b")]
+    #[case::digit_zero_full_stop_the_supplements_first("a\u{1F100}b")]
+    #[case::squared_capital_a("a\u{1F130}b")]
+    #[case::squared_capital_z("a\u{1F149}b")]
+    #[case::negative_circled_capital_a("a\u{1F150}b")]
+    #[case::negative_circled_capital_z("a\u{1F169}b")]
+    #[case::negative_squared_a_an_emoji("a\u{1F170}b")]
+    #[case::negative_squared_b_an_emoji("a\u{1F171}b")]
+    #[case::negative_squared_o_an_emoji("a\u{1F17E}b")]
+    #[case::negative_squared_p_an_emoji("a\u{1F17F}b")]
+    #[case::negative_squared_z("a\u{1F189}b")]
+    #[case::the_supplements_last("a\u{1F1FF}b")]
+    fn refuses_what_unicode_counts_as_a_letter_or_digit_but_u8_doesnt(#[case] input: &str) {
+        assert_eq!(
+            ModeName::try_from(input),
+            Err(ModeNameError::ForbiddenChar { index: 1 })
         );
     }
 
@@ -268,9 +344,38 @@ mod tests {
         prop_oneof![
             any::<char>(),
             prop::sample::select(vec![
-                ' ', 'a', 'ü', '日', '½', '!', '~', '„', '·', '\u{A0}', '\u{3164}', '\u{115F}',
-                '\u{FFA0}', '\u{17B4}', '\u{200B}', '\u{202E}', '\u{2066}', '\u{FEFF}', '§', '©',
-                '\u{308}', '\n', '\t', '🐄',
+                ' ',
+                'a',
+                'ü',
+                '日',
+                '½',
+                '!',
+                '~',
+                '„',
+                '·',
+                '\u{A0}',
+                '\u{3164}',
+                '\u{115F}',
+                '\u{FFA0}',
+                '\u{17B4}',
+                '\u{200B}',
+                '\u{202E}',
+                '\u{2066}',
+                '\u{FEFF}',
+                '§',
+                '©',
+                '\u{308}',
+                '\n',
+                '\t',
+                '🐄',
+                'ℹ',
+                'Ⓜ',
+                '①',
+                '🅰',
+                '\u{345}',
+                '\u{1DE7}',
+                '\u{13441}',
+                '\u{5B7}',
             ]),
         ]
     }

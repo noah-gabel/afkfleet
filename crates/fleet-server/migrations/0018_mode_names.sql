@@ -8,7 +8,9 @@
 -- and shared together, never share a name, and neither do any two shared modes, the built-in ones
 -- included. A private mode may take a shared one's name, and two owners' private modes may share
 -- one: whoever could meet either rule sees every mode it compares with, so it reveals nothing.
--- The service also refuses a built-in mode's name for a private mode, which no index here can.
+-- A private mode can't take a built-in mode's name either, which no index here can enforce: the
+-- request's own check refuses it, ASCII case ignored, before anything is written (fleet-api-types'
+-- valid_mode_name; ADR-0020, R4).
 
 -- One owner's names. The built-in modes have no owner, and a unique index keeps rows whose owner
 -- is NULL apart, so they never clash here. It also serves every lookup by owner.

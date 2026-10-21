@@ -12,10 +12,14 @@
 //!   (`{"action":{"type":"look","yaw":0.0,"pitch":0.0},"schedule":{"type":"every","interval_ms":…,"jitter_ms":…},"probability":…}`)
 //!   as flat types (S12): each action and schedule has a `type` and the
 //!   fields that type takes. A request that doesn't parse (an unknown field
-//!   or `type`, a value of the wrong JSON type, a number its type can't hold)
-//!   is the server's bare 400, which never repeats what it read. Every other
-//!   rule, fleet-core's included, is one field error at the field it names,
-//!   such as `steps[3].action.message` ([`ModeSteps::definition`]).
+//!   or `type`, a value of the wrong JSON type, an integer its field can't
+//!   hold such as a `slot` of 256, a number past JSON's own doubles such as
+//!   `1e400`) is the server's bare 400, which never repeats what it read.
+//!   Every other rule, fleet-core's included, is one field error at the
+//!   field it names, such as `steps[3].action.message`
+//!   ([`ModeSteps::definition`]). An angle is read as its nearest `f32`, so
+//!   one no `f32` holds, such as `1e40`, reads as infinite and is a 422 at
+//!   its field, as any angle out of range is.
 
 use core::time::Duration;
 
@@ -1278,28 +1282,98 @@ mod tests {
         );
     }
 
-    #[rstest]
-    #[case::any_action(json!({ "type": "jump" }), 249, "must be at least 250 ms")]
-    #[case::an_attack(json!({ "type": "attack_facing_entity" }), 499, "must be at least 500 ms for attacking or the use button")]
-    #[case::the_use_button(json!({ "type": "hold_use", "on": false }), 499, "must be at least 500 ms for attacking or the use button")]
-    #[case::chat(json!({ "type": "send_chat", "message": "hi" }), 29_999, "must be at least 30 seconds for chat")]
-    fn an_interval_too_short_names_its_actions_minimum(
-        #[case] action: Value,
-        #[case] interval_ms: u32,
-        #[case] message: &str,
-    ) {
+    /// Each action kind, in `ModeActionKind::ALL`'s order, with an interval
+    /// just under fleet-core's minimum for it and the text that names it.
+    fn interval_minimums() -> [(Value, u32, &'static str); 10] {
+        const ANY: &str = "must be at least 250 ms";
+        const ATTACK_OR_USE: &str = "must be at least 500 ms for attacking or the use button";
+        const CHAT: &str = "must be at least 30 seconds for chat";
+        [
+            (
+                json!({ "type": "look", "yaw": 0.0, "pitch": 0.0 }),
+                249,
+                ANY,
+            ),
+            (
+                json!({ "type": "rotate_random", "max_yaw": 10.0, "max_pitch": 10.0 }),
+                249,
+                ANY,
+            ),
+            (json!({ "type": "jump" }), 249, ANY),
+            (json!({ "type": "sneak", "on": true }), 249, ANY),
+            (json!({ "type": "swing_arm" }), 249, ANY),
+            (json!({ "type": "use_item" }), 249, ANY),
+            (
+                json!({ "type": "hold_use", "on": false }),
+                499,
+                ATTACK_OR_USE,
+            ),
+            (
+                json!({ "type": "attack_facing_entity" }),
+                499,
+                ATTACK_OR_USE,
+            ),
+            (json!({ "type": "select_hotbar_slot", "slot": 0 }), 249, ANY),
+            (
+                json!({ "type": "send_chat", "message": "hi" }),
+                29_999,
+                CHAT,
+            ),
+        ]
+    }
+
+    /// Every kind's text is pinned (PR #62's review): `interval_rule`
+    /// repeats fleet-core's `min_interval` by kind, so a kind whose text
+    /// named another kind's minimum would show here.
+    #[test]
+    fn an_interval_too_short_names_its_actions_minimum_for_every_kind() {
+        let cases = interval_minimums();
+        let kinds: Vec<ModeActionKind> = cases
+            .iter()
+            .map(|(action, ..)| {
+                serde_json::from_value::<ModeActionRequest>(action.clone())
+                    .unwrap()
+                    .kind
+            })
+            .collect();
+        assert_eq!(kinds, ModeActionKind::ALL, "one case per kind");
+
+        let wrong: Vec<_> = cases
+            .into_iter()
+            .filter_map(|(action, interval_ms, message)| {
+                let short = problem(json!([step(action.clone(), every(interval_ms))]));
+                let minimum = problems(&request(
+                    "Fine",
+                    json!([step(action.clone(), every(interval_ms + 1))]),
+                ));
+                let right =
+                    short == at("steps[0].schedule.interval_ms", message) && minimum.is_empty();
+                (!right).then(|| (action["type"].clone(), short, minimum))
+            })
+            .collect();
+        assert!(wrong.is_empty(), "{wrong:#?}");
+    }
+
+    /// The server reads a body's text, which holds numbers no `f32` can: an
+    /// angle past `f32` reads as infinite and is a field error at its own
+    /// path; one past JSON's own doubles doesn't parse, the bare 400.
+    #[test]
+    fn an_angle_from_a_bodys_text_is_its_nearest_f32() {
+        let look = |yaw: &str| {
+            format!(
+                r#"[{{"action":{{"type":"look","yaw":{yaw},"pitch":0}},"schedule":{{"type":"at_start"}},"probability":100}}]"#
+            )
+        };
+
+        let past_f32: ModeSteps = serde_json::from_str(&look("-1e40")).unwrap();
         assert_eq!(
-            problem(json!([step(action.clone(), every(interval_ms))])),
-            at("steps[0].schedule.interval_ms", message)
+            past_f32.definition(),
+            Err(ModeFieldError::at(
+                ModeField::ActionField(0, "yaw"),
+                "must be from -180 to 180 degrees"
+            ))
         );
-        assert_eq!(
-            problems(&request(
-                "Fine",
-                json!([step(action, every(interval_ms + 1))])
-            )),
-            [],
-            "the minimum itself is fine"
-        );
+        assert!(serde_json::from_str::<ModeSteps>(&look("1e400")).is_err());
     }
 
     #[test]
