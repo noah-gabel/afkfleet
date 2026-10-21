@@ -223,7 +223,7 @@ dev-managed-agent dir=(justfile_directory() / "target" / "dev-agent") $AFKFLEET_
 # The password, the 2FA code and a step-up are typed hidden, never an argument (ADR-0019,
 # S71); a user without 2FA sets it up in `just dev-app` first. `server` is dev-server's API.
 # A console for dev-server's bot and mode endpoints: bots, bot, offline, server, mode, start,
-# stop, chat, command, history, modes, new-mode, quit.
+# stop, chat, command, history, modes, new-mode, edit-mode, delete-mode, quit.
 [no-exit-message]
 dev-bots username server="http://127.0.0.1:8080":
     cargo run --quiet -p fleet-client --example dev-bots -- "{{ username }}" "{{ server }}"
