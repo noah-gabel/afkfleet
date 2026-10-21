@@ -90,7 +90,7 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
 - **Fail-on-action** makes `perform` fail with a chosen `SessionError`.
 - **The event contract** of ADR-0010 is enforced by the fake, so the actor's tests rely on the real contract:
   - at most one terminal event, then `None`
-  - `Died` at most once until `respawn()`
+  - `Died` at most once until `respawn()` *(until `Respawned` since Phase 11, [ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S22)*
   - only `Chat` is dropped, and counted, when the bounded event queue is full
 - **The log** records performed actions, sent chat, respawns and disconnects, in order.
 - **No panics.** The fakes are library code and follow every lint, so misuse returns an error or `false`.
@@ -235,7 +235,7 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
   - **System messages** keep their whole sanitized text, and their sender is never guessed.
   - **Action-bar messages** have their own counter, `ignored_action_bar`, apart from `dropped_chat`, and they log nothing. Some servers send several a second, and `dropped_chat` should stay a signal of overload.
   - **Unknown events.** azalea's `Event` is `#[non_exhaustive]`. A variant the mapping doesn't name lands in its catch-all, which ignores it and logs it at `debug`. Every azalea bump re-checks the variants against the mapping (ADR-0003, step 5).
-  - **The queue** follows the fake's design: a `Mutex<VecDeque>` plus `Notify`, so lifecycle events always go in and `next()` is cancel-safe. Chat is dropped once the queue holds `event_capacity` events. The contract bounds the lifecycle events: one `Joined`, one terminal event, and one `Died` per respawn.
+  - **The queue** follows the fake's design: a `Mutex<VecDeque>` plus `Notify`, so lifecycle events always go in and `next()` is cancel-safe. Chat is dropped once the queue holds `event_capacity` events. The contract bounds the lifecycle events: one `Joined`, one terminal event, and one `Died` per respawn. *(Since Phase 11, [ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S22: `Joined` or `Respawned`, one `Died` and one terminal event; `Respawned` comes once per `Died`, after the actor read it and asked.)*
   - **Liveness stamps** are atomic offsets from the session's start, so they never move backwards. A Bevy plugin stamps every `ReceiveGamePacketEvent` in `Update`, as a closure system that holds the session's stamps.
   - **Dead code until P3.4.** Outside the tests, nothing calls the producer side (the mapping, the sink and the liveness plugin) until the connector does. The user approved a temporary `#[expect(dead_code, reason = …)]` on `mod events`, in non-test builds only. P3.4 removes it, and the expectation fails as soon as everything is used.
   - **Test values.** Kick reasons are built from JSON with `serde_json`, a dev-dependency, since azalea doesn't re-export `TranslatableComponent`.
@@ -263,7 +263,7 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
       - It takes the `HitResultComponent`, which azalea limits to the reach. Nothing in reach gives `Ok`, logged at `debug`.
       - It writes the attack packet by hand: a `VarInt` packet ID and a `VarInt` entity ID, through `RawConnection::write_raw` (ADR-0008 §8).
       - It swings and resets `TicksSinceLastAttack`, as azalea's own attack would.
-    - The respawn writes `PerformRespawnEvent` and calls `BridgeControl::respawned` in the same job.
+    - The respawn writes `PerformRespawnEvent` and calls `BridgeControl::respawned` in the same job. *(Since Phase 11, [ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S22: it tells the bridge a respawn was asked for, and whether the bot is already loaded and alive.)*
   - **Non-finite angles** are skipped before the job, logged at `warn`, and the call returns `Ok`.
   - **Live checks** are in `slow_actions_scenario`. Swings are seen by a second bot through a test-only system added by the `fault-injection` hook, which counts `Animate` packets *(the user's decision)*. A failed `execute if` answers nothing over RCON, so "not sneaking" is checked with `execute unless`.
   - **The respawn step waits for the bot to load** *(found in group E, the user's decision)*.
