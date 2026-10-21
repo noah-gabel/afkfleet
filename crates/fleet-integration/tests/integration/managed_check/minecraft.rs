@@ -5,9 +5,11 @@
 //! `deploy/compose.dev.yaml` (the `pins` test checks that). Only its game
 //! port is published, on `127.0.0.1` and a port Docker picks; the bot dials
 //! `127.0.0.1:<port>`, never `localhost`, which may resolve to `::1` (R58).
-//! RCON's port isn't published: [`Minecraft::rcon`] runs `rcon-cli` inside
-//! the container, which reads the password itzg drew there, so none is ever
-//! on a command line.
+//! RCON is the image's default (on, with a password itzg draws at each
+//! start), set by name only for the slow case, the one that uses it. Its
+//! port isn't published: [`Minecraft::rcon`] runs `rcon-cli` inside the
+//! container, which reads that password there, so none is ever on a command
+//! line.
 //!
 //! It's removed by [`Minecraft::remove`] at the end, its volumes with it:
 //! they hold the account's name in the server's usercache and logs. Past
@@ -57,15 +59,14 @@ impl Minecraft {
     async fn launch(online: bool) -> Result<Self, String> {
         // Online, every join is checked with Mojang's session server and
         // chat must be signed, as on a public server.
-        let online = if online { "TRUE" } else { "FALSE" };
-        let container = GenericImage::new(IMAGE, TAG)
+        let checked = if online { "TRUE" } else { "FALSE" };
+        let request = GenericImage::new(IMAGE, TAG)
             .with_wait_for(WaitFor::healthcheck())
             .with_env_var("EULA", "TRUE")
             .with_env_var("TYPE", "VANILLA")
             .with_env_var("VERSION", VERSION)
-            .with_env_var("ONLINE_MODE", online)
-            .with_env_var("ENFORCE_SECURE_PROFILE", online)
-            .with_env_var("ENABLE_RCON", "TRUE")
+            .with_env_var("ONLINE_MODE", checked)
+            .with_env_var("ENFORCE_SECURE_PROFILE", checked)
             .with_env_var("LEVEL_TYPE", "minecraft:flat")
             .with_env_var("VIEW_DISTANCE", "4")
             .with_env_var("SIMULATION_DISTANCE", "4")
@@ -89,7 +90,15 @@ impl Minecraft {
                     binding.host_ip = Some("127.0.0.1".to_owned());
                 }
             })
-            .with_startup_timeout(STARTUP)
+            .with_startup_timeout(STARTUP);
+        // RCON is the image's default either way; the slow case, which
+        // uses it, asks for it by name.
+        let request = if online {
+            request
+        } else {
+            request.with_env_var("ENABLE_RCON", "TRUE")
+        };
+        let container = request
             .start()
             .await
             .map_err(|_| "the container didn't start: is Docker Desktop running?".to_owned())?;
