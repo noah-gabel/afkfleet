@@ -26,7 +26,7 @@ use fleet_core::id::{ModeId, UserId};
 use fleet_core::mode::{ModeDefinition, ModeName, ModePreset};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::audit::NewAuditEntry;
-use fleet_server::ports::modes::{InsertModeError, ListedMode, NewMode, StoredMode};
+use fleet_server::ports::modes::{ListedMode, ModeChange, NewMode, StoredMode, WriteModeError};
 use fleet_server::ports::page::{Page, PageLimit};
 use fleet_server::ports::store::{Store, StoreError};
 use sqlx::SqlitePool;
@@ -853,7 +853,7 @@ fn new_mode(n: u8, owner: UserId, name: &str, visibility: ModeVisibility) -> New
 }
 
 /// Stores `mode` in a transaction of its own.
-async fn insert(db: &Database, mode: &NewMode) -> Result<(), InsertModeError> {
+async fn insert(db: &Database, mode: &NewMode) -> Result<(), WriteModeError> {
     let mut tx = db.write().await.unwrap();
     tx.modes().insert(mode).await?;
     tx.commit(setup_entry()).await.unwrap();
@@ -930,7 +930,7 @@ async fn a_name_the_indexes_refuse_is_taken_and_nothing_is_stored(
     ] {
         let result = insert(&db, &mode).await;
         assert!(
-            matches!(result, Err(InsertModeError::NameTaken)),
+            matches!(result, Err(WriteModeError::NameTaken)),
             "{case}: {result:?}"
         );
         assert_eq!(db.modes().find(mode.id).await.unwrap(), None, "{case}");
@@ -1010,7 +1010,7 @@ async fn a_name_is_taken_as_the_indexes_would_refuse_it(
     ] {
         taken.push(
             tx.modes()
-                .name_taken(owner, &name(text), shared)
+                .name_taken(owner, &name(text), shared, None)
                 .await
                 .unwrap(),
         );
@@ -1021,4 +1021,211 @@ async fn a_name_is_taken_as_the_indexes_would_refuse_it(
         [true, true, true, false, true, false, false, false, false],
         "the built-in names on a private mode are the service's to refuse (R4)"
     );
+}
+
+/// One mode read by its ID carries what the list carries: its owner's
+/// current role and name, none for a built-in mode, on the read pool and
+/// in a transaction alike; an unknown ID is none (P11.4).
+#[sqlx::test(migrations = false)]
+async fn a_mode_read_by_its_id_is_listed_with_its_owner(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let cast = cast(db.write_pool()).await;
+    let listed = every_mode(&db, cast.owner).await;
+    let admins = listed
+        .iter()
+        .find(|listed| listed.mode.name.as_str() == "Admin shared")
+        .unwrap();
+    let afk = ModePreset::Afk.id();
+    let unknown = ModeId::new_v7(seeded(), [99; 10]).unwrap();
+
+    let read = db.modes().listed(admins.mode.id).await.unwrap();
+    let built_in = db.modes().listed(afk).await.unwrap().unwrap();
+    let missing = db.modes().listed(unknown).await.unwrap();
+    let mut tx = db.write().await.unwrap();
+    let in_tx = tx.modes().listed(admins.mode.id).await.unwrap();
+
+    assert_eq!(read.as_ref(), Some(admins));
+    assert_eq!(in_tx, read);
+    assert_eq!(built_in.owner, None);
+    assert_eq!(built_in.mode.name.as_str(), "afk");
+    assert_eq!(missing, None);
+}
+
+/// The mode being renamed never takes its own name, in any case; every
+/// other mode's still counts, a shared one's for a mode made shared
+/// (ADR-0020, S13).
+#[sqlx::test(migrations = false)]
+async fn a_name_is_never_taken_by_the_mode_being_renamed(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(db.write_pool(), 21, "fisher", Role::Admin).await;
+    let other = add_user(db.write_pool(), 22, "other", Role::Admin).await;
+    let fishing = new_mode(1, owner, "Fishing", ModeVisibility::Private);
+    let mining = new_mode(2, owner, "Mining", ModeVisibility::Private);
+    let shared = new_mode(3, other, "Farming", ModeVisibility::Shared);
+    for mode in [&fishing, &mining, &shared] {
+        insert(&db, mode).await.unwrap();
+    }
+    let name = |text: &str| ModeName::try_from(text).unwrap();
+
+    let mut tx = db.write().await.unwrap();
+    let mut taken = Vec::new();
+    for (owner, text, shared_now, except) in [
+        (owner, "FISHING", false, Some(fishing.id)),
+        (owner, "FISHING", true, Some(fishing.id)),
+        (owner, "fishing", false, Some(mining.id)),
+        (owner, "fishing", false, None),
+        (owner, "farming", false, Some(fishing.id)),
+        (owner, "farming", true, Some(fishing.id)),
+        (other, "FARMING", true, Some(shared.id)),
+        (owner, "afk", true, Some(fishing.id)),
+    ] {
+        taken.push(
+            tx.modes()
+                .name_taken(owner, &name(text), shared_now, except)
+                .await
+                .unwrap(),
+        );
+    }
+
+    assert_eq!(taken, [false, false, true, true, false, true, false, true]);
+}
+
+/// `mode`'s change to `name`, `visibility` and a jumping definition, from
+/// `expected` to the next version, at `at`.
+fn change(mode: &NewMode, expected: u32, name: &str, visibility: ModeVisibility) -> ModeChange {
+    let expected = NonZeroU32::new(expected).unwrap();
+    ModeChange {
+        id: mode.id,
+        expected,
+        version: expected.checked_add(1).unwrap(),
+        name: ModeName::try_from(name).unwrap(),
+        visibility,
+        definition: serde_json::from_str(r#"{"steps":[{"action":{"type":"jump"},"schedule":{"type":"every","interval_ms":250,"jitter_ms":0},"probability":100}]}"#).unwrap(),
+        updated_at: seeded() + chrono::Duration::hours(1),
+    }
+}
+
+/// An update writes only while the row has the version it expects, and
+/// never over a built-in mode; what it wrote reads back, `created_at` and
+/// the owner unchanged (ADR-0020, S18).
+#[sqlx::test(migrations = false)]
+async fn an_update_writes_only_at_the_expected_version_and_never_a_built_in_mode(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(db.write_pool(), 21, "fisher", Role::Admin).await;
+    let mode = new_mode(1, owner, "Fishing", ModeVisibility::Private);
+    insert(&db, &mode).await.unwrap();
+    let stale = change(&mode, 2, "Stale", ModeVisibility::Private);
+    let fresh = change(&mode, 1, "Fishing trip", ModeVisibility::Shared);
+    let mut built_in = change(&mode, 1, "Not afk", ModeVisibility::Shared);
+    built_in.id = ModePreset::Afk.id();
+    let afk_before = db.modes().find(ModePreset::Afk.id()).await.unwrap();
+
+    let mut tx = db.write().await.unwrap();
+    let wrote_stale = tx.modes().update(&stale).await.unwrap();
+    let wrote_fresh = tx.modes().update(&fresh).await.unwrap();
+    let wrote_again = tx.modes().update(&fresh).await.unwrap();
+    let wrote_built_in = tx.modes().update(&built_in).await.unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert_eq!(
+        (wrote_stale, wrote_fresh, wrote_again, wrote_built_in),
+        (false, true, false, false)
+    );
+    assert_eq!(
+        db.modes().find(mode.id).await.unwrap(),
+        Some(StoredMode {
+            id: mode.id,
+            owner: Some(owner),
+            name: fresh.name.clone(),
+            visibility: ModeVisibility::Shared,
+            definition: fresh.definition.clone(),
+            version: NonZeroU32::new(2).unwrap(),
+            created_at: mode.created_at,
+            updated_at: fresh.updated_at,
+        })
+    );
+    assert_eq!(
+        db.modes().find(ModePreset::Afk.id()).await.unwrap(),
+        afk_before
+    );
+}
+
+/// An update to a name either unique index refuses is `NameTaken`, never a
+/// bare database error: another of the owner's names, or a shared one's
+/// for a mode made shared (ADR-0020, S13).
+#[sqlx::test(migrations = false)]
+async fn an_update_to_a_name_the_indexes_refuse_is_taken(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(db.write_pool(), 21, "fisher", Role::Admin).await;
+    let other = add_user(db.write_pool(), 22, "other", Role::Admin).await;
+    let fishing = new_mode(1, owner, "Fishing", ModeVisibility::Private);
+    let mining = new_mode(2, owner, "Mining", ModeVisibility::Private);
+    let farming = new_mode(3, other, "Farming", ModeVisibility::Shared);
+    for mode in [&fishing, &mining, &farming] {
+        insert(&db, mode).await.unwrap();
+    }
+
+    for (case, change) in [
+        (
+            "the owner's other name",
+            change(&mining, 1, "FISHING", ModeVisibility::Private),
+        ),
+        (
+            "a shared name, made shared",
+            change(&mining, 1, "farming", ModeVisibility::Shared),
+        ),
+    ] {
+        let mut tx = db.write().await.unwrap();
+        let result = tx.modes().update(&change).await;
+        assert!(
+            matches!(result, Err(WriteModeError::NameTaken)),
+            "{case}: {result:?}"
+        );
+    }
+    assert_eq!(
+        db.modes()
+            .find(mining.id)
+            .await
+            .unwrap()
+            .unwrap()
+            .name
+            .as_str(),
+        "Mining"
+    );
+}
+
+/// A delete removes a user's mode and says so; a second one, or one of a
+/// built-in mode, finds nothing and leaves the table as it was.
+#[sqlx::test(migrations = false)]
+async fn a_delete_removes_a_users_mode_and_never_a_built_in_one(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(db.write_pool(), 21, "fisher", Role::Member).await;
+    let mode = new_mode(1, owner, "Fishing", ModeVisibility::Private);
+    insert(&db, &mode).await.unwrap();
+    let afk = ModePreset::Afk.id();
+
+    let mut tx = db.write().await.unwrap();
+    let first = tx.modes().delete(mode.id).await.unwrap();
+    let again = tx.modes().delete(mode.id).await.unwrap();
+    let built_in = tx.modes().delete(afk).await.unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert_eq!((first, again, built_in), (true, false, false));
+    assert_eq!(db.modes().find(mode.id).await.unwrap(), None);
+    assert!(db.modes().find(afk).await.unwrap().is_some());
 }

@@ -473,9 +473,8 @@ pub fn app_with(
     // One bus: the ingest publishes the agents' answers on it, and a chat
     // send waits for its answer there (ADR-0020, S5).
     let events = EventBus::new();
+    let modes = mode_service(config, &clock, &random, &store, Arc::clone(&reconcile));
     let bots = bot_service(config, &clock, &random, &store, &agents, &events, reconcile);
-    let modes = ModeService::new(Arc::clone(&clock), Arc::clone(&random), Arc::clone(&store))
-        .with_allowlist(config.chat.command_allowlist.clone());
     let shutdown = CancellationToken::new();
     let (enrollment_tokens, grpc) = control_plane_services(
         config,
@@ -622,6 +621,20 @@ fn bot_service(
     .with_allowlist(config.chat.command_allowlist.clone())
     .with_reconcile(reconcile)
     .with_chat_wait(ChatWait::new(config.http.request_timeout))
+}
+
+/// The modes' service over the app's ports, with `[chat]`'s allowlist,
+/// hinting `reconcile` after each real edit so the bots get it.
+fn mode_service(
+    config: &ServerConfig,
+    clock: &Arc<dyn Clock>,
+    random: &Arc<dyn SecureRandom>,
+    store: &Arc<dyn Store>,
+    reconcile: Arc<dyn Reconcile>,
+) -> ModeService {
+    ModeService::new(Arc::clone(clock), Arc::clone(random), Arc::clone(store))
+        .with_allowlist(config.chat.command_allowlist.clone())
+        .with_reconcile(reconcile)
 }
 
 /// The 2FA service over the app's ports, sealing TOTP secrets with `vault`

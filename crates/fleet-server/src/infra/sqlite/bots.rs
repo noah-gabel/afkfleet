@@ -692,6 +692,34 @@ pub(super) async fn set_mode(
     Ok(done.rows_affected() == 1)
 }
 
+/// The accounts whose bots run `mode`; see [`BotWrites::accounts_with_mode`].
+///
+/// [`BotWrites::accounts_with_mode`]: crate::ports::bots::BotWrites::accounts_with_mode
+pub(super) async fn accounts_with_mode(
+    conn: &mut SqliteConnection,
+    mode: ModeId,
+) -> Result<Vec<AccountId>, StoreError> {
+    let mode = id_text(mode);
+    // The index bots_mode_id finds them (0014).
+    sqlx::query!(
+        r#"SELECT rowid AS "rowid!: i64", account_id AS "account_id!"
+           FROM bots WHERE mode_id = ? ORDER BY account_id"#,
+        mode
+    )
+    .fetch_all(conn)
+    .await
+    .map_err(store_error)?
+    .into_iter()
+    .map(|row| {
+        parse_id(&row.account_id).ok_or(StoreError::Corrupt {
+            table: BOTS,
+            column: "account_id",
+            rowid: row.rowid,
+        })
+    })
+    .collect()
+}
+
 /// Sets whether `bot` should run, when it says otherwise.
 pub(super) async fn set_desired(
     conn: &mut SqliteConnection,

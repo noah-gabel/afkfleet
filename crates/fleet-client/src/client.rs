@@ -29,7 +29,7 @@ use fleet_api_types::chat::{
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
-use fleet_api_types::modes::{CreateModeRequest, ModePage, ModeResponse};
+use fleet_api_types::modes::{CreateModeRequest, ModePage, ModeResponse, UpdateModeRequest};
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
 use fleet_api_types::{
@@ -699,6 +699,53 @@ impl<S: SessionStore> Client<S> {
         request: &CreateModeRequest,
     ) -> Result<ModeResponse, ClientError> {
         self.core.create_mode(request, true).await
+    }
+
+    /// `PUT /modes/{id}`: the mode as it should be, at the `version` the
+    /// caller read (200: the mode as it now is, unchanged when the edit shows
+    /// the same), whose steps send no command off the server's allowlist;
+    /// [`Client::update_mode_with_commands`] takes one that does.
+    ///
+    /// # Errors
+    /// The server's 403 (`mode_needs_step_up` for a command off the
+    /// allowlist; `forbidden` without the right to edit the mode, both as it
+    /// is and as it will be), 404, 409 (`mode_changed`: the mode changed
+    /// since `version`; `mode_in_use_by_others`: a bot uses it that the
+    /// caller couldn't set the edited mode on) or 422 (a field that breaks its
+    /// rule, at its path), as [`ClientError::Api`]; any other error as for
+    /// every authenticated call.
+    pub async fn update_mode(
+        &self,
+        id: ModeId,
+        request: &UpdateModeRequest,
+    ) -> Result<ModeResponse, ClientError> {
+        self.core.update_mode(id, request, false).await
+    }
+
+    /// `PUT /modes/{id}/with-commands`: the mode as it should be, whatever
+    /// commands its steps send, after [`Client::step_up`] within 5 minutes.
+    ///
+    /// # Errors
+    /// As [`Client::update_mode`], and 403 `step_up_required` without a
+    /// fresh step-up instead of the pointer.
+    pub async fn update_mode_with_commands(
+        &self,
+        id: ModeId,
+        request: &UpdateModeRequest,
+    ) -> Result<ModeResponse, ClientError> {
+        self.core.update_mode(id, request, true).await
+    }
+
+    /// `DELETE /modes/{id}`: deletes a mode no bot uses, after
+    /// [`Client::step_up`] within 5 minutes.
+    ///
+    /// # Errors
+    /// The server's 403 (`step_up_required` without a fresh step-up,
+    /// `forbidden` without the right to delete it), 404 or 409
+    /// (`mode_in_use`: a bot uses it), as [`ClientError::Api`]; any other
+    /// error as for every authenticated call.
+    pub async fn delete_mode(&self, id: ModeId) -> Result<(), ClientError> {
+        self.core.delete_mode(id).await
     }
 }
 

@@ -8,6 +8,14 @@
 //!   send a command off the server's allowlist is written only through
 //!   `POST /modes/with-commands`, after a step-up; the plain route answers
 //!   403 `mode_needs_step_up` (S16).
+//! - **`PUT /modes/{id}`** takes an [`UpdateModeRequest`]: the whole mode
+//!   again, with the `version` the caller read (S18), and the same
+//!   `/with-commands` twin. An edit that shows the same as the stored mode
+//!   changes nothing and answers the mode (S21); a stale `version` is 409
+//!   `mode_changed`, and an edit a bot that uses the mode would refuse from
+//!   this caller is 409 `mode_in_use_by_others` (S17).
+//! - **`DELETE /modes/{id}`**, after a step-up, deletes a mode no bot uses;
+//!   one a bot uses is 409 `mode_in_use` (S16, S17).
 //! - **The steps** are ADR-0010's mode JSON
 //!   (`{"action":{"type":"look","yaw":0.0,"pitch":0.0},"schedule":{"type":"every","interval_ms":…,"jitter_ms":…},"probability":…}`)
 //!   as flat types (S12): each action and schedule has a `type` and the
@@ -251,6 +259,32 @@ pub struct CreateModeRequest {
     #[garde(skip)]
     pub visibility: ModeVisibility,
     /// Its steps, at most 32, in the order they run when due together.
+    #[garde(dive)]
+    #[ts(as = "Vec<ModeStepRequest>")]
+    #[schema(value_type = Vec<ModeStepRequest>)]
+    pub steps: ModeSteps,
+}
+
+/// `PUT /modes/{id}`: the mode as it should be from now on, and the version
+/// the caller last read (ADR-0020, S18, R2).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Validate, TS, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UpdateModeRequest {
+    /// The `version` of the mode the caller last read: a mode changed since
+    /// is 409 `mode_changed`, unless this edit shows the same as it.
+    #[garde(range(min = 1))]
+    #[schema(schema_with = integer_schema::<1, { u32::MAX }>)]
+    pub version: u32,
+    /// Its name, under [`CreateModeRequest::name`]'s rules; the mode's own
+    /// name never clashes with itself, in any case.
+    #[garde(custom(valid_mode_name))]
+    #[schema(schema_with = BoundedText::<MODE_NAME_MAX_CHARS>::schema)]
+    pub name: String,
+    /// Who may see it; switching needs the right to edit it both as it is
+    /// and as it will be.
+    #[garde(skip)]
+    pub visibility: ModeVisibility,
+    /// Its steps, at most 32, under [`CreateModeRequest::steps`]' rules.
     #[garde(dive)]
     #[ts(as = "Vec<ModeStepRequest>")]
     #[schema(value_type = Vec<ModeStepRequest>)]
@@ -1570,5 +1604,164 @@ mod tests {
 
         assert_eq!(read.steps.first().unwrap().action.kind.known(), None);
         assert_eq!(serde_json::to_value(&read).unwrap(), answer);
+    }
+
+    /// An update request of `name` at `version` with `steps`.
+    fn update(version: u32, name: &str, steps: &Value) -> Value {
+        json!({ "version": version, "name": name, "visibility": "private", "steps": steps })
+    }
+
+    /// What garde reports for an update request: each path and message.
+    fn update_problems(json: Value) -> Vec<(String, String)> {
+        let request: UpdateModeRequest = serde_json::from_value(json).unwrap();
+        request.validate().map_or_else(
+            |report| {
+                report
+                    .iter()
+                    .map(|(path, error)| (path.to_string(), error.message().to_owned()))
+                    .collect()
+            },
+            |()| Vec::new(),
+        )
+    }
+
+    #[test]
+    fn an_update_request_round_trips_and_carries_a_version_of_at_least_one() {
+        let json = update(7, "Greeter", &every_type()["steps"]);
+        let read: UpdateModeRequest = serde_json::from_value(json.clone()).unwrap();
+
+        assert_eq!(serde_json::to_value(&read).unwrap(), json);
+        assert_eq!(update_problems(json), []);
+        assert_eq!(
+            update_problems(update(0, "Greeter", &json!([]))),
+            [at("version", "lower than 1")]
+        );
+        assert_eq!(
+            update_problems(update(1, "afk", &json!([]))),
+            [at("name", MODE_NAME_RESERVED)]
+        );
+        assert_eq!(
+            update_problems(update(
+                1,
+                "Fine",
+                &json!([step(json!({ "type": "jump" }), every(249))])
+            )),
+            [at(
+                "steps[0].schedule.interval_ms",
+                "must be at least 250 ms"
+            )]
+        );
+    }
+
+    #[test]
+    fn an_update_request_without_a_version_or_with_another_field_is_a_shape_error() {
+        let mut missing = update(1, "Greeter", &json!([]));
+        missing.as_object_mut().unwrap().remove("version");
+        let mut extra = update(1, "Greeter", &json!([]));
+        extra["owner"] = json!("someone");
+        let mut too_big = update(1, "Greeter", &json!([]));
+        too_big["version"] = json!(u64::from(u32::MAX) + 1);
+        let mut negative = update(1, "Greeter", &json!([]));
+        negative["version"] = json!(-1);
+
+        for json in [missing, extra, too_big, negative] {
+            assert!(
+                serde_json::from_value::<UpdateModeRequest>(json.clone()).is_err(),
+                "{json}"
+            );
+        }
+    }
+
+    /// An answer's steps can't be sent back as they are: `arguments_hidden`
+    /// isn't a request's field (R5).
+    #[test]
+    fn an_answered_step_sent_back_as_it_is_is_a_shape_error() {
+        let definition: ModeDefinition = serde_json::from_value(every_type()).unwrap();
+        let answered = serde_json::to_value(answered(&definition)).unwrap();
+
+        let sent_back = update(1, "Greeter", &answered);
+
+        assert!(serde_json::from_value::<UpdateModeRequest>(sent_back).is_err());
+    }
+
+    /// `definition`'s steps as a viewer who may edit the mode gets them.
+    fn answered(definition: &ModeDefinition) -> Vec<ModeStep> {
+        definition
+            .steps()
+            .iter()
+            .map(|step| {
+                ModeStep::of(step, |message| Redacted {
+                    text: message.as_str(),
+                    arguments_hidden: false,
+                })
+            })
+            .collect()
+    }
+
+    /// `definition` loaded and saved back untouched: its answer, without
+    /// `arguments_hidden`, read as a request's steps.
+    fn sent_back(definition: &ModeDefinition) -> Result<ModeDefinition, ModeFieldError> {
+        let answer = serde_json::to_value(answered(definition)).unwrap();
+        steps(without_arguments_hidden(answer)).definition()
+    }
+
+    /// A mode whose one step sends `message` at start.
+    fn chatting(message: &str) -> ModeDefinition {
+        serde_json::from_value(json!({ "steps": [step(
+            json!({ "type": "send_chat", "message": message }),
+            at_start(),
+        )] }))
+        .unwrap()
+    }
+
+    /// A mode whose one step looks at `yaw` and `pitch` at start.
+    fn looking(yaw: f32, pitch: f32) -> ModeDefinition {
+        serde_json::from_value(json!({ "steps": [step(
+            json!({ "type": "look", "yaw": yaw, "pitch": pitch }),
+            at_start(),
+        )] }))
+        .unwrap()
+    }
+
+    /// fleet-core's `same_as_shown` is the answer's own rule (ADR-0020, S21,
+    /// R7): two modes read the same exactly when their answers, saved back
+    /// untouched, read as the same mode, and a mode saved back untouched
+    /// reads the same as itself.
+    #[rstest]
+    #[case::a_zero_width_space(chatting("he\u{200B}llo"), chatting("hello"), true)]
+    #[case::a_word_joiner(chatting("he\u{2060}llo"), chatting("hello"), true)]
+    #[case::a_byte_order_mark(chatting("\u{FEFF}hello"), chatting("hello"), true)]
+    #[case::an_invisible_next_to_an_edge_space(chatting("\u{200B} hello"), chatting("hello"), true)]
+    #[case::an_invisible_inside_a_command_name(
+        chatting("/spa\u{200B}wn home"),
+        chatting("/spawn home"),
+        true
+    )]
+    #[case::a_no_break_space_shows(chatting("a\u{A0}b"), chatting("a b"), false)]
+    #[case::another_message(chatting("hello"), chatting("hallo"), false)]
+    #[case::the_same_message(chatting("/spawn home"), chatting("/spawn home"), true)]
+    #[case::negative_zero(looking(-0.0, 0.0), looking(0.0, -0.0), true)]
+    #[case::another_angle(looking(1.0, 0.0), looking(1.5, 0.0), false)]
+    fn reading_the_same_is_answering_the_same(
+        #[case] one: ModeDefinition,
+        #[case] other: ModeDefinition,
+        #[case] same: bool,
+    ) {
+        let (one_back, other_back) = (sent_back(&one).unwrap(), sent_back(&other).unwrap());
+
+        assert_eq!(one.same_as_shown(&other), same);
+        assert_eq!(one_back == other_back, same);
+        assert!(one.same_as_shown(&one_back), "{one_back:?}");
+        assert!(other.same_as_shown(&other_back), "{other_back:?}");
+    }
+
+    /// A message made only of invisible characters is answered empty, which
+    /// can't be saved back: the one untouched save that isn't a no-op
+    /// (ADR-0020, S21's residual).
+    #[test]
+    fn a_message_of_only_invisible_characters_cant_be_saved_back() {
+        let error = sent_back(&chatting("\u{200B}\u{2060}")).unwrap_err();
+
+        assert_eq!(error.field, ModeField::ActionField(0, "message"));
     }
 }

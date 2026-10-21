@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT EXISTS (\n               SELECT 1 FROM modes\n               WHERE lower(name) = lower(?)\n                 AND (owner_user_id = ? OR (? AND visibility = 'shared'))\n                 AND (? IS NULL OR id <> ?)\n           ) AS \"taken!: bool\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "taken!: bool",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "8f55fc95f9fdbf29e3b38e4989e67568c9f567ec81b1bde362ce0394d333360e"
+}

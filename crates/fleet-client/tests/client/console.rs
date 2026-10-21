@@ -755,3 +755,167 @@ async fn mode_switches_a_bots_mode() {
     );
     server.stop().await;
 }
+
+/// The ID of the newest mode `client` sees.
+async fn newest_mode(client: &fleet_client::Client<impl fleet_client::SessionStore>) -> String {
+    client
+        .modes(&PageQuery {
+            before: None,
+            limit: None,
+        })
+        .await
+        .unwrap()
+        .items
+        .first()
+        .unwrap()
+        .id
+        .to_string()
+}
+
+/// A greeting mode of the Owner's, created through `owner`.
+async fn greeter(owner: &fleet_client::Client<impl fleet_client::SessionStore>) -> String {
+    let request = serde_json::from_value(
+        serde_json::json!({ "name": "Greeter", "visibility": "private", "steps": [] }),
+    )
+    .unwrap();
+    owner.create_mode(&request).await.unwrap();
+    newest_mode(owner).await
+}
+
+/// `edit-mode` edits the mode its JSON holds and shows its line at the next
+/// version, never its steps' text; the same line again changes nothing,
+/// and a stale one shows `mode_changed`'s text.
+#[tokio::test]
+async fn edit_mode_edits_the_mode_and_never_shows_its_steps() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    let id = greeter(&owner).await;
+    let (client, _) = server.client();
+    let edit = |version: u32, message: &str| {
+        format!(
+            r#"edit-mode {id} {{"version":{version},"name":"Greeter","visibility":"private","steps":[{{"action":{{"type":"send_chat","message":"{message}"}},"schedule":{{"type":"every","interval_ms":60000,"jitter_ms":0}},"probability":100}}]}}"#
+        )
+    };
+    let lines = [
+        edit(1, "hello secret-text"),
+        edit(1, "hello secret-text"),
+        edit(1, "bye secret-text"),
+    ];
+    let lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &lines);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let text = terminal.text();
+    assert_eq!(
+        text.matches(&format!(
+            "mode {id} Greeter private mine editable version 2"
+        ))
+        .count(),
+        2,
+        "{text}"
+    );
+    assert!(
+        text.contains("This mode changed since you opened it. Load it again to see the change."),
+        "{text}"
+    );
+    assert!(!text.contains("secret-text"), "{text}");
+    server.stop().await;
+}
+
+/// An edit with a command off the allowlist asks for the password again,
+/// once, and goes through the step-up twin.
+#[tokio::test]
+async fn edit_mode_with_a_command_off_the_allowlist_asks_for_the_password_once() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    let id = greeter(&owner).await;
+    let (client, _) = server.client();
+    let line = format!(
+        r#"edit-mode {id} {{"version":1,"name":"Greeter","visibility":"private","steps":[{{"action":{{"type":"send_chat","message":"/op AfkBot2"}},"schedule":{{"type":"at_start"}},"probability":100}}]}}"#
+    );
+    let mut terminal = Scripted::new(&[PASSWORD, &code, PASSWORD], &[&line]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    assert_eq!(terminal.secrets.len(), 0, "the step-up asked once");
+    let text = terminal.text();
+    assert!(
+        text.contains(" Greeter private mine editable version 2"),
+        "{text}"
+    );
+    assert!(
+        !text.contains("AfkBot2") && !text.contains(PASSWORD),
+        "{text}"
+    );
+    server.stop().await;
+}
+
+/// JSON that isn't an edit is said so and never repeated, and nothing is
+/// sent.
+#[tokio::test]
+async fn edit_mode_that_isnt_an_edit_is_never_echoed() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    let id = greeter(&owner).await;
+    let (client, _) = server.client();
+    let line = format!(
+        r#"edit-mode {id} {{"name":"Greeter","visibility":"private","steps":[{{"say":"secret-text"}}]}}"#
+    );
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &[&line]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let text = terminal.text();
+    assert!(text.contains("not a mode's JSON"), "{text}");
+    assert!(!text.contains("secret-text"), "{text}");
+    assert_eq!(newest_mode(&owner).await, id);
+    server.stop().await;
+}
+
+/// `delete-mode` asks for the password again and deletes the mode; one a
+/// bot uses shows `mode_in_use`'s text and stays.
+#[tokio::test]
+async fn delete_mode_asks_for_the_password_and_deletes_the_mode() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    let id = greeter(&owner).await;
+    let used = {
+        let request = serde_json::from_value(
+            serde_json::json!({ "name": "Used", "visibility": "private", "steps": [] }),
+        )
+        .unwrap();
+        owner.create_mode(&request).await.unwrap().id
+    };
+    let bot = bot_of(&owner, "AfkBot9").await;
+    owner
+        .set_bot_mode(
+            bot,
+            &fleet_api_types::bots::BotModeRequest { mode_id: used },
+        )
+        .await
+        .unwrap();
+    let (client, _) = server.client();
+    let delete = format!("delete-mode {id}");
+    let in_use = format!("delete-mode {used}");
+    let mut terminal = Scripted::new(&[PASSWORD, &code, PASSWORD], &[&delete, &in_use]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    assert_eq!(terminal.secrets.len(), 0, "the step-up asked once");
+    let text = terminal.text();
+    assert!(text.contains(&format!("mode {id} deleted")), "{text}");
+    assert!(
+        text.contains(
+            "A bot uses this mode, so it can't be deleted. Switch every bot to another mode first."
+        ),
+        "{text}"
+    );
+    assert!(!text.contains(PASSWORD), "{text}");
+    assert_eq!(newest_mode(&owner).await, used.to_string());
+    server.stop().await;
+}

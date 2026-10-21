@@ -94,7 +94,7 @@ use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{
     CODE_MAX_CHARS, MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse,
 };
-use fleet_api_types::modes::{CreateModeRequest, ModePage, ModeResponse};
+use fleet_api_types::modes::{CreateModeRequest, ModePage, ModeResponse, UpdateModeRequest};
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
 use fleet_api_types::{
@@ -852,6 +852,31 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         };
         let answer = self.authed(Method::POST, url, Some(json(request))).await?;
         expect_json(answer, 201)
+    }
+
+    /// The mode `id` edited through `PUT /modes/{id}`, or its step-up twin
+    /// when `with_commands` (200).
+    pub(crate) async fn update_mode(
+        self: &Arc<Self>,
+        id: ModeId,
+        request: &UpdateModeRequest,
+        with_commands: bool,
+    ) -> Result<ModeResponse, ClientError> {
+        let id = id.to_string();
+        let url = if with_commands {
+            self.server.api(&["modes", &id, "with-commands"])
+        } else {
+            self.server.api(&["modes", &id])
+        };
+        let answer = self.authed(Method::PUT, url, Some(json(request))).await?;
+        expect_json(answer, 200)
+    }
+
+    /// The mode `id` deleted through `DELETE /modes/{id}` (204).
+    pub(crate) async fn delete_mode(self: &Arc<Self>, id: ModeId) -> Result<(), ClientError> {
+        let url = self.server.api(&["modes", &id.to_string()]);
+        let answer = self.authed(Method::DELETE, url, None).await?;
+        expect_empty(answer, 204)
     }
 
     // ---- Sending ----
@@ -3090,6 +3115,108 @@ mod tests {
             .on("POST /api/v1/modes", Ok(refusal(status, code.as_str())));
 
         let error = core.create_mode(&a_new_mode(), false).await.unwrap_err();
+
+        assert!(is_api(&error, status, code), "{error:?}");
+    }
+
+    /// An edit of the mode `a_mode()` answers, at version 1.
+    fn an_edit() -> UpdateModeRequest {
+        serde_json::from_value(
+            json!({ "version": 1, "name": "Greeter", "visibility": "shared", "steps": [] }),
+        )
+        .unwrap()
+    }
+
+    /// The route of the mode `a_mode()` answers.
+    const A_MODE: &str = "/api/v1/modes/018bcfe5-6800-7cdc-8dcd-cdcdcdcdcdcd";
+
+    #[rstest]
+    #[case::plain(false, "")]
+    #[case::with_commands(true, "/with-commands")]
+    #[tokio::test]
+    async fn a_mode_is_edited_through_its_route(#[case] with_commands: bool, #[case] tail: &str) {
+        let core = signed_in().await;
+        let route = format!("PUT {A_MODE}{tail}");
+        core.transport.on(&route, Ok(dto(200, &a_mode())));
+
+        let edited = core
+            .update_mode(a_mode().id, &an_edit(), with_commands)
+            .await
+            .unwrap();
+
+        assert_eq!(edited, a_mode());
+        assert_eq!(
+            core.transport.seen(),
+            [sent(&route, Some(serde_json::to_value(an_edit()).unwrap()))]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_mode_is_deleted_through_its_route() {
+        let core = signed_in().await;
+        let route = format!("DELETE {A_MODE}");
+        core.transport.on(&route, Ok(raw(204, b"")));
+
+        core.delete_mode(a_mode().id).await.unwrap();
+
+        assert_eq!(core.transport.seen(), [sent(&route, None)]);
+    }
+
+    #[tokio::test]
+    async fn an_edit_or_a_delete_answered_with_another_success_is_unexpected() {
+        let core = signed_in().await;
+        core.transport
+            .on(&format!("PUT {A_MODE}"), Ok(dto(201, &a_mode())));
+        core.transport
+            .on(&format!("DELETE {A_MODE}"), Ok(dto(200, &a_mode())));
+
+        let edit = core
+            .update_mode(a_mode().id, &an_edit(), false)
+            .await
+            .unwrap_err();
+        let delete = core.delete_mode(a_mode().id).await.unwrap_err();
+
+        for (error, expected) in [(edit, 201), (delete, 200)] {
+            assert!(
+                matches!(
+                    error,
+                    ClientError::UnexpectedResponse {
+                        status,
+                        reason: Unexpected::Status
+                    } if status == expected
+                ),
+                "{error:?}"
+            );
+        }
+    }
+
+    #[rstest]
+    #[case::pointer("PUT", 403, ErrorCode::ModeNeedsStepUp)]
+    #[case::changed("PUT", 409, ErrorCode::ModeChanged)]
+    #[case::in_use_by_others("PUT", 409, ErrorCode::ModeInUseByOthers)]
+    #[case::step_up("DELETE", 403, ErrorCode::StepUpRequired)]
+    #[case::in_use("DELETE", 409, ErrorCode::ModeInUse)]
+    #[tokio::test]
+    async fn a_refused_edit_or_delete_comes_back_with_the_servers_code(
+        #[case] method: &str,
+        #[case] status: u16,
+        #[case] code: ErrorCode,
+    ) {
+        use fleet_api_types::OpenEnum as _;
+        let core = signed_in().await;
+        core.transport.on(
+            &format!("{method} {A_MODE}"),
+            Ok(refusal(status, code.as_str())),
+        );
+
+        let error = if method == "PUT" {
+            core.update_mode(a_mode().id, &an_edit(), false)
+                .await
+                .map(|_| ())
+                .unwrap_err()
+        } else {
+            core.delete_mode(a_mode().id).await.unwrap_err()
+        };
 
         assert!(is_api(&error, status, code), "{error:?}");
     }

@@ -56,6 +56,9 @@
 //! | `GET /api/v1/modes` | user | one page of the modes the user may see, each under its field rules |
 //! | `POST /api/v1/modes` | user (a shared mode: Admin+; steps sending a command off the allowlist: pointed to `/with-commands`) | a new mode of the user's: 201 |
 //! | `POST /api/v1/modes/with-commands` | user + step-up (a shared mode: Admin+) | a new mode of the user's, whatever its steps send: 201 |
+//! | `PUT /api/v1/modes/{id}` | user (the right to edit it, both as it is and as it will be; steps sending a command off the allowlist: pointed to `/with-commands`) | the mode as it should be, at the version read: 200 |
+//! | `PUT /api/v1/modes/{id}/with-commands` | user + step-up (the right to edit it, both ways) | the mode as it should be, whatever its steps send: 200 |
+//! | `DELETE /api/v1/modes/{id}` | user + step-up (the right to delete it) | deletes a mode no bot uses: 204 |
 //! | `GET /api/openapi.json` | public | the `OpenAPI` document, only in dev mode ([`openapi`](super::openapi)) |
 //!
 //! The health routes have no `/api/v1` prefix. Both answer `200` with an
@@ -263,6 +266,9 @@ pub fn api_routes(routes: Routes) -> Routes {
         .authed_route(RateClass::Standard, routes!(modes::list))
         .authed_route(RateClass::Standard, routes!(modes::create))
         .step_up_route(RateClass::Standard, routes!(modes::create_with_commands))
+        .authed_route(RateClass::Standard, routes!(modes::update))
+        .step_up_route(RateClass::Standard, routes!(modes::update_with_commands))
+        .step_up_route(RateClass::Standard, routes!(modes::delete))
 }
 
 /// Every route with `state`, behind the middleware stack with the timeout,

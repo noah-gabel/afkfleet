@@ -16,7 +16,7 @@ use sqlx::SqliteConnection;
 
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::{store_error, unique_violation};
-use crate::ports::modes::{InsertModeError, ListedMode, ModeOwner, NewMode, StoredMode};
+use crate::ports::modes::{ListedMode, ModeChange, ModeOwner, NewMode, StoredMode, WriteModeError};
 use crate::ports::page::Page;
 use crate::ports::store::StoreError;
 
@@ -84,9 +84,11 @@ pub(super) async fn name_taken(
     owner: UserId,
     name: &ModeName,
     shared: bool,
+    except: Option<ModeId>,
 ) -> Result<bool, StoreError> {
     let owner = id_text(owner);
     let name = name.as_str();
+    let except = except.map(|id| id_text(id).to_string());
     // SQLite's lower() folds ASCII only, as ModeName::same_name and the
     // unique indexes do.
     sqlx::query_scalar!(
@@ -94,10 +96,13 @@ pub(super) async fn name_taken(
                SELECT 1 FROM modes
                WHERE lower(name) = lower(?)
                  AND (owner_user_id = ? OR (? AND visibility = 'shared'))
+                 AND (? IS NULL OR id <> ?)
            ) AS "taken!: bool""#,
         name,
         owner,
-        shared
+        shared,
+        except,
+        except
     )
     .fetch_one(conn)
     .await
@@ -108,7 +113,7 @@ pub(super) async fn name_taken(
 pub(super) async fn insert(
     conn: &mut SqliteConnection,
     mode: &NewMode,
-) -> Result<(), InsertModeError> {
+) -> Result<(), WriteModeError> {
     let id = id_text(mode.id);
     let owner = id_text(mode.owner);
     let name = mode.name.as_str();
@@ -133,10 +138,92 @@ pub(super) async fn insert(
     .execute(conn)
     .await
     .map_err(|error| match unique_violation(&error).as_deref() {
-        Some(TAKEN_OWNERS_NAME | TAKEN_SHARED_NAME) => InsertModeError::NameTaken,
-        _ => InsertModeError::Store(store_error(error)),
+        Some(TAKEN_OWNERS_NAME | TAKEN_SHARED_NAME) => WriteModeError::NameTaken,
+        _ => WriteModeError::Store(store_error(error)),
     })?;
     Ok(())
+}
+
+/// Stores `change` over a user's mode still at its expected version; see
+/// [`ModeWrites::update`].
+///
+/// [`ModeWrites::update`]: crate::ports::modes::ModeWrites::update
+pub(super) async fn update(
+    conn: &mut SqliteConnection,
+    change: &ModeChange,
+) -> Result<bool, WriteModeError> {
+    let id = id_text(change.id);
+    let expected = i64::from(change.expected.get());
+    let version = i64::from(change.version.get());
+    let name = change.name.as_str();
+    let visibility = change.visibility.as_str();
+    let definition = serde_json::to_string(&change.definition)
+        .map_err(|error| StoreError::Backend(Box::new(error)))?;
+    let updated_at = time_text(change.updated_at).ok_or(StoreError::Unstorable {
+        table: MODES,
+        column: "updated_at",
+    })?;
+    let done = sqlx::query!(
+        "UPDATE modes
+         SET name = ?, visibility = ?, definition_json = ?, version = ?, updated_at = ?
+         WHERE id = ? AND version = ? AND owner_user_id IS NOT NULL",
+        name,
+        visibility,
+        definition,
+        version,
+        updated_at,
+        id,
+        expected
+    )
+    .execute(conn)
+    .await
+    .map_err(|error| match unique_violation(&error).as_deref() {
+        Some(TAKEN_OWNERS_NAME | TAKEN_SHARED_NAME) => WriteModeError::NameTaken,
+        _ => WriteModeError::Store(store_error(error)),
+    })?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// Deletes a user's mode; see [`ModeWrites::delete`].
+///
+/// [`ModeWrites::delete`]: crate::ports::modes::ModeWrites::delete
+pub(super) async fn delete(conn: &mut SqliteConnection, id: ModeId) -> Result<bool, StoreError> {
+    let id = id_text(id);
+    let done = sqlx::query!(
+        "DELETE FROM modes WHERE id = ? AND owner_user_id IS NOT NULL",
+        id
+    )
+    .execute(conn)
+    .await
+    .map_err(store_error)?;
+    Ok(done.rows_affected() == 1)
+}
+
+/// The mode `id` with its owner; see [`ModeReads::listed`].
+///
+/// [`ModeReads::listed`]: crate::ports::modes::ModeReads::listed
+pub(super) async fn listed<'c, E>(executor: E, id: ModeId) -> Result<Option<ListedMode>, StoreError>
+where
+    E: sqlx::SqliteExecutor<'c>,
+{
+    let id = id_text(id);
+    sqlx::query_as!(
+        ListedModeRow,
+        r#"SELECT m.rowid AS "rowid!: i64", m.id AS "id!", m.owner_user_id AS "owner_user_id?",
+                  m.name AS "name!", m.visibility AS "visibility!",
+                  m.definition_json AS "definition_json!", m.version AS "version!: i64",
+                  m.created_at AS "created_at!", m.updated_at AS "updated_at!",
+                  u.role AS "owner_role?", u.username AS "owner_name?"
+           FROM modes m
+           LEFT JOIN users u ON u.id = m.owner_user_id
+           WHERE m.id = ?"#,
+        id
+    )
+    .fetch_optional(executor)
+    .await
+    .map_err(store_error)?
+    .map(listed_from_row)
+    .transpose()
 }
 
 /// What SQLite names in a violation of the unique index on an owner's

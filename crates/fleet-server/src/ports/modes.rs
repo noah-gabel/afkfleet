@@ -8,7 +8,8 @@
 //! [`fleet_core::mode::ModePreset::id`] names. Users list the modes they may
 //! see ([`ModeReads::visible`], P11.4), each with its owner's current role
 //! and name ([`ListedMode`]), which `authorize()` and the API's field rules
-//! need (ADR-0020, S14).
+//! need (ADR-0020, S14). A user's mode changes only at the version its
+//! editor read ([`ModeWrites::update`], S18).
 
 use core::fmt;
 use core::num::NonZeroU32;
@@ -97,6 +98,14 @@ pub trait ModeReads: Send + Sync + fmt::Debug {
         viewer: Actor,
         page: Page<ModeId>,
     ) -> Result<Vec<ListedMode>, StoreError>;
+
+    /// The mode `id` with its owner's current role and name, for checking a
+    /// write before its transaction (P11.4).
+    ///
+    /// # Errors
+    /// [`StoreError`], [`StoreError::Corrupt`] for a row that doesn't read
+    /// back.
+    async fn listed(&self, id: ModeId) -> Result<Option<ListedMode>, StoreError>;
 }
 
 /// A user's new mode, version 1 (P11.4).
@@ -116,9 +125,28 @@ pub struct NewMode {
     pub created_at: DateTime<Utc>,
 }
 
+/// A user's mode as an edit leaves it (P11.4; ADR-0020, S18).
+#[derive(Debug, Clone, PartialEq)]
+pub struct ModeChange {
+    /// The mode.
+    pub id: ModeId,
+    /// The version the edit read: the row changes only while it has it.
+    pub expected: NonZeroU32,
+    /// The version it's stored at from now on.
+    pub version: NonZeroU32,
+    /// Its name.
+    pub name: ModeName,
+    /// Who may see it.
+    pub visibility: ModeVisibility,
+    /// Its steps.
+    pub definition: ModeDefinition,
+    /// When it changed.
+    pub updated_at: DateTime<Utc>,
+}
+
 /// Why a mode wasn't stored.
 #[derive(Debug, thiserror::Error)]
-pub enum InsertModeError {
+pub enum WriteModeError {
     /// One of the owner's modes, or for a shared mode a shared one, has the
     /// name, ASCII case ignored: the table's unique indexes refused it
     /// (ADR-0020, S13).
@@ -140,6 +168,14 @@ pub trait ModeWrites: Send {
     /// doesn't read back.
     async fn find(&mut self, id: ModeId) -> Result<Option<StoredMode>, StoreError>;
 
+    /// The mode `id` with its owner's current role and name, read in this
+    /// transaction (P11.4).
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`] for a row that
+    /// doesn't read back.
+    async fn listed(&mut self, id: ModeId) -> Result<Option<ListedMode>, StoreError>;
+
     /// How many modes `owner` owns, private and shared together (ADR-0020,
     /// S19).
     ///
@@ -149,7 +185,8 @@ pub trait ModeWrites: Send {
 
     /// Whether `name` is taken for a mode of `owner`, ASCII case ignored: by
     /// another of the owner's modes, or, when the mode is `shared`, by any
-    /// shared mode, the built-in ones included (ADR-0020, S13).
+    /// shared mode, the built-in ones included (ADR-0020, S13). The mode
+    /// `except`, the one being renamed, never takes it.
     ///
     /// # Errors
     /// [`StoreError`].
@@ -158,12 +195,28 @@ pub trait ModeWrites: Send {
         owner: UserId,
         name: &ModeName,
         shared: bool,
+        except: Option<ModeId>,
     ) -> Result<bool, StoreError>;
 
     /// Stores `mode` at version 1.
     ///
     /// # Errors
-    /// [`InsertModeError::NameTaken`] when a unique index refuses the name,
-    /// or [`InsertModeError::Store`].
-    async fn insert(&mut self, mode: &NewMode) -> Result<(), InsertModeError>;
+    /// [`WriteModeError::NameTaken`] when a unique index refuses the name,
+    /// or [`WriteModeError::Store`].
+    async fn insert(&mut self, mode: &NewMode) -> Result<(), WriteModeError>;
+
+    /// Stores `change` over a user's mode that's still at
+    /// `change.expected`; never over a built-in mode. Whether it changed.
+    ///
+    /// # Errors
+    /// [`WriteModeError::NameTaken`] when a unique index refuses the name,
+    /// or [`WriteModeError::Store`].
+    async fn update(&mut self, change: &ModeChange) -> Result<bool, WriteModeError>;
+
+    /// Deletes the user's mode `id`; never a built-in mode. Whether it was
+    /// there. The bots' foreign key refuses a mode a bot runs.
+    ///
+    /// # Errors
+    /// [`StoreError`], a mode a bot runs among them.
+    async fn delete(&mut self, id: ModeId) -> Result<bool, StoreError>;
 }

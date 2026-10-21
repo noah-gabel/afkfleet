@@ -283,6 +283,16 @@ pub trait BotWrites: Send {
     /// [`StoreError`]: a mode that doesn't exist, among the rest.
     async fn set_mode(&mut self, bot: BotId, mode: ModeId) -> Result<bool, StoreError>;
 
+    /// The accounts whose bots run `mode`, in ID order, each once (an
+    /// account has one bot), read in this transaction: what an edit of the
+    /// mode is checked against and what keeps it from being deleted
+    /// (ADR-0020, S17).
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`] for an ID that
+    /// doesn't read back.
+    async fn accounts_with_mode(&mut self, mode: ModeId) -> Result<Vec<AccountId>, StoreError>;
+
     /// Sets whether `bot` should run. Whether it changed: `false` when it
     /// says so already, or no such bot.
     ///

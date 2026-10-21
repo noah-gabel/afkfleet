@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE modes SET version = 4294967295 WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "f6c51155fe2b20d3e22a372afe9eb5d430f9c7a2b47e349af717b607b1cc4b14"
+}

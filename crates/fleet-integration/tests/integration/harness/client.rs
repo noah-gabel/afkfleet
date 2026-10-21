@@ -8,16 +8,42 @@ use core::time::Duration;
 
 use fleet_api_types::accounts::CreateOfflineAccountRequest;
 use fleet_api_types::auth::{LoginRequest, StepUpRequest};
-use fleet_api_types::bots::BotPatchRequest;
+use fleet_api_types::bots::{BotModeRequest, BotPatchRequest};
 use fleet_api_types::chat::{ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse};
 use fleet_api_types::mfa::CODE_MAX_CHARS;
+use fleet_api_types::modes::{
+    CreateModeRequest, ModeActionKind, ModeActionRequest, ModeResponse, ModeScheduleKind,
+    ModeScheduleRequest, ModeStepRequest, ModeSteps, ModeVisibility, UpdateModeRequest,
+};
 use fleet_api_types::{PageQuery, SecretText};
 use fleet_client::{Client, ClientConfig, ClientError, LoginStep, MemoryStore, ServerUrl, Trust};
-use fleet_core::id::BotId;
+use fleet_core::id::{BotId, ModeId};
 use fleet_core::system::Clock as _;
 use totp_rs::Totp;
 
 use super::server::{OWNER, PASSWORD, Server};
+
+/// One step that does `action`, which takes no field, every 250 ms.
+fn every_quarter_second(action: ModeActionKind) -> ModeSteps {
+    ModeSteps(vec![ModeStepRequest {
+        action: ModeActionRequest {
+            kind: action,
+            yaw: None,
+            pitch: None,
+            max_yaw: None,
+            max_pitch: None,
+            on: None,
+            slot: None,
+            message: None,
+        },
+        schedule: ModeScheduleRequest {
+            kind: ModeScheduleKind::Every,
+            interval_ms: Some(250),
+            jitter_ms: Some(0),
+        },
+        probability: 100,
+    }])
+}
 
 /// Where every bot is sent: the fake connector dials nothing.
 pub(crate) const MC_SERVER: &str = "mc.example.com:25565";
@@ -94,6 +120,48 @@ impl Owner {
             .await
             .unwrap();
         bot
+    }
+
+    /// A new private mode `name` of the Owner's, whose one step does
+    /// `action` every 250 ms.
+    pub(crate) async fn mode(&self, name: &str, action: ModeActionKind) -> ModeResponse {
+        self.client
+            .create_mode(&CreateModeRequest {
+                name: name.to_owned(),
+                visibility: ModeVisibility::Private,
+                steps: every_quarter_second(action),
+            })
+            .await
+            .unwrap()
+    }
+
+    /// `mode` edited so that its one step does `action` every 250 ms
+    /// instead, at the version it was answered with.
+    pub(crate) async fn edit_mode(
+        &self,
+        mode: &ModeResponse,
+        action: ModeActionKind,
+    ) -> ModeResponse {
+        self.client
+            .update_mode(
+                mode.id,
+                &UpdateModeRequest {
+                    version: mode.version,
+                    name: mode.name.as_str().to_owned(),
+                    visibility: ModeVisibility::Private,
+                    steps: every_quarter_second(action),
+                },
+            )
+            .await
+            .unwrap()
+    }
+
+    /// Switches `bot` to `mode`.
+    pub(crate) async fn set_mode(&self, bot: BotId, mode: ModeId) {
+        self.client
+            .set_bot_mode(bot, &BotModeRequest { mode_id: mode })
+            .await
+            .unwrap();
     }
 
     /// Starts `bot`.

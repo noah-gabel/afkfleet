@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM modes WHERE id = ? AND owner_user_id IS NOT NULL",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": []
+  },
+  "hash": "c011bb0d2e5d4e90eb9b3341087c835df03023f2ccf74b13ca5776098b25e64e"
+}

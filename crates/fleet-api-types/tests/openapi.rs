@@ -58,7 +58,8 @@ use fleet_api_types::mfa::{
 use fleet_api_types::modes::{
     CreateModeRequest, MODE_MESSAGE_MAX_CHARS, MODE_NAME_MAX_CHARS, ModeAction, ModeActionKind,
     ModeActionRequest, ModeOwnership, ModePage, ModeResponse, ModeSchedule, ModeScheduleKind,
-    ModeScheduleRequest, ModeStep, ModeStepRequest, ModeVisibility, number_schema,
+    ModeScheduleRequest, ModeStep, ModeStepRequest, ModeVisibility, UpdateModeRequest,
+    number_schema,
 };
 use fleet_api_types::sessions::{SessionPage, SessionResponse};
 use fleet_api_types::time::TIMESTAMP_CHARS;
@@ -182,13 +183,14 @@ fn declarations() -> BTreeMap<String, String> {
 }
 
 /// ts-rs's declaration of every mode type (ADR-0020, S12).
-fn mode_declarations(config: &Config) -> [(&'static str, String); 13] {
+fn mode_declarations(config: &Config) -> [(&'static str, String); 14] {
     [
         ("ModeVisibility", ModeVisibility::decl(config)),
         ("ModeOwnership", ModeOwnership::decl(config)),
         ("ModeActionKind", ModeActionKind::decl(config)),
         ("ModeScheduleKind", ModeScheduleKind::decl(config)),
         ("CreateModeRequest", CreateModeRequest::decl(config)),
+        ("UpdateModeRequest", UpdateModeRequest::decl(config)),
         ("ModeStepRequest", ModeStepRequest::decl(config)),
         ("ModeActionRequest", ModeActionRequest::decl(config)),
         ("ModeScheduleRequest", ModeScheduleRequest::decl(config)),
@@ -505,6 +507,7 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::chat_sender_name("ChatLineSender", "name", CHAT_SENDER_MAX_CHARS)]
 #[case::chat_sender_uuid("ChatLineSender", "uuid", ID_CHARS)]
 #[case::mode_request_name("CreateModeRequest", "name", MODE_NAME_MAX_CHARS)]
+#[case::mode_update_name("UpdateModeRequest", "name", MODE_NAME_MAX_CHARS)]
 #[case::mode_request_message("ModeActionRequest", "message", MODE_MESSAGE_MAX_CHARS)]
 #[case::mode_id("ModeResponse", "id", ID_CHARS)]
 #[case::mode_name("ModeResponse", "name", MODE_NAME_MAX_CHARS)]
@@ -526,7 +529,7 @@ fn a_text_field_is_capped_at_its_constant(
 }
 
 /// Every text field whose cap the cases above check.
-const CHECKED_TEXTS: [(&str, &str); 106] = [
+const CHECKED_TEXTS: [(&str, &str); 107] = [
     ("ErrorBody", "message"),
     ("ErrorBody", "request_id"),
     ("FieldError", "path"),
@@ -626,6 +629,7 @@ const CHECKED_TEXTS: [(&str, &str); 106] = [
     ("ChatLineSender", "name"),
     ("ChatLineSender", "uuid"),
     ("CreateModeRequest", "name"),
+    ("UpdateModeRequest", "name"),
     ("ModeActionRequest", "message"),
     ("ModeResponse", "id"),
     ("ModeResponse", "name"),
@@ -681,6 +685,7 @@ fn a_request_schema_refuses_unknown_fields_and_responses_dont() {
         "RefreshRequest",
         "RegisterRequest",
         "StepUpRequest",
+        "UpdateModeRequest",
         "UserPatchRequest",
     ]);
     let components = components_json();
