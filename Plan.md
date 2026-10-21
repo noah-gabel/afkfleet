@@ -4020,6 +4020,12 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Clients:** fleet-client's `update_mode`, `update_mode_with_commands` and `delete_mode`; `just dev-bots`' `edit-mode <id> <json>` and `delete-mode <id>`, the mode line with its version.
   > - **Deviations:** a delete that matches no row it had just read is the internal error too, as the user's note asks of an update; the commits are seven, the clients before the loopback case, which drives the server through fleet-client.
 
+  > Note (P11.4, Phase 11, group C3's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S22–S26): **"on respawn" steps.**
+  > - **fleet-mc** (S22): `Respawned` only for a `Died` the actor took and a `respawn()` since, once the bot is loaded and not dead (azalea's `HasClientLoaded` without `Dead`); never for a dimension change; the next `Died` only after it, so at most three lifecycle events are pending and the drain of 67 holds.
+  > - **The actor** (S23): an `Ok` not confirmed within 5 s is a failure, and the twelfth ends the session `RespawnFailed`, 60 s after the death at most; `Respawned` drops the retry and signals the runner through a `watch`; it stays inside the agent.
+  > - **The runner** (S24): fleet-core's plan keeps the on-respawn steps aside and hands them out on a respawn, a chat skipped within 30 s of the last one, a memory kept for the session; the runner lets go only for a mode that has such steps.
+  > - **Older agents and servers** (S25) refuse the whole message or row, as before; the agent's "couldn't be read" line goes to `error`. **The slow test** (S26): fleet-mc's scenario and a whole-path `slow_` case in fleet-integration.
+
 - [ ] **P11.5** 🔴 Live events:
   1. `POST /events/ticket` returns a single-use ticket valid for 30 s (moka).
   2. The client opens a WebSocket at `GET /events?ticket=…`.
