@@ -83,8 +83,23 @@ impl Logs {
     /// Waits until `done`, looking again at every line and every
     /// [`RECHECK`]; fails the case with `what` and the log after
     /// [`PATIENCE`].
-    pub(crate) async fn until(&self, what: &str, mut done: impl AsyncFnMut() -> bool) {
-        let waited = tokio::time::timeout(PATIENCE, async {
+    pub(crate) async fn until(&self, what: &str, done: impl AsyncFnMut() -> bool) {
+        let came = self.within(PATIENCE, done).await;
+        assert!(
+            came,
+            "{what}: not within {PATIENCE:?}\n{}",
+            self.buffer.text()
+        );
+    }
+
+    /// Waits until `done`, as [`Logs::until`] does, but at most `bound`, and
+    /// says whether it came: for a case that tries something again.
+    pub(crate) async fn within(
+        &self,
+        bound: Duration,
+        mut done: impl AsyncFnMut() -> bool,
+    ) -> bool {
+        tokio::time::timeout(bound, async {
             loop {
                 // Registered before looking, so a line between the look
                 // and the wait still wakes it.
@@ -97,12 +112,8 @@ impl Logs {
                 let _ = tokio::time::timeout(RECHECK, line).await;
             }
         })
-        .await;
-        assert!(
-            waited.is_ok(),
-            "{what}: not within {PATIENCE:?}\n{}",
-            self.buffer.text()
-        );
+        .await
+        .is_ok()
     }
 }
 

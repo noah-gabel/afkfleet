@@ -1,7 +1,8 @@
 //! A managed agent (ADR-0019, S72): enrolled with the server for real
 //! (`afkfleet-agent enroll`'s code, a host's token), then run in-process
 //! through `fleet_agent::run::run` with its identity loaded as main.rs
-//! loads it, its bots on the ledger's fake connector. It reaches the gRPC
+//! loads it, its bots on the ledger's fake connector, or on fleet-mc's real
+//! one for the slow on-respawn case (ADR-0020, S26). It reaches the gRPC
 //! port only through its own [`Proxy`].
 //!
 //! A run ends by a signal ([`Agent::stop`]), as an operator stops it, or
@@ -29,7 +30,7 @@ use fleet_core::net::PrivateTargets;
 use fleet_core::resilience::{CircuitPolicy, RetryPolicy};
 use fleet_core::system::{Clock as _, SecureRandom};
 use fleet_core::value::AgentName;
-use fleet_mc::McConfig;
+use fleet_mc::{AzaleaConnector, McConfig};
 use fleet_runtime::RuntimeConfig;
 use fleet_server::infra::system::SystemClock;
 use fleet_testkit::mc::FakeConnector;
@@ -90,7 +91,8 @@ pub(crate) struct Agent {
 
 #[derive(Debug)]
 struct Running {
-    connector: Connector,
+    /// The ledger's fake connector, or `None` on the real one.
+    connector: Option<Connector>,
     signals: mpsc::Sender<Signal>,
     task: JoinSet<Outcome>,
 }
@@ -127,9 +129,35 @@ impl Agent {
 
     /// Runs the agent as `options` say, its bots booked in `ledger`.
     pub(crate) fn start(&mut self, ledger: &Ledger, options: RunOptions) {
-        assert!(self.running.is_none(), "the agent isn't running");
-        let identity = ManagedIdentity::load(&self.plane, UnixTime::now()).unwrap();
         let connector = ledger.run(&self.name);
+        self.launch(options, connector.clone(), self.plane.clone());
+        if let Some(running) = &mut self.running {
+            running.connector = Some(connector);
+        }
+    }
+
+    /// Runs the agent as `options` say, its bots on fleet-mc's real azalea
+    /// connector, allowed to dial `127.0.0.1` only, where a case's Minecraft
+    /// container publishes its port (ADR-0019, S46; ADR-0020, S26). Nothing
+    /// is booked in a ledger.
+    pub(crate) fn start_on_minecraft(&mut self, options: RunOptions) {
+        let loopback = "127.0.0.1/32".parse().unwrap();
+        let plane = ControlPlaneConfig {
+            private_targets: PrivateTargets::try_new(vec![loopback]).unwrap(),
+            ..self.plane.clone()
+        };
+        let connector = AzaleaConnector::new(&McConfig::default())
+            .with_targets(AgentMode::ControlPlane(plane.clone()).target_policy());
+        self.launch(options, connector, plane);
+    }
+
+    /// Runs the agent on `connector` with `plane`.
+    fn launch<C>(&mut self, options: RunOptions, connector: C, plane: ControlPlaneConfig)
+    where
+        C: fleet_core::mc::MinecraftConnector,
+    {
+        assert!(self.running.is_none(), "the agent isn't running");
+        let identity = ManagedIdentity::load(&plane, UnixTime::now()).unwrap();
         let config = AgentConfig {
             name: AgentName::try_from(self.name.as_str()).unwrap(),
             runtime: RuntimeConfig {
@@ -148,14 +176,14 @@ impl Agent {
             .unwrap(),
             heartbeat_file: self.dir.join("agent.alive"),
             log: LogConfig::default(),
-            mode: AgentMode::ControlPlane(self.plane.clone()),
+            mode: AgentMode::ControlPlane(plane),
         };
         let (signals, receiver) = mpsc::channel(4);
         let mut task = JoinSet::new();
         task.spawn(
             run(RunParts {
                 config,
-                connector: Arc::new(connector.clone()),
+                connector: Arc::new(connector),
                 diagnostics: Quiet,
                 signals: Signals(receiver),
                 heartbeat: Beats,
@@ -170,7 +198,7 @@ impl Agent {
             .in_current_span(),
         );
         self.running = Some(Running {
-            connector,
+            connector: None,
             signals,
             task,
         });
@@ -182,7 +210,11 @@ impl Agent {
 
     /// The current run's fake connector.
     pub(crate) fn fake(&self) -> &FakeConnector {
-        self.running().connector.fake()
+        self.running()
+            .connector
+            .as_ref()
+            .expect("the agent runs on the fake connector")
+            .fake()
     }
 
     /// Stops the run with a signal, as an operator does: every bot leaves
@@ -206,7 +238,10 @@ impl Agent {
         self.proxy.silence_open();
         running.task.abort_all();
         while running.task.join_next().await.is_some() {}
-        ledger.dead(running.connector.run());
+        let connector = running
+            .connector
+            .expect("a crash runs on the fake connector");
+        ledger.dead(connector.run());
     }
 }
 

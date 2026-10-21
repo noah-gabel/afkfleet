@@ -37,7 +37,17 @@ fn every_quarter_second(action: ModeActionKind) -> ModeSteps {
 
 /// One step that does `action`, which takes no field, on `schedule`.
 fn one_step(action: ModeActionKind, schedule: ModeScheduleRequest) -> ModeSteps {
-    ModeSteps(vec![ModeStepRequest {
+    ModeSteps(vec![step(action, None, schedule)])
+}
+
+/// A step that does `action` with `message`, if it sends one, on
+/// `schedule`, always.
+fn step(
+    action: ModeActionKind,
+    message: Option<&str>,
+    schedule: ModeScheduleRequest,
+) -> ModeStepRequest {
+    ModeStepRequest {
         action: ModeActionRequest {
             kind: action,
             yaw: None,
@@ -46,11 +56,25 @@ fn one_step(action: ModeActionKind, schedule: ModeScheduleRequest) -> ModeSteps 
             max_pitch: None,
             on: None,
             slot: None,
-            message: None,
+            message: message.map(str::to_owned),
         },
         schedule,
         probability: 100,
-    }])
+    }
+}
+
+/// A step that does `action`, with `message` if it sends one, on respawn
+/// (ADR-0020, S20).
+pub(crate) fn on_respawn(action: ModeActionKind, message: Option<&str>) -> ModeStepRequest {
+    step(
+        action,
+        message,
+        ModeScheduleRequest {
+            kind: ModeScheduleKind::OnRespawn,
+            interval_ms: None,
+            jitter_ms: None,
+        },
+    )
 }
 
 /// Where every bot is sent: the fake connector dials nothing.
@@ -146,21 +170,33 @@ impl Owner {
     /// A new private mode `name` of the Owner's, whose one step does
     /// `action` on respawn (ADR-0020, S20).
     pub(crate) async fn mode_on_respawn(&self, name: &str, action: ModeActionKind) -> ModeResponse {
+        self.mode_of(name, ModeSteps(vec![on_respawn(action, None)]))
+            .await
+    }
+
+    /// A new private mode `name` of the Owner's with `steps`.
+    pub(crate) async fn mode_of(&self, name: &str, steps: ModeSteps) -> ModeResponse {
         self.client
             .create_mode(&CreateModeRequest {
                 name: name.to_owned(),
                 visibility: ModeVisibility::Private,
-                steps: one_step(
-                    action,
-                    ModeScheduleRequest {
-                        kind: ModeScheduleKind::OnRespawn,
-                        interval_ms: None,
-                        jitter_ms: None,
-                    },
-                ),
+                steps,
             })
             .await
             .unwrap()
+    }
+
+    /// Points `bot` at the Minecraft server `address`.
+    pub(crate) async fn point(&self, bot: BotId, address: &str) {
+        self.client
+            .patch_bot(
+                bot,
+                &BotPatchRequest {
+                    server_address: address.to_owned(),
+                },
+            )
+            .await
+            .unwrap();
     }
 
     /// `mode` edited so that its one step does `action` every 250 ms

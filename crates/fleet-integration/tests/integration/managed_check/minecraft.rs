@@ -1,20 +1,24 @@
-//! The managed check's Minecraft server (ADR-0019, S73): an online-mode
-//! `itzg/minecraft-server` container, as P1.8's check has it, with the image
-//! and `VERSION` pinned in `deploy/compose.dev.yaml` (the `pins` test checks
-//! that). Only its game port is published, on `127.0.0.1` and a port
-//! Docker picks; the bot dials `127.0.0.1:<port>`, never `localhost`, which
-//! may resolve to `::1` (R58).
+//! The real Minecraft server of the managed check (ADR-0019, S73) and of the
+//! slow on-respawn case (ADR-0020, S26): an `itzg/minecraft-server`
+//! container, online-mode as P1.8's check has it, or offline-mode with RCON
+//! for the slow case, with the image and `VERSION` pinned in
+//! `deploy/compose.dev.yaml` (the `pins` test checks that). Only its game
+//! port is published, on `127.0.0.1` and a port Docker picks; the bot dials
+//! `127.0.0.1:<port>`, never `localhost`, which may resolve to `::1` (R58).
+//! RCON's port isn't published: [`Minecraft::rcon`] runs `rcon-cli` inside
+//! the container, which reads the password itzg drew there, so none is ever
+//! on a command line.
 //!
-//! It's removed by [`Minecraft::remove`] at the check's end, its volumes
-//! with it: they hold the account's name in the server's usercache and
-//! logs. Past the removal's bound, its handle is released undropped and the
-//! user removes it by hand, since testcontainers' `Drop` would wait for
-//! Docker with no bound.
+//! It's removed by [`Minecraft::remove`] at the end, its volumes with it:
+//! they hold the account's name in the server's usercache and logs. Past
+//! the removal's bound, its handle is released undropped and the user
+//! removes it by hand, since testcontainers' `Drop` would wait for Docker
+//! with no bound.
 
 use core::mem::ManuallyDrop;
 use core::time::Duration;
 
-use testcontainers::core::{IntoContainerPort as _, WaitFor};
+use testcontainers::core::{ExecCommand, IntoContainerPort as _, WaitFor};
 use testcontainers::runners::AsyncRunner as _;
 use testcontainers::{ContainerAsync, GenericImage, ImageExt as _};
 
@@ -38,18 +42,30 @@ pub(crate) struct Minecraft {
 }
 
 impl Minecraft {
-    /// Starts the server and waits until it's healthy, or says why not.
-    /// Never with a value from the account: it has none.
+    /// Starts the online-mode server and waits until it's healthy, or says
+    /// why not. Never with a value from the account: it has none.
     pub(crate) async fn start() -> Result<Self, String> {
+        Self::launch(true).await
+    }
+
+    /// Starts an offline-mode server with RCON, for a case with an offline
+    /// account, and waits until it's healthy, or says why not.
+    pub(crate) async fn start_offline() -> Result<Self, String> {
+        Self::launch(false).await
+    }
+
+    async fn launch(online: bool) -> Result<Self, String> {
+        // Online, every join is checked with Mojang's session server and
+        // chat must be signed, as on a public server.
+        let online = if online { "TRUE" } else { "FALSE" };
         let container = GenericImage::new(IMAGE, TAG)
             .with_wait_for(WaitFor::healthcheck())
             .with_env_var("EULA", "TRUE")
             .with_env_var("TYPE", "VANILLA")
             .with_env_var("VERSION", VERSION)
-            // Every join is checked with Mojang's session server, and chat
-            // must be signed, as on a public server.
-            .with_env_var("ONLINE_MODE", "TRUE")
-            .with_env_var("ENFORCE_SECURE_PROFILE", "TRUE")
+            .with_env_var("ONLINE_MODE", online)
+            .with_env_var("ENFORCE_SECURE_PROFILE", online)
+            .with_env_var("ENABLE_RCON", "TRUE")
             .with_env_var("LEVEL_TYPE", "minecraft:flat")
             .with_env_var("VIEW_DISTANCE", "4")
             .with_env_var("SIMULATION_DISTANCE", "4")
@@ -87,6 +103,33 @@ impl Minecraft {
     /// The address the bot is sent to.
     pub(crate) fn address(&self) -> String {
         format!("127.0.0.1:{}", self.port)
+    }
+
+    /// Runs `command` through `rcon-cli` inside the container, within
+    /// `within`, and returns its output.
+    ///
+    /// # Errors
+    /// A fixed text when it didn't run or end in time.
+    pub(crate) async fn rcon(
+        &self,
+        command: &str,
+        within: Duration,
+    ) -> Result<String, &'static str> {
+        let run = async {
+            let mut result = self
+                .container
+                .exec(ExecCommand::new(["rcon-cli", command]))
+                .await
+                .map_err(|_| "rcon-cli couldn't run")?;
+            let stdout = result
+                .stdout_to_vec()
+                .await
+                .map_err(|_| "rcon-cli's output couldn't be read")?;
+            Ok(String::from_utf8_lossy(&stdout).trim().to_owned())
+        };
+        tokio::time::timeout(within, run)
+            .await
+            .map_err(|_| "rcon-cli didn't end in time")?
     }
 
     /// Removes the container and its volumes within `within`.
