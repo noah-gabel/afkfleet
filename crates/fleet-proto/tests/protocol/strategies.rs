@@ -129,6 +129,7 @@ fn schedule() -> impl Strategy<Value = Schedule> {
             interval: Duration::from_millis(interval),
             jitter: Duration::from_millis(jitter),
         }),
+        Just(Schedule::OnRespawn),
     ]
 }
 

@@ -156,6 +156,7 @@ message fleet.v1.Reject
 message fleet.v1.Schedule
   1 at_start: fleet.v1.Unit (oneof schedule)
   2 every: fleet.v1.Schedule.Every (oneof schedule)
+  3 on_respawn: fleet.v1.Unit (oneof schedule)
 message fleet.v1.Schedule.Every
   1 interval_ms: uint64
   2 jitter_ms: uint64

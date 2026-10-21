@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE modes SET definition_json = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "f4d8c0788f9c1d3dcf0c57b5a113e926c003529ec27d7858d6d4c051a6bff485"
+}

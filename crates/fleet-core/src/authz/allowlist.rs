@@ -312,6 +312,14 @@ mod tests {
     #[case::plain_chat(chat_mode("hi all", "still here"), false)]
     #[case::unlisted_at_start(chat_mode("/op AfkBot1", "/afk"), true)]
     #[case::unlisted_repeating(chat_mode("/spawn", "/home"), true)]
+    #[case::unlisted_on_respawn(
+        ModeDraft { steps: vec![chat_step("/home", Schedule::OnRespawn)] }.validate().unwrap(),
+        true
+    )]
+    #[case::listed_on_respawn(
+        ModeDraft { steps: vec![chat_step("/spawn", Schedule::OnRespawn)] }.validate().unwrap(),
+        false
+    )]
     fn check_mode_needs_manage_for_any_unlisted_command(
         #[case] mode: ModeDefinition,
         #[case] needs_manage: bool,

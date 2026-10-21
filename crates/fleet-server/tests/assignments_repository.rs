@@ -564,6 +564,9 @@ async fn the_records_page_newest_first(_pool: SqlitePoolOptions, options: Sqlite
     assert_eq!(ids(&rest), [bot(1)]);
 }
 
+/// A bot whose mode doesn't read back, an action or a schedule type this
+/// version doesn't know among them, is left alone: never run with the
+/// steps read as something else (ADR-0020, S25).
 #[sqlx::test(migrations = false)]
 async fn a_bot_whose_mode_isnt_valid_reads_as_unreadable(
     _pool: SqlitePoolOptions,
@@ -572,19 +575,30 @@ async fn a_bot_whose_mode_isnt_valid_reads_as_unreadable(
     let setup = Setup::new(options).await;
     let (_, bot) = setup.bot(1, false).await;
     let afk = ModePreset::Afk.id().to_string();
-    sqlx::query!(
-        r#"UPDATE modes SET definition_json = '{"steps":[{"action":{"type":"nope"}}]}' WHERE id = ?"#,
-        afk
-    )
-    .execute(setup.db.write_pool())
-    .await
-    .unwrap();
 
-    let fleet = setup.db.bots().fleet().await.unwrap();
+    for definition in [
+        r#"{"steps":[{"action":{"type":"nope"}}]}"#,
+        r#"{"steps":[{"action":{"type":"jump"},"schedule":{"type":"on_teleport"},"probability":100}]}"#,
+    ] {
+        sqlx::query!(
+            "UPDATE modes SET definition_json = ? WHERE id = ?",
+            definition,
+            afk
+        )
+        .execute(setup.db.write_pool())
+        .await
+        .unwrap();
 
-    assert_eq!(fleet.bots, []);
-    let unreadable = fleet.unreadable.first().unwrap();
-    assert_eq!((unreadable.bot, unreadable.table), (bot, "modes"));
+        let fleet = setup.db.bots().fleet().await.unwrap();
+
+        assert_eq!(fleet.bots, [], "{definition}");
+        let unreadable = fleet.unreadable.first().unwrap();
+        assert_eq!(
+            (unreadable.bot, unreadable.table),
+            (bot, "modes"),
+            "{definition}"
+        );
+    }
 }
 
 #[sqlx::test(migrations = false)]

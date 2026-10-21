@@ -39,6 +39,14 @@ fn sending(message: &str) -> String {
     .to_string()
 }
 
+/// A mode that sends `message` on respawn (ADR-0020, S20).
+fn sending_on_respawn(message: &str) -> String {
+    json!({ "steps": [
+        { "action": { "type": "send_chat", "message": message }, "schedule": { "type": "on_respawn" }, "probability": 100 },
+    ] })
+    .to_string()
+}
+
 /// The steps of the mode JSON `definition`.
 fn steps(definition: &str) -> Value {
     serde_json::from_str::<Value>(definition).unwrap()["steps"].clone()
@@ -986,6 +994,99 @@ async fn an_edit_needs_set_bot_mode_on_every_bot_that_uses_it(
     let recorded = setup.last(&AuditAction::MODE_UPDATE).await;
     assert_eq!(metadata(&recorded)["bots_checked"], "3");
     assert_eq!(setup.updates().await, 1);
+}
+
+/// S17's check reads an on-respawn command as any other: one off the
+/// allowlist needs Manage on every bot that uses the mode, so Control isn't
+/// enough, while one on it passes (ADR-0020, S20).
+#[sqlx::test(migrations = false)]
+async fn an_unlisted_command_on_respawn_counts_in_the_bots_check(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = with_spawn(options).await;
+    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let other = setup.person(3, "admin2", Role::Admin).await;
+    let id = setup
+        .add_mode(1, admin.id, "Shared farm", "shared", &swinging())
+        .await;
+    let (account, bot) = setup.bot_of(other.id, 5).await;
+    setup
+        .share(account, admin.id, GrantLevel::Control, other.id)
+        .await;
+    setup.run_mode(bot, id).await;
+
+    let unlisted = setup
+        .edit_with_commands(
+            &admin,
+            id,
+            body(1, "Shared farm", "shared", &sending_on_respawn("/op x")),
+        )
+        .await;
+    let listed = setup
+        .edit(
+            &admin,
+            id,
+            body(1, "Shared farm", "shared", &sending_on_respawn("/spawn")),
+        )
+        .await;
+
+    assert_eq!(
+        (unlisted.status, unlisted.code()),
+        (409, "mode_in_use_by_others"),
+        "{}",
+        unlisted.text
+    );
+    assert_eq!(listed.status, 200, "{}", listed.text);
+    assert_eq!(
+        listed.body["steps"][0]["schedule"],
+        json!({ "type": "on_respawn" })
+    );
+}
+
+/// S21's no-op covers an on-respawn chat: saved back untouched, a stored
+/// zero-width space and all, it's 200 with nothing written (ADR-0020, S20).
+#[sqlx::test(migrations = false)]
+async fn an_untouched_save_of_an_on_respawn_chat_is_200_and_changes_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let member = setup.person(2, "member", Role::Member).await;
+    let id = setup
+        .add_mode(
+            1,
+            member.id,
+            "Greeter",
+            "private",
+            &sending_on_respawn("he\u{200B}llo there"),
+        )
+        .await;
+    let listed = setup.modes(&member, "").await;
+    let answer = listed.body["items"][0].clone();
+    assert_eq!(
+        answer["steps"][0]["schedule"],
+        json!({ "type": "on_respawn" })
+    );
+    let mut sent_back = answer["steps"].clone();
+    sent_back[0]["action"]
+        .as_object_mut()
+        .unwrap()
+        .remove("arguments_hidden");
+    let before = setup.stored(id).await;
+
+    let seen = setup
+        .edit(
+            &member,
+            id,
+            json!({ "version": 1, "name": "Greeter", "visibility": "private", "steps": sent_back }),
+        )
+        .await;
+
+    assert_eq!(seen.status, 200, "{}", seen.text);
+    assert_eq!(seen.body, answer);
+    assert_eq!(setup.stored(id).await, before);
+    assert_eq!(setup.updates().await, 0);
 }
 
 /// The bots, the mode and the acting user are read again in the edit's

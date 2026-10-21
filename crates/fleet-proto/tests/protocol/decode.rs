@@ -148,6 +148,7 @@ fn wire_schedule() -> impl Strategy<Value = Option<wire::Schedule>> {
                             jitter_ms
                         }
                     )),
+                Just(S::OnRespawn(wire::Unit {})),
             ],
         ),
     )
@@ -217,6 +218,7 @@ fn draft_of(mode: &wire::ModeDefinition) -> Option<ModeDraft> {
                     interval: Duration::from_millis(every.interval_ms),
                     jitter: Duration::from_millis(every.jitter_ms),
                 },
+                S::OnRespawn(_) => Schedule::OnRespawn,
             };
             Some(Step {
                 action,

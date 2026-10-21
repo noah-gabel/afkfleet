@@ -13,7 +13,8 @@ use crate::chat::ChatMessage;
 ///
 /// In JSON a schedule is tagged with its `"type"`, and durations are whole
 /// milliseconds: `{"type":"every","interval_ms":45000,"jitter_ms":75000}`
-/// (ADR-0010).
+/// (ADR-0010). A server or agent that doesn't know a type refuses the mode
+/// whole; it never runs its steps at another time.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Schedule {
@@ -30,6 +31,12 @@ pub enum Schedule {
         #[serde(rename = "jitter_ms", with = "super::millis")]
         jitter: Duration,
     },
+    /// Once each time the bot is alive again after a death, as soon as the
+    /// server confirmed the respawn the bot asked for, after the runner let
+    /// go of the use button and sneak; never at start and never again on its
+    /// own (ADR-0020, S20, S24). An on-respawn chat is skipped when the last
+    /// one was sent less than [`ModeDefinition::MIN_CHAT_INTERVAL`] before.
+    OnRespawn,
 }
 
 /// One entry of a mode: what the bot does, when, and how likely.
@@ -166,26 +173,35 @@ impl fmt::Display for Angle {
 
 /// A kind of step a mode may have at most once (ADR-0010). Two of them would
 /// get around the attack, chat or hold-use interval, or fire together on
-/// every join. [`Action::HoldUse`] counts holding and letting go apart, so a
-/// mode can let go and draw again on a schedule.
+/// every join or respawn. [`Action::HoldUse`] counts holding and letting go
+/// apart, so a mode can let go and draw again on a schedule. Each schedule
+/// counts apart (ADR-0020, S20).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum LimitedStep {
     /// [`Action::SendChat`] at start.
     StartChat,
     /// [`Action::SendChat`] repeating.
     RepeatingChat,
+    /// [`Action::SendChat`] on respawn.
+    RespawnChat,
     /// [`Action::AttackFacingEntity`] at start.
     StartAttack,
     /// [`Action::AttackFacingEntity`] repeating.
     RepeatingAttack,
+    /// [`Action::AttackFacingEntity`] on respawn.
+    RespawnAttack,
     /// [`Action::HoldUse`] holding (`on: true`) at start.
     StartHold,
     /// [`Action::HoldUse`] holding (`on: true`) repeating.
     RepeatingHold,
+    /// [`Action::HoldUse`] holding (`on: true`) on respawn.
+    RespawnHold,
     /// [`Action::HoldUse`] letting go (`on: false`) at start.
     StartRelease,
     /// [`Action::HoldUse`] letting go (`on: false`) repeating.
     RepeatingRelease,
+    /// [`Action::HoldUse`] letting go (`on: false`) on respawn.
+    RespawnRelease,
 }
 
 impl fmt::Display for LimitedStep {
@@ -193,12 +209,16 @@ impl fmt::Display for LimitedStep {
         f.write_str(match self {
             Self::StartChat => "chat-at-start",
             Self::RepeatingChat => "repeating chat",
+            Self::RespawnChat => "chat-on-respawn",
             Self::StartAttack => "attack-at-start",
             Self::RepeatingAttack => "repeating attack",
+            Self::RespawnAttack => "attack-on-respawn",
             Self::StartHold => "hold-at-start",
             Self::RepeatingHold => "repeating hold",
+            Self::RespawnHold => "hold-on-respawn",
             Self::StartRelease => "release-at-start",
             Self::RepeatingRelease => "repeating release",
+            Self::RespawnRelease => "release-on-respawn",
         })
     }
 }
@@ -437,16 +457,18 @@ fn check_angle(
 }
 
 /// Checks a repeating step's interval and jitter, in whole milliseconds, and
-/// returns the schedule with them.
+/// returns the schedule with them. Every schedule is listed, so a new one
+/// needs a decision about its limits.
 fn check_schedule(
     index: usize,
     action: &Action,
     schedule: Schedule,
 ) -> Result<Schedule, ModeError> {
-    let Schedule::Every { interval, jitter } = schedule else {
-        return Ok(schedule);
+    let (interval, jitter) = match schedule {
+        Schedule::Every { interval, jitter } => (whole_millis(interval), whole_millis(jitter)),
+        // Once per join or confirmed respawn: no interval to check.
+        Schedule::AtStart | Schedule::OnRespawn => return Ok(schedule),
     };
-    let (interval, jitter) = (whole_millis(interval), whole_millis(jitter));
     let min = min_interval(action);
     if interval < min {
         return Err(ModeError::IntervalTooShort { step: index, min });
@@ -478,26 +500,44 @@ const fn min_interval(action: &Action) -> Duration {
 }
 
 /// Which kind of step a mode may have only once this step is, if any. Every
-/// action is listed, so a new one needs a decision.
+/// action and every schedule is listed, so a new one needs a decision: a
+/// schedule never falls into another's kinds.
 const fn limited_kind(action: &Action, schedule: Schedule) -> Option<LimitedStep> {
-    let repeating = matches!(schedule, Schedule::Every { .. });
-    match action {
-        Action::SendChat { .. } if repeating => Some(LimitedStep::RepeatingChat),
-        Action::SendChat { .. } => Some(LimitedStep::StartChat),
-        Action::AttackFacingEntity if repeating => Some(LimitedStep::RepeatingAttack),
-        Action::AttackFacingEntity => Some(LimitedStep::StartAttack),
-        Action::HoldUse { on: true } if repeating => Some(LimitedStep::RepeatingHold),
-        Action::HoldUse { on: true } => Some(LimitedStep::StartHold),
-        Action::HoldUse { on: false } if repeating => Some(LimitedStep::RepeatingRelease),
-        Action::HoldUse { on: false } => Some(LimitedStep::StartRelease),
+    // The kinds at start, repeating and on respawn.
+    let [start, repeating, respawn] = match action {
+        Action::SendChat { .. } => [
+            LimitedStep::StartChat,
+            LimitedStep::RepeatingChat,
+            LimitedStep::RespawnChat,
+        ],
+        Action::AttackFacingEntity => [
+            LimitedStep::StartAttack,
+            LimitedStep::RepeatingAttack,
+            LimitedStep::RespawnAttack,
+        ],
+        Action::HoldUse { on: true } => [
+            LimitedStep::StartHold,
+            LimitedStep::RepeatingHold,
+            LimitedStep::RespawnHold,
+        ],
+        Action::HoldUse { on: false } => [
+            LimitedStep::StartRelease,
+            LimitedStep::RepeatingRelease,
+            LimitedStep::RespawnRelease,
+        ],
         Action::Look { .. }
         | Action::RotateRandom { .. }
         | Action::Jump
         | Action::Sneak { .. }
         | Action::SwingArm
         | Action::UseItem
-        | Action::SelectHotbarSlot { .. } => None,
-    }
+        | Action::SelectHotbarSlot { .. } => return None,
+    };
+    Some(match schedule {
+        Schedule::AtStart => start,
+        Schedule::Every { .. } => repeating,
+        Schedule::OnRespawn => respawn,
+    })
 }
 
 /// Drops everything finer than a millisecond, as the stored JSON does.
@@ -583,6 +623,10 @@ mod tests {
     /// A repeating step with an interval every action allows.
     fn repeating(action: Action) -> Step {
         step(action, every(ms(60_000), Duration::ZERO))
+    }
+
+    fn on_respawn(action: Action) -> Step {
+        step(action, Schedule::OnRespawn)
     }
 
     fn with_probability(probability: u8, step: Step) -> Step {
@@ -839,6 +883,26 @@ mod tests {
         repeating(hold(false)),
         LimitedStep::RepeatingRelease
     )]
+    #[case::chat_on_respawn(
+        on_respawn(chat("/home")),
+        on_respawn(chat("back")),
+        LimitedStep::RespawnChat
+    )]
+    #[case::attack_on_respawn(
+        on_respawn(Action::AttackFacingEntity),
+        on_respawn(Action::AttackFacingEntity),
+        LimitedStep::RespawnAttack
+    )]
+    #[case::hold_on_respawn(
+        on_respawn(hold(true)),
+        on_respawn(hold(true)),
+        LimitedStep::RespawnHold
+    )]
+    #[case::release_on_respawn(
+        on_respawn(hold(false)),
+        on_respawn(hold(false)),
+        LimitedStep::RespawnRelease
+    )]
     fn rejects_a_second_limited_step(
         #[case] first: Step,
         #[case] second: Step,
@@ -848,19 +912,34 @@ mod tests {
         assert_eq!(validate(steps), Err(DuplicateStep { step: 2, kind }));
     }
 
+    /// One of each limited kind, each schedule counted apart (ADR-0020, S20);
+    /// an on-respawn step has no interval, so no minimum.
     #[test]
     fn accepts_one_limited_step_of_each_kind() {
         let steps = vec![
             at_start(chat("/spawn")),
             repeating(chat("/afk")),
+            on_respawn(chat("/home")),
             at_start(Action::AttackFacingEntity),
             repeating(Action::AttackFacingEntity),
+            on_respawn(Action::AttackFacingEntity),
             at_start(hold(true)),
             repeating(hold(true)),
+            on_respawn(hold(true)),
             at_start(hold(false)),
             repeating(hold(false)),
+            on_respawn(hold(false)),
         ];
-        assert!(validate(steps).is_ok());
+        assert_eq!(validate(steps.clone()).unwrap().steps(), steps);
+    }
+
+    #[rstest]
+    #[case::chat(LimitedStep::RespawnChat, "chat-on-respawn")]
+    #[case::attack(LimitedStep::RespawnAttack, "attack-on-respawn")]
+    #[case::hold(LimitedStep::RespawnHold, "hold-on-respawn")]
+    #[case::release(LimitedStep::RespawnRelease, "release-on-respawn")]
+    fn on_respawn_kinds_are_named_in_errors(#[case] kind: LimitedStep, #[case] name: &str) {
+        assert_eq!(kind.to_string(), name);
     }
 
     #[test]
@@ -1002,7 +1081,7 @@ mod tests {
             );
             let longest_gap = match step.schedule {
                 Schedule::Every { interval, jitter } => Some(interval + jitter),
-                Schedule::AtStart => None,
+                Schedule::AtStart | Schedule::OnRespawn => None,
             };
             resets_timer
                 && step.probability == 100
@@ -1061,9 +1140,22 @@ mod tests {
                 slot: HotbarSlot::LAST,
             }),
             with_probability(25, repeating(chat("/spawn"))),
+            on_respawn(chat("/home")),
         ]);
         let json = serde_json::to_string_pretty(&draft).unwrap();
         insta::assert_snapshot!("all_variants", json);
+    }
+
+    /// An on-respawn step's schedule is the tag alone, read and written as
+    /// itself (ADR-0020, S20).
+    #[test]
+    fn an_on_respawn_step_reads_and_writes_its_tag() {
+        let json = mode_json(JUMP, r#"{"type":"on_respawn"}"#, CERTAIN);
+
+        let definition = serde_json::from_str::<ModeDefinition>(&json).unwrap();
+
+        assert_eq!(definition.steps(), [on_respawn(Action::Jump)]);
+        assert_eq!(serde_json::to_string(&definition).unwrap(), json);
     }
 
     #[test]
@@ -1204,11 +1296,13 @@ mod tests {
         #[case] other: Action,
         #[case] same: bool,
     ) {
-        let one = validate(vec![at_start(one)]).unwrap();
-        let other = validate(vec![at_start(other)]).unwrap();
+        for schedule in [Schedule::AtStart, Schedule::OnRespawn] {
+            let one = validate(vec![step(one.clone(), schedule)]).unwrap();
+            let other = validate(vec![step(other.clone(), schedule)]).unwrap();
 
-        assert_eq!(one.same_as_shown(&other), same);
-        assert_eq!(other.same_as_shown(&one), same);
+            assert_eq!(one.same_as_shown(&other), same, "{schedule:?}");
+            assert_eq!(other.same_as_shown(&one), same, "{schedule:?}");
+        }
     }
 
     #[test]
@@ -1229,6 +1323,7 @@ mod tests {
                 at_start(Action::SwingArm),
             ],
             vec![repeating(Action::Jump), repeating(Action::SwingArm)],
+            vec![repeating(Action::Jump), on_respawn(Action::SwingArm)],
             vec![repeating(Action::Jump)],
             vec![],
         ];
@@ -1296,6 +1391,7 @@ mod tests {
         let schedule = prop_oneof![
             Just(Schedule::AtStart),
             (any_duration(), any_duration()).prop_map(|(interval, jitter)| every(interval, jitter)),
+            Just(Schedule::OnRespawn),
         ];
         (any_action(), schedule, any::<u8>()).prop_map(|(action, schedule, probability)| Step {
             action,
@@ -1364,31 +1460,63 @@ mod tests {
         })
     }
 
-    /// A valid draft: up to 24 unlimited steps plus at most one step of each
-    /// of the 8 limited kinds, in any order.
-    fn valid_draft() -> impl Strategy<Value = ModeDraft> {
+    fn valid_on_respawn(action: impl Strategy<Value = Action>) -> impl Strategy<Value = Step> {
+        (action, valid_probability()).prop_map(|(action, probability)| Step {
+            action,
+            schedule: Schedule::OnRespawn,
+            probability,
+        })
+    }
+
+    /// A valid draft: up to 20 unlimited steps plus at most one step of each
+    /// of the 12 limited kinds, in any order. Boxed, so two drafts' value
+    /// trees fit a test thread's stack on Windows.
+    fn valid_draft() -> BoxedStrategy<ModeDraft> {
         let unlimited = prop_oneof![
             valid_at_start(valid_unlimited_action()),
             valid_repeating(valid_unlimited_action(), 250),
+            valid_on_respawn(valid_unlimited_action()),
         ];
-        let limited = (
+        let chat = (
             proptest::option::of(valid_at_start(chat_action())),
             proptest::option::of(valid_repeating(chat_action(), 30_000)),
-            proptest::option::of(valid_at_start(Just(Action::AttackFacingEntity))),
-            proptest::option::of(valid_repeating(Just(Action::AttackFacingEntity), 500)),
+            proptest::option::of(valid_on_respawn(chat_action())),
+        );
+        let attack = Just(Action::AttackFacingEntity);
+        let attacks = (
+            proptest::option::of(valid_at_start(attack.clone())),
+            proptest::option::of(valid_repeating(attack.clone(), 500)),
+            proptest::option::of(valid_on_respawn(attack)),
+        );
+        let holds = (
             proptest::option::of(valid_at_start(Just(hold(true)))),
             proptest::option::of(valid_repeating(Just(hold(true)), 500)),
+            proptest::option::of(valid_on_respawn(Just(hold(true)))),
+        );
+        let releases = (
             proptest::option::of(valid_at_start(Just(hold(false)))),
             proptest::option::of(valid_repeating(Just(hold(false)), 500)),
+            proptest::option::of(valid_on_respawn(Just(hold(false)))),
+        );
+        // One kind's three schedules as one list.
+        let each = |(start, repeating, respawn)| [start, repeating, respawn];
+        let limited = (
+            chat.prop_map(each).boxed(),
+            attacks.prop_map(each).boxed(),
+            holds.prop_map(each).boxed(),
+            releases.prop_map(each).boxed(),
         )
-            .prop_map(|(a, b, c, d, e, f, g, h)| [a, b, c, d, e, f, g, h]);
-        (vec(unlimited, 0..=24), limited)
-            .prop_map(|(mut steps, limited)| {
-                steps.extend(limited.into_iter().flatten());
+            .boxed();
+        (vec(unlimited, 0..=20), limited)
+            .prop_map(|(mut steps, (chat, attacks, holds, releases))| {
+                for kind in [chat, attacks, holds, releases] {
+                    steps.extend(kind.into_iter().flatten());
+                }
                 steps
             })
             .prop_shuffle()
             .prop_map(draft)
+            .boxed()
     }
 
     /// `definition` with `invisible` inserted into each chat message, at the

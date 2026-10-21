@@ -13,7 +13,8 @@
 //! - [`ModePlan`] runs a definition: it decides when each step is due and
 //!   resolves it into [`PlannedAction`]s, a [`GameAction`] for the session
 //!   or a chat message for the chat queue. The runtime only sleeps until the
-//!   next due time and executes them.
+//!   next due time and executes them; after a respawn the server confirmed,
+//!   it asks the plan for the on-respawn steps ([`Respawn`]; ADR-0020, S24).
 //!
 //! Modes are stored as JSON in `modes.definition_json`. Actions and schedules
 //! are tagged with their `"type"`, and durations are whole milliseconds in
@@ -35,5 +36,5 @@ pub use action::{Action, HotbarSlot, HotbarSlotError};
 pub use cap::{MAX_MODES_PER_OWNER, mode_cap_reached};
 pub use definition::{Angle, LimitedStep, ModeDefinition, ModeDraft, ModeError, Schedule, Step};
 pub use name::{ModeName, ModeNameError};
-pub use plan::{GameAction, ModePlan, PlanTick, PlannedAction};
+pub use plan::{GameAction, ModePlan, PlanTick, PlannedAction, Respawn};
 pub use preset::{ModePreset, UnknownPresetError};

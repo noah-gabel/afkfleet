@@ -3,7 +3,9 @@
 //! step-up route, a stale version and a field error's path. What each
 //! viewer sees of a mode is fleet-server's to test.
 
-use fleet_api_types::modes::{CreateModeRequest, ModePage, ModeResponse, UpdateModeRequest};
+use fleet_api_types::modes::{
+    CreateModeRequest, ModePage, ModeResponse, ModeScheduleKind, UpdateModeRequest,
+};
 use fleet_api_types::{ErrorCode, PageQuery};
 use serde_json::json;
 
@@ -48,6 +50,37 @@ async fn a_member_lists_the_built_in_modes_and_then_their_own() {
     assert_eq!(created.version, 1);
     assert_eq!(names(&after), ["Greeter", "farm", "afk"]);
     assert_eq!(after.items.first(), Some(&created));
+    server.stop().await;
+}
+
+/// A mode with on-respawn steps is created and read back with its schedule
+/// known (ADR-0020, S20).
+#[tokio::test]
+async fn a_mode_with_on_respawn_steps_reads_back_as_itself() {
+    let server = Server::start().await;
+    let (owner, _, _) = server.owner().await;
+    let mode: CreateModeRequest = serde_json::from_value(json!({ "name": "Back again", "visibility": "private", "steps": [
+        { "action": { "type": "select_hotbar_slot", "slot": 4 }, "schedule": { "type": "on_respawn" }, "probability": 100 },
+        { "action": { "type": "send_chat", "message": "back again" }, "schedule": { "type": "on_respawn" }, "probability": 100 },
+    ] }))
+    .unwrap();
+
+    let created = owner.create_mode(&mode).await.unwrap();
+    let listed = owner.modes(&first_page()).await.unwrap();
+
+    let schedules: Vec<_> = created
+        .steps
+        .iter()
+        .map(|step| step.schedule.kind.known())
+        .collect();
+    assert_eq!(
+        schedules,
+        [
+            Some(ModeScheduleKind::OnRespawn),
+            Some(ModeScheduleKind::OnRespawn)
+        ]
+    );
+    assert_eq!(listed.items.first(), Some(&created));
     server.stop().await;
 }
 

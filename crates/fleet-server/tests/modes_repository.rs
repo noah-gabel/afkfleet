@@ -231,6 +231,55 @@ async fn a_users_mode_reads_back_with_its_owner_visibility_and_version(
     );
 }
 
+/// An on-respawn step is stored and read back as itself; a schedule type
+/// this version doesn't know is `Corrupt`, as any row that doesn't read
+/// back, never read as another schedule (ADR-0020, S25).
+#[sqlx::test(migrations = false)]
+async fn an_on_respawn_step_reads_back_and_an_unknown_schedule_is_corrupt(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    add_owner(db.write_pool()).await;
+    let unknown_id = "018bcfe5-6800-7eee-8eee-eeeeeeeeeeee";
+    Row {
+        json: r#"{"steps":[{"action":{"type":"jump"},"schedule":{"type":"on_respawn"},"probability":100}]}"#,
+        ..Row::valid()
+    }
+    .insert(db.write_pool())
+    .await
+    .unwrap();
+    Row {
+        id: unknown_id,
+        name: "Unknown",
+        json: r#"{"steps":[{"action":{"type":"jump"},"schedule":{"type":"on_teleport"},"probability":100}]}"#,
+        ..Row::valid()
+    }
+    .insert(db.write_pool())
+    .await
+    .unwrap();
+
+    let read = db.modes().find(OTHER.parse().unwrap()).await.unwrap();
+    let unknown = db.modes().find(unknown_id.parse().unwrap()).await;
+
+    let steps = read.unwrap().definition.steps().to_vec();
+    assert_eq!(
+        steps.iter().map(|step| step.schedule).collect::<Vec<_>>(),
+        [fleet_core::mode::Schedule::OnRespawn]
+    );
+    assert!(
+        matches!(
+            unknown,
+            Err(StoreError::Corrupt {
+                table: "modes",
+                column: "definition_json",
+                ..
+            })
+        ),
+        "{unknown:?}"
+    );
+}
+
 #[sqlx::test(migrations = false)]
 async fn a_stored_mode_that_isnt_valid_is_corrupt_and_the_error_never_holds_its_json(
     _pool: SqlitePoolOptions,
