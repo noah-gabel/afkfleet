@@ -438,6 +438,7 @@ async fn the_plain_route_points_any_unlisted_command_to_the_twin_after_forbidden
         ("kept", sending("/op AfkBot2")),
         ("changed", sending("/op AfkBot3")),
         ("new", sending("/kill @e")),
+        ("new on respawn", sending_on_respawn("/kill @e")),
     ] {
         let seen = setup
             .edit(&member, mine, body(1, "Ops", "private", &definition))

@@ -1857,7 +1857,7 @@ expression: answer.json()
             "type": "string"
           },
           "steps": {
-            "description": "Its steps, at most 32, under the rules of `CreateModeRequest`'s.",
+            "description": "Its steps, at most 32, under `CreateModeRequest`'s rules.",
             "items": {
               "$ref": "#/components/schemas/ModeStepRequest"
             },

@@ -520,6 +520,43 @@ async fn a_spec_with_a_schedule_this_agent_doesnt_know_is_refused_whole(
     assert_eq!(outcome.exit, Exit::Stopped);
 }
 
+/// A first message the agent can't read ends the stream as unreadable,
+/// said at `error` and naming the field, as any later one is (ADR-0020,
+/// S25; PR #65's review).
+#[tokio::test]
+async fn an_unreadable_first_message_is_said_at_error() {
+    let dir = test_dir("control", "unreadable_first");
+    let ca = TestCa::new(1);
+    let mut server = FakeServer::start(&ca).await;
+    let running = Agent::start(&dir, &server.url(), &ca);
+    let mut call = server.pending().await.accept();
+
+    call.send_raw(fleet_proto::generated::ServerMessage { msg: None })
+        .await;
+    let ended = call.until_ended(crate::server::PATIENCE).await;
+    let _again = server.pending().await;
+    let lines = running
+        .logs
+        .lines_with("a message from the server couldn't be read")
+        .unwrap();
+    let ends = running
+        .logs
+        .lines_with("the control stream ended; the agent reconnects")
+        .unwrap();
+    let outcome = running.stop().await;
+
+    assert!(ended.is_some(), "the agent ended its request stream");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["level"], "ERROR");
+    let error = lines[0]["error"].as_str().unwrap();
+    assert!(error.contains("ServerMessage.msg"), "{error}");
+    assert!(
+        ends.iter().any(|end| end["cause"] == "unreadable"),
+        "{ends:?}"
+    );
+    assert_eq!(outcome.exit, Exit::Stopped);
+}
+
 #[tokio::test]
 async fn no_agent_line_holds_the_servers_address_or_its_message() {
     let dir = test_dir("control", "logs");
