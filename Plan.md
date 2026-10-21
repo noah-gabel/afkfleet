@@ -4009,6 +4009,10 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Deviation:** the new mode's ID and `created_at` are drawn before the create's write transaction, not inside it as planned, as the offline-account and invite services do: minting reads `SecureRandom`, which stays out of an open write (ADR-0015). A refused create drops its ID unused, and `created_at` is when the service took the request.
   > - **For C2:** an answer's `message` is a `BoundedText`, which strips the invisible characters `ChatMessage` allows (a zero-width space), so an untouched mode holding one, sent back, reads as changed. C2's no-op check handles it, so such a save is no change, no entry and no version (ADR-0020's note for C2).
 
+  > Note (P11.4, Phase 11, group C2's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S21, R7): **editing and deleting.**
+  > - **The no-op** (S21): fleet-core's `ModeDefinition::same_as_shown` compares two definitions as an answer shows them (each chat message cleaned as `BoundedText` cleans it, then trimmed); an edit with the same name, visibility and shown steps writes nothing and answers 200. A real edit writes the request's steps exactly as sent, and every check judges them.
+  > - **A lost update** *(the user's addition at the plan review)*: a guarded `UPDATE` that matches no row after the transaction's own re-read matched is the internal error, never a 200.
+
 - [ ] **P11.5** 🔴 Live events:
   1. `POST /events/ticket` returns a single-use ticket valid for 30 s (moka).
   2. The client opens a WebSocket at `GET /events?ticket=…`.
