@@ -25,6 +25,18 @@ use super::server::{OWNER, PASSWORD, Server};
 
 /// One step that does `action`, which takes no field, every 250 ms.
 fn every_quarter_second(action: ModeActionKind) -> ModeSteps {
+    one_step(
+        action,
+        ModeScheduleRequest {
+            kind: ModeScheduleKind::Every,
+            interval_ms: Some(250),
+            jitter_ms: Some(0),
+        },
+    )
+}
+
+/// One step that does `action`, which takes no field, on `schedule`.
+fn one_step(action: ModeActionKind, schedule: ModeScheduleRequest) -> ModeSteps {
     ModeSteps(vec![ModeStepRequest {
         action: ModeActionRequest {
             kind: action,
@@ -36,11 +48,7 @@ fn every_quarter_second(action: ModeActionKind) -> ModeSteps {
             slot: None,
             message: None,
         },
-        schedule: ModeScheduleRequest {
-            kind: ModeScheduleKind::Every,
-            interval_ms: Some(250),
-            jitter_ms: Some(0),
-        },
+        schedule,
         probability: 100,
     }])
 }
@@ -130,6 +138,26 @@ impl Owner {
                 name: name.to_owned(),
                 visibility: ModeVisibility::Private,
                 steps: every_quarter_second(action),
+            })
+            .await
+            .unwrap()
+    }
+
+    /// A new private mode `name` of the Owner's, whose one step does
+    /// `action` on respawn (ADR-0020, S20).
+    pub(crate) async fn mode_on_respawn(&self, name: &str, action: ModeActionKind) -> ModeResponse {
+        self.client
+            .create_mode(&CreateModeRequest {
+                name: name.to_owned(),
+                visibility: ModeVisibility::Private,
+                steps: one_step(
+                    action,
+                    ModeScheduleRequest {
+                        kind: ModeScheduleKind::OnRespawn,
+                        interval_ms: None,
+                        jitter_ms: None,
+                    },
+                ),
             })
             .await
             .unwrap()

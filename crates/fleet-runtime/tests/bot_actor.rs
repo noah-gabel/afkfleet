@@ -1387,6 +1387,72 @@ async fn failed_and_unconfirmed_calls_count_together() {
     assert_eq!(bot.last_disconnect(), Some(DisconnectReason::RespawnFailed));
 }
 
+/// A spec running a mode that sends `/home` and jumps on respawn.
+fn homing() -> BotSpec {
+    let on_respawn = |action| Step {
+        action,
+        schedule: Schedule::OnRespawn,
+        probability: 100,
+    };
+    BotSpec {
+        mode: mode(vec![
+            on_respawn(Action::SendChat {
+                message: message("/home"),
+            }),
+            on_respawn(Action::Jump),
+        ]),
+        ..running()
+    }
+}
+
+/// A confirmed respawn reaches the runner of its own session only: the next
+/// session's runner subscribes afresh and runs no old respawn's steps
+/// (ADR-0020, S23).
+#[tokio::test(start_paused = true)]
+async fn a_new_sessions_runner_never_sees_an_old_respawn() {
+    let (bot, old) = Bot::online(Setup::new(homing())).await;
+    emit(&old, SessionEvent::Died);
+    settle().await;
+    let jumped = old.log().contains(&Performed::Action(GameAction::Jump));
+    emit(&old, transient_kick());
+    settle().await;
+    advance(policy().bounds(n(1)).1).await;
+    let new = bot.session(1).await;
+    emit(&new, SessionEvent::Joined);
+    settle().await;
+
+    advance(secs(60)).await;
+
+    assert!(jumped, "the old session ran its steps on respawn");
+    assert_eq!(new.log(), [], "the new session's runner ran nothing");
+}
+
+/// A bot that dies five times in one instant: the on-respawn steps run each
+/// time, the on-respawn chat once (ADR-0020, S24; the user's death-loop
+/// rule).
+#[tokio::test(start_paused = true)]
+async fn a_burst_of_deaths_runs_the_steps_each_time_and_chats_once() {
+    let (mut bot, controller) = Bot::online(Setup::new(homing())).await;
+
+    for _ in 0..5 {
+        emit(&controller, SessionEvent::Died);
+        settle().await;
+    }
+    advance(secs(10)).await;
+
+    let log = controller.log();
+    let count = |done: &Performed| log.iter().filter(|logged| *logged == done).count();
+    assert_eq!(count(&Performed::Respawn), 5);
+    assert_eq!(count(&Performed::Action(GameAction::Jump)), 5);
+    assert_eq!(count(&Performed::Chat(message("/home"))), 1);
+    let sent: Vec<_> = bot
+        .kinds()
+        .into_iter()
+        .filter(|kind| matches!(kind, FleetEventKind::ModeChatSent { .. }))
+        .collect();
+    assert_eq!(sent.len(), 1);
+}
+
 /// A bot that dies again and again (lava, a mob farm): each death is
 /// respawned once, confirmed, without a warning (ADR-0020, S23).
 #[tokio::test(start_paused = true)]

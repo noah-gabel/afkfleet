@@ -36,6 +36,11 @@ const LET_GO: [PlannedAction; 2] = [
 ///   (`HoldUse{on: false}`, `Sneak{on: false}`), then starts the new mode
 ///   with its at-start steps; the selected hotbar slot stays. An equal
 ///   definition changes nothing.
+/// - **A respawn the server confirmed** comes through the actor's count.
+///   For a mode with on-respawn steps the runner lets go, then runs them,
+///   an on-respawn chat skipped within 30 s of the last one; a mode without
+///   any does nothing, exactly as before, and the repeating steps keep
+///   their times (ADR-0020, S24).
 ///
 /// One runner lives as long as its session is Online. The bot's actor starts
 /// it after it opened the chat queue, and cancels it before it closes the
@@ -47,13 +52,17 @@ pub struct ModeRunner<S> {
     clock: RuntimeClock,
     rng: StdRng,
     mode: watch::Receiver<ModeDefinition>,
+    respawns: watch::Receiver<u64>,
     failures: FailureLog,
 }
 
 impl<S: SessionHandle> ModeRunner<S> {
     /// Builds a runner for `session` that sends mode chat through `chat`,
-    /// reads the time from `clock`, makes its random choices with `rng` and
-    /// runs the mode that `mode` holds.
+    /// reads the time from `clock`, makes its random choices with `rng`,
+    /// runs the mode that `mode` holds, and runs its on-respawn steps each
+    /// time `respawns` changes: the actor counts there the respawns the
+    /// server confirmed (ADR-0020, S23, S24). A change before the receiver
+    /// was made never reaches the runner.
     #[must_use]
     pub fn new(
         session: S,
@@ -61,6 +70,7 @@ impl<S: SessionHandle> ModeRunner<S> {
         clock: RuntimeClock,
         rng: StdRng,
         mode: watch::Receiver<ModeDefinition>,
+        respawns: watch::Receiver<u64>,
     ) -> Self {
         Self {
             session,
@@ -68,6 +78,7 @@ impl<S: SessionHandle> ModeRunner<S> {
             clock,
             rng,
             mode,
+            respawns,
             failures: FailureLog::default(),
         }
     }
@@ -89,9 +100,11 @@ impl<S: SessionHandle> ModeRunner<S> {
             let deadline = next_due.and_then(|due| self.clock.deadline(due));
             let tick = tokio::select! {
                 biased;
-                // All three branches are cancel-safe: `cancelled` and
+                // All four branches are cancel-safe: `cancelled` and both
                 // `changed` lose nothing when another branch wins, and the
-                // sleep starts over from `next_due` on the next turn.
+                // sleep starts over from `next_due` on the next turn. A
+                // mode change goes before a respawn, so a changed mode's
+                // on-respawn steps never run once the change is known.
                 () = cancel.cancelled() => return,
                 changed = self.mode.changed() => {
                     // An error means the owner dropped the sender.
@@ -103,12 +116,29 @@ impl<S: SessionHandle> ModeRunner<S> {
                         continue;
                     }
                     definition = changed;
-                    let (new_plan, first) =
-                        ModePlan::start(&definition, self.clock.now(), &mut self.rng);
-                    plan = new_plan;
+                    // Keeps the on-respawn chat's 30 s memory (S24).
+                    let first = plan.switch(&definition, self.clock.now(), &mut self.rng);
                     PlanTick {
                         actions: LET_GO.into_iter().chain(first.actions).collect(),
                         next_due: first.next_due,
+                    }
+                }
+                respawned = self.respawns.changed() => {
+                    if respawned.is_err() {
+                        return;
+                    }
+                    // Several respawns since the last turn run the steps once.
+                    self.respawns.borrow_and_update();
+                    let Some(respawn) = plan.respawned(self.clock.now(), &mut self.rng) else {
+                        // A mode without on-respawn steps: nothing, as before.
+                        continue;
+                    };
+                    if respawn.chat_skipped {
+                        debug!("the on-respawn chat was skipped: the last one went out less than 30 s before");
+                    }
+                    PlanTick {
+                        actions: LET_GO.into_iter().chain(respawn.actions).collect(),
+                        next_due: plan.next_due(),
                     }
                 }
                 () = sleep_until(deadline) => plan.tick(self.clock.now(), &mut self.rng),

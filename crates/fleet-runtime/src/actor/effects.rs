@@ -318,6 +318,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             self.clock,
             StdRng::seed_from_u64(self.rng.next_u64()),
             self.mode.subscribe(),
+            self.respawns.subscribe(),
         );
         self.runners.spawn(
             runner

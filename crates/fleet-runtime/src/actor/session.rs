@@ -65,8 +65,9 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
     }
 
     /// The server confirmed a respawn: the retry, which never ends in
-    /// success, is dropped (ADR-0020, S23). One without an open death, which
-    /// the actor stopped waiting for, changes nothing.
+    /// success, is dropped, and the mode runner runs its on-respawn steps
+    /// (ADR-0020, S23). One without an open death, which the actor stopped
+    /// waiting for, changes nothing.
     fn respawned(&mut self) {
         if !self.death_open {
             debug!("a respawn the bot no longer waits for was confirmed");
@@ -75,6 +76,9 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
         self.death_open = false;
         self.respawn = None;
         debug!("the server confirmed the respawn");
+        // With no runner the bump is dropped: the next one subscribes later.
+        self.respawns
+            .send_modify(|count| *count = count.wrapping_add(1));
     }
 
     /// The session ended on its own for `reason`: records it in the

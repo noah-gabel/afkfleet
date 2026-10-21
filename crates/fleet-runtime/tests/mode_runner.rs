@@ -126,6 +126,7 @@ struct Runner {
     controller: SessionController,
     queue: ChatQueue,
     mode: watch::Sender<ModeDefinition>,
+    respawns: watch::Sender<u64>,
     cancel: CancellationToken,
     events: broadcast::Receiver<FleetEvent>,
     task: JoinHandle<()>,
@@ -139,6 +140,12 @@ impl Runner {
     }
 
     async fn start_seeded(definition: ModeDefinition, seed: u64) -> Self {
+        Self::launch(definition, seed, false).await
+    }
+
+    /// Starts `definition` with `seed`; with `respawned_first`, a respawn
+    /// is signalled after the runner subscribed but before its first turn.
+    async fn launch(definition: ModeDefinition, seed: u64, respawned_first: bool) -> Self {
         let connector = FakeConnector::new();
         let (session, _events) = connector.connect(params()).await.unwrap();
         let controller = connector.session(0).await;
@@ -160,6 +167,8 @@ impl Runner {
         delivery_task.spawn(delivery.run());
 
         let (mode, watched) = watch::channel(definition);
+        // A respawn counted before this runner existed, which it never sees.
+        let respawns = watch::Sender::new(7);
         let cancel = CancellationToken::new();
         let runner = ModeRunner::new(
             session,
@@ -167,7 +176,11 @@ impl Runner {
             clock,
             StdRng::seed_from_u64(seed),
             watched,
+            respawns.subscribe(),
         );
+        if respawned_first {
+            respawns.send_modify(|count| *count += 1);
+        }
         let task = tokio::spawn(runner.run(cancel.clone()));
         settle().await;
 
@@ -175,6 +188,7 @@ impl Runner {
             controller,
             queue,
             mode,
+            respawns,
             cancel,
             events: subscriber,
             task,
@@ -191,6 +205,23 @@ impl Runner {
     async fn change_mode(&self, definition: ModeDefinition) {
         self.mode.send_replace(definition);
         settle().await;
+    }
+
+    /// Signals a respawn the server confirmed, as the actor does.
+    async fn respawn(&self) {
+        self.respawns.send_modify(|count| *count += 1);
+        settle().await;
+    }
+
+    /// The mode chat sent so far, in order.
+    fn sent(&mut self) -> Vec<ChatMessage> {
+        let mut sent = Vec::new();
+        while let Ok(event) = self.events.try_recv() {
+            if let FleetEventKind::ModeChatSent { message } = event.kind {
+                sent.push(message);
+            }
+        }
+        sent
     }
 }
 
@@ -487,4 +518,183 @@ async fn mode_chat_on_a_closed_queue_is_not_online_and_logs_below_warn() {
     assert!(!runner.task.is_finished(), "the runner keeps going");
     assert_eq!(levels.of("isn't online"), [Level::DEBUG]);
     assert!(!levels.any_warning(), "a closed queue never warns");
+}
+
+// --- On respawn (ADR-0020, S24) ---
+
+fn on_respawn(action: Action) -> Step {
+    step(action, Schedule::OnRespawn)
+}
+
+fn respawn_chat(text: &str) -> Step {
+    on_respawn(Action::SendChat {
+        message: message(text),
+    })
+}
+
+/// What the runner lets go of before the on-respawn steps.
+const LET_GO: [Performed; 2] = [
+    action(GameAction::HoldUse { on: false }),
+    action(GameAction::Sneak { on: false }),
+];
+
+/// A mode without on-respawn steps does on a respawn exactly what it does
+/// without one: the same actions at the same times, the same chat, even
+/// with a respawn at the instant a step is due (the user's rule for C3).
+#[rstest::rstest]
+#[case::afk(ModeDefinition::afk())]
+#[case::farm(ModeDefinition::farm())]
+#[case::sneaking_and_holding(mode(vec![
+    at_start(Action::Sneak { on: true }),
+    step(Action::HoldUse { on: true }, every(ms(2_000), Duration::ZERO)),
+    step(Action::HoldUse { on: false }, every(ms(2_000), ms(500))),
+    chat_step("/spawn"),
+]))]
+#[tokio::test(start_paused = true)]
+async fn a_mode_without_on_respawn_steps_behaves_exactly_as_before(
+    #[case] definition: ModeDefinition,
+) {
+    let mut quiet = Runner::start_seeded(definition.clone(), 9).await;
+    let mut respawning = Runner::start_seeded(definition, 9).await;
+
+    for second in 0..120_u64 {
+        match second % 7 {
+            // Signalled without letting it run first: the runner wakes with
+            // the respawn and a step due at 14, 28, … s together.
+            6 => respawning.respawns.send_modify(|count| *count += 1),
+            3 => respawning.respawn().await,
+            _ => {}
+        }
+        advance(1_000).await;
+    }
+
+    assert_ne!(quiet.log(), [], "the mode did something");
+    assert_eq!(respawning.log(), quiet.log());
+    assert_eq!(respawning.sent(), quiet.sent());
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_runner_lets_go_then_runs_the_on_respawn_steps() {
+    let runner = Runner::start(mode(vec![
+        at_start(Action::Jump),
+        on_respawn(Action::Sneak { on: true }),
+        on_respawn(Action::SelectHotbarSlot { slot: slot(4) }),
+    ]))
+    .await;
+    let before = runner.log();
+
+    runner.respawn().await;
+
+    assert_eq!(before, [JUMP], "no step on respawn before one");
+    assert_eq!(
+        runner.log(),
+        [
+            JUMP,
+            LET_GO[0].clone(),
+            LET_GO[1].clone(),
+            action(GameAction::Sneak { on: true }),
+            action(GameAction::SelectHotbarSlot { slot: slot(4) }),
+        ]
+    );
+}
+
+/// The let-go depends on the mode alone, never on a roll.
+#[tokio::test(start_paused = true)]
+async fn the_runner_lets_go_even_when_every_roll_fails() {
+    let runner = Runner::start(mode(vec![Step {
+        probability: 1,
+        ..on_respawn(Action::Jump)
+    }]))
+    .await;
+
+    runner.respawn().await;
+
+    assert_eq!(runner.log(), LET_GO);
+}
+
+/// A mode change and a respawn in one turn: the change goes first, so the
+/// old mode's on-respawn steps never run once the change was known.
+#[tokio::test(start_paused = true)]
+async fn a_change_and_a_respawn_in_one_turn_never_run_the_old_modes_steps() {
+    let runner = Runner::start(mode(vec![on_respawn(Action::Jump)])).await;
+
+    runner
+        .mode
+        .send_replace(mode(vec![on_respawn(Action::SwingArm)]));
+    runner.respawns.send_modify(|count| *count += 1);
+    settle().await;
+
+    let mut expected = LET_GO.to_vec();
+    expected.extend(LET_GO);
+    expected.push(action(GameAction::SwingArm));
+    assert_eq!(runner.log(), expected);
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_cancelled_runner_runs_no_respawn() {
+    let runner = Runner::start(mode(vec![on_respawn(Action::Jump)])).await;
+
+    runner.cancel.cancel();
+    runner.respawns.send_modify(|count| *count += 1);
+    settle().await;
+
+    assert_eq!(runner.log(), []);
+    assert!(runner.task.is_finished());
+}
+
+/// A respawn signalled after the runner subscribed but before its first
+/// turn runs after the at-start steps; one counted before it subscribed
+/// never reaches it (the helper's watch starts at 7).
+#[tokio::test(start_paused = true)]
+async fn a_respawn_before_the_first_turn_runs_after_the_at_start_steps() {
+    let runner = Runner::launch(
+        mode(vec![at_start(Action::Jump), on_respawn(Action::SwingArm)]),
+        1,
+        true,
+    )
+    .await;
+
+    assert_eq!(
+        runner.log(),
+        [
+            JUMP,
+            LET_GO[0].clone(),
+            LET_GO[1].clone(),
+            action(GameAction::SwingArm)
+        ]
+    );
+}
+
+/// A bot that dies every 5 s for two minutes: the on-respawn jump each
+/// time, the on-respawn chat only at 0, 30, 60 and 90 s (S24; the user's
+/// death-loop rule).
+#[tokio::test(start_paused = true)]
+async fn a_death_every_5_s_sends_the_on_respawn_chat_only_every_30_s() {
+    let mut runner =
+        Runner::start(mode(vec![respawn_chat("/home"), on_respawn(Action::Jump)])).await;
+
+    for _ in 0..24 {
+        runner.respawn().await;
+        advance(5_000).await;
+    }
+
+    assert_eq!(runner.sent(), vec![message("/home"); 4]);
+    let jumps = runner.log().iter().filter(|done| **done == JUMP).count();
+    assert_eq!(jumps, 24);
+}
+
+/// The 30 s memory lasts the session: a mode change keeps it.
+#[tokio::test(start_paused = true)]
+async fn the_on_respawn_chat_memory_survives_a_mode_change() {
+    let mut runner = Runner::start(mode(vec![respawn_chat("/home")])).await;
+    runner.respawn().await;
+    advance(5_000).await;
+    runner.change_mode(mode(vec![respawn_chat("/spawn")])).await;
+    advance(5_000).await;
+
+    runner.respawn().await;
+    advance(25_000).await;
+    runner.respawn().await;
+
+    assert_eq!(runner.sent(), [message("/home"), message("/spawn")]);
 }

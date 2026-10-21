@@ -177,6 +177,9 @@ pub struct BotActor<C: MinecraftConnector, P> {
     breaker_copy: watch::Sender<CircuitBreaker>,
     breaker: CircuitBreaker,
     mode: watch::Sender<ModeDefinition>,
+    /// How many respawns the server confirmed; each session's runner
+    /// subscribes when it starts, so it sees only its own (ADR-0020, S23).
+    respawns: watch::Sender<u64>,
     queue: ChatQueue,
     inbox: mpsc::Receiver<BotCommand>,
     span: Span,
@@ -260,6 +263,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             breaker_copy: breaker,
             breaker: breaker_start,
             mode: watch::Sender::new(spec.mode.clone()),
+            respawns: watch::Sender::new(0),
             queue: ChatQueue::new(spec.id, config.chat_queue, bucket, tickets),
             inbox,
             span: info_span!("bot", bot_id = %spec.id),
