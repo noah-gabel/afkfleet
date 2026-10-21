@@ -241,10 +241,8 @@ async fn a_malformed_unknown_or_unseen_mode_is_the_same_404(
     for seen in [&malformed, &unknown, &unseen] {
         assert_eq!(seen.status, 404, "{}", seen.text);
     }
-    assert_eq!(
-        unknown.body_without_request_id(),
-        unseen.body_without_request_id()
-    );
+    assert_eq!(without_request_id(&malformed), without_request_id(&unknown));
+    assert_eq!(without_request_id(&unknown), without_request_id(&unseen));
     assert_eq!(setup.stored(hidden).await.unwrap().name.as_str(), "Theirs");
 }
 
@@ -301,7 +299,7 @@ async fn a_body_that_doesnt_parse_is_400_and_a_broken_rule_422(
     assert_eq!(setup.updates().await, 0);
 }
 
-/// A built-in mode is read-only for everyone, the Owner included: 403.
+/// Every built-in mode is read-only for everyone, the Owner included: 403.
 #[sqlx::test(migrations = false)]
 async fn a_built_in_mode_is_403_for_everyone(
     _pool: SqlitePoolOptions,
@@ -313,30 +311,32 @@ async fn a_built_in_mode_is_403_for_everyone(
         stepped_up(&setup, 3, "admin", Role::Admin).await,
         stepped_up(&setup, 4, "member", Role::Member).await,
     ];
-    let afk = ModePreset::Afk.id();
-    let before = setup.stored(afk).await;
 
-    for person in &people {
-        for (n, seen) in [
-            setup
-                .edit(person, afk, body(1, "My afk", "shared", &swinging()))
-                .await,
-            setup
-                .edit_with_commands(person, afk, body(1, "My afk", "shared", &swinging()))
-                .await,
-        ]
-        .into_iter()
-        .enumerate()
-        {
-            assert_eq!(
-                (seen.status, seen.code()),
-                (403, "forbidden"),
-                "{n}: {}",
-                seen.text
-            );
+    for preset in ModePreset::ALL {
+        let id = preset.id();
+        let before = setup.stored(id).await;
+        for person in &people {
+            for (n, seen) in [
+                setup
+                    .edit(person, id, body(1, "My mode", "shared", &swinging()))
+                    .await,
+                setup
+                    .edit_with_commands(person, id, body(1, "My mode", "shared", &swinging()))
+                    .await,
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                assert_eq!(
+                    (seen.status, seen.code()),
+                    (403, "forbidden"),
+                    "{preset} {n}: {}",
+                    seen.text
+                );
+            }
         }
+        assert_eq!(setup.stored(id).await, before, "{preset}");
     }
-    assert_eq!(setup.stored(afk).await, before);
 }
 
 /// The edit needs the right to edit the mode both as it is and as it will
@@ -373,6 +373,39 @@ async fn editing_needs_the_right_both_as_the_mode_is_and_as_it_will_be(
         let version = setup.stored(id).await.unwrap().version.get();
         assert_eq!(version, if status == 200 { 2 } else { 1 }, "case {n}");
     }
+}
+
+/// The transaction asks for the right after the change too: an Admin
+/// demoted to Member right before it, sharing their own private mode, may
+/// still edit it as it is but not as it would be, so it's 403 and nothing
+/// is written (PR #64's review).
+#[sqlx::test(migrations = false)]
+async fn an_admin_demoted_right_before_sharing_their_private_mode_is_403(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    let id = setup
+        .add_mode(1, admin.id, "Mine", "private", &swinging())
+        .await;
+    let before = setup.stored(id).await;
+    setup
+        .hooked
+        .queue(Meanwhile::SetRole(admin.id, Role::Member));
+
+    let seen = setup
+        .edit(&admin, id, body(1, "Mine", "shared", &swinging()))
+        .await;
+
+    assert_eq!(
+        (seen.status, seen.code()),
+        (403, "forbidden"),
+        "{}",
+        seen.text
+    );
+    assert_eq!(setup.stored(id).await, before);
+    assert_eq!(setup.updates().await, 0);
 }
 
 /// The plain route points any command off the allowlist to the twin,
@@ -482,6 +515,64 @@ async fn an_untouched_save_is_200_and_changes_nothing(
     assert_eq!(setup.hints.take(), []);
 }
 
+/// The no-op comes before S17's check (R3): saving untouched a mode that a
+/// bot the editor can't set it on uses is 200 with nothing written, while
+/// a real edit is 409 (PR #64's review).
+#[sqlx::test(migrations = false)]
+async fn an_untouched_save_is_200_even_when_a_bot_the_editor_cant_set_it_on_uses_it(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    let other = setup.person(3, "admin2", Role::Admin).await;
+    let id = setup
+        .add_mode(
+            1,
+            admin.id,
+            "Greeter",
+            "shared",
+            &sending("he\u{200B}llo there"),
+        )
+        .await;
+    let (_, hidden) = setup.bot_of(other.id, 9).await;
+    setup.run_mode(hidden, id).await;
+    let listed = setup.modes(&admin, "").await;
+    let answer = super::named(&listed.body, "Greeter").clone();
+    let mut sent_back = answer["steps"].clone();
+    for step in sent_back.as_array_mut().unwrap() {
+        step["action"]
+            .as_object_mut()
+            .unwrap()
+            .remove("arguments_hidden");
+    }
+    let before = setup.stored(id).await;
+    setup.hints.take();
+
+    let untouched = setup
+        .edit(
+            &admin,
+            id,
+            json!({ "version": 1, "name": "Greeter", "visibility": "shared", "steps": sent_back }),
+        )
+        .await;
+    let changed = setup
+        .edit(&admin, id, body(1, "Greeter", "shared", &sending("hello")))
+        .await;
+
+    assert_eq!(untouched.status, 200, "{}", untouched.text);
+    assert_eq!(untouched.body, answer);
+    assert_eq!(
+        (changed.status, changed.code()),
+        (409, "mode_in_use_by_others"),
+        "{}",
+        changed.text
+    );
+    assert_eq!(setup.stored(id).await, before);
+    assert_eq!(setup.updates().await, 0);
+    assert_eq!(setup.hints.take(), []);
+}
+
 /// A stale `version` is 409 `mode_changed`, and nothing is written or
 /// recorded (S18).
 #[sqlx::test(migrations = false)]
@@ -521,6 +612,94 @@ async fn a_stale_version_is_409_mode_changed_and_writes_nothing(
     }
     assert_eq!(setup.stored(id).await, before);
     assert_eq!(setup.updates().await, 1);
+}
+
+/// R3's order in the transaction: a stale `version` is `mode_changed`
+/// before a taken name is looked at, and a taken name is 422 before the
+/// bots that use the mode are (PR #64's review).
+#[sqlx::test(migrations = false)]
+async fn in_the_transaction_the_version_comes_before_the_name_and_the_name_before_the_bots(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    let other = setup.person(3, "admin2", Role::Admin).await;
+    let edited = setup
+        .add_mode(1, admin.id, "Edited", "private", &swinging())
+        .await;
+    let used = setup
+        .add_mode(2, admin.id, "Used", "shared", &swinging())
+        .await;
+    setup
+        .add_mode(3, admin.id, "Taken", "private", &swinging())
+        .await;
+    let (_, hidden) = setup.bot_of(other.id, 9).await;
+    setup.run_mode(hidden, used).await;
+    let first = setup
+        .edit(&admin, edited, body(1, "Edited", "private", &jumping()))
+        .await;
+    assert_eq!(first.status, 200, "{}", first.text);
+
+    let stale_and_taken = setup
+        .edit(&admin, edited, body(1, "Taken", "private", &swinging()))
+        .await;
+    let taken_and_blocked = setup
+        .edit(&admin, used, body(1, "Taken", "shared", &jumping()))
+        .await;
+
+    assert_eq!(
+        (stale_and_taken.status, stale_and_taken.code()),
+        (409, "mode_changed"),
+        "{}",
+        stale_and_taken.text
+    );
+    assert_eq!(taken_and_blocked.status, 422, "{}", taken_and_blocked.text);
+    assert_eq!(
+        taken_and_blocked.body["error"]["fields"],
+        json!([{ "path": "name", "message": "is already another mode's name" }])
+    );
+    assert_eq!(setup.updates().await, 1);
+}
+
+/// R1's canary for edits: an edit's answer shows its editor the mode as
+/// `GET /modes` does, by the same rules: an Admin editing a Member's private
+/// mode and the Owner editing an Admin's shared one get its owner and the
+/// planted command whole (S14, S15; PR #64's review).
+#[sqlx::test(migrations = false)]
+async fn an_edit_answers_its_editor_as_the_list_shows_them(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let the_owner = stepped_up(&setup, 2, "theowner", Role::Owner).await;
+    let admin = stepped_up(&setup, 3, "admin", Role::Admin).await;
+    let member = setup.person(4, "member", Role::Member).await;
+    let members = setup
+        .add_mode(1, member.id, "Member farm", "private", &super::planted())
+        .await;
+    let admins = setup
+        .add_mode(2, admin.id, "Admin farm", "shared", &super::planted())
+        .await;
+
+    for (editor, id, name, visibility, owner) in [
+        (&admin, members, "Member farm 2", "private", "member"),
+        (&the_owner, admins, "Admin farm 2", "shared", "admin"),
+    ] {
+        let seen = setup
+            .edit_with_commands(editor, id, body(1, name, visibility, &super::planted()))
+            .await;
+        assert_eq!(seen.status, 200, "{name}: {}", seen.text);
+        assert_eq!(seen.body["owner"]["username"], owner, "{name}");
+        assert_eq!(
+            seen.text.matches(super::CANARY).count(),
+            2,
+            "{name}: {}",
+            seen.text
+        );
+        let listed = setup.modes(editor, "").await;
+        assert_eq!(super::named(&listed.body, name), &seen.body, "{name}");
+    }
 }
 
 /// A real edit answers the mode at the next version, as its editor sees it
@@ -638,6 +817,35 @@ async fn an_edit_is_recorded_without_the_name_or_a_steps_text(
     log_capture::check_absent("hunter2").unwrap();
 }
 
+/// `definition_changed` compares the steps as stored, byte for byte (S21):
+/// a rename whose steps differ only by `-0.0` against `0.0`, which read as
+/// the same angle, changed them (PR #64's review).
+#[sqlx::test(migrations = false)]
+async fn definition_changed_compares_the_stored_steps_byte_for_byte(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let member = setup.person(2, "member", Role::Member).await;
+    let looking = |yaw: f64| {
+        json!({ "steps": [
+            { "action": { "type": "look", "yaw": yaw, "pitch": 0.0 }, "schedule": { "type": "at_start" }, "probability": 100 },
+        ] })
+        .to_string()
+    };
+    let id = setup
+        .add_mode(1, member.id, "Looker", "private", &looking(-0.0))
+        .await;
+
+    let seen = setup
+        .edit(&member, id, body(1, "Renamed", "private", &looking(0.0)))
+        .await;
+
+    assert_eq!(seen.status, 200, "{}", seen.text);
+    let recorded = setup.last(&AuditAction::MODE_UPDATE).await;
+    assert_eq!(metadata(&recorded)["definition_changed"], "true");
+}
+
 /// A rename is checked against every name but the mode's own: a case
 /// change of its own name passes, another of the owner's names is 422, a
 /// shared mode's name is 422 for a mode made shared (never a 500) and free
@@ -662,6 +870,9 @@ async fn a_rename_is_checked_against_every_name_but_its_own(
     setup
         .add_mode(4, other.id, "Farming", "shared", &swinging())
         .await;
+    setup
+        .add_mode(5, other.id, "Herding", "shared", &swinging())
+        .await;
 
     for (case, id, name, visibility, status) in [
         ("its own in capitals", fishing, "FISHING", "private", 200),
@@ -676,7 +887,7 @@ async fn a_rename_is_checked_against_every_name_but_its_own(
         (
             "a shared one's, staying private",
             mining,
-            "farming stand",
+            "Herding",
             "private",
             200,
         ),

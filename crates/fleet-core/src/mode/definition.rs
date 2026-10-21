@@ -1391,6 +1391,50 @@ mod tests {
             .prop_map(draft)
     }
 
+    /// `definition` with `invisible` inserted into each chat message, at the
+    /// character `at` picks, and `-0.0` for each look's zero angle; and
+    /// whether a message changed, which `==` tells apart while an answer
+    /// shows it the same.
+    fn shadow_of(
+        definition: &ModeDefinition,
+        invisible: char,
+        at: usize,
+    ) -> (ModeDefinition, bool) {
+        let mut changed = false;
+        let steps = definition
+            .steps()
+            .iter()
+            .map(|step| {
+                let action = match &step.action {
+                    Action::SendChat { message } => {
+                        let chars: Vec<char> = message.as_str().chars().collect();
+                        let at = at % (chars.len() + 1);
+                        let text: String = chars
+                            .iter()
+                            .take(at)
+                            .chain(core::iter::once(&invisible))
+                            .chain(chars.iter().skip(at))
+                            .collect();
+                        match ChatMessage::try_from(text.as_str()) {
+                            Ok(message) => {
+                                changed = true;
+                                Action::SendChat { message }
+                            }
+                            Err(_) => step.action.clone(),
+                        }
+                    }
+                    Action::Look { yaw, pitch } => {
+                        let negated = |angle: f32| if angle.to_bits() == 0 { -0.0 } else { angle };
+                        look(negated(*yaw), negated(*pitch))
+                    }
+                    other => other.clone(),
+                };
+                Step { action, ..*step }
+            })
+            .collect();
+        (validate(steps).unwrap(), changed)
+    }
+
     proptest! {
         #[test]
         fn validate_never_panics(steps in vec(any_step(), 0..=40)) {
@@ -1406,15 +1450,26 @@ mod tests {
             prop_assert_eq!(serde_json::from_str::<ModeDefinition>(&json).unwrap(), definition);
         }
 
-        /// Every definition reads the same as itself, and the rule doesn't
-        /// depend on which side is the stored one.
+        /// Every definition reads the same as itself, and as itself with an
+        /// invisible character in each chat message or `-0.0` for a zero
+        /// angle, which `==` may tell apart; and the rule doesn't depend on
+        /// which side is the stored one (PR #64's review).
         #[test]
-        fn reading_the_same_is_reflexive_and_symmetric(one in valid_draft(), other in valid_draft()) {
+        fn reading_the_same_is_reflexive_and_symmetric(
+            one in valid_draft(),
+            other in valid_draft(),
+            invisible in proptest::sample::select(vec!['\u{200B}', '\u{2060}', '\u{FEFF}']),
+            at in any::<usize>(),
+        ) {
             let one = one.validate().unwrap();
             let other = other.validate().unwrap();
+            let (shadow, changed) = shadow_of(&one, invisible, at);
 
             prop_assert!(one.same_as_shown(&one));
             prop_assert!(one.same_as_shown(&one.clone()));
+            prop_assert!(one.same_as_shown(&shadow));
+            prop_assert!(shadow.same_as_shown(&one));
+            prop_assert_eq!(shadow == one, !changed);
             prop_assert_eq!(one.same_as_shown(&other), other.same_as_shown(&one));
         }
     }

@@ -275,7 +275,7 @@ pub struct UpdateModeRequest {
     #[garde(range(min = 1))]
     #[schema(schema_with = integer_schema::<1, { u32::MAX }>)]
     pub version: u32,
-    /// Its name, under [`CreateModeRequest::name`]'s rules; the mode's own
+    /// Its name, under the rules of `CreateModeRequest`'s; the mode's own
     /// name never clashes with itself, in any case.
     #[garde(custom(valid_mode_name))]
     #[schema(schema_with = BoundedText::<MODE_NAME_MAX_CHARS>::schema)]
@@ -284,7 +284,7 @@ pub struct UpdateModeRequest {
     /// and as it will be.
     #[garde(skip)]
     pub visibility: ModeVisibility,
-    /// Its steps, at most 32, under [`CreateModeRequest::steps`]' rules.
+    /// Its steps, at most 32, under the rules of `CreateModeRequest`'s.
     #[garde(dive)]
     #[ts(as = "Vec<ModeStepRequest>")]
     #[schema(value_type = Vec<ModeStepRequest>)]
