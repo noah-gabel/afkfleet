@@ -4,9 +4,10 @@
 //!
 //! It prints IDs, names, states and the server's answers; never a token,
 //! the password or a code, never a line it didn't understand, and never a
-//! chat line typed into it back, nor a mode's steps: `new-mode` takes a
-//! mode's JSON and shows only its line, and JSON that isn't a mode is said
-//! so, never repeated. `history` shows a bot's chat as the server
+//! chat line typed into it back, nor a mode's steps: `new-mode` and
+//! `edit-mode` take a mode's JSON and show only its line, and JSON that
+//! isn't a mode is said so, never repeated. `delete-mode` asks for the
+//! password again when the server wants it. `history` shows a bot's chat as the server
 //! sends it to this user: cleaned, a line break as ` | `, a command's
 //! arguments only for Manage holders (ADR-0020, S9, S11, U3).
 
@@ -19,7 +20,9 @@ use fleet_api_types::bots::{BotModeRequest, BotPatchRequest, BotResponse, BotSta
 use fleet_api_types::chat::{
     ChatCommandRequest, ChatLine, ChatPageQuery, ChatSendOutcome, ChatSendRequest, ChatSendResponse,
 };
-use fleet_api_types::modes::{CreateModeRequest, ModeOwnership, ModeResponse, ModeVisibility};
+use fleet_api_types::modes::{
+    CreateModeRequest, ModeOwnership, ModeResponse, ModeVisibility, UpdateModeRequest,
+};
 use fleet_api_types::{BotId, ErrorCode, ModeId, PageQuery, SafeInt, SecretText};
 use fleet_client::{Client, ClientError, LoginStep, SessionStore};
 use secrecy::{ExposeSecret as _, SecretString};
@@ -58,7 +61,7 @@ pub(crate) fn arguments(args: &[String]) -> Option<(&str, &str)> {
 }
 
 /// The commands, as the console lists them.
-pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | mode <id> <mode> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | history <id> [before] | modes | new-mode <json> | quit";
+pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | mode <id> <mode> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | history <id> [before] | modes | new-mode <json> | edit-mode <id> <json> | delete-mode <id> | quit";
 
 /// How many 2FA codes a login may try.
 const CODES: usize = 3;
@@ -95,6 +98,11 @@ enum Command {
     Modes,
     /// A new mode: the rest of the line, as typed, its JSON.
     NewMode(String),
+    /// A mode edited: the rest of the line, as typed, its JSON with the
+    /// version read.
+    EditMode(ModeId, String),
+    /// A mode deleted.
+    DeleteMode(ModeId),
     Quit,
 }
 
@@ -110,6 +118,13 @@ impl Command {
             match verb {
                 "chat" => return bot(id).map(|id| Self::Chat(id, text.to_owned())),
                 "command" => return bot(id).map(|id| Self::Slash(id, text.to_owned())),
+                // An edit's JSON is the rest of the line, as typed.
+                "edit-mode" => {
+                    return id
+                        .parse::<ModeId>()
+                        .ok()
+                        .map(|id| Self::EditMode(id, text.to_owned()));
+                }
                 _ => {}
             }
         }
@@ -124,6 +139,7 @@ impl Command {
         let words: Vec<&str> = line.split_whitespace().collect();
         match words.as_slice() {
             ["modes"] => Some(Self::Modes),
+            ["delete-mode", id] => id.parse::<ModeId>().ok().map(Self::DeleteMode),
             ["mode", id, mode] => bot(id)
                 .zip(mode.parse::<ModeId>().ok())
                 .map(|(id, mode)| Self::SetMode(id, mode)),
@@ -287,6 +303,8 @@ async fn command_of<S: SessionStore>(
             .map(|bot| terminal.say(&line_of(&bot))),
         Command::Modes => modes(client, terminal).await,
         Command::NewMode(json) => new_mode(client, &json, terminal).await,
+        Command::EditMode(id, json) => edit_mode(client, id, &json, terminal).await,
+        Command::DeleteMode(id) => delete_mode(client, id, terminal).await,
         Command::Quit => Ok(()),
     };
     match done {
@@ -472,8 +490,54 @@ async fn new_mode<S: SessionStore>(
     Ok(())
 }
 
+/// Edits the mode `id` as `json` holds it; see [`new_mode`].
+async fn edit_mode<S: SessionStore>(
+    client: &Client<S>,
+    id: ModeId,
+    json: &str,
+    terminal: &mut impl Terminal,
+) -> Result<(), ClientError> {
+    let Ok(request) = serde_json::from_str::<UpdateModeRequest>(json) else {
+        terminal.say(
+            "not a mode's JSON: {\"version\", \"name\", \"visibility\", \"steps\"}, as the README shows; nothing was sent",
+        );
+        return Ok(());
+    };
+    let mode = match client.update_mode(id, &request).await {
+        Err(ClientError::Api(failure)) if failure.is(ErrorCode::ModeNeedsStepUp) => {
+            if !stepped_up(client, terminal).await? {
+                return Ok(());
+            }
+            client.update_mode_with_commands(id, &request).await?
+        }
+        other => other?,
+    };
+    terminal.say(&mode_line_of(&mode));
+    Ok(())
+}
+
+/// Deletes the mode `id`, with a step-up when the server asks, once.
+async fn delete_mode<S: SessionStore>(
+    client: &Client<S>,
+    id: ModeId,
+    terminal: &mut impl Terminal,
+) -> Result<(), ClientError> {
+    match client.delete_mode(id).await {
+        Err(ClientError::Api(failure)) if failure.is(ErrorCode::StepUpRequired) => {
+            if !stepped_up(client, terminal).await? {
+                return Ok(());
+            }
+            client.delete_mode(id).await?;
+        }
+        other => other?,
+    }
+    terminal.say(&format!("mode {id} deleted"));
+    Ok(())
+}
+
 /// One mode as a line: `mode <id> <name> <kind>`, then ` mine` and
-/// ` editable` when they hold; never its steps.
+/// ` editable` when they hold, and ` version <n>`, which `edit-mode` sends
+/// back; never its steps.
 fn mode_line_of(mode: &ModeResponse) -> String {
     let kind = match (mode.ownership.known(), mode.visibility.known()) {
         (Some(ModeOwnership::BuiltIn), _) => "built-in",
@@ -488,6 +552,7 @@ fn mode_line_of(mode: &ModeResponse) -> String {
     if mode.editable {
         shown.push_str(" editable");
     }
+    let _ = write!(shown, " version {}", mode.version);
     shown
 }
 
@@ -780,12 +845,32 @@ mod tests {
         );
         assert_eq!(Command::parse("new-mode"), None);
         assert_eq!(Command::parse("new-mode   "), None);
+        assert_eq!(
+            Command::parse(&format!("edit-mode {farm} {json}")),
+            Some(Command::EditMode(mode, json.to_owned()))
+        );
+        assert_eq!(
+            Command::parse(&format!("delete-mode {farm}")),
+            Some(Command::DeleteMode(mode))
+        );
+        assert_eq!(Command::parse(&format!("edit-mode {farm}")), None);
+        assert_eq!(Command::parse(&format!("edit-mode {farm}   ")), None);
+        assert_eq!(
+            Command::parse(&format!("edit-mode not-a-mode {json}")),
+            None
+        );
+        assert_eq!(Command::parse("delete-mode not-a-mode"), None);
+        assert_eq!(Command::parse(&format!("delete-mode {farm} now")), None);
         assert_eq!(Command::parse(&format!("mode {id}")), None);
         assert_eq!(Command::parse(&format!("mode {id} not-a-mode")), None);
         assert_eq!(Command::parse("modes now"), None);
     }
 
     fn a_mode(ownership: &str, visibility: &str, editable: bool) -> ModeResponse {
+        a_mode_at(ownership, visibility, editable, 1)
+    }
+
+    fn a_mode_at(ownership: &str, visibility: &str, editable: bool, version: u32) -> ModeResponse {
         serde_json::from_value(serde_json::json!({
             "id": "018bcfe5-6800-7cdc-8dcd-cdcdcdcdcdcd",
             "name": "Fishing trip",
@@ -794,7 +879,7 @@ mod tests {
             "editable": editable,
             "deletable": editable,
             "visibility_editable": false,
-            "version": 1,
+            "version": version,
             "created_at": "2027-01-15T08:00:00.000Z",
             "updated_at": "2027-01-15T08:00:00.000Z",
             "steps": [{ "action": { "type": "send_chat", "message": "/login hunter2", "arguments_hidden": false }, "schedule": { "type": "at_start" }, "probability": 100 }],
@@ -810,6 +895,7 @@ mod tests {
             a_mode("mine", "shared", false),
             a_mode("someone_else", "shared", true),
             a_mode("someone_else", "public", false),
+            a_mode_at("mine", "private", true, 4_294_967_295),
         ]
         .iter()
         .map(mode_line_of)
@@ -819,11 +905,12 @@ mod tests {
         assert_eq!(
             shown,
             [
-                format!("{id} built-in"),
-                format!("{id} private mine editable"),
-                format!("{id} shared mine"),
-                format!("{id} shared editable"),
-                format!("{id} public"),
+                format!("{id} built-in version 1"),
+                format!("{id} private mine editable version 1"),
+                format!("{id} shared mine version 1"),
+                format!("{id} shared editable version 1"),
+                format!("{id} public version 1"),
+                format!("{id} private mine editable version 4294967295"),
             ]
         );
         assert!(shown.iter().all(|line| !line.contains("hunter2")));
