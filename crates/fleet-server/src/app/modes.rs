@@ -25,6 +25,11 @@
 //!   S17), writes the next version only over the version it read, records
 //!   `mode.update` and tells the reconciler (`Change::Store`), so the bots
 //!   get the edit.
+//! - **Deleting** ([`ModeService::delete`]), after a step-up: one write
+//!   transaction re-reads the acting user and the mode, asks `authorize()`
+//!   for `DeleteMode`, refuses a mode any bot uses, whoever's (S17), deletes
+//!   it and records `mode.delete` with the version and the visibility. No
+//!   bot used it, so the reconciler has nothing to do.
 
 use core::num::NonZeroU32;
 use std::sync::Arc;
@@ -181,6 +186,33 @@ pub enum UpdateModeError {
     /// which nothing on the one write connection can change in between: a
     /// bug, never a success.
     #[error("the mode's write matched no row at the version just read")]
+    Lost,
+    /// The audit entry couldn't be built.
+    #[error(transparent)]
+    Audit(#[from] AuditError),
+    /// The database failed.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
+
+/// Why a mode wasn't deleted.
+#[derive(Debug, thiserror::Error)]
+pub enum DeleteModeError {
+    /// The acting session ended, or its user was disabled, meanwhile.
+    #[error("the acting session is gone")]
+    SessionGone,
+    /// The mode doesn't exist (any more).
+    #[error("the mode doesn't exist")]
+    NotFound,
+    /// `authorize()` refused it on the fresh facts.
+    #[error("the mode may not be deleted")]
+    Denied(#[source] AuthzError),
+    /// A bot uses the mode (S17).
+    #[error("a bot uses the mode")]
+    InUse,
+    /// The delete found no row the transaction had just read: a bug, never
+    /// a success.
+    #[error("the mode's delete matched no row it had just read")]
     Lost,
     /// The audit entry couldn't be built.
     #[error(transparent)]
@@ -481,6 +513,50 @@ impl ModeService {
                 username: acting.username,
             }),
         })
+    }
+
+    /// Deletes the mode `id` for `by`; see the [module docs](self).
+    ///
+    /// # Errors
+    /// [`DeleteModeError::SessionGone`], [`DeleteModeError::NotFound`],
+    /// [`DeleteModeError::Denied`], [`DeleteModeError::InUse`],
+    /// [`DeleteModeError::Lost`], and the server's failures.
+    pub async fn delete(&self, by: &ActingUser, id: ModeId) -> Result<(), DeleteModeError> {
+        let mut tx = self.store.write().await?;
+        let Some(acting) = recheck(tx.as_mut(), by).await? else {
+            debug!(user_id = %by.actor.id, mode_id = %id, "a mode delete was refused: the session is gone");
+            return Err(DeleteModeError::SessionGone);
+        };
+        let Some(stored) = tx.modes().listed(id).await? else {
+            return Err(DeleteModeError::NotFound);
+        };
+        authorize(&acting.actor, Permission::DeleteMode, &stored.context()).map_err(|error| {
+            debug!(user_id = %by.actor.id, mode_id = %id, "a mode delete was refused");
+            DeleteModeError::Denied(error)
+        })?;
+        // Any bot, whoever's: a refusal only for bots the deleter can't see
+        // would tell them those bots exist (S17).
+        if !tx.bots().accounts_with_mode(id).await?.is_empty() {
+            debug!(user_id = %by.actor.id, mode_id = %id, "a mode delete was refused: a bot uses it");
+            return Err(DeleteModeError::InUse);
+        }
+        if !tx.modes().delete(id).await? {
+            error!(mode_id = %id, "a mode's delete matched no row its transaction had just read; nothing was deleted");
+            return Err(DeleteModeError::Lost);
+        }
+        let metadata = AuditMetadata::new()
+            .int("version", i64::from(stored.mode.version.get()))?
+            .text("visibility", stored.mode.visibility.as_str())?;
+        let entry = self
+            .audit
+            .entry(AuditAction::MODE_DELETE, AuditOutcome::Success)
+            .actor(by.actor.id)
+            .ip(by.ip)
+            .target(AuditTarget::Mode(id))
+            .metadata(metadata);
+        tx.commit(entry).await?;
+        info!(user_id = %by.actor.id, mode_id = %id, "a mode was deleted");
+        Ok(())
     }
 
     /// The modes `viewer` may see on `page`, newest first, and the next

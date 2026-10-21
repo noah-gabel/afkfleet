@@ -212,4 +212,11 @@ pub trait ModeWrites: Send {
     /// [`WriteModeError::NameTaken`] when a unique index refuses the name,
     /// or [`WriteModeError::Store`].
     async fn update(&mut self, change: &ModeChange) -> Result<bool, WriteModeError>;
+
+    /// Deletes the user's mode `id`; never a built-in mode. Whether it was
+    /// there. The bots' foreign key refuses a mode a bot runs.
+    ///
+    /// # Errors
+    /// [`StoreError`], a mode a bot runs among them.
+    async fn delete(&mut self, id: ModeId) -> Result<bool, StoreError>;
 }

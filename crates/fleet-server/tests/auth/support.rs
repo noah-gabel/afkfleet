@@ -256,9 +256,10 @@ impl HookedStore {
         }
     }
 
-    /// Makes the next write transaction's `ModeWrites::update` answer that
-    /// it matched no row, as no real one can after its own re-read did.
-    pub(crate) fn lose_next_mode_update(&self) {
+    /// Makes the next write transaction's `ModeWrites::update` and
+    /// `ModeWrites::delete` answer that they matched no row, as no real one
+    /// can after its own re-read found it.
+    pub(crate) fn lose_next_mode_write(&self) {
         *self.lose_mode_update.lock().unwrap() = true;
     }
 
@@ -462,8 +463,8 @@ impl WriteTx for HookedTx {
     }
 }
 
-/// A write transaction whose mode updates match no row: a bug a store
-/// could have, which an edit must never answer as a success.
+/// A write transaction whose mode updates and deletes match no row: a bug
+/// a store could have, which a write must never answer as a success.
 struct LosingTx {
     inner: Box<dyn WriteTx>,
 }
@@ -567,6 +568,10 @@ impl ModeWrites for LosingTx {
     }
 
     async fn update(&mut self, _change: &ModeChange) -> Result<bool, WriteModeError> {
+        Ok(false)
+    }
+
+    async fn delete(&mut self, _id: ModeId) -> Result<bool, StoreError> {
         Ok(false)
     }
 }

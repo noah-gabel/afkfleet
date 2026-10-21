@@ -790,6 +790,10 @@ impl ModeWrites for SqliteWriteTx {
     async fn update(&mut self, change: &ModeChange) -> Result<bool, WriteModeError> {
         modes::update(&mut self.tx, change).await
     }
+
+    async fn delete(&mut self, id: ModeId) -> Result<bool, StoreError> {
+        modes::delete(&mut self.tx, id).await
+    }
 }
 
 #[async_trait]

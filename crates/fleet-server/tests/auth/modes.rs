@@ -1,7 +1,7 @@
 //! The mode routes over HTTP (Plan.md P11.4; ADR-0020, S12–S16, S19):
 //! `GET /api/v1/modes` and what each viewer sees of a mode; `POST
 //! /api/v1/modes` and its step-up twin, with the pointer, the cap, names,
-//! the re-checks and the audit entry. Editing is in [`edits`].
+//! the re-checks and the audit entry. Editing is in [`edits`], deleting in [`deletion`].
 
 use std::collections::BTreeMap;
 
@@ -18,6 +18,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 use super::support::{Meanwhile, Options, Person, Seen, Setup, at, redacted, setup, setup_with};
 
+mod deletion;
 mod edits;
 
 /// The modes' list.

@@ -405,6 +405,7 @@ async fn the_document_lists_exactly_the_api_routes(
             ("/api/v1/modes", "post"),
             ("/api/v1/modes/with-commands", "post"),
             ("/api/v1/modes/{id}", "put"),
+            ("/api/v1/modes/{id}", "delete"),
             ("/api/v1/modes/{id}/with-commands", "put"),
             ("/api/v1/auth/login", "post"),
             ("/api/v1/auth/login/mfa", "post"),

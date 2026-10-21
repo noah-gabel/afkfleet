@@ -547,6 +547,7 @@ async fn the_setup_and_step_up_routes_are_registered_with_their_access_and_class
                 "/api/v1/modes/{id}/with-commands",
                 RateClass::Standard
             ),
+            entry(Method::DELETE, "/api/v1/modes/{id}", RateClass::Standard),
         ])
     );
     db.close().await;

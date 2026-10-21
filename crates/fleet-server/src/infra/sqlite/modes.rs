@@ -184,6 +184,21 @@ pub(super) async fn update(
     Ok(done.rows_affected() == 1)
 }
 
+/// Deletes a user's mode; see [`ModeWrites::delete`].
+///
+/// [`ModeWrites::delete`]: crate::ports::modes::ModeWrites::delete
+pub(super) async fn delete(conn: &mut SqliteConnection, id: ModeId) -> Result<bool, StoreError> {
+    let id = id_text(id);
+    let done = sqlx::query!(
+        "DELETE FROM modes WHERE id = ? AND owner_user_id IS NOT NULL",
+        id
+    )
+    .execute(conn)
+    .await
+    .map_err(store_error)?;
+    Ok(done.rows_affected() == 1)
+}
+
 /// The mode `id` with its owner; see [`ModeReads::listed`].
 ///
 /// [`ModeReads::listed`]: crate::ports::modes::ModeReads::listed

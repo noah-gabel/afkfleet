@@ -1026,3 +1026,32 @@ async fn a_modes_account_that_doesnt_read_back_is_corrupt(
         other => panic!("{other:?}"),
     }
 }
+
+/// The database refuses to delete a mode a bot runs, as the service does
+/// before it ever asks (ADR-0020, S17).
+#[sqlx::test(migrations = false)]
+async fn a_mode_a_bot_runs_isnt_deleted_by_the_database_either(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(&db, 1).await;
+    let (_, bot) = add_account_with_bot(&db, owner, 1).await;
+    let mode = ModeId::new_v7(at(T0), [8; 10]).unwrap();
+    let (id, owner_text) = (mode.to_string(), owner.to_string());
+    sqlx::query!(
+        "INSERT INTO modes (id, owner_user_id, name, visibility, definition_json, version, created_at, updated_at)
+         VALUES (?, ?, 'Mine', 'private', '{\"steps\":[]}', 1, '2027-01-15T08:00:00.000Z', '2027-01-15T08:00:00.000Z')",
+        id,
+        owner_text
+    )
+    .execute(db.write_pool())
+    .await
+    .unwrap();
+    let mut tx = db.write().await.unwrap();
+    tx.bots().set_mode(bot, mode).await.unwrap();
+
+    let deleted = tx.modes().delete(mode).await;
+
+    assert!(deleted.is_err(), "{deleted:?}");
+}

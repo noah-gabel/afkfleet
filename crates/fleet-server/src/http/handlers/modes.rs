@@ -26,6 +26,10 @@
 //!   `version` is 409 `mode_changed` (S18), a taken name 422 on `name`, and
 //!   a bot using the mode that the caller couldn't set it on 409
 //!   `mode_in_use_by_others` (S17).
+//! - **Deleting** (`DELETE /api/v1/modes/{id}`, after a step-up): a mode
+//!   the caller may not see is 404, one they may not delete 403 (a built-in
+//!   one for everyone); the service checks again in its transaction and
+//!   refuses a mode any bot uses (409 `mode_in_use`, S17). 204.
 
 use std::net::IpAddr;
 
@@ -43,7 +47,9 @@ use fleet_core::id::ModeId;
 use fleet_core::mode::ModeName;
 
 use super::{acting, mode_response, page};
-use crate::app::modes::{CreateModeError, ListModesError, ModeEdit, ModeRoute, UpdateModeError};
+use crate::app::modes::{
+    CreateModeError, DeleteModeError, ListModesError, ModeEdit, ModeRoute, UpdateModeError,
+};
 use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath, ValidQuery};
 use crate::http::rate_limit::ClientIp;
@@ -330,4 +336,51 @@ async fn editing(
             | UpdateModeError::Audit(_)) => ApiError::internal(other),
         })?;
     Ok(Json(mode_response(&user.actor(), edited.mode())?))
+}
+
+/// `DELETE /api/v1/modes/{id}`: deletes a mode no bot uses, after a
+/// step-up.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/modes/{id}",
+    operation_id = "delete_mode",
+    tag = "modes",
+    params(("id" = String, Path, description = "The mode's ID.")),
+    responses(
+        (status = 204, description = "The mode is deleted."),
+        (status = 401, description = "No valid access token.", body = ErrorResponse),
+        (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller may see the mode but not delete it. A built-in mode is read-only.", body = ErrorResponse),
+        (status = 404, description = "No such mode, or one the caller may not see.", body = ErrorResponse),
+        (status = 409, description = "`mode_in_use`: a bot uses the mode; switch every bot to another mode first.", body = ErrorResponse),
+        (status = 429, description = "Too many requests.", body = ErrorResponse,
+            headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
+        (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
+    ),
+)]
+pub(crate) async fn delete(
+    user: SteppedUpUser,
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    ValidPath(id): ValidPath<ModeId>,
+) -> Result<StatusCode, ApiError> {
+    let user = user.user();
+    let Some(listed) = state.modes.find(id).await? else {
+        return Err(ApiError::NotFound);
+    };
+    user.require(Permission::DeleteMode, &listed.context())?;
+    state
+        .modes
+        .delete(&acting(user, ip), id)
+        .await
+        .map_err(|error| match error {
+            DeleteModeError::SessionGone => ApiError::Unauthorized,
+            DeleteModeError::NotFound => ApiError::NotFound,
+            DeleteModeError::Denied(error) => ApiError::from(error),
+            DeleteModeError::InUse => ApiError::ModeInUse,
+            DeleteModeError::Store(error) => ApiError::from(error),
+            other @ (DeleteModeError::Lost | DeleteModeError::Audit(_)) => {
+                ApiError::internal(other)
+            }
+        })?;
+    Ok(StatusCode::NO_CONTENT)
 }

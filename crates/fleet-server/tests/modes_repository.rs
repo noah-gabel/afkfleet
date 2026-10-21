@@ -1205,3 +1205,27 @@ async fn an_update_to_a_name_the_indexes_refuse_is_taken(
         "Mining"
     );
 }
+
+/// A delete removes a user's mode and says so; a second one, or one of a
+/// built-in mode, finds nothing and leaves the table as it was.
+#[sqlx::test(migrations = false)]
+async fn a_delete_removes_a_users_mode_and_never_a_built_in_one(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(db.write_pool(), 21, "fisher", Role::Member).await;
+    let mode = new_mode(1, owner, "Fishing", ModeVisibility::Private);
+    insert(&db, &mode).await.unwrap();
+    let afk = ModePreset::Afk.id();
+
+    let mut tx = db.write().await.unwrap();
+    let first = tx.modes().delete(mode.id).await.unwrap();
+    let again = tx.modes().delete(mode.id).await.unwrap();
+    let built_in = tx.modes().delete(afk).await.unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert_eq!((first, again, built_in), (true, false, false));
+    assert_eq!(db.modes().find(mode.id).await.unwrap(), None);
+    assert!(db.modes().find(afk).await.unwrap().is_some());
+}

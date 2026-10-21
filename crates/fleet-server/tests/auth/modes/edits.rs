@@ -879,7 +879,7 @@ async fn an_update_that_matches_no_row_is_the_internal_error_never_a_success(
         .await;
     let before = setup.stored(id).await;
     setup.hints.take();
-    setup.hooked.lose_next_mode_update();
+    setup.hooked.lose_next_mode_write();
 
     let seen = setup
         .edit(&member, id, body(1, "Renamed", "private", &jumping()))
