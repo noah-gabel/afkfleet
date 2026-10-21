@@ -263,7 +263,7 @@ These crates are in the Plan.md §5 registry already; these are new uses, approv
       - It takes the `HitResultComponent`, which azalea limits to the reach. Nothing in reach gives `Ok`, logged at `debug`.
       - It writes the attack packet by hand: a `VarInt` packet ID and a `VarInt` entity ID, through `RawConnection::write_raw` (ADR-0008 §8).
       - It swings and resets `TicksSinceLastAttack`, as azalea's own attack would.
-    - The respawn writes `PerformRespawnEvent` and calls `BridgeControl::respawned` in the same job. *(Since Phase 11, [ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S22: it tells the bridge a respawn was asked for, and whether the bot is already loaded and alive.)*
+    - The respawn writes `PerformRespawnEvent` and calls `BridgeControl::respawned` in the same job. *(Since Phase 11, [ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S22, S27: it tells the bridge a respawn was asked for, and whether the bot's client is loaded; a Respawn's removal of `Dead` since, which the bridge remembers, tells the rest.)*
   - **Non-finite angles** are skipped before the job, logged at `warn`, and the call returns `Ok`.
   - **Live checks** are in `slow_actions_scenario`. Swings are seen by a second bot through a test-only system added by the `fault-injection` hook, which counts `Animate` packets *(the user's decision)*. A failed `execute if` answers nothing over RCON, so "not sneaking" is checked with `execute unless`.
   - **The respawn step waits for the bot to load** *(found in group E, the user's decision)*.
