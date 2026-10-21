@@ -108,6 +108,23 @@ impl ChatMessage {
                 .map_or(command, |(name, _)| name),
         )
     }
+
+    /// The message as a viewer reads it in an answer (ADR-0020, S21): its
+    /// invisible characters dropped by [`text::sanitize_untrusted`], as the
+    /// API's `BoundedText` drops them, then trimmed as
+    /// [`ChatMessage::try_from`] trims. A valid message holds nothing else
+    /// the cleaning strips, and is never longer than its cap.
+    ///
+    /// Only for comparing what users see: what a bot sends and what the
+    /// allowlist judges are [`ChatMessage::as_str`] and
+    /// [`ChatMessage::command_name`], unchanged.
+    #[must_use]
+    pub(crate) fn shown_text(&self) -> String {
+        text::sanitize_untrusted(&self.0, Self::MAX_LEN)
+            .text
+            .trim()
+            .to_owned()
+    }
 }
 
 impl TryFrom<&str> for ChatMessage {
@@ -274,6 +291,30 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::plain("hello world", "hello world")]
+    #[case::a_zero_width_space("he\u{200B}llo", "hello")]
+    #[case::a_word_joiner_and_a_byte_order_mark("/spawn\u{2060} home\u{FEFF}", "/spawn home")]
+    #[case::an_invisible_next_to_an_edge_space("\u{200B} hello", "hello")]
+    #[case::only_invisible("\u{200B}\u{2060}", "")]
+    #[case::the_emoji_selector_stays("\u{263A}\u{FE0F} ok", "\u{263A}\u{FE0F} ok")]
+    #[case::inner_spaces_stay("a  b", "a  b")]
+    fn shown_text_is_the_message_without_invisible_characters_trimmed(
+        #[case] input: &str,
+        #[case] shown: &str,
+    ) {
+        assert_eq!(message(input).shown_text(), shown);
+    }
+
+    #[test]
+    fn shown_text_leaves_what_the_bot_sends_and_the_command_name_alone() {
+        let hidden = message("/spa\u{200B}wn home");
+
+        assert_eq!(hidden.shown_text(), "/spawn home");
+        assert_eq!(hidden.as_str(), "/spa\u{200B}wn home");
+        assert_eq!(hidden.command_name(), Some("spa\u{200B}wn"));
+    }
+
     #[test]
     fn deserialize_rejects_invalid_text() {
         assert!(serde_json::from_str::<ChatMessage>("\"a\\nb\"").is_err());
@@ -313,6 +354,23 @@ mod tests {
                     prop_assert_eq!(shown.text, format!("/{name}"));
                 } else {
                     prop_assert_eq!(shown.text, message.as_str());
+                }
+            }
+        }
+
+        /// The shown text holds no invisible character and is trimmed, and
+        /// read back as a message it shows the same again.
+        #[test]
+        fn shown_text_is_clean_and_shows_the_same_once_read_back(
+            text in "[a-z /\u{a0}\u{200B}\u{2060}\u{FEFF}\u{00AD}]{1,40}"
+        ) {
+            if let Ok(message) = ChatMessage::try_from(text.as_str()) {
+                let shown = message.shown_text();
+
+                prop_assert!(!shown.chars().any(crate::text::is_invisible));
+                prop_assert_eq!(shown.trim(), shown.as_str());
+                if let Ok(again) = ChatMessage::try_from(shown.as_str()) {
+                    prop_assert_eq!(again.shown_text(), shown);
                 }
             }
         }

@@ -1,0 +1,17 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 409,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "mode_in_use_by_others",
+      "message": "A bot you can't set this mode on uses it, so this change can't be saved.",
+      "request_id": "test-request-id"
+    }
+  }
+}

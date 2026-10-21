@@ -252,6 +252,26 @@ impl ModeDefinition {
         })
     }
 
+    /// Whether `self` and `other` read the same in an answer (ADR-0020,
+    /// S21): the same steps in the same order, each with the same schedule,
+    /// probability and action, a chat step's message compared as a viewer
+    /// reads it (without its invisible characters, trimmed). An edit whose
+    /// steps read the same, with the same name and visibility, changes
+    /// nothing.
+    ///
+    /// It never says which steps to keep, and never feeds the allowlist,
+    /// which compares a command's name as it is: `/spa\u{200B}wn` reads as
+    /// `/spawn` but isn't that command.
+    #[must_use]
+    pub fn same_as_shown(&self, other: &Self) -> bool {
+        self.steps.len() == other.steps.len()
+            && self.steps.iter().zip(&other.steps).all(|(one, other)| {
+                one.schedule == other.schedule
+                    && one.probability == other.probability
+                    && same_action(&one.action, &other.action)
+            })
+    }
+
     /// The built-in `afk` mode: keeps a bot from being kicked for idling.
     ///
     /// It turns by up to 30° left or right and 10° up or down every 45–120 s,
@@ -499,6 +519,30 @@ impl From<ModeDefinition> for ModeDraft {
         Self {
             steps: definition.steps,
         }
+    }
+}
+
+/// Whether two actions read the same in an answer: a chat message as a
+/// viewer reads it, every other action as it is. Every kind is listed, so
+/// one that carries text must choose its rule.
+fn same_action(one: &Action, other: &Action) -> bool {
+    match (one, other) {
+        (Action::SendChat { message: one }, Action::SendChat { message: other }) => {
+            one.shown_text() == other.shown_text()
+        }
+        (
+            Action::SendChat { .. }
+            | Action::Look { .. }
+            | Action::RotateRandom { .. }
+            | Action::Jump
+            | Action::Sneak { .. }
+            | Action::SwingArm
+            | Action::UseItem
+            | Action::HoldUse { .. }
+            | Action::AttackFacingEntity
+            | Action::SelectHotbarSlot { .. },
+            _,
+        ) => one == other,
     }
 }
 
@@ -1127,6 +1171,76 @@ mod tests {
         );
     }
 
+    #[rstest]
+    #[case::a_zero_width_space(chat("he\u{200B}llo"), chat("hello"), true)]
+    #[case::a_word_joiner_and_a_byte_order_mark(
+        chat("/spawn\u{2060} home\u{FEFF}"),
+        chat("/spawn home"),
+        true
+    )]
+    #[case::an_invisible_next_to_an_edge_space(chat("\u{200B} hello"), chat("hello"), true)]
+    #[case::an_invisible_inside_a_command_name(chat("/spa\u{200B}wn"), chat("/spawn"), true)]
+    #[case::another_message(chat("hello"), chat("hallo"), false)]
+    #[case::another_case(chat("Hello"), chat("hello"), false)]
+    #[case::only_invisible_against_text(chat("\u{200B}"), chat("x"), false)]
+    #[case::negative_zero(look(-0.0, 0.0), look(0.0, -0.0), true)]
+    #[case::another_angle(look(1.0, 0.0), look(2.0, 0.0), false)]
+    #[case::another_turn(rotate(30.0, 10.0), rotate(30.0, 11.0), false)]
+    #[case::another_kind(Action::Jump, Action::SwingArm, false)]
+    #[case::sneaking_or_not(Action::Sneak { on: true }, Action::Sneak { on: false }, false)]
+    #[case::holding_or_not(hold(true), hold(false), false)]
+    #[case::another_slot(
+        Action::SelectHotbarSlot { slot: HotbarSlot::try_from(1).unwrap() },
+        Action::SelectHotbarSlot { slot: HotbarSlot::try_from(2).unwrap() },
+        false
+    )]
+    #[case::the_same_slot(
+        Action::SelectHotbarSlot { slot: HotbarSlot::FIRST },
+        Action::SelectHotbarSlot { slot: HotbarSlot::FIRST },
+        true
+    )]
+    fn an_action_reads_the_same_when_an_answer_shows_it_the_same(
+        #[case] one: Action,
+        #[case] other: Action,
+        #[case] same: bool,
+    ) {
+        let one = validate(vec![at_start(one)]).unwrap();
+        let other = validate(vec![at_start(other)]).unwrap();
+
+        assert_eq!(one.same_as_shown(&other), same);
+        assert_eq!(other.same_as_shown(&one), same);
+    }
+
+    #[test]
+    fn steps_read_the_same_only_in_order_with_their_schedule_and_probability() {
+        let base = validate(vec![repeating(Action::Jump), at_start(Action::SwingArm)]).unwrap();
+        let others = [
+            vec![at_start(Action::SwingArm), repeating(Action::Jump)],
+            vec![
+                step(Action::Jump, every(ms(60_001), Duration::ZERO)),
+                at_start(Action::SwingArm),
+            ],
+            vec![
+                step(Action::Jump, every(ms(60_000), ms(1))),
+                at_start(Action::SwingArm),
+            ],
+            vec![
+                with_probability(50, repeating(Action::Jump)),
+                at_start(Action::SwingArm),
+            ],
+            vec![repeating(Action::Jump), repeating(Action::SwingArm)],
+            vec![repeating(Action::Jump)],
+            vec![],
+        ];
+
+        assert!(base.same_as_shown(&base.clone()));
+        for steps in others {
+            let other = validate(steps).unwrap();
+            assert!(!base.same_as_shown(&other), "{other:?}");
+            assert!(!other.same_as_shown(&base), "{other:?}");
+        }
+    }
+
     // --- Properties ---
 
     /// Any `f32`, including NaN, the infinities and values just outside the
@@ -1290,6 +1404,18 @@ mod tests {
 
             let json = serde_json::to_string(&definition).unwrap();
             prop_assert_eq!(serde_json::from_str::<ModeDefinition>(&json).unwrap(), definition);
+        }
+
+        /// Every definition reads the same as itself, and the rule doesn't
+        /// depend on which side is the stored one.
+        #[test]
+        fn reading_the_same_is_reflexive_and_symmetric(one in valid_draft(), other in valid_draft()) {
+            let one = one.validate().unwrap();
+            let other = other.validate().unwrap();
+
+            prop_assert!(one.same_as_shown(&one));
+            prop_assert!(one.same_as_shown(&one.clone()));
+            prop_assert_eq!(one.same_as_shown(&other), other.same_as_shown(&one));
         }
     }
 }

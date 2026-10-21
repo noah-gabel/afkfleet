@@ -15,7 +15,7 @@ use fleet_api_types::auth::{
 use fleet_api_types::invites::CreateInviteRequest;
 use fleet_api_types::me::PasswordChangeRequest;
 use fleet_api_types::mfa::MfaConfirmRequest;
-use fleet_api_types::modes::CreateModeRequest;
+use fleet_api_types::modes::{CreateModeRequest, UpdateModeRequest};
 use fleet_api_types::users::UserPatchRequest;
 use fleet_api_types::{InviteId, PageQuery, SessionId, UserId};
 use garde::Validate;
@@ -62,6 +62,14 @@ fn every_request_serializes_to_the_json_the_server_reads() {
         "steps": [
             { "action": { "type": "look", "yaw": 90.0, "pitch": -10.5 }, "schedule": { "type": "at_start" }, "probability": 100 },
             { "action": { "type": "send_chat", "message": "hello" }, "schedule": { "type": "every", "interval_ms": 60000, "jitter_ms": 0 }, "probability": 50 }
+        ]
+    }));
+    round_trip::<UpdateModeRequest>(&json!({
+        "version": 2,
+        "name": "Greeter",
+        "visibility": "shared",
+        "steps": [
+            { "action": { "type": "sneak", "on": true }, "schedule": { "type": "at_start" }, "probability": 100 }
         ]
     }));
 }

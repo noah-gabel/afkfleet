@@ -95,6 +95,15 @@ pub enum ErrorCode {
     /// to `POST /modes` by someone who may write it: send it again to
     /// `/with-commands`, after a step-up (403).
     ModeNeedsStepUp,
+    /// An edit of a mode that changed since the caller read it: its
+    /// `version` is stale. Load the mode again (409).
+    ModeChanged,
+    /// An edit of a mode a bot uses, on which the caller couldn't set the
+    /// edited mode now; which bot, or whose, isn't said (409).
+    ModeInUseByOthers,
+    /// A delete of a mode a bot uses: switch every bot to another mode
+    /// first (409).
+    ModeInUse,
 }
 
 impl ErrorCode {
@@ -134,6 +143,15 @@ impl ErrorCode {
             Self::ModeNeedsStepUp => {
                 "This mode holds a command that needs your password: confirm it's you to save it."
             }
+            Self::ModeChanged => {
+                "This mode changed since you opened it. Load it again to see the change."
+            }
+            Self::ModeInUseByOthers => {
+                "A bot you can't set this mode on uses it, so this change can't be saved."
+            }
+            Self::ModeInUse => {
+                "A bot uses this mode, so it can't be deleted. Switch every bot to another mode first."
+            }
         }
     }
 }
@@ -163,6 +181,9 @@ impl OpenEnum for ErrorCode {
         Self::ChatUnavailable,
         Self::CommandNeedsStepUp,
         Self::ModeNeedsStepUp,
+        Self::ModeChanged,
+        Self::ModeInUseByOthers,
+        Self::ModeInUse,
     ];
 
     fn as_str(self) -> &'static str {
@@ -190,6 +211,9 @@ impl OpenEnum for ErrorCode {
             Self::ChatUnavailable => "chat_unavailable",
             Self::CommandNeedsStepUp => "command_needs_step_up",
             Self::ModeNeedsStepUp => "mode_needs_step_up",
+            Self::ModeChanged => "mode_changed",
+            Self::ModeInUseByOthers => "mode_in_use_by_others",
+            Self::ModeInUse => "mode_in_use",
         }
     }
 }
@@ -299,10 +323,13 @@ mod tests {
             ErrorCode::ChatUnavailable => 20,
             ErrorCode::CommandNeedsStepUp => 21,
             ErrorCode::ModeNeedsStepUp => 22,
+            ErrorCode::ModeChanged => 23,
+            ErrorCode::ModeInUseByOthers => 24,
+            ErrorCode::ModeInUse => 25,
         }
     }
 
-    const CODES: usize = 23;
+    const CODES: usize = 26;
 
     #[test]
     fn all_lists_every_code_exactly_once() {
@@ -419,6 +446,21 @@ mod tests {
         ErrorCode::ModeNeedsStepUp,
         "mode_needs_step_up",
         "This mode holds a command that needs your password: confirm it's you to save it."
+    )]
+    #[case(
+        ErrorCode::ModeChanged,
+        "mode_changed",
+        "This mode changed since you opened it. Load it again to see the change."
+    )]
+    #[case(
+        ErrorCode::ModeInUseByOthers,
+        "mode_in_use_by_others",
+        "A bot you can't set this mode on uses it, so this change can't be saved."
+    )]
+    #[case(
+        ErrorCode::ModeInUse,
+        "mode_in_use",
+        "A bot uses this mode, so it can't be deleted. Switch every bot to another mode first."
     )]
     fn every_code_has_its_name_and_fixed_message(
         #[case] code: ErrorCode,

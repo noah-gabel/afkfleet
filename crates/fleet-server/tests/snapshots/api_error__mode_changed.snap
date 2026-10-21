@@ -1,0 +1,17 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 409,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "mode_changed",
+      "message": "This mode changed since you opened it. Load it again to see the change.",
+      "request_id": "test-request-id"
+    }
+  }
+}

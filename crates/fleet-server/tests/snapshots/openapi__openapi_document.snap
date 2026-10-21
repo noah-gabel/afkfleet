@@ -813,7 +813,10 @@ expression: answer.json()
           "bot_not_online",
           "chat_unavailable",
           "command_needs_step_up",
-          "mode_needs_step_up"
+          "mode_needs_step_up",
+          "mode_changed",
+          "mode_in_use_by_others",
+          "mode_in_use"
         ],
         "type": "string"
       },
@@ -1843,6 +1846,39 @@ expression: answer.json()
           "awaiting_agent"
         ],
         "type": "string"
+      },
+      "UpdateModeRequest": {
+        "additionalProperties": false,
+        "description": "`PUT /modes/{id}`: the mode as it should be from now on, and the version\nthe caller last read (ADR-0020, S18, R2).",
+        "properties": {
+          "name": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "steps": {
+            "description": "Its steps, at most 32, under [`CreateModeRequest::steps`]' rules.",
+            "items": {
+              "$ref": "#/components/schemas/ModeStepRequest"
+            },
+            "type": "array"
+          },
+          "version": {
+            "maximum": 4294967295,
+            "minimum": 1,
+            "type": "integer"
+          },
+          "visibility": {
+            "$ref": "#/components/schemas/ModeVisibility",
+            "description": "Who may see it; switching needs the right to edit it both as it is\nand as it will be."
+          }
+        },
+        "required": [
+          "version",
+          "name",
+          "visibility",
+          "steps"
+        ],
+        "type": "object"
       },
       "UserLabel": {
         "description": "A user named next to something else, such as an invite's creator.",

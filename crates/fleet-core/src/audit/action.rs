@@ -463,6 +463,24 @@ audit_actions! {
     /// `with_commands`). Never the name or a step's text. A create refused
     /// before it's written (the cap, a taken name) is no entry.
     MODE_CREATE = "mode.create";
+
+    /// A user changed a mode's name, visibility or steps (P11.4, ADR-0020,
+    /// S16–S18, S21), through `PUT /modes/{id}` or, after a step-up, `PUT
+    /// /modes/{id}/with-commands`. Outcome: Success. Actor and IP: the
+    /// user's. Target: the mode. Metadata: `version` (the one the edit
+    /// wrote), `definition_changed` (whether the steps changed at all, byte
+    /// for byte), `visibility`, `previous_visibility` (only when it changed),
+    /// `commands` and `route` (as for `mode.create`, of the steps written)
+    /// and `bots_checked` (how many bots use the mode, each checked). Never
+    /// the name or a step's text. An edit that shows the same as the stored
+    /// mode is no change, and no entry; a refused one is no entry either.
+    MODE_UPDATE = "mode.update";
+
+    /// A user deleted a mode no bot uses, after a step-up (P11.4, ADR-0020,
+    /// S16, S17). Outcome: Success. Actor and IP: the user's. Target: the
+    /// mode. Metadata: `version` (the one deleted) and `visibility`. Never
+    /// the name or a step's text. A refused delete is no entry.
+    MODE_DELETE = "mode.delete";
 }
 
 /// For reading rows back. Code that records an entry uses the listed

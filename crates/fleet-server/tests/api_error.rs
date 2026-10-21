@@ -142,6 +142,9 @@ fn test_request_id() -> HeaderValue {
 #[case::chat_unavailable("chat_unavailable", || ApiError::ChatUnavailable)]
 #[case::command_needs_step_up("command_needs_step_up", || ApiError::CommandNeedsStepUp)]
 #[case::mode_needs_step_up("mode_needs_step_up", || ApiError::ModeNeedsStepUp)]
+#[case::mode_changed("mode_changed", || ApiError::ModeChanged)]
+#[case::mode_in_use_by_others("mode_in_use_by_others", || ApiError::ModeInUseByOthers)]
+#[case::mode_in_use("mode_in_use", || ApiError::ModeInUse)]
 #[tokio::test]
 async fn every_variant_answers_with_its_status_headers_and_envelope(
     #[case] code: &str,
@@ -177,6 +180,9 @@ async fn every_variant_answers_with_its_status_headers_and_envelope(
 #[case(ErrorCode::ChatUnavailable, StatusCode::CONFLICT)]
 #[case(ErrorCode::CommandNeedsStepUp, StatusCode::FORBIDDEN)]
 #[case(ErrorCode::ModeNeedsStepUp, StatusCode::FORBIDDEN)]
+#[case(ErrorCode::ModeChanged, StatusCode::CONFLICT)]
+#[case(ErrorCode::ModeInUseByOthers, StatusCode::CONFLICT)]
+#[case(ErrorCode::ModeInUse, StatusCode::CONFLICT)]
 fn every_code_has_its_status(#[case] code: ErrorCode, #[case] expected: StatusCode) {
     assert_eq!(status(code), expected);
 }
@@ -199,7 +205,7 @@ async fn every_401_carries_the_bearer_challenge_and_no_other_status_does() {
 }
 
 /// One constructor per code, in `ErrorCode::ALL`'s order.
-const MAKERS: [fn() -> ApiError; 23] = [
+const MAKERS: [fn() -> ApiError; 26] = [
     || ApiError::BadRequest,
     || ApiError::Unauthorized,
     || ApiError::InvalidCredentials,
@@ -225,6 +231,9 @@ const MAKERS: [fn() -> ApiError; 23] = [
     || ApiError::ChatUnavailable,
     || ApiError::CommandNeedsStepUp,
     || ApiError::ModeNeedsStepUp,
+    || ApiError::ModeChanged,
+    || ApiError::ModeInUseByOthers,
+    || ApiError::ModeInUse,
 ];
 
 #[rstest]

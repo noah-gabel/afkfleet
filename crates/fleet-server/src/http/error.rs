@@ -182,6 +182,16 @@ pub enum ApiError {
     /// `/with-commands` twin, after a step-up (403; ADR-0020, S16).
     #[error("the mode needs a step-up")]
     ModeNeedsStepUp,
+    /// An edit of a mode whose `version` is stale (409; ADR-0020, S18).
+    #[error("the mode changed since it was read")]
+    ModeChanged,
+    /// An edit of a mode a bot uses, on which the editor couldn't set the
+    /// edited mode now (409; ADR-0020, S17).
+    #[error("a bot the editor can't set the mode on uses it")]
+    ModeInUseByOthers,
+    /// A delete of a mode a bot uses (409; ADR-0020, S17).
+    #[error("a bot uses the mode")]
+    ModeInUse,
 }
 
 impl ApiError {
@@ -227,6 +237,9 @@ impl ApiError {
             Self::ChatUnavailable => ErrorCode::ChatUnavailable,
             Self::CommandNeedsStepUp => ErrorCode::CommandNeedsStepUp,
             Self::ModeNeedsStepUp => ErrorCode::ModeNeedsStepUp,
+            Self::ModeChanged => ErrorCode::ModeChanged,
+            Self::ModeInUseByOthers => ErrorCode::ModeInUseByOthers,
+            Self::ModeInUse => ErrorCode::ModeInUse,
         }
     }
 
@@ -256,7 +269,10 @@ pub const fn status(code: ErrorCode) -> StatusCode {
         | ErrorCode::BotNotPaused
         | ErrorCode::BotNotFailed
         | ErrorCode::BotNotOnline
-        | ErrorCode::ChatUnavailable => StatusCode::CONFLICT,
+        | ErrorCode::ChatUnavailable
+        | ErrorCode::ModeChanged
+        | ErrorCode::ModeInUseByOthers
+        | ErrorCode::ModeInUse => StatusCode::CONFLICT,
         ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         ErrorCode::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ErrorCode::ValidationFailed => StatusCode::UNPROCESSABLE_ENTITY,
@@ -403,7 +419,10 @@ impl ApiError {
             | Self::BotNotOnline
             | Self::ChatUnavailable
             | Self::CommandNeedsStepUp
-            | Self::ModeNeedsStepUp => (None, None),
+            | Self::ModeNeedsStepUp
+            | Self::ModeChanged
+            | Self::ModeInUseByOthers
+            | Self::ModeInUse => (None, None),
         };
         (
             response,
@@ -694,7 +713,10 @@ mod tests {
             | ErrorCode::BotNotPaused
             | ErrorCode::BotNotFailed
             | ErrorCode::BotNotOnline
-            | ErrorCode::ChatUnavailable => ErrorCode::Conflict,
+            | ErrorCode::ChatUnavailable
+            | ErrorCode::ModeChanged
+            | ErrorCode::ModeInUseByOthers
+            | ErrorCode::ModeInUse => ErrorCode::Conflict,
             other => other,
         }
     }
