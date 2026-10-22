@@ -10,6 +10,7 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
+use core::num::NonZeroU32;
 use core::time::Duration;
 use std::sync::{Arc, Barrier};
 
@@ -211,6 +212,27 @@ fn a_users_fourth_ticket_evicts_their_oldest_and_no_one_elses() {
         assert!(setup.tickets.take(text(&kept.ticket)).is_ok());
     }
     assert!(setup.tickets.take(text(&other.ticket)).is_ok());
+}
+
+#[test]
+fn a_user_holds_as_many_tickets_as_their_socket_cap() {
+    let setup = setup();
+    let tickets = setup.tickets.with_per_user(NonZeroU32::new(5).unwrap());
+    let mut mine = Vec::new();
+    for _ in 0..6 {
+        setup.clock.advance(Duration::from_millis(1));
+        mine.push(tickets.issue(user(1), session(1)).unwrap());
+    }
+
+    assert_eq!(tickets.held(), 5);
+    assert_eq!(
+        tickets.take(text(&mine[0].ticket)),
+        Err(TicketRefusal::Unknown),
+        "the oldest went"
+    );
+    for kept in &mine[1..] {
+        assert!(tickets.take(text(&kept.ticket)).is_ok());
+    }
 }
 
 #[test]

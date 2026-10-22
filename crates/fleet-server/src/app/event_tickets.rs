@@ -10,8 +10,12 @@
 //! - **[`EVENT_TICKET_TTL`] (30 s)** on the server's `Clock`. Expired
 //!   tickets are dropped at every issue and take, and by the housekeeping
 //!   ([`EventTickets::purge_expired`]).
-//! - **At most [`TICKETS_PER_USER`] a user:** a new one evicts the user's
-//!   oldest, so a client that leaks tickets only ever spends its own.
+//! - **At most as many a user as they may open sockets**
+//!   ([`EventTickets::with_per_user`], serve's
+//!   `[rate_limits] ws_connections_per_user`; [`TICKETS_PER_USER`] by
+//!   default): a new one evicts the user's oldest, so a client that leaks
+//!   tickets only ever spends its own, and one that opens every socket the
+//!   cap allows at once has a ticket for each.
 //! - **Only each ticket's SHA-256 is held,** as stored tokens are: a
 //!   presented ticket is looked up by its hash, then compared in constant
 //!   time, as an access token's hash is found. A restart drops every
@@ -21,6 +25,7 @@
 //! shows only how many tickets are held.
 
 use core::fmt;
+use core::num::NonZeroU32;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -32,7 +37,8 @@ use secrecy::SecretString;
 
 use crate::ports::tokens::{MintTokenError, TokenHash, TokenKind, Tokens};
 
-/// The most unspent tickets one user holds at once.
+/// The most unspent tickets one user holds at once, unless
+/// [`EventTickets::with_per_user`] says otherwise: the socket cap's default.
 pub const TICKETS_PER_USER: usize = 3;
 
 /// A ticket just issued, for its response.
@@ -81,6 +87,8 @@ struct Ticket {
 pub struct EventTickets {
     clock: Arc<dyn Clock>,
     tokens: Arc<dyn Tokens>,
+    /// The most unspent tickets one user holds.
+    per_user: usize,
     held: Arc<Mutex<HashMap<[u8; TokenHash::LEN], Ticket>>>,
 }
 
@@ -101,7 +109,17 @@ impl EventTickets {
         Self {
             clock,
             tokens,
+            per_user: TICKETS_PER_USER,
             held: Arc::default(),
+        }
+    }
+
+    /// The same tickets, each user holding up to `per_user`.
+    #[must_use]
+    pub fn with_per_user(self, per_user: NonZeroU32) -> Self {
+        Self {
+            per_user: usize::try_from(per_user.get()).unwrap_or(usize::MAX),
+            ..self
         }
     }
 
@@ -112,7 +130,7 @@ impl EventTickets {
     }
 
     /// Issues a ticket to `user`'s `session`, evicting their oldest when
-    /// they hold [`TICKETS_PER_USER`] already.
+    /// they hold as many as they may already.
     ///
     /// # Errors
     /// [`MintTokenError`] when the ticket can't be minted; nothing is held
@@ -128,9 +146,9 @@ impl EventTickets {
             .filter(|(_, ticket)| ticket.user == user)
             .map(|(key, ticket)| (ticket.issued_at, *key))
             .collect();
-        if theirs.len() >= TICKETS_PER_USER {
+        if theirs.len() >= self.per_user {
             theirs.sort_unstable();
-            let evicted = theirs.len() + 1 - TICKETS_PER_USER;
+            let evicted = theirs.len() + 1 - self.per_user;
             for (_, key) in theirs.iter().take(evicted) {
                 tickets.remove(key);
             }

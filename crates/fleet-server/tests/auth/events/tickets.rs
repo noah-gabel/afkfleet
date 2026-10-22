@@ -51,6 +51,8 @@ async fn every_ticket_that_isnt_a_live_one_of_this_session_is_the_same_404(
     let mut refusals = Vec::new();
     for (case, presented) in [
         ("malformed", SecretString::from("nope")),
+        ("empty", SecretString::from("")),
+        ("not UTF-8", SecretString::from("%FF%FE")),
         ("too long", SecretString::from("x".repeat(65))),
         ("unknown", never_issued()),
         ("used", used),
@@ -121,6 +123,38 @@ async fn a_request_that_isnt_an_upgrade_is_400_and_leaves_the_ticket_unspent(
     assert_eq!(plain.status, 400, "{}", plain.text);
     assert_eq!(head.status, 405);
     assert!(open(&served, &alice.token, &ticket).await.is_ok());
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_upgrades_refusal_comes_before_the_querys(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let alice = setup.alice_person().await;
+
+    let head = setup
+        .send(
+            Request::builder()
+                .method(Method::HEAD)
+                .uri("/api/v1/events?nope=1")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", alice.token.expose_secret()),
+                )
+                .header("connection", "upgrade")
+                .header("upgrade", "websocket")
+                .header("sec-websocket-version", "13")
+                .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+
+    assert_eq!(
+        head.status, 405,
+        "R10: the upgrade's headers, then the query"
+    );
 }
 
 #[sqlx::test(migrations = false)]

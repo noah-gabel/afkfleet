@@ -5816,7 +5816,7 @@ expression: answer.json()
                 }
               }
             },
-            "description": "Not a WebSocket upgrade, or a query that isn't one `ticket`."
+            "description": "Not a WebSocket upgrade, or (after the upgrade's checks) a query that isn't one `ticket`."
           },
           "401": {
             "content": {
@@ -5836,7 +5836,17 @@ expression: answer.json()
                 }
               }
             },
-            "description": "Not a live ticket of this session: unknown, used, expired, or another session's."
+            "description": "One answer for every ticket that opens nothing: malformed, unknown, used, expired, another user's or another session's; and for a session that no longer counts (revoked, expired, its user disabled or given another role). Mint a new ticket, and back off before trying again."
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A method that isn't `GET` (a `HEAD`)."
           },
           "429": {
             "content": {
@@ -5857,6 +5867,16 @@ expression: answer.json()
                 }
               }
             }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`busy`: the server is shutting down, or the session couldn't be checked."
           },
           "default": {
             "content": {

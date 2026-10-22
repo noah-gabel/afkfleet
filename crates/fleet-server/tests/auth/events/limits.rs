@@ -86,6 +86,69 @@ async fn a_frame_the_server_doesnt_take_closes_the_socket_with_1008(
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_frame_too_large_is_refused_at_its_header_before_its_payload(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    // The default bounds: without the frame limit, the server would wait
+    // 45 s for the payload.
+    let setup = setup(options).await;
+    let alice = setup.alice_person().await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &alice.token).await;
+
+    // A binary frame that claims 1000 bytes, and sends none.
+    socket
+        .get_mut()
+        .write_all(&masked(0x82, 1000, &[]))
+        .await
+        .unwrap();
+
+    assert_eq!(closed(&mut socket).await, said(SocketClose::RefusedFrame));
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_message_too_large_is_refused_before_its_last_fragment(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let alice = setup.alice_person().await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &alice.token).await;
+
+    // Two fragments of 100 bytes, each within the frame limit, neither the
+    // last: without the message limit the server would wait for the rest.
+    let mut fragments = masked(0x02, 100, &[0; 100]);
+    fragments.extend(masked(0x00, 100, &[0; 100]));
+    socket.get_mut().write_all(&fragments).await.unwrap();
+
+    assert_eq!(closed(&mut socket).await, said(SocketClose::RefusedFrame));
+}
+
+/// A client frame: `first` (FIN and opcode), a header that claims `length`,
+/// a mask, and `payload` masked with it, however long it really is.
+fn masked(first: u8, length: u16, payload: &[u8]) -> Vec<u8> {
+    const MASK: [u8; 4] = [0x12, 0x34, 0x56, 0x78];
+    let mut frame = vec![first];
+    match u8::try_from(length) {
+        Ok(short) if short <= 125 => frame.push(0x80 | short),
+        _ => {
+            frame.push(0x80 | 0x7E);
+            frame.extend(length.to_be_bytes());
+        }
+    }
+    frame.extend(MASK);
+    frame.extend(
+        payload
+            .iter()
+            .zip(MASK.iter().cycle())
+            .map(|(byte, mask)| byte ^ mask),
+    );
+    frame
+}
+
+#[sqlx::test(migrations = false)]
 async fn a_client_that_drops_its_connection_without_a_close_is_lost_not_refused(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,

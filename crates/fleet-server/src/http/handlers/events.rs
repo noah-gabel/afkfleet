@@ -93,11 +93,13 @@ pub(crate) async fn ticket(
     params(EventsQuery),
     responses(
         (status = 101, description = "The socket: JSON text frames, one `EventMessage` each, `ready` first; the client sends only pongs and a close (`fleet_api_types::events`)."),
-        (status = 400, description = "Not a WebSocket upgrade, or a query that isn't one `ticket`.", body = ErrorResponse),
+        (status = 400, description = "Not a WebSocket upgrade, or (after the upgrade's checks) a query that isn't one `ticket`.", body = ErrorResponse),
         (status = 401, description = "No valid access token.", body = ErrorResponse),
-        (status = 404, description = "Not a live ticket of this session: unknown, used, expired, or another session's.", body = ErrorResponse),
+        (status = 404, description = "One answer for every ticket that opens nothing: malformed, unknown, used, expired, another user's or another session's; and for a session that no longer counts (revoked, expired, its user disabled or given another role). Mint a new ticket, and back off before trying again.", body = ErrorResponse),
+        (status = 405, description = "A method that isn't `GET` (a `HEAD`).", body = ErrorResponse),
         (status = 429, description = "Too many requests, or `too_many_connections`: the user's sockets are all open.", body = ErrorResponse,
             headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
+        (status = 503, description = "`busy`: the server is shutting down, or the session couldn't be checked.", body = ErrorResponse),
         (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
     ),
     extensions(
@@ -108,7 +110,7 @@ pub(crate) async fn connect(
     user: AuthUser,
     State(state): State<AppState>,
     upgrade: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
-    ValidQuery(query): ValidQuery<EventsQuery>,
+    query: Result<ValidQuery<EventsQuery>, ApiError>,
 ) -> Result<Response, ApiError> {
     // Counted by the sockets' owner from the start, so a shutdown waits for
     // this connect, and one that began already turns it away (R21).
@@ -118,6 +120,8 @@ pub(crate) async fn connect(
         return Err(ApiError::busy());
     }
     let upgrade = upgrade.map_err(|rejection| refused_upgrade(&rejection))?;
+    // Only after the upgrade's own refusals (R10).
+    let ValidQuery(query) = query?;
     let actor = user.actor();
     let grant = state
         .events

@@ -455,7 +455,9 @@ pub fn app_with(
     let token_port: Arc<dyn Tokens> = Arc::new(Sha256Tokens::new(Arc::clone(&random)));
     let (tokens, invites) = token_services(config, &clock, &random, &store, &token_port);
     let challenges = Challenges::new(Arc::clone(&clock), Arc::clone(&token_port));
-    let tickets = EventTickets::new(Arc::clone(&clock), Arc::clone(&token_port));
+    // A ticket for every socket the cap allows at once.
+    let tickets = EventTickets::new(Arc::clone(&clock), Arc::clone(&token_port))
+        .with_per_user(config.rate_limits.ws_connections_per_user);
     let mfa = mfa_service(&clock, &random, &store, Arc::clone(&vault), &challenges);
     let limits = RateLimits::new(&config.rate_limits, limiter_clock);
     let lockout = lockout_service(config, &clock, &store, lockout_key);

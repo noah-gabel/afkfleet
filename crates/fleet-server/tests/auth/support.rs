@@ -880,13 +880,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
     let token_port = Arc::new(Sha256Tokens::new(Arc::new(random.clone())));
     let alice = UserId::new_v7(at(T0), [1; 10]).unwrap();
     let hooked = HookedStore::new(db.clone(), alice, clock.clone());
-    let tokens = TokenService::new(
-        Arc::new(clock.clone()),
-        Arc::new(random.clone()),
-        Arc::new(hooked.sharing_session_reads()),
-        token_port.clone(),
-        SessionPolicy::default(),
-    );
+    let tokens = token_service(&clock, &random, &hooked, &token_port);
     let challenges = Challenges::new(Arc::new(clock.clone()), token_port.clone());
     let mfa = mfa_service(&db, &clock, &random, &challenges);
     let passwords = Arc::new(TestPasswords {
@@ -930,7 +924,12 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         (&settings.allowlist, settings.chat_wait),
         &hints,
     );
-    let live_events = build_live_events(&clock, token_port, &events, settings.sockets);
+    let live_events = build_live_events(
+        &clock,
+        token_port,
+        &events,
+        (settings.sockets, settings.limits.ws_connections_per_user),
+    );
     let state = AppState::new(Services {
         health: HealthService::new(Arc::new(db.clone())),
         tokens: tokens.clone(),
@@ -969,16 +968,34 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
     }
 }
 
-/// The live events as serve builds them: tickets on `clock`, the bus chat
-/// waits on, and an owner of their own, with `timings`.
+/// The token service, reading sessions through `hooked`'s switches, with
+/// write queues of its own.
+fn token_service(
+    clock: &ManualClock,
+    random: &SeededRandom,
+    hooked: &HookedStore,
+    tokens: &Arc<Sha256Tokens>,
+) -> TokenService {
+    TokenService::new(
+        Arc::new(clock.clone()),
+        Arc::new(random.clone()),
+        Arc::new(hooked.sharing_session_reads()),
+        tokens.clone(),
+        SessionPolicy::default(),
+    )
+}
+
+/// The live events as serve builds them: tickets on `clock`, as many a user
+/// as their sockets, the bus chat waits on, and an owner of their own, with
+/// `timings`.
 fn build_live_events(
     clock: &ManualClock,
     tokens: Arc<Sha256Tokens>,
     bus: &EventBus,
-    timings: SocketTimings,
+    (timings, per_user): (SocketTimings, core::num::NonZeroU32),
 ) -> LiveEvents {
     LiveEvents::new(
-        EventTickets::new(Arc::new(clock.clone()), tokens),
+        EventTickets::new(Arc::new(clock.clone()), tokens).with_per_user(per_user),
         bus.clone(),
         LiveSockets::new(tokio_util::sync::CancellationToken::new()),
     )
