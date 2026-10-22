@@ -24,19 +24,24 @@
 
 use core::time::Duration;
 use std::io;
+use std::sync::Arc;
 
+use axum::body::Bytes;
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use fleet_api_types::events::{EventMessage, SocketClose};
-use tokio::time::{Instant, timeout};
+use tokio::sync::broadcast::Receiver;
+use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::watch;
+use tokio::time::{Instant, MissedTickBehavior, interval_at, sleep, sleep_until, timeout};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
 use tracing::info;
 
-use crate::app::auth::SocketSession;
+use crate::app::auth::{SocketCheckError, SocketSession, TokenService};
 use crate::app::event_tickets::EventTickets;
-use crate::app::events::EventBus;
+use crate::app::events::{EventBus, LiveEvent};
 use crate::http::error::ApiError;
 use crate::http::rate_limit::SocketSlot;
 
@@ -196,49 +201,197 @@ pub(crate) struct OpenSocket {
     pub(crate) session: SocketSession,
     /// The user's place, given back when the socket ends.
     pub(crate) slot: SocketSlot,
+    /// The commit count its session check follows, subscribed before the
+    /// connect's own check, so a commit after that check is never missed.
+    pub(crate) commits: watch::Receiver<u64>,
+    /// How long it may live: until the access token it opened with expires.
+    pub(crate) time_left: Duration,
     /// The bus, the stop token and the timings.
     pub(crate) events: LiveEvents,
+    /// The session check.
+    pub(crate) tokens: TokenService,
 }
 
-/// Runs one socket until it ends: subscribes to the bus, says `ready`, and
-/// closes with 1001 when the server shuts down; a client that closes or
-/// goes ends it at once.
+/// How long a socket waits for its session check: the read pool's acquire
+/// timeout.
+pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// How a socket ended, for its close and its last log line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Ended {
+    /// The server closes it, with this code and reason; `why` says what for.
+    Closed {
+        /// The close.
+        close: SocketClose,
+        /// What for, in the log line.
+        why: &'static str,
+    },
+    /// The client closed it.
+    ClientClosed,
+    /// The connection is gone.
+    Lost,
+}
+
+impl Ended {
+    /// The server closes with `close` for `why`.
+    const fn closed(close: SocketClose, why: &'static str) -> Self {
+        Self::Closed { close, why }
+    }
+}
+
+/// Runs one socket until it ends (ADR-0020, S31, S35, R18–R20): subscribes
+/// to the bus and says `ready`, then, in this order of precedence:
+/// - closes with 1001 at the shutdown, and with 4001 once the access token
+///   it opened with expires, without a read;
+/// - checks its session again after every commit, closing with 4001 when
+///   it no longer counts and with 1013 when the check can't be made;
+/// - takes a pong that answers a ping and the client's close; closes with
+///   1008 for anything else, and with 4000 once no pong came for the idle
+///   timeout;
+/// - pings on its interval, and says `resync` once it lagged behind the bus,
+///   at most once per gap.
+///
+/// A send that doesn't go out in time closes it with 4002. One `info` line
+/// says when it opened, and one when and why it ended.
 pub(crate) async fn run(mut socket: WebSocket, open: OpenSocket) {
     let OpenSocket {
         session,
         slot: _held,
+        mut commits,
+        time_left,
         events,
+        tokens,
     } = open;
-    info!(user_id = %session.actor.id, session_id = %session.session_id, "a live events socket opened");
-    let _bus = events.bus.subscribe();
-    let stop = events.sockets.stop();
-    if send(
-        &mut socket,
-        &EventMessage::ready(),
-        events.timings.send_timeout,
-    )
-    .await
-    .is_err()
-    {
-        return;
+    let timings = events.timings;
+    let started = Instant::now();
+    let mut bus = events.bus.subscribe();
+    info!("a live events socket opened");
+    let mut resyncs: u32 = 0;
+    let ended = match send(&mut socket, &EventMessage::ready(), timings.send_timeout).await {
+        Ok(()) => {
+            serve(
+                &mut socket,
+                &session,
+                (&mut commits, &mut bus, &mut resyncs),
+                (&events, &tokens),
+                started.checked_add(time_left).unwrap_or(started),
+            )
+            .await
+        }
+        Err(failed) => failed.ended(),
+    };
+    match ended {
+        Ended::Closed { close: why, .. } => close(&mut socket, why, timings.close_timeout).await,
+        Ended::ClientClosed => drain(&mut socket, timings.close_timeout).await,
+        Ended::Lost => {}
     }
+    let (why, code) = match ended {
+        Ended::Closed { close, why } => (why, Some(close.code())),
+        Ended::ClientClosed => ("the client closed it", None),
+        Ended::Lost => ("the connection was lost", None),
+    };
+    info!(
+        why,
+        code,
+        lasted_secs = started.elapsed().as_secs(),
+        resyncs,
+        "a live events socket closed"
+    );
+}
+
+/// The socket's loop once `ready` went out; see [`run`]. `deadline` is when
+/// the access token it opened with expires.
+async fn serve(
+    socket: &mut WebSocket,
+    session: &SocketSession,
+    (commits, bus, resyncs): (
+        &mut watch::Receiver<u64>,
+        &mut Receiver<Arc<LiveEvent>>,
+        &mut u32,
+    ),
+    (events, tokens): (&LiveEvents, &TokenService),
+    deadline: Instant,
+) -> Ended {
+    let timings = events.timings;
+    let stop = events.sockets.stop();
+    let mut pings = Pings::default();
+    let mut ticker = interval_at(
+        Instant::now() + timings.ping_interval,
+        timings.ping_interval,
+    );
+    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+    let idle = sleep(timings.idle_timeout);
+    tokio::pin!(idle);
+    let mut gate = ResyncGate::new(timings.resync_gap);
+    // A commit between the connect's check and this subscription's first
+    // read was marked unseen: the first turn checks again (R18).
     loop {
+        let resync_at = gate.due(Instant::now());
         tokio::select! {
             biased;
-            // `cancelled` and `recv` are cancel-safe.
-            () = stop.cancelled() => {
-                close(&mut socket, SocketClose::ShuttingDown, events.timings.close_timeout).await;
-                return;
+            // Every branch is cancel-safe: `cancelled`, `sleep_until`,
+            // `changed`, `recv` and `tick` lose nothing when another wins,
+            // and every send runs in a branch's body, never as a branch.
+            () = stop.cancelled() => return Ended::closed(SocketClose::ShuttingDown, "the server is shutting down"),
+            () = sleep_until(deadline) => return Ended::closed(SocketClose::Unauthenticated, "its access token expired"),
+            changed = commits.changed() => {
+                if changed.is_err() {
+                    return Ended::closed(SocketClose::Busy, "the commit count is gone");
+                }
+                commits.borrow_and_update();
+                match timeout(CHECK_TIMEOUT, tokens.check_socket(session)).await {
+                    Ok(Ok(())) => {}
+                    Ok(Err(SocketCheckError::Refused(_))) => {
+                        return Ended::closed(SocketClose::Unauthenticated, "its session no longer counts");
+                    }
+                    Ok(Err(SocketCheckError::Store(_))) | Err(_) => {
+                        return Ended::closed(SocketClose::Busy, "its session couldn't be checked");
+                    }
+                }
             }
             received = socket.recv() => match classify(received) {
-                Inbound::Close => {
-                    drain(&mut socket, events.timings.close_timeout).await;
-                    return;
+                Inbound::Pong if pings.answered() => {
+                    idle.as_mut().reset(Instant::now() + timings.idle_timeout);
                 }
-                Inbound::Lost => return,
-                Inbound::Pong | Inbound::Refused => {}
+                Inbound::Pong | Inbound::Refused => {
+                    return Ended::closed(SocketClose::RefusedFrame, "the client sent a frame the server doesn't take");
+                }
+                Inbound::Close => return Ended::ClientClosed,
+                Inbound::Lost => return Ended::Lost,
+            },
+            () = &mut idle => return Ended::closed(SocketClose::Idle, "no pong came in time"),
+            _ = ticker.tick() => {
+                if pings.send()
+                    && let Err(failed) = ping(socket, timings.send_timeout).await
+                {
+                    return failed.ended();
+                }
+            }
+            () = sleep_until(resync_at.unwrap_or(deadline)), if resync_at.is_some() => {
+                if let Err(failed) = send(socket, &EventMessage::resync(), timings.send_timeout).await {
+                    return failed.ended();
+                }
+                gate.sent(Instant::now());
+                *resyncs = resyncs.saturating_add(1);
+            }
+            received = bus.recv() => match received {
+                // D1 sends no event yet; D2 sends each to whoever may see
+                // it.
+                Ok(_) => {}
+                // No count: it would count events of bots the user can't see.
+                Err(RecvError::Lagged(_)) => gate.lagged(),
+                Err(RecvError::Closed) => return Ended::closed(SocketClose::ShuttingDown, "the bus is gone"),
             },
         }
+    }
+}
+
+/// Pings the client within `bound`.
+async fn ping(socket: &mut WebSocket, bound: Duration) -> Result<(), SendFailed> {
+    match timeout(bound, socket.send(Message::Ping(Bytes::new()))).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(SendFailed::Lost),
+        Err(_) => Err(SendFailed::TooSlow),
     }
 }
 
@@ -251,6 +404,17 @@ pub(crate) enum SendFailed {
     TooSlow,
     /// The message didn't serialize, which can't happen.
     Unwritable,
+}
+
+impl SendFailed {
+    /// How the socket ends after it.
+    const fn ended(self) -> Ended {
+        match self {
+            Self::Lost => Ended::Lost,
+            Self::TooSlow => Ended::closed(SocketClose::TooSlow, "the client didn't read in time"),
+            Self::Unwritable => Ended::closed(SocketClose::Busy, "an event didn't serialize"),
+        }
+    }
 }
 
 /// Sends `message` as one text frame within `bound`.

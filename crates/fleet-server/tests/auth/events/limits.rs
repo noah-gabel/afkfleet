@@ -1,0 +1,204 @@
+//! What a socket takes from its client, and how it keeps up (ADR-0020,
+//! S35, U13, R19): a pong answers a ping, and a close; anything else closes
+//! the socket with 1008; a client that doesn't answer the pings is closed
+//! with 4000; a socket that fell behind the bus says `resync`, without a
+//! count, at most once per gap.
+
+use core::num::NonZeroU32;
+use core::time::Duration;
+
+use chrono::{DateTime, Utc};
+use fleet_api_types::events::SocketClose;
+use fleet_core::id::{AgentId, BotId};
+use fleet_server::app::events::{LiveEvent, LiveEventKind};
+use fleet_server::config::RateLimitConfig;
+use fleet_server::http::ws::SocketTimings;
+use futures_util::SinkExt as _;
+use serde_json::json;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use tokio::io::AsyncReadExt as _;
+use tokio::time::{Instant, timeout};
+use tokio_tungstenite::tungstenite::{Bytes, Message};
+
+use super::super::support::{Options, Setup, setup_with};
+use super::{PATIENCE, Served, Socket, closed, next, next_event, ready, said};
+
+/// Short bounds: a ping every 100 ms, closed after 300 ms without a pong.
+const SHORT: SocketTimings = SocketTimings {
+    ping_interval: Duration::from_millis(100),
+    idle_timeout: Duration::from_millis(300),
+    send_timeout: Duration::from_secs(1),
+    close_timeout: Duration::from_millis(200),
+    resync_gap: Duration::from_millis(300),
+};
+
+async fn short(options: SqliteConnectOptions) -> Setup {
+    setup_with(
+        options,
+        Options {
+            sockets: SHORT,
+            ..Options::default()
+        },
+    )
+    .await
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_frame_the_server_doesnt_take_closes_the_socket_with_1008(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    // Room for every case's socket, however fast each one ends.
+    let setup = setup_with(
+        options,
+        Options {
+            limits: RateLimitConfig {
+                ws_connections_per_user: NonZeroU32::new(10).unwrap(),
+                ..RateLimitConfig::default()
+            },
+            ..Options::default()
+        },
+    )
+    .await;
+    let alice = setup.alice_person().await;
+    let served = Served::start(&setup).await;
+
+    let mut closes = Vec::new();
+    for (case, frame) in [
+        ("text", Message::Text("hello".into())),
+        ("binary", Message::Binary(Bytes::from_static(b"\x00\x01"))),
+        ("ping", Message::Ping(Bytes::new())),
+        ("too large", Message::Text("x".repeat(126).into())),
+        ("a pong nobody asked for", Message::Pong(Bytes::new())),
+    ] {
+        let mut socket = ready(&setup, &served, &alice.token).await;
+        socket.send(frame).await.unwrap();
+        closes.push((case, closed(&mut socket).await));
+    }
+
+    for (case, close) in closes {
+        assert_eq!(close, said(SocketClose::RefusedFrame), "{case}");
+    }
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_client_that_answers_the_pings_stays_open(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = short(options).await;
+    let alice = setup.alice_person().await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &alice.token).await;
+
+    // Reading answers each ping; five pings take 500 ms, past the 300 ms
+    // a socket stays open without a pong.
+    let mut pings = 0;
+    while pings < 5 {
+        match next(&mut socket).await {
+            Some(Message::Ping(_)) => pings += 1,
+            other => panic!("not a ping: {other:?}"),
+        }
+    }
+
+    assert_eq!(setup.live_events.sockets().open(), 1);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_client_that_never_answers_a_ping_is_closed_with_4000(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = short(options).await;
+    let alice = setup.alice_person().await;
+    let served = Served::start(&setup).await;
+    let socket = ready(&setup, &served, &alice.token).await;
+
+    // Read the raw connection: tungstenite would answer every ping.
+    let frames = raw_frames(socket).await;
+
+    let pings = frames.iter().filter(|(opcode, _)| *opcode == 0x9).count();
+    let close = frames.iter().find(|(opcode, _)| *opcode == 0x8).unwrap();
+    assert!(pings >= 2, "{pings} pings came first");
+    assert_eq!(close_code(&close.1), SocketClose::Idle.code());
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_lagging_socket_gets_one_resync_without_a_count_at_most_once_per_gap(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = short(options).await;
+    let alice = setup.alice_person().await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &alice.token).await;
+
+    flood(&setup);
+    let first = next_event(&mut socket).await;
+    let sent = Instant::now();
+    flood(&setup);
+    let second = next_event_after_pings(&mut socket).await;
+
+    assert_eq!(first, json!({ "type": "resync" }));
+    assert_eq!(second, json!({ "type": "resync" }));
+    assert!(
+        sent.elapsed() >= Duration::from_millis(250),
+        "the second came one gap after the first"
+    );
+}
+
+/// More events than the bus holds, published without a yield, so every
+/// socket falls behind.
+fn flood(setup: &Setup) {
+    let at = DateTime::<Utc>::from_timestamp_millis(1_800_000_000_000).unwrap();
+    let bot = BotId::new_v7(at, [7; 10]).unwrap();
+    let agent = AgentId::new_v7(at, [8; 10]).unwrap();
+    for _ in 0..1_100 {
+        setup.events.publish(LiveEvent {
+            bot,
+            agent,
+            generation: 1,
+            at,
+            kind: LiveEventKind::Died,
+        });
+    }
+}
+
+/// The next event, past the pings that come meanwhile.
+async fn next_event_after_pings(socket: &mut Socket) -> serde_json::Value {
+    loop {
+        match next(socket).await {
+            Some(Message::Text(text)) => return serde_json::from_str(&text).unwrap(),
+            Some(Message::Ping(_)) => {}
+            other => panic!("not an event: {other:?}"),
+        }
+    }
+}
+
+/// Every frame the server sends from now until it ends the connection, read
+/// from the raw connection, so nothing answers a ping: each as its opcode
+/// and payload.
+async fn raw_frames(socket: Socket) -> Vec<(u8, Vec<u8>)> {
+    let mut stream = socket.into_inner();
+    let mut bytes = Vec::new();
+    timeout(PATIENCE, stream.read_to_end(&mut bytes))
+        .await
+        .expect("the server ended the connection in time")
+        .unwrap();
+    let mut frames = Vec::new();
+    let mut rest = bytes.as_slice();
+    while let [first, second, tail @ ..] = rest {
+        // The server's frames are unmasked; these are all short.
+        let length = usize::from(second & 0x7F);
+        assert!(length <= 125, "a frame this test doesn't expect");
+        let (payload, after) = tail.split_at(length);
+        frames.push((first & 0x0F, payload.to_vec()));
+        rest = after;
+    }
+    frames
+}
+
+/// A close frame's code.
+fn close_code(payload: &[u8]) -> u16 {
+    u16::from_be_bytes([payload[0], payload[1]])
+}

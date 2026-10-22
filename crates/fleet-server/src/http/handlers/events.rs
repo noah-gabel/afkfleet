@@ -14,7 +14,9 @@
 //!   4. the ticket, taken at once (single use), then whose it is: every
 //!      ticket that isn't a live one of this session gets the same 404, with
 //!      one `debug` line naming why, never the ticket;
-//!   5. the session again (404 too; a store failure 503 or 500);
+//!   5. the session again, subscribed to the commit count first, so a
+//!      revocation committed meanwhile is never missed (404 too; a store
+//!      failure 503 or 500);
 //!   6. the user's place among their sockets: 429 `too_many_connections`;
 //!   7. the upgrade, with the socket's limits; the socket's task runs on
 //!      the sockets' owner from the start.
@@ -123,6 +125,8 @@ pub(crate) async fn connect(
         session_id: user.session_id(),
         times: user.session_times(),
     };
+    // Subscribed before the check: a commit after it wakes the socket (R18).
+    let commits = state.tokens.socket_commits();
     state
         .tokens
         .check_socket(&session)
@@ -136,7 +140,10 @@ pub(crate) async fn connect(
     let open = OpenSocket {
         session,
         slot,
+        commits,
+        time_left: state.tokens.socket_time_left(session.times),
         events: state.events.clone(),
+        tokens: state.tokens.clone(),
     };
     let sockets = state.events.sockets.clone();
     let span = info_span!("events_socket", user_id = %actor.id, session_id = %session.session_id);

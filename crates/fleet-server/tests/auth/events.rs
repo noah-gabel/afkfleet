@@ -9,6 +9,8 @@
 //! and real sockets): every wait is bounded by [`PATIENCE`], and nothing
 //! sleeps.
 
+mod limits;
+mod liveness;
 mod tickets;
 
 use core::time::Duration;
@@ -33,10 +35,10 @@ use tokio_util::sync::CancellationToken;
 use super::support::{Options, Setup, setup, setup_with};
 
 /// How long a test waits for anything a socket should do.
-const PATIENCE: Duration = Duration::from_secs(10);
+pub(super) const PATIENCE: Duration = Duration::from_secs(10);
 
 /// A client's socket.
-type Socket = WebSocketStream<TcpStream>;
+pub(super) type Socket = WebSocketStream<TcpStream>;
 
 /// The harness's app, served for real sockets until it's dropped.
 pub(super) struct Served {
