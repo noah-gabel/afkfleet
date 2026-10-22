@@ -89,6 +89,7 @@ use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotRespons
 use fleet_api_types::chat::{
     ChatCommandRequest, ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse,
 };
+#[cfg(feature = "dev-console")]
 use fleet_api_types::events::EventTicketResponse;
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
@@ -112,6 +113,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::client::LoginStep;
 use crate::error::{ApiFailure, ClientError, Unexpected};
+#[cfg(feature = "dev-console")]
 use crate::events::EventsHandshake;
 use crate::store::{SessionStore, StoreError, StoreOp};
 use crate::transport::{Incoming, Outgoing, Transport, TransportError};
@@ -881,6 +883,9 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         expect_empty(answer, 204)
     }
 
+    /// `POST /events/ticket`, and the socket's URL and bearer with it
+    /// (`dev-console` only; ADR-0020, U15).
+    #[cfg(feature = "dev-console")]
     pub(crate) async fn events_handshake(self: &Arc<Self>) -> Result<EventsHandshake, ClientError> {
         let answer = self
             .authed(Method::POST, self.server.api(&["events", "ticket"]), None)

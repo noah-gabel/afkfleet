@@ -1,26 +1,33 @@
-//! The live events socket (Plan.md P11.5; ADR-0020, S28, S36, R16): what a
-//! caller opens it with, [`EventsHandshake`], and how one of its frames
-//! reads, [`read`].
+//! The live events socket (Plan.md P11.5; ADR-0020, S28, S36, R16, U15): how
+//! one of its frames reads, [`read`], and, with the `dev-console` feature
+//! only, what the dev console opens it with, `EventsHandshake`.
 //!
-//! [`Client::events_handshake`](crate::Client::events_handshake) asks the
-//! server for a ticket and hands back the socket's URL, the ticket in its
-//! query, and the `Authorization` value of the session the ticket belongs
-//! to: the server takes the ticket only with that session's access token.
-//! Both are secrets, and nothing here shows either.
+//! `Client::events_handshake` asks the server for a ticket and hands back
+//! the socket's URL, the ticket in its query, and the `Authorization` value
+//! of the session the ticket belongs to: the server takes the ticket only
+//! with that session's access token. Both are secrets, and nothing here
+//! shows either. Whoever opens the socket with them must also keep its
+//! WebSocket client's logs from them: tokio-tungstenite 0.29's client logs
+//! the URL at `debug` and the whole handshake request, `Authorization`
+//! included, at `trace`, and a header marked sensitive doesn't change that.
 
 use fleet_api_types::events::EventMessage;
 pub use fleet_api_types::events::{Received, SocketClose};
+#[cfg(feature = "dev-console")]
 use secrecy::SecretString;
 
 /// What a live events socket opens with; see the [module docs](self). Its
 /// `Debug` shows neither secret. The ticket is single-use and lives 30 s:
-/// ask for a new handshake before every connect.
+/// ask for a new handshake before every connect. Only with the
+/// `dev-console` feature (ADR-0020, U15).
+#[cfg(feature = "dev-console")]
 #[derive(Debug)]
 pub struct EventsHandshake {
     url: SecretString,
     authorization: SecretString,
 }
 
+#[cfg(feature = "dev-console")]
 impl EventsHandshake {
     /// The handshake to `url` with `access_token`'s session.
     pub(crate) fn new(url: &str, access_token: &SecretString) -> Self {
@@ -58,6 +65,7 @@ pub fn read(frame: &str) -> Received {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "dev-console")]
     use secrecy::ExposeSecret as _;
 
     use super::*;
@@ -86,6 +94,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "dev-console")]
     #[test]
     fn a_handshake_shows_neither_secret() {
         let handshake = EventsHandshake::new(

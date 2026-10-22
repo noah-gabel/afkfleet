@@ -99,6 +99,7 @@ impl ServerUrl {
 
     /// The live events socket's URL with `ticket` in its query: `ws://` for
     /// an `http://` server, `wss://` for an `https://` one.
+    #[cfg(feature = "dev-console")]
     pub(crate) fn events(&self, ticket: &str) -> Url {
         let mut url = self.api(&["events"]);
         let scheme = if self.0.scheme() == "https" {
@@ -148,6 +149,7 @@ mod tests {
 
     use super::*;
 
+    #[cfg(feature = "dev-console")]
     #[rstest]
     #[case::plain(
         "http://127.0.0.1:8080",

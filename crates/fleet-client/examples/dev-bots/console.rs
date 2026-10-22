@@ -792,13 +792,15 @@ async fn watch_events(
                 return;
             }
             frame = socket.next() => match frame {
-                Some(Ok(Message::Text(text))) => terminal.say(&event_line(&read(&text))),
                 Some(Ok(Message::Close(frame))) => {
                     terminal.say(&closed_line(frame.map(|frame| u16::from(frame.code))));
                     break;
                 }
-                // tungstenite answers the pings by itself.
-                Some(Ok(_)) => {}
+                Some(Ok(frame)) => {
+                    if let Some(line) = frame_line(&frame) {
+                        terminal.say(&line);
+                    }
+                }
                 Some(Err(_)) | None => {
                     terminal.say("the events socket ended");
                     break;
@@ -808,6 +810,18 @@ async fn watch_events(
     }
     terminal.say("press Enter");
     let _ = enter.await;
+}
+
+/// What the console prints for a frame other than a close: an event's line,
+/// a binary frame read as one that doesn't read (a resync, the protocol's
+/// second rule), and nothing for a ping or a pong, which tungstenite
+/// answers by itself.
+pub(crate) fn frame_line(frame: &Message) -> Option<String> {
+    match frame {
+        Message::Text(text) => Some(event_line(&read(text))),
+        Message::Binary(_) => Some(event_line(&Received::Unreadable)),
+        _ => None,
+    }
 }
 
 /// One event, as the console shows it.

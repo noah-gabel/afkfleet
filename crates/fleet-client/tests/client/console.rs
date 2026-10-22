@@ -1095,6 +1095,79 @@ async fn an_https_server_gets_no_events_and_no_ticket_is_asked_for() {
 }
 
 #[test]
+fn a_binary_frame_reads_as_a_resync_and_a_ping_as_nothing() {
+    use tokio_tungstenite::tungstenite::{Bytes, Message};
+
+    let binary = dev_console::frame_line(&Message::Binary(Bytes::from_static(b"\x00")));
+    let text = dev_console::frame_line(&Message::Text(r#"{"type":"ready"}"#.into()));
+    let ping = dev_console::frame_line(&Message::Ping(Bytes::new()));
+
+    // The protocol's second rule: a frame that doesn't read is a resync.
+    assert_eq!(
+        binary.as_deref(),
+        Some("an event that doesn't read: taken for a resync")
+    );
+    assert_eq!(text.as_deref(), Some("ready"));
+    assert_eq!(ping, None);
+}
+
+#[tokio::test]
+async fn a_refused_events_socket_reads_as_its_status_and_code() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    // The owner's three places, taken by another session of theirs.
+    let mut held = Vec::new();
+    for _ in 0..3 {
+        held.push(held_socket(&owner).await);
+    }
+    let (client, _) = server.client();
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &["events"]);
+
+    tokio::time::timeout(
+        EVENTS_PATIENCE,
+        dev_console::run(&client, OWNER, &mut terminal),
+    )
+    .await
+    .expect("the console ends in time");
+
+    assert!(
+        terminal
+            .said
+            .iter()
+            .any(|line| line == "the events socket was refused: 429 too_many_connections"),
+        "{}",
+        terminal.text()
+    );
+    drop(held);
+    server.stop().await;
+}
+
+/// A live events socket of `client`'s session, held open.
+async fn held_socket<S: SessionStore>(
+    client: &Client<S>,
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+    use tokio_tungstenite::tungstenite::http::HeaderValue;
+
+    let handshake = client.events_handshake().await.unwrap();
+    let mut request = handshake
+        .url()
+        .expose_secret()
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        "authorization",
+        HeaderValue::from_str(handshake.authorization().expose_secret()).unwrap(),
+    );
+    let (socket, _) =
+        tokio::time::timeout(EVENTS_PATIENCE, tokio_tungstenite::connect_async(request))
+            .await
+            .expect("the socket opens in time")
+            .unwrap();
+    socket
+}
+
+#[test]
 fn each_event_and_close_reads_as_a_line() {
     use fleet_api_types::events::{EventMessage, Received};
 

@@ -41,6 +41,9 @@ tracing.workspace = true
 chrono.workspace = true
 # The Owner's username and password for `UserService::create_owner`.
 fleet-core.workspace = true
+# Itself with `dev-console`, so its tests and the dev-bots example have the handshake, and
+# no normal dependent does (ADR-0020, U15).
+fleet-client = { workspace = true, features = ["dev-console"] }
 # The in-process server the integration tests run against (ADR-0017), and the hidden
 # prompt (`cli::user::TerminalPrompt`) of the dev-bots example (ADR-0019, S71).
 fleet-server.workspace = true
@@ -61,3 +64,14 @@ tokio = { workspace = true, features = ["macros", "net", "rt"] }
 tokio-tungstenite = { workspace = true, features = ["connect"] }
 # The authenticator app: codes from the enroll answer's otpauth URI.
 totp-rs = { workspace = true, features = ["otpauth"] }
+
+[features]
+# `Client::events_handshake`, which hands the session's access token to whoever opens the
+# live events socket: for `just dev-bots`' `events` and these tests alone, never the
+# desktop app (`just tauri-check` fails if its build has it). P11.8 opens the socket inside
+# the client and removes it (ADR-0020, U15).
+dev-console = []
+
+[[example]]
+name = "dev-bots"
+required-features = ["dev-console"]
