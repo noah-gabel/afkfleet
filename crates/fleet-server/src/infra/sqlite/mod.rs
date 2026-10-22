@@ -53,6 +53,7 @@ mod agents;
 mod audit;
 mod bots;
 mod chat;
+mod commits;
 mod connect;
 mod convert;
 mod enrollment_tokens;
@@ -72,15 +73,14 @@ use core::time::Duration;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use sqlx::migrate::{MigrateError, Migrator};
-use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
-use tokio::sync::watch;
-
+use self::commits::CommitCount;
 pub use self::connect::{
     BUSY_TIMEOUT, DatabaseOptions, PoolRole, READ_CONNECTIONS, connect_options,
 };
 pub use self::store::SqliteWriteTx;
 use crate::config::DatabaseConfig;
+use sqlx::migrate::{MigrateError, Migrator};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
 
 /// Every migration under `crates/fleet-server/migrations/`, embedded in the
 /// binary. A merged migration is never edited: sqlx records each one's
@@ -184,7 +184,7 @@ pub struct Database {
     read: SqlitePool,
     reads: store::Reads,
     /// How many write transactions committed ([`Store::commits`](crate::ports::store::Store::commits)).
-    commits: Arc<watch::Sender<u64>>,
+    commits: Arc<CommitCount>,
 }
 
 impl Database {
@@ -203,25 +203,25 @@ impl Database {
         base: SqliteConnectOptions,
         options: DatabaseOptions,
     ) -> Result<Self, OpenError> {
-        let write = SqlitePoolOptions::new()
-            .max_connections(1)
-            .acquire_timeout(options.acquire_timeout())
+        let commits = Arc::new(CommitCount::new());
+        let write = write_pool(&commits, &options)
             .connect_with(connect_options(base.clone(), PoolRole::Write, &options))
             .await
             .map_err(OpenError::Connect)?;
         // Unbounded on purpose: a migration must finish or fail (module docs).
         MIGRATOR.run(&write).await.map_err(migrate_error)?;
         let read = read_pool(base, &options).await?;
-        Ok(Self::from_pools(write, read))
+        Ok(Self::from_pools(write, read, commits))
     }
 
-    /// The database over its two pools.
-    fn from_pools(write: SqlitePool, read: SqlitePool) -> Self {
+    /// The database over its two pools, and the count its write pool's hook
+    /// shares.
+    fn from_pools(write: SqlitePool, read: SqlitePool, commits: Arc<CommitCount>) -> Self {
         Self {
             write,
             reads: store::Reads { pool: read.clone() },
             read,
-            commits: Arc::new(watch::Sender::new(0)),
+            commits,
         }
     }
 
@@ -307,11 +307,26 @@ pub async fn open_migrated(
         read.close().await;
         return Err(error);
     }
-    let write = SqlitePoolOptions::new()
+    let commits = Arc::new(CommitCount::new());
+    let write = write_pool(&commits, &options).connect_lazy_with(connect_options(
+        base,
+        PoolRole::Write,
+        &options,
+    ));
+    Ok(Database::from_pools(write, read, commits))
+}
+
+/// The write pool's options: one connection, and the hook that settles
+/// `commits` whenever the connection comes back (the `commits` module).
+fn write_pool(commits: &Arc<CommitCount>, options: &DatabaseOptions) -> SqlitePoolOptions {
+    let commits = Arc::clone(commits);
+    SqlitePoolOptions::new()
         .max_connections(1)
         .acquire_timeout(options.acquire_timeout())
-        .connect_lazy_with(connect_options(base, PoolRole::Write, &options));
-    Ok(Database::from_pools(write, read))
+        .after_release(move |connection, _meta| {
+            let commits = Arc::clone(&commits);
+            Box::pin(async move { commits.settle(connection).await })
+        })
 }
 
 /// The read pool over `base`, through [`connect_options`].

@@ -1231,6 +1231,61 @@ async fn a_transaction_dropped_without_a_commit_leaves_it(
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_commit_dropped_midway_moves_the_count_at_once_and_again_once_its_connection_is_back(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = connect(options).await;
+    let mut commits = db.commits();
+    let before = *commits.borrow_and_update();
+    let tx = db.write().await.unwrap();
+    let mut commit = tx.commit(NewAuditEntry::new(
+        at(1_800_000_000_000),
+        AuditAction::try_from("test.commit_count").unwrap(),
+        AuditOutcome::Success,
+    ));
+
+    // One poll sends its first statement; dropping it then is what a request
+    // timeout or a client gone does to a handler awaiting its commit.
+    let first = std::future::poll_fn(|cx| core::task::Poll::Ready(commit.as_mut().poll(cx))).await;
+    assert!(first.is_pending());
+    drop(commit);
+    let at_once = *commits.borrow_and_update();
+    tokio::time::timeout(Duration::from_secs(5), commits.changed())
+        .await
+        .expect("a second move once the connection is back")
+        .unwrap();
+
+    assert_eq!(at_once, before + 1);
+    assert!(*commits.borrow() >= before + 2);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_commit_that_fails_moves_the_count(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = connect(options).await;
+    let before = *db.commits().borrow();
+    let tx = db.write().await.unwrap();
+
+    // An actor no user row has: the entry's foreign key refuses it.
+    let failed = tx
+        .commit(
+            NewAuditEntry::new(
+                at(1_800_000_000_000),
+                AuditAction::try_from("test.commit_count").unwrap(),
+                AuditOutcome::Success,
+            )
+            .actor(UserId::new_v7(at(1_800_000_000_000), [9; 10]).unwrap()),
+        )
+        .await;
+
+    assert!(failed.is_err(), "{failed:?}");
+    assert!(*db.commits().borrow() > before);
+}
+
+#[sqlx::test(migrations = false)]
 async fn every_clone_of_the_database_shares_one_count(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,

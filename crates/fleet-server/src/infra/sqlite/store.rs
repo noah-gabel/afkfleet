@@ -19,6 +19,7 @@ use fleet_core::value::{AgentName, McUsername, ServerAddress, Username};
 use sqlx::{Sqlite, SqlitePool, Transaction};
 use tokio::sync::watch;
 
+use super::commits::{CommitCount, Counted};
 use super::error::store_error;
 use super::{
     Database, accounts, agents, audit, enrollment_tokens, envelopes, grants, invites,
@@ -368,8 +369,8 @@ impl AuditReads for Reads {
 /// A write transaction on the one write connection. Dropping it rolls back.
 pub struct SqliteWriteTx {
     tx: Transaction<'static, Sqlite>,
-    /// The database's commit count, bumped once this commits.
-    commits: Arc<watch::Sender<u64>>,
+    /// The database's commit count, moved once a commit was asked for.
+    commits: Arc<CommitCount>,
 }
 
 impl fmt::Debug for SqliteWriteTx {
@@ -437,28 +438,28 @@ impl WriteTx for SqliteWriteTx {
     }
 
     async fn commit(mut self: Box<Self>, entry: NewAuditEntry) -> Result<AuditEntryId, StoreError> {
+        let counted = self.commits.start();
         let id = audit::record(&mut self.tx, &entry).await?;
-        let Self { tx, commits } = *self;
-        finish(tx, &commits).await?;
+        let Self { tx, .. } = *self;
+        finish(tx, &counted).await?;
         Ok(id)
     }
 
     async fn commit_unaudited(self: Box<Self>, _reason: UnauditedWrite) -> Result<(), StoreError> {
         // The reason names the exemption at the call site; nothing is stored.
-        let Self { tx, commits } = *self;
-        finish(tx, &commits).await
+        let counted = self.commits.start();
+        let Self { tx, .. } = *self;
+        finish(tx, &counted).await
     }
 }
 
-/// Commits `tx`, then bumps the database's commit count whatever came of
-/// it: a reader who sees the count moved reads again, which costs nothing
-/// when nothing changed (P11.5; ADR-0020, R8).
-async fn finish(
-    tx: Transaction<'static, Sqlite>,
-    commits: &watch::Sender<u64>,
-) -> Result<(), StoreError> {
+/// Commits `tx` in `counted`'s turn, which moves the database's commit count
+/// however this ends, a dropped future included: a reader who sees the count
+/// moved reads again, which costs nothing when nothing changed (P11.5;
+/// ADR-0020, R8; the `commits` module).
+async fn finish(tx: Transaction<'static, Sqlite>, counted: &Counted) -> Result<(), StoreError> {
     let committed = tx.commit().await.map_err(store_error);
-    commits.send_modify(|count| *count = count.wrapping_add(1));
+    counted.returned();
     committed
 }
 
