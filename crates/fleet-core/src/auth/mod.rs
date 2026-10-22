@@ -45,7 +45,8 @@ pub use access::{
     touch_due, touch_stale_since,
 };
 pub use challenge::{
-    MFA_ATTEMPTS, MFA_TOKEN_TTL, SETUP_TOKEN_TTL, challenge_expired, expires_in, used_up,
+    EVENT_TICKET_TTL, MFA_ATTEMPTS, MFA_TOKEN_TTL, SETUP_TOKEN_TTL, challenge_expired, expires_in,
+    used_up,
 };
 pub use invite::{
     InviteFacts, InviteState, InviteTtl, InviteTtlError, MAX_PENDING_INVITES, invite_state,

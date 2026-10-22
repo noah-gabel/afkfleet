@@ -37,7 +37,7 @@ fn exported() -> (TempDir, BTreeMap<String, String>) {
 }
 
 /// Every file the export writes, sorted: one per type.
-const EXPORTED_FILES: [&str; 104] = [
+const EXPORTED_FILES: [&str; 107] = [
     "AccountKind.ts",
     "AccountPage.ts",
     "AccountResponse.ts",
@@ -82,6 +82,9 @@ const EXPORTED_FILES: [&str; 104] = [
     "ErrorBody.ts",
     "ErrorCode.ts",
     "ErrorResponse.ts",
+    "EventMessage.ts",
+    "EventMessageKind.ts",
+    "EventTicketResponse.ts",
     "FailedCodeAttempts.ts",
     "FieldError.ts",
     "GrantLevel.ts",

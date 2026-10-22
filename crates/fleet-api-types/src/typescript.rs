@@ -42,6 +42,7 @@ use crate::auth::{
 use crate::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
 use crate::chat::{ChatCommandRequest, ChatPage, ChatSendRequest, ChatSendResponse};
 use crate::error::ErrorResponse;
+use crate::events::{EventMessage, EventTicketResponse};
 use crate::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use crate::me::{MeResponse, PasswordChangeRequest};
 use crate::mfa::{MfaConfirmRequest, MfaConfirmResponse, MfaEnrollResponse, MfaResetResponse};
@@ -214,7 +215,9 @@ fn write_api(config: &Config) -> Result<(), TypeScriptError> {
     ModePage::export_all(config).map_err(TypeScriptError::Export)?;
     ModeResponse::export_all(config).map_err(TypeScriptError::Export)?;
     CreateModeRequest::export_all(config).map_err(TypeScriptError::Export)?;
-    UpdateModeRequest::export_all(config).map_err(TypeScriptError::Export)
+    UpdateModeRequest::export_all(config).map_err(TypeScriptError::Export)?;
+    EventTicketResponse::export_all(config).map_err(TypeScriptError::Export)?;
+    EventMessage::export_all(config).map_err(TypeScriptError::Export)
 }
 
 /// Writes the app's root IPC types, and every type they use.

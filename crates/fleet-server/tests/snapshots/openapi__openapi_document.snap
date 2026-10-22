@@ -833,6 +833,46 @@ expression: answer.json()
         ],
         "type": "object"
       },
+      "EventMessage": {
+        "description": "One frame of the live events socket: what happened, by its `type`. The\n`events` module's docs say which frames come and how a client reads one.\n\nEvery kind carries only `type` in this version.",
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/EventMessageKind",
+            "description": "What happened."
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "EventMessageKind": {
+        "description": "What an `EventMessage` says.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on one always keeps a default branch.",
+        "enum": [
+          "ready",
+          "resync"
+        ],
+        "type": "string"
+      },
+      "EventTicketResponse": {
+        "description": "`POST /events/ticket`: a ticket for one live events socket.",
+        "properties": {
+          "expires_in": {
+            "maximum": 30,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ticket": {
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket",
+          "expires_in"
+        ],
+        "type": "object"
+      },
       "FailedCodeAttempts": {
         "description": "The wrong 2FA codes typed for the user after their previous successful\nlogin: what happened since they last logged in. The wrong codes of the\nnewest login's own step, the user's typos before it succeeded, aren't\ncounted, so a count above 0 means a login step that never succeeded.",
         "properties": {

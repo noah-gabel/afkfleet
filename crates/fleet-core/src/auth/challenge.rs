@@ -5,7 +5,8 @@
 //! The password step hands out one of them, never real tokens: an mfa token
 //! when the user has 2FA, a setup token when they must enroll first. A 2FA
 //! replacement hands out a setup token too. The server holds them in memory;
-//! these rules decide when one is over.
+//! these rules decide when one is over. A live events ticket (P11.5;
+//! ADR-0020, S29) is held the same way, and lives [`EVENT_TICKET_TTL`].
 
 use core::time::Duration;
 
@@ -18,6 +19,10 @@ pub const MFA_TOKEN_TTL: Duration = Duration::from_mins(5);
 
 /// How long a setup token lives (§7.2).
 pub const SETUP_TOKEN_TTL: Duration = Duration::from_mins(10);
+
+/// How long a live events ticket lives (§7.4: single use, 30 s): from
+/// `POST /events/ticket` to the socket it opens.
+pub const EVENT_TICKET_TTL: Duration = Duration::from_secs(30);
 
 /// How many wrong codes one mfa token takes: the last one uses it up, and
 /// the user goes back to the password step.
@@ -86,6 +91,16 @@ mod tests {
     }
 
     #[rstest]
+    #[case::one_millisecond_before(29_999, false)]
+    #[case::exactly_at_its_end(30_000, true)]
+    fn an_event_ticket_lives_30_s(#[case] millis: i64, #[case] expired: bool) {
+        assert_eq!(
+            challenge_expired(after(0), EVENT_TICKET_TTL, after(millis)),
+            expired
+        );
+    }
+
+    #[rstest]
     #[case::at_issue(0, 300)]
     #[case::rounded_down(1, 299)]
     #[case::last_second(299_000, 1)]
@@ -116,6 +131,7 @@ mod tests {
     fn the_lifetimes_are_pinned() {
         assert_eq!(MFA_TOKEN_TTL, Duration::from_secs(300));
         assert_eq!(SETUP_TOKEN_TTL, Duration::from_secs(600));
+        assert_eq!(EVENT_TICKET_TTL, Duration::from_secs(30));
         assert_eq!(MFA_ATTEMPTS, 3);
     }
 }
