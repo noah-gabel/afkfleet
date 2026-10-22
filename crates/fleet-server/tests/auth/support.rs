@@ -262,6 +262,7 @@ impl HookedStore {
                 fail_find: Arc::default(),
                 hang_find: Arc::default(),
                 hanging: Arc::new(tokio::sync::watch::Sender::new(0)),
+                find_behind_writes: Arc::default(),
             },
             inner,
             alice,
@@ -283,6 +284,13 @@ impl HookedStore {
     /// behind a long write; every other read works (P11.5).
     pub(crate) fn hang_socket_checks(&self) {
         *self.sessions.hang_find.lock().unwrap() = true;
+    }
+
+    /// From now on, `SessionReads::find` first waits for the write
+    /// connection, as a read stuck behind writes: under a stream of commits,
+    /// one has always landed by the time a check ends (P11.5).
+    pub(crate) fn queue_socket_checks_behind_writes(&self) {
+        *self.sessions.find_behind_writes.lock().unwrap() = true;
     }
 
     /// Waits, within `bound`, until a `find` hangs.
@@ -635,6 +643,8 @@ struct HookedSessions {
     hang_find: Arc<Mutex<bool>>,
     /// How many `find`s hang.
     hanging: Arc<tokio::sync::watch::Sender<u32>>,
+    /// Each `find` waits for the write connection first.
+    find_behind_writes: Arc<Mutex<bool>>,
 }
 
 #[async_trait]
@@ -657,6 +667,11 @@ impl SessionReads for HookedSessions {
         if *self.hang_find.lock().unwrap() {
             self.hanging.send_modify(|hanging| *hanging += 1);
             return std::future::pending().await;
+        }
+        let behind_writes = *self.find_behind_writes.lock().unwrap();
+        if behind_writes {
+            // Taken and dropped: rolled back, so it moves no count.
+            drop(self.inner.write().await?);
         }
         self.inner.sessions().find(id).await
     }

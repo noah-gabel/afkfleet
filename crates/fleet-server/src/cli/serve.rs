@@ -1174,8 +1174,10 @@ pub async fn stop_session_tokens<F, R>(
 pub const LIVE_SOCKETS_LEFT: &str = "live events sockets were still open when the database had to close; the server stops waiting, and they end with the process";
 
 /// Waits for `stop`, then for `stopped`, the live events sockets' shutdown,
-/// at most `bound` (P11.5; ADR-0020, S35, R20): each socket sends its 1001
-/// within its own close bound. Sockets still open then are left with one
+/// at most `bound` (P11.5; ADR-0020, S35, R20): each socket ends within two
+/// close bounds of the stop (a stuck send gets one to finish, else the
+/// socket is dropped; then its 1001 gets one). Sockets still open then are
+/// left with one
 /// `warn` naming how many (`open`); they end with the runtime. Generic, so
 /// tests drive it on paused time.
 pub async fn stop_live_sockets<F, R>(stop: CancellationToken, stopped: F, bound: Duration, open: R)

@@ -20,9 +20,12 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::time::{Instant, timeout};
 use tokio_tungstenite::tungstenite::{Bytes, Message};
+use tokio_util::sync::CancellationToken;
 
 use super::super::support::{Options, Setup, setup, setup_with};
-use super::{PATIENCE, Served, Socket, closed, next, next_event_after_pings, ready, said};
+use super::{
+    PATIENCE, Served, Socket, closed, commit_anything, next, next_event_after_pings, ready, said,
+};
 
 /// Short bounds: a ping every 100 ms, closed after 300 ms without a pong.
 const SHORT: SocketTimings = SocketTimings {
@@ -157,6 +160,34 @@ async fn a_client_that_never_answers_a_ping_is_closed_with_4000(
     let pings = frames.iter().filter(|(opcode, _)| *opcode == 0x9).count();
     let close = frames.iter().find(|(opcode, _)| *opcode == 0x8).unwrap();
     assert!(pings >= 2, "{pings} pings came first");
+    assert_eq!(close_code(&close.1), SocketClose::Idle.code());
+}
+
+#[sqlx::test(migrations = false)]
+async fn under_a_stream_of_commits_a_silent_client_is_still_closed_with_4000(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = short(options).await;
+    let alice = setup.alice_person().await;
+    let served = Served::start(&setup).await;
+    let socket = ready(&setup, &served, &alice.token).await;
+    setup.hooked.queue_socket_checks_behind_writes();
+    let done = CancellationToken::new();
+
+    let committing = async {
+        while !done.is_cancelled() {
+            commit_anything(&setup).await;
+        }
+    };
+    let watching = async {
+        let frames = raw_frames(socket).await;
+        done.cancel();
+        frames
+    };
+    let ((), frames) = tokio::join!(committing, watching);
+
+    let close = frames.iter().find(|(opcode, _)| *opcode == 0x8).unwrap();
     assert_eq!(close_code(&close.1), SocketClose::Idle.code());
 }
 

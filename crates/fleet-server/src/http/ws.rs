@@ -15,9 +15,11 @@
 //!   for, a frame too large, a protocol error) is refused with 1008. A lost
 //!   connection is told apart, and closes nothing: an `io::Error` among the
 //!   error's sources, or the connection ending without a close frame.
-//! - **`resync`** ([`ResyncGate`]): a socket that lagged behind the bus
-//!   says so once, without a count, and never more often than one gap; a
-//!   lag within the gap waits for its end, so no lost event goes unsaid.
+//! - **`resync` and the session check** ([`Gap`]): a socket that lagged
+//!   behind the bus says so once, without a count, and never more often
+//!   than one gap; a socket checks its session after the commit count
+//!   moved, at most once per [`CHECK_GAP`]. What's owed within a gap waits
+//!   for its end, so no lost event goes unsaid and no commit unchecked.
 //! - **The owner** ([`LiveSockets`], R21): a tracker token is taken as the
 //!   connect starts, and the socket's task runs on the tracker, so every
 //!   socket and every connect has an owner of ours, and a connect after the
@@ -221,6 +223,11 @@ pub(crate) struct OpenSocket {
 /// timeout.
 pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 
+/// The shortest gap between two checks of one socket's session: a stream of
+/// commits costs each socket one read per gap, and a commit within the gap
+/// is checked when it ends (PR #66's review).
+pub const CHECK_GAP: Duration = Duration::from_millis(250);
+
 /// How a socket ended, for its close and its last log line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Ended {
@@ -251,13 +258,14 @@ impl Ended {
 /// to the bus and says `ready`, then, in this order of precedence:
 /// - closes with 1001 at the shutdown, and with 4001 once the access token
 ///   it opened with expires, without a read;
-/// - checks its session again after every commit, closing with 4001 when
-///   it no longer counts and with 1013 when the check can't be made;
 /// - takes a pong that answers a ping and the client's close; closes with
 ///   1008 for anything else, and with 4000 once no pong came for the idle
 ///   timeout;
-/// - pings on its interval, and says `resync` once it lagged behind the bus,
-///   at most once per gap.
+/// - pings on its interval;
+/// - checks its session again once the commit count moved, at most once per
+///   [`CHECK_GAP`], closing with 4001 when it no longer counts and with
+///   1013 when the check can't be made;
+/// - says `resync` once it lagged behind the bus, at most once per gap.
 ///
 /// A send that doesn't go out in time closes it with 4002. The shutdown
 /// races every send and every check (R20): a send then gets the close bound
@@ -343,28 +351,33 @@ impl Running {
         let idle = sleep(timings.idle_timeout);
         let expiry = sleep_until(deadline);
         tokio::pin!(idle, expiry);
-        let mut gate = ResyncGate::new(timings.resync_gap);
-        // A commit between the connect's check and this subscription's first
-        // read was marked unseen: the first turn checks again (R18).
+        let mut resync = Gap::new(timings.resync_gap);
+        let mut checks = Gap::new(CHECK_GAP);
         loop {
-            let resync_at = gate.due(Instant::now());
+            // The count is read at every turn, whichever branch woke it, so
+            // no busy branch can hide a commit; one between the connect's
+            // check and the first turn is seen at once (R18).
+            match self.commits.has_changed() {
+                Ok(true) => {
+                    self.commits.borrow_and_update();
+                    checks.owe();
+                }
+                Ok(false) => {}
+                Err(_) => return Ended::closed(SocketClose::Busy, "the commit count is gone"),
+            }
+            let now = Instant::now();
+            let check_at = checks.due(now);
+            let resync_at = resync.due(now);
             tokio::select! {
                 biased;
                 // Every branch is cancel-safe: `cancelled`, the sleeps,
-                // `changed`, `recv` and `tick` lose nothing when another
-                // wins, and every send runs in a branch's body, never as a
-                // branch.
+                // `recv`, `tick` and `changed` lose nothing when another
+                // wins, and every send and check runs in a branch's body,
+                // never as a branch. The client's frames, the idle close and
+                // the pings come before the session check, so no stream of
+                // commits can hold them up.
                 () = stop.cancelled() => return Ended::closed(SocketClose::ShuttingDown, "the server is shutting down"),
                 () = &mut expiry => return Ended::closed(SocketClose::Unauthenticated, "its access token expired"),
-                changed = self.commits.changed() => {
-                    if changed.is_err() {
-                        return Ended::closed(SocketClose::Busy, "the commit count is gone");
-                    }
-                    self.commits.borrow_and_update();
-                    if let Err(ended) = self.check().await {
-                        return ended;
-                    }
-                }
                 received = self.socket.recv() => match classify(received) {
                     Inbound::Pong if pings.answered() => {
                         idle.as_mut().reset(Instant::now() + timings.idle_timeout);
@@ -383,11 +396,17 @@ impl Running {
                         return failed.ended();
                     }
                 }
+                () = sleep_until(check_at.unwrap_or(deadline)), if check_at.is_some() => {
+                    checks.done(Instant::now());
+                    if let Err(ended) = self.check().await {
+                        return ended;
+                    }
+                }
                 () = sleep_until(resync_at.unwrap_or(deadline)), if resync_at.is_some() => {
                     if let Err(failed) = self.send(&EventMessage::resync()).await {
                         return failed.ended();
                     }
-                    gate.sent(Instant::now());
+                    resync.done(Instant::now());
                     self.resyncs = self.resyncs.saturating_add(1);
                 }
                 received = self.bus.recv() => match received {
@@ -396,9 +415,16 @@ impl Running {
                     Ok(_) => {}
                     // No count: it would count events of bots the user can't
                     // see.
-                    Err(RecvError::Lagged(_)) => gate.lagged(),
+                    Err(RecvError::Lagged(_)) => resync.owe(),
                     Err(RecvError::Closed) => return Ended::closed(SocketClose::ShuttingDown, "the bus is gone"),
                 },
+                // Returning marks the count seen, so the check is owed here.
+                changed = self.commits.changed() => {
+                    if changed.is_err() {
+                        return Ended::closed(SocketClose::Busy, "the commit count is gone");
+                    }
+                    checks.owe();
+                }
             }
         }
     }
@@ -603,48 +629,50 @@ impl Pings {
     }
 }
 
-/// When a lagging socket may say `resync`: at most once per gap, and a lag
-/// within the gap waits for its end, so it's never lost.
+/// Something a socket owes at most once per gap: a `resync` once it lagged
+/// behind the bus ([`RESYNC_GAP`]), a check of its session once the commit
+/// count moved ([`CHECK_GAP`]). One owed within the gap is done at its end,
+/// never dropped, and many owed within one gap are done once.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ResyncGate {
-    gap: Duration,
+pub struct Gap {
+    every: Duration,
     last: Option<Instant>,
-    pending: bool,
+    owed: bool,
 }
 
-impl ResyncGate {
-    /// A gate whose `resync`s are at least `gap` apart.
+impl Gap {
+    /// At least `every` between two of them.
     #[must_use]
-    pub const fn new(gap: Duration) -> Self {
+    pub const fn new(every: Duration) -> Self {
         Self {
-            gap,
+            every,
             last: None,
-            pending: false,
+            owed: false,
         }
     }
 
-    /// The socket lagged: a `resync` is owed.
-    pub fn lagged(&mut self) {
-        self.pending = true;
+    /// One is owed.
+    pub fn owe(&mut self) {
+        self.owed = true;
     }
 
-    /// When the owed `resync` may go, if one is owed: at once, or one gap
-    /// after the last.
+    /// When the owed one is due, if one is owed: at once, or one gap after
+    /// the last.
     #[must_use]
     pub fn due(&self, now: Instant) -> Option<Instant> {
-        if !self.pending {
+        if !self.owed {
             return None;
         }
         let allowed = self
             .last
-            .and_then(|last| last.checked_add(self.gap))
+            .and_then(|last| last.checked_add(self.every))
             .unwrap_or(now);
         Some(allowed.max(now))
     }
 
-    /// The `resync` went at `at`.
-    pub fn sent(&mut self, at: Instant) {
-        self.pending = false;
+    /// It was done at `at`.
+    pub fn done(&mut self, at: Instant) {
+        self.owed = false;
         self.last = Some(at);
     }
 }
@@ -713,14 +741,14 @@ mod tests {
     #[test]
     fn a_first_resync_goes_at_once_and_the_next_one_gap_later() {
         let start = Instant::now();
-        let mut gate = ResyncGate::new(Duration::from_secs(5));
+        let mut gate = Gap::new(Duration::from_secs(5));
 
         let idle = gate.due(start);
-        gate.lagged();
+        gate.owe();
         let first = gate.due(start);
-        gate.sent(start);
+        gate.done(start);
         let after_sending = gate.due(start);
-        gate.lagged();
+        gate.owe();
         let second = gate.due(start + Duration::from_secs(1));
 
         assert_eq!(idle, None);
@@ -732,28 +760,45 @@ mod tests {
     #[test]
     fn many_lags_within_a_gap_owe_one_resync() {
         let start = Instant::now();
-        let mut gate = ResyncGate::new(Duration::from_secs(5));
-        gate.lagged();
-        gate.sent(start);
+        let mut gate = Gap::new(Duration::from_secs(5));
+        gate.owe();
+        gate.done(start);
 
         for _ in 0..10 {
-            gate.lagged();
+            gate.owe();
         }
         let due = gate.due(start + Duration::from_secs(2));
-        gate.sent(start + Duration::from_secs(5));
+        gate.done(start + Duration::from_secs(5));
 
         assert_eq!(due, Some(start + Duration::from_secs(5)));
         assert_eq!(gate.due(start + Duration::from_secs(6)), None);
     }
 
     #[test]
+    fn a_commit_within_the_check_gap_is_checked_when_it_ends() {
+        let start = Instant::now();
+        let mut checks = Gap::new(CHECK_GAP);
+        checks.owe();
+        let first = checks.due(start);
+        checks.done(start);
+
+        checks.owe();
+        checks.owe();
+        let next = checks.due(start + Duration::from_millis(100));
+
+        assert_eq!(CHECK_GAP, Duration::from_millis(250));
+        assert_eq!(first, Some(start));
+        assert_eq!(next, Some(start + Duration::from_millis(250)));
+    }
+
+    #[test]
     fn a_lag_after_the_gap_goes_at_once() {
         let start = Instant::now();
-        let mut gate = ResyncGate::new(Duration::from_secs(5));
-        gate.lagged();
-        gate.sent(start);
+        let mut gate = Gap::new(Duration::from_secs(5));
+        gate.owe();
+        gate.done(start);
 
-        gate.lagged();
+        gate.owe();
         let late = start + Duration::from_secs(9);
 
         assert_eq!(gate.due(late), Some(late));
