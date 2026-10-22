@@ -15,15 +15,22 @@ mod tickets;
 
 use core::time::Duration;
 use std::collections::BTreeMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 
 use fleet_api_types::events::SocketClose;
+use fleet_core::audit::{AuditAction, AuditOutcome};
+use fleet_core::system::Clock as _;
+use fleet_server::http::ws::SocketTimings;
+use fleet_server::ports::audit::NewAuditEntry;
+use fleet_server::ports::store::Store as _;
 use secrecy::{ExposeSecret as _, SecretString};
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use tokio::io::DuplexStream;
 use tokio::net::{TcpListener, TcpStream};
+use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tokio::time::timeout;
+use tokio::time::{Instant, timeout};
 use tokio_stream::StreamExt as _;
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
@@ -74,6 +81,100 @@ impl Drop for Served {
         self.stop.cancel();
         self.task.abort();
     }
+}
+
+/// How many bytes a pipe holds each way: fewer than the shortest event
+/// frame, so a client that stops reading holds up the server's next send at
+/// once.
+const PIPE_BYTES: usize = 8;
+
+/// The address a piped connection claims; the harness's app has its own.
+const PIPE_ADDRESS: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 0);
+
+/// The harness's app served over in-memory pipes of [`PIPE_BYTES`] each way
+/// instead of TCP, whose buffers the server's few small frames would never
+/// fill: for a client that doesn't read.
+pub(super) struct Piped {
+    connects: mpsc::Sender<DuplexStream>,
+    task: JoinHandle<()>,
+}
+
+/// Hands axum each pipe a client opens.
+struct PipeListener(mpsc::Receiver<DuplexStream>);
+
+impl axum::serve::Listener for PipeListener {
+    type Io = DuplexStream;
+    type Addr = SocketAddr;
+
+    async fn accept(&mut self) -> (Self::Io, Self::Addr) {
+        match self.0.recv().await {
+            Some(pipe) => (pipe, PIPE_ADDRESS),
+            // The test is over: nothing connects again.
+            None => std::future::pending().await,
+        }
+    }
+
+    fn local_addr(&self) -> std::io::Result<Self::Addr> {
+        Ok(PIPE_ADDRESS)
+    }
+}
+
+impl Piped {
+    /// Serves `setup`'s app over pipes.
+    pub(super) fn start(setup: &Setup) -> Self {
+        let (connects, incoming) = mpsc::channel(1);
+        let app = setup.app.clone();
+        let task = tokio::spawn(async move {
+            axum::serve(PipeListener(incoming), app.into_make_service())
+                .await
+                .unwrap();
+        });
+        Self { connects, task }
+    }
+
+    /// Opens a socket over a fresh pipe with `bearer` and `ticket`; nothing
+    /// reads it unless the test does.
+    pub(super) async fn open(
+        &self,
+        bearer: &SecretString,
+        ticket: &SecretString,
+    ) -> WebSocketStream<DuplexStream> {
+        let (client, server) = tokio::io::duplex(PIPE_BYTES);
+        self.connects.send(server).await.unwrap();
+        let url = format!(
+            "ws://127.0.0.1/api/v1/events?ticket={}",
+            ticket.expose_secret()
+        );
+        let mut request = url.into_client_request().unwrap();
+        request.headers_mut().insert(
+            "authorization",
+            HeaderValue::from_str(&format!("Bearer {}", bearer.expose_secret())).unwrap(),
+        );
+        let (socket, _) = timeout(PATIENCE, tokio_tungstenite::client_async(request, client))
+            .await
+            .expect("the handshake in time")
+            .unwrap();
+        socket
+    }
+}
+
+impl Drop for Piped {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+/// Commits a write that changes nothing, which moves the commit count and
+/// so wakes every socket to check its session.
+pub(super) async fn commit_anything(setup: &Setup) {
+    let tx = setup.db.write().await.unwrap();
+    tx.commit(NewAuditEntry::new(
+        setup.clock.now(),
+        AuditAction::try_from("test.any_commit").unwrap(),
+        AuditOutcome::Success,
+    ))
+    .await
+    .unwrap();
 }
 
 /// The server's refusal of a connect, as a client reads it.
@@ -317,6 +418,115 @@ async fn a_socket_closes_with_1001_when_its_owner_shuts_down(
 
     assert_eq!(said_close, said(SocketClose::ShuttingDown));
     assert_eq!(setup.live_events.sockets().open(), 0);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_stopped_socket_whose_client_doesnt_read_ends_within_2_s(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    // A send timeout far past the bound: only the stop may end the send.
+    let setup = setup_with(
+        options,
+        Options {
+            sockets: SocketTimings {
+                send_timeout: Duration::from_secs(60),
+                ..SocketTimings::default()
+            },
+            ..Options::default()
+        },
+    )
+    .await;
+    let alice = setup.alice_person().await;
+    let piped = Piped::start(&setup);
+    let ticket = ticket(&setup, &alice.token).await;
+    // Never read: `ready` itself is stuck in the pipe.
+    let _socket = piped.open(&alice.token, &ticket).await;
+
+    let started = Instant::now();
+    let shutdown = timeout(PATIENCE, setup.live_events.sockets().shutdown()).await;
+
+    assert!(shutdown.is_ok(), "the stop ends a stuck send");
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_stopped_socket_whose_session_check_hangs_says_1001_at_once(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let alice = setup.alice_person().await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &alice.token).await;
+    setup.hooked.hang_socket_checks();
+    commit_anything(&setup).await;
+    setup.hooked.until_a_socket_check_hangs(PATIENCE).await;
+
+    let started = Instant::now();
+    let (said_close, ()) = tokio::join!(closed(&mut socket), async {
+        timeout(PATIENCE, setup.live_events.sockets().shutdown())
+            .await
+            .unwrap();
+    });
+
+    assert_eq!(said_close, said(SocketClose::ShuttingDown));
+    assert!(
+        started.elapsed() < Duration::from_secs(2),
+        "{:?}",
+        started.elapsed()
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_connect_still_checking_at_the_shutdown_is_waited_for_and_answers_503(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let alice = setup.alice_person().await;
+    let served = Served::start(&setup).await;
+    let ticket = ticket(&setup, &alice.token).await;
+    setup.hooked.hang_socket_checks();
+
+    let both = async {
+        tokio::join!(open(&served, &alice.token, &ticket), async {
+            setup.hooked.until_a_socket_check_hangs(PATIENCE).await;
+            let counted = setup.live_events.sockets().open();
+            setup.live_events.sockets().shutdown().await;
+            counted
+        })
+    };
+    let (connected, counted) = timeout(PATIENCE, both).await.expect("both end in time");
+
+    assert_eq!(counted, 1, "the connect counts while it checks");
+    let refused = connected.unwrap_err();
+    assert_eq!(refused.status, 503);
+    assert_eq!(refused.body["error"]["code"], "busy");
+    assert_eq!(setup.live_events.sockets().open(), 0);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_connect_after_the_shutdown_began_is_503_busy(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let alice = setup.alice_person().await;
+    let served = Served::start(&setup).await;
+    let ticket = ticket(&setup, &alice.token).await;
+    timeout(PATIENCE, setup.live_events.sockets().shutdown())
+        .await
+        .unwrap();
+
+    let refused = open(&served, &alice.token, &ticket).await.unwrap_err();
+
+    assert_eq!(refused.status, 503);
+    assert_eq!(refused.body["error"]["code"], "busy");
 }
 
 #[sqlx::test(migrations = false)]

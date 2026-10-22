@@ -7,19 +7,21 @@
 //! - **The connect** needs the session's access token and a ticket issued
 //!   to that very session, and checks them in this order:
 //!   1. `AuthUser` (401, the per-user 429), before anything is read;
-//!   2. the upgrade's headers: 405 for a method that isn't `GET`, 400 for a
+//!   2. the sockets' owner counts the connect from here, so a shutdown
+//!      waits for it; once the shutdown began, 503 `busy`;
+//!   3. the upgrade's headers: 405 for a method that isn't `GET`, 400 for a
 //!      request that isn't an upgrade, before the ticket is spent;
-//!   3. the query: 400 for a parameter that isn't `ticket`, or one given
+//!   4. the query: 400 for a parameter that isn't `ticket`, or one given
 //!      twice;
-//!   4. the ticket, taken at once (single use), then whose it is: every
+//!   5. the ticket, taken at once (single use), then whose it is: every
 //!      ticket that isn't a live one of this session gets the same 404, with
 //!      one `debug` line naming why, never the ticket;
-//!   5. the session again, subscribed to the commit count first, so a
+//!   6. the session again, subscribed to the commit count first, so a
 //!      revocation committed meanwhile is never missed (404 too; a store
-//!      failure 503 or 500);
-//!   6. the user's place among their sockets: 429 `too_many_connections`;
-//!   7. the upgrade, with the socket's limits; the socket's task runs on
-//!      the sockets' owner from the start.
+//!      failure 503 or 500; 503 `busy` when the server stops meanwhile);
+//!   7. the user's place among their sockets: 429 `too_many_connections`;
+//!   8. the upgrade, with the socket's limits; the socket's task runs on
+//!      the sockets' owner.
 //!
 //!   The ticket is in the URL, so no log line ever holds it: the trace
 //!   layer logs the route's template, and nothing here logs the query.
@@ -108,6 +110,13 @@ pub(crate) async fn connect(
     upgrade: Result<WebSocketUpgrade, WebSocketUpgradeRejection>,
     ValidQuery(query): ValidQuery<EventsQuery>,
 ) -> Result<Response, ApiError> {
+    // Counted by the sockets' owner from the start, so a shutdown waits for
+    // this connect, and one that began already turns it away (R21).
+    let owned = state.events.sockets.token();
+    let stop = state.events.sockets.stop();
+    if stop.is_cancelled() {
+        return Err(ApiError::busy());
+    }
     let upgrade = upgrade.map_err(|rejection| refused_upgrade(&rejection))?;
     let actor = user.actor();
     let grant = state
@@ -130,16 +139,17 @@ pub(crate) async fn connect(
     };
     // Subscribed before the check: a commit after it wakes the socket (R18).
     let commits = state.tokens.socket_commits();
-    state
-        .tokens
-        .check_socket(&session)
-        .await
-        .map_err(|error| match error {
-            SocketCheckError::Refused(reason) => refuse(&user, reason),
-            SocketCheckError::Store(error) => ApiError::from(error),
-        })?;
+    let checked = tokio::select! {
+        biased;
+        // Both are cancel-safe: the check only reads.
+        () = stop.cancelled() => return Err(ApiError::busy()),
+        checked = state.tokens.check_socket(&session) => checked,
+    };
+    checked.map_err(|error| match error {
+        SocketCheckError::Refused(reason) => refuse(&user, reason),
+        SocketCheckError::Store(error) => ApiError::from(error),
+    })?;
     let slot = state.limits.open_socket(actor.id)?;
-    let owned = state.events.sockets.token();
     let open = OpenSocket {
         session,
         slot,

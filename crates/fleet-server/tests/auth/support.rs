@@ -260,6 +260,8 @@ impl HookedStore {
             sessions: HookedSessions {
                 inner: inner.clone(),
                 fail_find: Arc::default(),
+                hang_find: Arc::default(),
+                hanging: Arc::new(tokio::sync::watch::Sender::new(0)),
             },
             inner,
             alice,
@@ -275,6 +277,21 @@ impl HookedStore {
     /// (P11.5).
     pub(crate) fn fail_socket_checks(&self) {
         *self.sessions.fail_find.lock().unwrap() = true;
+    }
+
+    /// From now on, `SessionReads::find` never answers, as a database stuck
+    /// behind a long write; every other read works (P11.5).
+    pub(crate) fn hang_socket_checks(&self) {
+        *self.sessions.hang_find.lock().unwrap() = true;
+    }
+
+    /// Waits, within `bound`, until a `find` hangs.
+    pub(crate) async fn until_a_socket_check_hangs(&self, bound: Duration) {
+        let mut hanging = self.sessions.hanging.subscribe();
+        tokio::time::timeout(bound, hanging.wait_for(|hanging| *hanging > 0))
+            .await
+            .expect("a check hangs in time")
+            .unwrap();
     }
 
     /// The token service's store: this one's session reads, with queues of
@@ -615,6 +632,9 @@ impl ModeWrites for LosingTx {
 struct HookedSessions {
     inner: Database,
     fail_find: Arc<Mutex<bool>>,
+    hang_find: Arc<Mutex<bool>>,
+    /// How many `find`s hang.
+    hanging: Arc<tokio::sync::watch::Sender<u32>>,
 }
 
 #[async_trait]
@@ -633,6 +653,10 @@ impl SessionReads for HookedSessions {
     async fn find(&self, id: SessionId) -> Result<Option<SessionWithUser>, StoreError> {
         if *self.fail_find.lock().unwrap() {
             return Err(StoreError::Busy);
+        }
+        if *self.hang_find.lock().unwrap() {
+            self.hanging.send_modify(|hanging| *hanging += 1);
+            return std::future::pending().await;
         }
         self.inner.sessions().find(id).await
     }
