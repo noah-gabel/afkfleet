@@ -2,6 +2,7 @@
 //! in-process server, its terminal scripted: the login, its refusals, the
 //! commands, the step-up, and that nothing secret or unknown is ever shown.
 
+use core::pin::Pin;
 use core::time::Duration;
 use std::collections::VecDeque;
 use std::io;
@@ -12,6 +13,7 @@ use fleet_api_types::{BotId, PageQuery, SecretText};
 use fleet_client::{Client, ClientConfig, MemoryStore, ServerUrl, SessionStore, StoreError, Trust};
 use fleet_testkit::system::ManualClock;
 use secrecy::{ExposeSecret as _, SecretString};
+use tokio::sync::watch;
 
 use crate::dev_console::{self, DEV_SERVER, Ended, HELP, Terminal};
 use crate::support::{OWNER, PASSWORD, Server};
@@ -26,6 +28,10 @@ struct Scripted {
     lines: VecDeque<String>,
     secrets: VecDeque<String>,
     said: Vec<String>,
+    /// What was said, for a test that waits on it while the console runs.
+    heard: watch::Sender<Vec<String>>,
+    /// Each Enter `events` waits for comes once a line holding this was said.
+    enters: VecDeque<String>,
     /// The server's clock, for [`A_MONTH`].
     clock: Option<ManualClock>,
 }
@@ -36,8 +42,22 @@ impl Scripted {
             lines: lines.iter().map(|line| (*line).to_owned()).collect(),
             secrets: secrets.iter().map(|secret| (*secret).to_owned()).collect(),
             said: Vec::new(),
+            heard: watch::Sender::default(),
+            enters: VecDeque::new(),
             clock: None,
         }
+    }
+
+    /// The script, with Enter pressed for each `events` once a line holding
+    /// its text was said.
+    fn with_enters(mut self, after: &[&str]) -> Self {
+        self.enters = after.iter().map(|text| (*text).to_owned()).collect();
+        self
+    }
+
+    /// What the console said and will say, as it goes.
+    fn heard(&self) -> watch::Receiver<Vec<String>> {
+        self.heard.subscribe()
     }
 
     /// The script, with [`A_MONTH`] moving `clock`.
@@ -73,6 +93,20 @@ impl Terminal for Scripted {
 
     fn say(&mut self, text: &str) {
         self.said.push(text.to_owned());
+        self.heard.send_modify(|said| said.push(text.to_owned()));
+    }
+
+    fn enter(&mut self) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send>> {
+        let after = self.enters.pop_front();
+        let mut heard = self.heard.subscribe();
+        Box::pin(async move {
+            let after = after.ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no Enter"))?;
+            heard
+                .wait_for(|said| said.iter().any(|line| line.contains(&after)))
+                .await
+                .map(drop)
+                .map_err(|_| io::Error::other("the terminal is gone"))
+        })
     }
 }
 
@@ -956,4 +990,213 @@ async fn delete_mode_asks_for_the_password_and_deletes_the_mode() {
     assert!(!text.contains(PASSWORD), "{text}");
     assert_eq!(newest_mode(&owner).await, used.to_string());
     server.stop().await;
+}
+
+// --- `events` (P11.5; ADR-0020, S37) ---------------------------------------------
+
+/// The longest an `events` test waits for the console or the server.
+const EVENTS_PATIENCE: Duration = Duration::from_secs(30);
+
+#[tokio::test]
+async fn events_shows_ready_and_stops_at_enter_without_a_ticket_or_token() {
+    let server = Server::start().await;
+    let (_owner, code) = owner_and_code(&server).await;
+    let (client, _) = server.client();
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &["events"]).with_enters(&["ready"]);
+
+    let ended = tokio::time::timeout(
+        EVENTS_PATIENCE,
+        dev_console::run(&client, OWNER, &mut terminal),
+    )
+    .await
+    .expect("the console ends in time");
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let text = terminal.text();
+    for line in ["events: press Enter to stop", "ready", "events stopped"] {
+        assert!(
+            terminal.said.iter().any(|said| said == line),
+            "{line}: {text}"
+        );
+    }
+    for secret in ["afk_wt_", "ticket=", "afk_at_", "Bearer"] {
+        assert!(!text.contains(secret), "{secret}: {text}");
+    }
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn ending_the_consoles_session_closes_its_events_with_4001_and_it_waits_for_enter() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    let (client, _) = server.client();
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &["events"])
+        .with_enters(&["the server closed the events socket"]);
+    let mut heard = terminal.heard();
+
+    let both = async {
+        tokio::join!(dev_console::run(&client, OWNER, &mut terminal), async {
+            heard
+                .wait_for(|said| said.iter().any(|line| line == "ready"))
+                .await
+                .unwrap();
+            let sessions = owner
+                .sessions(&PageQuery {
+                    before: None,
+                    limit: None,
+                })
+                .await
+                .unwrap();
+            let consoles = sessions
+                .items
+                .iter()
+                .find(|session| !session.current)
+                .unwrap();
+            owner.revoke_session(consoles.id).await.unwrap();
+        })
+    };
+    let (ended, ()) = tokio::time::timeout(EVENTS_PATIENCE, both)
+        .await
+        .expect("the console ends in time");
+
+    assert_eq!(ended, Ended::LoggedOut);
+    assert!(
+        terminal
+            .said
+            .iter()
+            .any(|line| line
+                == "the server closed the events socket: 4001 Authentication is required."),
+        "{}",
+        terminal.text()
+    );
+    assert!(terminal.said.iter().any(|line| line == "press Enter"));
+    server.stop().await;
+}
+
+#[tokio::test]
+async fn an_https_server_gets_no_events_and_no_ticket_is_asked_for() {
+    let client = Client::new(
+        ClientConfig {
+            server: ServerUrl::parse("https://127.0.0.1:1").unwrap(),
+            trust: Trust::System,
+        },
+        MemoryStore::new(),
+    )
+    .unwrap();
+    let mut terminal = Scripted::new(&[], &[]);
+
+    let done = dev_console::events(&client, &mut terminal).await;
+
+    assert!(done.is_ok());
+    assert_eq!(
+        terminal.said,
+        ["events need dev-server's plain http until the app's own client (P11.8)"]
+    );
+}
+
+#[test]
+fn a_binary_frame_reads_as_a_resync_and_a_ping_as_nothing() {
+    use tokio_tungstenite::tungstenite::{Bytes, Message};
+
+    let binary = dev_console::frame_line(&Message::Binary(Bytes::from_static(b"\x00")));
+    let text = dev_console::frame_line(&Message::Text(r#"{"type":"ready"}"#.into()));
+    let ping = dev_console::frame_line(&Message::Ping(Bytes::new()));
+
+    // The protocol's second rule: a frame that doesn't read is a resync.
+    assert_eq!(
+        binary.as_deref(),
+        Some("an event that doesn't read: taken for a resync")
+    );
+    assert_eq!(text.as_deref(), Some("ready"));
+    assert_eq!(ping, None);
+}
+
+#[tokio::test]
+async fn a_refused_events_socket_reads_as_its_status_and_code() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    // The owner's three places, taken by another session of theirs.
+    let mut held = Vec::new();
+    for _ in 0..3 {
+        held.push(held_socket(&owner).await);
+    }
+    let (client, _) = server.client();
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &["events"]);
+
+    tokio::time::timeout(
+        EVENTS_PATIENCE,
+        dev_console::run(&client, OWNER, &mut terminal),
+    )
+    .await
+    .expect("the console ends in time");
+
+    assert!(
+        terminal
+            .said
+            .iter()
+            .any(|line| line == "the events socket was refused: 429 too_many_connections"),
+        "{}",
+        terminal.text()
+    );
+    drop(held);
+    server.stop().await;
+}
+
+/// A live events socket of `client`'s session, held open.
+async fn held_socket<S: SessionStore>(
+    client: &Client<S>,
+) -> tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>> {
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
+    use tokio_tungstenite::tungstenite::http::HeaderValue;
+
+    let handshake = client.events_handshake().await.unwrap();
+    let mut request = handshake
+        .url()
+        .expose_secret()
+        .into_client_request()
+        .unwrap();
+    request.headers_mut().insert(
+        "authorization",
+        HeaderValue::from_str(handshake.authorization().expose_secret()).unwrap(),
+    );
+    let (socket, _) =
+        tokio::time::timeout(EVENTS_PATIENCE, tokio_tungstenite::connect_async(request))
+            .await
+            .expect("the socket opens in time")
+            .unwrap();
+    socket
+}
+
+#[test]
+fn each_event_and_close_reads_as_a_line() {
+    use fleet_api_types::events::{EventMessage, Received};
+
+    assert_eq!(
+        dev_console::event_line(&Received::Event(EventMessage::ready())),
+        "ready"
+    );
+    assert_eq!(
+        dev_console::event_line(&Received::Event(EventMessage::resync())),
+        "resync: fetch again"
+    );
+    assert_eq!(
+        dev_console::event_line(&Received::Ignored),
+        "an event this console doesn't know"
+    );
+    assert_eq!(
+        dev_console::event_line(&Received::Unreadable),
+        "an event that doesn't read: taken for a resync"
+    );
+    assert_eq!(
+        dev_console::closed_line(Some(1001)),
+        "the server closed the events socket: 1001 The server is shutting down."
+    );
+    assert_eq!(
+        dev_console::closed_line(Some(1000)),
+        "the server closed the events socket: 1000"
+    );
+    assert_eq!(
+        dev_console::closed_line(None),
+        "the server closed the events socket"
+    );
 }

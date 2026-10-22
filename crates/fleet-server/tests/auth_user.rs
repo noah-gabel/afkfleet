@@ -269,6 +269,7 @@ async fn setup_with(options: SqliteConnectOptions, database: DatabaseOptions) ->
         agents: idle_agents(&db),
         bots: idle_bots(&db),
         modes: idle_modes(&db),
+        events: idle_events(),
     });
     let http = HttpConfig {
         bind: HttpConfig::DEFAULT_BIND,
@@ -898,5 +899,20 @@ fn idle_modes(db: &fleet_server::infra::sqlite::Database) -> fleet_server::app::
         )),
         Arc::new(fleet_testkit::system::SeededRandom::new(1)),
         Arc::new(db.clone()),
+    )
+}
+
+/// The live events with no ticket held and no socket open (P11.5).
+fn idle_events() -> fleet_server::http::ws::LiveEvents {
+    let clock = Arc::new(fleet_testkit::system::ManualClock::new(
+        chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
+    ));
+    let tokens = fleet_server::infra::crypto::tokens::Sha256Tokens::new(Arc::new(
+        fleet_testkit::system::SeededRandom::new(77),
+    ));
+    fleet_server::http::ws::LiveEvents::new(
+        fleet_server::app::event_tickets::EventTickets::new(clock, Arc::new(tokens)),
+        fleet_server::app::events::EventBus::new(),
+        fleet_server::http::ws::LiveSockets::new(tokio_util::sync::CancellationToken::new()),
     )
 }

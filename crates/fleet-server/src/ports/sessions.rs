@@ -142,6 +142,14 @@ pub trait SessionReads: Send + Sync + fmt::Debug {
     /// [`StoreError`].
     async fn refresh_hash_exists(&self, hash: &TokenHash) -> Result<bool, StoreError>;
 
+    /// The session `id`, with its user, if there is one: a live events
+    /// socket's re-check of the session it was opened by (P11.5; ADR-0020,
+    /// S31).
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn find(&self, id: SessionId) -> Result<Option<SessionWithUser>, StoreError>;
+
     /// The user's live sessions of `page`, newest first: up to
     /// `page.limit.fetch()` of them, one more than the page holds.
     ///

@@ -7,8 +7,8 @@
 //!    (`retain_recent`), so their memory stays bounded;
 //! 2. the lockout's expired streaks are purged, in batches that stop at the
 //!    shutdown; a failure is a `warn`, and the next run tries again;
-//! 3. the login's expired challenges (mfa and setup tokens) are dropped from
-//!    memory;
+//! 3. the login's expired challenges (mfa and setup tokens), and the live
+//!    events' expired tickets (P11.5), are dropped from memory;
 //! 4. the link flows that finished more than 15 minutes ago are dropped
 //!    from memory (P9.4);
 //! 5. one `info` line sums up the requests the limits and the lockout
@@ -30,6 +30,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use crate::app::challenges::Challenges;
+use crate::app::event_tickets::EventTickets;
 use crate::app::link_flows::LinkFlows;
 use crate::app::lockout::LockoutService;
 use crate::grpc::registry::AgentRegistry;
@@ -40,24 +41,27 @@ use crate::http::rate_limit::RateLimits;
 pub const INTERVAL: Duration = Duration::from_mins(1);
 
 /// What the housekeeping looks after: the rate limits, the lockout, the
-/// login's challenges, the link flows and the agents' streams.
+/// login's challenges, the live events' tickets, the link flows and the
+/// agents' streams.
 #[derive(Debug, Clone)]
 pub struct Housekeeping {
     limits: RateLimits,
     lockout: LockoutService,
     challenges: Challenges,
+    event_tickets: EventTickets,
     link_flows: LinkFlows,
     agents: AgentRegistry,
 }
 
 impl Housekeeping {
-    /// The housekeeping of `limits`, `lockout`, `challenges`, `link_flows`
-    /// and `agents`.
+    /// The housekeeping of `limits`, `lockout`, `challenges`,
+    /// `event_tickets`, `link_flows` and `agents`.
     #[must_use]
     pub const fn new(
         limits: RateLimits,
         lockout: LockoutService,
         challenges: Challenges,
+        event_tickets: EventTickets,
         link_flows: LinkFlows,
         agents: AgentRegistry,
     ) -> Self {
@@ -65,6 +69,7 @@ impl Housekeeping {
             limits,
             lockout,
             challenges,
+            event_tickets,
             link_flows,
             agents,
         }
@@ -91,6 +96,10 @@ impl Housekeeping {
             0 => {}
             dropped => debug!(dropped, "expired login challenges were dropped"),
         }
+        match self.event_tickets.purge_expired() {
+            0 => {}
+            dropped => debug!(dropped, "expired live events tickets were dropped"),
+        }
         match self.link_flows.purge_finished() {
             0 => {}
             dropped => debug!(dropped, "finished link flows were dropped"),
@@ -111,6 +120,7 @@ impl Housekeeping {
                 fresh_sessions = limits.fresh_sessions,
                 chat_per_user = limits.chat_per_user,
                 chat_per_bot = limits.chat_per_bot,
+                ws_connections = limits.ws_connections,
                 locked = lockout.locked,
                 in_flight = lockout.in_flight,
                 "requests were refused since the last report"

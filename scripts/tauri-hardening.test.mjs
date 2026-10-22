@@ -10,6 +10,7 @@ import {
   COMMANDS,
   CSP,
   checkCapabilities,
+  checkClientFeatures,
   checkCommands,
   checkConfig,
   checkContract,
@@ -406,5 +407,26 @@ describe("the repository", () => {
     const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
     assert.deepEqual(checkRepoFiles(repoRoot), []);
+  });
+});
+
+describe("checkClientFeatures", () => {
+  /** fleet-client's line as `cargo tree` prints it, at a placeholder path. */
+  const LINE = "fleet-client v0.1.0 (/path/to/afkfleet/crates/fleet-client)|";
+
+  it("accepts fleet-client with no features, or with others", () => {
+    assert.deepEqual(checkClientFeatures(`${LINE}\n`), []);
+    assert.deepEqual(checkClientFeatures(`${LINE}something\r\n`), []);
+  });
+
+  it("names dev-console as never allowed in the app", () => {
+    const output = `${LINE}other,dev-console\n`;
+
+    assert.match(checkClientFeatures(output).join("\n"), /dev-console.*never/);
+  });
+
+  it("refuses output it can't read", () => {
+    assert.match(checkClientFeatures("").join("\n"), /can't be read/);
+    assert.match(checkClientFeatures(`${LINE}\n${LINE}\n`).join("\n"), /can't be read/);
   });
 });

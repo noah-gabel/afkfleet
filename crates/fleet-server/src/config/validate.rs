@@ -548,6 +548,7 @@ fn rate_limits(raw: &RawRateLimits) -> Option<RateLimitConfig> {
         chat_per_bot: ChatRate::try_new(raw.chat_per_bot_interval_secs, raw.chat_per_bot_burst)
             .ok()?,
         chat_per_user: Rate::per_minute(count(raw.chat_per_user_per_min)?),
+        ws_connections_per_user: count(raw.ws_connections_per_user)?,
     })
 }
 

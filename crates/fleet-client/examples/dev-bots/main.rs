@@ -11,6 +11,8 @@
 
 mod console;
 
+use core::pin::Pin;
+
 use std::io::{self, BufRead as _, IsTerminal as _, Write as _};
 use std::process::ExitCode;
 
@@ -40,6 +42,19 @@ impl Terminal for StdTerminal {
     fn say(&mut self, text: &str) {
         // A failed write has nowhere else to go.
         let _ = writeln!(io::stdout().lock(), "{text}");
+    }
+
+    fn enter(&mut self) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send>> {
+        Box::pin(async {
+            // stdin blocks: read on a blocking thread, which `events` always
+            // awaits before it reads the next command.
+            tokio::task::spawn_blocking(|| {
+                let mut line = String::new();
+                io::stdin().lock().read_line(&mut line).map(drop)
+            })
+            .await
+            .unwrap_or_else(|_| Err(io::Error::other("the terminal's reader failed")))
+        })
     }
 }
 

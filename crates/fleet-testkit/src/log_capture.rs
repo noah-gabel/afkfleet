@@ -122,9 +122,27 @@ pub fn check_absent(secret: &str) -> Result<(), SecretLeak> {
 /// # Errors
 /// [`SecretLeak`], naming only the targets, levels and counts.
 pub fn find(matches: impl Fn(&str) -> bool) -> Result<(), SecretLeak> {
+    leaks(|_target, text| matches(text))
+}
+
+/// [`check_absent`] over every target but `except`: for a test whose own
+/// client logs the secret it sends, as tungstenite's client handshake logs
+/// its request, query string included, at `trace`.
+///
+/// # Errors
+/// [`SecretLeak`], as [`check_absent`].
+pub fn check_absent_except(secret: &str, except: &str) -> Result<(), SecretLeak> {
+    leaks(|target, text| target != except && text.contains(secret))
+}
+
+/// The captured lines `matches` holds for, by target and text.
+fn leaks(matches: impl Fn(&str, &str) -> bool) -> Result<(), SecretLeak> {
     let mut hits = BTreeMap::<String, usize>::new();
     let mut levels = BTreeMap::<(String, String), usize>::new();
-    for line in lines().iter().filter(|line| matches(&line.text)) {
+    for line in lines()
+        .iter()
+        .filter(|line| matches(&line.target, &line.text))
+    {
         let count = hits.entry(line.target.clone()).or_default();
         *count = count.saturating_add(1);
         let count = levels
@@ -219,6 +237,22 @@ mod tests {
     fn installing_twice_succeeds() {
         assert_eq!(install(), Ok(()));
         assert_eq!(install(), Ok(()));
+    }
+
+    #[test]
+    fn a_check_except_one_target_finds_the_secret_everywhere_else() {
+        install().unwrap();
+
+        tracing::trace!(target: "capture_test_client", "probe-except-7c2f");
+        let skipped = check_absent_except("probe-except-7c2f", "capture_test_client");
+        tracing::trace!(target: "capture_test_server", "probe-except-7c2f");
+        let found = check_absent_except("probe-except-7c2f", "capture_test_client");
+
+        assert_eq!(skipped, Ok(()));
+        assert_eq!(
+            found.unwrap_err().hits,
+            BTreeMap::from([("capture_test_server".to_owned(), 1)])
+        );
     }
 
     #[test]

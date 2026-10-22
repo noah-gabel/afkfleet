@@ -32,6 +32,9 @@
 //!   the bot exists ([`RateLimits::check_chat_user`],
 //!   [`RateLimits::check_chat_bot`]; ADR-0020, S3). The bot's is the chat
 //!   rate its agent enforces too, sent in its spec.
+//! - **A live events socket takes one of its user's places** before the
+//!   upgrade, given back when the socket ends however it ends
+//!   ([`RateLimits::open_socket`]; ADR-0020, S35): a cap, not a rate.
 //! - **A fresh session request on the gRPC port spends its bot's limit**,
 //!   in its stream's session, once the registry found the stream holding the
 //!   bot assigned, and before the request is queued: each fresh session the
@@ -54,6 +57,7 @@
 
 mod client_ip;
 mod net;
+mod sockets;
 
 use core::fmt;
 use core::num::NonZeroU32;
@@ -77,6 +81,8 @@ use governor::{Quota, RateLimiter};
 
 pub use client_ip::{ClientIp, MissingClientIp, MissingPeerAddress, X_FORWARDED_FOR, client_ip};
 pub use net::{IpNet, IpNetError, TrustedProxies, limiter_key};
+pub use sockets::SocketSlot;
+use sockets::SocketSlots;
 
 use super::error::ApiError;
 use super::routes::RateClass;
@@ -136,6 +142,22 @@ impl From<Refused> for ApiError {
     }
 }
 
+/// A user who holds as many live events sockets open as
+/// `ws_connections_per_user` allows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the user holds as many live events sockets open as allowed")]
+pub struct SocketsFull;
+
+/// `too_many_connections`, with `Retry-After` the idle timeout's: the
+/// longest one of the user's dead sockets can hold its place.
+impl From<SocketsFull> for ApiError {
+    fn from(SocketsFull: SocketsFull) -> Self {
+        Self::TooManyConnections {
+            retry_after: crate::http::ws::IDLE_TIMEOUT,
+        }
+    }
+}
+
 /// How many requests each limit refused since the last
 /// [`RateLimits::take_refusals`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -164,6 +186,8 @@ pub struct Refusals {
     pub chat_per_user: u64,
     /// The per-bot limit of chat lines sent through the API.
     pub chat_per_bot: u64,
+    /// The per-user cap on open live events sockets.
+    pub ws_connections: u64,
 }
 
 impl Refusals {
@@ -182,6 +206,7 @@ impl Refusals {
             && self.fresh_sessions == 0
             && self.chat_per_user == 0
             && self.chat_per_bot == 0
+            && self.ws_connections == 0
     }
 }
 
@@ -200,6 +225,7 @@ struct Counters {
     fresh_sessions: AtomicU64,
     chat_per_user: AtomicU64,
     chat_per_bot: AtomicU64,
+    ws_connections: AtomicU64,
 }
 
 /// Every limiter, built from `[rate_limits]`.
@@ -219,6 +245,8 @@ struct Limiters {
     chat_per_bot: Limiter<BotId>,
     /// How long a bot's chat bucket takes to hold one more line.
     chat_interval: Duration,
+    /// The live events sockets' places, per user.
+    sockets: SocketSlots,
     refused: Counters,
 }
 
@@ -263,6 +291,7 @@ impl RateLimits {
             chat_per_user: limiter(config.chat_per_user, &clock),
             chat_per_bot: limiter(Rate::from(config.chat_per_bot), &clock),
             chat_interval: config.chat_per_bot.interval(),
+            sockets: SocketSlots::new(config.ws_connections_per_user),
             refused: Counters::default(),
             clock,
         }))
@@ -445,6 +474,30 @@ impl RateLimits {
         limits.chat_per_bot.retain_recent();
     }
 
+    /// Takes one of `user`'s places for a live events socket, which its
+    /// connect does right before the upgrade; the socket holds it until it
+    /// ends (ADR-0020, S35).
+    ///
+    /// # Errors
+    /// [`SocketsFull`] when they hold as many as `ws_connections_per_user`
+    /// allows; counted for the summary.
+    pub fn open_socket(&self, user: UserId) -> Result<SocketSlot, SocketsFull> {
+        let limits = &self.0;
+        limits.sockets.take(user).ok_or_else(|| {
+            limits
+                .refused
+                .ws_connections
+                .fetch_add(1, Ordering::Relaxed);
+            SocketsFull
+        })
+    }
+
+    /// How many live events sockets hold a place, everyone's together.
+    #[must_use]
+    pub fn open_sockets(&self) -> u64 {
+        self.0.sockets.open()
+    }
+
     /// How many keys the limiters hold.
     #[must_use]
     pub fn tracked(&self) -> usize {
@@ -481,6 +534,7 @@ impl RateLimits {
             fresh_sessions: take(&refused.fresh_sessions),
             chat_per_user: take(&refused.chat_per_user),
             chat_per_bot: take(&refused.chat_per_bot),
+            ws_connections: take(&refused.ws_connections),
         }
     }
 }
@@ -609,6 +663,7 @@ mod tests {
             fresh_sessions: rate,
             chat_per_bot: fleet_core::chat::ChatRate::default(),
             chat_per_user: rate,
+            ws_connections_per_user: nonzero(2),
         }
     }
 
@@ -919,6 +974,10 @@ mod tests {
         for _ in 0..10 {
             let _ = limits.check_chat_bot(bot(1));
         }
+        let _held = [limits.open_socket(user(1)), limits.open_socket(user(1))];
+        for _ in 0..8 {
+            let _ = limits.open_socket(user(1));
+        }
         let _ = limits.check_class(RateClass::Refresh, ip("192.0.2.10"));
 
         assert_eq!(
@@ -936,6 +995,7 @@ mod tests {
                 fresh_sessions: 6,
                 chat_per_user: 7,
                 chat_per_bot: 7,
+                ws_connections: 8,
             }
         );
         assert_eq!(limits.take_refusals(), Refusals::default());
@@ -991,6 +1051,10 @@ mod tests {
             },
             Refusals {
                 chat_per_bot: 1,
+                ..Refusals::default()
+            },
+            Refusals {
+                ws_connections: 1,
                 ..Refusals::default()
             },
         ] {

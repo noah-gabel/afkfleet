@@ -123,6 +123,7 @@ mod tests {
     #[case::refresh(TokenKind::Refresh, "afk_rt_")]
     #[case::invite(TokenKind::Invite, "afk_iv_")]
     #[case::enrollment(TokenKind::Enrollment, "afk_et_")]
+    #[case::event_ticket(TokenKind::EventTicket, "afk_wt_")]
     fn a_minted_token_is_its_prefix_and_43_base64url_characters(
         #[case] kind: TokenKind,
         #[case] prefix: &str,

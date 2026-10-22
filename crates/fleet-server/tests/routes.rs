@@ -271,6 +271,7 @@ async fn build(db: &Database, docs: ApiDocs, extra: impl FnOnce(Routes) -> Route
         agents: idle_agents(db),
         bots: idle_bots(db),
         modes: idle_modes(db),
+        events: idle_events(),
     });
     let ids = RequestIds::new(Arc::new(clock()), Arc::new(SeededRandom::new(5)));
     let (app, entries) = extra(api_routes(Routes::new(&limits))).finish(state, &http(), ids, docs);
@@ -626,6 +627,8 @@ async fn the_authed_routes_are_registered_with_their_class(
             entry(Method::GET, "/api/v1/modes", RateClass::Standard),
             entry(Method::POST, "/api/v1/modes", RateClass::Standard),
             entry(Method::PUT, "/api/v1/modes/{id}", RateClass::Standard),
+            entry(Method::POST, "/api/v1/events/ticket", RateClass::Standard),
+            entry(Method::GET, "/api/v1/events", RateClass::Standard),
         ])
     );
     db.close().await;
@@ -1059,5 +1062,20 @@ fn idle_modes(db: &fleet_server::infra::sqlite::Database) -> fleet_server::app::
         )),
         Arc::new(fleet_testkit::system::SeededRandom::new(1)),
         Arc::new(db.clone()),
+    )
+}
+
+/// The live events with no ticket held and no socket open (P11.5).
+fn idle_events() -> fleet_server::http::ws::LiveEvents {
+    let clock = Arc::new(fleet_testkit::system::ManualClock::new(
+        chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
+    ));
+    let tokens = fleet_server::infra::crypto::tokens::Sha256Tokens::new(Arc::new(
+        fleet_testkit::system::SeededRandom::new(77),
+    ));
+    fleet_server::http::ws::LiveEvents::new(
+        fleet_server::app::event_tickets::EventTickets::new(clock, Arc::new(tokens)),
+        fleet_server::app::events::EventBus::new(),
+        fleet_server::http::ws::LiveSockets::new(tokio_util::sync::CancellationToken::new()),
     )
 }

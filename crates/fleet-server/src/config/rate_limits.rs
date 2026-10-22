@@ -1,8 +1,8 @@
 //! `[rate_limits]`: §7.4's request limits (Plan.md P7.10, Appendix A,
 //! ADR-0016), the Microsoft link flows' caps (P9.4, ADR-0018), each bot's
 //! chat rate, which the server sends in its spec and spends on chat through
-//! the API, and each user's (P11.3; ADR-0020, S3). `ws_connections_per_user`
-//! arrives with its route in Phase 11.
+//! the API, and each user's (P11.3; ADR-0020, S3), and how many live events
+//! sockets a user holds open (P11.5; ADR-0020, U12).
 
 use core::num::NonZeroU32;
 use core::time::Duration;
@@ -126,6 +126,10 @@ pub struct RateLimitConfig {
     /// the bot's own rate, so a refusal never tells a stranger the bot
     /// exists.
     pub chat_per_user: Rate,
+    /// How many live events sockets one user holds open at once
+    /// (`ws_connections_per_user`; ADR-0020, S35, U12): taken before the
+    /// upgrade, given back when the socket ends however it ends.
+    pub ws_connections_per_user: NonZeroU32,
 }
 
 /// `[rate_limits]`'s caps on Microsoft link flows (P9.4, ADR-0018). Each
@@ -198,6 +202,8 @@ impl RateLimitConfig {
     };
     /// `chat_per_user_per_min`: 1 to 60. Default 20.
     pub const CHAT_PER_USER_PER_MIN: Bounds = Bounds { min: 1, max: 60 };
+    /// `ws_connections_per_user`: 1 to 10. Default 3.
+    pub const WS_CONNECTIONS_PER_USER: Bounds = Bounds { min: 1, max: 10 };
 }
 
 impl Default for RateLimitConfig {
@@ -219,6 +225,7 @@ impl Default for RateLimitConfig {
             fresh_sessions: Rate::per_hour(nonzero(6)),
             chat_per_bot: ChatRate::default(),
             chat_per_user: Rate::per_minute(nonzero(20)),
+            ws_connections_per_user: nonzero(3),
         }
     }
 }
@@ -275,6 +282,7 @@ mod tests {
         assert_eq!(defaults.fresh_sessions, Rate::per_hour(nonzero(6)));
         assert_eq!(defaults.chat_per_bot, ChatRate::default());
         assert_eq!(defaults.chat_per_user, Rate::per_minute(nonzero(20)));
+        assert_eq!(defaults.ws_connections_per_user.get(), 3);
     }
 
     #[test]

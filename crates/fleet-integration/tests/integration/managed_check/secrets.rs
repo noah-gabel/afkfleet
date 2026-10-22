@@ -43,13 +43,14 @@ const CERTS_TARGET: &str = "azalea_auth::certs";
 /// Every kind of the server's tokens, each found by its prefix in any line
 /// whether the run saw the token or not: the client never shows its access
 /// tokens, and a refresh rotates the refresh token.
-const SERVER_TOKENS: [TokenKind; 6] = [
+const SERVER_TOKENS: [TokenKind; 7] = [
     TokenKind::Access,
     TokenKind::Refresh,
     TokenKind::Mfa,
     TokenKind::Setup,
     TokenKind::Invite,
     TokenKind::Enrollment,
+    TokenKind::EventTicket,
 ];
 
 /// A server token's kind in a finding; a new kind doesn't compile until
@@ -62,6 +63,7 @@ const fn token_name(kind: TokenKind) -> &'static str {
         TokenKind::Setup => "TOTP setup",
         TokenKind::Invite => "invite",
         TokenKind::Enrollment => "enrollment",
+        TokenKind::EventTicket => "live events ticket",
     }
 }
 

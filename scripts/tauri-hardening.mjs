@@ -13,6 +13,8 @@
 //   `COMMANDS`, in order
 // - tauri's resolved features, which `cargo tree` reports; `devtools`, `dynamic-acl` and
 //   `custom-protocol` are named as never allowed
+// - fleet-client's resolved features in the app: never `dev-console`, which hands out the
+//   session's access token for `just dev-bots` alone (ADR-0020, U15)
 //
 // The expected values live here on purpose: changing a hardening setting means changing
 // this check too, deliberately, with an ADR. A new command goes into `COMMANDS` here and
@@ -117,6 +119,17 @@ export const CARGO_TREE_ARGS = [
   "--format",
   "{p}|{f}",
 ];
+
+/** The same for fleet-client's line, as the desktop app resolves it, dev edges left out. */
+export const CLIENT_TREE_ARGS = CARGO_TREE_ARGS.map((arg) =>
+  arg === "tauri" ? "fleet-client" : arg,
+);
+
+/**
+ * fleet-client's features the desktop app must never have: `dev-console` hands out the
+ * session's access token, for `just dev-bots` alone (ADR-0020, U15).
+ */
+const FORBIDDEN_CLIENT_FEATURES = ["dev-console"];
 
 /** Each capability permission that grants one of the app's own commands. */
 function commandGrants() {
@@ -354,6 +367,23 @@ export function checkFeatures(output) {
   return problems;
 }
 
+/** Checks `cargo tree`'s output for fleet-client's features. Returns one message per problem. */
+export function checkClientFeatures(output) {
+  const lines = output
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line !== "");
+  const match = lines.length === 1 ? /^fleet-client v\S+ \(.*\)\|(.*)$/.exec(lines[0] ?? "") : null;
+  if (match === null) {
+    return [`cargo tree's output for fleet-client can't be read: \`${output.trim()}\``];
+  }
+  const features = (match[1] ?? "").split(",").filter((feature) => feature !== "");
+  return FORBIDDEN_CLIENT_FEATURES.filter((feature) => features.includes(feature)).map(
+    (feature) =>
+      `fleet-client's \`${feature}\` feature is on in the desktop app, but it must never be (ADR-0020, U15)`,
+  );
+}
+
 /**
  * The entries of `dir`: `{ name, text }` for a file, `{ name, entries }` for a folder, read
  * the same way; none if it doesn't exist. A folder is never read as a file.
@@ -411,6 +441,13 @@ function main() {
     problems.push(`cargo tree failed: ${result.error?.message ?? `exit code ${result.status}`}`);
   } else {
     problems.push(...checkFeatures(result.stdout));
+  }
+  const client = spawnSync("cargo", CLIENT_TREE_ARGS, { cwd: root, encoding: "utf8" });
+  if (client.error !== undefined || client.status !== 0) {
+    console.error(client.stderr ?? "");
+    problems.push(`cargo tree failed: ${client.error?.message ?? `exit code ${client.status}`}`);
+  } else {
+    problems.push(...checkClientFeatures(client.stdout));
   }
   for (const problem of problems) {
     console.error(problem);

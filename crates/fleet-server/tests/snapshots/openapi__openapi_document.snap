@@ -816,7 +816,8 @@ expression: answer.json()
           "mode_needs_step_up",
           "mode_changed",
           "mode_in_use_by_others",
-          "mode_in_use"
+          "mode_in_use",
+          "too_many_connections"
         ],
         "type": "string"
       },
@@ -830,6 +831,46 @@ expression: answer.json()
         },
         "required": [
           "error"
+        ],
+        "type": "object"
+      },
+      "EventMessage": {
+        "description": "One frame of the live events socket: what happened, by its `type`. The\n`events` module's docs say which frames come and how a client reads one.\n\nEvery kind carries only `type` in this version.",
+        "properties": {
+          "type": {
+            "$ref": "#/components/schemas/EventMessageKind",
+            "description": "What happened."
+          }
+        },
+        "required": [
+          "type"
+        ],
+        "type": "object"
+      },
+      "EventMessageKind": {
+        "description": "What an `EventMessage` says.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on one always keeps a default branch.",
+        "enum": [
+          "ready",
+          "resync"
+        ],
+        "type": "string"
+      },
+      "EventTicketResponse": {
+        "description": "`POST /events/ticket`: a ticket for one live events socket.",
+        "properties": {
+          "expires_in": {
+            "maximum": 30,
+            "minimum": 0,
+            "type": "integer"
+          },
+          "ticket": {
+            "maxLength": 64,
+            "type": "string"
+          }
+        },
+        "required": [
+          "ticket",
+          "expires_in"
         ],
         "type": "object"
       },
@@ -5745,6 +5786,186 @@ expression: answer.json()
         "summary": "`POST /api/v1/bots/{id}/stop`: the bot should be stopped.",
         "tags": [
           "bots"
+        ]
+      }
+    },
+    "/api/v1/events": {
+      "get": {
+        "operationId": "events",
+        "parameters": [
+          {
+            "description": "A ticket from `POST /api/v1/events/ticket`, issued to the same session within 30 s, and never used before.",
+            "in": "query",
+            "name": "ticket",
+            "required": true,
+            "schema": {
+              "maxLength": 64,
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "101": {
+            "description": "The socket: JSON text frames, one `EventMessage` each, `ready` first; the client sends only pongs and a close (`fleet_api_types::events`)."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Not a WebSocket upgrade, or (after the upgrade's checks) a query that isn't one `ticket`."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "One answer for every ticket that opens nothing: malformed, unknown, used, expired, another user's or another session's; and for a session that no longer counts (revoked, expired, its user disabled or given another role). Mint a new ticket, and back off before trying again."
+          },
+          "405": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A method that isn't `GET` (a `HEAD`)."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests, or `too_many_connections`: the user's sockets are all open.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "503": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`busy`: the server is shutting down, or the session couldn't be checked."
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/events?ticket=…`: the live events socket, its checks in\nthe order this module's docs give.",
+        "tags": [
+          "events"
+        ],
+        "x-websocket-message": {
+          "$ref": "#/components/schemas/EventMessage"
+        }
+      }
+    },
+    "/api/v1/events/ticket": {
+      "post": {
+        "operationId": "event_ticket",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EventTicketResponse"
+                }
+              }
+            },
+            "description": "A single-use ticket for `GET /api/v1/events`, with this session's access token, within 30 s. A secret: never log or show it."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/events/ticket`: a ticket for one live events socket of this\nsession.",
+        "tags": [
+          "events"
         ]
       }
     },

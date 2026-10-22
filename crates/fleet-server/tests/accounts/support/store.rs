@@ -235,6 +235,10 @@ impl Store for FlakyStore {
     async fn ping(&self) -> Result<(), StoreError> {
         self.inner.ping().await
     }
+
+    fn commits(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.inner.commits()
+    }
 }
 
 #[async_trait]

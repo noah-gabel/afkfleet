@@ -4,6 +4,7 @@
 use core::fmt;
 
 use async_trait::async_trait;
+use tokio::sync::watch;
 
 use super::accounts::{AccountReads, AccountWrites};
 use super::agents::{AgentReads, AgentWrites};
@@ -117,6 +118,16 @@ pub trait Store: Send + Sync + fmt::Debug {
     /// [`StoreError::Busy`] when no read connection is free within the
     /// acquire timeout, or [`StoreError::Backend`] when the database fails.
     async fn ping(&self) -> Result<(), StoreError>;
+
+    /// How many commits this process has asked for, audited or not, as a
+    /// `watch`, so whoever holds what a write could change (a live events
+    /// socket's session and rights; P11.5, ADR-0020, R8) reads it again once
+    /// the count moved. It moves whenever a commit ends, whatever its result,
+    /// and also when its future was dropped midway, both at once and once
+    /// whatever it handed the database has run, so a commit that still lands
+    /// is never missed. A transaction dropped without a commit doesn't count;
+    /// a write by another process isn't seen.
+    fn commits(&self) -> watch::Receiver<u64>;
 }
 
 /// One write transaction. Dropping it without [`WriteTx::commit`] rolls

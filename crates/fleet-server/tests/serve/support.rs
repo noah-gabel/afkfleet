@@ -17,6 +17,7 @@ use chrono::DateTime;
 use fleet_core::auth::LockoutPolicy;
 use fleet_core::system::Clock;
 use fleet_server::app::challenges::Challenges;
+use fleet_server::app::event_tickets::EventTickets;
 use fleet_server::app::lockout::LockoutService;
 use fleet_server::cli::housekeeping::Housekeeping;
 use fleet_server::cli::serve::App;
@@ -339,12 +340,19 @@ pub(crate) fn app_of(router: Router, database: &Database) -> App {
             RateLimits::new(&RateLimitConfig::default(), Arc::clone(&clock)),
             lockout,
             challenges,
+            EventTickets::new(
+                Arc::clone(&clock),
+                Arc::new(Sha256Tokens::new(Arc::new(SeededRandom::new(10)))),
+            ),
             link_flows.flows(),
             AgentRegistry::new(clock),
         ),
         link_flows,
         grpc: None,
         events: fleet_server::app::events::EventBus::new(),
+        sockets: fleet_server::http::ws::LiveSockets::new(
+            tokio_util::sync::CancellationToken::new(),
+        ),
         shutdown: tokio_util::sync::CancellationToken::new(),
     }
 }

@@ -25,7 +25,7 @@ use fleet_core::id::{AccountId, AgentId, BotId, InviteId, ModeId, SessionId, Use
 use fleet_core::value::Username;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions, READ_CONNECTIONS};
 use fleet_server::ports::audit::{AuditEntryId, AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
-use fleet_server::ports::store::{Store, StoreError};
+use fleet_server::ports::store::{Store, StoreError, UnauditedWrite};
 use fleet_server::ports::users::{InsertUserError, NewUser, PasswordHash, User};
 use secrecy::SecretString;
 use sqlx::SqlitePool;
@@ -1170,4 +1170,132 @@ async fn a_ping_on_a_closed_database_is_a_backend_error(
     let result = db.ping().await;
 
     assert!(matches!(result, Err(StoreError::Backend(_))), "{result:?}");
+}
+
+// --- The commit count (P11.5; ADR-0020, R8) -------------------------------------
+
+/// A write transaction that changes nothing, committed with a test entry.
+async fn commit_one(db: &Database) {
+    let tx = db.write().await.unwrap();
+    tx.commit(NewAuditEntry::new(
+        at(1_800_000_000_000),
+        AuditAction::try_from("test.commit_count").unwrap(),
+        AuditOutcome::Success,
+    ))
+    .await
+    .unwrap();
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_audited_commit_bumps_the_commit_count(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = connect(options).await;
+    let mut commits = db.commits();
+    let before = *commits.borrow_and_update();
+
+    commit_one(&db).await;
+    commit_one(&db).await;
+
+    assert!(commits.has_changed().unwrap());
+    assert_eq!(*commits.borrow_and_update(), before + 2);
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_unaudited_commit_bumps_it_too(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
+    let db = connect(options).await;
+    let before = *db.commits().borrow();
+
+    let tx = db.write().await.unwrap();
+    tx.commit_unaudited(UnauditedWrite::SessionTouch)
+        .await
+        .unwrap();
+
+    assert_eq!(*db.commits().borrow(), before + 1);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_transaction_dropped_without_a_commit_leaves_it(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = connect(options).await;
+    let mut commits = db.commits();
+    let before = *commits.borrow_and_update();
+
+    drop(db.write().await.unwrap());
+
+    assert!(!commits.has_changed().unwrap());
+    assert_eq!(*db.commits().borrow(), before);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_commit_dropped_midway_moves_the_count_at_once_and_again_once_its_connection_is_back(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = connect(options).await;
+    let mut commits = db.commits();
+    let before = *commits.borrow_and_update();
+    let tx = db.write().await.unwrap();
+    let mut commit = tx.commit(NewAuditEntry::new(
+        at(1_800_000_000_000),
+        AuditAction::try_from("test.commit_count").unwrap(),
+        AuditOutcome::Success,
+    ));
+
+    // One poll sends its first statement; dropping it then is what a request
+    // timeout or a client gone does to a handler awaiting its commit.
+    let first = std::future::poll_fn(|cx| core::task::Poll::Ready(commit.as_mut().poll(cx))).await;
+    assert!(first.is_pending());
+    drop(commit);
+    let at_once = *commits.borrow_and_update();
+    tokio::time::timeout(Duration::from_secs(5), commits.changed())
+        .await
+        .expect("a second move once the connection is back")
+        .unwrap();
+
+    assert_eq!(at_once, before + 1);
+    assert!(*commits.borrow() >= before + 2);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_commit_that_fails_moves_the_count(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = connect(options).await;
+    let before = *db.commits().borrow();
+    let tx = db.write().await.unwrap();
+
+    // An actor no user row has: the entry's foreign key refuses it.
+    let failed = tx
+        .commit(
+            NewAuditEntry::new(
+                at(1_800_000_000_000),
+                AuditAction::try_from("test.commit_count").unwrap(),
+                AuditOutcome::Success,
+            )
+            .actor(UserId::new_v7(at(1_800_000_000_000), [9; 10]).unwrap()),
+        )
+        .await;
+
+    assert!(failed.is_err(), "{failed:?}");
+    assert!(*db.commits().borrow() > before);
+}
+
+#[sqlx::test(migrations = false)]
+async fn every_clone_of_the_database_shares_one_count(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = connect(options).await;
+    let clone = db.clone();
+    let mut watched = clone.commits();
+    watched.borrow_and_update();
+
+    commit_one(&db).await;
+
+    assert!(watched.has_changed().unwrap());
 }

@@ -285,11 +285,15 @@ pub(super) async fn list_live(
     .collect()
 }
 
-/// The session with this ID, with its user.
-pub(super) async fn find_by_id(
-    conn: &mut SqliteConnection,
+/// The session with this ID, with its user: in a write transaction, or on
+/// the read pool.
+pub(super) async fn find_by_id<'c, E>(
+    executor: E,
     id: SessionId,
-) -> Result<Option<SessionWithUser>, StoreError> {
+) -> Result<Option<SessionWithUser>, StoreError>
+where
+    E: sqlx::SqliteExecutor<'c>,
+{
     let id = id_text(id);
     sqlx::query_as!(
         SessionRow,
@@ -304,7 +308,7 @@ pub(super) async fn find_by_id(
            WHERE s.id = ?"#,
         id
     )
-    .fetch_optional(conn)
+    .fetch_optional(executor)
     .await
     .map_err(store_error)?
     .map(|row| session_from_row(&row))

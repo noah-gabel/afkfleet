@@ -191,6 +191,7 @@ async fn app(db: &Database, docs: ApiDocs) -> Router {
         agents: idle_agents(db),
         bots: idle_bots(db),
         modes: idle_modes(db),
+        events: idle_events(),
     });
     router(state, &http, ids, docs)
         .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))))
@@ -407,6 +408,8 @@ async fn the_document_lists_exactly_the_api_routes(
             ("/api/v1/modes/{id}", "put"),
             ("/api/v1/modes/{id}", "delete"),
             ("/api/v1/modes/{id}/with-commands", "put"),
+            ("/api/v1/events/ticket", "post"),
+            ("/api/v1/events", "get"),
             ("/api/v1/auth/login", "post"),
             ("/api/v1/auth/login/mfa", "post"),
             ("/api/v1/auth/logout", "post"),
@@ -587,5 +590,20 @@ fn idle_modes(db: &fleet_server::infra::sqlite::Database) -> fleet_server::app::
         )),
         Arc::new(fleet_testkit::system::SeededRandom::new(1)),
         Arc::new(db.clone()),
+    )
+}
+
+/// The live events with no ticket held and no socket open (P11.5).
+fn idle_events() -> fleet_server::http::ws::LiveEvents {
+    let clock = Arc::new(fleet_testkit::system::ManualClock::new(
+        chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
+    ));
+    let tokens = fleet_server::infra::crypto::tokens::Sha256Tokens::new(Arc::new(
+        fleet_testkit::system::SeededRandom::new(77),
+    ));
+    fleet_server::http::ws::LiveEvents::new(
+        fleet_server::app::event_tickets::EventTickets::new(clock, Arc::new(tokens)),
+        fleet_server::app::events::EventBus::new(),
+        fleet_server::http::ws::LiveSockets::new(tokio_util::sync::CancellationToken::new()),
     )
 }

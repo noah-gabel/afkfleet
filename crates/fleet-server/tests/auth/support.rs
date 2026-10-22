@@ -27,6 +27,7 @@ use fleet_server::app::auth::TokenService;
 use fleet_server::app::bots::{BotService, ChatWait};
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
 use fleet_server::app::enrollment::EnrollmentTokenService;
+use fleet_server::app::event_tickets::EventTickets;
 use fleet_server::app::events::EventBus;
 use fleet_server::app::health::HealthService;
 use fleet_server::app::invites::InviteService;
@@ -41,6 +42,7 @@ use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::openapi::ApiDocs;
 use fleet_server::http::rate_limit::{RateLimits, TrustedProxies};
 use fleet_server::http::router::{AppState, Services, router};
+use fleet_server::http::ws::{LiveEvents, LiveSockets, SocketTimings};
 use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
 use fleet_server::infra::crypto::passwords::Argon2Passwords;
 use fleet_server::infra::crypto::recovery_codes::Sha256RecoveryCodes;
@@ -65,9 +67,12 @@ use fleet_server::ports::mfa::{MfaReads, MfaWrites};
 use fleet_server::ports::modes::{
     ListedMode, ModeChange, ModeReads, ModeWrites, NewMode, StoredMode, WriteModeError,
 };
+use fleet_server::ports::page::Page;
 use fleet_server::ports::passwords::{HashError, Passwords, VerifyError};
 use fleet_server::ports::reconcile::{Change, Reconcile};
-use fleet_server::ports::sessions::{SessionReads, SessionWrites};
+use fleet_server::ports::sessions::{
+    LiveSince, Session, SessionReads, SessionWithUser, SessionWrites,
+};
 use fleet_server::ports::store::{Store, StoreError, UnauditedWrite, WriteTx};
 use fleet_server::ports::tokens::TokenHash;
 use fleet_server::ports::users::{NewUser, PasswordHash};
@@ -181,6 +186,9 @@ pub(crate) struct Options {
     /// How long a chat line waits for its agent's answer: serve's, unless a
     /// test waits for no answer.
     pub(crate) chat_wait: ChatWait,
+    /// The live events sockets' bounds: serve's, unless a test runs them
+    /// short (P11.5).
+    pub(crate) sockets: SocketTimings,
 }
 
 impl Default for Options {
@@ -193,6 +201,7 @@ impl Default for Options {
             control_plane: false,
             allowlist: CommandAllowlist::default(),
             chat_wait: ChatWait::default(),
+            sockets: SocketTimings::default(),
         }
     }
 }
@@ -240,6 +249,7 @@ pub(crate) struct HookedStore {
     queued: Arc<Mutex<Option<Meanwhile>>>,
     after_commit: Arc<Mutex<Option<Meanwhile>>>,
     lose_mode_update: Arc<Mutex<bool>>,
+    sessions: HookedSessions,
 }
 
 impl HookedStore {
@@ -247,12 +257,60 @@ impl HookedStore {
     /// name.
     fn new(inner: Database, alice: UserId, clock: ManualClock) -> Self {
         Self {
+            sessions: HookedSessions {
+                inner: inner.clone(),
+                fail_find: Arc::default(),
+                hang_find: Arc::default(),
+                hanging: Arc::new(tokio::sync::watch::Sender::new(0)),
+                find_behind_writes: Arc::default(),
+            },
             inner,
             alice,
             clock,
             queued: Arc::default(),
             after_commit: Arc::default(),
             lose_mode_update: Arc::default(),
+        }
+    }
+
+    /// From now on, `SessionReads::find`, a live events socket's check of
+    /// its session, fails as a busy database does; every other read works
+    /// (P11.5).
+    pub(crate) fn fail_socket_checks(&self) {
+        *self.sessions.fail_find.lock().unwrap() = true;
+    }
+
+    /// From now on, `SessionReads::find` never answers, as a database stuck
+    /// behind a long write; every other read works (P11.5).
+    pub(crate) fn hang_socket_checks(&self) {
+        *self.sessions.hang_find.lock().unwrap() = true;
+    }
+
+    /// From now on, `SessionReads::find` first waits for the write
+    /// connection, as a read stuck behind writes: under a stream of commits,
+    /// one has always landed by the time a check ends (P11.5).
+    pub(crate) fn queue_socket_checks_behind_writes(&self) {
+        *self.sessions.find_behind_writes.lock().unwrap() = true;
+    }
+
+    /// Waits, within `bound`, until a `find` hangs.
+    pub(crate) async fn until_a_socket_check_hangs(&self, bound: Duration) {
+        let mut hanging = self.sessions.hanging.subscribe();
+        tokio::time::timeout(bound, hanging.wait_for(|hanging| *hanging > 0))
+            .await
+            .expect("a check hangs in time")
+            .unwrap();
+    }
+
+    /// The token service's store: this one's session reads, with queues of
+    /// its own, so its writes never take a change queued for another
+    /// service's.
+    fn sharing_session_reads(&self) -> Self {
+        Self {
+            queued: Arc::default(),
+            after_commit: Arc::default(),
+            lose_mode_update: Arc::default(),
+            ..self.clone()
         }
     }
 
@@ -576,6 +634,58 @@ impl ModeWrites for LosingTx {
     }
 }
 
+/// The database's session reads, with `find` failing once
+/// [`HookedStore::fail_socket_checks`] asked it to.
+#[derive(Debug, Clone)]
+struct HookedSessions {
+    inner: Database,
+    fail_find: Arc<Mutex<bool>>,
+    hang_find: Arc<Mutex<bool>>,
+    /// How many `find`s hang.
+    hanging: Arc<tokio::sync::watch::Sender<u32>>,
+    /// Each `find` waits for the write connection first.
+    find_behind_writes: Arc<Mutex<bool>>,
+}
+
+#[async_trait]
+impl SessionReads for HookedSessions {
+    async fn find_by_access_hash(
+        &self,
+        hash: &TokenHash,
+    ) -> Result<Option<SessionWithUser>, StoreError> {
+        self.inner.sessions().find_by_access_hash(hash).await
+    }
+
+    async fn refresh_hash_exists(&self, hash: &TokenHash) -> Result<bool, StoreError> {
+        self.inner.sessions().refresh_hash_exists(hash).await
+    }
+
+    async fn find(&self, id: SessionId) -> Result<Option<SessionWithUser>, StoreError> {
+        if *self.fail_find.lock().unwrap() {
+            return Err(StoreError::Busy);
+        }
+        if *self.hang_find.lock().unwrap() {
+            self.hanging.send_modify(|hanging| *hanging += 1);
+            return std::future::pending().await;
+        }
+        let behind_writes = *self.find_behind_writes.lock().unwrap();
+        if behind_writes {
+            // Taken and dropped: rolled back, so it moves no count.
+            drop(self.inner.write().await?);
+        }
+        self.inner.sessions().find(id).await
+    }
+
+    async fn list_live(
+        &self,
+        user: UserId,
+        live: LiveSince,
+        page: Page<SessionId>,
+    ) -> Result<Vec<Session>, StoreError> {
+        self.inner.sessions().list_live(user, live, page).await
+    }
+}
+
 #[async_trait]
 impl Store for HookedStore {
     async fn write(&self) -> Result<Box<dyn WriteTx>, StoreError> {
@@ -606,7 +716,7 @@ impl Store for HookedStore {
     }
 
     fn sessions(&self) -> &dyn SessionReads {
-        self.inner.sessions()
+        &self.sessions
     }
 
     fn login_attempts(&self) -> &dyn LoginAttemptReads {
@@ -660,6 +770,10 @@ impl Store for HookedStore {
     async fn ping(&self) -> Result<(), StoreError> {
         self.inner.ping().await
     }
+
+    fn commits(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.inner.commits()
+    }
 }
 
 /// A user with a live session.
@@ -690,6 +804,9 @@ pub(crate) struct Setup {
     pub(crate) hints: Arc<Hinted>,
     /// The bus a chat send waits on, where a test answers for the agent.
     pub(crate) events: EventBus,
+    /// The live events: their tickets, and the sockets' owner a test shuts
+    /// down (P11.5).
+    pub(crate) live_events: LiveEvents,
 }
 
 /// A reconciler that records the hints it gets, to check which writes send
@@ -761,14 +878,10 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
     let clock = ManualClock::new(at(T0));
     let random = SeededRandom::new(81);
     let token_port = Arc::new(Sha256Tokens::new(Arc::new(random.clone())));
-    let tokens = TokenService::new(
-        Arc::new(clock.clone()),
-        Arc::new(random.clone()),
-        Arc::new(db.clone()),
-        token_port.clone(),
-        SessionPolicy::default(),
-    );
-    let challenges = Challenges::new(Arc::new(clock.clone()), token_port);
+    let alice = UserId::new_v7(at(T0), [1; 10]).unwrap();
+    let hooked = HookedStore::new(db.clone(), alice, clock.clone());
+    let tokens = token_service(&clock, &random, &hooked, &token_port);
+    let challenges = Challenges::new(Arc::new(clock.clone()), token_port.clone());
     let mfa = mfa_service(&db, &clock, &random, &challenges);
     let passwords = Arc::new(TestPasswords {
         real: Argon2Passwords::new(Argon2Params::default(), Arc::new(random.clone()))
@@ -787,8 +900,6 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
             .unwrap(),
     };
     let lockout = lockout_service(&clock, &db);
-    let alice = UserId::new_v7(at(T0), [1; 10]).unwrap();
-    let hooked = HookedStore::new(db.clone(), alice, clock.clone());
     let login = LoginService::new(
         Arc::new(clock.clone()),
         Arc::new(random.clone()),
@@ -813,6 +924,12 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         (&settings.allowlist, settings.chat_wait),
         &hints,
     );
+    let live_events = build_live_events(
+        &clock,
+        token_port,
+        &events,
+        (settings.sockets, settings.limits.ws_connections_per_user),
+    );
     let state = AppState::new(Services {
         health: HealthService::new(Arc::new(db.clone())),
         tokens: tokens.clone(),
@@ -828,6 +945,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         agents,
         bots,
         modes: mode_service(&clock, &random, &hooked, &settings.allowlist, &hints),
+        events: live_events.clone(),
     });
     let app = app(state, &clock);
     insert_alice(&db, alice, alice_hash).await;
@@ -846,7 +964,42 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         registry,
         hints,
         events,
+        live_events,
     }
+}
+
+/// The token service, reading sessions through `hooked`'s switches, with
+/// write queues of its own.
+fn token_service(
+    clock: &ManualClock,
+    random: &SeededRandom,
+    hooked: &HookedStore,
+    tokens: &Arc<Sha256Tokens>,
+) -> TokenService {
+    TokenService::new(
+        Arc::new(clock.clone()),
+        Arc::new(random.clone()),
+        Arc::new(hooked.sharing_session_reads()),
+        tokens.clone(),
+        SessionPolicy::default(),
+    )
+}
+
+/// The live events as serve builds them: tickets on `clock`, as many a user
+/// as their sockets, the bus chat waits on, and an owner of their own, with
+/// `timings`.
+fn build_live_events(
+    clock: &ManualClock,
+    tokens: Arc<Sha256Tokens>,
+    bus: &EventBus,
+    (timings, per_user): (SocketTimings, core::num::NonZeroU32),
+) -> LiveEvents {
+    LiveEvents::new(
+        EventTickets::new(Arc::new(clock.clone()), tokens).with_per_user(per_user),
+        bus.clone(),
+        LiveSockets::new(tokio_util::sync::CancellationToken::new()),
+    )
+    .with_timings(timings)
 }
 
 /// The lockout service over `db`, with a fixed attempt key.

@@ -12,6 +12,15 @@
 //!   the app), and the password step's mfa or setup token only in its
 //!   memory. Methods take codes, never tokens, and nothing the client
 //!   returns, logs or formats holds one.
+//!   *One exception, for the dev console alone* (ADR-0020, U15, R16): with
+//!   the non-default `dev-console` feature, `Client::events_handshake`
+//!   hands the live events socket's handshake, the session's access token
+//!   as its `Authorization` value, to `just dev-bots`' `events`. Only that
+//!   example and this crate's tests enable it, through the crate's
+//!   dev-dependency on itself; the desktop app's build never has it, so it
+//!   can't call it, and `just tauri-check` fails if it ever does. P11.8
+//!   opens the socket inside the client, and removes the feature and this
+//!   exception.
 //! - **One refresh at a time, and only on a 401 `unauthorized` from an
 //!   authenticated route** (ADR-0016). A request whose token a refresh
 //!   already replaced is retried once with the current one instead. An
@@ -42,6 +51,7 @@ use core::time::Duration;
 
 pub mod client;
 pub mod error;
+pub mod events;
 pub mod link;
 pub mod store;
 pub mod trust;

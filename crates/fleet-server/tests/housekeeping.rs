@@ -19,13 +19,14 @@ use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::auth::LockoutPolicy;
 use fleet_core::authz::Role;
 use fleet_core::bot::{BotSnapshot, BotState};
-use fleet_core::id::{AgentId, BotId, LoginStepId, RequestId, UserId};
+use fleet_core::id::{AgentId, BotId, LoginStepId, RequestId, SessionId, UserId};
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock as _;
 use fleet_core::value::AgentName;
 use fleet_core::value::Username;
 use fleet_proto::control::{AgentMessage, SessionRequest, SessionRequestId};
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
+use fleet_server::app::event_tickets::EventTickets;
 use fleet_server::app::link_flows::LinkFlows;
 use fleet_server::app::lockout::LockoutService;
 use fleet_server::cli::housekeeping::Housekeeping;
@@ -76,6 +77,7 @@ struct Setup {
     limits: RateLimits,
     lockout: LockoutService,
     challenges: Challenges,
+    event_tickets: EventTickets,
     clock: ManualClock,
     db: Database,
 }
@@ -101,6 +103,7 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
             fresh_sessions: one,
             chat_per_bot: fleet_core::chat::ChatRate::try_new(60, 1).unwrap(),
             chat_per_user: one,
+            ws_connections_per_user: NonZeroU32::MIN,
         },
         Arc::new(clock.clone()),
     );
@@ -114,12 +117,17 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
         Arc::new(clock.clone()),
         Arc::new(Sha256Tokens::new(Arc::new(SeededRandom::new(3)))),
     );
+    let event_tickets = EventTickets::new(
+        Arc::new(clock.clone()),
+        Arc::new(Sha256Tokens::new(Arc::new(SeededRandom::new(4)))),
+    );
     let registry = AgentRegistry::new(Arc::new(clock.clone()));
     Setup {
         housekeeping: Housekeeping::new(
             limits.clone(),
             lockout.clone(),
             challenges.clone(),
+            event_tickets.clone(),
             LinkFlows::new(Arc::new(clock.clone())),
             registry.clone(),
         ),
@@ -127,6 +135,7 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
         limits,
         lockout,
         challenges,
+        event_tickets,
         clock,
         db,
     }
@@ -357,6 +366,29 @@ async fn a_run_drops_the_expired_challenges_and_keeps_the_live_ones(
     setup.clock.advance(Duration::from_mins(5));
     setup.run_once().await;
     assert_eq!(setup.challenges.held(), 1, "the first setup token is over");
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_run_drops_the_expired_event_tickets_and_keeps_the_live_ones(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let user = challenge_user(1).id;
+    let session =
+        SessionId::new_v7(Utc.with_ymd_and_hms(2027, 1, 1, 0, 0, 0).unwrap(), [1; 10]).unwrap();
+    setup.event_tickets.issue(user, session).unwrap();
+    setup.clock.advance(Duration::from_secs(20));
+    setup.event_tickets.issue(user, session).unwrap();
+    setup.clock.advance(Duration::from_secs(10));
+
+    setup.run_once().await;
+
+    assert_eq!(
+        setup.event_tickets.held(),
+        1,
+        "the first ticket is 30 s old, the second 10 s"
+    );
 }
 
 #[sqlx::test(migrations = false)]

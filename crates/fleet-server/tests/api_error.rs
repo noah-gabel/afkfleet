@@ -145,6 +145,9 @@ fn test_request_id() -> HeaderValue {
 #[case::mode_changed("mode_changed", || ApiError::ModeChanged)]
 #[case::mode_in_use_by_others("mode_in_use_by_others", || ApiError::ModeInUseByOthers)]
 #[case::mode_in_use("mode_in_use", || ApiError::ModeInUse)]
+#[case::too_many_connections("too_many_connections", || ApiError::TooManyConnections {
+    retry_after: Duration::from_secs(45),
+})]
 #[tokio::test]
 async fn every_variant_answers_with_its_status_headers_and_envelope(
     #[case] code: &str,
@@ -183,6 +186,7 @@ async fn every_variant_answers_with_its_status_headers_and_envelope(
 #[case(ErrorCode::ModeChanged, StatusCode::CONFLICT)]
 #[case(ErrorCode::ModeInUseByOthers, StatusCode::CONFLICT)]
 #[case(ErrorCode::ModeInUse, StatusCode::CONFLICT)]
+#[case(ErrorCode::TooManyConnections, StatusCode::TOO_MANY_REQUESTS)]
 fn every_code_has_its_status(#[case] code: ErrorCode, #[case] expected: StatusCode) {
     assert_eq!(status(code), expected);
 }
@@ -205,7 +209,7 @@ async fn every_401_carries_the_bearer_challenge_and_no_other_status_does() {
 }
 
 /// One constructor per code, in `ErrorCode::ALL`'s order.
-const MAKERS: [fn() -> ApiError; 26] = [
+const MAKERS: [fn() -> ApiError; 27] = [
     || ApiError::BadRequest,
     || ApiError::Unauthorized,
     || ApiError::InvalidCredentials,
@@ -234,6 +238,9 @@ const MAKERS: [fn() -> ApiError; 26] = [
     || ApiError::ModeChanged,
     || ApiError::ModeInUseByOthers,
     || ApiError::ModeInUse,
+    || ApiError::TooManyConnections {
+        retry_after: Duration::from_secs(45),
+    },
 ];
 
 #[rstest]

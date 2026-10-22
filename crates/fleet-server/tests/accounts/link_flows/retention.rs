@@ -8,6 +8,7 @@ use fleet_core::auth::LockoutPolicy;
 use fleet_core::authz::Role;
 use fleet_core::system::Clock;
 use fleet_server::app::challenges::Challenges;
+use fleet_server::app::event_tickets::EventTickets;
 use fleet_server::app::link_flows::{FINISHED_RETENTION, LinkFlowStatus};
 use fleet_server::app::lockout::LockoutService;
 use fleet_server::cli::housekeeping::Housekeeping;
@@ -103,6 +104,10 @@ async fn each_housekeeping_run_drops_the_finished_flows(
         Challenges::new(
             Arc::clone(&clock),
             Arc::new(Sha256Tokens::new(Arc::new(SeededRandom::new(5)))),
+        ),
+        EventTickets::new(
+            Arc::clone(&clock),
+            Arc::new(Sha256Tokens::new(Arc::new(SeededRandom::new(6)))),
         ),
         setup.service.flows(),
         AgentRegistry::new(Arc::clone(&clock)),

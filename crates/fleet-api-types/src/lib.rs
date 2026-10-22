@@ -42,6 +42,8 @@
 //!   sets.
 //! - [`chat`]: a line a user sends a bot, and the server's answer.
 //! - [`error`]: the error envelope that every failed request answers with.
+//! - [`events`]: the live events socket: its ticket, its frames and how a
+//!   client reads them, and why the server closes it.
 //! - [`ids`]: fleet-core's typed IDs in DTOs, re-exported, and their schema.
 //! - [`int`]: the 64-bit integer type, [`SafeInt`], and the schema of a
 //!   bounded 32-bit field.
@@ -67,6 +69,7 @@ pub mod auth;
 pub mod bots;
 pub mod chat;
 pub mod error;
+pub mod events;
 pub mod ids;
 pub mod int;
 pub mod invites;

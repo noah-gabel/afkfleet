@@ -16,6 +16,8 @@
 //! - [`router`]: the server's routes behind that stack (P6.7 on).
 //! - [`routes`]: the route registry, the only way a route gets into the
 //!   router: public or authed, each with its rate-limit class (P7.11).
+//! - [`ws`]: the live events socket's transport: its bounds, the owner of
+//!   its tasks, and what it takes from its client (P11.5).
 //! - `handlers`: one module per resource, starting with the health checks
 //!   (P6.7); the other handlers arrive with the endpoints from P7 on.
 
@@ -27,3 +29,4 @@ pub mod openapi;
 pub mod rate_limit;
 pub mod router;
 pub mod routes;
+pub mod ws;

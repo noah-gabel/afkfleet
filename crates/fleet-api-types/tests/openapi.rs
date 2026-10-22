@@ -45,6 +45,9 @@ use fleet_api_types::chat::{
 use fleet_api_types::error::{
     FIELD_MESSAGE_MAX_CHARS, FIELD_PATH_MAX_CHARS, MESSAGE_MAX_CHARS, REQUEST_ID_MAX_CHARS,
 };
+use fleet_api_types::events::{
+    EVENT_TICKET_MAX_SECS, EventMessage, EventMessageKind, EventTicketResponse,
+};
 use fleet_api_types::ids::ID_CHARS;
 use fleet_api_types::invites::{
     CreateInviteRequest, CreatedInviteResponse, InvitePage, InviteResponse, InviteState,
@@ -178,8 +181,18 @@ fn declarations() -> BTreeMap<String, String> {
     ]
     .into_iter()
     .chain(mode_declarations(&config))
+    .chain(event_declarations(&config))
     .map(|(name, declaration)| (name.to_owned(), declaration))
     .collect()
+}
+
+/// ts-rs's declaration of every live events type (ADR-0020, S36).
+fn event_declarations(config: &Config) -> [(&'static str, String); 3] {
+    [
+        ("EventMessage", EventMessage::decl(config)),
+        ("EventMessageKind", EventMessageKind::decl(config)),
+        ("EventTicketResponse", EventTicketResponse::decl(config)),
+    ]
 }
 
 /// ts-rs's declaration of every mode type (ADR-0020, S12).
@@ -413,6 +426,7 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::totp_secret("MfaEnrollResponse", "secret", TOTP_SECRET_MAX_CHARS)]
 #[case::confirm_code("MfaConfirmRequest", "code", CODE_MAX_CHARS)]
 #[case::setup_token("MfaResetResponse", "setup_token", TOKEN_MAX_CHARS)]
+#[case::event_ticket("EventTicketResponse", "ticket", TOKEN_MAX_CHARS)]
 #[case::login_username("LoginRequest", "username", USERNAME_MAX_CHARS)]
 #[case::login_password("LoginRequest", "password", PASSWORD_MAX_CHARS)]
 #[case::login_token("LoginResponse", "token", TOKEN_MAX_CHARS)]
@@ -529,7 +543,7 @@ fn a_text_field_is_capped_at_its_constant(
 }
 
 /// Every text field whose cap the cases above check.
-const CHECKED_TEXTS: [(&str, &str); 107] = [
+const CHECKED_TEXTS: [(&str, &str); 108] = [
     ("ErrorBody", "message"),
     ("ErrorBody", "request_id"),
     ("FieldError", "path"),
@@ -539,6 +553,7 @@ const CHECKED_TEXTS: [(&str, &str); 107] = [
     ("MfaEnrollResponse", "secret"),
     ("MfaConfirmRequest", "code"),
     ("MfaResetResponse", "setup_token"),
+    ("EventTicketResponse", "ticket"),
     ("LoginRequest", "username"),
     ("LoginRequest", "password"),
     ("LoginResponse", "token"),
@@ -721,6 +736,7 @@ fn seconds_left_are_an_integer_with_their_range() {
 #[case::login("LoginResponse", "expires_in", SETUP_TOKEN_MAX_SECS)]
 #[case::access("TokenResponse", "access_expires_in", ACCESS_TOKEN_MAX_SECS)]
 #[case::refresh("TokenResponse", "refresh_expires_in", REFRESH_TOKEN_MAX_SECS)]
+#[case::event_ticket("EventTicketResponse", "expires_in", EVENT_TICKET_MAX_SECS)]
 fn every_lifetime_is_an_integer_with_its_range(
     #[case] component: &str,
     #[case] field: &str,
@@ -878,6 +894,7 @@ fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[ca
 #[case::mode_ownership("ModeResponse", "ownership", "ModeOwnership")]
 #[case::mode_action_kind("ModeAction", "type", "ModeActionKind")]
 #[case::mode_schedule_kind("ModeSchedule", "type", "ModeScheduleKind")]
+#[case::event_kind("EventMessage", "type", "EventMessageKind")]
 fn the_new_open_fields_list_exactly_their_known_values(
     #[case] component: &str,
     #[case] field: &str,
@@ -917,6 +934,7 @@ fn the_new_open_fields_list_exactly_their_known_values(
         "ModeOwnership" => names(ModeOwnership::ALL),
         "ModeActionKind" => names(ModeActionKind::ALL),
         "ModeScheduleKind" => names(ModeScheduleKind::ALL),
+        "EventMessageKind" => names(EventMessageKind::ALL),
         _ => InviteState::ALL
             .iter()
             .map(|state| state.as_str())
