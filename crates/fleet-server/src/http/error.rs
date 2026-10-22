@@ -192,6 +192,15 @@ pub enum ApiError {
     /// A delete of a mode a bot uses (409; ADR-0020, S17).
     #[error("a bot uses the mode")]
     ModeInUse,
+    /// The user holds as many live events sockets open as
+    /// `[rate_limits] ws_connections_per_user` allows (429; ADR-0020, S35):
+    /// the client may try again after `retry_after`, the longest one of
+    /// their dead sockets can hold its place.
+    #[error("too many live events sockets")]
+    TooManyConnections {
+        /// When the client may try again; sent in whole seconds, rounded up.
+        retry_after: Duration,
+    },
 }
 
 impl ApiError {
@@ -240,6 +249,7 @@ impl ApiError {
             Self::ModeChanged => ErrorCode::ModeChanged,
             Self::ModeInUseByOthers => ErrorCode::ModeInUseByOthers,
             Self::ModeInUse => ErrorCode::ModeInUse,
+            Self::TooManyConnections { .. } => ErrorCode::TooManyConnections,
         }
     }
 
@@ -276,7 +286,7 @@ pub const fn status(code: ErrorCode) -> StatusCode {
         ErrorCode::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
         ErrorCode::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         ErrorCode::ValidationFailed => StatusCode::UNPROCESSABLE_ENTITY,
-        ErrorCode::RateLimited => StatusCode::TOO_MANY_REQUESTS,
+        ErrorCode::RateLimited | ErrorCode::TooManyConnections => StatusCode::TOO_MANY_REQUESTS,
         ErrorCode::Internal => StatusCode::INTERNAL_SERVER_ERROR,
         ErrorCode::Busy => StatusCode::SERVICE_UNAVAILABLE,
     }
@@ -395,7 +405,9 @@ impl ApiError {
             headers.insert(WWW_AUTHENTICATE, BEARER);
         }
         let (fields, source) = match self {
-            Self::RateLimited { retry_after } | Self::Busy { retry_after } => {
+            Self::RateLimited { retry_after }
+            | Self::Busy { retry_after }
+            | Self::TooManyConnections { retry_after } => {
                 headers.insert(RETRY_AFTER, retry_after_seconds(retry_after));
                 (None, None)
             }
@@ -717,6 +729,7 @@ mod tests {
             | ErrorCode::ModeChanged
             | ErrorCode::ModeInUseByOthers
             | ErrorCode::ModeInUse => ErrorCode::Conflict,
+            ErrorCode::TooManyConnections => ErrorCode::RateLimited,
             other => other,
         }
     }

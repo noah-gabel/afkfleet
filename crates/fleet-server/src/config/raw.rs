@@ -256,6 +256,8 @@ pub(crate) struct RawRateLimits {
     pub(crate) chat_per_bot_burst: u32,
     #[garde(range(min = RateLimitConfig::CHAT_PER_USER_PER_MIN.min, max = RateLimitConfig::CHAT_PER_USER_PER_MIN.max))]
     pub(crate) chat_per_user_per_min: u32,
+    #[garde(range(min = RateLimitConfig::WS_CONNECTIONS_PER_USER.min, max = RateLimitConfig::WS_CONNECTIONS_PER_USER.max))]
+    pub(crate) ws_connections_per_user: u32,
 }
 
 impl Default for RawRateLimits {
@@ -278,6 +280,7 @@ impl Default for RawRateLimits {
             chat_per_bot_interval_secs: 3,
             chat_per_bot_burst: 3,
             chat_per_user_per_min: 20,
+            ws_connections_per_user: 3,
         }
     }
 }
@@ -648,6 +651,7 @@ mod secret_names {
             "rate_limits.chat_per_bot_interval_secs",
             "rate_limits.chat_per_bot_burst",
             "rate_limits.chat_per_user_per_min",
+            "rate_limits.ws_connections_per_user",
             "accounts",
             "accounts.max_per_member",
             "accounts.allow_offline",

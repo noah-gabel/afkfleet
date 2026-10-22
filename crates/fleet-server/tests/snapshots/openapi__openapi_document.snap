@@ -816,7 +816,8 @@ expression: answer.json()
           "mode_needs_step_up",
           "mode_changed",
           "mode_in_use_by_others",
-          "mode_in_use"
+          "mode_in_use",
+          "too_many_connections"
         ],
         "type": "string"
       },

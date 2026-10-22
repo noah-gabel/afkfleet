@@ -105,6 +105,9 @@ pub enum ErrorCode {
     /// A delete of a mode a bot uses: switch every bot to another mode
     /// first (409).
     ModeInUse,
+    /// The user holds as many live events sockets open as the server allows:
+    /// try again after `Retry-After` (429; ADR-0020, S35).
+    TooManyConnections,
 }
 
 impl ErrorCode {
@@ -153,6 +156,9 @@ impl ErrorCode {
             Self::ModeInUse => {
                 "A bot uses this mode, so it can't be deleted. Switch every bot to another mode first."
             }
+            Self::TooManyConnections => {
+                "Live updates are already open in too many places. Close the app somewhere else, or try again in a minute."
+            }
         }
     }
 }
@@ -185,6 +191,7 @@ impl OpenEnum for ErrorCode {
         Self::ModeChanged,
         Self::ModeInUseByOthers,
         Self::ModeInUse,
+        Self::TooManyConnections,
     ];
 
     fn as_str(self) -> &'static str {
@@ -215,6 +222,7 @@ impl OpenEnum for ErrorCode {
             Self::ModeChanged => "mode_changed",
             Self::ModeInUseByOthers => "mode_in_use_by_others",
             Self::ModeInUse => "mode_in_use",
+            Self::TooManyConnections => "too_many_connections",
         }
     }
 }
@@ -327,10 +335,11 @@ mod tests {
             ErrorCode::ModeChanged => 23,
             ErrorCode::ModeInUseByOthers => 24,
             ErrorCode::ModeInUse => 25,
+            ErrorCode::TooManyConnections => 26,
         }
     }
 
-    const CODES: usize = 26;
+    const CODES: usize = 27;
 
     #[test]
     fn all_lists_every_code_exactly_once() {
@@ -462,6 +471,11 @@ mod tests {
         ErrorCode::ModeInUse,
         "mode_in_use",
         "A bot uses this mode, so it can't be deleted. Switch every bot to another mode first."
+    )]
+    #[case(
+        ErrorCode::TooManyConnections,
+        "too_many_connections",
+        "Live updates are already open in too many places. Close the app somewhere else, or try again in a minute."
     )]
     fn every_code_has_its_name_and_fixed_message(
         #[case] code: ErrorCode,

@@ -85,6 +85,11 @@ clap = "4.6.7"
 # exist; fleet-startup enables `toml` and `env`, and fleet-testkit `test` (`Jail`) for
 # every config test (ADR-0014, ADR-0015).
 figment = "0.10.19"
+# futures-util: `SinkExt`, for the WebSocket clients in fleet-server's tests and fleet-client's
+# console, which send frames through tokio-tungstenite's `Sink`. Without default features;
+# members enable `sink` only. Already in Cargo.lock through axum, tower and sqlx (P11.5,
+# ADR-0020, U11).
+futures-util = { version = "0.3.34", default-features = false }
 # garde: range checks on the agent's config, and the rules of fleet-api-types' request
 # DTOs. No default features exist; the members enable `derive` (ADR-0014, ADR-0016).
 garde = "0.23.0"
@@ -208,6 +213,11 @@ tokio = "1.53.2"
 # bounded queue, and maps the listener's accepted sockets with `StreamExt`. Without default
 # features (`time`): neither needs one. Already in Cargo.lock through tonic and sqlx (ADR-0019).
 tokio-stream = { version = "0.1.19", default-features = false }
+# tokio-tungstenite: the WebSocket client of fleet-server's tests and fleet-client's console,
+# over plain ws:// to 127.0.0.1. Without default features; members enable `connect` only, no
+# TLS (G decides fleet-client's). 0.29.0, the one axum 0.8.9's `ws` pins, so one tungstenite is
+# built (P11.5, ADR-0020, U11).
+tokio-tungstenite = { version = "0.29.0", default-features = false }
 # tokio-util: fleet-runtime enables no features; it uses only `CancellationToken` (ADR-0013).
 # fleet-server enables `rt` for the session-token service's `TaskTracker`, which pulls in only
 # futures-util, already in its tree (ADR-0018).

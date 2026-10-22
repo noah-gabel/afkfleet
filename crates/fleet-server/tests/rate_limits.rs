@@ -100,6 +100,7 @@ fn loose() -> RateLimitConfig {
         fresh_sessions: loose,
         chat_per_bot: fleet_core::chat::ChatRate::default(),
         chat_per_user: loose,
+        ws_connections_per_user: NonZeroU32::MAX,
     }
 }
 

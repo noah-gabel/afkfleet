@@ -103,6 +103,7 @@ async fn setup(options: SqliteConnectOptions) -> Setup {
             fresh_sessions: one,
             chat_per_bot: fleet_core::chat::ChatRate::try_new(60, 1).unwrap(),
             chat_per_user: one,
+            ws_connections_per_user: NonZeroU32::MIN,
         },
         Arc::new(clock.clone()),
     );

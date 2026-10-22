@@ -120,6 +120,7 @@ impl Housekeeping {
                 fresh_sessions = limits.fresh_sessions,
                 chat_per_user = limits.chat_per_user,
                 chat_per_bot = limits.chat_per_bot,
+                ws_connections = limits.ws_connections,
                 locked = lockout.locked,
                 in_flight = lockout.in_flight,
                 "requests were refused since the last report"

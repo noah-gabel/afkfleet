@@ -26,9 +26,10 @@ chacha20poly1305 = { workspace = true, features = ["alloc", "zeroize"] }
 # The HTTP layer: `matched-path`, so the trace layer logs the route's template, never
 # the path a client sent; `tokio` and `http1` for `axum::serve` (Caddy speaks HTTP/1.1 to
 # it); `json` for the request bodies and `query` for the lists' query strings, whose
-# rejections the server maps itself. The error body is written with serde_json (ADR-0015,
-# ADR-0016).
-axum = { workspace = true, features = ["http1", "json", "matched-path", "query", "tokio"] }
+# rejections the server maps itself; `ws` for the live events socket (P11.5, ADR-0020, U11),
+# which brings tokio-tungstenite and tungstenite 0.29.0. The error body is written with
+# serde_json (ADR-0015, ADR-0016).
+axum = { workspace = true, features = ["http1", "json", "matched-path", "query", "tokio", "ws"] }
 # `TypedHeader<Authorization<Bearer>>` for AuthUser (ADR-0016).
 axum-extra = { workspace = true, features = ["typed-header"] }
 # SystemClock's one wall-clock read (ADR-0015).
@@ -124,6 +125,8 @@ zxcvbn.workspace = true
 # `figment::Jail`, the type `in_jail` hands each config test (ADR-0015).
 figment = { workspace = true, features = ["test"] }
 fleet-testkit.workspace = true
+# `SinkExt`, for the live events tests' client to send frames (P11.5, ADR-0020, U11).
+futures-util = { workspace = true, features = ["sink"] }
 # `rt::TokioIo`, which hands tonic's client an in-memory pipe in the control plane's
 # paused-time test (U6, ADR-0019).
 hyper-util = { workspace = true, features = ["tokio"] }
@@ -140,6 +143,8 @@ tempfile.workspace = true
 tonic = { workspace = true, features = ["channel", "tls-aws-lc"] }
 # `test-util`: the request timeout's test runs on paused time (ADR-0015).
 tokio = { workspace = true, features = ["macros", "rt", "test-util"] }
+# The live events tests' WebSocket client, plain ws:// to 127.0.0.1 (P11.5, ADR-0020, U11).
+tokio-tungstenite = { workspace = true, features = ["connect"] }
 # `ServiceExt::oneshot`, for requests through a router in tests (ADR-0015).
 tower = { workspace = true, features = ["util"] }
 # A scoped subscriber around fleet-startup's layer, for the dev-mode warning's

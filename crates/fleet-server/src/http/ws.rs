@@ -1,0 +1,488 @@
+//! The live events socket's transport (Plan.md P11.5; ADR-0020, S35, R9,
+//! R19–R21): its bounds, the owner of every socket's task, and the rules a
+//! socket follows for what its client sends and when it says `resync`.
+//!
+//! - **The bounds** ([`SocketTimings`], U13): a ping every 15 s, and a close
+//!   (4000) once 45 s pass without a pong; each send within 10 s, or the
+//!   socket closes (4002); one `resync` at most every 5 s; 1 s for the close
+//!   frame at shutdown. The client's frames hold at most
+//!   [`MAX_CLIENT_FRAME`] bytes and are read through a [`READ_BUFFER`]; what
+//!   the server writes goes out one frame at a time, with at most
+//!   [`MAX_WRITE_BUFFER`] bytes buffered.
+//! - **What a client may send** ([`classify`]): a pong that answers one of
+//!   the server's pings ([`Pings`]: at most [`PONG_CREDITS`] outstanding),
+//!   and a close. Anything else (text, binary, a ping, a pong nobody asked
+//!   for, a frame too large, a protocol error) is refused with 1008; a lost
+//!   connection is told apart by an `io::Error` among the error's sources.
+//! - **`resync`** ([`ResyncGate`]): a socket that lagged behind the bus
+//!   says so once, without a count, and never more often than one gap; a
+//!   lag within the gap waits for its end, so no lost event goes unsaid.
+//! - **The owner** ([`LiveSockets`], R21): a tracker token is taken before
+//!   the upgrade, and the socket's task runs on the tracker, so every socket
+//!   has an owner of ours; at shutdown each one sends 1001 and serve waits
+//!   for them, within its drain, before the database closes.
+
+use core::time::Duration;
+use std::io;
+
+use axum::extract::ws::Message;
+use axum::extract::ws::rejection::WebSocketUpgradeRejection;
+use tokio::time::Instant;
+use tokio_util::sync::CancellationToken;
+use tokio_util::task::TaskTracker;
+use tokio_util::task::task_tracker::TaskTrackerToken;
+
+use crate::http::error::ApiError;
+
+/// How often the server pings an open socket.
+pub const PING_INTERVAL: Duration = Duration::from_secs(15);
+
+/// How long a socket stays open without a pong.
+pub const IDLE_TIMEOUT: Duration = Duration::from_secs(45);
+
+/// How long one frame may take to go out before the socket closes as too
+/// slow.
+pub const SEND_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long a closing socket gives its close frame, at shutdown.
+pub const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
+
+/// The shortest gap between two `resync`s of one socket.
+pub const RESYNC_GAP: Duration = Duration::from_secs(5);
+
+/// How many of the server's pings may wait for a pong.
+pub const PONG_CREDITS: u8 = 3;
+
+/// The most bytes of one frame, and of one message, a client may send: a
+/// control frame's payload is at most 125 bytes anyway.
+pub const MAX_CLIENT_FRAME: usize = 125;
+
+/// The read buffer of each socket, in bytes.
+pub const READ_BUFFER: usize = 4096;
+
+/// The most bytes a socket buffers for its client before a send waits.
+pub const MAX_WRITE_BUFFER: usize = 128 * 1024;
+
+/// A socket's timings; tests replace them with short ones.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SocketTimings {
+    /// How often the server pings ([`PING_INTERVAL`]).
+    pub ping_interval: Duration,
+    /// How long without a pong ([`IDLE_TIMEOUT`]).
+    pub idle_timeout: Duration,
+    /// How long one send may take ([`SEND_TIMEOUT`]).
+    pub send_timeout: Duration,
+    /// How long the close frame may take ([`CLOSE_TIMEOUT`]).
+    pub close_timeout: Duration,
+    /// The gap between two `resync`s ([`RESYNC_GAP`]).
+    pub resync_gap: Duration,
+}
+
+impl Default for SocketTimings {
+    /// The constants above.
+    fn default() -> Self {
+        Self {
+            ping_interval: PING_INTERVAL,
+            idle_timeout: IDLE_TIMEOUT,
+            send_timeout: SEND_TIMEOUT,
+            close_timeout: CLOSE_TIMEOUT,
+            resync_gap: RESYNC_GAP,
+        }
+    }
+}
+
+/// The owner of every live events socket's task: each watches the stop
+/// token, and [`shutdown`](Self::shutdown) closes them all and waits for
+/// them. Clones share them.
+#[derive(Debug, Clone)]
+pub struct LiveSockets {
+    tasks: TaskTracker,
+    stop: CancellationToken,
+}
+
+impl LiveSockets {
+    /// The owner of sockets that close when `stop` is cancelled.
+    #[must_use]
+    pub fn new(stop: CancellationToken) -> Self {
+        Self {
+            tasks: TaskTracker::new(),
+            stop,
+        }
+    }
+
+    /// A token counted as one socket until it's dropped: taken before the
+    /// upgrade, so the gap between the answer and the socket's task counts
+    /// too.
+    pub fn token(&self) -> TaskTrackerToken {
+        self.tasks.token()
+    }
+
+    /// Runs `socket` on the tracker.
+    pub fn spawn<F>(&self, socket: F)
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        drop(self.tasks.spawn(socket));
+    }
+
+    /// The token every socket watches: cancelled at shutdown.
+    #[must_use]
+    pub fn stop(&self) -> CancellationToken {
+        self.stop.clone()
+    }
+
+    /// How many sockets, or upgrades about to be one, are open.
+    #[must_use]
+    pub fn open(&self) -> usize {
+        self.tasks.len()
+    }
+
+    /// Closes every socket and waits until each has ended. The caller bounds
+    /// the wait (serve's drain).
+    pub async fn shutdown(&self) {
+        self.stop.cancel();
+        self.tasks.close();
+        self.tasks.wait().await;
+    }
+}
+
+/// The answer to a request the upgrade refused: 405 for a method that isn't
+/// `GET` (a `HEAD`, which `get` routes serve too), 400 for anything else: a
+/// request that isn't an upgrade, a missing key, a version other than 13, a
+/// connection that can't be upgraded. Never the bare status axum would
+/// answer, which `render_errors` takes for a wiring bug.
+#[must_use]
+pub fn refused_upgrade(rejection: &WebSocketUpgradeRejection) -> ApiError {
+    match rejection {
+        WebSocketUpgradeRejection::MethodNotGet(_) => ApiError::MethodNotAllowed,
+        // A non-exhaustive enum of axum's: every other refusal is the
+        // request's.
+        _ => ApiError::BadRequest,
+    }
+}
+
+/// What a client's frame is to the socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Inbound {
+    /// A pong: it must answer a ping.
+    Pong,
+    /// The client closes.
+    Close,
+    /// Anything the server doesn't take: closed with 1008.
+    Refused,
+    /// The connection is gone: nothing more can be sent.
+    Lost,
+}
+
+/// What `received`, the socket's next read, is to the socket; `None` is a
+/// connection that ended.
+#[must_use]
+pub fn classify(received: Option<Result<Message, axum::Error>>) -> Inbound {
+    match received {
+        None => Inbound::Lost,
+        Some(Err(error)) if from_io(&error) => Inbound::Lost,
+        Some(Ok(Message::Pong(_))) => Inbound::Pong,
+        Some(Ok(Message::Close(_))) => Inbound::Close,
+        Some(Ok(Message::Text(_) | Message::Binary(_) | Message::Ping(_)) | Err(_)) => {
+            Inbound::Refused
+        }
+    }
+}
+
+/// Whether `error`, or one of its sources, is an I/O error: the connection
+/// failed, rather than the client breaking the protocol.
+fn from_io(error: &(dyn std::error::Error + 'static)) -> bool {
+    let mut current = Some(error);
+    while let Some(error) = current {
+        if error.is::<io::Error>() {
+            return true;
+        }
+        current = error.source();
+    }
+    false
+}
+
+/// The pings that wait for a pong.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Pings {
+    outstanding: u8,
+}
+
+impl Pings {
+    /// Whether one more ping may go out: no more than [`PONG_CREDITS`] wait.
+    /// Counted when it may.
+    pub fn send(&mut self) -> bool {
+        if self.outstanding >= PONG_CREDITS {
+            return false;
+        }
+        self.outstanding = self.outstanding.saturating_add(1);
+        true
+    }
+
+    /// Whether a pong answers a ping; one that doesn't is refused.
+    pub fn answered(&mut self) -> bool {
+        match self.outstanding.checked_sub(1) {
+            Some(left) => {
+                self.outstanding = left;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+/// When a lagging socket may say `resync`: at most once per gap, and a lag
+/// within the gap waits for its end, so it's never lost.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ResyncGate {
+    gap: Duration,
+    last: Option<Instant>,
+    pending: bool,
+}
+
+impl ResyncGate {
+    /// A gate whose `resync`s are at least `gap` apart.
+    #[must_use]
+    pub const fn new(gap: Duration) -> Self {
+        Self {
+            gap,
+            last: None,
+            pending: false,
+        }
+    }
+
+    /// The socket lagged: a `resync` is owed.
+    pub fn lagged(&mut self) {
+        self.pending = true;
+    }
+
+    /// When the owed `resync` may go, if one is owed: at once, or one gap
+    /// after the last.
+    #[must_use]
+    pub fn due(&self, now: Instant) -> Option<Instant> {
+        if !self.pending {
+            return None;
+        }
+        let allowed = self
+            .last
+            .and_then(|last| last.checked_add(self.gap))
+            .unwrap_or(now);
+        Some(allowed.max(now))
+    }
+
+    /// The `resync` went at `at`.
+    pub fn sent(&mut self, at: Instant) {
+        self.pending = false;
+        self.last = Some(at);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use axum::body::Bytes;
+    use axum::extract::ws::CloseFrame;
+
+    use super::*;
+
+    #[test]
+    fn the_bounds_are_u13s() {
+        let timings = SocketTimings::default();
+
+        assert_eq!(timings.ping_interval, Duration::from_secs(15));
+        assert_eq!(timings.idle_timeout, Duration::from_secs(45));
+        assert_eq!(timings.send_timeout, Duration::from_secs(10));
+        assert_eq!(timings.close_timeout, Duration::from_secs(1));
+        assert_eq!(timings.resync_gap, Duration::from_secs(5));
+        assert_eq!(PONG_CREDITS, 3);
+        assert_eq!(MAX_CLIENT_FRAME, 125);
+        assert_eq!(READ_BUFFER, 4096);
+        assert_eq!(MAX_WRITE_BUFFER, 131_072);
+    }
+
+    #[test]
+    fn a_pong_answers_one_ping_and_an_unsolicited_one_is_refused() {
+        let mut pings = Pings::default();
+
+        let unasked = pings.answered();
+        assert!(pings.send());
+        let answer = pings.answered();
+        let again = pings.answered();
+
+        assert!(!unasked);
+        assert!(answer);
+        assert!(!again);
+    }
+
+    #[test]
+    fn no_more_than_three_pings_wait_for_a_pong() {
+        let mut pings = Pings::default();
+
+        let sent: Vec<_> = (0..4).map(|_| pings.send()).collect();
+        let answers: Vec<_> = (0..4).map(|_| pings.answered()).collect();
+
+        assert_eq!(sent, [true, true, true, false]);
+        assert_eq!(answers, [true, true, true, false]);
+    }
+
+    #[test]
+    fn a_first_resync_goes_at_once_and_the_next_one_gap_later() {
+        let start = Instant::now();
+        let mut gate = ResyncGate::new(Duration::from_secs(5));
+
+        let idle = gate.due(start);
+        gate.lagged();
+        let first = gate.due(start);
+        gate.sent(start);
+        let after_sending = gate.due(start);
+        gate.lagged();
+        let second = gate.due(start + Duration::from_secs(1));
+
+        assert_eq!(idle, None);
+        assert_eq!(first, Some(start));
+        assert_eq!(after_sending, None);
+        assert_eq!(second, Some(start + Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn many_lags_within_a_gap_owe_one_resync() {
+        let start = Instant::now();
+        let mut gate = ResyncGate::new(Duration::from_secs(5));
+        gate.lagged();
+        gate.sent(start);
+
+        for _ in 0..10 {
+            gate.lagged();
+        }
+        let due = gate.due(start + Duration::from_secs(2));
+        gate.sent(start + Duration::from_secs(5));
+
+        assert_eq!(due, Some(start + Duration::from_secs(5)));
+        assert_eq!(gate.due(start + Duration::from_secs(6)), None);
+    }
+
+    #[test]
+    fn a_lag_after_the_gap_goes_at_once() {
+        let start = Instant::now();
+        let mut gate = ResyncGate::new(Duration::from_secs(5));
+        gate.lagged();
+        gate.sent(start);
+
+        gate.lagged();
+        let late = start + Duration::from_secs(9);
+
+        assert_eq!(gate.due(late), Some(late));
+    }
+
+    #[test]
+    fn a_pong_and_a_close_are_taken_and_everything_else_is_refused() {
+        let answer = classify(Some(Ok(Message::Pong(Bytes::from_static(b"x")))));
+        let close = classify(Some(Ok(Message::Close(Some(CloseFrame {
+            code: 1000,
+            reason: "bye".into(),
+        })))));
+        let bare_close = classify(Some(Ok(Message::Close(None))));
+        let text = classify(Some(Ok(Message::Text("hello".into()))));
+        let binary = classify(Some(Ok(Message::Binary(Bytes::from_static(b"\x00")))));
+        let client_ping = classify(Some(Ok(Message::Ping(Bytes::new()))));
+
+        assert_eq!(answer, Inbound::Pong);
+        assert_eq!(close, Inbound::Close);
+        assert_eq!(bare_close, Inbound::Close);
+        assert_eq!(text, Inbound::Refused);
+        assert_eq!(binary, Inbound::Refused);
+        assert_eq!(client_ping, Inbound::Refused);
+    }
+
+    #[test]
+    fn a_connection_that_ended_or_failed_in_its_io_is_lost() {
+        let ended = classify(None);
+        let reset = classify(Some(Err(axum::Error::new(io::Error::from(
+            io::ErrorKind::ConnectionReset,
+        )))));
+
+        assert_eq!(ended, Inbound::Lost);
+        assert_eq!(reset, Inbound::Lost);
+    }
+
+    #[test]
+    fn an_error_that_isnt_the_connections_is_a_refused_frame() {
+        let protocol = classify(Some(Err(axum::Error::new(ProtocolBreach))));
+
+        assert_eq!(protocol, Inbound::Refused);
+    }
+
+    /// What a route answers that takes the upgrade as the events route does.
+    async fn upgrade_answer(request: axum::http::Request<axum::body::Body>) -> u16 {
+        use axum::extract::ws::WebSocketUpgrade;
+        use axum::response::IntoResponse as _;
+        use tower::ServiceExt as _;
+
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::get(
+                |upgrade: Result<WebSocketUpgrade, WebSocketUpgradeRejection>| async move {
+                    match upgrade {
+                        Ok(_) => axum::http::StatusCode::NO_CONTENT.into_response(),
+                        Err(rejection) => refused_upgrade(&rejection).into_response(),
+                    }
+                },
+            ),
+        );
+        app.oneshot(request).await.unwrap().status().as_u16()
+    }
+
+    fn request(method: &str, upgrade: bool) -> axum::http::Request<axum::body::Body> {
+        let mut builder = axum::http::Request::builder().method(method).uri("/");
+        if upgrade {
+            builder = builder
+                .header("connection", "upgrade")
+                .header("upgrade", "websocket")
+                .header("sec-websocket-version", "13")
+                .header("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==");
+        }
+        builder.body(axum::body::Body::empty()).unwrap()
+    }
+
+    #[tokio::test]
+    async fn each_upgrade_refusal_is_an_api_errors_status() {
+        let plain = upgrade_answer(request("GET", false)).await;
+        let head = upgrade_answer(request("HEAD", true)).await;
+        let not_upgradable = upgrade_answer(request("GET", true)).await;
+
+        assert_eq!(plain, 400, "not an upgrade");
+        assert_eq!(head, 405, "a method that isn't GET");
+        assert_eq!(not_upgradable, 400, "a connection that can't be upgraded");
+    }
+
+    /// A protocol error with no I/O error among its sources, as tungstenite
+    /// reports a frame too large or a bad opcode.
+    #[derive(Debug, thiserror::Error)]
+    #[error("a protocol breach")]
+    struct ProtocolBreach;
+
+    #[tokio::test(start_paused = true)]
+    async fn shutdown_closes_every_socket_and_waits_for_each() {
+        let sockets = LiveSockets::new(CancellationToken::new());
+        let token = sockets.token();
+        let stop = sockets.stop();
+        let (ended_tx, mut ended) = tokio::sync::mpsc::channel(1);
+        sockets.spawn(async move {
+            stop.cancelled().await;
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            let _ = ended_tx.send(()).await;
+        });
+        assert_eq!(sockets.open(), 2);
+
+        let shutdown = sockets.shutdown();
+        tokio::pin!(shutdown);
+        let early = tokio::time::timeout(Duration::from_secs(5), &mut shutdown).await;
+        assert!(early.is_err(), "the token still counts");
+        drop(token);
+        tokio::time::timeout(Duration::from_secs(5), &mut shutdown)
+            .await
+            .unwrap();
+
+        assert!(ended.try_recv().is_ok(), "the socket ended before");
+        assert_eq!(sockets.open(), 0);
+    }
+}

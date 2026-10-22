@@ -51,6 +51,11 @@ export const GATES = [
       "crates/fleet-server/src/infra/crypto/attempt_keys.rs",
       "crates/fleet-server/src/ports/login_attempts.rs",
       "crates/fleet-server/src/app/challenges.rs",
+      // The live events socket's tickets and transport (P11.5; ADR-0020, U14),
+      // and its handlers once the route arrives.
+      "crates/fleet-server/src/app/event_tickets.rs",
+      "crates/fleet-server/src/http/ws.rs",
+      "crates/fleet-server/src/http/handlers/events.rs",
       "crates/fleet-server/src/app/mfa.rs",
       "crates/fleet-server/src/app/login.rs",
       "crates/fleet-server/src/app/invites.rs",

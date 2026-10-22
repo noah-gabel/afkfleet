@@ -1,0 +1,18 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 429,
+  "headers": {
+    "content-type": "application/json",
+    "retry-after": "45"
+  },
+  "body": {
+    "error": {
+      "code": "too_many_connections",
+      "message": "Live updates are already open in too many places. Close the app somewhere else, or try again in a minute.",
+      "request_id": "test-request-id"
+    }
+  }
+}
