@@ -12,8 +12,9 @@
 //! - **What a client may send** ([`classify`]): a pong that answers one of
 //!   the server's pings ([`Pings`]: at most [`PONG_CREDITS`] outstanding),
 //!   and a close. Anything else (text, binary, a ping, a pong nobody asked
-//!   for, a frame too large, a protocol error) is refused with 1008; a lost
-//!   connection is told apart by an `io::Error` among the error's sources.
+//!   for, a frame too large, a protocol error) is refused with 1008. A lost
+//!   connection is told apart, and closes nothing: an `io::Error` among the
+//!   error's sources, or the connection ending without a close frame.
 //! - **`resync`** ([`ResyncGate`]): a socket that lagged behind the bus
 //!   says so once, without a count, and never more often than one gap; a
 //!   lag within the gap waits for its end, so no lost event goes unsaid.
@@ -487,7 +488,7 @@ pub enum Inbound {
 pub fn classify(received: Option<Result<Message, axum::Error>>) -> Inbound {
     match received {
         None => Inbound::Lost,
-        Some(Err(error)) if from_io(&error) => Inbound::Lost,
+        Some(Err(error)) if connection_gone(&error) => Inbound::Lost,
         Some(Ok(Message::Pong(_))) => Inbound::Pong,
         Some(Ok(Message::Close(_))) => Inbound::Close,
         Some(Ok(Message::Text(_) | Message::Binary(_) | Message::Ping(_)) | Err(_)) => {
@@ -496,12 +497,20 @@ pub fn classify(received: Option<Result<Message, axum::Error>>) -> Inbound {
     }
 }
 
-/// Whether `error`, or one of its sources, is an I/O error: the connection
-/// failed, rather than the client breaking the protocol.
-fn from_io(error: &(dyn std::error::Error + 'static)) -> bool {
+/// What tungstenite's `ProtocolError::ResetWithoutClosingHandshake` says:
+/// the connection ended (a FIN, a client killed) without a close frame.
+/// fleet-server reaches tungstenite only through axum, so it's told by its
+/// text; `a_connection_closed_without_a_close_frame_is_lost` pins the text
+/// against the real error, so a tungstenite bump that changes it fails.
+const ENDED_WITHOUT_CLOSE: &str = "Connection reset without closing handshake";
+
+/// Whether `error` says the connection is gone, rather than that the client
+/// broke the protocol: an I/O error among its sources, or the connection
+/// ending without a close frame ([`ENDED_WITHOUT_CLOSE`]).
+fn connection_gone(error: &(dyn std::error::Error + 'static)) -> bool {
     let mut current = Some(error);
     while let Some(error) = current {
-        if error.is::<io::Error>() {
+        if error.is::<io::Error>() || error.to_string() == ENDED_WITHOUT_CLOSE {
             return true;
         }
         current = error.source();
@@ -707,6 +716,17 @@ mod tests {
         )))));
 
         assert_eq!(ended, Inbound::Lost);
+        assert_eq!(reset, Inbound::Lost);
+    }
+
+    #[test]
+    fn a_connection_closed_without_a_close_frame_is_lost() {
+        use tokio_tungstenite::tungstenite::error::{Error, ProtocolError};
+
+        let reset = classify(Some(Err(axum::Error::new(Error::Protocol(
+            ProtocolError::ResetWithoutClosingHandshake,
+        )))));
+
         assert_eq!(reset, Inbound::Lost);
     }
 

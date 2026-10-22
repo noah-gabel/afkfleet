@@ -13,14 +13,15 @@ use fleet_core::id::{AgentId, BotId};
 use fleet_server::app::events::{LiveEvent, LiveEventKind};
 use fleet_server::config::RateLimitConfig;
 use fleet_server::http::ws::SocketTimings;
+use fleet_testkit::log_capture;
 use futures_util::SinkExt as _;
 use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use tokio::io::AsyncReadExt as _;
+use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::time::{Instant, timeout};
 use tokio_tungstenite::tungstenite::{Bytes, Message};
 
-use super::super::support::{Options, Setup, setup_with};
+use super::super::support::{Options, Setup, setup, setup_with};
 use super::{PATIENCE, Served, Socket, closed, next, next_event_after_pings, ready, said};
 
 /// Short bounds: a ping every 100 ms, closed after 300 ms without a pong.
@@ -79,6 +80,42 @@ async fn a_frame_the_server_doesnt_take_closes_the_socket_with_1008(
     for (case, close) in closes {
         assert_eq!(close, said(SocketClose::RefusedFrame), "{case}");
     }
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_client_that_drops_its_connection_without_a_close_is_lost_not_refused(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    log_capture::install().unwrap();
+    let setup = setup(options).await;
+    let alice = setup.alice_person().await;
+    let served = Served::start(&setup).await;
+    let socket = ready(&setup, &served, &alice.token).await;
+
+    // A FIN with no close frame, as a client killed or a network gone
+    // sends; what the server writes back is still read.
+    let mut stream = socket.into_inner();
+    stream.shutdown().await.unwrap();
+    let mut back = Vec::new();
+    timeout(PATIENCE, stream.read_to_end(&mut back))
+        .await
+        .expect("the server ended the connection in time")
+        .unwrap();
+
+    assert!(
+        back.is_empty(),
+        "the server wrote {} bytes back",
+        back.len()
+    );
+    assert_eq!(
+        log_capture::count("fleet_server::http::ws", "why=the connection was lost"),
+        1
+    );
+    assert_eq!(
+        log_capture::count("fleet_server::http::ws", "doesn't take"),
+        0
+    );
 }
 
 #[sqlx::test(migrations = false)]
