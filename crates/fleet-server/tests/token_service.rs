@@ -880,3 +880,36 @@ async fn a_database_that_fails_is_no_refusal(
         "{result:?}"
     );
 }
+
+#[sqlx::test(migrations = false)]
+async fn a_sockets_time_left_runs_down_to_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let (socket, _) = setup.socket().await;
+
+    let fresh = setup.service.socket_time_left(socket.times);
+    setup.clock.advance(MINUTE * 10);
+    let later = setup.service.socket_time_left(socket.times);
+    setup.clock.advance(MINUTE * 6);
+    let past = setup.service.socket_time_left(socket.times);
+
+    assert_eq!(fresh, MINUTE * 15);
+    assert_eq!(later, MINUTE * 5);
+    assert_eq!(past, Duration::ZERO);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_sockets_commit_count_follows_the_stores(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let mut commits = setup.service.socket_commits();
+    commits.borrow_and_update();
+
+    setup.login().await;
+
+    assert!(commits.has_changed().unwrap());
+}

@@ -59,6 +59,8 @@
 //! | `PUT /api/v1/modes/{id}` | user (the right to edit it, both as it is and as it will be; steps sending a command off the allowlist: pointed to `/with-commands`) | the mode as it should be, at the version read: 200 |
 //! | `PUT /api/v1/modes/{id}/with-commands` | user + step-up (the right to edit it, both ways) | the mode as it should be, whatever its steps send: 200 |
 //! | `DELETE /api/v1/modes/{id}` | user + step-up (the right to delete it) | deletes a mode no bot uses: 204 |
+//! | `POST /api/v1/events/ticket` | user | a single-use ticket for one live events socket of this session, 30 s |
+//! | `GET /api/v1/events` | user, with a ticket of this session | the live events socket (101); any other ticket 404, the user's sockets all open 429 |
 //! | `GET /api/openapi.json` | public | the `OpenAPI` document, only in dev mode ([`openapi`](super::openapi)) |
 //!
 //! The health routes have no `/api/v1` prefix. Both answer `200` with an
@@ -74,12 +76,13 @@ use axum::Router;
 use utoipa_axum::routes;
 
 use super::handlers::{
-    accounts, agents, auth, bots, chat, grants, health, invites, me, mfa, modes, users,
+    accounts, agents, auth, bots, chat, events, grants, health, invites, me, mfa, modes, users,
 };
 use super::middleware::RequestIds;
 use super::openapi::ApiDocs;
 use super::rate_limit::RateLimits;
 use super::routes::{RateClass, Routes};
+use super::ws::LiveEvents;
 use crate::app::accounts::AccountService;
 use crate::app::agents::AgentService;
 use crate::app::auth::TokenService;
@@ -131,6 +134,8 @@ pub struct AppState {
     pub(crate) bots: BotService,
     /// The modes: what each viewer may see of them.
     pub(crate) modes: ModeService,
+    /// The live events: the tickets, the bus and the sockets (P11.5).
+    pub(crate) events: LiveEvents,
 }
 
 /// Every service the handlers share, by name, so each one is a line of its
@@ -166,6 +171,8 @@ pub struct Services {
     pub bots: BotService,
     /// The modes: what each viewer may see of them.
     pub modes: ModeService,
+    /// The live events: the tickets, the bus and the sockets.
+    pub events: LiveEvents,
 }
 
 impl AppState {
@@ -187,6 +194,7 @@ impl AppState {
             agents,
             bots,
             modes,
+            events,
         } = services;
         Self {
             health,
@@ -203,6 +211,7 @@ impl AppState {
             agents,
             bots,
             modes,
+            events,
         }
     }
 }
@@ -269,6 +278,8 @@ pub fn api_routes(routes: Routes) -> Routes {
         .authed_route(RateClass::Standard, routes!(modes::update))
         .step_up_route(RateClass::Standard, routes!(modes::update_with_commands))
         .step_up_route(RateClass::Standard, routes!(modes::delete))
+        .authed_route(RateClass::Standard, routes!(events::ticket))
+        .authed_route(RateClass::Standard, routes!(events::connect))
 }
 
 /// Every route with `state`, behind the middleware stack with the timeout,

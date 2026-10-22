@@ -17,5 +17,6 @@
 mod boot;
 mod cli;
 mod control_plane;
+mod events;
 mod shutdown;
 mod support;

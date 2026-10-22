@@ -59,6 +59,7 @@ use fleet_core::id::{SessionId, UserId};
 use fleet_core::system::{Clock, MintError, SecureRandom, mint};
 use fleet_core::time::elapsed;
 use secrecy::{ExposeSecret as _, SecretString};
+use tokio::sync::watch;
 use tracing::{debug, info, warn};
 
 use super::audit::AuditService;
@@ -631,6 +632,23 @@ impl TokenService {
     #[must_use]
     pub fn socket_deadline(&self, times: SessionTimes) -> DateTime<Utc> {
         self.policy.access_expiry(times)
+    }
+
+    /// How long a socket opened now with a session's `times` may live: until
+    /// [`socket_deadline`](Self::socket_deadline), nothing once it passed.
+    #[must_use]
+    pub fn socket_time_left(&self, times: SessionTimes) -> Duration {
+        self.socket_deadline(times)
+            .signed_duration_since(self.clock.now())
+            .to_std()
+            .unwrap_or(Duration::ZERO)
+    }
+
+    /// The commit count a socket's session check follows: after every
+    /// commit, the socket checks its session again (ADR-0020, R8).
+    #[must_use]
+    pub fn socket_commits(&self) -> watch::Receiver<u64> {
+        self.store.commits()
     }
 
     /// Notes session `id`'s use at `now`; a failure is only logged.

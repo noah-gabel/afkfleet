@@ -25,14 +25,20 @@
 use core::time::Duration;
 use std::io;
 
-use axum::extract::ws::Message;
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
-use tokio::time::Instant;
+use axum::extract::ws::{CloseFrame, Message, WebSocket};
+use fleet_api_types::events::{EventMessage, SocketClose};
+use tokio::time::{Instant, timeout};
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 use tokio_util::task::task_tracker::TaskTrackerToken;
+use tracing::info;
 
+use crate::app::auth::SocketSession;
+use crate::app::event_tickets::EventTickets;
+use crate::app::events::EventBus;
 use crate::http::error::ApiError;
+use crate::http::rate_limit::SocketSlot;
 
 /// How often the server pings an open socket.
 pub const PING_INTERVAL: Duration = Duration::from_secs(15);
@@ -144,6 +150,143 @@ impl LiveSockets {
         self.tasks.close();
         self.tasks.wait().await;
     }
+}
+
+/// What the live events routes share: the tickets, the bus, the sockets'
+/// owner and their timings. Clones share them.
+#[derive(Debug, Clone)]
+pub struct LiveEvents {
+    pub(crate) tickets: EventTickets,
+    pub(crate) bus: EventBus,
+    pub(crate) sockets: LiveSockets,
+    pub(crate) timings: SocketTimings,
+}
+
+impl LiveEvents {
+    /// The live events over `tickets` and `bus`, their sockets owned by
+    /// `sockets`, with the default timings.
+    #[must_use]
+    pub fn new(tickets: EventTickets, bus: EventBus, sockets: LiveSockets) -> Self {
+        Self {
+            tickets,
+            bus,
+            sockets,
+            timings: SocketTimings::default(),
+        }
+    }
+
+    /// The same, with `timings` instead: tests run them short.
+    #[must_use]
+    pub fn with_timings(self, timings: SocketTimings) -> Self {
+        Self { timings, ..self }
+    }
+
+    /// The sockets' owner, which serve shuts down.
+    #[must_use]
+    pub fn sockets(&self) -> &LiveSockets {
+        &self.sockets
+    }
+}
+
+/// What one open socket needs: who it's for, the place it holds, and its
+/// share of the live events.
+#[derive(Debug)]
+pub(crate) struct OpenSocket {
+    /// The session it was opened by, as its connect found it.
+    pub(crate) session: SocketSession,
+    /// The user's place, given back when the socket ends.
+    pub(crate) slot: SocketSlot,
+    /// The bus, the stop token and the timings.
+    pub(crate) events: LiveEvents,
+}
+
+/// Runs one socket until it ends: subscribes to the bus, says `ready`, and
+/// closes with 1001 when the server shuts down; a client that closes or
+/// goes ends it at once.
+pub(crate) async fn run(mut socket: WebSocket, open: OpenSocket) {
+    let OpenSocket {
+        session,
+        slot: _held,
+        events,
+    } = open;
+    info!(user_id = %session.actor.id, session_id = %session.session_id, "a live events socket opened");
+    let _bus = events.bus.subscribe();
+    let stop = events.sockets.stop();
+    if send(
+        &mut socket,
+        &EventMessage::ready(),
+        events.timings.send_timeout,
+    )
+    .await
+    .is_err()
+    {
+        return;
+    }
+    loop {
+        tokio::select! {
+            biased;
+            // `cancelled` and `recv` are cancel-safe.
+            () = stop.cancelled() => {
+                close(&mut socket, SocketClose::ShuttingDown, events.timings.close_timeout).await;
+                return;
+            }
+            received = socket.recv() => match classify(received) {
+                Inbound::Close => {
+                    drain(&mut socket, events.timings.close_timeout).await;
+                    return;
+                }
+                Inbound::Lost => return,
+                Inbound::Pong | Inbound::Refused => {}
+            },
+        }
+    }
+}
+
+/// Why a frame didn't go out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SendFailed {
+    /// The connection failed.
+    Lost,
+    /// The client didn't read it within the send timeout.
+    TooSlow,
+    /// The message didn't serialize, which can't happen.
+    Unwritable,
+}
+
+/// Sends `message` as one text frame within `bound`.
+async fn send(
+    socket: &mut WebSocket,
+    message: &EventMessage,
+    bound: Duration,
+) -> Result<(), SendFailed> {
+    let text = serde_json::to_string(message).map_err(|_| SendFailed::Unwritable)?;
+    match timeout(bound, socket.send(Message::Text(text.into()))).await {
+        Ok(Ok(())) => Ok(()),
+        Ok(Err(_)) => Err(SendFailed::Lost),
+        Err(_) => Err(SendFailed::TooSlow),
+    }
+}
+
+/// Closes the socket with `why`'s code and reason, giving the close frame
+/// `bound`, then reads until the client's close or the end, within the same
+/// bound, so the TCP connection doesn't end with a reset.
+async fn close(socket: &mut WebSocket, why: SocketClose, bound: Duration) {
+    let frame = CloseFrame {
+        code: why.code(),
+        reason: why.reason().into(),
+    };
+    // Past the bound the socket is dropped; nothing waits for it.
+    if let Ok(Ok(())) = timeout(bound, socket.send(Message::Close(Some(frame)))).await {
+        drain(socket, bound).await;
+    }
+}
+
+/// Reads until the close handshake ends, within `bound`: a read writes what
+/// tungstenite queued, the reply to a client's close among it.
+async fn drain(socket: &mut WebSocket, bound: Duration) {
+    let draining = async { while let Some(Ok(_)) = socket.recv().await {} };
+    // Past the bound the socket is dropped; nothing waits for it.
+    let _ = timeout(bound, draining).await;
 }
 
 /// The answer to a request the upgrade refused: 405 for a method that isn't
@@ -280,7 +423,6 @@ impl ResyncGate {
 #[cfg(test)]
 mod tests {
     use axum::body::Bytes;
-    use axum::extract::ws::CloseFrame;
 
     use super::*;
 

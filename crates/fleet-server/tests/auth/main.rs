@@ -35,6 +35,7 @@
 mod agents;
 mod bots;
 mod enrollment_tokens;
+mod events;
 mod invites;
 mod login;
 mod logout;

@@ -14,6 +14,8 @@
 //!   `/stop`, `/restart`, `/reset` and `/resume` (P11.2).
 //! - [`chat`]: `GET` and `POST /api/v1/bots/{id}/chat`, and `POST
 //!   /api/v1/bots/{id}/command` (P11.3).
+//! - [`events`]: `POST /api/v1/events/ticket` and `GET /api/v1/events`, the
+//!   live events socket (P11.5).
 //! - [`grants`]: `GET` and `POST /api/v1/accounts/{id}/grants`, `PUT` and
 //!   `DELETE /api/v1/accounts/{id}/grants/{user}` (P9.6).
 //! - [`auth`]: `POST /api/v1/auth/login`, `/auth/login/mfa`,
@@ -35,6 +37,7 @@ pub(super) mod agents;
 pub(super) mod auth;
 pub(super) mod bots;
 pub(super) mod chat;
+pub(super) mod events;
 pub(super) mod grants;
 pub(super) mod health;
 pub(super) mod invites;

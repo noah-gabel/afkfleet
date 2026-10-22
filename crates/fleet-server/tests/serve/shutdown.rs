@@ -617,6 +617,87 @@ async fn the_session_token_service_stops_only_at_the_signal() {
     assert!(asked.load(Ordering::SeqCst));
 }
 
+// --- The live events sockets' stop (P11.5; ADR-0020, S35, R20) ----------------
+
+/// `drive` with a close that first waits for the live events sockets, whose
+/// shutdown is `stopped` with `open` sockets left, then closes the database
+/// in `close_takes`: as serve joins its background tasks first.
+async fn drive_with_sockets(
+    stopped: impl Future<Output = ()>,
+    open: usize,
+    close_takes: Duration,
+) -> (Exit, Duration, Arc<AtomicBool>) {
+    let (sender, signals) = ChannelSignals::new();
+    let shutdown = CancellationToken::new();
+    let (close, closed) = closing(close_takes);
+    let sockets =
+        serve::stop_live_sockets(shutdown.child_token(), stopped, TIMEOUTS.drain, move || {
+            open
+        });
+    sender.send(Signal::Terminate).await.unwrap();
+    let started = Instant::now();
+    let exit = serve::drive(
+        draining(&shutdown, Duration::ZERO),
+        &shutdown,
+        async move {
+            sockets.await;
+            close.await;
+        },
+        signals,
+        TIMEOUTS,
+    )
+    .await;
+    (exit, started.elapsed(), closed)
+}
+
+#[tokio::test(start_paused = true)]
+async fn sockets_still_open_at_the_drain_are_left_with_one_warn_and_the_database_closes() {
+    let (logs, _guard) = capture();
+
+    let (exit, took, closed) = drive_with_sockets(core::future::pending(), 3, secs(4)).await;
+
+    assert_eq!(exit, Exit::Stopped, "a socket left behind is no failure");
+    assert_eq!(took, TIMEOUTS.drain + secs(4), "the drain, then the close");
+    assert!(closed.load(Ordering::SeqCst));
+    let left = logs.lines_with(serve::LIVE_SOCKETS_LEFT).unwrap();
+    assert_eq!(left.len(), 1, "{}", logs.text());
+    assert_eq!(left[0]["level"], "WARN");
+    assert_eq!(left[0]["sockets"], 3);
+}
+
+#[tokio::test(start_paused = true)]
+async fn sockets_that_close_within_the_drain_leave_no_warn_and_close_only_at_the_signal() {
+    let (logs, _guard) = capture();
+    let stop = CancellationToken::new();
+    let asked = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&asked);
+    let task = tokio::spawn(serve::stop_live_sockets(
+        stop.clone(),
+        async move { flag.store(true, Ordering::SeqCst) },
+        TIMEOUTS.drain,
+        || 0,
+    ));
+
+    tokio::time::sleep(Duration::from_hours(1)).await;
+    let before = asked.load(Ordering::SeqCst);
+    stop.cancel();
+    task.await.unwrap();
+    let (exit, took, closed) = drive_with_sockets(tokio::time::sleep(secs(2)), 0, secs(1)).await;
+
+    assert!(!before, "nothing closes before the signal");
+    assert!(asked.load(Ordering::SeqCst));
+    assert_eq!(exit, Exit::Stopped);
+    assert_eq!(took, secs(3));
+    assert!(closed.load(Ordering::SeqCst));
+    assert!(
+        logs.lines_with(serve::LIVE_SOCKETS_LEFT)
+            .unwrap()
+            .is_empty(),
+        "{}",
+        logs.text()
+    );
+}
+
 // --- both: the API and the gRPC port as one server (ADR-0019) -----------------
 
 /// A stand-in port that fails with `what` `after` it starts.

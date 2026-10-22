@@ -115,6 +115,7 @@ use crate::http::middleware::RequestIds;
 use crate::http::openapi::ApiDocs;
 use crate::http::rate_limit::RateLimits;
 use crate::http::router::{AppState, Services, router};
+use crate::http::ws::{LiveEvents, LiveSockets};
 use crate::infra::crypto::attempt_keys::HmacAttemptKeys;
 use crate::infra::crypto::passwords::Argon2Passwords;
 use crate::infra::crypto::recovery_codes::Sha256RecoveryCodes;
@@ -270,6 +271,10 @@ pub struct App {
     /// The internal event bus, what agents report as the ingest takes it in
     /// (P10.8), for P11.5's live events.
     pub events: EventBus,
+    /// The live events sockets' owner: [`serve`] closes them at the shutdown
+    /// and waits for them, within the drain, before the database closes
+    /// (P11.5; ADR-0020, S35).
+    pub sockets: LiveSockets,
     /// The shutdown's token, which [`serve`] cancels at the first signal:
     /// the session-token service keeps a child of it (ADR-0019, S64).
     pub shutdown: CancellationToken,
@@ -450,7 +455,7 @@ pub fn app_with(
     let token_port: Arc<dyn Tokens> = Arc::new(Sha256Tokens::new(Arc::clone(&random)));
     let (tokens, invites) = token_services(config, &clock, &random, &store, &token_port);
     let challenges = Challenges::new(Arc::clone(&clock), Arc::clone(&token_port));
-    let event_tickets = EventTickets::new(Arc::clone(&clock), Arc::clone(&token_port));
+    let tickets = EventTickets::new(Arc::clone(&clock), Arc::clone(&token_port));
     let mfa = mfa_service(&clock, &random, &store, Arc::clone(&vault), &challenges);
     let limits = RateLimits::new(&config.rate_limits, limiter_clock);
     let lockout = lockout_service(config, &clock, &store, lockout_key);
@@ -473,6 +478,8 @@ pub fn app_with(
     let modes = mode_service(config, &clock, &random, &store, Arc::clone(&reconcile));
     let bots = bot_service(config, &clock, &random, &store, &agents, &events, reconcile);
     let shutdown = CancellationToken::new();
+    let sockets = LiveSockets::new(shutdown.child_token());
+    let live = LiveEvents::new(tickets.clone(), events.clone(), sockets.clone());
     let (enrollment_tokens, grpc) = control_plane_services(
         config,
         ca,
@@ -506,6 +513,7 @@ pub fn app_with(
         agents: agent_service,
         bots,
         modes,
+        events: live,
     });
     App {
         router: router(
@@ -514,19 +522,33 @@ pub fn app_with(
             ids,
             ApiDocs::for_dev_mode(config.dev_mode),
         ),
-        housekeeping: Housekeeping::new(
-            limits,
-            lockout,
-            challenges,
-            event_tickets,
-            link_flows.flows(),
-            agents,
-        ),
+        housekeeping: housekeeping(limits, lockout, challenges, tickets, &link_flows, agents),
         link_flows,
         grpc,
         events,
+        sockets,
         shutdown,
     }
+}
+
+/// The housekeeping of the app's limits, lockout, login challenges, live
+/// events tickets, link flows and agents' streams.
+fn housekeeping(
+    limits: RateLimits,
+    lockout: LockoutService,
+    challenges: Challenges,
+    event_tickets: EventTickets,
+    link_flows: &LinkFlowService,
+    agents: AgentRegistry,
+) -> Housekeeping {
+    Housekeeping::new(
+        limits,
+        lockout,
+        challenges,
+        event_tickets,
+        link_flows.flows(),
+        agents,
+    )
 }
 
 /// The per-username lockout over the app's ports, with `[auth]`'s policy
@@ -1011,6 +1033,16 @@ pub async fn serve<S: ShutdownSignals>(
         flows_stop.cancelled().await;
         link_flows.shutdown().await;
     });
+    // axum's graceful shutdown doesn't wait for an upgraded connection, so
+    // the sockets' owner does, within the drain, before the database closes.
+    let sockets = app.sockets;
+    let counted = sockets.clone();
+    background.spawn(stop_live_sockets(
+        shutdown.child_token(),
+        async move { sockets.shutdown().await },
+        timeouts.drain,
+        move || counted.open(),
+    ));
     let http = axum::serve(
         listener,
         app.router
@@ -1135,6 +1167,27 @@ pub async fn stop_session_tokens<F, R>(
     // tracker, and end with the runtime.
     if timeout(bound, stopped).await.is_err() {
         warn!(flights = running(), "{SESSION_TOKENS_LEFT}");
+    }
+}
+
+/// What serve logs when live events sockets outlast the drain.
+pub const LIVE_SOCKETS_LEFT: &str = "live events sockets were still open when the database had to close; the server stops waiting, and they end with the process";
+
+/// Waits for `stop`, then for `stopped`, the live events sockets' shutdown,
+/// at most `bound` (P11.5; ADR-0020, S35, R20): each socket sends its 1001
+/// within its own close bound. Sockets still open then are left with one
+/// `warn` naming how many (`open`); they end with the runtime. Generic, so
+/// tests drive it on paused time.
+pub async fn stop_live_sockets<F, R>(stop: CancellationToken, stopped: F, bound: Duration, open: R)
+where
+    F: Future<Output = ()>,
+    R: Fn() -> usize,
+{
+    stop.cancelled().await;
+    // Dropping the wait is cancel-safe: the sockets stay with their tracker,
+    // and end with the runtime.
+    if timeout(bound, stopped).await.is_err() {
+        warn!(sockets = open(), "{LIVE_SOCKETS_LEFT}");
     }
 }
 

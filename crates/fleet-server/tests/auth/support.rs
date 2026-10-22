@@ -27,6 +27,7 @@ use fleet_server::app::auth::TokenService;
 use fleet_server::app::bots::{BotService, ChatWait};
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
 use fleet_server::app::enrollment::EnrollmentTokenService;
+use fleet_server::app::event_tickets::EventTickets;
 use fleet_server::app::events::EventBus;
 use fleet_server::app::health::HealthService;
 use fleet_server::app::invites::InviteService;
@@ -41,6 +42,7 @@ use fleet_server::http::middleware::RequestIds;
 use fleet_server::http::openapi::ApiDocs;
 use fleet_server::http::rate_limit::{RateLimits, TrustedProxies};
 use fleet_server::http::router::{AppState, Services, router};
+use fleet_server::http::ws::{LiveEvents, LiveSockets, SocketTimings};
 use fleet_server::infra::crypto::attempt_keys::HmacAttemptKeys;
 use fleet_server::infra::crypto::passwords::Argon2Passwords;
 use fleet_server::infra::crypto::recovery_codes::Sha256RecoveryCodes;
@@ -181,6 +183,9 @@ pub(crate) struct Options {
     /// How long a chat line waits for its agent's answer: serve's, unless a
     /// test waits for no answer.
     pub(crate) chat_wait: ChatWait,
+    /// The live events sockets' bounds: serve's, unless a test runs them
+    /// short (P11.5).
+    pub(crate) sockets: SocketTimings,
 }
 
 impl Default for Options {
@@ -193,6 +198,7 @@ impl Default for Options {
             control_plane: false,
             allowlist: CommandAllowlist::default(),
             chat_wait: ChatWait::default(),
+            sockets: SocketTimings::default(),
         }
     }
 }
@@ -694,6 +700,9 @@ pub(crate) struct Setup {
     pub(crate) hints: Arc<Hinted>,
     /// The bus a chat send waits on, where a test answers for the agent.
     pub(crate) events: EventBus,
+    /// The live events: their tickets, and the sockets' owner a test shuts
+    /// down (P11.5).
+    pub(crate) live_events: LiveEvents,
 }
 
 /// A reconciler that records the hints it gets, to check which writes send
@@ -772,7 +781,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         token_port.clone(),
         SessionPolicy::default(),
     );
-    let challenges = Challenges::new(Arc::new(clock.clone()), token_port);
+    let challenges = Challenges::new(Arc::new(clock.clone()), token_port.clone());
     let mfa = mfa_service(&db, &clock, &random, &challenges);
     let passwords = Arc::new(TestPasswords {
         real: Argon2Passwords::new(Argon2Params::default(), Arc::new(random.clone()))
@@ -817,6 +826,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         (&settings.allowlist, settings.chat_wait),
         &hints,
     );
+    let live_events = build_live_events(&clock, token_port, &events, settings.sockets);
     let state = AppState::new(Services {
         health: HealthService::new(Arc::new(db.clone())),
         tokens: tokens.clone(),
@@ -832,6 +842,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         agents,
         bots,
         modes: mode_service(&clock, &random, &hooked, &settings.allowlist, &hints),
+        events: live_events.clone(),
     });
     let app = app(state, &clock);
     insert_alice(&db, alice, alice_hash).await;
@@ -850,7 +861,24 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         registry,
         hints,
         events,
+        live_events,
     }
+}
+
+/// The live events as serve builds them: tickets on `clock`, the bus chat
+/// waits on, and an owner of their own, with `timings`.
+fn build_live_events(
+    clock: &ManualClock,
+    tokens: Arc<Sha256Tokens>,
+    bus: &EventBus,
+    timings: SocketTimings,
+) -> LiveEvents {
+    LiveEvents::new(
+        EventTickets::new(Arc::new(clock.clone()), tokens),
+        bus.clone(),
+        LiveSockets::new(tokio_util::sync::CancellationToken::new()),
+    )
+    .with_timings(timings)
 }
 
 /// The lockout service over `db`, with a fixed attempt key.
