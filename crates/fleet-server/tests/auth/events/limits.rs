@@ -21,7 +21,7 @@ use tokio::time::{Instant, timeout};
 use tokio_tungstenite::tungstenite::{Bytes, Message};
 
 use super::super::support::{Options, Setup, setup_with};
-use super::{PATIENCE, Served, Socket, closed, next, next_event, ready, said};
+use super::{PATIENCE, Served, Socket, closed, next, next_event_after_pings, ready, said};
 
 /// Short bounds: a ping every 100 ms, closed after 300 ms without a pong.
 const SHORT: SocketTimings = SocketTimings {
@@ -128,13 +128,24 @@ async fn a_lagging_socket_gets_one_resync_without_a_count_at_most_once_per_gap(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
 ) {
-    let setup = short(options).await;
+    // A gap of 1 s, so the check below has room for a slow test machine.
+    let setup = setup_with(
+        options,
+        Options {
+            sockets: SocketTimings {
+                resync_gap: Duration::from_secs(1),
+                ..SHORT
+            },
+            ..Options::default()
+        },
+    )
+    .await;
     let alice = setup.alice_person().await;
     let served = Served::start(&setup).await;
     let mut socket = ready(&setup, &served, &alice.token).await;
 
     flood(&setup);
-    let first = next_event(&mut socket).await;
+    let first = next_event_after_pings(&mut socket).await;
     let sent = Instant::now();
     flood(&setup);
     let second = next_event_after_pings(&mut socket).await;
@@ -142,7 +153,7 @@ async fn a_lagging_socket_gets_one_resync_without_a_count_at_most_once_per_gap(
     assert_eq!(first, json!({ "type": "resync" }));
     assert_eq!(second, json!({ "type": "resync" }));
     assert!(
-        sent.elapsed() >= Duration::from_millis(250),
+        sent.elapsed() >= Duration::from_millis(750),
         "the second came one gap after the first"
     );
 }
@@ -161,17 +172,6 @@ fn flood(setup: &Setup) {
             at,
             kind: LiveEventKind::Died,
         });
-    }
-}
-
-/// The next event, past the pings that come meanwhile.
-async fn next_event_after_pings(socket: &mut Socket) -> serde_json::Value {
-    loop {
-        match next(socket).await {
-            Some(Message::Text(text)) => return serde_json::from_str(&text).unwrap(),
-            Some(Message::Ping(_)) => {}
-            other => panic!("not an event: {other:?}"),
-        }
     }
 }
 

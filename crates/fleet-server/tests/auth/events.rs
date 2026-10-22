@@ -177,18 +177,36 @@ pub(super) async fn next_event(socket: &mut Socket) -> Value {
     }
 }
 
-/// The server's close: its code and reason, read until the socket ends;
+/// The server's close: its code and reason, within [`PATIENCE`] in all;
 /// nothing but pings may come before it.
 pub(super) async fn closed(socket: &mut Socket) -> (u16, String) {
-    loop {
-        match next(socket).await {
-            Some(Message::Close(Some(CloseFrame { code, reason }))) => {
-                return (code.into(), reason.to_string());
+    let reading = async {
+        loop {
+            match next(socket).await {
+                Some(Message::Close(Some(CloseFrame { code, reason }))) => {
+                    return (code.into(), reason.to_string());
+                }
+                Some(Message::Ping(_)) => {}
+                other => panic!("not a close: {other:?}"),
             }
-            Some(Message::Ping(_)) => {}
-            other => panic!("not a close: {other:?}"),
         }
-    }
+    };
+    timeout(PATIENCE, reading).await.expect("a close in time")
+}
+
+/// The next event, past the pings that come meanwhile, within [`PATIENCE`]
+/// in all.
+pub(super) async fn next_event_after_pings(socket: &mut Socket) -> Value {
+    let reading = async {
+        loop {
+            match next(socket).await {
+                Some(Message::Text(text)) => return serde_json::from_str(&text).unwrap(),
+                Some(Message::Ping(_)) => {}
+                other => panic!("not an event: {other:?}"),
+            }
+        }
+    };
+    timeout(PATIENCE, reading).await.expect("an event in time")
 }
 
 /// `close`'s code and reason.
