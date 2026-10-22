@@ -24,6 +24,8 @@
 //!   The ticket is in the URL, so no log line ever holds it: the trace
 //!   layer logs the route's template, and nothing here logs the query.
 
+use core::time::Duration;
+
 use axum::Json;
 use axum::extract::State;
 use axum::extract::ws::WebSocketUpgrade;
@@ -33,6 +35,7 @@ use fleet_api_types::events::{EventTicketResponse, EventsQuery};
 use fleet_api_types::{ErrorResponse, SecretText};
 use fleet_core::authz::{Permission, ResourceContext};
 use secrecy::ExposeSecret as _;
+use tokio::time::Instant;
 use tracing::{Instrument as _, debug, info_span};
 
 use crate::app::auth::{SocketCheckError, SocketSession};
@@ -141,7 +144,8 @@ pub(crate) async fn connect(
         session,
         slot,
         commits,
-        time_left: state.tokens.socket_time_left(session.times),
+        // Counted here, so the upgrade's own time is part of the lifetime.
+        deadline: socket_deadline(state.tokens.socket_time_left(session.times)),
         events: state.events.clone(),
         tokens: state.tokens.clone(),
     };
@@ -161,6 +165,13 @@ pub(crate) async fn connect(
             // Counted by the tracker until its task is spawned.
             drop(owned);
         }))
+}
+
+/// When a socket with `time_left` must close: now plus that, or now when it
+/// overflows the clock.
+fn socket_deadline(time_left: Duration) -> Instant {
+    let now = Instant::now();
+    now.checked_add(time_left).unwrap_or(now)
 }
 
 /// The one answer to every ticket that doesn't open a socket, with its one

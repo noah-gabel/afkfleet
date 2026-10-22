@@ -205,8 +205,9 @@ pub(crate) struct OpenSocket {
     /// The commit count its session check follows, subscribed before the
     /// connect's own check, so a commit after that check is never missed.
     pub(crate) commits: watch::Receiver<u64>,
-    /// How long it may live: until the access token it opened with expires.
-    pub(crate) time_left: Duration,
+    /// When it closes at the latest: when the access token it opened with
+    /// expires, counted at the connect.
+    pub(crate) deadline: Instant,
     /// The bus, the stop token and the timings.
     pub(crate) events: LiveEvents,
     /// The session check.
@@ -254,36 +255,33 @@ impl Ended {
 ///
 /// A send that doesn't go out in time closes it with 4002. One `info` line
 /// says when it opened, and one when and why it ended.
-pub(crate) async fn run(mut socket: WebSocket, open: OpenSocket) {
+pub(crate) async fn run(socket: WebSocket, open: OpenSocket) {
     let OpenSocket {
         session,
         slot: _held,
-        mut commits,
-        time_left,
+        commits,
+        deadline,
         events,
         tokens,
     } = open;
-    let timings = events.timings;
     let started = Instant::now();
-    let mut bus = events.bus.subscribe();
+    let mut running = Running {
+        socket,
+        session,
+        commits,
+        bus: events.bus.subscribe(),
+        tokens,
+        timings: events.timings,
+        resyncs: 0,
+    };
     info!("a live events socket opened");
-    let mut resyncs: u32 = 0;
-    let ended = match send(&mut socket, &EventMessage::ready(), timings.send_timeout).await {
-        Ok(()) => {
-            serve(
-                &mut socket,
-                &session,
-                (&mut commits, &mut bus, &mut resyncs),
-                (&events, &tokens),
-                started.checked_add(time_left).unwrap_or(started),
-            )
-            .await
-        }
+    let ended = match running.send(&EventMessage::ready()).await {
+        Ok(()) => running.serve(deadline, &events.sockets.stop()).await,
         Err(failed) => failed.ended(),
     };
     match ended {
-        Ended::Closed { close: why, .. } => close(&mut socket, why, timings.close_timeout).await,
-        Ended::ClientClosed => drain(&mut socket, timings.close_timeout).await,
+        Ended::Closed { close, .. } => running.close(close).await,
+        Ended::ClientClosed => running.drain().await,
         Ended::Lost => {}
     }
     let (why, code) = match ended {
@@ -295,104 +293,157 @@ pub(crate) async fn run(mut socket: WebSocket, open: OpenSocket) {
         why,
         code,
         lasted_secs = started.elapsed().as_secs(),
-        resyncs,
+        resyncs = running.resyncs,
         "a live events socket closed"
     );
 }
 
-/// The socket's loop once `ready` went out; see [`run`]. `deadline` is when
-/// the access token it opened with expires.
-async fn serve(
-    socket: &mut WebSocket,
-    session: &SocketSession,
-    (commits, bus, resyncs): (
-        &mut watch::Receiver<u64>,
-        &mut Receiver<Arc<LiveEvent>>,
-        &mut u32,
-    ),
-    (events, tokens): (&LiveEvents, &TokenService),
-    deadline: Instant,
-) -> Ended {
-    let timings = events.timings;
-    let stop = events.sockets.stop();
-    let mut pings = Pings::default();
-    let mut ticker = interval_at(
-        Instant::now() + timings.ping_interval,
-        timings.ping_interval,
-    );
-    ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-    let idle = sleep(timings.idle_timeout);
-    tokio::pin!(idle);
-    let mut gate = ResyncGate::new(timings.resync_gap);
-    // A commit between the connect's check and this subscription's first
-    // read was marked unseen: the first turn checks again (R18).
-    loop {
-        let resync_at = gate.due(Instant::now());
-        tokio::select! {
-            biased;
-            // Every branch is cancel-safe: `cancelled`, `sleep_until`,
-            // `changed`, `recv` and `tick` lose nothing when another wins,
-            // and every send runs in a branch's body, never as a branch.
-            () = stop.cancelled() => return Ended::closed(SocketClose::ShuttingDown, "the server is shutting down"),
-            () = sleep_until(deadline) => return Ended::closed(SocketClose::Unauthenticated, "its access token expired"),
-            changed = commits.changed() => {
-                if changed.is_err() {
-                    return Ended::closed(SocketClose::Busy, "the commit count is gone");
-                }
-                commits.borrow_and_update();
-                match timeout(CHECK_TIMEOUT, tokens.check_socket(session)).await {
-                    Ok(Ok(())) => {}
-                    Ok(Err(SocketCheckError::Refused(_))) => {
-                        return Ended::closed(SocketClose::Unauthenticated, "its session no longer counts");
-                    }
-                    Ok(Err(SocketCheckError::Store(_))) | Err(_) => {
-                        return Ended::closed(SocketClose::Busy, "its session couldn't be checked");
-                    }
-                }
-            }
-            received = socket.recv() => match classify(received) {
-                Inbound::Pong if pings.answered() => {
-                    idle.as_mut().reset(Instant::now() + timings.idle_timeout);
-                }
-                Inbound::Pong | Inbound::Refused => {
-                    return Ended::closed(SocketClose::RefusedFrame, "the client sent a frame the server doesn't take");
-                }
-                Inbound::Close => return Ended::ClientClosed,
-                Inbound::Lost => return Ended::Lost,
-            },
-            () = &mut idle => return Ended::closed(SocketClose::Idle, "no pong came in time"),
-            _ = ticker.tick() => {
-                if pings.send()
-                    && let Err(failed) = ping(socket, timings.send_timeout).await
-                {
-                    return failed.ended();
-                }
-            }
-            () = sleep_until(resync_at.unwrap_or(deadline)), if resync_at.is_some() => {
-                if let Err(failed) = send(socket, &EventMessage::resync(), timings.send_timeout).await {
-                    return failed.ended();
-                }
-                gate.sent(Instant::now());
-                *resyncs = resyncs.saturating_add(1);
-            }
-            received = bus.recv() => match received {
-                // D1 sends no event yet; D2 sends each to whoever may see
-                // it.
-                Ok(_) => {}
-                // No count: it would count events of bots the user can't see.
-                Err(RecvError::Lagged(_)) => gate.lagged(),
-                Err(RecvError::Closed) => return Ended::closed(SocketClose::ShuttingDown, "the bus is gone"),
-            },
-        }
-    }
+/// One socket while it runs: its connection, and what its loop reads.
+struct Running {
+    socket: WebSocket,
+    /// The session it was opened by.
+    session: SocketSession,
+    /// The commit count its session check follows.
+    commits: watch::Receiver<u64>,
+    /// Its subscription to the bus.
+    bus: Receiver<Arc<LiveEvent>>,
+    /// The session check.
+    tokens: TokenService,
+    timings: SocketTimings,
+    /// How many `resync`s it said, for its last log line.
+    resyncs: u32,
 }
 
-/// Pings the client within `bound`.
-async fn ping(socket: &mut WebSocket, bound: Duration) -> Result<(), SendFailed> {
-    match timeout(bound, socket.send(Message::Ping(Bytes::new()))).await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(_)) => Err(SendFailed::Lost),
-        Err(_) => Err(SendFailed::TooSlow),
+impl Running {
+    /// The socket's loop once `ready` went out; see [`run`]. `deadline` is
+    /// when the access token it opened with expires; `stop` is cancelled at
+    /// the shutdown.
+    async fn serve(&mut self, deadline: Instant, stop: &CancellationToken) -> Ended {
+        let timings = self.timings;
+        let mut pings = Pings::default();
+        let mut ticker = interval_at(
+            Instant::now() + timings.ping_interval,
+            timings.ping_interval,
+        );
+        ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let idle = sleep(timings.idle_timeout);
+        let expiry = sleep_until(deadline);
+        tokio::pin!(idle, expiry);
+        let mut gate = ResyncGate::new(timings.resync_gap);
+        // A commit between the connect's check and this subscription's first
+        // read was marked unseen: the first turn checks again (R18).
+        loop {
+            let resync_at = gate.due(Instant::now());
+            tokio::select! {
+                biased;
+                // Every branch is cancel-safe: `cancelled`, the sleeps,
+                // `changed`, `recv` and `tick` lose nothing when another
+                // wins, and every send runs in a branch's body, never as a
+                // branch.
+                () = stop.cancelled() => return Ended::closed(SocketClose::ShuttingDown, "the server is shutting down"),
+                () = &mut expiry => return Ended::closed(SocketClose::Unauthenticated, "its access token expired"),
+                changed = self.commits.changed() => {
+                    if changed.is_err() {
+                        return Ended::closed(SocketClose::Busy, "the commit count is gone");
+                    }
+                    self.commits.borrow_and_update();
+                    if let Err(ended) = self.check().await {
+                        return ended;
+                    }
+                }
+                received = self.socket.recv() => match classify(received) {
+                    Inbound::Pong if pings.answered() => {
+                        idle.as_mut().reset(Instant::now() + timings.idle_timeout);
+                    }
+                    Inbound::Pong | Inbound::Refused => {
+                        return Ended::closed(SocketClose::RefusedFrame, "the client sent a frame the server doesn't take");
+                    }
+                    Inbound::Close => return Ended::ClientClosed,
+                    Inbound::Lost => return Ended::Lost,
+                },
+                () = &mut idle => return Ended::closed(SocketClose::Idle, "no pong came in time"),
+                _ = ticker.tick() => {
+                    if pings.send()
+                        && let Err(failed) = self.send_frame(Message::Ping(Bytes::new())).await
+                    {
+                        return failed.ended();
+                    }
+                }
+                () = sleep_until(resync_at.unwrap_or(deadline)), if resync_at.is_some() => {
+                    if let Err(failed) = self.send(&EventMessage::resync()).await {
+                        return failed.ended();
+                    }
+                    gate.sent(Instant::now());
+                    self.resyncs = self.resyncs.saturating_add(1);
+                }
+                received = self.bus.recv() => match received {
+                    // D1 sends no event yet; D2 sends each to whoever may see
+                    // it.
+                    Ok(_) => {}
+                    // No count: it would count events of bots the user can't
+                    // see.
+                    Err(RecvError::Lagged(_)) => gate.lagged(),
+                    Err(RecvError::Closed) => return Ended::closed(SocketClose::ShuttingDown, "the bus is gone"),
+                },
+            }
+        }
+    }
+
+    /// Checks the socket's session again within [`CHECK_TIMEOUT`]: 4001 when
+    /// it no longer counts, 1013 when it can't be checked.
+    async fn check(&mut self) -> Result<(), Ended> {
+        match timeout(CHECK_TIMEOUT, self.tokens.check_socket(&self.session)).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(SocketCheckError::Refused(_))) => Err(Ended::closed(
+                SocketClose::Unauthenticated,
+                "its session no longer counts",
+            )),
+            Ok(Err(SocketCheckError::Store(_))) | Err(_) => Err(Ended::closed(
+                SocketClose::Busy,
+                "its session couldn't be checked",
+            )),
+        }
+    }
+
+    /// Sends `message` as one text frame.
+    async fn send(&mut self, message: &EventMessage) -> Result<(), SendFailed> {
+        let text = serde_json::to_string(message).map_err(|_| SendFailed::Unwritable)?;
+        self.send_frame(Message::Text(text.into())).await
+    }
+
+    /// Sends `frame` within the send timeout.
+    async fn send_frame(&mut self, frame: Message) -> Result<(), SendFailed> {
+        match timeout(self.timings.send_timeout, self.socket.send(frame)).await {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) => Err(SendFailed::Lost),
+            Err(_) => Err(SendFailed::TooSlow),
+        }
+    }
+
+    /// Closes the socket with `why`'s code and reason, giving the close
+    /// frame the close bound, then reads until the client's close or the
+    /// end, within the same bound, so the TCP connection doesn't end with a
+    /// reset.
+    async fn close(&mut self, why: SocketClose) {
+        let bound = self.timings.close_timeout;
+        let frame = CloseFrame {
+            code: why.code(),
+            reason: why.reason().into(),
+        };
+        // Past the bound the socket is dropped; nothing waits for it.
+        if let Ok(Ok(())) = timeout(bound, self.socket.send(Message::Close(Some(frame)))).await {
+            self.drain().await;
+        }
+    }
+
+    /// Reads until the close handshake ends, within the close bound: a read
+    /// writes what tungstenite queued, the reply to a client's close among
+    /// it.
+    async fn drain(&mut self) {
+        let bound = self.timings.close_timeout;
+        let draining = async { while let Some(Ok(_)) = self.socket.recv().await {} };
+        // Past the bound the socket is dropped; nothing waits for it.
+        let _ = timeout(bound, draining).await;
     }
 }
 
@@ -416,42 +467,6 @@ impl SendFailed {
             Self::Unwritable => Ended::closed(SocketClose::Busy, "an event didn't serialize"),
         }
     }
-}
-
-/// Sends `message` as one text frame within `bound`.
-async fn send(
-    socket: &mut WebSocket,
-    message: &EventMessage,
-    bound: Duration,
-) -> Result<(), SendFailed> {
-    let text = serde_json::to_string(message).map_err(|_| SendFailed::Unwritable)?;
-    match timeout(bound, socket.send(Message::Text(text.into()))).await {
-        Ok(Ok(())) => Ok(()),
-        Ok(Err(_)) => Err(SendFailed::Lost),
-        Err(_) => Err(SendFailed::TooSlow),
-    }
-}
-
-/// Closes the socket with `why`'s code and reason, giving the close frame
-/// `bound`, then reads until the client's close or the end, within the same
-/// bound, so the TCP connection doesn't end with a reset.
-async fn close(socket: &mut WebSocket, why: SocketClose, bound: Duration) {
-    let frame = CloseFrame {
-        code: why.code(),
-        reason: why.reason().into(),
-    };
-    // Past the bound the socket is dropped; nothing waits for it.
-    if let Ok(Ok(())) = timeout(bound, socket.send(Message::Close(Some(frame)))).await {
-        drain(socket, bound).await;
-    }
-}
-
-/// Reads until the close handshake ends, within `bound`: a read writes what
-/// tungstenite queued, the reply to a client's close among it.
-async fn drain(socket: &mut WebSocket, bound: Duration) {
-    let draining = async { while let Some(Ok(_)) = socket.recv().await {} };
-    // Past the bound the socket is dropped; nothing waits for it.
-    let _ = timeout(bound, draining).await;
 }
 
 /// The answer to a request the upgrade refused: 405 for a method that isn't
@@ -535,15 +550,15 @@ impl Pings {
         true
     }
 
-    /// Whether a pong answers a ping; one that doesn't is refused.
+    /// Whether a pong answers: it does while any ping waits, and answers them
+    /// all, since a client may answer only the latest (RFC 6455, 5.5.3); one
+    /// that comes while none waits is refused.
     pub fn answered(&mut self) -> bool {
-        match self.outstanding.checked_sub(1) {
-            Some(left) => {
-                self.outstanding = left;
-                true
-            }
-            None => false,
+        if self.outstanding == 0 {
+            return false;
         }
+        self.outstanding = 0;
+        true
     }
 }
 
@@ -615,7 +630,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pong_answers_one_ping_and_an_unsolicited_one_is_refused() {
+    fn a_pong_answers_a_ping_and_an_unsolicited_one_is_refused() {
         let mut pings = Pings::default();
 
         let unasked = pings.answered();
@@ -633,10 +648,25 @@ mod tests {
         let mut pings = Pings::default();
 
         let sent: Vec<_> = (0..4).map(|_| pings.send()).collect();
-        let answers: Vec<_> = (0..4).map(|_| pings.answered()).collect();
 
         assert_eq!(sent, [true, true, true, false]);
-        assert_eq!(answers, [true, true, true, false]);
+    }
+
+    #[test]
+    fn one_pong_answers_every_ping_that_waits() {
+        // RFC 6455, 5.5.3: a client may answer only the latest ping.
+        let mut pings = Pings::default();
+        for _ in 0..3 {
+            assert!(pings.send());
+        }
+
+        let answer = pings.answered();
+        let second = pings.answered();
+        let room: Vec<_> = (0..4).map(|_| pings.send()).collect();
+
+        assert!(answer);
+        assert!(!second, "nothing waits for a second pong");
+        assert_eq!(room, [true, true, true, false]);
     }
 
     #[test]
