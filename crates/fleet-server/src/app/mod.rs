@@ -18,6 +18,8 @@
 //!   (P7.6, P7.7).
 //! - [`enrollment`]: the agents' enrollment tokens, and enrolling an agent
 //!   with one (P10.3).
+//! - [`event_tickets`]: the live events' single-use tickets, held in memory
+//!   (P11.5).
 //! - [`events`]: the internal event bus: what agents report about their
 //!   bots, for the live events P11.5 sends on (P10.8).
 //! - [`grants`]: sharing a linked account with other users (P9.6).
@@ -46,6 +48,7 @@ pub mod auth;
 pub mod bots;
 pub mod challenges;
 pub mod enrollment;
+pub mod event_tickets;
 pub mod events;
 pub mod grants;
 pub mod health;

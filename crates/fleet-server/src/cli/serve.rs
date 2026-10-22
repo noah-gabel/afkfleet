@@ -92,6 +92,7 @@ use crate::app::auth::TokenService;
 use crate::app::bots::{BotService, ChatWait};
 use crate::app::challenges::Challenges;
 use crate::app::enrollment::{EnrollmentService, EnrollmentTokenService};
+use crate::app::event_tickets::EventTickets;
 use crate::app::events::EventBus;
 use crate::app::grants::GrantService;
 use crate::app::health::HealthService;
@@ -449,14 +450,10 @@ pub fn app_with(
     let token_port: Arc<dyn Tokens> = Arc::new(Sha256Tokens::new(Arc::clone(&random)));
     let (tokens, invites) = token_services(config, &clock, &random, &store, &token_port);
     let challenges = Challenges::new(Arc::clone(&clock), Arc::clone(&token_port));
+    let event_tickets = EventTickets::new(Arc::clone(&clock), Arc::clone(&token_port));
     let mfa = mfa_service(&clock, &random, &store, Arc::clone(&vault), &challenges);
     let limits = RateLimits::new(&config.rate_limits, limiter_clock);
-    let lockout = LockoutService::new(
-        Arc::clone(&clock),
-        Arc::clone(&store),
-        Arc::new(HmacAttemptKeys::new(lockout_key)),
-        config.auth.lockout,
-    );
+    let lockout = lockout_service(config, &clock, &store, lockout_key);
     let users = user_service(&clock, &random, &store, &passwords, &reconcile);
     let login = LoginService::new(
         Arc::clone(&clock),
@@ -517,12 +514,35 @@ pub fn app_with(
             ids,
             ApiDocs::for_dev_mode(config.dev_mode),
         ),
-        housekeeping: Housekeeping::new(limits, lockout, challenges, link_flows.flows(), agents),
+        housekeeping: Housekeeping::new(
+            limits,
+            lockout,
+            challenges,
+            event_tickets,
+            link_flows.flows(),
+            agents,
+        ),
         link_flows,
         grpc,
         events,
         shutdown,
     }
+}
+
+/// The per-username lockout over the app's ports, with `[auth]`'s policy
+/// and the key its rows are kept under.
+fn lockout_service(
+    config: &ServerConfig,
+    clock: &Arc<dyn Clock>,
+    store: &Arc<dyn Store>,
+    lockout_key: SecretBox<[u8; 32]>,
+) -> LockoutService {
+    LockoutService::new(
+        Arc::clone(clock),
+        Arc::clone(store),
+        Arc::new(HmacAttemptKeys::new(lockout_key)),
+        config.auth.lockout,
+    )
 }
 
 /// The sessions' and the invites' services over the app's ports, with

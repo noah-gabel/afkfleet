@@ -5,9 +5,11 @@
 //! A token is opaque: 256 random bits from the `SecureRandom` port,
 //! base64url without padding, behind its kind's prefix ([`TokenKind`]): a
 //! session's `afk_at_` and `afk_rt_`, the login's challenges `afk_mt_` and
-//! `afk_st_`, and the invites' `afk_iv_`, so secret scanners spot them. Only their SHA-256 hash is
-//! stored, and a presented token is compared with a stored hash in constant
-//! time ([`TokenHash::ct_eq`]). The hash isn't a secret a client could use,
+//! `afk_st_`, the invites' `afk_iv_`, the agents' enrollment tokens'
+//! `afk_et_` and the live events' tickets' `afk_wt_`, so secret scanners spot
+//! them. Only their SHA-256 hash is stored, and a presented token is
+//! compared with a stored hash in constant time ([`TokenHash::ct_eq`]), or
+//! looked up by it first. The hash isn't a secret a client could use,
 //! but its `Debug` shows none of its bytes all the same, and no type here
 //! shows a token.
 
@@ -18,8 +20,8 @@ use secrecy::SecretString;
 use subtle::ConstantTimeEq as _;
 
 /// Which kind of token: a session's two, one of the login's challenges
-/// (group D), an invite's code (group E), or an agent's enrollment token
-/// (P10.3).
+/// (group D), an invite's code (group E), an agent's enrollment token
+/// (P10.3), or a live events ticket (P11.5).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TokenKind {
     /// The access token, sent with every request: `afk_at_…`.
@@ -36,6 +38,9 @@ pub enum TokenKind {
     /// An agent's enrollment token, for enrolling once: `afk_et_…`, the
     /// prefix fleet-core's enrollment bundle checks (P10.3).
     Enrollment,
+    /// A live events ticket, for opening one socket: `afk_wt_…` (P11.5;
+    /// ADR-0020, S29).
+    EventTicket,
 }
 
 impl TokenKind {
@@ -49,6 +54,7 @@ impl TokenKind {
             Self::Setup => "afk_st_",
             Self::Invite => "afk_iv_",
             Self::Enrollment => "afk_et_",
+            Self::EventTicket => "afk_wt_",
         }
     }
 }
@@ -207,6 +213,7 @@ mod tests {
         assert_eq!(TokenKind::Setup.prefix(), "afk_st_");
         assert_eq!(TokenKind::Invite.prefix(), "afk_iv_");
         assert_eq!(TokenKind::Enrollment.prefix(), "afk_et_");
+        assert_eq!(TokenKind::EventTicket.prefix(), "afk_wt_");
         assert_eq!(
             TokenKind::Enrollment.prefix(),
             fleet_core::enrollment::TOKEN_PREFIX
