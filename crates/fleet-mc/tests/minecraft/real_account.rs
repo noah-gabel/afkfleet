@@ -171,6 +171,7 @@ fn kind(event: &SessionEvent) -> String {
         SessionEvent::Joined => "Joined".to_owned(),
         SessionEvent::Chat(_) => "Chat".to_owned(),
         SessionEvent::Died => "Died".to_owned(),
+        SessionEvent::Respawned => "Respawned".to_owned(),
         SessionEvent::Disconnected(reason) => format!("Disconnected({:?})", reason.classify()),
         SessionEvent::ConnectionFailed(failure) => format!("ConnectionFailed({failure:?})"),
     }

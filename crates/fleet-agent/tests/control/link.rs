@@ -454,6 +454,109 @@ async fn a_signal_while_the_agent_reconnects_ends_it_at_once() {
     assert!(started.elapsed() < secs(5), "{:?}", started.elapsed());
 }
 
+/// `message` with its first spec's first step on a schedule case the reader
+/// doesn't know: prost skips the case's field, so the schedule reads as
+/// unset, as fleet-proto's `rejects` tests show (ADR-0020, S25).
+fn with_an_unknown_schedule(message: ServerMessage) -> fleet_proto::generated::ServerMessage {
+    use fleet_proto::generated as wire;
+    use wire::server_message::Msg as M;
+    let mut wire = wire::ServerMessage::try_from(message).unwrap();
+    let spec = match wire.msg.as_mut().unwrap() {
+        M::Reconcile(full) => full.bots[0].spec.as_mut().unwrap(),
+        M::Assign(assign) => assign.spec.as_mut().unwrap(),
+        M::Update(update) => update.spec.as_mut().unwrap(),
+        other => panic!("no spec in {other:?}"),
+    };
+    spec.mode.as_mut().unwrap().steps[0].schedule = Some(wire::Schedule { schedule: None });
+    wire
+}
+
+/// A spec with a schedule case the agent doesn't know is refused whole:
+/// the stream ends as unreadable, nothing in the message is applied, no bot
+/// starts, and the line says so at `error`, naming the field, never a value
+/// (ADR-0020, S25).
+#[rstest::rstest]
+#[case::reconcile("reconcile", ServerMessage::Reconcile(vec![assignment(1)]))]
+#[case::assign("assign", ServerMessage::Assign(assignment(1)))]
+#[case::update("update", ServerMessage::Update(assignment(1).spec))]
+#[tokio::test]
+async fn a_spec_with_a_schedule_this_agent_doesnt_know_is_refused_whole(
+    #[case] name: &str,
+    #[case] message: ServerMessage,
+) {
+    let dir = test_dir("control", &format!("unknown_schedule_{name}"));
+    let ca = TestCa::new(1);
+    let mut server = FakeServer::start(&ca).await;
+    let running = Agent::start(&dir, &server.url(), &ca);
+    let mut call = server.pending().await.accept();
+    call.welcome(agent(), secs(10)).await;
+
+    call.send_raw(with_an_unknown_schedule(message)).await;
+    let ended = call.until_ended(crate::server::PATIENCE).await;
+    let again = server.pending().await;
+    let lines = running
+        .logs
+        .lines_with("a message from the server couldn't be read")
+        .unwrap();
+    let ends = running
+        .logs
+        .lines_with("the control stream ended; the agent reconnects")
+        .unwrap();
+    let no_bot = running.fake.try_session(0).is_none();
+    let outcome = running.stop().await;
+
+    assert!(ended.is_some(), "the agent ended its request stream");
+    assert_eq!(again.hello.running, [], "nothing was applied");
+    assert!(no_bot, "no bot started");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["level"], "ERROR");
+    let error = lines[0]["error"].as_str().unwrap();
+    assert!(error.contains("Schedule.schedule"), "{error}");
+    assert!(!error.contains("AfkBot1"), "{error}");
+    assert!(
+        ends.iter().any(|end| end["cause"] == "unreadable"),
+        "{ends:?}"
+    );
+    assert_eq!(outcome.exit, Exit::Stopped);
+}
+
+/// A first message the agent can't read ends the stream as unreadable,
+/// said at `error` and naming the field, as any later one is (ADR-0020,
+/// S25; PR #65's review).
+#[tokio::test]
+async fn an_unreadable_first_message_is_said_at_error() {
+    let dir = test_dir("control", "unreadable_first");
+    let ca = TestCa::new(1);
+    let mut server = FakeServer::start(&ca).await;
+    let running = Agent::start(&dir, &server.url(), &ca);
+    let mut call = server.pending().await.accept();
+
+    call.send_raw(fleet_proto::generated::ServerMessage { msg: None })
+        .await;
+    let ended = call.until_ended(crate::server::PATIENCE).await;
+    let _again = server.pending().await;
+    let lines = running
+        .logs
+        .lines_with("a message from the server couldn't be read")
+        .unwrap();
+    let ends = running
+        .logs
+        .lines_with("the control stream ended; the agent reconnects")
+        .unwrap();
+    let outcome = running.stop().await;
+
+    assert!(ended.is_some(), "the agent ended its request stream");
+    assert_eq!(lines.len(), 1, "{lines:?}");
+    assert_eq!(lines[0]["level"], "ERROR");
+    let error = lines[0]["error"].as_str().unwrap();
+    assert!(error.contains("ServerMessage.msg"), "{error}");
+    assert!(
+        ends.iter().any(|end| end["cause"] == "unreadable"),
+        "{ends:?}"
+    );
+    assert_eq!(outcome.exit, Exit::Stopped);
+}
+
 #[tokio::test]
 async fn no_agent_line_holds_the_servers_address_or_its_message() {
     let dir = test_dir("control", "logs");

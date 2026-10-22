@@ -5,8 +5,10 @@
 //! The server keeps no state for an arm swing, so a second bot, the watcher,
 //! counts the swing animations it receives, through a test-only system that
 //! the `fault-injection` hook adds to its App. The same hook counts when the
-//! bot tells the server it has loaded, which the respawn step waits for.
+//! bot's client loads, which the respawn step's dimension change waits
+//! for.
 
+use core::time::Duration;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -81,8 +83,56 @@ impl Scene {
         )
     }
 
-    async fn died(&mut self, what: &str) {
-        wait_for(&mut self.events, what, |event| *event == SessionEvent::Died).await;
+    /// Kills the bot through RCON until its `Died` comes: a respawned
+    /// player takes no damage until the server has its `PlayerLoaded`,
+    /// which may still be on its way (found in group E). Each try waits at
+    /// most 5 s, and there are at most 12.
+    async fn kill(&mut self, what: &str) {
+        for _ in 0..12 {
+            self.server.rcon(&format!("kill {NAME}")).await;
+            let died = tokio::time::timeout(Duration::from_secs(5), async {
+                while let Some(event) = self.events.next().await {
+                    if event == SessionEvent::Died {
+                        return true;
+                    }
+                }
+                false
+            })
+            .await;
+            match died {
+                Ok(true) => return,
+                Ok(false) => panic!("the session ended before {what}"),
+                Err(_elapsed) => {}
+            }
+        }
+        panic!("{what} didn't happen after 12 kills");
+    }
+
+    /// Asks for a respawn and waits for the server's confirmation, after
+    /// which no other lifecycle event follows: no second `Respawned`, and no
+    /// `Died` from the old life (PR #65's review).
+    async fn respawned(&mut self, what: &str) {
+        assert_eq!(within("a respawn", self.session.respawn()).await, Ok(()));
+        wait_for(&mut self.events, what, |event| {
+            *event == SessionEvent::Respawned
+        })
+        .await;
+        let after = self.ready_lifecycle_events().await;
+        assert_eq!(after, [], "after {what}");
+    }
+
+    /// The lifecycle events queued now: those that come within half a
+    /// second, chat left out.
+    async fn ready_lifecycle_events(&mut self) -> Vec<SessionEvent> {
+        let mut lifecycle = Vec::new();
+        while let Ok(Some(event)) =
+            tokio::time::timeout(Duration::from_millis(500), self.events.next()).await
+        {
+            if !matches!(event, SessionEvent::Chat(_)) {
+                lifecycle.push(event);
+            }
+        }
+        lifecycle
     }
 }
 
@@ -396,32 +446,44 @@ async fn chat_burst(scene: &mut Scene) {
 /// The translation key of vanilla's kick for chat spam.
 const SPAM_KICK: &str = "disconnect.spam";
 
-/// Respawn: back to full health, and the next death is reported again.
+/// Respawn: `Respawned` comes once the server respawned the bot and its
+/// client loaded, at full health, and the next death is reported again. A
+/// dimension change gives neither `Respawned` nor `Died`, and a death there
+/// respawns as any other (ADR-0020, S22, S26).
 async fn respawn(scene: &mut Scene) {
-    scene.server.rcon(&format!("kill {NAME}")).await;
-    scene.died("the first death").await;
+    scene.kill("the first death").await;
+    scene.respawned("the first respawn").await;
+    scene
+        .server
+        .eventually(
+            "full health after the respawn",
+            &format!("data get entity {NAME} Health"),
+            |output| data_floats(output) == [20.0],
+        )
+        .await;
+    scene.kill("the second death").await;
+    scene.respawned("the second respawn").await;
+
     let loads = scene.loads.load(Ordering::SeqCst);
-    assert_eq!(within("the respawn", scene.session.respawn()).await, Ok(()));
-    // The server ignores damage to a respawned player until its client says
-    // it has loaded, which azalea does only once the bot is in a loaded chunk
-    // again. A kill before that is lost (found in group E: about 4 runs in
-    // 10 failed here).
-    within("the bot loading again after the respawn", async {
+    scene
+        .server
+        .rcon(&format!(
+            "execute in minecraft:the_nether run tp {NAME} 0.5 129 0.5"
+        ))
+        .await;
+    within("the bot loading in the nether", async {
         while scene.loads.load(Ordering::SeqCst) <= loads {
             tokio::task::yield_now().await;
         }
     })
     .await;
-    scene
-        .server
-        .eventually(
-            "the respawn",
-            &format!("data get entity {NAME} Health"),
-            |output| data_floats(output) == [20.0],
-        )
-        .await;
-    scene.server.rcon(&format!("kill {NAME}")).await;
-    scene.died("the second death").await;
+    // The watch tells the bridge in the same frame as the load, so a
+    // `Respawned` for it would be queued by now.
+    let lifecycle = scene.ready_lifecycle_events().await;
+    assert_eq!(lifecycle, [], "the dimension change");
+
+    scene.kill("the death in the nether").await;
+    scene.respawned("the respawn from the nether").await;
 }
 
 #[tokio::test]

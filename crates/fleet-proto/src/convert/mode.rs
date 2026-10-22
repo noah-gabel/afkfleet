@@ -70,6 +70,7 @@ fn step_to_wire(step: &Step) -> wire::Step {
     };
     let schedule = match step.schedule {
         Schedule::AtStart => wire::schedule::Schedule::AtStart(unit),
+        Schedule::OnRespawn => wire::schedule::Schedule::OnRespawn(unit),
         Schedule::Every { interval, jitter } => {
             wire::schedule::Schedule::Every(wire::schedule::Every {
                 interval_ms: millis(interval),
@@ -125,6 +126,7 @@ fn step_from_wire(step: wire::Step) -> Result<Step, ConvertError> {
         required("Step.schedule", step.schedule)?.schedule,
     )? {
         wire::schedule::Schedule::AtStart(wire::Unit {}) => Schedule::AtStart,
+        wire::schedule::Schedule::OnRespawn(wire::Unit {}) => Schedule::OnRespawn,
         wire::schedule::Schedule::Every(every) => Schedule::Every {
             interval: Duration::from_millis(every.interval_ms),
             jitter: Duration::from_millis(every.jitter_ms),

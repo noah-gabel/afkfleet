@@ -48,6 +48,14 @@ async fn start_joined() -> (FakeSession, FakeEvents, SessionController) {
     (session, events, controller)
 }
 
+/// The next event within a second of paused time, so a broken fake fails
+/// a test instead of hanging it; `None` when none came.
+async fn next(events: &mut FakeEvents) -> Option<SessionEvent> {
+    tokio::time::timeout(Duration::from_secs(1), events.next())
+        .await
+        .unwrap_or(None)
+}
+
 fn chat(text: &str) -> SessionEvent {
     SessionEvent::Chat(IncomingChat::system(text))
 }
@@ -157,16 +165,107 @@ async fn a_second_death_before_respawn_is_dropped() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn a_death_after_a_respawn_is_delivered() {
+async fn a_death_after_a_confirmed_respawn_is_delivered() {
     let (session, mut events, controller) = start_joined().await;
     assert_eq!(controller.emit(SessionEvent::Died), EmitOutcome::Queued);
-    assert_eq!(events.next().await, Some(SessionEvent::Died));
+    assert_eq!(next(&mut events).await, Some(SessionEvent::Died));
     session.respawn().await.unwrap();
+    assert_eq!(next(&mut events).await, Some(SessionEvent::Respawned));
 
     let again = controller.emit(SessionEvent::Died);
 
     assert_eq!(again, EmitOutcome::Queued);
-    assert_eq!(events.next().await, Some(SessionEvent::Died));
+    assert_eq!(next(&mut events).await, Some(SessionEvent::Died));
+}
+
+/// A respawn is confirmed only when it was asked for after its `Died` was
+/// read, once per death (ADR-0020, S22).
+#[tokio::test(start_paused = true)]
+async fn a_respawn_asked_before_its_death_was_read_is_never_confirmed() {
+    let (session, mut events, controller) = start_joined().await;
+    assert_eq!(controller.emit(SessionEvent::Died), EmitOutcome::Queued);
+
+    session.respawn().await.unwrap();
+    assert_eq!(controller.emit(chat("marker")), EmitOutcome::Queued);
+
+    assert_eq!(next(&mut events).await, Some(SessionEvent::Died));
+    assert_eq!(next(&mut events).await, Some(chat("marker")));
+    assert_eq!(
+        controller.emit(SessionEvent::Died),
+        EmitOutcome::DuplicateDeath,
+        "still dead"
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_respawn_is_confirmed_once_per_death() {
+    let (session, mut events, controller) = start_joined().await;
+    assert_eq!(controller.emit(SessionEvent::Died), EmitOutcome::Queued);
+    assert_eq!(next(&mut events).await, Some(SessionEvent::Died));
+
+    session.respawn().await.unwrap();
+    session.respawn().await.unwrap();
+    assert_eq!(controller.emit(chat("marker")), EmitOutcome::Queued);
+
+    assert_eq!(next(&mut events).await, Some(SessionEvent::Respawned));
+    assert_eq!(next(&mut events).await, Some(chat("marker")));
+    assert_eq!(controller.log(), [Performed::Respawn, Performed::Respawn]);
+}
+
+/// A server that's slow or silent: a withheld confirmation leaves the bot
+/// dead, until it's released, which confirms the request at once.
+#[tokio::test(start_paused = true)]
+async fn a_withheld_respawn_is_confirmed_when_released() {
+    let (session, mut events, controller) = start_joined().await;
+    controller.withhold_respawns();
+    assert_eq!(controller.emit(SessionEvent::Died), EmitOutcome::Queued);
+    assert_eq!(next(&mut events).await, Some(SessionEvent::Died));
+
+    session.respawn().await.unwrap();
+    let still_dead = controller.emit(SessionEvent::Died);
+    assert_eq!(controller.emit(chat("marker")), EmitOutcome::Queued);
+    controller.confirm_respawns();
+
+    assert_eq!(still_dead, EmitOutcome::DuplicateDeath);
+    assert_eq!(next(&mut events).await, Some(chat("marker")));
+    assert_eq!(next(&mut events).await, Some(SessionEvent::Respawned));
+}
+
+/// A `Respawned` a test emits follows the same rules: only for a request.
+#[tokio::test(start_paused = true)]
+async fn a_respawned_emitted_by_hand_needs_a_request() {
+    let (session, mut events, controller) = start_joined().await;
+    controller.withhold_respawns();
+
+    let unasked = controller.emit(SessionEvent::Respawned);
+    assert_eq!(controller.emit(SessionEvent::Died), EmitOutcome::Queued);
+    assert_eq!(next(&mut events).await, Some(SessionEvent::Died));
+    session.respawn().await.unwrap();
+    let asked = controller.emit(SessionEvent::Respawned);
+    let twice = controller.emit(SessionEvent::Respawned);
+
+    assert_eq!(unasked, EmitOutcome::UnrequestedRespawn);
+    assert_eq!(asked, EmitOutcome::Queued);
+    assert_eq!(twice, EmitOutcome::UnrequestedRespawn);
+    assert_eq!(next(&mut events).await, Some(SessionEvent::Respawned));
+}
+
+#[tokio::test(start_paused = true)]
+async fn respawned_is_delivered_even_when_the_queue_is_full() {
+    let (session, mut events, controller) = start_with_capacity(1).await;
+    assert_eq!(controller.emit(SessionEvent::Joined), EmitOutcome::Queued);
+    assert_eq!(next(&mut events).await, Some(SessionEvent::Joined));
+    assert_eq!(controller.emit(SessionEvent::Died), EmitOutcome::Queued);
+    assert_eq!(next(&mut events).await, Some(SessionEvent::Died));
+    assert_eq!(
+        controller.emit(chat("fills the queue")),
+        EmitOutcome::Queued
+    );
+
+    session.respawn().await.unwrap();
+
+    assert_eq!(next(&mut events).await, Some(chat("fills the queue")));
+    assert_eq!(next(&mut events).await, Some(SessionEvent::Respawned));
 }
 
 #[tokio::test(start_paused = true)]

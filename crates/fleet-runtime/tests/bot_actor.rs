@@ -1279,6 +1279,199 @@ async fn each_death_warns_on_its_first_failed_respawn() {
     );
 }
 
+/// The actor no longer trusts `respawn()`'s `Ok`: with no `Respawned` within
+/// 5 s it asks again, and that counts as a failure (ADR-0020, S20, S23).
+#[tokio::test(start_paused = true)]
+async fn an_unconfirmed_respawn_counts_as_a_failure_after_5_s() {
+    let levels = Levels::default();
+    let _guard = tracing::subscriber::set_default(levels.clone());
+    let (bot, controller) = Bot::online(Setup::new(running())).await;
+    controller.withhold_respawns();
+
+    emit(&controller, SessionEvent::Died);
+    settle().await;
+    advance(ms(4_999)).await;
+    let before = controller.log();
+    advance(ms(1)).await;
+
+    assert_eq!(before, [Performed::Respawn]);
+    assert_eq!(controller.log(), [Performed::Respawn, Performed::Respawn]);
+    assert_eq!(
+        levels.of("the server didn't confirm a respawn"),
+        [Level::WARN]
+    );
+    assert!(matches!(bot.state(), BotState::Online { .. }));
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_confirmation_within_5_s_ends_the_retry() {
+    let levels = Levels::default();
+    let _guard = tracing::subscriber::set_default(levels.clone());
+    let (bot, controller) = Bot::online(Setup::new(running())).await;
+    controller.withhold_respawns();
+    emit(&controller, SessionEvent::Died);
+    settle().await;
+
+    advance(secs(2)).await;
+    controller.confirm_respawns();
+    settle().await;
+    advance(secs(120)).await;
+
+    assert_eq!(controller.log(), [Performed::Respawn]);
+    assert!(matches!(bot.state(), BotState::Online { .. }));
+    assert!(!levels.any_warning());
+    assert_eq!(
+        levels.of("the server confirmed the respawn"),
+        [Level::DEBUG]
+    );
+}
+
+#[tokio::test(start_paused = true)]
+async fn twelve_unconfirmed_respawns_end_the_session_after_60_s() {
+    let (bot, controller) = Bot::online(Setup::new(running())).await;
+    controller.withhold_respawns();
+
+    emit(&controller, SessionEvent::Died);
+    settle().await;
+    // One call every 5 s: at 0, 5, …, 55 s.
+    for _ in 0..11 {
+        advance(secs(5)).await;
+    }
+    advance(ms(4_999)).await;
+    let still_online = matches!(bot.state(), BotState::Online { .. });
+    advance(ms(1)).await;
+
+    assert!(still_online);
+    let calls = |log: Vec<Performed>| {
+        log.iter()
+            .filter(|done| **done == Performed::Respawn)
+            .count()
+    };
+    assert_eq!(calls(controller.log()), 12);
+    assert_eq!(bot.state(), backoff(n(1)));
+    assert_eq!(bot.last_disconnect(), Some(DisconnectReason::RespawnFailed));
+    assert!(controller.is_torn_down());
+}
+
+/// Failed calls and unconfirmed ones count together: three errors, then
+/// nine calls the server never confirms, end the session 60 s after the
+/// death.
+#[tokio::test(start_paused = true)]
+async fn failed_and_unconfirmed_calls_count_together() {
+    let (bot, controller) = Bot::online(Setup::new(running())).await;
+    controller.withhold_respawns();
+    controller.fail_respawn(SessionError::TimedOut);
+
+    emit(&controller, SessionEvent::Died);
+    settle().await;
+    // Failed calls at 0, 5 and 10 s; unconfirmed ones at 15, 20, …, 55 s.
+    advance(secs(5)).await;
+    advance(secs(5)).await;
+    advance(secs(4)).await;
+    controller.succeed_respawn();
+    advance(secs(1)).await;
+    for _ in 0..8 {
+        advance(secs(5)).await;
+    }
+    advance(ms(4_999)).await;
+    let still_online = matches!(bot.state(), BotState::Online { .. });
+    advance(ms(1)).await;
+
+    assert!(still_online);
+    let calls = |log: Vec<Performed>| {
+        log.iter()
+            .filter(|done| **done == Performed::Respawn)
+            .count()
+    };
+    assert_eq!(calls(controller.log()), 9);
+    assert_eq!(bot.last_disconnect(), Some(DisconnectReason::RespawnFailed));
+}
+
+/// A spec running a mode that sends `/home` and jumps on respawn.
+fn homing() -> BotSpec {
+    let on_respawn = |action| Step {
+        action,
+        schedule: Schedule::OnRespawn,
+        probability: 100,
+    };
+    BotSpec {
+        mode: mode(vec![
+            on_respawn(Action::SendChat {
+                message: message("/home"),
+            }),
+            on_respawn(Action::Jump),
+        ]),
+        ..running()
+    }
+}
+
+/// A confirmed respawn reaches the runner of its own session only: the next
+/// session's runner subscribes afresh and runs no old respawn's steps
+/// (ADR-0020, S23).
+#[tokio::test(start_paused = true)]
+async fn a_new_sessions_runner_never_sees_an_old_respawn() {
+    let (bot, old) = Bot::online(Setup::new(homing())).await;
+    emit(&old, SessionEvent::Died);
+    settle().await;
+    let jumped = old.log().contains(&Performed::Action(GameAction::Jump));
+    emit(&old, transient_kick());
+    settle().await;
+    advance(policy().bounds(n(1)).1).await;
+    let new = bot.session(1).await;
+    emit(&new, SessionEvent::Joined);
+    settle().await;
+
+    advance(secs(60)).await;
+
+    assert!(jumped, "the old session ran its steps on respawn");
+    assert_eq!(new.log(), [], "the new session's runner ran nothing");
+}
+
+/// A bot that dies five times in one instant: the on-respawn steps run each
+/// time, the on-respawn chat once (ADR-0020, S24; the user's death-loop
+/// rule).
+#[tokio::test(start_paused = true)]
+async fn a_burst_of_deaths_runs_the_steps_each_time_and_chats_once() {
+    let (mut bot, controller) = Bot::online(Setup::new(homing())).await;
+
+    for _ in 0..5 {
+        emit(&controller, SessionEvent::Died);
+        settle().await;
+    }
+    advance(secs(10)).await;
+
+    let log = controller.log();
+    let count = |done: &Performed| log.iter().filter(|logged| *logged == done).count();
+    assert_eq!(count(&Performed::Respawn), 5);
+    assert_eq!(count(&Performed::Action(GameAction::Jump)), 5);
+    assert_eq!(count(&Performed::Chat(message("/home"))), 1);
+    let sent: Vec<_> = bot
+        .kinds()
+        .into_iter()
+        .filter(|kind| matches!(kind, FleetEventKind::ModeChatSent { .. }))
+        .collect();
+    assert_eq!(sent.len(), 1);
+}
+
+/// A bot that dies again and again (lava, a mob farm): each death is
+/// respawned once, confirmed, without a warning (ADR-0020, S23).
+#[tokio::test(start_paused = true)]
+async fn a_burst_of_deaths_respawns_each_once() {
+    let levels = Levels::default();
+    let _guard = tracing::subscriber::set_default(levels.clone());
+    let (bot, controller) = Bot::online(Setup::new(running())).await;
+
+    for _ in 0..5 {
+        emit(&controller, SessionEvent::Died);
+        settle().await;
+    }
+    advance(secs(60)).await;
+
+    assert_eq!(controller.log(), vec![Performed::Respawn; 5]);
+    assert!(matches!(bot.state(), BotState::Online { .. }));
+    assert!(!levels.any_warning());
+}
+
 // --- Commands ---
 
 #[tokio::test(start_paused = true)]

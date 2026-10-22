@@ -5,4 +5,4 @@
  * This union lists the values this version knows; a newer server may send
  * others, so code that branches on one always keeps a default branch.
  */
-export type ModeScheduleKind = "at_start" | "every";
+export type ModeScheduleKind = "at_start" | "every" | "on_respawn";

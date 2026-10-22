@@ -177,6 +177,9 @@ pub struct BotActor<C: MinecraftConnector, P> {
     breaker_copy: watch::Sender<CircuitBreaker>,
     breaker: CircuitBreaker,
     mode: watch::Sender<ModeDefinition>,
+    /// How many respawns the server confirmed; each session's runner
+    /// subscribes when it starts, so it sees only its own (ADR-0020, S23).
+    respawns: watch::Sender<u64>,
     queue: ChatQueue,
     inbox: mpsc::Receiver<BotCommand>,
     span: Span,
@@ -192,6 +195,9 @@ pub struct BotActor<C: MinecraftConnector, P> {
     session_request: Slot<SessionAnswer>,
     retry: Option<Pin<Box<Sleep>>>,
     respawn: Slot<RespawnOutcome>,
+    /// A death the actor is respawning, from `Effect::Respawn` until the
+    /// server confirms it with `Respawned` (ADR-0020, S23).
+    death_open: bool,
     /// The watchdog's next check, while the bot is Online.
     watchdog: Option<Pin<Box<Sleep>>>,
     session: Option<Session<C::Session>>,
@@ -257,6 +263,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             breaker_copy: breaker,
             breaker: breaker_start,
             mode: watch::Sender::new(spec.mode.clone()),
+            respawns: watch::Sender::new(0),
             queue: ChatQueue::new(spec.id, config.chat_queue, bucket, tickets),
             inbox,
             span: info_span!("bot", bot_id = %spec.id),
@@ -269,6 +276,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
             session_request: None,
             retry: None,
             respawn: None,
+            death_open: false,
             watchdog: None,
             session: None,
             session_events: None,
@@ -482,12 +490,15 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
         }
     }
 
-    /// Every respawn failed: the session ends with `RespawnFailed`, unless a
-    /// ready event ended it first.
+    /// Every respawn failed or went unconfirmed: the session ends with
+    /// `RespawnFailed`, unless a ready event ended it first, or confirmed the
+    /// respawn after all (ADR-0020, S23). A death read after that
+    /// confirmation started a retry of its own, so it's not this one's to
+    /// end (PR #65's review).
     async fn respawn_failed(&mut self) {
         let generation = self.generation;
         self.drain().await;
-        if self.is_current_online(generation) {
+        if self.death_open && self.respawn.is_none() && self.is_current_online(generation) {
             self.ended(
                 DisconnectReason::RespawnFailed,
                 BotEvent::Disconnected(DisconnectReason::RespawnFailed),
@@ -594,6 +605,7 @@ impl<C: MinecraftConnector, P: SessionCredentialProvider> BotActor<C, P> {
         self.session_request = None;
         self.retry = None;
         self.respawn = None;
+        self.death_open = false;
         self.watchdog = None;
         if let Some(session) = self.session.take() {
             self.close_session(session);
@@ -678,7 +690,9 @@ mod tests {
     use fleet_core::mc::SessionEvent;
     use fleet_core::mode::ModeDraft;
     use fleet_core::resilience::CircuitPolicy;
-    use fleet_testkit::mc::{EmitOutcome, FakeConnector, FakeCredentials, SessionController};
+    use fleet_testkit::mc::{
+        EmitOutcome, FakeConnector, FakeCredentials, Performed, SessionController,
+    };
     use rand::SeedableRng as _;
 
     use super::*;
@@ -764,9 +778,20 @@ mod tests {
         (actor, snapshots, controller)
     }
 
+    /// The bot died and the actor read it: a respawn retry runs.
+    async fn dead(
+        actor: &mut BotActor<FakeConnector, FakeCredentials>,
+        controller: &SessionController,
+    ) {
+        assert_eq!(controller.emit(SessionEvent::Died), EmitOutcome::Queued);
+        actor.drain().await;
+        assert!(actor.respawn.is_some());
+    }
+
     #[tokio::test(start_paused = true)]
     async fn a_queued_duplicate_login_goes_before_a_failed_respawn() {
         let (mut actor, snapshots, controller) = online().await;
+        dead(&mut actor, &controller).await;
         assert_eq!(controller.emit(duplicate_login()), EmitOutcome::Queued);
 
         let flow = actor.handle(Input::Respawn(RespawnOutcome::GaveUp)).await;
@@ -782,6 +807,7 @@ mod tests {
     #[tokio::test(start_paused = true)]
     async fn without_a_queued_event_a_failed_respawn_ends_the_session() {
         let (mut actor, snapshots, controller) = online().await;
+        dead(&mut actor, &controller).await;
 
         let _ = actor.handle(Input::Respawn(RespawnOutcome::GaveUp)).await;
 
@@ -795,17 +821,79 @@ mod tests {
     }
 
     #[tokio::test(start_paused = true)]
-    async fn a_respawn_that_worked_or_found_the_session_ended_changes_nothing() {
-        let (mut actor, snapshots, _controller) = online().await;
+    async fn a_respawn_that_found_the_session_ended_changes_nothing() {
+        let (mut actor, snapshots, controller) = online().await;
+        dead(&mut actor, &controller).await;
 
-        let _ = actor
-            .handle(Input::Respawn(RespawnOutcome::Respawned))
-            .await;
         let _ = actor
             .handle(Input::Respawn(RespawnOutcome::SessionEnded))
             .await;
 
         assert!(matches!(snapshots.borrow().state, BotState::Online { .. }));
+    }
+
+    /// A confirmation already queued when the retry gives up wins, as a
+    /// queued kick does: the bot lives, so the session stays (ADR-0020,
+    /// S23).
+    #[tokio::test(start_paused = true)]
+    async fn a_queued_confirmation_goes_before_a_failed_respawn() {
+        let (mut actor, snapshots, controller) = online().await;
+        dead(&mut actor, &controller).await;
+        // The retry's call, answered by the server after the retry gave up.
+        let handle = actor.session.as_ref().unwrap().handle.clone();
+        handle.respawn().await.unwrap();
+
+        let _ = actor.handle(Input::Respawn(RespawnOutcome::GaveUp)).await;
+
+        assert!(matches!(snapshots.borrow().state, BotState::Online { .. }));
+        assert_eq!(snapshots.borrow().last_disconnect, None);
+        assert!(!controller.is_torn_down());
+    }
+
+    /// A drain that reads the old death's confirmation and then a new death
+    /// leaves the new death to its own retry: the session stays (PR #65's
+    /// review).
+    #[tokio::test(start_paused = true)]
+    async fn a_new_death_read_while_the_retry_gives_up_keeps_its_own_retry() {
+        let (mut actor, snapshots, controller) = online().await;
+        dead(&mut actor, &controller).await;
+        let handle = actor.session.as_ref().unwrap().handle.clone();
+        handle.respawn().await.unwrap();
+        assert_eq!(controller.emit(SessionEvent::Died), EmitOutcome::Queued);
+
+        let _ = actor.handle(Input::Respawn(RespawnOutcome::GaveUp)).await;
+
+        assert!(matches!(snapshots.borrow().state, BotState::Online { .. }));
+        assert_eq!(snapshots.borrow().last_disconnect, None);
+        assert!(actor.respawn.is_some(), "the new death's retry runs");
+        assert!(!controller.is_torn_down());
+    }
+
+    /// A `Respawned` with no death open (one the actor stopped waiting for)
+    /// changes nothing, and never reaches the mode runner.
+    #[tokio::test(start_paused = true)]
+    async fn a_respawned_without_an_open_death_is_ignored() {
+        let (mut actor, snapshots, _controller) = online().await;
+
+        actor.session_event(Some(SessionEvent::Respawned)).await;
+
+        assert!(matches!(snapshots.borrow().state, BotState::Online { .. }));
+        assert!(actor.respawn.is_none());
+        assert_eq!(*actor.respawns.borrow(), 0, "the runner wasn't signalled");
+    }
+
+    /// A confirmed respawn drops the retry: it never calls again.
+    #[tokio::test(start_paused = true)]
+    async fn a_confirmed_respawn_drops_the_retry() {
+        let (mut actor, _snapshots, controller) = online().await;
+        dead(&mut actor, &controller).await;
+        let handle = actor.session.as_ref().unwrap().handle.clone();
+        handle.respawn().await.unwrap();
+
+        actor.drain().await;
+
+        assert!(actor.respawn.is_none());
+        assert_eq!(controller.log(), [Performed::Respawn]);
     }
 
     #[tokio::test(start_paused = true)]

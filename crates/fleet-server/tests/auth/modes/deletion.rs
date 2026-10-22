@@ -156,10 +156,8 @@ async fn a_malformed_unknown_or_unseen_mode_is_the_same_404(
     for seen in [&malformed, &unknown, &unseen] {
         assert_eq!(seen.status, 404, "{}", seen.text);
     }
-    assert_eq!(
-        unknown.body_without_request_id(),
-        unseen.body_without_request_id()
-    );
+    assert_eq!(without_request_id(&malformed), without_request_id(&unknown));
+    assert_eq!(without_request_id(&unknown), without_request_id(&unseen));
     assert!(setup.kept(hidden).await);
 }
 
@@ -260,8 +258,9 @@ async fn a_mode_a_bot_uses_is_409_whoever_runs_it(
     assert_eq!(setup.deletions().await, 0);
 }
 
-/// A bot switched to the mode, a lowered role or a revoked session right
-/// before the delete's transaction is seen in it, and nothing is deleted.
+/// A bot switched to the mode, a lowered role, the mode deleted or a
+/// revoked session right before the delete's transaction is seen in it, and
+/// nothing is deleted by it.
 #[sqlx::test(migrations = false)]
 async fn a_change_right_before_the_transaction_is_seen_in_it(
     _pool: SqlitePoolOptions,
@@ -275,7 +274,8 @@ async fn a_change_right_before_the_transaction_is_seen_in_it(
     for (n, status, code) in [
         (1_u8, 409, "mode_in_use"),
         (2, 403, "forbidden"),
-        (3, 401, "unauthorized"),
+        (3, 404, "not_found"),
+        (4, 401, "unauthorized"),
     ] {
         let id = setup
             .add_mode(n, admin.id, &format!("Shared {n}"), "shared", &swinging())
@@ -283,6 +283,7 @@ async fn a_change_right_before_the_transaction_is_seen_in_it(
         let meanwhile = match n {
             1 => Meanwhile::SetBotMode(hidden, id),
             2 => Meanwhile::SetRole(admin.id, Role::Member),
+            3 => Meanwhile::DeleteMode(id),
             _ => Meanwhile::RevokeSession(admin.session),
         };
         setup.hooked.queue(meanwhile);
@@ -293,7 +294,7 @@ async fn a_change_right_before_the_transaction_is_seen_in_it(
             "case {n}: {}",
             seen.text
         );
-        assert!(setup.kept(id).await, "case {n}");
+        assert_eq!(setup.kept(id).await, n != 3, "case {n}");
         setup.set_role(admin.id, Role::Admin).await;
     }
     assert_eq!(setup.deletions().await, 0);

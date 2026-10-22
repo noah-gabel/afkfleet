@@ -1510,7 +1510,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P4.2, from the Phase 4 plan, the user's decisions) ([ADR-0013](docs/adr/0013-fleet-runtime-conventions-and-phase-4-refinements.md)):
   > - **Holds after a respawn** aren't re-applied; that's a known limit. A repeating `HoldUse{on: true}` step does re-apply a hold after a death. P11.4 decides about "on respawn" steps. *Decided in Phase 11, group C ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S20): an opt-in `on_respawn` schedule after a respawn the server confirmed, built in C3.*
-  > - **A failed `respawn()`** is retried every 5 s while the session lives; the first failure logs at `warn`, the retries at `debug`. After 12 failed calls in a row the session ends with the new `DisconnectReason::RespawnFailed` (Transient, added to fleet-core in this task), so the bot reconnects and respawns on join.
+  > - **A failed `respawn()`** is retried every 5 s while the session lives; the first failure logs at `warn`, the retries at `debug`. After 12 failed calls in a row the session ends with the new `DisconnectReason::RespawnFailed` (Transient, added to fleet-core in this task), so the bot reconnects and respawns on join. *(Since Phase 11, [ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S23: an `Ok` the server doesn't confirm within 5 s counts as a failure too.)*
   > - **Events.** `FleetEvent { bot_id, at, kind }` with `StateChanged(BotSnapshot)`, `Died`, `ChatReceived`, `ChatSent{ticket}` and `ChatFailed{ticket, reason}`, on one bounded `broadcast` per fleet.
   > - **The session-request timeout** is 30 s, a `RuntimeConfig` default. *(150 s from Phase 11, ADR-0020, S1, PR #59's review: longer than the server may take to mint a session, so a bot asking fresh after a refused login takes the session minted for it.)*
 
@@ -3974,7 +3974,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P11.3, from Phase 10, group E) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **`[chat] command_allowlist` exists** (`ServerConfig.chat`, P2.9's rules; the mode switch reads it), and `BotService` has it; `retention_days` stays P11.6's. The bot routes answer in extractor order (R38): 401, the per-user 429, a malformed path's 404, the body's 400/422, an unseen bot's 404, then 403; the chat route follows it, and re-reads the actor and the grant in its transaction as the bot writes do.
 
   > Note (P11.3, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): **a `SendChat` dies with its stream.** The agent applies one only while the stream that carried it lives, and its `ChatSent` or `ChatFailed` may come on a later stream or never: the outbox keeps answers across an outage, bounded, and drops those of bots the next reconcile doesn't give. P11.3's wait for an answer is bounded, and one that never comes reads as unknown. `chat_messages` holds what bots received and what their modes sent; a user's message is P11.3's to store.
-- [ ] **P11.4** 🔴 Modes CRUD: `GET`, `POST`, `PUT`, `DELETE` on `/modes`. Core validation errors become field errors. Built-in modes are read-only.
+- [x] **P11.4** 🔴 Modes CRUD: `GET`, `POST`, `PUT`, `DELETE` on `/modes`. Core validation errors become field errors. Built-in modes are read-only.
 
   > Note (P11.4, from Phase 2): Editing a mode that's assigned to bots must re-run the command check for every one of them. A mode with a command outside the allowlist needs Manage on each bot (ADR-0010).
 
@@ -4019,6 +4019,20 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Ports:** `ModeReads`/`ModeWrites::listed`, `name_taken` without the mode itself, `ModeWrites::update` (guarded by the version) and `delete` (never a built-in mode), `BotWrites::accounts_with_mode` (the index `bots_mode_id`). No migration.
   > - **Clients:** fleet-client's `update_mode`, `update_mode_with_commands` and `delete_mode`; `just dev-bots`' `edit-mode <id> <json>` and `delete-mode <id>`, the mode line with its version.
   > - **Deviations:** a delete that matches no row it had just read is the internal error too, as the user's note asks of an update; the commits are seven, the clients before the loopback case, which drives the server through fleet-client.
+
+  > Note (P11.4, Phase 11, group C3's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S22–S26): **"on respawn" steps.**
+  > - **fleet-mc** (S22): `Respawned` only for a `Died` the actor took and a `respawn()` since, once the bot is loaded and not dead (azalea's `HasClientLoaded` without `Dead`; corrected at PR #65's review, S27: once a Respawn removed `Dead` and the next load followed); never for a dimension change; the next `Died` only after it, so at most three lifecycle events are pending and the drain of 67 holds.
+  > - **The actor** (S23): an `Ok` not confirmed within 5 s is a failure, and the twelfth ends the session `RespawnFailed`, 60 s after the death at most; `Respawned` drops the retry and signals the runner through a `watch`; it stays inside the agent.
+  > - **The runner** (S24): fleet-core's plan keeps the on-respawn steps aside and hands them out on a respawn, a chat skipped within 30 s of the last one, a memory kept for the session; the runner lets go only for a mode that has such steps.
+  > - **Older agents and servers** (S25) refuse the whole message or row, as before; the agent's "couldn't be read" line goes to `error`. **The slow test** (S26): fleet-mc's scenario and a whole-path `slow_` case in fleet-integration.
+
+  > Note (P11.4, Phase 11, group C3) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)): **"on respawn" steps, as built**; P11.4 is ticked.
+  > - **The tag:** `{"type":"on_respawn"}` through fleet-core, the API (`ModeScheduleKind::OnRespawn`, no interval or jitter), the stored JSON and the proto (`on_respawn = 3`); four limited kinds, one each per mode. An agent or server that doesn't know it refuses the whole message or row.
+  > - **The confirmed respawn:** fleet-mc's `SessionEvent::Respawned` (`RespawnWatchPlugin` and the bridge's `Taken` death); the fake confirms by itself unless withheld; the actor's retry counts an unconfirmed `Ok` as a failure.
+  > - **The runner:** lets go of the use button and stops sneaking, then runs the on-respawn steps in order, an on-respawn chat skipped within 30 s of the last; a mode without such steps behaves as before.
+  > - **Tests:** fleet-integration's `loopback::on_respawn` on the fake and `slow_on_respawn` against a real offline-mode container, killed through RCON.
+  > - **Deviations:** no `calls` field on the confirmation's line; `ModeRunner::new` takes the respawn signal; the slow case checks an on-respawn look (a jump right after the load doesn't register) and reads the history after each ingest batch; the azalea bump check is in ADR-0003, as `docs/runbook.md` comes with P12.6.
+  > - **PR #65's review** ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S27, U9, U10): azalea's `add_dead` can put `Dead` back in the Respawn's frame, so fleet-mc confirms a respawn from the Respawn's removal of `Dead` and the next load, and reads deaths from azalea's `DeathEvent` inside the frame (S27); `respawn_failed()` leaves a death read in its drain to its own retry; the slow case counts every retry line, fits its budget with both stops, always removes its container first, reads RCON through `Logs::within` (U9) and the history while the bot runs (U10).
 
 - [ ] **P11.5** 🔴 Live events:
   1. `POST /events/ticket` returns a single-use ticket valid for 30 s (moka).
@@ -4241,6 +4255,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - The shutdown's `warn` "session-token refreshes were still running…" and a later `reauth_required` mean a rotated refresh token was lost: link the account again.
   > - After an agent is compromised, every account whose bot it held counts as exposed until about 24 h after its last `bot.unassign`, `bot.detach` or `agent.disable`; the server's "a session was granted" lines narrow it where they're kept (S61).
   > - A bot stuck backing off while the minute's summary shows `fresh_sessions` refusals is past its fresh-session limit (S58).
+
+  > Note (P12.6, from Phase 11, group C3) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S22, S23, S25):
+  > - **An agent older than its server's modes** can't read a spec with a schedule it doesn't know (`on_respawn` for agents built before C3): it ends its stream as `unreadable` and reconnects in a loop, with the `error` line "a message from the server couldn't be read" naming the field, while its running bots keep their old specs. Update the agent; servers go first, as P12's note says.
+  > - **A server rolled back past C3** reads a mode with `on_respawn` steps as `Corrupt`, so its bots are left alone and `GET /modes` fails: switch the bots off such modes, or delete them, before rolling back.
+  > - **Respawns:** a `warn` "the server didn't confirm a respawn; retrying" means the server ignored a respawn request for 5 s; twelve in a row end the session `respawn_failed` and the bot joins again. The Minecraft version upgrade carries ADR-0003's check of azalea's `Dead` and `HasClientLoaded`, which the confirmation reads.
 
   > Note (P12.6, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)):
   > - **Connecting to a server, for friends** *(the user's note on the app's CA field)*: the runbook and the README get a section with the server address to enter; with Caddy and Let's Encrypt (P12.2's default) the app's CA field stays empty; for a server without a public domain, how the operator exports the HTTPS CA certificate (never the control plane's agent CA from `pki init`) and hands it out, and how friends compare its fingerprint in the app's server setup.

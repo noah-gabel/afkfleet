@@ -690,6 +690,44 @@ async fn new_mode_creates_the_mode_and_never_shows_its_steps() {
     server.stop().await;
 }
 
+/// `new-mode` takes on-respawn steps: the hands-on line of group C3's PR,
+/// as the user types it (ADR-0020, S20).
+#[tokio::test]
+async fn new_mode_takes_on_respawn_steps() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    let (client, _) = server.client();
+    let line = r#"new-mode {"name":"Back again","visibility":"private","steps":[{"action":{"type":"select_hotbar_slot","slot":2},"schedule":{"type":"at_start"},"probability":100},{"action":{"type":"select_hotbar_slot","slot":4},"schedule":{"type":"on_respawn"},"probability":100},{"action":{"type":"send_chat","message":"back again"},"schedule":{"type":"on_respawn"},"probability":100}]}"#;
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &[line]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let text = terminal.text();
+    assert!(
+        text.contains(" Back again private mine editable version 1"),
+        "{text}"
+    );
+    let created = owner
+        .modes(&PageQuery {
+            before: None,
+            limit: None,
+        })
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .next()
+        .unwrap();
+    let schedules: Vec<&str> = created
+        .steps
+        .iter()
+        .map(|step| step.schedule.kind.as_str())
+        .collect();
+    assert_eq!(schedules, ["at_start", "on_respawn", "on_respawn"]);
+    server.stop().await;
+}
+
 /// A mode with a command off the allowlist asks for the password again,
 /// once, and is created through the step-up route.
 #[tokio::test]

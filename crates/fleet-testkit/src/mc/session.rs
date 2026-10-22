@@ -34,9 +34,12 @@ pub enum EmitOutcome {
     /// The queue was full, so the chat event was dropped and counted
     /// ([`SessionController::dropped_chat`]). Only chat is ever dropped.
     ChatDropped,
-    /// A `Died` before the last one was answered with a respawn: dropped, as
-    /// fleet-mc drops azalea's double death report (ADR-0008 §4).
+    /// A `Died` before the last one was answered with a confirmed respawn:
+    /// dropped, as fleet-mc drops azalea's double death report (ADR-0008 §4).
     DuplicateDeath,
+    /// A `Respawned` no respawn asked for: a death the code under test took
+    /// and a [`SessionHandle::respawn`] since (ADR-0020, S22). Dropped.
+    UnrequestedRespawn,
     /// The session already ended with a terminal event, or was torn down, so
     /// no more events are delivered.
     SessionEnded,
@@ -59,8 +62,9 @@ struct Shared {
 struct State {
     queue: VecDeque<SessionEvent>,
     phase: Phase,
-    /// `Died` was emitted and not yet answered with a respawn.
-    death_pending: bool,
+    death: Death,
+    /// Respawns asked for are confirmed only once this is false again.
+    withholding: bool,
     hung: bool,
     failing_actions: Option<SessionError>,
     failing_chat: Option<SessionError>,
@@ -88,6 +92,22 @@ enum Phase {
     TornDown,
 }
 
+/// The death the session reported, as fleet-mc's bridge keeps it
+/// (ADR-0020, S22).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Death {
+    /// None since the last confirmed respawn.
+    #[default]
+    None,
+    /// `Died` is queued and not yet read.
+    Queued,
+    /// `Died` was read; `requested` once a respawn was asked for since.
+    Read {
+        /// Whether a respawn was asked for since.
+        requested: bool,
+    },
+}
+
 /// What [`FakeEvents::next`] finds when it looks.
 enum Next {
     Event(SessionEvent),
@@ -96,6 +116,28 @@ enum Next {
 }
 
 impl State {
+    /// A respawn was asked for: it counts only after its `Died` was read,
+    /// and is confirmed at once unless held back. Returns whether it queued
+    /// `Respawned`.
+    fn respawn_asked(&mut self) -> bool {
+        if let Death::Read { .. } = self.death {
+            self.death = Death::Read { requested: true };
+        }
+        self.confirm()
+    }
+
+    /// Queues `Respawned` for a respawn asked for, unless held back or the
+    /// session ended. Returns whether it did.
+    fn confirm(&mut self) -> bool {
+        let ended = matches!(self.phase, Phase::Ended | Phase::TornDown);
+        if self.withholding || ended || self.death != (Death::Read { requested: true }) {
+            return false;
+        }
+        self.death = Death::None;
+        self.queue.push_back(SessionEvent::Respawned);
+        true
+    }
+
     /// Whether a handle call runs now, and the error it fails with if not.
     fn ready(&self) -> Result<(), SessionError> {
         // A torn-down session answers at once, even when it hung: fleet-mc
@@ -127,23 +169,28 @@ impl Shared {
     }
 
     /// Runs one handle call: checks that the session can take it, then logs
-    /// it.
+    /// it. A respawn asked for after its `Died` was read is confirmed, as a
+    /// cooperative server would, unless confirmations are held back.
     fn run(&self, call: Performed) -> Result<(), SessionError> {
-        let mut state = self.lock();
-        state.ready()?;
-        if let (Performed::Action(_), Some(error)) = (&call, state.failing_actions) {
-            return Err(error);
+        let confirmed = {
+            let mut state = self.lock();
+            state.ready()?;
+            if let (Performed::Action(_), Some(error)) = (&call, state.failing_actions) {
+                return Err(error);
+            }
+            if let (Performed::Chat(_), Some(error)) = (&call, state.failing_chat) {
+                return Err(error);
+            }
+            if let (Performed::Respawn, Some(error)) = (&call, state.failing_respawn) {
+                return Err(error);
+            }
+            let respawn = matches!(call, Performed::Respawn);
+            state.log.push(call);
+            respawn && state.respawn_asked()
+        };
+        if confirmed {
+            self.events_ready.notify_one();
         }
-        if let (Performed::Chat(_), Some(error)) = (&call, state.failing_chat) {
-            return Err(error);
-        }
-        if let (Performed::Respawn, Some(error)) = (&call, state.failing_respawn) {
-            return Err(error);
-        }
-        if matches!(call, Performed::Respawn) {
-            state.death_pending = false;
-        }
-        state.log.push(call);
         Ok(())
     }
 
@@ -168,6 +215,12 @@ impl Shared {
             return Next::End;
         }
         match state.queue.pop_front() {
+            Some(SessionEvent::Died) => {
+                if state.death == Death::Queued {
+                    state.death = Death::Read { requested: false };
+                }
+                Next::Event(SessionEvent::Died)
+            }
             Some(event) => Next::Event(event),
             None if state.phase == Phase::Ended => Next::End,
             None => Next::Wait,
@@ -298,15 +351,24 @@ impl SessionController {
                         state.dropped_chat = state.dropped_chat.saturating_add(1);
                         EmitOutcome::ChatDropped
                     }
-                    SessionEvent::Died if state.death_pending => EmitOutcome::DuplicateDeath,
+                    SessionEvent::Died if state.death != Death::None => EmitOutcome::DuplicateDeath,
+                    SessionEvent::Respawned => {
+                        if state.death == (Death::Read { requested: true }) {
+                            state.death = Death::None;
+                            state.queue.push_back(SessionEvent::Respawned);
+                            EmitOutcome::Queued
+                        } else {
+                            EmitOutcome::UnrequestedRespawn
+                        }
+                    }
                     event => {
                         match event {
                             SessionEvent::Joined => state.phase = Phase::InWorld,
-                            SessionEvent::Died => state.death_pending = true,
+                            SessionEvent::Died => state.death = Death::Queued,
                             SessionEvent::Disconnected(_) | SessionEvent::ConnectionFailed(_) => {
                                 state.phase = Phase::Ended;
                             }
-                            SessionEvent::Chat(_) => {}
+                            SessionEvent::Chat(_) | SessionEvent::Respawned => {}
                         }
                         state.queue.push_back(event);
                         EmitOutcome::Queued
@@ -388,6 +450,27 @@ impl SessionController {
     /// Lets [`SessionHandle::respawn`] succeed again.
     pub fn succeed_respawn(&self) {
         self.shared.lock().failing_respawn = None;
+    }
+
+    /// Holds back the confirmation of every respawn asked for from now on,
+    /// as a server that's slow to respawn the bot or ignores the request
+    /// (ADR-0020, S23): `respawn()` still succeeds, but no `Respawned`
+    /// comes until [`confirm_respawns`](Self::confirm_respawns).
+    pub fn withhold_respawns(&self) {
+        self.shared.lock().withholding = true;
+    }
+
+    /// Confirms respawns again: one asked for while they were held back is
+    /// confirmed at once, as a late load would.
+    pub fn confirm_respawns(&self) {
+        let confirmed = {
+            let mut state = self.shared.lock();
+            state.withholding = false;
+            state.confirm()
+        };
+        if confirmed {
+            self.shared.events_ready.notify_one();
+        }
     }
 
     /// Makes every later [`SessionHandle::disconnect`] slow, the way fleet-mc

@@ -60,7 +60,12 @@ pub trait SessionHandle: Clone + Send + Sync + 'static {
         message: ChatMessage,
     ) -> impl Future<Output = Result<(), SessionError>> + Send;
 
-    /// Respawns the bot after it died.
+    /// Asks the server to respawn the bot after it died. `Ok` means it was
+    /// asked, not that the bot lives: [`SessionEvent::Respawned`] confirms
+    /// that (ADR-0020, S22). A call before the `Died` was delivered, or
+    /// with no death open, still asks but is never confirmed.
+    ///
+    /// [`SessionEvent::Respawned`]: super::SessionEvent::Respawned
     ///
     /// # Errors
     /// As for [`perform`](Self::perform).

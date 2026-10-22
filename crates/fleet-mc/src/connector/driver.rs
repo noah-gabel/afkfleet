@@ -33,7 +33,7 @@ use tracing::{Instrument as _, debug, info_span, warn};
 use super::AppHook;
 use super::app::{build_app, event_channel};
 use crate::account::AuthReports;
-use crate::events::{EventSink, LivenessStamps, Phase, Terminal};
+use crate::events::{EventSink, LivenessStamps, Phase, RespawnWatchPlugin, Terminal};
 use crate::signing::SigningPlugin;
 
 /// Where a session's `Client` lives while the bot is in a world. Only the
@@ -183,10 +183,11 @@ impl Driver {
         // bot, so nothing it reports in that same frame is lost (found in CI
         // on Linux, where a refused connect fails within that frame).
         let (events_tx, mut events) = event_channel();
+        let respawns = RespawnWatchPlugin(sink.control());
         #[cfg(feature = "fault-injection")]
-        let mut app = session_app(stamps, events_tx, signing, bot_id, hook.as_ref());
+        let mut app = session_app(stamps, events_tx, signing, respawns, bot_id, hook.as_ref());
         #[cfg(not(feature = "fault-injection"))]
-        let mut app = session_app(stamps, events_tx, signing, bot_id);
+        let mut app = session_app(stamps, events_tx, signing, respawns, bot_id);
         // Variant C (ADR-0008 §1). The runner is a task of the host thread's
         // LocalSet, so closing the thread drops it and with it the World.
         let (ecs, start_running_systems, app_exit) = azalea::start_ecs_runner(app.main_mut());
@@ -301,10 +302,11 @@ fn session_app(
     stamps: Arc<LivenessStamps>,
     events: mpsc::UnboundedSender<Event>,
     signing: SigningPlugin,
+    respawns: RespawnWatchPlugin,
     bot_id: BotId,
     hook: Option<&AppHook>,
 ) -> App {
-    build_app(stamps, events, signing, |app| {
+    build_app(stamps, events, signing, respawns, |app| {
         if let Some(hook) = hook {
             hook(bot_id, app);
         }
@@ -317,9 +319,10 @@ fn session_app(
     stamps: Arc<LivenessStamps>,
     events: mpsc::UnboundedSender<Event>,
     signing: SigningPlugin,
+    respawns: RespawnWatchPlugin,
     _bot_id: BotId,
 ) -> App {
-    build_app(stamps, events, signing, |_| {})
+    build_app(stamps, events, signing, respawns, |_| {})
 }
 
 /// The bot's entity from the join callback, or `None` after reporting why

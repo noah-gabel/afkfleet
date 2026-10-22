@@ -9,6 +9,9 @@
 //! - [`loopback`]: P10.9's cases over mTLS on `127.0.0.1`.
 //! - [`managed_check`]: Phase 10's managed check, a manual test only the
 //!   user runs, with their own Microsoft account.
+//! - [`slow_on_respawn`]: the slow on-respawn case (ADR-0020, S26): a real
+//!   Minecraft server in Docker, the agent's bot on the azalea connector;
+//!   `just test-slow` runs it.
 //! - [`timing`]: the timing contracts between the agent and the server,
 //!   over their constants.
 //!
@@ -21,4 +24,5 @@
 mod harness;
 mod loopback;
 mod managed_check;
+mod slow_on_respawn;
 mod timing;

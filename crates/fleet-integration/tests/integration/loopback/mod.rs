@@ -10,6 +10,7 @@ mod agent_restart;
 mod chat;
 mod killed_mid_stream;
 mod mode_edit;
+mod on_respawn;
 mod outage;
 mod server_restart;
 mod silent_connection;

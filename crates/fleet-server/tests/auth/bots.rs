@@ -292,11 +292,23 @@ impl Setup {
     /// A mode of `owner` with `visibility`, sending `/home` at start, named
     /// `home <n>` so no two modes share a name (S13).
     async fn custom_mode(&self, n: u8, owner: UserId, visibility: &str) -> ModeId {
+        let definition = r#"{"steps":[{"action":{"type":"send_chat","message":"/home"},"schedule":{"type":"at_start"},"probability":100}]}"#;
+        self.custom_mode_of(n, owner, visibility, definition).await
+    }
+
+    /// A mode of `owner` with `visibility` and the mode JSON `definition`,
+    /// named `home <n>`.
+    async fn custom_mode_of(
+        &self,
+        n: u8,
+        owner: UserId,
+        visibility: &str,
+        definition: &str,
+    ) -> ModeId {
         let id = ModeId::new_v7(at(T0), [n; 10]).unwrap();
         let text = id.to_string();
         let owner = owner.to_string();
         let name = format!("home {n}");
-        let definition = r#"{"steps":[{"action":{"type":"send_chat","message":"/home"},"schedule":{"type":"at_start"},"probability":100}]}"#;
         sqlx::query!(
             "INSERT INTO modes (id, owner_user_id, name, visibility, definition_json, version, created_at, updated_at)
              VALUES (?, ?, ?, ?, ?, 1, '2027-01-15T08:00:00.000Z', '2027-01-15T08:00:00.000Z')",
@@ -918,6 +930,43 @@ async fn a_mode_with_a_command_off_the_allowlist_needs_manage(
 
     assert_eq!(refused.status, 403, "{}", refused.text);
     assert_eq!(refused.code(), "forbidden");
+    assert_eq!(refused_mode, ModePreset::Afk.id());
+    assert_eq!(managed.status, 200, "{}", managed.text);
+}
+
+/// The switch's check reads an on-respawn command as any other: one off the
+/// allowlist needs Manage (ADR-0010; ADR-0020, S20).
+#[sqlx::test(migrations = false)]
+async fn a_mode_with_a_command_off_the_allowlist_on_respawn_needs_manage(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let owner = setup.person(2, "owner", Role::Admin).await;
+    let controller = setup.person(3, "controller", Role::Member).await;
+    let (account, bot) = setup.bot_of(owner.id, 10).await;
+    setup
+        .share(account, controller.id, GrantLevel::Control, owner.id)
+        .await;
+    let home = setup
+        .custom_mode_of(
+            1,
+            owner.id,
+            "shared",
+            r#"{"steps":[{"action":{"type":"send_chat","message":"/home"},"schedule":{"type":"on_respawn"},"probability":100}]}"#,
+        )
+        .await;
+
+    let refused = setup.set_mode(bot, home, &controller).await;
+    let refused_mode = setup.bot_row(bot).await.mode;
+    let managed = setup.set_mode(bot, home, &owner).await;
+
+    assert_eq!(
+        (refused.status, refused.code()),
+        (403, "forbidden"),
+        "{}",
+        refused.text
+    );
     assert_eq!(refused_mode, ModePreset::Afk.id());
     assert_eq!(managed.status, 200, "{}", managed.text);
 }

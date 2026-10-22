@@ -103,7 +103,8 @@ pub enum Action {
     /// hotbar slot, finishes the item (food) or disconnects. That's how the
     /// vanilla server handles them; only letting go is checked against a real
     /// server. At-start steps run again on each join, so an at-start hold
-    /// comes back after a reconnect, but not after a respawn.
+    /// comes back after a reconnect, but not after a respawn; an on-respawn
+    /// hold brings it back after one (ADR-0020, S20).
     HoldUse {
         /// Whether the bot holds the use button from now on.
         on: bool,

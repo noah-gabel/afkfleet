@@ -7,9 +7,9 @@
 //! chat line typed into it back, nor a mode's steps: `new-mode` and
 //! `edit-mode` take a mode's JSON and show only its line, and JSON that
 //! isn't a mode is said so, never repeated. `delete-mode` asks for the
-//! password again when the server wants it. `history` shows a bot's chat as the server
-//! sends it to this user: cleaned, a line break as ` | `, a command's
-//! arguments only for Manage holders (ADR-0020, S9, S11, U3).
+//! password again when the server wants it. `history` shows a bot's chat
+//! as the server sends it to this user: cleaned, a line break as ` | `, a
+//! command's arguments only for Manage holders (ADR-0020, S9, S11, U3).
 
 use core::fmt::Write as _;
 use std::io;

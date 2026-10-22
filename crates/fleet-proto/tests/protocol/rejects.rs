@@ -18,6 +18,7 @@ use fleet_proto::control::{
 };
 use fleet_proto::generated as wire;
 use fleet_proto::{ConvertError, Problem};
+use prost::Message as _;
 use rstest::rstest;
 use secrecy::SecretString;
 use uuid::Uuid;
@@ -235,6 +236,87 @@ fn a_mode_is_refused(#[case] mutate: fn(&mut wire::BotSpec), #[case] expected: C
     let mut spec = wire_spec();
     mutate(&mut spec);
     assert_eq!(BotSpec::try_from(spec), Err(expected));
+}
+
+/// A schedule case a reader doesn't know is a field number prost skips, so
+/// its oneof reads as unset and the whole spec is refused, never run at
+/// another time (ADR-0020, S25). Case 15 is an empty message, tag `0x7A`.
+#[test]
+fn a_schedule_case_this_version_doesnt_know_is_refused_as_missing() {
+    let unknown = wire::Schedule::decode([0x7A, 0x00].as_slice()).unwrap();
+    let mut spec = wire_spec();
+    step(&mut spec, 0).schedule = Some(unknown);
+
+    assert_eq!(
+        BotSpec::try_from(spec),
+        Err(error("Schedule.schedule", Problem::Missing).at(0))
+    );
+}
+
+/// `Schedule` as a reader from before `on_respawn` declares it: the first two
+/// cases only.
+#[derive(Clone, PartialEq, prost::Message)]
+struct OldSchedule {
+    #[prost(oneof = "old_schedule::Case", tags = "1, 2")]
+    schedule: Option<old_schedule::Case>,
+}
+
+mod old_schedule {
+    use fleet_proto::generated as wire;
+
+    /// `Schedule`'s cases before `on_respawn`.
+    #[derive(Clone, PartialEq, prost::Oneof)]
+    pub(super) enum Case {
+        #[prost(message, tag = "1")]
+        AtStart(wire::Unit),
+        #[prost(message, tag = "2")]
+        Every(wire::schedule::Every),
+    }
+}
+
+/// An agent built before `on_respawn` reads an on-respawn step's schedule as
+/// unset, which its reader refuses (the test above): it never runs the step
+/// at start or on a timer (ADR-0020, S25).
+#[test]
+fn a_reader_from_before_on_respawn_sees_its_schedule_unset() {
+    let on_respawn = wire::Schedule {
+        schedule: Some(wire::schedule::Schedule::OnRespawn(wire::Unit {})),
+    };
+    let at_start = wire::Schedule {
+        schedule: Some(wire::schedule::Schedule::AtStart(wire::Unit {})),
+    };
+
+    let old = OldSchedule::decode(on_respawn.encode_to_vec().as_slice()).unwrap();
+    let known = OldSchedule::decode(at_start.encode_to_vec().as_slice()).unwrap();
+
+    assert_eq!(old.schedule, None);
+    assert_eq!(
+        known.schedule,
+        Some(old_schedule::Case::AtStart(wire::Unit {}))
+    );
+}
+
+/// An on-respawn step crosses the wire as itself.
+#[test]
+fn an_on_respawn_step_crosses_as_itself() {
+    let mut spec = wire_spec();
+    step(&mut spec, 0).schedule = Some(wire::Schedule {
+        schedule: Some(wire::schedule::Schedule::OnRespawn(wire::Unit {})),
+    });
+
+    let read = BotSpec::try_from(spec).unwrap();
+
+    assert_eq!(
+        read.mode.steps().first().map(|step| step.schedule),
+        Some(fleet_core::mode::Schedule::OnRespawn)
+    );
+    let written = wire::BotSpec::from(read);
+    assert_eq!(
+        written.mode.unwrap().steps.first().unwrap().schedule,
+        Some(wire::Schedule {
+            schedule: Some(wire::schedule::Schedule::OnRespawn(wire::Unit {}))
+        })
+    );
 }
 
 fn state(state: wire::bot_state::State) -> wire::BotState {

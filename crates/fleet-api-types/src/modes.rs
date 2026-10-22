@@ -222,15 +222,20 @@ pub enum ModeScheduleKind {
     /// Again and again: each gap is `interval_ms` plus up to `jitter_ms`,
     /// the first one after the join.
     Every,
+    /// Once each time the bot is alive again after a death, after it let go
+    /// of the use button and sneak; an on-respawn chat is skipped when the
+    /// last one was sent less than 30 s before.
+    OnRespawn,
 }
 
 impl OpenEnum for ModeScheduleKind {
-    const ALL: &'static [Self] = &[Self::AtStart, Self::Every];
+    const ALL: &'static [Self] = &[Self::AtStart, Self::Every, Self::OnRespawn];
 
     fn as_str(self) -> &'static str {
         match self {
             Self::AtStart => "at_start",
             Self::Every => "every",
+            Self::OnRespawn => "on_respawn",
         }
     }
 }
@@ -239,6 +244,7 @@ impl From<&Schedule> for ModeScheduleKind {
     fn from(schedule: &Schedule) -> Self {
         match schedule {
             Schedule::AtStart => Self::AtStart,
+            Schedule::OnRespawn => Self::OnRespawn,
             Schedule::Every { .. } => Self::Every,
         }
     }
@@ -275,7 +281,7 @@ pub struct UpdateModeRequest {
     #[garde(range(min = 1))]
     #[schema(schema_with = integer_schema::<1, { u32::MAX }>)]
     pub version: u32,
-    /// Its name, under [`CreateModeRequest::name`]'s rules; the mode's own
+    /// Its name, under `CreateModeRequest`'s rules; the mode's own
     /// name never clashes with itself, in any case.
     #[garde(custom(valid_mode_name))]
     #[schema(schema_with = BoundedText::<MODE_NAME_MAX_CHARS>::schema)]
@@ -284,7 +290,7 @@ pub struct UpdateModeRequest {
     /// and as it will be.
     #[garde(skip)]
     pub visibility: ModeVisibility,
-    /// Its steps, at most 32, under [`CreateModeRequest::steps`]' rules.
+    /// Its steps, at most 32, under `CreateModeRequest`'s rules.
     #[garde(dive)]
     #[ts(as = "Vec<ModeStepRequest>")]
     #[schema(value_type = Vec<ModeStepRequest>)]
@@ -500,7 +506,7 @@ const fn schedule_fields(request: &ModeScheduleRequest) -> [(&'static str, bool)
 /// The fields a schedule of `kind` takes.
 const fn schedule_takes(kind: ModeScheduleKind) -> &'static [&'static str] {
     match kind {
-        ModeScheduleKind::AtStart => &[],
+        ModeScheduleKind::AtStart | ModeScheduleKind::OnRespawn => &[],
         ModeScheduleKind::Every => &["interval_ms", "jitter_ms"],
     }
 }
@@ -579,6 +585,7 @@ fn schedule(step: usize, request: &ModeScheduleRequest) -> Result<Schedule, Mode
     )?;
     Ok(match request.kind {
         ModeScheduleKind::AtStart => Schedule::AtStart,
+        ModeScheduleKind::OnRespawn => Schedule::OnRespawn,
         ModeScheduleKind::Every => Schedule::Every {
             interval: Duration::from_millis(u64::from(needed(
                 request.interval_ms,
@@ -640,9 +647,13 @@ const fn duplicate_rule(kind: LimitedStep) -> &'static str {
     match kind {
         LimitedStep::StartChat => "is a second chat step at start; a mode can have only one",
         LimitedStep::RepeatingChat => "is a second repeating chat step; a mode can have only one",
+        LimitedStep::RespawnChat => "is a second chat step on respawn; a mode can have only one",
         LimitedStep::StartAttack => "is a second attack step at start; a mode can have only one",
         LimitedStep::RepeatingAttack => {
             "is a second repeating attack step; a mode can have only one"
+        }
+        LimitedStep::RespawnAttack => {
+            "is a second attack step on respawn; a mode can have only one"
         }
         LimitedStep::StartHold => {
             "is a second step at start that holds the use button; a mode can have only one"
@@ -650,11 +661,17 @@ const fn duplicate_rule(kind: LimitedStep) -> &'static str {
         LimitedStep::RepeatingHold => {
             "is a second repeating step that holds the use button; a mode can have only one"
         }
+        LimitedStep::RespawnHold => {
+            "is a second step on respawn that holds the use button; a mode can have only one"
+        }
         LimitedStep::StartRelease => {
             "is a second step at start that lets go of the use button; a mode can have only one"
         }
         LimitedStep::RepeatingRelease => {
             "is a second repeating step that lets go of the use button; a mode can have only one"
+        }
+        LimitedStep::RespawnRelease => {
+            "is a second step on respawn that lets go of the use button; a mode can have only one"
         }
     }
 }
@@ -921,6 +938,11 @@ impl ModeStep {
                 interval_ms: None,
                 jitter_ms: None,
             },
+            Schedule::OnRespawn => ModeSchedule {
+                kind: ModeScheduleKind::OnRespawn.into(),
+                interval_ms: None,
+                jitter_ms: None,
+            },
             Schedule::Every { interval, jitter } => ModeSchedule {
                 kind: ModeScheduleKind::Every.into(),
                 interval_ms: Some(millis(interval)),
@@ -975,7 +997,8 @@ mod tests {
             { "action": { "type": "hold_use", "on": false }, "schedule": { "type": "every", "interval_ms": 2000, "jitter_ms": 0 }, "probability": 100 },
             { "action": { "type": "attack_facing_entity" }, "schedule": { "type": "every", "interval_ms": 650, "jitter_ms": 150 }, "probability": 100 },
             { "action": { "type": "select_hotbar_slot", "slot": 8 }, "schedule": { "type": "at_start" }, "probability": 100 },
-            { "action": { "type": "send_chat", "message": "/home base" }, "schedule": { "type": "every", "interval_ms": 30000, "jitter_ms": 0 }, "probability": 100 }
+            { "action": { "type": "send_chat", "message": "/home base" }, "schedule": { "type": "every", "interval_ms": 30000, "jitter_ms": 0 }, "probability": 100 },
+            { "action": { "type": "send_chat", "message": "/spawn" }, "schedule": { "type": "on_respawn" }, "probability": 75 }
         ] })
     }
 
@@ -999,6 +1022,10 @@ mod tests {
 
     fn at_start() -> Value {
         json!({ "type": "at_start" })
+    }
+
+    fn on_respawn() -> Value {
+        json!({ "type": "on_respawn" })
     }
 
     /// What garde reports for `request`'s steps: each path and message.
@@ -1131,7 +1158,7 @@ mod tests {
     fn each_kind_is_named_as_fleet_core_tags_it() {
         let json = every_type();
         let definition: ModeDefinition = serde_json::from_value(json).unwrap();
-        let mut named = Vec::new();
+        let (mut named, mut scheduled) = (Vec::new(), Vec::new());
 
         for step in definition.steps() {
             let core = serde_json::to_value(step).unwrap();
@@ -1144,9 +1171,13 @@ mod tests {
                 core["schedule"]["type"]
             );
             named.push(ModeActionKind::from(&step.action));
+            scheduled.push(ModeScheduleKind::from(&step.schedule));
         }
         for kind in ModeActionKind::ALL {
             assert!(named.contains(kind), "{kind:?} isn't in every_type()");
+        }
+        for kind in ModeScheduleKind::ALL {
+            assert!(scheduled.contains(kind), "{kind:?} isn't in every_type()");
         }
     }
 
@@ -1246,6 +1277,8 @@ mod tests {
     #[case::every_without_jitter(json!({ "type": "every", "interval_ms": 1000 }), "steps[0].schedule.jitter_ms", REQUIRED)]
     #[case::at_start_with_interval(json!({ "type": "at_start", "interval_ms": 1000 }), "steps[0].schedule.interval_ms", NOT_USED)]
     #[case::at_start_with_jitter(json!({ "type": "at_start", "jitter_ms": 0 }), "steps[0].schedule.jitter_ms", NOT_USED)]
+    #[case::on_respawn_with_interval(json!({ "type": "on_respawn", "interval_ms": 1000 }), "steps[0].schedule.interval_ms", NOT_USED)]
+    #[case::on_respawn_with_jitter(json!({ "type": "on_respawn", "jitter_ms": 0 }), "steps[0].schedule.jitter_ms", NOT_USED)]
     fn a_field_its_schedule_needs_or_doesnt_take_is_named(
         #[case] schedule: Value,
         #[case] path: &str,
@@ -1447,6 +1480,10 @@ mod tests {
     #[case::repeating_hold(json!({ "type": "hold_use", "on": true }), every(500), "is a second repeating step that holds the use button; a mode can have only one")]
     #[case::release_at_start(json!({ "type": "hold_use", "on": false }), at_start(), "is a second step at start that lets go of the use button; a mode can have only one")]
     #[case::repeating_release(json!({ "type": "hold_use", "on": false }), every(500), "is a second repeating step that lets go of the use button; a mode can have only one")]
+    #[case::chat_on_respawn(json!({ "type": "send_chat", "message": "hi" }), on_respawn(), "is a second chat step on respawn; a mode can have only one")]
+    #[case::attack_on_respawn(json!({ "type": "attack_facing_entity" }), on_respawn(), "is a second attack step on respawn; a mode can have only one")]
+    #[case::hold_on_respawn(json!({ "type": "hold_use", "on": true }), on_respawn(), "is a second step on respawn that holds the use button; a mode can have only one")]
+    #[case::release_on_respawn(json!({ "type": "hold_use", "on": false }), on_respawn(), "is a second step on respawn that lets go of the use button; a mode can have only one")]
     fn a_second_limited_step_is_named_on_its_step(
         #[case] action: Value,
         #[case] schedule: Value,
@@ -1515,12 +1552,16 @@ mod tests {
             [
                 LimitedStep::StartChat,
                 LimitedStep::RepeatingChat,
+                LimitedStep::RespawnChat,
                 LimitedStep::StartAttack,
                 LimitedStep::RepeatingAttack,
+                LimitedStep::RespawnAttack,
                 LimitedStep::StartHold,
                 LimitedStep::RepeatingHold,
+                LimitedStep::RespawnHold,
                 LimitedStep::StartRelease,
                 LimitedStep::RepeatingRelease,
+                LimitedStep::RespawnRelease,
             ]
             .into_iter()
             .map(duplicate_rule),
@@ -1602,8 +1643,29 @@ mod tests {
 
         let read: ModeResponse = serde_json::from_value(answer.clone()).unwrap();
 
-        assert_eq!(read.steps.first().unwrap().action.kind.known(), None);
+        let step = read.steps.first().unwrap();
+        assert_eq!(step.action.kind.known(), None);
+        assert_eq!(step.schedule.kind.known(), None);
         assert_eq!(serde_json::to_value(&read).unwrap(), answer);
+    }
+
+    /// A request is closed: a schedule `type` this version doesn't know is
+    /// serde's shape error, never read as another (ADR-0020, S25).
+    #[test]
+    fn a_request_with_a_schedule_type_this_version_doesnt_know_is_a_shape_error() {
+        let unknown = json!([step(
+            json!({ "type": "jump" }),
+            json!({ "type": "on_teleport" })
+        )]);
+
+        assert!(serde_json::from_value::<ModeSteps>(unknown).is_err());
+        assert!(
+            serde_json::from_value::<ModeSteps>(json!([step(
+                json!({ "type": "jump" }),
+                on_respawn()
+            )]))
+            .is_ok()
+        );
     }
 
     /// An update request of `name` at `version` with `steps`.
@@ -1707,9 +1769,14 @@ mod tests {
 
     /// A mode whose one step sends `message` at start.
     fn chatting(message: &str) -> ModeDefinition {
+        chatting_when(message, at_start())
+    }
+
+    /// A mode whose one step sends `message` on `schedule`.
+    fn chatting_when(message: &str, schedule: Value) -> ModeDefinition {
         serde_json::from_value(json!({ "steps": [step(
             json!({ "type": "send_chat", "message": message }),
-            at_start(),
+            schedule,
         )] }))
         .unwrap()
     }
@@ -1742,6 +1809,12 @@ mod tests {
     #[case::the_same_message(chatting("/spawn home"), chatting("/spawn home"), true)]
     #[case::negative_zero(looking(-0.0, 0.0), looking(0.0, -0.0), true)]
     #[case::another_angle(looking(1.0, 0.0), looking(1.5, 0.0), false)]
+    #[case::a_zero_width_space_on_respawn(
+        chatting_when("/ho\u{200B}me", on_respawn()),
+        chatting_when("/home", on_respawn()),
+        true
+    )]
+    #[case::at_start_or_on_respawn(chatting("/home"), chatting_when("/home", on_respawn()), false)]
     fn reading_the_same_is_answering_the_same(
         #[case] one: ModeDefinition,
         #[case] other: ModeDefinition,

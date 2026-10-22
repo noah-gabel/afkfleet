@@ -2,11 +2,14 @@
 //! S17): `PUT /modes/{id}` through fleet-client and serve's own wiring
 //! hints the reconciler, whose next pass sends the agent that holds the bot
 //! an `Update` with the edited steps. The bot runs them in the session it
-//! has: the same session, no new `Assign` (P10.5).
+//! has: the same session, no new `Assign` (P10.5), so the hold keeps its
+//! `since` (PR #64's review).
+
+use core::time::Duration;
 
 use fleet_api_types::modes::ModeActionKind;
 use fleet_core::mode::GameAction;
-use fleet_server::grpc::registry::ViewPhase;
+use fleet_server::grpc::registry::{HoldEntry, ViewPhase};
 use fleet_testkit::mc::Performed;
 
 use crate::harness::agent::RunOptions;
@@ -38,9 +41,7 @@ async fn an_edited_mode_reaches_its_held_bot_as_an_update_without_a_new_session(
         })
         .await;
     assert_eq!(swung(&session), 0, "the first steps only jump");
-
-    let edited = world.owner.edit_mode(&mode, ModeActionKind::SwingArm).await;
-    let held_steps = || {
+    let held = || {
         world
             .server
             .registry()
@@ -51,20 +52,27 @@ async fn an_edited_mode_reaches_its_held_bot_as_an_update_without_a_new_session(
                 ViewPhase::Reconciled(held) => held
                     .iter()
                     .find(|held| held.bot == bot)
-                    .and_then(|held| held.entry.sent.as_ref())
-                    .map(|spec| spec.mode.clone()),
+                    .map(|held| held.entry.clone()),
                 ViewPhase::Listed(_) => None,
             })
+    };
+    let since = held().map(|entry| entry.since);
+    // A hold that started again after the edit would show a later `since`.
+    world.server.clock().advance(Duration::from_secs(1));
+
+    let edited = world.owner.edit_mode(&mode, ModeActionKind::SwingArm).await;
+    let edited_steps_sent = |entry: &HoldEntry| {
+        entry.sent.as_ref().is_some_and(|spec| {
+            spec.mode
+                .steps()
+                .iter()
+                .all(|step| step.action == fleet_core::mode::Action::SwingArm)
+        })
     };
     world
         .logs
         .until("the edited steps are sent", async || {
-            held_steps().is_some_and(|steps| {
-                steps
-                    .steps()
-                    .iter()
-                    .all(|step| step.action == fleet_core::mode::Action::SwingArm)
-            })
+            held().is_some_and(|entry| edited_steps_sent(&entry))
         })
         .await;
     world
@@ -73,6 +81,12 @@ async fn an_edited_mode_reaches_its_held_bot_as_an_update_without_a_new_session(
         .await;
 
     assert_eq!(edited.version, 2);
+    assert!(since.is_some(), "the bot was held before the edit");
+    assert_eq!(
+        held().map(|entry| entry.since),
+        since,
+        "an Update keeps the hold; a new Assign would start it again"
+    );
     assert_eq!(world.ledger.sessions(bot), 1, "the same session ran it");
     assert!(agent.fake().try_session(1).is_none(), "no second session");
     world.end(vec![agent]).await;

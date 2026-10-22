@@ -78,15 +78,29 @@ pub struct PlanTick {
     pub next_due: Option<DateTime<Utc>>,
 }
 
+/// What [`ModePlan::respawned`] returns for a mode with on-respawn steps.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Respawn {
+    /// The on-respawn actions to run now, in step order.
+    pub actions: Vec<PlannedAction>,
+    /// Whether the on-respawn chat was skipped: the last one was handed out
+    /// less than [`ModeDefinition::MIN_CHAT_INTERVAL`] before.
+    pub chat_skipped: bool,
+}
+
 /// Schedules a running mode: what to do when, so the runtime only sleeps
 /// until [`PlanTick::next_due`] and executes the actions (Plan.md P2.8;
 /// ADR-0010).
 ///
 /// - [`ModePlan::start`] runs the [`Schedule::AtStart`] steps and schedules
-///   each [`Schedule::Every`] step one gap after the start.
+///   each [`Schedule::Every`] step one gap after the start. It keeps the
+///   [`Schedule::OnRespawn`] steps aside: they never run at start and never
+///   on a timer.
 /// - [`ModePlan::tick`] runs every step that is due and schedules it again,
 ///   one gap after `now`. Each gap is uniform in [`interval`,
 ///   `interval + jitter`].
+/// - [`ModePlan::respawned`] hands out the on-respawn steps after a respawn
+///   the server confirmed (ADR-0020, S24).
 /// - A step that's due rolls its probability first; a skipped run is
 ///   scheduled again like any other.
 ///
@@ -98,6 +112,18 @@ pub struct PlanTick {
 #[derive(Debug, Clone, PartialEq)]
 pub struct ModePlan {
     timers: Vec<Timer>,
+    /// The on-respawn steps, in step order.
+    on_respawn: Vec<RespawnStep>,
+    /// When the last on-respawn chat was handed out, kept across a
+    /// [`switch`](Self::switch).
+    last_respawn_chat: Option<DateTime<Utc>>,
+}
+
+/// An on-respawn step.
+#[derive(Debug, Clone, PartialEq)]
+struct RespawnStep {
+    action: Action,
+    probability: u8,
 }
 
 /// A repeating step and when it's due next.
@@ -120,6 +146,7 @@ impl ModePlan {
     ) -> (Self, PlanTick) {
         let mut actions = Vec::new();
         let mut timers = Vec::new();
+        let mut on_respawn = Vec::new();
         for step in definition.steps() {
             match step.schedule {
                 Schedule::AtStart => {
@@ -134,14 +161,82 @@ impl ModePlan {
                     jitter,
                     due: time::add(now, gap(interval, jitter, rng)),
                 }),
+                Schedule::OnRespawn => on_respawn.push(RespawnStep {
+                    action: step.action.clone(),
+                    probability: step.probability,
+                }),
             }
         }
-        let plan = Self { timers };
+        let plan = Self {
+            timers,
+            on_respawn,
+            last_respawn_chat: None,
+        };
         let tick = PlanTick {
             actions,
             next_due: plan.next_due(),
         };
         (plan, tick)
+    }
+
+    /// Starts running `definition` at `now` in place of the running mode, as
+    /// [`start`](Self::start) does, but keeps when the last on-respawn chat
+    /// was handed out, so a mode change never resets the 30 s rule
+    /// (ADR-0020, S24).
+    pub fn switch<R: Rng + ?Sized>(
+        &mut self,
+        definition: &ModeDefinition,
+        now: DateTime<Utc>,
+        rng: &mut R,
+    ) -> PlanTick {
+        let (plan, tick) = Self::start(definition, now, rng);
+        *self = Self {
+            last_respawn_chat: self.last_respawn_chat,
+            ..plan
+        };
+        tick
+    }
+
+    /// The bot is alive again after a respawn the server confirmed, at
+    /// `now`: `None` for a mode without on-respawn steps, which then does
+    /// nothing; otherwise those steps rolled and resolved in step order, the
+    /// chat left out before its roll when the last on-respawn chat was handed
+    /// out less than [`ModeDefinition::MIN_CHAT_INTERVAL`] before, a clock
+    /// that went backwards included (ADR-0020, S24). A chat that rolls no
+    /// run or is left out doesn't count as handed out.
+    pub fn respawned<R: Rng + ?Sized>(
+        &mut self,
+        now: DateTime<Utc>,
+        rng: &mut R,
+    ) -> Option<Respawn> {
+        if self.on_respawn.is_empty() {
+            return None;
+        }
+        let mut last_chat = self.last_respawn_chat;
+        let mut respawn = Respawn {
+            actions: Vec::new(),
+            chat_skipped: false,
+        };
+        for step in &self.on_respawn {
+            let chat = matches!(step.action, Action::SendChat { .. });
+            // `elapsed` is zero for a clock that went backwards: too soon.
+            if chat
+                && last_chat.is_some_and(|last| {
+                    time::elapsed(last, now) < ModeDefinition::MIN_CHAT_INTERVAL
+                })
+            {
+                respawn.chat_skipped = true;
+                continue;
+            }
+            if roll(step.probability, rng) {
+                if chat {
+                    last_chat = Some(now);
+                }
+                respawn.actions.push(resolve(&step.action, rng));
+            }
+        }
+        self.last_respawn_chat = last_chat;
+        Some(respawn)
     }
 
     /// Runs every step that is due at `now`, in step order, and schedules
@@ -611,6 +706,244 @@ mod tests {
         assert_ne!(run(&mode, 42, 100), run(&mode, 43, 100));
     }
 
+    // --- On respawn (ADR-0020, S24) ---
+
+    fn on_respawn(action: Action) -> Step {
+        step(action, Schedule::OnRespawn)
+    }
+
+    fn chat(text: &str) -> Action {
+        Action::SendChat {
+            message: text.parse().unwrap(),
+        }
+    }
+
+    fn said(text: &str) -> PlannedAction {
+        PlannedAction::Chat(text.parse().unwrap())
+    }
+
+    /// A mode that sends `/home` and jumps on respawn.
+    fn homing() -> ModeDefinition {
+        definition(vec![on_respawn(chat("/home")), on_respawn(Action::Jump)])
+    }
+
+    #[test]
+    fn on_respawn_steps_never_run_at_start_or_on_a_tick() {
+        let mut rng = rng(1);
+        let mode = definition(vec![
+            on_respawn(Action::Jump),
+            step(Action::SwingArm, every(ms(1_000), Duration::ZERO)),
+            on_respawn(chat("/home")),
+        ]);
+
+        let (mut plan, first) = ModePlan::start(&mode, start(), &mut rng);
+
+        assert_eq!(
+            first,
+            PlanTick {
+                actions: Vec::new(),
+                next_due: Some(after(1_000)),
+            }
+        );
+        for n in 1..=5 {
+            assert_eq!(
+                plan.tick(after(1_000 * n), &mut rng).actions,
+                [game(GameAction::SwingArm)]
+            );
+        }
+    }
+
+    #[test]
+    fn a_respawn_hands_out_the_on_respawn_steps_in_step_order() {
+        let mut rng = rng(1);
+        let mode = definition(vec![
+            on_respawn(Action::Jump),
+            at_start(Action::Sneak { on: true }),
+            on_respawn(chat("/home")),
+            on_respawn(Action::SelectHotbarSlot { slot: slot(4) }),
+            on_respawn(Action::HoldUse { on: true }),
+        ]);
+        let (mut plan, _) = ModePlan::start(&mode, start(), &mut rng);
+
+        assert_eq!(
+            plan.respawned(after(5_000), &mut rng),
+            Some(Respawn {
+                actions: vec![
+                    game(GameAction::Jump),
+                    said("/home"),
+                    game(GameAction::SelectHotbarSlot { slot: slot(4) }),
+                    game(GameAction::HoldUse { on: true }),
+                ],
+                chat_skipped: false,
+            })
+        );
+    }
+
+    #[rstest]
+    #[case::afk(ModeDefinition::afk())]
+    #[case::farm(ModeDefinition::farm())]
+    #[case::empty(definition(Vec::new()))]
+    #[case::at_start_and_repeating(definition(vec![
+        at_start(chat("/spawn")),
+        step(chat("/afk"), every(ms(30_000), Duration::ZERO)),
+    ]))]
+    fn a_mode_without_on_respawn_steps_does_nothing_on_a_respawn(#[case] mode: ModeDefinition) {
+        let (mut plan, _) = ModePlan::start(&mode, start(), &mut rng(1));
+        let before = plan.clone();
+        let (mut used, mut untouched) = (rng(7), rng(7));
+
+        assert_eq!(plan.respawned(after(1_000), &mut used), None);
+        assert_eq!(plan, before);
+        assert_eq!(
+            rand::Rng::next_u64(&mut used),
+            rand::Rng::next_u64(&mut untouched),
+            "nothing rolled"
+        );
+    }
+
+    #[rstest]
+    #[case::just_before_30_s(29_999, true)]
+    #[case::at_30_s(30_000, false)]
+    fn an_on_respawn_chat_within_30_s_of_the_last_is_skipped(
+        #[case] later: u64,
+        #[case] skipped: bool,
+    ) {
+        let mut rng = rng(1);
+        let (mut plan, _) = ModePlan::start(&homing(), start(), &mut rng);
+        let first = plan.respawned(after(10_000), &mut rng).unwrap();
+        assert_eq!(first.actions, [said("/home"), game(GameAction::Jump)]);
+
+        let second = plan.respawned(after(10_000 + later), &mut rng);
+
+        let actions = if skipped {
+            vec![game(GameAction::Jump)]
+        } else {
+            vec![said("/home"), game(GameAction::Jump)]
+        };
+        assert_eq!(
+            second,
+            Some(Respawn {
+                actions,
+                chat_skipped: skipped
+            })
+        );
+    }
+
+    /// A skipped chat isn't handed out, so the 30 s count from the last one
+    /// that was.
+    #[test]
+    fn a_skipped_chat_doesnt_restart_the_30_s() {
+        let mut rng = rng(1);
+        let (mut plan, _) = ModePlan::start(&homing(), start(), &mut rng);
+
+        let first = plan.respawned(after(0), &mut rng).unwrap();
+        let skipped = plan.respawned(after(20_000), &mut rng).unwrap();
+        let third = plan.respawned(after(30_000), &mut rng).unwrap();
+
+        assert!(!first.chat_skipped);
+        assert!(skipped.chat_skipped);
+        assert_eq!(third.actions, [said("/home"), game(GameAction::Jump)]);
+    }
+
+    /// Only a chat handed out counts: one whose roll ran nothing leaves the
+    /// 30 s as they were. A respawn every second for five minutes, the chat
+    /// at 50 %, against a model of the rule.
+    #[test]
+    fn only_a_chat_handed_out_starts_the_30_s() {
+        let mut rng = rng(3);
+        let mode = definition(vec![with_probability(50, on_respawn(chat("/home")))]);
+        let (mut plan, _) = ModePlan::start(&mode, start(), &mut rng);
+        let mut last: Option<u64> = None;
+        let (mut no_runs, mut skips) = (0, 0);
+
+        for second in 0..300_u64 {
+            let now = second * 1_000;
+            let respawn = plan.respawned(after(now), &mut rng).unwrap();
+            let too_soon = last.is_some_and(|last| now - last < 30_000);
+            assert_eq!(respawn.chat_skipped, too_soon, "at {now} ms");
+            match respawn.actions.as_slice() {
+                [] if too_soon => skips += 1,
+                [] => no_runs += 1,
+                [chat] => {
+                    assert_eq!(chat, &said("/home"));
+                    last = Some(now);
+                }
+                other => panic!("at {now} ms: {other:?}"),
+            }
+        }
+        assert!(
+            no_runs > 0 && skips > 0,
+            "{no_runs} rolls ran nothing, {skips} skips"
+        );
+    }
+
+    #[test]
+    fn a_clock_gone_backwards_skips_the_chat() {
+        let mut rng = rng(1);
+        let (mut plan, _) = ModePlan::start(&homing(), start(), &mut rng);
+        plan.respawned(after(60_000), &mut rng);
+
+        let earlier = plan.respawned(after(10_000), &mut rng).unwrap();
+
+        assert!(earlier.chat_skipped);
+        assert_eq!(earlier.actions, [game(GameAction::Jump)]);
+    }
+
+    #[test]
+    fn a_respawn_leaves_the_repeating_steps_alone() {
+        let mode = definition(vec![
+            step(Action::SwingArm, every(ms(1_000), ms(500))),
+            on_respawn(Action::Jump),
+        ]);
+        let (mut respawning, _) = ModePlan::start(&mode, start(), &mut rng(1));
+        let (mut quiet, _) = ModePlan::start(&mode, start(), &mut rng(1));
+        let (mut ticks, mut quiet_ticks) = (rng(2), rng(2));
+
+        for n in 1..=20 {
+            respawning.respawned(after(700 * n), &mut rng(n));
+            assert_eq!(
+                respawning.tick(after(700 * n), &mut ticks),
+                quiet.tick(after(700 * n), &mut quiet_ticks),
+                "tick {n}"
+            );
+        }
+    }
+
+    /// A mode change keeps when the last on-respawn chat was handed out, and
+    /// runs the new mode's at-start steps; a new session's plan forgets it.
+    #[test]
+    fn switch_keeps_the_chat_memory_and_start_forgets_it() {
+        let mut rng = rng(1);
+        let other = definition(vec![
+            at_start(Action::Jump),
+            step(Action::SwingArm, every(ms(1_000), Duration::ZERO)),
+            on_respawn(chat("/spawn")),
+        ]);
+        let (mut plan, _) = ModePlan::start(&homing(), start(), &mut rng);
+        plan.respawned(after(0), &mut rng);
+
+        let switched = plan.switch(&other, after(5_000), &mut rng);
+        let kept = plan.respawned(after(10_000), &mut rng).unwrap();
+        let (mut fresh, _) = ModePlan::start(&other, after(5_000), &mut rng);
+        let forgotten = fresh.respawned(after(10_000), &mut rng).unwrap();
+
+        assert_eq!(
+            switched,
+            PlanTick {
+                actions: vec![game(GameAction::Jump)],
+                next_due: Some(after(6_000)),
+            }
+        );
+        assert_eq!(
+            kept,
+            Respawn {
+                actions: Vec::new(),
+                chat_skipped: true
+            }
+        );
+        assert_eq!(forgotten.actions, [said("/spawn")]);
+    }
+
     // --- Properties ---
 
     /// Repeating steps as (interval ms, jitter ms, probability), often at the
@@ -737,6 +1070,53 @@ mod tests {
                 }
                 due = tick.next_due.unwrap();
                 prop_assert_eq!(plan.next_due(), Some(due));
+            }
+        }
+
+        /// On-respawn steps never come from the start or a tick, whatever
+        /// the repeating steps do (ADR-0020, S24).
+        #[test]
+        fn on_respawn_steps_never_come_from_the_start_or_a_tick(
+            schedules in schedules(),
+            jumps in 1..=4_usize,
+            seed in any::<u64>(),
+            ticks in 1..=100_usize,
+        ) {
+            let mut steps = marked_mode(&schedules).steps().to_vec();
+            steps.extend((0..jumps).map(|_| on_respawn(Action::Jump)));
+            let mut rng = rng(seed);
+            let (mut plan, first) = ModePlan::start(&definition(steps), start(), &mut rng);
+            prop_assert_eq!(first.actions, Vec::new());
+
+            let mut due = first.next_due;
+            for _ in 0..ticks {
+                let tick = plan.tick(due.unwrap(), &mut rng);
+                prop_assert!(!tick.actions.contains(&game(GameAction::Jump)));
+                due = tick.next_due;
+            }
+        }
+
+        /// A bot that dies again and again: on-respawn chats are handed out
+        /// at least 30 s apart, and at 100 % none is missed.
+        #[test]
+        fn a_death_loop_hands_out_a_chat_at_most_every_30_s_and_misses_none(
+            gaps in vec(prop_oneof![0..=5_000_u64, 25_000..=35_000_u64], 1..=100),
+            seed in any::<u64>(),
+        ) {
+            let mut rng = rng(seed);
+            let (mut plan, _) = ModePlan::start(&homing(), start(), &mut rng);
+            let mut now = 0;
+            let mut last: Option<u64> = None;
+            for gap in gaps {
+                now += gap;
+                let respawn = plan.respawned(after(now), &mut rng).unwrap();
+                let due = last.is_none_or(|last| now - last >= 30_000);
+                prop_assert_eq!(respawn.actions.contains(&said("/home")), due);
+                prop_assert_eq!(respawn.chat_skipped, !due);
+                prop_assert!(respawn.actions.contains(&game(GameAction::Jump)));
+                if due {
+                    last = Some(now);
+                }
             }
         }
 

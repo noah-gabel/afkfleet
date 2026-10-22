@@ -7,8 +7,11 @@
 //! - `bridge` is the bounded queue between the host thread and the bot's
 //!   actor. It keeps ADR-0010's contract: only chat is dropped (and counted),
 //!   `Joined` is the first spawn, a death before it is held, a death is
-//!   reported once until the respawn, and the first terminal event wins.
-//!   [`McEvents`] is its consumer side.
+//!   reported once until a confirmed respawn, and the first terminal event
+//!   wins. [`McEvents`] is its consumer side.
+//! - `respawn` reads the bot's deaths inside the frame, and confirms a
+//!   respawn the session asked for once a Respawn removed the bot's `Dead`
+//!   and the client loaded again (ADR-0020, S22, S27).
 //! - `liveness` holds the session's tick and packet stamps. Ticks and received
 //!   packets only stamp liveness; they're never queued.
 //! - `render` turns server text into plain text within a fixed budget, since
@@ -18,8 +21,10 @@ mod bridge;
 mod liveness;
 mod map;
 mod render;
+mod respawn;
 
 pub use bridge::McEvents;
 pub(crate) use bridge::{BridgeControl, EventCounters, EventSink, Phase, bridge};
 pub(crate) use liveness::{LivenessStamps, PacketLivenessPlugin};
 pub(crate) use map::Terminal;
+pub(crate) use respawn::RespawnWatchPlugin;

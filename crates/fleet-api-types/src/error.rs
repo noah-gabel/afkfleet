@@ -92,8 +92,9 @@ pub enum ErrorCode {
     /// may send it: send it again to `/command`, after a step-up (403).
     CommandNeedsStepUp,
     /// A mode whose steps send a command off the server's allowlist, sent
-    /// to `POST /modes` by someone who may write it: send it again to
-    /// `/with-commands`, after a step-up (403).
+    /// to `POST /modes` or `PUT /modes/{id}` by someone who may write it:
+    /// send it again to the route's `/with-commands` twin, after a step-up
+    /// (403).
     ModeNeedsStepUp,
     /// An edit of a mode that changed since the caller read it: its
     /// `version` is stale. Load the mode again (409).

@@ -617,29 +617,49 @@ async fn checked_bots(
     Ok(i64::try_from(accounts.len()).unwrap_or(i64::MAX))
 }
 
+/// Whether `one` and `other` are stored as the same bytes: the JSON the
+/// `modes` table holds, so `-0.0` and `0.0` differ where `==` reads them as
+/// one angle (S21).
+///
+/// # Errors
+/// [`StoreError::Backend`] if a definition doesn't serialize, as the write
+/// would report it.
+fn stored_alike(one: &ModeDefinition, other: &ModeDefinition) -> Result<bool, StoreError> {
+    let json = |definition: &ModeDefinition| {
+        serde_json::to_string(definition).map_err(|error| StoreError::Backend(Box::new(error)))
+    };
+    Ok(json(one)? == json(other)?)
+}
+
 /// `mode.update`'s metadata for `change` over `stored`, through `route`,
 /// whose commands `check` judged, after checking `bots` bots: never the name
-/// or a step's text (ADR-0016).
+/// or a step's text (ADR-0016). `definition_changed` compares the steps as
+/// stored, byte for byte (S21).
+///
+/// # Errors
+/// [`UpdateModeError::Audit`], or [`UpdateModeError::Store`] if a definition
+/// doesn't serialize.
 fn edited(
     stored: &StoredMode,
     change: &ModeChange,
     check: CommandCheck,
     route: ModeRoute,
     bots: i64,
-) -> Result<AuditMetadata, AuditError> {
+) -> Result<AuditMetadata, UpdateModeError> {
+    let changed = !stored_alike(&stored.definition, &change.definition)?;
     let metadata = AuditMetadata::new()
         .int("version", i64::from(change.version.get()))?
-        .flag("definition_changed", change.definition != stored.definition)?
+        .flag("definition_changed", changed)?
         .text("visibility", change.visibility.as_str())?;
     let metadata = if change.visibility == stored.visibility {
         metadata
     } else {
         metadata.text("previous_visibility", stored.visibility.as_str())?
     };
-    metadata
+    Ok(metadata
         .text("commands", commands(&change.definition, check))?
         .text("route", route.as_str())?
-        .int("bots_checked", bots)
+        .int("bots_checked", bots)?)
 }
 
 /// What an audit entry says of the commands `definition`'s steps send,

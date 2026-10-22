@@ -1,7 +1,8 @@
 //! A session's Bevy App, as ADR-0008 §1 and §3 decided: azalea's plugins
 //! without auto-reconnect and auto-respawn, the packet-liveness and
-//! chat-signing plugins, the bot's event channel, and the single-threaded
-//! executor on every schedule.
+//! chat-signing plugins, the death and respawn watch (ADR-0020, S22, S27),
+//! the bot's event channel, and the single-threaded executor on every
+//! schedule.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -19,7 +20,7 @@ use azalea::{DefaultPlugins, Event};
 use tokio::sync::mpsc;
 use tracing::warn;
 
-use crate::events::{LivenessStamps, PacketLivenessPlugin};
+use crate::events::{LivenessStamps, PacketLivenessPlugin, RespawnWatchPlugin};
 use crate::signing::SigningPlugin;
 
 /// The channel azalea's `LocalPlayerEvents` sends a session's events on. The
@@ -33,14 +34,16 @@ pub(super) fn event_channel() -> (mpsc::UnboundedSender<Event>, mpsc::UnboundedR
 }
 
 /// Builds the App of one session. `events` becomes the bot's
-/// `LocalPlayerEvents` when azalea spawns it, and `signing` publishes where
-/// its chat signing is. `extra` adds to the App before the executor is set,
-/// so whatever it adds runs single-threaded too (the fault-injection hook's
-/// systems, in the slow tests).
+/// `LocalPlayerEvents` when azalea spawns it, `signing` publishes where its
+/// chat signing is, and `respawns` confirms the respawns the session asks
+/// for. `extra` adds to the App before the executor is set, so whatever it
+/// adds runs single-threaded too (the fault-injection hook's systems, in the
+/// slow tests).
 pub(super) fn build_app(
     stamps: Arc<LivenessStamps>,
     events: mpsc::UnboundedSender<Event>,
     signing: SigningPlugin,
+    respawns: RespawnWatchPlugin,
     extra: impl FnOnce(&mut App),
 ) -> App {
     let mut app = App::new();
@@ -53,6 +56,7 @@ pub(super) fn build_app(
             .disable::<AutoRespawnPlugin>(),
         PacketLivenessPlugin(stamps),
         signing,
+        respawns,
     ));
     give_events_to_the_bot(&mut app, events);
     extra(&mut app);
@@ -121,15 +125,29 @@ mod tests {
         }
     }
 
+    /// The respawn watch of a bridge nobody reads.
+    fn respawns() -> RespawnWatchPlugin {
+        let (sink, _events) = crate::events::bridge(
+            "018bcfe5-6800-7bab-abab-abababababab".parse().unwrap(),
+            core::num::NonZeroUsize::MIN,
+            Arc::default(),
+            stamps(),
+        );
+        RespawnWatchPlugin(sink.control())
+    }
+
     fn app() -> App {
         let (events, _) = event_channel();
-        build_app(stamps(), events, signing(), |_| {})
+        build_app(stamps(), events, signing(), respawns(), |_| {})
     }
 
     /// A session's App and the receiver of its bot's events.
     fn listening_app() -> (App, mpsc::UnboundedReceiver<Event>) {
         let (events, receiver) = event_channel();
-        (build_app(stamps(), events, signing(), |_| {}), receiver)
+        (
+            build_app(stamps(), events, signing(), respawns(), |_| {}),
+            receiver,
+        )
     }
 
     /// Every schedule's executor kind.
@@ -159,7 +177,7 @@ mod tests {
     #[test]
     fn what_extra_adds_runs_single_threaded_too() {
         let (events, _) = event_channel();
-        let app = build_app(stamps(), events, signing(), |app| {
+        let app = build_app(stamps(), events, signing(), respawns(), |app| {
             for (_, schedule) in app.world_mut().resource_mut::<Schedules>().iter_mut() {
                 schedule.set_executor_kind(ExecutorKind::MultiThreaded);
             }
@@ -243,5 +261,177 @@ mod tests {
                 .any(|event| matches!(event, Event::ConnectionFailed(_))),
             "{sent:?}"
         );
+    }
+
+    // --- A `Dead` re-inserted in the Respawn's frame (ADR-0020, S27) ---
+
+    use core::time::Duration;
+
+    use azalea::ecs::entity::Entity;
+    use azalea::entity::metadata::Health;
+    use azalea::entity::{Dead, HasClientLoaded};
+    use fleet_core::mc::{SessionEvent, SessionEvents as _};
+
+    use crate::actions;
+    use crate::events::{EventSink, McEvents};
+
+    /// The session's real App on a bridge the test reads, its bot joined,
+    /// loaded and at full health.
+    struct Scene {
+        app: App,
+        bot: Entity,
+        sink: EventSink,
+        events: McEvents,
+        channel: mpsc::UnboundedReceiver<Event>,
+    }
+
+    impl Scene {
+        async fn joined() -> Self {
+            let (sink, mut events) = crate::events::bridge(
+                "018bcfe5-6800-7bab-abab-abababababab".parse().unwrap(),
+                core::num::NonZeroUsize::new(8).unwrap(),
+                Arc::default(),
+                stamps(),
+            );
+            let (sender, channel) = event_channel();
+            let mut app = build_app(
+                stamps(),
+                sender,
+                signing(),
+                RespawnWatchPlugin(sink.control()),
+                |_| {},
+            );
+            let bot = app
+                .world_mut()
+                .spawn((LocalEntity, Health(20.0), HasClientLoaded))
+                .id();
+            sink.forward(&Event::Spawn);
+            assert_eq!(events.next().await, Some(SessionEvent::Joined));
+            Self {
+                app,
+                bot,
+                sink,
+                events,
+                channel,
+            }
+        }
+
+        /// Sets the bot's health, as a `SetHealth` packet does: a change
+        /// even to the same value.
+        fn health(&mut self, health: f32) {
+            *self.app.world_mut().get_mut::<Health>(self.bot).unwrap() = Health(health);
+        }
+
+        /// What azalea's Respawn handler does to the bot's entity.
+        fn respawn_packet(&mut self) {
+            self.app
+                .world_mut()
+                .entity_mut(self.bot)
+                .remove::<(Dead, HasClientLoaded)>();
+        }
+
+        /// The next load, as `player_loaded_packet` does it in `GameTick`.
+        fn load(&mut self) {
+            self.app
+                .world_mut()
+                .entity_mut(self.bot)
+                .insert(HasClientLoaded);
+        }
+
+        /// Hands what azalea sent on the bot's channel to the bridge, as the
+        /// session loop does.
+        fn forward(&mut self) {
+            while let Ok(event) = self.channel.try_recv() {
+                self.sink.forward(&event);
+            }
+        }
+
+        /// The respawn job's call (`connector::session`), with the bot's
+        /// state as the job sees it.
+        fn ask(&self) {
+            self.sink
+                .control()
+                .respawn_asked(actions::loaded_in(self.app.world(), self.bot));
+        }
+
+        fn dead(&self) -> bool {
+            self.app.world().get::<Dead>(self.bot).is_some()
+        }
+
+        /// The session events queued now.
+        async fn queued(&mut self) -> Vec<SessionEvent> {
+            let mut queued = Vec::new();
+            while let Ok(Some(event)) =
+                tokio::time::timeout(Duration::from_millis(50), self.events.next()).await
+            {
+                queued.push(event);
+            }
+            queued
+        }
+
+        /// The bot died, the actor read it and asked for the respawn; then
+        /// the Respawn came in the same frame as the old life's health 0,
+        /// so azalea's `add_dead` put `Dead` back after the handler removed
+        /// it; then the next load. Returns what was queued in that frame
+        /// and at the load, and after the frame's channel, handed over last.
+        async fn respawned_with_a_stale_dead(&mut self) -> [Vec<SessionEvent>; 3] {
+            self.health(0.0);
+            self.app.update();
+            self.forward();
+            assert_eq!(self.queued().await, [SessionEvent::Died]);
+            self.ask();
+
+            self.health(0.0);
+            self.respawn_packet();
+            self.app.update();
+            let in_the_frame = self.queued().await;
+            assert!(self.dead(), "add_dead put Dead back");
+            self.health(20.0);
+            self.app.update();
+            self.load();
+            let at_the_load = self.queued().await;
+            self.forward();
+            let after = self.queued().await;
+            [in_the_frame, at_the_load, after]
+        }
+    }
+
+    /// A `Dead` re-inserted in the Respawn's frame and never removed again
+    /// doesn't hide the respawn: it's confirmed once, at the next load, and
+    /// the old life's second death report adds nothing, even when azalea's
+    /// channel is read after the load (PR #65's review; ADR-0020, S27).
+    #[tokio::test]
+    async fn a_dead_put_back_in_the_respawns_frame_still_confirms_the_respawn_once() {
+        let mut scene = Scene::joined().await;
+
+        let [in_the_frame, at_the_load, after] = scene.respawned_with_a_stale_dead().await;
+
+        assert_eq!(in_the_frame, []);
+        assert_eq!(at_the_load, [SessionEvent::Respawned]);
+        assert_eq!(after, [], "the old life's death report");
+    }
+
+    /// The next death, with the stale `Dead` still there, is reported once,
+    /// and its respawn waits for its own Respawn and load (ADR-0020, S27).
+    #[tokio::test]
+    async fn the_next_death_after_a_stale_dead_is_reported_and_waits_for_its_own_respawn() {
+        let mut scene = Scene::joined().await;
+        scene.respawned_with_a_stale_dead().await;
+
+        scene.health(0.0);
+        scene.app.update();
+        scene.forward();
+        let died = scene.queued().await;
+        scene.ask();
+        let asked = scene.queued().await;
+        scene.respawn_packet();
+        scene.health(20.0);
+        scene.app.update();
+        scene.load();
+        let loaded = scene.queued().await;
+
+        assert_eq!(died, [SessionEvent::Died]);
+        assert_eq!(asked, [], "loaded, but no Respawn since this death");
+        assert_eq!(loaded, [SessionEvent::Respawned]);
     }
 }

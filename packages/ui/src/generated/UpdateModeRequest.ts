@@ -13,7 +13,7 @@ export type UpdateModeRequest = {
  */
 version: number, 
 /**
- * Its name, under [`CreateModeRequest::name`]'s rules; the mode's own
+ * Its name, under `CreateModeRequest`'s rules; the mode's own
  * name never clashes with itself, in any case.
  */
 name: string, 
@@ -23,6 +23,6 @@ name: string,
  */
 visibility: ModeVisibility, 
 /**
- * Its steps, at most 32, under [`CreateModeRequest::steps`]' rules.
+ * Its steps, at most 32, under `CreateModeRequest`'s rules.
  */
 steps: Array<ModeStepRequest>, };

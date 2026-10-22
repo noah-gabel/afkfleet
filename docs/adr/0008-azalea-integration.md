@@ -85,7 +85,7 @@ pub fn single_threaded(app: &mut App) {
   - no `packet-event`
   - no `log`, because `log` adds Bevy's `LogPlugin` to every App and fights our tracing subscriber
 - **`Init`** arrives before the TCP connect, so `ConnectionFailed` always follows it.
-- **`Death`** can arrive twice (the combat-kill packet, then health reaching 0); de-duplicate it.
+- **`Death`** can arrive twice (the combat-kill packet, then health reaching 0); de-duplicate it. *(Since Phase 11, [ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S27: read from azalea's `DeathEvent` inside the frame, not from `Event::Death`, so a report reaches the bridge before the next load.)*
 - After a disconnect or failed connect, the runner keeps running: every session ends with `exit()`.
 
 ### 5. Watchdog and timeouts (refines Plan.md §6 rows 1 and 6, P3.4, P4.6)

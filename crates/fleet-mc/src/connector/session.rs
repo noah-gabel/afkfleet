@@ -266,9 +266,10 @@ impl SessionHandle for McSession {
         let control = self.inner.control.clone();
         self.call(move |client| {
             actions::respawn(client);
-            // In the same job, so a death after the respawn is reported
-            // again, and one before it isn't reported twice (P3.5).
-            control.respawned();
+            // In the same job: a server that respawned the bot by itself
+            // left the removal and the load behind already, so no load will
+            // follow to confirm it (ADR-0020, S22, S27).
+            control.respawn_asked(actions::loaded(client));
             Ok(())
         })
     }

@@ -37,7 +37,7 @@
 //! A setup step that fails is a FAIL line with a fixed text, never a panic
 //! carrying a command's output, and teardown never panics.
 
-mod minecraft;
+pub(crate) mod minecraft;
 mod pins;
 mod recording;
 mod secrets;

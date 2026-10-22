@@ -355,7 +355,7 @@ impl Link {
                 Ok(ServerMessage::Welcome(welcome)) => Ok((messages, welcome)),
                 Ok(ServerMessage::Reject(reason)) => Err(End::of_reject(reason)),
                 Ok(_) => Err(End::own(Cause::UnexpectedFirst)),
-                Err(_unreadable) => Err(End::own(Cause::Unreadable)),
+                Err(unreadable) => Err(unread(&unreadable)),
             }
         };
         let welcomed = tokio::select! {
@@ -409,10 +409,7 @@ impl Link {
     ) -> Option<End> {
         let message = match ServerMessage::try_from(message) {
             Ok(message) => message,
-            Err(unreadable) => {
-                debug!(error = %unreadable, "a message from the server couldn't be read");
-                return Some(End::own(Cause::Unreadable));
-            }
+            Err(unreadable) => return Some(unread(&unreadable)),
         };
         let instruction = match message {
             // The answers go straight to the credentials, never behind a
@@ -481,6 +478,16 @@ impl Link {
             ),
         }
     }
+}
+
+/// A message from the server this agent can't read, such as a spec with a
+/// mode type it doesn't know: refused whole, never applied in part, and
+/// said at `error`, since a human must act (update the agent, or fix the
+/// server). The error names the field and the problem, never a value
+/// (ADR-0020, S25).
+fn unread(unreadable: &fleet_proto::ConvertError) -> End {
+    error!(error = %unreadable, "a message from the server couldn't be read");
+    End::own(Cause::Unreadable)
 }
 
 #[cfg(test)]

@@ -667,6 +667,7 @@ async fn a_body_that_doesnt_parse_is_400_and_never_repeats_what_it_read(
         step(json!({ "type": "jump", CANARY: true })),
         json!({ "name": "Fine", "visibility": format!("shared {CANARY}"), "steps": [] }),
         json!({ "name": "Fine", "visibility": "private", "steps": [], "owner": CANARY }),
+        json!({ "name": "Fine", "visibility": "private", "steps": [{ "action": { "type": "jump" }, "schedule": { "type": format!("on_respawn {CANARY}") }, "probability": 100 }] }),
     ];
 
     for body in bodies {
@@ -733,6 +734,81 @@ async fn a_command_off_the_allowlist_is_pointed_to_the_step_up_route(
     assert_eq!(pointed.code(), "mode_needs_step_up");
     insta::assert_json_snapshot!("mode_needs_step_up", pointed.body_without_request_id());
     assert_eq!(listed.status, 201, "{}", listed.text);
+}
+
+/// The allowlist reads an on-respawn command as any other: one off it is
+/// pointed to the step-up route, which takes it after a step-up and answers
+/// the step on respawn; one on it passes the plain route (S16; ADR-0020,
+/// S20).
+#[sqlx::test(migrations = false)]
+async fn an_unlisted_command_on_respawn_is_pointed_to_the_step_up_route(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = with_spawn(options).await;
+    let member = setup.person(2, "member", Role::Member).await;
+    let on_respawn = |name: &str, command: &str| {
+        json!({ "name": name, "visibility": "private", "steps": [
+            { "action": { "type": "send_chat", "message": command }, "schedule": { "type": "on_respawn" }, "probability": 100 },
+        ] })
+    };
+
+    let pointed = setup
+        .create(&member, on_respawn("Ops", "/op AfkBot2"))
+        .await;
+    let written = setup.users_modes().await;
+    setup.stamp(member.session).await;
+    let twin = setup
+        .create_with_commands(&member, on_respawn("Ops", "/op AfkBot2"))
+        .await;
+    let listed = setup
+        .create(&member, on_respawn("Home", "/spawn home"))
+        .await;
+
+    assert_eq!(
+        (pointed.status, pointed.code()),
+        (403, "mode_needs_step_up"),
+        "{}",
+        pointed.text
+    );
+    assert_eq!(written, 0, "nothing written");
+    assert_eq!(twin.status, 201, "{}", twin.text);
+    assert_eq!(
+        twin.body["steps"][0]["schedule"],
+        json!({ "type": "on_respawn" })
+    );
+    assert_eq!(twin.body["steps"][0]["action"]["message"], "/op AfkBot2");
+    assert_eq!(listed.status, 201, "{}", listed.text);
+}
+
+/// S15's canary on respawn: an argument planted in a shared mode's
+/// on-respawn command reaches its creator, never a viewer who can't edit it.
+#[sqlx::test(migrations = false)]
+async fn a_planted_argument_on_respawn_never_reaches_a_viewer_who_cant_edit_the_mode(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = setup.person(3, "admin", Role::Admin).await;
+    let member = setup.person(5, "member", Role::Member).await;
+    let definition = json!({ "steps": [
+        { "action": { "type": "send_chat", "message": format!("/login {CANARY}") }, "schedule": { "type": "on_respawn" }, "probability": 100 },
+    ] })
+    .to_string();
+    setup
+        .add_mode(10, admin.id, "Admin shared", "shared", &definition)
+        .await;
+
+    let below = setup.modes(&member, "").await;
+    let editor = setup.modes(&admin, "").await;
+
+    assert_eq!(below.status, 200, "{}", below.text);
+    assert!(!below.text.contains(CANARY), "{}", below.text);
+    let step = &named(&below.body, "Admin shared")["steps"][0];
+    assert_eq!(step["action"]["message"], "/login");
+    assert_eq!(step["action"]["arguments_hidden"], true);
+    assert_eq!(step["schedule"], json!({ "type": "on_respawn" }));
+    assert_eq!(editor.text.matches(CANARY).count(), 1, "{}", editor.text);
 }
 
 /// The pointer comes after `forbidden`: only a caller the twin would take

@@ -1546,7 +1546,8 @@ expression: answer.json()
         "description": "When a step runs: its schedule's `type` (ADR-0010).\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on one always keeps a default branch.",
         "enum": [
           "at_start",
-          "every"
+          "every",
+          "on_respawn"
         ],
         "type": "string"
       },
@@ -1856,7 +1857,7 @@ expression: answer.json()
             "type": "string"
           },
           "steps": {
-            "description": "Its steps, at most 32, under [`CreateModeRequest::steps`]' rules.",
+            "description": "Its steps, at most 32, under `CreateModeRequest`'s rules.",
             "items": {
               "$ref": "#/components/schemas/ModeStepRequest"
             },

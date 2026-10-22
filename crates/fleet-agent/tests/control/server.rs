@@ -74,7 +74,13 @@ impl Call {
     /// Sends `message`.
     pub(crate) async fn send(&self, message: ServerMessage) {
         let wire = wire::ServerMessage::try_from(message).unwrap();
-        self.outgoing.send(Ok(wire)).await.unwrap();
+        self.send_raw(wire).await;
+    }
+
+    /// Sends `message` as it is, as a server this agent doesn't fully
+    /// understand might.
+    pub(crate) async fn send_raw(&self, message: wire::ServerMessage) {
+        self.outgoing.send(Ok(message)).await.unwrap();
     }
 
     /// Welcomes the agent as agent `agent`, heartbeats every `interval`.

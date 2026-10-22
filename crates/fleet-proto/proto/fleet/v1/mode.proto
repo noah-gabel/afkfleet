@@ -97,6 +97,10 @@ message Schedule {
     Unit at_start = 1;
     // Again and again while the bot is online.
     Every every = 2;
+    // Once each time the bot is alive again after a death, as soon as the
+    // server confirmed the respawn it asked for. A reader that doesn't know
+    // this case sees the oneof unset and refuses the whole message.
+    Unit on_respawn = 3;
   }
 
   // A repeating schedule. Each gap is uniform between the interval and the

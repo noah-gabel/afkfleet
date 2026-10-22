@@ -26,7 +26,10 @@ pub(crate) enum Mapped {
     Packet,
     /// The bot spawned in the world. The first one is `Joined`.
     Spawn,
-    /// The bot died. azalea can report one death twice (ADR-0008 §4).
+    /// The bot died. azalea can report one death twice (ADR-0008 §4). It
+    /// comes from azalea's `DeathEvent`, read inside the frame
+    /// ([`super::BridgeControl::died`]), never from `Event::Death`
+    /// (ADR-0020, S27).
     Death,
     /// A chat message, already sanitized.
     Chat(IncomingChat),
@@ -69,7 +72,6 @@ pub(crate) fn map_event(event: &Event) -> Mapped {
         Event::Tick => Mapped::Tick,
         Event::KeepAlive(_) => Mapped::Packet,
         Event::Spawn => Mapped::Spawn,
-        Event::Death(_) => Mapped::Death,
         Event::Chat(packet) => map_chat(packet),
         Event::Disconnect(reason) => {
             Mapped::Terminal(Terminal::Disconnected(disconnect_reason(reason.as_ref())))
@@ -77,7 +79,10 @@ pub(crate) fn map_event(event: &Event) -> Mapped {
         Event::ConnectionFailed(error) => {
             Mapped::Terminal(Terminal::ConnectionFailed(connect_failure(error)))
         }
-        Event::Init
+        // A death is read inside the frame instead, so its report comes
+        // before the next load (ADR-0020, S27).
+        Event::Death(_)
+        | Event::Init
         | Event::Login
         | Event::AddPlayer(_)
         | Event::RemovePlayer(_)
@@ -536,11 +541,11 @@ mod tests {
     #[case::tick(Event::Tick, Mapped::Tick)]
     #[case::keep_alive(Event::KeepAlive(42), Mapped::Packet)]
     #[case::spawn(Event::Spawn, Mapped::Spawn)]
-    #[case::death_by_health(Event::Death(None), Mapped::Death)]
+    #[case::death_by_health(Event::Death(None), Mapped::Ignored)]
     #[case::death_by_kill(Event::Death(Some(Arc::new(ClientboundPlayerCombatKill {
         player_id: MinecraftEntityId(1),
         message: FormattedText::from("AfkBot1 was slain"),
-    }))), Mapped::Death)]
+    }))), Mapped::Ignored)]
     #[case::init(Event::Init, Mapped::Ignored)]
     #[case::login(Event::Login, Mapped::Ignored)]
     #[case::chunk(Event::ReceiveChunk(ChunkPos::new(0, 0)), Mapped::Ignored)]
