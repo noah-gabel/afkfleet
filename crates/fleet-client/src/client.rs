@@ -37,6 +37,7 @@ use fleet_api_types::{
 };
 
 use crate::error::{BuildError, ClientError};
+use crate::events::EventsHandshake;
 use crate::session::{BotCall, Core};
 use crate::store::SessionStore;
 use crate::transport::{ReqwestTransport, Timeouts};
@@ -746,6 +747,20 @@ impl<S: SessionStore> Client<S> {
     /// error as for every authenticated call.
     pub async fn delete_mode(&self, id: ModeId) -> Result<(), ClientError> {
         self.core.delete_mode(id).await
+    }
+
+    /// `POST /events/ticket`, and what the live events socket opens with:
+    /// its URL with the ticket, and the `Authorization` value of the session
+    /// the ticket belongs to (P11.5; ADR-0020, S28). The one exception to
+    /// the crate's token rule (R16), for `just dev-bots`' `events` until
+    /// P11.8's client opens the socket inside: the desktop app never calls
+    /// it. A ticket is single-use and lives 30 s, so ask for a new handshake
+    /// before every connect.
+    ///
+    /// # Errors
+    /// As for every authenticated call.
+    pub async fn events_handshake(&self) -> Result<EventsHandshake, ClientError> {
+        self.core.events_handshake().await
     }
 }
 

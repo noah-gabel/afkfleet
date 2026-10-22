@@ -97,6 +97,22 @@ impl ServerUrl {
         self.join(["api", "v1"].iter().chain(segments))
     }
 
+    /// The live events socket's URL with `ticket` in its query: `ws://` for
+    /// an `http://` server, `wss://` for an `https://` one.
+    pub(crate) fn events(&self, ticket: &str) -> Url {
+        let mut url = self.api(&["events"]);
+        let scheme = if self.0.scheme() == "https" {
+            "wss"
+        } else {
+            "ws"
+        };
+        // http(s) and ws(s) are all special schemes, so the switch is
+        // allowed; it could only fail between special and other schemes.
+        url.set_scheme(scheme).unwrap_or(());
+        url.query_pairs_mut().append_pair("ticket", ticket);
+        url
+    }
+
     /// The URL of the health route `/health/<which>`.
     pub(crate) fn health(&self, which: &str) -> Url {
         self.join(["health", which].iter())
@@ -131,6 +147,24 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
+
+    #[rstest]
+    #[case::plain(
+        "http://127.0.0.1:8080",
+        "ws://127.0.0.1:8080/api/v1/events?ticket=afk_wt_x-y_z"
+    )]
+    #[case::tls(
+        "https://example.com",
+        "wss://example.com/api/v1/events?ticket=afk_wt_x-y_z"
+    )]
+    fn the_events_url_takes_its_servers_scheme_and_the_ticket(
+        #[case] server: &str,
+        #[case] events: &str,
+    ) {
+        let url = ServerUrl::parse(server).unwrap().events("afk_wt_x-y_z");
+
+        assert_eq!(url.as_str(), events);
+    }
 
     #[rstest]
     #[case::https("https://example.com", "https://example.com/")]

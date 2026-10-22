@@ -15,6 +15,7 @@ mod chat;
 mod console;
 #[path = "../../examples/dev-bots/console.rs"]
 mod dev_console;
+mod events;
 mod link;
 mod me;
 mod mfa;

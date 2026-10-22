@@ -48,11 +48,16 @@ fleet-server.workspace = true
 fleet-startup.workspace = true
 # ManualClock and SeededRandom for the server.
 fleet-testkit.workspace = true
+# `SinkExt`, for the console's `events` to close its socket (P11.5, ADR-0020, U11).
+futures-util = { workspace = true, features = ["sink"] }
 # The TLS tests' CA and server certificates, made at run time (ADR-0017).
 rcgen = { workspace = true, features = ["aws_lc_rs", "pem"] }
 rstest.workspace = true
 # A fresh folder for each test server's database.
 tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt"] }
+# The console's `events` and the live events tests: a plain ws:// client to 127.0.0.1, no
+# TLS (P11.5, ADR-0020, U11).
+tokio-tungstenite = { workspace = true, features = ["connect"] }
 # The authenticator app: codes from the enroll answer's otpauth URI.
 totp-rs = { workspace = true, features = ["otpauth"] }

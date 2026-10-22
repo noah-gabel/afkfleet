@@ -12,6 +12,11 @@
 //!   the app), and the password step's mfa or setup token only in its
 //!   memory. Methods take codes, never tokens, and nothing the client
 //!   returns, logs or formats holds one.
+//!   *One exception* (ADR-0020, R16): [`Client::events_handshake`] hands
+//!   the live events socket's handshake, the session's access token as its
+//!   `Authorization` value, to the one caller that opens the socket itself,
+//!   `just dev-bots`' `events`, until P11.8's client opens it inside; the
+//!   desktop app never calls it.
 //! - **One refresh at a time, and only on a 401 `unauthorized` from an
 //!   authenticated route** (ADR-0016). A request whose token a refresh
 //!   already replaced is retried once with the current one instead. An
@@ -42,6 +47,7 @@ use core::time::Duration;
 
 pub mod client;
 pub mod error;
+pub mod events;
 pub mod link;
 pub mod store;
 pub mod trust;

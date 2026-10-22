@@ -89,6 +89,7 @@ use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotRespons
 use fleet_api_types::chat::{
     ChatCommandRequest, ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse,
 };
+use fleet_api_types::events::EventTicketResponse;
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{
@@ -111,6 +112,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::client::LoginStep;
 use crate::error::{ApiFailure, ClientError, Unexpected};
+use crate::events::EventsHandshake;
 use crate::store::{SessionStore, StoreError, StoreOp};
 use crate::transport::{Incoming, Outgoing, Transport, TransportError};
 use crate::url::ServerUrl;
@@ -877,6 +879,18 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         let url = self.server.api(&["modes", &id.to_string()]);
         let answer = self.authed(Method::DELETE, url, None).await?;
         expect_empty(answer, 204)
+    }
+
+    pub(crate) async fn events_handshake(self: &Arc<Self>) -> Result<EventsHandshake, ClientError> {
+        let answer = self
+            .authed(Method::POST, self.server.api(&["events", "ticket"]), None)
+            .await?;
+        let ticket: EventTicketResponse = expect_json(answer, 200)?;
+        // The token the ticket's request went with, or a newer one of the
+        // same session: the ticket belongs to the session.
+        let access = self.current_access().ok_or(ClientError::NoSession)?;
+        let url = self.server.events(ticket.ticket.expose());
+        Ok(EventsHandshake::new(url.as_str(), &access.token))
     }
 
     // ---- Sending ----
