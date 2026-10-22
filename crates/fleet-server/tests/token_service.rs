@@ -17,14 +17,16 @@ use core::time::Duration;
 use std::net::IpAddr;
 use std::sync::Arc;
 
-use chrono::{DateTime, TimeZone as _, Utc};
+use chrono::{DateTime, TimeDelta, TimeZone as _, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget, RecordedValue};
-use fleet_core::auth::SessionPolicy;
-use fleet_core::authz::Role;
-use fleet_core::id::UserId;
+use fleet_core::auth::{SessionPolicy, SessionTimes};
+use fleet_core::authz::{Actor, Role};
+use fleet_core::id::{SessionId, UserId};
 use fleet_core::system::{Clock as _, RandomError};
 use fleet_core::value::Username;
-use fleet_server::app::auth::{IssueError, IssuedTokens, RefreshError, TokenService};
+use fleet_server::app::auth::{
+    IssueError, IssuedTokens, RefreshError, SocketCheckError, SocketSession, TokenService,
+};
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
@@ -681,4 +683,200 @@ async fn a_new_sessions_debug_shows_no_hash_byte(
             assert!(!debug.contains(&hex[start..start + 8]), "{debug}");
         }
     }
+}
+
+// --- A live events socket's session (P11.5; ADR-0020, S31) -----------------------
+
+impl Setup {
+    /// The socket session a fresh login's access token opens, with the
+    /// login's tokens.
+    async fn socket(&self) -> (SocketSession, IssuedTokens) {
+        let tokens = self.login().await;
+        let found = self
+            .service
+            .authenticate(&tokens.access_token)
+            .await
+            .unwrap();
+        let socket = SocketSession {
+            actor: found.actor,
+            session_id: found.session_id,
+            times: found.times,
+        };
+        (socket, tokens)
+    }
+
+    /// The reason `socket`'s session no longer counts, or `None` when it
+    /// still does.
+    async fn refusal(&self, socket: &SocketSession) -> Option<&'static str> {
+        match self.service.check_socket(socket).await {
+            Ok(()) => None,
+            Err(SocketCheckError::Refused(reason)) => Some(reason),
+            Err(other @ SocketCheckError::Store(_)) => panic!("{other}"),
+        }
+    }
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_live_sockets_session_still_counts(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let (socket, _) = setup.socket().await;
+    setup.clock.advance(MINUTE);
+
+    assert_eq!(setup.refusal(&socket).await, None);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_revoked_session_no_longer_counts(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let (socket, _) = setup.socket().await;
+    let mut tx = setup.db.write().await.unwrap();
+    tx.sessions()
+        .revoke(socket.session_id, setup.clock.now())
+        .await
+        .unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert_eq!(setup.refusal(&socket).await, Some("revoked"));
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_disabled_users_session_no_longer_counts(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let (socket, _) = setup.socket().await;
+    let mut tx = setup.db.write().await.unwrap();
+    tx.users().set_disabled(setup.user, true).await.unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert_eq!(setup.refusal(&socket).await, Some("disabled"));
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_session_whose_user_has_another_role_now_no_longer_counts(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let (socket, _) = setup.socket().await;
+    let mut tx = setup.db.write().await.unwrap();
+    tx.users().set_role(setup.user, Role::Admin).await.unwrap();
+    tx.commit(setup_entry()).await.unwrap();
+
+    assert_eq!(setup.refusal(&socket).await, Some("role_changed"));
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_session_that_isnt_there_or_isnt_the_users_no_longer_counts(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let (socket, _) = setup.socket().await;
+    let unknown = SocketSession {
+        session_id: SessionId::new_v7(start(), [9; 10]).unwrap(),
+        ..socket
+    };
+    let someone_else = SocketSession {
+        actor: Actor {
+            id: UserId::new_v7(start(), [9; 10]).unwrap(),
+            ..socket.actor
+        },
+        ..socket
+    };
+
+    assert_eq!(setup.refusal(&unknown).await, Some("gone"));
+    assert_eq!(setup.refusal(&someone_else).await, Some("gone"));
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_refresh_doesnt_extend_the_socket(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let (socket, tokens) = setup.socket().await;
+    setup.clock.advance(MINUTE * 10);
+    let refreshed = setup.refresh(&tokens.refresh_token).await.unwrap();
+    setup.clock.advance(MINUTE * 5);
+
+    let refusal = setup.refusal(&socket).await;
+
+    assert_eq!(refusal, Some("expired"), "15 minutes after the connect");
+    assert!(
+        setup
+            .service
+            .authenticate(&refreshed.access_token)
+            .await
+            .is_ok(),
+        "the refreshed token still counts"
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_socket_counts_until_a_millisecond_before_its_access_tokens_expiry(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let (socket, _) = setup.socket().await;
+
+    setup
+        .clock
+        .advance(Duration::from_millis(15 * 60 * 1000 - 1));
+    let before = setup.refusal(&socket).await;
+    setup.clock.advance(Duration::from_millis(1));
+    let at_it = setup.refusal(&socket).await;
+
+    assert_eq!(before, None);
+    assert_eq!(at_it, Some("expired"));
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_sockets_deadline_is_its_access_tokens_expiry_capped_at_the_sessions_end(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let fresh = SessionTimes {
+        created_at: start(),
+        refreshed_at: start(),
+    };
+    let ending = SessionTimes {
+        created_at: start() - TimeDelta::days(30) + TimeDelta::minutes(5),
+        refreshed_at: start(),
+    };
+
+    assert_eq!(
+        setup.service.socket_deadline(fresh),
+        start() + TimeDelta::minutes(15)
+    );
+    assert_eq!(
+        setup.service.socket_deadline(ending),
+        start() + TimeDelta::minutes(5)
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_database_that_fails_is_no_refusal(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let (socket, _) = setup.socket().await;
+    setup.db.close().await;
+
+    let result = setup.service.check_socket(&socket).await;
+
+    assert!(
+        matches!(result, Err(SocketCheckError::Store(_))),
+        "{result:?}"
+    );
 }

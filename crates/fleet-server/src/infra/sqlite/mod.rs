@@ -70,9 +70,11 @@ mod users;
 
 use core::time::Duration;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use sqlx::migrate::{MigrateError, Migrator};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePool, SqlitePoolOptions};
+use tokio::sync::watch;
 
 pub use self::connect::{
     BUSY_TIMEOUT, DatabaseOptions, PoolRole, READ_CONNECTIONS, connect_options,
@@ -181,6 +183,8 @@ pub struct Database {
     write: SqlitePool,
     read: SqlitePool,
     reads: store::Reads,
+    /// How many write transactions committed ([`Store::commits`](crate::ports::store::Store::commits)).
+    commits: Arc<watch::Sender<u64>>,
 }
 
 impl Database {
@@ -217,6 +221,7 @@ impl Database {
             write,
             reads: store::Reads { pool: read.clone() },
             read,
+            commits: Arc::new(watch::Sender::new(0)),
         }
     }
 

@@ -24,6 +24,7 @@
 use axum::extract::FromRequestParts;
 use axum::http::request::Parts;
 use chrono::{DateTime, Utc};
+use fleet_core::auth::SessionTimes;
 use fleet_core::authz::{Actor, AuthzError, Permission, ResourceContext, authorize};
 use fleet_core::id::SessionId;
 use tracing::debug;
@@ -34,12 +35,14 @@ use crate::http::error::ApiError;
 use crate::http::router::AppState;
 
 /// The authenticated user of a request: the actor (their ID and current
-/// role), their session, and when they last entered their password again.
+/// role), their session and its times, and when they last entered their
+/// password again.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AuthUser {
     actor: Actor,
     session_id: SessionId,
     stepped_up_at: Option<DateTime<Utc>>,
+    times: SessionTimes,
 }
 
 impl AuthUser {
@@ -60,6 +63,14 @@ impl AuthUser {
     #[must_use]
     pub const fn stepped_up_at(&self) -> Option<DateTime<Utc>> {
         self.stepped_up_at
+    }
+
+    /// The session's anchors as the request's access token was checked: a
+    /// live events socket lives at most until that token expires (P11.5;
+    /// ADR-0020, S31).
+    #[must_use]
+    pub const fn session_times(&self) -> SessionTimes {
+        self.times
     }
 
     /// Whether the actor may do `permission` to `resource`, decided by
@@ -96,6 +107,7 @@ impl FromRequestParts<AppState> for AuthUser {
                     actor: authenticated.actor,
                     session_id: authenticated.session_id,
                     stepped_up_at: authenticated.stepped_up_at,
+                    times: authenticated.times,
                 })
             }
             Err(AuthenticateError::Rejected(rejected)) => Err(refuse(&rejected)),

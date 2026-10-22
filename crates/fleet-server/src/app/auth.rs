@@ -31,6 +31,11 @@
 //!   connections, and decides with `fleet_core::auth::access_decision`, so a
 //!   revocation, a disabled user or a role change counts on the very next
 //!   request.
+//! - **A live events socket** (P11.5; ADR-0020, S31):
+//!   [`TokenService::check_socket`] reads the session it was opened by
+//!   again after every commit and decides as `authenticate` does, over the
+//!   times its connecting request saw, so a refresh never extends a socket;
+//!   [`TokenService::socket_deadline`] is when it closes at the latest.
 //! - **The touch:** a request notes its session's use (`last_used_at`) at
 //!   most once a minute (`fleet_core::auth::touch_due`), with a conditional
 //!   write committed without an entry ([`UnauditedWrite::SessionTouch`]). It
@@ -176,6 +181,36 @@ pub struct Authenticated {
     pub session_id: SessionId,
     /// When the user last entered their password again in this session.
     pub stepped_up_at: Option<DateTime<Utc>>,
+    /// The session's anchors as the token was checked: when its access
+    /// token expires follows from them.
+    pub times: SessionTimes,
+}
+
+/// The session a live events socket was opened by, as its connecting
+/// request found it (P11.5; ADR-0020, S31): what
+/// [`TokenService::check_socket`] checks again after every commit, and what
+/// [`TokenService::socket_deadline`] times the socket's life by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SocketSession {
+    /// The user and their role at the connect.
+    pub actor: Actor,
+    /// The session.
+    pub session_id: SessionId,
+    /// Its anchors at the connect. A refresh since doesn't move them: the
+    /// socket lives at most until the access token it opened with expires.
+    pub times: SessionTimes,
+}
+
+/// Why a socket's session no longer counts.
+#[derive(Debug, thiserror::Error)]
+pub enum SocketCheckError {
+    /// The session or its user no longer allow it; the reason is only
+    /// logged: `gone`, `revoked`, `expired`, `disabled` or `role_changed`.
+    #[error("the socket's session no longer counts ({0})")]
+    Refused(&'static str),
+    /// The database failed: not a refusal.
+    #[error(transparent)]
+    Store(#[from] StoreError),
 }
 
 /// Why a request's credentials were refused, for the log only: the API
@@ -551,7 +586,51 @@ impl TokenService {
             },
             session_id: session.id,
             stepped_up_at: session.stepped_up_at,
+            times: times(session),
         })
+    }
+
+    /// Whether the session `socket` was opened by still counts now (P11.5;
+    /// ADR-0020, S31): it's read again with its user, and decided with
+    /// `fleet_core::auth::access_decision` over the socket's own times, so a
+    /// refresh since never extends it. A session that's gone, or whose user
+    /// isn't the socket's or has another role now, doesn't count either: a
+    /// role change revokes every session anyway.
+    ///
+    /// # Errors
+    /// [`SocketCheckError::Refused`] when it no longer counts, and
+    /// [`SocketCheckError::Store`] when the database fails.
+    pub async fn check_socket(&self, socket: &SocketSession) -> Result<(), SocketCheckError> {
+        let Some(found) = self
+            .store
+            .sessions()
+            .find(socket.session_id)
+            .await?
+            .filter(|found| found.session.user_id == socket.actor.id)
+        else {
+            return Err(SocketCheckError::Refused("gone"));
+        };
+        access_decision(
+            &self.policy,
+            AccessFacts {
+                times: socket.times,
+                revoked: found.session.revoked_at.is_some(),
+                user_disabled: found.disabled,
+            },
+            self.clock.now(),
+        )
+        .map_err(|rejection| SocketCheckError::Refused(rejection.as_str()))?;
+        if found.role != socket.actor.role {
+            return Err(SocketCheckError::Refused("role_changed"));
+        }
+        Ok(())
+    }
+
+    /// When a socket opened with a session's `times` closes at the latest:
+    /// when the access token it opened with expires.
+    #[must_use]
+    pub fn socket_deadline(&self, times: SessionTimes) -> DateTime<Utc> {
+        self.policy.access_expiry(times)
     }
 
     /// Notes session `id`'s use at `now`; a failure is only logged.

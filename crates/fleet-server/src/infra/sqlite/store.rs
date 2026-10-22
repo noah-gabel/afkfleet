@@ -2,6 +2,7 @@
 //! pool, and [`SqliteWriteTx`] on the one write connection.
 
 use core::fmt;
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -16,6 +17,7 @@ use fleet_core::mode::ModeName;
 use fleet_core::pki::CertFingerprint;
 use fleet_core::value::{AgentName, McUsername, ServerAddress, Username};
 use sqlx::{Sqlite, SqlitePool, Transaction};
+use tokio::sync::watch;
 
 use super::error::store_error;
 use super::{
@@ -109,6 +111,10 @@ impl SessionReads for Reads {
 
     async fn refresh_hash_exists(&self, hash: &TokenHash) -> Result<bool, StoreError> {
         sessions::refresh_hash_exists(&self.pool, hash).await
+    }
+
+    async fn find(&self, id: SessionId) -> Result<Option<SessionWithUser>, StoreError> {
+        sessions::find_by_id(&self.pool, id).await
     }
 
     async fn list_live(
@@ -362,6 +368,8 @@ impl AuditReads for Reads {
 /// A write transaction on the one write connection. Dropping it rolls back.
 pub struct SqliteWriteTx {
     tx: Transaction<'static, Sqlite>,
+    /// The database's commit count, bumped once this commits.
+    commits: Arc<watch::Sender<u64>>,
 }
 
 impl fmt::Debug for SqliteWriteTx {
@@ -430,14 +438,28 @@ impl WriteTx for SqliteWriteTx {
 
     async fn commit(mut self: Box<Self>, entry: NewAuditEntry) -> Result<AuditEntryId, StoreError> {
         let id = audit::record(&mut self.tx, &entry).await?;
-        self.tx.commit().await.map_err(store_error)?;
+        let Self { tx, commits } = *self;
+        finish(tx, &commits).await?;
         Ok(id)
     }
 
     async fn commit_unaudited(self: Box<Self>, _reason: UnauditedWrite) -> Result<(), StoreError> {
         // The reason names the exemption at the call site; nothing is stored.
-        self.tx.commit().await.map_err(store_error)
+        let Self { tx, commits } = *self;
+        finish(tx, &commits).await
     }
+}
+
+/// Commits `tx`, then bumps the database's commit count whatever came of
+/// it: a reader who sees the count moved reads again, which costs nothing
+/// when nothing changed (P11.5; ADR-0020, R8).
+async fn finish(
+    tx: Transaction<'static, Sqlite>,
+    commits: &watch::Sender<u64>,
+) -> Result<(), StoreError> {
+    let committed = tx.commit().await.map_err(store_error);
+    commits.send_modify(|count| *count = count.wrapping_add(1));
+    committed
 }
 
 #[async_trait]
@@ -480,7 +502,7 @@ impl SessionWrites for SqliteWriteTx {
     }
 
     async fn find(&mut self, id: SessionId) -> Result<Option<SessionWithUser>, StoreError> {
-        sessions::find_by_id(&mut self.tx, id).await
+        sessions::find_by_id(&mut *self.tx, id).await
     }
 
     async fn stamp_step_up(
@@ -971,7 +993,10 @@ impl Store for Database {
             .begin_with(BEGIN_IMMEDIATE)
             .await
             .map_err(store_error)?;
-        Ok(Box::new(SqliteWriteTx { tx }))
+        Ok(Box::new(SqliteWriteTx {
+            tx,
+            commits: Arc::clone(&self.commits),
+        }))
     }
 
     fn users(&self) -> &dyn UserReads {
@@ -1036,5 +1061,9 @@ impl Store for Database {
             .await
             .map(drop)
             .map_err(store_error)
+    }
+
+    fn commits(&self) -> watch::Receiver<u64> {
+        self.commits.subscribe()
     }
 }
