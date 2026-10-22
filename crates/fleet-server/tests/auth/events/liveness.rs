@@ -1,8 +1,9 @@
 //! An open socket doesn't outlive its session (ADR-0020, S31, R8, R18):
 //! every commit wakes it to check its session again, so a logout, a
 //! revocation, a password change, a 2FA replacement, a role change or a
-//! disabling closes it with 4001 at once; and it closes, without a read,
-//! when the access token it opened with expires.
+//! disabling closes it with 4001 at once, and a check that fails closes it
+//! with 1013; and it closes, without a read, when the access token it
+//! opened with expires.
 
 use core::time::Duration;
 
@@ -129,6 +130,30 @@ async fn replacing_the_authenticator_closes_the_other_sessions_sockets(
         closed(&mut others).await,
         said(SocketClose::Unauthenticated)
     );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_session_that_cant_be_checked_after_a_commit_closes_the_socket_with_1013(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let alice = setup.alice_person().await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &alice.token).await;
+    setup.hooked.fail_socket_checks();
+
+    // Any commit wakes the socket to check its session.
+    let tx = setup.db.write().await.unwrap();
+    tx.commit(NewAuditEntry::new(
+        setup.clock.now(),
+        AuditAction::try_from("test.any_commit").unwrap(),
+        AuditOutcome::Success,
+    ))
+    .await
+    .unwrap();
+
+    assert_eq!(closed(&mut socket).await, said(SocketClose::Busy));
 }
 
 #[sqlx::test(migrations = false)]

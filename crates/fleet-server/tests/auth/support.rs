@@ -67,9 +67,12 @@ use fleet_server::ports::mfa::{MfaReads, MfaWrites};
 use fleet_server::ports::modes::{
     ListedMode, ModeChange, ModeReads, ModeWrites, NewMode, StoredMode, WriteModeError,
 };
+use fleet_server::ports::page::Page;
 use fleet_server::ports::passwords::{HashError, Passwords, VerifyError};
 use fleet_server::ports::reconcile::{Change, Reconcile};
-use fleet_server::ports::sessions::{SessionReads, SessionWrites};
+use fleet_server::ports::sessions::{
+    LiveSince, Session, SessionReads, SessionWithUser, SessionWrites,
+};
 use fleet_server::ports::store::{Store, StoreError, UnauditedWrite, WriteTx};
 use fleet_server::ports::tokens::TokenHash;
 use fleet_server::ports::users::{NewUser, PasswordHash};
@@ -246,6 +249,7 @@ pub(crate) struct HookedStore {
     queued: Arc<Mutex<Option<Meanwhile>>>,
     after_commit: Arc<Mutex<Option<Meanwhile>>>,
     lose_mode_update: Arc<Mutex<bool>>,
+    sessions: HookedSessions,
 }
 
 impl HookedStore {
@@ -253,12 +257,35 @@ impl HookedStore {
     /// name.
     fn new(inner: Database, alice: UserId, clock: ManualClock) -> Self {
         Self {
+            sessions: HookedSessions {
+                inner: inner.clone(),
+                fail_find: Arc::default(),
+            },
             inner,
             alice,
             clock,
             queued: Arc::default(),
             after_commit: Arc::default(),
             lose_mode_update: Arc::default(),
+        }
+    }
+
+    /// From now on, `SessionReads::find`, a live events socket's check of
+    /// its session, fails as a busy database does; every other read works
+    /// (P11.5).
+    pub(crate) fn fail_socket_checks(&self) {
+        *self.sessions.fail_find.lock().unwrap() = true;
+    }
+
+    /// The token service's store: this one's session reads, with queues of
+    /// its own, so its writes never take a change queued for another
+    /// service's.
+    fn sharing_session_reads(&self) -> Self {
+        Self {
+            queued: Arc::default(),
+            after_commit: Arc::default(),
+            lose_mode_update: Arc::default(),
+            ..self.clone()
         }
     }
 
@@ -582,6 +609,44 @@ impl ModeWrites for LosingTx {
     }
 }
 
+/// The database's session reads, with `find` failing once
+/// [`HookedStore::fail_socket_checks`] asked it to.
+#[derive(Debug, Clone)]
+struct HookedSessions {
+    inner: Database,
+    fail_find: Arc<Mutex<bool>>,
+}
+
+#[async_trait]
+impl SessionReads for HookedSessions {
+    async fn find_by_access_hash(
+        &self,
+        hash: &TokenHash,
+    ) -> Result<Option<SessionWithUser>, StoreError> {
+        self.inner.sessions().find_by_access_hash(hash).await
+    }
+
+    async fn refresh_hash_exists(&self, hash: &TokenHash) -> Result<bool, StoreError> {
+        self.inner.sessions().refresh_hash_exists(hash).await
+    }
+
+    async fn find(&self, id: SessionId) -> Result<Option<SessionWithUser>, StoreError> {
+        if *self.fail_find.lock().unwrap() {
+            return Err(StoreError::Busy);
+        }
+        self.inner.sessions().find(id).await
+    }
+
+    async fn list_live(
+        &self,
+        user: UserId,
+        live: LiveSince,
+        page: Page<SessionId>,
+    ) -> Result<Vec<Session>, StoreError> {
+        self.inner.sessions().list_live(user, live, page).await
+    }
+}
+
 #[async_trait]
 impl Store for HookedStore {
     async fn write(&self) -> Result<Box<dyn WriteTx>, StoreError> {
@@ -612,7 +677,7 @@ impl Store for HookedStore {
     }
 
     fn sessions(&self) -> &dyn SessionReads {
-        self.inner.sessions()
+        &self.sessions
     }
 
     fn login_attempts(&self) -> &dyn LoginAttemptReads {
@@ -774,10 +839,12 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
     let clock = ManualClock::new(at(T0));
     let random = SeededRandom::new(81);
     let token_port = Arc::new(Sha256Tokens::new(Arc::new(random.clone())));
+    let alice = UserId::new_v7(at(T0), [1; 10]).unwrap();
+    let hooked = HookedStore::new(db.clone(), alice, clock.clone());
     let tokens = TokenService::new(
         Arc::new(clock.clone()),
         Arc::new(random.clone()),
-        Arc::new(db.clone()),
+        Arc::new(hooked.sharing_session_reads()),
         token_port.clone(),
         SessionPolicy::default(),
     );
@@ -800,8 +867,6 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
             .unwrap(),
     };
     let lockout = lockout_service(&clock, &db);
-    let alice = UserId::new_v7(at(T0), [1; 10]).unwrap();
-    let hooked = HookedStore::new(db.clone(), alice, clock.clone());
     let login = LoginService::new(
         Arc::new(clock.clone()),
         Arc::new(random.clone()),

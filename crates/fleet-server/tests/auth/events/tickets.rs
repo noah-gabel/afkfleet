@@ -1,7 +1,8 @@
 //! The tickets of the live events socket (ADR-0020, S28, S29, R10, R17):
 //! every ticket that isn't a live one of the connecting session gets the
-//! same 404, a request the upgrade or the query refuses leaves the ticket
-//! unspent, and no log line ever holds a ticket.
+//! same 404, a session that can't be checked is 503 and opens nothing, a
+//! request the upgrade or the query refuses leaves the ticket unspent, and
+//! no log line ever holds a ticket.
 
 use core::num::NonZeroU32;
 use core::time::Duration;
@@ -67,6 +68,24 @@ async fn every_ticket_that_isnt_a_live_one_of_this_session_is_the_same_404(
     for (case, refused) in &refusals {
         assert_eq!(refused, first, "{case}");
     }
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_session_that_cant_be_checked_is_503_busy_and_opens_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let alice = setup.alice_person().await;
+    let served = Served::start(&setup).await;
+    let ticket = ticket(&setup, &alice.token).await;
+    setup.hooked.fail_socket_checks();
+
+    let refused = open(&served, &alice.token, &ticket).await.unwrap_err();
+
+    assert_eq!(refused.status, 503);
+    assert_eq!(refused.body["error"]["code"], "busy");
+    assert_eq!(setup.live_events.sockets().open(), 0);
 }
 
 #[sqlx::test(migrations = false)]
