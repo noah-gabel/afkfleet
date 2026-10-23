@@ -11,7 +11,7 @@ use fleet_core::audit::AuditAction;
 use fleet_core::authz::Role;
 use fleet_core::id::{AgentId, BotId};
 use fleet_core::mode::ModePreset;
-use fleet_server::ports::store::Store as _;
+use fleet_server::ports::store::{Store as _, UnauditedWrite};
 use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
@@ -193,7 +193,9 @@ async fn disabling_an_agent_hints_its_bots_after_its_commit(
 /// What each audited write tells the live events sockets, so no new action
 /// goes unconsidered: `bots` when what a bot reads as may change, `mode`
 /// for a mode's writes, `role` for a role change, `chat` for a user's line
-/// (published by its send), or nothing, with why.
+/// (published by its send), or nothing, with why. A write without an audit
+/// entry says so too, in a match a new one doesn't compile without (E's
+/// retention, say).
 #[test]
 fn every_audit_action_is_labelled_with_what_it_tells_the_sockets() {
     let labels: &[(&str, &str)] = &[
@@ -279,4 +281,19 @@ fn every_audit_action_is_labelled_with_what_it_tells_the_sockets() {
                 .any(|kind| told.starts_with(kind))),
         "each says what it tells"
     );
+    let unaudited = |write: &UnauditedWrite| match write {
+        UnauditedWrite::SessionTouch | UnauditedWrite::SessionRotate => "nothing: a session",
+        UnauditedWrite::LoginAttemptsPurge => "nothing: a login's counter",
+        UnauditedWrite::EventBatch => {
+            "nothing: its lines and the agent's reports are on the bus already"
+        }
+    };
+    for write in [
+        UnauditedWrite::SessionTouch,
+        UnauditedWrite::SessionRotate,
+        UnauditedWrite::LoginAttemptsPurge,
+        UnauditedWrite::EventBatch,
+    ] {
+        assert!(unaudited(&write).starts_with("nothing"), "{write:?}");
+    }
 }

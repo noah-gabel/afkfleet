@@ -255,12 +255,17 @@ async fn a_users_line_reaches_every_viewer_before_its_chat_sent(
 
     assert_eq!(sent.status, 200, "{}", sent.text);
     let request = sent.body["request_id"].clone();
-    for ((name, _, _, _), socket) in chatting.viewers().into_iter().zip(&mut sockets) {
+    for ((name, person, _, _), socket) in chatting.viewers().into_iter().zip(&mut sockets) {
         let line = next_event_after_pings(socket).await;
         assert_eq!(
             (line["type"].clone(), line["request"].clone()),
             (json!("chat"), request.clone()),
             "{name}"
+        );
+        assert_eq!(
+            line["line"],
+            history(&setup, bot, person).await[0],
+            "{name}: the sent line, as their history shows it"
         );
         assert_eq!(
             next_event_after_pings(socket).await,

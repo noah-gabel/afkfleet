@@ -102,9 +102,10 @@ fn median_and_max(
     (median, max)
 }
 
-/// Real time over a real database: the bounds are loose, about twenty
-/// times the slowest a debug build measured (2.8 ms and 11 ms), so only a
-/// change of scale fails it.
+/// Real time over a real database: the bounds hold the medians, about
+/// twenty times what a debug build measured (2.3 ms and 5.5 ms), so only a
+/// change of scale fails it, never one scheduler stall (CI's instrumented
+/// coverage run has them); the maxima only print.
 #[sqlx::test(migrations = false)]
 async fn rebuild_and_merge_costs_stay_within_loose_bounds(
     _pool: SqlitePoolOptions,
@@ -160,11 +161,11 @@ async fn rebuild_and_merge_costs_stay_within_loose_bounds(
     );
 
     assert!(
-        rebuild_max < core::time::Duration::from_millis(50),
-        "{rebuild_max:?}"
+        rebuild < core::time::Duration::from_millis(50),
+        "the median {rebuild:?}"
     );
     assert!(
-        read_max < core::time::Duration::from_millis(250),
-        "{read_max:?}"
+        read < core::time::Duration::from_millis(250),
+        "the median {read:?}"
     );
 }
