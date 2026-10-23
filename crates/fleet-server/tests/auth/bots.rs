@@ -36,7 +36,7 @@ use super::support::{
     Meanwhile, Options, Person, Seen, Setup, T0, at, redacted, setup, setup_entry, setup_with,
 };
 
-mod chat;
+pub(crate) mod chat;
 mod history;
 
 const BOTS: &str = "/api/v1/bots";
@@ -68,8 +68,8 @@ fn failed_at(millis: i64) -> LastReport {
 }
 
 /// A live stream that holds bots: its lease, its queue and its end.
-struct Stream {
-    lease: Lease,
+pub(crate) struct Stream {
+    pub(crate) lease: Lease,
     queued: mpsc::Receiver<fleet_proto::generated::ServerMessage>,
     _ended: oneshot::Receiver<StreamEnd>,
 }
@@ -135,7 +135,7 @@ impl Setup {
     }
 
     /// Gives `bot` a server and sets it running, as a user's calls would.
-    async fn running(&self, bot: BotId) {
+    pub(crate) async fn running(&self, bot: BotId) {
         let id = bot.to_string();
         sqlx::query!(
             "UPDATE bots SET server_address = 'mc.example.com', desired_state = 'running' WHERE id = ?",
@@ -158,7 +158,7 @@ impl Setup {
     }
 
     /// Assigns `bot` to agent `n` (enrolled here), with `last` stored.
-    async fn assigned(&self, bot: BotId, n: u8, last: Option<LastReport>) -> AgentId {
+    pub(crate) async fn assigned(&self, bot: BotId, n: u8, last: Option<LastReport>) -> AgentId {
         let agent = self.agent(n).await;
         let mut tx = self.db.write().await.unwrap();
         assert!(tx.bots().assign(bot, agent).await.unwrap());
@@ -198,7 +198,7 @@ impl Setup {
     }
 
     /// Agent `n`'s live stream, reconciled, holding `bots` assigned.
-    fn holding(&self, n: u8, bots: &[BotId]) -> Stream {
+    pub(crate) fn holding(&self, n: u8, bots: &[BotId]) -> Stream {
         let (lease, queued, ended) = self.stream(n);
         self.registry
             .settle(
@@ -232,7 +232,13 @@ impl Setup {
     }
 
     /// `stream`'s report of `bot` in `state`.
-    fn report(&self, stream: &Stream, bot: BotId, state: BotState, last: Option<DisconnectReason>) {
+    pub(crate) fn report(
+        &self,
+        stream: &Stream,
+        bot: BotId,
+        state: BotState,
+        last: Option<DisconnectReason>,
+    ) {
         let (verdict, _) = self.registry.admit(
             &stream.lease,
             &AgentMessage::Status(BotSnapshot {

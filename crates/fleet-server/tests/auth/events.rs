@@ -10,6 +10,7 @@
 //! sleeps.
 
 mod bots;
+mod chat;
 mod limits;
 mod liveness;
 mod rights;

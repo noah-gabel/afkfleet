@@ -13,7 +13,7 @@ use fleet_core::value::{Host, ServerAddress};
 use tracing::info;
 
 use super::{BotService, BotWriteError, reread};
-use crate::app::users::ActingUser;
+use crate::app::users::{ActingUser, Rechecked};
 use crate::ports::reconcile::Change;
 
 /// What a setting's write did.
@@ -39,7 +39,7 @@ impl BotService {
         server: ServerAddress,
     ) -> Result<Configured, BotWriteError> {
         let mut tx = self.store.write().await?;
-        let (actor, bot, account) = reread(tx.as_mut(), by, id).await?;
+        let (Rechecked { actor, .. }, bot, account) = reread(tx.as_mut(), by, id).await?;
         authorize(&actor, Permission::ConfigureBot, &account.context())
             .map_err(BotWriteError::Denied)?;
         if bot.server.as_ref() == Some(&server) || !tx.bots().set_server(id, &server).await? {
@@ -69,7 +69,7 @@ impl BotService {
         mode: ModeId,
     ) -> Result<Configured, BotWriteError> {
         let mut tx = self.store.write().await?;
-        let (actor, bot, account) = reread(tx.as_mut(), by, id).await?;
+        let (Rechecked { actor, .. }, bot, account) = reread(tx.as_mut(), by, id).await?;
         // The bot first: a stranger learns nothing about the mode.
         authorize(&actor, Permission::ViewBot, &account.context())
             .map_err(BotWriteError::Denied)?;

@@ -51,7 +51,7 @@ pub use settings::Configured;
 use super::agents::last_seen;
 use super::audit::AuditService;
 use super::events::EventBus;
-use super::users::{ActingUser, recheck};
+use super::users::{ActingUser, Rechecked, recheck};
 use crate::ports::accounts::ListedAccount;
 use crate::ports::agents::ListedAgent;
 use crate::ports::audit::NewAuditEntry;
@@ -365,7 +365,7 @@ async fn reread(
     tx: &mut dyn WriteTx,
     by: &ActingUser,
     id: BotId,
-) -> Result<(Actor, Bot, ListedAccount), BotWriteError> {
+) -> Result<(Rechecked, Bot, ListedAccount), BotWriteError> {
     let Some(acting) = recheck(tx, by).await? else {
         debug!(user_id = %by.actor.id, bot_id = %id, "a bot write was refused: the session is gone");
         return Err(BotWriteError::SessionGone);
@@ -376,5 +376,5 @@ async fn reread(
     let Some(account) = tx.accounts().listed(bot.account, acting.actor.id).await? else {
         return Err(BotWriteError::NotFound);
     };
-    Ok((acting.actor, bot, account))
+    Ok((acting, bot, account))
 }

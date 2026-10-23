@@ -28,18 +28,18 @@ use axum::Json;
 use axum::extract::State;
 use axum::http::StatusCode;
 use fleet_api_types::chat::{
-    ChatCommandRequest, ChatPage, ChatPageQuery, ChatSendOutcome, ChatSendRequest, ChatSendResponse,
+    ChatCommandRequest, ChatFailure, ChatPage, ChatPageQuery, ChatSendOutcome, ChatSendRequest,
+    ChatSendResponse,
 };
 use fleet_api_types::{ErrorResponse, SafeInt};
 use fleet_core::authz::{Permission, effective_level};
 use fleet_core::bot::ChatRefusal;
 use fleet_core::chat::ChatMessage;
 use fleet_core::id::BotId;
-use fleet_proto::control::ChatFailedReason;
 use tokio::time::Instant;
 
 use super::bots::{facts, writing};
-use super::{acting, chat_line};
+use super::{acting, chat_failure, chat_line};
 use crate::app::bots::{ChatHistoryError, ChatOutcome, ChatRoute, ChatSendDone, ChatSendError};
 use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath, ValidQuery};
@@ -255,26 +255,20 @@ fn answered(done: ChatSendDone) -> Result<(StatusCode, Json<ChatSendResponse>), 
 }
 
 /// A line that wasn't sent, or that its agent refused, as the API answers
-/// it (S5): one match over the agent's reasons, without a wildcard, so a
-/// reason the protocol adds can't go unanswered.
+/// it (S5): the agent's reasons through [`chat_failure`], the match the live
+/// `chat_failed` shares (S34).
 fn chatting(error: ChatSendError, limits: &RateLimits) -> ApiError {
     match error {
         ChatSendError::Write(error) => writing(error),
         ChatSendError::Refused(ChatRefusal::NotOnline) => ApiError::BotNotOnline,
         ChatSendError::Refused(ChatRefusal::Unreachable) => ApiError::BotUnreachable,
-        ChatSendError::Failed(reason) => match reason {
-            ChatFailedReason::NotOnline
-            | ChatFailedReason::Disconnected
-            | ChatFailedReason::NotInWorld => ApiError::BotNotOnline,
-            ChatFailedReason::ChatUnavailable => ApiError::ChatUnavailable,
-            ChatFailedReason::RateLimited | ChatFailedReason::QueueFull => ApiError::RateLimited {
+        ChatSendError::Failed(reason) => match chat_failure(reason) {
+            ChatFailure::BotNotOnline => ApiError::BotNotOnline,
+            ChatFailure::ChatUnavailable => ApiError::ChatUnavailable,
+            ChatFailure::RateLimited => ApiError::RateLimited {
                 retry_after: limits.chat_retry_after(),
             },
-            ChatFailedReason::TimedOut
-            | ChatFailedReason::SessionBusy
-            | ChatFailedReason::AgentBusy
-            | ChatFailedReason::UnknownBot
-            | ChatFailedReason::ShuttingDown => ApiError::BotUnreachable,
+            ChatFailure::BotUnreachable => ApiError::BotUnreachable,
         },
         // Only a missing check in a handler here gets a line to the service
         // through a route that doesn't take it: a bug (S10).
@@ -289,6 +283,7 @@ mod tests {
     use std::sync::Arc;
 
     use chrono::DateTime;
+    use fleet_proto::control::ChatFailedReason;
     use fleet_testkit::system::ManualClock;
 
     use super::*;
@@ -309,6 +304,39 @@ mod tests {
             assert!(
                 matches!(answered, ApiError::Internal(_)),
                 "{route:?}: {answered:?}"
+            );
+        }
+    }
+
+    /// S34: a live `chat_failed` names a failure with the very code the
+    /// `POST` answers it with.
+    #[test]
+    fn a_failures_code_on_the_socket_is_the_posts_answer() {
+        let limits = RateLimits::new(
+            &RateLimitConfig::default(),
+            Arc::new(ManualClock::new(DateTime::UNIX_EPOCH)),
+        );
+        let reasons = [
+            ChatFailedReason::NotOnline,
+            ChatFailedReason::Disconnected,
+            ChatFailedReason::NotInWorld,
+            ChatFailedReason::ChatUnavailable,
+            ChatFailedReason::RateLimited,
+            ChatFailedReason::QueueFull,
+            ChatFailedReason::TimedOut,
+            ChatFailedReason::SessionBusy,
+            ChatFailedReason::AgentBusy,
+            ChatFailedReason::UnknownBot,
+            ChatFailedReason::ShuttingDown,
+        ];
+
+        for reason in reasons {
+            let answered = chatting(ChatSendError::Failed(reason), &limits);
+
+            assert_eq!(
+                fleet_api_types::OpenEnum::as_str(super::super::chat_failure(reason)),
+                fleet_api_types::OpenEnum::as_str(answered.code()),
+                "{reason:?}"
             );
         }
     }

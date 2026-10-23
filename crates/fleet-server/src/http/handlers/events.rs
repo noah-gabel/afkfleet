@@ -52,9 +52,10 @@ use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::response::Response;
 use fleet_api_types::bots::{BotStateKind, BotStateReason};
+use fleet_api_types::chat::ChatFailure;
 use fleet_api_types::events::{EventMessage, EventTicketResponse, EventsQuery};
 use fleet_api_types::{ErrorResponse, SecretText};
-use fleet_core::authz::{Actor, Permission, ResourceContext, authorize};
+use fleet_core::authz::{Actor, GrantLevel, Permission, ResourceContext, authorize};
 use fleet_core::bot::{BotNotification, LastState};
 use fleet_core::id::BotId;
 use secrecy::ExposeSecret as _;
@@ -62,10 +63,10 @@ use tokio::time::Instant;
 use tracing::{Instrument as _, debug, info_span};
 
 use super::bots::bot_response;
-use super::timestamp;
+use super::{chat_failure, chat_line, timestamp};
 use crate::app::auth::{SocketCheckError, SocketSession};
 use crate::app::bots::{BotService, BotView};
-use crate::app::events::{BusEvent, LiveEvent, LiveEventKind, LiveRights, Rights};
+use crate::app::events::{BusEvent, LiveEvent, LiveEventKind, LiveRights, NotSent, Rights};
 use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, ValidQuery};
 use crate::http::router::AppState;
@@ -371,21 +372,50 @@ impl Viewer {
         }
     }
 
-    /// An agent's `event`, for a viewer who may see its bot now.
+    /// An agent's `event`, for a viewer who may see its bot now, at the
+    /// level they hold on it now: a chat line through the history's
+    /// `chat_line`, a failure's reason only at Control or more (S34).
     fn agent_step(&self, event: &LiveEvent) -> Step {
-        if self.rights.level(&self.actor, event.bot).is_none() {
+        let Some(level) = self.rights.level(&self.actor, event.bot) else {
             return Step::Nothing;
-        }
-        let at = timestamp(event.at);
-        let message = match (&event.kind, at) {
-            (LiveEventKind::Died, Ok(at)) => EventMessage::bot_died(event.bot, at),
-            (LiveEventKind::Alert(notification), Ok(at)) => match alerted(*notification) {
-                Some((state, reason)) => EventMessage::bot_alert(event.bot, at, state, reason),
-                None => return Step::Nothing,
+        };
+        let control = level >= GrantLevel::Control;
+        let message = match &event.kind {
+            LiveEventKind::Died => match timestamp(event.at) {
+                Ok(at) => EventMessage::bot_died(event.bot, at),
+                Err(_) => return Step::Nothing,
             },
-            // A state is merged into the bots' reads as it's taken; chat
-            // arrives with its own frames.
-            _ => return Step::Nothing,
+            LiveEventKind::Alert(notification) => {
+                match (timestamp(event.at), alerted(*notification)) {
+                    (Ok(at), Some((state, reason))) => {
+                        EventMessage::bot_alert(event.bot, at, state, reason)
+                    }
+                    _ => return Step::Nothing,
+                }
+            }
+            LiveEventKind::Chat { line, request } => {
+                // A line that doesn't build is the internal error the
+                // history answers, logged there; the socket sends nothing.
+                match chat_line(&self.actor, level, line) {
+                    Ok(shown) => EventMessage::chat(event.bot, shown, *request),
+                    Err(_) => return Step::Nothing,
+                }
+            }
+            LiveEventKind::ChatSent(request) => EventMessage::chat_sent(event.bot, *request),
+            LiveEventKind::ChatFailed(request, reason) => EventMessage::chat_failed(
+                event.bot,
+                *request,
+                control.then(|| chat_failure(*reason)),
+            ),
+            LiveEventKind::ChatNotSent { request, why } => {
+                let failure = match why {
+                    NotSent::Unreachable => control.then_some(ChatFailure::BotUnreachable),
+                    NotSent::Unsendable => None,
+                };
+                EventMessage::chat_failed(event.bot, *request, failure)
+            }
+            // Merged into the bots' reads as it's taken.
+            LiveEventKind::Status(_) => return Step::Nothing,
         };
         Step::Send(Box::new(message))
     }

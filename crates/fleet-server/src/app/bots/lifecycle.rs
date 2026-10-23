@@ -23,7 +23,7 @@ use fleet_core::id::BotId;
 use tracing::{debug, info};
 
 use super::{BotService, BotWriteError, reread};
-use crate::app::users::ActingUser;
+use crate::app::users::{ActingUser, Rechecked};
 use crate::ports::bots::Bot;
 use crate::ports::live_agents::{CommandRefused, LatestReport, LiveAgents};
 use crate::ports::reconcile::Change;
@@ -69,7 +69,7 @@ impl BotService {
         action: BotAction,
     ) -> Result<Controlled, BotWriteError> {
         let mut tx = self.store.write().await?;
-        let (actor, bot, account) = reread(tx.as_mut(), by, id).await?;
+        let (Rechecked { actor, .. }, bot, account) = reread(tx.as_mut(), by, id).await?;
         authorize(&actor, Permission::ControlBot, &account.context())
             .map_err(BotWriteError::Denied)?;
         match action {

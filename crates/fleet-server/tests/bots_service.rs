@@ -1603,6 +1603,116 @@ async fn a_refusal_after_the_commit_keeps_the_row_and_the_entry(
     }
 }
 
+/// The chat events a send puts on the bus, in the order they came.
+fn chat_events(
+    events: &mut tokio::sync::broadcast::Receiver<Arc<fleet_server::app::events::BusEvent>>,
+) -> Vec<LiveEventKind> {
+    let mut kinds = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if let Some(event) = event.agent() {
+            kinds.push(event.kind.clone());
+        }
+    }
+    kinds
+}
+
+/// S34: the user's line goes on the bus with its sender and request once
+/// it's stored, before it goes to the agent, so its answer, which the agent
+/// gives while it's sent, comes after it.
+#[sqlx::test(migrations = false)]
+async fn a_users_line_is_on_the_bus_before_its_send_with_its_sender_and_request(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let by = setup.acting().await;
+    let bot = setup.bot(1).await;
+    setup.held_in(bot, online()).await;
+    setup.reply(LiveEventKind::ChatSent(
+        ChatRequestId::new_v7(at(T0), [0; 10]).unwrap(),
+    ));
+    let mut events = setup.events.subscribe();
+
+    let done = setup
+        .chatting()
+        .send_chat(
+            &by,
+            bot,
+            &line("/login secret"),
+            ChatRoute::Command,
+            Instant::now(),
+        )
+        .await
+        .unwrap();
+
+    let kinds = chat_events(&mut events);
+    let [
+        LiveEventKind::Chat {
+            line: sent,
+            request,
+        },
+        LiveEventKind::ChatSent(answered),
+    ] = kinds.as_slice()
+    else {
+        panic!("not the line, then its answer: {kinds:?}");
+    };
+    assert_eq!((*request, *answered), (Some(done.request), done.request));
+    assert_eq!(sent.record.id, done.message);
+    assert_eq!(sent.record.bot, bot);
+    assert_eq!(sent.record.entry, users_line("/login secret"));
+    assert_eq!(sent.sent_by, Some(Username::try_from("owner").unwrap()));
+    assert_eq!(
+        setup.lines(bot).await,
+        core::slice::from_ref(&sent.record.entry),
+        "the line the bus carries is the stored one"
+    );
+}
+
+/// S34, R35: a line refused after its commit goes on the bus, then the
+/// refusal: unreachable, or unsendable.
+#[sqlx::test(migrations = false)]
+async fn a_line_refused_after_its_commit_is_followed_on_the_bus_by_why(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    use fleet_server::app::events::NotSent;
+
+    let setup = Setup::new(options).await;
+    let by = setup.acting().await;
+    let refusals = [
+        (CommandRefused::NotHeld, NotSent::Unreachable),
+        (CommandRefused::NotConnected, NotSent::Unreachable),
+        (CommandRefused::QueueFull, NotSent::Unreachable),
+        (CommandRefused::Unsendable, NotSent::Unsendable),
+    ];
+
+    for (n, (refusal, expected)) in (1_u8..).zip(refusals) {
+        let bot = setup.bot(n).await;
+        setup.held_in(bot, online()).await;
+        *setup.live.chat_refusal.lock().unwrap() = Some(refusal);
+        let mut events = setup.events.subscribe();
+
+        let refused = setup
+            .chatting()
+            .send_chat(&by, bot, &line("hello"), ChatRoute::Chat, Instant::now())
+            .await;
+
+        assert!(refused.is_err(), "{refusal:?}");
+        let kinds = chat_events(&mut events);
+        let [
+            LiveEventKind::Chat {
+                request: Some(line_request),
+                ..
+            },
+            LiveEventKind::ChatNotSent { request, why },
+        ] = kinds.as_slice()
+        else {
+            panic!("{refusal:?}: not the line, then why: {kinds:?}");
+        };
+        assert_eq!((line_request, why), (request, &expected), "{refusal:?}");
+    }
+}
+
 /// The history: a bot's chat newest first, with its account as the viewer
 /// sees it, for whoever may see the bot (P11.3; ADR-0020, U3).
 #[sqlx::test(migrations = false)]
