@@ -32,13 +32,14 @@ use fleet_server::app::link_flows::LinkFlowService;
 use fleet_server::app::users::ActingUser;
 use fleet_server::cli::serve::{App, ServerPorts, app_with};
 use fleet_server::config::{
-    AccountsConfig, Argon2Params, AuthConfig, ChatConfig, DatabaseConfig, HttpConfig, LogConfig,
-    LogFormat, RateLimitConfig, ServerConfig, VaultConfig,
+    AccountsConfig, Argon2Params, AuthConfig, ChatConfig, DatabaseConfig, GrpcConfig, Heartbeats,
+    HttpConfig, LogConfig, LogFormat, PkiPaths, RateLimitConfig, ServerConfig, VaultConfig,
 };
 use fleet_server::http::rate_limit::TrustedProxies;
 use fleet_server::infra::crypto::passwords::Argon2Passwords;
 use fleet_server::infra::crypto::tokens::Sha256Tokens;
 use fleet_server::infra::crypto::vault::{DerivedKey, VaultKeys};
+use fleet_server::infra::pki::CertificateAuthority;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord};
@@ -107,9 +108,30 @@ impl Seen {
     }
 }
 
-/// The server's config with `limits` and `accounts`; the database's path
-/// and the vault's key file are never read here.
-fn config(limits: &RateLimitConfig, accounts: AccountsConfig) -> ServerConfig {
+/// `[grpc]` for an app whose control plane runs over a CA the test made:
+/// its files are never read here, and nothing listens.
+fn control_plane() -> GrpcConfig {
+    let unused = |name: &str| std::env::temp_dir().join(format!("unused-{name}"));
+    GrpcConfig {
+        bind: GrpcConfig::DEFAULT_BIND,
+        pki: PkiPaths {
+            ca_cert_file: unused("ca.crt"),
+            ca_key_file: unused("ca.key"),
+            server_cert_file: unused("server.crt"),
+            server_key_file: unused("server.key"),
+        },
+        agent_cert_lifetime: chrono::TimeDelta::days(60),
+        heartbeats: Heartbeats::try_from_secs(10, 30).unwrap(),
+    }
+}
+
+/// The server's config with `limits` and `accounts`, and `grpc`; the
+/// database's path and the vault's key file are never read here.
+fn config(
+    limits: &RateLimitConfig,
+    accounts: AccountsConfig,
+    grpc: Option<GrpcConfig>,
+) -> ServerConfig {
     ServerConfig {
         dev_mode: false,
         http: HttpConfig {
@@ -133,7 +155,7 @@ fn config(limits: &RateLimitConfig, accounts: AccountsConfig) -> ServerConfig {
         },
         accounts,
         chat: ChatConfig::default(),
-        grpc: None,
+        grpc,
     }
 }
 
@@ -160,6 +182,18 @@ impl Server {
         key: &SecretBox<[u8; 32]>,
         ports: ServerPorts,
     ) -> Self {
+        Self::start_with(options, (limits, accounts), key, ports, None).await
+    }
+
+    /// [`Server::start`], its control plane on over `ca` when there is one
+    /// (`[grpc]` and the gRPC routes, which nothing serves here).
+    pub(crate) async fn start_with(
+        options: SqliteConnectOptions,
+        (limits, accounts): (&RateLimitConfig, AccountsConfig),
+        key: &SecretBox<[u8; 32]>,
+        ports: ServerPorts,
+        ca: Option<CertificateAuthority>,
+    ) -> Self {
         let db = Database::connect(options, DatabaseOptions::default())
             .await
             .unwrap();
@@ -174,14 +208,15 @@ impl Server {
         let passwords = Argon2Passwords::new(Argon2Params::default(), Arc::clone(&random))
             .await
             .unwrap();
+        let grpc = ca.as_ref().map(|_| control_plane());
         let app = app_with(
-            &config(limits, accounts),
+            &config(limits, accounts, grpc),
             &db,
             keys,
             lockout_key,
             Arc::new(passwords),
             ports,
-            None,
+            ca,
         );
         let tokens = TokenService::new(
             clock,
@@ -496,6 +531,29 @@ impl HttpSetup {
         limits: &RateLimitConfig,
         accounts: AccountsConfig,
     ) -> Self {
+        Self::with_ca(options, limits, accounts, None).await
+    }
+
+    /// The default setup with its control plane on over `ca`.
+    pub(crate) async fn with_control_plane(
+        options: SqliteConnectOptions,
+        ca: CertificateAuthority,
+    ) -> Self {
+        Self::with_ca(
+            options,
+            &RateLimitConfig::default(),
+            AccountsConfig::default(),
+            Some(ca),
+        )
+        .await
+    }
+
+    async fn with_ca(
+        options: SqliteConnectOptions,
+        limits: &RateLimitConfig,
+        accounts: AccountsConfig,
+        ca: Option<CertificateAuthority>,
+    ) -> Self {
         let clock = ManualClock::new(at(T0));
         let random = SeededRandom::new(21);
         let fake = Arc::new(FakeMicrosoftAuth::new());
@@ -508,12 +566,12 @@ impl HttpSetup {
             pace: pace.clone(),
         };
         Self {
-            server: Server::start(
+            server: Server::start_with(
                 options,
-                limits,
-                accounts,
+                (limits, accounts),
                 &SecretBox::new(Box::new([0x21; 32])),
                 ports,
+                ca,
             )
             .await,
             clock,

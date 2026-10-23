@@ -25,6 +25,7 @@ mod at_rest;
 mod delete;
 mod grants;
 mod link_flows;
+mod live_wiring;
 mod manual;
 mod msauth_fake;
 mod offline;
