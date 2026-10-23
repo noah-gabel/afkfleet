@@ -47,7 +47,7 @@ use tracing::info;
 
 use crate::app::auth::{SocketCheckError, SocketSession, TokenService};
 use crate::app::event_tickets::EventTickets;
-use crate::app::events::{EventBus, LiveEvent};
+use crate::app::events::{BusEvent, EventBus};
 use crate::http::error::ApiError;
 use crate::http::rate_limit::SocketSlot;
 
@@ -326,7 +326,7 @@ struct Running {
     /// The commit count its session check follows.
     commits: watch::Receiver<u64>,
     /// Its subscription to the bus.
-    bus: Receiver<Arc<LiveEvent>>,
+    bus: Receiver<Arc<BusEvent>>,
     /// The session check.
     tokens: TokenService,
     /// Cancelled at the shutdown.

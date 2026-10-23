@@ -30,6 +30,8 @@
 //!   plans from, and each change of a bot's agent, audited (P10.5).
 //! - [`reconcile`]: the hints that tell the reconciler to look again after a
 //!   commit or a stream's change (P10.5).
+//! - [`live_hints`]: the hints that tell the live events sockets to read
+//!   again after a commit: bots, a mode, a role (P11.5).
 //! - [`accounts`]: the linked Minecraft accounts, Microsoft or offline
 //!   (P9.1).
 //! - [`grants`]: the grants that share an account with other users (P9.1).
@@ -75,6 +77,7 @@ pub mod grants;
 pub mod ingest;
 pub mod invites;
 pub mod live_agents;
+pub mod live_hints;
 pub mod login_attempts;
 pub mod mfa;
 pub mod modes;

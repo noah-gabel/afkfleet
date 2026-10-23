@@ -38,7 +38,7 @@ use tokio::time::{Instant, timeout_at};
 use tracing::{debug, info};
 
 use super::{BotService, BotWriteError, reread};
-use crate::app::events::{LiveEvent, LiveEventKind};
+use crate::app::events::{BusEvent, LiveEventKind};
 use crate::app::users::ActingUser;
 use crate::ports::chat::{ChatEntry, ChatMessageId, NewChatMessage};
 use crate::ports::live_agents::CommandRefused;
@@ -306,9 +306,10 @@ fn recorded(
 }
 
 /// The agent's answer to `request` for `bot` from `agent`, on any stream,
-/// heard on `answers` until `deadline`; anything else on the bus is skipped.
+/// heard on `answers` until `deadline`; anything else on the bus is skipped,
+/// the server's own hints among it: only an agent's event answers (R13).
 async fn answer(
-    answers: &mut broadcast::Receiver<Arc<LiveEvent>>,
+    answers: &mut broadcast::Receiver<Arc<BusEvent>>,
     request: ChatRequestId,
     bot: BotId,
     agent: AgentId,
@@ -322,6 +323,9 @@ async fn answer(
             // Nothing in time; or the wait fell behind the bus, so its
             // answer may be among the events it missed; or the bus is gone.
             Err(_) | Ok(Err(RecvError::Lagged(_) | RecvError::Closed)) => return Answer::Pending,
+        };
+        let Some(event) = event.agent() else {
+            continue;
         };
         if event.bot != bot || event.agent != agent {
             continue;
@@ -342,7 +346,7 @@ mod tests {
     use fleet_core::bot::{BotSnapshot, BotState};
 
     use super::*;
-    use crate::app::events::{EVENT_BUS_CAPACITY, EventBus};
+    use crate::app::events::{EVENT_BUS_CAPACITY, EventBus, LiveEvent};
 
     fn at() -> DateTime<Utc> {
         DateTime::from_timestamp_millis(1_800_000_000_000).unwrap()
@@ -412,6 +416,44 @@ mod tests {
 
         assert_eq!(sent, Answer::Sent);
         assert_eq!(none, Answer::Pending);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_wait_reads_agent_events_only() {
+        use crate::ports::live_hints::{LiveHints, ModeEvent};
+
+        let bus = EventBus::new();
+        let mut answers = bus.subscribe();
+        let hint = |bus: &EventBus| {
+            bus.bots(&[bot(1)]);
+            bus.mode(ModeEvent {
+                id: fleet_core::id::ModeId::new_v7(at(), [5; 10]).unwrap(),
+                was: None,
+            });
+            bus.role_changed(fleet_core::id::UserId::new_v7(at(), [6; 10]).unwrap());
+        };
+        hint(&bus);
+        bus.publish(event(
+            bot(1),
+            agent(1),
+            1,
+            LiveEventKind::ChatNotSent {
+                request: request(1),
+                why: crate::app::events::NotSent::Unreachable,
+            },
+        ));
+        hint(&bus);
+        bus.publish(event(
+            bot(1),
+            agent(1),
+            1,
+            LiveEventKind::ChatSent(request(1)),
+        ));
+        let deadline = Instant::now() + ChatWait::ANSWER;
+
+        let heard = answer(&mut answers, request(1), bot(1), agent(1), deadline).await;
+
+        assert_eq!(heard, Answer::Sent);
     }
 
     #[tokio::test(start_paused = true)]
