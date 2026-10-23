@@ -345,8 +345,7 @@ impl Viewer {
         if !joined.is_empty() {
             // A removal still waiting for a bot seen again never goes: its
             // read below says what it is now.
-            self.slots
-                .retain(|slot| !matches!(slot, Slot::Removed(bot) if joined.contains(bot)));
+            drop_removals(&mut self.slots, &joined);
             self.slots.push_front(Slot::Bots(BotReads {
                 ids: joined,
                 views: None,
@@ -591,7 +590,16 @@ impl Project for Viewer {
 
     fn resynced(&mut self) {
         self.seen = self.rights.visible(&self.actor);
+        // The viewer fetches these bots now: a removal still waiting for one
+        // of them would take it away again.
+        drop_removals(&mut self.slots, &self.seen);
     }
+}
+
+/// Drops every `bot_removed` still waiting in `slots` for a bot of `shown`,
+/// which the viewer is taken to see again (R41).
+fn drop_removals(slots: &mut VecDeque<Slot>, shown: &BTreeSet<BotId>) {
+    slots.retain(|slot| !matches!(slot, Slot::Removed(bot) if shown.contains(bot)));
 }
 
 /// A paused or failed bot's state and reason, as `GET /bots/{id}` names
@@ -614,4 +622,111 @@ fn refuse(user: &AuthUser, reason: &str) -> ApiError {
         "a live events ticket was refused"
     );
     ApiError::NotFound
+}
+
+#[cfg(test)]
+mod tests {
+    use fleet_core::id::AccountId;
+    use fleet_testkit::system::{ManualClock, SeededRandom};
+    use sqlx::sqlite::SqliteConnectOptions;
+
+    use super::*;
+    use crate::app::events::EventBus;
+    use crate::grpc::registry::AgentRegistry;
+    use crate::infra::sqlite::{Database, DatabaseOptions};
+    use crate::ports::bots::{Access, BotAccess, UserAccess};
+    use crate::ports::store::Store;
+
+    fn at() -> chrono::DateTime<chrono::Utc> {
+        "2027-01-15T08:00:00Z".parse().unwrap()
+    }
+
+    fn bot(n: u8) -> BotId {
+        BotId::new_v7(at(), [n; 10]).unwrap()
+    }
+
+    fn account(n: u8) -> AccountId {
+        AccountId::new_v7(at(), [n; 10]).unwrap()
+    }
+
+    /// The Owner `owner`'s viewer, over a fresh database it never reads, and
+    /// that database, to close.
+    async fn viewer(dir: &tempfile::TempDir, owner: UserId) -> (Viewer, Database) {
+        // An empty file is an empty database; the read pool opens it read-only.
+        let path = dir.path().join("viewer.db");
+        std::fs::File::create(&path).unwrap();
+        let db = Database::connect(
+            SqliteConnectOptions::new().filename(&path),
+            DatabaseOptions::default(),
+        )
+        .await
+        .unwrap();
+        let store: Arc<dyn Store> = Arc::new(db.clone());
+        let clock = Arc::new(ManualClock::new(at()));
+        let random = Arc::new(SeededRandom::new(1));
+        let bots = BotService::new(
+            clock.clone(),
+            random.clone(),
+            Arc::clone(&store),
+            Arc::new(AgentRegistry::new(clock.clone())),
+            EventBus::new(),
+            true,
+        );
+        let modes = ModeService::new(clock, random, Arc::clone(&store));
+        let actor = Actor {
+            id: owner,
+            role: Role::Owner,
+        };
+        (Viewer::new(actor, LiveRights::new(store), bots, modes), db)
+    }
+
+    /// A resync while the removals of bots 2 and 3 wait, on rights that show
+    /// bots 1 and 2: the viewer fetches bot 2 with the rest, so only bot 3's
+    /// removal still goes.
+    #[tokio::test]
+    async fn a_resync_drops_a_waiting_removal_of_a_bot_the_viewer_sees_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let owner = UserId::new_v7(at(), [1; 10]).unwrap();
+        let (mut viewer, db) = viewer(&dir, owner).await;
+        viewer.rights = Arc::new(Rights::new(
+            0,
+            Access {
+                bots: vec![
+                    BotAccess {
+                        bot: bot(1),
+                        account: account(1),
+                        owner,
+                    },
+                    BotAccess {
+                        bot: bot(2),
+                        account: account(2),
+                        owner,
+                    },
+                ],
+                grants: Vec::new(),
+                users: vec![UserAccess {
+                    user: owner,
+                    role: Role::Owner,
+                    enabled: true,
+                }],
+            },
+        ));
+        viewer.seen = BTreeSet::from([bot(1)]);
+        viewer.slots = VecDeque::from([Slot::Removed(bot(2)), Slot::Removed(bot(3))]);
+
+        viewer.resynced();
+
+        let waiting: Vec<BotId> = viewer
+            .slots
+            .iter()
+            .filter_map(|slot| match slot {
+                Slot::Removed(bot) => Some(*bot),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(viewer.seen, BTreeSet::from([bot(1), bot(2)]));
+        assert_eq!(waiting, [bot(3)]);
+        drop(viewer);
+        db.close().await;
+    }
 }
