@@ -1287,8 +1287,11 @@ fn each_event_kind_reads_as_its_console_line() {
             ),
         ),
         (
-            json!({ "type": "chat", "bot_id": EVENT_BOT, "line": line }),
-            format!("bot {EVENT_BOT} #41 {EVENT_AT} user by you: /login (arguments hidden)"),
+            json!({ "type": "chat", "bot_id": EVENT_BOT, "line": {
+                "id": 40, "at": EVENT_AT, "direction": "in", "kind": "system", "text": "Welcome",
+                "truncated": false, "arguments_hidden": false, "mine": false
+            } }),
+            format!("bot {EVENT_BOT} #40 {EVENT_AT} system: Welcome"),
         ),
         (
             json!({ "type": "chat_sent", "bot_id": EVENT_BOT, "request": EVENT_REQUEST }),

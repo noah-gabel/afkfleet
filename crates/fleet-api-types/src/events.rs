@@ -57,7 +57,8 @@
 //! - `bot_alert`: `bot_id`, `at`, `state` (`paused` or `failed`) and its
 //!   `reason`: the bot needs a human.
 //! - `chat`: `bot_id` and `line`, the [`ChatLine`] this viewer's history
-//!   shows for it; a line a user sent also carries its `request`.
+//!   shows for it; a user's line (`kind` `user`) also always carries its
+//!   `request`.
 //! - `chat_sent`: `bot_id` and `request`: the bot sent that user's line.
 //! - `chat_failed`: `bot_id` and `request`: it didn't. Viewers with Control or
 //!   more also get its `failure`, when the server knows one.
@@ -74,7 +75,7 @@ use utoipa::openapi::path::{Parameter, ParameterBuilder, ParameterIn};
 use utoipa::{IntoParams, PartialSchema as _, ToSchema};
 
 use crate::bots::{BotResponse, BotStateKind, BotStateReason};
-use crate::chat::{ChatFailure, ChatLine};
+use crate::chat::{ChatFailure, ChatLine, ChatLineKind};
 use crate::ids::{BotId, ChatRequestId, ModeId, id_schema};
 use crate::int::integer_schema;
 use crate::mfa::TOKEN_MAX_CHARS;
@@ -417,7 +418,10 @@ impl EventMessage {
             EventMessageKind::BotAlert => {
                 bot && self.at.is_some() && self.state.is_some() && self.reason.is_some()
             }
-            EventMessageKind::Chat => bot && self.line.is_some(),
+            // A user's line always carries its request (R28).
+            EventMessageKind::Chat => self.line.as_ref().is_some_and(|line| {
+                bot && (line.kind.known() != Some(ChatLineKind::User) || self.request.is_some())
+            }),
             EventMessageKind::ChatSent | EventMessageKind::ChatFailed => {
                 bot && self.request.is_some()
             }
@@ -587,6 +591,30 @@ mod tests {
         .unwrap()
     }
 
+    /// A system message the bot received: no user sent it, so it has no
+    /// request.
+    fn a_system_line() -> ChatLine {
+        serde_json::from_value(json!({
+            "id": 40,
+            "at": AT,
+            "direction": "in",
+            "kind": "system",
+            "text": "Welcome",
+            "truncated": false,
+            "arguments_hidden": false,
+            "mine": false
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn a_users_line_without_its_request_is_unreadable() {
+        let line = EventMessage::chat(bot_id(), a_line(), None);
+        let frame = serde_json::to_string(&line).unwrap();
+
+        assert_eq!(message(&frame).received(), Received::Unreadable, "{frame}");
+    }
+
     fn a_mode() -> ModeResponse {
         serde_json::from_value(json!({
             "id": MODE,
@@ -709,7 +737,7 @@ mod tests {
     #[test]
     fn a_failure_left_out_and_a_line_without_its_request_are_events() {
         let failed = EventMessage::chat_failed(bot_id(), request(), None);
-        let line = EventMessage::chat(bot_id(), a_line(), None);
+        let line = EventMessage::chat(bot_id(), a_system_line(), None);
 
         for sent in [failed, line] {
             let frame = serde_json::to_string(&sent).unwrap();
