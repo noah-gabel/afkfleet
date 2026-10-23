@@ -26,7 +26,11 @@
 //! and `trusted_schema=OFF` (functions with side effects can't run from the
 //! schema, which guards against a tampered file).
 //! - **The write pool has exactly one connection**, in WAL mode, so writes are
-//!   serialized here instead of failing with `SQLITE_BUSY`.
+//!   serialized here instead of failing with `SQLITE_BUSY`. It has no
+//!   lifetime: sqlx closes a connection past it without the release hook
+//!   that settles the commit count (ADR-0020, S39; the `commits` module).
+//!   Its idle timeout still replaces a connection that sat unused, which is
+//!   always settled by then.
 //! - **The read pool has four**, each with `query_only=ON`, so a write through
 //!   a read connection fails instead of bypassing the single writer.
 //!
@@ -316,12 +320,14 @@ pub async fn open_migrated(
     Ok(Database::from_pools(write, read, commits))
 }
 
-/// The write pool's options: one connection, and the hook that settles
-/// `commits` whenever the connection comes back (the `commits` module).
+/// The write pool's options: one connection, no lifetime, and the hook that
+/// settles `commits` whenever the connection comes back (the `commits`
+/// module): past a lifetime, sqlx would close it without the hook.
 fn write_pool(commits: &Arc<CommitCount>, options: &DatabaseOptions) -> SqlitePoolOptions {
     let commits = Arc::clone(commits);
     SqlitePoolOptions::new()
         .max_connections(1)
+        .max_lifetime(None)
         .acquire_timeout(options.acquire_timeout())
         .after_release(move |connection, _meta| {
             let commits = Arc::clone(&commits);

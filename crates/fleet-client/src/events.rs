@@ -8,8 +8,11 @@
 //! with that session's access token. Both are secrets, and nothing here
 //! shows either. Whoever opens the socket with them must also keep its
 //! WebSocket client's logs from them: tokio-tungstenite 0.29's client logs
-//! the URL at `debug` and the whole handshake request, `Authorization`
-//! included, at `trace`, and a header marked sensitive doesn't change that.
+//! the whole handshake request, the URL's ticket and `Authorization`
+//! included, at `trace` (tungstenite's "Request:" line, target
+//! `tungstenite::handshake::client`), and a header marked sensitive doesn't
+//! change that. tungstenite's `debug` line with the URL is in its blocking
+//! client's `connect_to_some`, which tokio-tungstenite never calls.
 
 use fleet_api_types::events::EventMessage;
 pub use fleet_api_types::events::{Received, SocketClose};

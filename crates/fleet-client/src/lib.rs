@@ -15,12 +15,15 @@
 //!   *One exception, for the dev console alone* (ADR-0020, U15, R16): with
 //!   the non-default `dev-console` feature, `Client::events_handshake`
 //!   hands the live events socket's handshake, the session's access token
-//!   as its `Authorization` value, to `just dev-bots`' `events`. Only that
+//!   as its `Authorization` value, to `just dev-bots`' `events`. That
 //!   example and this crate's tests enable it, through the crate's
-//!   dev-dependency on itself; the desktop app's build never has it, so it
-//!   can't call it, and `just tauri-check` fails if it ever does. P11.8
-//!   opens the socket inside the client, and removes the feature and this
-//!   exception.
+//!   dev-dependency on itself; so do the lint and workspace-wide test
+//!   builds, since `just clippy` passes `--all-features` and cargo unifies
+//!   the dev-dependency's feature into the one fleet-client every member's
+//!   tests link. The desktop app's own build never has it, so the app can't
+//!   call it: `just tauri-check` reads its resolved features and fails if
+//!   it ever does. P11.8 opens the socket inside the client, and removes the
+//!   feature and this exception.
 //! - **One refresh at a time, and only on a 401 `unauthorized` from an
 //!   authenticated route** (ADR-0016). A request whose token a refresh
 //!   already replaced is retried once with the current one instead. An
