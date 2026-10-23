@@ -298,12 +298,12 @@ impl Viewer {
         });
         if let Some(listed) = seen_now {
             // A mode that doesn't build is the internal error a `GET /modes`
-            // answers, logged there; the socket sends nothing.
-            return Ok(
-                mode_response(&self.actor, &listed).map_or(Step::Nothing, |shown| {
-                    Step::Send(Box::new(EventMessage::mode(shown)))
-                }),
-            );
+            // answers; the socket sends nothing.
+            if let Ok(shown) = mode_response(&self.actor, &listed) {
+                return Ok(Step::Send(Box::new(EventMessage::mode(shown))));
+            }
+            debug!(mode_id = %event.id, "a live events socket couldn't build a mode's frame");
+            return Ok(Step::Nothing);
         }
         let saw = event.was.is_some_and(|was| {
             authorize(&self.actor, Permission::ViewMode, &was.context()).is_ok()
@@ -446,11 +446,16 @@ impl Viewer {
         });
         match shown {
             // A response that doesn't build is the internal error a `GET`
-            // answers, logged there; the socket sends nothing for it.
-            Some(view) => bot_response(&self.actor, &view).map_or(Step::Nothing, |response| {
-                self.seen.insert(bot);
-                Step::Send(Box::new(EventMessage::bot(response)))
-            }),
+            // answers; the socket sends nothing for it.
+            Some(view) => {
+                if let Ok(response) = bot_response(&self.actor, &view) {
+                    self.seen.insert(bot);
+                    Step::Send(Box::new(EventMessage::bot(response)))
+                } else {
+                    debug!(bot_id = %bot, "a live events socket couldn't build a bot's frame");
+                    Step::Nothing
+                }
+            }
             None if self.seen.remove(&bot) => Step::Send(Box::new(EventMessage::bot_removed(bot))),
             None => Step::Nothing,
         }
@@ -479,11 +484,12 @@ impl Viewer {
             }
             LiveEventKind::Chat { line, request } => {
                 // A line that doesn't build is the internal error the
-                // history answers, logged there; the socket sends nothing.
-                match chat_line(&self.actor, level, line) {
-                    Ok(shown) => EventMessage::chat(event.bot, shown, *request),
-                    Err(_) => return Step::Nothing,
-                }
+                // history answers; the socket sends nothing.
+                let Ok(shown) = chat_line(&self.actor, level, line) else {
+                    debug!(bot_id = %event.bot, "a live events socket couldn't build a chat line's frame");
+                    return Step::Nothing;
+                };
+                EventMessage::chat(event.bot, shown, *request)
             }
             LiveEventKind::ChatSent(request) => EventMessage::chat_sent(event.bot, *request),
             LiveEventKind::ChatFailed(request, reason) => EventMessage::chat_failed(
