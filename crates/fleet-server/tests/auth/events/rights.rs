@@ -19,7 +19,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio_tungstenite::tungstenite::Message;
 
 use super::super::support::{LOGOUT, Options, Setup, setup, setup_entry, setup_with};
-use super::bots::{agent_event, watched};
+use super::bots::{agent_event, bot_frame, get_bot, watched};
 use super::{
     PATIENCE, Piped, Served, closed, commit_anything, next, next_event, next_event_after_pings,
     open, ready, said, ticket,
@@ -586,4 +586,131 @@ async fn a_bot_that_rejoins_before_its_removal_went_out_is_sent_as_bot(
         ),
         "{rest:?}"
     );
+}
+
+// --- A bot the held rights don't show yet (PR #67's review) -------------
+
+/// A View grant given to the stranger while their socket is idle, and the
+/// grant service's hint: their socket reads the rights again, and sends the
+/// bot as their `GET /bots/{id}` answers it.
+#[sqlx::test(migrations = false)]
+async fn a_grantees_idle_socket_gets_the_newly_shared_bot_as_their_get(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let watched = watched(&setup).await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &watched.stranger.token).await;
+
+    setup
+        .share(
+            watched.account,
+            watched.stranger.id,
+            GrantLevel::View,
+            watched.member.id,
+        )
+        .await;
+    setup.events.bots(&[watched.bot]);
+
+    assert_eq!(
+        next_event_after_pings(&mut socket).await,
+        bot_frame(
+            watched.bot,
+            &get_bot(&setup, watched.bot, &watched.stranger).await
+        )
+    );
+}
+
+/// A Member's new offline account, and the accounts service's hint: the
+/// Owner's and an Admin's idle sockets each send its bot as their `GET`.
+#[sqlx::test(migrations = false)]
+async fn a_new_offline_account_reaches_the_owners_and_an_admins_idle_sockets(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let the_owner = setup.person(6, "theowner", Role::Owner).await;
+    let admin = setup.person(7, "admin", Role::Admin).await;
+    let member = setup.person(2, "member", Role::Member).await;
+    let served = Served::start(&setup).await;
+    let mut sockets = Vec::new();
+    for person in [&the_owner, &admin] {
+        sockets.push(ready(&setup, &served, &person.token).await);
+    }
+
+    let (_, bot) = setup.bot_of(member.id, 10).await;
+    setup.events.bots(&[bot]);
+
+    for (person, socket) in [&the_owner, &admin].into_iter().zip(&mut sockets) {
+        assert_eq!(
+            next_event_after_pings(socket).await,
+            bot_frame(bot, &get_bot(&setup, bot, person).await)
+        );
+    }
+}
+
+/// A bot shared with the stranger while their socket is idle, then a line
+/// of its chat and that line's `chat_sent`, all before the socket woke:
+/// the bot, then the line, then its `chat_sent`.
+#[sqlx::test(migrations = false)]
+async fn a_newly_shared_bots_frame_its_line_and_its_chat_sent_arrive_in_order(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let watched = watched(&setup).await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &watched.stranger.token).await;
+    let request = fleet_core::id::ChatRequestId::new_v7(setup.clock.now(), [4; 10]).unwrap();
+    let line = fleet_server::ports::chat::ListedChat {
+        record: fleet_server::ports::chat::ChatRecord {
+            id: fleet_server::ports::chat::ChatMessageId::new(1),
+            bot: watched.bot,
+            at: setup.clock.now(),
+            entry: fleet_server::ports::chat::ChatEntry::Received(
+                fleet_core::chat::IncomingChat::from_parts(
+                    fleet_core::chat::ChatKind::System,
+                    None,
+                    "a line",
+                    false,
+                )
+                .unwrap(),
+            ),
+        },
+        sent_by: None,
+    };
+
+    setup
+        .share(
+            watched.account,
+            watched.stranger.id,
+            GrantLevel::Control,
+            watched.member.id,
+        )
+        .await;
+    setup.events.bots(&[watched.bot]);
+    agent_event(
+        &setup,
+        watched.bot,
+        watched.agent,
+        LiveEventKind::Chat {
+            line,
+            request: None,
+        },
+    );
+    agent_event(
+        &setup,
+        watched.bot,
+        watched.agent,
+        LiveEventKind::ChatSent(request),
+    );
+    let mut kinds = Vec::new();
+    for _ in 0..3 {
+        let frame = next_event_after_pings(&mut socket).await;
+        assert_eq!(frame["bot_id"], json!(watched.bot.to_string()), "{frame}");
+        kinds.push(frame["type"].clone());
+    }
+
+    assert_eq!(kinds, [json!("bot"), json!("chat"), json!("chat_sent")]);
 }

@@ -333,13 +333,15 @@ impl Viewer {
             // and only rights that held decide what was seen.
             return Ok(false);
         }
+        let visible = self.rights.visible(&self.actor);
+        let joined: BTreeSet<BotId> = visible.difference(&self.seen).copied().collect();
         for slot in &mut self.slots {
             if let Slot::Bots(reads) = slot {
                 reads.views = None;
+                // Read below, at the front: once is enough.
+                reads.ids.retain(|bot| !joined.contains(bot));
             }
         }
-        let visible = self.rights.visible(&self.actor);
-        let joined: BTreeSet<BotId> = visible.difference(&self.seen).copied().collect();
         if !joined.is_empty() {
             // A removal still waiting for a bot seen again never goes: its
             // read below says what it is now.
@@ -365,11 +367,16 @@ impl Viewer {
     }
 
     /// Notes that `bots` may read differently: merged into the first
-    /// unread read it holds, or a new one at the end.
+    /// unread read it holds, or a new one at the end. On rights a commit
+    /// outran, every bot is kept: they may not show one the viewer sees now,
+    /// and the gate judges each on new ones before any frame (S30).
     fn hint(&mut self, bots: impl IntoIterator<Item = BotId>) {
+        let judged = !self.outrun();
         let ids: BTreeSet<BotId> = bots
             .into_iter()
-            .filter(|bot| self.rights.level(&self.actor, *bot).is_some() || self.seen.contains(bot))
+            .filter(|bot| {
+                !judged || self.rights.level(&self.actor, *bot).is_some() || self.seen.contains(bot)
+            })
             .collect();
         if ids.is_empty() {
             return;
@@ -396,6 +403,10 @@ impl Viewer {
             reads.ids.retain(|bot| {
                 self.rights.level(&self.actor, *bot).is_some() || self.seen.contains(bot)
             });
+            if reads.ids.is_empty() {
+                // Every bot it held is hidden: no read, no frame.
+                return Ok(Step::Nothing);
+            }
             let ids: Vec<BotId> = reads.ids.iter().copied().collect();
             let views = self
                 .bots
@@ -516,8 +527,11 @@ impl Project for Viewer {
     fn take(&mut self, event: Arc<BusEvent>) {
         match &*event {
             BusEvent::Agent(agent) => {
-                // A bot the viewer can't see: dropped by a lookup (S30).
-                if self.rights.level(&self.actor, agent.bot).is_none() {
+                // A bot the viewer can't see: dropped by a lookup (S30), on
+                // rights as new as every commit counted. Older ones may not
+                // show a bot the viewer sees now: the event waits, and its
+                // step judges it on new ones.
+                if !self.outrun() && self.rights.level(&self.actor, agent.bot).is_none() {
                     return;
                 }
                 if matches!(agent.kind, LiveEventKind::Status(_)) {

@@ -148,6 +148,7 @@ async fn a_hidden_bot_that_goes_sends_no_bot_removed(
     let served = Served::start(&setup).await;
     let mut stranger = ready(&setup, &served, &watched.stranger.token).await;
     let mut member = ready(&setup, &served, &watched.member.token).await;
+    let reads = setup.hooked.bot_reads();
 
     // Deleted, and hinted as the deletion's service does.
     let mut tx = setup.db.write().await.unwrap();
@@ -164,6 +165,11 @@ async fn a_hidden_bot_that_goes_sends_no_bot_removed(
         next_event_after_pings(&mut member).await,
         json!({ "type": "bot_removed", "bot_id": watched.bot.to_string() }),
         "its owner saw it go"
+    );
+    assert_eq!(
+        setup.hooked.bot_reads(),
+        reads,
+        "a hint whose bots are all hidden reads nothing"
     );
 }
 
