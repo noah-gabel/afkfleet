@@ -33,7 +33,9 @@
 //!   4002. [`SocketClose`] lists every code the server closes with.
 //!
 //! # Reading a frame ([`EventMessage::received`])
-//! 1. **A `type` this version doesn't know:** the frame is ignored.
+//! 1. **A `type` this version doesn't know:** the frame is ignored. That's
+//!    safe because of rule 3: a new kind never takes over what a known one
+//!    carries, so what the client shows misses nothing.
 //! 2. **A frame that doesn't read** (not JSON, no `type`, a field of the
 //!    wrong type, a binary frame), or a known `type` without a field its
 //!    kind always carries: the client treats it as `resync`.
