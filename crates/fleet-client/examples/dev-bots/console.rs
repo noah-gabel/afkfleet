@@ -25,7 +25,7 @@ use fleet_api_types::bots::{BotModeRequest, BotPatchRequest, BotResponse, BotSta
 use fleet_api_types::chat::{
     ChatCommandRequest, ChatLine, ChatPageQuery, ChatSendOutcome, ChatSendRequest, ChatSendResponse,
 };
-use fleet_api_types::events::EventMessageKind;
+use fleet_api_types::events::{EventMessage, EventMessageKind};
 use fleet_api_types::modes::{
     CreateModeRequest, ModeOwnership, ModeResponse, ModeVisibility, UpdateModeRequest,
 };
@@ -824,16 +824,78 @@ pub(crate) fn frame_line(frame: &Message) -> Option<String> {
     }
 }
 
-/// One event, as the console shows it.
+/// One event, as the console shows it: a bot in `bots`' line format, a chat
+/// line in `history`'s, a mode in `modes`' (never its steps), each named
+/// by its bot or mode.
 pub(crate) fn event_line(received: &Received) -> String {
     match received {
-        Received::Event(event) => match event.kind.known() {
-            Some(EventMessageKind::Ready) => "ready".to_owned(),
-            Some(EventMessageKind::Resync) => "resync: fetch again".to_owned(),
-            None => "an event this console doesn't know".to_owned(),
-        },
+        Received::Event(event) => event.kind.known().map_or_else(
+            || "an event this console doesn't know".to_owned(),
+            |kind| known_event_line(kind, event),
+        ),
         Received::Ignored => "an event this console doesn't know".to_owned(),
         Received::Unreadable => "an event that doesn't read: taken for a resync".to_owned(),
+    }
+}
+
+/// `event`, of the known `kind`, as one line. [`Received::Event`] holds only
+/// events with every field their kind carries, so the fields read here are
+/// there; one missing anyway shows as `?`.
+fn known_event_line(kind: EventMessageKind, event: &EventMessage) -> String {
+    let bot = event
+        .bot_id
+        .map_or_else(|| "?".to_owned(), |id| id.to_string());
+    let request = event
+        .request
+        .map_or_else(|| "?".to_owned(), |id| id.to_string());
+    let at = event
+        .at
+        .as_ref()
+        .map_or_else(|| "?".to_owned(), ToString::to_string);
+    match kind {
+        EventMessageKind::Ready => "ready".to_owned(),
+        EventMessageKind::Resync => "resync: fetch again".to_owned(),
+        EventMessageKind::Bot => event
+            .bot
+            .as_ref()
+            .map_or_else(|| format!("bot {bot}"), line_of),
+        EventMessageKind::BotRemoved => format!("bot {bot} removed"),
+        EventMessageKind::BotDied => format!("bot {bot} died at {at}"),
+        EventMessageKind::BotAlert => {
+            let state = event.state.as_ref().map_or("?", |state| state.as_str());
+            let reason = event.reason.as_ref().map_or("?", |reason| reason.as_str());
+            format!("bot {bot} {state} reason={reason} at {at}")
+        }
+        EventMessageKind::Chat => {
+            let mut shown = format!("bot {bot} ");
+            if let Some(line) = &event.line {
+                shown.push_str(&chat_line_of(line));
+            }
+            if let Some(request) = event.request {
+                let _ = write!(shown, " (request {request})");
+            }
+            shown
+        }
+        EventMessageKind::ChatSent => format!("bot {bot} request {request} sent"),
+        EventMessageKind::ChatFailed => match &event.failure {
+            Some(failure) => format!("bot {bot} request {request} failed: {}", failure.as_str()),
+            None => format!("bot {bot} request {request} failed"),
+        },
+        EventMessageKind::Mode => event.mode.as_ref().map_or_else(
+            || {
+                let id = event
+                    .mode_id
+                    .map_or_else(|| "?".to_owned(), |id| id.to_string());
+                format!("mode {id}")
+            },
+            mode_line_of,
+        ),
+        EventMessageKind::ModeRemoved => {
+            let id = event
+                .mode_id
+                .map_or_else(|| "?".to_owned(), |id| id.to_string());
+            format!("mode {id} removed")
+        }
     }
 }
 

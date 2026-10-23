@@ -423,6 +423,16 @@ expression: answer.json()
         ],
         "type": "string"
       },
+      "ChatFailure": {
+        "description": "Why a line its bot didn't send failed, as a live `chat_failed` event says\nit to viewers with Control or more (ADR-0020, S34): the same four codes\n`POST /bots/{id}/chat` answers a failure with, by their error codes'\nnames.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on one always keeps a default branch.",
+        "enum": [
+          "bot_not_online",
+          "chat_unavailable",
+          "rate_limited",
+          "bot_unreachable"
+        ],
+        "type": "string"
+      },
       "ChatLine": {
         "description": "One line of a bot's chat, as its viewer may see it (S6, S9, U3).",
         "properties": {
@@ -835,8 +845,48 @@ expression: answer.json()
         "type": "object"
       },
       "EventMessage": {
-        "description": "One frame of the live events socket: what happened, by its `type`. The\n`events` module's docs say which frames come and how a client reads one.\n\nEvery kind carries only `type` in this version.",
+        "description": "One frame of the live events socket: what happened, by its `type`. The\n`events` module's docs say which frames come, which fields each kind\nalways carries, and how a client reads one. Every field but `type` is\nleft out where its kind doesn't carry it.",
         "properties": {
+          "at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "bot": {
+            "$ref": "#/components/schemas/BotResponse",
+            "description": "`bot`: the bot as the viewer's `GET /bots/{id}` shows it now."
+          },
+          "bot_id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "failure": {
+            "$ref": "#/components/schemas/ChatFailure",
+            "description": "`chat_failed`, for viewers with Control or more, when the server\nknows it: why the line failed."
+          },
+          "line": {
+            "$ref": "#/components/schemas/ChatLine",
+            "description": "`chat`: the line as the viewer's history shows it."
+          },
+          "mode": {
+            "$ref": "#/components/schemas/ModeResponse",
+            "description": "`mode`: the mode as the viewer's `GET /modes` lists it now."
+          },
+          "mode_id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "reason": {
+            "$ref": "#/components/schemas/BotStateReason",
+            "description": "`bot_alert`: why it rests there."
+          },
+          "request": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "state": {
+            "$ref": "#/components/schemas/BotStateKind",
+            "description": "`bot_alert`: the state the bot rests in, `paused` or `failed`."
+          },
           "type": {
             "$ref": "#/components/schemas/EventMessageKind",
             "description": "What happened."
@@ -851,7 +901,16 @@ expression: answer.json()
         "description": "What an `EventMessage` says.\nThis union lists the values this version knows; a newer server may send\nothers, so code that branches on one always keeps a default branch.",
         "enum": [
           "ready",
-          "resync"
+          "resync",
+          "bot",
+          "bot_removed",
+          "bot_died",
+          "bot_alert",
+          "chat",
+          "chat_sent",
+          "chat_failed",
+          "mode",
+          "mode_removed"
         ],
         "type": "string"
       },

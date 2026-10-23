@@ -77,11 +77,11 @@ mod tests {
     fn a_known_frame_reads_as_its_event() {
         assert_eq!(
             read(r#"{"type":"ready"}"#),
-            Received::Event(EventMessage::ready())
+            Received::Event(Box::new(EventMessage::ready()))
         );
         assert_eq!(
             read(r#"{"type":"resync","since":1}"#),
-            Received::Event(EventMessage::resync())
+            Received::Event(Box::new(EventMessage::resync()))
         );
     }
 

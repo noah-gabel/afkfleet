@@ -40,8 +40,31 @@
 //! 3. **The server only ever adds** kinds and optional fields: a field keeps
 //!    its name and type, and a kind never loses a field it always carried.
 //!
-//! This version knows `ready` and `resync`; the bots', chat's and modes'
-//! events arrive with P11.5's second group (ADR-0020, group D).
+//! # The kinds and what each always carries (ADR-0020, R14, R28)
+//! Every event about a bot, its chat or a mode reaches only a viewer who
+//! may see it, and is built for them when it's sent: what it carries equals
+//! what `GET /bots/{id}`, `GET /bots/{id}/chat` or `GET /modes` would answer
+//! them at that moment (S32–S34). An event they may not see leaves no trace:
+//! no frame, and nothing counts frames.
+//! - `ready`, `resync`: only `type`.
+//! - `bot`: `bot_id` and `bot`, the whole [`BotResponse`] this viewer's
+//!   `GET /bots/{id}` answers now. It comes whenever what that answer shows
+//!   may have changed, and may repeat an unchanged one.
+//! - `bot_removed`: `bot_id`. The viewer may no longer see the bot, or it's
+//!   gone.
+//! - `bot_died`: `bot_id` and `at`, when the server heard it. The bot
+//!   respawns on its own.
+//! - `bot_alert`: `bot_id`, `at`, `state` (`paused` or `failed`) and its
+//!   `reason`: the bot needs a human.
+//! - `chat`: `bot_id` and `line`, the [`ChatLine`] this viewer's history
+//!   shows for it; a line a user sent also carries its `request`.
+//! - `chat_sent`: `bot_id` and `request`: the bot sent that user's line.
+//! - `chat_failed`: `bot_id` and `request`: it didn't. Viewers with Control or
+//!   more also get its `failure`, when the server knows one.
+//! - `mode`: `mode_id` and `mode`, the [`ModeResponse`] this viewer's
+//!   `GET /modes` lists for it now: created, or changed.
+//! - `mode_removed`: `mode_id`. The viewer may no longer see the mode, or
+//!   it's gone.
 
 use garde::Validate;
 use serde::{Deserialize, Serialize};
@@ -50,10 +73,15 @@ use utoipa::openapi::Required;
 use utoipa::openapi::path::{Parameter, ParameterBuilder, ParameterIn};
 use utoipa::{IntoParams, PartialSchema as _, ToSchema};
 
+use crate::bots::{BotResponse, BotStateKind, BotStateReason};
+use crate::chat::{ChatFailure, ChatLine};
+use crate::ids::{BotId, ChatRequestId, ModeId, id_schema};
 use crate::int::integer_schema;
 use crate::mfa::TOKEN_MAX_CHARS;
+use crate::modes::ModeResponse;
 use crate::open::{Open, OpenEnum};
 use crate::secret::SecretText;
+use crate::time::Timestamp;
 
 /// The longest a ticket lives, in seconds (§7.4: single use, 30 s).
 pub const EVENT_TICKET_MAX_SECS: u32 = 30;
@@ -110,55 +138,258 @@ pub enum EventMessageKind {
     /// The socket fell behind and events were lost: the client fetches what
     /// it shows again.
     Resync,
+    /// A bot as the viewer's `GET /bots/{id}` shows it now.
+    Bot,
+    /// The viewer may no longer see a bot, or it's gone.
+    BotRemoved,
+    /// A bot died, and respawns on its own.
+    BotDied,
+    /// A bot paused or failed: it needs a human.
+    BotAlert,
+    /// A line of a bot's chat, as the viewer's history shows it.
+    Chat,
+    /// The bot sent a user's line.
+    ChatSent,
+    /// The bot didn't send a user's line.
+    ChatFailed,
+    /// A mode as the viewer's `GET /modes` lists it now.
+    Mode,
+    /// The viewer may no longer see a mode, or it's gone.
+    ModeRemoved,
 }
 
 impl OpenEnum for EventMessageKind {
-    const ALL: &'static [Self] = &[Self::Ready, Self::Resync];
+    const ALL: &'static [Self] = &[
+        Self::Ready,
+        Self::Resync,
+        Self::Bot,
+        Self::BotRemoved,
+        Self::BotDied,
+        Self::BotAlert,
+        Self::Chat,
+        Self::ChatSent,
+        Self::ChatFailed,
+        Self::Mode,
+        Self::ModeRemoved,
+    ];
 
     fn as_str(self) -> &'static str {
         match self {
             Self::Ready => "ready",
             Self::Resync => "resync",
+            Self::Bot => "bot",
+            Self::BotRemoved => "bot_removed",
+            Self::BotDied => "bot_died",
+            Self::BotAlert => "bot_alert",
+            Self::Chat => "chat",
+            Self::ChatSent => "chat_sent",
+            Self::ChatFailed => "chat_failed",
+            Self::Mode => "mode",
+            Self::ModeRemoved => "mode_removed",
         }
     }
 }
 
 /// One frame of the live events socket: what happened, by its `type`. The
-/// `events` module's docs say which frames come and how a client reads one.
-///
-/// Every kind carries only `type` in this version.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+/// `events` module's docs say which frames come, which fields each kind
+/// always carries, and how a client reads one. Every field but `type` is
+/// left out where its kind doesn't carry it.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
 pub struct EventMessage {
     /// What happened.
     #[serde(rename = "type")]
     #[ts(as = "EventMessageKind")]
     #[schema(value_type = EventMessageKind)]
     pub kind: Open<EventMessageKind>,
+    /// The bot it's about: every `bot…` and `chat…` kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional)]
+    #[schema(schema_with = id_schema, nullable = false)]
+    pub bot_id: Option<BotId>,
+    /// `bot`: the bot as the viewer's `GET /bots/{id}` shows it now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[schema(nullable = false)]
+    pub bot: Option<BotResponse>,
+    /// `bot_died`, `bot_alert`: when the server heard it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional)]
+    #[schema(schema_with = Timestamp::schema, nullable = false)]
+    pub at: Option<Timestamp>,
+    /// `bot_alert`: the state the bot rests in, `paused` or `failed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<BotStateKind>", optional)]
+    #[schema(value_type = Option<BotStateKind>, nullable = false)]
+    pub state: Option<Open<BotStateKind>>,
+    /// `bot_alert`: why it rests there.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<BotStateReason>", optional)]
+    #[schema(value_type = Option<BotStateReason>, nullable = false)]
+    pub reason: Option<Open<BotStateReason>>,
+    /// `chat`: the line as the viewer's history shows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[schema(nullable = false)]
+    pub line: Option<ChatLine>,
+    /// `chat_sent`, `chat_failed`, and `chat` for a line a user sent: the
+    /// chat request, as `POST /bots/{id}/chat` answered it to its sender.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional)]
+    #[schema(schema_with = id_schema, nullable = false)]
+    pub request: Option<ChatRequestId>,
+    /// `chat_failed`, for viewers with Control or more, when the server
+    /// knows it: why the line failed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<ChatFailure>", optional)]
+    #[schema(value_type = Option<ChatFailure>, nullable = false)]
+    pub failure: Option<Open<ChatFailure>>,
+    /// The mode it's about: `mode` and `mode_removed`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional)]
+    #[schema(schema_with = id_schema, nullable = false)]
+    pub mode_id: Option<ModeId>,
+    /// `mode`: the mode as the viewer's `GET /modes` lists it now.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    #[schema(nullable = false)]
+    pub mode: Option<ModeResponse>,
 }
 
 impl EventMessage {
+    /// A frame of `kind` without any other field.
+    fn of(kind: EventMessageKind) -> Self {
+        Self {
+            kind: kind.into(),
+            bot_id: None,
+            bot: None,
+            at: None,
+            state: None,
+            reason: None,
+            line: None,
+            request: None,
+            failure: None,
+            mode_id: None,
+            mode: None,
+        }
+    }
+
     /// The first frame of every socket.
     #[must_use]
     pub fn ready() -> Self {
-        Self {
-            kind: EventMessageKind::Ready.into(),
-        }
+        Self::of(EventMessageKind::Ready)
     }
 
     /// Events were lost: fetch again.
     #[must_use]
     pub fn resync() -> Self {
+        Self::of(EventMessageKind::Resync)
+    }
+
+    /// `bot`: `bot` as the viewer's `GET /bots/{id}` shows it.
+    #[must_use]
+    pub fn bot(bot: BotResponse) -> Self {
         Self {
-            kind: EventMessageKind::Resync.into(),
+            bot_id: Some(bot.id),
+            bot: Some(bot),
+            ..Self::of(EventMessageKind::Bot)
+        }
+    }
+
+    /// `bot_removed`: the viewer may no longer see `bot`, or it's gone.
+    #[must_use]
+    pub fn bot_removed(bot: BotId) -> Self {
+        Self {
+            bot_id: Some(bot),
+            ..Self::of(EventMessageKind::BotRemoved)
+        }
+    }
+
+    /// `bot_died`: `bot` died, as the server heard `at`.
+    #[must_use]
+    pub fn bot_died(bot: BotId, at: Timestamp) -> Self {
+        Self {
+            bot_id: Some(bot),
+            at: Some(at),
+            ..Self::of(EventMessageKind::BotDied)
+        }
+    }
+
+    /// `bot_alert`: `bot` rests in `state` for `reason`, as the server heard
+    /// `at`.
+    #[must_use]
+    pub fn bot_alert(
+        bot: BotId,
+        at: Timestamp,
+        state: BotStateKind,
+        reason: BotStateReason,
+    ) -> Self {
+        Self {
+            bot_id: Some(bot),
+            at: Some(at),
+            state: Some(state.into()),
+            reason: Some(reason.into()),
+            ..Self::of(EventMessageKind::BotAlert)
+        }
+    }
+
+    /// `chat`: `line` of `bot`'s chat, a user's line with its `request`.
+    #[must_use]
+    pub fn chat(bot: BotId, line: ChatLine, request: Option<ChatRequestId>) -> Self {
+        Self {
+            bot_id: Some(bot),
+            line: Some(line),
+            request,
+            ..Self::of(EventMessageKind::Chat)
+        }
+    }
+
+    /// `chat_sent`: `bot` sent the line of `request`.
+    #[must_use]
+    pub fn chat_sent(bot: BotId, request: ChatRequestId) -> Self {
+        Self {
+            bot_id: Some(bot),
+            request: Some(request),
+            ..Self::of(EventMessageKind::ChatSent)
+        }
+    }
+
+    /// `chat_failed`: `bot` didn't send the line of `request`, for `failure`
+    /// when this viewer may know it.
+    #[must_use]
+    pub fn chat_failed(bot: BotId, request: ChatRequestId, failure: Option<ChatFailure>) -> Self {
+        Self {
+            bot_id: Some(bot),
+            request: Some(request),
+            failure: failure.map(Open::from),
+            ..Self::of(EventMessageKind::ChatFailed)
+        }
+    }
+
+    /// `mode`: `mode` as the viewer's `GET /modes` lists it.
+    #[must_use]
+    pub fn mode(mode: ModeResponse) -> Self {
+        Self {
+            mode_id: Some(mode.id),
+            mode: Some(mode),
+            ..Self::of(EventMessageKind::Mode)
+        }
+    }
+
+    /// `mode_removed`: the viewer may no longer see `mode`, or it's gone.
+    #[must_use]
+    pub fn mode_removed(mode: ModeId) -> Self {
+        Self {
+            mode_id: Some(mode),
+            ..Self::of(EventMessageKind::ModeRemoved)
         }
     }
 }
 
 /// What a client makes of a frame's text, by the module's reading rules.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Received {
     /// An event this version knows, with every field its kind carries.
-    Event(EventMessage),
+    Event(Box<EventMessage>),
     /// A kind only a newer server knows: ignore it.
     Ignored,
     /// A frame that doesn't read, or a known kind without its fields: treat
@@ -174,10 +405,29 @@ impl EventMessage {
     /// all is [`Received::Unreadable`] too; reading it is the client's.
     #[must_use]
     pub fn received(self) -> Received {
-        match self.kind.known() {
-            None => Received::Ignored,
-            // Neither carries more than its type.
-            Some(EventMessageKind::Ready | EventMessageKind::Resync) => Received::Event(self),
+        let Some(kind) = self.kind.known() else {
+            return Received::Ignored;
+        };
+        let bot = self.bot_id.is_some();
+        let carried = match kind {
+            EventMessageKind::Ready | EventMessageKind::Resync => true,
+            EventMessageKind::Bot => bot && self.bot.is_some(),
+            EventMessageKind::BotRemoved => bot,
+            EventMessageKind::BotDied => bot && self.at.is_some(),
+            EventMessageKind::BotAlert => {
+                bot && self.at.is_some() && self.state.is_some() && self.reason.is_some()
+            }
+            EventMessageKind::Chat => bot && self.line.is_some(),
+            EventMessageKind::ChatSent | EventMessageKind::ChatFailed => {
+                bot && self.request.is_some()
+            }
+            EventMessageKind::Mode => self.mode_id.is_some() && self.mode.is_some(),
+            EventMessageKind::ModeRemoved => self.mode_id.is_some(),
+        };
+        if carried {
+            Received::Event(Box::new(self))
+        } else {
+            Received::Unreadable
         }
     }
 }
@@ -273,8 +523,238 @@ mod tests {
                 .iter()
                 .map(|kind| kind.as_str())
                 .collect::<Vec<_>>(),
-            ["ready", "resync"]
+            [
+                "ready",
+                "resync",
+                "bot",
+                "bot_removed",
+                "bot_died",
+                "bot_alert",
+                "chat",
+                "chat_sent",
+                "chat_failed",
+                "mode",
+                "mode_removed"
+            ]
         );
+    }
+
+    const BOT: &str = "0190a5b0-0000-7000-8000-000000000001";
+    const MODE: &str = "0190a5b0-0000-7000-8000-000000000002";
+    const REQUEST: &str = "0190a5b0-0000-7000-8000-000000000003";
+    const AT: &str = "2027-01-15T08:00:00.000Z";
+
+    fn bot_id() -> BotId {
+        serde_json::from_value(json!(BOT)).unwrap()
+    }
+
+    fn request() -> ChatRequestId {
+        serde_json::from_value(json!(REQUEST)).unwrap()
+    }
+
+    fn at() -> Timestamp {
+        serde_json::from_value(json!(AT)).unwrap()
+    }
+
+    fn a_bot() -> BotResponse {
+        serde_json::from_value(json!({
+            "id": BOT,
+            "account": {
+                "id": "0190a5b0-0000-7000-8000-000000000004",
+                "name": "AfkBot1",
+                "kind": "offline",
+                "status": "active",
+                "level": "view"
+            },
+            "mode_id": MODE,
+            "desired_state": "stopped",
+            "status": { "kind": "unplaced", "why": "stopped", "state": "stopped" }
+        }))
+        .unwrap()
+    }
+
+    fn a_line() -> ChatLine {
+        serde_json::from_value(json!({
+            "id": 41,
+            "at": AT,
+            "direction": "out",
+            "kind": "user",
+            "text": "/login",
+            "truncated": false,
+            "arguments_hidden": true,
+            "mine": true
+        }))
+        .unwrap()
+    }
+
+    fn a_mode() -> ModeResponse {
+        serde_json::from_value(json!({
+            "id": MODE,
+            "name": "home",
+            "visibility": "shared",
+            "ownership": "someone_else",
+            "editable": false,
+            "deletable": false,
+            "visibility_editable": false,
+            "version": 2,
+            "created_at": AT,
+            "updated_at": AT,
+            "steps": []
+        }))
+        .unwrap()
+    }
+
+    /// One frame of every kind, with every field it can carry.
+    fn every_kind() -> Vec<EventMessage> {
+        vec![
+            EventMessage::ready(),
+            EventMessage::resync(),
+            EventMessage::bot(a_bot()),
+            EventMessage::bot_removed(bot_id()),
+            EventMessage::bot_died(bot_id(), at()),
+            EventMessage::bot_alert(
+                bot_id(),
+                at(),
+                BotStateKind::Paused,
+                BotStateReason::DuplicateLogin,
+            ),
+            EventMessage::chat(bot_id(), a_line(), Some(request())),
+            EventMessage::chat_sent(bot_id(), request()),
+            EventMessage::chat_failed(bot_id(), request(), Some(ChatFailure::ChatUnavailable)),
+            EventMessage::mode(a_mode()),
+            EventMessage::mode_removed(serde_json::from_value(json!(MODE)).unwrap()),
+        ]
+    }
+
+    /// The fields a frame's JSON holds, `type` first.
+    fn fields(message: &EventMessage) -> Vec<String> {
+        let value = serde_json::to_value(message).unwrap();
+        let mut keys: Vec<String> = value.as_object().unwrap().keys().cloned().collect();
+        keys.sort_by_key(|key| (key != "type", key.clone()));
+        keys
+    }
+
+    #[test]
+    fn each_kind_carries_exactly_its_fields() {
+        let expected: &[&[&str]] = &[
+            &["type"],
+            &["type"],
+            &["type", "bot", "bot_id"],
+            &["type", "bot_id"],
+            &["type", "at", "bot_id"],
+            &["type", "at", "bot_id", "reason", "state"],
+            &["type", "bot_id", "line", "request"],
+            &["type", "bot_id", "request"],
+            &["type", "bot_id", "failure", "request"],
+            &["type", "mode", "mode_id"],
+            &["type", "mode_id"],
+        ];
+
+        let shown: Vec<Vec<String>> = every_kind().iter().map(fields).collect();
+
+        assert_eq!(shown, expected);
+    }
+
+    #[test]
+    fn each_kinds_values_are_on_the_wire() {
+        let alert = serde_json::to_value(EventMessage::bot_alert(
+            bot_id(),
+            at(),
+            BotStateKind::Failed,
+            BotStateReason::Banned,
+        ))
+        .unwrap();
+        let failed = serde_json::to_value(EventMessage::chat_failed(
+            bot_id(),
+            request(),
+            Some(ChatFailure::RateLimited),
+        ))
+        .unwrap();
+        let bot = serde_json::to_value(EventMessage::bot(a_bot())).unwrap();
+        let mode = serde_json::to_value(EventMessage::mode(a_mode())).unwrap();
+
+        assert_eq!(
+            alert,
+            json!({
+                "type": "bot_alert", "bot_id": BOT, "at": AT,
+                "state": "failed", "reason": "banned"
+            })
+        );
+        assert_eq!(
+            failed,
+            json!({
+                "type": "chat_failed", "bot_id": BOT, "request": REQUEST,
+                "failure": "rate_limited"
+            })
+        );
+        assert_eq!(bot["bot_id"], json!(BOT));
+        assert_eq!(bot["bot"], serde_json::to_value(a_bot()).unwrap());
+        assert_eq!(mode["mode_id"], json!(MODE));
+        assert_eq!(mode["mode"], serde_json::to_value(a_mode()).unwrap());
+    }
+
+    #[test]
+    fn every_kind_with_its_fields_is_an_event() {
+        for sent in every_kind() {
+            let frame = serde_json::to_string(&sent).unwrap();
+
+            assert_eq!(
+                message(&frame).received(),
+                Received::Event(Box::new(sent)),
+                "{frame}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_failure_left_out_and_a_line_without_its_request_are_events() {
+        let failed = EventMessage::chat_failed(bot_id(), request(), None);
+        let line = EventMessage::chat(bot_id(), a_line(), None);
+
+        for sent in [failed, line] {
+            let frame = serde_json::to_string(&sent).unwrap();
+
+            assert_eq!(
+                message(&frame).received(),
+                Received::Event(Box::new(sent)),
+                "{frame}"
+            );
+        }
+    }
+
+    #[rstest]
+    #[case::bot(2, "bot_id")]
+    #[case::bot_without_its_bot(2, "bot")]
+    #[case::bot_removed(3, "bot_id")]
+    #[case::bot_died(4, "bot_id")]
+    #[case::bot_died_without_its_time(4, "at")]
+    #[case::bot_alert(5, "bot_id")]
+    #[case::bot_alert_without_its_time(5, "at")]
+    #[case::bot_alert_without_its_state(5, "state")]
+    #[case::bot_alert_without_its_reason(5, "reason")]
+    #[case::chat(6, "bot_id")]
+    #[case::chat_without_its_line(6, "line")]
+    #[case::chat_sent(7, "bot_id")]
+    #[case::chat_sent_without_its_request(7, "request")]
+    #[case::chat_failed(8, "bot_id")]
+    #[case::chat_failed_without_its_request(8, "request")]
+    #[case::mode(9, "mode_id")]
+    #[case::mode_without_its_mode(9, "mode")]
+    #[case::mode_removed(10, "mode_id")]
+    fn a_known_kind_missing_its_field_is_unreadable(#[case] kind: usize, #[case] field: &str) {
+        let mut value = serde_json::to_value(&every_kind()[kind]).unwrap();
+        value.as_object_mut().unwrap().remove(field).unwrap();
+
+        let read: EventMessage = serde_json::from_value(value).unwrap();
+
+        assert_eq!(read.received(), Received::Unreadable);
+    }
+
+    #[test]
+    fn a_field_of_the_wrong_type_doesnt_read() {
+        let frame = json!({ "type": "bot_died", "bot_id": BOT, "at": 7 });
+
+        assert!(serde_json::from_value::<EventMessage>(frame).is_err());
     }
 
     #[test]
@@ -298,12 +778,13 @@ mod tests {
     #[case::ready(r#"{"type":"ready"}"#, EventMessage::ready())]
     #[case::resync(r#"{"type":"resync"}"#, EventMessage::resync())]
     fn a_known_event_reads_back(#[case] frame: &str, #[case] event: EventMessage) {
-        assert_eq!(message(frame).received(), Received::Event(event));
+        assert_eq!(message(frame).received(), Received::Event(Box::new(event)));
     }
 
     #[test]
     fn an_unknown_type_is_ignored() {
-        let frame = r#"{"type":"bot_teleported","bot_id":"x"}"#;
+        let frame =
+            r#"{"type":"bot_teleported","bot_id":"0190a5b0-0000-7000-8000-000000000001","to":"x"}"#;
 
         assert_eq!(message(frame).received(), Received::Ignored);
     }
@@ -312,7 +793,7 @@ mod tests {
     fn a_field_only_a_newer_server_sends_is_ignored() {
         assert_eq!(
             message(r#"{"type":"ready","since":"2026-10-22T00:00:00.000Z"}"#).received(),
-            Received::Event(EventMessage::ready())
+            Received::Event(Box::new(EventMessage::ready()))
         );
     }
 

@@ -1172,11 +1172,11 @@ fn each_event_and_close_reads_as_a_line() {
     use fleet_api_types::events::{EventMessage, Received};
 
     assert_eq!(
-        dev_console::event_line(&Received::Event(EventMessage::ready())),
+        dev_console::event_line(&Received::Event(Box::new(EventMessage::ready()))),
         "ready"
     );
     assert_eq!(
-        dev_console::event_line(&Received::Event(EventMessage::resync())),
+        dev_console::event_line(&Received::Event(Box::new(EventMessage::resync()))),
         "resync: fetch again"
     );
     assert_eq!(
@@ -1199,4 +1199,132 @@ fn each_event_and_close_reads_as_a_line() {
         dev_console::closed_line(None),
         "the server closed the events socket"
     );
+}
+
+const EVENT_BOT: &str = "0190a5b0-0000-7000-8000-000000000001";
+const EVENT_MODE: &str = "0190a5b0-0000-7000-8000-000000000002";
+const EVENT_REQUEST: &str = "0190a5b0-0000-7000-8000-000000000003";
+const EVENT_AT: &str = "2027-01-15T08:00:00.000Z";
+
+/// The console's line for the frame `value`, read as the console reads it.
+fn event_line_of(value: &serde_json::Value) -> String {
+    dev_console::event_line(&fleet_client::events::read(&value.to_string()))
+}
+
+/// A mode as the API answers it, with a chat step holding `message`.
+fn a_mode_frame(message: &str) -> serde_json::Value {
+    serde_json::json!({
+        "type": "mode",
+        "mode_id": EVENT_MODE,
+        "mode": {
+            "id": EVENT_MODE,
+            "name": "home",
+            "visibility": "shared",
+            "ownership": "mine",
+            "editable": true,
+            "deletable": true,
+            "visibility_editable": true,
+            "version": 3,
+            "created_at": EVENT_AT,
+            "updated_at": EVENT_AT,
+            "steps": [{
+                "action": { "type": "chat", "message": message, "arguments_hidden": false },
+                "schedule": { "type": "at_start" },
+                "probability": 100
+            }]
+        }
+    })
+}
+
+#[test]
+fn each_event_kind_reads_as_its_console_line() {
+    use serde_json::json;
+
+    let bot = json!({
+        "type": "bot",
+        "bot_id": EVENT_BOT,
+        "bot": {
+            "id": EVENT_BOT,
+            "account": {
+                "id": "0190a5b0-0000-7000-8000-000000000004",
+                "name": "AfkBot1",
+                "kind": "offline",
+                "status": "active",
+                "level": "view"
+            },
+            "mode_id": EVENT_MODE,
+            "desired_state": "running",
+            "status": { "kind": "reported", "state": "online", "since": EVENT_AT }
+        }
+    });
+    let line = json!({
+        "id": 41, "at": EVENT_AT, "direction": "out", "kind": "user", "text": "/login",
+        "truncated": false, "arguments_hidden": true, "mine": true
+    });
+    let cases = [
+        (bot, format!("bot {EVENT_BOT} AfkBot1 reported/online")),
+        (
+            json!({ "type": "bot_removed", "bot_id": EVENT_BOT }),
+            format!("bot {EVENT_BOT} removed"),
+        ),
+        (
+            json!({ "type": "bot_died", "bot_id": EVENT_BOT, "at": EVENT_AT }),
+            format!("bot {EVENT_BOT} died at {EVENT_AT}"),
+        ),
+        (
+            json!({
+                "type": "bot_alert", "bot_id": EVENT_BOT, "at": EVENT_AT,
+                "state": "paused", "reason": "duplicate_login"
+            }),
+            format!("bot {EVENT_BOT} paused reason=duplicate_login at {EVENT_AT}"),
+        ),
+        (
+            json!({
+                "type": "chat", "bot_id": EVENT_BOT, "line": line, "request": EVENT_REQUEST
+            }),
+            format!(
+                "bot {EVENT_BOT} #41 {EVENT_AT} user by you: /login (arguments hidden) (request {EVENT_REQUEST})"
+            ),
+        ),
+        (
+            json!({ "type": "chat", "bot_id": EVENT_BOT, "line": line }),
+            format!("bot {EVENT_BOT} #41 {EVENT_AT} user by you: /login (arguments hidden)"),
+        ),
+        (
+            json!({ "type": "chat_sent", "bot_id": EVENT_BOT, "request": EVENT_REQUEST }),
+            format!("bot {EVENT_BOT} request {EVENT_REQUEST} sent"),
+        ),
+        (
+            json!({
+                "type": "chat_failed", "bot_id": EVENT_BOT, "request": EVENT_REQUEST,
+                "failure": "chat_unavailable"
+            }),
+            format!("bot {EVENT_BOT} request {EVENT_REQUEST} failed: chat_unavailable"),
+        ),
+        (
+            json!({ "type": "chat_failed", "bot_id": EVENT_BOT, "request": EVENT_REQUEST }),
+            format!("bot {EVENT_BOT} request {EVENT_REQUEST} failed"),
+        ),
+        (
+            a_mode_frame("hello"),
+            format!("mode {EVENT_MODE} home shared mine editable version 3"),
+        ),
+        (
+            json!({ "type": "mode_removed", "mode_id": EVENT_MODE }),
+            format!("mode {EVENT_MODE} removed"),
+        ),
+    ];
+
+    for (frame, expected) in cases {
+        assert_eq!(event_line_of(&frame), expected, "{frame}");
+    }
+}
+
+#[test]
+fn a_mode_event_never_prints_its_steps() {
+    let shown = event_line_of(&a_mode_frame("/warp canary-secret"));
+
+    assert!(shown.starts_with("mode "), "{shown}");
+    assert!(!shown.contains("canary"), "{shown}");
+    assert!(!shown.contains("warp"), "{shown}");
 }
