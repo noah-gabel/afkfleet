@@ -13,6 +13,7 @@ mod bots;
 mod chat;
 mod limits;
 mod liveness;
+mod modes;
 mod rights;
 mod tickets;
 

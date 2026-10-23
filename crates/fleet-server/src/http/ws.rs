@@ -292,6 +292,8 @@ pub(crate) trait Project: Send + 'static {
 pub(crate) enum Step {
     /// Sends this frame.
     Send(Box<EventMessage>),
+    /// Owes a `resync`, said within its gap.
+    Resync,
     /// Nothing: what it took makes no frame for this viewer.
     Nothing,
 }
@@ -497,6 +499,7 @@ impl<P: Project> Running<P> {
                             return failed.ended();
                         }
                     }
+                    Ok(Step::Resync) => resync.owe(),
                     Ok(Step::Nothing) => {}
                     Err(ended) => return ended,
                 },

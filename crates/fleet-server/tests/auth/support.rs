@@ -62,6 +62,7 @@ use fleet_server::ports::enrollment_tokens::{EnrollmentTokenReads, EnrollmentTok
 use fleet_server::ports::envelopes::{EnvelopeReads, EnvelopeWrites};
 use fleet_server::ports::grants::{GrantReads, GrantWrites};
 use fleet_server::ports::invites::{InviteReads, InviteWrites, NewInvite};
+use fleet_server::ports::live_hints::{LiveHints, ModeEvent};
 use fleet_server::ports::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
 use fleet_server::ports::mfa::{MfaReads, MfaWrites};
 use fleet_server::ports::modes::{
@@ -251,6 +252,7 @@ pub(crate) struct HookedStore {
     lose_mode_update: Arc<Mutex<bool>>,
     sessions: HookedSessions,
     bots: HookedBots,
+    modes: HookedModes,
 }
 
 impl HookedStore {
@@ -265,6 +267,10 @@ impl HookedStore {
                 hanging: Arc::new(tokio::sync::watch::Sender::new(0)),
                 find_behind_writes: Arc::default(),
                 found: Arc::new(tokio::sync::watch::Sender::new(0)),
+            },
+            modes: HookedModes {
+                inner: inner.clone(),
+                fail_listed: Arc::default(),
             },
             bots: HookedBots {
                 inner: inner.clone(),
@@ -314,6 +320,13 @@ impl HookedStore {
     /// database does (P11.5).
     pub(crate) fn fail_rights_reads(&self) {
         *self.bots.fail_access.lock().unwrap() = true;
+    }
+
+    /// From now on, reading one mode with its owner (`ModeReads::listed`, a
+    /// live events socket's read of a mode) fails as a busy database does
+    /// (P11.5).
+    pub(crate) fn fail_mode_reads(&self) {
+        *self.modes.fail_listed.lock().unwrap() = true;
     }
 
     /// How many times bots were read for live events (`BotReads::listed_in`,
@@ -700,6 +713,35 @@ impl ModeWrites for LosingTx {
     }
 }
 
+/// The database's mode reads, `listed` failing on request.
+#[derive(Debug, Clone)]
+struct HookedModes {
+    inner: Database,
+    fail_listed: Arc<Mutex<bool>>,
+}
+
+#[async_trait]
+impl ModeReads for HookedModes {
+    async fn find(&self, id: ModeId) -> Result<Option<StoredMode>, StoreError> {
+        self.inner.modes().find(id).await
+    }
+
+    async fn visible(
+        &self,
+        viewer: Actor,
+        page: Page<ModeId>,
+    ) -> Result<Vec<ListedMode>, StoreError> {
+        self.inner.modes().visible(viewer, page).await
+    }
+
+    async fn listed(&self, id: ModeId) -> Result<Option<ListedMode>, StoreError> {
+        if *self.fail_listed.lock().unwrap() {
+            return Err(StoreError::Busy);
+        }
+        self.inner.modes().listed(id).await
+    }
+}
+
 /// A read of the live events' rights held by
 /// [`HookedStore::hold_next_rights_read`].
 pub(crate) struct HeldRead {
@@ -932,7 +974,7 @@ impl Store for HookedStore {
     }
 
     fn modes(&self) -> &dyn ModeReads {
-        self.inner.modes()
+        &self.modes
     }
 
     fn chat(&self) -> &dyn ChatReads {
@@ -982,6 +1024,8 @@ pub(crate) struct Setup {
     pub(crate) registry: AgentRegistry,
     /// The reconciler's hints the bots' writes sent.
     pub(crate) hints: Arc<Hinted>,
+    /// The live events' hints the services sent (P11.5).
+    pub(crate) heard: Arc<Heard>,
     /// The bus a chat send waits on, where a test answers for the agent.
     pub(crate) events: EventBus,
     /// The live events: their tickets, and the sockets' owner a test shuts
@@ -1004,6 +1048,64 @@ impl Hinted {
     /// The hints since the last call.
     pub(crate) fn take(&self) -> Vec<Change> {
         core::mem::take(&mut *self.0.lock().unwrap())
+    }
+}
+
+/// One hint a service sent the live events sockets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Hint {
+    /// These bots may read differently.
+    Bots(Vec<BotId>),
+    /// A mode was created, changed or deleted.
+    Mode(ModeEvent),
+    /// This user's role changed.
+    RoleChanged(UserId),
+}
+
+/// The live events' hints the services send, each with the commit count at
+/// the call, passed on to the bus the sockets read (ADR-0020, S42, R36): a
+/// hint counted before its commit shows as one count short.
+#[derive(Debug)]
+pub(crate) struct Heard {
+    bus: EventBus,
+    commits: tokio::sync::watch::Receiver<u64>,
+    calls: Mutex<Vec<(u64, Hint)>>,
+}
+
+impl Heard {
+    fn new(bus: EventBus, commits: tokio::sync::watch::Receiver<u64>) -> Self {
+        Self {
+            bus,
+            commits,
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The hints since the last call, each with the commit count it came at.
+    pub(crate) fn take(&self) -> Vec<(u64, Hint)> {
+        core::mem::take(&mut *self.calls.lock().unwrap())
+    }
+
+    fn heard(&self, hint: Hint) {
+        let count = *self.commits.borrow();
+        self.calls.lock().unwrap().push((count, hint));
+    }
+}
+
+impl LiveHints for Heard {
+    fn bots(&self, bots: &[BotId]) {
+        self.heard(Hint::Bots(bots.to_vec()));
+        self.bus.bots(bots);
+    }
+
+    fn mode(&self, event: ModeEvent) {
+        self.heard(Hint::Mode(event));
+        self.bus.mode(event);
+    }
+
+    fn role_changed(&self, user: UserId) {
+        self.heard(Hint::RoleChanged(user));
+        self.bus.role_changed(user);
     }
 }
 
@@ -1063,22 +1165,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
     let tokens = token_service(&clock, &random, &hooked, &token_port);
     let challenges = Challenges::new(Arc::new(clock.clone()), token_port.clone());
     let mfa = mfa_service(&db, &clock, &random, &challenges);
-    let passwords = Arc::new(TestPasswords {
-        real: Argon2Passwords::new(Argon2Params::default(), Arc::new(random.clone()))
-            .await
-            .unwrap(),
-        rehash: settings.rehash,
-    });
-    let alice_hash = match settings.hash {
-        Some(hash) => hash,
-        None => passwords
-            .hash(
-                &NewPassword::try_from(SecretString::from(PASSWORD)).unwrap(),
-                &Username::try_from("alice").unwrap(),
-            )
-            .await
-            .unwrap(),
-    };
+    let (passwords, alice_hash) = passwords(&random, (settings.rehash, settings.hash)).await;
     let lockout = lockout_service(&clock, &db);
     let login = LoginService::new(
         Arc::new(clock.clone()),
@@ -1089,17 +1176,25 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         tokens.clone(),
         mfa.clone(),
     );
-    let (users, invites) = accounts(&clock, &random, &hooked, passwords, settings.invite_ttl);
+    let events = EventBus::new();
+    let heard = Arc::new(Heard::new(events.clone(), db.commits()));
+    let (users, invites) = accounts(
+        &clock,
+        &random,
+        &hooked,
+        (passwords, settings.invite_ttl),
+        &heard,
+    );
     let limits = RateLimits::new(&settings.limits, Arc::new(clock.clone()));
     let enrollment_tokens = settings
         .control_plane
         .then(|| enrollment_tokens(&clock, &random, &hooked));
     let (registry, agents) = agents(&clock, &hooked);
     let hints = Arc::new(Hinted::default());
-    let (bots, events) = bot_service(
+    let bots = bot_service(
         &clock,
         &random,
-        &hooked,
+        (&hooked, &events),
         &registry,
         (&settings.allowlist, settings.chat_wait),
         &hints,
@@ -1124,7 +1219,13 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         enrollment_tokens,
         agents,
         bots,
-        modes: mode_service(&clock, &random, &hooked, &settings.allowlist, &hints),
+        modes: mode_service(
+            &clock,
+            &random,
+            &hooked,
+            &settings.allowlist,
+            (&hints, &heard),
+        ),
         events: live_events.clone(),
     });
     let app = app(state, &clock);
@@ -1143,9 +1244,35 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         alice,
         registry,
         hints,
+        heard,
         events,
         live_events,
     }
+}
+
+/// The passwords, rehashing as `rehash` says, and Alice's hash: `hash`, or
+/// her password's.
+async fn passwords(
+    random: &SeededRandom,
+    (rehash, hash): (Rehash, Option<PasswordHash>),
+) -> (Arc<TestPasswords>, PasswordHash) {
+    let passwords = Arc::new(TestPasswords {
+        real: Argon2Passwords::new(Argon2Params::default(), Arc::new(random.clone()))
+            .await
+            .unwrap(),
+        rehash,
+    });
+    let alice_hash = match hash {
+        Some(hash) => hash,
+        None => passwords
+            .hash(
+                &NewPassword::try_from(SecretString::from(PASSWORD)).unwrap(),
+                &Username::try_from("alice").unwrap(),
+            )
+            .await
+            .unwrap(),
+    };
+    (passwords, alice_hash)
 }
 
 /// The token service, reading sessions through `hooked`'s switches, with
@@ -1195,17 +1322,16 @@ fn lockout_service(clock: &ManualClock, db: &Database) -> LockoutService {
 
 /// The bots' service as serve builds it, over `hooked` and `registry`,
 /// with offline accounts on, `allowlist` and `chat_wait`, recording its
-/// hints in `hints`; and the bus it waits for chat answers on.
+/// hints in `hints`, waiting for chat answers on `events`.
 fn bot_service(
     clock: &ManualClock,
     random: &SeededRandom,
-    hooked: &HookedStore,
+    (hooked, events): (&HookedStore, &EventBus),
     registry: &AgentRegistry,
     (allowlist, chat_wait): (&CommandAllowlist, ChatWait),
     hints: &Arc<Hinted>,
-) -> (BotService, EventBus) {
-    let events = EventBus::new();
-    let bots = BotService::new(
+) -> BotService {
+    BotService::new(
         Arc::new(clock.clone()),
         Arc::new(random.clone()),
         Arc::new(hooked.clone()),
@@ -1215,18 +1341,18 @@ fn bot_service(
     )
     .with_allowlist(allowlist.clone())
     .with_reconcile(Arc::clone(hints) as Arc<dyn Reconcile>)
-    .with_chat_wait(chat_wait);
-    (bots, events)
+    .with_chat_wait(chat_wait)
 }
 
 /// The modes' service as serve builds it, over `hooked`, with `allowlist`,
-/// recording its hints in `hints`.
+/// recording its hints to the reconciler in `hints` and to the sockets in
+/// `heard`.
 fn mode_service(
     clock: &ManualClock,
     random: &SeededRandom,
     hooked: &HookedStore,
     allowlist: &CommandAllowlist,
-    hints: &Arc<Hinted>,
+    (hints, heard): (&Arc<Hinted>, &Arc<Heard>),
 ) -> ModeService {
     ModeService::new(
         Arc::new(clock.clone()),
@@ -1235,6 +1361,7 @@ fn mode_service(
     )
     .with_allowlist(allowlist.clone())
     .with_reconcile(Arc::clone(hints) as Arc<dyn Reconcile>)
+    .with_live_hints(Arc::clone(heard) as Arc<dyn LiveHints>)
 }
 
 /// Stores Alice, a Member, with `hash`.
@@ -1286,15 +1413,16 @@ fn accounts(
     clock: &ManualClock,
     random: &SeededRandom,
     hooked: &HookedStore,
-    passwords: Arc<TestPasswords>,
-    ttl: InviteTtl,
+    (passwords, ttl): (Arc<TestPasswords>, InviteTtl),
+    heard: &Arc<Heard>,
 ) -> (UserService, InviteService) {
     let users = UserService::new(
         Arc::new(clock.clone()),
         Arc::new(random.clone()),
         Arc::new(hooked.clone()),
         passwords,
-    );
+    )
+    .with_live_hints(Arc::clone(heard) as Arc<dyn LiveHints>);
     let invites = InviteService::new(
         Arc::new(clock.clone()),
         Arc::new(random.clone()),

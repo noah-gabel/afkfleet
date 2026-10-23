@@ -129,6 +129,7 @@ use crate::infra::qr::SvgQr;
 use crate::infra::sqlite::{self, Database, DatabaseOptions, OpenError};
 use crate::infra::system::{MonotonicClock, OsRandom, SystemClock, TokioPace};
 use crate::ports::agent_connections::AgentConnections;
+use crate::ports::live_hints::LiveHints;
 use crate::ports::msauth::MicrosoftAuthProvider;
 use crate::ports::pace::Pace;
 use crate::ports::passwords::{HashError, Passwords};
@@ -438,8 +439,12 @@ pub fn app_with(
         pace,
     } = ports;
     let store: Arc<dyn Store> = Arc::new(database.clone());
+    // One bus, built first: the agents' answers, a chat send's wait (S5) and
+    // the services' hints to the live events sockets (R36).
+    let events = EventBus::new();
     let vault: Arc<dyn Vault> = Arc::new(XChaChaVault::new(keys, Arc::clone(&random)));
     let (reconcile, inbox) = hint_queue(config.grpc.is_some() && ca.is_some());
+    let hints = Hints::new(&reconcile, &events);
     let (link_flows, accounts) = account_services(
         config,
         &reconcile,
@@ -461,7 +466,7 @@ pub fn app_with(
     let mfa = mfa_service(&clock, &random, &store, Arc::clone(&vault), &challenges);
     let limits = RateLimits::new(&config.rate_limits, limiter_clock);
     let lockout = lockout_service(config, &clock, &store, lockout_key);
-    let users = user_service(&clock, &random, &store, &passwords, &reconcile);
+    let users = user_service(&clock, &random, &store, &passwords, &hints);
     let login = LoginService::new(
         Arc::clone(&clock),
         Arc::clone(&random),
@@ -474,10 +479,7 @@ pub fn app_with(
     let grants = GrantService::new(Arc::clone(&clock), Arc::clone(&store));
     let ids = RequestIds::new(Arc::clone(&clock), Arc::clone(&random));
     let (agents, agent_service) = agent_services(&clock, &store, Arc::clone(&reconcile));
-    // One bus: the ingest publishes the agents' answers on it, and a chat
-    // send waits for its answer there (ADR-0020, S5).
-    let events = EventBus::new();
-    let modes = mode_service(config, &clock, &random, &store, Arc::clone(&reconcile));
+    let modes = mode_service(config, &clock, &random, &store, &hints);
     let bots = bot_service(config, &clock, &random, &store, &agents, &events, reconcile);
     let shutdown = CancellationToken::new();
     let (sockets, live) = live_events(&tickets, &events, &store, &shutdown);
@@ -630,7 +632,7 @@ fn user_service(
     random: &Arc<dyn SecureRandom>,
     store: &Arc<dyn Store>,
     passwords: &Arc<dyn Passwords>,
-    reconcile: &Arc<dyn Reconcile>,
+    hints: &Hints,
 ) -> UserService {
     UserService::new(
         Arc::clone(clock),
@@ -638,7 +640,8 @@ fn user_service(
         Arc::clone(store),
         Arc::clone(passwords),
     )
-    .with_reconcile(Arc::clone(reconcile))
+    .with_reconcile(Arc::clone(&hints.reconcile))
+    .with_live_hints(hints.live())
 }
 
 /// Each agent's one stream, hinting `reconcile`, and the agents' service
@@ -691,11 +694,34 @@ fn mode_service(
     clock: &Arc<dyn Clock>,
     random: &Arc<dyn SecureRandom>,
     store: &Arc<dyn Store>,
-    reconcile: Arc<dyn Reconcile>,
+    hints: &Hints,
 ) -> ModeService {
     ModeService::new(Arc::clone(clock), Arc::clone(random), Arc::clone(store))
         .with_allowlist(config.chat.command_allowlist.clone())
-        .with_reconcile(reconcile)
+        .with_reconcile(Arc::clone(&hints.reconcile))
+        .with_live_hints(hints.live())
+}
+
+/// What the services tell after their commits: the reconciler, and the live
+/// events sockets through the bus (ADR-0020, R36).
+struct Hints {
+    reconcile: Arc<dyn Reconcile>,
+    events: EventBus,
+}
+
+impl Hints {
+    /// `reconcile`'s and `events`' hints.
+    fn new(reconcile: &Arc<dyn Reconcile>, events: &EventBus) -> Self {
+        Self {
+            reconcile: Arc::clone(reconcile),
+            events: events.clone(),
+        }
+    }
+
+    /// The live events' hints.
+    fn live(&self) -> Arc<dyn LiveHints> {
+        Arc::new(self.events.clone())
+    }
 }
 
 /// The 2FA service over the app's ports, sealing TOTP secrets with `vault`

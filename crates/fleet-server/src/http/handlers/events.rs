@@ -55,18 +55,19 @@ use fleet_api_types::bots::{BotStateKind, BotStateReason};
 use fleet_api_types::chat::ChatFailure;
 use fleet_api_types::events::{EventMessage, EventTicketResponse, EventsQuery};
 use fleet_api_types::{ErrorResponse, SecretText};
-use fleet_core::authz::{Actor, GrantLevel, Permission, ResourceContext, authorize};
+use fleet_core::authz::{Actor, GrantLevel, Permission, ResourceContext, Role, authorize};
 use fleet_core::bot::{BotNotification, LastState};
-use fleet_core::id::BotId;
+use fleet_core::id::{BotId, UserId};
 use secrecy::ExposeSecret as _;
 use tokio::time::Instant;
 use tracing::{Instrument as _, debug, info_span};
 
 use super::bots::bot_response;
-use super::{chat_failure, chat_line, timestamp};
+use super::{chat_failure, chat_line, mode_response, timestamp};
 use crate::app::auth::{SocketCheckError, SocketSession};
 use crate::app::bots::{BotService, BotView};
 use crate::app::events::{BusEvent, LiveEvent, LiveEventKind, LiveRights, NotSent, Rights};
+use crate::app::modes::ModeService;
 use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, ValidQuery};
 use crate::http::router::AppState;
@@ -74,6 +75,7 @@ use crate::http::ws::{
     MAX_CLIENT_FRAME, MAX_WRITE_BUFFER, MERGE_MAX, OpenSocket, Project, READ_BUFFER, Step,
     Unprojected, refused_upgrade, run,
 };
+use crate::ports::live_hints::ModeEvent;
 
 /// `POST /api/v1/events/ticket`: a ticket for one live events socket of this
 /// session.
@@ -190,7 +192,12 @@ pub(crate) async fn connect(
         events: state.events.clone(),
         tokens: state.tokens.clone(),
     };
-    let viewer = Viewer::new(actor, state.events.rights.clone(), state.bots.clone());
+    let viewer = Viewer::new(
+        actor,
+        state.events.rights.clone(),
+        state.bots.clone(),
+        state.modes.clone(),
+    );
     let sockets = state.events.sockets.clone();
     let span = info_span!("events_socket", user_id = %actor.id, session_id = %session.session_id);
     Ok(upgrade
@@ -230,6 +237,7 @@ pub(crate) struct Viewer {
     seen: BTreeSet<BotId>,
     slots: VecDeque<Slot>,
     bots: BotService,
+    modes: ModeService,
 }
 
 /// One thing a socket owes its viewer, in the bus's order.
@@ -242,6 +250,11 @@ enum Slot {
     Bots(BotReads),
     /// An agent's event about one bot.
     Agent(Arc<BusEvent>),
+    /// A mode that was created, changed or deleted, read when its turn
+    /// comes.
+    Mode(ModeEvent),
+    /// Another user's role changed: an Admin viewer's sight may have (R11).
+    RoleChanged(UserId),
 }
 
 /// Bots to read, and, once read, the views not sent yet.
@@ -253,8 +266,14 @@ struct BotReads {
 }
 
 impl Viewer {
-    /// The viewer `actor`, judged on `live`, their bots read through `bots`.
-    pub(crate) fn new(actor: Actor, live: LiveRights, bots: BotService) -> Self {
+    /// The viewer `actor`, judged on `live`, their bots read through `bots`
+    /// and their modes through `modes`.
+    pub(crate) fn new(
+        actor: Actor,
+        live: LiveRights,
+        bots: BotService,
+        modes: ModeService,
+    ) -> Self {
         Self {
             actor,
             live,
@@ -262,7 +281,38 @@ impl Viewer {
             seen: BTreeSet::new(),
             slots: VecDeque::new(),
             bots,
+            modes,
         }
+    }
+
+    /// The mode `event` names, read now (S33): `mode` as `GET /modes` lists
+    /// it when the viewer may see it now, else `mode_removed` when they could
+    /// before the write, judged on what it read, else nothing.
+    async fn mode_step(&self, event: ModeEvent) -> Result<Step, Unprojected> {
+        let listed = self.modes.find(event.id).await.map_err(|error| {
+            debug!(%error, "a live events socket couldn't read a mode");
+            Unprojected
+        })?;
+        let seen_now = listed.filter(|listed| {
+            authorize(&self.actor, Permission::ViewMode, &listed.context()).is_ok()
+        });
+        if let Some(listed) = seen_now {
+            // A mode that doesn't build is the internal error a `GET /modes`
+            // answers, logged there; the socket sends nothing.
+            return Ok(
+                mode_response(&self.actor, &listed).map_or(Step::Nothing, |shown| {
+                    Step::Send(Box::new(EventMessage::mode(shown)))
+                }),
+            );
+        }
+        let saw = event.was.is_some_and(|was| {
+            authorize(&self.actor, Permission::ViewMode, &was.context()).is_ok()
+        });
+        Ok(if saw {
+            Step::Send(Box::new(EventMessage::mode_removed(event.id)))
+        } else {
+            Step::Nothing
+        })
     }
 
     /// Reads the rights again once the commit count moved past them: sends
@@ -453,7 +503,8 @@ impl Project for Viewer {
                 }
             }
             BusEvent::Bots(bots) => self.hint(bots.iter().copied()),
-            BusEvent::Mode(_) | BusEvent::RoleChanged { .. } => {}
+            BusEvent::Mode(event) => self.slots.push_back(Slot::Mode(*event)),
+            BusEvent::RoleChanged { user } => self.slots.push_back(Slot::RoleChanged(*user)),
         }
     }
 
@@ -475,6 +526,17 @@ impl Project for Viewer {
             Some(Slot::Agent(event)) => Ok(event
                 .agent()
                 .map_or(Step::Nothing, |event| self.agent_step(event))),
+            Some(Slot::Mode(event)) => self.mode_step(event).await,
+            // Another Admin's sight follows a user's role (R11); the Owner
+            // and Members see what they did, and a viewer's own role closes
+            // their socket.
+            Some(Slot::RoleChanged(user)) => {
+                Ok(if user != self.actor.id && self.actor.role == Role::Admin {
+                    Step::Resync
+                } else {
+                    Step::Nothing
+                })
+            }
         }
     }
 
