@@ -540,7 +540,18 @@ impl Project for Viewer {
                 }
             }
             BusEvent::Bots(bots) => self.hint(bots.iter().copied()),
-            BusEvent::Mode(event) => self.slots.push_back(Slot::Mode(*event)),
+            BusEvent::Mode(event) => {
+                // Read once, at its first place (R33): one waiting already is
+                // read as the mode is then, and judged on its own `was`, the
+                // earliest, which is what the viewer last saw.
+                let waiting = self
+                    .slots
+                    .iter()
+                    .any(|slot| matches!(slot, Slot::Mode(queued) if queued.id == event.id));
+                if !waiting {
+                    self.slots.push_back(Slot::Mode(*event));
+                }
+            }
             BusEvent::RoleChanged { user } => self.slots.push_back(Slot::RoleChanged(*user)),
         }
     }

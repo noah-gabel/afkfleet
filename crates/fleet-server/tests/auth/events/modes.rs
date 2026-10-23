@@ -493,3 +493,49 @@ async fn a_mode_made_private_while_its_read_is_held_sends_mode_removed(
         "each hint answered, and never the mode"
     );
 }
+
+/// The shared mode's first event is being read while three more of it and
+/// one of the private mode wait: the three are read once, at their first
+/// place (R33).
+#[sqlx::test(migrations = false)]
+async fn waiting_events_of_one_mode_merge_into_one_read(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let watchers = watchers(&setup).await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &watchers.creator.token).await;
+    let edited = ModeEvent {
+        id: watchers.shared,
+        was: Some(watchers.shared_seen(ModeVisibility::Shared)),
+    };
+    let reads = setup.hooked.mode_reads();
+
+    let mut held = setup.hooked.hold_next_mode_read();
+    setup.events.mode(edited);
+    held.read(PATIENCE).await;
+    for _ in 0..3 {
+        setup.events.mode(edited);
+    }
+    setup.events.mode(ModeEvent {
+        id: watchers.private,
+        was: None,
+    });
+    held.release();
+    let mut named = Vec::new();
+    for _ in 0..3 {
+        named.push(next_event_after_pings(&mut socket).await["mode_id"].clone());
+    }
+
+    let (shared, private) = (
+        json!(watchers.shared.to_string()),
+        json!(watchers.private.to_string()),
+    );
+    assert_eq!(named, [shared.clone(), shared, private]);
+    assert_eq!(
+        setup.hooked.mode_reads() - reads,
+        3,
+        "the held read, the three merged, the other mode"
+    );
+}

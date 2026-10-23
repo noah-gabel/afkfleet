@@ -272,6 +272,7 @@ impl HookedStore {
                 inner: inner.clone(),
                 fail_listed: Arc::default(),
                 hold_listed: Arc::default(),
+                listeds: Arc::default(),
             },
             bots: HookedBots {
                 inner: inner.clone(),
@@ -357,6 +358,12 @@ impl HookedStore {
 
     /// Holds the next read of the live events' rights once it has read the
     /// database, until the returned hold is released (P11.5).
+    /// How many times a mode was read with its owner (`ModeReads::listed`,
+    /// a live events socket's read of a mode) since the start (P11.5).
+    pub(crate) fn mode_reads(&self) -> usize {
+        self.modes.listeds.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
     /// The next `ModeReads::listed`, a live events socket's read of a
     /// mode, tells the returned [`HeldRead`] once it read the database, then
     /// waits for its release before it answers (P11.5).
@@ -743,6 +750,8 @@ struct HookedModes {
     /// The next `listed` tells the first once it read, then waits for the
     /// second.
     hold_listed: Arc<Mutex<Option<Hold>>>,
+    /// How many `listed`s were asked for.
+    listeds: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 #[async_trait]
@@ -760,6 +769,8 @@ impl ModeReads for HookedModes {
     }
 
     async fn listed(&self, id: ModeId) -> Result<Option<ListedMode>, StoreError> {
+        self.listeds
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         if *self.fail_listed.lock().unwrap() {
             return Err(StoreError::Busy);
         }
