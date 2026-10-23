@@ -385,6 +385,18 @@ impl BotWrites for FailingTx {
         self.inner.bots().agent_of(id).await
     }
 
+    async fn id_of_account(&mut self, account: AccountId) -> Result<Option<BotId>, StoreError> {
+        self.inner.bots().id_of_account(account).await
+    }
+
+    async fn owned_by(&mut self, owner: UserId) -> Result<Vec<BotId>, StoreError> {
+        self.inner.bots().owned_by(owner).await
+    }
+
+    async fn assigned_to(&mut self, agent: AgentId) -> Result<Vec<BotId>, StoreError> {
+        self.inner.bots().assigned_to(agent).await
+    }
+
     async fn assign(&mut self, bot: BotId, agent: AgentId) -> Result<bool, StoreError> {
         self.inner.bots().assign(bot, agent).await
     }

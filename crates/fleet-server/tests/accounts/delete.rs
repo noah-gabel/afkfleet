@@ -14,12 +14,13 @@ use fleet_core::authz::{AuthzError, GrantLevel, Role};
 use fleet_core::id::AccountId;
 use fleet_server::app::accounts::{AccountService, AccountSettings, DeleteAccountError};
 use fleet_server::config::{Rate, RateLimitConfig};
+use fleet_server::ports::live_hints::LiveHints;
 use fleet_server::ports::reconcile::{Change, Reconcile};
 use fleet_server::ports::store::Store as _;
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-use crate::support::hints::Hinted;
+use crate::support::hints::{Heard, Hinted};
 use crate::support::http::{HttpSetup, Person, Seen, meta, text};
 use crate::support::service::{T0, at, profile};
 
@@ -60,6 +61,44 @@ async fn a_deletion_hints_the_reconciler_after_its_commit_and_a_refused_one_does
     );
     assert_eq!(after_the_refusal, []);
     assert_eq!(hinted.take(), [Change::Store]);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_deletion_tells_the_sockets_its_bot_after_its_commit_and_a_refused_one_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let member = setup.person(1, Role::Member).await;
+    let stranger = setup.person(2, Role::Member).await;
+    let id = setup.add_account(member.id, 3, None).await;
+    let bot = setup.add_bot(id, 3).await;
+    let botless = setup.add_account(member.id, 4, None).await;
+    let heard = Arc::new(Heard::new(&setup.db));
+    let accounts = AccountService::new(
+        Arc::new(ManualClock::new(at(T0))),
+        Arc::new(SeededRandom::new(5)),
+        Arc::new(setup.db.clone()),
+        AccountSettings {
+            allow_offline: false,
+            max_per_member: core::num::NonZeroU32::MIN,
+        },
+    )
+    .with_live_hints(Arc::clone(&heard) as Arc<dyn LiveHints>);
+
+    let refused = accounts.delete(&stranger.acting(), id).await;
+    let after_the_refusal = heard.take();
+    accounts.delete(&member.acting(), id).await.unwrap();
+    let after_the_deletion = (heard.take(), heard.once(&[bot]));
+    accounts.delete(&member.acting(), botless).await.unwrap();
+
+    assert!(
+        matches!(refused, Err(DeleteAccountError::Denied(_))),
+        "{refused:?}"
+    );
+    assert_eq!(after_the_refusal, []);
+    assert_eq!(after_the_deletion.0, after_the_deletion.1);
+    assert_eq!(heard.take(), [], "an account without a bot");
 }
 
 #[sqlx::test(migrations = false)]

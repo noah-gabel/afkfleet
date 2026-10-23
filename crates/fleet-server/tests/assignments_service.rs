@@ -12,7 +12,7 @@
 // helper functions below would count as library code.
 #![cfg(test)]
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget, RecordedValue};
@@ -30,6 +30,7 @@ use fleet_server::ports::agents::NewAgent;
 use fleet_server::ports::assignments::{Assigned, Assignments as _};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
 use fleet_server::ports::bots::NewBot;
+use fleet_server::ports::live_hints::{LiveHints, ModeEvent};
 use fleet_server::ports::store::Store as _;
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use fleet_testkit::system::ManualClock;
@@ -66,6 +67,52 @@ struct Setup {
     owner: UserId,
     assignments: AssignmentService,
     agents: AgentService,
+    heard: Arc<Heard>,
+}
+
+/// The bots a service told the live events sockets about, each with the
+/// database's commit count at the call: a hint sent before its commit shows
+/// as one count short (ADR-0020, S42).
+#[derive(Debug)]
+struct Heard {
+    commits: tokio::sync::watch::Receiver<u64>,
+    calls: Mutex<Vec<(u64, Vec<BotId>)>>,
+}
+
+impl Heard {
+    fn new(db: &Database) -> Self {
+        Self {
+            commits: db.commits(),
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The hints since the last call.
+    fn take(&self) -> Vec<(u64, Vec<BotId>)> {
+        core::mem::take(&mut *self.calls.lock().unwrap())
+    }
+
+    /// What one hint of `bots` after the last commit leaves.
+    fn once(&self, bots: &[BotId]) -> Vec<(u64, Vec<BotId>)> {
+        vec![(*self.commits.borrow(), bots.to_vec())]
+    }
+}
+
+impl LiveHints for Heard {
+    fn bots(&self, bots: &[BotId]) {
+        if !bots.is_empty() {
+            let count = *self.commits.borrow();
+            self.calls.lock().unwrap().push((count, bots.to_vec()));
+        }
+    }
+
+    fn mode(&self, event: ModeEvent) {
+        panic!("an agents' service told a mode: {event:?}");
+    }
+
+    fn role_changed(&self, user: UserId) {
+        panic!("an agents' service told a role change: {user}");
+    }
 }
 
 impl Setup {
@@ -98,16 +145,19 @@ impl Setup {
         }
         tx.commit(setup_entry()).await.unwrap();
         let assignments = AssignmentService::new(Arc::new(clock.clone()), Arc::new(db.clone()));
+        let heard = Arc::new(Heard::new(&db));
         let agents = AgentService::new(
             Arc::new(clock.clone()),
             Arc::new(db.clone()),
             Arc::new(AgentRegistry::new(Arc::new(clock))),
-        );
+        )
+        .with_live_hints(Arc::clone(&heard) as Arc<dyn LiveHints>);
         Self {
             db,
             owner,
             assignments,
             agents,
+            heard,
         }
     }
 
@@ -415,6 +465,27 @@ async fn releasing_a_disabled_agent_clears_its_bots_and_records_one_entry_each(
     );
     assert_eq!(meta(entry, "count"), Some(RecordedValue::Int(2)));
     assert_eq!(meta(entry, "via"), Some(text("cli")));
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_release_tells_the_sockets_its_bots_after_its_commit_and_nothing_to_release_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let (_, first) = setup.bot(1).await;
+    let (_, second) = setup.bot(2).await;
+    for id in [first, second] {
+        setup.assignments.assign(id, agent(1)).await.unwrap();
+    }
+    setup.disable(1).await;
+
+    setup.agents.release(agent(1)).await.unwrap();
+    let after_releasing = (setup.heard.take(), setup.heard.once(&[first, second]));
+    setup.agents.release(agent(1)).await.unwrap();
+
+    assert_eq!(after_releasing.0, after_releasing.1);
+    assert_eq!(setup.heard.take(), [], "nothing to release");
 }
 
 #[sqlx::test(migrations = false)]

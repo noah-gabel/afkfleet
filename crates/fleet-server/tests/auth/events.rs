@@ -11,6 +11,7 @@
 
 mod bots;
 mod chat;
+mod hints;
 mod limits;
 mod liveness;
 mod modes;

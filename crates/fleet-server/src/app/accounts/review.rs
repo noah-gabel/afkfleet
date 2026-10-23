@@ -64,9 +64,11 @@ impl AccountService {
         if !tx.accounts().set_status(id, AccountStatus::Active).await? {
             return Err(ReviewError::NotFound);
         }
+        let bot = tx.bots().id_of_account(id).await?;
         let entry = self.entry(AuditAction::ACCOUNT_APPROVE, by, &account, None)?;
         tx.commit(entry).await?;
         self.reconcile.changed(Change::Store);
+        self.live_hints.bots(bot.as_slice());
         info!(user_id = %by.actor.id, account_id = %id, "{APPROVED}");
         Ok(ListedAccount {
             status: AccountStatus::Active,
@@ -90,6 +92,7 @@ impl AccountService {
         let entry = self.entry(AuditAction::ACCOUNT_REFUSE, by, &account, deleted.bot)?;
         tx.commit(entry).await?;
         self.reconcile.changed(Change::Store);
+        self.live_hints.bots(deleted.bot.as_slice());
         info!(user_id = %by.actor.id, account_id = %id, "{REFUSED}");
         Ok(())
     }

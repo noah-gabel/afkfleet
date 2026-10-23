@@ -95,6 +95,7 @@ pub use self::table::LinkFlows;
 use super::audit::AuditService;
 use super::users::{ActingUser, recheck};
 use crate::ports::accounts::ListedAccount;
+use crate::ports::live_hints::LiveHints;
 use crate::ports::msauth::{MicrosoftAuthProvider, UserCode, VerificationUri};
 use crate::ports::pace::Pace;
 use crate::ports::store::{Store, WriteTx};
@@ -138,6 +139,9 @@ pub struct LinkFlowPorts {
     pub microsoft: Arc<dyn MicrosoftAuthProvider>,
     /// The waits between polls and tries.
     pub pace: Arc<dyn Pace>,
+    /// The live events sockets, told which bot a link's commit changed
+    /// (ADR-0020, S42).
+    pub live_hints: Arc<dyn LiveHints>,
 }
 
 /// The caps (`[rate_limits]`, `[accounts]`).

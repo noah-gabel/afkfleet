@@ -361,6 +361,44 @@ async fn a_renamed_profile_is_handed_out_and_stored_even_when_only_its_case_chan
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_rename_tells_the_sockets_its_bot_after_its_commit_and_the_same_name_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let renamed = setup
+        .link(
+            1,
+            "AfkBot1",
+            &profile(1),
+            AccountStatus::Active,
+            "refresh-a",
+        )
+        .await;
+    let bot = setup.add_bot(1).await;
+    for (n, name) in [(1, "NewName_9"), (2, "NewName_9")] {
+        setup.fake.script_refresh(Script::Answer(Ok(ms_tokens(
+            &format!("access-{n}"),
+            &format!("refresh-{n}"),
+        ))));
+        setup.fake.script_session(Script::Answer(Ok(mc_session(
+            &format!("minecraft-{n}"),
+            &profile(1),
+            name,
+        ))));
+    }
+
+    bounded(setup.service.session(renamed, false))
+        .await
+        .unwrap();
+    let after_renaming = (setup.heard.take(), setup.heard.once(&[bot]));
+    bounded(setup.service.session(renamed, true)).await.unwrap();
+
+    assert_eq!(after_renaming.0, after_renaming.1);
+    assert_eq!(setup.heard.take(), [], "the same name again");
+}
+
+#[sqlx::test(migrations = false)]
 async fn a_failed_rename_still_hands_out_the_session_and_its_next_session_tries_again(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,

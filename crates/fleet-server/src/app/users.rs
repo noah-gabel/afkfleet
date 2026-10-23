@@ -302,7 +302,7 @@ pub struct UserService {
     passwords: Arc<dyn Passwords>,
     audit: AuditService,
     reconcile: Arc<dyn Reconcile>,
-    live: Arc<dyn LiveHints>,
+    live_hints: Arc<dyn LiveHints>,
 }
 
 impl UserService {
@@ -323,15 +323,15 @@ impl UserService {
             passwords,
             audit,
             reconcile: Arc::new(NoReconcile),
-            live: Arc::new(NoLiveHints),
+            live_hints: Arc::new(NoLiveHints),
         }
     }
 
-    /// The service, telling the live events sockets through `live` when a
+    /// The service, telling the live events sockets through `live_hints` when a
     /// user's role changed, once its commit returned (R11).
     #[must_use]
-    pub fn with_live_hints(self, live: Arc<dyn LiveHints>) -> Self {
-        Self { live, ..self }
+    pub fn with_live_hints(self, live_hints: Arc<dyn LiveHints>) -> Self {
+        Self { live_hints, ..self }
     }
 
     /// The service, telling `reconcile` to look again after a user is
@@ -687,6 +687,9 @@ impl UserService {
         let hint = matches!(change, UserChange::Disabled(_));
         // Told only after a commit, which only a real change makes.
         let role_changed = matches!(change, UserChange::Role(_));
+        // The bots whose owner's flag a change sets: what they read as
+        // follows it (S42).
+        let mut owned = Vec::new();
         let entry = match change {
             UserChange::Role(role) if role == user.role => None,
             UserChange::Disabled(disabled) if disabled == user.disabled => None,
@@ -709,6 +712,7 @@ impl UserService {
             }
             UserChange::Disabled(disabled) => {
                 tx.users().set_disabled(target, disabled).await?;
+                owned = tx.bots().owned_by(target).await?;
                 let revoked = tx.sessions().revoke_all_for_user(target, None, now).await?;
                 if disabled {
                     self.revoke_invites(tx.as_mut(), by, target, CreatorChange::Disabled, now)
@@ -736,8 +740,9 @@ impl UserService {
                 self.reconcile.changed(Change::Store);
             }
             if role_changed {
-                self.live.role_changed(target);
+                self.live_hints.role_changed(target);
             }
+            self.live_hints.bots(&owned);
             info!(user_id = %by.actor.id, target = %target, "a user was changed");
         } else {
             // Nothing to change; dropping the transaction writes nothing.

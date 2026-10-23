@@ -455,6 +455,7 @@ pub fn app_with(
             vault: Arc::clone(&vault),
             microsoft: Arc::clone(&microsoft),
             pace,
+            live_hints: hints.live(),
         },
     );
     let token_port: Arc<dyn Tokens> = Arc::new(Sha256Tokens::new(Arc::clone(&random)));
@@ -476,9 +477,10 @@ pub fn app_with(
         tokens.clone(),
         mfa.clone(),
     );
-    let grants = GrantService::new(Arc::clone(&clock), Arc::clone(&store));
+    let grants =
+        GrantService::new(Arc::clone(&clock), Arc::clone(&store)).with_live_hints(hints.live());
     let ids = RequestIds::new(Arc::clone(&clock), Arc::clone(&random));
-    let (agents, agent_service) = agent_services(&clock, &store, Arc::clone(&reconcile));
+    let (agents, agent_service) = agent_services(&clock, &store, &hints);
     let modes = mode_service(config, &clock, &random, &store, &hints);
     let bots = bot_service(config, &clock, &random, &store, &agents, &events, reconcile);
     let shutdown = CancellationToken::new();
@@ -650,14 +652,15 @@ fn user_service(
 fn agent_services(
     clock: &Arc<dyn Clock>,
     store: &Arc<dyn Store>,
-    reconcile: Arc<dyn Reconcile>,
+    hints: &Hints,
 ) -> (AgentRegistry, AgentService) {
-    let agents = AgentRegistry::with_reconcile(Arc::clone(clock), reconcile);
+    let agents = AgentRegistry::with_reconcile(Arc::clone(clock), Arc::clone(&hints.reconcile));
     let service = AgentService::new(
         Arc::clone(clock),
         Arc::clone(store),
         Arc::new(agents.clone()),
-    );
+    )
+    .with_live_hints(hints.live());
     (agents, service)
 }
 
@@ -684,6 +687,7 @@ fn bot_service(
     )
     .with_allowlist(config.chat.command_allowlist.clone())
     .with_reconcile(reconcile)
+    .with_live_hints(Arc::new(events.clone()))
     .with_chat_wait(ChatWait::new(config.http.request_timeout))
 }
 
@@ -778,6 +782,7 @@ fn session_grants(
             store: Arc::clone(&ports.store),
             vault: Arc::clone(&ports.vault),
             microsoft: Arc::clone(&ports.microsoft),
+            live_hints: Arc::new(ports.bus.clone()),
         },
         &ports.shutdown,
     );
@@ -818,7 +823,8 @@ fn control_plane_services(
         ReconcileTimings::default(),
         config.accounts.allow_offline,
         config.rate_limits.chat_per_bot,
-    );
+    )
+    .with_live_hints(Arc::new(ports.bus.clone()));
     let tokens = EnrollmentTokenService::new(
         Arc::clone(&ports.clock),
         Arc::clone(&ports.random),
@@ -827,11 +833,14 @@ fn control_plane_services(
         ca.fingerprint(),
     );
     let issuer = AgentIssuer::new(ca, Arc::clone(&ports.random), grpc.agent_cert_lifetime);
-    let connections: Arc<dyn AgentConnections> = Arc::new(AgentConnectionService::new(
-        Arc::clone(&ports.clock),
-        Arc::clone(&ports.store),
-        Arc::new(X509AgentNames),
-    ));
+    let connections: Arc<dyn AgentConnections> = Arc::new(
+        AgentConnectionService::new(
+            Arc::clone(&ports.clock),
+            Arc::clone(&ports.store),
+            Arc::new(X509AgentNames),
+        )
+        .with_live_hints(Arc::new(ports.bus.clone())),
+    );
     let sessions = Sessions::new(CancellationToken::new());
     let (session_tokens, grants) = session_grants(config, &ports);
     let (ingest, ingest_writer) = ingest(
@@ -895,7 +904,8 @@ fn account_services(
             max_per_member: config.accounts.max_per_member,
         },
     )
-    .with_reconcile(Arc::clone(reconcile));
+    .with_reconcile(Arc::clone(reconcile))
+    .with_live_hints(Arc::clone(&ports.live_hints));
     let link_flows = LinkFlowService::new(
         ports,
         LinkFlowSettings {

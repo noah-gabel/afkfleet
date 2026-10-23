@@ -15,7 +15,7 @@
 
 use core::fmt;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -134,6 +134,10 @@ pub struct Fleet {
     pub unreadable: Vec<UnreadableBot>,
     /// The agents that are enabled.
     pub enabled_agents: BTreeSet<AgentId>,
+    /// When each enabled agent's latest unrevoked certificate expires; an
+    /// agent without one isn't here. What a bot's agent shows changes with
+    /// it (ADR-0020, R37).
+    pub agent_expiry: BTreeMap<AgentId, DateTime<Utc>>,
 }
 
 /// Who may see which bot, read in one read transaction (ADR-0020, S30):
@@ -281,6 +285,28 @@ pub trait BotWrites: Send {
     /// [`StoreError`], including [`StoreError::Corrupt`] for an agent ID
     /// that doesn't read back.
     async fn agent_of(&mut self, id: BotId) -> Result<Option<Option<AgentId>>, StoreError>;
+
+    /// The ID of the account `account`'s bot, read in this transaction, for
+    /// the live events' hint after a write to the account (ADR-0020, S42).
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`] for an ID that
+    /// doesn't read back.
+    async fn id_of_account(&mut self, account: AccountId) -> Result<Option<BotId>, StoreError>;
+
+    /// The IDs of `owner`'s accounts' bots, in ID order, read in this
+    /// transaction (S42).
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn owned_by(&mut self, owner: UserId) -> Result<Vec<BotId>, StoreError>;
+
+    /// The IDs of the bots whose rows assign them to `agent`, in ID order,
+    /// read in this transaction (S42).
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn assigned_to(&mut self, agent: AgentId) -> Result<Vec<BotId>, StoreError>;
 
     /// Assigns `bot` to `agent`, but only while it has no agent and
     /// `agent` is enabled. Whether it changed.

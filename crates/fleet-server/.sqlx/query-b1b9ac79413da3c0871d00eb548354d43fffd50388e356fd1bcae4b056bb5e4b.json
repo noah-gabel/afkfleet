@@ -1,0 +1,45 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT agents.rowid AS \"rowid!: i64\", agents.id AS \"id!\",\n                  (SELECT max(agent_certs.not_after) FROM agent_certs\n                   WHERE agent_certs.agent_id = agents.id AND agent_certs.revoked_at IS NULL)\n                      AS \"not_after?: String\"\n           FROM agents WHERE agents.enabled = 1",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "agents",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "not_after?: String",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      true
+    ]
+  },
+  "hash": "b1b9ac79413da3c0871d00eb548354d43fffd50388e356fd1bcae4b056bb5e4b"
+}

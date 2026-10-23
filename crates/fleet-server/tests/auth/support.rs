@@ -1094,7 +1094,10 @@ impl Heard {
 
 impl LiveHints for Heard {
     fn bots(&self, bots: &[BotId]) {
-        self.heard(Hint::Bots(bots.to_vec()));
+        // An empty list is no hint, as the bus takes it.
+        if !bots.is_empty() {
+            self.heard(Hint::Bots(bots.to_vec()));
+        }
         self.bus.bots(bots);
     }
 
@@ -1189,7 +1192,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
     let enrollment_tokens = settings
         .control_plane
         .then(|| enrollment_tokens(&clock, &random, &hooked));
-    let (registry, agents) = agents(&clock, &hooked);
+    let (registry, agents) = agents(&clock, &hooked, &heard);
     let hints = Arc::new(Hinted::default());
     let bots = bot_service(
         &clock,
@@ -1197,7 +1200,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         (&hooked, &events),
         &registry,
         (&settings.allowlist, settings.chat_wait),
-        &hints,
+        (&hints, &heard),
     );
     let live_events = build_live_events(
         &clock,
@@ -1329,7 +1332,7 @@ fn bot_service(
     (hooked, events): (&HookedStore, &EventBus),
     registry: &AgentRegistry,
     (allowlist, chat_wait): (&CommandAllowlist, ChatWait),
-    hints: &Arc<Hinted>,
+    (hints, heard): (&Arc<Hinted>, &Arc<Heard>),
 ) -> BotService {
     BotService::new(
         Arc::new(clock.clone()),
@@ -1341,6 +1344,7 @@ fn bot_service(
     )
     .with_allowlist(allowlist.clone())
     .with_reconcile(Arc::clone(hints) as Arc<dyn Reconcile>)
+    .with_live_hints(Arc::clone(heard) as Arc<dyn LiveHints>)
     .with_chat_wait(chat_wait)
 }
 
@@ -1382,13 +1386,18 @@ async fn insert_alice(db: &Database, alice: UserId, hash: PasswordHash) {
 
 /// Each agent's one stream, which a test claims directly, and the agents'
 /// service over `hooked`, ending streams there.
-fn agents(clock: &ManualClock, hooked: &HookedStore) -> (AgentRegistry, AgentService) {
+fn agents(
+    clock: &ManualClock,
+    hooked: &HookedStore,
+    heard: &Arc<Heard>,
+) -> (AgentRegistry, AgentService) {
     let registry = AgentRegistry::new(Arc::new(clock.clone()));
     let agents = AgentService::new(
         Arc::new(clock.clone()),
         Arc::new(hooked.clone()),
         Arc::new(registry.clone()),
-    );
+    )
+    .with_live_hints(Arc::clone(heard) as Arc<dyn LiveHints>);
     (registry, agents)
 }
 
@@ -1864,6 +1873,7 @@ fn idle_link_flows(
     .unwrap();
     LinkFlowService::new(
         LinkFlowPorts {
+            live_hints: std::sync::Arc::new(fleet_server::ports::live_hints::NoLiveHints),
             microsoft: Arc::new(
                 fleet_server::infra::msauth::ReqwestMicrosoftAuth::new(Arc::clone(&clock)).unwrap(),
             ),

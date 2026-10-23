@@ -222,6 +222,7 @@ async fn commit(
         }
     };
     tx.commit(linked).await?;
+    inner.ports.live_hints.bots(&[bot]);
     Ok(LinkFlowStatus::Linked {
         account: id,
         status,
@@ -288,6 +289,7 @@ async fn relink(
         info!(user_id = %creator, flow_id = %running.id, account_id = %id, "{NOT_RELINKABLE}");
         return Ok(LinkFlowStatus::Failed);
     }
+    let bot = tx.bots().id_of_account(id).await?;
     let mut metadata = AuditMetadata::new()
         .id("flow", running.id)?
         .text("previous_status", listed.status.as_str())?
@@ -297,6 +299,7 @@ async fn relink(
     }
     tx.commit(entry(AuditOutcome::Success).metadata(metadata))
         .await?;
+    inner.ports.live_hints.bots(bot.as_slice());
     Ok(LinkFlowStatus::Linked {
         account: id,
         status: AccountStatus::Active,

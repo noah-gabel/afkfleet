@@ -435,19 +435,81 @@ fn start_at(
     chat_rate: ChatRate,
 ) -> Running {
     let (hints, inbox) = hints(depth);
-    let clock = ManualClock::new(at(T0));
     let reconciler = Reconciler::new(
         registry.clone(),
         Arc::clone(store) as Arc<dyn Assignments>,
-        Arc::new(clock),
+        Arc::new(ManualClock::new(at(T0))),
         inbox,
         ReconcileTimings::default(),
         allow_offline,
         chat_rate,
     );
+    spawned(reconciler, hints)
+}
+
+/// `reconciler`'s task, sent `hints`.
+fn spawned(reconciler: Reconciler, hints: Hints) -> Running {
     let stop = CancellationToken::new();
     let task = tokio::spawn(reconciler.run(stop.clone()));
     Running { hints, stop, task }
+}
+
+/// The bots each pass told the live events sockets about, with how many
+/// store calls came before it (ADR-0020, S42).
+#[derive(Debug)]
+struct Told {
+    store: Arc<Store>,
+    calls: Mutex<Vec<(usize, Vec<BotId>)>>,
+}
+
+impl Told {
+    /// What the passes told since the last call.
+    fn take(&self) -> Vec<(usize, Vec<BotId>)> {
+        core::mem::take(&mut *self.calls.lock().unwrap())
+    }
+}
+
+impl LiveHints for Told {
+    fn bots(&self, bots: &[BotId]) {
+        // An empty list is no hint, as the bus takes it.
+        if !bots.is_empty() {
+            let calls = self.store.calls().len();
+            self.calls.lock().unwrap().push((calls, bots.to_vec()));
+        }
+    }
+
+    fn mode(&self, event: crate::ports::live_hints::ModeEvent) {
+        panic!("the reconciler told a mode: {event:?}");
+    }
+
+    fn role_changed(&self, user: fleet_core::id::UserId) {
+        panic!("the reconciler told a role change: {user}");
+    }
+}
+
+/// [`start`], on `clock`, telling the live events sockets through the
+/// returned [`Told`].
+fn start_telling(
+    registry: &AgentRegistry,
+    store: &Arc<Store>,
+    clock: &ManualClock,
+) -> (Running, Arc<Told>) {
+    let (hints, inbox) = hints(8);
+    let told = Arc::new(Told {
+        store: Arc::clone(store),
+        calls: Mutex::new(Vec::new()),
+    });
+    let reconciler = Reconciler::new(
+        registry.clone(),
+        Arc::clone(store) as Arc<dyn Assignments>,
+        Arc::new(clock.clone()),
+        inbox,
+        ReconcileTimings::default(),
+        true,
+        ChatRate::default(),
+    )
+    .with_live_hints(Arc::clone(&told) as Arc<dyn LiveHints>);
+    (spawned(reconciler, hints), told)
 }
 
 fn registry() -> AgentRegistry {
@@ -1253,5 +1315,205 @@ async fn an_offline_bot_is_never_placed_while_offline_accounts_are_off() {
 
     assert_eq!(reconciled(stream.next().await), []);
     assert_eq!(store.calls(), []);
+    running.stop().await;
+}
+
+// --- What the passes tell the live events sockets (ADR-0020, S42, R37) -----------------------
+
+#[tokio::test(start_paused = true)]
+async fn a_pass_tells_the_bots_it_held_or_wrote_after_its_writes() {
+    let registry = registry();
+    let store = Store::with(vec![on(1, 1)], &[1]);
+    let mut stream = connect(&registry, 1, 5, vec![online(1)], 8);
+    let (running, told) = start_telling(&registry, &store, &ManualClock::new(at(T0)));
+    assert_eq!(ids_of(reconciled(stream.next().await)), [bot(1)]);
+    let after_the_welcome = told.take();
+
+    store.state().fleet.bots.push(record(2));
+    running.hints.changed(Change::Store);
+    assert!(matches!(
+        stream.next().await,
+        Some(ServerMessage::Assign(_))
+    ));
+
+    assert_eq!(after_the_welcome, [(0, vec![bot(1)])], "held, not written");
+    assert_eq!(store.calls(), [Call::Assign(bot(2), agent(1))]);
+    assert_eq!(told.take(), [(1, vec![bot(2)])], "after its assignment");
+    running.stop().await;
+}
+
+/// Bot 2 on agent 2, which has no stream; agent 1's stream, reconciled
+/// empty; and what the first pass told.
+async fn waiting_on_agent_2(
+    clock: &ManualClock,
+    store: &Arc<Store>,
+) -> (AgentRegistry, Stream, Running, Arc<Told>) {
+    let registry = registry();
+    let mut stream = connect(&registry, 1, 5, Vec::new(), 8);
+    let (running, told) = start_telling(&registry, store, clock);
+    assert_eq!(reconciled(stream.next().await), []);
+    (registry, stream, running, told)
+}
+
+#[tokio::test(start_paused = true)]
+async fn the_first_pass_only_records_what_each_bots_agent_shows() {
+    let store = Store::with(vec![on(2, 2)], &[1, 2]);
+
+    let (_registry, mut stream, running, told) =
+        waiting_on_agent_2(&ManualClock::new(at(T0)), &store).await;
+    running.hints.changed(Change::Store);
+    let again = stream.next().await;
+
+    assert_eq!(again.map(|_| ()), None);
+    assert_eq!(told.take(), []);
+    assert_eq!(store.calls(), []);
+    running.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_agent_disabled_between_passes_tells_its_bots() {
+    let store = Store::with(vec![on(2, 2)], &[1, 2]);
+    let (_registry, mut stream, running, told) =
+        waiting_on_agent_2(&ManualClock::new(at(T0)), &store).await;
+
+    store.state().fleet.enabled_agents.remove(&agent(2));
+    running.hints.changed(Change::Store);
+    let quiet = stream.next().await;
+
+    assert_eq!(quiet.map(|_| ()), None);
+    assert_eq!(store.calls(), []);
+    assert_eq!(told.take(), [(0, vec![bot(2)])]);
+    running.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_certificate_that_expires_between_passes_tells_its_agents_bots() {
+    let store = Store::with(vec![on(2, 2)], &[1, 2]);
+    store
+        .state()
+        .fleet
+        .agent_expiry
+        .insert(agent(2), at("2027-01-15T08:01:00Z"));
+    let clock = ManualClock::new(at(T0));
+    let (_registry, mut stream, running, told) = waiting_on_agent_2(&clock, &store).await;
+    running.hints.changed(Change::Store);
+    assert_eq!(stream.next().await.map(|_| ()), None);
+    let before_it_expired = told.take();
+
+    clock.advance(Duration::from_secs(60));
+    running.hints.changed(Change::Store);
+    assert_eq!(stream.next().await.map(|_| ()), None);
+
+    assert_eq!(before_it_expired, []);
+    assert_eq!(told.take(), [(0, vec![bot(2)])]);
+    running.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_bot_released_by_the_host_between_passes_tells_it() {
+    let mut stopped = on(2, 2);
+    stopped.bot.desired = DesiredRunState::Stopped;
+    // Agent 2 is disabled: its bots wait for the host's release.
+    let store = Store::with(vec![stopped], &[1]);
+    let (_registry, mut stream, running, told) =
+        waiting_on_agent_2(&ManualClock::new(at(T0)), &store).await;
+    let calls = store.calls().len();
+
+    store.change(bot(2), |record| record.bot.agent = None);
+    running.hints.changed(Change::Store);
+    assert_eq!(stream.next().await.map(|_| ()), None);
+
+    assert_eq!(told.take(), [(calls, vec![bot(2)])]);
+    running.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_failed_read_tells_nothing_and_the_next_pass_compares_with_the_last_read() {
+    let store = Store::with(vec![on(2, 2)], &[1, 2]);
+    let (_registry, mut stream, running, told) =
+        waiting_on_agent_2(&ManualClock::new(at(T0)), &store).await;
+
+    {
+        let mut state = store.state();
+        state.fail_reads = true;
+        state.fleet.enabled_agents.remove(&agent(2));
+    }
+    running.hints.changed(Change::Store);
+    assert_eq!(stream.next().await.map(|_| ()), None);
+    let after_the_failed_read = told.take();
+    store.state().fail_reads = false;
+    running.hints.changed(Change::Store);
+    assert_eq!(stream.next().await.map(|_| ()), None);
+
+    assert_eq!(after_the_failed_read, []);
+    assert_eq!(told.take(), [(0, vec![bot(2)])]);
+    running.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn an_assignment_whose_stream_ended_before_its_message_still_tells_its_bot() {
+    let registry = registry();
+    let mut stopped = record(2);
+    stopped.bot.desired = DesiredRunState::Stopped;
+    let store = Store::with(vec![stopped], &[1]);
+    let mut stream = connect(&registry, 1, 5, Vec::new(), 8);
+    let (running, told) = start_telling(&registry, &store, &ManualClock::new(at(T0)));
+    assert_eq!(reconciled(stream.next().await), []);
+    store.change(bot(2), |record| {
+        record.bot.desired = DesiredRunState::Running;
+    });
+    store.state().end_on_assign = Some((registry.clone(), agent(1)));
+
+    running.hints.changed(Change::Store);
+    tokio::time::sleep(NOW).await;
+
+    assert_eq!(registry.held(agent(1), bot(2)), None, "never held");
+    assert_eq!(told.take(), [(1, vec![bot(2)])], "its row changed");
+    running.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_change_sent_to_a_held_bot_tells_it() {
+    let registry = registry();
+    let store = Store::with(vec![on(1, 1)], &[1]);
+    let mut stream = connect(&registry, 1, 5, vec![online(1)], 8);
+    let (running, told) = start_telling(&registry, &store, &ManualClock::new(at(T0)));
+    assert_eq!(ids_of(reconciled(stream.next().await)), [bot(1)]);
+    told.take();
+    store.change(bot(1), |record| {
+        record.bot.server = Some("mc.example.com".parse().unwrap());
+    });
+
+    running.hints.changed(Change::Store);
+    let sent = stream.next().await;
+
+    assert!(matches!(sent, Some(ServerMessage::Update(_))), "{sent:?}");
+    assert_eq!(store.calls(), []);
+    assert_eq!(told.take(), [(0, vec![bot(1)])]);
+    running.stop().await;
+}
+
+#[tokio::test(start_paused = true)]
+async fn a_new_stream_whose_reconcile_is_held_back_still_tells_its_agents_bots() {
+    let registry = registry();
+    let mut stray = record(2);
+    stray.bot.desired = DesiredRunState::Stopped;
+    let store = Store::with(vec![on(1, 1), stray], &[1]);
+    let mut old = connect(&registry, 1, 5, vec![online(1)], 8);
+    let (running, told) = start_telling(&registry, &store, &ManualClock::new(at(T0)));
+    assert_eq!(ids_of(reconciled(old.next().await)), [bot(1)]);
+    told.take();
+
+    // Its agent reconnects running a bot it wasn't given, whose fence is
+    // busy: the new stream's full reconcile waits, so nothing holds bot 1.
+    let _ = old.lease.free();
+    store.state().busy_strays = 1;
+    let mut new = connect(&registry, 1, 5, vec![online(1), online(2)], 8);
+    running.hints.changed(Change::Welcomed(agent(1)));
+    let held_back = new.next().await;
+
+    assert_eq!(held_back.map(|_| ()), None, "no reconcile yet");
+    let calls = store.calls().len();
+    assert_eq!(told.take(), [(calls, vec![bot(1)])], "its new stream");
     running.stop().await;
 }

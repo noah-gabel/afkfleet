@@ -16,12 +16,13 @@ use fleet_core::id::AccountId;
 use fleet_server::app::accounts::{AccountService, AccountSettings, ReviewError};
 use fleet_server::config::{Rate, RateLimitConfig};
 use fleet_server::ports::accounts::AccountCredential;
+use fleet_server::ports::live_hints::LiveHints;
 use fleet_server::ports::reconcile::{Change, Reconcile};
 use fleet_server::ports::store::Store as _;
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
-use crate::support::hints::Hinted;
+use crate::support::hints::{Heard, Hinted};
 use crate::support::http::{HttpSetup, Person, Seen, meta, text};
 use crate::support::service::{T0, at, profile};
 
@@ -337,6 +338,37 @@ async fn each_review_hints_the_reconciler_after_its_commit_and_a_refused_one_doe
     assert!(matches!(again, Err(ReviewError::NotPending)), "{again:?}");
     assert_eq!(after_a_refused_review, []);
     assert_eq!(hinted.take(), [Change::Store]);
+}
+
+#[sqlx::test(migrations = false)]
+async fn each_review_tells_the_sockets_its_bot_after_its_commit_and_a_refused_one_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let admin = setup.person(1, Role::Admin).await;
+    let member = setup.person(2, Role::Member).await;
+    let approved = setup
+        .add_account(member.id, 3, Some(AccountStatus::Pending))
+        .await;
+    let approved_bot = setup.add_bot(approved, 3).await;
+    let refused = setup
+        .add_account(member.id, 4, Some(AccountStatus::Pending))
+        .await;
+    let refused_bot = setup.add_bot(refused, 4).await;
+    let heard = Arc::new(Heard::new(&setup.db));
+    let accounts = service(&setup).with_live_hints(Arc::clone(&heard) as Arc<dyn LiveHints>);
+
+    accounts.approve(&admin.acting(), approved).await.unwrap();
+    let after_approving = (heard.take(), heard.once(&[approved_bot]));
+    let again = accounts.approve(&admin.acting(), approved).await;
+    let after_a_refused_review = heard.take();
+    accounts.refuse(&admin.acting(), refused).await.unwrap();
+
+    assert_eq!(after_approving.0, after_approving.1);
+    assert!(matches!(again, Err(ReviewError::NotPending)), "{again:?}");
+    assert_eq!(after_a_refused_review, []);
+    assert_eq!(heard.take(), heard.once(&[refused_bot]));
 }
 
 #[sqlx::test(migrations = false)]

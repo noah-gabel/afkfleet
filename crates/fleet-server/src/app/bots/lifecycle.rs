@@ -114,6 +114,7 @@ impl BotService {
         let metadata = acted_on(known)?;
         tx.commit(self.entry(by, action, bot.id, metadata)).await?;
         self.reconcile.changed(Change::Store);
+        self.live_hints.bots(&[bot.id]);
         info!(user_id = %by.actor.id, bot_id = %bot.id, desired = desired.as_str(), "a bot's desired state was set");
         Ok(Controlled::Changed)
     }
@@ -184,6 +185,7 @@ impl BotService {
                 tx.commit(self.entry(by, action, bot.id, metadata)).await?;
                 taken.keep_out();
                 self.reconcile.changed(Change::Store);
+                self.live_hints.bots(&[bot.id]);
                 info!(user_id = %by.actor.id, bot_id = %bot.id, command = ?command, "a resting bot's sticky state was cleared");
                 Ok(Controlled::Cleared)
             }

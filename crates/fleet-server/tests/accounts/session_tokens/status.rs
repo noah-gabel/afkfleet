@@ -74,6 +74,58 @@ async fn invalid_grant_marks_the_account_reauth_required(
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_status_mark_tells_the_sockets_its_bot_after_its_commit_and_a_refusal_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let id = active(&setup).await;
+    let bot = setup.add_bot(1).await;
+    setup
+        .fake
+        .script_refresh(Script::Answer(Err(RefreshError::InvalidGrant)));
+
+    let marked = bounded(setup.service.session(id, false)).await;
+    let after_marking = (setup.heard.take(), setup.heard.once(&[bot]));
+    let refused = bounded(setup.service.session(id, true)).await;
+
+    assert!(marked.is_err(), "{marked:?}");
+    assert_eq!(after_marking.0, after_marking.1);
+    assert!(
+        matches!(refused, Err(SessionTokenError::NotActive { .. })),
+        "{refused:?}"
+    );
+    assert_eq!(setup.heard.take(), []);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_profile_mismatch_tells_the_sockets_its_bot_after_its_commit(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let id = active(&setup).await;
+    let bot = setup.add_bot(1).await;
+    setup
+        .fake
+        .script_refresh(Script::Answer(Ok(ms_tokens("access-1", "refresh-1"))));
+    setup.fake.script_session(Script::Answer(Ok(mc_session(
+        "minecraft-1",
+        OTHER_PROFILE,
+        "AfkBot1",
+    ))));
+
+    let refused = bounded(setup.service.session(id, false)).await;
+
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(
+        setup.status(id).await,
+        AccountStatus::Refused(RefusalReason::ProfileMismatch)
+    );
+    assert_eq!(setup.heard.take(), setup.heard.once(&[bot]));
+}
+
+#[sqlx::test(migrations = false)]
 async fn invalid_grant_after_a_link_again_meanwhile_changes_nothing(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,

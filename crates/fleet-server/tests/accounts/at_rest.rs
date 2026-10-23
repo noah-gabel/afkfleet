@@ -160,6 +160,7 @@ fn tokens_over(setup: &HttpSetup, db: &Database, vault: XChaChaVault) -> Session
             store: Arc::new(db.clone()),
             vault: Arc::new(vault),
             microsoft: setup.fake.clone(),
+            live_hints: std::sync::Arc::new(fleet_server::ports::live_hints::NoLiveHints),
         },
         &CancellationToken::new(),
     )

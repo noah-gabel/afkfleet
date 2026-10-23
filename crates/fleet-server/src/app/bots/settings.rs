@@ -50,6 +50,7 @@ impl BotService {
         tx.commit(self.entry(by, AuditAction::BOT_SET_SERVER, id, metadata))
             .await?;
         self.reconcile.changed(Change::Store);
+        self.live_hints.bots(&[id]);
         info!(user_id = %by.actor.id, bot_id = %id, "a bot's server address was set");
         Ok(Configured::Changed)
     }
@@ -107,6 +108,7 @@ impl BotService {
         tx.commit(self.entry(by, AuditAction::BOT_SET_MODE, id, metadata))
             .await?;
         self.reconcile.changed(Change::Store);
+        self.live_hints.bots(&[id]);
         info!(user_id = %by.actor.id, bot_id = %id, mode_id = %mode, "a bot's mode was switched");
         Ok(Configured::Changed)
     }

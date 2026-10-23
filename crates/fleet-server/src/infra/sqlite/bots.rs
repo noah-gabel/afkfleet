@@ -11,7 +11,7 @@
 //! the bot and the agent, never `OR IGNORE`, which would hide a CHECK's
 //! refusal too.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use chrono::{DateTime, Utc};
 use fleet_core::account::{AccountKind, AccountStatus};
@@ -168,6 +168,71 @@ pub(super) async fn agent_of(
         })
         .transpose()?;
     Ok(Some(agent))
+}
+
+/// The ID of the account `account`'s bot.
+pub(super) async fn id_of_account(
+    conn: &mut SqliteConnection,
+    account: AccountId,
+) -> Result<Option<BotId>, StoreError> {
+    let account = id_text(account);
+    sqlx::query!(
+        r#"SELECT rowid AS "rowid!: i64", id AS "id!" FROM bots WHERE account_id = ?"#,
+        account
+    )
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(store_error)?
+    .map(|row| bot_id(row.rowid, &row.id))
+    .transpose()
+}
+
+/// The IDs of `owner`'s accounts' bots, in ID order.
+pub(super) async fn owned_by(
+    conn: &mut SqliteConnection,
+    owner: UserId,
+) -> Result<Vec<BotId>, StoreError> {
+    let owner = id_text(owner);
+    sqlx::query!(
+        r#"SELECT b.rowid AS "rowid!: i64", b.id AS "id!"
+           FROM bots b JOIN mc_accounts a ON a.id = b.account_id
+           WHERE a.owner_user_id = ?
+           ORDER BY b.id"#,
+        owner
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(store_error)?
+    .iter()
+    .map(|row| bot_id(row.rowid, &row.id))
+    .collect()
+}
+
+/// The IDs of the bots assigned to `agent`, in ID order.
+pub(super) async fn assigned_to(
+    conn: &mut SqliteConnection,
+    agent: AgentId,
+) -> Result<Vec<BotId>, StoreError> {
+    let agent = id_text(agent);
+    sqlx::query!(
+        r#"SELECT rowid AS "rowid!: i64", id AS "id!" FROM bots WHERE agent_id = ? ORDER BY id"#,
+        agent
+    )
+    .fetch_all(&mut *conn)
+    .await
+    .map_err(store_error)?
+    .iter()
+    .map(|row| bot_id(row.rowid, &row.id))
+    .collect()
+}
+
+/// A bot's ID as its row `rowid` stores it.
+fn bot_id(rowid: i64, id: &str) -> Result<BotId, StoreError> {
+    parse_id(id).ok_or(StoreError::Corrupt {
+        table: BOTS,
+        column: "id",
+        rowid,
+    })
 }
 
 /// The bot of the account `account`.
@@ -501,20 +566,33 @@ pub(super) async fn fleet(pool: &sqlx::SqlitePool) -> Result<Fleet, StoreError> 
             Err(other) => return Err(other),
         }
     }
-    let enabled_agents =
-        sqlx::query!(r#"SELECT rowid AS "rowid!: i64", id AS "id!" FROM agents WHERE enabled = 1"#)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(store_error)?
-            .into_iter()
-            .map(|row| {
-                parse_id(&row.id).ok_or(StoreError::Corrupt {
-                    table: "agents",
-                    column: "id",
-                    rowid: row.rowid,
-                })
-            })
-            .collect::<Result<BTreeSet<AgentId>, _>>()?;
+    let agent_rows = sqlx::query!(
+        r#"SELECT agents.rowid AS "rowid!: i64", agents.id AS "id!",
+                  (SELECT max(agent_certs.not_after) FROM agent_certs
+                   WHERE agent_certs.agent_id = agents.id AND agent_certs.revoked_at IS NULL)
+                      AS "not_after?: String"
+           FROM agents WHERE agents.enabled = 1"#
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(store_error)?;
+    let mut enabled_agents = BTreeSet::new();
+    let mut agent_expiry = BTreeMap::new();
+    for row in agent_rows {
+        let corrupt = |column| StoreError::Corrupt {
+            table: "agents",
+            column,
+            rowid: row.rowid,
+        };
+        let agent: AgentId = parse_id(&row.id).ok_or_else(|| corrupt("id"))?;
+        enabled_agents.insert(agent);
+        if let Some(not_after) = row.not_after.as_deref() {
+            agent_expiry.insert(
+                agent,
+                parse_time(not_after).ok_or_else(|| corrupt("not_after"))?,
+            );
+        }
+    }
     // Read only: nothing to commit, and dropping it ends it.
     drop(tx);
     Ok(Fleet {
@@ -522,6 +600,7 @@ pub(super) async fn fleet(pool: &sqlx::SqlitePool) -> Result<Fleet, StoreError> 
         releases,
         unreadable,
         enabled_agents,
+        agent_expiry,
     })
 }
 

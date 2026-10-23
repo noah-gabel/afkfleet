@@ -119,6 +119,7 @@ impl AccountService {
             })
             .await?;
         tx.commit(entries.created).await?;
+        self.live_hints.bots(&[bot]);
         info!(user_id = %creator, account_id = %id, "{CREATED}");
         Ok(account)
     }

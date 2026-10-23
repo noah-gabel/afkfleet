@@ -735,6 +735,18 @@ impl BotWrites for SqliteWriteTx {
         bots::agent_of(&mut self.tx, id).await
     }
 
+    async fn id_of_account(&mut self, account: AccountId) -> Result<Option<BotId>, StoreError> {
+        bots::id_of_account(&mut self.tx, account).await
+    }
+
+    async fn owned_by(&mut self, owner: UserId) -> Result<Vec<BotId>, StoreError> {
+        bots::owned_by(&mut self.tx, owner).await
+    }
+
+    async fn assigned_to(&mut self, agent: AgentId) -> Result<Vec<BotId>, StoreError> {
+        bots::assigned_to(&mut self.tx, agent).await
+    }
+
     async fn assign(&mut self, bot: BotId, agent: AgentId) -> Result<bool, StoreError> {
         bots::assign(&mut self.tx, bot, agent).await
     }

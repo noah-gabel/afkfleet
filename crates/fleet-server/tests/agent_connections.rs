@@ -14,7 +14,7 @@
 
 use core::time::Duration;
 use std::net::IpAddr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, TimeDelta, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget, RecordedValue};
@@ -38,6 +38,7 @@ use fleet_server::ports::agents::{NewAgent, NewAgentCert};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
 use fleet_server::ports::bots::NewBot;
 use fleet_server::ports::live_agents::PermissionEnd;
+use fleet_server::ports::live_hints::{LiveHints, ModeEvent};
 use fleet_server::ports::store::Store as _;
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use fleet_testkit::system::{ManualClock, SeededRandom};
@@ -63,8 +64,54 @@ struct Setup {
     db: Database,
     clock: ManualClock,
     connections: AgentConnectionService,
+    heard: Arc<Heard>,
     ca: CertificateAuthority,
     random: SeededRandom,
+}
+
+/// The bots a service told the live events sockets about, each with the
+/// database's commit count at the call: a hint sent before its commit shows
+/// as one count short (ADR-0020, S42).
+#[derive(Debug)]
+struct Heard {
+    commits: tokio::sync::watch::Receiver<u64>,
+    calls: Mutex<Vec<(u64, Vec<BotId>)>>,
+}
+
+impl Heard {
+    fn new(db: &Database) -> Self {
+        Self {
+            commits: db.commits(),
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The hints since the last call.
+    fn take(&self) -> Vec<(u64, Vec<BotId>)> {
+        core::mem::take(&mut *self.calls.lock().unwrap())
+    }
+
+    /// What one hint of `bots` after the last commit leaves.
+    fn once(&self, bots: &[BotId]) -> Vec<(u64, Vec<BotId>)> {
+        vec![(*self.commits.borrow(), bots.to_vec())]
+    }
+}
+
+impl LiveHints for Heard {
+    fn bots(&self, bots: &[BotId]) {
+        if !bots.is_empty() {
+            let count = *self.commits.borrow();
+            self.calls.lock().unwrap().push((count, bots.to_vec()));
+        }
+    }
+
+    fn mode(&self, event: ModeEvent) {
+        panic!("an agents' service told a mode: {event:?}");
+    }
+
+    fn role_changed(&self, user: UserId) {
+        panic!("an agents' service told a role change: {user}");
+    }
 }
 
 /// An enrolled agent and the certificate it connects with.
@@ -81,15 +128,18 @@ async fn setup_with(options: SqliteConnectOptions, db_options: DatabaseOptions) 
     let clock = ManualClock::new(at(T0));
     let random = SeededRandom::new(21);
     let (ca, _) = CertificateAuthority::create(&random, at(T0)).unwrap();
+    let heard = Arc::new(Heard::new(&db));
     let connections = AgentConnectionService::new(
         Arc::new(clock.clone()),
         Arc::new(db.clone()),
         Arc::new(X509AgentNames),
-    );
+    )
+    .with_live_hints(Arc::clone(&heard) as Arc<dyn LiveHints>);
     Setup {
         db,
         clock,
         connections,
+        heard,
         ca,
         random,
     }
@@ -610,6 +660,41 @@ async fn a_hellos_reports_are_stored_for_the_bots_assigned_to_its_agent_only(
 }
 
 #[sqlx::test(migrations = false)]
+async fn a_hello_tells_the_sockets_its_agents_bots_after_its_commit_and_a_refused_one_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let agent = setup.enroll(1, "agent-1").await;
+    let other = setup.enroll(2, "agent-2").await;
+    let mut own = vec![
+        setup.bot(1, Some(agent.id)).await,
+        setup.bot(2, Some(agent.id)).await,
+    ];
+    own.sort();
+    setup.bot(3, Some(other.id)).await;
+    let admitted = setup.admit(&agent).await.unwrap();
+    let version = AgentVersion::try_from("0.1.0").unwrap();
+    let hello = || {
+        setup.connections.hello(
+            &admitted,
+            AgentCapacity::try_from(50_u32).unwrap(),
+            &version,
+            &[],
+        )
+    };
+
+    hello().await.unwrap();
+    let after_the_hello = (setup.heard.take(), setup.heard.once(&own));
+    setup.revoke(agent.id).await;
+    let refused_hello = hello().await;
+
+    assert_eq!(after_the_hello.0, after_the_hello.1);
+    refused(&refused_hello);
+    assert_eq!(setup.heard.take(), [], "a refused hello's entry");
+}
+
+#[sqlx::test(migrations = false)]
 async fn a_hellos_bots_it_wasnt_given_are_fenced_in_its_transaction(
     _pool: SqlitePoolOptions,
     options: SqliteConnectOptions,
@@ -872,6 +957,39 @@ async fn the_end_of_a_stream_stores_its_held_bots_reports_where_its_agent_still_
         AuditOutcome::Success,
         agent.id,
     );
+}
+
+#[sqlx::test(migrations = false)]
+async fn the_end_of_a_stream_tells_the_sockets_its_agents_bots_after_its_commit(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let agent = setup.enroll(1, "agent-1").await;
+    let idle = setup.enroll(2, "agent-2").await;
+    let own = setup.bot(1, Some(agent.id)).await;
+    let setup = &setup;
+    let ended = move |admitted: Admitted| async move {
+        setup
+            .connections
+            .ended(
+                &admitted,
+                Ended {
+                    reason: StreamEnd::Closed,
+                    connected_at: at(T0),
+                    last_seen: at(T0) + TimeDelta::minutes(1),
+                    held: Vec::new(),
+                },
+            )
+            .await;
+    };
+
+    ended(setup.admit(&agent).await.unwrap()).await;
+    let after_its_end = (setup.heard.take(), setup.heard.once(&[own]));
+    ended(setup.admit(&idle).await.unwrap()).await;
+
+    assert_eq!(after_its_end.0, after_its_end.1);
+    assert_eq!(setup.heard.take(), [], "an agent without bots");
 }
 
 #[test]

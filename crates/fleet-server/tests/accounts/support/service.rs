@@ -18,13 +18,15 @@ use chrono::{DateTime, Utc};
 use fleet_core::account::AccountStatus;
 use fleet_core::audit::{AuditAction, AuditOutcome, RecordedTarget, RecordedValue};
 use fleet_core::authz::Role;
-use fleet_core::id::{AccountId, UserId};
+use fleet_core::id::{AccountId, BotId, UserId};
+use fleet_core::mode::ModePreset;
 use fleet_core::value::Username;
 use fleet_server::app::session_tokens::{SessionTokenPorts, SessionTokenService};
 use fleet_server::infra::crypto::vault::{VaultKeys, XChaChaVault};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
+use fleet_server::ports::bots::NewBot;
 use fleet_server::ports::envelopes::SealedRecord;
 use fleet_server::ports::msauth::{MicrosoftTokens, MinecraftSession};
 use fleet_server::ports::store::Store as _;
@@ -40,6 +42,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::subscriber::DefaultGuard;
 use tracing_subscriber::layer::SubscriberExt as _;
 
+use super::hints::Heard;
 use super::msauth::{Call, FakeMicrosoftAuth, session, tokens};
 use super::store::FlakyStore;
 
@@ -132,6 +135,8 @@ pub(crate) struct Setup {
     pub(crate) vault: Arc<XChaChaVault>,
     pub(crate) fake: Arc<FakeMicrosoftAuth>,
     pub(crate) stop: CancellationToken,
+    /// What the service told the live events sockets.
+    pub(crate) heard: Arc<Heard>,
     pub(crate) service: SessionTokenService,
     /// The user who owns every account [`Setup::link`] adds.
     pub(crate) owner: UserId,
@@ -148,12 +153,14 @@ impl Setup {
         let vault = Arc::new(vault_with_key(1, &random));
         let fake = Arc::new(FakeMicrosoftAuth::new());
         let stop = CancellationToken::new();
+        let heard = Arc::new(Heard::new(&db));
         let service = SessionTokenService::new(
             SessionTokenPorts {
                 clock: clock.clone(),
                 store: store.clone(),
                 vault: vault.clone(),
                 microsoft: fake.clone(),
+                live_hints: heard.clone(),
             },
             &stop,
         );
@@ -165,6 +172,7 @@ impl Setup {
             vault,
             fake,
             stop,
+            heard,
             service,
             owner: UserId::new_v7(at(T0), [0; 10]).unwrap(),
         };
@@ -238,6 +246,23 @@ impl Setup {
             },
         };
         self.insert(&account).await;
+        id
+    }
+
+    /// Gives account `n` its bot, as the services create one with every
+    /// account.
+    pub(crate) async fn add_bot(&self, n: u8) -> BotId {
+        let id = BotId::new_v7(at(T0 + i64::from(n)), [n; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.bots()
+            .insert(&NewBot {
+                id,
+                account: Self::account_id(n),
+                mode: ModePreset::Afk.id(),
+            })
+            .await
+            .unwrap();
+        tx.commit(setup_entry()).await.unwrap();
         id
     }
 

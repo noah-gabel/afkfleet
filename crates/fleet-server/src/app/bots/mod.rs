@@ -57,6 +57,7 @@ use crate::ports::agents::ListedAgent;
 use crate::ports::audit::NewAuditEntry;
 use crate::ports::bots::{Bot, BotRecord, ListedBot};
 use crate::ports::live_agents::LiveAgents;
+use crate::ports::live_hints::{LiveHints, NoLiveHints};
 use crate::ports::page::{Page, Paged};
 use crate::ports::reconcile::{NoReconcile, Reconcile};
 use crate::ports::store::{Store, StoreError, WriteTx};
@@ -145,6 +146,7 @@ pub struct BotService {
     allow_offline: bool,
     allowlist: CommandAllowlist,
     reconcile: Arc<dyn Reconcile>,
+    live_hints: Arc<dyn LiveHints>,
     chat_wait: ChatWait,
 }
 
@@ -176,8 +178,16 @@ impl BotService {
             allow_offline,
             allowlist: CommandAllowlist::default(),
             reconcile: Arc::new(NoReconcile),
+            live_hints: Arc::new(NoLiveHints),
             chat_wait: ChatWait::default(),
         }
+    }
+
+    /// The service, telling the live events sockets through `live_hints`
+    /// which bot a write changed, once its commit returned (ADR-0020, S42).
+    #[must_use]
+    pub fn with_live_hints(self, live_hints: Arc<dyn LiveHints>) -> Self {
+        Self { live_hints, ..self }
     }
 
     /// The service, with the commands Control holders may send through a

@@ -1211,3 +1211,44 @@ async fn the_snapshots_visible_bots_are_bot_reads_visible_for_every_role(
         assert!(!listed.is_empty(), "{role:?}");
     }
 }
+
+// --- The bots a write tells the live events about (ADR-0020, S42) -------------------------
+
+#[sqlx::test(migrations = false)]
+async fn a_transaction_finds_an_accounts_bot_an_owners_bots_and_an_agents_bots(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user_with(&db, 1, Role::Member).await;
+    let other = add_user_with(&db, 2, Role::Member).await;
+    let (first_account, first) = add_account_with_bot(&db, owner, 10).await;
+    let (_, second) = add_account_with_bot(&db, owner, 11).await;
+    let (_, others) = add_account_with_bot(&db, other, 12).await;
+    let agent = assign_to_agent(&db, second, 3).await;
+    let mut tx = db.write().await.unwrap();
+    assert!(tx.bots().assign(others, agent).await.unwrap());
+    let unknown = AccountId::new_v7(at(T0), [99; 10]).unwrap();
+    let nobody = UserId::new_v7(at(T0), [99; 10]).unwrap();
+    let idle = AgentId::new_v7(at(T0), [98; 10]).unwrap();
+
+    let of_account = tx.bots().id_of_account(first_account).await.unwrap();
+    let of_unknown = tx.bots().id_of_account(unknown).await.unwrap();
+    let owned = tx.bots().owned_by(owner).await.unwrap();
+    let owned_by_nobody = tx.bots().owned_by(nobody).await.unwrap();
+    let assigned = tx.bots().assigned_to(agent).await.unwrap();
+    let assigned_to_idle = tx.bots().assigned_to(idle).await.unwrap();
+
+    assert_eq!((of_account, of_unknown), (Some(first), None));
+    let mut expected_owned = vec![first, second];
+    expected_owned.sort();
+    assert_eq!(owned, expected_owned);
+    assert_eq!(owned_by_nobody, Vec::new());
+    let mut expected_assigned = vec![second, others];
+    expected_assigned.sort();
+    assert_eq!(
+        assigned, expected_assigned,
+        "the agent's, whoever owns them"
+    );
+    assert_eq!(assigned_to_idle, Vec::new());
+}

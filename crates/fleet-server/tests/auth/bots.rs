@@ -60,7 +60,7 @@ fn paused_at(millis: i64) -> LastReport {
 }
 
 /// A Microsoft-free failure: the server rejected the session twice.
-fn failed_at(millis: i64) -> LastReport {
+pub(crate) fn failed_at(millis: i64) -> LastReport {
     LastReport {
         state: LastState::Failed(fleet_core::bot::FailReason::Auth),
         at: at(T0 + millis),
@@ -148,7 +148,7 @@ impl Setup {
 
     /// Stores `last` as `bot`'s last state, through an assignment to agent
     /// `n` (enrolled here) that's then detached: the bot runs nowhere.
-    async fn rested(&self, bot: BotId, n: u8, last: LastReport) {
+    pub(crate) async fn rested(&self, bot: BotId, n: u8, last: LastReport) {
         let agent = self.agent(n).await;
         let mut tx = self.db.write().await.unwrap();
         assert!(tx.bots().assign(bot, agent).await.unwrap());

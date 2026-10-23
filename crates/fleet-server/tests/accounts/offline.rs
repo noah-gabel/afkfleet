@@ -18,12 +18,14 @@ use fleet_server::config::{AccountsConfig, Rate, RateLimitConfig};
 use fleet_server::ports::accounts::AccountCredential;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord};
 use fleet_server::ports::bots::Bot;
+use fleet_server::ports::live_hints::LiveHints;
 use fleet_server::ports::store::Store as _;
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::sync::Arc;
 
+use crate::support::hints::Heard;
 use crate::support::http::{HttpSetup, Person, Seen};
 use crate::support::service::{T0, at, bounded};
 
@@ -366,6 +368,34 @@ async fn a_session_gone_meanwhile_creates_nothing(
         setup.db.accounts().count_owned_by(alice.id).await.unwrap(),
         0
     );
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_new_offline_account_tells_the_sockets_its_bot_after_its_commit_and_a_refused_one_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = on(options, 3).await;
+    let alice = setup.person(1, Role::Member).await;
+    let heard = Arc::new(Heard::new(&setup.db));
+    let accounts = service(&setup, true).with_live_hints(Arc::clone(&heard) as Arc<dyn LiveHints>);
+
+    let created = bounded(accounts.create_offline(&alice.acting(), "AfkBot1".parse().unwrap()))
+        .await
+        .unwrap();
+    let bot = setup
+        .db
+        .bots()
+        .of_account(created.id)
+        .await
+        .unwrap()
+        .unwrap();
+    let after_creating = (heard.take(), heard.once(&[bot.id]));
+    let taken = bounded(accounts.create_offline(&alice.acting(), "afkbot1".parse().unwrap())).await;
+
+    assert_eq!(after_creating.0, after_creating.1);
+    assert!(matches!(taken, Err(CreateOfflineError::Taken)), "{taken:?}");
+    assert_eq!(heard.take(), []);
 }
 
 #[sqlx::test(migrations = false)]

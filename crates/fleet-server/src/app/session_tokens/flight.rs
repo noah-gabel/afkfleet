@@ -359,7 +359,9 @@ async fn mark(
     if !tx.accounts().set_status(id, status).await? {
         return Ok(Marked::Gone);
     }
+    let bot = tx.bots().id_of_account(id).await?;
     tx.commit(entry).await?;
+    inner.ports.live_hints.bots(bot.as_slice());
     Ok(Marked::Done)
 }
 
@@ -458,7 +460,9 @@ async fn try_rename(
         );
     let mut tx = inner.ports.store.write().await?;
     if tx.accounts().rename(id, from, to).await? {
+        let bot = tx.bots().id_of_account(id).await?;
         tx.commit(entry).await?;
+        inner.ports.live_hints.bots(bot.as_slice());
     }
     Ok(())
 }

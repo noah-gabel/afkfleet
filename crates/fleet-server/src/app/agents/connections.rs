@@ -58,6 +58,7 @@ use crate::ports::agent_connections::{
 use crate::ports::agents::{AgentCert, AgentHello};
 use crate::ports::audit::NewAuditEntry;
 use crate::ports::live_agents::PermissionEnd;
+use crate::ports::live_hints::{LiveHints, NoLiveHints};
 use crate::ports::pki::AgentNames;
 use crate::ports::store::{Store, StoreError};
 
@@ -68,6 +69,7 @@ pub struct AgentConnectionService {
     store: Arc<dyn Store>,
     names: Arc<dyn AgentNames>,
     audit: AuditService,
+    live_hints: Arc<dyn LiveHints>,
 }
 
 /// A refusal of a certificate the server knows, as it's recorded.
@@ -91,7 +93,16 @@ impl AgentConnectionService {
             store,
             names,
             audit,
+            live_hints: Arc::new(NoLiveHints),
         }
+    }
+
+    /// The service, telling the live events sockets through `live_hints`
+    /// about an agent's bots once its hello or its end committed: when it
+    /// was last seen, and what its bots last reported (ADR-0020, S42).
+    #[must_use]
+    pub fn with_live_hints(self, live_hints: Arc<dyn LiveHints>) -> Self {
+        Self { live_hints, ..self }
     }
 
     /// Whether `cert`, of an agent enabled or not as `enabled` says, admits
@@ -250,7 +261,9 @@ impl AgentConnectionService {
         if let Some(peer) = admitted.peer {
             entry = entry.ip(peer);
         }
+        let bots = tx.bots().assigned_to(admitted.agent).await?;
         tx.commit(entry).await?;
+        self.live_hints.bots(&bots);
         Ok(Ok(()))
     }
 
@@ -293,7 +306,9 @@ impl AgentConnectionService {
         if let Some(peer) = admitted.peer {
             entry = entry.ip(peer);
         }
+        let bots = tx.bots().assigned_to(admitted.agent).await?;
         tx.commit(entry).await?;
+        self.live_hints.bots(&bots);
         Ok(())
     }
 }

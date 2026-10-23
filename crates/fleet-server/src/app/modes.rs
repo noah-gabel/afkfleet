@@ -247,7 +247,7 @@ pub struct ModeService {
     audit: AuditService,
     allowlist: CommandAllowlist,
     reconcile: Arc<dyn Reconcile>,
-    live: Arc<dyn LiveHints>,
+    live_hints: Arc<dyn LiveHints>,
 }
 
 impl ModeService {
@@ -268,15 +268,15 @@ impl ModeService {
             audit,
             allowlist: CommandAllowlist::default(),
             reconcile: Arc::new(NoReconcile),
-            live: Arc::new(NoLiveHints),
+            live_hints: Arc::new(NoLiveHints),
         }
     }
 
-    /// The same, telling the live events sockets through `live` when a
+    /// The same, telling the live events sockets through `live_hints` when a
     /// mode was created, changed or deleted, once its commit returned (S33).
     #[must_use]
-    pub fn with_live_hints(self, live: Arc<dyn LiveHints>) -> Self {
-        Self { live, ..self }
+    pub fn with_live_hints(self, live_hints: Arc<dyn LiveHints>) -> Self {
+        Self { live_hints, ..self }
     }
 
     /// The same, with the server's `[chat] command_allowlist`.
@@ -406,7 +406,7 @@ impl ModeService {
             .metadata(metadata);
         tx.commit(entry).await?;
         self.reconcile.changed(Change::Store);
-        self.live.mode(ModeEvent {
+        self.live_hints.mode(ModeEvent {
             id,
             was: Some(stored.seen()),
         });
@@ -495,7 +495,7 @@ impl ModeService {
             .target(AuditTarget::Mode(id))
             .metadata(metadata);
         tx.commit(entry).await?;
-        self.live.mode(ModeEvent { id, was: None });
+        self.live_hints.mode(ModeEvent { id, was: None });
         info!(user_id = %by.actor.id, mode_id = %id, "a mode was created");
         Ok(ListedMode {
             mode: StoredMode {
@@ -558,7 +558,7 @@ impl ModeService {
             .target(AuditTarget::Mode(id))
             .metadata(metadata);
         tx.commit(entry).await?;
-        self.live.mode(ModeEvent {
+        self.live_hints.mode(ModeEvent {
             id,
             was: Some(stored.seen()),
         });
