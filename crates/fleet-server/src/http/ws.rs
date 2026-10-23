@@ -20,7 +20,7 @@
 //!   than one gap; a socket checks its session after the commit count
 //!   moved, at most once per [`CHECK_GAP`]. What's owed within a gap waits
 //!   for its end, so no lost event goes unsaid and no commit unchecked.
-//! - **What it sends** ([`Project`], R29–R34): the events of the bus its
+//! - **What it sends** (`Project`, R29–R34): the events of the bus its
 //!   viewer may see, each built for them right before its own send, one per
 //!   turn of its loop, so pings, the client's frames and the stop are served
 //!   between them. It takes at most [`MERGE_MAX`] events off the bus at a
