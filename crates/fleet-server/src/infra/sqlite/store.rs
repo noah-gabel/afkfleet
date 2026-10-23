@@ -37,7 +37,7 @@ use crate::ports::audit::{
     AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, FailedCodeAttempts,
     NewAuditEntry,
 };
-use crate::ports::bots::{Bot, BotReads, BotRecord, BotWrites, Fleet, ListedBot, NewBot};
+use crate::ports::bots::{Access, Bot, BotReads, BotRecord, BotWrites, Fleet, ListedBot, NewBot};
 use crate::ports::chat::{ChatMessageId, ChatReads, ChatWrites, ListedChat, NewChatMessage};
 use crate::ports::enrollment_tokens::{
     EnrollmentToken, EnrollmentTokenReads, EnrollmentTokenWrites, NewEnrollmentToken,
@@ -267,6 +267,10 @@ impl BotReads for Reads {
 
     async fn fleet(&self) -> Result<Fleet, StoreError> {
         bots::fleet(&self.pool).await
+    }
+
+    async fn access(&self) -> Result<Access, StoreError> {
+        bots::access(&self.pool).await
     }
 }
 

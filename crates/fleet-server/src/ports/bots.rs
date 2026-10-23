@@ -20,7 +20,7 @@ use std::collections::BTreeSet;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::account::{AccountKind, AccountStatus};
-use fleet_core::authz::Actor;
+use fleet_core::authz::{Actor, GrantLevel, Role};
 use fleet_core::bot::{BotAccount, DesiredRunState, LastReport};
 use fleet_core::id::{AccountId, AgentId, BotId, ModeId, UserId};
 use fleet_core::mode::ModeDefinition;
@@ -136,6 +136,53 @@ pub struct Fleet {
     pub enabled_agents: BTreeSet<AgentId>,
 }
 
+/// Who may see which bot, read in one read transaction (ADR-0020, S30):
+/// every bot with its account and the account's owner, every grant, and
+/// every user's role and whether they're enabled. Nothing else: no names,
+/// no addresses, nothing a viewer is sent.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Access {
+    /// Every bot.
+    pub bots: Vec<BotAccess>,
+    /// Every grant.
+    pub grants: Vec<GrantAccess>,
+    /// Every user.
+    pub users: Vec<UserAccess>,
+}
+
+/// A bot, its account and the account's owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BotAccess {
+    /// The bot.
+    pub bot: BotId,
+    /// Its account.
+    pub account: AccountId,
+    /// The account's owner.
+    pub owner: UserId,
+}
+
+/// A grant on an account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GrantAccess {
+    /// The account.
+    pub account: AccountId,
+    /// Its grantee.
+    pub user: UserId,
+    /// Its level.
+    pub level: GrantLevel,
+}
+
+/// A user's role, and whether they're enabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UserAccess {
+    /// The user.
+    pub user: UserId,
+    /// Their role.
+    pub role: Role,
+    /// Whether they're enabled.
+    pub enabled: bool,
+}
+
 /// Reading bots through the read connections.
 #[async_trait]
 pub trait BotReads: Send + Sync + fmt::Debug {
@@ -190,6 +237,15 @@ pub trait BotReads: Send + Sync + fmt::Debug {
     /// [`StoreError`], including [`StoreError::Corrupt`] for any row that
     /// doesn't read back.
     async fn fleet(&self) -> Result<Fleet, StoreError>;
+
+    /// Who may see which bot: [`Access`], read in one read transaction, so
+    /// its parts agree with each other (S30).
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`] for any row that
+    /// doesn't read back: one unreadable row fails the whole read, so no
+    /// viewer is judged on a part of it.
+    async fn access(&self) -> Result<Access, StoreError>;
 }
 
 /// Writing bots inside a [`super::store::WriteTx`].

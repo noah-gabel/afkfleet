@@ -93,7 +93,7 @@ use crate::app::bots::{BotService, ChatWait};
 use crate::app::challenges::Challenges;
 use crate::app::enrollment::{EnrollmentService, EnrollmentTokenService};
 use crate::app::event_tickets::EventTickets;
-use crate::app::events::EventBus;
+use crate::app::events::{EventBus, LiveRights};
 use crate::app::grants::GrantService;
 use crate::app::health::HealthService;
 use crate::app::invites::InviteService;
@@ -480,8 +480,7 @@ pub fn app_with(
     let modes = mode_service(config, &clock, &random, &store, Arc::clone(&reconcile));
     let bots = bot_service(config, &clock, &random, &store, &agents, &events, reconcile);
     let shutdown = CancellationToken::new();
-    let sockets = LiveSockets::new(shutdown.child_token());
-    let live = LiveEvents::new(tickets.clone(), events.clone(), sockets.clone());
+    let (sockets, live) = live_events(&tickets, &events, &store, &shutdown);
     let (enrollment_tokens, grpc) = control_plane_services(
         config,
         ca,
@@ -531,6 +530,24 @@ pub fn app_with(
         sockets,
         shutdown,
     }
+}
+
+/// The live events over `tickets` and `events`, their rights read through
+/// `store`, and their sockets' owner, stopped with `shutdown`.
+fn live_events(
+    tickets: &EventTickets,
+    events: &EventBus,
+    store: &Arc<dyn Store>,
+    shutdown: &CancellationToken,
+) -> (LiveSockets, LiveEvents) {
+    let sockets = LiveSockets::new(shutdown.child_token());
+    let live = LiveEvents::new(
+        tickets.clone(),
+        events.clone(),
+        sockets.clone(),
+        LiveRights::new(Arc::clone(store)),
+    );
+    (sockets, live)
 }
 
 /// The housekeeping of the app's limits, lockout, login challenges, live

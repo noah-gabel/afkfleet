@@ -47,7 +47,7 @@ use tracing::info;
 
 use crate::app::auth::{SocketCheckError, SocketSession, TokenService};
 use crate::app::event_tickets::EventTickets;
-use crate::app::events::{BusEvent, EventBus};
+use crate::app::events::{BusEvent, EventBus, LiveRights};
 use crate::http::error::ApiError;
 use crate::http::rate_limit::SocketSlot;
 
@@ -164,24 +164,33 @@ impl LiveSockets {
 }
 
 /// What the live events routes share: the tickets, the bus, the sockets'
-/// owner and their timings. Clones share them.
+/// owner, the rights every socket judges its events on, and the sockets'
+/// timings. Clones share them.
 #[derive(Debug, Clone)]
 pub struct LiveEvents {
     pub(crate) tickets: EventTickets,
     pub(crate) bus: EventBus,
     pub(crate) sockets: LiveSockets,
+    pub(crate) rights: LiveRights,
     pub(crate) timings: SocketTimings,
 }
 
 impl LiveEvents {
     /// The live events over `tickets` and `bus`, their sockets owned by
-    /// `sockets`, with the default timings.
+    /// `sockets` and judging what they send on `rights`, with the default
+    /// timings.
     #[must_use]
-    pub fn new(tickets: EventTickets, bus: EventBus, sockets: LiveSockets) -> Self {
+    pub fn new(
+        tickets: EventTickets,
+        bus: EventBus,
+        sockets: LiveSockets,
+        rights: LiveRights,
+    ) -> Self {
         Self {
             tickets,
             bus,
             sockets,
+            rights,
             timings: SocketTimings::default(),
         }
     }
@@ -196,6 +205,12 @@ impl LiveEvents {
     #[must_use]
     pub fn sockets(&self) -> &LiveSockets {
         &self.sockets
+    }
+
+    /// The rights every socket judges what it sends on (S30).
+    #[must_use]
+    pub fn rights(&self) -> &LiveRights {
+        &self.rights
     }
 }
 

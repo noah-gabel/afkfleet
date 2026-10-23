@@ -16,7 +16,7 @@ use axum::http::Method;
 use chrono::{DateTime, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::auth::{InviteTtl, LockoutPolicy, NewPassword, SessionPolicy};
-use fleet_core::authz::{CommandAllowlist, GrantLevel, Role};
+use fleet_core::authz::{Actor, CommandAllowlist, GrantLevel, Role};
 use fleet_core::id::{AccountId, BotId, InviteId, ModeId, SessionId, UserId};
 use fleet_core::mode::ModeName;
 use fleet_core::pki::CertFingerprint;
@@ -28,7 +28,7 @@ use fleet_server::app::bots::{BotService, ChatWait};
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
 use fleet_server::app::enrollment::EnrollmentTokenService;
 use fleet_server::app::event_tickets::EventTickets;
-use fleet_server::app::events::EventBus;
+use fleet_server::app::events::{EventBus, LiveRights};
 use fleet_server::app::health::HealthService;
 use fleet_server::app::invites::InviteService;
 use fleet_server::app::lockout::LockoutService;
@@ -56,7 +56,7 @@ use fleet_server::ports::agents::{AgentReads, AgentWrites};
 use fleet_server::ports::audit::{
     AuditEntryId, AuditLimit, AuditPage, AuditReads, AuditRecord, AuditWrites, NewAuditEntry,
 };
-use fleet_server::ports::bots::{BotReads, BotWrites};
+use fleet_server::ports::bots::{Access, Bot, BotReads, BotRecord, BotWrites, Fleet, ListedBot};
 use fleet_server::ports::chat::{ChatReads, ChatWrites};
 use fleet_server::ports::enrollment_tokens::{EnrollmentTokenReads, EnrollmentTokenWrites};
 use fleet_server::ports::envelopes::{EnvelopeReads, EnvelopeWrites};
@@ -250,6 +250,7 @@ pub(crate) struct HookedStore {
     after_commit: Arc<Mutex<Option<Meanwhile>>>,
     lose_mode_update: Arc<Mutex<bool>>,
     sessions: HookedSessions,
+    bots: HookedBots,
 }
 
 impl HookedStore {
@@ -263,6 +264,12 @@ impl HookedStore {
                 hang_find: Arc::default(),
                 hanging: Arc::new(tokio::sync::watch::Sender::new(0)),
                 find_behind_writes: Arc::default(),
+            },
+            bots: HookedBots {
+                inner: inner.clone(),
+                accesses: Arc::default(),
+                fail_access: Arc::default(),
+                hold_access: Arc::default(),
             },
             inner,
             alice,
@@ -291,6 +298,27 @@ impl HookedStore {
     /// one has always landed by the time a check ends (P11.5).
     pub(crate) fn queue_socket_checks_behind_writes(&self) {
         *self.sessions.find_behind_writes.lock().unwrap() = true;
+    }
+
+    /// How many times the live events' rights were read
+    /// (`BotReads::access`, P11.5).
+    pub(crate) fn rights_reads(&self) -> usize {
+        self.bots.accesses.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// From now on, reading the live events' rights fails as a busy
+    /// database does (P11.5).
+    pub(crate) fn fail_rights_reads(&self) {
+        *self.bots.fail_access.lock().unwrap() = true;
+    }
+
+    /// Holds the next read of the live events' rights once it has read the
+    /// database, until the returned hold is released (P11.5).
+    pub(crate) fn hold_next_rights_read(&self) -> HeldRead {
+        let (read, read_done) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        *self.bots.hold_access.lock().unwrap() = Some((read, released));
+        HeldRead { read_done, release }
     }
 
     /// Waits, within `bound`, until a `find` hangs.
@@ -634,6 +662,96 @@ impl ModeWrites for LosingTx {
     }
 }
 
+/// A read of the live events' rights held by
+/// [`HookedStore::hold_next_rights_read`].
+pub(crate) struct HeldRead {
+    read_done: tokio::sync::oneshot::Receiver<()>,
+    release: tokio::sync::oneshot::Sender<()>,
+}
+
+impl HeldRead {
+    /// Waits, within `bound`, until the held read has read the database.
+    pub(crate) async fn read(&mut self, bound: Duration) {
+        tokio::time::timeout(bound, &mut self.read_done)
+            .await
+            .expect("the rights are read in time")
+            .unwrap();
+    }
+
+    /// Lets the held read answer.
+    pub(crate) fn release(self) {
+        let _ = self.release.send(());
+    }
+}
+
+/// The database's bot reads, with the live events' rights counted, and
+/// failing or held on request.
+#[derive(Debug, Clone)]
+struct HookedBots {
+    inner: Database,
+    accesses: Arc<std::sync::atomic::AtomicUsize>,
+    fail_access: Arc<Mutex<bool>>,
+    /// The next `access` tells the first once it read, then waits for the
+    /// second.
+    hold_access: Arc<Mutex<Option<Hold>>>,
+}
+
+/// A held read's two ends: told once it read, then released.
+type Hold = (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
+
+#[async_trait]
+impl BotReads for HookedBots {
+    async fn find(&self, id: BotId) -> Result<Option<Bot>, StoreError> {
+        self.inner.bots().find(id).await
+    }
+
+    async fn of_account(&self, account: AccountId) -> Result<Option<Bot>, StoreError> {
+        self.inner.bots().of_account(account).await
+    }
+
+    async fn record(&self, id: BotId) -> Result<Option<BotRecord>, StoreError> {
+        self.inner.bots().record(id).await
+    }
+
+    async fn records(&self, page: Page<BotId>) -> Result<Vec<BotRecord>, StoreError> {
+        self.inner.bots().records(page).await
+    }
+
+    async fn listed(&self, id: BotId, viewer: UserId) -> Result<Option<ListedBot>, StoreError> {
+        self.inner.bots().listed(id, viewer).await
+    }
+
+    async fn visible(
+        &self,
+        viewer: Actor,
+        page: Page<BotId>,
+    ) -> Result<Vec<ListedBot>, StoreError> {
+        self.inner.bots().visible(viewer, page).await
+    }
+
+    async fn fleet(&self) -> Result<Fleet, StoreError> {
+        self.inner.bots().fleet().await
+    }
+
+    async fn access(&self) -> Result<Access, StoreError> {
+        self.accesses
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if *self.fail_access.lock().unwrap() {
+            return Err(StoreError::Busy);
+        }
+        let read = self.inner.bots().access().await;
+        let hold = self.hold_access.lock().unwrap().take();
+        if let Some((read_done, released)) = hold {
+            let _ = read_done.send(());
+            let _ = released.await;
+        }
+        read
+    }
+}
+
 /// The database's session reads, with `find` failing once
 /// [`HookedStore::fail_socket_checks`] asked it to.
 #[derive(Debug, Clone)]
@@ -748,7 +866,7 @@ impl Store for HookedStore {
     }
 
     fn bots(&self) -> &dyn BotReads {
-        self.inner.bots()
+        &self.bots
     }
 
     fn modes(&self) -> &dyn ModeReads {
@@ -926,7 +1044,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
     );
     let live_events = build_live_events(
         &clock,
-        token_port,
+        (token_port, &hooked),
         &events,
         (settings.sockets, settings.limits.ws_connections_per_user),
     );
@@ -986,11 +1104,11 @@ fn token_service(
 }
 
 /// The live events as serve builds them: tickets on `clock`, as many a user
-/// as their sockets, the bus chat waits on, and an owner of their own, with
-/// `timings`.
+/// as their sockets, the bus chat waits on, an owner of their own, and the
+/// rights read through `hooked`, with `timings`.
 fn build_live_events(
     clock: &ManualClock,
-    tokens: Arc<Sha256Tokens>,
+    (tokens, hooked): (Arc<Sha256Tokens>, &HookedStore),
     bus: &EventBus,
     (timings, per_user): (SocketTimings, core::num::NonZeroU32),
 ) -> LiveEvents {
@@ -998,6 +1116,7 @@ fn build_live_events(
         EventTickets::new(Arc::new(clock.clone()), tokens).with_per_user(per_user),
         bus.clone(),
         LiveSockets::new(tokio_util::sync::CancellationToken::new()),
+        LiveRights::new(Arc::new(hooked.clone())),
     )
     .with_timings(timings)
 }

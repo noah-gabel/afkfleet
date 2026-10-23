@@ -1,0 +1,74 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.rowid AS \"rowid!: i64\", b.id AS \"id!\", b.account_id AS \"account_id!\",\n                  a.rowid AS \"account_rowid!: i64\", a.owner_user_id AS \"owner_user_id!\"\n           FROM bots b\n           JOIN mc_accounts a ON a.id = b.account_id",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "account_id!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "account_id"
+          }
+        }
+      },
+      {
+        "name": "account_rowid!: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "owner_user_id!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "owner_user_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "bfbd6d08d433dae0299e23c5be6dd7678acc98cb07310bffb327eae8b3a5399a"
+}

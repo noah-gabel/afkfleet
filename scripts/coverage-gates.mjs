@@ -56,6 +56,9 @@ export const GATES = [
       "crates/fleet-server/src/app/event_tickets.rs",
       "crates/fleet-server/src/http/ws.rs",
       "crates/fleet-server/src/http/handlers/events.rs",
+      // The bus and the rights every socket judges its events on (P11.5;
+      // ADR-0020, U16).
+      "crates/fleet-server/src/app/events.rs",
       "crates/fleet-server/src/app/mfa.rs",
       "crates/fleet-server/src/app/login.rs",
       "crates/fleet-server/src/app/invites.rs",

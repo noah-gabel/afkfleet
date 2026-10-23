@@ -11,6 +11,7 @@
 
 mod limits;
 mod liveness;
+mod rights;
 mod tickets;
 
 use core::time::Duration;

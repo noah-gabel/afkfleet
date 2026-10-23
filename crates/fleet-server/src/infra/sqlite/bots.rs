@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 
 use chrono::{DateTime, Utc};
 use fleet_core::account::{AccountKind, AccountStatus};
-use fleet_core::authz::Actor;
+use fleet_core::authz::{Actor, GrantLevel, Role};
 use fleet_core::bot::{BotAccount, DesiredRunState, LastReport, LastState};
 use fleet_core::id::{AccountId, AgentId, BotId, ModeId, UserId};
 use fleet_core::mode::ModeDefinition;
@@ -26,7 +26,10 @@ use sqlx::SqliteConnection;
 use super::accounts;
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::store_error;
-use crate::ports::bots::{Bot, BotRecord, Fleet, ListedBot, NewBot, ReleaseRecord, UnreadableBot};
+use crate::ports::bots::{
+    Access, Bot, BotAccess, BotRecord, Fleet, GrantAccess, ListedBot, NewBot, ReleaseRecord,
+    UnreadableBot, UserAccess,
+};
 use crate::ports::page::Page;
 use crate::ports::store::StoreError;
 
@@ -469,6 +472,101 @@ pub(super) async fn fleet(pool: &sqlx::SqlitePool) -> Result<Fleet, StoreError> 
         releases,
         unreadable,
         enabled_agents,
+    })
+}
+
+/// Who may see which bot (S30): every bot with its account's owner, every
+/// grant and every user, in one read transaction, so the three agree. Any
+/// row that doesn't read back fails the read.
+pub(super) async fn access(pool: &sqlx::SqlitePool) -> Result<Access, StoreError> {
+    let mut tx = pool.begin().await.map_err(store_error)?;
+    let bots = sqlx::query!(
+        r#"SELECT b.rowid AS "rowid!: i64", b.id AS "id!", b.account_id AS "account_id!",
+                  a.rowid AS "account_rowid!: i64", a.owner_user_id AS "owner_user_id!"
+           FROM bots b
+           JOIN mc_accounts a ON a.id = b.account_id"#
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(store_error)?
+    .into_iter()
+    .map(|row| {
+        Ok(BotAccess {
+            bot: parse_id(&row.id).ok_or(StoreError::Corrupt {
+                table: BOTS,
+                column: "id",
+                rowid: row.rowid,
+            })?,
+            account: parse_id(&row.account_id).ok_or(StoreError::Corrupt {
+                table: BOTS,
+                column: "account_id",
+                rowid: row.rowid,
+            })?,
+            owner: parse_id(&row.owner_user_id).ok_or(StoreError::Corrupt {
+                table: "mc_accounts",
+                column: "owner_user_id",
+                rowid: row.account_rowid,
+            })?,
+        })
+    })
+    .collect::<Result<Vec<_>, StoreError>>()?;
+    let grants = sqlx::query!(
+        r#"SELECT rowid AS "rowid!: i64", account_id AS "account_id!", user_id AS "user_id!",
+                  level AS "level!"
+           FROM account_grants"#
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(store_error)?
+    .into_iter()
+    .map(|row| {
+        let corrupt = |column| StoreError::Corrupt {
+            table: "account_grants",
+            column,
+            rowid: row.rowid,
+        };
+        Ok(GrantAccess {
+            account: parse_id(&row.account_id).ok_or_else(|| corrupt("account_id"))?,
+            user: parse_id(&row.user_id).ok_or_else(|| corrupt("user_id"))?,
+            level: row
+                .level
+                .parse::<GrantLevel>()
+                .map_err(|_| corrupt("level"))?,
+        })
+    })
+    .collect::<Result<Vec<_>, StoreError>>()?;
+    let users = sqlx::query!(
+        r#"SELECT rowid AS "rowid!: i64", id AS "id!", role AS "role!",
+                  disabled AS "disabled!: i64"
+           FROM users"#
+    )
+    .fetch_all(&mut *tx)
+    .await
+    .map_err(store_error)?
+    .into_iter()
+    .map(|row| {
+        let corrupt = |column| StoreError::Corrupt {
+            table: "users",
+            column,
+            rowid: row.rowid,
+        };
+        Ok(UserAccess {
+            user: parse_id(&row.id).ok_or_else(|| corrupt("id"))?,
+            role: row.role.parse::<Role>().map_err(|_| corrupt("role"))?,
+            enabled: match row.disabled {
+                0 => true,
+                1 => false,
+                _ => return Err(corrupt("disabled")),
+            },
+        })
+    })
+    .collect::<Result<Vec<_>, StoreError>>()?;
+    // Read only: nothing to commit, and dropping it ends it.
+    drop(tx);
+    Ok(Access {
+        bots,
+        grants,
+        users,
     })
 }
 
