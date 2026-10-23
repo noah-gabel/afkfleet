@@ -4075,6 +4075,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Smaller:** a FIN without a close frame is a lost connection, not a 1008 (R22); a user holds as many tickets as sockets (R26); one pong answers every ping that waits; the query is refused after the upgrade (R10).
   > - **U15 (the user's decision):** `Client::events_handshake` exists only with fleet-client's `dev-console` feature, which only `just dev-bots` and fleet-client's tests have; `just tauri-check` fails if the desktop app's build has it. P11.8 opens the socket inside the client and removes the feature.
 
+  > Note (P11.5, Phase 11, group D2's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U16, U17, S38–S42, R28–R39): **one PR of about 8,400 lines** (U17, the user's), its first commit PR #66's follow-ups.
+  > - **The commit count** (S38, S39): its mark is the generation of the commit that set it, so a late return never clears the next commit's; the write pool has no lifetime, since sqlx closes a connection past it without the hook that settles the count.
+  > - **Rights** (S30, S41, R30–R32): one shared snapshot, rebuilt before any event frame once the count moved, at most one rebuild at a time; a viewer whose own role or flag changed is sent nothing until their 4001; `bot_removed` when a bot leaves what they see. Each socket reads its hinted bots in one query, through `GET /bots/{id}`'s own `read()` and `bot_response`.
+  > - **The server's hints** (S42, R36, R37): S32's list plus enabling and disabling a user, an account's rename, a relink, an agent's disable, release, hello and end, and the reconciler once per pass with a diff of the agents' shown status; each after its commit, its bots read inside the transaction, through one narrow port.
+  > - **Chat** (S34, R35, R39): the user's line on the bus after its commit and before its send; a refusal after the commit is `chat_failed`, with `bot_unreachable` for Control and above, or with no reason for an unsendable line.
+  > - **The residual** (S40): a flood on a hidden bot can show as a `resync`, at most one bit per 5 s: an accepted risk in the threat model, tested.
+  > - **Coverage** (U16): `app/events.rs` joins the auth gate.
+
 - [ ] **P11.6** 🔴 Retention job: chat older than `chat.retention_days` is deleted. The audit log is kept longer (configurable).
 
   > Note (P11.6, from Phase 7, group B, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **sessions are cleaned up here too.** A session, with its `rotated_refresh_tokens` rows (ON DELETE CASCADE), is deleted once `created_at` + the current `refresh_token_absolute_days` has passed, whether it was revoked or not. A revoked session is unusable anyway, and keeping its rotation history until then lets an investigation after a reuse see the family's timeline. `sessions(created_at)` is indexed for it.
