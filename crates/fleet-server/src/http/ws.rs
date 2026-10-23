@@ -511,7 +511,7 @@ impl<P: Project> Running<P> {
                 received = self.bus.recv(), if self.project.has_room() => match received {
                     Ok(event) => {
                         self.project.take(event);
-                        self.take_waiting(&mut resync);
+                        take_waiting(&mut self.bus, &mut self.project, &mut resync);
                     }
                     // No count: it would count events of bots the user can't
                     // see.
@@ -566,19 +566,6 @@ impl<P: Project> Running<P> {
         self.resyncs = self.resyncs.saturating_add(1);
         self.project.resynced();
         Ok(())
-    }
-
-    /// Takes the events already waiting on the bus while the projection has
-    /// room, in order (R33); a lag among them owes a `resync`.
-    fn take_waiting(&mut self, resync: &mut Gap) {
-        while self.project.has_room() {
-            match self.bus.try_recv() {
-                Ok(event) => self.project.take(event),
-                Err(TryRecvError::Lagged(_)) => resync.owe(),
-                // A closed bus shows at the next `recv`.
-                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
-            }
-        }
     }
 
     /// Opens the projection within [`CHECK_TIMEOUT`]: 1013 when its rights
@@ -869,11 +856,73 @@ impl Gap {
     }
 }
 
+/// Takes the events already waiting on `bus` while `project` has room, in
+/// order (R33), at most [`MERGE_MAX`] with the one that woke the socket,
+/// those that take no room (a hidden bot's) included, so the turn ends and
+/// the socket's other branches get theirs; a lag among them owes `resync`.
+fn take_waiting<P: Project>(bus: &mut Receiver<Arc<BusEvent>>, project: &mut P, resync: &mut Gap) {
+    for _ in 1..MERGE_MAX {
+        if !project.has_room() {
+            break;
+        }
+        match bus.try_recv() {
+            Ok(event) => project.take(event),
+            Err(TryRecvError::Lagged(_)) => resync.owe(),
+            // A closed bus shows at the next `recv`.
+            Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use axum::body::Bytes;
 
     use super::*;
+
+    /// A projection that takes every event and makes nothing of them, as a
+    /// viewer does of a hidden bot's, counting them.
+    #[derive(Debug, Default)]
+    struct Counting(usize);
+
+    impl Project for Counting {
+        fn open(&mut self) -> impl Future<Output = Result<(), Unprojected>> + Send {
+            future::ready(Ok(()))
+        }
+
+        fn has_room(&self) -> bool {
+            true
+        }
+
+        fn take(&mut self, _event: Arc<BusEvent>) {
+            self.0 += 1;
+        }
+
+        fn has_work(&self) -> bool {
+            false
+        }
+
+        fn next(&mut self) -> impl Future<Output = Result<Step, Unprojected>> + Send {
+            future::ready(Ok(Step::Nothing))
+        }
+
+        fn resynced(&mut self) {}
+    }
+
+    #[test]
+    fn a_wake_takes_at_most_merge_max_events_even_ones_that_take_no_room() {
+        let (bus, mut received) = tokio::sync::broadcast::channel(1024);
+        let user = fleet_core::id::UserId::new_v7("2027-01-15T08:00:00Z".parse().unwrap(), [1; 10])
+            .unwrap();
+        for _ in 0..200 {
+            bus.send(Arc::new(BusEvent::RoleChanged { user })).unwrap();
+        }
+        let mut counting = Counting::default();
+
+        take_waiting(&mut received, &mut counting, &mut Gap::new(RESYNC_GAP));
+
+        assert_eq!(counting.0, MERGE_MAX - 1, "with the event that woke it");
+    }
 
     #[test]
     fn the_bounds_are_u13s() {
