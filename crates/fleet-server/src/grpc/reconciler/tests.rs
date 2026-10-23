@@ -1517,3 +1517,65 @@ async fn a_new_stream_whose_reconcile_is_held_back_still_tells_its_agents_bots()
     assert_eq!(told.take(), [(calls, vec![bot(1)])], "its new stream");
     running.stop().await;
 }
+
+#[tokio::test(start_paused = true)]
+async fn a_bot_a_pass_assigned_is_not_told_again_by_the_next() {
+    let registry = registry();
+    let store = Store::with(Vec::new(), &[1]);
+    let mut stream = connect(&registry, 1, 5, Vec::new(), 8);
+    let (running, told) = start_telling(&registry, &store, &ManualClock::new(at(T0)));
+    assert_eq!(reconciled(stream.next().await), []);
+    store.state().fleet.bots.push(record(2));
+    running.hints.changed(Change::Store);
+    assert!(matches!(
+        stream.next().await,
+        Some(ServerMessage::Assign(_))
+    ));
+    let assigned = told.take();
+
+    running.hints.changed(Change::Store);
+    let quiet = stream.next().await;
+
+    assert_eq!(assigned, [(1, vec![bot(2)])]);
+    assert_eq!(quiet.map(|_| ()), None);
+    assert_eq!(told.take(), [], "nothing changed since its assignment");
+    running.stop().await;
+}
+
+/// A release record of bot 2 on agent 1, whose row still names it, and an
+/// agent 1 whose hello doesn't list it: the welcome's pass detaches it, and
+/// the next pass tells nothing more.
+#[tokio::test(start_paused = true)]
+async fn a_bot_a_pass_detached_is_not_told_again_by_the_next() {
+    let registry = registry();
+    let mut stopped = on(2, 1);
+    stopped.bot.desired = DesiredRunState::Stopped;
+    let identity = stopped.identity.clone();
+    let store = Store::with(vec![stopped], &[1]);
+    store.state().fleet.releases.push(ReleaseRecord {
+        bot: bot(2),
+        agent: agent(1),
+        identity,
+    });
+    let mut stream = connect(&registry, 1, 5, Vec::new(), 8);
+    let (running, told) = start_telling(&registry, &store, &ManualClock::new(at(T0)));
+    let welcomed = stream.next().await;
+    let calls = store.calls().len();
+    let detached = (store.agent_of(bot(2)), told.take());
+
+    running.hints.changed(Change::Store);
+    let quiet = stream.next().await;
+
+    assert!(
+        matches!(welcomed, Some(ServerMessage::Reconcile(_))),
+        "{welcomed:?}"
+    );
+    assert_eq!(
+        detached,
+        (None, vec![(calls, vec![bot(2)])]),
+        "after its writes"
+    );
+    assert_eq!(quiet.map(|_| ()), None);
+    assert_eq!(told.take(), [], "nothing changed since its detach");
+    running.stop().await;
+}

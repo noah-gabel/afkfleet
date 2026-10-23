@@ -295,17 +295,17 @@ impl Reconciler {
 
     /// One pass; see the [module docs](self).
     async fn pass(&mut self) {
-        let mut touched = BTreeSet::new();
-        self.planned(&mut touched).await;
-        let touched: Vec<BotId> = touched.into_iter().collect();
+        let mut notes = Notes::default();
+        self.planned(&mut notes).await;
+        let touched: Vec<BotId> = notes.touched.into_iter().collect();
         self.live_hints.bots(&touched);
     }
 
-    /// One pass's work, noting in `touched` each bot it changed, held, or
+    /// One pass's work, noting in `notes` each bot it changed, held, or
     /// whose agent shows otherwise since the last pass.
-    async fn planned(&mut self, touched: &mut BTreeSet<BotId>) {
+    async fn planned(&mut self, notes: &mut Notes) {
         self.last_pass = Instant::now();
-        touched.extend(self.detach_released().await);
+        notes.touched.extend(self.detach_released().await);
         let fleet = match self.store.fleet().await {
             Ok(fleet) => fleet,
             Err(failure) => {
@@ -317,9 +317,10 @@ impl Reconciler {
             }
         };
         let views = self.registry.placement_view();
-        let observed = Observed::of(&fleet, &views, self.clock.now());
-        if let Some(before) = self.observed.replace(observed.clone()) {
-            touched.extend(observed.changed_since(&before));
+        let shows = Shows::new(&fleet, &views, self.clock.now());
+        let mut observed = Observed::of(&fleet, &shows);
+        if let Some(before) = &self.observed {
+            notes.touched.extend(observed.changed_since(before));
         }
         let untouchable = untouchable(&fleet);
         // An untouchable bot keeps what's known of it too.
@@ -365,7 +366,7 @@ impl Reconciler {
                 Ok(changed) => {
                     detached(changed, detach.bot, detach.agent, detach.reason);
                     if changed {
-                        touched.insert(detach.bot);
+                        notes.moved(detach.bot, None);
                     }
                 }
                 Err(failure) => {
@@ -398,8 +399,12 @@ impl Reconciler {
             if part.full && held_back.contains(&part.agent) {
                 continue;
             }
-            self.apply(part, &known, touched).await;
+            self.apply(part, &known, notes).await;
         }
+        // What the next pass compares with: the rows as its writes left
+        // them, so a write is told once, by this pass.
+        observed.moved(&notes.rows, &shows);
+        self.observed = Some(observed);
     }
 
     /// Clears the bots whose `Removed` the registry noted; a note whose
@@ -433,8 +438,8 @@ impl Reconciler {
     }
 
     /// Applies one agent's part: its writes, then its messages, noting in
-    /// `touched` each bot they changed or held.
-    async fn apply(&self, part: &AgentPlan, known: &Known<'_>, touched: &mut BTreeSet<BotId>) {
+    /// `notes` each bot they changed or held.
+    async fn apply(&self, part: &AgentPlan, known: &Known<'_>, notes: &mut Notes) {
         // Unassignments first: a welcome whose decision can't be recorded
         // places nothing and waits for the next pass.
         let mut lets: Vec<&Let> = Vec::new();
@@ -453,7 +458,8 @@ impl Reconciler {
                             reason = reason.as_str(),
                             "a bot was unassigned from its agent"
                         );
-                        touched.insert(release.bot);
+                        // Its row names the agent until its `Removed`.
+                        notes.touched.insert(release.bot);
                     }
                     Ok(false) => {}
                     Err(failure) => {
@@ -481,7 +487,7 @@ impl Reconciler {
                             agent_id = %part.agent,
                             "a bot was assigned to an agent"
                         );
-                        touched.insert(run.bot);
+                        notes.moved(run.bot, Some(part.agent));
                         // Its restore comes from the row its assignment read:
                         // a Resume or a Reset may have cleared the stored state
                         // since this pass read the fleet (S48).
@@ -502,9 +508,9 @@ impl Reconciler {
             runs.push((run, record));
         }
         if part.full {
-            self.settle(part, known, (&runs, &lets), touched);
+            self.settle(part, known, &runs, &lets, &mut notes.touched);
         } else {
-            self.update(part, known, (&runs, &lets), touched);
+            self.update(part, known, &runs, &lets, &mut notes.touched);
         }
     }
 
@@ -514,7 +520,8 @@ impl Reconciler {
         &self,
         part: &AgentPlan,
         known: &Known<'_>,
-        (runs, lets): (&[(&Run, Cow<'_, BotRecord>)], &[&Let]),
+        runs: &[(&Run, Cow<'_, BotRecord>)],
+        lets: &[&Let],
         touched: &mut BTreeSet<BotId>,
     ) {
         let now = self.clock.now();
@@ -559,7 +566,8 @@ impl Reconciler {
         &self,
         part: &AgentPlan,
         known: &Known<'_>,
-        (runs, lets): (&[(&Run, Cow<'_, BotRecord>)], &[&Let]),
+        runs: &[(&Run, Cow<'_, BotRecord>)],
+        lets: &[&Let],
         touched: &mut BTreeSet<BotId>,
     ) {
         let mut held = |bot: BotId, result: Result<(), SendError>| {
@@ -917,42 +925,86 @@ fn detached(changed: bool, bot: BotId, agent: AgentId, reason: DetachReason) {
     }
 }
 
+/// What a pass noted: the bots to tell the live events sockets about, and
+/// the rows its writes moved to another agent, or to none.
+#[derive(Debug, Default)]
+struct Notes {
+    touched: BTreeSet<BotId>,
+    rows: Vec<(BotId, Option<AgentId>)>,
+}
+
+impl Notes {
+    /// The pass's write left `bot`'s row naming `agent`.
+    fn moved(&mut self, bot: BotId, agent: Option<AgentId>) {
+        self.touched.insert(bot);
+        self.rows.push((bot, agent));
+    }
+}
+
 /// What a pass saw of each bot's agent (R37): the agent its row names, and
 /// that agent's status as a bot's read shows it, with its stream's
 /// generation. A change since the last pass changes what the bot reads as.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 struct Observed(BTreeMap<BotId, (Option<AgentId>, Option<AgentShown>)>);
 
 /// An agent's status as a bot's read shows it, and its stream's generation.
 type AgentShown = (AgentStatus, Option<u64>);
 
-impl Observed {
+/// Each agent's status as a bot's read shows it, from a pass's fleet and
+/// live streams at its time.
+struct Shows<'a> {
+    fleet: &'a Fleet,
+    streams: HashMap<AgentId, u64>,
+    now: DateTime<Utc>,
+}
+
+impl<'a> Shows<'a> {
     /// What `fleet` and the live streams `views` show at `now`.
-    fn of(fleet: &Fleet, views: &[LiveView], now: DateTime<Utc>) -> Self {
-        let streams: HashMap<AgentId, u64> = views
-            .iter()
-            .map(|view| (view.agent, view.generation))
-            .collect();
-        let shown = |agent: AgentId| {
-            let generation = streams.get(&agent).copied();
-            let shown = status(
-                fleet.enabled_agents.contains(&agent),
-                fleet.agent_expiry.get(&agent).copied(),
-                generation.is_some(),
-                now,
-            );
-            (shown, generation)
-        };
+    fn new(fleet: &'a Fleet, views: &[LiveView], now: DateTime<Utc>) -> Self {
+        Self {
+            fleet,
+            streams: views
+                .iter()
+                .map(|view| (view.agent, view.generation))
+                .collect(),
+            now,
+        }
+    }
+
+    /// `agent`'s status and its stream's generation.
+    fn of(&self, agent: AgentId) -> AgentShown {
+        let generation = self.streams.get(&agent).copied();
+        let shown = status(
+            self.fleet.enabled_agents.contains(&agent),
+            self.fleet.agent_expiry.get(&agent).copied(),
+            generation.is_some(),
+            self.now,
+        );
+        (shown, generation)
+    }
+}
+
+impl Observed {
+    /// What `fleet`'s rows show, through `shows`.
+    fn of(fleet: &Fleet, shows: &Shows<'_>) -> Self {
         Self(
             fleet
                 .bots
                 .iter()
                 .map(|record| {
                     let agent = record.bot.agent;
-                    (record.bot.id, (agent, agent.map(shown)))
+                    (record.bot.id, (agent, agent.map(|agent| shows.of(agent))))
                 })
                 .collect(),
         )
+    }
+
+    /// Each row of `moved` as the pass's write left it, through `shows`.
+    fn moved(&mut self, moved: &[(BotId, Option<AgentId>)], shows: &Shows<'_>) {
+        for &(bot, agent) in moved {
+            self.0
+                .insert(bot, (agent, agent.map(|agent| shows.of(agent))));
+        }
     }
 
     /// The bots that show otherwise than in `before`, new ones included.
