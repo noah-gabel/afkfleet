@@ -271,6 +271,7 @@ impl HookedStore {
             modes: HookedModes {
                 inner: inner.clone(),
                 fail_listed: Arc::default(),
+                hold_listed: Arc::default(),
             },
             bots: HookedBots {
                 inner: inner.clone(),
@@ -280,6 +281,7 @@ impl HookedStore {
                 fail_listed_in: Arc::default(),
                 hold_listed_in: Arc::default(),
                 hold_access: Arc::default(),
+                commit_during_access: Arc::default(),
             },
             inner,
             alice,
@@ -355,6 +357,26 @@ impl HookedStore {
 
     /// Holds the next read of the live events' rights once it has read the
     /// database, until the returned hold is released (P11.5).
+    /// The next `ModeReads::listed`, a live events socket's read of a
+    /// mode, tells the returned [`HeldRead`] once it read the database, then
+    /// waits for its release before it answers (P11.5).
+    pub(crate) fn hold_next_mode_read(&self) -> HeldRead {
+        let (read, read_done) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        *self.modes.hold_listed.lock().unwrap() = Some((read, released));
+        HeldRead { read_done, release }
+    }
+
+    /// Each of the next `reads` reads of the live events' rights commits
+    /// once after it read the database and before it answers, as a write
+    /// landing during the read does: each snapshot is older than the count
+    /// when it comes (P11.5, S43).
+    pub(crate) fn commit_during_next_rights_reads(&self, reads: u32) {
+        self.bots
+            .commit_during_access
+            .store(reads, std::sync::atomic::Ordering::SeqCst);
+    }
+
     pub(crate) fn hold_next_rights_read(&self) -> HeldRead {
         let (read, read_done) = tokio::sync::oneshot::channel();
         let (release, released) = tokio::sync::oneshot::channel();
@@ -718,6 +740,9 @@ impl ModeWrites for LosingTx {
 struct HookedModes {
     inner: Database,
     fail_listed: Arc<Mutex<bool>>,
+    /// The next `listed` tells the first once it read, then waits for the
+    /// second.
+    hold_listed: Arc<Mutex<Option<Hold>>>,
 }
 
 #[async_trait]
@@ -738,7 +763,13 @@ impl ModeReads for HookedModes {
         if *self.fail_listed.lock().unwrap() {
             return Err(StoreError::Busy);
         }
-        self.inner.modes().listed(id).await
+        let read = self.inner.modes().listed(id).await;
+        let hold = self.hold_listed.lock().unwrap().take();
+        if let Some((read_done, released)) = hold {
+            let _ = read_done.send(());
+            let _ = released.await;
+        }
+        read
     }
 }
 
@@ -779,6 +810,8 @@ struct HookedBots {
     /// The next `access` tells the first once it read, then waits for the
     /// second.
     hold_access: Arc<Mutex<Option<Hold>>>,
+    /// How many of the next `access`es commit once after they read.
+    commit_during_access: Arc<std::sync::atomic::AtomicU32>,
 }
 
 /// A held read's two ends: told once it read, then released.
@@ -843,6 +876,21 @@ impl BotReads for HookedBots {
             return Err(StoreError::Busy);
         }
         let read = self.inner.bots().access().await;
+        let commits = self.commit_during_access.try_update(
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+            |left| left.checked_sub(1),
+        );
+        if commits.is_ok() {
+            let tx = self.inner.write().await.unwrap();
+            tx.commit(NewAuditEntry::new(
+                at(T0),
+                AuditAction::try_from("test.commit_during_a_read").unwrap(),
+                AuditOutcome::Success,
+            ))
+            .await
+            .unwrap();
+        }
         let hold = self.hold_access.lock().unwrap().take();
         if let Some((read_done, released)) = hold {
             let _ = read_done.send(());

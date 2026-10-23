@@ -13,7 +13,9 @@ use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 use super::super::support::{Hint, Person, Setup, USERS, setup};
-use super::{Served, Socket, closed, next_event_after_pings, ready, said};
+use super::{
+    PATIENCE, Served, Socket, closed, commit_anything, next_event_after_pings, ready, said,
+};
 
 const MODES: &str = "/api/v1/modes";
 
@@ -449,4 +451,45 @@ async fn a_real_role_change_hints_the_sockets_after_its_commit(
         vec![(after_promotion.0, Hint::RoleChanged(member.id))]
     );
     assert_eq!(after_no_op, Vec::new(), "the same role hints nothing");
+}
+
+/// The shared mode made private while the other Admin's read of it is held,
+/// after that read: the read is older than the count, so the mode is read
+/// again, and they get `mode_removed`, never the mode (S43).
+#[sqlx::test(migrations = false)]
+async fn a_mode_made_private_while_its_read_is_held_sends_mode_removed(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let watchers = watchers(&setup).await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &watchers.other_admin.token).await;
+    let edited = ModeEvent {
+        id: watchers.shared,
+        was: Some(watchers.shared_seen(ModeVisibility::Shared)),
+    };
+
+    let mut held = setup.hooked.hold_next_mode_read();
+    setup.events.mode(edited);
+    held.read(PATIENCE).await;
+    set_visibility(&setup, watchers.shared, "private").await;
+    commit_anything(&setup).await;
+    setup.events.mode(edited);
+    setup.events.role_changed(watchers.member.id);
+    held.release();
+    let mut frames = Vec::new();
+    while frames.last() != Some(&json!({ "type": "resync" })) {
+        frames.push(next_event_after_pings(&mut socket).await);
+    }
+
+    assert_eq!(
+        frames,
+        [
+            removed(watchers.shared),
+            removed(watchers.shared),
+            json!({ "type": "resync" })
+        ],
+        "each hint answered, and never the mode"
+    );
 }

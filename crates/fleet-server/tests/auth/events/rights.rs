@@ -7,7 +7,8 @@
 use core::time::Duration;
 
 use fleet_api_types::events::SocketClose;
-use fleet_core::authz::Role;
+use fleet_core::authz::{GrantLevel, Role};
+use fleet_core::id::{AccountId, UserId};
 use fleet_core::system::Clock as _;
 use fleet_server::app::events::LiveEventKind;
 use fleet_server::http::ws::SocketTimings;
@@ -15,12 +16,13 @@ use fleet_server::ports::live_hints::LiveHints as _;
 use fleet_server::ports::store::{Store as _, StoreError};
 use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use tokio_tungstenite::tungstenite::Message;
 
-use super::super::support::{Options, setup, setup_entry, setup_with};
+use super::super::support::{LOGOUT, Options, Setup, setup, setup_entry, setup_with};
 use super::bots::{agent_event, watched};
 use super::{
-    PATIENCE, Piped, Served, closed, commit_anything, next_event, next_event_after_pings, open,
-    ready, said, ticket,
+    PATIENCE, Piped, Served, closed, commit_anything, next, next_event, next_event_after_pings,
+    open, ready, said, ticket,
 };
 
 #[sqlx::test(migrations = false)]
@@ -202,8 +204,8 @@ async fn a_deleted_account_turns_its_bot_into_bot_removed(
     );
 }
 
-/// A frame built before a revoke may still go out; none taken from the bus
-/// before it is sent after it.
+/// A bot read made before a revoke and answering after it is made again
+/// (S43): nothing taken from the bus before the revoke is sent after it.
 #[sqlx::test(migrations = false)]
 async fn a_frame_queued_before_a_revoke_never_reaches_its_viewer(
     _pool: SqlitePoolOptions,
@@ -235,13 +237,9 @@ async fn a_frame_queued_before_a_revoke_never_reaches_its_viewer(
     held.release();
 
     assert_eq!(
-        next_event_after_pings(&mut socket).await["type"],
-        json!("bot"),
-        "read before the revoke"
-    );
-    assert_eq!(
         next_event_after_pings(&mut socket).await,
-        removed(watched.bot)
+        removed(watched.bot),
+        "read before the revoke, and read again after it (S43)"
     );
     assert_eq!(
         next_event_after_pings(&mut socket).await["bot_id"],
@@ -361,11 +359,13 @@ async fn a_read_made_before_a_commit_is_read_again_for_the_bots_not_yet_sent(
     assert_eq!(next_event(&mut socket).await, json!({ "type": "ready" }));
 
     // Read together; the first frame is stuck in the pipe until the client
-    // reads, and the second bot's grant is revoked meanwhile.
+    // reads, and the second bot's grant is revoked meanwhile: once the
+    // server writes it, the step that read both is over.
     let mut held = setup.hooked.hold_next_bot_read();
     setup.events.bots(&[watched.bot, second]);
     held.read(PATIENCE).await;
     held.release();
+    socket.get_mut().written().await;
     let mut tx = setup.db.write().await.unwrap();
     assert!(
         tx.grants()
@@ -385,5 +385,205 @@ async fn a_read_made_before_a_commit_is_read_again_for_the_bots_not_yet_sent(
         next_event(&mut socket).await["bot_id"],
         json!(marker.to_string()),
         "the second bot came only as removed"
+    );
+}
+
+// --- Commits landing during a step's reads (S43) ------------------------
+
+/// Revokes `user`'s grant on `account`.
+async fn revoked(setup: &Setup, account: AccountId, user: UserId) {
+    let mut tx = setup.db.write().await.unwrap();
+    assert!(tx.grants().delete(account, user).await.unwrap());
+    tx.commit(setup_entry()).await.unwrap();
+}
+
+/// A revoke committed while the death's rights read is held, after that
+/// read: the snapshot it gives is older than the count, so the death waits
+/// for the next read, which sees the revoke.
+#[sqlx::test(migrations = false)]
+async fn a_revoke_committed_while_a_rebuild_is_held_drops_the_event(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let watched = watched(&setup).await;
+    let (_, marker) = setup.bot_of(watched.controller.id, 30).await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &watched.controller.token).await;
+    // So the death's step reads the rights again.
+    commit_anything(&setup).await;
+    let reads = setup.hooked.rights_reads();
+
+    let mut held = setup.hooked.hold_next_rights_read();
+    agent_event(&setup, watched.bot, watched.agent, LiveEventKind::Died);
+    held.read(PATIENCE).await;
+    revoked(&setup, watched.account, watched.controller.id).await;
+    setup.events.bots(&[marker]);
+    held.release();
+
+    assert_eq!(
+        next_event_after_pings(&mut socket).await,
+        removed(watched.bot)
+    );
+    assert_eq!(
+        next_event_after_pings(&mut socket).await["bot_id"],
+        json!(marker.to_string()),
+        "no death came"
+    );
+    assert_eq!(
+        setup.hooked.rights_reads() - reads,
+        2,
+        "the held read, and one after the revoke"
+    );
+}
+
+/// Three commits, each landing during a rights read: the death waits out
+/// each, and goes once, on the first read no commit outran.
+#[sqlx::test(migrations = false)]
+async fn a_death_waits_out_commits_during_its_rights_reads_and_goes_once(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let watched = watched(&setup).await;
+    let (_, marker) = setup.bot_of(watched.controller.id, 30).await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &watched.controller.token).await;
+    commit_anything(&setup).await;
+    let reads = setup.hooked.rights_reads();
+
+    setup.hooked.commit_during_next_rights_reads(3);
+    agent_event(&setup, watched.bot, watched.agent, LiveEventKind::Died);
+    setup.events.bots(&[marker]);
+    let died = next_event_after_pings(&mut socket).await;
+    let after = next_event_after_pings(&mut socket).await;
+
+    assert_eq!(
+        (died["type"].clone(), died["bot_id"].clone()),
+        (json!("bot_died"), json!(watched.bot.to_string()))
+    );
+    assert_eq!(after["bot_id"], json!(marker.to_string()));
+    assert_eq!(
+        setup.hooked.rights_reads() - reads,
+        4,
+        "three outrun, then one that held"
+    );
+}
+
+/// Commits landing during every rights read, without end: the death waits,
+/// while the socket keeps pinging and checking its session, so a logout
+/// still closes it with 4001; never 1013.
+#[sqlx::test(migrations = false)]
+async fn an_endless_storm_of_commits_holds_the_frames_but_not_the_pings_or_the_session_check(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup_with(
+        options,
+        Options {
+            sockets: SocketTimings {
+                ping_interval: Duration::from_millis(100),
+                ..SocketTimings::default()
+            },
+            ..Options::default()
+        },
+    )
+    .await;
+    let watched = watched(&setup).await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &watched.controller.token).await;
+    let reads = setup.hooked.rights_reads();
+
+    setup.hooked.commit_during_next_rights_reads(u32::MAX);
+    commit_anything(&setup).await;
+    agent_event(&setup, watched.bot, watched.agent, LiveEventKind::Died);
+    let mut pings = 0;
+    while pings < 3 {
+        match next(&mut socket).await {
+            Some(Message::Ping(_)) => pings += 1,
+            other => panic!("only pings while the storm lasts: {other:?}"),
+        }
+    }
+    let out = setup
+        .post(LOGOUT, Some(&watched.controller.token), None)
+        .await;
+
+    assert_eq!(out.status, 204, "{}", out.text);
+    assert_eq!(
+        closed(&mut socket).await,
+        said(SocketClose::Unauthenticated)
+    );
+    assert!(setup.hooked.rights_reads() - reads > 3, "the storm ran");
+}
+
+/// Three bots leave in one read; the last is shared again while the
+/// second's removal is on its way: it comes back as `bot`, and its own
+/// removal, still waiting, never goes.
+#[sqlx::test(migrations = false)]
+async fn a_bot_that_rejoins_before_its_removal_went_out_is_sent_as_bot(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let watched = watched(&setup).await;
+    let mut shared = vec![(watched.account, watched.bot)];
+    for n in [11, 12] {
+        let (account, bot) = setup.bot_of(watched.member.id, n).await;
+        setup
+            .share(
+                account,
+                watched.controller.id,
+                GrantLevel::Control,
+                watched.member.id,
+            )
+            .await;
+        shared.push((account, bot));
+    }
+    shared.sort_by_key(|(_, bot)| *bot);
+    let (_, marker) = setup.bot_of(watched.controller.id, 30).await;
+    let piped = Piped::start(&setup);
+    let ticket = ticket(&setup, &watched.controller.token).await;
+    let mut socket = piped.open(&watched.controller.token, &ticket).await;
+    assert_eq!(next_event(&mut socket).await, json!({ "type": "ready" }));
+
+    let mut tx = setup.db.write().await.unwrap();
+    for (account, _) in &shared {
+        assert!(
+            tx.grants()
+                .delete(*account, watched.controller.id)
+                .await
+                .unwrap()
+        );
+    }
+    tx.commit(setup_entry()).await.unwrap();
+    setup.events.bots(&[marker]);
+    let first = next_event(&mut socket).await;
+    // The second's removal can't leave the pipe until it's read: the third
+    // can't have gone yet when it's shared again.
+    let (last_account, last) = shared[2];
+    setup
+        .share(
+            last_account,
+            watched.controller.id,
+            GrantLevel::Control,
+            watched.member.id,
+        )
+        .await;
+    let mut rest: Vec<serde_json::Value> = Vec::new();
+    while rest
+        .last()
+        .is_none_or(|frame| frame["bot_id"] != json!(marker.to_string()))
+    {
+        rest.push(next_event(&mut socket).await);
+    }
+
+    assert_eq!(first, removed(shared[0].1));
+    assert_eq!(rest.len(), 3, "{rest:?}");
+    assert!(rest.contains(&removed(shared[1].1)), "{rest:?}");
+    assert!(
+        rest.iter().any(
+            |frame| frame["type"] == json!("bot") && frame["bot_id"] == json!(last.to_string())
+        ),
+        "{rest:?}"
     );
 }

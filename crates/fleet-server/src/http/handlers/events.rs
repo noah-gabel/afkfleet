@@ -317,16 +317,22 @@ impl Viewer {
 
     /// Reads the rights again once the commit count moved past them: sends
     /// `bot_removed` first for each bot the viewer no longer sees, then
-    /// reads those they now do, and drops every read made before.
-    async fn gate(&mut self) -> Result<(), Unprojected> {
+    /// reads those they now do, and drops every read made before. Whether
+    /// the rights are current: not when a commit outran the read (S43).
+    async fn gate(&mut self) -> Result<bool, Unprojected> {
         let count = self.live.count();
         if count <= self.rights.at() {
-            return Ok(());
+            return Ok(true);
         }
         self.rights = self.live.at_least(count).await.map_err(|error| {
             debug!(%error, "a live events socket couldn't read its rights");
             Unprojected
         })?;
+        if self.outrun() {
+            // Older than a commit already made: the next turn reads again,
+            // and only rights that held decide what was seen.
+            return Ok(false);
+        }
         for slot in &mut self.slots {
             if let Slot::Bots(reads) = slot {
                 reads.views = None;
@@ -335,6 +341,10 @@ impl Viewer {
         let visible = self.rights.visible(&self.actor);
         let joined: BTreeSet<BotId> = visible.difference(&self.seen).copied().collect();
         if !joined.is_empty() {
+            // A removal still waiting for a bot seen again never goes: its
+            // read below says what it is now.
+            self.slots
+                .retain(|slot| !matches!(slot, Slot::Removed(bot) if joined.contains(bot)));
             self.slots.push_front(Slot::Bots(BotReads {
                 ids: joined,
                 views: None,
@@ -345,7 +355,13 @@ impl Viewer {
             self.seen.remove(&bot);
             self.slots.push_front(Slot::Removed(bot));
         }
-        Ok(())
+        Ok(true)
+    }
+
+    /// Whether a commit was counted after the rights the viewer holds: a
+    /// read made since may be older than it (S43).
+    fn outrun(&self) -> bool {
+        self.live.count() > self.rights.at()
     }
 
     /// Notes that `bots` may read differently: merged into the first
@@ -381,7 +397,8 @@ impl Viewer {
                 self.rights.level(&self.actor, *bot).is_some() || self.seen.contains(bot)
             });
             let ids: Vec<BotId> = reads.ids.iter().copied().collect();
-            self.bots
+            let views = self
+                .bots
                 .views(&self.actor, &ids)
                 .await
                 .map_err(|error| {
@@ -390,7 +407,14 @@ impl Viewer {
                 })?
                 .into_iter()
                 .map(|view| (view.record.bot.id, view))
-                .collect()
+                .collect();
+            if self.outrun() {
+                // A commit landed during the read: read again on the next
+                // turn, under the rights it made (S43).
+                self.slots.push_front(Slot::Bots(reads));
+                return Ok(Step::Nothing);
+            }
+            views
         };
         let Some(bot) = reads.ids.pop_first() else {
             return Ok(Step::Nothing);
@@ -513,7 +537,9 @@ impl Project for Viewer {
     }
 
     async fn next(&mut self) -> Result<Step, Unprojected> {
-        self.gate().await?;
+        if !self.gate().await? {
+            return Ok(Step::Nothing);
+        }
         if !self.rights.stands(&self.actor) {
             // Muted until the session check closes the socket (R31).
             self.slots.clear();
@@ -526,7 +552,16 @@ impl Project for Viewer {
             Some(Slot::Agent(event)) => Ok(event
                 .agent()
                 .map_or(Step::Nothing, |event| self.agent_step(event))),
-            Some(Slot::Mode(event)) => self.mode_step(event).await,
+            Some(Slot::Mode(event)) => {
+                let step = self.mode_step(event).await?;
+                if self.outrun() {
+                    // A commit landed during the read: read again on the
+                    // next turn (S43).
+                    self.slots.push_front(Slot::Mode(event));
+                    return Ok(Step::Nothing);
+                }
+                Ok(step)
+            }
             // Another Admin's sight follows a user's role (R11); the Owner
             // and Members see what they did, and a viewer's own role closes
             // their socket.

@@ -11,6 +11,8 @@
 
 mod bots;
 mod chat;
+mod cost;
+mod hidden;
 mod hints;
 mod limits;
 mod liveness;
@@ -18,6 +20,8 @@ mod modes;
 mod rights;
 mod tickets;
 
+use core::pin::Pin;
+use core::task::{Context, Poll};
 use core::time::Duration;
 use std::collections::BTreeMap;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
@@ -31,7 +35,7 @@ use fleet_server::ports::store::Store as _;
 use secrecy::{ExposeSecret as _, SecretString};
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
-use tokio::io::DuplexStream;
+use tokio::io::{AsyncReadExt as _, DuplexStream};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -143,8 +147,12 @@ impl Piped {
         &self,
         bearer: &SecretString,
         ticket: &SecretString,
-    ) -> WebSocketStream<DuplexStream> {
+    ) -> WebSocketStream<Peeking> {
         let (client, server) = tokio::io::duplex(PIPE_BYTES);
+        let client = Peeking {
+            pipe: client,
+            ahead: Vec::new(),
+        };
         self.connects.send(server).await.unwrap();
         let url = format!(
             "ws://127.0.0.1/api/v1/events?ticket={}",
@@ -166,6 +174,65 @@ impl Piped {
 impl Drop for Piped {
     fn drop(&mut self) {
         self.task.abort();
+    }
+}
+
+/// A pipe's client end, which can wait until the server wrote something
+/// without the client reading it: the server is then sending a frame, so
+/// the step that built it is over.
+pub(super) struct Peeking {
+    pipe: DuplexStream,
+    /// Read ahead by [`Peeking::written`], not yet read by the client.
+    ahead: Vec<u8>,
+}
+
+impl Peeking {
+    /// Waits, within [`PATIENCE`], until the server wrote a byte.
+    pub(super) async fn written(&mut self) {
+        if self.ahead.is_empty() {
+            let mut byte = [0; 1];
+            let read = timeout(PATIENCE, self.pipe.read(&mut byte))
+                .await
+                .expect("the server wrote in time")
+                .unwrap();
+            assert_eq!(read, 1, "the server ended the pipe");
+            self.ahead.push(byte[0]);
+        }
+    }
+}
+
+impl tokio::io::AsyncRead for Peeking {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        if this.ahead.is_empty() {
+            return Pin::new(&mut this.pipe).poll_read(cx, buf);
+        }
+        let n = this.ahead.len().min(buf.remaining());
+        buf.put_slice(&this.ahead[..n]);
+        this.ahead.drain(..n);
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl tokio::io::AsyncWrite for Peeking {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<std::io::Result<usize>> {
+        Pin::new(&mut self.get_mut().pipe).poll_write(cx, buf)
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().pipe).poll_flush(cx)
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<std::io::Result<()>> {
+        Pin::new(&mut self.get_mut().pipe).poll_shutdown(cx)
     }
 }
 
@@ -319,6 +386,26 @@ pub(super) async fn next_event_after_pings(socket: &mut Socket) -> Value {
         }
     };
     timeout(PATIENCE, reading).await.expect("an event in time")
+}
+
+/// Every event `socket` sends until it's quiet: two pings in a row.
+pub(super) async fn until_quiet(socket: &mut Socket) -> Vec<Value> {
+    let reading = async {
+        let mut events = Vec::new();
+        let mut pings = 0;
+        while pings < 2 {
+            match next(socket).await {
+                Some(Message::Text(text)) => {
+                    events.push(serde_json::from_str(&text).unwrap());
+                    pings = 0;
+                }
+                Some(Message::Ping(_)) => pings += 1,
+                other => panic!("not an event: {other:?}"),
+            }
+        }
+        events
+    };
+    timeout(PATIENCE, reading).await.expect("quiet in time")
 }
 
 /// `close`'s code and reason.

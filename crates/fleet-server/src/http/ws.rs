@@ -277,7 +277,10 @@ pub(crate) trait Project: Send + 'static {
     /// Whether it holds anything to send.
     fn has_work(&self) -> bool;
 
-    /// Its next step, built now on the rights as they are now.
+    /// Its next step, built now on the rights as they are now. When a
+    /// commit lands during a read the step needs, the step is
+    /// [`Step::Nothing`] and what it took stays, built again on the next turn
+    /// (S43).
     ///
     /// # Errors
     /// [`Unprojected`] when a read fails: the socket closes with 1013.
@@ -294,7 +297,8 @@ pub(crate) enum Step {
     Send(Box<EventMessage>),
     /// Owes a `resync`, said within its gap.
     Resync,
-    /// Nothing: what it took makes no frame for this viewer.
+    /// Nothing this turn: what it took makes no frame for this viewer, or
+    /// stays, to be built again on the next turn.
     Nothing,
 }
 
@@ -449,6 +453,11 @@ impl<P: Project> Running<P> {
                 Err(_) => return Ended::closed(SocketClose::Busy, "the commit count is gone"),
             }
             let now = Instant::now();
+            match self.owed(&mut checks, &mut resync, now).await {
+                Ok(true) => continue,
+                Ok(false) => {}
+                Err(ended) => return ended,
+            }
             let check_at = checks.due(now);
             let resync_at = resync.due(now);
             tokio::select! {
@@ -480,18 +489,14 @@ impl<P: Project> Running<P> {
                     }
                 }
                 () = sleep_until(check_at.unwrap_or(deadline)), if check_at.is_some() => {
-                    checks.done(Instant::now());
-                    if let Err(ended) = self.check().await {
+                    if let Err(ended) = self.checked(&mut checks).await {
                         return ended;
                     }
                 }
                 () = sleep_until(resync_at.unwrap_or(deadline)), if resync_at.is_some() => {
-                    if let Err(failed) = self.send(&EventMessage::resync()).await {
-                        return failed.ended();
+                    if let Err(ended) = self.resynced(&mut resync).await {
+                        return ended;
                     }
-                    resync.done(Instant::now());
-                    self.resyncs = self.resyncs.saturating_add(1);
-                    self.project.resynced();
                 }
                 () = future::ready(()), if self.project.has_work() => match self.step().await {
                     Ok(Step::Send(message)) => {
@@ -522,6 +527,45 @@ impl<P: Project> Running<P> {
                 }
             }
         }
+    }
+
+    /// Does the session check or the `resync` owed and due already at `now`,
+    /// before anything waits: whether it did one. A branch's sleep fires only
+    /// at the timer's next tick, which a branch ready at every turn would
+    /// outrun for good (S43); each is still done at most once per its gap.
+    async fn owed(
+        &mut self,
+        checks: &mut Gap,
+        resync: &mut Gap,
+        now: Instant,
+    ) -> Result<bool, Ended> {
+        if checks.due(now).is_some_and(|at| at <= now) {
+            self.checked(checks).await?;
+            return Ok(true);
+        }
+        if resync.due(now).is_some_and(|at| at <= now) {
+            self.resynced(resync).await?;
+            return Ok(true);
+        }
+        Ok(false)
+    }
+
+    /// The session check `checks` owed, done now.
+    async fn checked(&mut self, checks: &mut Gap) -> Result<(), Ended> {
+        checks.done(Instant::now());
+        self.check().await
+    }
+
+    /// The `resync` `resync` owed, sent now; the viewer fetches everything
+    /// again.
+    async fn resynced(&mut self, resync: &mut Gap) -> Result<(), Ended> {
+        self.send(&EventMessage::resync())
+            .await
+            .map_err(SendFailed::ended)?;
+        resync.done(Instant::now());
+        self.resyncs = self.resyncs.saturating_add(1);
+        self.project.resynced();
+        Ok(())
     }
 
     /// Takes the events already waiting on the bus while the projection has
