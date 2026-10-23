@@ -332,6 +332,56 @@ where
     .transpose()
 }
 
+/// The bots among `ids` that exist, each as [`listed`] reads it for
+/// `viewer`, in ID order: one query, the IDs bound as one JSON array.
+pub(super) async fn listed_in(
+    pool: &sqlx::SqlitePool,
+    ids: &[BotId],
+    viewer: UserId,
+) -> Result<Vec<ListedBot>, StoreError> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let ids = serde_json::Value::from(
+        ids.iter()
+            .map(|id| id_text(*id).to_string())
+            .collect::<Vec<_>>(),
+    )
+    .to_string();
+    let viewer = id_text(viewer);
+    sqlx::query_as!(
+        ListedBotRow,
+        r#"SELECT b.rowid AS "rowid!: i64", b.id AS "id!", b.account_id AS "account_id!",
+                  b.server_address AS "server_address?", b.mode_id AS "mode_id!",
+                  b.desired_state AS "desired_state!", b.agent_id AS "agent_id?",
+                  b.last_state AS "last_state?", b.last_state_reason AS "last_state_reason?",
+                  b.last_state_at AS "last_state_at?",
+                  a.rowid AS "account_rowid!: i64", a.kind AS "kind!", a.mc_uuid AS "mc_uuid?",
+                  a.mc_name AS "mc_name!", a.status AS "status!",
+                  a.status_reason AS "status_reason?", a.created_at AS "created_at!",
+                  a.owner_user_id AS "owner_user_id!", u.role AS "owner_role!",
+                  u.username AS "owner_name!", u.rowid AS "owner_rowid!: i64",
+                  u.disabled AS "owner_disabled!: i64",
+                  m.rowid AS "mode_rowid!: i64", m.definition_json AS "definition_json!",
+                  g.level AS "grant_level?", g.rowid AS "grant_rowid?: i64"
+           FROM bots b
+           JOIN mc_accounts a ON a.id = b.account_id
+           JOIN users u ON u.id = a.owner_user_id
+           JOIN modes m ON m.id = b.mode_id
+           LEFT JOIN account_grants g ON g.account_id = a.id AND g.user_id = ?
+           WHERE b.id IN (SELECT value FROM json_each(?))
+           ORDER BY b.id"#,
+        viewer,
+        ids
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(store_error)?
+    .iter()
+    .map(listed_bot_from_row)
+    .collect()
+}
+
 /// One page of the bots `viewer` may see, newest first: those of the
 /// accounts `accounts::list_visible` lists for them. One more than its limit
 /// when another page follows.

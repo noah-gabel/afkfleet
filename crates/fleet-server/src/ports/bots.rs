@@ -219,6 +219,14 @@ pub trait BotReads: Send + Sync + fmt::Debug {
     /// [`StoreError`], including [`StoreError::Corrupt`].
     async fn listed(&self, id: BotId, viewer: UserId) -> Result<Option<ListedBot>, StoreError>;
 
+    /// The bots among `ids` that exist, each as [`BotReads::listed`] reads
+    /// it for `viewer`, in one query (ADR-0020, S41), in ID order. The
+    /// caller still asks `authorize()` for each.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn listed_in(&self, ids: &[BotId], viewer: UserId) -> Result<Vec<ListedBot>, StoreError>;
+
     /// One page of the bots `viewer` may see, newest first: those of the
     /// accounts [`super::accounts::AccountReads::list_visible`] lists for
     /// them, by the owners' current roles (ADR-0010). One more than its limit

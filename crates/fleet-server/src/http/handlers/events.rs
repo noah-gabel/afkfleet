@@ -25,27 +25,53 @@
 //!
 //!   The ticket is in the URL, so no log line ever holds it: the trace
 //!   layer logs the route's template, and nothing here logs the query.
+//! - **What a socket sends** ([`Viewer`], ADR-0020, S30, S32–S34,
+//!   R28–R35): each event built for its viewer right before its send,
+//!   through the very helpers the REST answers use, so a frame shows what
+//!   `GET /bots/{id}` would show them then:
+//!   1. the gate: once the commit count moved past the rights it judged on,
+//!      it reads them again (one read for every socket), sends `bot_removed`
+//!      for each bot the viewer no longer sees, and reads the ones they now
+//!      do; every read of bots it holds is then read again;
+//!   2. a viewer whose own role, flag or account changed is sent nothing
+//!      more: their session check closes the socket (R31);
+//!   3. an agent's event on a bot they can't see is dropped by a lookup,
+//!      with no read and no frame;
+//!   4. a bot's state and the server's hints are read together, in one
+//!      query, at the first one's place (R33), and each read decides its
+//!      frame: `bot` when the viewer may see the bot, `bot_removed` when they
+//!      saw it and no longer may.
 
 use core::time::Duration;
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::sync::Arc;
 
 use axum::Json;
 use axum::extract::State;
 use axum::extract::ws::WebSocketUpgrade;
 use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::response::Response;
-use fleet_api_types::events::{EventTicketResponse, EventsQuery};
+use fleet_api_types::bots::{BotStateKind, BotStateReason};
+use fleet_api_types::events::{EventMessage, EventTicketResponse, EventsQuery};
 use fleet_api_types::{ErrorResponse, SecretText};
-use fleet_core::authz::{Permission, ResourceContext};
+use fleet_core::authz::{Actor, Permission, ResourceContext, authorize};
+use fleet_core::bot::{BotNotification, LastState};
+use fleet_core::id::BotId;
 use secrecy::ExposeSecret as _;
 use tokio::time::Instant;
 use tracing::{Instrument as _, debug, info_span};
 
+use super::bots::bot_response;
+use super::timestamp;
 use crate::app::auth::{SocketCheckError, SocketSession};
+use crate::app::bots::{BotService, BotView};
+use crate::app::events::{BusEvent, LiveEvent, LiveEventKind, LiveRights, Rights};
 use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, ValidQuery};
 use crate::http::router::AppState;
 use crate::http::ws::{
-    MAX_CLIENT_FRAME, MAX_WRITE_BUFFER, OpenSocket, READ_BUFFER, refused_upgrade, run,
+    MAX_CLIENT_FRAME, MAX_WRITE_BUFFER, MERGE_MAX, OpenSocket, Project, READ_BUFFER, Step,
+    Unprojected, refused_upgrade, run,
 };
 
 /// `POST /api/v1/events/ticket`: a ticket for one live events socket of this
@@ -163,6 +189,7 @@ pub(crate) async fn connect(
         events: state.events.clone(),
         tokens: state.tokens.clone(),
     };
+    let viewer = Viewer::new(actor, state.events.rights.clone(), state.bots.clone());
     let sockets = state.events.sockets.clone();
     let span = info_span!("events_socket", user_id = %actor.id, session_id = %session.session_id);
     Ok(upgrade
@@ -175,7 +202,7 @@ pub(crate) async fn connect(
             debug!(error = %error, "a live events socket's upgrade failed");
         })
         .on_upgrade(move |socket| async move {
-            sockets.spawn(run(socket, open).instrument(span));
+            sockets.spawn(run(socket, open, viewer).instrument(span));
             // Counted by the tracker until its task is spawned.
             drop(owned);
         }))
@@ -186,6 +213,254 @@ pub(crate) async fn connect(
 fn socket_deadline(time_left: Duration) -> Instant {
     let now = Instant::now();
     now.checked_add(time_left).unwrap_or(now)
+}
+
+/// One socket's viewer, and what the socket owes them; see the
+/// [module docs](self).
+#[derive(Debug)]
+pub(crate) struct Viewer {
+    actor: Actor,
+    live: LiveRights,
+    /// The rights it judges on.
+    rights: Arc<Rights>,
+    /// The bots the viewer is taken to know: what they could see at the
+    /// open or the last `resync`, and every bot sent since, until it's
+    /// removed (R32).
+    seen: BTreeSet<BotId>,
+    slots: VecDeque<Slot>,
+    bots: BotService,
+}
+
+/// One thing a socket owes its viewer, in the bus's order.
+#[derive(Debug)]
+enum Slot {
+    /// The viewer no longer sees this bot: `bot_removed`.
+    Removed(BotId),
+    /// Bots whose reads may have changed, read together when their turn
+    /// comes.
+    Bots(BotReads),
+    /// An agent's event about one bot.
+    Agent(Arc<BusEvent>),
+}
+
+/// Bots to read, and, once read, the views not sent yet.
+#[derive(Debug, Default)]
+struct BotReads {
+    ids: BTreeSet<BotId>,
+    /// `None` until read, and again once a commit may have changed them.
+    views: Option<BTreeMap<BotId, BotView>>,
+}
+
+impl Viewer {
+    /// The viewer `actor`, judged on `live`, their bots read through `bots`.
+    pub(crate) fn new(actor: Actor, live: LiveRights, bots: BotService) -> Self {
+        Self {
+            actor,
+            live,
+            rights: Arc::default(),
+            seen: BTreeSet::new(),
+            slots: VecDeque::new(),
+            bots,
+        }
+    }
+
+    /// Reads the rights again once the commit count moved past them: sends
+    /// `bot_removed` first for each bot the viewer no longer sees, then
+    /// reads those they now do, and drops every read made before.
+    async fn gate(&mut self) -> Result<(), Unprojected> {
+        let count = self.live.count();
+        if count <= self.rights.at() {
+            return Ok(());
+        }
+        self.rights = self.live.at_least(count).await.map_err(|error| {
+            debug!(%error, "a live events socket couldn't read its rights");
+            Unprojected
+        })?;
+        for slot in &mut self.slots {
+            if let Slot::Bots(reads) = slot {
+                reads.views = None;
+            }
+        }
+        let visible = self.rights.visible(&self.actor);
+        let joined: BTreeSet<BotId> = visible.difference(&self.seen).copied().collect();
+        if !joined.is_empty() {
+            self.slots.push_front(Slot::Bots(BotReads {
+                ids: joined,
+                views: None,
+            }));
+        }
+        let left: Vec<BotId> = self.seen.difference(&visible).copied().collect();
+        for bot in left.into_iter().rev() {
+            self.seen.remove(&bot);
+            self.slots.push_front(Slot::Removed(bot));
+        }
+        Ok(())
+    }
+
+    /// Notes that `bots` may read differently: merged into the first
+    /// unread read it holds, or a new one at the end.
+    fn hint(&mut self, bots: impl IntoIterator<Item = BotId>) {
+        let ids: BTreeSet<BotId> = bots
+            .into_iter()
+            .filter(|bot| self.rights.level(&self.actor, *bot).is_some() || self.seen.contains(bot))
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let unread = self.slots.iter_mut().find_map(|slot| match slot {
+            Slot::Bots(reads) if reads.views.is_none() => Some(reads),
+            _ => None,
+        });
+        match unread {
+            Some(reads) => reads.ids.extend(ids),
+            None => self
+                .slots
+                .push_back(Slot::Bots(BotReads { ids, views: None })),
+        }
+    }
+
+    /// The next bot of `reads`, read now with the rest if it wasn't yet.
+    async fn bot_step(&mut self, mut reads: BotReads) -> Result<Step, Unprojected> {
+        let mut views = if let Some(views) = reads.views.take() {
+            views
+        } else {
+            // The bots the viewer may see now, and those they saw, for a
+            // `bot_removed`.
+            reads.ids.retain(|bot| {
+                self.rights.level(&self.actor, *bot).is_some() || self.seen.contains(bot)
+            });
+            let ids: Vec<BotId> = reads.ids.iter().copied().collect();
+            self.bots
+                .views(&self.actor, &ids)
+                .await
+                .map_err(|error| {
+                    debug!(%error, "a live events socket couldn't read its bots");
+                    Unprojected
+                })?
+                .into_iter()
+                .map(|view| (view.record.bot.id, view))
+                .collect()
+        };
+        let Some(bot) = reads.ids.pop_first() else {
+            return Ok(Step::Nothing);
+        };
+        let view = views.remove(&bot);
+        if !reads.ids.is_empty() {
+            reads.views = Some(views);
+            self.slots.push_front(Slot::Bots(reads));
+        }
+        Ok(self.bot_frame(bot, view))
+    }
+
+    /// `bot`'s frame from its fresh `view` (R32): `bot` when the viewer may
+    /// see it, as `GET /bots/{id}` shows it, else `bot_removed` when they saw
+    /// it.
+    fn bot_frame(&mut self, bot: BotId, view: Option<BotView>) -> Step {
+        let shown = view.filter(|view| {
+            authorize(&self.actor, Permission::ViewBot, &view.account.context()).is_ok()
+        });
+        match shown {
+            // A response that doesn't build is the internal error a `GET`
+            // answers, logged there; the socket sends nothing for it.
+            Some(view) => bot_response(&self.actor, &view).map_or(Step::Nothing, |response| {
+                self.seen.insert(bot);
+                Step::Send(Box::new(EventMessage::bot(response)))
+            }),
+            None if self.seen.remove(&bot) => Step::Send(Box::new(EventMessage::bot_removed(bot))),
+            None => Step::Nothing,
+        }
+    }
+
+    /// An agent's `event`, for a viewer who may see its bot now.
+    fn agent_step(&self, event: &LiveEvent) -> Step {
+        if self.rights.level(&self.actor, event.bot).is_none() {
+            return Step::Nothing;
+        }
+        let at = timestamp(event.at);
+        let message = match (&event.kind, at) {
+            (LiveEventKind::Died, Ok(at)) => EventMessage::bot_died(event.bot, at),
+            (LiveEventKind::Alert(notification), Ok(at)) => match alerted(*notification) {
+                Some((state, reason)) => EventMessage::bot_alert(event.bot, at, state, reason),
+                None => return Step::Nothing,
+            },
+            // A state is merged into the bots' reads as it's taken; chat
+            // arrives with its own frames.
+            _ => return Step::Nothing,
+        };
+        Step::Send(Box::new(message))
+    }
+}
+
+impl Project for Viewer {
+    async fn open(&mut self) -> Result<(), Unprojected> {
+        self.rights = self
+            .live
+            .at_least(self.live.count())
+            .await
+            .map_err(|error| {
+                debug!(%error, "a live events socket couldn't read its rights");
+                Unprojected
+            })?;
+        self.seen = self.rights.visible(&self.actor);
+        Ok(())
+    }
+
+    fn has_room(&self) -> bool {
+        self.slots.len() < MERGE_MAX
+    }
+
+    fn take(&mut self, event: Arc<BusEvent>) {
+        match &*event {
+            BusEvent::Agent(agent) => {
+                // A bot the viewer can't see: dropped by a lookup (S30).
+                if self.rights.level(&self.actor, agent.bot).is_none() {
+                    return;
+                }
+                if matches!(agent.kind, LiveEventKind::Status(_)) {
+                    self.hint([agent.bot]);
+                } else {
+                    self.slots.push_back(Slot::Agent(event));
+                }
+            }
+            BusEvent::Bots(bots) => self.hint(bots.iter().copied()),
+            BusEvent::Mode(_) | BusEvent::RoleChanged { .. } => {}
+        }
+    }
+
+    fn has_work(&self) -> bool {
+        !self.slots.is_empty()
+    }
+
+    async fn next(&mut self) -> Result<Step, Unprojected> {
+        self.gate().await?;
+        if !self.rights.stands(&self.actor) {
+            // Muted until the session check closes the socket (R31).
+            self.slots.clear();
+            return Ok(Step::Nothing);
+        }
+        match self.slots.pop_front() {
+            None => Ok(Step::Nothing),
+            Some(Slot::Removed(bot)) => Ok(Step::Send(Box::new(EventMessage::bot_removed(bot)))),
+            Some(Slot::Bots(reads)) => self.bot_step(reads).await,
+            Some(Slot::Agent(event)) => Ok(event
+                .agent()
+                .map_or(Step::Nothing, |event| self.agent_step(event))),
+        }
+    }
+
+    fn resynced(&mut self) {
+        self.seen = self.rights.visible(&self.actor);
+    }
+}
+
+/// A paused or failed bot's state and reason, as `GET /bots/{id}` names
+/// them.
+fn alerted(notification: BotNotification) -> Option<(BotStateKind, BotStateReason)> {
+    let state = match notification {
+        BotNotification::Paused { reason } => LastState::Paused(reason),
+        BotNotification::Failed { reason } => LastState::Failed(reason),
+    };
+    Some((BotStateKind::from(state), BotStateReason::of(state)?))
 }
 
 /// The one answer to every ticket that doesn't open a socket, with its one

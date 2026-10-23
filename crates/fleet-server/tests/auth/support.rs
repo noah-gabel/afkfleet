@@ -264,11 +264,15 @@ impl HookedStore {
                 hang_find: Arc::default(),
                 hanging: Arc::new(tokio::sync::watch::Sender::new(0)),
                 find_behind_writes: Arc::default(),
+                found: Arc::new(tokio::sync::watch::Sender::new(0)),
             },
             bots: HookedBots {
                 inner: inner.clone(),
                 accesses: Arc::default(),
                 fail_access: Arc::default(),
+                listed_ins: Arc::default(),
+                fail_listed_in: Arc::default(),
+                hold_listed_in: Arc::default(),
                 hold_access: Arc::default(),
             },
             inner,
@@ -312,6 +316,30 @@ impl HookedStore {
         *self.bots.fail_access.lock().unwrap() = true;
     }
 
+    /// How many times bots were read for live events (`BotReads::listed_in`,
+    /// P11.5).
+    pub(crate) fn bot_reads(&self) -> usize {
+        self.bots
+            .listed_ins
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// From now on, reading bots for live events fails as a busy database
+    /// does (P11.5).
+    pub(crate) fn fail_bot_reads(&self) {
+        *self.bots.fail_listed_in.lock().unwrap() = true;
+    }
+
+    /// Holds the next read of bots for live events once it has read the
+    /// database, until the returned hold is released (P11.5): the socket is
+    /// then in the middle of a step, reading nothing from its client.
+    pub(crate) fn hold_next_bot_read(&self) -> HeldRead {
+        let (read, read_done) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        *self.bots.hold_listed_in.lock().unwrap() = Some((read, released));
+        HeldRead { read_done, release }
+    }
+
     /// Holds the next read of the live events' rights once it has read the
     /// database, until the returned hold is released (P11.5).
     pub(crate) fn hold_next_rights_read(&self) -> HeldRead {
@@ -319,6 +347,16 @@ impl HookedStore {
         let (release, released) = tokio::sync::oneshot::channel();
         *self.bots.hold_access.lock().unwrap() = Some((read, released));
         HeldRead { read_done, release }
+    }
+
+    /// Waits, within `bound`, until `SessionReads::find`, a socket's check of
+    /// its session, answered `count` times since the start (P11.5).
+    pub(crate) async fn until_socket_checks(&self, count: u32, bound: Duration) {
+        let mut found = self.sessions.found.subscribe();
+        tokio::time::timeout(bound, found.wait_for(|found| *found >= count))
+            .await
+            .expect("the checks answered in time")
+            .unwrap();
     }
 
     /// Waits, within `bound`, until a `find` hangs.
@@ -691,6 +729,11 @@ struct HookedBots {
     inner: Database,
     accesses: Arc<std::sync::atomic::AtomicUsize>,
     fail_access: Arc<Mutex<bool>>,
+    listed_ins: Arc<std::sync::atomic::AtomicUsize>,
+    fail_listed_in: Arc<Mutex<bool>>,
+    /// The next `listed_in` tells the first once it read, then waits for
+    /// the second.
+    hold_listed_in: Arc<Mutex<Option<Hold>>>,
     /// The next `access` tells the first once it read, then waits for the
     /// second.
     hold_access: Arc<Mutex<Option<Hold>>>,
@@ -722,6 +765,21 @@ impl BotReads for HookedBots {
 
     async fn listed(&self, id: BotId, viewer: UserId) -> Result<Option<ListedBot>, StoreError> {
         self.inner.bots().listed(id, viewer).await
+    }
+
+    async fn listed_in(&self, ids: &[BotId], viewer: UserId) -> Result<Vec<ListedBot>, StoreError> {
+        self.listed_ins
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if *self.fail_listed_in.lock().unwrap() {
+            return Err(StoreError::Busy);
+        }
+        let read = self.inner.bots().listed_in(ids, viewer).await;
+        let hold = self.hold_listed_in.lock().unwrap().take();
+        if let Some((read_done, released)) = hold {
+            let _ = read_done.send(());
+            let _ = released.await;
+        }
+        read
     }
 
     async fn visible(
@@ -763,6 +821,8 @@ struct HookedSessions {
     hanging: Arc<tokio::sync::watch::Sender<u32>>,
     /// Each `find` waits for the write connection first.
     find_behind_writes: Arc<Mutex<bool>>,
+    /// How many `find`s answered.
+    found: Arc<tokio::sync::watch::Sender<u32>>,
 }
 
 #[async_trait]
@@ -791,7 +851,9 @@ impl SessionReads for HookedSessions {
             // Taken and dropped: rolled back, so it moves no count.
             drop(self.inner.write().await?);
         }
-        self.inner.sessions().find(id).await
+        let found = self.inner.sessions().find(id).await;
+        self.found.send_modify(|found| *found += 1);
+        found
     }
 
     async fn list_live(

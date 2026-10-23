@@ -12,7 +12,7 @@ use fleet_api_types::events::SocketClose;
 use fleet_core::id::{AgentId, BotId};
 use fleet_server::app::events::{LiveEvent, LiveEventKind};
 use fleet_server::config::RateLimitConfig;
-use fleet_server::http::ws::SocketTimings;
+use fleet_server::http::ws::{CHECK_GAP, SocketTimings};
 use fleet_testkit::log_capture;
 use futures_util::SinkExt as _;
 use serde_json::json;
@@ -34,6 +34,7 @@ const SHORT: SocketTimings = SocketTimings {
     send_timeout: Duration::from_secs(1),
     close_timeout: Duration::from_millis(200),
     resync_gap: Duration::from_millis(300),
+    check_gap: CHECK_GAP,
 };
 
 async fn short(options: SqliteConnectOptions) -> Setup {

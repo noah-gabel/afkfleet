@@ -257,6 +257,10 @@ impl BotReads for Reads {
         bots::listed(&self.pool, id, viewer).await
     }
 
+    async fn listed_in(&self, ids: &[BotId], viewer: UserId) -> Result<Vec<ListedBot>, StoreError> {
+        bots::listed_in(&self.pool, ids, viewer).await
+    }
+
     async fn visible(
         &self,
         viewer: Actor,

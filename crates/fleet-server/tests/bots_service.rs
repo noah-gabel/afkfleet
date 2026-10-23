@@ -944,6 +944,35 @@ async fn the_list_pages_the_bots_newest_first_each_with_its_state(
     ));
 }
 
+/// What a live events socket reads (ADR-0020, S41): one query for many
+/// bots, each read exactly as `view` reads it, unknown IDs left out.
+#[sqlx::test(migrations = false)]
+async fn the_views_of_many_bots_are_each_what_view_reads_in_id_order(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    for n in 1..=4 {
+        setup.bot(n).await;
+    }
+    setup.assign(bot(2), agent(2), None).await;
+    setup.assign(bot(3), agent(2), None).await;
+    let service = setup.service(true);
+
+    let views = service
+        .views(&the_owner(), &[bot(3), bot(9), bot(1), bot(2)])
+        .await
+        .unwrap();
+    let none = service.views(&the_owner(), &[]).await.unwrap();
+
+    let mut expected = Vec::new();
+    for n in [1, 2, 3] {
+        expected.push(service.view(&the_owner(), bot(n)).await.unwrap().unwrap());
+    }
+    assert_eq!(views, expected);
+    assert_eq!(none, Vec::new());
+}
+
 #[sqlx::test(migrations = false)]
 async fn a_read_that_fails_is_an_error(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
     let setup = Setup::new(options).await;
@@ -952,6 +981,11 @@ async fn a_read_that_fails_is_an_error(_pool: SqlitePoolOptions, options: Sqlite
     setup.db.close().await;
 
     let view = service.view(&the_owner(), bot).await;
+    let views = service.views(&the_owner(), &[bot]).await;
+    assert!(
+        matches!(views, Err(StoreError::Backend(_) | StoreError::Busy)),
+        "{views:?}"
+    );
     let list = service
         .list(
             &the_owner(),

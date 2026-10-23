@@ -9,6 +9,7 @@
 //! and real sockets): every wait is bounded by [`PATIENCE`], and nothing
 //! sleeps.
 
+mod bots;
 mod limits;
 mod liveness;
 mod rights;
@@ -264,7 +265,10 @@ pub(super) async fn ready(setup: &Setup, served: &Served, bearer: &SecretString)
 }
 
 /// The next frame, within [`PATIENCE`]; `None` once the socket ended.
-pub(super) async fn next(socket: &mut Socket) -> Option<Message> {
+pub(super) async fn next<S>(socket: &mut WebSocketStream<S>) -> Option<Message>
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     timeout(PATIENCE, socket.next())
         .await
         .expect("a frame in time")
@@ -272,7 +276,10 @@ pub(super) async fn next(socket: &mut Socket) -> Option<Message> {
 }
 
 /// The next frame, which must be an event.
-pub(super) async fn next_event(socket: &mut Socket) -> Value {
+pub(super) async fn next_event<S>(socket: &mut WebSocketStream<S>) -> Value
+where
+    S: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+{
     match next(socket).await {
         Some(Message::Text(text)) => serde_json::from_str(&text).unwrap(),
         other => panic!("not an event: {other:?}"),

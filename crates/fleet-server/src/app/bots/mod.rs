@@ -213,6 +213,23 @@ impl BotService {
         Ok(Some(view))
     }
 
+    /// The bots among `ids` that exist, each as [`BotService::view`] reads
+    /// it for `viewer`, from one query and each agent read once (ADR-0020,
+    /// S41): what a live events socket sends. The caller asks `authorize()`
+    /// for each, with its account's context.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    pub async fn views(&self, viewer: &Actor, ids: &[BotId]) -> Result<Vec<BotView>, StoreError> {
+        let rows = self.store.bots().listed_in(ids, viewer.id).await?;
+        let mut agents = Agents::new();
+        let mut views = Vec::with_capacity(rows.len());
+        for row in rows {
+            views.push(self.read(row, &mut agents).await?);
+        }
+        Ok(views)
+    }
+
     /// The bots `viewer` may see on `page`, newest first, and the next
     /// page's cursor; every one is checked with `authorize()`.
     ///

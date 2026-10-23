@@ -20,6 +20,11 @@
 //!   than one gap; a socket checks its session after the commit count
 //!   moved, at most once per [`CHECK_GAP`]. What's owed within a gap waits
 //!   for its end, so no lost event goes unsaid and no commit unchecked.
+//! - **What it sends** ([`Project`], R29–R34): the events of the bus its
+//!   viewer may see, each built for them right before its own send, one per
+//!   turn of its loop, so pings, the client's frames and the stop are served
+//!   between them. It takes at most [`MERGE_MAX`] events off the bus at a
+//!   time; the rest wait in the bus's receiver, its only queue.
 //! - **The owner** ([`LiveSockets`], R21): a tracker token is taken as the
 //!   connect starts, and the socket's task runs on the tracker, so every
 //!   socket and every connect has an owner of ours, and a connect after the
@@ -28,6 +33,7 @@
 //!   dropped), and serve waits for them, within its drain, before the
 //!   database closes.
 
+use core::future::{self, Future};
 use core::time::Duration;
 use std::io;
 use std::sync::Arc;
@@ -37,7 +43,7 @@ use axum::extract::ws::rejection::WebSocketUpgradeRejection;
 use axum::extract::ws::{CloseFrame, Message, WebSocket};
 use fleet_api_types::events::{EventMessage, SocketClose};
 use tokio::sync::broadcast::Receiver;
-use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::broadcast::error::{RecvError, TryRecvError};
 use tokio::sync::watch;
 use tokio::time::{Instant, MissedTickBehavior, interval_at, sleep, sleep_until, timeout};
 use tokio_util::sync::CancellationToken;
@@ -93,6 +99,8 @@ pub struct SocketTimings {
     pub close_timeout: Duration,
     /// The gap between two `resync`s ([`RESYNC_GAP`]).
     pub resync_gap: Duration,
+    /// The gap between two checks of the session ([`CHECK_GAP`]).
+    pub check_gap: Duration,
 }
 
 impl Default for SocketTimings {
@@ -104,6 +112,7 @@ impl Default for SocketTimings {
             send_timeout: SEND_TIMEOUT,
             close_timeout: CLOSE_TIMEOUT,
             resync_gap: RESYNC_GAP,
+            check_gap: CHECK_GAP,
         }
     }
 }
@@ -243,6 +252,54 @@ pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 /// is checked when it ends (PR #66's review).
 pub const CHECK_GAP: Duration = Duration::from_millis(250);
 
+/// How many events a socket takes off the bus before it sent what they make
+/// (R33): the rest wait in the bus's receiver.
+pub const MERGE_MAX: usize = 64;
+
+/// What one socket sends its viewer (ADR-0020, R29): the bus's events they
+/// may see, each built for them right before its send, on the rights as
+/// they are then (S30, S32–S34, R30–R33). `handlers::events::Viewer` is the
+/// one implementation; the socket's loop drives it.
+pub(crate) trait Project: Send + 'static {
+    /// Reads, before `ready`, the rights the socket starts from and what its
+    /// viewer sees then.
+    ///
+    /// # Errors
+    /// [`Unprojected`] when the read fails: the socket closes with 1013.
+    fn open(&mut self) -> impl Future<Output = Result<(), Unprojected>> + Send;
+
+    /// Whether it takes another event: it holds fewer than [`MERGE_MAX`].
+    fn has_room(&self) -> bool;
+
+    /// Takes `event`, the bus's next one.
+    fn take(&mut self, event: Arc<BusEvent>);
+
+    /// Whether it holds anything to send.
+    fn has_work(&self) -> bool;
+
+    /// Its next step, built now on the rights as they are now.
+    ///
+    /// # Errors
+    /// [`Unprojected`] when a read fails: the socket closes with 1013.
+    fn next(&mut self) -> impl Future<Output = Result<Step, Unprojected>> + Send;
+
+    /// The socket said `resync`: its viewer fetches everything again.
+    fn resynced(&mut self);
+}
+
+/// What a socket does next for its viewer.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum Step {
+    /// Sends this frame.
+    Send(Box<EventMessage>),
+    /// Nothing: what it took makes no frame for this viewer.
+    Nothing,
+}
+
+/// A read the projection needed failed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Unprojected;
+
 /// How a socket ended, for its close and its last log line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Ended {
@@ -270,7 +327,8 @@ impl Ended {
 }
 
 /// Runs one socket until it ends (ADR-0020, S31, S35, R18–R20): subscribes
-/// to the bus and says `ready`, then, in this order of precedence:
+/// to the bus, opens `project` and says `ready`, then, in this order of
+/// precedence:
 /// - closes with 1001 at the shutdown, and with 4001 once the access token
 ///   it opened with expires, without a read;
 /// - takes a pong that answers a ping and the client's close; closes with
@@ -280,7 +338,9 @@ impl Ended {
 /// - checks its session again once the commit count moved, at most once per
 ///   [`CHECK_GAP`], closing with 4001 when it no longer counts and with
 ///   1013 when the check can't be made;
-/// - says `resync` once it lagged behind the bus, at most once per gap.
+/// - says `resync` once it lagged behind the bus, at most once per gap;
+/// - sends what `project` builds of the events it took, one step a turn;
+/// - takes the bus's next events, while `project` has room.
 ///
 /// A send that doesn't go out in time closes it with 4002. The shutdown
 /// races every send and every check (R20): a send then gets the close bound
@@ -288,7 +348,7 @@ impl Ended {
 /// so a socket ends within two close bounds of the stop: a send finishing,
 /// then its 1001. One `info` line says when it opened, and one when and why
 /// it ended.
-pub(crate) async fn run(socket: WebSocket, open: OpenSocket) {
+pub(crate) async fn run<P: Project>(socket: WebSocket, open: OpenSocket, project: P) {
     let OpenSocket {
         session,
         slot: _held,
@@ -307,11 +367,15 @@ pub(crate) async fn run(socket: WebSocket, open: OpenSocket) {
         stop: events.sockets.stop(),
         timings: events.timings,
         resyncs: 0,
+        project,
     };
     info!("a live events socket opened");
-    let ended = match running.send(&EventMessage::ready()).await {
-        Ok(()) => running.serve(deadline).await,
-        Err(failed) => failed.ended(),
+    let ended = match running.open().await {
+        Ok(()) => match running.send(&EventMessage::ready()).await {
+            Ok(()) => running.serve(deadline).await,
+            Err(failed) => failed.ended(),
+        },
+        Err(ended) => ended,
     };
     match ended {
         Ended::Closed { close, .. } => running.close(close).await,
@@ -334,7 +398,7 @@ pub(crate) async fn run(socket: WebSocket, open: OpenSocket) {
 }
 
 /// One socket while it runs: its connection, and what its loop reads.
-struct Running {
+struct Running<P> {
     socket: WebSocket,
     /// The session it was opened by.
     session: SocketSession,
@@ -349,9 +413,11 @@ struct Running {
     timings: SocketTimings,
     /// How many `resync`s it said, for its last log line.
     resyncs: u32,
+    /// What it sends its viewer.
+    project: P,
 }
 
-impl Running {
+impl<P: Project> Running<P> {
     /// The socket's loop once `ready` went out; see [`run`]. `deadline` is
     /// when the access token it opened with expires.
     async fn serve(&mut self, deadline: Instant) -> Ended {
@@ -367,7 +433,7 @@ impl Running {
         let expiry = sleep_until(deadline);
         tokio::pin!(idle, expiry);
         let mut resync = Gap::new(timings.resync_gap);
-        let mut checks = Gap::new(CHECK_GAP);
+        let mut checks = Gap::new(timings.check_gap);
         loop {
             // The count is read at every turn, whichever branch woke it, so
             // no busy branch can hide a commit; one between the connect's
@@ -423,11 +489,22 @@ impl Running {
                     }
                     resync.done(Instant::now());
                     self.resyncs = self.resyncs.saturating_add(1);
+                    self.project.resynced();
                 }
-                received = self.bus.recv() => match received {
-                    // D1 sends no event yet; D2 sends each to whoever may see
-                    // it.
-                    Ok(_) => {}
+                () = future::ready(()), if self.project.has_work() => match self.step().await {
+                    Ok(Step::Send(message)) => {
+                        if let Err(failed) = self.send(&message).await {
+                            return failed.ended();
+                        }
+                    }
+                    Ok(Step::Nothing) => {}
+                    Err(ended) => return ended,
+                },
+                received = self.bus.recv(), if self.project.has_room() => match received {
+                    Ok(event) => {
+                        self.project.take(event);
+                        self.take_waiting(&mut resync);
+                    }
                     // No count: it would count events of bots the user can't
                     // see.
                     Err(RecvError::Lagged(_)) => resync.owe(),
@@ -441,6 +518,59 @@ impl Running {
                     checks.owe();
                 }
             }
+        }
+    }
+
+    /// Takes the events already waiting on the bus while the projection has
+    /// room, in order (R33); a lag among them owes a `resync`.
+    fn take_waiting(&mut self, resync: &mut Gap) {
+        while self.project.has_room() {
+            match self.bus.try_recv() {
+                Ok(event) => self.project.take(event),
+                Err(TryRecvError::Lagged(_)) => resync.owe(),
+                // A closed bus shows at the next `recv`.
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            }
+        }
+    }
+
+    /// Opens the projection within [`CHECK_TIMEOUT`]: 1013 when its rights
+    /// can't be read, and 1001 at once when the server stops meanwhile.
+    async fn open(&mut self) -> Result<(), Ended> {
+        let opened = tokio::select! {
+            biased;
+            // Both are cancel-safe: opening only reads.
+            () = self.stop.cancelled() => {
+                return Err(Ended::closed(SocketClose::ShuttingDown, "the server is shutting down"));
+            }
+            opened = timeout(CHECK_TIMEOUT, self.project.open()) => opened,
+        };
+        match opened {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(Unprojected)) | Err(_) => Err(Ended::closed(
+                SocketClose::Busy,
+                "its rights couldn't be read",
+            )),
+        }
+    }
+
+    /// The projection's next step within [`CHECK_TIMEOUT`]: 1013 when a read
+    /// it needs fails, and 1001 at once when the server stops meanwhile.
+    async fn step(&mut self) -> Result<Step, Ended> {
+        let stepped = tokio::select! {
+            biased;
+            // Dropping a step only drops reads; the socket ends either way.
+            () = self.stop.cancelled() => {
+                return Err(Ended::closed(SocketClose::ShuttingDown, "the server is shutting down"));
+            }
+            stepped = timeout(CHECK_TIMEOUT, self.project.next()) => stepped,
+        };
+        match stepped {
+            Ok(Ok(step)) => Ok(step),
+            Ok(Err(Unprojected)) | Err(_) => Err(Ended::closed(
+                SocketClose::Busy,
+                "an event couldn't be read",
+            )),
         }
     }
 

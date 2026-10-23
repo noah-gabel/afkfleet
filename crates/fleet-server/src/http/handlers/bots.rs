@@ -412,7 +412,7 @@ fn bot_page(viewer: &Actor, listed: &Paged<BotView, BotId>) -> Result<Json<BotPa
 /// A bot as `viewer` sees it (S54): its account under the accounts' field
 /// rule, its server for Control holders and above (PR #54's review), and
 /// its agent for Admins and the Owner only.
-fn bot_response(viewer: &Actor, view: &BotView) -> Result<BotResponse, ApiError> {
+pub(super) fn bot_response(viewer: &Actor, view: &BotView) -> Result<BotResponse, ApiError> {
     let bot = &view.record.bot;
     let sees_agents = authorize(viewer, Permission::ViewAgents, &ResourceContext::Global).is_ok();
     let sees_server = effective_level(viewer, view.account.owner, view.account.grant)
