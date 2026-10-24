@@ -1,0 +1,33 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n               (SELECT id FROM audit_log WHERE at > ? ORDER BY id LIMIT 1) AS \"first_kept: i64\",\n               (SELECT MAX(id) FROM audit_log) AS \"last: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "first_kept: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "audit_log",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "last: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true
+    ]
+  },
+  "hash": "e4afa7efa50bf2bd8e03e3c6bc20321405e7d7b641a3f998d0f547ccd449ca9f"
+}

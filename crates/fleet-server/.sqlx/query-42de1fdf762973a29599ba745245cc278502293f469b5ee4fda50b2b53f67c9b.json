@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM enrollment_tokens WHERE rowid IN (\n             SELECT rowid FROM enrollment_tokens\n             WHERE used_at IS NULL AND expires_at <= ?\n             ORDER BY expires_at LIMIT ?\n         )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "42de1fdf762973a29599ba745245cc278502293f469b5ee4fda50b2b53f67c9b"
+}

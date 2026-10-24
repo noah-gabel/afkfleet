@@ -71,6 +71,7 @@ use fleet_server::ports::modes::{
 use fleet_server::ports::page::Page;
 use fleet_server::ports::passwords::{HashError, Passwords, VerifyError};
 use fleet_server::ports::reconcile::{Change, Reconcile};
+use fleet_server::ports::retention::{RetentionReads, RetentionWrites};
 use fleet_server::ports::sessions::{
     LiveSince, Session, SessionReads, SessionWithUser, SessionWrites,
 };
@@ -606,6 +607,10 @@ impl WriteTx for HookedTx {
         self.inner.audit()
     }
 
+    fn retention(&mut self) -> &mut dyn RetentionWrites {
+        self.inner.retention()
+    }
+
     async fn commit(self: Box<Self>, entry: NewAuditEntry) -> Result<AuditEntryId, StoreError> {
         let Self {
             inner,
@@ -691,6 +696,10 @@ impl WriteTx for LosingTx {
 
     fn audit(&mut self) -> &mut dyn AuditWrites {
         self.inner.audit()
+    }
+
+    fn retention(&mut self) -> &mut dyn RetentionWrites {
+        self.inner.retention()
     }
 
     async fn commit(self: Box<Self>, entry: NewAuditEntry) -> Result<AuditEntryId, StoreError> {
@@ -1047,6 +1056,10 @@ impl Store for HookedStore {
 
     fn audit(&self) -> &dyn AuditReads {
         self.inner.audit()
+    }
+
+    fn retention(&self) -> &dyn RetentionReads {
+        self.inner.retention()
     }
 
     async fn ping(&self) -> Result<(), StoreError> {

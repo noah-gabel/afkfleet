@@ -18,6 +18,7 @@ use fleet_server::ports::invites::{InviteReads, InviteWrites};
 use fleet_server::ports::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
 use fleet_server::ports::mfa::{MfaReads, MfaWrites};
 use fleet_server::ports::modes::{ModeReads, ModeWrites};
+use fleet_server::ports::retention::{RetentionReads, RetentionWrites};
 use fleet_server::ports::sessions::{SessionReads, SessionWrites};
 use fleet_server::ports::store::{Store, StoreError, UnauditedWrite, WriteTx};
 use fleet_server::ports::users::{UserReads, UserWrites};
@@ -104,6 +105,10 @@ impl WriteTx for ObservedTx {
         self.inner.audit()
     }
 
+    fn retention(&mut self) -> &mut dyn RetentionWrites {
+        self.inner.retention()
+    }
+
     async fn commit(self: Box<Self>, entry: NewAuditEntry) -> Result<AuditEntryId, StoreError> {
         let id = self.inner.commit(entry).await?;
         self.log.lock().unwrap().push("committed");
@@ -184,6 +189,10 @@ impl Store for ObservedStore {
 
     fn audit(&self) -> &dyn AuditReads {
         self.inner.audit()
+    }
+
+    fn retention(&self) -> &dyn RetentionReads {
+        self.inner.retention()
     }
 
     async fn ping(&self) -> Result<(), StoreError> {

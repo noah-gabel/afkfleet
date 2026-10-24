@@ -1,0 +1,133 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT\n            (SELECT COUNT(*) FROM users) AS \"users!: i64\",\n            (SELECT COUNT(*) FROM audit_log) AS \"audit_log!: i64\",\n            (SELECT COUNT(*) FROM sessions) AS \"sessions!: i64\",\n            (SELECT COUNT(*) FROM rotated_refresh_tokens) AS \"rotated_refresh_tokens!: i64\",\n            (SELECT COUNT(*) FROM login_attempts) AS \"login_attempts!: i64\",\n            (SELECT COUNT(*) FROM user_mfa) AS \"user_mfa!: i64\",\n            (SELECT COUNT(*) FROM recovery_codes) AS \"recovery_codes!: i64\",\n            (SELECT COUNT(*) FROM invites) AS \"invites!: i64\",\n            (SELECT COUNT(*) FROM mc_accounts) AS \"mc_accounts!: i64\",\n            (SELECT COUNT(*) FROM account_grants) AS \"account_grants!: i64\",\n            (SELECT COUNT(*) FROM agents) AS \"agents!: i64\",\n            (SELECT COUNT(*) FROM agent_certs) AS \"agent_certs!: i64\",\n            (SELECT COUNT(*) FROM enrollment_tokens) AS \"enrollment_tokens!: i64\",\n            (SELECT COUNT(*) FROM modes) AS \"modes!: i64\",\n            (SELECT COUNT(*) FROM bots) AS \"bots!: i64\",\n            (SELECT COUNT(*) FROM releasing_bots) AS \"releasing_bots!: i64\",\n            (SELECT COUNT(*) FROM chat_messages) AS \"chat_messages!: i64\"",
+  "describe": {
+    "columns": [
+      {
+        "name": "users!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "audit_log!: i64",
+        "ordinal": 1,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "sessions!: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "rotated_refresh_tokens!: i64",
+        "ordinal": 3,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "login_attempts!: i64",
+        "ordinal": 4,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "user_mfa!: i64",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "recovery_codes!: i64",
+        "ordinal": 6,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "invites!: i64",
+        "ordinal": 7,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "mc_accounts!: i64",
+        "ordinal": 8,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "account_grants!: i64",
+        "ordinal": 9,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "agents!: i64",
+        "ordinal": 10,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "agent_certs!: i64",
+        "ordinal": 11,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "enrollment_tokens!: i64",
+        "ordinal": 12,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "modes!: i64",
+        "ordinal": 13,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "bots!: i64",
+        "ordinal": 14,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "releasing_bots!: i64",
+        "ordinal": 15,
+        "type_info": "Integer",
+        "origin": "Expression"
+      },
+      {
+        "name": "chat_messages!: i64",
+        "ordinal": 16,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "7397edec2f7f51b35292da00c60d8209f9b1f363fa340faa6cea59bf7076add5"
+}

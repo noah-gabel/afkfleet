@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM chat_messages WHERE id IN (\n             SELECT id FROM chat_messages WHERE at <= ? ORDER BY at LIMIT ?\n         )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "c3c52bbc89912e869146ad7d3cab8e24777ef4f1f42b6767fe2c6d15e2d54c2b"
+}

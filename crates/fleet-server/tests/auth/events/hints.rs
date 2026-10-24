@@ -287,12 +287,16 @@ fn every_audit_action_is_labelled_with_what_it_tells_the_sockets() {
         UnauditedWrite::EventBatch => {
             "nothing: its lines and the agent's reports are on the bus already"
         }
+        UnauditedWrite::RetentionPurge => {
+            "nothing: deleted chat is fetched, not pushed (S42); ended sessions, old entries, invites and enrollment tokens no socket shows"
+        }
     };
     for write in [
         UnauditedWrite::SessionTouch,
         UnauditedWrite::SessionRotate,
         UnauditedWrite::LoginAttemptsPurge,
         UnauditedWrite::EventBatch,
+        UnauditedWrite::RetentionPurge,
     ] {
         assert!(unaudited(&write).starts_with("nothing"), "{write:?}");
     }

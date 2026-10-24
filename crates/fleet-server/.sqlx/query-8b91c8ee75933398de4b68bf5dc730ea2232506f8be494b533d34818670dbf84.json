@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH RECURSIVE n(i) AS (SELECT 1 WHERE ?1 > 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)\n         INSERT INTO rotated_refresh_tokens (hash, session_id, rotated_at)\n         SELECT randomblob(32), ?2, ?3 FROM n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "8b91c8ee75933398de4b68bf5dc730ea2232506f8be494b533d34818670dbf84"
+}

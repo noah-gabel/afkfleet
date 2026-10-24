@@ -69,6 +69,7 @@ mod invites;
 mod login_attempts;
 mod mfa;
 mod modes;
+mod retention;
 mod sessions;
 mod store;
 mod users;

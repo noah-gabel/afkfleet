@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH RECURSIVE n(i) AS (SELECT 1 WHERE ?1 > 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)\n         INSERT INTO audit_log (at, action, outcome) SELECT ?2, 'test.old_entry', 'success' FROM n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "2cca54d4ff1bebc3e5bde46b50eb5bfaef1e740ddfc70992ca53b02c904b0827"
+}

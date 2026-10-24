@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM sessions WHERE rowid IN (\n             SELECT rowid FROM sessions WHERE created_at <= ? ORDER BY created_at LIMIT ?\n         )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "be4d1e129b04249aa1de2a8850d29e4f0d7ccca137ef4a725323f1c7b3d55e24"
+}
