@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO audit_log (at, action, outcome)\n         VALUES ('2025-12-01T08:00:00.000Z', 'test.long_ago', 'success')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "d28276f5f99f831a4805a6ea4f0dbb81beae4bc046861ce699abac546c391910"
+}

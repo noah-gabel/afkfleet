@@ -9,6 +9,9 @@
 //! - [`serve`]: runs the HTTP API until a signal stops it.
 //! - [`housekeeping`]: `serve`'s periodic background task: the rate
 //!   limiters' memory, the lockout's purge and the refusals' summary (P7.10).
+//! - [`retention`]: `serve`'s retention task: old chat, sessions, audit
+//!   entries, invites and enrollment tokens deleted, and its hourly summary
+//!   (P11.6).
 //! - [`migrate`]: applies every pending migration and exits.
 //! - [`healthcheck`]: asks a running server's `GET /health/ready`, for
 //!   Docker's HEALTHCHECK.
@@ -36,6 +39,7 @@ pub mod healthcheck;
 pub mod housekeeping;
 pub mod migrate;
 pub mod pki;
+pub mod retention;
 pub mod serve;
 pub mod user;
 pub mod vault;

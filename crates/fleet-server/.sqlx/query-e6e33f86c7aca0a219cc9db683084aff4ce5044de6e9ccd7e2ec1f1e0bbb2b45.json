@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH RECURSIVE n(i) AS (SELECT 1 WHERE ?1 > 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)\n         INSERT INTO audit_log (at, action, outcome, metadata_json)\n         SELECT ?2, 'test.old_entry', 'success', json_object('note', ?3 || ' ' || i) FROM n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 3
+    },
+    "nullable": []
+  },
+  "hash": "e6e33f86c7aca0a219cc9db683084aff4ce5044de6e9ccd7e2ec1f1e0bbb2b45"
+}

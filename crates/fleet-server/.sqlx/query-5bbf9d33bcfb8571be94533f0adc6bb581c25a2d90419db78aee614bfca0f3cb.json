@@ -1,0 +1,26 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT action AS \"action!\" FROM audit_log ORDER BY id",
+  "describe": {
+    "columns": [
+      {
+        "name": "action!",
+        "ordinal": 0,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit_log",
+            "name": "action"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "5bbf9d33bcfb8571be94533f0adc6bb581c25a2d90419db78aee614bfca0f3cb"
+}

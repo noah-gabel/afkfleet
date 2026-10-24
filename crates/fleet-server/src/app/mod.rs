@@ -32,6 +32,8 @@
 //!   authenticator, replacing it, and checking a code at login (P7.7).
 //! - [`invites`]: creating, listing and revoking the invites to register
 //!   (P7.9).
+//! - [`retention`]: what the retention task deletes in a run, and its
+//!   hourly summary (P11.6).
 //! - [`link_flows`]: linking a Microsoft account through Microsoft's
 //!   device-code flow, held in memory and polled in the background (P9.4).
 //! - [`session_tokens`]: Minecraft session tokens for linked Microsoft
@@ -58,6 +60,7 @@ pub mod lockout;
 pub mod login;
 pub mod mfa;
 pub mod modes;
+pub mod retention;
 pub mod session_tokens;
 pub mod users;
 pub mod vault;
