@@ -132,7 +132,7 @@ On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: th
 **Server layering:** `http/handlers` → `app` services → `ports` → `infra`.
 - Handlers only parse input, authorize, call a service and map the result. No business logic, no SQL.
 - Services own use cases, transactions and audit entries.
-- Writes go through `Store::write()`, a `WriteTx` on the one write connection. Its `commit(entry)` takes the audit entry, so nothing commits unaudited, except through `commit_unaudited(UnauditedWrite)`, whose named exemptions (`SessionTouch`, `SessionRotate`, `LoginAttemptsPurge`, and the ingest's `EventBatch`, which writes only chat rows and a held bot's sticky crossing, U17) each have an ADR note; a new one needs the user's approval and its own note (ADR-0015, ADR-0016, ADR-0019). Keep it short: no password hashing, crypto or network calls while it's open (ADR-0015).
+- Writes go through `Store::write()`, a `WriteTx` on the one write connection. Its `commit(entry)` takes the audit entry, so nothing commits unaudited, except through `commit_unaudited(UnauditedWrite)`, whose named exemptions (`SessionTouch`, `SessionRotate`, `LoginAttemptsPurge`, the ingest's `EventBatch`, which writes only chat rows and a held bot's sticky crossing, U17, and the retention task's `RetentionPurge`, which only deletes, one table per batch, summed up in an hourly `retention.purge` entry, U20) each have an ADR note; a new one needs the user's approval and its own note (ADR-0015, ADR-0016, ADR-0019, ADR-0020). Keep it short: no password hashing, crypto or network calls while it's open (ADR-0015).
 
 **The gRPC port:**
 - Its listener bounds each connection's age itself: 80 s, lifted only while an agent's welcomed stream lives. fleet-server's `clippy.toml` bans tonic's server-wide `max_connection_age`, its grace and `Server::timeout`, which would cut agents' streams (ADR-0019, U7).
@@ -152,7 +152,7 @@ Server module layout:
 fleet-server/src/
   main.rs  lib.rs  config.rs
   cli/        # serve, migrate, healthcheck, user create-owner, vault status, vault rotate-key, pki init, pki server-cert, agent create-enrollment-token, agent list, agent disable, agent release, backup
-  app/        # services: auth, users, accounts, bots, modes, agents, enrollment, audit, events, event_tickets, vault
+  app/        # services: auth, users, accounts, bots, modes, agents, enrollment, audit, events, event_tickets, retention, vault
   ports/      # repository and provider traits
   infra/      # sqlite/ (sqlx repos), crypto/ (vault, tokens, passwords), msauth/ (Microsoft's account flows over HTTP), pki/ (the CA, certificates, CSRs)
   http/       # router.rs, middleware/, extractors/, handlers/<resource>.rs, error.rs, openapi.rs, ws.rs
