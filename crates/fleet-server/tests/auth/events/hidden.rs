@@ -227,3 +227,46 @@ async fn a_hidden_flood_past_the_bus_shows_only_as_one_resync_without_a_count(
         "only the resync and the bot's own frames: {frames:?}"
     );
 }
+
+/// Two of the Member's bots hinted, with 100 deaths of the stranger's bot
+/// between them, all waiting while a marker's read is held: the hidden
+/// deaths count toward nothing, so both bots are still read together, in
+/// one read (PR #67's review follow-up c, R48).
+#[sqlx::test(migrations = false)]
+async fn hidden_events_never_split_a_merged_bot_read(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = pinging(options).await;
+    let watched = watched(&setup).await;
+    let (_, second) = setup.bot_of(watched.member.id, 11).await;
+    let (_, marker) = setup.bot_of(watched.member.id, 30).await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &watched.member.token).await;
+    let reads = setup.hooked.bot_reads();
+
+    let mut held = setup.hooked.hold_next_bot_read();
+    setup.events.bots(&[marker]);
+    held.read(PATIENCE).await;
+    setup.events.bots(&[watched.bot]);
+    for _ in 0..100 {
+        agent_event(&setup, watched.own, watched.agent, LiveEventKind::Died);
+    }
+    setup.events.bots(&[second]);
+    held.release();
+    let frames = until_quiet(&mut socket).await;
+
+    let named: Vec<&Value> = frames.iter().map(|frame| &frame["bot_id"]).collect();
+    assert_eq!(named.len(), 3, "{frames:?}");
+    assert_eq!(*named[0], json!(marker.to_string()));
+    assert!(
+        named.contains(&&json!(watched.bot.to_string())),
+        "{frames:?}"
+    );
+    assert!(named.contains(&&json!(second.to_string())), "{frames:?}");
+    assert_eq!(
+        setup.hooked.bot_reads() - reads,
+        2,
+        "the marker's, then both bots in one"
+    );
+}

@@ -53,7 +53,7 @@ use tracing::info;
 
 use crate::app::auth::{SocketCheckError, SocketSession, TokenService};
 use crate::app::event_tickets::EventTickets;
-use crate::app::events::{BusEvent, EventBus, LiveRights};
+use crate::app::events::{BusEvent, EVENT_BUS_CAPACITY, EventBus, LiveRights};
 use crate::http::error::ApiError;
 use crate::http::rate_limit::SocketSlot;
 
@@ -252,8 +252,10 @@ pub const CHECK_TIMEOUT: Duration = Duration::from_secs(5);
 /// is checked when it ends (PR #66's review).
 pub const CHECK_GAP: Duration = Duration::from_millis(250);
 
-/// How many events a socket takes off the bus before it sent what they make
-/// (R33): the rest wait in the bus's receiver.
+/// How many events that make or join something to send a socket takes off
+/// the bus at one wake, before it sent what they make (R33, R48): the rest
+/// wait in the bus's receiver. Those that make nothing (a hidden bot's, or
+/// one waiting for the rights) count only toward the bus's capacity.
 pub const MERGE_MAX: usize = 64;
 
 /// What one socket sends its viewer (ADR-0020, R29): the bus's events they
@@ -268,11 +270,9 @@ pub(crate) trait Project: Send + 'static {
     /// [`Unprojected`] when the read fails: the socket closes with 1013.
     fn open(&mut self) -> impl Future<Output = Result<(), Unprojected>> + Send;
 
-    /// Whether it takes another event: it holds fewer than [`MERGE_MAX`].
-    fn has_room(&self) -> bool;
-
-    /// Takes `event`, the bus's next one.
-    fn take(&mut self, event: Arc<BusEvent>);
+    /// Takes `event`, the bus's next one: whether it made or joined
+    /// something to send, which counts toward [`MERGE_MAX`] (R48).
+    fn take(&mut self, event: Arc<BusEvent>) -> Taken;
 
     /// Whether it holds anything to send.
     fn has_work(&self) -> bool;
@@ -288,6 +288,16 @@ pub(crate) trait Project: Send + 'static {
 
     /// The socket said `resync`: its viewer fetches everything again.
     fn resynced(&mut self);
+}
+
+/// What taking an event did, for [`MERGE_MAX`] (R48).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Taken {
+    /// It made or joined something to send: it counts.
+    Counted,
+    /// Nothing yet: a hidden bot's event, or one waiting for the rights to
+    /// be read again (R47). Only the bus's capacity bounds these.
+    Uncounted,
 }
 
 /// What a socket does next for its viewer.
@@ -508,10 +518,12 @@ impl<P: Project> Running<P> {
                     Ok(Step::Nothing) => {}
                     Err(ended) => return ended,
                 },
-                received = self.bus.recv(), if self.project.has_room() => match received {
+                // Read only once everything taken went: the step branch above
+                // wins every turn while there's work.
+                received = self.bus.recv(), if !self.project.has_work() => match received {
                     Ok(event) => {
-                        self.project.take(event);
-                        take_waiting(&mut self.bus, &mut self.project, &mut resync);
+                        let first = self.project.take(event);
+                        take_waiting(&mut self.bus, &mut self.project, first, &mut resync);
                     }
                     // No count: it would count events of bots the user can't
                     // see.
@@ -856,17 +868,30 @@ impl Gap {
     }
 }
 
-/// Takes the events already waiting on `bus` while `project` has room, in
-/// order (R33), at most [`MERGE_MAX`] with the one that woke the socket,
-/// those that take no room (a hidden bot's) included, so the turn ends and
-/// the socket's other branches get theirs; a lag among them owes `resync`.
-fn take_waiting<P: Project>(bus: &mut Receiver<Arc<BusEvent>>, project: &mut P, resync: &mut Gap) {
-    for _ in 1..MERGE_MAX {
-        if !project.has_room() {
+/// Takes the events already waiting on `bus`, in order (R33): until
+/// [`MERGE_MAX`] of them, with `first`, what the one that woke the socket
+/// did, made or joined something to send, and at most [`EVENT_BUS_CAPACITY`]
+/// in all, so the turn ends and the socket's other branches get theirs
+/// (R48). Events that make nothing never split a merge: a count of them
+/// would tell a viewer something about bots they can't see. A lag among
+/// them owes `resync`.
+fn take_waiting<P: Project>(
+    bus: &mut Receiver<Arc<BusEvent>>,
+    project: &mut P,
+    first: Taken,
+    resync: &mut Gap,
+) {
+    let mut counted = usize::from(first == Taken::Counted);
+    for _ in 1..EVENT_BUS_CAPACITY {
+        if counted >= MERGE_MAX {
             break;
         }
         match bus.try_recv() {
-            Ok(event) => project.take(event),
+            Ok(event) => {
+                if project.take(event) == Taken::Counted {
+                    counted = counted.saturating_add(1);
+                }
+            }
             Err(TryRecvError::Lagged(_)) => resync.owe(),
             // A closed bus shows at the next `recv`.
             Err(TryRecvError::Empty | TryRecvError::Closed) => break,
@@ -880,22 +905,29 @@ mod tests {
 
     use super::*;
 
-    /// A projection that takes every event and makes nothing of them, as a
-    /// viewer does of a hidden bot's, counting them.
-    #[derive(Debug, Default)]
-    struct Counting(usize);
+    /// A projection that takes every event and answers `taken` for each, as
+    /// a viewer does of a visible bot's (counted) or a hidden one's (not),
+    /// counting them.
+    #[derive(Debug)]
+    struct Counting {
+        taken: Taken,
+        took: usize,
+    }
+
+    impl Counting {
+        fn new(taken: Taken) -> Self {
+            Self { taken, took: 0 }
+        }
+    }
 
     impl Project for Counting {
         fn open(&mut self) -> impl Future<Output = Result<(), Unprojected>> + Send {
             future::ready(Ok(()))
         }
 
-        fn has_room(&self) -> bool {
-            true
-        }
-
-        fn take(&mut self, _event: Arc<BusEvent>) {
-            self.0 += 1;
+        fn take(&mut self, _event: Arc<BusEvent>) -> Taken {
+            self.took += 1;
+            self.taken
         }
 
         fn has_work(&self) -> bool {
@@ -909,19 +941,40 @@ mod tests {
         fn resynced(&mut self) {}
     }
 
-    #[test]
-    fn a_wake_takes_at_most_merge_max_events_even_ones_that_take_no_room() {
-        let (bus, mut received) = tokio::sync::broadcast::channel(1024);
+    /// A wake over `waiting` events, each answered `taken`, in a bus that
+    /// holds them all: how many it took after the one that woke it.
+    fn wake(waiting: usize, taken: Taken) -> usize {
+        let (bus, mut received) = tokio::sync::broadcast::channel(waiting);
         let user = fleet_core::id::UserId::new_v7("2027-01-15T08:00:00Z".parse().unwrap(), [1; 10])
             .unwrap();
-        for _ in 0..200 {
+        for _ in 0..waiting {
             bus.send(Arc::new(BusEvent::RoleChanged { user })).unwrap();
         }
-        let mut counting = Counting::default();
+        let mut counting = Counting::new(taken);
 
-        take_waiting(&mut received, &mut counting, &mut Gap::new(RESYNC_GAP));
+        take_waiting(
+            &mut received,
+            &mut counting,
+            taken,
+            &mut Gap::new(RESYNC_GAP),
+        );
 
-        assert_eq!(counting.0, MERGE_MAX - 1, "with the event that woke it");
+        counting.took
+    }
+
+    #[test]
+    fn a_wake_counts_only_events_that_make_or_join_a_slot_and_takes_at_most_the_bus_capacity() {
+        assert_eq!(
+            wake(200, Taken::Counted),
+            MERGE_MAX - 1,
+            "with the counted one that woke it"
+        );
+        assert_eq!(wake(200, Taken::Uncounted), 200, "every one waiting");
+        assert_eq!(
+            wake(3 * EVENT_BUS_CAPACITY, Taken::Uncounted),
+            EVENT_BUS_CAPACITY - 1,
+            "with the one that woke it"
+        );
     }
 
     #[test]

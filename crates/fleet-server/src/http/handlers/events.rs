@@ -36,11 +36,15 @@
 //!   2. a viewer whose own role, flag or account changed is sent nothing
 //!      more: their session check closes the socket (R31);
 //!   3. an agent's event on a bot they can't see is dropped by a lookup,
-//!      with no read and no frame;
+//!      with no read and no frame; events taken on rights a commit outran
+//!      wait, unjudged, until the gate read them again, so a hidden bot's
+//!      event never makes, joins or moves anything the viewer is sent (R47);
 //!   4. a bot's state and the server's hints are read together, in one
 //!      query, at the first one's place (R33), and each read decides its
 //!      frame: `bot` when the viewer may see the bot, `bot_removed` when they
-//!      saw it and no longer may.
+//!      saw it and no longer may;
+//!   5. a mode's events are read once, at the first one's place, and the
+//!      viewer saw it when they could see it under any of their `was` (R49).
 
 use core::time::Duration;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -57,7 +61,7 @@ use fleet_api_types::events::{EventMessage, EventTicketResponse, EventsQuery};
 use fleet_api_types::{ErrorResponse, SecretText};
 use fleet_core::authz::{Actor, GrantLevel, Permission, ResourceContext, Role, authorize};
 use fleet_core::bot::{BotNotification, LastState};
-use fleet_core::id::{BotId, UserId};
+use fleet_core::id::{BotId, ModeId};
 use secrecy::ExposeSecret as _;
 use tokio::time::Instant;
 use tracing::{Instrument as _, debug, info_span};
@@ -72,10 +76,9 @@ use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, ValidQuery};
 use crate::http::router::AppState;
 use crate::http::ws::{
-    MAX_CLIENT_FRAME, MAX_WRITE_BUFFER, MERGE_MAX, OpenSocket, Project, READ_BUFFER, Step,
+    MAX_CLIENT_FRAME, MAX_WRITE_BUFFER, MERGE_MAX, OpenSocket, Project, READ_BUFFER, Step, Taken,
     Unprojected, refused_upgrade, run,
 };
-use crate::ports::live_hints::ModeEvent;
 
 /// `POST /api/v1/events/ticket`: a ticket for one live events socket of this
 /// session.
@@ -236,6 +239,9 @@ pub(crate) struct Viewer {
     /// removed (R32).
     seen: BTreeSet<BotId>,
     slots: VecDeque<Slot>,
+    /// Events taken on rights a commit outran, in the bus's order: judged
+    /// once the gate read the rights again (R47).
+    unjudged: VecDeque<Arc<BusEvent>>,
     bots: BotService,
     modes: ModeService,
 }
@@ -251,10 +257,12 @@ enum Slot {
     /// An agent's event about one bot.
     Agent(Arc<BusEvent>),
     /// A mode that was created, changed or deleted, read when its turn
-    /// comes.
-    Mode(ModeEvent),
-    /// Another user's role changed: an Admin viewer's sight may have (R11).
-    RoleChanged(UserId),
+    /// comes, and whether the viewer could see it under any `was` of its
+    /// events, judged as each was taken (R49).
+    Mode { id: ModeId, saw: bool },
+    /// Another user's role changed, for an Admin viewer: their sight may
+    /// have (R11).
+    RoleChanged,
 }
 
 /// Bots to read, and, once read, the views not sent yet.
@@ -280,16 +288,17 @@ impl Viewer {
             rights: Arc::default(),
             seen: BTreeSet::new(),
             slots: VecDeque::new(),
+            unjudged: VecDeque::new(),
             bots,
             modes,
         }
     }
 
-    /// The mode `event` names, read now (S33): `mode` as `GET /modes` lists
-    /// it when the viewer may see it now, else `mode_removed` when they could
-    /// before the write, judged on what it read, else nothing.
-    async fn mode_step(&self, event: ModeEvent) -> Result<Step, Unprojected> {
-        let listed = self.modes.find(event.id).await.map_err(|error| {
+    /// The mode `id`, read now (S33): `mode` as `GET /modes` lists it when
+    /// the viewer may see it now, else `mode_removed` when they `saw` it
+    /// before a write, else nothing.
+    async fn mode_step(&self, id: ModeId, saw: bool) -> Result<Step, Unprojected> {
+        let listed = self.modes.find(id).await.map_err(|error| {
             debug!(%error, "a live events socket couldn't read a mode");
             Unprojected
         })?;
@@ -302,14 +311,11 @@ impl Viewer {
             if let Ok(shown) = mode_response(&self.actor, &listed) {
                 return Ok(Step::Send(Box::new(EventMessage::mode(shown))));
             }
-            debug!(mode_id = %event.id, "a live events socket couldn't build a mode's frame");
+            debug!(mode_id = %id, "a live events socket couldn't build a mode's frame");
             return Ok(Step::Nothing);
         }
-        let saw = event.was.is_some_and(|was| {
-            authorize(&self.actor, Permission::ViewMode, &was.context()).is_ok()
-        });
         Ok(if saw {
-            Step::Send(Box::new(EventMessage::mode_removed(event.id)))
+            Step::Send(Box::new(EventMessage::mode_removed(id)))
         } else {
             Step::Nothing
         })
@@ -365,21 +371,14 @@ impl Viewer {
         self.live.count() > self.rights.at()
     }
 
-    /// Notes that `bots` may read differently: merged into the first
-    /// unread read it holds, or a new one at the end. On rights a commit
-    /// outran, every bot is kept: they may not show one the viewer sees now,
-    /// and the gate judges each on new ones before any frame (S30).
-    fn hint(&mut self, bots: impl IntoIterator<Item = BotId>) {
-        let judged = !self.outrun();
-        let ids: BTreeSet<BotId> = bots
-            .into_iter()
-            .filter(|bot| {
-                !judged || self.rights.level(&self.actor, *bot).is_some() || self.seen.contains(bot)
-            })
-            .collect();
-        if ids.is_empty() {
-            return;
-        }
+    /// Whether the viewer may see `bot` now, or saw it, for a `bot_removed`.
+    fn sees(&self, bot: BotId) -> bool {
+        self.rights.level(&self.actor, bot).is_some() || self.seen.contains(&bot)
+    }
+
+    /// Notes that `ids`, bots the viewer sees or saw, may read differently:
+    /// merged into the first unread read it holds, or a new one at the end.
+    fn hint(&mut self, ids: BTreeSet<BotId>) {
         let unread = self.slots.iter_mut().find_map(|slot| match slot {
             Slot::Bots(reads) if reads.views.is_none() => Some(reads),
             _ => None,
@@ -399,9 +398,7 @@ impl Viewer {
         } else {
             // The bots the viewer may see now, and those they saw, for a
             // `bot_removed`.
-            reads.ids.retain(|bot| {
-                self.rights.level(&self.actor, *bot).is_some() || self.seen.contains(bot)
-            });
+            reads.ids.retain(|bot| self.sees(*bot));
             if reads.ids.is_empty() {
                 // Every bot it held is hidden: no read, no frame.
                 return Ok(Step::Nothing);
@@ -509,6 +506,101 @@ impl Viewer {
         };
         Step::Send(Box::new(message))
     }
+
+    /// Judges `event` on the rights the viewer holds, current when it was
+    /// taken: what it makes or joins counts toward [`MERGE_MAX`], and one
+    /// about a bot the viewer can't see makes nothing (S30). `Err` gives it
+    /// back when a commit outran those rights while it was judged: it waits
+    /// for the gate (R47).
+    fn judge(&mut self, event: Arc<BusEvent>) -> Result<Taken, Arc<BusEvent>> {
+        match &*event {
+            BusEvent::Agent(agent) => {
+                let bot = agent.bot;
+                if self.rights.level(&self.actor, bot).is_none() {
+                    // Dropped by a lookup, on rights as new as every commit
+                    // counted so far.
+                    return if self.outrun() {
+                        Err(event)
+                    } else {
+                        Ok(Taken::Uncounted)
+                    };
+                }
+                if matches!(agent.kind, LiveEventKind::Status(_)) {
+                    self.hint(BTreeSet::from([bot]));
+                } else {
+                    self.slots.push_back(Slot::Agent(event));
+                }
+                Ok(Taken::Counted)
+            }
+            BusEvent::Bots(bots) => {
+                let ids: BTreeSet<BotId> =
+                    bots.iter().copied().filter(|bot| self.sees(*bot)).collect();
+                if bots.iter().any(|bot| !ids.contains(bot)) && self.outrun() {
+                    return Err(event);
+                }
+                if ids.is_empty() {
+                    return Ok(Taken::Uncounted);
+                }
+                self.hint(ids);
+                Ok(Taken::Counted)
+            }
+            BusEvent::Mode(mode) => {
+                // Judged now: `authorize` on `was` depends only on the viewer
+                // and `was` (R49).
+                let saw = mode.was.is_some_and(|was| {
+                    authorize(&self.actor, Permission::ViewMode, &was.context()).is_ok()
+                });
+                // Read once, at its first place (R33): one waiting already is
+                // read as the mode is then.
+                let waiting = self.slots.iter_mut().find_map(|slot| match slot {
+                    Slot::Mode { id, saw: queued } if *id == mode.id => Some(queued),
+                    _ => None,
+                });
+                match waiting {
+                    Some(queued) => *queued |= saw,
+                    None => self.slots.push_back(Slot::Mode { id: mode.id, saw }),
+                }
+                Ok(Taken::Counted)
+            }
+            // Another Admin's sight follows a user's role (R11); the Owner
+            // and Members see what they did, and a viewer's own role closes
+            // their socket.
+            BusEvent::RoleChanged { user } => {
+                if *user != self.actor.id && self.actor.role == Role::Admin {
+                    self.slots.push_back(Slot::RoleChanged);
+                    Ok(Taken::Counted)
+                } else {
+                    Ok(Taken::Uncounted)
+                }
+            }
+        }
+    }
+
+    /// Judges the events taken on rights a commit outran, in order and after
+    /// everything taken before them, now that the gate read the rights again:
+    /// until [`MERGE_MAX`] of them made or joined something to send, or
+    /// another commit outran the rights; the rest wait for the next turn
+    /// (R47, R48).
+    fn replay(&mut self) {
+        let mut counted = 0_usize;
+        while counted < MERGE_MAX {
+            let Some(event) = self.unjudged.pop_front() else {
+                break;
+            };
+            if self.outrun() {
+                self.unjudged.push_front(event);
+                break;
+            }
+            match self.judge(event) {
+                Ok(Taken::Counted) => counted = counted.saturating_add(1),
+                Ok(Taken::Uncounted) => {}
+                Err(event) => {
+                    self.unjudged.push_front(event);
+                    break;
+                }
+            }
+        }
+    }
 }
 
 impl Project for Viewer {
@@ -525,45 +617,23 @@ impl Project for Viewer {
         Ok(())
     }
 
-    fn has_room(&self) -> bool {
-        self.slots.len() < MERGE_MAX
-    }
-
-    fn take(&mut self, event: Arc<BusEvent>) {
-        match &*event {
-            BusEvent::Agent(agent) => {
-                // A bot the viewer can't see: dropped by a lookup (S30), on
-                // rights as new as every commit counted. Older ones may not
-                // show a bot the viewer sees now: the event waits, and its
-                // step judges it on new ones.
-                if !self.outrun() && self.rights.level(&self.actor, agent.bot).is_none() {
-                    return;
-                }
-                if matches!(agent.kind, LiveEventKind::Status(_)) {
-                    self.hint([agent.bot]);
-                } else {
-                    self.slots.push_back(Slot::Agent(event));
-                }
-            }
-            BusEvent::Bots(bots) => self.hint(bots.iter().copied()),
-            BusEvent::Mode(event) => {
-                // Read once, at its first place (R33): one waiting already is
-                // read as the mode is then, and judged on its own `was`, the
-                // earliest, which is what the viewer last saw.
-                let waiting = self
-                    .slots
-                    .iter()
-                    .any(|slot| matches!(slot, Slot::Mode(queued) if queued.id == event.id));
-                if !waiting {
-                    self.slots.push_back(Slot::Mode(*event));
-                }
-            }
-            BusEvent::RoleChanged { user } => self.slots.push_back(Slot::RoleChanged(*user)),
+    fn take(&mut self, event: Arc<BusEvent>) -> Taken {
+        // Rights a commit outran may not show a bot the viewer sees now, nor
+        // hide one they no longer do: the event waits, unjudged, behind any
+        // that wait already, and the gate reads the rights before any is
+        // judged (R47).
+        if !self.unjudged.is_empty() || self.outrun() {
+            self.unjudged.push_back(event);
+            return Taken::Uncounted;
         }
+        self.judge(event).unwrap_or_else(|event| {
+            self.unjudged.push_back(event);
+            Taken::Uncounted
+        })
     }
 
     fn has_work(&self) -> bool {
-        !self.slots.is_empty()
+        !self.slots.is_empty() || !self.unjudged.is_empty()
     }
 
     async fn next(&mut self) -> Result<Step, Unprojected> {
@@ -573,8 +643,12 @@ impl Project for Viewer {
         if !self.rights.stands(&self.actor) {
             // Muted until the session check closes the socket (R31).
             self.slots.clear();
+            self.unjudged.clear();
             return Ok(Step::Nothing);
         }
+        // Right after the gate, before the bots it found joined are read: a
+        // waiting hint of one of them merges into that read, so it comes once.
+        self.replay();
         match self.slots.pop_front() {
             None => Ok(Step::Nothing),
             Some(Slot::Removed(bot)) => Ok(Step::Send(Box::new(EventMessage::bot_removed(bot)))),
@@ -582,26 +656,17 @@ impl Project for Viewer {
             Some(Slot::Agent(event)) => Ok(event
                 .agent()
                 .map_or(Step::Nothing, |event| self.agent_step(event))),
-            Some(Slot::Mode(event)) => {
-                let step = self.mode_step(event).await?;
+            Some(Slot::Mode { id, saw }) => {
+                let step = self.mode_step(id, saw).await?;
                 if self.outrun() {
                     // A commit landed during the read: read again on the
                     // next turn (S43).
-                    self.slots.push_front(Slot::Mode(event));
+                    self.slots.push_front(Slot::Mode { id, saw });
                     return Ok(Step::Nothing);
                 }
                 Ok(step)
             }
-            // Another Admin's sight follows a user's role (R11); the Owner
-            // and Members see what they did, and a viewer's own role closes
-            // their socket.
-            Some(Slot::RoleChanged(user)) => {
-                Ok(if user != self.actor.id && self.actor.role == Role::Admin {
-                    Step::Resync
-                } else {
-                    Step::Nothing
-                })
-            }
+            Some(Slot::RoleChanged) => Ok(Step::Resync),
         }
     }
 
@@ -643,7 +708,8 @@ fn refuse(user: &AuthUser, reason: &str) -> ApiError {
 
 #[cfg(test)]
 mod tests {
-    use fleet_core::id::AccountId;
+    use fleet_core::authz::{ModeVisibility, UserRef};
+    use fleet_core::id::{AccountId, UserId};
     use fleet_testkit::system::{ManualClock, SeededRandom};
     use sqlx::sqlite::SqliteConnectOptions;
 
@@ -652,6 +718,7 @@ mod tests {
     use crate::grpc::registry::AgentRegistry;
     use crate::infra::sqlite::{Database, DatabaseOptions};
     use crate::ports::bots::{Access, BotAccess, UserAccess};
+    use crate::ports::live_hints::{ModeEvent, ModeSeen};
     use crate::ports::store::Store;
 
     fn at() -> chrono::DateTime<chrono::Utc> {
@@ -666,9 +733,9 @@ mod tests {
         AccountId::new_v7(at(), [n; 10]).unwrap()
     }
 
-    /// The Owner `owner`'s viewer, over a fresh database it never reads, and
-    /// that database, to close.
-    async fn viewer(dir: &tempfile::TempDir, owner: UserId) -> (Viewer, Database) {
+    /// `actor`'s viewer, over a fresh database it never reads, and that
+    /// database, to close.
+    async fn viewer(dir: &tempfile::TempDir, actor: Actor) -> (Viewer, Database) {
         // An empty file is an empty database; the read pool opens it read-only.
         let path = dir.path().join("viewer.db");
         std::fs::File::create(&path).unwrap();
@@ -690,11 +757,63 @@ mod tests {
             true,
         );
         let modes = ModeService::new(clock, random, Arc::clone(&store));
-        let actor = Actor {
-            id: owner,
-            role: Role::Owner,
-        };
         (Viewer::new(actor, LiveRights::new(store), bots, modes), db)
+    }
+
+    /// Events of two modes an Admin made, taken by a Member's viewer: each
+    /// mode waits in one slot, and the Member saw it when they could under
+    /// any `was` of its events, whatever their order (R49).
+    #[tokio::test]
+    async fn merged_mode_events_keep_whether_the_viewer_saw_it_under_any_was() {
+        let dir = tempfile::tempdir().unwrap();
+        let member = Actor {
+            id: UserId::new_v7(at(), [1; 10]).unwrap(),
+            role: Role::Member,
+        };
+        let (mut viewer, db) = viewer(&dir, member).await;
+        let admin = UserRef {
+            id: UserId::new_v7(at(), [2; 10]).unwrap(),
+            role: Role::Admin,
+        };
+        let was = |visibility| {
+            Some(ModeSeen {
+                owner: Some(admin),
+                visibility,
+            })
+        };
+        let (first, second) = (
+            ModeId::new_v7(at(), [3; 10]).unwrap(),
+            ModeId::new_v7(at(), [4; 10]).unwrap(),
+        );
+
+        let taken: Vec<Taken> = [
+            (first, ModeVisibility::Private),
+            (second, ModeVisibility::Shared),
+            (first, ModeVisibility::Shared),
+            (second, ModeVisibility::Private),
+        ]
+        .into_iter()
+        .map(|(id, visibility)| {
+            viewer.take(Arc::new(BusEvent::Mode(ModeEvent {
+                id,
+                was: was(visibility),
+            })))
+        })
+        .collect();
+
+        let slots: Vec<(ModeId, bool)> = viewer
+            .slots
+            .iter()
+            .filter_map(|slot| match slot {
+                Slot::Mode { id, saw } => Some((*id, *saw)),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(slots, [(first, true), (second, true)]);
+        assert_eq!(viewer.slots.len(), 2);
+        assert!(taken.iter().all(|taken| *taken == Taken::Counted));
+        drop(viewer);
+        db.close().await;
     }
 
     /// A resync while the removals of bots 2 and 3 wait, on rights that show
@@ -704,7 +823,14 @@ mod tests {
     async fn a_resync_drops_a_waiting_removal_of_a_bot_the_viewer_sees_again() {
         let dir = tempfile::tempdir().unwrap();
         let owner = UserId::new_v7(at(), [1; 10]).unwrap();
-        let (mut viewer, db) = viewer(&dir, owner).await;
+        let (mut viewer, db) = viewer(
+            &dir,
+            Actor {
+                id: owner,
+                role: Role::Owner,
+            },
+        )
+        .await;
         viewer.rights = Arc::new(Rights::new(
             0,
             Access {

@@ -1254,7 +1254,9 @@ async fn a_commit_dropped_midway_moves_the_count_at_once_and_again_once_its_conn
         // commit.
         let first =
             std::future::poll_fn(|cx| core::task::Poll::Ready(commit.as_mut().poll(cx))).await;
-        if first.is_ready() {
+        if let core::task::Poll::Ready(landed) = first {
+            // It landed whole, and must have landed well.
+            landed.expect("a commit that lands at its first poll lands");
             continue;
         }
         drop(commit);

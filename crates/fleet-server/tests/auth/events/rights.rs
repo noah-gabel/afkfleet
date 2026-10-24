@@ -714,3 +714,74 @@ async fn a_newly_shared_bots_frame_its_line_and_its_chat_sent_arrive_in_order(
 
     assert_eq!(kinds, [json!("bot"), json!("chat"), json!("chat_sent")]);
 }
+
+/// A hidden bot's state, then a line and the state of a bot the Control
+/// holder sees, all taken on rights a commit outran: the line comes before
+/// the bot, as on current rights, so the hidden event left no trace in the
+/// order of their frames (PR #67's review follow-up b, R47).
+#[sqlx::test(migrations = false)]
+async fn a_hidden_bots_event_taken_on_stale_rights_leaves_no_trace_in_the_order(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let watched = watched(&setup).await;
+    let (_, marker) = setup.bot_of(watched.controller.id, 30).await;
+    let piped = Piped::start(&setup);
+    let ticket = ticket(&setup, &watched.controller.token).await;
+    let mut socket = piped.open(&watched.controller.token, &ticket).await;
+    assert_eq!(next_event(&mut socket).await, json!({ "type": "ready" }));
+    let status = |bot| {
+        LiveEventKind::Status(fleet_core::bot::BotSnapshot {
+            bot_id: bot,
+            state: fleet_core::bot::BotState::Stopped,
+            since: setup.clock.now(),
+            last_disconnect: None,
+        })
+    };
+    let line = fleet_server::ports::chat::ListedChat {
+        record: fleet_server::ports::chat::ChatRecord {
+            id: fleet_server::ports::chat::ChatMessageId::new(1),
+            bot: watched.bot,
+            at: setup.clock.now(),
+            entry: fleet_server::ports::chat::ChatEntry::Received(
+                fleet_core::chat::IncomingChat::from_parts(
+                    fleet_core::chat::ChatKind::System,
+                    None,
+                    "a line",
+                    false,
+                )
+                .unwrap(),
+            ),
+        },
+        sent_by: None,
+    };
+
+    // The marker's frame is on its way, so its step is over; a commit then
+    // outruns the rights the socket holds, and the three events wait on the
+    // bus until the client reads the marker.
+    setup.events.bots(&[marker]);
+    socket.get_mut().written().await;
+    commit_anything(&setup).await;
+    agent_event(&setup, watched.own, watched.agent, status(watched.own));
+    agent_event(
+        &setup,
+        watched.bot,
+        watched.agent,
+        LiveEventKind::Chat {
+            line,
+            request: None,
+        },
+    );
+    agent_event(&setup, watched.bot, watched.agent, status(watched.bot));
+    let first = next_event(&mut socket).await;
+    let mut kinds = Vec::new();
+    for _ in 0..2 {
+        let frame = next_event(&mut socket).await;
+        assert_eq!(frame["bot_id"], json!(watched.bot.to_string()), "{frame}");
+        kinds.push(frame["type"].clone());
+    }
+
+    assert_eq!(first["bot_id"], json!(marker.to_string()));
+    assert_eq!(kinds, [json!("chat"), json!("bot")]);
+}

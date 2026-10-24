@@ -356,8 +356,6 @@ impl HookedStore {
         HeldRead { read_done, release }
     }
 
-    /// Holds the next read of the live events' rights once it has read the
-    /// database, until the returned hold is released (P11.5).
     /// How many times a mode was read with its owner (`ModeReads::listed`,
     /// a live events socket's read of a mode) since the start (P11.5).
     pub(crate) fn mode_reads(&self) -> usize {
@@ -384,6 +382,8 @@ impl HookedStore {
             .store(reads, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// Holds the next read of the live events' rights once it has read the
+    /// database, until the returned hold is released (P11.5).
     pub(crate) fn hold_next_rights_read(&self) -> HeldRead {
         let (read, read_done) = tokio::sync::oneshot::channel();
         let (release, released) = tokio::sync::oneshot::channel();
@@ -784,8 +784,9 @@ impl ModeReads for HookedModes {
     }
 }
 
-/// A read of the live events' rights held by
-/// [`HookedStore::hold_next_rights_read`].
+/// A live events read held by [`HookedStore::hold_next_rights_read`],
+/// [`HookedStore::hold_next_bot_read`] or [`HookedStore::hold_next_mode_read`]:
+/// the rights, a socket's bots or a mode.
 pub(crate) struct HeldRead {
     read_done: tokio::sync::oneshot::Receiver<()>,
     release: tokio::sync::oneshot::Sender<()>,
@@ -796,7 +797,7 @@ impl HeldRead {
     pub(crate) async fn read(&mut self, bound: Duration) {
         tokio::time::timeout(bound, &mut self.read_done)
             .await
-            .expect("the rights are read in time")
+            .expect("the held read reads in time")
             .unwrap();
     }
 
