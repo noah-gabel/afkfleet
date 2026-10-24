@@ -1,0 +1,21 @@
+{
+  "db_name": "SQLite",
+  "query": "PRAGMA secure_delete",
+  "describe": {
+    "columns": [
+      {
+        "name": "secure_delete",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": [
+      null
+    ]
+  },
+  "hash": "db9dfbb8b929b36bec0d6468376f911c8b883050c87d8dfa8ec3070ac5fc2f48"
+}

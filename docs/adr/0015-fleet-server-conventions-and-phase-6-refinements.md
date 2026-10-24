@@ -334,7 +334,7 @@ fleet-startup and fleet-server join the justfile's `stable_crates` in group A, a
 ### Notes for later groups
 - **P6.3 (group B)** *(the user's decision)*: set sqlx's statement logging explicitly when configuring the connection, every statement at `debug` and slow statements at `warn`, since sqlx has logged every statement at `info` in some versions. *(Done, see above.)*
 - **P6.12 (group E)** *(from group B)*: `Database::close()` waits for every checked-out connection, so shutdown bounds it with a timeout. *(Done, see above.)*
-- **P11.6** *(from group B)*: decide `secure_delete` there, so deleted chat and old audit entries are overwritten instead of lingering in free pages.
+- **P11.6** *(from group B)*: decide `secure_delete` there, so deleted chat and old audit entries are overwritten instead of lingering in free pages. *Decided in Phase 11, group E ([ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S44): `secure_delete = ON` on every connection.*
 - **P12** *(from group B, the user's decisions)*: the database lives on a named volume, never a bind mount from a Windows folder (Docker Desktop shows those as 777 and the server refuses them). The image will likely pre-create the data folder so a named volume gets the nonroot owner, which makes a missing mount invisible to the folder check: the database would land in the container's throwaway layer. P12's compose setup and smoke test prove the database survives a container restart.
 - **P6.11 (group E)** *(the user's decisions)*:
   - `serve` calls `warn_if_dev_mode()` right after logging starts.
