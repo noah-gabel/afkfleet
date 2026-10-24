@@ -208,7 +208,7 @@ tauri-plugin-opener = "2.7.0"
 totp-rs = { version = "6.0.0", default-features = false }
 # tokio: no default features exist; members enable only what they use (`sync`,
 # `time`, …) and `test-util` in tests.
-tokio = "1.53.2"
+tokio = "1.53.3"
 # tokio-stream: fleet-server answers each agent's `Connect` with a `ReceiverStream` over its
 # bounded queue, and maps the listener's accepted sockets with `StreamExt`. Without default
 # features (`time`): neither needs one. Already in Cargo.lock through tonic and sqlx (ADR-0019).
