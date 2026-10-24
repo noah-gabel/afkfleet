@@ -32,6 +32,8 @@
 //! - [`audit`]: the vocabulary of the server's audit log.
 //! - [`auth`]: the rules of authentication, such as what a new password
 //!   must be.
+//! - [`retention`]: what the server's retention keeps, and where each run
+//!   cuts.
 //! - [`time`]: saturating arithmetic on points in time and durations.
 //! - [`system`]: the clock and secure-randomness ports the server reads time
 //!   and random bytes through, and minting IDs from them.
@@ -91,6 +93,7 @@ pub mod net;
 pub mod pki;
 pub mod placement;
 pub mod resilience;
+pub mod retention;
 pub mod system;
 pub mod text;
 pub mod time;

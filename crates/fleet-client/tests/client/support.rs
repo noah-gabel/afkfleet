@@ -24,8 +24,8 @@ use fleet_core::value::{AgentName, Username};
 use fleet_server::app::users::UserService;
 use fleet_server::cli::serve::{Exit, ServerPorts, ShutdownTimeouts, app_with, serve};
 use fleet_server::config::{
-    AccountsConfig, Argon2Params, AuthConfig, ChatConfig, DatabaseConfig, HttpConfig, LogConfig,
-    LogFormat, RateLimitConfig, ServerConfig, VaultConfig,
+    AccountsConfig, Argon2Params, AuditConfig, AuthConfig, ChatConfig, DatabaseConfig, HttpConfig,
+    LogConfig, LogFormat, RateLimitConfig, ServerConfig, VaultConfig,
 };
 use fleet_server::http::rate_limit::TrustedProxies;
 use fleet_server::infra::crypto::passwords::Argon2Passwords;
@@ -403,6 +403,7 @@ fn config(dir: &TempDir) -> ServerConfig {
             ..AccountsConfig::default()
         },
         chat: ChatConfig::default(),
+        audit: AuditConfig::default(),
         grpc: None,
     }
 }

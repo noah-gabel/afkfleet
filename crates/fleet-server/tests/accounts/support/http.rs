@@ -32,8 +32,9 @@ use fleet_server::app::link_flows::LinkFlowService;
 use fleet_server::app::users::ActingUser;
 use fleet_server::cli::serve::{App, ServerPorts, app_with};
 use fleet_server::config::{
-    AccountsConfig, Argon2Params, AuthConfig, ChatConfig, DatabaseConfig, GrpcConfig, Heartbeats,
-    HttpConfig, LogConfig, LogFormat, PkiPaths, RateLimitConfig, ServerConfig, VaultConfig,
+    AccountsConfig, Argon2Params, AuditConfig, AuthConfig, ChatConfig, DatabaseConfig, GrpcConfig,
+    Heartbeats, HttpConfig, LogConfig, LogFormat, PkiPaths, RateLimitConfig, ServerConfig,
+    VaultConfig,
 };
 use fleet_server::http::rate_limit::TrustedProxies;
 use fleet_server::infra::crypto::passwords::Argon2Passwords;
@@ -155,6 +156,7 @@ fn config(
         },
         accounts,
         chat: ChatConfig::default(),
+        audit: AuditConfig::default(),
         grpc,
     }
 }

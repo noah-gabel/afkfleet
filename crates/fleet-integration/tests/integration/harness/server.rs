@@ -42,8 +42,8 @@ use fleet_server::cli::serve::{
     ControlPlane, Exit, ServerPorts, ShutdownTimeouts, app_with, grpc_port, open, serve,
 };
 use fleet_server::config::{
-    AccountsConfig, AuthConfig, ChatConfig, DatabaseConfig, GrpcConfig, Heartbeats, HttpConfig,
-    LogConfig, LogFormat, PkiPaths, RateLimitConfig, ServerConfig, VaultConfig,
+    AccountsConfig, AuditConfig, AuthConfig, ChatConfig, DatabaseConfig, GrpcConfig, Heartbeats,
+    HttpConfig, LogConfig, LogFormat, PkiPaths, RateLimitConfig, ServerConfig, VaultConfig,
 };
 use fleet_server::grpc::registry::AgentRegistry;
 use fleet_server::http::rate_limit::TrustedProxies;
@@ -559,6 +559,7 @@ fn config(
             ..AccountsConfig::default()
         },
         chat: ChatConfig::default(),
+        audit: AuditConfig::default(),
         grpc: Some(GrpcConfig {
             bind: grpc,
             pki: PkiPaths {

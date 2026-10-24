@@ -405,7 +405,8 @@ mod tests {
 
     use super::*;
     use crate::config::{
-        AccountsConfig, AuthConfig, ChatConfig, DatabaseConfig, HttpConfig, VaultConfig,
+        AccountsConfig, AuditConfig, AuthConfig, ChatConfig, DatabaseConfig, HttpConfig,
+        VaultConfig,
     };
     use crate::infra::crypto::passwords::Argon2Passwords;
     use crate::infra::sqlite::{self, DatabaseOptions};
@@ -437,6 +438,7 @@ mod tests {
             },
             accounts: AccountsConfig::default(),
             chat: ChatConfig::default(),
+            audit: AuditConfig::default(),
             grpc: None,
         }
     }

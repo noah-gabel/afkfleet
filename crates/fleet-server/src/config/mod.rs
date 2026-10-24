@@ -17,13 +17,15 @@
 //!   `[rate_limits]` and `[http] trusted_proxies` (ADR-0016); Phase 9 adds
 //!   `[accounts]` and the link flows' rate limits (ADR-0018); Phase 10 adds
 //!   the optional `[grpc]`, and `[chat]`'s command allowlist with the bots'
-//!   endpoints (ADR-0019).
+//!   endpoints (ADR-0019); Phase 11 adds `[chat]`'s retention and `[audit]`
+//!   (ADR-0020).
 //! - **Secrets never go in this file.** A key for a secret names the file
 //!   that holds it and ends in `_file` or `_files`; a test checks every
 //!   key's name (security rule 4). fleet-startup's `secret_file` reads those
 //!   files, and only `serve` reads them (ADR-0016).
 
 mod accounts;
+mod audit;
 mod auth;
 mod chat;
 mod error;
@@ -38,12 +40,14 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use chrono::TimeDelta;
+use fleet_core::retention::RetentionPolicy;
 
 use raw::RawConfig;
 
 use crate::http::rate_limit::TrustedProxies;
 
 pub use accounts::AccountsConfig;
+pub use audit::AuditConfig;
 pub use auth::{Argon2Params, Argon2ParamsError, AuthConfig, Bounds};
 pub use chat::ChatConfig;
 pub use error::{ConfigError, Problem, ProblemKind, Problems};
@@ -77,8 +81,10 @@ pub struct ServerConfig {
     pub rate_limits: RateLimitConfig,
     /// The linked Minecraft accounts (`[accounts]`).
     pub accounts: AccountsConfig,
-    /// What users may make the bots say (`[chat]`).
+    /// What users may make the bots say, and how long it's kept (`[chat]`).
     pub chat: ChatConfig,
+    /// How long the audit log is kept (`[audit]`).
+    pub audit: AuditConfig,
     /// How the server logs (`[log]`).
     pub log: LogConfig,
     /// The agents' control plane (`[grpc]`), or `None` when the section is
@@ -194,6 +200,17 @@ impl ServerConfig {
                 "dev mode is on: development-only features are enabled; never run a production \
                  server in dev mode"
             );
+        }
+    }
+
+    /// What the retention job keeps (Plan.md P11.6; ADR-0020, U19, U21,
+    /// U22): chat's age and each bot's bound, and the audit log's age.
+    #[must_use]
+    pub const fn retention(&self) -> RetentionPolicy {
+        RetentionPolicy {
+            chat: self.chat.retention,
+            bound: self.chat.bound,
+            audit: self.audit.retention,
         }
     }
 }
