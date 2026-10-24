@@ -13,7 +13,7 @@ use fleet_core::value::{Host, ServerAddress};
 use tracing::info;
 
 use super::{BotService, BotWriteError, reread};
-use crate::app::users::ActingUser;
+use crate::app::users::{ActingUser, Rechecked};
 use crate::ports::reconcile::Change;
 
 /// What a setting's write did.
@@ -39,7 +39,7 @@ impl BotService {
         server: ServerAddress,
     ) -> Result<Configured, BotWriteError> {
         let mut tx = self.store.write().await?;
-        let (actor, bot, account) = reread(tx.as_mut(), by, id).await?;
+        let (Rechecked { actor, .. }, bot, account) = reread(tx.as_mut(), by, id).await?;
         authorize(&actor, Permission::ConfigureBot, &account.context())
             .map_err(BotWriteError::Denied)?;
         if bot.server.as_ref() == Some(&server) || !tx.bots().set_server(id, &server).await? {
@@ -50,6 +50,7 @@ impl BotService {
         tx.commit(self.entry(by, AuditAction::BOT_SET_SERVER, id, metadata))
             .await?;
         self.reconcile.changed(Change::Store);
+        self.live_hints.bots(&[id]);
         info!(user_id = %by.actor.id, bot_id = %id, "a bot's server address was set");
         Ok(Configured::Changed)
     }
@@ -69,7 +70,7 @@ impl BotService {
         mode: ModeId,
     ) -> Result<Configured, BotWriteError> {
         let mut tx = self.store.write().await?;
-        let (actor, bot, account) = reread(tx.as_mut(), by, id).await?;
+        let (Rechecked { actor, .. }, bot, account) = reread(tx.as_mut(), by, id).await?;
         // The bot first: a stranger learns nothing about the mode.
         authorize(&actor, Permission::ViewBot, &account.context())
             .map_err(BotWriteError::Denied)?;
@@ -107,6 +108,7 @@ impl BotService {
         tx.commit(self.entry(by, AuditAction::BOT_SET_MODE, id, metadata))
             .await?;
         self.reconcile.changed(Change::Store);
+        self.live_hints.bots(&[id]);
         info!(user_id = %by.actor.id, bot_id = %id, mode_id = %mode, "a bot's mode was switched");
         Ok(Configured::Changed)
     }

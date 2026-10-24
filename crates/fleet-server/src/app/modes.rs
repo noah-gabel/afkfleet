@@ -39,13 +39,14 @@ use fleet_core::authz::{
     Actor, AuthzError, CommandAllowlist, CommandCheck, ModeVisibility, Permission, ResourceContext,
     UserRef, authorize,
 };
-use fleet_core::id::ModeId;
+use fleet_core::id::{ModeId, UserId};
 use fleet_core::mode::{ModeDefinition, ModeName, mode_cap_reached};
 use fleet_core::system::{Clock, MintError, SecureRandom, mint};
 use tracing::{debug, error, info};
 
 use super::audit::AuditService;
 use super::users::{ActingUser, recheck};
+use crate::ports::live_hints::{LiveHints, ModeEvent, NoLiveHints};
 use crate::ports::modes::{ListedMode, ModeChange, ModeOwner, NewMode, StoredMode, WriteModeError};
 use crate::ports::page::{Page, Paged};
 use crate::ports::reconcile::{Change, NoReconcile, Reconcile};
@@ -246,6 +247,7 @@ pub struct ModeService {
     audit: AuditService,
     allowlist: CommandAllowlist,
     reconcile: Arc<dyn Reconcile>,
+    live_hints: Arc<dyn LiveHints>,
 }
 
 impl ModeService {
@@ -266,7 +268,15 @@ impl ModeService {
             audit,
             allowlist: CommandAllowlist::default(),
             reconcile: Arc::new(NoReconcile),
+            live_hints: Arc::new(NoLiveHints),
         }
+    }
+
+    /// The same, telling the live events sockets through `live_hints` when a
+    /// mode was created, changed or deleted, once its commit returned (S33).
+    #[must_use]
+    pub fn with_live_hints(self, live_hints: Arc<dyn LiveHints>) -> Self {
+        Self { live_hints, ..self }
     }
 
     /// The same, with the server's `[chat] command_allowlist`.
@@ -396,20 +406,12 @@ impl ModeService {
             .metadata(metadata);
         tx.commit(entry).await?;
         self.reconcile.changed(Change::Store);
+        self.live_hints.mode(ModeEvent {
+            id,
+            was: Some(stored.seen()),
+        });
         info!(user_id = %by.actor.id, mode_id = %id, "a mode was edited");
-        Ok(Edited::Changed(ListedMode {
-            mode: StoredMode {
-                id,
-                owner: Some(owner),
-                name: change.name,
-                visibility: change.visibility,
-                definition: change.definition,
-                version,
-                created_at: stored.mode.created_at,
-                updated_at: now,
-            },
-            owner: stored.owner,
-        }))
+        Ok(Edited::Changed(changed(stored, change, owner)))
     }
 
     /// What the allowlist says of the commands `definition`'s steps send:
@@ -493,6 +495,7 @@ impl ModeService {
             .target(AuditTarget::Mode(id))
             .metadata(metadata);
         tx.commit(entry).await?;
+        self.live_hints.mode(ModeEvent { id, was: None });
         info!(user_id = %by.actor.id, mode_id = %id, "a mode was created");
         Ok(ListedMode {
             mode: StoredMode {
@@ -555,6 +558,10 @@ impl ModeService {
             .target(AuditTarget::Mode(id))
             .metadata(metadata);
         tx.commit(entry).await?;
+        self.live_hints.mode(ModeEvent {
+            id,
+            was: Some(stored.seen()),
+        });
         info!(user_id = %by.actor.id, mode_id = %id, "a mode was deleted");
         Ok(())
     }
@@ -629,6 +636,23 @@ fn stored_alike(one: &ModeDefinition, other: &ModeDefinition) -> Result<bool, St
         serde_json::to_string(definition).map_err(|error| StoreError::Backend(Box::new(error)))
     };
     Ok(json(one)? == json(other)?)
+}
+
+/// `stored` as `change` wrote it, by its `owner`.
+fn changed(stored: ListedMode, change: ModeChange, owner: UserId) -> ListedMode {
+    ListedMode {
+        mode: StoredMode {
+            id: change.id,
+            owner: Some(owner),
+            name: change.name,
+            visibility: change.visibility,
+            definition: change.definition,
+            version: change.version,
+            created_at: stored.mode.created_at,
+            updated_at: change.updated_at,
+        },
+        owner: stored.owner,
+    }
 }
 
 /// `mode.update`'s metadata for `change` over `stored`, through `route`,

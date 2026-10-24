@@ -16,7 +16,7 @@ use axum::http::Method;
 use chrono::{DateTime, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::auth::{InviteTtl, LockoutPolicy, NewPassword, SessionPolicy};
-use fleet_core::authz::{CommandAllowlist, GrantLevel, Role};
+use fleet_core::authz::{Actor, CommandAllowlist, GrantLevel, Role};
 use fleet_core::id::{AccountId, BotId, InviteId, ModeId, SessionId, UserId};
 use fleet_core::mode::ModeName;
 use fleet_core::pki::CertFingerprint;
@@ -28,7 +28,7 @@ use fleet_server::app::bots::{BotService, ChatWait};
 use fleet_server::app::challenges::{ChallengeUser, Challenges, SetupPurpose};
 use fleet_server::app::enrollment::EnrollmentTokenService;
 use fleet_server::app::event_tickets::EventTickets;
-use fleet_server::app::events::EventBus;
+use fleet_server::app::events::{EventBus, LiveRights};
 use fleet_server::app::health::HealthService;
 use fleet_server::app::invites::InviteService;
 use fleet_server::app::lockout::LockoutService;
@@ -56,12 +56,13 @@ use fleet_server::ports::agents::{AgentReads, AgentWrites};
 use fleet_server::ports::audit::{
     AuditEntryId, AuditLimit, AuditPage, AuditReads, AuditRecord, AuditWrites, NewAuditEntry,
 };
-use fleet_server::ports::bots::{BotReads, BotWrites};
+use fleet_server::ports::bots::{Access, Bot, BotReads, BotRecord, BotWrites, Fleet, ListedBot};
 use fleet_server::ports::chat::{ChatReads, ChatWrites};
 use fleet_server::ports::enrollment_tokens::{EnrollmentTokenReads, EnrollmentTokenWrites};
 use fleet_server::ports::envelopes::{EnvelopeReads, EnvelopeWrites};
 use fleet_server::ports::grants::{GrantReads, GrantWrites};
 use fleet_server::ports::invites::{InviteReads, InviteWrites, NewInvite};
+use fleet_server::ports::live_hints::{LiveHints, ModeEvent};
 use fleet_server::ports::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
 use fleet_server::ports::mfa::{MfaReads, MfaWrites};
 use fleet_server::ports::modes::{
@@ -250,6 +251,8 @@ pub(crate) struct HookedStore {
     after_commit: Arc<Mutex<Option<Meanwhile>>>,
     lose_mode_update: Arc<Mutex<bool>>,
     sessions: HookedSessions,
+    bots: HookedBots,
+    modes: HookedModes,
 }
 
 impl HookedStore {
@@ -263,6 +266,23 @@ impl HookedStore {
                 hang_find: Arc::default(),
                 hanging: Arc::new(tokio::sync::watch::Sender::new(0)),
                 find_behind_writes: Arc::default(),
+                found: Arc::new(tokio::sync::watch::Sender::new(0)),
+            },
+            modes: HookedModes {
+                inner: inner.clone(),
+                fail_listed: Arc::default(),
+                hold_listed: Arc::default(),
+                listeds: Arc::default(),
+            },
+            bots: HookedBots {
+                inner: inner.clone(),
+                accesses: Arc::default(),
+                fail_access: Arc::default(),
+                listed_ins: Arc::default(),
+                fail_listed_in: Arc::default(),
+                hold_listed_in: Arc::default(),
+                hold_access: Arc::default(),
+                commit_during_access: Arc::default(),
             },
             inner,
             alice,
@@ -291,6 +311,94 @@ impl HookedStore {
     /// one has always landed by the time a check ends (P11.5).
     pub(crate) fn queue_socket_checks_behind_writes(&self) {
         *self.sessions.find_behind_writes.lock().unwrap() = true;
+    }
+
+    /// How many times the live events' rights were read
+    /// (`BotReads::access`, P11.5).
+    pub(crate) fn rights_reads(&self) -> usize {
+        self.bots.accesses.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// From now on, reading the live events' rights fails as a busy
+    /// database does (P11.5).
+    pub(crate) fn fail_rights_reads(&self) {
+        *self.bots.fail_access.lock().unwrap() = true;
+    }
+
+    /// From now on, reading one mode with its owner (`ModeReads::listed`, a
+    /// live events socket's read of a mode) fails as a busy database does
+    /// (P11.5).
+    pub(crate) fn fail_mode_reads(&self) {
+        *self.modes.fail_listed.lock().unwrap() = true;
+    }
+
+    /// How many times bots were read for live events (`BotReads::listed_in`,
+    /// P11.5).
+    pub(crate) fn bot_reads(&self) -> usize {
+        self.bots
+            .listed_ins
+            .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// From now on, reading bots for live events fails as a busy database
+    /// does (P11.5).
+    pub(crate) fn fail_bot_reads(&self) {
+        *self.bots.fail_listed_in.lock().unwrap() = true;
+    }
+
+    /// Holds the next read of bots for live events once it has read the
+    /// database, until the returned hold is released (P11.5): the socket is
+    /// then in the middle of a step, reading nothing from its client.
+    pub(crate) fn hold_next_bot_read(&self) -> HeldRead {
+        let (read, read_done) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        *self.bots.hold_listed_in.lock().unwrap() = Some((read, released));
+        HeldRead { read_done, release }
+    }
+
+    /// Holds the next read of the live events' rights once it has read the
+    /// database, until the returned hold is released (P11.5).
+    /// How many times a mode was read with its owner (`ModeReads::listed`,
+    /// a live events socket's read of a mode) since the start (P11.5).
+    pub(crate) fn mode_reads(&self) -> usize {
+        self.modes.listeds.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// The next `ModeReads::listed`, a live events socket's read of a
+    /// mode, tells the returned [`HeldRead`] once it read the database, then
+    /// waits for its release before it answers (P11.5).
+    pub(crate) fn hold_next_mode_read(&self) -> HeldRead {
+        let (read, read_done) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        *self.modes.hold_listed.lock().unwrap() = Some((read, released));
+        HeldRead { read_done, release }
+    }
+
+    /// Each of the next `reads` reads of the live events' rights commits
+    /// once after it read the database and before it answers, as a write
+    /// landing during the read does: each snapshot is older than the count
+    /// when it comes (P11.5, S43).
+    pub(crate) fn commit_during_next_rights_reads(&self, reads: u32) {
+        self.bots
+            .commit_during_access
+            .store(reads, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    pub(crate) fn hold_next_rights_read(&self) -> HeldRead {
+        let (read, read_done) = tokio::sync::oneshot::channel();
+        let (release, released) = tokio::sync::oneshot::channel();
+        *self.bots.hold_access.lock().unwrap() = Some((read, released));
+        HeldRead { read_done, release }
+    }
+
+    /// Waits, within `bound`, until `SessionReads::find`, a socket's check of
+    /// its session, answered `count` times since the start (P11.5).
+    pub(crate) async fn until_socket_checks(&self, count: u32, bound: Duration) {
+        let mut found = self.sessions.found.subscribe();
+        tokio::time::timeout(bound, found.wait_for(|found| *found >= count))
+            .await
+            .expect("the checks answered in time")
+            .unwrap();
     }
 
     /// Waits, within `bound`, until a `find` hangs.
@@ -634,6 +742,175 @@ impl ModeWrites for LosingTx {
     }
 }
 
+/// The database's mode reads, `listed` failing on request.
+#[derive(Debug, Clone)]
+struct HookedModes {
+    inner: Database,
+    fail_listed: Arc<Mutex<bool>>,
+    /// The next `listed` tells the first once it read, then waits for the
+    /// second.
+    hold_listed: Arc<Mutex<Option<Hold>>>,
+    /// How many `listed`s were asked for.
+    listeds: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+#[async_trait]
+impl ModeReads for HookedModes {
+    async fn find(&self, id: ModeId) -> Result<Option<StoredMode>, StoreError> {
+        self.inner.modes().find(id).await
+    }
+
+    async fn visible(
+        &self,
+        viewer: Actor,
+        page: Page<ModeId>,
+    ) -> Result<Vec<ListedMode>, StoreError> {
+        self.inner.modes().visible(viewer, page).await
+    }
+
+    async fn listed(&self, id: ModeId) -> Result<Option<ListedMode>, StoreError> {
+        self.listeds
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if *self.fail_listed.lock().unwrap() {
+            return Err(StoreError::Busy);
+        }
+        let read = self.inner.modes().listed(id).await;
+        let hold = self.hold_listed.lock().unwrap().take();
+        if let Some((read_done, released)) = hold {
+            let _ = read_done.send(());
+            let _ = released.await;
+        }
+        read
+    }
+}
+
+/// A read of the live events' rights held by
+/// [`HookedStore::hold_next_rights_read`].
+pub(crate) struct HeldRead {
+    read_done: tokio::sync::oneshot::Receiver<()>,
+    release: tokio::sync::oneshot::Sender<()>,
+}
+
+impl HeldRead {
+    /// Waits, within `bound`, until the held read has read the database.
+    pub(crate) async fn read(&mut self, bound: Duration) {
+        tokio::time::timeout(bound, &mut self.read_done)
+            .await
+            .expect("the rights are read in time")
+            .unwrap();
+    }
+
+    /// Lets the held read answer.
+    pub(crate) fn release(self) {
+        let _ = self.release.send(());
+    }
+}
+
+/// The database's bot reads, with the live events' rights counted, and
+/// failing or held on request.
+#[derive(Debug, Clone)]
+struct HookedBots {
+    inner: Database,
+    accesses: Arc<std::sync::atomic::AtomicUsize>,
+    fail_access: Arc<Mutex<bool>>,
+    listed_ins: Arc<std::sync::atomic::AtomicUsize>,
+    fail_listed_in: Arc<Mutex<bool>>,
+    /// The next `listed_in` tells the first once it read, then waits for
+    /// the second.
+    hold_listed_in: Arc<Mutex<Option<Hold>>>,
+    /// The next `access` tells the first once it read, then waits for the
+    /// second.
+    hold_access: Arc<Mutex<Option<Hold>>>,
+    /// How many of the next `access`es commit once after they read.
+    commit_during_access: Arc<std::sync::atomic::AtomicU32>,
+}
+
+/// A held read's two ends: told once it read, then released.
+type Hold = (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
+
+#[async_trait]
+impl BotReads for HookedBots {
+    async fn find(&self, id: BotId) -> Result<Option<Bot>, StoreError> {
+        self.inner.bots().find(id).await
+    }
+
+    async fn of_account(&self, account: AccountId) -> Result<Option<Bot>, StoreError> {
+        self.inner.bots().of_account(account).await
+    }
+
+    async fn record(&self, id: BotId) -> Result<Option<BotRecord>, StoreError> {
+        self.inner.bots().record(id).await
+    }
+
+    async fn records(&self, page: Page<BotId>) -> Result<Vec<BotRecord>, StoreError> {
+        self.inner.bots().records(page).await
+    }
+
+    async fn listed(&self, id: BotId, viewer: UserId) -> Result<Option<ListedBot>, StoreError> {
+        self.inner.bots().listed(id, viewer).await
+    }
+
+    async fn listed_in(&self, ids: &[BotId], viewer: UserId) -> Result<Vec<ListedBot>, StoreError> {
+        self.listed_ins
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if *self.fail_listed_in.lock().unwrap() {
+            return Err(StoreError::Busy);
+        }
+        let read = self.inner.bots().listed_in(ids, viewer).await;
+        let hold = self.hold_listed_in.lock().unwrap().take();
+        if let Some((read_done, released)) = hold {
+            let _ = read_done.send(());
+            let _ = released.await;
+        }
+        read
+    }
+
+    async fn visible(
+        &self,
+        viewer: Actor,
+        page: Page<BotId>,
+    ) -> Result<Vec<ListedBot>, StoreError> {
+        self.inner.bots().visible(viewer, page).await
+    }
+
+    async fn fleet(&self) -> Result<Fleet, StoreError> {
+        self.inner.bots().fleet().await
+    }
+
+    async fn access(&self) -> Result<Access, StoreError> {
+        self.accesses
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if *self.fail_access.lock().unwrap() {
+            return Err(StoreError::Busy);
+        }
+        let read = self.inner.bots().access().await;
+        let commits = self.commit_during_access.try_update(
+            std::sync::atomic::Ordering::SeqCst,
+            std::sync::atomic::Ordering::SeqCst,
+            |left| left.checked_sub(1),
+        );
+        if commits.is_ok() {
+            let tx = self.inner.write().await.unwrap();
+            tx.commit(NewAuditEntry::new(
+                at(T0),
+                AuditAction::try_from("test.commit_during_a_read").unwrap(),
+                AuditOutcome::Success,
+            ))
+            .await
+            .unwrap();
+        }
+        let hold = self.hold_access.lock().unwrap().take();
+        if let Some((read_done, released)) = hold {
+            let _ = read_done.send(());
+            let _ = released.await;
+        }
+        read
+    }
+}
+
 /// The database's session reads, with `find` failing once
 /// [`HookedStore::fail_socket_checks`] asked it to.
 #[derive(Debug, Clone)]
@@ -645,6 +922,8 @@ struct HookedSessions {
     hanging: Arc<tokio::sync::watch::Sender<u32>>,
     /// Each `find` waits for the write connection first.
     find_behind_writes: Arc<Mutex<bool>>,
+    /// How many `find`s answered.
+    found: Arc<tokio::sync::watch::Sender<u32>>,
 }
 
 #[async_trait]
@@ -673,7 +952,9 @@ impl SessionReads for HookedSessions {
             // Taken and dropped: rolled back, so it moves no count.
             drop(self.inner.write().await?);
         }
-        self.inner.sessions().find(id).await
+        let found = self.inner.sessions().find(id).await;
+        self.found.send_modify(|found| *found += 1);
+        found
     }
 
     async fn list_live(
@@ -748,11 +1029,11 @@ impl Store for HookedStore {
     }
 
     fn bots(&self) -> &dyn BotReads {
-        self.inner.bots()
+        &self.bots
     }
 
     fn modes(&self) -> &dyn ModeReads {
-        self.inner.modes()
+        &self.modes
     }
 
     fn chat(&self) -> &dyn ChatReads {
@@ -802,6 +1083,8 @@ pub(crate) struct Setup {
     pub(crate) registry: AgentRegistry,
     /// The reconciler's hints the bots' writes sent.
     pub(crate) hints: Arc<Hinted>,
+    /// The live events' hints the services sent (P11.5).
+    pub(crate) heard: Arc<Heard>,
     /// The bus a chat send waits on, where a test answers for the agent.
     pub(crate) events: EventBus,
     /// The live events: their tickets, and the sockets' owner a test shuts
@@ -824,6 +1107,67 @@ impl Hinted {
     /// The hints since the last call.
     pub(crate) fn take(&self) -> Vec<Change> {
         core::mem::take(&mut *self.0.lock().unwrap())
+    }
+}
+
+/// One hint a service sent the live events sockets.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Hint {
+    /// These bots may read differently.
+    Bots(Vec<BotId>),
+    /// A mode was created, changed or deleted.
+    Mode(ModeEvent),
+    /// This user's role changed.
+    RoleChanged(UserId),
+}
+
+/// The live events' hints the services send, each with the commit count at
+/// the call, passed on to the bus the sockets read (ADR-0020, S42, R36): a
+/// hint counted before its commit shows as one count short.
+#[derive(Debug)]
+pub(crate) struct Heard {
+    bus: EventBus,
+    commits: tokio::sync::watch::Receiver<u64>,
+    calls: Mutex<Vec<(u64, Hint)>>,
+}
+
+impl Heard {
+    fn new(bus: EventBus, commits: tokio::sync::watch::Receiver<u64>) -> Self {
+        Self {
+            bus,
+            commits,
+            calls: Mutex::new(Vec::new()),
+        }
+    }
+
+    /// The hints since the last call, each with the commit count it came at.
+    pub(crate) fn take(&self) -> Vec<(u64, Hint)> {
+        core::mem::take(&mut *self.calls.lock().unwrap())
+    }
+
+    fn heard(&self, hint: Hint) {
+        let count = *self.commits.borrow();
+        self.calls.lock().unwrap().push((count, hint));
+    }
+}
+
+impl LiveHints for Heard {
+    fn bots(&self, bots: &[BotId]) {
+        // An empty list is no hint, as the bus takes it.
+        if !bots.is_empty() {
+            self.heard(Hint::Bots(bots.to_vec()));
+        }
+        self.bus.bots(bots);
+    }
+
+    fn mode(&self, event: ModeEvent) {
+        self.heard(Hint::Mode(event));
+        self.bus.mode(event);
+    }
+
+    fn role_changed(&self, user: UserId) {
+        self.heard(Hint::RoleChanged(user));
+        self.bus.role_changed(user);
     }
 }
 
@@ -883,22 +1227,7 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
     let tokens = token_service(&clock, &random, &hooked, &token_port);
     let challenges = Challenges::new(Arc::new(clock.clone()), token_port.clone());
     let mfa = mfa_service(&db, &clock, &random, &challenges);
-    let passwords = Arc::new(TestPasswords {
-        real: Argon2Passwords::new(Argon2Params::default(), Arc::new(random.clone()))
-            .await
-            .unwrap(),
-        rehash: settings.rehash,
-    });
-    let alice_hash = match settings.hash {
-        Some(hash) => hash,
-        None => passwords
-            .hash(
-                &NewPassword::try_from(SecretString::from(PASSWORD)).unwrap(),
-                &Username::try_from("alice").unwrap(),
-            )
-            .await
-            .unwrap(),
-    };
+    let (passwords, alice_hash) = passwords(&random, (settings.rehash, settings.hash)).await;
     let lockout = lockout_service(&clock, &db);
     let login = LoginService::new(
         Arc::new(clock.clone()),
@@ -909,24 +1238,32 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         tokens.clone(),
         mfa.clone(),
     );
-    let (users, invites) = accounts(&clock, &random, &hooked, passwords, settings.invite_ttl);
+    let events = EventBus::new();
+    let heard = Arc::new(Heard::new(events.clone(), db.commits()));
+    let (users, invites) = accounts(
+        &clock,
+        &random,
+        &hooked,
+        (passwords, settings.invite_ttl),
+        &heard,
+    );
     let limits = RateLimits::new(&settings.limits, Arc::new(clock.clone()));
     let enrollment_tokens = settings
         .control_plane
         .then(|| enrollment_tokens(&clock, &random, &hooked));
-    let (registry, agents) = agents(&clock, &hooked);
+    let (registry, agents) = agents(&clock, &hooked, &heard);
     let hints = Arc::new(Hinted::default());
-    let (bots, events) = bot_service(
+    let bots = bot_service(
         &clock,
         &random,
-        &hooked,
+        (&hooked, &events),
         &registry,
         (&settings.allowlist, settings.chat_wait),
-        &hints,
+        (&hints, &heard),
     );
     let live_events = build_live_events(
         &clock,
-        token_port,
+        (token_port, &hooked),
         &events,
         (settings.sockets, settings.limits.ws_connections_per_user),
     );
@@ -944,7 +1281,13 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         enrollment_tokens,
         agents,
         bots,
-        modes: mode_service(&clock, &random, &hooked, &settings.allowlist, &hints),
+        modes: mode_service(
+            &clock,
+            &random,
+            &hooked,
+            &settings.allowlist,
+            (&hints, &heard),
+        ),
         events: live_events.clone(),
     });
     let app = app(state, &clock);
@@ -963,9 +1306,35 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
         alice,
         registry,
         hints,
+        heard,
         events,
         live_events,
     }
+}
+
+/// The passwords, rehashing as `rehash` says, and Alice's hash: `hash`, or
+/// her password's.
+async fn passwords(
+    random: &SeededRandom,
+    (rehash, hash): (Rehash, Option<PasswordHash>),
+) -> (Arc<TestPasswords>, PasswordHash) {
+    let passwords = Arc::new(TestPasswords {
+        real: Argon2Passwords::new(Argon2Params::default(), Arc::new(random.clone()))
+            .await
+            .unwrap(),
+        rehash,
+    });
+    let alice_hash = match hash {
+        Some(hash) => hash,
+        None => passwords
+            .hash(
+                &NewPassword::try_from(SecretString::from(PASSWORD)).unwrap(),
+                &Username::try_from("alice").unwrap(),
+            )
+            .await
+            .unwrap(),
+    };
+    (passwords, alice_hash)
 }
 
 /// The token service, reading sessions through `hooked`'s switches, with
@@ -986,11 +1355,11 @@ fn token_service(
 }
 
 /// The live events as serve builds them: tickets on `clock`, as many a user
-/// as their sockets, the bus chat waits on, and an owner of their own, with
-/// `timings`.
+/// as their sockets, the bus chat waits on, an owner of their own, and the
+/// rights read through `hooked`, with `timings`.
 fn build_live_events(
     clock: &ManualClock,
-    tokens: Arc<Sha256Tokens>,
+    (tokens, hooked): (Arc<Sha256Tokens>, &HookedStore),
     bus: &EventBus,
     (timings, per_user): (SocketTimings, core::num::NonZeroU32),
 ) -> LiveEvents {
@@ -998,6 +1367,7 @@ fn build_live_events(
         EventTickets::new(Arc::new(clock.clone()), tokens).with_per_user(per_user),
         bus.clone(),
         LiveSockets::new(tokio_util::sync::CancellationToken::new()),
+        LiveRights::new(Arc::new(hooked.clone())),
     )
     .with_timings(timings)
 }
@@ -1014,17 +1384,16 @@ fn lockout_service(clock: &ManualClock, db: &Database) -> LockoutService {
 
 /// The bots' service as serve builds it, over `hooked` and `registry`,
 /// with offline accounts on, `allowlist` and `chat_wait`, recording its
-/// hints in `hints`; and the bus it waits for chat answers on.
+/// hints in `hints`, waiting for chat answers on `events`.
 fn bot_service(
     clock: &ManualClock,
     random: &SeededRandom,
-    hooked: &HookedStore,
+    (hooked, events): (&HookedStore, &EventBus),
     registry: &AgentRegistry,
     (allowlist, chat_wait): (&CommandAllowlist, ChatWait),
-    hints: &Arc<Hinted>,
-) -> (BotService, EventBus) {
-    let events = EventBus::new();
-    let bots = BotService::new(
+    (hints, heard): (&Arc<Hinted>, &Arc<Heard>),
+) -> BotService {
+    BotService::new(
         Arc::new(clock.clone()),
         Arc::new(random.clone()),
         Arc::new(hooked.clone()),
@@ -1034,18 +1403,19 @@ fn bot_service(
     )
     .with_allowlist(allowlist.clone())
     .with_reconcile(Arc::clone(hints) as Arc<dyn Reconcile>)
-    .with_chat_wait(chat_wait);
-    (bots, events)
+    .with_live_hints(Arc::clone(heard) as Arc<dyn LiveHints>)
+    .with_chat_wait(chat_wait)
 }
 
 /// The modes' service as serve builds it, over `hooked`, with `allowlist`,
-/// recording its hints in `hints`.
+/// recording its hints to the reconciler in `hints` and to the sockets in
+/// `heard`.
 fn mode_service(
     clock: &ManualClock,
     random: &SeededRandom,
     hooked: &HookedStore,
     allowlist: &CommandAllowlist,
-    hints: &Arc<Hinted>,
+    (hints, heard): (&Arc<Hinted>, &Arc<Heard>),
 ) -> ModeService {
     ModeService::new(
         Arc::new(clock.clone()),
@@ -1054,6 +1424,7 @@ fn mode_service(
     )
     .with_allowlist(allowlist.clone())
     .with_reconcile(Arc::clone(hints) as Arc<dyn Reconcile>)
+    .with_live_hints(Arc::clone(heard) as Arc<dyn LiveHints>)
 }
 
 /// Stores Alice, a Member, with `hash`.
@@ -1074,13 +1445,18 @@ async fn insert_alice(db: &Database, alice: UserId, hash: PasswordHash) {
 
 /// Each agent's one stream, which a test claims directly, and the agents'
 /// service over `hooked`, ending streams there.
-fn agents(clock: &ManualClock, hooked: &HookedStore) -> (AgentRegistry, AgentService) {
+fn agents(
+    clock: &ManualClock,
+    hooked: &HookedStore,
+    heard: &Arc<Heard>,
+) -> (AgentRegistry, AgentService) {
     let registry = AgentRegistry::new(Arc::new(clock.clone()));
     let agents = AgentService::new(
         Arc::new(clock.clone()),
         Arc::new(hooked.clone()),
         Arc::new(registry.clone()),
-    );
+    )
+    .with_live_hints(Arc::clone(heard) as Arc<dyn LiveHints>);
     (registry, agents)
 }
 
@@ -1105,15 +1481,16 @@ fn accounts(
     clock: &ManualClock,
     random: &SeededRandom,
     hooked: &HookedStore,
-    passwords: Arc<TestPasswords>,
-    ttl: InviteTtl,
+    (passwords, ttl): (Arc<TestPasswords>, InviteTtl),
+    heard: &Arc<Heard>,
 ) -> (UserService, InviteService) {
     let users = UserService::new(
         Arc::new(clock.clone()),
         Arc::new(random.clone()),
         Arc::new(hooked.clone()),
         passwords,
-    );
+    )
+    .with_live_hints(Arc::clone(heard) as Arc<dyn LiveHints>);
     let invites = InviteService::new(
         Arc::new(clock.clone()),
         Arc::new(random.clone()),
@@ -1555,6 +1932,7 @@ fn idle_link_flows(
     .unwrap();
     LinkFlowService::new(
         LinkFlowPorts {
+            live_hints: std::sync::Arc::new(fleet_server::ports::live_hints::NoLiveHints),
             microsoft: Arc::new(
                 fleet_server::infra::msauth::ReqwestMicrosoftAuth::new(Arc::clone(&clock)).unwrap(),
             ),

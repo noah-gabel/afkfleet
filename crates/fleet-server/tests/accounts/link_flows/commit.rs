@@ -203,6 +203,27 @@ async fn a_linked_minecraft_account_is_taken_and_recorded_without_naming_its_own
     assert_eq!(failure.metadata.entries().len(), 5);
 }
 
+#[sqlx::test(migrations = false)]
+async fn a_link_tells_the_sockets_its_new_bot_after_its_commit_and_a_taken_one_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = LinkSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+    let bob = setup.person(2, Role::Owner).await;
+
+    let LinkFlowStatus::Linked { account, .. } = linked(&setup, &alice).await else {
+        panic!("linked");
+    };
+    let bot = setup.db.bots().of_account(account).await.unwrap().unwrap();
+    let after_linking = (setup.heard.take(), setup.heard.once(&[bot.id]));
+    let taken = linked(&setup, &bob).await;
+
+    assert_eq!(after_linking.0, after_linking.1);
+    assert_eq!(taken, LinkFlowStatus::Taken);
+    assert_eq!(setup.heard.take(), [], "a taken account's failure entry");
+}
+
 // --- The re-checks of the creator and their session ------------------------------
 
 #[sqlx::test(migrations = false)]

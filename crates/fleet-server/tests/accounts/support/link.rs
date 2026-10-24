@@ -18,7 +18,8 @@ use std::sync::Arc;
 use fleet_core::account::AccountStatus;
 use fleet_core::audit::{AuditAction, RecordedValue};
 use fleet_core::authz::{Actor, Role};
-use fleet_core::id::{AccountId, LinkFlowId, SessionId, UserId};
+use fleet_core::id::{AccountId, BotId, LinkFlowId, SessionId, UserId};
+use fleet_core::mode::ModePreset;
 use fleet_core::system::Clock as _;
 use fleet_core::value::Username;
 use fleet_server::app::link_flows::{
@@ -29,6 +30,7 @@ use fleet_server::infra::crypto::vault::XChaChaVault;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord};
+use fleet_server::ports::bots::NewBot;
 use fleet_server::ports::msauth::{DeviceFlow, PollInterval};
 use fleet_server::ports::sessions::{NewSession, Rotation};
 use fleet_server::ports::store::Store as _;
@@ -39,6 +41,7 @@ use fleet_testkit::system::{ManualClock, SeededRandom};
 use secrecy::{ExposeSecret as _, SecretString};
 use sqlx::sqlite::SqliteConnectOptions;
 
+use super::hints::Heard;
 use super::msauth::{Call, FakeMicrosoftAuth, Script, device_flow};
 use super::pace::FakePace;
 use super::service::{T0, at, bounded, profile, setup_entry, vault_with_key};
@@ -77,6 +80,8 @@ pub(crate) struct LinkSetup {
     pub(crate) vault_random: SeededRandom,
     pub(crate) fake: Arc<FakeMicrosoftAuth>,
     pub(crate) pace: Arc<FakePace>,
+    /// What the service told the live events sockets.
+    pub(crate) heard: Arc<Heard>,
     pub(crate) service: LinkFlowService,
 }
 
@@ -96,6 +101,7 @@ impl LinkSetup {
         let vault = Arc::new(vault_with_key(1, &vault_random));
         let fake = Arc::new(FakeMicrosoftAuth::new());
         let pace = Arc::new(FakePace::new(clock.clone()));
+        let heard = Arc::new(Heard::new(&db));
         let ports = LinkFlowPorts {
             clock: clock.clone(),
             random: Arc::new(random.clone()),
@@ -103,6 +109,7 @@ impl LinkSetup {
             vault: vault.clone(),
             microsoft: fake.clone(),
             pace: pace.clone(),
+            live_hints: heard.clone(),
         };
         let service = LinkFlowService::new(ports.clone(), settings);
         Self {
@@ -116,6 +123,7 @@ impl LinkSetup {
             vault_random,
             fake,
             pace,
+            heard,
             service,
         }
     }
@@ -228,6 +236,23 @@ impl LinkSetup {
             .await
             .unwrap();
         tx.commit(setup_entry()).await.unwrap();
+    }
+
+    /// Gives account `n` its bot `n`, as the services create one with every
+    /// account.
+    pub(crate) async fn add_bot(&self, n: u8) -> BotId {
+        let id = BotId::new_v7(at(T0 + i64::from(n)), [n; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.bots()
+            .insert(&NewBot {
+                id,
+                account: AccountId::new_v7(at(T0), [n; 10]).unwrap(),
+                mode: ModePreset::Afk.id(),
+            })
+            .await
+            .unwrap();
+        tx.commit(setup_entry()).await.unwrap();
+        id
     }
 
     /// Scripts the next start to answer the device code `code`, polled every

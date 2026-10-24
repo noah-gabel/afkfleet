@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO users (id, username, password_hash, role, disabled, created_at, password_changed_at)\n         VALUES ('00000000-0000-4000-8000-000000000001', 'nobody', '$argon2id$x', 'member', 0,\n                 '2027-01-15T08:00:00.000Z', '2027-01-15T08:00:00.000Z')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "6bc597fa05c41d3305137e91a71b25759f402d1209507b3d2b84f7fb2aabd0b5"
+}

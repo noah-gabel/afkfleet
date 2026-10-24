@@ -385,6 +385,7 @@ fn idle_link_flows(
     .unwrap();
     LinkFlowService::new(
         LinkFlowPorts {
+            live_hints: std::sync::Arc::new(fleet_server::ports::live_hints::NoLiveHints),
             microsoft: Arc::new(
                 fleet_server::infra::msauth::ReqwestMicrosoftAuth::new(Arc::clone(&clock)).unwrap(),
             ),

@@ -25,12 +25,14 @@
 use core::time::Duration;
 use std::sync::Arc;
 
+use chrono::{DateTime, Utc};
 use fleet_core::audit::{AuditAction, AuditError, AuditMetadata};
 use fleet_core::authz::{CommandCheck, Permission, authorize};
 use fleet_core::bot::{ChatFacts, ChatRefusal, judge_chat};
 use fleet_core::chat::ChatMessage;
 use fleet_core::id::{AgentId, BotId, ChatRequestId};
 use fleet_core::system::{MintError, mint};
+use fleet_core::value::Username;
 use fleet_proto::control::ChatFailedReason;
 use tokio::sync::broadcast;
 use tokio::sync::broadcast::error::RecvError;
@@ -38,9 +40,9 @@ use tokio::time::{Instant, timeout_at};
 use tracing::{debug, info};
 
 use super::{BotService, BotWriteError, reread};
-use crate::app::events::{LiveEvent, LiveEventKind};
-use crate::app::users::ActingUser;
-use crate::ports::chat::{ChatEntry, ChatMessageId, NewChatMessage};
+use crate::app::events::{BusEvent, LiveEvent, LiveEventKind, NotSent};
+use crate::app::users::{ActingUser, Rechecked};
+use crate::ports::chat::{ChatEntry, ChatMessageId, ChatRecord, ListedChat, NewChatMessage};
 use crate::ports::live_agents::CommandRefused;
 
 /// Which route a line came through, which its audit entry names.
@@ -198,7 +200,7 @@ impl BotService {
             return Err(ChatSendError::WrongRoute(route));
         }
         let mut tx = self.store.write().await.map_err(BotWriteError::from)?;
-        let (actor, bot, account) = reread(tx.as_mut(), by, id).await?;
+        let (Rechecked { actor, username }, bot, account) = reread(tx.as_mut(), by, id).await?;
         authorize(&actor, Permission::SendChat(check), &account.context())
             .map_err(BotWriteError::Denied)?;
         let reached = self.reach(&bot).await.map_err(BotWriteError::from)?;
@@ -237,6 +239,17 @@ impl BotService {
         tx.commit(self.entry(by, action, bot.id, metadata))
             .await
             .map_err(BotWriteError::from)?;
+        // On the bus once stored and before it's sent, with its request, so
+        // every viewer has the line before its outcome (S34).
+        let events = LineEvents {
+            bot: bot.id,
+            agent,
+            generation,
+            at: now,
+            request,
+        };
+        self.events
+            .publish(events.line(stored, row.entry, username));
         // Subscribed before the send, so no answer can come before the wait
         // listens.
         let mut answers = self.events.subscribe();
@@ -253,9 +266,13 @@ impl BotService {
                 // The answer, 409 `bot_unreachable`, doesn't tell this from a
                 // refusal before the commit; the row and the entry stay (S7).
                 debug!(user_id = %by.actor.id, bot_id = %bot.id, agent_id = %agent, chat_request = %request, chat_line = stored.get(), refused = ?refused, "a user's chat line was stored and recorded, but its stream no longer took it");
+                self.events.publish(events.not_sent(NotSent::Unreachable));
                 return Err(ChatSendError::Refused(ChatRefusal::Unreachable));
             }
             Err(CommandRefused::Unsendable) => {
+                // The sender's answer is the internal error; viewers learn
+                // only that it failed (R35).
+                self.events.publish(events.not_sent(NotSent::Unsendable));
                 return Err(ChatSendError::Write(BotWriteError::Unsendable));
             }
         }
@@ -275,6 +292,52 @@ impl BotService {
             message: stored,
             outcome,
         })
+    }
+}
+
+/// What a user's line puts on the bus (S34, R35), from its bot's agent as
+/// the send found it.
+struct LineEvents {
+    bot: BotId,
+    agent: AgentId,
+    generation: u64,
+    at: DateTime<Utc>,
+    request: ChatRequestId,
+}
+
+impl LineEvents {
+    /// The line, stored as row `id` from `entry`, sent by `username`.
+    fn line(&self, id: ChatMessageId, entry: ChatEntry, username: Username) -> LiveEvent {
+        self.event(LiveEventKind::Chat {
+            line: ListedChat {
+                record: ChatRecord {
+                    id,
+                    bot: self.bot,
+                    at: self.at,
+                    entry,
+                },
+                sent_by: Some(username),
+            },
+            request: Some(self.request),
+        })
+    }
+
+    /// The line stored, and not sent, for `why`.
+    const fn not_sent(&self, why: NotSent) -> LiveEvent {
+        self.event(LiveEventKind::ChatNotSent {
+            request: self.request,
+            why,
+        })
+    }
+
+    const fn event(&self, kind: LiveEventKind) -> LiveEvent {
+        LiveEvent {
+            bot: self.bot,
+            agent: self.agent,
+            generation: self.generation,
+            at: self.at,
+            kind,
+        }
     }
 }
 
@@ -306,9 +369,10 @@ fn recorded(
 }
 
 /// The agent's answer to `request` for `bot` from `agent`, on any stream,
-/// heard on `answers` until `deadline`; anything else on the bus is skipped.
+/// heard on `answers` until `deadline`; anything else on the bus is skipped,
+/// the server's own hints among it: only an agent's event answers (R13).
 async fn answer(
-    answers: &mut broadcast::Receiver<Arc<LiveEvent>>,
+    answers: &mut broadcast::Receiver<Arc<BusEvent>>,
     request: ChatRequestId,
     bot: BotId,
     agent: AgentId,
@@ -322,6 +386,9 @@ async fn answer(
             // Nothing in time; or the wait fell behind the bus, so its
             // answer may be among the events it missed; or the bus is gone.
             Err(_) | Ok(Err(RecvError::Lagged(_) | RecvError::Closed)) => return Answer::Pending,
+        };
+        let Some(event) = event.agent() else {
+            continue;
         };
         if event.bot != bot || event.agent != agent {
             continue;
@@ -342,7 +409,7 @@ mod tests {
     use fleet_core::bot::{BotSnapshot, BotState};
 
     use super::*;
-    use crate::app::events::{EVENT_BUS_CAPACITY, EventBus};
+    use crate::app::events::{EVENT_BUS_CAPACITY, EventBus, LiveEvent};
 
     fn at() -> DateTime<Utc> {
         DateTime::from_timestamp_millis(1_800_000_000_000).unwrap()
@@ -412,6 +479,44 @@ mod tests {
 
         assert_eq!(sent, Answer::Sent);
         assert_eq!(none, Answer::Pending);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn the_wait_reads_agent_events_only() {
+        use crate::ports::live_hints::{LiveHints, ModeEvent};
+
+        let bus = EventBus::new();
+        let mut answers = bus.subscribe();
+        let hint = |bus: &EventBus| {
+            bus.bots(&[bot(1)]);
+            bus.mode(ModeEvent {
+                id: fleet_core::id::ModeId::new_v7(at(), [5; 10]).unwrap(),
+                was: None,
+            });
+            bus.role_changed(fleet_core::id::UserId::new_v7(at(), [6; 10]).unwrap());
+        };
+        hint(&bus);
+        bus.publish(event(
+            bot(1),
+            agent(1),
+            1,
+            LiveEventKind::ChatNotSent {
+                request: request(1),
+                why: crate::app::events::NotSent::Unreachable,
+            },
+        ));
+        hint(&bus);
+        bus.publish(event(
+            bot(1),
+            agent(1),
+            1,
+            LiveEventKind::ChatSent(request(1)),
+        ));
+        let deadline = Instant::now() + ChatWait::ANSWER;
+
+        let heard = answer(&mut answers, request(1), bot(1), agent(1), deadline).await;
+
+        assert_eq!(heard, Answer::Sent);
     }
 
     #[tokio::test(start_paused = true)]

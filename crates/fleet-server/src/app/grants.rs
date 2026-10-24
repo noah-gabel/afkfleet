@@ -41,6 +41,7 @@ use super::audit::AuditService;
 use super::users::ActingUser;
 use crate::ports::audit::NewAuditEntry;
 use crate::ports::grants::{AccountGrant, InsertGrantError, ListedGrant};
+use crate::ports::live_hints::{LiveHints, NoLiveHints};
 use crate::ports::page::{Page, Paged};
 use crate::ports::store::{Store, StoreError, WriteTx};
 
@@ -164,6 +165,7 @@ pub struct GrantService {
     clock: Arc<dyn Clock>,
     store: Arc<dyn Store>,
     audit: AuditService,
+    live_hints: Arc<dyn LiveHints>,
 }
 
 impl GrantService {
@@ -175,7 +177,15 @@ impl GrantService {
             clock,
             store,
             audit,
+            live_hints: Arc::new(NoLiveHints),
         }
+    }
+
+    /// The service, telling the live events sockets through `live_hints`
+    /// whose bot a grant changed, once its commit returned (ADR-0020, S42).
+    #[must_use]
+    pub fn with_live_hints(self, live_hints: Arc<dyn LiveHints>) -> Self {
+        Self { live_hints, ..self }
     }
 
     /// The grants on `account` on `page`, newest grantee first, and the
@@ -267,6 +277,7 @@ impl GrantService {
             Err(InsertGrantError::Exists) => return Err(CreateGrantError::Exists),
             Err(InsertGrantError::Store(error)) => return Err(error.into()),
         }
+        let bot = tx.bots().id_of_account(account).await?;
         let entry = self
             .entry(
                 AuditAction::GRANT_CREATE,
@@ -280,6 +291,7 @@ impl GrantService {
                     .text("level", level.as_str())?,
             );
         tx.commit(entry).await?;
+        self.live_hints.bots(bot.as_slice());
         info!(user_id = %by.actor.id, account_id = %account, grantee = %grantee.id, "{GRANTED}");
         Ok(ListedGrant {
             grant,
@@ -356,6 +368,7 @@ impl GrantService {
         {
             return Err(ChangeGrantError::NoGrant);
         }
+        let bot = tx.bots().id_of_account(account).await?;
         let entry = self
             .entry(
                 AuditAction::GRANT_SET_LEVEL,
@@ -370,6 +383,7 @@ impl GrantService {
                     .text("previous_level", current.level.as_str())?,
             );
         tx.commit(entry).await?;
+        self.live_hints.bots(bot.as_slice());
         info!(user_id = %by.actor.id, account_id = %account, grantee = %user, "{CHANGED}");
         Ok(ListedGrant {
             grant: AccountGrant {
@@ -412,6 +426,7 @@ impl GrantService {
         if !tx.grants().delete(account, user).await? {
             return Err(RevokeGrantError::NoGrant);
         }
+        let bot = tx.bots().id_of_account(account).await?;
         let entry = self
             .entry(
                 AuditAction::GRANT_REVOKE,
@@ -425,6 +440,7 @@ impl GrantService {
                     .text("level", current.level.as_str())?,
             );
         tx.commit(entry).await?;
+        self.live_hints.bots(bot.as_slice());
         info!(user_id = %by.actor.id, account_id = %account, grantee = %user, "{REVOKED}");
         Ok(())
     }

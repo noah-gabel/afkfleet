@@ -49,7 +49,7 @@ fn swinging() -> String {
 impl Setup {
     /// Mode `n` of `owner`, named `name`, with `visibility` and the mode JSON
     /// `definition`: a later `n` is a newer mode.
-    async fn add_mode(
+    pub(crate) async fn add_mode(
         &self,
         n: u8,
         owner: UserId,

@@ -34,7 +34,7 @@ use fleet_core::value::{AgentName, Username};
 use fleet_proto::control::{AgentMessage, ChatFailedReason, ServerMessage, Welcome};
 use fleet_proto::generated as wire;
 use fleet_server::app::agents::ingest::{IngestBounds, IngestTimings, IngestWriter, Tick, ingest};
-use fleet_server::app::events::{EventBus, LiveEvent, LiveEventKind};
+use fleet_server::app::events::{BusEvent, EventBus, LiveEvent, LiveEventKind};
 use fleet_server::config::{LogConfig, LogFormat};
 use fleet_server::grpc::registry::{
     Activation, AgentRegistry, Halt, Hold, HoldEntry, Lease, Verdict,
@@ -45,7 +45,7 @@ use fleet_server::ports::agent_connections::Admitted;
 use fleet_server::ports::agents::NewAgent;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, NewAuditEntry};
 use fleet_server::ports::bots::NewBot;
-use fleet_server::ports::chat::{ChatEntry, ChatMessageId, ChatRecord};
+use fleet_server::ports::chat::{ChatEntry, ChatMessageId, ChatRecord, ListedChat};
 use fleet_server::ports::ingest::{
     Ingest, NotTaken, Report, Reported, StickyMarks, StickyWrite, StreamShare,
 };
@@ -552,21 +552,29 @@ async fn chat_is_published_only_after_its_commit_with_its_row_id(
     let id = world.chat(world.bot).await.first().unwrap().id;
     assert_eq!(
         *after,
-        LiveEvent {
+        BusEvent::Agent(LiveEvent {
             bot: world.bot,
             agent: world.agent,
             generation: 1,
             at: at(T0),
             kind: LiveEventKind::Chat {
-                id,
-                entry: ChatEntry::Received(IncomingChat::player(
-                    PlayerChatKind::Chat,
-                    "Steve",
-                    None,
-                    "hi"
-                )),
+                line: ListedChat {
+                    record: ChatRecord {
+                        id,
+                        bot: world.bot,
+                        at: at(T0),
+                        entry: ChatEntry::Received(IncomingChat::player(
+                            PlayerChatKind::Chat,
+                            "Steve",
+                            None,
+                            "hi"
+                        )),
+                    },
+                    sent_by: None,
+                },
+                request: None,
             },
-        }
+        })
     );
 }
 
@@ -607,7 +615,7 @@ async fn statuses_deaths_alerts_and_outcomes_are_published_at_once_and_never_wri
         front.take(&share, world.report(T0, reported)).unwrap();
     }
     let published: Vec<LiveEventKind> = (0..5)
-        .map(|_| events.try_recv().unwrap().kind.clone())
+        .map(|_| events.try_recv().unwrap().agent().unwrap().kind.clone())
         .collect();
     let tick = writer.tick().await;
 
@@ -714,7 +722,11 @@ async fn a_message_for_a_bot_no_longer_the_agents_is_skipped_and_counted(
     );
     assert_eq!(world.chat(unassigned).await, Vec::new());
     let published = events.try_recv().unwrap();
-    assert_eq!(published.bot, world.bot, "a skipped row is never published");
+    assert_eq!(
+        published.agent().unwrap().bot,
+        world.bot,
+        "a skipped row is never published"
+    );
     assert_eq!(events.try_recv().map(drop), Err(TryRecvError::Empty));
 }
 

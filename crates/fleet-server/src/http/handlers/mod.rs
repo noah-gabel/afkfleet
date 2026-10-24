@@ -53,7 +53,7 @@ use fleet_api_types::accounts::{
     AccountKind, AccountResponse, AccountStatus, GrantLevel as ApiGrantLevel, RefusalReason,
 };
 use fleet_api_types::auth::USERNAME_MAX_CHARS;
-use fleet_api_types::chat::{ChatDirection, ChatLine, ChatLineKind, ChatLineSender};
+use fleet_api_types::chat::{ChatDirection, ChatFailure, ChatLine, ChatLineKind, ChatLineSender};
 use fleet_api_types::modes::{
     ModeOwnership, ModeResponse, ModeStep, ModeVisibility as ApiModeVisibility,
 };
@@ -65,6 +65,7 @@ use fleet_core::authz::{
 use fleet_core::chat::{ChatMessage, ChatSender, Redacted};
 use fleet_core::id::UserId;
 use fleet_core::value::Username;
+use fleet_proto::control::ChatFailedReason;
 use secrecy::{ExposeSecret as _, SecretString};
 
 use super::error::ApiError;
@@ -189,6 +190,25 @@ fn sees_owner(viewer: &Actor, level: GrantLevel) -> bool {
 /// is the whole of its owner rule (ADR-0020, S14).
 fn sees_owners_by_role(viewer: &Actor) -> bool {
     viewer.role >= Role::Admin
+}
+
+/// Why the agent didn't send a user's line, as one of the four codes
+/// `POST /bots/{id}/chat` answers a failure with (S5, S34): one match without
+/// a wildcard, which the answer and the live `chat_failed` share, so a
+/// reason the protocol adds can't go unanswered.
+fn chat_failure(reason: ChatFailedReason) -> ChatFailure {
+    match reason {
+        ChatFailedReason::NotOnline
+        | ChatFailedReason::Disconnected
+        | ChatFailedReason::NotInWorld => ChatFailure::BotNotOnline,
+        ChatFailedReason::ChatUnavailable => ChatFailure::ChatUnavailable,
+        ChatFailedReason::RateLimited | ChatFailedReason::QueueFull => ChatFailure::RateLimited,
+        ChatFailedReason::TimedOut
+        | ChatFailedReason::SessionBusy
+        | ChatFailedReason::AgentBusy
+        | ChatFailedReason::UnknownBot
+        | ChatFailedReason::ShuttingDown => ChatFailure::BotUnreachable,
+    }
 }
 
 /// A line of a bot's chat as `viewer`, whose level on the bot's account is

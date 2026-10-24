@@ -53,6 +53,7 @@ use super::audit::AuditService;
 use super::users::{ActingUser, recheck};
 use crate::ports::agents::ListedAgent;
 use crate::ports::live_agents::{LiveAgents, LiveStream, PermissionEnd};
+use crate::ports::live_hints::{LiveHints, NoLiveHints};
 use crate::ports::page::{Page, Paged};
 use crate::ports::store::{Store, StoreError};
 
@@ -147,6 +148,7 @@ pub struct AgentService {
     store: Arc<dyn Store>,
     live: Arc<dyn LiveAgents>,
     audit: AuditService,
+    live_hints: Arc<dyn LiveHints>,
 }
 
 impl AgentService {
@@ -160,7 +162,16 @@ impl AgentService {
             store,
             live,
             audit,
+            live_hints: Arc::new(NoLiveHints),
         }
+    }
+
+    /// The service, telling the live events sockets through `live_hints`
+    /// which bots a disable or a release changed, once its commit returned
+    /// (ADR-0020, S42).
+    #[must_use]
+    pub fn with_live_hints(self, live_hints: Arc<dyn LiveHints>) -> Self {
+        Self { live_hints, ..self }
     }
 
     /// The agents of `page`, newest first, and the next page's cursor.
@@ -238,6 +249,7 @@ impl AgentService {
             .target(AuditTarget::Agent(id))
             .metadata(metadata);
         tx.commit(entry).await?;
+        self.live_hints.bots(&released);
         info!(agent_id = %id, agent = %agent.name, bots = released.len(), "a disabled agent's bots were released");
         Ok(released)
     }
@@ -273,6 +285,7 @@ impl AgentService {
             .ok_or(DisableAgentError::NotFound)?;
         let revoked = if tx.agents().disable(id).await? {
             let revoked = tx.agents().revoke_certs(id, now).await?;
+            let bots = tx.bots().assigned_to(id).await?;
             let metadata = AuditMetadata::new()
                 .text("name", agent.name.as_str())?
                 .int(
@@ -291,6 +304,7 @@ impl AgentService {
                 Disabler::Host => entry.metadata(metadata.text("via", "cli")?),
             };
             tx.commit(entry).await?;
+            self.live_hints.bots(&bots);
             info!(agent_id = %id, agent = %agent.name, certificates_revoked = revoked, "an agent was disabled");
             Some(revoked)
         } else {

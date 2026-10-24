@@ -29,7 +29,7 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
 use super::approval;
 use crate::support::http::{HttpSetup, Person, Seen, meta, text};
-use crate::support::link::USER_CODE;
+use crate::support::link::{LinkSetup, USER_CODE};
 use crate::support::msauth::{Call, Script, device_flow, session};
 use crate::support::service::{DAY, OTHER_PROFILE, T0, at, bounded, profile};
 
@@ -154,6 +154,54 @@ async fn a_relink_replaces_the_token_and_takes_the_profiles_current_name(
     assert_eq!(meta(entry, "name"), Some(text("Renamed_3")));
     assert_eq!(meta(entry, "previous_name"), Some(text("AfkBot3")));
     assert_eq!(setup.entries(&AuditAction::ACCOUNT_LINK).await.len(), 0);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_relink_tells_the_sockets_its_bot_after_its_commit_and_another_profile_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = LinkSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+    let ids = [3, 4].map(|n| AccountId::new_v7(at(T0), [n; 10]).unwrap());
+    let mut bots = Vec::new();
+    for n in [3, 4] {
+        setup
+            .add_account(alice.actor.id, n, Some(AccountStatus::ReauthRequired))
+            .await;
+        bots.push(setup.add_bot(n).await);
+    }
+    let relinked = |id: AccountId, uuid: String| {
+        let setup = &setup;
+        let alice = &alice;
+        async move {
+            setup.script_start("device-code-1");
+            setup.fake.script_poll(Script::Answer(Ok(approval(1))));
+            setup.fake.script_session(Script::Answer(Ok(session(
+                "minecraft-1",
+                &uuid,
+                "Renamed_3",
+                at(T0 + DAY),
+            ))));
+            let flow = bounded(setup.service.start_relink(alice, id))
+                .await
+                .unwrap()
+                .id;
+            setup.ended(flow).await
+        }
+    };
+
+    let first = relinked(ids[0], profile(3)).await;
+    let after_relinking = (setup.heard.take(), setup.heard.once(&bots[..1]));
+    let other = relinked(ids[1], OTHER_PROFILE.to_owned()).await;
+
+    assert!(matches!(first, LinkFlowStatus::Linked { .. }), "{first:?}");
+    assert_eq!(after_relinking.0, after_relinking.1);
+    assert_eq!(
+        other,
+        LinkFlowStatus::Refused(RefusalReason::ProfileMismatch)
+    );
+    assert_eq!(setup.heard.take(), [], "another profile's failure entry");
 }
 
 #[sqlx::test(migrations = false)]

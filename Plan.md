@@ -4037,7 +4037,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Deviations:** no `calls` field on the confirmation's line; `ModeRunner::new` takes the respawn signal; the slow case checks an on-respawn look (a jump right after the load doesn't register) and reads the history after each ingest batch; the azalea bump check is in ADR-0003, as `docs/runbook.md` comes with P12.6.
   > - **PR #65's review** ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S27, U9, U10): azalea's `add_dead` can put `Dead` back in the Respawn's frame, so fleet-mc confirms a respawn from the Respawn's removal of `Dead` and the next load, and reads deaths from azalea's `DeathEvent` inside the frame (S27); `respawn_failed()` leaves a death read in its drain to its own retry; the slow case counts every retry line, fits its budget with both stops, always removes its container first, reads RCON through `Logs::within` (U9) and the history while the bot runs (U10).
 
-- [ ] **P11.5** 🔴 Live events:
+- [x] **P11.5** 🔴 Live events:
   1. `POST /events/ticket` returns a single-use ticket valid for 30 s (moka).
   2. The client opens a WebSocket at `GET /events?ticket=…`.
   3. Events are **filtered per user at send time**.
@@ -4074,6 +4074,23 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The session check** (R23, R24): the commit count moves for every commit asked for, a dropped one too, and once more after it landed; a socket checks at most once per 250 ms, its pings and idle close first, so no stream of commits holds them up.
   > - **Smaller:** a FIN without a close frame is a lost connection, not a 1008 (R22); a user holds as many tickets as sockets (R26); one pong answers every ping that waits; the query is refused after the upgrade (R10).
   > - **U15 (the user's decision):** `Client::events_handshake` exists only with fleet-client's `dev-console` feature, which only `just dev-bots` and fleet-client's tests have; `just tauri-check` fails if the desktop app's build has it. P11.8 opens the socket inside the client and removes the feature.
+
+  > Note (P11.5, Phase 11, group D2's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U16, U17, S38–S42, R28–R39): **one PR of about 8,400 lines** (U17, the user's), its first commit PR #66's follow-ups.
+  > - **The commit count** (S38, S39): its mark is the generation of the commit that set it, so a late return never clears the next commit's; the write pool has no lifetime, since sqlx closes a connection past it without the hook that settles the count.
+  > - **Rights** (S30, S41, R30–R32): one shared snapshot, rebuilt before any event frame once the count moved, at most one rebuild at a time; a viewer whose own role or flag changed is sent nothing until their 4001; `bot_removed` when a bot leaves what they see. Each socket reads its hinted bots in one query, through `GET /bots/{id}`'s own `read()` and `bot_response`.
+  > - **The server's hints** (S42, R36, R37): S32's list plus enabling and disabling a user, an account's rename, a relink, an agent's disable, release, hello and end, and the reconciler once per pass with a diff of the agents' shown status; each after its commit, its bots read inside the transaction, through one narrow port.
+  > - **Chat** (S34, R35, R39): the user's line on the bus after its commit and before its send; a refusal after the commit is `chat_failed`, with `bot_unreachable` for Control and above, or with no reason for an unsendable line.
+  > - **The residual** (S40): a flood on a hidden bot can show as a `resync`, at most one bit per 5 s: an accepted risk in the threat model, tested.
+  > - **Coverage** (U16): `app/events.rs` joins the auth gate.
+
+  > Note (P11.5, Phase 11, group D2) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S38–S43, R28–R42): **the events, filtered per viewer, as built; P11.5 ticked here.**
+  > - **The frames** (R28): `bot`, `bot_removed`, `bot_died`, `bot_alert`, `chat`, `chat_sent`, `chat_failed`, `mode` and `mode_removed`, each built for its viewer right before it's sent, through REST's own helpers (`http/handlers/events.rs`' `Viewer`, behind `ws::Project`); `just dev-bots`' `events` prints each kind.
+  > - **Rights** (S30, S41, S43): `app::events::LiveRights`, one snapshot for every socket, read again once the commit count moved. *Found while building, decided by a review agent (S43, for the user's review):* a step whose read a commit outran (the rights, a bot read or a mode read) sends nothing and reads again on the next turn, so a revoke landing during a read never lets a frame built on the older rights out.
+  > - **The server's hints** (S42): every write that changes what a bot reads as tells the sockets after its commit; the reconciler once per pass, with its diff of the agents' shown status.
+  > - **Two bugs found and fixed:** a bot shared again before its `bot_removed` went out got `bot` and then `bot_removed` (R41); D1's loop let work ready at every turn hold up the session check and the `resync` for good (R40), which S43's re-reads under a commit storm would have made a logout's 4001 wait on.
+  > - **Measured** (S41, a debug build on Windows): with 200 bots, 20 users and 400 grants, a rights rebuild takes 2.3 ms (median; 2.8 ms at most) and one viewer's read of 200 hinted bots 5.5 ms (11 ms at most).
+  > - **Deviations:** the console's lines came with the wire; `CHECK_GAP` is `SocketTimings::check_gap`; one frame per loop turn; a `resync` lands where its turn comes, frames already waiting before or after it; 8,753 lines added and 389 removed as the PR opened, inside U17's range.
+  > - **PR #67's review** ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), R43–R46): on rights a commit outran, a socket keeps every hint and agent event for the gate to judge, so a newly visible bot reaches an idle socket; a resync drops a waiting removal of a bot it shows; a bus wake takes at most 64 events; a user's line without its request doesn't read; the reconciler tells a write once; a mode's waiting events are read once; serve's wiring of every service's hints is tested.
 
 - [ ] **P11.6** 🔴 Retention job: chat older than `chat.retention_days` is deleted. The audit log is kept longer (configurable).
 
@@ -4336,6 +4353,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P13.4, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): load the conductor and the ingest too, and measure chat's stored size under that load (P11.6's note: retention must bound size, not only time).
 
   > Note (P13.4, from Phase 11, group D1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S31, S35): the 20 WebSocket clients open real sockets with tickets, and the test measures what each commit costs them: every open socket checks its session again after each commit (S31), and from D2 on the rights snapshot is rebuilt (S30). A `resync` in the clients' logs means a socket fell more than the bus's 1024 events behind.
+  > Note (P13.4, from Phase 11, group D2) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S40, S41, S43, R38): S41's test measured, in a debug build on Windows with 200 bots, 20 users and 400 grants, a rights rebuild at 2.3 ms (median; 2.8 ms at most) and one viewer's batched read of 200 hinted bots at 5.5 ms (11 ms at most), so a hint for all 200 costs 20 sockets about 115 ms of reads, one rebuild shared by all. The load test counts the rebuilds and their time, the steps a commit outran and read again (S43), and the resyncs at the ingest's peak, weighing its 1000-line batch against the bus of 1024 (S40); and it measures an event's latency at that peak and during a reconciler pass that writes many bots.
 - [ ] **P13.5** Chaos tests:
   - kill and restart the server, agent and MC containers
   - partition the network between agent and server

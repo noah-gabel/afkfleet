@@ -22,11 +22,14 @@ use fleet_core::disconnect::ConflictKind;
 use fleet_core::id::{AccountId, AgentId, BotId, ModeId, UserId};
 use fleet_core::mode::ModePreset;
 use fleet_core::value::{AgentName, ServerAddress, Username};
+use fleet_server::app::events::Rights;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions, MIGRATOR, PoolRole, connect_options};
 use fleet_server::ports::accounts::{AccountCredential, DeletedAccount, McAccount};
 use fleet_server::ports::agents::NewAgent;
 use fleet_server::ports::audit::NewAuditEntry;
-use fleet_server::ports::bots::{Bot, ListedBot, NewBot};
+use fleet_server::ports::bots::{
+    Access, Bot, BotAccess, GrantAccess, ListedBot, NewBot, UserAccess,
+};
 use fleet_server::ports::grants::AccountGrant;
 use fleet_server::ports::page::{Page, PageLimit};
 use fleet_server::ports::store::{Store, StoreError};
@@ -1054,4 +1057,198 @@ async fn a_mode_a_bot_runs_isnt_deleted_by_the_database_either(
     let deleted = tx.modes().delete(mode).await;
 
     assert!(deleted.is_err(), "{deleted:?}");
+}
+
+// --- Who may see which bot (P11.5; ADR-0020, S30, R12) ------------------------------------
+
+/// `access` with each list in a fixed order.
+fn sorted(mut access: Access) -> Access {
+    access.bots.sort_by_key(|bot| bot.bot);
+    access
+        .grants
+        .sort_by_key(|grant| (grant.account, grant.user));
+    access.users.sort_by_key(|user| user.user);
+    access
+}
+
+#[sqlx::test(migrations = false)]
+async fn access_holds_every_bot_with_its_owner_every_grant_and_every_user(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user_with(&db, 1, Role::Owner).await;
+    let friend = add_user_with(&db, 2, Role::Member).await;
+    let gone = add_user_with(&db, 3, Role::Admin).await;
+    let (account, bot) = add_account_with_bot(&db, friend, 10).await;
+    let (other_account, other_bot) = add_account_with_bot(&db, gone, 11).await;
+    add_grant(&db, account, owner, GrantLevel::View, friend).await;
+    add_grant(&db, other_account, friend, GrantLevel::Manage, gone).await;
+    let mut tx = db.write().await.unwrap();
+    assert!(tx.users().set_disabled(gone, true).await.unwrap());
+    tx.commit(setup_entry()).await.unwrap();
+
+    let access = db.bots().access().await.unwrap();
+
+    let expected = Access {
+        bots: vec![
+            BotAccess {
+                bot,
+                account,
+                owner: friend,
+            },
+            BotAccess {
+                bot: other_bot,
+                account: other_account,
+                owner: gone,
+            },
+        ],
+        grants: vec![
+            GrantAccess {
+                account,
+                user: owner,
+                level: GrantLevel::View,
+            },
+            GrantAccess {
+                account: other_account,
+                user: friend,
+                level: GrantLevel::Manage,
+            },
+        ],
+        users: vec![
+            UserAccess {
+                user: owner,
+                role: Role::Owner,
+                enabled: true,
+            },
+            UserAccess {
+                user: friend,
+                role: Role::Member,
+                enabled: true,
+            },
+            UserAccess {
+                user: gone,
+                role: Role::Admin,
+                enabled: false,
+            },
+        ],
+    };
+    assert_eq!(sorted(access), sorted(expected));
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_user_row_that_doesnt_read_back_fails_the_whole_read(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    add_user_with(&db, 1, Role::Owner).await;
+    // A version 4 ID: the table's CHECK takes its shape, the ID type doesn't.
+    sqlx::query!(
+        "INSERT INTO users (id, username, password_hash, role, disabled, created_at, password_changed_at)
+         VALUES ('00000000-0000-4000-8000-000000000001', 'nobody', '$argon2id$x', 'member', 0,
+                 '2027-01-15T08:00:00.000Z', '2027-01-15T08:00:00.000Z')"
+    )
+    .execute(db.write_pool())
+    .await
+    .unwrap();
+
+    let read = db.bots().access().await;
+
+    match read {
+        Err(StoreError::Corrupt { table, column, .. }) => {
+            assert_eq!((table, column), ("users", "id"));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+/// R12: the snapshot's rule sees, for every viewer, exactly the bots
+/// `BotReads::visible` lists for them, so the live events show exactly the
+/// bots `GET /bots` does.
+#[sqlx::test(migrations = false)]
+async fn the_snapshots_visible_bots_are_bot_reads_visible_for_every_role(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let people = [
+        (add_user_with(&db, 1, Role::Owner).await, Role::Owner),
+        (add_user_with(&db, 2, Role::Admin).await, Role::Admin),
+        (add_user_with(&db, 3, Role::Admin).await, Role::Admin),
+        (add_user_with(&db, 4, Role::Member).await, Role::Member),
+        (add_user_with(&db, 5, Role::Member).await, Role::Member),
+        (add_user_with(&db, 6, Role::Member).await, Role::Member),
+    ];
+    let levels = [GrantLevel::View, GrantLevel::Control, GrantLevel::Manage];
+    let mut n = 10;
+    for (index, (owner, _)) in people.iter().enumerate() {
+        for k in 0..3 {
+            let (account, _) = add_account_with_bot(&db, *owner, n).await;
+            // Each user's accounts are shared with the next user at each level,
+            // and their last one with nobody.
+            if k < 2 {
+                let next = people[(index + 1 + k) % people.len()].0;
+                add_grant(&db, account, next, levels[(index + k) % 3], *owner).await;
+            }
+            n += 1;
+        }
+    }
+
+    let rights = Rights::new(0, db.bots().access().await.unwrap());
+
+    for (viewer, role) in people {
+        let actor = Actor { id: viewer, role };
+        let listed: std::collections::BTreeSet<BotId> = db
+            .bots()
+            .visible(actor, page(100))
+            .await
+            .unwrap()
+            .iter()
+            .map(|bot| bot.record.bot.id)
+            .collect();
+        assert_eq!(rights.visible(&actor), listed, "{role:?}");
+        assert!(!listed.is_empty(), "{role:?}");
+    }
+}
+
+// --- The bots a write tells the live events about (ADR-0020, S42) -------------------------
+
+#[sqlx::test(migrations = false)]
+async fn a_transaction_finds_an_accounts_bot_an_owners_bots_and_an_agents_bots(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user_with(&db, 1, Role::Member).await;
+    let other = add_user_with(&db, 2, Role::Member).await;
+    let (first_account, first) = add_account_with_bot(&db, owner, 10).await;
+    let (_, second) = add_account_with_bot(&db, owner, 11).await;
+    let (_, others) = add_account_with_bot(&db, other, 12).await;
+    let agent = assign_to_agent(&db, second, 3).await;
+    let mut tx = db.write().await.unwrap();
+    assert!(tx.bots().assign(others, agent).await.unwrap());
+    let unknown = AccountId::new_v7(at(T0), [99; 10]).unwrap();
+    let nobody = UserId::new_v7(at(T0), [99; 10]).unwrap();
+    let idle = AgentId::new_v7(at(T0), [98; 10]).unwrap();
+
+    let of_account = tx.bots().id_of_account(first_account).await.unwrap();
+    let of_unknown = tx.bots().id_of_account(unknown).await.unwrap();
+    let owned = tx.bots().owned_by(owner).await.unwrap();
+    let owned_by_nobody = tx.bots().owned_by(nobody).await.unwrap();
+    let assigned = tx.bots().assigned_to(agent).await.unwrap();
+    let assigned_to_idle = tx.bots().assigned_to(idle).await.unwrap();
+
+    assert_eq!((of_account, of_unknown), (Some(first), None));
+    let mut expected_owned = vec![first, second];
+    expected_owned.sort();
+    assert_eq!(owned, expected_owned);
+    assert_eq!(owned_by_nobody, Vec::new());
+    let mut expected_assigned = vec![second, others];
+    expected_assigned.sort();
+    assert_eq!(
+        assigned, expected_assigned,
+        "the agent's, whoever owns them"
+    );
+    assert_eq!(assigned_to_idle, Vec::new());
 }

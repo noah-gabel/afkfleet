@@ -51,12 +51,13 @@ pub use settings::Configured;
 use super::agents::last_seen;
 use super::audit::AuditService;
 use super::events::EventBus;
-use super::users::{ActingUser, recheck};
+use super::users::{ActingUser, Rechecked, recheck};
 use crate::ports::accounts::ListedAccount;
 use crate::ports::agents::ListedAgent;
 use crate::ports::audit::NewAuditEntry;
 use crate::ports::bots::{Bot, BotRecord, ListedBot};
 use crate::ports::live_agents::LiveAgents;
+use crate::ports::live_hints::{LiveHints, NoLiveHints};
 use crate::ports::page::{Page, Paged};
 use crate::ports::reconcile::{NoReconcile, Reconcile};
 use crate::ports::store::{Store, StoreError, WriteTx};
@@ -145,6 +146,7 @@ pub struct BotService {
     allow_offline: bool,
     allowlist: CommandAllowlist,
     reconcile: Arc<dyn Reconcile>,
+    live_hints: Arc<dyn LiveHints>,
     chat_wait: ChatWait,
 }
 
@@ -176,8 +178,16 @@ impl BotService {
             allow_offline,
             allowlist: CommandAllowlist::default(),
             reconcile: Arc::new(NoReconcile),
+            live_hints: Arc::new(NoLiveHints),
             chat_wait: ChatWait::default(),
         }
+    }
+
+    /// The service, telling the live events sockets through `live_hints`
+    /// which bot a write changed, once its commit returned (ADR-0020, S42).
+    #[must_use]
+    pub fn with_live_hints(self, live_hints: Arc<dyn LiveHints>) -> Self {
+        Self { live_hints, ..self }
     }
 
     /// The service, with the commands Control holders may send through a
@@ -211,6 +221,23 @@ impl BotService {
         };
         let view = self.read(listed, &mut Agents::new()).await?;
         Ok(Some(view))
+    }
+
+    /// The bots among `ids` that exist, each as [`BotService::view`] reads
+    /// it for `viewer`, from one query and each agent read once (ADR-0020,
+    /// S41): what a live events socket sends. The caller asks `authorize()`
+    /// for each, with its account's context.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    pub async fn views(&self, viewer: &Actor, ids: &[BotId]) -> Result<Vec<BotView>, StoreError> {
+        let rows = self.store.bots().listed_in(ids, viewer.id).await?;
+        let mut agents = Agents::new();
+        let mut views = Vec::with_capacity(rows.len());
+        for row in rows {
+            views.push(self.read(row, &mut agents).await?);
+        }
+        Ok(views)
     }
 
     /// The bots `viewer` may see on `page`, newest first, and the next
@@ -348,7 +375,7 @@ async fn reread(
     tx: &mut dyn WriteTx,
     by: &ActingUser,
     id: BotId,
-) -> Result<(Actor, Bot, ListedAccount), BotWriteError> {
+) -> Result<(Rechecked, Bot, ListedAccount), BotWriteError> {
     let Some(acting) = recheck(tx, by).await? else {
         debug!(user_id = %by.actor.id, bot_id = %id, "a bot write was refused: the session is gone");
         return Err(BotWriteError::SessionGone);
@@ -359,5 +386,5 @@ async fn reread(
     let Some(account) = tx.accounts().listed(bot.account, acting.actor.id).await? else {
         return Err(BotWriteError::NotFound);
     };
-    Ok((acting.actor, bot, account))
+    Ok((acting, bot, account))
 }

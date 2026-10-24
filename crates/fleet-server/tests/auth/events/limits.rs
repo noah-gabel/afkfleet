@@ -10,9 +10,10 @@ use core::time::Duration;
 use chrono::{DateTime, Utc};
 use fleet_api_types::events::SocketClose;
 use fleet_core::id::{AgentId, BotId};
-use fleet_server::app::events::{LiveEvent, LiveEventKind};
+use fleet_server::app::events::{EVENT_BUS_CAPACITY, LiveEvent, LiveEventKind};
 use fleet_server::config::RateLimitConfig;
-use fleet_server::http::ws::SocketTimings;
+use fleet_server::http::ws::{CHECK_GAP, SocketTimings};
+use fleet_server::ports::live_hints::LiveHints as _;
 use fleet_testkit::log_capture;
 use futures_util::SinkExt as _;
 use serde_json::json;
@@ -25,6 +26,7 @@ use tokio_util::sync::CancellationToken;
 use super::super::support::{Options, Setup, setup, setup_with};
 use super::{
     PATIENCE, Served, Socket, closed, commit_anything, next, next_event_after_pings, ready, said,
+    until_quiet,
 };
 
 /// Short bounds: a ping every 100 ms, closed after 300 ms without a pong.
@@ -34,6 +36,7 @@ const SHORT: SocketTimings = SocketTimings {
     send_timeout: Duration::from_secs(1),
     close_timeout: Duration::from_millis(200),
     resync_gap: Duration::from_millis(300),
+    check_gap: CHECK_GAP,
 };
 
 async fn short(options: SqliteConnectOptions) -> Setup {
@@ -286,6 +289,64 @@ async fn a_lagging_socket_gets_one_resync_without_a_count_at_most_once_per_gap(
     assert!(
         sent.elapsed() >= Duration::from_millis(750),
         "the second came one gap after the first"
+    );
+}
+
+/// A socket that fell behind says `resync` before the frames still waiting
+/// behind the gap, not once they all went: work ready at every turn never
+/// holds up what the socket owes (S43).
+#[sqlx::test(migrations = false)]
+async fn a_lagging_socket_says_resync_before_the_frames_waiting_behind_it(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup_with(
+        options,
+        Options {
+            sockets: SocketTimings {
+                ping_interval: Duration::from_millis(100),
+                ..SocketTimings::default()
+            },
+            ..Options::default()
+        },
+    )
+    .await;
+    let alice = setup.alice_person().await;
+    let (_, bot) = setup.bot_of(alice.id, 10).await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &alice.token).await;
+    let at = DateTime::<Utc>::from_timestamp_millis(1_800_000_000_000).unwrap();
+    let agent = AgentId::new_v7(at, [8; 10]).unwrap();
+
+    // Held inside a read while more deaths than the bus holds, all of a bot
+    // the user sees, are published.
+    let mut held = setup.hooked.hold_next_bot_read();
+    setup.events.bots(&[bot]);
+    held.read(PATIENCE).await;
+    for _ in 0..EVENT_BUS_CAPACITY + 100 {
+        setup.events.publish(LiveEvent {
+            bot,
+            agent,
+            generation: 1,
+            at,
+            kind: LiveEventKind::Died,
+        });
+    }
+    held.release();
+    let frames = until_quiet(&mut socket).await;
+
+    let resync = json!({ "type": "resync" });
+    let deaths = frames
+        .iter()
+        .filter(|frame| frame["type"] == json!("bot_died"))
+        .count();
+    assert_eq!(frames.iter().filter(|frame| **frame == resync).count(), 1);
+    assert!(deaths >= EVENT_BUS_CAPACITY - 1, "{deaths}");
+    let place = frames.iter().position(|frame| *frame == resync);
+    assert!(
+        place.is_some_and(|place| place < 10),
+        "the resync came at {place:?} of {}",
+        frames.len()
     );
 }
 

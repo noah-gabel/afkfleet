@@ -19,10 +19,12 @@ use fleet_server::app::grants::{
     ChangeGrantError, CreateGrantError, GrantService, RevokeGrantError,
 };
 use fleet_server::config::{AccountsConfig, Rate, RateLimitConfig};
+use fleet_server::ports::live_hints::LiveHints;
 use fleet_testkit::system::ManualClock;
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
+use crate::support::hints::Heard;
 use crate::support::http::{HttpSetup, Person, Seen, meta, text};
 use crate::support::service::{T0, at};
 
@@ -654,6 +656,50 @@ async fn the_writes_re_check_the_actor_and_the_grantee_in_their_transaction(
         setup.grant_of(id, bob.id).await.unwrap().level,
         GrantLevel::View
     );
+}
+
+#[sqlx::test(migrations = false)]
+async fn each_grant_write_tells_the_sockets_its_bot_after_its_commit_and_a_refused_one_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+    let bob = setup.person(2, Role::Member).await;
+    let id = setup.add_account(alice.id, 3, None).await;
+    let bot = setup.add_bot(id, 3).await;
+    let heard = Arc::new(Heard::new(&setup.db));
+    let grants = service(&setup).with_live_hints(Arc::clone(&heard) as Arc<dyn LiveHints>);
+    let bob_name = fleet_core::value::Username::try_from("user2").unwrap();
+
+    let mut steps = Vec::new();
+    grants
+        .create_by_name(&alice.acting(), id, &bob_name, GrantLevel::View)
+        .await
+        .unwrap();
+    steps.push(("created", heard.take(), heard.once(&[bot])));
+    let again = grants
+        .create_by_name(&alice.acting(), id, &bob_name, GrantLevel::View)
+        .await;
+    steps.push(("created again", heard.take(), Vec::new()));
+    grants
+        .set_level(&alice.acting(), id, bob.id, GrantLevel::Control)
+        .await
+        .unwrap();
+    steps.push(("changed", heard.take(), heard.once(&[bot])));
+    grants.revoke(&alice.acting(), id, bob.id).await.unwrap();
+    steps.push(("revoked", heard.take(), heard.once(&[bot])));
+    let revoked_again = grants.revoke(&alice.acting(), id, bob.id).await;
+    steps.push(("revoked again", heard.take(), Vec::new()));
+
+    assert!(matches!(again, Err(CreateGrantError::Exists)), "{again:?}");
+    assert!(
+        matches!(revoked_again, Err(RevokeGrantError::NoGrant)),
+        "{revoked_again:?}"
+    );
+    for (name, heard, expected) in steps {
+        assert_eq!(heard, expected, "{name}");
+    }
 }
 
 #[sqlx::test(migrations = false)]

@@ -1,6 +1,6 @@
 {
   "db_name": "SQLite",
-  "query": "SELECT rowid AS \"rowid!: i64\", id AS \"id!\" FROM agents WHERE enabled = 1",
+  "query": "SELECT rowid AS \"rowid!: i64\", id AS \"id!\" FROM bots WHERE agent_id = ? ORDER BY id",
   "describe": {
     "columns": [
       {
@@ -9,7 +9,7 @@
         "type_info": "Integer",
         "origin": {
           "Table": {
-            "table": "agents",
+            "table": "bots",
             "name": "rowid"
           }
         }
@@ -20,19 +20,19 @@
         "type_info": "Text",
         "origin": {
           "Table": {
-            "table": "agents",
+            "table": "bots",
             "name": "id"
           }
         }
       }
     ],
     "parameters": {
-      "Right": 0
+      "Right": 1
     },
     "nullable": [
       false,
       false
     ]
   },
-  "hash": "0c48ea50630701126b506b79e5487d630606482868a17d54c47ab9e75565d044"
+  "hash": "fafad0c4855806512c244d75d7cd3961ab84de45f3fde6d8c2f89a817ad62d0b"
 }

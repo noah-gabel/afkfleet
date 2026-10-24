@@ -1,0 +1,38 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT b.rowid AS \"rowid!: i64\", b.id AS \"id!\"\n           FROM bots b JOIN mc_accounts a ON a.id = b.account_id\n           WHERE a.owner_user_id = ?\n           ORDER BY b.id",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "bots",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "20e9ff9b00dbc6057a1863a077bc2c551739d7ef0fa7573729229a435a9369bc"
+}

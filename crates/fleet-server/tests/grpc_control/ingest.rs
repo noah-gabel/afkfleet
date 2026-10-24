@@ -118,14 +118,15 @@ async fn an_assigned_bots_chat_is_stored_and_published_with_its_row_id(
     );
     for (id, entry) in stored.iter().rev() {
         let published = events.try_recv().unwrap();
+        let published = published.agent().unwrap();
         assert_eq!(published.bot, bot);
         assert_eq!(published.agent, agent.id);
+        let LiveEventKind::Chat { line, request } = &published.kind else {
+            panic!("not a chat line: {published:?}");
+        };
         assert_eq!(
-            published.kind,
-            LiveEventKind::Chat {
-                id: *id,
-                entry: entry.clone()
-            }
+            (line.record.id, &line.record.entry, &line.sent_by, request),
+            (*id, entry, &None, &None)
         );
     }
     port.stop().await;
@@ -148,7 +149,7 @@ async fn a_status_of_an_assigned_bot_is_published_at_once_and_never_written_as_c
 
     let published = events.try_recv().unwrap();
     assert_eq!(
-        published.kind,
+        published.agent().unwrap().kind,
         LiveEventKind::Status(snapshot(bot, BotState::Stopped))
     );
     assert_eq!(port.ingest_tick().await, Tick::Idle);

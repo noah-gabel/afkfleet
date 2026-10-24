@@ -42,6 +42,7 @@ use fleet_core::value::Username;
 use super::audit::AuditService;
 use super::users::{ActingUser, recheck};
 use crate::ports::accounts::ListedAccount;
+use crate::ports::live_hints::{LiveHints, NoLiveHints};
 use crate::ports::reconcile::{NoReconcile, Reconcile};
 use crate::ports::store::{Store, StoreError, WriteTx};
 
@@ -68,6 +69,7 @@ pub struct AccountService {
     audit: AuditService,
     settings: AccountSettings,
     reconcile: Arc<dyn Reconcile>,
+    live_hints: Arc<dyn LiveHints>,
 }
 
 impl AccountService {
@@ -88,7 +90,16 @@ impl AccountService {
             audit,
             settings,
             reconcile: Arc::new(NoReconcile),
+            live_hints: Arc::new(NoLiveHints),
         }
+    }
+
+    /// The service, telling the live events sockets through `live_hints`
+    /// which bot a write changed, once its commit returned (ADR-0020, S42):
+    /// a deletion, a review, a new offline account.
+    #[must_use]
+    pub fn with_live_hints(self, live_hints: Arc<dyn LiveHints>) -> Self {
+        Self { live_hints, ..self }
     }
 
     /// The service, telling `reconcile` to look again after each write

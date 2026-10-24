@@ -49,7 +49,7 @@ fn command_path(bot: BotId) -> String {
     format!("{BOTS}/{bot}/command")
 }
 
-fn online() -> BotState {
+pub(crate) fn online() -> BotState {
     BotState::Online {
         since: at(T0),
         attempt: NonZeroU32::MIN,
@@ -75,7 +75,7 @@ fn listed() -> Options {
 }
 
 impl Setup {
-    async fn chat(&self, bot: BotId, by: &Person, text: &str) -> Seen {
+    pub(crate) async fn chat(&self, bot: BotId, by: &Person, text: &str) -> Seen {
         self.post(
             &chat_path(bot),
             Some(&by.token),
@@ -95,7 +95,7 @@ impl Setup {
 
     /// `owner`'s bot `n`, running on agent 1's live stream, which reported
     /// it Online.
-    async fn online_bot(&self, owner: UserId, n: u8) -> (AccountId, BotId, Stream) {
+    pub(crate) async fn online_bot(&self, owner: UserId, n: u8) -> (AccountId, BotId, Stream) {
         let (account, bot) = self.bot_of(owner, n).await;
         self.running(bot).await;
         self.assigned(bot, 1, None).await;
@@ -139,7 +139,7 @@ impl Setup {
 
     /// Answers the next line `stream` gets for `bot` with `answer`, as the
     /// ingest publishes it: the line's request ID.
-    async fn answer(
+    pub(crate) async fn answer(
         &self,
         stream: &mut Stream,
         bot: BotId,
@@ -159,7 +159,7 @@ impl Setup {
 
 impl Stream {
     /// The next chat line queued for the agent: its request ID and text.
-    async fn line(&mut self) -> (ChatRequestId, ChatMessage) {
+    pub(crate) async fn line(&mut self) -> (ChatRequestId, ChatMessage) {
         let message = tokio::time::timeout(BOUND, self.queued.recv())
             .await
             .unwrap()

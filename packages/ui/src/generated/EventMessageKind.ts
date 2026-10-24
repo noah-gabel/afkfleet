@@ -5,4 +5,4 @@
  * This union lists the values this version knows; a newer server may send
  * others, so code that branches on one always keeps a default branch.
  */
-export type EventMessageKind = "ready" | "resync";
+export type EventMessageKind = "ready" | "resync" | "bot" | "bot_removed" | "bot_died" | "bot_alert" | "chat" | "chat_sent" | "chat_failed" | "mode" | "mode_removed";

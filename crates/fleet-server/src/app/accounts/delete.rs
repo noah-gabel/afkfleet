@@ -63,8 +63,10 @@ impl AccountService {
         let Some(deleted) = tx.accounts().delete(id, self.clock.now()).await? else {
             return Err(DeleteAccountError::NotFound);
         };
+        let bot = deleted.bot;
         tx.commit(self.deleted(by, &account, deleted)?).await?;
         self.reconcile.changed(Change::Store);
+        self.live_hints.bots(bot.as_slice());
         info!(user_id = %by.actor.id, account_id = %id, "{DELETED}");
         Ok(())
     }

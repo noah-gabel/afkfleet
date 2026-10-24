@@ -21,6 +21,7 @@ use fleet_core::id::{ModeId, UserId};
 use fleet_core::mode::{ModeDefinition, ModeName};
 use fleet_core::value::Username;
 
+use super::live_hints::ModeSeen;
 use super::page::Page;
 use super::store::StoreError;
 
@@ -67,7 +68,14 @@ impl ListedMode {
     /// The facts `authorize()` decides on.
     #[must_use]
     pub fn context(&self) -> ResourceContext {
-        ResourceContext::Mode {
+        self.seen().context()
+    }
+
+    /// Who may see it, as read: its owner with their role, and its
+    /// visibility (S33).
+    #[must_use]
+    pub fn seen(&self) -> ModeSeen {
+        ModeSeen {
             owner: self.owner.as_ref().map(|owner| owner.user),
             visibility: self.mode.visibility,
         }

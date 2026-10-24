@@ -128,6 +128,44 @@ impl OpenEnum for ChatSendOutcome {
     }
 }
 
+/// Why a line its bot didn't send failed, as a live `chat_failed` event says
+/// it to viewers with Control or more (ADR-0020, S34): the same four codes
+/// `POST /bots/{id}/chat` answers a failure with, by their error codes'
+/// names.
+/// This union lists the values this version knows; a newer server may send
+/// others, so code that branches on one always keeps a default branch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub enum ChatFailure {
+    /// The bot wasn't online (`bot_not_online`).
+    BotNotOnline,
+    /// The Minecraft server only takes signed chat, and the bot couldn't
+    /// sign this line (`chat_unavailable`).
+    ChatUnavailable,
+    /// The bot's chat rate was spent (`rate_limited`).
+    RateLimited,
+    /// The bot couldn't be reached (`bot_unreachable`).
+    BotUnreachable,
+}
+
+impl OpenEnum for ChatFailure {
+    const ALL: &'static [Self] = &[
+        Self::BotNotOnline,
+        Self::ChatUnavailable,
+        Self::RateLimited,
+        Self::BotUnreachable,
+    ];
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::BotNotOnline => "bot_not_online",
+            Self::ChatUnavailable => "chat_unavailable",
+            Self::RateLimited => "rate_limited",
+            Self::BotUnreachable => "bot_unreachable",
+        }
+    }
+}
+
 /// The answer to a line that went to its bot's agent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct ChatSendResponse {
@@ -382,6 +420,27 @@ mod tests {
     use super::*;
 
     const REQUEST: &str = "018bcfe5-6800-7101-8101-010101010103";
+
+    #[test]
+    fn a_failures_names_are_the_error_codes_the_post_answers() {
+        let codes = [
+            crate::ErrorCode::BotNotOnline,
+            crate::ErrorCode::ChatUnavailable,
+            crate::ErrorCode::RateLimited,
+            crate::ErrorCode::BotUnreachable,
+        ];
+
+        let failures: Vec<&str> = ChatFailure::ALL.iter().map(|f| f.as_str()).collect();
+        let named: Vec<&str> = codes.iter().map(|code| code.as_str()).collect();
+
+        assert_eq!(failures, named);
+        for failure in ChatFailure::ALL {
+            assert_eq!(
+                serde_json::to_value(failure).unwrap(),
+                json!(failure.as_str())
+            );
+        }
+    }
 
     fn problems<T: Validate<Context = ()>>(request: &T) -> Vec<(String, String)> {
         request.validate().map_or_else(

@@ -564,6 +564,23 @@ async fn writes_have_one_connection_and_reads_four() {
     db.close().await;
 }
 
+/// sqlx closes a connection past its pool's lifetime without the release
+/// hook that settles the commit count, so the write connection never ages
+/// out (ADR-0020, S39): whichever way the database was opened.
+#[tokio::test]
+async fn the_write_pool_never_retires_its_connection() {
+    let dir = TempDir::new().unwrap();
+    let opened = open_in(&dir).await;
+    let opened_lifetime = opened.write_pool().options().get_max_lifetime();
+    opened.close().await;
+    let migrated = open_migrated_in(&dir).await.unwrap();
+    let migrated_lifetime = migrated.write_pool().options().get_max_lifetime();
+    migrated.close().await;
+
+    assert_eq!(opened_lifetime, None);
+    assert_eq!(migrated_lifetime, None);
+}
+
 #[tokio::test]
 async fn the_read_pool_refuses_writes() {
     let dir = TempDir::new().unwrap();

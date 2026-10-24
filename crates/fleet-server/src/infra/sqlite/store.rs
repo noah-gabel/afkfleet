@@ -37,7 +37,7 @@ use crate::ports::audit::{
     AuditEntryId, AuditPage, AuditReads, AuditRecord, AuditWrites, FailedCodeAttempts,
     NewAuditEntry,
 };
-use crate::ports::bots::{Bot, BotReads, BotRecord, BotWrites, Fleet, ListedBot, NewBot};
+use crate::ports::bots::{Access, Bot, BotReads, BotRecord, BotWrites, Fleet, ListedBot, NewBot};
 use crate::ports::chat::{ChatMessageId, ChatReads, ChatWrites, ListedChat, NewChatMessage};
 use crate::ports::enrollment_tokens::{
     EnrollmentToken, EnrollmentTokenReads, EnrollmentTokenWrites, NewEnrollmentToken,
@@ -257,6 +257,10 @@ impl BotReads for Reads {
         bots::listed(&self.pool, id, viewer).await
     }
 
+    async fn listed_in(&self, ids: &[BotId], viewer: UserId) -> Result<Vec<ListedBot>, StoreError> {
+        bots::listed_in(&self.pool, ids, viewer).await
+    }
+
     async fn visible(
         &self,
         viewer: Actor,
@@ -267,6 +271,10 @@ impl BotReads for Reads {
 
     async fn fleet(&self) -> Result<Fleet, StoreError> {
         bots::fleet(&self.pool).await
+    }
+
+    async fn access(&self) -> Result<Access, StoreError> {
+        bots::access(&self.pool).await
     }
 }
 
@@ -725,6 +733,18 @@ impl BotWrites for SqliteWriteTx {
 
     async fn agent_of(&mut self, id: BotId) -> Result<Option<Option<AgentId>>, StoreError> {
         bots::agent_of(&mut self.tx, id).await
+    }
+
+    async fn id_of_account(&mut self, account: AccountId) -> Result<Option<BotId>, StoreError> {
+        bots::id_of_account(&mut self.tx, account).await
+    }
+
+    async fn owned_by(&mut self, owner: UserId) -> Result<Vec<BotId>, StoreError> {
+        bots::owned_by(&mut self.tx, owner).await
+    }
+
+    async fn assigned_to(&mut self, agent: AgentId) -> Result<Vec<BotId>, StoreError> {
+        bots::assigned_to(&mut self.tx, agent).await
     }
 
     async fn assign(&mut self, bot: BotId, agent: AgentId) -> Result<bool, StoreError> {

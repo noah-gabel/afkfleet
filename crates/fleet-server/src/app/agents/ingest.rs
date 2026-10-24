@@ -46,7 +46,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, warn};
 
 use crate::app::events::{EventBus, LiveEvent, LiveEventKind};
-use crate::ports::chat::{ChatEntry, ChatMessageId, NewChatMessage};
+use crate::ports::chat::{ChatEntry, ChatMessageId, ChatRecord, ListedChat, NewChatMessage};
 use crate::ports::ingest::{Ingest, NotTaken, Report, Reported, StickyMarks, StreamShare};
 use crate::ports::store::{Store, StoreError, UnauditedWrite};
 
@@ -356,8 +356,17 @@ impl IngestWriter {
                         generation: row.generation,
                         at: row.message.at,
                         kind: LiveEventKind::Chat {
-                            id,
-                            entry: row.message.entry,
+                            line: ListedChat {
+                                record: ChatRecord {
+                                    id,
+                                    bot: row.message.bot,
+                                    at: row.message.at,
+                                    entry: row.message.entry,
+                                },
+                                // No user sent an agent's line.
+                                sent_by: None,
+                            },
+                            request: None,
                         },
                     });
                 }

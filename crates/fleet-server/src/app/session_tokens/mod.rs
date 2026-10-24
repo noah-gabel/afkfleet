@@ -80,6 +80,7 @@ pub use self::error::{SessionTokenError, WaitBoundError};
 use self::slot::{Backoff, Slot, later};
 use super::audit::AuditService;
 use crate::ports::accounts::AccountCredential;
+use crate::ports::live_hints::LiveHints;
 use crate::ports::msauth::{Failure, MicrosoftAuthProvider, MinecraftSession};
 use crate::ports::store::Store;
 use crate::ports::vault::Vault;
@@ -129,6 +130,9 @@ pub struct SessionTokenPorts {
     pub vault: Arc<dyn Vault>,
     /// Microsoft.
     pub microsoft: Arc<dyn MicrosoftAuthProvider>,
+    /// The live events sockets, told which bot a change of its account's
+    /// status or name changed (ADR-0020, S42).
+    pub live_hints: Arc<dyn LiveHints>,
 }
 
 /// The session-token service; see the [module docs](self). Clones share

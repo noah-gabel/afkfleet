@@ -14,6 +14,13 @@
 //! 5. only then tells the agents: a welcome's one full reconcile, or one
 //!    message per bot, each checked against the stream's generation.
 //!
+//! **The live events** (ADR-0020, S42, R37): a pass ends by telling the
+//! sockets, in one hint, which bots may read differently: every bot one of
+//! its writes changed or a stream now holds, and every bot whose row now
+//! names another agent, or an agent that shows otherwise than at the last
+//! pass (its stream, its enabled flag, its certificate's expiry). The first
+//! pass only notes what it saw.
+//!
 //! **Facts live in state**, never only in a hint: a hint that's lost costs
 //! latency, never correctness. `QueueFull` and `NotConnected` mean the
 //! stream is gone, and its next hello resyncs. Nothing here moves a bot by
@@ -24,13 +31,14 @@
 //! the next pass.
 
 use core::time::Duration;
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use std::borrow::Cow;
 
 use chrono::{DateTime, Utc};
+use fleet_core::agent::{AgentStatus, status};
 use fleet_core::bot::{BotSpec, LastReport, LastState, StickyState};
 use fleet_core::chat::ChatRate;
 use fleet_core::disconnect::ConflictTexts;
@@ -52,6 +60,7 @@ use super::registry::{
 use crate::http::error::chain;
 use crate::ports::assignments::{AssignError, Assignments};
 use crate::ports::bots::{BotRecord, Fleet};
+use crate::ports::live_hints::{LiveHints, NoLiveHints};
 use crate::ports::reconcile::{Change, Reconcile};
 use crate::ports::store::StoreError;
 
@@ -173,6 +182,10 @@ pub struct Reconciler {
     gate_open: bool,
     /// Whether every hint sender is gone.
     hints_closed: bool,
+    /// Tells the live events sockets which bots a pass changed (S42).
+    live_hints: Arc<dyn LiveHints>,
+    /// What the last pass that read the fleet saw of each bot's agent.
+    observed: Option<Observed>,
 }
 
 impl Reconciler {
@@ -203,7 +216,16 @@ impl Reconciler {
             welcomed: HashSet::new(),
             gate_open: false,
             hints_closed: false,
+            live_hints: Arc::new(NoLiveHints),
+            observed: None,
         }
+    }
+
+    /// The same, telling the live events sockets through `live_hints` which
+    /// bots each pass changed (ADR-0020, S42).
+    #[must_use]
+    pub fn with_live_hints(self, live_hints: Arc<dyn LiveHints>) -> Self {
+        Self { live_hints, ..self }
     }
 
     /// Runs a pass now, then one on every hint, every interval and at the
@@ -273,8 +295,17 @@ impl Reconciler {
 
     /// One pass; see the [module docs](self).
     async fn pass(&mut self) {
+        let mut notes = Notes::default();
+        self.planned(&mut notes).await;
+        let touched: Vec<BotId> = notes.touched.into_iter().collect();
+        self.live_hints.bots(&touched);
+    }
+
+    /// One pass's work, noting in `notes` each bot it changed, held, or
+    /// whose agent shows otherwise since the last pass.
+    async fn planned(&mut self, notes: &mut Notes) {
         self.last_pass = Instant::now();
-        self.detach_released().await;
+        notes.touched.extend(self.detach_released().await);
         let fleet = match self.store.fleet().await {
             Ok(fleet) => fleet,
             Err(failure) => {
@@ -286,6 +317,11 @@ impl Reconciler {
             }
         };
         let views = self.registry.placement_view();
+        let shows = Shows::new(&fleet, &views, self.clock.now());
+        let mut observed = Observed::of(&fleet, &shows);
+        if let Some(before) = &self.observed {
+            notes.touched.extend(observed.changed_since(before));
+        }
         let untouchable = untouchable(&fleet);
         // An untouchable bot keeps what's known of it too.
         let stored: HashSet<BotId> = fleet
@@ -327,7 +363,12 @@ impl Reconciler {
                 .detach(detach.bot, detach.agent, detach.reason, last)
                 .await
             {
-                Ok(changed) => detached(changed, detach.bot, detach.agent, detach.reason),
+                Ok(changed) => {
+                    detached(changed, detach.bot, detach.agent, detach.reason);
+                    if changed {
+                        notes.moved(detach.bot, None);
+                    }
+                }
                 Err(failure) => {
                     held_back.insert(detach.agent);
                     failed(&failure, detach.bot, detach.agent, "detach");
@@ -358,13 +399,18 @@ impl Reconciler {
             if part.full && held_back.contains(&part.agent) {
                 continue;
             }
-            self.apply(part, &known).await;
+            self.apply(part, &known, notes).await;
         }
+        // What the next pass compares with: the rows as its writes left
+        // them, so a write is told once, by this pass.
+        observed.moved(&notes.rows, &shows);
+        self.observed = Some(observed);
     }
 
     /// Clears the bots whose `Removed` the registry noted; a note whose
-    /// write fails goes back for the next pass.
-    async fn detach_released(&self) {
+    /// write fails goes back for the next pass. The bots it changed.
+    async fn detach_released(&self) -> Vec<BotId> {
+        let mut changed_bots = Vec::new();
         for released in self.registry.take_released() {
             let last = self
                 .registry
@@ -378,6 +424,9 @@ impl Reconciler {
             {
                 Ok(changed) => {
                     detached(changed, released.bot, released.agent, DetachReason::Removed);
+                    if changed {
+                        changed_bots.push(released.bot);
+                    }
                 }
                 Err(failure) => {
                     failed(&failure, released.bot, released.agent, "detach");
@@ -385,10 +434,12 @@ impl Reconciler {
                 }
             }
         }
+        changed_bots
     }
 
-    /// Applies one agent's part: its writes, then its messages.
-    async fn apply(&self, part: &AgentPlan, known: &Known<'_>) {
+    /// Applies one agent's part: its writes, then its messages, noting in
+    /// `notes` each bot they changed or held.
+    async fn apply(&self, part: &AgentPlan, known: &Known<'_>, notes: &mut Notes) {
         // Unassignments first: a welcome whose decision can't be recorded
         // places nothing and waits for the next pass.
         let mut lets: Vec<&Let> = Vec::new();
@@ -400,12 +451,16 @@ impl Reconciler {
                     .unassign(release.bot, part.agent, reason, last)
                     .await
                 {
-                    Ok(true) => info!(
-                        bot_id = %release.bot,
-                        agent_id = %part.agent,
-                        reason = reason.as_str(),
-                        "a bot was unassigned from its agent"
-                    ),
+                    Ok(true) => {
+                        info!(
+                            bot_id = %release.bot,
+                            agent_id = %part.agent,
+                            reason = reason.as_str(),
+                            "a bot was unassigned from its agent"
+                        );
+                        // Its row names the agent until its `Removed`.
+                        notes.touched.insert(release.bot);
+                    }
                     Ok(false) => {}
                     Err(failure) => {
                         failed(&failure, release.bot, part.agent, "unassign");
@@ -432,6 +487,7 @@ impl Reconciler {
                             agent_id = %part.agent,
                             "a bot was assigned to an agent"
                         );
+                        notes.moved(run.bot, Some(part.agent));
                         // Its restore comes from the row its assignment read:
                         // a Resume or a Reset may have cleared the stored state
                         // since this pass read the fleet (S48).
@@ -452,19 +508,21 @@ impl Reconciler {
             runs.push((run, record));
         }
         if part.full {
-            self.settle(part, known, &runs, &lets);
+            self.settle(part, known, &runs, &lets, &mut notes.touched);
         } else {
-            self.update(part, known, &runs, &lets);
+            self.update(part, known, &runs, &lets, &mut notes.touched);
         }
     }
 
-    /// A welcome's one full reconcile, and its holds.
+    /// A welcome's one full reconcile, and its holds, noting the bots it
+    /// held in `touched` once they're held.
     fn settle(
         &self,
         part: &AgentPlan,
         known: &Known<'_>,
         runs: &[(&Run, Cow<'_, BotRecord>)],
         lets: &[&Let],
+        touched: &mut BTreeSet<BotId>,
     ) {
         let now = self.clock.now();
         let mut assignments = Vec::new();
@@ -489,23 +547,35 @@ impl Reconciler {
             holds.push((run.bot, entry));
         }
         holds.extend(lets.iter().map(|release| (release.bot, releasing(now))));
+        let held: Vec<BotId> = holds.iter().map(|(bot, _)| *bot).collect();
         let result = self.registry.settle(
             part.agent,
             part.generation,
             holds,
             ServerMessage::Reconcile(assignments),
         );
+        if result.is_ok() {
+            touched.extend(held);
+        }
         sent(part.agent, result);
     }
 
-    /// A reconciled stream's changes, one message per bot.
+    /// A reconciled stream's changes, one message per bot, noting each bot
+    /// held anew in `touched`.
     fn update(
         &self,
         part: &AgentPlan,
         known: &Known<'_>,
         runs: &[(&Run, Cow<'_, BotRecord>)],
         lets: &[&Let],
+        touched: &mut BTreeSet<BotId>,
     ) {
+        let mut held = |bot: BotId, result: Result<(), SendError>| {
+            if result.is_ok() {
+                touched.insert(bot);
+            }
+            sent(part.agent, result);
+        };
         let now = self.clock.now();
         for (run, record) in runs {
             if run.placed {
@@ -529,31 +599,33 @@ impl Reconciler {
                     entry,
                     Some(message),
                 );
-                sent(part.agent, result);
+                held(run.bot, result);
                 continue;
             }
-            let Some(held) = known.entry(part.agent, run.bot) else {
+            let Some(kept) = known.entry(part.agent, run.bot) else {
                 // An assignment the agent never got: sent again.
-                self.resend(part, known, run, record, now);
+                if let Some(result) = self.resend(part, known, run, record, now) {
+                    held(run.bot, result);
+                }
                 continue;
             };
-            let spec = spec_of(record, run, held.sent.as_ref(), self.chat_rate);
+            let spec = spec_of(record, run, kept.sent.as_ref(), self.chat_rate);
             let entry = HoldEntry {
                 hold: Hold::Assigned,
-                since: held.since,
-                sent: spec.clone().or_else(|| held.sent.clone()),
-                stopping: self.stop_state(run, held.stopping),
+                since: kept.since,
+                sent: spec.clone().or_else(|| kept.sent.clone()),
+                stopping: self.stop_state(run, kept.stopping),
             };
-            if entry == *held {
+            if entry == *kept {
                 continue;
             }
             let message = spec
-                .filter(|spec| held.sent.as_ref() != Some(spec))
+                .filter(|spec| kept.sent.as_ref() != Some(spec))
                 .map(ServerMessage::Update);
             let result =
                 self.registry
                     .hold_and_send(part.agent, part.generation, run.bot, entry, message);
-            sent(part.agent, result);
+            held(run.bot, result);
         }
         for undelivered in &part.undelivered {
             info!(
@@ -571,12 +643,12 @@ impl Reconciler {
                 releasing(now),
                 Some(ServerMessage::Unassign(release.bot)),
             );
-            sent(part.agent, result);
+            held(release.bot, result);
         }
     }
 
     /// Sends `run`'s bot, whose row names `part`'s agent but which its stream
-    /// doesn't hold, again, and holds it.
+    /// doesn't hold, again, and holds it: the hold's result, when it tried.
     fn resend(
         &self,
         part: &AgentPlan,
@@ -584,10 +656,8 @@ impl Reconciler {
         run: &Run,
         record: &BotRecord,
         now: DateTime<Utc>,
-    ) {
-        let Some(spec) = spec_of(record, run, None, self.chat_rate) else {
-            return;
-        };
+    ) -> Option<Result<(), SendError>> {
+        let spec = spec_of(record, run, None, self.chat_rate)?;
         let entry = HoldEntry {
             hold: Hold::Assigned,
             since: now,
@@ -603,10 +673,13 @@ impl Reconciler {
             agent_id = %part.agent,
             "an assignment its agent never got is sent again"
         );
-        let result =
-            self.registry
-                .hold_and_send(part.agent, part.generation, run.bot, entry, Some(message));
-        sent(part.agent, result);
+        Some(self.registry.hold_and_send(
+            part.agent,
+            part.generation,
+            run.bot,
+            entry,
+            Some(message),
+        ))
     }
 
     /// The stop state of `run`, which was `before`: a bound starts once.
@@ -849,6 +922,97 @@ fn detached(changed: bool, bot: BotId, agent: AgentId, reason: DetachReason) {
             reason = reason.as_str(),
             "a bot was detached from its agent"
         );
+    }
+}
+
+/// What a pass noted: the bots to tell the live events sockets about, and
+/// the rows its writes moved to another agent, or to none.
+#[derive(Debug, Default)]
+struct Notes {
+    touched: BTreeSet<BotId>,
+    rows: Vec<(BotId, Option<AgentId>)>,
+}
+
+impl Notes {
+    /// The pass's write left `bot`'s row naming `agent`.
+    fn moved(&mut self, bot: BotId, agent: Option<AgentId>) {
+        self.touched.insert(bot);
+        self.rows.push((bot, agent));
+    }
+}
+
+/// What a pass saw of each bot's agent (R37): the agent its row names, and
+/// that agent's status as a bot's read shows it, with its stream's
+/// generation. A change since the last pass changes what the bot reads as.
+#[derive(Debug, PartialEq, Eq)]
+struct Observed(BTreeMap<BotId, (Option<AgentId>, Option<AgentShown>)>);
+
+/// An agent's status as a bot's read shows it, and its stream's generation.
+type AgentShown = (AgentStatus, Option<u64>);
+
+/// Each agent's status as a bot's read shows it, from a pass's fleet and
+/// live streams at its time.
+struct Shows<'a> {
+    fleet: &'a Fleet,
+    streams: HashMap<AgentId, u64>,
+    now: DateTime<Utc>,
+}
+
+impl<'a> Shows<'a> {
+    /// What `fleet` and the live streams `views` show at `now`.
+    fn new(fleet: &'a Fleet, views: &[LiveView], now: DateTime<Utc>) -> Self {
+        Self {
+            fleet,
+            streams: views
+                .iter()
+                .map(|view| (view.agent, view.generation))
+                .collect(),
+            now,
+        }
+    }
+
+    /// `agent`'s status and its stream's generation.
+    fn of(&self, agent: AgentId) -> AgentShown {
+        let generation = self.streams.get(&agent).copied();
+        let shown = status(
+            self.fleet.enabled_agents.contains(&agent),
+            self.fleet.agent_expiry.get(&agent).copied(),
+            generation.is_some(),
+            self.now,
+        );
+        (shown, generation)
+    }
+}
+
+impl Observed {
+    /// What `fleet`'s rows show, through `shows`.
+    fn of(fleet: &Fleet, shows: &Shows<'_>) -> Self {
+        Self(
+            fleet
+                .bots
+                .iter()
+                .map(|record| {
+                    let agent = record.bot.agent;
+                    (record.bot.id, (agent, agent.map(|agent| shows.of(agent))))
+                })
+                .collect(),
+        )
+    }
+
+    /// Each row of `moved` as the pass's write left it, through `shows`.
+    fn moved(&mut self, moved: &[(BotId, Option<AgentId>)], shows: &Shows<'_>) {
+        for &(bot, agent) in moved {
+            self.0
+                .insert(bot, (agent, agent.map(|agent| shows.of(agent))));
+        }
+    }
+
+    /// The bots that show otherwise than in `before`, new ones included.
+    fn changed_since<'a>(&'a self, before: &'a Self) -> impl Iterator<Item = BotId> + 'a {
+        self.0
+            .iter()
+            .filter(|(bot, seen)| before.0.get(bot) != Some(seen))
+            .map(|(bot, _)| *bot)
     }
 }
 

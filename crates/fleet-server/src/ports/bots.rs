@@ -15,12 +15,12 @@
 
 use core::fmt;
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::account::{AccountKind, AccountStatus};
-use fleet_core::authz::Actor;
+use fleet_core::authz::{Actor, GrantLevel, Role};
 use fleet_core::bot::{BotAccount, DesiredRunState, LastReport};
 use fleet_core::id::{AccountId, AgentId, BotId, ModeId, UserId};
 use fleet_core::mode::ModeDefinition;
@@ -134,6 +134,57 @@ pub struct Fleet {
     pub unreadable: Vec<UnreadableBot>,
     /// The agents that are enabled.
     pub enabled_agents: BTreeSet<AgentId>,
+    /// When each enabled agent's latest unrevoked certificate expires; an
+    /// agent without one isn't here. What a bot's agent shows changes with
+    /// it (ADR-0020, R37).
+    pub agent_expiry: BTreeMap<AgentId, DateTime<Utc>>,
+}
+
+/// Who may see which bot, read in one read transaction (ADR-0020, S30):
+/// every bot with its account and the account's owner, every grant, and
+/// every user's role and whether they're enabled. Nothing else: no names,
+/// no addresses, nothing a viewer is sent.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Access {
+    /// Every bot.
+    pub bots: Vec<BotAccess>,
+    /// Every grant.
+    pub grants: Vec<GrantAccess>,
+    /// Every user.
+    pub users: Vec<UserAccess>,
+}
+
+/// A bot, its account and the account's owner.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BotAccess {
+    /// The bot.
+    pub bot: BotId,
+    /// Its account.
+    pub account: AccountId,
+    /// The account's owner.
+    pub owner: UserId,
+}
+
+/// A grant on an account.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GrantAccess {
+    /// The account.
+    pub account: AccountId,
+    /// Its grantee.
+    pub user: UserId,
+    /// Its level.
+    pub level: GrantLevel,
+}
+
+/// A user's role, and whether they're enabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UserAccess {
+    /// The user.
+    pub user: UserId,
+    /// Their role.
+    pub role: Role,
+    /// Whether they're enabled.
+    pub enabled: bool,
 }
 
 /// Reading bots through the read connections.
@@ -172,6 +223,14 @@ pub trait BotReads: Send + Sync + fmt::Debug {
     /// [`StoreError`], including [`StoreError::Corrupt`].
     async fn listed(&self, id: BotId, viewer: UserId) -> Result<Option<ListedBot>, StoreError>;
 
+    /// The bots among `ids` that exist, each as [`BotReads::listed`] reads
+    /// it for `viewer`, in one query (ADR-0020, S41), in ID order. The
+    /// caller still asks `authorize()` for each.
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn listed_in(&self, ids: &[BotId], viewer: UserId) -> Result<Vec<ListedBot>, StoreError>;
+
     /// One page of the bots `viewer` may see, newest first: those of the
     /// accounts [`super::accounts::AccountReads::list_visible`] lists for
     /// them, by the owners' current roles (ADR-0010). One more than its limit
@@ -190,6 +249,15 @@ pub trait BotReads: Send + Sync + fmt::Debug {
     /// [`StoreError`], including [`StoreError::Corrupt`] for any row that
     /// doesn't read back.
     async fn fleet(&self) -> Result<Fleet, StoreError>;
+
+    /// Who may see which bot: [`Access`], read in one read transaction, so
+    /// its parts agree with each other (S30).
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`] for any row that
+    /// doesn't read back: one unreadable row fails the whole read, so no
+    /// viewer is judged on a part of it.
+    async fn access(&self) -> Result<Access, StoreError>;
 }
 
 /// Writing bots inside a [`super::store::WriteTx`].
@@ -217,6 +285,28 @@ pub trait BotWrites: Send {
     /// [`StoreError`], including [`StoreError::Corrupt`] for an agent ID
     /// that doesn't read back.
     async fn agent_of(&mut self, id: BotId) -> Result<Option<Option<AgentId>>, StoreError>;
+
+    /// The ID of the account `account`'s bot, read in this transaction, for
+    /// the live events' hint after a write to the account (ADR-0020, S42).
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`] for an ID that
+    /// doesn't read back.
+    async fn id_of_account(&mut self, account: AccountId) -> Result<Option<BotId>, StoreError>;
+
+    /// The IDs of `owner`'s accounts' bots, in ID order, read in this
+    /// transaction (S42).
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn owned_by(&mut self, owner: UserId) -> Result<Vec<BotId>, StoreError>;
+
+    /// The IDs of the bots whose rows assign them to `agent`, in ID order,
+    /// read in this transaction (S42).
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn assigned_to(&mut self, agent: AgentId) -> Result<Vec<BotId>, StoreError>;
 
     /// Assigns `bot` to `agent`, but only while it has no agent and
     /// `agent` is enabled. Whether it changed.

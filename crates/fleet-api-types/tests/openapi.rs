@@ -39,7 +39,7 @@ use fleet_api_types::bots::{
 };
 use fleet_api_types::chat::{
     CHAT_MESSAGE_MAX_UNITS, CHAT_SENDER_MAX_CHARS, CHAT_TEXT_MAX_CHARS, ChatCommandRequest,
-    ChatDirection, ChatLine, ChatLineKind, ChatLineSender, ChatPage, ChatSendOutcome,
+    ChatDirection, ChatFailure, ChatLine, ChatLineKind, ChatLineSender, ChatPage, ChatSendOutcome,
     ChatSendRequest, ChatSendResponse,
 };
 use fleet_api_types::error::{
@@ -186,9 +186,10 @@ fn declarations() -> BTreeMap<String, String> {
     .collect()
 }
 
-/// ts-rs's declaration of every live events type (ADR-0020, S36).
-fn event_declarations(config: &Config) -> [(&'static str, String); 3] {
+/// ts-rs's declaration of every live events type (ADR-0020, S36, R28).
+fn event_declarations(config: &Config) -> [(&'static str, String); 4] {
     [
+        ("ChatFailure", ChatFailure::decl(config)),
         ("EventMessage", EventMessage::decl(config)),
         ("EventMessageKind", EventMessageKind::decl(config)),
         ("EventTicketResponse", EventTicketResponse::decl(config)),
@@ -517,6 +518,10 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::command_message("ChatCommandRequest", "message", CHAT_MESSAGE_MAX_UNITS)]
 #[case::chat_request_id("ChatSendResponse", "request_id", ID_CHARS)]
 #[case::chat_line_at("ChatLine", "at", TIMESTAMP_CHARS)]
+#[case::event_bot_id("EventMessage", "bot_id", ID_CHARS)]
+#[case::event_at("EventMessage", "at", TIMESTAMP_CHARS)]
+#[case::event_request("EventMessage", "request", ID_CHARS)]
+#[case::event_mode_id("EventMessage", "mode_id", ID_CHARS)]
 #[case::chat_line_text("ChatLine", "text", CHAT_TEXT_MAX_CHARS)]
 #[case::chat_sender_name("ChatLineSender", "name", CHAT_SENDER_MAX_CHARS)]
 #[case::chat_sender_uuid("ChatLineSender", "uuid", ID_CHARS)]
@@ -543,7 +548,7 @@ fn a_text_field_is_capped_at_its_constant(
 }
 
 /// Every text field whose cap the cases above check.
-const CHECKED_TEXTS: [(&str, &str); 108] = [
+const CHECKED_TEXTS: [(&str, &str); 112] = [
     ("ErrorBody", "message"),
     ("ErrorBody", "request_id"),
     ("FieldError", "path"),
@@ -640,6 +645,10 @@ const CHECKED_TEXTS: [(&str, &str); 108] = [
     ("ChatCommandRequest", "message"),
     ("ChatSendResponse", "request_id"),
     ("ChatLine", "at"),
+    ("EventMessage", "bot_id"),
+    ("EventMessage", "at"),
+    ("EventMessage", "request"),
+    ("EventMessage", "mode_id"),
     ("ChatLine", "text"),
     ("ChatLineSender", "name"),
     ("ChatLineSender", "uuid"),
@@ -840,6 +849,16 @@ fn an_open_field_lists_exactly_its_enums_known_values() {
 #[case::mode_jitter_ms("ModeSchedule", "jitter_ms")]
 #[case::mode_owner("ModeResponse", "owner")]
 #[case::mode_page_next("ModePage", "next")]
+#[case::event_bot_id("EventMessage", "bot_id")]
+#[case::event_bot("EventMessage", "bot")]
+#[case::event_at("EventMessage", "at")]
+#[case::event_state("EventMessage", "state")]
+#[case::event_reason("EventMessage", "reason")]
+#[case::event_line("EventMessage", "line")]
+#[case::event_request("EventMessage", "request")]
+#[case::event_failure("EventMessage", "failure")]
+#[case::event_mode_id("EventMessage", "mode_id")]
+#[case::event_mode("EventMessage", "mode")]
 fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[case] field: &str) {
     let components = components_json();
     let schema = property(&components, component, field);
@@ -895,6 +914,9 @@ fn every_new_optional_field_is_left_out_never_null(#[case] component: &str, #[ca
 #[case::mode_action_kind("ModeAction", "type", "ModeActionKind")]
 #[case::mode_schedule_kind("ModeSchedule", "type", "ModeScheduleKind")]
 #[case::event_kind("EventMessage", "type", "EventMessageKind")]
+#[case::event_state("EventMessage", "state", "BotStateKind")]
+#[case::event_reason("EventMessage", "reason", "BotStateReason")]
+#[case::event_failure("EventMessage", "failure", "ChatFailure")]
 fn the_new_open_fields_list_exactly_their_known_values(
     #[case] component: &str,
     #[case] field: &str,
@@ -935,6 +957,7 @@ fn the_new_open_fields_list_exactly_their_known_values(
         "ModeActionKind" => names(ModeActionKind::ALL),
         "ModeScheduleKind" => names(ModeScheduleKind::ALL),
         "EventMessageKind" => names(EventMessageKind::ALL),
+        "ChatFailure" => names(ChatFailure::ALL),
         _ => InviteState::ALL
             .iter()
             .map(|state| state.as_str())

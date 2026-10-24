@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "UPDATE modes SET visibility = ? WHERE id = ?",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "fb9b89996931ce66e05d98ed696b1f9d905e788ff436855c0ea681a0b84e5503"
+}

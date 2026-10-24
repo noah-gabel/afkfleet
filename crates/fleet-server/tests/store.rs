@@ -1237,27 +1237,38 @@ async fn a_commit_dropped_midway_moves_the_count_at_once_and_again_once_its_conn
 ) {
     let db = connect(options).await;
     let mut commits = db.commits();
-    let before = *commits.borrow_and_update();
-    let tx = db.write().await.unwrap();
-    let mut commit = tx.commit(NewAuditEntry::new(
-        at(1_800_000_000_000),
-        AuditAction::try_from("test.commit_count").unwrap(),
-        AuditOutcome::Success,
-    ));
+    // A first poll that already finished the commit tests nothing: under
+    // load, sqlx's worker thread can answer every statement before the poll
+    // returns. Such a try committed; the next one starts afresh.
+    for _ in 0..20 {
+        let before = *commits.borrow_and_update();
+        let tx = db.write().await.unwrap();
+        let mut commit = tx.commit(NewAuditEntry::new(
+            at(1_800_000_000_000),
+            AuditAction::try_from("test.commit_count").unwrap(),
+            AuditOutcome::Success,
+        ));
 
-    // One poll sends its first statement; dropping it then is what a request
-    // timeout or a client gone does to a handler awaiting its commit.
-    let first = std::future::poll_fn(|cx| core::task::Poll::Ready(commit.as_mut().poll(cx))).await;
-    assert!(first.is_pending());
-    drop(commit);
-    let at_once = *commits.borrow_and_update();
-    tokio::time::timeout(Duration::from_secs(5), commits.changed())
-        .await
-        .expect("a second move once the connection is back")
-        .unwrap();
+        // One poll sends its first statement; dropping it then is what a
+        // request timeout or a client gone does to a handler awaiting its
+        // commit.
+        let first =
+            std::future::poll_fn(|cx| core::task::Poll::Ready(commit.as_mut().poll(cx))).await;
+        if first.is_ready() {
+            continue;
+        }
+        drop(commit);
+        let at_once = *commits.borrow_and_update();
+        tokio::time::timeout(Duration::from_secs(5), commits.changed())
+            .await
+            .expect("a second move once the connection is back")
+            .unwrap();
 
-    assert_eq!(at_once, before + 1);
-    assert!(*commits.borrow() >= before + 2);
+        assert_eq!(at_once, before + 1);
+        assert!(*commits.borrow() >= before + 2);
+        return;
+    }
+    panic!("no try left its commit pending after one poll");
 }
 
 #[sqlx::test(migrations = false)]
