@@ -4,7 +4,8 @@
 // permissions.test.ts reads fleet-core's authorization-matrix snapshot as it is, so a rule
 // change on the server fails the UI's test until this follows.
 // - Nobody changes the Owner or themselves.
-// - The Owner sets Members and Admins to Member or Admin, and disables or enables them.
+// - The Owner sets Members and Admins to Member or Admin, disables or enables them, and
+//   reviews their grants (ADR-0020, S50).
 // - An Admin only disables or enables Members.
 // - A Member invite is an Admin's or the Owner's to create and revoke, an Admin invite only
 //   the Owner's, an Owner invite nobody's.
@@ -31,6 +32,8 @@ export interface UserActions {
   readonly setRole: Readonly<Record<"member" | "admin" | "owner", boolean>>;
   /** Disabling or enabling. */
   readonly setDisabled: boolean;
+  /** Reviewing the grants the user holds and those on their accounts: the Owner's. */
+  readonly reviewGrants: boolean;
 }
 
 /** Whether `actor` manages `target`: never themselves or the Owner. */
@@ -55,6 +58,7 @@ export function userActions(actor: Actor, target: Target): UserActions {
   return {
     setRole: { member: setsRoles, admin: setsRoles, owner: false },
     setDisabled: managed,
+    reviewGrants: setsRoles,
   };
 }
 

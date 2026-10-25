@@ -914,12 +914,13 @@ F (`p11/p11.9-admin-endpoints`) builds P11.9's backend for J's admin screens: `G
 - **R69. Notes for J** (below).
 
 ### As built (group F)
-Built as planned, one PR on `p11/p11.9-admin-endpoints`, in seven commits: PR #70's follow-ups (above), the planning record, `GET /audit`, the API release, the grants review, leaving, and the docs. P11.9 stays unticked; J ticks it. Each new test ran red before its code, against a stub with the real signature (one that answered nothing, sent nothing or deleted nothing) or a route not yet registered or listed; a test that pins code already working, by a mutation restored from a saved copy and checked by checksum.
+Built as planned, one PR on `p11/p11.9-admin-endpoints`, in nine commits: PR #70's follow-ups (above), the planning record, `GET /audit`, the API release, the grants review, leaving, a malformed ID's leave (a case these notes claimed and no test held, ML4), the docs, and the UI's permission mirror (below). P11.9 stays unticked; J ticks it. Each new test ran red before its code, against a stub with the real signature (one that answered nothing, sent nothing or deleted nothing) or a route not yet registered or listed; a test that pins code already working, by a mutation restored from a saved copy and checked by checksum.
 
 *Choices made while building:*
 - **`AuditActionName`'s OpenAPI schema is written by hand,** listing fleet-core's `AuditAction::ALL`: utoipa's derive doesn't read the names a macro gives serde, as serde and ts-rs do. The test that keeps the OpenAPI schemas equal to the TypeScript export covers it.
 - **Leaving answers two refusals that can't come as 404:** once `authorize()` allowed `LeaveAccount`, a grant was read in the transaction, so a missing level or a delete that removed nothing would be a grant gone meanwhile, answered as one.
 - **No 422 test for the release or leaving:** neither takes a body or a query, and a malformed ID is 404, as for the disable route (ADR-0019).
+- **The admin screens' permission mirror follows the matrix,** F's one frontend change: `packages/ui`'s `permissions.test.ts` reads the matrix snapshot, so `ReviewUserGrants`' new column failed it (found by `just check`) until `userActions` gained `reviewGrants`, the Owner's on a Member or an Admin, as `setRole`, which J's review panel reads.
 - **Test helpers:** fleet-client's test server gains `member_with_app`, so the console logs in as a Member; fleet-api-types' OpenAPI test keeps the admin screens' declarations in `admin_declarations`, under clippy's 100 lines.
 
 *Mutations* (each failed its tests, then was restored):
