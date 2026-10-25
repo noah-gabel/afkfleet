@@ -829,8 +829,11 @@ async fn without_a_grant_or_an_account_there_is_nothing_to_leave(
 
     let ungranted = leave(&setup, &bob, id).await;
     let missing = leave(&setup, &bob, unknown).await;
+    let malformed = setup
+        .api(Method::DELETE, "/accounts/not-an-id/grants/me", &bob, None)
+        .await;
 
-    for seen in [&ungranted, &missing] {
+    for seen in [&ungranted, &missing, &malformed] {
         assert_eq!(seen.status, 404, "{}", seen.text);
         assert_eq!(seen.code(), "not_found");
     }
