@@ -396,6 +396,7 @@ async fn the_document_lists_exactly_the_api_routes(
             ("/api/v1/agents", "get"),
             ("/api/v1/agents/enrollment-tokens", "post"),
             ("/api/v1/agents/{id}/disable", "post"),
+            ("/api/v1/agents/{id}/release", "post"),
             ("/api/v1/audit", "get"),
             ("/api/v1/bots", "get"),
             ("/api/v1/bots/{id}", "get"),

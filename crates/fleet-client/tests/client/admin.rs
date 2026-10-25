@@ -1,11 +1,13 @@
-//! The admins' routes: users, invites and the audit log.
+//! The admins' routes: users, invites, agents and the audit log.
 
 use core::time::Duration;
 
+use fleet_api_types::accounts::CreateOfflineAccountRequest;
+use fleet_api_types::agents::AgentStatus;
 use fleet_api_types::audit::{AuditActionName, AuditPageQuery};
 use fleet_api_types::invites::{CreateInviteRequest, InviteState};
 use fleet_api_types::users::{UserPatchRequest, UserRole};
-use fleet_api_types::{ErrorCode, PageQuery, UserId};
+use fleet_api_types::{ErrorCode, PageQuery, SecretText, UserId};
 use fleet_client::ClientError;
 
 use crate::support::{PASSWORD, Server, is_api, register, step_up};
@@ -160,5 +162,49 @@ async fn the_owner_pages_through_the_audit_log_and_a_member_is_refused() {
     );
     assert!(actions.len() > 2, "more than one page: {actions:?}");
     assert!(is_api(&refused, 403, ErrorCode::Forbidden), "{refused:?}");
+    server.stop().await;
+}
+
+/// The Owner lists the agents with their bots, releases a disabled one's
+/// bot after a step-up, and an enabled one is refused with its code.
+#[tokio::test]
+async fn the_owner_releases_a_disabled_agents_bots_and_an_enabled_one_is_refused() {
+    let server = Server::start().await;
+    let (owner, _, _) = server.owner().await;
+    let mut bots = Vec::new();
+    for name in ["AfkBot1", "AfkBot2"] {
+        owner
+            .create_offline_account(&CreateOfflineAccountRequest {
+                name: SecretText::new(name.to_owned()),
+            })
+            .await
+            .unwrap();
+    }
+    for bot in owner.bots(&all()).await.unwrap().items {
+        bots.push(bot.id);
+    }
+    let disabled = server.agent_holding(bots[0], 1, true).await;
+    let enabled = server.agent_holding(bots[1], 2, false).await;
+    step_up(&owner).await;
+
+    let before = owner.agents(&all()).await.unwrap();
+    let released = owner.release_agent(disabled).await.unwrap();
+    let refused = owner.release_agent(enabled).await.unwrap_err();
+
+    let held = |id| {
+        before
+            .items
+            .iter()
+            .find(|agent| agent.id == id)
+            .map(|agent| agent.bots)
+    };
+    assert_eq!(held(disabled), Some(1));
+    assert_eq!(released.id, disabled);
+    assert_eq!(released.bots, 0);
+    assert_eq!(released.status.known(), Some(AgentStatus::Disabled));
+    assert!(
+        is_api(&refused, 409, ErrorCode::AgentNotDisabled),
+        "{refused:?}"
+    );
     server.stop().await;
 }

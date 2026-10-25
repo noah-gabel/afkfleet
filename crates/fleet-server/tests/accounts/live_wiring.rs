@@ -200,6 +200,42 @@ async fn disabling_an_agent_tells_the_bus_its_bots(
     bots_hint(&mut bus, bot).await;
 }
 
+/// An agent disabled, then released over the API (ADR-0020, S49).
+#[sqlx::test(migrations = false)]
+async fn releasing_an_agent_tells_the_bus_its_bots(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let admin = setup.stepped_up(1, Role::Admin).await;
+    let member = setup.person(2, Role::Member).await;
+    let id = setup.add_account(member.id, 3, None).await;
+    let bot = setup.add_bot(id, 3).await;
+    let agent = setup.assign_to_agent(bot, 4).await;
+    let disabled = setup
+        .api(
+            Method::POST,
+            &format!("/agents/{agent}/disable"),
+            &admin,
+            None,
+        )
+        .await;
+    assert_eq!(disabled.status, 200, "{}", disabled.text);
+    let mut bus = bus(&setup);
+
+    let released = setup
+        .api(
+            Method::POST,
+            &format!("/agents/{agent}/release"),
+            &admin,
+            None,
+        )
+        .await;
+
+    assert_eq!(released.status, 200, "{}", released.text);
+    bots_hint(&mut bus, bot).await;
+}
+
 #[sqlx::test(migrations = false)]
 async fn a_links_commit_tells_the_bus_its_new_bot(
     _pool: SqlitePoolOptions,

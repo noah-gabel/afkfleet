@@ -81,6 +81,7 @@ use fleet_api_types::accounts::{
     CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
     LinkFlowResponse, LinkStartedResponse,
 };
+use fleet_api_types::agents::{AgentPage, AgentResponse};
 use fleet_api_types::audit::{AuditPage, AuditPageQuery};
 use fleet_api_types::auth::{
     LoginMfaRequest, LoginRequest, LoginResponse, LoginStatus, RefreshRequest, RegisterRequest,
@@ -92,6 +93,7 @@ use fleet_api_types::chat::{
 };
 #[cfg(feature = "dev-console")]
 use fleet_api_types::events::EventTicketResponse;
+use fleet_api_types::ids::AgentId;
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{
@@ -808,6 +810,24 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
 
     /// One page of the bot `id`'s chat, newest first, as the caller may see
     /// it (200).
+    pub(crate) async fn agents(
+        self: &Arc<Self>,
+        query: &PageQuery<AgentId>,
+    ) -> Result<AgentPage, ClientError> {
+        let url = with_page(self.server.api(&["agents"]), query);
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn release_agent(
+        self: &Arc<Self>,
+        id: AgentId,
+    ) -> Result<AgentResponse, ClientError> {
+        let url = self.server.api(&["agents", &id.to_string(), "release"]);
+        let answer = self.authed(Method::POST, url, None).await?;
+        expect_json(answer, 200)
+    }
+
     pub(crate) async fn audit(
         self: &Arc<Self>,
         query: &AuditPageQuery,
@@ -2971,6 +2991,68 @@ mod tests {
             ),
             "{error:?}"
         );
+    }
+
+    const AGENT: &str = "018bcfe5-6800-7101-8101-010101010101";
+
+    fn an_agent() -> AgentResponse {
+        serde_json::from_value(json!({
+            "id": AGENT,
+            "name": "agent-1",
+            "enabled": false,
+            "status": "disabled",
+            "bots": 0,
+            "created_at": "2027-01-15T07:00:00.000Z"
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_agents_and_a_release_are_read_and_sent_on_their_routes() {
+        let core = signed_in().await;
+        let page = AgentPage {
+            items: vec![an_agent()],
+            next: None,
+        };
+        let release = format!("POST /api/v1/agents/{AGENT}/release");
+        core.transport.on("GET /api/v1/agents", Ok(dto(200, &page)));
+        core.transport.on(&release, Ok(dto(200, &an_agent())));
+
+        let listed = core
+            .agents(&PageQuery {
+                before: None,
+                limit: None,
+            })
+            .await
+            .unwrap();
+        let released = core.release_agent(id(AGENT)).await.unwrap();
+
+        assert_eq!(listed, page);
+        assert_eq!(released, an_agent());
+        assert_eq!(
+            core.transport.seen(),
+            [sent("GET /api/v1/agents", None), sent(&release, None)]
+        );
+    }
+
+    #[rstest]
+    #[case::enabled(409, ErrorCode::AgentNotDisabled)]
+    #[case::step_up(403, ErrorCode::StepUpRequired)]
+    #[case::unknown(404, ErrorCode::NotFound)]
+    #[tokio::test]
+    async fn a_refused_release_comes_back_with_the_servers_code(
+        #[case] status: u16,
+        #[case] code: ErrorCode,
+    ) {
+        use fleet_api_types::OpenEnum as _;
+        let core = signed_in().await;
+        let route = format!("POST /api/v1/agents/{AGENT}/release");
+        core.transport
+            .on(&route, Ok(refusal(status, code.as_str())));
+
+        let error = core.release_agent(id(AGENT)).await.unwrap_err();
+
+        assert!(is_api(&error, status, code), "{error:?}");
     }
 
     fn an_audit_page() -> AuditPage {

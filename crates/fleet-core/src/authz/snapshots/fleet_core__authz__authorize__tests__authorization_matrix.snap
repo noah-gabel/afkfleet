@@ -233,6 +233,7 @@ CreateInvite for an Owner  403    403    403
 ViewAgents                 ok     ok     403
 EnrollAgent                ok     403    403
 DisableAgent               ok     ok     403
+ReleaseAgent               ok     ok     403
 ViewAuditLog               ok     ok     403
 
 ## Invites

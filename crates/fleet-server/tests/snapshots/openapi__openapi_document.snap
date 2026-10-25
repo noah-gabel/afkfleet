@@ -1021,7 +1021,8 @@ expression: answer.json()
           "mode_changed",
           "mode_in_use_by_others",
           "mode_in_use",
-          "too_many_connections"
+          "too_many_connections",
+          "agent_not_disabled"
         ],
         "type": "string"
       },
@@ -4178,6 +4179,114 @@ expression: answer.json()
           }
         ],
         "summary": "`POST /api/v1/agents/{id}/disable`: disables an agent for good, revoking\nevery certificate and ending its stream. Needs a step-up.",
+        "tags": [
+          "agents"
+        ],
+        "x-step-up": true
+      }
+    },
+    "/api/v1/agents/{id}/release": {
+      "post": {
+        "operationId": "release_agent",
+        "parameters": [
+          {
+            "description": "The agent's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentResponse"
+                }
+              }
+            },
+            "description": "The agent, its bots released and placed again as soon as an agent can take them. One that held none answers as it is."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or only Admins and the Owner release agents."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such agent."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`agent_not_disabled`: the agent is enabled; disable it first."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/agents/{id}/release`: releases a disabled agent's bots, on\nthe caller's word that its host and its bots are stopped, so they can be\nplaced elsewhere. Needs a step-up.",
         "tags": [
           "agents"
         ],

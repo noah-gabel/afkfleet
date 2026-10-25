@@ -127,6 +127,7 @@ fn account(
         | Permission::ViewAgents
         | Permission::EnrollAgent
         | Permission::DisableAgent
+        | Permission::ReleaseAgent
         | Permission::ViewAuditLog
         | Permission::RevokeInvite
         | Permission::ViewMode
@@ -161,6 +162,7 @@ fn global(actor: &Actor, permission: Permission) -> Result<(), AuthzError> {
         | Permission::ListInvites
         | Permission::ViewAgents
         | Permission::DisableAgent
+        | Permission::ReleaseAgent
         | Permission::ViewAuditLog => actor.role >= Role::Admin,
         // An agent receives session tokens for the bots assigned to it, so
         // only the Owner decides which agents exist (ADR-0010).
@@ -218,6 +220,7 @@ fn invite(actor: &Actor, permission: Permission, role: Role) -> Result<(), Authz
         | Permission::ViewAgents
         | Permission::EnrollAgent
         | Permission::DisableAgent
+        | Permission::ReleaseAgent
         | Permission::ViewAuditLog
         | Permission::ViewMode
         | Permission::UpdateMode { .. }
@@ -262,6 +265,7 @@ fn mode(
         | Permission::ViewAgents
         | Permission::EnrollAgent
         | Permission::DisableAgent
+        | Permission::ReleaseAgent
         | Permission::ViewAuditLog
         | Permission::RevokeInvite
         | Permission::SetRole { .. }
@@ -324,6 +328,7 @@ fn user(actor: &Actor, permission: Permission, target: UserRef) -> Result<(), Au
         | Permission::ViewAgents
         | Permission::EnrollAgent
         | Permission::DisableAgent
+        | Permission::ReleaseAgent
         | Permission::ViewAuditLog
         | Permission::RevokeInvite
         | Permission::ViewMode
@@ -372,6 +377,7 @@ fn personal(actor: &Actor, permission: Permission, owner: UserId) -> Result<(), 
         | Permission::ViewAgents
         | Permission::EnrollAgent
         | Permission::DisableAgent
+        | Permission::ReleaseAgent
         | Permission::ViewAuditLog
         | Permission::RevokeInvite
         | Permission::ViewMode
@@ -501,7 +507,7 @@ mod tests {
     }
 
     /// How many variants [`Permission`] has.
-    const PERMISSION_VARIANTS: usize = 26;
+    const PERMISSION_VARIANTS: usize = 27;
 
     /// The variant's index, and the kind of context it applies to.
     ///
@@ -536,6 +542,7 @@ mod tests {
             Permission::SetDisabled => (23, Kind::User),
             Permission::UsePersonal => (24, Kind::Personal),
             Permission::ReviewLink => (25, Kind::Account),
+            Permission::ReleaseAgent => (26, Kind::Global),
         }
     }
 
@@ -600,6 +607,7 @@ mod tests {
             ("ViewAgents", Permission::ViewAgents),
             ("EnrollAgent", Permission::EnrollAgent),
             ("DisableAgent", Permission::DisableAgent),
+            ("ReleaseAgent", Permission::ReleaseAgent),
             ("ViewAuditLog", Permission::ViewAuditLog),
             ("RevokeInvite", Permission::RevokeInvite),
             ("ViewMode", Permission::ViewMode),

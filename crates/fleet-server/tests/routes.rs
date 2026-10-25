@@ -511,6 +511,11 @@ async fn the_setup_and_step_up_routes_are_registered_with_their_access_and_class
                 "/api/v1/agents/{id}/disable",
                 RateClass::Standard
             ),
+            entry(
+                Method::POST,
+                "/api/v1/agents/{id}/release",
+                RateClass::Standard
+            ),
             entry(Method::DELETE, "/api/v1/invites/{id}", RateClass::Standard),
             entry(Method::DELETE, "/api/v1/accounts/{id}", RateClass::Standard),
             entry(

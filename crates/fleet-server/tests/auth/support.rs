@@ -1261,8 +1261,8 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
     let enrollment_tokens = settings
         .control_plane
         .then(|| enrollment_tokens(&clock, &random, &hooked));
-    let (registry, agents) = agents(&clock, &hooked, &heard);
     let hints = Arc::new(Hinted::default());
+    let (registry, agents) = agents(&clock, &hooked, (&heard, &hints));
     let bots = bot_service(
         &clock,
         &random,
@@ -1462,7 +1462,7 @@ async fn insert_alice(db: &Database, alice: UserId, hash: PasswordHash) {
 fn agents(
     clock: &ManualClock,
     hooked: &HookedStore,
-    heard: &Arc<Heard>,
+    (heard, hints): (&Arc<Heard>, &Arc<Hinted>),
 ) -> (AgentRegistry, AgentService) {
     let registry = AgentRegistry::new(Arc::new(clock.clone()));
     let agents = AgentService::new(
@@ -1470,7 +1470,8 @@ fn agents(
         Arc::new(hooked.clone()),
         Arc::new(registry.clone()),
     )
-    .with_live_hints(Arc::clone(heard) as Arc<dyn LiveHints>);
+    .with_live_hints(Arc::clone(heard) as Arc<dyn LiveHints>)
+    .with_reconcile(Arc::clone(hints) as Arc<dyn Reconcile>);
     (registry, agents)
 }
 

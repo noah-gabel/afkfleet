@@ -1369,3 +1369,37 @@ async fn users_lists_every_user_and_audit_the_newest_entries_oldest_first() {
     );
     server.stop().await;
 }
+
+/// `agents` lists every agent with its bots; `release` asks for the
+/// password again, as the server wants, and releases a disabled one's bot.
+#[tokio::test]
+async fn release_asks_for_the_password_again_and_releases_a_disabled_agents_bots() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    let bot = bot_of(&owner, "AfkBot9").await;
+    let agent = server.agent_holding(bot, 1, true).await;
+    let (client, _) = server.client();
+    let release = format!("release {agent}");
+    let mut terminal = Scripted::new(
+        &[PASSWORD, &code, PASSWORD],
+        &["agents", &release, "agents"],
+    );
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let said = &terminal.said;
+    let listed: Vec<&String> = said
+        .iter()
+        .filter(|line| line.starts_with(&agent.to_string()))
+        .collect();
+    assert_eq!(listed.len(), 3, "{said:?}");
+    assert!(listed[0].ends_with(" agent-1 disabled bots=1"), "{said:?}");
+    assert!(listed[1].ends_with(" agent-1 disabled bots=0"), "{said:?}");
+    assert!(listed[2].ends_with(" agent-1 disabled bots=0"), "{said:?}");
+    assert!(
+        terminal.secrets.is_empty(),
+        "the password was asked for again"
+    );
+    server.stop().await;
+}

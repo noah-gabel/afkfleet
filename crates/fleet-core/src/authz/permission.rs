@@ -74,6 +74,10 @@ pub enum Permission {
     EnrollAgent,
     /// Disable an agent (Admin+).
     DisableAgent,
+    /// Release a disabled agent's bots, on the operator's word that its
+    /// host is stopped (Admin+; ADR-0020, S49): its own permission, since
+    /// it lifts a guard that disabling keeps.
+    ReleaseAgent,
     /// Read the audit log (Admin+).
     ViewAuditLog,
 

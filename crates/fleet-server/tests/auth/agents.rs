@@ -1,8 +1,10 @@
-//! `GET /agents` and `POST /agents/{id}/disable` (Plan.md P10.10, Appendix
-//! B; ADR-0019, S31): every agent with its status for Admins and the Owner;
+//! `GET /agents`, `POST /agents/{id}/disable` and `POST
+//! /agents/{id}/release` (Plan.md P10.10, P11.9, Appendix B; ADR-0019, S31;
+//! ADR-0020, S49): every agent with its status for Admins and the Owner;
 //! disabling one after a step-up, its certificates revoked and its live
-//! stream ended before the answer; everyone else refused; the re-checks in
-//! the transaction; the limits.
+//! stream ended before the answer; releasing a disabled one's bots after a
+//! step-up, audited with who vouched for it and hinted; everyone else
+//! refused; the re-checks in the transaction; the limits.
 
 use core::num::NonZeroU32;
 
@@ -11,7 +13,7 @@ use fleet_core::audit::{
     AuditAction, AuditMetadata, AuditOutcome, AuditTarget, RecordedMetadata, RecordedTarget,
 };
 use fleet_core::authz::Role;
-use fleet_core::id::{AgentId, RequestId};
+use fleet_core::id::{AgentId, BotId, RequestId};
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock as _;
 use fleet_core::value::AgentName;
@@ -19,6 +21,7 @@ use fleet_server::config::{Rate, RateLimitConfig};
 use fleet_server::grpc::registry::{Halt, Lease};
 use fleet_server::ports::agent_connections::{Admitted, StreamEnd};
 use fleet_server::ports::agents::{NewAgent, NewAgentCert};
+use fleet_server::ports::reconcile::Change;
 use fleet_server::ports::store::Store as _;
 use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -32,6 +35,10 @@ const AGENTS: &str = "/api/v1/agents";
 
 fn disable_path(id: AgentId) -> String {
     format!("{AGENTS}/{id}/disable")
+}
+
+fn release_path(id: AgentId) -> String {
+    format!("{AGENTS}/{id}/release")
 }
 
 impl Setup {
@@ -113,6 +120,34 @@ impl Setup {
 
     async fn disable(&self, id: AgentId, by: &Person) -> super::support::Seen {
         self.post(&disable_path(id), Some(&by.token), None).await
+    }
+
+    async fn release(&self, id: AgentId, by: &Person) -> super::support::Seen {
+        self.post(&release_path(id), Some(&by.token), None).await
+    }
+
+    async fn releases(&self) -> usize {
+        self.audit()
+            .await
+            .iter()
+            .filter(|entry| entry.action == AuditAction::AGENT_RELEASE)
+            .count()
+    }
+
+    /// The agent `bot` is assigned to.
+    async fn holder(&self, bot: BotId) -> Option<AgentId> {
+        self.db.bots().find(bot).await.unwrap().unwrap().agent
+    }
+
+    /// The Owner's bot 1, assigned to agent 1, which an Admin then disabled
+    /// through the API: the hints so far taken.
+    async fn disabled_with_a_bot(&self, owner: &Person, admin: &Person) -> (AgentId, BotId) {
+        let (_, bot) = self.bot_of(owner.id, 1).await;
+        let agent = self.assigned(bot, 1, None).await;
+        assert_eq!(self.disable(agent, admin).await.status, 200);
+        self.hints.take();
+        self.heard.take();
+        (agent, bot)
     }
 }
 
@@ -385,4 +420,218 @@ async fn both_routes_spend_the_users_limit(
     assert_eq!(listed.status, 429, "{}", listed.text);
     assert_eq!(disabled.status, 429, "{}", disabled.text);
     assert!(setup.enabled(agent).await);
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_admin_releases_a_disabled_agents_bots_audited_with_who_vouched_and_hinted(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let owner = setup.person(3, "owner", Role::Owner).await;
+    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let (agent, bot) = setup.disabled_with_a_bot(&owner, &admin).await;
+    let before = *setup.db.commits().borrow();
+
+    let seen = setup.release(agent, &admin).await;
+
+    assert_eq!(seen.status, 200, "{}", seen.text);
+    assert_eq!(seen.body["id"], json!(agent.to_string()));
+    assert_eq!(seen.body["status"], json!("disabled"));
+    assert_eq!(seen.body["bots"], json!(0));
+    assert_eq!(setup.holder(bot).await, None);
+    let entry = setup.last(&AuditAction::AGENT_RELEASE).await;
+    assert_eq!(entry.outcome, AuditOutcome::Success);
+    assert_eq!(entry.actor, Some(admin.id));
+    assert_eq!(entry.ip, Some("192.0.2.10".parse().unwrap()));
+    assert_eq!(
+        entry.target,
+        Some(RecordedTarget::Known(AuditTarget::Agent(agent)))
+    );
+    assert_eq!(
+        entry.metadata,
+        RecordedMetadata::from(
+            &AuditMetadata::new()
+                .int("count", 1)
+                .unwrap()
+                .text("via", "http")
+                .unwrap()
+        )
+    );
+    let detach = setup.last(&AuditAction::BOT_DETACH).await;
+    assert_eq!(detach.actor, None);
+    assert_eq!(
+        detach.target,
+        Some(RecordedTarget::Known(AuditTarget::Bot(bot)))
+    );
+    // Both after the release's one commit.
+    assert_eq!(setup.hints.take(), [Change::Store]);
+    assert_eq!(
+        setup.heard.take(),
+        [(before + 1, super::support::Hint::Bots(vec![bot]))]
+    );
+}
+
+#[sqlx::test(migrations = false)]
+async fn releasing_an_enabled_agent_is_409_and_keeps_its_bots(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let owner = stepped_up(&setup, 3, "owner", Role::Owner).await;
+    let (_, bot) = setup.bot_of(owner.id, 1).await;
+    let agent = setup.assigned(bot, 1, None).await;
+
+    let seen = setup.release(agent, &owner).await;
+
+    assert_eq!(seen.status, 409, "{}", seen.text);
+    assert_eq!(seen.code(), "agent_not_disabled");
+    assert_eq!(
+        seen.body["error"]["message"],
+        json!("Only a disabled agent's bots can be released. Disable the agent first.")
+    );
+    assert_eq!(setup.holder(bot).await, Some(agent));
+    assert_eq!(setup.releases().await, 0);
+    assert_eq!(setup.hints.take(), []);
+}
+
+#[sqlx::test(migrations = false)]
+async fn releasing_an_agent_that_holds_no_bots_answers_it_and_records_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let agent = setup.agent(1).await;
+    assert_eq!(setup.disable(agent, &admin).await.status, 200);
+    setup.hints.take();
+
+    let seen = setup.release(agent, &admin).await;
+
+    assert_eq!(seen.status, 200, "{}", seen.text);
+    assert_eq!(seen.body["bots"], json!(0));
+    assert_eq!(setup.releases().await, 0);
+    assert_eq!(setup.hints.take(), []);
+}
+
+#[sqlx::test(migrations = false)]
+async fn a_member_may_not_release_an_agent(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let owner = setup.person(3, "owner", Role::Owner).await;
+    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let member = stepped_up(&setup, 4, "member", Role::Member).await;
+    let (agent, bot) = setup.disabled_with_a_bot(&owner, &admin).await;
+
+    let seen = setup.release(agent, &member).await;
+
+    assert_eq!(seen.status, 403, "{}", seen.text);
+    assert_eq!(seen.code(), "forbidden");
+    assert_eq!(setup.holder(bot).await, Some(agent));
+    assert_eq!(setup.releases().await, 0);
+}
+
+#[sqlx::test(migrations = false)]
+async fn releasing_needs_a_fresh_step_up(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
+    let setup = setup(options).await;
+    let owner = setup.person(3, "owner", Role::Owner).await;
+    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let (agent, bot) = setup.disabled_with_a_bot(&owner, &admin).await;
+    let fresh = setup.person(5, "other", Role::Admin).await;
+
+    let seen = setup.release(agent, &fresh).await;
+
+    assert_eq!(seen.status, 403, "{}", seen.text);
+    assert_eq!(seen.code(), "step_up_required");
+    assert_eq!(setup.holder(bot).await, Some(agent));
+    assert_eq!(setup.releases().await, 0);
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_unknown_or_malformed_agent_is_404_to_a_release(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+
+    let unknown = setup
+        .release(AgentId::new_v7(at(T0), [9; 10]).unwrap(), &admin)
+        .await;
+    let malformed = setup
+        .post(
+            &format!("{AGENTS}/not-an-id/release"),
+            Some(&admin.token),
+            None,
+        )
+        .await;
+
+    for seen in [&unknown, &malformed] {
+        assert_eq!(seen.status, 404, "{}", seen.text);
+        assert_eq!(seen.code(), "not_found");
+    }
+}
+
+#[sqlx::test(migrations = false)]
+async fn an_admin_demoted_or_logged_out_meanwhile_releases_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let owner = setup.person(3, "owner", Role::Owner).await;
+    let demoted = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let logged_out = stepped_up(&setup, 4, "other", Role::Admin).await;
+    let (agent, bot) = setup.disabled_with_a_bot(&owner, &demoted).await;
+
+    setup
+        .hooked
+        .queue(Meanwhile::SetRole(demoted.id, Role::Member));
+    let refused = setup.release(agent, &demoted).await;
+    setup
+        .hooked
+        .queue(Meanwhile::RevokeSession(logged_out.session));
+    let gone = setup.release(agent, &logged_out).await;
+
+    assert_eq!(refused.status, 403, "{}", refused.text);
+    assert_eq!(refused.code(), "forbidden");
+    assert_eq!(gone.status, 401, "{}", gone.text);
+    assert_eq!(setup.holder(bot).await, Some(agent));
+    assert_eq!(setup.releases().await, 0);
+}
+
+#[sqlx::test(migrations = false)]
+async fn releasing_spends_the_users_limit(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
+    let setup = setup_with(
+        options,
+        Options {
+            limits: RateLimitConfig {
+                per_user: Rate::per_second(NonZeroU32::MIN, NonZeroU32::MIN),
+                ..RateLimitConfig::default()
+            },
+            ..Options::default()
+        },
+    )
+    .await;
+    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let agent = setup.agent(1).await;
+    assert_eq!(setup.get(AGENTS, Some(&admin.token)).await.status, 200);
+
+    let seen = setup.release(agent, &admin).await;
+
+    assert_eq!(seen.status, 429, "{}", seen.text);
+}
+
+#[sqlx::test(migrations = false)]
+async fn without_credentials_a_release_is_401(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let agent = setup.agent(1).await;
+
+    let seen = setup.post(&release_path(agent), None, None).await;
+
+    assert_eq!(seen.status, 401, "{}", seen.text);
 }

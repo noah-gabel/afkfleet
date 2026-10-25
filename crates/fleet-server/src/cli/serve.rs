@@ -817,7 +817,8 @@ fn agent_services(
         Arc::clone(store),
         Arc::new(agents.clone()),
     )
-    .with_live_hints(hints.live());
+    .with_live_hints(hints.live())
+    .with_reconcile(Arc::clone(&hints.reconcile));
     (agents, service)
 }
 

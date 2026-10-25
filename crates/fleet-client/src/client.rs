@@ -21,12 +21,14 @@ use fleet_api_types::accounts::{
     CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
     LinkFlowResponse, LinkStartedResponse,
 };
+use fleet_api_types::agents::{AgentPage, AgentResponse};
 use fleet_api_types::audit::{AuditPage, AuditPageQuery};
 use fleet_api_types::auth::{LoginRequest, RegisterRequest, RegisterResponse, StepUpRequest};
 use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
 use fleet_api_types::chat::{
     ChatCommandRequest, ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse,
 };
+use fleet_api_types::ids::AgentId;
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
@@ -277,6 +279,30 @@ impl<S: SessionStore> Client<S> {
     /// for every authenticated call.
     pub async fn audit(&self, query: &AuditPageQuery) -> Result<AuditPage, ClientError> {
         self.core.audit(query).await
+    }
+
+    /// `GET /agents`: a page of the agents, newest first, with their status
+    /// and bots count (Admins and the Owner).
+    ///
+    /// # Errors
+    /// The server's 403 for a Member, or 422; any other error as for every
+    /// authenticated call.
+    pub async fn agents(&self, query: &PageQuery<AgentId>) -> Result<AgentPage, ClientError> {
+        self.core.agents(query).await
+    }
+
+    /// `POST /agents/{id}/release`: releases a disabled agent's bots, on the
+    /// caller's word that its host and its bots are stopped, so they can be
+    /// placed elsewhere (Admins and the Owner, after a step-up). The agent
+    /// as the list shows it after.
+    ///
+    /// # Errors
+    /// The server's 403 (`step_up_required` without a fresh step-up;
+    /// `forbidden` for a Member), 404, 409 (`agent_not_disabled`) or 429 as
+    /// [`ClientError::Api`]; any other error as for every authenticated
+    /// call.
+    pub async fn release_agent(&self, id: AgentId) -> Result<AgentResponse, ClientError> {
+        self.core.release_agent(id).await
     }
 
     /// `GET /users`: a page of the users (Admins and the Owner).

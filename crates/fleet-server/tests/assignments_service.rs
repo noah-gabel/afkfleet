@@ -22,7 +22,7 @@ use fleet_core::id::{AccountId, AgentId, BotId, UserId};
 use fleet_core::mode::ModePreset;
 use fleet_core::placement::{DetachReason, UnassignReason, Unplaced};
 use fleet_core::value::{AgentName, Username};
-use fleet_server::app::agents::{AgentService, AssignmentService, ReleaseAgentError};
+use fleet_server::app::agents::{AgentService, AssignmentService, ReleaseAgentError, Releaser};
 use fleet_server::grpc::registry::AgentRegistry;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
@@ -31,6 +31,7 @@ use fleet_server::ports::assignments::{Assigned, Assignments as _};
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord, NewAuditEntry};
 use fleet_server::ports::bots::NewBot;
 use fleet_server::ports::live_hints::{LiveHints, ModeEvent};
+use fleet_server::ports::reconcile::{Change, Reconcile};
 use fleet_server::ports::store::Store as _;
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use fleet_testkit::system::ManualClock;
@@ -68,6 +69,22 @@ struct Setup {
     assignments: AssignmentService,
     agents: AgentService,
     heard: Arc<Heard>,
+    reconciled: Arc<Reconciled>,
+}
+
+/// The reconciler's hints a service sent, each with the database's commit
+/// count at the call: one sent before its commit shows as one count short.
+#[derive(Debug)]
+struct Reconciled {
+    commits: tokio::sync::watch::Receiver<u64>,
+    calls: Mutex<Vec<(u64, Change)>>,
+}
+
+impl Reconcile for Reconciled {
+    fn changed(&self, change: Change) {
+        let count = *self.commits.borrow();
+        self.calls.lock().unwrap().push((count, change));
+    }
 }
 
 /// The bots a service told the live events sockets about, each with the
@@ -146,18 +163,24 @@ impl Setup {
         tx.commit(setup_entry()).await.unwrap();
         let assignments = AssignmentService::new(Arc::new(clock.clone()), Arc::new(db.clone()));
         let heard = Arc::new(Heard::new(&db));
+        let reconciled = Arc::new(Reconciled {
+            commits: db.commits(),
+            calls: Mutex::new(Vec::new()),
+        });
         let agents = AgentService::new(
             Arc::new(clock.clone()),
             Arc::new(db.clone()),
             Arc::new(AgentRegistry::new(Arc::new(clock))),
         )
-        .with_live_hints(Arc::clone(&heard) as Arc<dyn LiveHints>);
+        .with_live_hints(Arc::clone(&heard) as Arc<dyn LiveHints>)
+        .with_reconcile(Arc::clone(&reconciled) as Arc<dyn Reconcile>);
         Self {
             db,
             owner,
             assignments,
             agents,
             heard,
+            reconciled,
         }
     }
 
@@ -442,11 +465,19 @@ async fn releasing_a_disabled_agent_clears_its_bots_and_records_one_entry_each(
     tx.commit(setup_entry()).await.unwrap();
     setup.disable(1).await;
 
-    let released = setup.agents.release(agent(1)).await.unwrap();
-    let again = setup.agents.release(agent(1)).await.unwrap();
+    let released = setup
+        .agents
+        .release(Releaser::Host, agent(1))
+        .await
+        .unwrap();
+    let again = setup
+        .agents
+        .release(Releaser::Host, agent(1))
+        .await
+        .unwrap();
 
-    assert_eq!(released, [first, gone]);
-    assert_eq!(again, []);
+    assert_eq!(released.bots, [first, gone]);
+    assert_eq!(again.bots, []);
     assert_eq!(setup.agent_of(first).await, None);
     let detaches = setup.entries(&AuditAction::BOT_DETACH).await;
     assert_eq!(detaches.len(), 2);
@@ -480,12 +511,49 @@ async fn a_release_tells_the_sockets_its_bots_after_its_commit_and_nothing_to_re
     }
     setup.disable(1).await;
 
-    setup.agents.release(agent(1)).await.unwrap();
+    setup
+        .agents
+        .release(Releaser::Host, agent(1))
+        .await
+        .unwrap();
     let after_releasing = (setup.heard.take(), setup.heard.once(&[first, second]));
-    setup.agents.release(agent(1)).await.unwrap();
+    setup
+        .agents
+        .release(Releaser::Host, agent(1))
+        .await
+        .unwrap();
 
     assert_eq!(after_releasing.0, after_releasing.1);
     assert_eq!(setup.heard.take(), [], "nothing to release");
+}
+
+/// A release hints the reconciler after its commit, so a running server
+/// places the bots at once; nothing to release hints nothing (ADR-0020, S49).
+#[sqlx::test(migrations = false)]
+async fn a_release_hints_the_reconciler_after_its_commit_and_nothing_to_release_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = Setup::new(options).await;
+    let (_, id) = setup.bot(1).await;
+    setup.assignments.assign(id, agent(1)).await.unwrap();
+    setup.disable(1).await;
+
+    setup
+        .agents
+        .release(Releaser::Host, agent(1))
+        .await
+        .unwrap();
+    let after_releasing = core::mem::take(&mut *setup.reconciled.calls.lock().unwrap());
+    let committed = *setup.db.commits().borrow();
+    setup
+        .agents
+        .release(Releaser::Host, agent(1))
+        .await
+        .unwrap();
+
+    assert_eq!(after_releasing, [(committed, Change::Store)]);
+    assert_eq!(*setup.reconciled.calls.lock().unwrap(), []);
 }
 
 #[sqlx::test(migrations = false)]
@@ -497,8 +565,8 @@ async fn an_enabled_or_unknown_agent_is_never_released(
     let (_, id) = setup.bot(1).await;
     setup.assignments.assign(id, agent(1)).await.unwrap();
 
-    let enabled = setup.agents.release(agent(1)).await;
-    let unknown = setup.agents.release(agent(9)).await;
+    let enabled = setup.agents.release(Releaser::Host, agent(1)).await;
+    let unknown = setup.agents.release(Releaser::Host, agent(9)).await;
 
     assert!(
         matches!(enabled, Err(ReleaseAgentError::Enabled)),

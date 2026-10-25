@@ -313,6 +313,33 @@ impl Server {
         tx.commit(entry).await.unwrap();
     }
 
+    /// Agent `n` holding `bot`, disabled when `disabled` says so: rows
+    /// only an enrolled agent makes, written straight to the database.
+    pub(crate) async fn agent_holding(&self, bot: BotId, n: u8, disabled: bool) -> AgentId {
+        let now = self.clock.now();
+        let agent = AgentId::new_v7(now, [n; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.agents()
+            .insert(&NewAgent {
+                id: agent,
+                name: AgentName::try_from(format!("agent-{n}").as_str()).unwrap(),
+                created_at: now,
+            })
+            .await
+            .unwrap();
+        assert!(tx.bots().assign(bot, agent).await.unwrap());
+        if disabled {
+            assert!(tx.agents().disable(agent).await.unwrap());
+        }
+        let entry = NewAuditEntry::new(
+            now,
+            AuditAction::try_from("test.agent_setup").unwrap(),
+            AuditOutcome::Success,
+        );
+        tx.commit(entry).await.unwrap();
+        agent
+    }
+
     /// The Owner, logged in with 2FA: the client, its store and the app.
     pub(crate) async fn owner(&self) -> (Client<MemoryStore>, MemoryStore, Totp) {
         let (client, store) = self.client();

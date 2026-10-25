@@ -41,6 +41,7 @@
 //! | `POST /api/v1/agents/enrollment-tokens` | user + step-up (the Owner; while `[grpc]` is configured) | a new enrollment token, in its bundle, shown this once |
 //! | `GET /api/v1/agents` | user (Admin+) | one page of agents, with their status |
 //! | `POST /api/v1/agents/{id}/disable` | user + step-up (Admin+) | disables an agent for good: every certificate revoked, its stream ended |
+//! | `POST /api/v1/agents/{id}/release` | user + step-up (Admin+) | releases a disabled agent's bots, on the caller's word that its host is stopped |
 //! | `GET /api/v1/audit` | user (Admin+) | one page of the audit log, newest first, each entry as stored |
 //! | `GET /api/v1/bots` | user | one page of the bots the user may see, each under its account's field rule |
 //! | `GET /api/v1/bots/{id}` | user (View) | one bot, with what the server knows of its state |
@@ -269,6 +270,7 @@ pub fn api_routes(routes: Routes) -> Routes {
         )
         .authed_route(RateClass::Standard, routes!(agents::list_agents))
         .step_up_route(RateClass::Standard, routes!(agents::disable_agent))
+        .step_up_route(RateClass::Standard, routes!(agents::release_agent))
         .authed_route(RateClass::Standard, routes!(audit::list))
         .authed_route(RateClass::Standard, routes!(bots::list))
         .authed_route(RateClass::Standard, routes!(bots::get))

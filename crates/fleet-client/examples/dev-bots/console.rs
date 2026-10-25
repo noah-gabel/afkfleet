@@ -12,8 +12,10 @@
 //! command's arguments only for Manage holders (ADR-0020, S9, S11, U3).
 //! `events` prints the live events, one line each, until Enter (P11.5;
 //! ADR-0020, S37): never the socket's URL, its ticket or the token it
-//! opens with. `audit` shows a page of the audit log and `users` every user,
-//! for Admins and the Owner (P11.9; ADR-0020, R67).
+//! opens with. `audit` shows a page of the audit log, `users` every user and
+//! `agents` every agent, for Admins and the Owner; `release` releases a
+//! disabled agent's bots, asking for the password again when the server
+//! wants it (P11.9; ADR-0020, R67).
 
 use core::fmt::Write as _;
 use core::pin::Pin;
@@ -21,6 +23,7 @@ use core::time::Duration;
 use std::io;
 
 use fleet_api_types::accounts::CreateOfflineAccountRequest;
+use fleet_api_types::agents::AgentResponse;
 use fleet_api_types::audit::{AuditEntryResponse, AuditPageQuery};
 use fleet_api_types::auth::{LoginRequest, StepUpRequest};
 use fleet_api_types::bots::{BotModeRequest, BotPatchRequest, BotResponse, BotStatus};
@@ -28,6 +31,7 @@ use fleet_api_types::chat::{
     ChatCommandRequest, ChatLine, ChatPageQuery, ChatSendOutcome, ChatSendRequest, ChatSendResponse,
 };
 use fleet_api_types::events::{EventMessage, EventMessageKind};
+use fleet_api_types::ids::AgentId;
 use fleet_api_types::modes::{
     CreateModeRequest, ModeOwnership, ModeResponse, ModeVisibility, UpdateModeRequest,
 };
@@ -80,7 +84,7 @@ pub(crate) fn arguments(args: &[String]) -> Option<(&str, &str)> {
 }
 
 /// The commands, as the console lists them.
-pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | mode <id> <mode> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | history <id> [before] | modes | new-mode <json> | edit-mode <id> <json> | delete-mode <id> | events | users | audit [before] | quit";
+pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | mode <id> <mode> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | history <id> [before] | modes | new-mode <json> | edit-mode <id> <json> | delete-mode <id> | events | users | audit [before] | agents | release <agent-id> | quit";
 
 /// How many 2FA codes a login may try.
 const CODES: usize = 3;
@@ -128,6 +132,10 @@ enum Command {
     Users,
     /// One page of the audit log: the newest, or the one before an entry.
     Audit(Option<SafeInt>),
+    /// Every agent, for Admins and the Owner.
+    Agents,
+    /// A disabled agent's bots released.
+    Release(AgentId),
     Quit,
 }
 
@@ -166,6 +174,8 @@ impl Command {
             ["modes"] => Some(Self::Modes),
             ["events"] => Some(Self::Events),
             ["users"] => Some(Self::Users),
+            ["agents"] => Some(Self::Agents),
+            ["release", id] => id.parse::<AgentId>().ok().map(Self::Release),
             ["audit"] => Some(Self::Audit(None)),
             ["audit", before] => {
                 let before = before.parse::<i64>().ok()?;
@@ -342,6 +352,8 @@ async fn command_of<S: SessionStore>(
         Command::Events => events(client, terminal).await,
         Command::Users => users(client, terminal).await,
         Command::Audit(before) => audit(client, before, terminal).await,
+        Command::Agents => agents(client, terminal).await,
+        Command::Release(id) => release(client, id, terminal).await,
         Command::Quit => Ok(()),
     };
     match done {
@@ -411,6 +423,66 @@ async fn users<S: SessionStore>(
             None => break,
         }
     }
+    Ok(())
+}
+
+/// Every page of the agents, one line each.
+async fn agents<S: SessionStore>(
+    client: &Client<S>,
+    terminal: &mut impl Terminal,
+) -> Result<(), ClientError> {
+    let mut before = None;
+    let mut any = false;
+    loop {
+        let page = client
+            .agents(&PageQuery {
+                before,
+                limit: None,
+            })
+            .await?;
+        for agent in &page.items {
+            terminal.say(&agent_line_of(agent));
+            any = true;
+        }
+        match page.next {
+            Some(next) => before = Some(next),
+            None => break,
+        }
+    }
+    if !any {
+        terminal.say("no agents yet");
+    }
+    Ok(())
+}
+
+/// One agent: its ID, name and status, and how many bots it holds.
+fn agent_line_of(agent: &AgentResponse) -> String {
+    format!(
+        "{} {} {} bots={}",
+        agent.id,
+        agent.name,
+        agent.status.as_str(),
+        agent.bots
+    )
+}
+
+/// Releases the disabled agent `id`'s bots, with a step-up when the server
+/// asks, once.
+async fn release<S: SessionStore>(
+    client: &Client<S>,
+    id: AgentId,
+    terminal: &mut impl Terminal,
+) -> Result<(), ClientError> {
+    let agent = match client.release_agent(id).await {
+        Err(ClientError::Api(failure)) if failure.is(ErrorCode::StepUpRequired) => {
+            if !stepped_up(client, terminal).await? {
+                return Ok(());
+            }
+            client.release_agent(id).await?
+        }
+        other => other?,
+    };
+    terminal.say(&agent_line_of(&agent));
     Ok(())
 }
 
@@ -1077,6 +1149,22 @@ mod tests {
                 assert_eq!(Command::parse(&line), None, "{line:?}");
             }
         }
+    }
+
+    #[test]
+    fn release_takes_an_agent_and_agents_nothing() {
+        let id = "018bcfe5-6800-7101-8101-010101010101";
+        let agent: AgentId = id.parse().unwrap();
+
+        assert_eq!(Command::parse("agents"), Some(Command::Agents));
+        assert_eq!(
+            Command::parse(&format!(" release {id} ")),
+            Some(Command::Release(agent))
+        );
+        assert_eq!(Command::parse("release"), None);
+        assert_eq!(Command::parse("release not-an-id"), None);
+        assert_eq!(Command::parse(&format!("release {id} now")), None);
+        assert_eq!(Command::parse("agents all"), None);
     }
 
     #[test]
