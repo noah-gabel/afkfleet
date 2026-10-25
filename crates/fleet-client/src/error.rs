@@ -96,6 +96,10 @@ pub enum Unexpected {
     Body,
     /// A login status this version doesn't know.
     UnknownLoginStatus,
+    /// A 101 that doesn't answer the live events socket's upgrade: no
+    /// upgrade to `websocket`, a `Sec-WebSocket-Accept` that isn't the
+    /// key's, or an extension or subprotocol never offered (ADR-0020, U25).
+    Handshake,
 }
 
 impl fmt::Display for Unexpected {
@@ -107,6 +111,7 @@ impl fmt::Display for Unexpected {
             Self::Status => "the route never answers this status",
             Self::Body => "its body isn't the route's answer",
             Self::UnknownLoginStatus => "it names a login step this version doesn't know",
+            Self::Handshake => "its 101 doesn't answer the live events upgrade",
         })
     }
 }

@@ -114,6 +114,16 @@ impl ServerUrl {
         url
     }
 
+    /// The live events socket's upgrade URL, `/api/v1/events` with `ticket`
+    /// in its query, on the server's own scheme: the upgrade is an HTTP/1.1
+    /// request through reqwest (ADR-0020, U25). It holds the ticket, so it's
+    /// never shown.
+    pub(crate) fn upgrade(&self, ticket: &str) -> Url {
+        let mut url = self.api(&["events"]);
+        url.query_pairs_mut().append_pair("ticket", ticket);
+        url
+    }
+
     /// The URL of the health route `/health/<which>`.
     pub(crate) fn health(&self, which: &str) -> Url {
         self.join(["health", which].iter())
@@ -166,6 +176,24 @@ mod tests {
         let url = ServerUrl::parse(server).unwrap().events("afk_wt_x-y_z");
 
         assert_eq!(url.as_str(), events);
+    }
+
+    #[rstest]
+    #[case::plain(
+        "http://127.0.0.1:8080",
+        "http://127.0.0.1:8080/api/v1/events?ticket=afk_wt_x-y_z"
+    )]
+    #[case::tls(
+        "https://example.com",
+        "https://example.com/api/v1/events?ticket=afk_wt_x-y_z"
+    )]
+    fn the_upgrade_url_keeps_its_servers_scheme_and_takes_the_ticket(
+        #[case] server: &str,
+        #[case] upgrade: &str,
+    ) {
+        let url = ServerUrl::parse(server).unwrap().upgrade("afk_wt_x-y_z");
+
+        assert_eq!(url.as_str(), upgrade);
     }
 
     #[rstest]

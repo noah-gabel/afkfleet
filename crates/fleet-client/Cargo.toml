@@ -16,6 +16,8 @@ workspace = true
 base64 = { workspace = true, features = ["alloc"] }
 # The API's DTOs, the only internal crate the client depends on (Plan.md §4).
 fleet-api-types.workspace = true
+# `StreamExt` and `SinkExt` over the live events socket (`sink`; P11.8, ADR-0020, U25).
+futures-util = { workspace = true, features = ["sink"] }
 # HTTP over rustls with aws-lc-rs and the platform verifier; nothing else enabled: bodies
 # go through serde_json and queries through reqwest's `Url` (ADR-0017).
 reqwest.workspace = true
@@ -34,6 +36,10 @@ thiserror.workspace = true
 # for the tasks that finish a refresh or a code step when their caller is dropped
 # (ADR-0017).
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
+# Frames the live events socket over reqwest's own upgraded connection, and checks the 101
+# (`derive_accept_key`): `handshake` only, no TLS feature, since the socket's TLS is
+# reqwest's (P11.8, ADR-0020, U25).
+tokio-tungstenite = { workspace = true, features = ["handshake"] }
 tracing.workspace = true
 
 [dev-dependencies]
@@ -51,14 +57,14 @@ fleet-server.workspace = true
 fleet-startup.workspace = true
 # ManualClock and SeededRandom for the server.
 fleet-testkit.workspace = true
-# `SinkExt`, for the console's `events` to close its socket (P11.5, ADR-0020, U11).
-futures-util = { workspace = true, features = ["sink"] }
 # The TLS tests' CA and server certificates, made at run time (ADR-0017).
 rcgen = { workspace = true, features = ["aws_lc_rs", "pem"] }
 rstest.workspace = true
 # A fresh folder for each test server's database.
 tempfile.workspace = true
-tokio = { workspace = true, features = ["macros", "net", "rt"] }
+# `io-util` for the socket tests' in-memory pipes (`duplex`) and `test-util` for their paused
+# time (P11.8, ADR-0020, U26).
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt", "test-util"] }
 # The console's `events` and the live events tests: a plain ws:// client to 127.0.0.1, no
 # TLS (P11.5, ADR-0020, U11).
 tokio-tungstenite = { workspace = true, features = ["connect"] }

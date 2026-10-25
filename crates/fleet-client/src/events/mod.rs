@@ -14,6 +14,8 @@
 //! change that. tungstenite's `debug` line with the URL is in its blocking
 //! client's `connect_to_some`, which tokio-tungstenite never calls.
 
+pub(crate) mod upgrade;
+
 use fleet_api_types::events::EventMessage;
 pub use fleet_api_types::events::{Received, SocketClose};
 #[cfg(feature = "dev-console")]

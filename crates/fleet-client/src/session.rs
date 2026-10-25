@@ -1389,7 +1389,7 @@ fn chain(error: &dyn Error) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, VecDeque};
+
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use fleet_api_types::ErrorCode;
@@ -1400,7 +1400,8 @@ mod tests {
 
     use super::*;
     use crate::store::{MemoryStore, StoreError, StoreOp};
-    use crate::transport::{Outgoing, TransportError};
+    use crate::transport::TransportError;
+    use crate::transport::scripted::{Scripted, Seen};
 
     /// Bounds every wait of these tests, so a hang fails with a clear
     /// message instead of running until CI's job timeout.
@@ -1472,106 +1473,6 @@ mod tests {
         Incoming {
             status,
             ..profile()
-        }
-    }
-
-    /// An answer the test holds until it releases it.
-    #[derive(Clone, Default)]
-    struct Gate {
-        arrived: Arc<Notify>,
-        release: Arc<Notify>,
-    }
-
-    struct Reply {
-        gate: Option<Gate>,
-        result: Result<Incoming, TransportError>,
-    }
-
-    /// What the transport was sent.
-    #[derive(Debug, Clone, PartialEq)]
-    struct Seen {
-        route: String,
-        bearer: Option<String>,
-        body: Option<Value>,
-    }
-
-    /// A transport that answers each route from its script, in order, and
-    /// records what it was sent.
-    #[derive(Default)]
-    struct Scripted {
-        replies: Mutex<HashMap<String, VecDeque<Reply>>>,
-        seen: Mutex<Vec<Seen>>,
-    }
-
-    impl Scripted {
-        fn push(&self, route: &str, reply: Reply) {
-            self.replies
-                .lock()
-                .unwrap()
-                .entry(route.to_owned())
-                .or_default()
-                .push_back(reply);
-        }
-
-        fn on(&self, route: &str, result: Result<Incoming, TransportError>) {
-            self.push(route, Reply { gate: None, result });
-        }
-
-        fn held(&self, route: &str, incoming: Incoming) -> Gate {
-            let gate = Gate::default();
-            self.push(
-                route,
-                Reply {
-                    gate: Some(gate.clone()),
-                    result: Ok(incoming),
-                },
-            );
-            gate
-        }
-
-        fn seen(&self) -> Vec<Seen> {
-            self.seen.lock().unwrap().clone()
-        }
-
-        fn routes(&self) -> Vec<String> {
-            self.seen().into_iter().map(|seen| seen.route).collect()
-        }
-
-        fn bearers(&self, route: &str) -> Vec<Option<String>> {
-            self.seen()
-                .into_iter()
-                .filter(|seen| seen.route == route)
-                .map(|seen| seen.bearer)
-                .collect()
-        }
-    }
-
-    impl Transport for Scripted {
-        async fn send(&self, request: Outgoing) -> Result<Incoming, TransportError> {
-            let route = format!("{} {}", request.method, request.url.path());
-            self.seen.lock().unwrap().push(Seen {
-                route: route.clone(),
-                bearer: request
-                    .bearer
-                    .as_ref()
-                    .map(|token| token.expose_secret().to_owned()),
-                body: request
-                    .body
-                    .as_ref()
-                    .map(|body| serde_json::from_slice(body).unwrap()),
-            });
-            let reply = self
-                .replies
-                .lock()
-                .unwrap()
-                .get_mut(&route)
-                .and_then(VecDeque::pop_front);
-            let reply = reply.unwrap_or_else(|| panic!("no answer scripted for {route}"));
-            if let Some(gate) = reply.gate {
-                gate.arrived.notify_one();
-                gate.release.notified().await;
-            }
-            reply.result
         }
     }
 
