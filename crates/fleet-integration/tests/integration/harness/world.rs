@@ -1,9 +1,11 @@
 //! One case's world: its folder, its log, its ledger, the server and the
-//! Owner logged in to it, and what a case asks of them.
+//! Owner logged in to it, and what a case asks of them, the Owner's live
+//! events included (S58).
 
 use std::collections::{BTreeSet, HashSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use fleet_api_types::bots::BotResponse;
 use fleet_core::audit::{AuditAction, AuditTarget, RecordedTarget};
 use fleet_core::bot::{BotSnapshot, BotState};
 use fleet_core::id::BotId;
@@ -15,6 +17,7 @@ use tracing::subscriber::DefaultGuard;
 use super::agent::Agent;
 use super::client::Owner;
 use super::ledger::Ledger;
+use super::live::Live;
 use super::logs::Logs;
 use super::server::{Server, ServerOptions};
 
@@ -116,6 +119,35 @@ impl World {
             })
             .await;
         seen
+    }
+
+    /// Waits until the newest `bot` frame of `bot` on `live` meets
+    /// `condition` and equals what `GET /bots/{id}` answers the Owner at
+    /// that moment (ADR-0020, S58); returns it. Each frame gets one GET, at
+    /// the wake after it came, and only if it meets `condition`: a repeated
+    /// frame is just another one, and nothing polls the API.
+    pub(crate) async fn live_settles(
+        &self,
+        live: &Live,
+        bot: BotId,
+        what: &str,
+        condition: impl Fn(&BotResponse) -> bool,
+    ) -> BotResponse {
+        let mut settled = None;
+        self.logs
+            .until(what, async || match live.newest_bot_frame(bot) {
+                Some(frame) if condition(&frame) => {
+                    let shown = self.owner.shown(bot).await;
+                    let same = shown == frame;
+                    if same {
+                        settled = Some(frame);
+                    }
+                    same
+                }
+                _ => false,
+            })
+            .await;
+        settled.unwrap()
     }
 
     /// Waits until the server has recorded `count` entries of `action`.
