@@ -2583,7 +2583,6 @@ dependencies = [
  "base64 0.23.1",
  "chrono",
  "fleet-api-types",
- "fleet-client",
  "fleet-core",
  "fleet-server",
  "fleet-startup",

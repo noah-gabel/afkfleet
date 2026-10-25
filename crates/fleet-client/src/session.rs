@@ -116,8 +116,6 @@ use tracing::{debug, error, info, warn};
 
 use crate::client::LoginStep;
 use crate::error::{ApiFailure, ClientError, Unexpected};
-#[cfg(feature = "dev-console")]
-use crate::events::EventsHandshake;
 use crate::store::{SessionStore, StoreError, StoreOp};
 use crate::transport::{Incoming, Outgoing, Transport, TransportError, Upgrade, UpgradeRequest};
 use crate::url::ServerUrl;
@@ -1012,21 +1010,6 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
             .upgrade(request)
             .await
             .map_err(transport_error)
-    }
-
-    /// `POST /events/ticket`, and the socket's URL and bearer with it
-    /// (`dev-console` only; ADR-0020, U15).
-    #[cfg(feature = "dev-console")]
-    pub(crate) async fn events_handshake(self: &Arc<Self>) -> Result<EventsHandshake, ClientError> {
-        let answer = self
-            .authed(Method::POST, self.server.api(&["events", "ticket"]), None)
-            .await?;
-        let ticket: EventTicketResponse = expect_json(answer, 200)?;
-        // The token the ticket's request went with, or a newer one of the
-        // same session: the ticket belongs to the session.
-        let access = self.current_access().ok_or(ClientError::NoSession)?;
-        let url = self.server.events(ticket.ticket.expose());
-        Ok(EventsHandshake::new(url.as_str(), &access.token))
     }
 
     // ---- Sending ----

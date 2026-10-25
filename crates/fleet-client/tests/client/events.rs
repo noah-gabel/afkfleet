@@ -2,11 +2,10 @@
 //! S54) against the in-process server: `ready` first, a 4001 at the access
 //! token's end answered by a reconnect with a refreshed one, a revoked
 //! session ending it, the shutdown's 1001, the per-user cap's Retry-After,
-//! and a logout ending it at once; its `Debug` shows neither secret. And
-//! through serve's own wiring, each viewer's frame after each action equals
-//! what their `GET /bots/{id}` answers then (S32, S42).
-//!
-//! The handshake's tests stay until U15's removal (R80).
+//! and a logout ending it at once; neither its `Debug` nor any log line, at
+//! any level, shows a ticket or a token (S56). And through serve's own
+//! wiring, each viewer's frame after each action equals what their
+//! `GET /bots/{id}` answers then (S32, S42).
 
 use core::time::Duration;
 
@@ -15,20 +14,14 @@ use fleet_api_types::bots::{BotModeRequest, BotPatchRequest};
 use fleet_api_types::invites::CreateInviteRequest;
 use fleet_api_types::users::UserRole;
 use fleet_api_types::{BotId, ErrorCode, PageQuery, SecretText};
-use fleet_client::events::{Received, read};
 use fleet_client::{
-    Client, ClientConfig, ClientError, Disconnect, LiveEnd, LiveEvents, LiveUpdate, MemoryStore,
-    RefetchReason, Trust,
+    Client, ClientConfig, Disconnect, LiveEnd, LiveEvents, LiveUpdate, MemoryStore, RefetchReason,
+    Trust,
 };
 use fleet_core::mode::ModePreset;
 use fleet_testkit::log_capture;
-use futures_util::StreamExt as _;
-use secrecy::ExposeSecret as _;
 use serde_json::{Value, json};
 use tokio::time::timeout;
-use tokio_tungstenite::tungstenite::Message;
-use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
-use tokio_tungstenite::tungstenite::http::HeaderValue;
 
 use crate::bots::bot_of;
 use crate::relay::Relay;
@@ -221,85 +214,6 @@ async fn a_socket_without_a_session_ends_with_no_session() {
     let ended = next_update(&mut live).await;
 
     assert!(matches!(ended, Err(LiveEnd::NoSession)), "{ended:?}");
-    server.stop().await;
-}
-
-#[tokio::test]
-async fn a_handshake_names_the_ws_url_with_a_fresh_ticket_and_the_sessions_bearer() {
-    let server = Server::start().await;
-    let (owner, _, _) = server.owner().await;
-
-    let first = owner.events_handshake().await.unwrap();
-    let second = owner.events_handshake().await.unwrap();
-
-    let url = first.url().expose_secret();
-    let base = owner.server().as_str().replacen("http://", "ws://", 1);
-    let ticket = url
-        .strip_prefix(&format!("{base}api/v1/events?ticket="))
-        .unwrap_or_else(|| panic!("an events URL"));
-    assert!(ticket.starts_with("afk_wt_"));
-    assert_eq!(ticket.len(), 50);
-    assert_ne!(
-        url,
-        second.url().expose_secret(),
-        "each handshake mints its own"
-    );
-    assert!(
-        first
-            .authorization()
-            .expose_secret()
-            .starts_with("Bearer afk_at_")
-    );
-    let shown = format!("{first:?}");
-    assert!(!shown.contains(ticket), "{shown}");
-    assert!(!shown.contains("afk_at_"), "{shown}");
-    server.stop().await;
-}
-
-#[tokio::test]
-async fn a_handshake_opens_one_socket_whose_first_frame_is_ready() {
-    let server = Server::start().await;
-    let (owner, _, _) = server.owner().await;
-    let handshake = owner.events_handshake().await.unwrap();
-    let mut request = handshake
-        .url()
-        .expose_secret()
-        .into_client_request()
-        .unwrap();
-    request.headers_mut().insert(
-        "authorization",
-        HeaderValue::from_str(handshake.authorization().expose_secret()).unwrap(),
-    );
-
-    let (mut socket, _) = timeout(PATIENCE, tokio_tungstenite::connect_async(request))
-        .await
-        .unwrap()
-        .unwrap();
-    let first = timeout(PATIENCE, socket.next())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-
-    let Message::Text(text) = first else {
-        panic!("not a text frame: {first:?}");
-    };
-    assert!(matches!(read(&text), Received::Event(_)));
-    assert_eq!(text.as_str(), r#"{"type":"ready"}"#);
-    server.stop().await;
-}
-
-#[tokio::test]
-async fn a_handshake_without_a_session_is_no_session() {
-    let server = Server::start().await;
-    let (client, _) = server.client();
-
-    let refused = client.events_handshake().await;
-
-    assert!(
-        matches!(refused, Err(ClientError::NoSession)),
-        "{refused:?}"
-    );
     server.stop().await;
 }
 

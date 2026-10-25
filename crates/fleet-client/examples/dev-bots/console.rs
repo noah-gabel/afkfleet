@@ -10,19 +10,18 @@
 //! password again when the server wants it. `history` shows a bot's chat
 //! as the server sends it to this user: cleaned, a line break as ` | `, a
 //! command's arguments only for Manage holders (ADR-0020, S9, S11, U3).
-//! `events` prints the live events, one line each, until Enter (P11.5;
-//! ADR-0020, S37): never the socket's URL, its ticket or the token it
-//! opens with. `audit` shows a page of the audit log, `users` every user and
-//! `agents` every agent, for Admins and the Owner; `release` releases a
-//! disabled agent's bots, asking for the password again when the server
-//! wants it; `held` and `shared` show the review of a user's grants at a
-//! role change, the Owner's; `leave` gives up the user's own grant on a
-//! shared account, asking for the password again when the server wants it
-//! (P11.9; ADR-0020, R67, S51).
+//! `events` prints the live events, one line each, until Enter, over
+//! fleet-client's own socket, which reconnects by itself and keeps its
+//! ticket and token (P11.5, P11.8; ADR-0020, S37, S53). `audit` shows a page
+//! of the audit log, `users` every user and `agents` every agent, for Admins
+//! and the Owner; `release` releases a disabled agent's bots, asking for the
+//! password again when the server wants it; `held` and `shared` show the
+//! review of a user's grants at a role change, the Owner's; `leave` gives up
+//! the user's own grant on a shared account, asking for the password again
+//! when the server wants it (P11.9; ADR-0020, R67, S51).
 
 use core::fmt::Write as _;
 use core::pin::Pin;
-use core::time::Duration;
 use std::io;
 
 use fleet_api_types::accounts::{CreateOfflineAccountRequest, HeldGrantResponse};
@@ -39,17 +38,13 @@ use fleet_api_types::modes::{
     CreateModeRequest, ModeOwnership, ModeResponse, ModeVisibility, UpdateModeRequest,
 };
 use fleet_api_types::{
-    AccountId, BotId, ErrorCode, ErrorResponse, ModeId, PageQuery, SafeInt, SecretText, UserId,
+    AccountId, BotId, ErrorCode, ModeId, PageQuery, SafeInt, SecretText, UserId,
 };
-use fleet_client::events::{EventsHandshake, Received, SocketClose, read};
-use fleet_client::{Client, ClientError, LoginStep, SessionStore};
-use futures_util::StreamExt as _;
+use fleet_client::events::{Received, SocketClose};
+use fleet_client::{
+    Client, ClientError, Disconnect, LiveEnd, LiveUpdate, LoginStep, RefetchReason, SessionStore,
+};
 use secrecy::{ExposeSecret as _, SecretString};
-use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
-use tokio_tungstenite::tungstenite::http::HeaderValue;
-use tokio_tungstenite::tungstenite::http::header::AUTHORIZATION;
-use tokio_tungstenite::tungstenite::{Error as WsError, Message};
-use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, connect_async};
 
 /// Where the console reads and writes.
 pub(crate) trait Terminal {
@@ -373,7 +368,10 @@ async fn command_of<S: SessionStore>(
         Command::NewMode(json) => new_mode(client, &json, terminal).await,
         Command::EditMode(id, json) => edit_mode(client, id, &json, terminal).await,
         Command::DeleteMode(id) => delete_mode(client, id, terminal).await,
-        Command::Events => events(client, terminal).await,
+        Command::Events => {
+            events(client, terminal).await;
+            Ok(())
+        }
         Command::Users => users(client, terminal).await,
         Command::Audit(before) => audit(client, before, terminal).await,
         Command::Agents => agents(client, terminal).await,
@@ -1030,104 +1028,29 @@ fn describe(error: &ClientError) -> String {
     }
 }
 
-/// How long the live events socket's handshake may take.
-const EVENTS_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// How long the console's own close may take, after Enter.
-const EVENTS_CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
-
-/// `events`: the live events (P11.5; ADR-0020, S37), one line each, until
-/// Enter; when the server closes the socket first, its code and the
-/// approved reason, then Enter. Only over dev-server's plain http: the
-/// console's WebSocket client has no TLS until the app's own (P11.8). It
-/// never prints the URL, the ticket, the token, or the client library's
-/// error text, which could quote them.
-pub(crate) async fn events<S: SessionStore>(
-    client: &Client<S>,
-    terminal: &mut impl Terminal,
-) -> Result<(), ClientError> {
-    if client.server().as_str().starts_with("https:") {
-        terminal.say("events need dev-server's plain http until the app's own client (P11.8)");
-        return Ok(());
-    }
-    let handshake = client.events_handshake().await?;
-    let opened = open_events(&handshake).await;
-    drop(handshake);
-    let socket = match opened {
-        Ok(socket) => socket,
-        Err(said) => {
-            terminal.say(&said);
-            return Ok(());
-        }
-    };
+/// `events`: the live events (P11.5, P11.8; ADR-0020, S37, S53), one line
+/// each, until Enter, over fleet-client's own socket, which reconnects as
+/// the app's does: what to fetch again, each event, and each disconnect with
+/// its wait. It ends by itself only with the session or at a refused
+/// certificate, then waits for Enter. The ticket and the token never leave
+/// the client, so it can't print them.
+pub(crate) async fn events<S: SessionStore>(client: &Client<S>, terminal: &mut impl Terminal) {
+    let mut live = client.live_events();
     terminal.say("events: press Enter to stop");
-    let enter = terminal.enter();
-    watch_events(socket, enter, terminal).await;
-    Ok(())
-}
-
-/// The live events socket, as the console reads it.
-type EventsSocket = WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>;
-
-/// Opens the socket with `handshake`; on a failure, what the console says:
-/// the server's status and code at most.
-async fn open_events(handshake: &EventsHandshake) -> Result<EventsSocket, String> {
-    const COULDNT: &str = "the events socket couldn't open";
-    let mut request = handshake
-        .url()
-        .expose_secret()
-        .into_client_request()
-        .map_err(|_| COULDNT.to_owned())?;
-    let mut bearer = HeaderValue::from_str(handshake.authorization().expose_secret())
-        .map_err(|_| COULDNT.to_owned())?;
-    bearer.set_sensitive(true);
-    request.headers_mut().insert(AUTHORIZATION, bearer);
-    match tokio::time::timeout(EVENTS_CONNECT_TIMEOUT, connect_async(request)).await {
-        Ok(Ok((socket, _))) => Ok(socket),
-        Ok(Err(WsError::Http(response))) => {
-            let code = response
-                .body()
-                .as_deref()
-                .and_then(|body| serde_json::from_slice::<ErrorResponse>(body).ok())
-                .map(|error| error.error.code.as_str().to_owned())
-                .unwrap_or_default();
-            Err(format!(
-                "the events socket was refused: {} {code}",
-                response.status().as_u16()
-            ))
-        }
-        Ok(Err(_)) | Err(_) => Err(COULDNT.to_owned()),
-    }
-}
-
-/// Prints each event of `socket` until `enter`, or until the server closes
-/// it, then waits for `enter`.
-async fn watch_events(
-    mut socket: EventsSocket,
-    mut enter: Pin<Box<dyn Future<Output = io::Result<()>> + Send>>,
-    terminal: &mut impl Terminal,
-) {
+    let mut enter = terminal.enter();
     loop {
         tokio::select! {
-            // Both are cancel-safe: `next` loses no frame, and Enter's
-            // future is kept across turns.
+            // Both are cancel-safe: `recv` is, and Enter's future is kept
+            // across turns.
             _ = &mut enter => {
-                let _ = tokio::time::timeout(EVENTS_CLOSE_TIMEOUT, socket.close(None)).await;
-                terminal.say("events stopped");
+                live.close().await;
+                terminal.say(end_line(LiveEnd::Stopped));
                 return;
             }
-            frame = socket.next() => match frame {
-                Some(Ok(Message::Close(frame))) => {
-                    terminal.say(&closed_line(frame.map(|frame| u16::from(frame.code))));
-                    break;
-                }
-                Some(Ok(frame)) => {
-                    if let Some(line) = frame_line(&frame) {
-                        terminal.say(&line);
-                    }
-                }
-                Some(Err(_)) | None => {
-                    terminal.say("the events socket ended");
+            update = live.recv() => match update {
+                Ok(update) => terminal.say(&update_line(update)),
+                Err(end) => {
+                    terminal.say(end_line(end));
                     break;
                 }
             },
@@ -1137,15 +1060,44 @@ async fn watch_events(
     let _ = enter.await;
 }
 
-/// What the console prints for a frame other than a close: an event's line,
-/// a binary frame read as one that doesn't read (a resync, the protocol's
-/// second rule), and nothing for a ping or a pong, which tungstenite
-/// answers by itself.
-pub(crate) fn frame_line(frame: &Message) -> Option<String> {
-    match frame {
-        Message::Text(text) => Some(event_line(&read(text))),
-        Message::Binary(_) => Some(event_line(&Received::Unreadable)),
-        _ => None,
+/// One update of the live events socket, as the console shows it.
+pub(crate) fn update_line(update: LiveUpdate) -> String {
+    match update {
+        LiveUpdate::Refetch(reason) => {
+            let reason = match reason {
+                RefetchReason::Ready => "ready",
+                RefetchReason::Resync => "resync",
+                RefetchReason::Unreadable => "unreadable",
+            };
+            format!("fetch everything ({reason})")
+        }
+        LiveUpdate::Event(event) => event_line(&Received::Event(event)),
+        LiveUpdate::Disconnected { why, retry_in } => {
+            let why = match why {
+                Disconnect::Closed { code } => closed_line(code),
+                Disconnect::Lost => "the events socket was lost".to_owned(),
+                Disconnect::Silent => "the events socket went silent".to_owned(),
+                Disconnect::NotOpened(ClientError::Api(failure)) => format!(
+                    "the events socket was refused: {} {}",
+                    failure.status,
+                    failure.code.as_str()
+                ),
+                Disconnect::NotOpened(error) => {
+                    format!("the events socket couldn't open: {error}")
+                }
+            };
+            let seconds = retry_in.as_millis().div_ceil(1000);
+            format!("{why} (reconnecting in {seconds} s)")
+        }
+    }
+}
+
+/// How the live events socket ended, as the console says it.
+pub(crate) const fn end_line(end: LiveEnd) -> &'static str {
+    match end {
+        LiveEnd::Stopped => "events stopped",
+        LiveEnd::NoSession => "the session ended",
+        LiveEnd::Certificate => "the server's certificate was refused",
     }
 }
 

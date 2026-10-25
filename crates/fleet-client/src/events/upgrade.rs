@@ -30,7 +30,7 @@ pub(crate) const MAX_EVENT_FRAME: usize = MAX_RESPONSE_BYTES;
 /// with the session's `bearer` and a fresh `Sec-WebSocket-Key`.
 pub(crate) fn request(server: &ServerUrl, ticket: &str, bearer: SecretString) -> UpgradeRequest {
     UpgradeRequest {
-        url: server.upgrade(ticket),
+        url: server.events(ticket),
         bearer,
         key: generate_key(),
     }

@@ -11,19 +11,11 @@
 //!   memory, the refresh token only in a [`SessionStore`] (the OS keychain in
 //!   the app), and the password step's mfa or setup token only in its
 //!   memory. Methods take codes, never tokens, and nothing the client
-//!   returns, logs or formats holds one.
-//!   *One exception, for the dev console alone* (ADR-0020, U15, R16): with
-//!   the non-default `dev-console` feature, `Client::events_handshake`
-//!   hands the live events socket's handshake, the session's access token
-//!   as its `Authorization` value, to `just dev-bots`' `events`. That
-//!   example and this crate's tests enable it, through the crate's
-//!   dev-dependency on itself; so do the lint and workspace-wide test
-//!   builds, since `just clippy` passes `--all-features` and cargo unifies
-//!   the dev-dependency's feature into the one fleet-client every member's
-//!   tests link. The desktop app's own build never has it, so the app can't
-//!   call it: `just tauri-check` reads its resolved features and fails if
-//!   it ever does. P11.8 opens the socket inside the client, and removes the
-//!   feature and this exception.
+//!   returns, logs or formats holds one. The live events socket opens inside
+//!   the client too ([`LiveEvents`]): its tickets and the access token it
+//!   upgrades with stay there (ADR-0020, U25, S53, R80). The crate has no
+//!   features, and `just tauri-check` fails if the desktop app's build ever
+//!   resolves one (S57).
 //! - **One refresh at a time, and only on a 401 `unauthorized` from an
 //!   authenticated route** (ADR-0016). A request whose token a refresh
 //!   already replaced is retried once with the current one instead. An

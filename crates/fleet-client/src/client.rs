@@ -40,8 +40,6 @@ use fleet_api_types::{
 };
 
 use crate::error::{BuildError, ClientError};
-#[cfg(feature = "dev-console")]
-use crate::events::EventsHandshake;
 use crate::events::LiveEvents;
 use crate::session::{BotCall, Core};
 use crate::store::SessionStore;
@@ -842,23 +840,6 @@ impl<S: SessionStore> Client<S> {
     #[must_use]
     pub fn live_events(&self) -> LiveEvents<S> {
         LiveEvents::new(Arc::clone(&self.core))
-    }
-
-    /// `POST /events/ticket`, and what the live events socket opens with:
-    /// its URL with the ticket, and the `Authorization` value of the session
-    /// the ticket belongs to (P11.5; ADR-0020, S28). The one exception to
-    /// the crate's token rule, approved for the dev console alone (U15, R16):
-    /// only with the non-default `dev-console` feature, which `just dev-bots`
-    /// and this crate's tests enable and the desktop app never has
-    /// (`just tauri-check`). P11.8 opens the socket inside the client and
-    /// removes it. A ticket is single-use and lives 30 s, so ask for a new
-    /// handshake before every connect.
-    ///
-    /// # Errors
-    /// As for every authenticated call.
-    #[cfg(feature = "dev-console")]
-    pub async fn events_handshake(&self) -> Result<EventsHandshake, ClientError> {
-        self.core.events_handshake().await
     }
 }
 
