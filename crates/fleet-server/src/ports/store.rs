@@ -18,7 +18,7 @@ use super::invites::{InviteReads, InviteWrites};
 use super::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
 use super::mfa::{MfaReads, MfaWrites};
 use super::modes::{ModeReads, ModeWrites};
-use super::retention::{RetentionReads, RetentionWrites};
+use super::retention::{RetentionBatch, RetentionReads};
 use super::sessions::{SessionReads, SessionWrites};
 use super::users::{UserReads, UserWrites};
 
@@ -67,6 +67,17 @@ pub trait Store: Send + Sync + fmt::Debug {
     /// [`StoreError::Busy`] when the write connection stays taken for the
     /// acquire timeout, or [`StoreError::Backend`].
     async fn write(&self) -> Result<Box<dyn WriteTx>, StoreError>;
+
+    /// Starts one batch of the retention task (U20, R57): a write
+    /// transaction of its own on the one write connection, taking the write
+    /// lock at once as [`Store::write`] does, that can only delete what the
+    /// retention deletes and commit without an audit entry. Only
+    /// `app::retention` calls it; a test reads the server's sources for any
+    /// other caller.
+    ///
+    /// # Errors
+    /// As [`Store::write`].
+    async fn retention_batch(&self) -> Result<Box<dyn RetentionBatch>, StoreError>;
 
     /// The users, read through the read connections.
     fn users(&self) -> &dyn UserReads;
@@ -145,7 +156,8 @@ pub trait Store: Send + Sync + fmt::Debug {
 /// **Every commit is audited.** [`WriteTx::commit`] takes the entry that
 /// describes the change, so a change can't be committed without one. The
 /// only exceptions are the named [`UnauditedWrite`]s, committed with
-/// [`WriteTx::commit_unaudited`].
+/// [`WriteTx::commit_unaudited`], and the retention's batches, which have a
+/// transaction of their own ([`Store::retention_batch`]).
 #[async_trait]
 pub trait WriteTx: Send {
     /// The users, written in this transaction.
@@ -192,9 +204,6 @@ pub trait WriteTx: Send {
     /// The audit log, for a second entry in this transaction.
     fn audit(&mut self) -> &mut dyn AuditWrites;
 
-    /// The retention's deletes, for one batch in this transaction (U20).
-    fn retention(&mut self) -> &mut dyn RetentionWrites;
-
     /// Records `entry`, then commits everything.
     ///
     /// # Errors
@@ -211,8 +220,10 @@ pub trait WriteTx: Send {
 }
 
 /// A write that commits without an audit entry. Each variant is a named
-/// exemption with its own ADR note (ADR-0015, ADR-0016, ADR-0019, ADR-0020), never free text, so
-/// review sees every new one.
+/// exemption with its own ADR note (ADR-0015, ADR-0016, ADR-0019), never
+/// free text, so review sees every new one. The retention's batches are the
+/// other exemption, a transaction of their own ([`Store::retention_batch`];
+/// ADR-0020, U20, R57).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnauditedWrite {
     /// A session's `last_used_at`, written by an authenticated request at
@@ -242,17 +253,4 @@ pub enum UnauditedWrite {
     /// and one per row would let agent-driven volume flood the log; who
     /// could report for which bot, and when, is audited already.
     EventBatch,
-    /// One batch of the server's retention task (P11.6; ADR-0020, U20, S45,
-    /// S46): at most 1000 rows of one table, deleted, never inserted or
-    /// updated: the replaced refresh tokens of sessions whose `created_at`
-    /// plus the current absolute lifetime has passed, then those sessions;
-    /// chat lines older than `[chat] retention_days` or past a bot's bound;
-    /// audit entries as a prefix by ID, below the first one dated after the
-    /// audit cut; unused invites and enrollment tokens that expired at or
-    /// before it. Only the retention task commits it, every 60 s, each batch
-    /// its own short transaction. An entry per batch would say only that rows
-    /// the policy removes were removed, and would follow the ingest's volume;
-    /// instead one `retention.purge` entry, counts and cut-offs and never
-    /// text, sums up every hour that deleted anything, and the stop.
-    RetentionPurge,
 }

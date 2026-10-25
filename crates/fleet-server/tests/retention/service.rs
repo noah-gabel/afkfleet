@@ -17,7 +17,7 @@ use fleet_core::id::BotId;
 use fleet_core::retention::{AuditRetention, ChatBound, ChatRetention, RetentionPolicy};
 use fleet_core::system::SecureRandom as _;
 use fleet_server::app::retention::{
-    Deleted, Phase, RetentionService, Run, STOP_WAIT, SummaryError, Tally,
+    CLOCK_SLACK, Deleted, Phase, RetentionService, Run, STOP_WAIT, SummaryError, Tally,
 };
 use fleet_server::infra::sqlite::Database;
 use fleet_server::ports::audit::{AuditEntryId, AuditLimit, AuditPage};
@@ -28,9 +28,9 @@ use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio_util::sync::CancellationToken;
 
 use super::fixtures::{
-    T0, add_bot, add_invite, add_session, add_token, add_user, at, clear_chat, database, days,
-    entries, entry_ids, invite_ids, line_ids, lines, millis, rotations, rotations_of, session_ids,
-    token_ids, users_lines,
+    T0, add_account_bot, add_bot, add_invite, add_session, add_token, add_user, at, clear_chat,
+    database, days, entries, entry_ids, invite_ids, line_ids, lines, millis, rotations,
+    rotations_of, session_ids, setup_entry, token_ids, users_lines,
 };
 use super::watched::{Failure, WatchedStore};
 
@@ -69,8 +69,8 @@ pub(crate) fn service(
         Arc::new(store.clone()),
         policy,
         SessionPolicy::default(),
-        pause,
     )
+    .with_pause(pause)
 }
 
 /// Where a run at [`now`] by [`policy`] cuts chat, sessions and the audit log.
@@ -377,15 +377,16 @@ async fn a_waiting_ingest_tick_commits_between_two_batches(
     };
     assert_eq!(run.deleted.chat_by_age, 2500);
     assert!(
-        position("commit RetentionPurge", 0) < position("commit EventBatch", 0)
+        position("commit retention batch", 0) < position("commit EventBatch", 0)
             && position("commit EventBatch", 0) < position("delete chat_by_age 1000", 1),
         "{log:?}"
     );
     db.close().await;
 }
 
-/// Chat's second batch fails to get its write: the first batch stays, the phase is named in one `warn`, the later phases still
-/// run, and the next run deletes the rest. Once for a busy store, once for
+/// Chat's second batch fails to get its write: the first batch stays, the
+/// phase is named in one `warn`, the later phases still run, and the next
+/// run deletes the rest. Once for a busy store, once for
 /// a failing one.
 #[sqlx::test(migrations = false)]
 async fn a_run_that_fails_midway_keeps_its_batches_and_goes_on(
@@ -426,6 +427,245 @@ async fn a_run_that_fails_midway_keeps_its_batches_and_goes_on(
         2,
         "one warn per failed phase, naming it"
     );
+    db.close().await;
+}
+
+/// The stop right after the audit cut was read, before its first batch:
+/// the run reports no audit entry deleted, and none through any ID, while
+/// the log holds every one (R59).
+#[sqlx::test(migrations = false)]
+async fn a_stop_before_the_audits_first_batch_reports_nothing_deleted_through_it(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    entries(&db, 5, audit_cut()).await;
+    add_user(&db, 1).await;
+    let before = entry_ids(&db).await;
+    let store = WatchedStore::new(db.clone());
+    let retention = service(&store, now(), policy(), Duration::ZERO);
+    let stop = CancellationToken::new();
+    let mut held = store.hold_next_audit_cut();
+
+    let stopping = stop.clone();
+    let running = tokio::spawn(async move { retention.run_once(&stopping).await });
+    held.reached(PATIENCE).await;
+    stop.cancel();
+    held.release();
+    let run = tokio::time::timeout(PATIENCE, running)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(run.stopped);
+    assert_eq!(run.deleted.audit_entries, 0);
+    assert_eq!(run.audit_through, None);
+    assert_eq!(entry_ids(&db).await, before);
+    db.close().await;
+}
+
+/// The audit phase's second batch fails to get its write: the run reports
+/// the first batch's last entry as the highest gone, the one the log no
+/// longer holds, not the cut it read (R59).
+#[sqlx::test(migrations = false)]
+async fn an_audit_phase_that_fails_after_a_batch_reports_the_last_entry_it_deleted(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    entries(&db, 2500, audit_cut()).await;
+    add_user(&db, 1).await;
+    let ids = entry_ids(&db).await;
+    let store = WatchedStore::new(db.clone());
+    let retention = service(&store, now(), policy(), Duration::ZERO);
+    let mut held = store.hold_next_delete("audit");
+
+    let running = tokio::spawn(async move { run(&retention).await });
+    held.reached(PATIENCE).await;
+    store.fail_write(1, Failure::Backend);
+    held.release();
+    let run = tokio::time::timeout(PATIENCE, running)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(run.failed, [Phase::Audit]);
+    assert_eq!(run.deleted.audit_entries, 1000);
+    assert_eq!(run.audit_through, Some(AuditEntryId::new(ids[999])));
+    assert_eq!(entry_ids(&db).await.first(), Some(&ids[1000]));
+    db.close().await;
+}
+
+/// An audit entry dated two days ahead, after a clock was set back: the
+/// prefix stops there, so the due entries after it stay, and two runs warn
+/// once that it holds the log up (R60).
+#[sqlx::test(migrations = false)]
+async fn an_audit_entry_dated_in_the_future_warns_once_that_the_log_keeps_what_follows(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    log_capture::install().unwrap();
+    let db = database(options).await;
+    entries(&db, 2, audit_cut()).await;
+    entries(&db, 1, now() + days(2)).await;
+    entries(&db, 2, audit_cut()).await;
+    let ids = entry_ids(&db).await;
+    let store = WatchedStore::new(db.clone());
+    let retention = service(&store, now(), policy(), Duration::ZERO);
+
+    let first = run(&retention).await;
+    let second = run(&retention).await;
+
+    assert_eq!(first.deleted.audit_entries, 2);
+    assert_eq!(second.deleted.audit_entries, 0);
+    assert_eq!(entry_ids(&db).await, ids[2..]);
+    assert_eq!(
+        log_capture::count("fleet_server::app::retention", "dated in the future"),
+        1
+    );
+    db.close().await;
+}
+
+/// An audit entry dated an hour ahead at most, as a clock's small
+/// correction leaves one: no `warn` (R60).
+#[sqlx::test(migrations = false)]
+async fn an_audit_entry_at_most_an_hour_ahead_warns_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    log_capture::install().unwrap();
+    let db = database(options).await;
+    entries(&db, 1, audit_cut()).await;
+    entries(&db, 1, now() + CLOCK_SLACK).await;
+    let store = WatchedStore::new(db.clone());
+    let retention = service(&store, now(), policy(), Duration::ZERO);
+
+    let run = run(&retention).await;
+
+    assert_eq!(run.deleted.audit_entries, 1);
+    assert_eq!(
+        log_capture::count("fleet_server::app::retention", "dated in the future"),
+        0
+    );
+    db.close().await;
+}
+
+/// Two bots' accounts are deleted while the size phase reads the first
+/// one's cut: the first loses its lines between its cut and its batch, the
+/// next before its cut is read. Neither fails the phase, and the third
+/// bot's lines past the bound still go.
+#[sqlx::test(migrations = false)]
+async fn a_bot_deleted_during_the_size_phase_never_fails_it(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let user = add_user(&db, 1).await;
+    let (first_account, first) = add_account_bot(&db, user, 1).await;
+    let (next_account, next) = add_account_bot(&db, user, 2).await;
+    let kept = add_bot(&db, user, 3).await;
+    for bot in [first, next, kept] {
+        lines(&db, bot, 150, now()).await;
+    }
+    let store = WatchedStore::new(db.clone());
+    let retention = service(&store, now(), policy(), Duration::ZERO);
+    let mut held = store.hold_next_chat_cut();
+
+    let running = tokio::spawn(async move { run(&retention).await });
+    held.reached(PATIENCE).await;
+    let mut tx = db.write().await.unwrap();
+    for account in [first_account, next_account] {
+        assert!(
+            tx.accounts()
+                .delete(account, now())
+                .await
+                .unwrap()
+                .is_some()
+        );
+    }
+    tx.commit(setup_entry()).await.unwrap();
+    held.release();
+    let run = tokio::time::timeout(PATIENCE, running)
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(run.failed, Vec::new());
+    assert_eq!(run.deleted.chat_by_size, 50);
+    assert_eq!(line_ids(&db, kept).await.len(), 100);
+    assert_eq!(line_ids(&db, first).await, Vec::<i64>::new());
+    db.close().await;
+}
+
+/// The stop while the first bot's cut is read, that bot within its bound:
+/// the run stops before the next bot, whose cut it never reads.
+#[sqlx::test(migrations = false)]
+async fn the_stop_before_a_bot_reads_none_of_its_lines(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let user = add_user(&db, 1).await;
+    let within = add_bot(&db, user, 1).await;
+    let past = add_bot(&db, user, 2).await;
+    lines(&db, within, 10, now()).await;
+    lines(&db, past, 150, now()).await;
+    let store = WatchedStore::new(db.clone());
+    let retention = service(&store, now(), policy(), Duration::ZERO);
+    let stop = CancellationToken::new();
+    let mut held = store.hold_next_chat_cut();
+
+    let stopping = stop.clone();
+    let running = tokio::spawn(async move { retention.run_once(&stopping).await });
+    held.reached(PATIENCE).await;
+    stop.cancel();
+    held.release();
+    let run = tokio::time::timeout(PATIENCE, running)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let log = store.log();
+    assert!(run.stopped);
+    assert_eq!(
+        log.iter().filter(|line| *line == "read chat cut").count(),
+        1,
+        "{log:?}"
+    );
+    assert_eq!(line_ids(&db, past).await.len(), 150);
+    db.close().await;
+}
+
+/// The stop while chat by age deletes nothing: the run stops before the
+/// size phase, which reads nothing.
+#[sqlx::test(migrations = false)]
+async fn the_stop_before_a_phase_reads_nothing_of_it(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let user = add_user(&db, 1).await;
+    let bot = add_bot(&db, user, 1).await;
+    lines(&db, bot, 150, now()).await;
+    let store = WatchedStore::new(db.clone());
+    let retention = service(&store, now(), policy(), Duration::ZERO);
+    let stop = CancellationToken::new();
+    let mut held = store.hold_next_delete("chat_by_age");
+
+    let stopping = stop.clone();
+    let running = tokio::spawn(async move { retention.run_once(&stopping).await });
+    held.reached(PATIENCE).await;
+    stop.cancel();
+    held.release();
+    let run = tokio::time::timeout(PATIENCE, running)
+        .await
+        .unwrap()
+        .unwrap();
+
+    let log = store.log();
+    assert!(run.stopped);
+    assert!(!log.iter().any(|line| line.starts_with("read")), "{log:?}");
+    assert_eq!(line_ids(&db, bot).await.len(), 150);
     db.close().await;
 }
 
@@ -568,7 +808,10 @@ async fn the_summary_records_every_key_with_the_runs_sums(
         });
     }
 
-    retention.record(&tally).await.unwrap();
+    retention
+        .record(&tally, &CancellationToken::new())
+        .await
+        .unwrap();
 
     let page = AuditPage {
         before: None,

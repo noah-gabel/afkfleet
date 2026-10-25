@@ -13,8 +13,10 @@
 //!   ones seeded with fixed IDs (P11.1).
 //! - [`chat`]: the bots' chat log, what they received and what their modes
 //!   sent; append-only (P11.1, P10.8).
-//! - [`retention`]: what the retention task deletes, the only deletes of
-//!   chat and the audit log, and the reads of where it cuts (P11.6).
+//! - [`retention`]: what the retention task deletes, in a transaction of
+//!   its own, and the reads of where it cuts (P11.6): the only deletes of
+//!   the audit log, and of chat but for an account's deletion, which takes
+//!   its bot's chat with it.
 //! - [`agents`]: the enrolled agents and the certificates the server signed
 //!   for them (P10.2, P10.3).
 //! - [`agent_connections`]: what an agent's `Connect` stream asks the app:

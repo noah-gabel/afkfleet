@@ -16,6 +16,7 @@ use chrono::TimeDelta;
 use fleet_server::infra::sqlite::Database;
 use fleet_server::ports::audit::AuditEntryId;
 use fleet_server::ports::chat::ChatMessageId;
+use fleet_server::ports::retention::{AuditCut, KeptEntry};
 use fleet_server::ports::store::Store;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 
@@ -193,9 +194,21 @@ async fn the_audit_log_goes_as_a_prefix_so_a_clock_step_back_keeps_entries(
     }
     let ids = entry_ids(&db).await;
 
-    let through = db.retention().audit_cut(cut).await.unwrap().unwrap();
+    let through = db
+        .retention()
+        .audit_cut(cut)
+        .await
+        .unwrap()
+        .unwrap()
+        .through;
     let counts = drain(&db, BATCH, |writes, limit| {
-        Box::pin(async move { writes.delete_audit_through(through, limit).await.unwrap() })
+        Box::pin(async move {
+            writes
+                .delete_audit_through(through, limit)
+                .await
+                .map(|purged| purged.count)
+                .unwrap()
+        })
     })
     .await;
 
@@ -205,8 +218,9 @@ async fn the_audit_log_goes_as_a_prefix_so_a_clock_step_back_keeps_entries(
     db.close().await;
 }
 
-/// The audit cut: below the first entry when that one is newer; the last
-/// entry when every one is due; none for an empty log.
+/// The audit cut: below the first entry when that one is newer, which it
+/// names with its date; the last entry when every one is due; none for an
+/// empty log.
 #[sqlx::test(migrations = false)]
 async fn the_audit_cut_is_below_a_newer_first_entry_and_the_last_when_all_are_due(
     _pool: SqlitePoolOptions,
@@ -222,8 +236,23 @@ async fn the_audit_cut_is_below_a_newer_first_entry_and_the_last_when_all_are_du
     let all_due = db.retention().audit_cut(cut + days(1)).await.unwrap();
 
     assert_eq!(empty, None);
-    assert_eq!(all_kept, Some(AuditEntryId::new(ids[0] - 1)));
-    assert_eq!(all_due, Some(AuditEntryId::new(ids[1])));
+    assert_eq!(
+        all_kept,
+        Some(AuditCut {
+            through: AuditEntryId::new(ids[0] - 1),
+            first_kept: Some(KeptEntry {
+                id: AuditEntryId::new(ids[0]),
+                at: cut + millis(1),
+            }),
+        })
+    );
+    assert_eq!(
+        all_due,
+        Some(AuditCut {
+            through: AuditEntryId::new(ids[1]),
+            first_kept: None,
+        })
+    );
     db.close().await;
 }
 
@@ -234,10 +263,22 @@ async fn audit_entries_go_in_batches(_pool: SqlitePoolOptions, options: SqliteCo
     let cut = at(T0) + days(100);
     entries(&db, 2001, cut).await;
     entries(&db, 3, cut + millis(1)).await;
-    let through = db.retention().audit_cut(cut).await.unwrap().unwrap();
+    let through = db
+        .retention()
+        .audit_cut(cut)
+        .await
+        .unwrap()
+        .unwrap()
+        .through;
 
     let counts = drain(&db, BATCH, |writes, limit| {
-        Box::pin(async move { writes.delete_audit_through(through, limit).await.unwrap() })
+        Box::pin(async move {
+            writes
+                .delete_audit_through(through, limit)
+                .await
+                .map(|purged| purged.count)
+                .unwrap()
+        })
     })
     .await;
 
@@ -478,7 +519,13 @@ async fn each_delete_touches_only_its_own_table(
     let _ = agent;
     // The newest 2 of 6 stay: lines 1 to 4 are past the bound.
     let chat_cut = db.retention().chat_cut(bot, 2).await.unwrap().unwrap();
-    let audit_cut = db.retention().audit_cut(cut).await.unwrap().unwrap();
+    let audit_cut = db
+        .retention()
+        .audit_cut(cut)
+        .await
+        .unwrap()
+        .unwrap()
+        .through;
     let before = counts(&db).await;
 
     let mut seen = Vec::new();
@@ -492,7 +539,10 @@ async fn each_delete_touches_only_its_own_table(
                     // Lines 1 and 2: the size cut finds 3 and 4 left.
                     Kind::ChatByAge => writes.delete_chat_received_by(cut, 2).await,
                     Kind::ChatBySize => writes.delete_chat_through(bot, chat_cut, BATCH).await,
-                    Kind::Audit => writes.delete_audit_through(audit_cut, BATCH).await,
+                    Kind::Audit => writes
+                        .delete_audit_through(audit_cut, BATCH)
+                        .await
+                        .map(|purged| purged.count),
                     Kind::Invites => writes.delete_unused_invites(cut, BATCH).await,
                     Kind::Tokens => writes.delete_unused_enrollment_tokens(cut, BATCH).await,
                 }

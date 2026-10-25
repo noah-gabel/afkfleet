@@ -579,8 +579,8 @@ impl Viewer {
     /// Judges the events taken on rights a commit outran, in order and after
     /// everything taken before them, now that the gate read the rights again:
     /// until [`MERGE_MAX`] of them made or joined something to send, or
-    /// another commit outran the rights; the rest wait for the next turn
-    /// (R47, R48).
+    /// another commit outran the rights; the rest wait until what this
+    /// replay made went out (R47, R48, R61).
     fn replay(&mut self) {
         let mut counted = 0_usize;
         while counted < MERGE_MAX {
@@ -637,6 +637,9 @@ impl Project for Viewer {
     }
 
     async fn next(&mut self) -> Result<Step, Unprojected> {
+        // A replay makes slots only once those of the last one went out, so
+        // the slots hold at most one wake's worth, whatever waits (R61).
+        let sent = self.slots.is_empty();
         if !self.gate().await? {
             return Ok(Step::Nothing);
         }
@@ -648,7 +651,9 @@ impl Project for Viewer {
         }
         // Right after the gate, before the bots it found joined are read: a
         // waiting hint of one of them merges into that read, so it comes once.
-        self.replay();
+        if sent {
+            self.replay();
+        }
         match self.slots.pop_front() {
             None => Ok(Step::Nothing),
             Some(Slot::Removed(bot)) => Ok(Step::Send(Box::new(EventMessage::bot_removed(bot)))),
@@ -812,6 +817,58 @@ mod tests {
         assert_eq!(slots, [(first, true), (second, true)]);
         assert_eq!(viewer.slots.len(), 2);
         assert!(taken.iter().all(|taken| *taken == Taken::Counted));
+        drop(viewer);
+        db.close().await;
+    }
+
+    /// 200 mode events wait unjudged, as taken on rights a commit outran:
+    /// a replay makes at most `MERGE_MAX` slots, and the next one waits
+    /// until they went out, turn by turn, so the slots never hold more than
+    /// one wake's worth (R61), and every event is judged in the end.
+    #[tokio::test]
+    async fn a_replay_adds_at_most_merge_max_slots_until_they_are_sent() {
+        let dir = tempfile::tempdir().unwrap();
+        let owner = UserId::new_v7(at(), [1; 10]).unwrap();
+        let (mut viewer, db) = viewer(
+            &dir,
+            Actor {
+                id: owner,
+                role: Role::Owner,
+            },
+        )
+        .await;
+        viewer.rights = Arc::new(Rights::new(
+            0,
+            Access {
+                bots: Vec::new(),
+                grants: Vec::new(),
+                users: vec![UserAccess {
+                    user: owner,
+                    role: Role::Owner,
+                    enabled: true,
+                }],
+            },
+        ));
+        for n in 0..200_u8 {
+            viewer
+                .unjudged
+                .push_back(Arc::new(BusEvent::Mode(ModeEvent {
+                    id: ModeId::new_v7(at(), [n; 10]).unwrap(),
+                    was: None,
+                })));
+        }
+
+        let mut most = 0;
+        let mut turns = 0;
+        while viewer.has_work() && turns < 1000 {
+            viewer.next().await.unwrap();
+            most = most.max(viewer.slots.len());
+            turns += 1;
+        }
+
+        assert!(most < MERGE_MAX, "the slots held {most}");
+        assert!(!viewer.has_work(), "every event judged and sent");
+        assert_eq!(turns, 200, "one slot a turn");
         drop(viewer);
         db.close().await;
     }

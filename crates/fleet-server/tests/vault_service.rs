@@ -42,7 +42,7 @@ use fleet_server::ports::invites::InviteReads;
 use fleet_server::ports::login_attempts::LoginAttemptReads;
 use fleet_server::ports::mfa::{MfaReads, UserMfa};
 use fleet_server::ports::modes::ModeReads;
-use fleet_server::ports::retention::RetentionReads;
+use fleet_server::ports::retention::{RetentionBatch, RetentionReads};
 use fleet_server::ports::sessions::SessionReads;
 use fleet_server::ports::store::{Store, StoreError, WriteTx};
 use fleet_server::ports::users::{NewUser, PasswordHash, UserReads};
@@ -191,6 +191,10 @@ impl Store for HookedStore {
 
     fn retention(&self) -> &dyn RetentionReads {
         self.inner.retention()
+    }
+
+    async fn retention_batch(&self) -> Result<Box<dyn RetentionBatch>, StoreError> {
+        self.inner.retention_batch().await
     }
 
     async fn ping(&self) -> Result<(), StoreError> {

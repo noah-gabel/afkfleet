@@ -1,6 +1,7 @@
-//! The retention task (ADR-0020, U20, R52, R53, R54): it records one
+//! The retention task (ADR-0020, U20, R52, R53, R54, R58): it records one
 //! `retention.purge` entry after its runs once they deleted something, and
-//! one at the stop; a summary that fails keeps its counts for the next try;
+//! one at the stop; a summary waiting for the write connection never holds
+//! up the stop; a summary that fails keeps its counts for the next try;
 //! and its logs carry counts, never a line's text or its sender. Real time,
 //! with intervals of milliseconds; every wait is bounded and wakes on the
 //! commit count.
@@ -9,7 +10,7 @@ use core::time::Duration;
 
 use fleet_core::audit::{AuditAction, RecordedValue};
 use fleet_core::id::BotId;
-use fleet_server::app::retention::RetentionTimings;
+use fleet_server::app::retention::{RetentionTimings, STOP_WAIT};
 use fleet_server::cli::retention::Retention;
 use fleet_server::infra::sqlite::Database;
 use fleet_server::ports::audit::{AuditLimit, AuditPage, AuditRecord};
@@ -130,6 +131,35 @@ async fn the_task_sums_up_at_the_stop_what_it_deleted_since(
     stop.cancel();
     timeout(PATIENCE, running).await.unwrap().unwrap();
 
+    let entries = summaries(&db).await;
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(int(&entries[0], "chat_by_size"), 50);
+    db.close().await;
+}
+
+/// The hourly summary waits for the write connection, which stays taken,
+/// when the stop comes: it gives up at once, and the stop's own summary,
+/// which waits at most [`STOP_WAIT`], records the same counts once, so the
+/// task ends within about a second (R53, R58).
+#[sqlx::test(migrations = false)]
+async fn a_summary_waiting_for_the_write_connection_never_holds_up_the_stop(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let (store, _) = fleet(&db).await;
+    let mut held = store.hold_next_write();
+    let stop = CancellationToken::new();
+
+    let running = tokio::spawn(task(&store, 1).run(stop.clone()));
+    held.reached(PATIENCE).await;
+    stop.cancel();
+    let ended = timeout(STOP_WAIT + Duration::from_secs(1), running).await;
+    drop(held);
+
+    ended
+        .expect("the task ends within the stop's wait")
+        .unwrap();
     let entries = summaries(&db).await;
     assert_eq!(entries.len(), 1, "{entries:?}");
     assert_eq!(int(&entries[0], "chat_by_size"), 50);
