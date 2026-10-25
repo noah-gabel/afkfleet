@@ -134,7 +134,6 @@ const fn refusal(refused: Refused, request: Request) -> Action {
         Refused::Unreachable | Refused::TimedOut | Refused::Local => {
             Action::Backoff { retry_after: None }
         }
-        Refused::Malformed => Action::Slow,
         Refused::Status {
             status: 429 | 503,
             retry_after,
@@ -148,9 +147,9 @@ const fn refusal(refused: Refused, request: Request) -> Action {
             status: 408 | 500..=599,
             ..
         } => Action::Backoff { retry_after: None },
-        // A server without the route, a proxy's answer, a refusal that
-        // won't change in seconds.
-        Refused::Status { .. } => Action::Slow,
+        // An answer that doesn't read, a server without the route, a
+        // proxy's answer, a refusal that won't change in seconds.
+        Refused::Malformed | Refused::Status { .. } => Action::Slow,
     }
 }
 
@@ -384,7 +383,10 @@ mod tests {
             backoff.after(End::Lost, None);
         }
 
-        let short = backoff.after(End::Lost, Some(STABLE_AFTER - Duration::from_millis(1)));
+        let short = backoff.after(
+            End::Lost,
+            Some(STABLE_AFTER.checked_sub(Duration::from_millis(1)).unwrap()),
+        );
         let stable = backoff.after(End::Lost, Some(STABLE_AFTER));
 
         assert!(within(short, 15, 30), "{short:?}");

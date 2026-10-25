@@ -65,6 +65,7 @@ mod transport;
 
 pub use client::{Client, ClientConfig, LoginStep};
 pub use error::{ApiFailure, BuildError, ClientError, Unexpected};
+pub use events::{Disconnect, LiveEnd, LiveEvents, LiveStop, LiveUpdate, RefetchReason};
 pub use link::{VerifiedLink, VerifiedLinkError};
 pub use store::{MemoryStore, SessionStore, StoreError, StoreOp};
 pub use trust::{CaError, CustomCa, Trust};

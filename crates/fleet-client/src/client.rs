@@ -42,6 +42,7 @@ use fleet_api_types::{
 use crate::error::{BuildError, ClientError};
 #[cfg(feature = "dev-console")]
 use crate::events::EventsHandshake;
+use crate::events::LiveEvents;
 use crate::session::{BotCall, Core};
 use crate::store::SessionStore;
 use crate::transport::{ReqwestTransport, Timeouts};
@@ -831,6 +832,16 @@ impl<S: SessionStore> Client<S> {
     /// error as for every authenticated call.
     pub async fn delete_mode(&self, id: ModeId) -> Result<(), ClientError> {
         self.core.delete_mode(id).await
+    }
+
+    /// The live events socket of this client's session (P11.8; ADR-0020,
+    /// U25, S53): a [`LiveEvents`] its caller drives with `recv`, which
+    /// asks for a new ticket at every connect and reconnects by the
+    /// socket's policy. Nothing happens until the first `recv`. Neither the
+    /// ticket nor the access token ever leaves the client.
+    #[must_use]
+    pub fn live_events(&self) -> LiveEvents<S> {
+        LiveEvents::new(Arc::clone(&self.core))
     }
 
     /// `POST /events/ticket`, and what the live events socket opens with:

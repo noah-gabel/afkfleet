@@ -91,7 +91,6 @@ use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotRespons
 use fleet_api_types::chat::{
     ChatCommandRequest, ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse,
 };
-#[cfg(feature = "dev-console")]
 use fleet_api_types::events::EventTicketResponse;
 use fleet_api_types::ids::AgentId;
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
@@ -111,6 +110,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
@@ -119,7 +119,7 @@ use crate::error::{ApiFailure, ClientError, Unexpected};
 #[cfg(feature = "dev-console")]
 use crate::events::EventsHandshake;
 use crate::store::{SessionStore, StoreError, StoreOp};
-use crate::transport::{Incoming, Outgoing, Transport, TransportError};
+use crate::transport::{Incoming, Outgoing, Transport, TransportError, Upgrade, UpgradeRequest};
 use crate::url::ServerUrl;
 
 /// A bot's lifecycle call: its path segment, and the statuses that answer
@@ -221,6 +221,9 @@ pub(crate) struct Core<S, T> {
     refresh_lock: Arc<AsyncMutex<()>>,
     /// Guards the epoch and every store write; never held across a request.
     gate: AsyncMutex<()>,
+    /// The epoch, as every end moves it: a live events socket ends with the
+    /// session it was opened for (ADR-0020, S53).
+    epochs: watch::Sender<u64>,
 }
 
 /// What the session holds. Behind a std mutex that's never held across an
@@ -285,7 +288,36 @@ impl<S, T> Core<S, T> {
             state: Mutex::new(State::default()),
             refresh_lock: Arc::new(AsyncMutex::new(())),
             gate: AsyncMutex::new(()),
+            epochs: watch::Sender::new(0),
         }
+    }
+
+    /// The session's epoch now, which every end moves.
+    pub(crate) fn epoch(&self) -> u64 {
+        self.state().epoch
+    }
+
+    /// The epoch as every end moves it.
+    pub(crate) fn epochs(&self) -> watch::Receiver<u64> {
+        self.epochs.subscribe()
+    }
+
+    /// The transport, for the live events socket's unit tests.
+    #[cfg(test)]
+    pub(crate) const fn transport(&self) -> &T {
+        &self.transport
+    }
+
+    /// Gives the session `token` as its access token, as a login would
+    /// have, for the live events socket's unit tests.
+    #[cfg(test)]
+    pub(crate) fn hold_access(&self, token: &str) {
+        let mut state = self.state();
+        state.generations = state.generations.wrapping_add(1);
+        state.access = Some(Access {
+            token: SecretString::from(token),
+            generation: state.generations,
+        });
     }
 
     pub(crate) fn server(&self) -> &ServerUrl {
@@ -950,6 +982,38 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         expect_empty(answer, 204)
     }
 
+    /// `POST /events/ticket`: a ticket for one connect of the live events
+    /// socket, and the access token it goes with, of the same session
+    /// (ADR-0020, S28, S53). Both stay in the client: the socket spends them
+    /// at once, and never shows either.
+    pub(crate) async fn events_ticket(
+        self: &Arc<Self>,
+    ) -> Result<(SecretString, SecretString), ClientError> {
+        let answer = self
+            .authed(Method::POST, self.server.api(&["events", "ticket"]), None)
+            .await?;
+        let ticket: EventTicketResponse = expect_json(answer, 200)?;
+        // The token the ticket's request went with, or a newer one of the
+        // same session: the ticket belongs to the session.
+        let access = self.current_access().ok_or(ClientError::NoSession)?;
+        Ok((SecretString::from(ticket.ticket.expose()), access.token))
+    }
+
+    /// Sends `request`, the live events socket's upgrade, over the
+    /// transport (ADR-0020, U25).
+    pub(crate) async fn upgrade(
+        &self,
+        request: UpgradeRequest,
+    ) -> Result<Upgrade<T::Socket>, ClientError>
+    where
+        T: Transport,
+    {
+        self.transport
+            .upgrade(request)
+            .await
+            .map_err(transport_error)
+    }
+
     /// `POST /events/ticket`, and the socket's URL and bearer with it
     /// (`dev-console` only; ADR-0020, U15).
     #[cfg(feature = "dev-console")]
@@ -983,12 +1047,7 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
                 body,
             })
             .await
-            .map_err(|error| match error {
-                TransportError::Unreachable(cause) => ClientError::Unreachable(cause),
-                TransportError::Certificate(cause) => ClientError::Certificate(cause),
-                TransportError::TimedOut(cause) => ClientError::TimedOut(cause),
-                TransportError::TooLarge => ClientError::TooLarge,
-            })
+            .map_err(transport_error)
     }
 
     /// Sends an authenticated request with the session's rules; see the
@@ -1193,6 +1252,7 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         state.epoch = state.epoch.wrapping_add(1);
         state.access = None;
         state.pending = None;
+        self.epochs.send_replace(state.epoch);
     }
 
     /// Revokes the session of `access_token` on the server, best effort.
@@ -1307,6 +1367,29 @@ fn is_unauthorized(answer: &Incoming) -> bool {
 /// The route's answer for `status`, read as `R`.
 fn expect_json<R: DeserializeOwned>(answer: Incoming, status: u16) -> Result<R, ClientError> {
     expect_json_of(answer, &[status])
+}
+
+/// What a transport's failure means for the caller.
+fn transport_error(error: TransportError) -> ClientError {
+    match error {
+        TransportError::Unreachable(cause) => ClientError::Unreachable(cause),
+        TransportError::Certificate(cause) => ClientError::Certificate(cause),
+        TransportError::TimedOut(cause) => ClientError::TimedOut(cause),
+        TransportError::TooLarge => ClientError::TooLarge,
+    }
+}
+
+/// What `answer`, an upgrade answered without a 101, means: the server's
+/// refusal, or an answer the route never gives (ADR-0020, U25).
+pub(crate) fn upgrade_refusal(answer: Incoming) -> ClientError {
+    match with_status(answer, 101) {
+        Err(error) => error,
+        // A 101 comes as a switch, never as a refusal.
+        Ok(answer) => ClientError::UnexpectedResponse {
+            status: answer.status,
+            reason: Unexpected::Status,
+        },
+    }
 }
 
 /// The route's answer for any of `statuses`, read as `R`.

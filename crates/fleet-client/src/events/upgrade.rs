@@ -8,8 +8,8 @@
 //! RFC 6455's rules, then the connection is framed as the client's end.
 
 use reqwest::header::{
-    CONNECTION, HeaderMap, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_EXTENSIONS, SEC_WEBSOCKET_PROTOCOL,
-    UPGRADE,
+    CONNECTION, HeaderMap, HeaderValue, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_EXTENSIONS,
+    SEC_WEBSOCKET_PROTOCOL, UPGRADE,
 };
 use secrecy::SecretString;
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -68,11 +68,7 @@ pub(crate) fn checked(headers: &HeaderMap, key: &str) -> Result<(), Handshake> {
         return Err(Handshake::NoConnection);
     }
     let expected = derive_accept_key(key.as_bytes());
-    if headers
-        .get(SEC_WEBSOCKET_ACCEPT)
-        .map(|value| value.as_bytes())
-        != Some(expected.as_bytes())
-    {
+    if headers.get(SEC_WEBSOCKET_ACCEPT).map(HeaderValue::as_bytes) != Some(expected.as_bytes()) {
         return Err(Handshake::Accept);
     }
     if headers.contains_key(SEC_WEBSOCKET_EXTENSIONS)
@@ -101,7 +97,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use reqwest::header::HeaderValue;
     use rstest::rstest;
     use secrecy::ExposeSecret as _;
 
