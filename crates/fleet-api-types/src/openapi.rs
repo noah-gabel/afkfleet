@@ -27,7 +27,7 @@ use crate::ErrorResponse;
 use crate::accounts::{
     AccountPage, AccountResponse, ChangeGrantRequest, CreateGrantRequest,
     CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
-    LinkFlowResponse, LinkStartedResponse,
+    HeldGrantPage, LinkFlowResponse, LinkStartedResponse,
 };
 use crate::agents::{AgentPage, AgentResponse, AgentStatus, CreatedEnrollmentTokenResponse};
 use crate::audit::AuditPage;
@@ -104,6 +104,7 @@ pub fn components() -> BTreeMap<String, RefOr<Schema>> {
     add::<EventTicketResponse>(&mut schemas);
     add::<EventMessage>(&mut schemas);
     add::<AuditPage>(&mut schemas);
+    add::<HeldGrantPage>(&mut schemas);
     schemas.into_iter().collect()
 }
 

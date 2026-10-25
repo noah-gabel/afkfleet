@@ -10,9 +10,9 @@ use core::fmt;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
-use fleet_core::authz::GrantLevel;
+use fleet_core::authz::{GrantLevel, UserRef};
 use fleet_core::id::{AccountId, UserId};
-use fleet_core::value::Username;
+use fleet_core::value::{McUsername, Username};
 
 use super::page::Page;
 use super::store::StoreError;
@@ -43,6 +43,23 @@ pub struct ListedGrant {
     pub granted_by_name: Username,
 }
 
+/// A grant one user holds, as the review at a role change lists it, with
+/// the account it shares and its owner, by their current role (ADR-0020,
+/// S50).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldGrant {
+    /// The grant.
+    pub grant: AccountGrant,
+    /// The account's Minecraft name.
+    pub account_name: McUsername,
+    /// Who owns the account, with their current role.
+    pub owner: UserRef,
+    /// The owner's username.
+    pub owner_name: Username,
+    /// The username of whoever set the grant last.
+    pub granted_by_name: Username,
+}
+
 /// Why a grant couldn't be inserted.
 #[derive(Debug, thiserror::Error)]
 pub enum InsertGrantError {
@@ -67,6 +84,18 @@ pub trait GrantReads: Send + Sync + fmt::Debug {
         account: AccountId,
         page: Page<UserId>,
     ) -> Result<Vec<ListedGrant>, StoreError>;
+
+    /// One page of the grants `user` holds, newest account first by ID,
+    /// one row more than the page (ADR-0020, S50).
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`] for a row that
+    /// doesn't read back.
+    async fn held_by(
+        &self,
+        user: UserId,
+        page: Page<AccountId>,
+    ) -> Result<Vec<HeldGrant>, StoreError>;
 }
 
 /// Reading and writing grants inside a [`super::store::WriteTx`].

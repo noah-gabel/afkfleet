@@ -107,6 +107,12 @@ pub enum Permission {
     /// Disable or enable a user (Owner; Admins for Members). Nobody disables
     /// themselves or the Owner.
     SetDisabled,
+    /// See a user's grants at a role change: the grants they hold, dormant
+    /// ones included, and their shared accounts (Owner, as for [`SetRole`];
+    /// ADR-0020, S50).
+    ///
+    /// [`SetRole`]: Permission::SetRole
+    ReviewUserGrants,
 
     // Personal resources (`ResourceContext::Personal`).
     /// Use one's own profile, sessions, 2FA, link flows and event tickets

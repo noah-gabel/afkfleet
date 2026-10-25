@@ -456,7 +456,7 @@ async fn facts(state: &AppState, actor: &Actor, id: AccountId) -> Result<ListedA
 }
 
 /// A list that couldn't be read, as the API answers it.
-fn listing(error: ListAccountsError) -> ApiError {
+pub(super) fn listing(error: ListAccountsError) -> ApiError {
     match error {
         ListAccountsError::Store(error) => ApiError::from(error),
         other @ ListAccountsError::Disagreement => ApiError::internal(other),
@@ -476,7 +476,7 @@ fn reviewing(error: ReviewError) -> ApiError {
 }
 
 /// A page of accounts as `viewer` sees them.
-fn account_page(
+pub(super) fn account_page(
     viewer: &Actor,
     listed: &Paged<ListedAccount, AccountId>,
 ) -> Result<Json<AccountPage>, ApiError> {

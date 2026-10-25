@@ -8,7 +8,8 @@ use std::collections::VecDeque;
 use std::io;
 use std::sync::{Arc, Mutex};
 
-use fleet_api_types::accounts::CreateOfflineAccountRequest;
+use fleet_api_types::accounts::{CreateGrantRequest, CreateOfflineAccountRequest, GrantLevel};
+use fleet_api_types::users::{UserPatchRequest, UserRole};
 use fleet_api_types::{BotId, PageQuery, SecretText};
 use fleet_client::{Client, ClientConfig, MemoryStore, ServerUrl, SessionStore, StoreError, Trust};
 use fleet_testkit::system::ManualClock;
@@ -1400,6 +1401,80 @@ async fn release_asks_for_the_password_again_and_releases_a_disabled_agents_bots
     assert!(
         terminal.secrets.is_empty(),
         "the password was asked for again"
+    );
+    server.stop().await;
+}
+
+/// `held` shows the grants a promoted user holds, dormant now, and `shared`
+/// the accounts of theirs a grant shares (the Owner's review).
+#[tokio::test]
+async fn held_and_shared_show_the_review_of_a_users_grants() {
+    let server = Server::start().await;
+    let (owner, _, app) = server.owner().await;
+    step_up(&owner).await;
+    let (alice, _) = server.member(&owner, "alice").await;
+    let (_bob, bob) = server.member(&owner, "bob").await;
+    let account = alice
+        .create_offline_account(&CreateOfflineAccountRequest {
+            name: SecretText::new("AfkBot4".to_owned()),
+        })
+        .await
+        .unwrap()
+        .id;
+    step_up(&alice).await;
+    alice
+        .create_grant(
+            account,
+            &CreateGrantRequest {
+                username: SecretText::new("bob".to_owned()),
+                level: GrantLevel::Control,
+            },
+        )
+        .await
+        .unwrap();
+    owner
+        .patch_user(
+            bob,
+            &UserPatchRequest {
+                role: Some(UserRole::Admin),
+                disabled: None,
+            },
+        )
+        .await
+        .unwrap();
+    let alice_id = owner
+        .users(&PageQuery {
+            before: None,
+            limit: None,
+        })
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|user| user.username.as_str() == "alice")
+        .unwrap()
+        .id;
+    server.next_step();
+    let code = server.code(&app).expose().to_owned();
+    let (client, _) = server.client();
+    let held = format!("held {bob}");
+    let shared = format!("shared {alice_id}");
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &[&held, &shared]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let said = &terminal.said;
+    assert!(
+        said.contains(&format!(
+            "{account} AfkBot4 of alice control by alice (dormant)"
+        )),
+        "{said:?}"
+    );
+    assert!(
+        said.iter()
+            .any(|line| line.starts_with(&format!("{account} AfkBot4 offline "))),
+        "{said:?}"
     );
     server.stop().await;
 }

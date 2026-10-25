@@ -409,6 +409,52 @@ async fn the_lists_page_newest_first(_pool: SqlitePoolOptions, options: SqliteCo
     }
 }
 
+/// The accounts one owner owns that a grant shares, newest first, as the
+/// viewer sees them; an unshared account, and another owner's shared one,
+/// never among them (ADR-0020, S50).
+#[sqlx::test(migrations = false)]
+async fn the_shared_accounts_of_an_owner_page_newest_first(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let db = database(options).await;
+    let owner = add_user(&db, 1, Role::Owner).await;
+    let member = add_user(&db, 2, Role::Member).await;
+    let friend = add_user(&db, 3, Role::Member).await;
+    let mut shared = Vec::new();
+    for n in 10..13 {
+        let account = account(member.id, n, None);
+        insert(&db, &account).await;
+        grant(&db, account.id, friend.id, GrantLevel::View, member.id).await;
+        shared.push(account.id);
+    }
+    let unshared = account(member.id, 13, None);
+    insert(&db, &unshared).await;
+    let elsewhere = account(friend.id, 14, None);
+    insert(&db, &elsewhere).await;
+    grant(&db, elsewhere.id, member.id, GrantLevel::View, friend.id).await;
+
+    let first = db
+        .accounts()
+        .shared_of(member.id, owner.id, page(None, 2))
+        .await
+        .unwrap();
+    let rest = db
+        .accounts()
+        .shared_of(member.id, owner.id, page(Some(shared[1]), 2))
+        .await
+        .unwrap();
+
+    // A repository fetches one row more than the page holds.
+    assert_eq!(ids(&first), [shared[2], shared[1], shared[0]]);
+    assert_eq!(ids(&rest), [shared[0]]);
+    assert!(first.iter().all(|account| account.owner.id == member.id));
+    assert!(
+        first.iter().all(|account| account.grant.is_none()),
+        "the Owner holds none"
+    );
+}
+
 #[sqlx::test(migrations = false)]
 async fn a_role_change_moves_an_account_between_the_lists(
     _pool: SqlitePoolOptions,

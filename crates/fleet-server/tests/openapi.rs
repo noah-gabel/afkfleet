@@ -398,6 +398,8 @@ async fn the_document_lists_exactly_the_api_routes(
             ("/api/v1/agents/{id}/disable", "post"),
             ("/api/v1/agents/{id}/release", "post"),
             ("/api/v1/audit", "get"),
+            ("/api/v1/users/{id}/grants", "get"),
+            ("/api/v1/users/{id}/shared-accounts", "get"),
             ("/api/v1/bots", "get"),
             ("/api/v1/bots/{id}", "get"),
             ("/api/v1/bots/{id}", "patch"),

@@ -40,7 +40,7 @@ use super::accounts::{Reread, reread};
 use super::audit::AuditService;
 use super::users::ActingUser;
 use crate::ports::audit::NewAuditEntry;
-use crate::ports::grants::{AccountGrant, InsertGrantError, ListedGrant};
+use crate::ports::grants::{AccountGrant, HeldGrant, InsertGrantError, ListedGrant};
 use crate::ports::live_hints::{LiveHints, NoLiveHints};
 use crate::ports::page::{Page, Paged};
 use crate::ports::store::{Store, StoreError, WriteTx};
@@ -76,6 +76,17 @@ impl UnusableName {
             Self::ImplicitManage => "implicit_manage",
         }
     }
+}
+
+/// A grant one user holds, and whether it's dormant now: their role gives
+/// Manage on the account already, so it adds nothing until a demotion
+/// (ADR-0020, S50).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HeldView {
+    /// The grant, its account and their people.
+    pub held: HeldGrant,
+    /// Whether the holder's role gives Manage on the account now.
+    pub dormant: bool,
 }
 
 /// Why a grant wasn't created.
@@ -201,6 +212,34 @@ impl GrantService {
     ) -> Result<Paged<ListedGrant, UserId>, StoreError> {
         let rows = self.store.grants().list(account, page).await?;
         Ok(Paged::split(rows, page.limit, |grant| grant.grant.user))
+    }
+
+    /// The grants `holder` holds on `page`, newest account first, each
+    /// with whether it's dormant (the holder's role gives Manage on that
+    /// account now, so the grant adds nothing until a demotion), and the
+    /// next page's cursor: the review at a role change (ADR-0020, S50).
+    /// The caller asks `authorize()` first.
+    ///
+    /// # Errors
+    /// [`StoreError`].
+    pub async fn held(
+        &self,
+        holder: &Actor,
+        page: Page<AccountId>,
+    ) -> Result<Paged<HeldView, AccountId>, StoreError> {
+        let rows = self.store.grants().held_by(holder.id, page).await?;
+        let held = Paged::split(rows, page.limit, |held| held.grant.account);
+        Ok(Paged {
+            items: held
+                .items
+                .into_iter()
+                .map(|held| HeldView {
+                    dormant: implicit_manage(holder, held.owner),
+                    held,
+                })
+                .collect(),
+            next: held.next,
+        })
     }
 
     /// Gives the user named `username` `level` on `account`, for `by`; see

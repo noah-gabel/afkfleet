@@ -278,18 +278,18 @@ Member  the Owner's shared        ok        403                    403          
 ## Users
 Rows: the actor's role, and the target user. Columns: the permission.
 
-actor   target          SetRole member  SetRole admin  SetRole owner  SetDisabled
-Owner   self            403             403            403            403
-Owner   a Member        ok              ok             403            ok
-Owner   an Admin        ok              ok             403            ok
-Admin   self            403             403            403            403
-Admin   a Member        403             403            403            ok
-Admin   another Admin   403             403            403            403
-Admin   the Owner       403             403            403            403
-Member  self            403             403            403            403
-Member  another Member  404             404            404            404
-Member  an Admin        404             404            404            404
-Member  the Owner       404             404            404            404
+actor   target          SetRole member  SetRole admin  SetRole owner  SetDisabled  ReviewUserGrants
+Owner   self            403             403            403            403          403
+Owner   a Member        ok              ok             403            ok           ok
+Owner   an Admin        ok              ok             403            ok           ok
+Admin   self            403             403            403            403          403
+Admin   a Member        403             403            403            ok           403
+Admin   another Admin   403             403            403            403          403
+Admin   the Owner       403             403            403            403          403
+Member  self            403             403            403            403          403
+Member  another Member  404             404            404            404          404
+Member  an Admin        404             404            404            404          404
+Member  the Owner       404             404            404            404          404
 
 ## Personal resources
 Rows: the actor's role, and whom the resource belongs to. Columns: the permission.

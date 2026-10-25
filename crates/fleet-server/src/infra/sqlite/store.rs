@@ -43,7 +43,9 @@ use crate::ports::enrollment_tokens::{
     EnrollmentToken, EnrollmentTokenReads, EnrollmentTokenWrites, NewEnrollmentToken,
 };
 use crate::ports::envelopes::{EnvelopeReads, EnvelopeWrites, SealedEnvelope, SealedRecord};
-use crate::ports::grants::{AccountGrant, GrantReads, GrantWrites, InsertGrantError, ListedGrant};
+use crate::ports::grants::{
+    AccountGrant, GrantReads, GrantWrites, HeldGrant, InsertGrantError, ListedGrant,
+};
 use crate::ports::invites::{
     Invite, InviteReads, InviteWrites, ListedInvite, NewInvite, RevokedInvite,
 };
@@ -185,6 +187,15 @@ impl AccountReads for Reads {
     ) -> Result<Vec<ListedAccount>, StoreError> {
         accounts::awaiting_review(&self.pool, viewer, page).await
     }
+
+    async fn shared_of(
+        &self,
+        owner: UserId,
+        viewer: UserId,
+        page: Page<AccountId>,
+    ) -> Result<Vec<ListedAccount>, StoreError> {
+        accounts::shared_of(&self.pool, owner, viewer, page).await
+    }
 }
 
 #[async_trait]
@@ -195,6 +206,14 @@ impl GrantReads for Reads {
         page: Page<UserId>,
     ) -> Result<Vec<ListedGrant>, StoreError> {
         grants::list(&self.pool, account, page).await
+    }
+
+    async fn held_by(
+        &self,
+        user: UserId,
+        page: Page<AccountId>,
+    ) -> Result<Vec<HeldGrant>, StoreError> {
+        grants::held_by(&self.pool, user, page).await
     }
 }
 

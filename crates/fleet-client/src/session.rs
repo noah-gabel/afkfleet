@@ -79,7 +79,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use fleet_api_types::accounts::{
     AccountPage, AccountResponse, ChangeGrantRequest, CreateGrantRequest,
     CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
-    LinkFlowResponse, LinkStartedResponse,
+    HeldGrantPage, LinkFlowResponse, LinkStartedResponse,
 };
 use fleet_api_types::agents::{AgentPage, AgentResponse};
 use fleet_api_types::audit::{AuditPage, AuditPageQuery};
@@ -825,6 +825,33 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
     ) -> Result<AgentResponse, ClientError> {
         let url = self.server.api(&["agents", &id.to_string(), "release"]);
         let answer = self.authed(Method::POST, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn user_grants(
+        self: &Arc<Self>,
+        id: UserId,
+        query: &PageQuery<AccountId>,
+    ) -> Result<HeldGrantPage, ClientError> {
+        let url = with_page(
+            self.server.api(&["users", &id.to_string(), "grants"]),
+            query,
+        );
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn shared_accounts(
+        self: &Arc<Self>,
+        id: UserId,
+        query: &PageQuery<AccountId>,
+    ) -> Result<AccountPage, ClientError> {
+        let url = with_page(
+            self.server
+                .api(&["users", &id.to_string(), "shared-accounts"]),
+            query,
+        );
+        let answer = self.authed(Method::GET, url, None).await?;
         expect_json(answer, 200)
     }
 
@@ -2991,6 +3018,63 @@ mod tests {
             ),
             "{error:?}"
         );
+    }
+
+    const REVIEWED: &str = "018bcfe5-6800-7303-8303-030303030303";
+
+    #[tokio::test]
+    async fn the_review_reads_both_lists_from_their_routes() {
+        let core = signed_in().await;
+        let held = HeldGrantPage {
+            items: Vec::new(),
+            next: None,
+        };
+        let shared = AccountPage {
+            items: Vec::new(),
+            next: None,
+        };
+        let held_route = format!("GET /api/v1/users/{REVIEWED}/grants");
+        let shared_route = format!("GET /api/v1/users/{REVIEWED}/shared-accounts");
+        core.transport.on(&held_route, Ok(dto(200, &held)));
+        core.transport.on(&shared_route, Ok(dto(200, &shared)));
+        let all = PageQuery {
+            before: None,
+            limit: None,
+        };
+
+        let read_held = core.user_grants(id(REVIEWED), &all).await.unwrap();
+        let read_shared = core.shared_accounts(id(REVIEWED), &all).await.unwrap();
+
+        assert_eq!(read_held, held);
+        assert_eq!(read_shared, shared);
+        assert_eq!(
+            core.transport.seen(),
+            [sent(&held_route, None), sent(&shared_route, None)]
+        );
+    }
+
+    #[rstest]
+    #[case::an_admin(403, ErrorCode::Forbidden)]
+    #[case::another_member(404, ErrorCode::NotFound)]
+    #[case::too_many(429, ErrorCode::RateLimited)]
+    #[tokio::test]
+    async fn a_refused_review_comes_back_with_the_servers_code(
+        #[case] status: u16,
+        #[case] code: ErrorCode,
+    ) {
+        use fleet_api_types::OpenEnum as _;
+        let core = signed_in().await;
+        let route = format!("GET /api/v1/users/{REVIEWED}/grants");
+        core.transport
+            .on(&route, Ok(refusal(status, code.as_str())));
+        let all = PageQuery {
+            before: None,
+            limit: None,
+        };
+
+        let error = core.user_grants(id(REVIEWED), &all).await.unwrap_err();
+
+        assert!(is_api(&error, status, code), "{error:?}");
     }
 
     const AGENT: &str = "018bcfe5-6800-7101-8101-010101010101";

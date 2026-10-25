@@ -3,7 +3,7 @@
 
 use fleet_core::account::awaits_review;
 use fleet_core::authz::{Actor, Permission, authorize};
-use fleet_core::id::AccountId;
+use fleet_core::id::{AccountId, UserId};
 use tracing::error;
 
 use super::AccountService;
@@ -59,6 +59,28 @@ impl AccountService {
             error!(account_id = %account.id, "{DISAGREEMENT}");
             return Err(ListAccountsError::Disagreement);
         }
+        Ok(Paged::split(rows, page.limit, |account| account.id))
+    }
+
+    /// The accounts `owner` owns that at least one grant shares on `page`,
+    /// newest first, as `viewer` sees them, and the next page's cursor: the
+    /// review at a role change (ADR-0020, S50). The caller asks
+    /// `authorize()` first.
+    ///
+    /// # Errors
+    /// [`ListAccountsError::Disagreement`], or [`ListAccountsError::Store`].
+    pub async fn shared_of(
+        &self,
+        viewer: &Actor,
+        owner: UserId,
+        page: Page<AccountId>,
+    ) -> Result<Paged<ListedAccount, AccountId>, ListAccountsError> {
+        let rows = self
+            .store
+            .accounts()
+            .shared_of(owner, viewer.id, page)
+            .await?;
+        checked(viewer, Permission::ViewBot, &rows)?;
         Ok(Paged::split(rows, page.limit, |account| account.id))
     }
 

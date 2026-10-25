@@ -24,8 +24,9 @@
 //!   they're an Admin, and by the Owner. Private modes follow the account
 //!   rule.
 //! - **Users and invites.** Admins disable Members and handle Member
-//!   invites. Only the Owner changes roles, handles Admin invites and
-//!   enrolls agents. Nobody acts on themselves or on the Owner, and nobody
+//!   invites. Only the Owner changes roles, reviews a user's grants at a
+//!   role change ([`Permission::ReviewUserGrants`]), handles Admin invites
+//!   and enrolls agents. Nobody acts on themselves or on the Owner, and nobody
 //!   becomes the Owner this way.
 //! - **Agents and the audit log.** Admins and the Owner list agents,
 //!   disable them, release a disabled one's bots

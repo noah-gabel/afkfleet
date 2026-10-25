@@ -301,4 +301,13 @@ impl AccountReads for FlakyStore {
     ) -> Result<Vec<ListedAccount>, StoreError> {
         self.inner.accounts().awaiting_review(viewer, page).await
     }
+
+    async fn shared_of(
+        &self,
+        owner: UserId,
+        viewer: UserId,
+        page: Page<AccountId>,
+    ) -> Result<Vec<ListedAccount>, StoreError> {
+        self.inner.accounts().shared_of(owner, viewer, page).await
+    }
 }

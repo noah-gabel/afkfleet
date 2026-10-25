@@ -17,10 +17,11 @@ use std::fmt::Write as _;
 use std::fs;
 
 use fleet_api_types::accounts::{
-    AccountKind, AccountPage, AccountResponse, AccountStatus, ChangeGrantRequest,
+    AccountKind, AccountLabel, AccountPage, AccountResponse, AccountStatus, ChangeGrantRequest,
     CreateGrantRequest, CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantLevel,
-    GrantPage, GrantResponse, LinkFlowResponse, LinkFlowState, LinkStartedResponse,
-    MC_NAME_MAX_CHARS, RefusalReason, USER_CODE_MAX_CHARS, VERIFICATION_URI_MAX_CHARS,
+    GrantPage, GrantResponse, HeldGrantPage, HeldGrantResponse, LinkFlowResponse, LinkFlowState,
+    LinkStartedResponse, MC_NAME_MAX_CHARS, RefusalReason, USER_CODE_MAX_CHARS,
+    VERIFICATION_URI_MAX_CHARS,
 };
 use fleet_api_types::agents::{
     AGENT_NAME_MAX_CHARS, AGENT_VERSION_MAX_CHARS, AgentPage, AgentResponse, AgentStatus,
@@ -188,10 +189,13 @@ fn declarations() -> BTreeMap<String, String> {
     .collect()
 }
 
-/// ts-rs's declaration of every agents and audit log type, the admin
-/// screens' (ADR-0019, S31; ADR-0020, R65).
-fn admin_declarations(config: &Config) -> [(&'static str, String); 10] {
+/// ts-rs's declaration of every agents, audit log and grants review type,
+/// the admin screens' (ADR-0019, S31; ADR-0020, R65, S50).
+fn admin_declarations(config: &Config) -> [(&'static str, String); 13] {
     [
+        ("AccountLabel", AccountLabel::decl(config)),
+        ("HeldGrantPage", HeldGrantPage::decl(config)),
+        ("HeldGrantResponse", HeldGrantResponse::decl(config)),
         ("AgentPage", AgentPage::decl(config)),
         ("AgentResponse", AgentResponse::decl(config)),
         ("AgentStatus", AgentStatus::decl(config)),
@@ -559,6 +563,10 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::audit_target_id("AuditTargetResponse", "id", ID_CHARS)]
 #[case::audit_key("AuditDetail", "key", AUDIT_KEY_MAX_CHARS)]
 #[case::audit_text("AuditDetail", "text", AUDIT_TEXT_MAX_CHARS)]
+#[case::held_account_id("AccountLabel", "id", ID_CHARS)]
+#[case::held_account_name("AccountLabel", "name", MC_NAME_MAX_CHARS)]
+#[case::held_granted_at("HeldGrantResponse", "granted_at", TIMESTAMP_CHARS)]
+#[case::held_page_next("HeldGrantPage", "next", ID_CHARS)]
 fn a_text_field_is_capped_at_its_constant(
     #[case] component: &str,
     #[case] field: &str,
@@ -573,7 +581,7 @@ fn a_text_field_is_capped_at_its_constant(
 }
 
 /// Every text field whose cap the cases above check.
-const CHECKED_TEXTS: [(&str, &str); 118] = [
+const CHECKED_TEXTS: [(&str, &str); 122] = [
     ("ErrorBody", "message"),
     ("ErrorBody", "request_id"),
     ("FieldError", "path"),
@@ -654,6 +662,10 @@ const CHECKED_TEXTS: [(&str, &str); 118] = [
     ("AuditTargetResponse", "id"),
     ("AuditDetail", "key"),
     ("AuditDetail", "text"),
+    ("AccountLabel", "id"),
+    ("AccountLabel", "name"),
+    ("HeldGrantResponse", "granted_at"),
+    ("HeldGrantPage", "next"),
     ("AgentResponse", "connected_since"),
     ("AgentResponse", "last_seen_at"),
     ("AgentResponse", "not_after"),

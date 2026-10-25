@@ -135,6 +135,7 @@ fn account(
         | Permission::DeleteMode
         | Permission::SetRole { .. }
         | Permission::SetDisabled
+        | Permission::ReviewUserGrants
         | Permission::UsePersonal => return Err(AuthzError::WrongResource),
     };
     let Some(level) = effective_level(actor, owner, grant) else {
@@ -184,6 +185,7 @@ fn global(actor: &Actor, permission: Permission) -> Result<(), AuthzError> {
         | Permission::DeleteMode
         | Permission::SetRole { .. }
         | Permission::SetDisabled
+        | Permission::ReviewUserGrants
         | Permission::UsePersonal => return Err(AuthzError::WrongResource),
     };
     allow(allowed)
@@ -227,6 +229,7 @@ fn invite(actor: &Actor, permission: Permission, role: Role) -> Result<(), Authz
         | Permission::DeleteMode
         | Permission::SetRole { .. }
         | Permission::SetDisabled
+        | Permission::ReviewUserGrants
         | Permission::UsePersonal => return Err(AuthzError::WrongResource),
     }
     if actor.role < Role::Admin {
@@ -270,6 +273,7 @@ fn mode(
         | Permission::RevokeInvite
         | Permission::SetRole { .. }
         | Permission::SetDisabled
+        | Permission::ReviewUserGrants
         | Permission::UsePersonal => return Err(AuthzError::WrongResource),
     };
     let visible = match (owner, visibility) {
@@ -310,6 +314,9 @@ fn user(actor: &Actor, permission: Permission, target: UserRef) -> Result<(), Au
             actor.role == Role::Owner && role != Role::Owner && manages_user(actor, target)
         }
         Permission::SetDisabled => manages_user(actor, target),
+        // The review at a role change is the Owner's, who changes roles
+        // (ADR-0020, S50).
+        Permission::ReviewUserGrants => actor.role == Role::Owner && manages_user(actor, target),
         Permission::ViewBot
         | Permission::ControlBot
         | Permission::SendChat(_)
@@ -384,7 +391,8 @@ fn personal(actor: &Actor, permission: Permission, owner: UserId) -> Result<(), 
         | Permission::UpdateMode { .. }
         | Permission::DeleteMode
         | Permission::SetRole { .. }
-        | Permission::SetDisabled => return Err(AuthzError::WrongResource),
+        | Permission::SetDisabled
+        | Permission::ReviewUserGrants => return Err(AuthzError::WrongResource),
     }
     // Not even the Owner sees another user's sessions or link flows.
     if actor.id == owner {
@@ -507,7 +515,7 @@ mod tests {
     }
 
     /// How many variants [`Permission`] has.
-    const PERMISSION_VARIANTS: usize = 27;
+    const PERMISSION_VARIANTS: usize = 28;
 
     /// The variant's index, and the kind of context it applies to.
     ///
@@ -543,6 +551,7 @@ mod tests {
             Permission::UsePersonal => (24, Kind::Personal),
             Permission::ReviewLink => (25, Kind::Account),
             Permission::ReleaseAgent => (26, Kind::Global),
+            Permission::ReviewUserGrants => (27, Kind::User),
         }
     }
 
@@ -626,6 +635,7 @@ mod tests {
             ("SetRole admin", Permission::SetRole { role: Role::Admin }),
             ("SetRole owner", Permission::SetRole { role: Role::Owner }),
             ("SetDisabled", Permission::SetDisabled),
+            ("ReviewUserGrants", Permission::ReviewUserGrants),
             ("UsePersonal", Permission::UsePersonal),
         ]
     }

@@ -19,7 +19,7 @@ use std::sync::Arc;
 use fleet_api_types::accounts::{
     AccountPage, AccountResponse, ChangeGrantRequest, CreateGrantRequest,
     CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
-    LinkFlowResponse, LinkStartedResponse,
+    HeldGrantPage, LinkFlowResponse, LinkStartedResponse,
 };
 use fleet_api_types::agents::{AgentPage, AgentResponse};
 use fleet_api_types::audit::{AuditPage, AuditPageQuery};
@@ -303,6 +303,36 @@ impl<S: SessionStore> Client<S> {
     /// call.
     pub async fn release_agent(&self, id: AgentId) -> Result<AgentResponse, ClientError> {
         self.core.release_agent(id).await
+    }
+
+    /// `GET /users/{id}/grants`: a page of the grants the user holds,
+    /// dormant ones included, newest account first: the review at a role
+    /// change (the Owner's).
+    ///
+    /// # Errors
+    /// The server's 403 (an Admin, or a Member on themselves), 404 (no such
+    /// user, or a Member on another), 422 or 429 as [`ClientError::Api`];
+    /// any other error as for every authenticated call.
+    pub async fn user_grants(
+        &self,
+        id: UserId,
+        query: &PageQuery<AccountId>,
+    ) -> Result<HeldGrantPage, ClientError> {
+        self.core.user_grants(id, query).await
+    }
+
+    /// `GET /users/{id}/shared-accounts`: a page of the user's accounts that
+    /// at least one grant shares, newest first; [`Client::account_grants`]
+    /// lists each one's grants (the Owner's).
+    ///
+    /// # Errors
+    /// As [`Client::user_grants`].
+    pub async fn shared_accounts(
+        &self,
+        id: UserId,
+        query: &PageQuery<AccountId>,
+    ) -> Result<AccountPage, ClientError> {
+        self.core.shared_accounts(id, query).await
     }
 
     /// `GET /users`: a page of the users (Admins and the Owner).

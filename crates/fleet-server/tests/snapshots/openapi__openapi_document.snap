@@ -13,6 +13,24 @@ expression: answer.json()
         ],
         "type": "string"
       },
+      "AccountLabel": {
+        "description": "An account named by its ID and Minecraft name.",
+        "properties": {
+          "id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 16,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
       "AccountPage": {
         "description": "One page of accounts, newest first.",
         "properties": {
@@ -1218,6 +1236,64 @@ expression: answer.json()
           "level",
           "granted_by",
           "granted_at"
+        ],
+        "type": "object"
+      },
+      "HeldGrantPage": {
+        "description": "`GET /users/{id}/grants`: one page of the grants a user holds, newest\naccount first.",
+        "properties": {
+          "items": {
+            "description": "The grants.",
+            "items": {
+              "$ref": "#/components/schemas/HeldGrantResponse"
+            },
+            "type": "array"
+          },
+          "next": {
+            "maxLength": 36,
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "HeldGrantResponse": {
+        "description": "A grant a user holds, as `GET /users/{id}/grants` lists it: the review\nat a role change (the Owner's; ADR-0020, S50).",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountLabel",
+            "description": "The account it shares."
+          },
+          "dormant": {
+            "description": "Whether it's dormant: the user's role gives Manage on the account\nnow, so the grant adds nothing, and it counts again after a demotion.",
+            "type": "boolean"
+          },
+          "granted_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "granted_by": {
+            "$ref": "#/components/schemas/UserLabel",
+            "description": "Who set it last."
+          },
+          "level": {
+            "$ref": "#/components/schemas/GrantLevel",
+            "description": "What it allows."
+          },
+          "owner": {
+            "$ref": "#/components/schemas/UserLabel",
+            "description": "Who owns the account."
+          }
+        },
+        "required": [
+          "account",
+          "owner",
+          "level",
+          "granted_by",
+          "granted_at",
+          "dormant"
         ],
         "type": "object"
       },
@@ -8319,6 +8395,282 @@ expression: answer.json()
           "users"
         ],
         "x-step-up": true
+      }
+    },
+    "/api/v1/users/{id}/grants": {
+      "get": {
+        "operationId": "user_held_grants",
+        "parameters": [
+          {
+            "description": "The user's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items older than this ID: the `next` of the page before.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maxLength": 36,
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many items at most; 50 by default.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeldGrantPage"
+                }
+              }
+            },
+            "description": "One page of the grants the user holds on other users' accounts, newest account first; each says whether the user's role makes it dormant now."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A query that doesn't parse."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Only the Owner reviews a user's grants."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such user, or one the caller can't see."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A `limit` outside 1 to 100."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/users/{id}/grants`: one page of the grants the user holds,\ndormant ones included, newest account first (the Owner's).",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/v1/users/{id}/shared-accounts": {
+      "get": {
+        "operationId": "user_shared_accounts",
+        "parameters": [
+          {
+            "description": "The user's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items older than this ID: the `next` of the page before.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maxLength": 36,
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many items at most; 50 by default.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountPage"
+                }
+              }
+            },
+            "description": "One page of the user's accounts that a grant shares, newest first; `GET /accounts/{id}/grants` lists each one's grants."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A query that doesn't parse."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Only the Owner reviews a user's grants."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such user, or one the caller can't see."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A `limit` outside 1 to 100."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/users/{id}/shared-accounts`: one page of the user's\naccounts that at least one grant shares, newest first (the Owner's).",
+        "tags": [
+          "users"
+        ]
       }
     },
     "/health/live": {

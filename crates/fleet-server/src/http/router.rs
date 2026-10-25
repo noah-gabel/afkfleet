@@ -21,6 +21,8 @@
 //! | `DELETE /api/v1/me/sessions/{id}` | user | ends another of the user's sessions |
 //! | `GET /api/v1/users` | user (Admin+) | one page of users |
 //! | `PATCH /api/v1/users/{id}` | user + step-up (the Owner; Admins for a Member's `disabled`) | one change: a role or `disabled` |
+//! | `GET /api/v1/users/{id}/grants` | user (the Owner) | one page of the grants the user holds, each saying whether it's dormant |
+//! | `GET /api/v1/users/{id}/shared-accounts` | user (the Owner) | one page of the user's accounts that a grant shares |
 //! | `POST /api/v1/invites` | user + step-up (Admin+; Admin invites the Owner) | a new invite and its code |
 //! | `GET /api/v1/invites` | user (Admin+) | one page of invites |
 //! | `DELETE /api/v1/invites/{id}` | user + step-up (as creating) | revokes a pending invite |
@@ -247,6 +249,8 @@ pub fn api_routes(routes: Routes) -> Routes {
         .authed_route(RateClass::Standard, routes!(me::revoke_session))
         .authed_route(RateClass::Standard, routes!(users::list))
         .step_up_route(RateClass::Standard, routes!(users::patch))
+        .authed_route(RateClass::Standard, routes!(users::held_grants))
+        .authed_route(RateClass::Standard, routes!(users::shared_accounts))
         .step_up_route(RateClass::Standard, routes!(invites::create))
         .authed_route(RateClass::Standard, routes!(invites::list))
         .step_up_route(RateClass::Standard, routes!(invites::revoke))

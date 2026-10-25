@@ -15,14 +15,15 @@
 //! opens with. `audit` shows a page of the audit log, `users` every user and
 //! `agents` every agent, for Admins and the Owner; `release` releases a
 //! disabled agent's bots, asking for the password again when the server
-//! wants it (P11.9; ADR-0020, R67).
+//! wants it; `held` and `shared` show the review of a user's grants at a
+//! role change, the Owner's (P11.9; ADR-0020, R67).
 
 use core::fmt::Write as _;
 use core::pin::Pin;
 use core::time::Duration;
 use std::io;
 
-use fleet_api_types::accounts::CreateOfflineAccountRequest;
+use fleet_api_types::accounts::{CreateOfflineAccountRequest, HeldGrantResponse};
 use fleet_api_types::agents::AgentResponse;
 use fleet_api_types::audit::{AuditEntryResponse, AuditPageQuery};
 use fleet_api_types::auth::{LoginRequest, StepUpRequest};
@@ -35,7 +36,9 @@ use fleet_api_types::ids::AgentId;
 use fleet_api_types::modes::{
     CreateModeRequest, ModeOwnership, ModeResponse, ModeVisibility, UpdateModeRequest,
 };
-use fleet_api_types::{BotId, ErrorCode, ErrorResponse, ModeId, PageQuery, SafeInt, SecretText};
+use fleet_api_types::{
+    AccountId, BotId, ErrorCode, ErrorResponse, ModeId, PageQuery, SafeInt, SecretText, UserId,
+};
 use fleet_client::events::{EventsHandshake, Received, SocketClose, read};
 use fleet_client::{Client, ClientError, LoginStep, SessionStore};
 use futures_util::StreamExt as _;
@@ -84,7 +87,7 @@ pub(crate) fn arguments(args: &[String]) -> Option<(&str, &str)> {
 }
 
 /// The commands, as the console lists them.
-pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | mode <id> <mode> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | history <id> [before] | modes | new-mode <json> | edit-mode <id> <json> | delete-mode <id> | events | users | audit [before] | agents | release <agent-id> | quit";
+pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | mode <id> <mode> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | history <id> [before] | modes | new-mode <json> | edit-mode <id> <json> | delete-mode <id> | events | users | audit [before] | agents | release <agent-id> | held <user-id> [before] | shared <user-id> [before] | quit";
 
 /// How many 2FA codes a login may try.
 const CODES: usize = 3;
@@ -136,6 +139,11 @@ enum Command {
     Agents,
     /// A disabled agent's bots released.
     Release(AgentId),
+    /// One page of the grants a user holds: the newest, or the one before
+    /// an account.
+    Held(UserId, Option<AccountId>),
+    /// One page of a user's accounts that a grant shares.
+    Shared(UserId, Option<AccountId>),
     Quit,
 }
 
@@ -143,6 +151,7 @@ impl Command {
     /// `line` as a command; none for anything else.
     fn parse(line: &str) -> Option<Self> {
         let bot = |text: &str| text.parse::<BotId>().ok();
+        let user = |text: &str| text.parse::<UserId>().ok();
         // A line's text is the rest of the line, its spaces kept; a line
         // without text is no command, never an empty line sent.
         if let Some((verb, id, text)) =
@@ -175,6 +184,16 @@ impl Command {
             ["events"] => Some(Self::Events),
             ["users"] => Some(Self::Users),
             ["agents"] => Some(Self::Agents),
+            ["held", id] => user(id).map(|id| Self::Held(id, None)),
+            ["held", id, before] => {
+                let before = before.parse::<AccountId>().ok()?;
+                user(id).map(|id| Self::Held(id, Some(before)))
+            }
+            ["shared", id] => user(id).map(|id| Self::Shared(id, None)),
+            ["shared", id, before] => {
+                let before = before.parse::<AccountId>().ok()?;
+                user(id).map(|id| Self::Shared(id, Some(before)))
+            }
             ["release", id] => id.parse::<AgentId>().ok().map(Self::Release),
             ["audit"] => Some(Self::Audit(None)),
             ["audit", before] => {
@@ -354,6 +373,8 @@ async fn command_of<S: SessionStore>(
         Command::Audit(before) => audit(client, before, terminal).await,
         Command::Agents => agents(client, terminal).await,
         Command::Release(id) => release(client, id, terminal).await,
+        Command::Held(id, before) => held(client, id, before, terminal).await,
+        Command::Shared(id, before) => shared(client, id, before, terminal).await,
         Command::Quit => Ok(()),
     };
     match done {
@@ -483,6 +504,84 @@ async fn release<S: SessionStore>(
         other => other?,
     };
     terminal.say(&agent_line_of(&agent));
+    Ok(())
+}
+
+/// One page of the grants user `id` holds, the one before `before` or the
+/// newest, newest account first, and where the next page starts.
+async fn held<S: SessionStore>(
+    client: &Client<S>,
+    id: UserId,
+    before: Option<AccountId>,
+    terminal: &mut impl Terminal,
+) -> Result<(), ClientError> {
+    let page = client
+        .user_grants(
+            id,
+            &PageQuery {
+                before,
+                limit: None,
+            },
+        )
+        .await?;
+    if page.items.is_empty() {
+        terminal.say("holds no grants");
+    }
+    for grant in &page.items {
+        terminal.say(&held_line_of(grant));
+    }
+    if let Some(next) = page.next {
+        terminal.say(&format!("older: held {id} {next}"));
+    }
+    Ok(())
+}
+
+/// One held grant: the account, its owner, the level, who set it, and
+/// whether it's dormant.
+fn held_line_of(grant: &HeldGrantResponse) -> String {
+    let dormant = if grant.dormant { " (dormant)" } else { "" };
+    format!(
+        "{} {} of {} {} by {}{dormant}",
+        grant.account.id,
+        grant.account.name,
+        grant.owner.username,
+        grant.level.as_str(),
+        grant.granted_by.username
+    )
+}
+
+/// One page of user `id`'s accounts that a grant shares, the one before
+/// `before` or the newest, and where the next page starts.
+async fn shared<S: SessionStore>(
+    client: &Client<S>,
+    id: UserId,
+    before: Option<AccountId>,
+    terminal: &mut impl Terminal,
+) -> Result<(), ClientError> {
+    let page = client
+        .shared_accounts(
+            id,
+            &PageQuery {
+                before,
+                limit: None,
+            },
+        )
+        .await?;
+    if page.items.is_empty() {
+        terminal.say("shares no accounts");
+    }
+    for account in &page.items {
+        terminal.say(&format!(
+            "{} {} {} {}",
+            account.id,
+            account.name,
+            account.kind.as_str(),
+            account.status.as_str()
+        ));
+    }
+    if let Some(next) = page.next {
+        terminal.say(&format!("older: shared {id} {next}"));
+    }
     Ok(())
 }
 
@@ -1149,6 +1248,44 @@ mod tests {
                 assert_eq!(Command::parse(&line), None, "{line:?}");
             }
         }
+    }
+
+    #[test]
+    fn held_and_shared_take_a_user_and_maybe_the_account_to_page_before() {
+        let user = "018bcfe5-6800-7303-8303-030303030303";
+        let account = "018bcfe5-6800-7404-8404-040404040404";
+        let (user_id, account_id): (UserId, AccountId) =
+            (user.parse().unwrap(), account.parse().unwrap());
+
+        assert_eq!(
+            Command::parse(&format!("held {user}")),
+            Some(Command::Held(user_id, None))
+        );
+        assert_eq!(
+            Command::parse(&format!(" shared {user} {account} ")),
+            Some(Command::Shared(user_id, Some(account_id)))
+        );
+        assert_eq!(Command::parse("held"), None);
+        assert_eq!(Command::parse("shared not-an-id"), None);
+        assert_eq!(Command::parse(&format!("held {user} x")), None);
+    }
+
+    #[test]
+    fn a_held_line_names_the_account_its_owner_and_whether_its_dormant() {
+        let grant: HeldGrantResponse = serde_json::from_value(serde_json::json!({
+            "account": { "id": "018bcfe5-6800-7404-8404-040404040404", "name": "AfkBot4" },
+            "owner": { "id": "018bcfe5-6800-7202-8202-020202020202", "username": "alice" },
+            "level": "control",
+            "granted_by": { "id": "018bcfe5-6800-7202-8202-020202020202", "username": "alice" },
+            "granted_at": "2027-01-15T08:00:00.000Z",
+            "dormant": true
+        }))
+        .unwrap();
+
+        assert_eq!(
+            held_line_of(&grant),
+            "018bcfe5-6800-7404-8404-040404040404 AfkBot4 of alice control by alice (dormant)"
+        );
     }
 
     #[test]

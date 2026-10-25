@@ -28,7 +28,7 @@ use ts_rs::{Config, ExportError, TS};
 use crate::accounts::{
     AccountPage, AccountResponse, ChangeGrantRequest, CreateGrantRequest,
     CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
-    LinkFlowResponse, LinkStartedResponse,
+    HeldGrantPage, LinkFlowResponse, LinkStartedResponse,
 };
 use crate::agents::{AgentPage, AgentResponse, AgentStatus, CreatedEnrollmentTokenResponse};
 use crate::app::{
@@ -219,7 +219,8 @@ fn write_api(config: &Config) -> Result<(), TypeScriptError> {
     UpdateModeRequest::export_all(config).map_err(TypeScriptError::Export)?;
     EventTicketResponse::export_all(config).map_err(TypeScriptError::Export)?;
     EventMessage::export_all(config).map_err(TypeScriptError::Export)?;
-    AuditPage::export_all(config).map_err(TypeScriptError::Export)
+    AuditPage::export_all(config).map_err(TypeScriptError::Export)?;
+    HeldGrantPage::export_all(config).map_err(TypeScriptError::Export)
 }
 
 /// Writes the app's root IPC types, and every type they use.
