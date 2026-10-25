@@ -14,10 +14,15 @@
 //! change that. tungstenite's `debug` line with the URL is in its blocking
 //! client's `connect_to_some`, which tokio-tungstenite never calls.
 
+pub(crate) mod policy;
 pub(crate) mod upgrade;
 
 use fleet_api_types::events::EventMessage;
 pub use fleet_api_types::events::{Received, SocketClose};
+pub use policy::{
+    CLOSE_TIMEOUT, READY_TIMEOUT, RECONNECT_BASE, RECONNECT_MAX, RETRY_AFTER_MAX, SILENCE_TIMEOUT,
+    STABLE_AFTER,
+};
 #[cfg(feature = "dev-console")]
 use secrecy::SecretString;
 
