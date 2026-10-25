@@ -25,7 +25,7 @@ use super::{
     Database, accounts, agents, audit, enrollment_tokens, envelopes, grants, invites,
     login_attempts, mfa, sessions, users,
 };
-use super::{bots, chat, modes};
+use super::{bots, chat, modes, retention};
 use crate::ports::accounts::{
     AccountReads, AccountWrites, DeletedAccount, InsertAccountError, ListedAccount, McAccount,
 };
@@ -56,6 +56,7 @@ use crate::ports::modes::{
 };
 use crate::ports::page::Page;
 use crate::ports::recovery_codes::RecoveryCodeHash;
+use crate::ports::retention::{RetentionReads, RetentionWrites};
 use crate::ports::sessions::{
     LiveSince, NewSession, RefreshLookup, Rotation, Session, SessionReads, SessionWithUser,
     SessionWrites,
@@ -442,6 +443,10 @@ impl WriteTx for SqliteWriteTx {
     }
 
     fn audit(&mut self) -> &mut dyn AuditWrites {
+        self
+    }
+
+    fn retention(&mut self) -> &mut dyn RetentionWrites {
         self
     }
 
@@ -1007,6 +1012,81 @@ impl AuditWrites for SqliteWriteTx {
 }
 
 #[async_trait]
+impl RetentionReads for Reads {
+    async fn bots(&self) -> Result<Vec<BotId>, StoreError> {
+        retention::bots(&self.pool).await
+    }
+
+    async fn chat_cut(&self, bot: BotId, keep: u32) -> Result<Option<ChatMessageId>, StoreError> {
+        retention::chat_cut(&self.pool, bot, keep).await
+    }
+
+    async fn audit_cut(&self, before: DateTime<Utc>) -> Result<Option<AuditEntryId>, StoreError> {
+        retention::audit_cut(&self.pool, before).await
+    }
+}
+
+#[async_trait]
+impl RetentionWrites for SqliteWriteTx {
+    async fn delete_expired_rotations(
+        &mut self,
+        created_by: DateTime<Utc>,
+        limit: u32,
+    ) -> Result<u64, StoreError> {
+        retention::delete_expired_rotations(&mut self.tx, created_by, limit).await
+    }
+
+    async fn delete_expired_sessions(
+        &mut self,
+        created_by: DateTime<Utc>,
+        limit: u32,
+    ) -> Result<u64, StoreError> {
+        retention::delete_expired_sessions(&mut self.tx, created_by, limit).await
+    }
+
+    async fn delete_chat_received_by(
+        &mut self,
+        received_by: DateTime<Utc>,
+        limit: u32,
+    ) -> Result<u64, StoreError> {
+        retention::delete_chat_received_by(&mut self.tx, received_by, limit).await
+    }
+
+    async fn delete_chat_through(
+        &mut self,
+        bot: BotId,
+        cut: ChatMessageId,
+        limit: u32,
+    ) -> Result<u64, StoreError> {
+        retention::delete_chat_through(&mut self.tx, bot, cut, limit).await
+    }
+
+    async fn delete_audit_through(
+        &mut self,
+        cut: AuditEntryId,
+        limit: u32,
+    ) -> Result<u64, StoreError> {
+        retention::delete_audit_through(&mut self.tx, cut, limit).await
+    }
+
+    async fn delete_unused_invites(
+        &mut self,
+        expired_by: DateTime<Utc>,
+        limit: u32,
+    ) -> Result<u64, StoreError> {
+        retention::delete_unused_invites(&mut self.tx, expired_by, limit).await
+    }
+
+    async fn delete_unused_enrollment_tokens(
+        &mut self,
+        expired_by: DateTime<Utc>,
+        limit: u32,
+    ) -> Result<u64, StoreError> {
+        retention::delete_unused_enrollment_tokens(&mut self.tx, expired_by, limit).await
+    }
+}
+
+#[async_trait]
 impl Store for Database {
     async fn write(&self) -> Result<Box<dyn WriteTx>, StoreError> {
         let tx = self
@@ -1073,6 +1153,10 @@ impl Store for Database {
     }
 
     fn audit(&self) -> &dyn AuditReads {
+        &self.reads
+    }
+
+    fn retention(&self) -> &dyn RetentionReads {
         &self.reads
     }
 

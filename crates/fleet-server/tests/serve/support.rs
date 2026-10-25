@@ -14,16 +14,19 @@ use std::thread;
 
 use axum::Router;
 use chrono::DateTime;
-use fleet_core::auth::LockoutPolicy;
+use fleet_core::auth::{LockoutPolicy, SessionPolicy};
+use fleet_core::retention::RetentionPolicy;
 use fleet_core::system::Clock;
 use fleet_server::app::challenges::Challenges;
 use fleet_server::app::event_tickets::EventTickets;
 use fleet_server::app::lockout::LockoutService;
+use fleet_server::app::retention::{RetentionService, RetentionTimings};
 use fleet_server::cli::housekeeping::Housekeeping;
+use fleet_server::cli::retention::Retention;
 use fleet_server::cli::serve::App;
 use fleet_server::config::{
-    AccountsConfig, AuthConfig, ChatConfig, DatabaseConfig, HttpConfig, LogConfig, LogFormat,
-    RateLimitConfig, ServerConfig, VaultConfig,
+    AccountsConfig, AuditConfig, AuthConfig, ChatConfig, DatabaseConfig, HttpConfig, LogConfig,
+    LogFormat, RateLimitConfig, ServerConfig, VaultConfig,
 };
 use fleet_server::grpc::registry::AgentRegistry;
 use fleet_server::http::rate_limit::RateLimits;
@@ -135,6 +138,7 @@ pub(crate) fn server_config(dir: &Path, bind: SocketAddr, dev_mode: bool) -> Ser
         },
         accounts: AccountsConfig::default(),
         chat: ChatConfig::default(),
+        audit: AuditConfig::default(),
         grpc: None,
     }
 }
@@ -316,9 +320,10 @@ pub(crate) fn capture() -> (LogBuffer, tracing::subscriber::DefaultGuard) {
     (buffer, guard)
 }
 
-/// `router` with the housekeeping `serve` runs beside it: the default
-/// limits, a lockout over `database`, an empty challenge store and idle
-/// link flows, on a clock that never moves, with a fixed lockout key.
+/// `router` with the housekeeping and the retention `serve` runs beside it:
+/// the default limits, a lockout over `database`, an empty challenge store,
+/// idle link flows and the default retention, on a clock that never moves,
+/// with a fixed lockout key.
 pub(crate) fn app_of(router: Router, database: &Database) -> App {
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(
         DateTime::from_timestamp_millis(1_800_000_000_000).unwrap(),
@@ -334,8 +339,20 @@ pub(crate) fn app_of(router: Router, database: &Database) -> App {
         Arc::new(Sha256Tokens::new(Arc::new(SeededRandom::new(9)))),
     );
     let link_flows = idle_link_flows(database);
+    let timings = RetentionTimings::default();
+    let retention = Retention::new(
+        RetentionService::new(
+            Arc::clone(&clock),
+            Arc::new(database.clone()),
+            RetentionPolicy::default(),
+            SessionPolicy::default(),
+            timings.pause,
+        ),
+        timings,
+    );
     App {
         router,
+        retention,
         housekeeping: Housekeeping::new(
             RateLimits::new(&RateLimitConfig::default(), Arc::clone(&clock)),
             lockout,

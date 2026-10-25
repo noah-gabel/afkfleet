@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 use garde::Validate;
 use serde::Deserialize;
 
-use super::{AccountsConfig, Argon2Params, GrpcConfig, RateLimitConfig};
+use super::{AccountsConfig, Argon2Params, AuditConfig, ChatConfig, GrpcConfig, RateLimitConfig};
 
 /// A range of a numeric key, inclusive at both ends.
 pub(crate) struct Range {
@@ -68,6 +68,9 @@ pub(crate) struct RawConfig {
     #[serde(default)]
     #[garde(skip)]
     pub(crate) chat: RawChat,
+    #[serde(default)]
+    #[garde(skip)]
+    pub(crate) audit: RawAudit,
     /// Absent means the control plane is off.
     #[serde(default)]
     #[garde(dive)]
@@ -310,11 +313,41 @@ impl Default for RawAccounts {
 }
 
 /// `[chat]`. A missing `command_allowlist` is empty: every command needs
-/// Manage.
-#[derive(Debug, Default, Deserialize)]
+/// Manage. Validation checks the retention's ranges, so a problem names
+/// the key.
+#[derive(Debug, Deserialize)]
 #[serde(default, deny_unknown_fields, expecting = "a table of chat settings")]
 pub(crate) struct RawChat {
     pub(crate) command_allowlist: Vec<String>,
+    pub(crate) retention_days: u32,
+    pub(crate) max_lines_per_bot: u32,
+}
+
+impl Default for RawChat {
+    fn default() -> Self {
+        let chat = ChatConfig::default();
+        Self {
+            command_allowlist: Vec::new(),
+            retention_days: chat.retention.days(),
+            max_lines_per_bot: chat.bound.lines(),
+        }
+    }
+}
+
+/// `[audit]`. A missing `retention_days` is 365; validation checks its
+/// range.
+#[derive(Debug, Deserialize)]
+#[serde(default, deny_unknown_fields, expecting = "a table of audit settings")]
+pub(crate) struct RawAudit {
+    pub(crate) retention_days: u32,
+}
+
+impl Default for RawAudit {
+    fn default() -> Self {
+        Self {
+            retention_days: AuditConfig::default().retention.days(),
+        }
+    }
 }
 
 /// `[database]`. `path` is required.
@@ -657,6 +690,10 @@ mod secret_names {
             "accounts.allow_offline",
             "chat",
             "chat.command_allowlist",
+            "chat.retention_days",
+            "chat.max_lines_per_bot",
+            "audit",
+            "audit.retention_days",
             "grpc",
             "grpc.bind",
             "grpc.ca_cert_file",

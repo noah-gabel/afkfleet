@@ -55,5 +55,6 @@ expression: names
   "bot.send_command",
   "mode.create",
   "mode.update",
-  "mode.delete"
+  "mode.delete",
+  "retention.purge"
 ]

@@ -5,7 +5,8 @@
 //! ingest appends what bots received and what their modes said inside its
 //! batch's write transaction, a user's send appends their line inside its
 //! own audited one ([`ChatWrites::append`]), P11.3 pages through a bot's
-//! chat ([`ChatReads::page`]), and P11.6's retention deletes old rows. No
+//! chat ([`ChatReads::page`]), and P11.6's retention deletes old rows,
+//! through a port of its own (`ports::retention`). No
 //! row changes once written: a user's line records what they asked the bot
 //! to send, never whether it went out (S7).
 

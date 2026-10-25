@@ -17,16 +17,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use axum::Router;
 use axum::extract::State;
 use axum::routing::get;
+use fleet_server::app::retention::RetentionTimings;
 use fleet_server::cli::healthcheck;
 use fleet_server::cli::serve::{self, Exit, ShutdownTimeouts, Watched};
 use fleet_server::config::DatabaseConfig;
 use fleet_server::infra::sqlite::{self, Database, DatabaseOptions};
+use fleet_server::ports::store::Store as _;
 use fleet_startup::signals::Signal;
 use fleet_testkit::log_buffer::LogBuffer;
 use tempfile::TempDir;
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 use tokio::net::TcpStream;
 use tokio::sync::Notify;
+use tokio::sync::broadcast::error::TryRecvError;
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
@@ -1038,4 +1041,64 @@ async fn a_server_stopped_by_a_signal_leaves_no_wal_or_shm() {
     assert!(dir.join("afkfleet.db").is_file());
     assert!(!dir.join("afkfleet.db-wal").exists());
     assert!(!dir.join("afkfleet.db-shm").exists());
+}
+
+/// The retention task (P11.6; ADR-0020, S45, U20) runs without the control
+/// plane: an audit entry older than its 365 days is deleted, nothing is
+/// published on the bus, and at the signal its summary is recorded before
+/// the database closes.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn the_retention_runs_without_the_control_plane_and_sums_up_before_the_database_closes() {
+    let (dir, database) = database().await;
+    // The app's clock stands at 1_800_000_000_000 ms: 2027-01-15T08:00:00Z.
+    sqlx::query!(
+        "INSERT INTO audit_log (at, action, outcome)
+         VALUES ('2025-12-01T08:00:00.000Z', 'test.long_ago', 'success')"
+    )
+    .execute(database.write_pool())
+    .await
+    .unwrap();
+    let mut app = app_of(Router::new(), &database);
+    app.retention = app.retention.with_timings(RetentionTimings {
+        interval: Duration::from_millis(10),
+        pause: Duration::ZERO,
+        summary_every: 1000,
+    });
+    let mut bus = app.events.subscribe();
+    let (listener, _address) = listener().await;
+    let (sender, signals) = ChannelSignals::new();
+    let mut commits = database.commits();
+    let server = tokio::spawn({
+        let database = database.clone();
+        async move { serve::serve(listener, None, app, &database, signals, TIMEOUTS).await }
+    });
+
+    within("the old entry should be deleted", commits.changed())
+        .await
+        .unwrap();
+    sender.send(Signal::Terminate).await.unwrap();
+    let exit = within("the server should stop", server).await.unwrap();
+
+    assert_eq!(exit, Exit::Stopped);
+    // Closed with the app, or empty: nothing was published either way.
+    assert!(
+        matches!(
+            bus.try_recv(),
+            Err(TryRecvError::Empty | TryRecvError::Closed)
+        ),
+        "the retention publishes nothing"
+    );
+    let config = DatabaseConfig {
+        path: dir.path().join("afkfleet.db"),
+    };
+    let reopened = sqlite::open(&config, DatabaseOptions::default())
+        .await
+        .unwrap();
+    let actions: Vec<String> =
+        sqlx::query_scalar!(r#"SELECT action AS "action!" FROM audit_log ORDER BY id"#)
+            .fetch_all(reopened.read_pool())
+            .await
+            .unwrap();
+    assert_eq!(actions, ["retention.purge"]);
+    reopened.close().await;
 }

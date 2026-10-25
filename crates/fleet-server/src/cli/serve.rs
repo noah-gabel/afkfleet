@@ -25,9 +25,11 @@
 //! - **Every connection carries its peer's address** (axum's
 //!   `into_make_service_with_connect_info`): the per-IP limits need it, and a
 //!   request without it is refused as a wiring bug.
-//! - **The housekeeping** is the server's one long-lived background task,
-//!   owned by [`serve`]'s `JoinSet`, and stops at the first signal through a
-//!   child of the shutdown token.
+//! - **The housekeeping** and **the retention task** (P11.6; ADR-0020,
+//!   S45) are the server's long-lived background tasks, owned by
+//!   [`serve`]'s `JoinSet`, with or without the control plane, and stop at the
+//!   first signal through a child of the shutdown token; the retention
+//!   records its summary at the stop, before the database closes.
 //! - **The link flows** (P9.4) poll Microsoft on their service's own
 //!   tasks; a task on the same `JoinSet` stops them at the first signal and
 //!   waits for them (ADR-0018).
@@ -50,7 +52,8 @@
 //!    logged at `warn` and left: axum owns its connection tasks, and the
 //!    runtime's shutdown ends them right after.
 //! 3. The housekeeping ends (it stopped at the signal, or after its current
-//!    purge batch), the link flows (each stopped at the signal, or after a
+//!    purge batch), the retention task (after its current batch, and its
+//!    summary, which waits at most 1 s for the write connection), the link flows (each stopped at the signal, or after a
 //!    commit that started) and the reconciler (after its current pass),
 //!    then the database closes, all with the rest of the deadline, at least
 //!    [`DATABASE_CLOSE`]. If that doesn't finish in time, that's an `error`
@@ -83,6 +86,7 @@ use tracing::{error, info, warn};
 
 use super::DATABASE_CLOSE;
 use super::housekeeping::Housekeeping;
+use super::retention::Retention;
 use crate::app::accounts::{AccountService, AccountSettings};
 use crate::app::agents::ingest::{IngestBounds, IngestTimings, IngestWriter, ingest};
 use crate::app::agents::{
@@ -102,6 +106,7 @@ use crate::app::lockout::LockoutService;
 use crate::app::login::LoginService;
 use crate::app::mfa::{MfaPorts, MfaService};
 use crate::app::modes::ModeService;
+use crate::app::retention::{RetentionService, RetentionTimings};
 use crate::app::session_tokens::{SessionTokenPorts, SessionTokenService};
 use crate::app::users::UserService;
 use crate::config::{HttpConfig, ServerConfig};
@@ -255,8 +260,8 @@ pub fn cant_start(error: &StartError) -> Exit {
     Exit::StartupFailed
 }
 
-/// What [`serve`] runs: the router, its periodic housekeeping, and the link
-/// flows it stops at the first signal.
+/// What [`serve`] runs: the router, its periodic housekeeping and retention,
+/// and the link flows it stops at the first signal.
 #[derive(Debug)]
 pub struct App {
     /// Every route behind the middleware stack.
@@ -264,6 +269,9 @@ pub struct App {
     /// The background task that looks after the rate limits, the lockout,
     /// the login's challenges and the finished link flows.
     pub housekeeping: Housekeeping,
+    /// The background task that deletes what the retention no longer keeps
+    /// (P11.6).
+    pub retention: Retention,
     /// The Microsoft link flows, whose pollers run until the shutdown.
     pub link_flows: LinkFlowService,
     /// The gRPC port's services, while the control plane is on: [`run`]
@@ -468,14 +476,12 @@ pub fn app_with(
     let limits = RateLimits::new(&config.rate_limits, limiter_clock);
     let lockout = lockout_service(config, &clock, &store, lockout_key);
     let users = user_service(&clock, &random, &store, &passwords, &hints);
-    let login = LoginService::new(
-        Arc::clone(&clock),
-        Arc::clone(&random),
-        Arc::clone(&store),
+    let login = login_service(
+        &clock,
+        &random,
+        &store,
         passwords,
-        lockout.clone(),
-        tokens.clone(),
-        mfa.clone(),
+        (&lockout, &tokens, &mfa),
     );
     let grants =
         GrantService::new(Arc::clone(&clock), Arc::clone(&store)).with_live_hints(hints.live());
@@ -483,6 +489,7 @@ pub fn app_with(
     let (agents, agent_service) = agent_services(&clock, &store, &hints);
     let modes = mode_service(config, &clock, &random, &store, &hints);
     let bots = bot_service(config, &clock, &random, &store, &agents, &events, reconcile);
+    let retention = retention(config, &clock, &store);
     let shutdown = CancellationToken::new();
     let (sockets, live) = live_events(&tickets, &events, &store, &shutdown);
     let (enrollment_tokens, grpc) = control_plane_services(
@@ -528,6 +535,7 @@ pub fn app_with(
             ApiDocs::for_dev_mode(config.dev_mode),
         ),
         housekeeping: housekeeping(limits, lockout, challenges, tickets, &link_flows, agents),
+        retention,
         link_flows,
         grpc,
         events,
@@ -552,6 +560,42 @@ fn live_events(
         LiveRights::new(Arc::clone(store)),
     );
     (sockets, live)
+}
+
+/// Logging in over the app's ports, `passwords`, and its lockout, tokens
+/// and second factor.
+fn login_service(
+    clock: &Arc<dyn Clock>,
+    random: &Arc<dyn SecureRandom>,
+    store: &Arc<dyn Store>,
+    passwords: Arc<dyn Passwords>,
+    (lockout, tokens, mfa): (&LockoutService, &TokenService, &MfaService),
+) -> LoginService {
+    LoginService::new(
+        Arc::clone(clock),
+        Arc::clone(random),
+        Arc::clone(store),
+        passwords,
+        lockout.clone(),
+        tokens.clone(),
+        mfa.clone(),
+    )
+}
+
+/// The retention task over `store`, by the config's retention and session
+/// lifetimes, at its default pace.
+fn retention(config: &ServerConfig, clock: &Arc<dyn Clock>, store: &Arc<dyn Store>) -> Retention {
+    let timings = RetentionTimings::default();
+    Retention::new(
+        RetentionService::new(
+            Arc::clone(clock),
+            Arc::clone(store),
+            config.retention(),
+            config.auth.sessions,
+            timings.pause,
+        ),
+        timings,
+    )
 }
 
 /// The housekeeping of the app's limits, lockout, login challenges, live
@@ -1068,9 +1112,9 @@ async fn warn_about_kept_offline_accounts(config: &ServerConfig, database: &Data
 }
 
 /// Serves `app` on `listener`, every connection with its peer's address,
-/// and the `grpc` port if there is one, and runs the housekeeping, until a
-/// signal from `signals` stops them; then shuts down within `timeouts`,
-/// waits for the housekeeping and closes `database`.
+/// and the `grpc` port if there is one, and runs the housekeeping and the
+/// retention, until a signal from `signals` stops them; then shuts down
+/// within `timeouts`, waits for both and closes `database`.
 pub async fn serve<S: ShutdownSignals>(
     listener: TcpListener,
     grpc: Option<GrpcPort>,
@@ -1082,6 +1126,7 @@ pub async fn serve<S: ShutdownSignals>(
     let shutdown = app.shutdown;
     let mut background = JoinSet::new();
     background.spawn(app.housekeeping.run(shutdown.child_token()));
+    background.spawn(app.retention.run(shutdown.child_token()));
     let flows_stop = shutdown.child_token();
     let link_flows = app.link_flows;
     background.spawn(async move {

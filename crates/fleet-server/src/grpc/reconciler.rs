@@ -14,12 +14,13 @@
 //! 5. only then tells the agents: a welcome's one full reconcile, or one
 //!    message per bot, each checked against the stream's generation.
 //!
-//! **The live events** (ADR-0020, S42, R37): a pass ends by telling the
+//! **The live events** (ADR-0020, S42, R37, R45): a pass ends by telling the
 //! sockets, in one hint, which bots may read differently: every bot one of
 //! its writes changed or a stream now holds, and every bot whose row now
-//! names another agent, or an agent that shows otherwise than at the last
-//! pass (its stream, its enabled flag, its certificate's expiry). The first
-//! pass only notes what it saw.
+//! names another agent, or an agent that shows otherwise than in the rows
+//! the last pass's writes left (its stream, its enabled flag, its
+//! certificate's expiry), so a write is told once. The first pass only notes
+//! what it saw.
 //!
 //! **Facts live in state**, never only in a hint: a hint that's lost costs
 //! latency, never correctness. `QueueFull` and `NotConnected` mean the
@@ -941,9 +942,10 @@ impl Notes {
     }
 }
 
-/// What a pass saw of each bot's agent (R37): the agent its row names, and
-/// that agent's status as a bot's read shows it, with its stream's
-/// generation. A change since the last pass changes what the bot reads as.
+/// What a pass saw of each bot's agent (R37), in the rows its own writes
+/// left (R45): the agent its row names, and that agent's status as a bot's
+/// read shows it, with its stream's generation. A change since the last
+/// pass changes what the bot reads as.
 #[derive(Debug, PartialEq, Eq)]
 struct Observed(BTreeMap<BotId, (Option<AgentId>, Option<AgentShown>)>);
 

@@ -63,6 +63,7 @@ struct Pragmas {
     foreign_keys: Option<i64>,
     busy_timeout: Option<i64>,
     trusted_schema: Option<i64>,
+    secure_delete: Option<i64>,
     query_only: Option<i64>,
 }
 
@@ -89,6 +90,10 @@ async fn pragmas(pool: &SqlitePool) -> Pragmas {
             .await
             .unwrap(),
         trusted_schema: sqlx::query_scalar!("PRAGMA trusted_schema")
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap(),
+        secure_delete: sqlx::query_scalar!("PRAGMA secure_delete")
             .fetch_one(&mut *conn)
             .await
             .unwrap(),
@@ -523,6 +528,7 @@ async fn the_write_connection_has_the_production_pragmas() {
             foreign_keys: Some(1),
             busy_timeout: Some(5_000),
             trusted_schema: Some(0),
+            secure_delete: Some(1),
             query_only: Some(0),
         }
     );
@@ -544,6 +550,7 @@ async fn read_connections_have_the_production_pragmas() {
             foreign_keys: Some(1),
             busy_timeout: Some(5_000),
             trusted_schema: Some(0),
+            secure_delete: Some(1),
             query_only: Some(1),
         }
     );

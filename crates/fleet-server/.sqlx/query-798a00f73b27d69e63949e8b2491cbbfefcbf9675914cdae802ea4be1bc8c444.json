@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM invites WHERE rowid IN (\n             SELECT rowid FROM invites\n             WHERE used_at IS NULL AND expires_at <= ?\n             ORDER BY expires_at LIMIT ?\n         )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "798a00f73b27d69e63949e8b2491cbbfefcbf9675914cdae802ea4be1bc8c444"
+}

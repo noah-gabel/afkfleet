@@ -190,82 +190,89 @@ async fn disabling_an_agent_hints_its_bots_after_its_commit(
     assert_eq!(after_again.0, after_again.1, "a disabled agent's disable");
 }
 
+/// Each audited action, in `AuditAction::ALL`'s order, and what it tells the
+/// live events sockets.
+const LABELS: &[(&str, &str)] = &[
+    ("user.create", "nothing: a new user has no bots"),
+    ("security.refresh_token_reuse", "nothing: a session"),
+    ("security.lockout", "nothing: a login's counter"),
+    ("mfa.enroll", "nothing: a user's second factor"),
+    ("mfa.reset", "nothing: a user's second factor"),
+    ("auth.login", "nothing: a session"),
+    ("auth.logout", "nothing: a session"),
+    ("auth.step_up", "nothing: a session"),
+    ("user.set_role", "role"),
+    ("user.set_disabled", "bots"),
+    ("invite.create", "nothing: an invite"),
+    ("invite.revoke", "nothing: an invite"),
+    ("invite.use", "nothing: an invite"),
+    ("user.change_password", "nothing: a password"),
+    ("session.revoke", "nothing: a session"),
+    ("vault.rotate_key", "nothing: sealed envelopes, never shown"),
+    ("account.refresh", "nothing: a token, never shown"),
+    ("account.set_status", "bots"),
+    ("account.rename", "bots"),
+    ("security.account_profile_mismatch", "bots"),
+    ("account.start_link", "nothing: a flow has no bot yet"),
+    ("account.link", "bots"),
+    ("account.approve", "bots"),
+    ("account.refuse", "bots"),
+    ("account.delete", "bots"),
+    ("account.relink", "bots"),
+    ("grant.create", "bots"),
+    ("grant.set_level", "bots"),
+    ("grant.revoke", "bots"),
+    ("enrollment_token.create", "nothing: a token"),
+    ("enrollment_token.use", "nothing: a new agent has no bots"),
+    ("agent.enroll", "nothing: a new agent has no bots"),
+    ("agent.connect", "bots"),
+    ("agent.disconnect", "bots"),
+    (
+        "security.agent_identity_conflict",
+        "nothing: a refused stream",
+    ),
+    ("agent.disable", "bots"),
+    ("bot.assign", "bots"),
+    ("bot.unassign", "bots"),
+    ("bot.detach", "bots"),
+    ("bot.stray", "nothing: a fence no read shows"),
+    ("agent.release", "bots"),
+    ("bot.set_server", "bots"),
+    ("bot.set_mode", "bots"),
+    ("bot.start", "bots"),
+    ("bot.stop", "bots"),
+    (
+        "bot.restart",
+        "nothing: sent to the stream, whose report follows",
+    ),
+    (
+        "bot.reset",
+        "bots: a sticky state cleared; a sent one's report follows",
+    ),
+    (
+        "bot.resume",
+        "bots: a sticky state cleared; a sent one's report follows",
+    ),
+    ("bot.send_chat", "chat"),
+    ("bot.send_command", "chat"),
+    ("mode.create", "mode"),
+    ("mode.update", "mode"),
+    ("mode.delete", "mode"),
+    (
+        "retention.purge",
+        "nothing: deleted chat is fetched, not pushed (S42); the summary of rows no socket shows",
+    ),
+];
+
 /// What each audited write tells the live events sockets, so no new action
 /// goes unconsidered: `bots` when what a bot reads as may change, `mode`
 /// for a mode's writes, `role` for a role change, `chat` for a user's line
-/// (published by its send), or nothing, with why. A write without an audit
-/// entry says so too, in a match a new one doesn't compile without (E's
-/// retention, say).
+/// (published by its send), or nothing, with why ([`LABELS`]). A write
+/// without an audit entry says so too, in a match a new one doesn't compile
+/// without (the retention's, say).
 #[test]
 fn every_audit_action_is_labelled_with_what_it_tells_the_sockets() {
-    let labels: &[(&str, &str)] = &[
-        ("user.create", "nothing: a new user has no bots"),
-        ("security.refresh_token_reuse", "nothing: a session"),
-        ("security.lockout", "nothing: a login's counter"),
-        ("mfa.enroll", "nothing: a user's second factor"),
-        ("mfa.reset", "nothing: a user's second factor"),
-        ("auth.login", "nothing: a session"),
-        ("auth.logout", "nothing: a session"),
-        ("auth.step_up", "nothing: a session"),
-        ("user.set_role", "role"),
-        ("user.set_disabled", "bots"),
-        ("invite.create", "nothing: an invite"),
-        ("invite.revoke", "nothing: an invite"),
-        ("invite.use", "nothing: an invite"),
-        ("user.change_password", "nothing: a password"),
-        ("session.revoke", "nothing: a session"),
-        ("vault.rotate_key", "nothing: sealed envelopes, never shown"),
-        ("account.refresh", "nothing: a token, never shown"),
-        ("account.set_status", "bots"),
-        ("account.rename", "bots"),
-        ("security.account_profile_mismatch", "bots"),
-        ("account.start_link", "nothing: a flow has no bot yet"),
-        ("account.link", "bots"),
-        ("account.approve", "bots"),
-        ("account.refuse", "bots"),
-        ("account.delete", "bots"),
-        ("account.relink", "bots"),
-        ("grant.create", "bots"),
-        ("grant.set_level", "bots"),
-        ("grant.revoke", "bots"),
-        ("enrollment_token.create", "nothing: a token"),
-        ("enrollment_token.use", "nothing: a new agent has no bots"),
-        ("agent.enroll", "nothing: a new agent has no bots"),
-        ("agent.connect", "bots"),
-        ("agent.disconnect", "bots"),
-        (
-            "security.agent_identity_conflict",
-            "nothing: a refused stream",
-        ),
-        ("agent.disable", "bots"),
-        ("bot.assign", "bots"),
-        ("bot.unassign", "bots"),
-        ("bot.detach", "bots"),
-        ("bot.stray", "nothing: a fence no read shows"),
-        ("agent.release", "bots"),
-        ("bot.set_server", "bots"),
-        ("bot.set_mode", "bots"),
-        ("bot.start", "bots"),
-        ("bot.stop", "bots"),
-        (
-            "bot.restart",
-            "nothing: sent to the stream, whose report follows",
-        ),
-        (
-            "bot.reset",
-            "bots: a sticky state cleared; a sent one's report follows",
-        ),
-        (
-            "bot.resume",
-            "bots: a sticky state cleared; a sent one's report follows",
-        ),
-        ("bot.send_chat", "chat"),
-        ("bot.send_command", "chat"),
-        ("mode.create", "mode"),
-        ("mode.update", "mode"),
-        ("mode.delete", "mode"),
-    ];
-
+    let labels = LABELS;
     let labelled: Vec<&str> = labels.iter().map(|(name, _)| *name).collect();
     let actions: Vec<&str> = AuditAction::ALL.iter().map(AuditAction::as_str).collect();
 
@@ -287,12 +294,16 @@ fn every_audit_action_is_labelled_with_what_it_tells_the_sockets() {
         UnauditedWrite::EventBatch => {
             "nothing: its lines and the agent's reports are on the bus already"
         }
+        UnauditedWrite::RetentionPurge => {
+            "nothing: deleted chat is fetched, not pushed (S42); ended sessions, old entries, invites and enrollment tokens no socket shows"
+        }
     };
     for write in [
         UnauditedWrite::SessionTouch,
         UnauditedWrite::SessionRotate,
         UnauditedWrite::LoginAttemptsPurge,
         UnauditedWrite::EventBatch,
+        UnauditedWrite::RetentionPurge,
     ] {
         assert!(unaudited(&write).starts_with("nothing"), "{write:?}");
     }

@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "DELETE FROM rotated_refresh_tokens WHERE rowid IN (\n             SELECT r.rowid FROM sessions s\n             JOIN rotated_refresh_tokens r ON r.session_id = s.id\n             WHERE s.created_at <= ?\n             LIMIT ?\n         )",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": []
+  },
+  "hash": "1453dcbff4313974f68e9c1575145ed1e0297ad4dfc000b4b46f4d250d1bd848"
+}

@@ -17,10 +17,11 @@ use figment::Jail;
 use fleet_core::auth::{InviteTtl, LockoutPolicy, SessionPolicy};
 use fleet_core::authz::{CommandAllowlist, CommandAllowlistError};
 use fleet_core::chat::ChatRate;
+use fleet_core::retention::{AuditRetention, ChatBound, ChatRetention};
 use fleet_server::config::{
-    AccountsConfig, Argon2Params, AuthConfig, ChatConfig, ConfigError, DatabaseConfig, GrpcConfig,
-    Heartbeats, HttpConfig, LinkFlowLimits, LogConfig, LogFilterError, LogFormat, ParseError,
-    ParseProblem, ParseSource, PkiPaths, ProblemKind, Problems, Rate, RateLimitConfig,
+    AccountsConfig, Argon2Params, AuditConfig, AuthConfig, ChatConfig, ConfigError, DatabaseConfig,
+    GrpcConfig, Heartbeats, HttpConfig, LinkFlowLimits, LogConfig, LogFilterError, LogFormat,
+    ParseError, ParseProblem, ParseSource, PkiPaths, ProblemKind, Problems, Rate, RateLimitConfig,
     ServerConfig, UnknownLogFormatError, VaultConfig, load,
 };
 use fleet_server::http::rate_limit::{IpNet, IpNetError, TrustedProxies};
@@ -199,6 +200,7 @@ fn only_the_database_path_and_the_vault_are_required() {
                 rate_limits: RateLimitConfig::default(),
                 accounts: AccountsConfig::default(),
                 chat: ChatConfig::default(),
+                audit: AuditConfig::default(),
                 grpc: None,
             }
         );
@@ -289,6 +291,11 @@ allow_offline = true
 
 [chat]
 command_allowlist = ["/spawn", "/home"]
+retention_days = 21
+max_lines_per_bot = 1000
+
+[audit]
+retention_days = 120
 
 [vault]
 master_key_files = {{ 3 = {} }}
@@ -346,6 +353,14 @@ active_key_id = 3
             config.chat,
             ChatConfig {
                 command_allowlist: CommandAllowlist::try_new(&["/spawn", "/home"]).unwrap(),
+                retention: ChatRetention::try_new(21).unwrap(),
+                bound: ChatBound::try_new(1000).unwrap(),
+            }
+        );
+        assert_eq!(
+            config.audit,
+            AuditConfig {
+                retention: AuditRetention::try_new(120).unwrap(),
             }
         );
     });
@@ -509,19 +524,23 @@ fn a_misspelled_environment_variable_names_the_variable() {
     });
 }
 
-/// `[chat]` arrived with P11.2's command allowlist; its `retention_days` is
-/// P11.6's, so it's still an unknown key.
+/// `[database]` holds only its path; the `backup_*` keys are P12.3's, so
+/// they're still unknown keys.
 #[test]
 fn a_key_of_a_later_phase_is_unknown_until_that_phase() {
     in_jail(|jail| {
-        let toml = format!("{}\n[chat]\nretention_days = 14\n", minimal(jail));
+        let toml = format!(
+            "[database]\npath = {}\nbackup_keep = 14\n{}",
+            toml_path(&db_path(jail)),
+            vault(jail)
+        );
         let error = parse_error(load_toml(jail, &toml));
 
-        assert_eq!(error.key().to_string(), "chat.retention_days");
+        assert_eq!(error.key().to_string(), "database.backup_keep");
         assert_eq!(
             error.problem(),
             &ParseProblem::UnknownKey {
-                expected: &["command_allowlist"]
+                expected: &["path"]
             }
         );
     });
@@ -547,6 +566,7 @@ fn an_unknown_section_names_every_known_one() {
                     "rate_limits",
                     "accounts",
                     "chat",
+                    "audit",
                     "grpc"
                 ]
             }
@@ -1300,6 +1320,115 @@ fn the_invite_lifetime_is_1_to_720_hours() {
                 }]
             );
         }
+    });
+}
+
+/// `[chat] retention_days` (U21): chat is kept 1 to 30 days.
+#[test]
+fn chat_is_kept_1_to_30_days() {
+    in_jail(|jail| {
+        let base = minimal(jail);
+        let with = |value: u32| format!("{base}\n[chat]\nretention_days = {value}\n");
+
+        for value in [1, 30] {
+            let config = load_toml(jail, &with(value)).unwrap();
+            assert_eq!(config.chat.retention.days(), value);
+        }
+        for (value, message) in [(0, "lower than 1"), (31, "greater than 30")] {
+            let problems = invalid(load_toml(jail, &with(value)));
+            assert_eq!(keys(&problems), ["chat.retention_days"]);
+            assert_eq!(
+                kinds(&problems),
+                [ProblemKind::OutOfRange {
+                    message: message.to_owned()
+                }]
+            );
+        }
+    });
+}
+
+/// `[chat] max_lines_per_bot` (U19): each bot keeps 100 to 200,000 lines.
+#[test]
+fn each_bot_keeps_100_to_200_000_lines() {
+    in_jail(|jail| {
+        let base = minimal(jail);
+        let with = |value: u32| format!("{base}\n[chat]\nmax_lines_per_bot = {value}\n");
+
+        for value in [100, 200_000] {
+            let config = load_toml(jail, &with(value)).unwrap();
+            assert_eq!(config.chat.bound.lines(), value);
+        }
+        for (value, message) in [(99, "lower than 100"), (200_001, "greater than 200000")] {
+            let problems = invalid(load_toml(jail, &with(value)));
+            assert_eq!(keys(&problems), ["chat.max_lines_per_bot"]);
+            assert_eq!(
+                kinds(&problems),
+                [ProblemKind::OutOfRange {
+                    message: message.to_owned()
+                }]
+            );
+        }
+    });
+}
+
+/// `[audit] retention_days` (U22): the audit log is kept 90 to 730 days.
+#[test]
+fn the_audit_log_is_kept_90_to_730_days() {
+    in_jail(|jail| {
+        let base = minimal(jail);
+        let with = |value: u32| format!("{base}\n[audit]\nretention_days = {value}\n");
+
+        for value in [90, 730] {
+            let config = load_toml(jail, &with(value)).unwrap();
+            assert_eq!(config.audit.retention.days(), value);
+        }
+        for (value, message) in [(89, "lower than 90"), (731, "greater than 730")] {
+            let problems = invalid(load_toml(jail, &with(value)));
+            assert_eq!(keys(&problems), ["audit.retention_days"]);
+            assert_eq!(
+                kinds(&problems),
+                [ProblemKind::OutOfRange {
+                    message: message.to_owned()
+                }]
+            );
+        }
+    });
+}
+
+#[test]
+fn an_unknown_audit_key_names_the_known_one() {
+    in_jail(|jail| {
+        let toml = format!("{}\n[audit]\nkeep_days = 365\n", minimal(jail));
+        let error = parse_error(load_toml(jail, &toml));
+
+        assert_eq!(error.key().to_string(), "audit.keep_days");
+        assert_eq!(
+            error.problem(),
+            &ParseProblem::UnknownKey {
+                expected: &["retention_days"]
+            }
+        );
+    });
+}
+
+#[test]
+fn the_retention_takes_its_three_keys() {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}\n[chat]\nretention_days = 7\nmax_lines_per_bot = 500\n[audit]\nretention_days = 100\n",
+            minimal(jail)
+        );
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(
+            config.retention(),
+            fleet_core::retention::RetentionPolicy {
+                chat: ChatRetention::try_new(7).unwrap(),
+                bound: ChatBound::try_new(500).unwrap(),
+                audit: AuditRetention::try_new(100).unwrap(),
+            }
+        );
     });
 }
 

@@ -18,6 +18,7 @@ use super::invites::{InviteReads, InviteWrites};
 use super::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
 use super::mfa::{MfaReads, MfaWrites};
 use super::modes::{ModeReads, ModeWrites};
+use super::retention::{RetentionReads, RetentionWrites};
 use super::sessions::{SessionReads, SessionWrites};
 use super::users::{UserReads, UserWrites};
 
@@ -110,6 +111,9 @@ pub trait Store: Send + Sync + fmt::Debug {
     /// The audit log, read through the read connections.
     fn audit(&self) -> &dyn AuditReads;
 
+    /// Where the retention cuts, read through the read connections.
+    fn retention(&self) -> &dyn RetentionReads;
+
     /// Checks that the database answers: one trivial query through a read
     /// connection, for the readiness check (P6.7). It never competes with the
     /// one write connection.
@@ -188,6 +192,9 @@ pub trait WriteTx: Send {
     /// The audit log, for a second entry in this transaction.
     fn audit(&mut self) -> &mut dyn AuditWrites;
 
+    /// The retention's deletes, for one batch in this transaction (U20).
+    fn retention(&mut self) -> &mut dyn RetentionWrites;
+
     /// Records `entry`, then commits everything.
     ///
     /// # Errors
@@ -204,7 +211,7 @@ pub trait WriteTx: Send {
 }
 
 /// A write that commits without an audit entry. Each variant is a named
-/// exemption with its own ADR note (ADR-0015, ADR-0016), never free text, so
+/// exemption with its own ADR note (ADR-0015, ADR-0016, ADR-0019, ADR-0020), never free text, so
 /// review sees every new one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnauditedWrite {
@@ -235,4 +242,17 @@ pub enum UnauditedWrite {
     /// and one per row would let agent-driven volume flood the log; who
     /// could report for which bot, and when, is audited already.
     EventBatch,
+    /// One batch of the server's retention task (P11.6; ADR-0020, U20, S45,
+    /// S46): at most 1000 rows of one table, deleted, never inserted or
+    /// updated: the replaced refresh tokens of sessions whose `created_at`
+    /// plus the current absolute lifetime has passed, then those sessions;
+    /// chat lines older than `[chat] retention_days` or past a bot's bound;
+    /// audit entries as a prefix by ID, below the first one dated after the
+    /// audit cut; unused invites and enrollment tokens that expired at or
+    /// before it. Only the retention task commits it, every 60 s, each batch
+    /// its own short transaction. An entry per batch would say only that rows
+    /// the policy removes were removed, and would follow the ingest's volume;
+    /// instead one `retention.purge` entry, counts and cut-offs and never
+    /// text, sums up every hour that deleted anything, and the stop.
+    RetentionPurge,
 }

@@ -3833,9 +3833,9 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   | C3 | `p11/p11.4-on-respawn-steps` | P11.4: "on respawn" steps (ticked here) |
 >   | D1 | `p11/p11.5-live-events` | P11.5: the socket and its security: tickets, `POST /events/ticket`, `GET /events`, its limits, liveness and shutdown |
 >   | D2 | `p11/p11.5-events-per-viewer` | P11.5: the bot, chat and mode events, filtered per viewer (ticked here) |
->   | E | `p11/p11.6-p11.7-retention-and-full-flow` | P11.6, P11.7 |
+>   | E | `p11/p11.6-retention` | P11.6 (P11.7 moved to G at its planning, U18) |
 >   | F | `p11/p11.9-admin-endpoints` | P11.9's backend: `GET /audit`, `agent release` over the API, the grants review at a role change |
->   | G | `p11/p11.8-events-in-the-app` | P11.8 |
+>   | G | `p11/p11.8-events-in-the-app` | P11.8, and P11.7 over fleet-client's own socket (U18) |
 >   | H | `p11/p11.9-bot-screens` | P11.9's dashboard and bot detail; the DoD's first check |
 >   | I | `p11/p11.9-mode-editor` | P11.9's mode editor |
 >   | J | `p11/p11.9-admin-screens` | P11.9's admin screens (ticked here) |
@@ -3844,7 +3844,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   | M | `p11/p11-wrap-up` | The threat model, the README, the DoD's 24-hour run |
 >
 >   - **P11.3 is spread over A, B1 and B2** (B was split at its plan review: about 8,000–9,000 lines in one; ADR-0020, group B), **P11.4 over C1, C2 and C3** (C was split at its plan review: about 11,500 lines in one; ADR-0020, group C), **P11.5 over D1 and D2** (D was split at its plan review: about 11,600 lines in one; ADR-0020, group D), and **P11.9 over F, H, I and J**, each ticked in its last group, as P10.5 was over C and D. Each group aims at Phase 10's F or H in size (about 5,300 lines); one that grows past it is split at its plan review.
->   - **New dependencies** arrive with their group, each shown to the user with its version, license and release date: axum's `ws` feature (tokio-tungstenite and tungstenite 0.29.0, which axum 0.8.9 pins), tokio-tungstenite as fleet-server's dev-dependency, and futures-util and moka only if D needs them (*approved at D's planning, U11:* axum's `ws`, tokio-tungstenite and futures-util as dev-dependencies of fleet-server and fleet-client; no moka, S29); tokio-tungstenite as fleet-integration's dev-dependency in E; tokio-tungstenite and futures-util in fleet-client in G, its TLS features G's question; single Radix packages in H, I and J; bundled fonts in L.
+>   - **New dependencies** arrive with their group, each shown to the user with its version, license and release date: axum's `ws` feature (tokio-tungstenite and tungstenite 0.29.0, which axum 0.8.9 pins), tokio-tungstenite as fleet-server's dev-dependency, and futures-util and moka only if D needs them (*approved at D's planning, U11:* axum's `ws`, tokio-tungstenite and futures-util as dev-dependencies of fleet-server and fleet-client; no moka, S29); tokio-tungstenite as fleet-integration's dev-dependency in E (*moved to G with P11.7 at E's planning, U18*); tokio-tungstenite and futures-util in fleet-client in G, its TLS features G's question; single Radix packages in H, I and J; bundled fonts in L.
 >   - **Who decides what:** the review agents decide each group's open questions (CLAUDE.md's step 10); the user decides P11.6's size bound (E), P11.11's stable screenshots and visual direction (L), every text friends read (one table per group plan), the looks and UX questions, and whether the chat console names who sent each line (B).
 > - **The DoD's two checks** are the user's, with their own accounts. The first ("pressing Start in the app …") in H, once the bot screens exist; the second (24 h) in M, after the design pass. Each manual check gets default-profile tests that run its own setup, config and log check without the account (Phase 10's lesson).
 > - **The DoD checks' own data folder** *(the user's addition at the plan review, U1)*. Linking a real account stores its Microsoft refresh token in the server's database, sealed by a vault key file beside it. So both checks use one folder of their own, `target/dod-run/` (the database, the vault key, the PKI, the agent's identity, the logs), through recipes of their own that H adds, never the everyday `target/dev-server/`, so the account linked in H stays for M. They log at the default `info`, so no chat text reaches the disk. A cleanup recipe deletes the whole folder when the user is done, with a default-profile test that it removes everything inside, touches nothing outside, follows no link and refuses any other path. The steps say: unlink the accounts in the app first, then run the cleanup, then optionally end the app's consent in the Microsoft account. This mirrors production, where the key file lives on the server's host; `target/` is never committed.
@@ -4091,17 +4091,33 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Measured** (S41, a debug build on Windows): with 200 bots, 20 users and 400 grants, a rights rebuild takes 2.3 ms (median; 2.8 ms at most) and one viewer's read of 200 hinted bots 5.5 ms (11 ms at most).
   > - **Deviations:** the console's lines came with the wire; `CHECK_GAP` is `SocketTimings::check_gap`; one frame per loop turn; a `resync` lands where its turn comes, frames already waiting before or after it; 8,753 lines added and 389 removed as the PR opened, inside U17's range.
   > - **PR #67's review** ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), R43–R46): on rights a commit outran, a socket keeps every hint and agent event for the gate to judge, so a newly visible bot reaches an idle socket; a resync drops a waiting removal of a bot it shows; a bus wake takes at most 64 events; a user's line without its request doesn't read; the reconciler tells a write once; a mode's waiting events are read once; serve's wiring of every service's hints is tested.
+  > - **Its follow-ups, in group E's first commit** ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), R47–R49): events taken on rights a commit outran wait, unjudged, until the gate read the rights again, so a hidden bot's event never moves a visible one's frame; only events that make or join something to send count toward the 64, at most 1024 in all, so hidden events never split a merge; a viewer saw a mode when any of its waiting events' `was` showed it to them.
 
-- [ ] **P11.6** 🔴 Retention job: chat older than `chat.retention_days` is deleted. The audit log is kept longer (configurable).
+- [x] **P11.6** 🔴 Retention job: chat older than `chat.retention_days` is deleted. The audit log is kept longer (configurable).
 
-  > Note (P11.6, from Phase 7, group B, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **sessions are cleaned up here too.** A session, with its `rotated_refresh_tokens` rows (ON DELETE CASCADE), is deleted once `created_at` + the current `refresh_token_absolute_days` has passed, whether it was revoked or not. A revoked session is unusable anyway, and keeping its rotation history until then lets an investigation after a reuse see the family's timeline. `sessions(created_at)` is indexed for it.
+  > Note (P11.6, from Phase 7, group B, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): **sessions are cleaned up here too.** A session, with its `rotated_refresh_tokens` rows (ON DELETE CASCADE), is deleted once `created_at` + the current `refresh_token_absolute_days` has passed, whether it was revoked or not. A revoked session is unusable anyway, and keeping its rotation history until then lets an investigation after a reuse see the family's timeline. `sessions(created_at)` is indexed for it. *Done in group E ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S45): their replaced tokens go first, in batches, so no cascade makes a batch long.*
 
-  > Note (P11.6, from Phase 6, group B) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): decide `secure_delete` here, so deleted chat and old audit entries are overwritten instead of lingering in free pages.
+  > Note (P11.6, from Phase 6, group B) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)): decide `secure_delete` here, so deleted chat and old audit entries are overwritten instead of lingering in free pages. *Decided in Phase 11, group E ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S44): `secure_delete = ON` on every connection, freed pages included.*
 
-  > Note (P11.6, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)) *(the user's note at G's plan review)*: **retention must also bound size,** for example the newest N rows per bot, not only `retention_days`: up to about 2000 rows a second of up to 1024 characters can reach the ingest, and every bot on one Minecraft server stores its own copy. The limit itself is the user's decision here. `chat_messages` has the `(at)` and `(bot_id, id)` indexes both need.
+  > Note (P11.6, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)) *(the user's note at G's plan review)*: **retention must also bound size,** for example the newest N rows per bot, not only `retention_days`: up to about 2000 rows a second of up to 1024 characters can reach the ingest, and every bot on one Minecraft server stores its own copy. The limit itself is the user's decision here. `chat_messages` has the `(at)` and `(bot_id, id)` indexes both need. *Decided in group E ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U19): each bot keeps its newest 50,000 lines by default (`[chat] max_lines_per_bot`, 100 to 200,000).*
 
-  > Note (P11.6, from Phase 10, group H) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), S74): a retention delete holds the write connection; meanwhile the ingest's ticks find it busy and keep their batch, which now holds up to 1000 of the 4096 places, so more chat drops while a long delete runs. Delete in short batches, as the lockout purge does (1000).
-  > Note (P11.6, from Phase 11, group B) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S6, S7): users' lines (`kind = 'user'`) are deleted by age and size like any other chat; the audit log holds none of their text, so nothing there needs scrubbing. Deleting a user leaves their lines with no sender (`ON DELETE SET NULL`), and the partial index `chat_messages_sent_by` finds them.
+  > Note (P11.6, from Phase 10, group H) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), S74): a retention delete holds the write connection; meanwhile the ingest's ticks find it busy and keep their batch, which now holds up to 1000 of the 4096 places, so more chat drops while a long delete runs. Delete in short batches, as the lockout purge does (1000). *Done in group E ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S45): batches of 1000, each followed by a 100 ms pause.*
+  > Note (P11.6, from Phase 11, group B) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S6, S7): users' lines (`kind = 'user'`) are deleted by age and size like any other chat; the audit log holds none of their text, so nothing there needs scrubbing. Deleting a user leaves their lines with no sender (`ON DELETE SET NULL`), and the partial index `chat_messages_sent_by` finds them. *Done in group E.*
+
+  > Note (P11.6, Phase 11, group E's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U18–U22, S44–S46, R47–R56): **group E is P11.6 alone** (P11.7 moved to G, U18), on `p11/p11.6-retention`, its first commit PR #67's follow-ups. The notes above are decided there:
+  > - **The keys** (the user's): `[chat] max_lines_per_bot` 100–200,000, 50,000 by default (U19); `[chat] retention_days` 1–30, 14 by default (U21); `[audit] retention_days` 90–730, 365 by default, a new section, since every entry holds a user's IP address (U22).
+  > - **Recording** (the user's, U20): each batch commits through a new exemption, `UnauditedWrite::RetentionPurge` (deletes only, five tables, only the retention task); one `retention.purge` entry, counts and cut-offs and never text, after every 60th run that deleted anything and at stop.
+  > - **`secure_delete = ON`** on every connection (S44): deleted rows are overwritten, freed pages included.
+  > - **The task** (S45): its own, unwatched, every 60 s, the first run one interval in, batches of 1000 with a 100 ms pause after each commit; sessions (their rotated tokens first), chat by age, chat by size bot by bot, the audit log as an ID prefix, then invites and enrollment tokens; a phase with nothing due commits nothing.
+  > - **Invites and enrollment tokens** (S46): unused ones whose `expires_at` is past the audit retention go; used ones never.
+  > - **Mine** (R50–R56): the deletes in their own port, `ports::retention`; an item goes once `now >= its time + its retention`, cut from one clock read per run in fleet-core; logs carry counts only; the stop's summary waits at most 1 s; `RetentionTimings`; the socket table's label.
+
+  > Note (P11.6, Phase 11, group E) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U18–U22, S44–S46, R47–R56): **the retention job, as built; P11.6 ticked here.**
+  > - **The task:** `cli::retention` runs `app::retention::RetentionService::run_once` every 60 s on serve's `JoinSet`, with or without `[grpc]`; each run cuts once (fleet-core's `retention`), deletes phase by phase in batches of 1000 through `ports::retention`, each committed with `UnauditedWrite::RetentionPurge` and followed by a 100 ms pause, and a quiet run commits nothing. A failed phase is one `warn`; the next run tries again.
+  > - **The summary:** one `retention.purge` entry after every 60th run that deleted anything and at the stop (within 1 s), its 14 keys the counts and cut-offs; a failed one keeps its counts.
+  > - **`secure_delete = ON`** on every connection; three tests scan the files after a close for deleted text, red with OFF and with FAST.
+  > - **Tests:** the `retention` binary (the store's deletes and cuts at their boundaries, a seeded model of both bounds, a run racing the ingest, failing midway and stopped, the summary, the task, the at-rest scans) and serve's retention without `[grpc]`.
+  > - **Deviations:** the repository tests share one binary with the service's, so their tables are loops (rstest's cases can't take `sqlx::test`'s database); the runner's timing is housekeeping's `every`, whose paused-time tests cover the first run one interval in; `LoginService`'s wiring moved into a helper and the socket table's labels into a `const`, to stay under clippy's 100 lines.
 
 - [ ] **P11.7** 🔴 Full-flow integration test: in-process server + in-process agent with `FakeConnector`.
   1. Start a bot via `fleet-client`.
@@ -4110,6 +4126,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   4. Stop the bot.
 
   > Note (P11.7, from Phase 10, group H) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md), U19): **it lives in `crates/fleet-integration`**, a module of its one test binary beside `loopback/`, over the same harness: `World` (the server through serve's wiring, the Owner through fleet-client with 2FA), agents enrolled for real and run over the `Ledger` connector, and the log the waits wake on. The WebSocket client it needs arrives with P11.5 (`tokio-tungstenite`), a new dev-dependency of the crate then.
+
+  > Note (P11.7, Phase 11, group E's planning, the user's choice, U18) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)): **built in group G, not E,** over fleet-client's own reconnecting socket once it exists, so no bearer exception reaches fleet-integration (U15 stays as it is). ADR-0020's notes for E (the frames compared with `GET /bots/{id}` at that moment, a repeated `bot` frame tolerated, a line before its `chat_sent`, every wait through `Logs::until` or `within`) move to G's; fleet-integration's dependencies are G's question.
 - [ ] **P11.8** 🔴 Tauri: the WebSocket lives in Rust (`fleet-client` + reconnect) and is forwarded to the UI over a Tauri `Channel`. The UI patches the TanStack Query cache from the events.
 - [ ] **P11.9** 🔴 UI:
 
@@ -4251,6 +4269,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - a scheduled `VACUUM INTO` with retention, plus a `backup` CLI
   - a restore runbook
   - Backups contain only ciphertext. **Back up the vault key separately and securely.**
+
+  > Note (P12.3, from Phase 11, group E) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S44, S45): a `VACUUM INTO` holds a read snapshot, so the retention's batches meanwhile grow the WAL: schedule the backup between its runs, or have both share a lock. A backup keeps deleted chat for the backup's own retention (`secure_delete` overwrites only the live file), and that retention needs a name apart from P11.6's. Whether to set `journal_size_limit` is decided here.
 - [ ] **P12.4** A Prometheus metrics endpoint on an internal port, with the key metrics documented.
 
   > Note (P12.4, from Phase 7, group B, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): a counter of detected refresh-token reuses belongs among the key metrics, so alerting can pick up possible token theft without anyone reading `/audit` or the logs.
@@ -4262,6 +4282,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > Note (P12.4, from Phase 10, group F) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): session grants and denials belong among the key metrics, e.g. `afkfleet_session_grants_total{kind,fresh}` and `afkfleet_session_denials_total{reason}` (S61, R43: a grant writes no audit entry, and its `info` line is the only other trail); the fresh-session limit's refusals (`fresh_sessions` in the minute's summary) go with the other rate limits' counts.
 
   > Note (P12.4, from Phase 10, group G) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): the outbox's counts (chat dropped, refusals, session requests dropped) and the ingest's (rows stored, skipped and dropped per agent; housekeeping's `chat_dropped`) are metrics to export.
+
+  > Note (P12.4, from Phase 11, group E) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S45): the retention's rows deleted per phase, a run's time and batches, and the time of its last successful run belong among the key metrics: the task isn't watched, so that time is the alert for one that died or fails every run.
 - [ ] **P12.5** Tauri release:
   - NSIS installer.
   - Updater key pair; the private key is kept **offline**.
@@ -4277,6 +4299,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   - incident response: revoke sessions, disable users and agents
 
   > Note (P12.6, from Phase 5, group D, the user's decision) ([ADR-0014](docs/adr/0014-fleet-agent-conventions-and-phase-5-refinements.md)): The **Minecraft version upgrade** section carries ADR-0003's bump procedure, whose verify step now runs `just ci`, `just test-slow` and `just demo-agent` (1 h), with the demo's `summary.txt` in the bump's pull request.
+
+  > Note (P12.6, from Phase 11, group E) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U19, S44, S45): **disk sizing** for chat (bots × `max_lines_per_bot` × up to 4.7 KB a line, plus 120,000 lines between two runs, plus the WAL); a lowered `max_lines_per_bot` or `retention_days` applies at the first run after the restart; the file doesn't shrink without a `VACUUM`; a full disk makes every run fail, since a delete needs WAL space; encrypt the data volume on the host, since `secure_delete` reaches only what SQLite writes.
   > Note (P12.6, from Phase 9, group B, the user's decisions) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)):
   > - **The manual Microsoft check:** `just test-ms-account` checks the Microsoft adapter with the operator's own account. It prints a link and a code, then pass or FAIL per step; `just test-ms-account declined_link` checks a refusal.
   > - **CA certificates in the server image:** reqwest's platform verifier reads the system's CA store on Linux, so the server image needs one, or every Microsoft call fails as `Certificate`. The agent image's distroless/cc base already has them.
@@ -4354,6 +4378,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P13.4, from Phase 11, group D1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S31, S35): the 20 WebSocket clients open real sockets with tickets, and the test measures what each commit costs them: every open socket checks its session again after each commit (S31), and from D2 on the rights snapshot is rebuilt (S30). A `resync` in the clients' logs means a socket fell more than the bus's 1024 events behind.
   > Note (P13.4, from Phase 11, group D2) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S40, S41, S43, R38): S41's test measured, in a debug build on Windows with 200 bots, 20 users and 400 grants, a rights rebuild at 2.3 ms (median; 2.8 ms at most) and one viewer's batched read of 200 hinted bots at 5.5 ms (11 ms at most), so a hint for all 200 costs 20 sockets about 115 ms of reads, one rebuild shared by all. The load test counts the rebuilds and their time, the steps a commit outran and read again (S43), and the resyncs at the ingest's peak, weighing its 1000-line batch against the bus of 1024 (S40); and it measures an event's latency at that peak and during a reconciler pass that writes many bots.
+
+  > Note (P13.4, from Phase 11, group E) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S44, S45): measure a retention run at the ingest's peak: its batch times by phase, commits a second, WAL frames and checkpoints, the sockets' rebuilds and redone reads, the chat the ingest drops meanwhile, and the per-bot walk with 200 bots; retune the pause or the interval, and fall back to `secure_delete = FAST` if ON stalls the ingest.
 - [ ] **P13.5** Chaos tests:
   - kill and restart the server, agent and MC containers
   - partition the network between agent and server
@@ -4528,9 +4554,13 @@ max_per_member = 3
 allow_offline = false                    # dev only
 
 [chat]
-retention_days = 14
+retention_days = 14                      # 1–30
+max_lines_per_bot = 50000                # each bot's newest lines kept; 100–200,000
 command_allowlist = ["/spawn", "/home", "/afk"]   # usable with Control; every other /command needs Manage
                                                  # each entry: "/" + one command name, no arguments; at most 64; missing = empty
+
+[audit]
+retention_days = 365                     # 90–730: every entry holds a user's IP address
 ```
 
 > Note (Appendix A, Phase 7, group E, the user's decision) ([ADR-0016](docs/adr/0016-fleet-server-auth-conventions-and-phase-7-refinements.md)): `[auth] invite_ttl_hours` is 1 to 720 (30 days), 72 by default. An invite's expiry is stored when it's created, so a change doesn't move existing invites.
@@ -4554,6 +4584,8 @@ command_allowlist = ["/spawn", "/home", "/afk"]   # usable with Control; every o
 > Note (Appendix A, Phase 11, group B1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), S3): `[rate_limits] chat_per_user_per_min` (1–60, 20 by default): the chat lines one user may send through the API in a minute, across bots.
 
 > Note (Appendix A, Phase 11, group D1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U12, U13): `[rate_limits]` gains `ws_connections_per_user` (1–10, 3 by default). The socket's other bounds (U13) are constants, not settings.
+
+> Note (Appendix A, Phase 11, group E) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U19, U21, U22): `[chat]` gains `retention_days` (1–30, 14 by default) and `max_lines_per_bot` (100–200,000, 50,000), and a new `[audit]` section `retention_days` (90–730, 365); an error names the key. Unused invites and enrollment tokens are kept `[audit] retention_days` past their expiry (S46).
 
 `agent.toml`
 ```toml

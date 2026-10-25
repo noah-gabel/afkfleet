@@ -539,3 +539,44 @@ async fn waiting_events_of_one_mode_merge_into_one_read(
         "the held read, the three merged, the other mode"
     );
 }
+
+/// The shared mode, private in the database, and two of its events waiting
+/// while another mode's read is held: the first from when it was private,
+/// which the Member couldn't see, the second from when it was shared, which
+/// they could. The merged read finds it hidden, and they saw it under the
+/// later one: `mode_removed` (PR #67's review follow-up a, R49).
+#[sqlx::test(migrations = false)]
+async fn merged_mode_events_send_mode_removed_to_a_viewer_who_saw_it_under_a_later_was(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let watchers = watchers(&setup).await;
+    let (_, marker) = setup.bot_of(watchers.member.id, 30).await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &watchers.member.token).await;
+    set_visibility(&setup, watchers.shared, "private").await;
+
+    let mut held = setup.hooked.hold_next_mode_read();
+    setup.events.mode(ModeEvent {
+        id: watchers.private,
+        was: None,
+    });
+    held.read(PATIENCE).await;
+    for visibility in [ModeVisibility::Private, ModeVisibility::Shared] {
+        setup.events.mode(ModeEvent {
+            id: watchers.shared,
+            was: Some(watchers.shared_seen(visibility)),
+        });
+    }
+    setup.events.bots(&[marker]);
+    held.release();
+    let first = next_event_after_pings(&mut socket).await;
+
+    assert_eq!(first, removed(watchers.shared));
+    assert_eq!(
+        next_event_after_pings(&mut socket).await["bot_id"],
+        json!(marker.to_string()),
+        "nothing else came"
+    );
+}

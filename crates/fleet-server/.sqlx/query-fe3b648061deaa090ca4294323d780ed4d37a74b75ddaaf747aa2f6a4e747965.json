@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "WITH RECURSIVE n(i) AS (SELECT 1 WHERE ?1 > 0 UNION ALL SELECT i + 1 FROM n WHERE i < ?1)\n         INSERT INTO chat_messages (bot_id, direction, kind, text, truncated, at, sent_by)\n         SELECT ?2, 'out', 'user', 'asked ' || i, 0, ?3, ?4 FROM n",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 4
+    },
+    "nullable": []
+  },
+  "hash": "fe3b648061deaa090ca4294323d780ed4d37a74b75ddaaf747aa2f6a4e747965"
+}

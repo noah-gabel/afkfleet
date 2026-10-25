@@ -71,6 +71,7 @@ use fleet_server::ports::modes::{
 use fleet_server::ports::page::Page;
 use fleet_server::ports::passwords::{HashError, Passwords, VerifyError};
 use fleet_server::ports::reconcile::{Change, Reconcile};
+use fleet_server::ports::retention::{RetentionReads, RetentionWrites};
 use fleet_server::ports::sessions::{
     LiveSince, Session, SessionReads, SessionWithUser, SessionWrites,
 };
@@ -356,8 +357,6 @@ impl HookedStore {
         HeldRead { read_done, release }
     }
 
-    /// Holds the next read of the live events' rights once it has read the
-    /// database, until the returned hold is released (P11.5).
     /// How many times a mode was read with its owner (`ModeReads::listed`,
     /// a live events socket's read of a mode) since the start (P11.5).
     pub(crate) fn mode_reads(&self) -> usize {
@@ -384,6 +383,8 @@ impl HookedStore {
             .store(reads, std::sync::atomic::Ordering::SeqCst);
     }
 
+    /// Holds the next read of the live events' rights once it has read the
+    /// database, until the returned hold is released (P11.5).
     pub(crate) fn hold_next_rights_read(&self) -> HeldRead {
         let (read, read_done) = tokio::sync::oneshot::channel();
         let (release, released) = tokio::sync::oneshot::channel();
@@ -606,6 +607,10 @@ impl WriteTx for HookedTx {
         self.inner.audit()
     }
 
+    fn retention(&mut self) -> &mut dyn RetentionWrites {
+        self.inner.retention()
+    }
+
     async fn commit(self: Box<Self>, entry: NewAuditEntry) -> Result<AuditEntryId, StoreError> {
         let Self {
             inner,
@@ -691,6 +696,10 @@ impl WriteTx for LosingTx {
 
     fn audit(&mut self) -> &mut dyn AuditWrites {
         self.inner.audit()
+    }
+
+    fn retention(&mut self) -> &mut dyn RetentionWrites {
+        self.inner.retention()
     }
 
     async fn commit(self: Box<Self>, entry: NewAuditEntry) -> Result<AuditEntryId, StoreError> {
@@ -784,8 +793,9 @@ impl ModeReads for HookedModes {
     }
 }
 
-/// A read of the live events' rights held by
-/// [`HookedStore::hold_next_rights_read`].
+/// A live events read held by [`HookedStore::hold_next_rights_read`],
+/// [`HookedStore::hold_next_bot_read`] or [`HookedStore::hold_next_mode_read`]:
+/// the rights, a socket's bots or a mode.
 pub(crate) struct HeldRead {
     read_done: tokio::sync::oneshot::Receiver<()>,
     release: tokio::sync::oneshot::Sender<()>,
@@ -796,7 +806,7 @@ impl HeldRead {
     pub(crate) async fn read(&mut self, bound: Duration) {
         tokio::time::timeout(bound, &mut self.read_done)
             .await
-            .expect("the rights are read in time")
+            .expect("the held read reads in time")
             .unwrap();
     }
 
@@ -1046,6 +1056,10 @@ impl Store for HookedStore {
 
     fn audit(&self) -> &dyn AuditReads {
         self.inner.audit()
+    }
+
+    fn retention(&self) -> &dyn RetentionReads {
+        self.inner.retention()
     }
 
     async fn ping(&self) -> Result<(), StoreError> {

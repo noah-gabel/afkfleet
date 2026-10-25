@@ -10,21 +10,24 @@ use std::time::Duration;
 use chrono::TimeDelta;
 
 use super::raw::{
-    RawAccounts, RawAuth, RawChat, RawConfig, RawGrpc, RawLog, RawRateLimits, RawVault,
+    RawAccounts, RawAudit, RawAuth, RawChat, RawConfig, RawGrpc, RawLog, RawRateLimits, RawVault,
 };
 use super::{
-    AccountsConfig, Argon2Params, AuthConfig, Bounds, ChatConfig, ConfigError, DatabaseConfig,
-    GrpcConfig, Heartbeats, HttpConfig, KeyPath, LinkFlowLimits, LogConfig, LogFilter, LogFormat,
-    PkiPaths, ProblemKind, Problems, Rate, RateLimitConfig, ServerConfig, VaultConfig,
+    AccountsConfig, Argon2Params, AuditConfig, AuthConfig, Bounds, ChatConfig, ConfigError,
+    DatabaseConfig, GrpcConfig, Heartbeats, HttpConfig, KeyPath, LinkFlowLimits, LogConfig,
+    LogFilter, LogFormat, PkiPaths, ProblemKind, Problems, Rate, RateLimitConfig, ServerConfig,
+    VaultConfig,
 };
 use fleet_core::auth::{InviteTtl, LockoutPolicy, SessionPolicy};
 use fleet_core::authz::{CommandAllowlist, CommandAllowlistError};
 use fleet_core::chat::ChatRate;
+use fleet_core::retention::{AuditRetention, ChatBound, ChatRetention};
 
 use crate::http::rate_limit::{IpNet, TrustedProxies};
 
 /// Validates `raw`: garde's ranges first (`[http]`'s and `[rate_limits]`'s),
-/// then each text key, `[auth]`'s ranges and the trusted proxies.
+/// then each text key, `[auth]`'s, `[chat]`'s and `[audit]`'s ranges and
+/// the trusted proxies.
 ///
 /// # Errors
 /// [`ConfigError::Invalid`](fleet_startup::config::ConfigError::Invalid)
@@ -58,6 +61,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
     let rate_limits = rate_limits(&raw.rate_limits);
     let accounts = accounts(&raw.accounts);
     let chat = chat(&raw.chat, &mut problems);
+    let audit = audit(&raw.audit, &mut problems);
     let grpc = grpc(raw.grpc.as_ref(), bind, &mut problems);
 
     let (
@@ -74,6 +78,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         Some(rate_limits),
         Some(accounts),
         Some(chat),
+        Some(audit),
         Ok(grpc),
     ) = (
         problems.is_empty(),
@@ -89,6 +94,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         rate_limits,
         accounts,
         chat,
+        audit,
         grpc,
     )
     else {
@@ -116,6 +122,7 @@ pub(crate) fn validate(raw: &RawConfig) -> Result<ServerConfig, ConfigError> {
         rate_limits,
         accounts,
         chat,
+        audit,
         grpc,
     })
 }
@@ -552,12 +559,36 @@ fn rate_limits(raw: &RawRateLimits) -> Option<RateLimitConfig> {
     })
 }
 
-/// `[chat] command_allowlist`: the first bad entry is reported under its
-/// index, never with its text; too many under the key.
+/// `[chat]`: the retention's two keys against their ranges, in garde's
+/// words like the other numeric keys; and `command_allowlist`, whose first
+/// bad entry is reported under its index, never with its text, and too many
+/// under the key.
 fn chat(raw: &RawChat, problems: &mut Problems) -> Option<ChatConfig> {
+    check_ranges(
+        "chat",
+        [
+            (
+                "retention_days",
+                raw.retention_days,
+                ChatConfig::RETENTION_DAYS,
+            ),
+            (
+                "max_lines_per_bot",
+                raw.max_lines_per_bot,
+                ChatConfig::MAX_LINES_PER_BOT,
+            ),
+        ],
+        problems,
+    );
+    let retention = ChatRetention::try_new(raw.retention_days).ok();
+    let bound = ChatBound::try_new(raw.max_lines_per_bot).ok();
     let key = KeyPath::root().key("chat").key("command_allowlist");
     match CommandAllowlist::try_new(&raw.command_allowlist) {
-        Ok(command_allowlist) => Some(ChatConfig { command_allowlist }),
+        Ok(command_allowlist) => Some(ChatConfig {
+            command_allowlist,
+            retention: retention?,
+            bound: bound?,
+        }),
         Err(error) => {
             let at = match error {
                 CommandAllowlistError::TooMany { .. } => key,
@@ -570,6 +601,22 @@ fn chat(raw: &RawChat, problems: &mut Problems) -> Option<ChatConfig> {
             None
         }
     }
+}
+
+/// `[audit] retention_days`, in garde's words like the other numeric keys.
+fn audit(raw: &RawAudit, problems: &mut Problems) -> Option<AuditConfig> {
+    check_ranges(
+        "audit",
+        [(
+            "retention_days",
+            raw.retention_days,
+            AuditConfig::RETENTION_DAYS,
+        )],
+        problems,
+    );
+    Some(AuditConfig {
+        retention: AuditRetention::try_new(raw.retention_days).ok()?,
+    })
 }
 
 /// `[accounts]`, whose ranges garde has checked: none is 0, so only an

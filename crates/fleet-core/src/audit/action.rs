@@ -481,6 +481,22 @@ audit_actions! {
     /// mode. Metadata: `version` (the one deleted) and `visibility`. Never
     /// the name or a step's text. A refused delete is no entry.
     MODE_DELETE = "mode.delete";
+
+    /// The server's retention task deleted what its policy no longer keeps
+    /// (P11.6; ADR-0020, U20): one entry after every 60th run that deleted
+    /// anything since the last entry, and one when the server stops, summing
+    /// up those runs. Outcome: Success. No actor, no IP and no target. Every
+    /// key is always there, every value the server's, never a text:
+    /// `since` (when the counted period began: the last entry, or the
+    /// task's start); `chat_before`, `sessions_before` and `audit_before`
+    /// (the latest run's cuts; invites and enrollment tokens use the audit
+    /// cut); `chat_per_bot` (each bot's bound); the counts deleted:
+    /// `chat_by_age`, `chat_by_size`, `sessions`, `rotations` (the replaced
+    /// refresh tokens of those sessions), `audit_entries`, `invites` and
+    /// `enrollments` (unused enrollment tokens); `audit_through` (the
+    /// highest audit ID the log no longer holds); and `phases_failed`. The
+    /// batches themselves commit through `UnauditedWrite::RetentionPurge`.
+    RETENTION_PURGE = "retention.purge";
 }
 
 /// For reading rows back. Code that records an entry uses the listed
