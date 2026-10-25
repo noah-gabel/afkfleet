@@ -351,6 +351,18 @@ impl Server {
         agent
     }
 
+    /// Commits a write that changes nothing, which moves the commit count and
+    /// so wakes every live events socket to check its session.
+    pub(crate) async fn commit_anything(&self) {
+        let tx = self.db.write().await.unwrap();
+        let entry = NewAuditEntry::new(
+            self.clock.now(),
+            AuditAction::try_from("test.any_commit").unwrap(),
+            AuditOutcome::Success,
+        );
+        tx.commit(entry).await.unwrap();
+    }
+
     /// The Owner, logged in with 2FA: the client, its store and the app.
     pub(crate) async fn owner(&self) -> (Client<MemoryStore>, MemoryStore, Totp) {
         let (client, store) = self.client();
