@@ -1,5 +1,7 @@
-//! The admins' user routes (Plan.md P7.9, Appendix B, ADR-0010, ADR-0016):
-//! `GET /api/v1/users` and `PATCH /api/v1/users/{id}`.
+//! The admins' user routes (Plan.md P7.9, P11.9, Appendix B, ADR-0010,
+//! ADR-0016, ADR-0020): `GET /api/v1/users`, `PATCH /api/v1/users/{id}`,
+//! and the review of a user's grants at a role change, `GET
+//! /api/v1/users/{id}/grants` and `GET /api/v1/users/{id}/shared-accounts`.
 //!
 //! - **Listing** is Admin+ (`ListUsers`).
 //! - **A change** is one field. The handler authorizes it against the
@@ -12,15 +14,25 @@
 //!   within 5 minutes, checked when the request arrives. Without one, any
 //!   caller gets 403 `step_up_required` before the target is read, so the
 //!   answer says nothing about it.
+//! - **The review at a role change** is the Owner's (`ReviewUserGrants`,
+//!   as `SetRole`; ADR-0020, S50): the grants the user holds, dormant ones
+//!   included, and their accounts that a grant shares, whose grants
+//!   `GET /accounts/{id}/grants` lists. Reads, so no step-up; an Admin gets
+//!   403, a Member 404 for another user, as for a change.
 
 use axum::Json;
 use axum::extract::State;
+use fleet_api_types::accounts::{
+    AccountLabel, AccountPage, GrantLevel as ApiGrantLevel, HeldGrantPage, HeldGrantResponse,
+};
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse, UserRole};
-use fleet_api_types::{ErrorResponse, PageQuery};
-use fleet_core::authz::{Permission, ResourceContext};
-use fleet_core::id::UserId;
+use fleet_api_types::{BoundedText, ErrorResponse, PageQuery};
+use fleet_core::authz::{Actor, Permission, ResourceContext};
+use fleet_core::id::{AccountId, UserId};
 
-use super::{page, timestamp, username};
+use super::accounts::{account_page, listing};
+use super::{label, page, timestamp, username};
+use crate::app::grants::HeldView;
 use crate::app::users::{ActingUser, SetUserError, UserChange};
 use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath, ValidQuery};
@@ -133,4 +145,106 @@ pub(crate) async fn patch(
             other @ SetUserError::Audit(_) => ApiError::internal(other),
         })?;
     Ok(Json(user_response(&changed)?))
+}
+
+/// A grant the reviewed user holds, as the API shows it.
+fn held_grant_response(view: &HeldView) -> Result<HeldGrantResponse, ApiError> {
+    let held = &view.held;
+    let grant = &held.grant;
+    Ok(HeldGrantResponse {
+        account: AccountLabel {
+            id: grant.account,
+            name: BoundedText::new(held.account_name.as_str()),
+        },
+        owner: label(held.owner.id, &held.owner_name),
+        level: ApiGrantLevel::from(grant.level).into(),
+        granted_by: label(grant.granted_by, &held.granted_by_name),
+        granted_at: timestamp(grant.granted_at)?,
+        dormant: view.dormant,
+    })
+}
+
+/// The user `id` as the review reads them, once the caller may review
+/// them; 404 for an unknown user or one the caller can't see.
+async fn reviewed(state: &AppState, user: &AuthUser, id: UserId) -> Result<Actor, ApiError> {
+    let target = state.users.user_ref(id).await?.ok_or(ApiError::NotFound)?;
+    user.require(Permission::ReviewUserGrants, &ResourceContext::User(target))?;
+    Ok(Actor {
+        id: target.id,
+        role: target.role,
+    })
+}
+
+/// `GET /api/v1/users/{id}/grants`: one page of the grants the user holds,
+/// dormant ones included, newest account first (the Owner's).
+#[utoipa::path(
+    get,
+    path = "/api/v1/users/{id}/grants",
+    operation_id = "user_held_grants",
+    tag = "users",
+    params(("id" = String, Path, description = "The user's ID."), PageQuery<AccountId>),
+    responses(
+        (status = 200, description = "One page of the grants the user holds on other users' accounts, newest account first; each says whether the user's role makes it dormant now.", body = HeldGrantPage),
+        (status = 400, description = "A query that doesn't parse.", body = ErrorResponse),
+        (status = 401, description = "No valid access token.", body = ErrorResponse),
+        (status = 403, description = "Only the Owner reviews a user's grants.", body = ErrorResponse),
+        (status = 404, description = "No such user, or one the caller can't see.", body = ErrorResponse),
+        (status = 422, description = "A `limit` outside 1 to 100.", body = ErrorResponse),
+        (status = 429, description = "Too many requests.", body = ErrorResponse,
+            headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
+        (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
+    ),
+)]
+pub(crate) async fn held_grants(
+    user: AuthUser,
+    State(state): State<AppState>,
+    ValidPath(id): ValidPath<UserId>,
+    ValidQuery(query): ValidQuery<PageQuery<AccountId>>,
+) -> Result<Json<HeldGrantPage>, ApiError> {
+    let holder = reviewed(&state, &user, id).await?;
+    let held = state.grants.held(&holder, page(&query)?).await?;
+    Ok(Json(HeldGrantPage {
+        items: held
+            .items
+            .iter()
+            .map(held_grant_response)
+            .collect::<Result<_, _>>()?,
+        next: held.next,
+    }))
+}
+
+/// `GET /api/v1/users/{id}/shared-accounts`: one page of the user's
+/// accounts that at least one grant shares, newest first (the Owner's).
+#[utoipa::path(
+    get,
+    path = "/api/v1/users/{id}/shared-accounts",
+    operation_id = "user_shared_accounts",
+    tag = "users",
+    params(("id" = String, Path, description = "The user's ID."), PageQuery<AccountId>),
+    responses(
+        (status = 200, description = "One page of the user's accounts that a grant shares, newest first; `GET /accounts/{id}/grants` lists each one's grants.", body = AccountPage),
+        (status = 400, description = "A query that doesn't parse.", body = ErrorResponse),
+        (status = 401, description = "No valid access token.", body = ErrorResponse),
+        (status = 403, description = "Only the Owner reviews a user's grants.", body = ErrorResponse),
+        (status = 404, description = "No such user, or one the caller can't see.", body = ErrorResponse),
+        (status = 422, description = "A `limit` outside 1 to 100.", body = ErrorResponse),
+        (status = 429, description = "Too many requests.", body = ErrorResponse,
+            headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
+        (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
+    ),
+)]
+pub(crate) async fn shared_accounts(
+    user: AuthUser,
+    State(state): State<AppState>,
+    ValidPath(id): ValidPath<UserId>,
+    ValidQuery(query): ValidQuery<PageQuery<AccountId>>,
+) -> Result<Json<AccountPage>, ApiError> {
+    let owner = reviewed(&state, &user, id).await?;
+    let viewer = user.actor();
+    let listed = state
+        .accounts
+        .shared_of(&viewer, owner.id, page(&query)?)
+        .await
+        .map_err(listing)?;
+    account_page(&viewer, &listed)
 }

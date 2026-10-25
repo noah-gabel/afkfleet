@@ -79,8 +79,10 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use fleet_api_types::accounts::{
     AccountPage, AccountResponse, ChangeGrantRequest, CreateGrantRequest,
     CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
-    LinkFlowResponse, LinkStartedResponse,
+    HeldGrantPage, LinkFlowResponse, LinkStartedResponse,
 };
+use fleet_api_types::agents::{AgentPage, AgentResponse};
+use fleet_api_types::audit::{AuditPage, AuditPageQuery};
 use fleet_api_types::auth::{
     LoginMfaRequest, LoginRequest, LoginResponse, LoginStatus, RefreshRequest, RegisterRequest,
     RegisterResponse, StepUpRequest, TokenResponse,
@@ -91,6 +93,7 @@ use fleet_api_types::chat::{
 };
 #[cfg(feature = "dev-console")]
 use fleet_api_types::events::EventTicketResponse;
+use fleet_api_types::ids::AgentId;
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{
@@ -734,6 +737,14 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         expect_empty(answer, 204)
     }
 
+    pub(crate) async fn leave_account(self: &Arc<Self>, id: AccountId) -> Result<(), ClientError> {
+        let url = self
+            .server
+            .api(&["accounts", &id.to_string(), "grants", "me"]);
+        let answer = self.authed(Method::DELETE, url, None).await?;
+        expect_empty(answer, 204)
+    }
+
     /// `/accounts/{id}/grants/{user}`.
     fn grant_url(&self, id: AccountId, user: UserId) -> Url {
         self.server
@@ -807,6 +818,60 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
 
     /// One page of the bot `id`'s chat, newest first, as the caller may see
     /// it (200).
+    pub(crate) async fn agents(
+        self: &Arc<Self>,
+        query: &PageQuery<AgentId>,
+    ) -> Result<AgentPage, ClientError> {
+        let url = with_page(self.server.api(&["agents"]), query);
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn release_agent(
+        self: &Arc<Self>,
+        id: AgentId,
+    ) -> Result<AgentResponse, ClientError> {
+        let url = self.server.api(&["agents", &id.to_string(), "release"]);
+        let answer = self.authed(Method::POST, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn user_grants(
+        self: &Arc<Self>,
+        id: UserId,
+        query: &PageQuery<AccountId>,
+    ) -> Result<HeldGrantPage, ClientError> {
+        let url = with_page(
+            self.server.api(&["users", &id.to_string(), "grants"]),
+            query,
+        );
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn shared_accounts(
+        self: &Arc<Self>,
+        id: UserId,
+        query: &PageQuery<AccountId>,
+    ) -> Result<AccountPage, ClientError> {
+        let url = with_page(
+            self.server
+                .api(&["users", &id.to_string(), "shared-accounts"]),
+            query,
+        );
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
+    pub(crate) async fn audit(
+        self: &Arc<Self>,
+        query: &AuditPageQuery,
+    ) -> Result<AuditPage, ClientError> {
+        let url = with_cursor(self.server.api(&["audit"]), query.before, query.limit);
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
     pub(crate) async fn chat(
         self: &Arc<Self>,
         id: BotId,
@@ -1196,13 +1261,19 @@ fn refresh_body(token: &SecretString) -> Vec<u8> {
 }
 
 /// `url` with the chat page's parameters, if it has any.
-fn with_chat_page(mut url: Url, query: &ChatPageQuery) -> Url {
-    if query.before.is_some() || query.limit.is_some() {
+fn with_chat_page(url: Url, query: &ChatPageQuery) -> Url {
+    with_cursor(url, query.before, query.limit)
+}
+
+/// `url` with a row ID cursor's page parameters, `before` and `limit`, if
+/// it has any: the chat history's and the audit log's.
+fn with_cursor(mut url: Url, before: Option<fleet_api_types::SafeInt>, limit: Option<u32>) -> Url {
+    if before.is_some() || limit.is_some() {
         let mut pairs = url.query_pairs_mut();
-        if let Some(before) = query.before {
+        if let Some(before) = before {
             pairs.append_pair("before", &before.to_string());
         }
-        if let Some(limit) = query.limit {
+        if let Some(limit) = limit {
             pairs.append_pair("limit", &limit.to_string());
         }
     }
@@ -2799,6 +2870,28 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn leaving_deletes_the_callers_own_grant_and_brings_back_a_refusal() {
+        let core = signed_in().await;
+        let leave = format!("DELETE /api/v1/accounts/{ACCOUNT}/grants/me");
+        core.transport.on(&leave, Ok(raw(204, b"")));
+        core.transport
+            .on(&leave, Ok(refusal(403, "step_up_required")));
+
+        let left = core.leave_account(id(ACCOUNT)).await;
+        let refused = core.leave_account(id(ACCOUNT)).await.unwrap_err();
+
+        assert!(left.is_ok(), "{left:?}");
+        assert!(
+            is_api(&refused, 403, ErrorCode::StepUpRequired),
+            "{refused:?}"
+        );
+        assert_eq!(
+            core.transport.seen(),
+            [sent(&leave, None), sent(&leave, None)]
+        );
+    }
+
+    #[tokio::test]
     async fn the_grant_routes_send_their_method_path_and_body() {
         let core = signed_in().await;
         let page = GrantPage {
@@ -2955,6 +3048,182 @@ mod tests {
             ),
             "{error:?}"
         );
+    }
+
+    const REVIEWED: &str = "018bcfe5-6800-7303-8303-030303030303";
+
+    #[tokio::test]
+    async fn the_review_reads_both_lists_from_their_routes() {
+        let core = signed_in().await;
+        let held = HeldGrantPage {
+            items: Vec::new(),
+            next: None,
+        };
+        let shared = AccountPage {
+            items: Vec::new(),
+            next: None,
+        };
+        let held_route = format!("GET /api/v1/users/{REVIEWED}/grants");
+        let shared_route = format!("GET /api/v1/users/{REVIEWED}/shared-accounts");
+        core.transport.on(&held_route, Ok(dto(200, &held)));
+        core.transport.on(&shared_route, Ok(dto(200, &shared)));
+        let all = PageQuery {
+            before: None,
+            limit: None,
+        };
+
+        let read_held = core.user_grants(id(REVIEWED), &all).await.unwrap();
+        let read_shared = core.shared_accounts(id(REVIEWED), &all).await.unwrap();
+
+        assert_eq!(read_held, held);
+        assert_eq!(read_shared, shared);
+        assert_eq!(
+            core.transport.seen(),
+            [sent(&held_route, None), sent(&shared_route, None)]
+        );
+    }
+
+    #[rstest]
+    #[case::an_admin(403, ErrorCode::Forbidden)]
+    #[case::another_member(404, ErrorCode::NotFound)]
+    #[case::too_many(429, ErrorCode::RateLimited)]
+    #[tokio::test]
+    async fn a_refused_review_comes_back_with_the_servers_code(
+        #[case] status: u16,
+        #[case] code: ErrorCode,
+    ) {
+        use fleet_api_types::OpenEnum as _;
+        let core = signed_in().await;
+        let route = format!("GET /api/v1/users/{REVIEWED}/grants");
+        core.transport
+            .on(&route, Ok(refusal(status, code.as_str())));
+        let all = PageQuery {
+            before: None,
+            limit: None,
+        };
+
+        let error = core.user_grants(id(REVIEWED), &all).await.unwrap_err();
+
+        assert!(is_api(&error, status, code), "{error:?}");
+    }
+
+    const AGENT: &str = "018bcfe5-6800-7101-8101-010101010101";
+
+    fn an_agent() -> AgentResponse {
+        serde_json::from_value(json!({
+            "id": AGENT,
+            "name": "agent-1",
+            "enabled": false,
+            "status": "disabled",
+            "bots": 0,
+            "created_at": "2027-01-15T07:00:00.000Z"
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_agents_and_a_release_are_read_and_sent_on_their_routes() {
+        let core = signed_in().await;
+        let page = AgentPage {
+            items: vec![an_agent()],
+            next: None,
+        };
+        let release = format!("POST /api/v1/agents/{AGENT}/release");
+        core.transport.on("GET /api/v1/agents", Ok(dto(200, &page)));
+        core.transport.on(&release, Ok(dto(200, &an_agent())));
+
+        let listed = core
+            .agents(&PageQuery {
+                before: None,
+                limit: None,
+            })
+            .await
+            .unwrap();
+        let released = core.release_agent(id(AGENT)).await.unwrap();
+
+        assert_eq!(listed, page);
+        assert_eq!(released, an_agent());
+        assert_eq!(
+            core.transport.seen(),
+            [sent("GET /api/v1/agents", None), sent(&release, None)]
+        );
+    }
+
+    #[rstest]
+    #[case::enabled(409, ErrorCode::AgentNotDisabled)]
+    #[case::step_up(403, ErrorCode::StepUpRequired)]
+    #[case::unknown(404, ErrorCode::NotFound)]
+    #[tokio::test]
+    async fn a_refused_release_comes_back_with_the_servers_code(
+        #[case] status: u16,
+        #[case] code: ErrorCode,
+    ) {
+        use fleet_api_types::OpenEnum as _;
+        let core = signed_in().await;
+        let route = format!("POST /api/v1/agents/{AGENT}/release");
+        core.transport
+            .on(&route, Ok(refusal(status, code.as_str())));
+
+        let error = core.release_agent(id(AGENT)).await.unwrap_err();
+
+        assert!(is_api(&error, status, code), "{error:?}");
+    }
+
+    fn an_audit_page() -> AuditPage {
+        serde_json::from_value(json!({
+            "items": [{
+                "id": 41,
+                "at": "2027-01-15T08:00:00.000Z",
+                "action": "retention.purge",
+                "outcome": "success",
+                "metadata": [{ "key": "chat_by_age", "int": 3 }]
+            }],
+            "next": 41
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_audit_log_is_read_from_its_route() {
+        let core = signed_in().await;
+        let route = "GET /api/v1/audit";
+        core.transport.on(route, Ok(dto(200, &an_audit_page())));
+
+        let page = core
+            .audit(&AuditPageQuery {
+                before: Some(fleet_api_types::SafeInt::try_new(42).unwrap()),
+                limit: Some(10),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(page, an_audit_page());
+        assert_eq!(core.transport.seen(), [sent(route, None)]);
+    }
+
+    #[rstest]
+    #[case::a_member(403, ErrorCode::Forbidden)]
+    #[case::out_of_range(422, ErrorCode::ValidationFailed)]
+    #[case::too_many(429, ErrorCode::RateLimited)]
+    #[tokio::test]
+    async fn a_refused_audit_page_comes_back_with_the_servers_code(
+        #[case] status: u16,
+        #[case] code: ErrorCode,
+    ) {
+        use fleet_api_types::OpenEnum as _;
+        let core = signed_in().await;
+        let route = "GET /api/v1/audit";
+        core.transport.on(route, Ok(refusal(status, code.as_str())));
+
+        let error = core
+            .audit(&AuditPageQuery {
+                before: None,
+                limit: None,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(is_api(&error, status, code), "{error:?}");
     }
 
     fn a_chat_page() -> ChatPage {

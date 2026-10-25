@@ -1,8 +1,10 @@
 //! A store that tells the retention's tests what its writes did, and lets
-//! them step in: one log of what happened in order (each write asked for,
-//! each delete with its rows, each commit), the time of each retention
-//! commit, a write that fails on cue, and a hold inside the next chat cut's
-//! read or the next delete, until the test releases it.
+//! them step in: one log of what happened in order (each read of where it
+//! cuts, each write or retention batch asked for, each delete with its
+//! rows, each commit), the
+//! time of each retention commit, a write that fails on cue, and a hold
+//! before the next write, inside the next chat or audit cut's read or after
+//! the next delete, until the test releases it.
 
 use core::time::Duration;
 use std::collections::BTreeMap;
@@ -25,7 +27,7 @@ use fleet_server::ports::invites::{InviteReads, InviteWrites};
 use fleet_server::ports::login_attempts::{LoginAttemptReads, LoginAttemptWrites};
 use fleet_server::ports::mfa::{MfaReads, MfaWrites};
 use fleet_server::ports::modes::{ModeReads, ModeWrites};
-use fleet_server::ports::retention::{RetentionReads, RetentionWrites};
+use fleet_server::ports::retention::{AuditCut, AuditPurged, RetentionBatch, RetentionReads};
 use fleet_server::ports::sessions::{SessionReads, SessionWrites};
 use fleet_server::ports::store::{Store, StoreError, UnauditedWrite, WriteTx};
 use fleet_server::ports::users::{UserReads, UserWrites};
@@ -61,6 +63,8 @@ struct Hooks {
     /// Whether the next audited commit fails, and how.
     failing_record: Mutex<Option<Failure>>,
     hold_chat_cut: Mutex<Option<Hold>>,
+    hold_audit_cut: Mutex<Option<Hold>>,
+    hold_write: Mutex<Option<Hold>>,
     hold_delete: Mutex<Option<(String, Hold)>>,
     requested: Notify,
 }
@@ -163,6 +167,23 @@ impl WatchedStore {
         test
     }
 
+    /// Holds the next write transaction asked for (never a retention
+    /// batch) before it takes the connection, until the returned hold is
+    /// released or dropped: a summary's write.
+    pub(crate) fn hold_next_write(&self) -> Held {
+        let (step, test) = hold();
+        *self.hooks.hold_write.lock().unwrap() = Some(step);
+        test
+    }
+
+    /// Holds the next audit cut's read once it read the database, until the
+    /// returned hold is released.
+    pub(crate) fn hold_next_audit_cut(&self) -> Held {
+        let (step, test) = hold();
+        *self.hooks.hold_audit_cut.lock().unwrap() = Some(step);
+        test
+    }
+
     /// Holds the next retention delete of `kind` (as the log names it) once
     /// it deleted, before its commit, until the returned hold is released.
     pub(crate) fn hold_next_delete(&self, kind: &str) -> Held {
@@ -182,6 +203,12 @@ impl WatchedStore {
 /// A write transaction of [`WatchedStore`].
 struct WatchedTx {
     inner: Box<dyn WriteTx>,
+    hooks: Arc<Hooks>,
+}
+
+/// A retention batch of [`WatchedStore`].
+struct WatchedBatch {
+    inner: Box<dyn RetentionBatch>,
     hooks: Arc<Hooks>,
 }
 
@@ -216,17 +243,13 @@ async fn log_delete(
 }
 
 #[async_trait]
-impl RetentionWrites for WatchedTx {
+impl RetentionBatch for WatchedBatch {
     async fn delete_expired_rotations(
         &mut self,
         created_by: DateTime<Utc>,
         limit: u32,
     ) -> Result<u64, StoreError> {
-        let deleted = self
-            .inner
-            .retention()
-            .delete_expired_rotations(created_by, limit)
-            .await;
+        let deleted = self.inner.delete_expired_rotations(created_by, limit).await;
         log_delete(&self.hooks, "rotations", deleted).await
     }
 
@@ -235,11 +258,7 @@ impl RetentionWrites for WatchedTx {
         created_by: DateTime<Utc>,
         limit: u32,
     ) -> Result<u64, StoreError> {
-        let deleted = self
-            .inner
-            .retention()
-            .delete_expired_sessions(created_by, limit)
-            .await;
+        let deleted = self.inner.delete_expired_sessions(created_by, limit).await;
         log_delete(&self.hooks, "sessions", deleted).await
     }
 
@@ -248,11 +267,7 @@ impl RetentionWrites for WatchedTx {
         received_by: DateTime<Utc>,
         limit: u32,
     ) -> Result<u64, StoreError> {
-        let deleted = self
-            .inner
-            .retention()
-            .delete_chat_received_by(received_by, limit)
-            .await;
+        let deleted = self.inner.delete_chat_received_by(received_by, limit).await;
         log_delete(&self.hooks, "chat_by_age", deleted).await
     }
 
@@ -262,11 +277,7 @@ impl RetentionWrites for WatchedTx {
         cut: ChatMessageId,
         limit: u32,
     ) -> Result<u64, StoreError> {
-        let deleted = self
-            .inner
-            .retention()
-            .delete_chat_through(bot, cut, limit)
-            .await;
+        let deleted = self.inner.delete_chat_through(bot, cut, limit).await;
         log_delete(&self.hooks, "chat_by_size", deleted).await
     }
 
@@ -274,13 +285,15 @@ impl RetentionWrites for WatchedTx {
         &mut self,
         cut: AuditEntryId,
         limit: u32,
-    ) -> Result<u64, StoreError> {
-        let deleted = self
-            .inner
-            .retention()
-            .delete_audit_through(cut, limit)
-            .await;
-        log_delete(&self.hooks, "audit", deleted).await
+    ) -> Result<AuditPurged, StoreError> {
+        match self.inner.delete_audit_through(cut, limit).await {
+            Ok(purged) => log_delete(&self.hooks, "audit", Ok(purged.count))
+                .await
+                .map(|_| purged),
+            Err(error) => log_delete(&self.hooks, "audit", Err(error))
+                .await
+                .map(|_| AuditPurged::default()),
+        }
     }
 
     async fn delete_unused_invites(
@@ -288,11 +301,7 @@ impl RetentionWrites for WatchedTx {
         expired_by: DateTime<Utc>,
         limit: u32,
     ) -> Result<u64, StoreError> {
-        let deleted = self
-            .inner
-            .retention()
-            .delete_unused_invites(expired_by, limit)
-            .await;
+        let deleted = self.inner.delete_unused_invites(expired_by, limit).await;
         log_delete(&self.hooks, "invites", deleted).await
     }
 
@@ -303,10 +312,20 @@ impl RetentionWrites for WatchedTx {
     ) -> Result<u64, StoreError> {
         let deleted = self
             .inner
-            .retention()
             .delete_unused_enrollment_tokens(expired_by, limit)
             .await;
         log_delete(&self.hooks, "enrollment_tokens", deleted).await
+    }
+
+    async fn commit(self: Box<Self>) -> Result<(), StoreError> {
+        self.inner.commit().await?;
+        self.hooks.commits.lock().unwrap().push(Instant::now());
+        self.hooks
+            .log
+            .lock()
+            .unwrap()
+            .push("commit retention batch".to_owned());
+        Ok(())
     }
 }
 
@@ -368,10 +387,6 @@ impl WriteTx for WatchedTx {
         self.inner.audit()
     }
 
-    fn retention(&mut self) -> &mut dyn RetentionWrites {
-        self
-    }
-
     async fn commit(self: Box<Self>, entry: NewAuditEntry) -> Result<AuditEntryId, StoreError> {
         let failing = self.hooks.failing_record.lock().unwrap().take();
         if let Some(failure) = failing {
@@ -388,9 +403,6 @@ impl WriteTx for WatchedTx {
 
     async fn commit_unaudited(self: Box<Self>, reason: UnauditedWrite) -> Result<(), StoreError> {
         self.inner.commit_unaudited(reason).await?;
-        if reason == UnauditedWrite::RetentionPurge {
-            self.hooks.commits.lock().unwrap().push(Instant::now());
-        }
         self.hooks
             .log
             .lock()
@@ -403,23 +415,34 @@ impl WriteTx for WatchedTx {
 #[async_trait]
 impl RetentionReads for WatchedStore {
     async fn bots(&self) -> Result<Vec<BotId>, StoreError> {
+        self.read("bots");
         self.inner.retention().bots().await
     }
 
     async fn chat_cut(&self, bot: BotId, keep: u32) -> Result<Option<ChatMessageId>, StoreError> {
+        self.read("chat cut");
         let cut = self.inner.retention().chat_cut(bot, keep).await;
         wait_if_held(&self.hooks.hold_chat_cut).await;
         cut
     }
 
-    async fn audit_cut(&self, before: DateTime<Utc>) -> Result<Option<AuditEntryId>, StoreError> {
-        self.inner.retention().audit_cut(before).await
+    async fn audit_cut(&self, before: DateTime<Utc>) -> Result<Option<AuditCut>, StoreError> {
+        self.read("audit cut");
+        let cut = self.inner.retention().audit_cut(before).await;
+        wait_if_held(&self.hooks.hold_audit_cut).await;
+        cut
     }
 }
 
-#[async_trait]
-impl Store for WatchedStore {
-    async fn write(&self) -> Result<Box<dyn WriteTx>, StoreError> {
+impl WatchedStore {
+    /// Logs a read of where the retention cuts.
+    fn read(&self, what: &str) {
+        self.hooks.log.lock().unwrap().push(format!("read {what}"));
+    }
+
+    /// Counts and logs a write asked for, a retention batch's too, and
+    /// fails it when it was set to.
+    fn requested(&self) -> Result<(), StoreError> {
         let nth = self.hooks.writes.fetch_add(1, Ordering::SeqCst) + 1;
         self.hooks
             .log
@@ -428,11 +451,26 @@ impl Store for WatchedStore {
             .push("write requested".to_owned());
         self.hooks.requested.notify_waiters();
         let failing = self.hooks.failing.lock().unwrap().remove(&nth);
-        if let Some(failure) = failing {
-            return Err(failure.error());
-        }
+        failing.map_or(Ok(()), |failure| Err(failure.error()))
+    }
+}
+
+#[async_trait]
+impl Store for WatchedStore {
+    async fn write(&self) -> Result<Box<dyn WriteTx>, StoreError> {
+        self.requested()?;
+        wait_if_held(&self.hooks.hold_write).await;
         let inner = self.inner.write().await?;
         Ok(Box::new(WatchedTx {
+            inner,
+            hooks: Arc::clone(&self.hooks),
+        }))
+    }
+
+    async fn retention_batch(&self) -> Result<Box<dyn RetentionBatch>, StoreError> {
+        self.requested()?;
+        let inner = self.inner.retention_batch().await?;
+        Ok(Box::new(WatchedBatch {
             inner,
             hooks: Arc::clone(&self.hooks),
         }))

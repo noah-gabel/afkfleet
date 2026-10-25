@@ -21,7 +21,7 @@ use fleet_core::value::Username;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
 use fleet_server::ports::audit::NewAuditEntry;
-use fleet_server::ports::grants::{AccountGrant, InsertGrantError};
+use fleet_server::ports::grants::{AccountGrant, HeldGrant, InsertGrantError};
 use fleet_server::ports::page::{Page, PageLimit};
 use fleet_server::ports::store::{Store, StoreError};
 use fleet_server::ports::users::{NewUser, PasswordHash};
@@ -275,6 +275,66 @@ async fn the_list_pages_by_grantee_newest_first_and_shows_only_its_account(
     assert_eq!(users(&first), [fourth, c.other, c.friend]);
     assert_eq!(users(&rest), [c.friend]);
     assert!(rest.iter().all(|g| g.grant.account == c.account));
+}
+
+/// The grants one user holds, newest account first, each with its
+/// account's name, its owner as they are now and who set it; one row more
+/// than the page; another user's grants never among them (ADR-0020, S50).
+#[sqlx::test(migrations = false)]
+async fn the_grants_a_user_holds_page_newest_account_first_with_owner_and_granter(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let c = cast(options).await;
+    let second = add_account(&c.db, c.owner, 2).await;
+    let third = add_account(&c.db, c.other, 3).await;
+    for account in [c.account, second] {
+        insert(&c.db, &grant(account, c.friend, GrantLevel::View, c.owner))
+            .await
+            .unwrap();
+    }
+    insert(&c.db, &grant(third, c.friend, GrantLevel::Control, c.other))
+        .await
+        .unwrap();
+    insert(
+        &c.db,
+        &grant(c.account, c.other, GrantLevel::Manage, c.owner),
+    )
+    .await
+    .unwrap();
+
+    let first =
+        c.db.grants()
+            .held_by(c.friend, page_of_accounts(None, 2))
+            .await
+            .unwrap();
+    let rest =
+        c.db.grants()
+            .held_by(c.friend, page_of_accounts(Some(second), 2))
+            .await
+            .unwrap();
+
+    let accounts = |held: &[HeldGrant]| held.iter().map(|g| g.grant.account).collect::<Vec<_>>();
+    // A repository fetches one row more than the page holds.
+    assert_eq!(accounts(&first), [third, second, c.account]);
+    assert_eq!(accounts(&rest), [c.account]);
+    let newest = &first[0];
+    assert_eq!(newest.grant.user, c.friend);
+    assert_eq!(newest.grant.level, GrantLevel::Control);
+    assert_eq!(newest.account_name.as_str(), "OffBot3");
+    assert_eq!(newest.owner.id, c.other);
+    assert_eq!(newest.owner.role, Role::Member);
+    assert_eq!(newest.owner_name.as_str(), "user3");
+    assert_eq!(newest.grant.granted_by, c.other);
+    assert_eq!(newest.granted_by_name.as_str(), "user3");
+    assert!(first.iter().all(|g| g.grant.user == c.friend));
+}
+
+fn page_of_accounts(before: Option<AccountId>, limit: u32) -> Page<AccountId> {
+    Page {
+        before,
+        limit: PageLimit::new(limit).unwrap(),
+    }
 }
 
 // --- Changing and revoking --------------------------------------------------------------

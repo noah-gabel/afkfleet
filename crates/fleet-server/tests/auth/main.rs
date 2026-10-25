@@ -33,6 +33,7 @@
 #![cfg(test)]
 
 mod agents;
+mod audit;
 mod bots;
 mod enrollment_tokens;
 mod events;

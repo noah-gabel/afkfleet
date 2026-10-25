@@ -339,16 +339,14 @@ pub(crate) fn app_of(router: Router, database: &Database) -> App {
         Arc::new(Sha256Tokens::new(Arc::new(SeededRandom::new(9)))),
     );
     let link_flows = idle_link_flows(database);
-    let timings = RetentionTimings::default();
     let retention = Retention::new(
         RetentionService::new(
             Arc::clone(&clock),
             Arc::new(database.clone()),
             RetentionPolicy::default(),
             SessionPolicy::default(),
-            timings.pause,
         ),
-        timings,
+        RetentionTimings::default(),
     );
     App {
         router,

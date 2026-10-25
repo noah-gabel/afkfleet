@@ -281,9 +281,11 @@ audit_actions! {
     /// and `previous_level`.
     GRANT_SET_LEVEL = "grant.set_level";
 
-    /// A user revoked another user's grant on an account (P9.6). Outcome:
-    /// Success. Target: the account. Metadata: `grantee` (their ID) and
-    /// `level` (the one revoked).
+    /// A grant on an account ended: a Manage holder revoked another user's
+    /// (P9.6), or its grantee left the account, `via` = `leave` (P11.9;
+    /// ADR-0020, S51). Outcome: Success. Target: the account. Metadata:
+    /// `grantee` (their ID), `level` (the one revoked), and `via` when the
+    /// grantee left.
     GRANT_REVOKE = "grant.revoke";
 
     /// An enrollment token was created for one new agent (P10.3, ADR-0019):
@@ -493,9 +495,11 @@ audit_actions! {
     /// cut); `chat_per_bot` (each bot's bound); the counts deleted:
     /// `chat_by_age`, `chat_by_size`, `sessions`, `rotations` (the replaced
     /// refresh tokens of those sessions), `audit_entries`, `invites` and
-    /// `enrollments` (unused enrollment tokens); `audit_through` (the
-    /// highest audit ID the log no longer holds); and `phases_failed`. The
-    /// batches themselves commit through `UnauditedWrite::RetentionPurge`.
+    /// `enrollments` (unused enrollment tokens), each at most 2^53 − 1;
+    /// `audit_through` (the highest audit ID a committed batch deleted, which
+    /// the log no longer holds, 0 when none was); and `phases_failed`. The
+    /// batches themselves commit without an entry, in the store's retention
+    /// batch (R57).
     RETENTION_PURGE = "retention.purge";
 }
 

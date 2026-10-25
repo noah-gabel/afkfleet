@@ -13,6 +13,24 @@ expression: answer.json()
         ],
         "type": "string"
       },
+      "AccountLabel": {
+        "description": "An account named by its ID and Minecraft name.",
+        "properties": {
+          "id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "name": {
+            "maxLength": 16,
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name"
+        ],
+        "type": "object"
+      },
       "AccountPage": {
         "description": "One page of accounts, newest first.",
         "properties": {
@@ -185,6 +203,200 @@ expression: answer.json()
           "disabled"
         ],
         "type": "string"
+      },
+      "AuditActionName": {
+        "description": "An audited action's name, as the audit log stores it. A newer server may record others, so code that branches on one always keeps a default branch.",
+        "enum": [
+          "user.create",
+          "security.refresh_token_reuse",
+          "security.lockout",
+          "mfa.enroll",
+          "mfa.reset",
+          "auth.login",
+          "auth.logout",
+          "auth.step_up",
+          "user.set_role",
+          "user.set_disabled",
+          "invite.create",
+          "invite.revoke",
+          "invite.use",
+          "user.change_password",
+          "session.revoke",
+          "vault.rotate_key",
+          "account.refresh",
+          "account.set_status",
+          "account.rename",
+          "security.account_profile_mismatch",
+          "account.start_link",
+          "account.link",
+          "account.approve",
+          "account.refuse",
+          "account.delete",
+          "account.relink",
+          "grant.create",
+          "grant.set_level",
+          "grant.revoke",
+          "enrollment_token.create",
+          "enrollment_token.use",
+          "agent.enroll",
+          "agent.connect",
+          "agent.disconnect",
+          "security.agent_identity_conflict",
+          "agent.disable",
+          "bot.assign",
+          "bot.unassign",
+          "bot.detach",
+          "bot.stray",
+          "agent.release",
+          "bot.set_server",
+          "bot.set_mode",
+          "bot.start",
+          "bot.stop",
+          "bot.restart",
+          "bot.reset",
+          "bot.resume",
+          "bot.send_chat",
+          "bot.send_command",
+          "mode.create",
+          "mode.update",
+          "mode.delete",
+          "retention.purge"
+        ],
+        "type": "string"
+      },
+      "AuditDetail": {
+        "description": "One value of an audit entry's metadata, under its key: a text, an\ninteger or a flag, each the server's. A value only a newer server\nrecords comes as text.",
+        "properties": {
+          "flag": {
+            "description": "A flag.",
+            "type": "boolean"
+          },
+          "int": {
+            "$ref": "#/components/schemas/SafeInt",
+            "description": "An integer value: a count, a number or a row ID."
+          },
+          "key": {
+            "maxLength": 32,
+            "type": "string"
+          },
+          "text": {
+            "maxLength": 256,
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "type": "object"
+      },
+      "AuditEntryResponse": {
+        "description": "One entry of the audit log, as `GET /audit` lists it.",
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/AuditActionName",
+            "description": "What was done."
+          },
+          "actor": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "id": {
+            "$ref": "#/components/schemas/SafeInt",
+            "description": "The entry's ID, in commit order: the list's cursor."
+          },
+          "ip": {
+            "maxLength": 45,
+            "type": "string"
+          },
+          "metadata": {
+            "description": "Its details, by key.",
+            "items": {
+              "$ref": "#/components/schemas/AuditDetail"
+            },
+            "type": "array"
+          },
+          "outcome": {
+            "$ref": "#/components/schemas/AuditOutcomeName",
+            "description": "How it ended."
+          },
+          "target": {
+            "$ref": "#/components/schemas/AuditTargetResponse",
+            "description": "What it touched, if anything."
+          }
+        },
+        "required": [
+          "id",
+          "at",
+          "action",
+          "outcome",
+          "metadata"
+        ],
+        "type": "object"
+      },
+      "AuditOutcomeName": {
+        "description": "How an audited action ended.\nThis union lists the outcomes this version knows; a newer server may\nrecord others, so code that branches on one always keeps a default\nbranch.",
+        "enum": [
+          "success",
+          "failure",
+          "denied"
+        ],
+        "type": "string"
+      },
+      "AuditPage": {
+        "description": "`GET /audit`: one page of the audit log, newest first.",
+        "properties": {
+          "items": {
+            "description": "The entries.",
+            "items": {
+              "$ref": "#/components/schemas/AuditEntryResponse"
+            },
+            "type": "array"
+          },
+          "next": {
+            "$ref": "#/components/schemas/SafeInt",
+            "description": "The `before` of the next page, when one follows."
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "AuditTargetKind": {
+        "description": "What an audit entry's target is.\nThis union lists the kinds this version knows; a newer server may\nrecord others, so code that branches on one always keeps a default\nbranch.",
+        "enum": [
+          "user",
+          "account",
+          "bot",
+          "agent",
+          "mode",
+          "session",
+          "invite",
+          "enrollment_token"
+        ],
+        "type": "string"
+      },
+      "AuditTargetResponse": {
+        "description": "What an audit entry touched.",
+        "properties": {
+          "id": {
+            "maxLength": 36,
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AuditTargetKind",
+            "description": "What it is."
+          }
+        },
+        "required": [
+          "kind",
+          "id"
+        ],
+        "type": "object"
       },
       "BotAgent": {
         "description": "The agent a bot is assigned to: for Admins and the Owner only.",
@@ -827,7 +1039,8 @@ expression: answer.json()
           "mode_changed",
           "mode_in_use_by_others",
           "mode_in_use",
-          "too_many_connections"
+          "too_many_connections",
+          "agent_not_disabled"
         ],
         "type": "string"
       },
@@ -1023,6 +1236,64 @@ expression: answer.json()
           "level",
           "granted_by",
           "granted_at"
+        ],
+        "type": "object"
+      },
+      "HeldGrantPage": {
+        "description": "`GET /users/{id}/grants`: one page of the grants a user holds, newest\naccount first.",
+        "properties": {
+          "items": {
+            "description": "The grants.",
+            "items": {
+              "$ref": "#/components/schemas/HeldGrantResponse"
+            },
+            "type": "array"
+          },
+          "next": {
+            "maxLength": 36,
+            "type": "string"
+          }
+        },
+        "required": [
+          "items"
+        ],
+        "type": "object"
+      },
+      "HeldGrantResponse": {
+        "description": "A grant a user holds, as `GET /users/{id}/grants` lists it: the review\nat a role change (the Owner's; ADR-0020, S50).",
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/AccountLabel",
+            "description": "The account it shares."
+          },
+          "dormant": {
+            "description": "Whether it's dormant: the user's role gives Manage on the account\nnow, so the grant adds nothing, and it counts again after a demotion.",
+            "type": "boolean"
+          },
+          "granted_at": {
+            "maxLength": 24,
+            "type": "string"
+          },
+          "granted_by": {
+            "$ref": "#/components/schemas/UserLabel",
+            "description": "Who set it last."
+          },
+          "level": {
+            "$ref": "#/components/schemas/GrantLevel",
+            "description": "What it allows."
+          },
+          "owner": {
+            "$ref": "#/components/schemas/UserLabel",
+            "description": "Who owns the account."
+          }
+        },
+        "required": [
+          "account",
+          "owner",
+          "level",
+          "granted_by",
+          "granted_at",
+          "dormant"
         ],
         "type": "object"
       },
@@ -3203,6 +3474,97 @@ expression: answer.json()
         "x-step-up": true
       }
     },
+    "/api/v1/accounts/{id}/grants/me": {
+      "delete": {
+        "operationId": "leave_account",
+        "parameters": [
+          {
+            "description": "The account's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The caller's grant is gone: they left the account."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or the caller has the account through ownership or their role, not a grant."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such account, or one the caller holds no grant on."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`DELETE /api/v1/accounts/{id}/grants/me`: the caller gives up their own\ngrant on the account. Needs a step-up.",
+        "tags": [
+          "accounts"
+        ],
+        "x-step-up": true
+      }
+    },
     "/api/v1/accounts/{id}/grants/{user}": {
       "delete": {
         "operationId": "revoke_grant",
@@ -3988,6 +4350,234 @@ expression: answer.json()
           "agents"
         ],
         "x-step-up": true
+      }
+    },
+    "/api/v1/agents/{id}/release": {
+      "post": {
+        "operationId": "release_agent",
+        "parameters": [
+          {
+            "description": "The agent's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AgentResponse"
+                }
+              }
+            },
+            "description": "The agent, its bots released and placed again as soon as an agent can take them. One that held none answers as it is."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or only Admins and the Owner release agents."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such agent."
+          },
+          "409": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "`agent_not_disabled`: the agent is enabled; disable it first."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`POST /api/v1/agents/{id}/release`: releases a disabled agent's bots, on\nthe caller's word that its host and its bots are stopped, so they can be\nplaced elsewhere. Needs a step-up.",
+        "tags": [
+          "agents"
+        ],
+        "x-step-up": true
+      }
+    },
+    "/api/v1/audit": {
+      "get": {
+        "operationId": "list_audit",
+        "parameters": [
+          {
+            "description": "Only entries older than this ID: the `next` of the page before.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+            }
+          },
+          {
+            "description": "How many entries at most; 50 by default.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuditPage"
+                }
+              }
+            },
+            "description": "One page of the audit log, newest first: each entry as the log stores it."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A query that doesn't parse."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Only Admins and the Owner read the audit log."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A `limit` outside 1 to 100, or a `before` below 1."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/audit`: one page of the audit log, newest first.",
+        "tags": [
+          "audit"
+        ]
       }
     },
     "/api/v1/auth/login": {
@@ -7896,6 +8486,282 @@ expression: answer.json()
           "users"
         ],
         "x-step-up": true
+      }
+    },
+    "/api/v1/users/{id}/grants": {
+      "get": {
+        "operationId": "user_held_grants",
+        "parameters": [
+          {
+            "description": "The user's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items older than this ID: the `next` of the page before.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maxLength": 36,
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many items at most; 50 by default.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HeldGrantPage"
+                }
+              }
+            },
+            "description": "One page of the grants the user holds on other users' accounts, newest account first; each says whether the user's role makes it dormant now."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A query that doesn't parse."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Only the Owner reviews a user's grants."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such user, or one the caller can't see."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A `limit` outside 1 to 100."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/users/{id}/grants`: one page of the grants the user holds,\ndormant ones included, newest account first (the Owner's).",
+        "tags": [
+          "users"
+        ]
+      }
+    },
+    "/api/v1/users/{id}/shared-accounts": {
+      "get": {
+        "operationId": "user_shared_accounts",
+        "parameters": [
+          {
+            "description": "The user's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "description": "Only items older than this ID: the `next` of the page before.",
+            "in": "query",
+            "name": "before",
+            "required": false,
+            "schema": {
+              "maxLength": 36,
+              "type": "string"
+            }
+          },
+          {
+            "description": "How many items at most; 50 by default.",
+            "in": "query",
+            "name": "limit",
+            "required": false,
+            "schema": {
+              "maximum": 100,
+              "minimum": 1,
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountPage"
+                }
+              }
+            },
+            "description": "One page of the user's accounts that a grant shares, newest first; `GET /accounts/{id}/grants` lists each one's grants."
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A query that doesn't parse."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Only the Owner reviews a user's grants."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such user, or one the caller can't see."
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "A `limit` outside 1 to 100."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`GET /api/v1/users/{id}/shared-accounts`: one page of the user's\naccounts that at least one grant shares, newest first (the Owner's).",
+        "tags": [
+          "users"
+        ]
       }
     },
     "/health/live": {

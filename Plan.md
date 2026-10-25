@@ -2304,7 +2304,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P6.8, as built, group B, the user's decisions) ([ADR-0015](docs/adr/0015-fleet-server-conventions-and-phase-6-refinements.md)):
   > - **`app::audit::AuditService { clock, store }`:** `entry(action, outcome)` returns a `NewAuditEntry` stamped with the `Clock` (milliseconds), with the builder methods `actor`, `ip`, `target` and `metadata`; `record(entry)` runs its own short write transaction (`write()`, then `commit(entry)`), for a failure or denial whose change was rolled back; `list(page)` reads through the read pool. A use case that changes state builds its entry here and passes it to `WriteTx::commit`, so every timestamp comes from one clock.
-  > - **Append-only** means the store has exactly two operations for the log, `AuditWrites::record` inside a `WriteTx` and `AuditReads::list` (P6.4's note); nothing updates or deletes an entry, and no trigger blocks P11.6's retention.
+  > - **Append-only** means the store has exactly two operations for the log, `AuditWrites::record` inside a `WriteTx` and `AuditReads::list` (P6.4's note); nothing updates or deletes an entry, and no trigger blocks P11.6's retention. *One exception since P11.6 ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), R50, R57):* the retention task deletes the log's oldest entries, a prefix by ID past `[audit] retention_days`, in a transaction of its own (`Store::retention_batch`) that nothing else opens; nothing ever updates an entry.
   > - **No secrets:** the metadata's rules live in fleet-core's `AuditMetadata` (P6.4's note), checked when it's built.
   > - **Tests** (`tests/audit_service.rs`, `ManualClock`, IDs minted from `SeededRandom` and compared with each other), red against a stub that stamped the epoch, recorded nothing and listed nothing: 5 of 6 failed.
 - [x] **P6.9** `fleet-api-types`:
@@ -3834,7 +3834,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   | D1 | `p11/p11.5-live-events` | P11.5: the socket and its security: tickets, `POST /events/ticket`, `GET /events`, its limits, liveness and shutdown |
 >   | D2 | `p11/p11.5-events-per-viewer` | P11.5: the bot, chat and mode events, filtered per viewer (ticked here) |
 >   | E | `p11/p11.6-retention` | P11.6 (P11.7 moved to G at its planning, U18) |
->   | F | `p11/p11.9-admin-endpoints` | P11.9's backend: `GET /audit`, `agent release` over the API, the grants review at a role change |
+>   | F | `p11/p11.9-admin-endpoints` | P11.9's backend: `GET /audit`, `agent release` over the API, the grants review at a role change, leaving a shared account (U23) |
 >   | G | `p11/p11.8-events-in-the-app` | P11.8, and P11.7 over fleet-client's own socket (U18) |
 >   | H | `p11/p11.9-bot-screens` | P11.9's dashboard and bot detail; the DoD's first check |
 >   | I | `p11/p11.9-mode-editor` | P11.9's mode editor |
@@ -4118,6 +4118,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **`secure_delete = ON`** on every connection; three tests scan the files after a close for deleted text, red with OFF and with FAST.
   > - **Tests:** the `retention` binary (the store's deletes and cuts at their boundaries, a seeded model of both bounds, a run racing the ingest, failing midway and stopped, the summary, the task, the at-rest scans) and serve's retention without `[grpc]`.
   > - **Deviations:** the repository tests share one binary with the service's, so their tables are loops (rstest's cases can't take `sqlx::test`'s database); the runner's timing is housekeeping's `every`, whose paused-time tests cover the first run one interval in; `LoginService`'s wiring moved into a helper and the socket table's labels into a `const`, to stay under clippy's 100 lines.
+  > - **PR #70's review, fixed in group F's first commit** ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), R57–R63): the batches commit in a transaction of their own, `Store::retention_batch()`, which only the retention opens (a test reads the sources) and which deletes only from its own table (a whole-table test); the hourly summary gives up its wait for the connection at the stop, whose own summary waits at most 1 s; `audit_through` is the highest ID a committed batch deleted; counts clamp to 2^53 − 1; an audit entry dated more than an hour ahead, which blocks the prefix purge until then, gets one `warn`; a socket's replay waits until the slots of the last one went out; `app_with` is split and the pause has one source.
 
 - [ ] **P11.7** 🔴 Full-flow integration test: in-process server + in-process agent with `FakeConnector`.
   1. Start a bot via `fleet-client`.
@@ -4131,7 +4132,16 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 - [ ] **P11.8** 🔴 Tauri: the WebSocket lives in Rust (`fleet-client` + reconnect) and is forwarded to the UI over a Tauri `Channel`. The UI patches the TanStack Query cache from the events.
 - [ ] **P11.9** 🔴 UI:
 
-  > Note (P11.9, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): the agents view shows each agent's bots count (`AgentResponse.bots`: its bots and open release records); releasing a disabled agent's bots becomes an API action (Admin or Owner, step-up, `agent.release` with `via` = `api`), with a text saying the operator vouches the agent's host is stopped. The texts for it and for the shown states are the user's.
+  > Note (P11.9, from Phase 10, group D) ([ADR-0019](docs/adr/0019-control-plane-conventions-and-phase-10-refinements.md)): the agents view shows each agent's bots count (`AgentResponse.bots`: its bots and open release records); releasing a disabled agent's bots becomes an API action (Admin or Owner, step-up, `agent.release` with `via` = `api`), with a text saying the operator vouches the agent's host is stopped. The texts for it and for the shown states are the user's. *Corrected at group F's planning (the user's choice, [ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U24): `via` = `http`, as every entry the HTTP API writes; the route is S49's.*
+
+  > Note (P11.9, Phase 11, group F's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U23, U24, S47–S51, R57–R69): **the admin endpoints, on `p11/p11.9-admin-endpoints`,** its first commit PR #70's follow-ups (R57–R63). P11.9 is ticked in J.
+  > - **`GET /audit`** (S47, S48, R64–R66): an authed route of class Standard, no step-up, no filters; newest-first pages with a `SafeInt` cursor; each entry as stored (actor, IP, action, target, outcome, metadata), the names `Open<…>`, the server's own entries without actor, IP or target.
+  > - **The release** (S49, U24): `POST /agents/{id}/release`, step-up, a new `ReleaseAgent` (Admin+), 200 with the agent, 409 `agent_not_disabled`, `agent.release` with the actor, the IP and `via` = `http`, the bots placed at once.
+  > - **The grants review** (S50): `GET /users/{id}/grants` (held, with `dormant`) and `GET /users/{id}/shared-accounts`, the Owner's only (`ReviewUserGrants`); revoking through the existing route.
+  > - **Leaving** (U23, S51): `DELETE /accounts/{id}/grants/me`, step-up, a new `LeaveAccount` for any grantee without implicit Manage, audited as `grant.revoke` with `via` = `leave`.
+  > - **Clients** (R67): fleet-client's methods for each, and `just dev-bots`' verbs. **The text** friends read: `agent_not_disabled`, approved as drafted.
+
+  > Note (P11.9, Phase 11, group F as built) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group F)"): **built as planned, one PR,** the four parts with fleet-client's methods and the console's verbs (`users`, `audit`, `agents`, `release`, `held`, `shared`, `leave`). *Deviations:* no 422 test for the release or leaving, which take no body or query (a malformed ID is 404), as for the disable route; `AuditActionName`'s OpenAPI schema is written by hand from fleet-core's list, since utoipa's derive doesn't read the names a macro gives serde; the admin screens' permission mirror (`packages/ui`) gains `reviewGrants`, since its test reads the matrix. About 8,000 lines added, above the planned 6,000 to 7,500 (about 1,700 of them generated).
 
   - **Dashboard:** a card per bot with a state badge, uptime, server, mode and last disconnect reason.
   - **Bot detail:**
@@ -4155,11 +4165,11 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.9, from group B): **Controls.** For paused or failed bots, the app shows Resume or Reset instead of Start and Stop (ADR-0010).
 
-  > Note (P11.9, from group D, the user's request): **Promotions.** When a Member is promoted to Admin (P8.8), the app shows the existing grants on their accounts, and the server provides them, so the Owner can review and revoke them. Grants made before the promotion survive it, including one an Admin gave an alt account (ADR-0010, threat model).
+  > Note (P11.9, from group D, the user's request): **Promotions.** When a Member is promoted to Admin (P8.8), the app shows the existing grants on their accounts, and the server provides them, so the Owner can review and revoke them. Grants made before the promotion survive it, including one an Admin gave an alt account (ADR-0010, threat model). *The server's side is group F's S50 ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)): `GET /users/{id}/shared-accounts` and `GET /users/{id}/grants`, the Owner's.*
 
-  > Note (P11.9, from Phase 9, group F, the user's request) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **leaving a shared account.** A View or Control grantee can't remove themselves from a shared account; only a Manage holder revokes a grant. A "leave" action could come here.
+  > Note (P11.9, from Phase 9, group F, the user's request) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **leaving a shared account.** A View or Control grantee can't remove themselves from a shared account; only a Manage holder revokes a grant. A "leave" action could come here. *Answered at group F's planning (the user's choice, [ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U23): built in F, `DELETE /accounts/{id}/grants/me` (S51).*
 
-  > Note (P11.9, from Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **demotions too.** A grant can't be made to someone with implicit Manage, but one made before a promotion stays dormant, and comes back when that Admin is demoted, so the review at a role change shows the grants the user holds as well as those on their accounts.
+  > Note (P11.9, from Phase 9, group E) ([ADR-0018](docs/adr/0018-microsoft-accounts-and-vault-conventions-and-phase-9-refinements.md)): **demotions too.** A grant can't be made to someone with implicit Manage, but one made before a promotion stays dormant, and comes back when that Admin is demoted, so the review at a role change shows the grants the user holds as well as those on their accounts. *The held grants come with `dormant`, computed on the server (S50).*
 
   > Note (P11.9, from Phase 3, the user's request): **Parsed senders.** If P4.1's per-server chat format is built, the chat console shows a sender parsed from the text visibly differently from one a player packet named. Neither is verified: azalea 0.16 doesn't verify chat signatures, so every chat sender is only what the server claims, and none drives a permission or trigger decision (ADR-0011, threat model).
 
@@ -4641,17 +4651,19 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 | `POST /me/mfa/enroll` · `/confirm` · `/reset` | setup token (enroll, confirm); user + step-up (reset) | 2FA: enroll answers a new secret, confirm stores it with 10 recovery codes; reset answers a setup token whose confirm replaces the authenticator and revokes the user's other sessions (group D) |
 | `GET /me/sessions` · `DELETE /me/sessions/{id}` | user | Session management |
 | `GET /users` · `PATCH /users/{id}` | Admin+ (`PATCH`: step-up) | Role, disable |
+| `GET /users/{id}/grants` · `GET /users/{id}/shared-accounts` | Owner | The grants review at a role change: the grants the user holds (dormant ones marked), and their accounts a grant shares (P11.9) |
 | `POST /invites` · `GET /invites` · `DELETE /invites/{id}` | Admin+ (`POST`, `DELETE`: step-up) | Invites |
 | `POST /accounts/link` · `GET /accounts/link/{flow}` | Member+ | Microsoft device-code flow |
 | `GET /accounts` · `GET /accounts/awaiting-approval` · `GET/DELETE /accounts/{id}` | View / Manage (`DELETE`: step-up) | MC accounts; the pending links the caller may review |
 | `POST /accounts/{id}/approve` · `/refuse` | above the owner (step-up) | Review a pending link |
 | `POST /accounts/{id}/relink` | Manage | Link the account again (a link flow) |
 | `GET/POST /accounts/{id}/grants` · `PUT/DELETE /accounts/{id}/grants/{user}` | Manage (writes: step-up) | Sharing |
+| `DELETE /accounts/{id}/grants/me` | a grantee without implicit Manage (step-up) | Leave a shared account (P11.9) |
 | `GET /bots` · `GET/PATCH /bots/{id}` · `PUT /bots/{id}/mode` | View / Manage (`PATCH`: step-up) / Control | Bots and their state; the server address; the mode |
 | `POST /bots/{id}/start\|stop\|restart\|reset\|resume` | Control | Lifecycle |
 | `POST /bots/{id}/chat` · `POST /bots/{id}/command` · `GET /bots/{id}/chat` | Control (`/command`: step-up; a command off the allowlist: Manage) / View | Chat |
 | `GET/POST /modes` · `PUT/DELETE /modes/{id}` | Member+ (own) / Admin+ (shared) (`POST`, `PUT` with a command off the allowlist: their `/with-commands` step-up twins; `DELETE`: step-up) | Modes |
-| `GET /agents` · `POST /agents/enrollment-tokens` · `POST /agents/{id}/disable` | Admin+ | Agents |
+| `GET /agents` · `POST /agents/enrollment-tokens` · `POST /agents/{id}/disable` · `POST /agents/{id}/release` | Admin+ (`disable`, `release`: step-up) | Agents; a disabled agent's bots released (P11.9) |
 | `GET /audit` | Admin+ | Audit log (cursor-paginated) |
 | `POST /events/ticket` · `GET /events?ticket=` | user | WebSocket live events |
 | `GET /health/live` · `GET /health/ready` | public (no prefix) | Health |

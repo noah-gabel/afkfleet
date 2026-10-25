@@ -219,7 +219,7 @@ impl ChatPageQuery {
 }
 
 /// The garde rule of a cursor: at least 1, in garde's own words for a range.
-fn positive_cursor(cursor: SafeInt) -> garde::Result {
+pub(crate) fn positive_cursor(cursor: SafeInt) -> garde::Result {
     if cursor.get() < 1 {
         Err(garde::Error::new("lower than 1"))
     } else {
@@ -251,7 +251,7 @@ impl IntoParams for ChatPageQuery {
 }
 
 /// A cursor's schema: an integer from 1 to [`SafeInt::MAX`].
-fn cursor_schema() -> RefOr<Schema> {
+pub(crate) fn cursor_schema() -> RefOr<Schema> {
     ObjectBuilder::new()
         .schema_type(Type::Integer)
         .minimum(Some(1))

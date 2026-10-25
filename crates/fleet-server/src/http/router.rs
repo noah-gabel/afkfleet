@@ -21,6 +21,8 @@
 //! | `DELETE /api/v1/me/sessions/{id}` | user | ends another of the user's sessions |
 //! | `GET /api/v1/users` | user (Admin+) | one page of users |
 //! | `PATCH /api/v1/users/{id}` | user + step-up (the Owner; Admins for a Member's `disabled`) | one change: a role or `disabled` |
+//! | `GET /api/v1/users/{id}/grants` | user (the Owner) | one page of the grants the user holds, each saying whether it's dormant |
+//! | `GET /api/v1/users/{id}/shared-accounts` | user (the Owner) | one page of the user's accounts that a grant shares |
 //! | `POST /api/v1/invites` | user + step-up (Admin+; Admin invites the Owner) | a new invite and its code |
 //! | `GET /api/v1/invites` | user (Admin+) | one page of invites |
 //! | `DELETE /api/v1/invites/{id}` | user + step-up (as creating) | revokes a pending invite |
@@ -38,9 +40,12 @@
 //! | `POST /api/v1/accounts/{id}/grants` | user + step-up (Manage) | shares the account with a user named in the body |
 //! | `PUT /api/v1/accounts/{id}/grants/{user}` | user + step-up (Manage) | changes a grant |
 //! | `DELETE /api/v1/accounts/{id}/grants/{user}` | user + step-up (Manage) | revokes a grant |
+//! | `DELETE /api/v1/accounts/{id}/grants/me` | user + step-up (a grantee without implicit Manage) | gives up the caller's own grant: they leave the account |
 //! | `POST /api/v1/agents/enrollment-tokens` | user + step-up (the Owner; while `[grpc]` is configured) | a new enrollment token, in its bundle, shown this once |
 //! | `GET /api/v1/agents` | user (Admin+) | one page of agents, with their status |
 //! | `POST /api/v1/agents/{id}/disable` | user + step-up (Admin+) | disables an agent for good: every certificate revoked, its stream ended |
+//! | `POST /api/v1/agents/{id}/release` | user + step-up (Admin+) | releases a disabled agent's bots, on the caller's word that its host is stopped |
+//! | `GET /api/v1/audit` | user (Admin+) | one page of the audit log, newest first, each entry as stored |
 //! | `GET /api/v1/bots` | user | one page of the bots the user may see, each under its account's field rule |
 //! | `GET /api/v1/bots/{id}` | user (View) | one bot, with what the server knows of its state |
 //! | `PATCH /api/v1/bots/{id}` | user + step-up (Manage) | the Minecraft server the bot joins |
@@ -76,7 +81,8 @@ use axum::Router;
 use utoipa_axum::routes;
 
 use super::handlers::{
-    accounts, agents, auth, bots, chat, events, grants, health, invites, me, mfa, modes, users,
+    accounts, agents, audit, auth, bots, chat, events, grants, health, invites, me, mfa, modes,
+    users,
 };
 use super::middleware::RequestIds;
 use super::openapi::ApiDocs;
@@ -85,6 +91,7 @@ use super::routes::{RateClass, Routes};
 use super::ws::LiveEvents;
 use crate::app::accounts::AccountService;
 use crate::app::agents::AgentService;
+use crate::app::audit::AuditService;
 use crate::app::auth::TokenService;
 use crate::app::bots::BotService;
 use crate::app::enrollment::EnrollmentTokenService;
@@ -136,6 +143,8 @@ pub struct AppState {
     pub(crate) modes: ModeService,
     /// The live events: the tickets, the bus and the sockets (P11.5).
     pub(crate) events: LiveEvents,
+    /// The audit log, read by Admins and the Owner (P11.9).
+    pub(crate) audit: AuditService,
 }
 
 /// Every service the handlers share, by name, so each one is a line of its
@@ -173,6 +182,8 @@ pub struct Services {
     pub modes: ModeService,
     /// The live events: the tickets, the bus and the sockets.
     pub events: LiveEvents,
+    /// The audit log, read by Admins and the Owner.
+    pub audit: AuditService,
 }
 
 impl AppState {
@@ -195,6 +206,7 @@ impl AppState {
             bots,
             modes,
             events,
+            audit,
         } = services;
         Self {
             health,
@@ -212,6 +224,7 @@ impl AppState {
             bots,
             modes,
             events,
+            audit,
         }
     }
 }
@@ -237,6 +250,8 @@ pub fn api_routes(routes: Routes) -> Routes {
         .authed_route(RateClass::Standard, routes!(me::revoke_session))
         .authed_route(RateClass::Standard, routes!(users::list))
         .step_up_route(RateClass::Standard, routes!(users::patch))
+        .authed_route(RateClass::Standard, routes!(users::held_grants))
+        .authed_route(RateClass::Standard, routes!(users::shared_accounts))
         .step_up_route(RateClass::Standard, routes!(invites::create))
         .authed_route(RateClass::Standard, routes!(invites::list))
         .step_up_route(RateClass::Standard, routes!(invites::revoke))
@@ -254,12 +269,15 @@ pub fn api_routes(routes: Routes) -> Routes {
         .step_up_route(RateClass::Standard, routes!(grants::create))
         .step_up_route(RateClass::Standard, routes!(grants::change))
         .step_up_route(RateClass::Standard, routes!(grants::revoke))
+        .step_up_route(RateClass::Standard, routes!(grants::leave))
         .step_up_route(
             RateClass::Standard,
             routes!(agents::create_enrollment_token),
         )
         .authed_route(RateClass::Standard, routes!(agents::list_agents))
         .step_up_route(RateClass::Standard, routes!(agents::disable_agent))
+        .step_up_route(RateClass::Standard, routes!(agents::release_agent))
+        .authed_route(RateClass::Standard, routes!(audit::list))
         .authed_route(RateClass::Standard, routes!(bots::list))
         .authed_route(RateClass::Standard, routes!(bots::get))
         .step_up_route(RateClass::Standard, routes!(bots::patch))

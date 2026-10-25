@@ -192,6 +192,12 @@ async fn app(db: &Database, docs: ApiDocs) -> Router {
         bots: idle_bots(db),
         modes: idle_modes(db),
         events: idle_events(db),
+        audit: fleet_server::app::audit::AuditService::new(
+            std::sync::Arc::new(fleet_testkit::system::ManualClock::new(
+                chrono::DateTime::UNIX_EPOCH,
+            )),
+            std::sync::Arc::new(db.clone()),
+        ),
     });
     router(state, &http, ids, docs)
         .layer(MockConnectInfo(SocketAddr::from(([192, 0, 2, 10], 4711))))
@@ -383,6 +389,7 @@ async fn the_document_lists_exactly_the_api_routes(
             ("/api/v1/accounts/{id}/approve", "post"),
             ("/api/v1/accounts/{id}/grants", "get"),
             ("/api/v1/accounts/{id}/grants", "post"),
+            ("/api/v1/accounts/{id}/grants/me", "delete"),
             ("/api/v1/accounts/{id}/grants/{user}", "delete"),
             ("/api/v1/accounts/{id}/grants/{user}", "put"),
             ("/api/v1/accounts/{id}/refuse", "post"),
@@ -390,6 +397,10 @@ async fn the_document_lists_exactly_the_api_routes(
             ("/api/v1/agents", "get"),
             ("/api/v1/agents/enrollment-tokens", "post"),
             ("/api/v1/agents/{id}/disable", "post"),
+            ("/api/v1/agents/{id}/release", "post"),
+            ("/api/v1/audit", "get"),
+            ("/api/v1/users/{id}/grants", "get"),
+            ("/api/v1/users/{id}/shared-accounts", "get"),
             ("/api/v1/bots", "get"),
             ("/api/v1/bots/{id}", "get"),
             ("/api/v1/bots/{id}", "patch"),

@@ -289,6 +289,48 @@ pub(super) async fn list_visible(
     .collect()
 }
 
+/// One page of the accounts `owner` owns that at least one grant shares,
+/// newest first, with `viewer`'s own grant on each.
+pub(super) async fn shared_of(
+    pool: &SqlitePool,
+    owner: UserId,
+    viewer: UserId,
+    page: Page<AccountId>,
+) -> Result<Vec<ListedAccount>, StoreError> {
+    let owner = id_text(owner);
+    let viewer = id_text(viewer);
+    let before = page.before.map(|id| id_text(id).to_string());
+    let fetch = page.limit.fetch();
+    sqlx::query_as!(
+        ListedRow,
+        r#"SELECT a.rowid AS "rowid!: i64", a.id AS "id!", a.owner_user_id AS "owner_user_id!",
+                  o.role AS "owner_role!", o.username AS "owner_name!",
+                  o.rowid AS "owner_rowid!: i64", a.kind AS "kind!", a.mc_uuid AS "mc_uuid?",
+                  a.mc_name AS "mc_name!", a.status AS "status!",
+                  a.status_reason AS "status_reason?", a.created_at AS "created_at!",
+                  g.level AS "grant_level?", g.rowid AS "grant_rowid?: i64"
+           FROM mc_accounts AS a
+           JOIN users AS o ON o.id = a.owner_user_id
+           LEFT JOIN account_grants AS g ON g.account_id = a.id AND g.user_id = ?
+           WHERE a.owner_user_id = ?
+             AND EXISTS (SELECT 1 FROM account_grants AS shared WHERE shared.account_id = a.id)
+             AND (? IS NULL OR a.id < ?)
+           ORDER BY a.id DESC
+           LIMIT ?"#,
+        viewer,
+        owner,
+        before,
+        before,
+        fetch
+    )
+    .fetch_all(pool)
+    .await
+    .map_err(store_error)?
+    .into_iter()
+    .map(|row| listed_from_row(&row))
+    .collect()
+}
+
 /// One page of the pending accounts `viewer` may review: those whose owner
 /// they outrank by current role, the Owner over Admins and Members and an
 /// Admin over Members (`authorize()`'s `ReviewLink`).

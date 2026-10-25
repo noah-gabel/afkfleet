@@ -23,7 +23,7 @@ use fleet_server::ports::login_attempts::LoginAttemptReads;
 use fleet_server::ports::mfa::MfaReads;
 use fleet_server::ports::modes::ModeReads;
 use fleet_server::ports::page::Page;
-use fleet_server::ports::retention::RetentionReads;
+use fleet_server::ports::retention::{RetentionBatch, RetentionReads};
 use fleet_server::ports::sessions::SessionReads;
 use fleet_server::ports::store::{Store, StoreError, WriteTx};
 use fleet_server::ports::users::UserReads;
@@ -237,6 +237,10 @@ impl Store for FlakyStore {
         self.inner.retention()
     }
 
+    async fn retention_batch(&self) -> Result<Box<dyn RetentionBatch>, StoreError> {
+        self.inner.retention_batch().await
+    }
+
     async fn ping(&self) -> Result<(), StoreError> {
         self.inner.ping().await
     }
@@ -296,5 +300,14 @@ impl AccountReads for FlakyStore {
         page: Page<AccountId>,
     ) -> Result<Vec<ListedAccount>, StoreError> {
         self.inner.accounts().awaiting_review(viewer, page).await
+    }
+
+    async fn shared_of(
+        &self,
+        owner: UserId,
+        viewer: UserId,
+        page: Page<AccountId>,
+    ) -> Result<Vec<ListedAccount>, StoreError> {
+        self.inner.accounts().shared_of(owner, viewer, page).await
     }
 }

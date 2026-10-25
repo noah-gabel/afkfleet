@@ -16,9 +16,9 @@ use fleet_server::ports::audit::NewAuditEntry;
 use fleet_server::ports::bots::NewBot;
 use fleet_server::ports::enrollment_tokens::NewEnrollmentToken;
 use fleet_server::ports::invites::NewInvite;
-use fleet_server::ports::retention::RetentionWrites;
+use fleet_server::ports::retention::RetentionBatch;
 use fleet_server::ports::sessions::NewSession;
-use fleet_server::ports::store::{Store, UnauditedWrite};
+use fleet_server::ports::store::Store;
 use fleet_server::ports::tokens::TokenHash;
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use secrecy::SecretString;
@@ -98,6 +98,11 @@ pub(crate) async fn add_agent(db: &Database, n: u8) -> AgentId {
 
 /// Offline account `n` of `owner`, with its bot.
 pub(crate) async fn add_bot(db: &Database, owner: UserId, n: u8) -> BotId {
+    add_account_bot(db, owner, n).await.1
+}
+
+/// Offline account `n` of `owner` and its bot, both IDs.
+pub(crate) async fn add_account_bot(db: &Database, owner: UserId, n: u8) -> (AccountId, BotId) {
     let account = McAccount {
         id: AccountId::new_v7(at(T0 + i64::from(n)), [n; 10]).unwrap(),
         owner,
@@ -114,7 +119,7 @@ pub(crate) async fn add_bot(db: &Database, owner: UserId, n: u8) -> BotId {
     tx.accounts().insert(&account).await.unwrap();
     tx.bots().insert(&bot).await.unwrap();
     tx.commit(setup_entry()).await.unwrap();
-    bot.id
+    (account.id, bot.id)
 }
 
 /// `count` system lines of `bot`, received at `received`, inserted at once.
@@ -320,14 +325,12 @@ pub(crate) async fn token_ids(db: &Database) -> Vec<String> {
 pub(crate) async fn batch<F>(db: &Database, delete: F) -> u64
 where
     F: for<'a> FnOnce(
-        &'a mut dyn RetentionWrites,
+        &'a mut dyn RetentionBatch,
     ) -> core::pin::Pin<Box<dyn Future<Output = u64> + Send + 'a>>,
 {
-    let mut tx = db.write().await.unwrap();
-    let deleted = delete(tx.retention()).await;
-    tx.commit_unaudited(UnauditedWrite::RetentionPurge)
-        .await
-        .unwrap();
+    let mut batch = db.retention_batch().await.unwrap();
+    let deleted = delete(batch.as_mut()).await;
+    batch.commit().await.unwrap();
     deleted
 }
 
@@ -335,7 +338,7 @@ where
 pub(crate) async fn drain<F>(db: &Database, limit: u32, delete: F) -> Vec<u64>
 where
     F: Fn(
-            &mut dyn RetentionWrites,
+            &mut dyn RetentionBatch,
             u32,
         ) -> core::pin::Pin<Box<dyn Future<Output = u64> + Send + '_>>
         + Copy,

@@ -57,6 +57,7 @@ use tracing::error;
 use super::DATABASE_CLOSE;
 use crate::app::agents::{
     AgentService, AgentView, DisableAgentError, DisabledAgent, Disabler, ReleaseAgentError,
+    Releaser,
 };
 use crate::app::enrollment::{
     CreateTokenError, CreatedEnrollmentToken, Creator, EnrollmentTokenService,
@@ -283,8 +284,8 @@ pub async fn release(
         Err(error) => return fail(err, "the database can't be opened", &error),
     };
     let agents = agent_service(&database, clock);
-    let exit = match agents.release(id).await {
-        Ok(released) => print_released(id, released.len(), out, err),
+    let exit = match agents.release(Releaser::Host, id).await {
+        Ok(released) => print_released(id, released.bots.len(), out, err),
         Err(ReleaseAgentError::NotFound) => refuse(err, &format!("no agent has the ID {id}")),
         Err(ReleaseAgentError::Enabled) => refuse(
             err,

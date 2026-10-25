@@ -16,7 +16,8 @@
 //!   (P10.8, S70), behind the [`Ingest`](crate::ports::ingest::Ingest) port
 //!   the gRPC port calls.
 //! - [`AgentService`]: the agents' list, disabling one (P10.10, S31), and
-//!   releasing a disabled one's bots from the server's host (P10.5, S32).
+//!   releasing a disabled one's bots, from the server's host (P10.5, S32)
+//!   or over the API (P11.9; ADR-0020, S49).
 //!   - **The list** shows every agent, newest first, with its status
 //!     (fleet-core's rule over the row, its latest unrevoked certificate and
 //!     the live stream), when its stream was welcomed, and the later of the
@@ -28,6 +29,15 @@
 //!     after the commit, so a stream this misses finds the commit at its
 //!     hello's transaction. An agent disabled already is no change and no
 //!     entry.
+//!   - **Releasing** is one transaction too: over the API, the acting user
+//!     re-read and authorized again (`ReleaseAgent`, Admin+); the agent read
+//!     and refused while it's enabled; its bots and release records cleared,
+//!     a `bot.detach` per bot and `agent.release` with the count and `via`,
+//!     the actor and the IP over the API. After the commit, the sockets are
+//!     told the bots and the reconciler hinted, so a running server places
+//!     them at once. Nothing to release is no change and no entry. The
+//!     operator vouches that the agent's host and its bots are stopped:
+//!     nothing can prove it (S32).
 
 pub mod assignments;
 pub mod connections;
@@ -55,6 +65,7 @@ use crate::ports::agents::ListedAgent;
 use crate::ports::live_agents::{LiveAgents, LiveStream, PermissionEnd};
 use crate::ports::live_hints::{LiveHints, NoLiveHints};
 use crate::ports::page::{Page, Paged};
+use crate::ports::reconcile::{Change, NoReconcile, Reconcile};
 use crate::ports::store::{Store, StoreError};
 
 /// An agent as the list shows it; see the [module docs](self).
@@ -94,6 +105,24 @@ pub struct DisabledAgent {
     pub revoked: Option<u64>,
 }
 
+/// Who releases a disabled agent's bots.
+#[derive(Debug, Clone, Copy)]
+pub enum Releaser<'a> {
+    /// An Admin or the Owner, through the API (ADR-0020, S49).
+    Admin(&'a ActingUser),
+    /// The server's host, through `afkfleet-server agent release`.
+    Host,
+}
+
+/// A disabled agent whose bots [`AgentService::release`] released.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReleasedAgent {
+    /// The bots released, in ID order; none when it held none.
+    pub bots: Vec<BotId>,
+    /// The agent as the list shows it after.
+    pub view: AgentView,
+}
+
 /// Why a disabled agent's bots weren't released.
 #[derive(Debug, thiserror::Error)]
 pub enum ReleaseAgentError {
@@ -104,6 +133,12 @@ pub enum ReleaseAgentError {
     /// itself. Disable it first.
     #[error("the agent is enabled")]
     Enabled,
+    /// The acting user's session ended, or they were disabled, meanwhile.
+    #[error("the acting session is gone")]
+    SessionGone,
+    /// `authorize()` refused it on the fresh facts.
+    #[error("the actor may not release agents")]
+    Denied(#[source] AuthzError),
     /// An audit entry couldn't be built.
     #[error("the audit entry can't be built")]
     Audit(#[from] AuditError),
@@ -149,6 +184,7 @@ pub struct AgentService {
     live: Arc<dyn LiveAgents>,
     audit: AuditService,
     live_hints: Arc<dyn LiveHints>,
+    reconcile: Arc<dyn Reconcile>,
 }
 
 impl AgentService {
@@ -163,7 +199,16 @@ impl AgentService {
             live,
             audit,
             live_hints: Arc::new(NoLiveHints),
+            reconcile: Arc::new(NoReconcile),
         }
+    }
+
+    /// The service, telling `reconcile` to look again after a release, so
+    /// a running server places the bots at once (ADR-0020, S49). The host's
+    /// command keeps none: the running server's next pass finds them.
+    #[must_use]
+    pub fn with_reconcile(self, reconcile: Arc<dyn Reconcile>) -> Self {
+        Self { reconcile, ..self }
     }
 
     /// The service, telling the live events sockets through `live_hints`
@@ -204,18 +249,36 @@ impl AgentService {
         }
     }
 
-    /// Releases the disabled agent `id`'s bots, from the server's host: every
-    /// bot assigned to it and every release record naming it cleared, in one
-    /// transaction with a `bot.detach` per bot and `agent.release`, so the
-    /// bots can be placed elsewhere (ADR-0019, S32, R25). The operator
+    /// Releases the disabled agent `id`'s bots for `by`: every bot assigned
+    /// to it and every release record naming it cleared, in one transaction
+    /// with a `bot.detach` per bot and `agent.release`, so the bots can be
+    /// placed elsewhere (ADR-0019, S32, R25; ADR-0020, S49). The operator
     /// vouches that the agent's host and its bots are stopped: nothing can
-    /// prove it. The bots released, in ID order; none is no change and no
-    /// entry. A running server places them on its next pass.
+    /// prove it. The agent as the list shows it after, with the bots
+    /// released, in ID order; none is no change and no entry. See the
+    /// [module docs](self).
     ///
     /// # Errors
     /// [`ReleaseAgentError`].
-    pub async fn release(&self, id: AgentId) -> Result<Vec<BotId>, ReleaseAgentError> {
+    pub async fn release(
+        &self,
+        by: Releaser<'_>,
+        id: AgentId,
+    ) -> Result<ReleasedAgent, ReleaseAgentError> {
+        let now = self.clock.now();
         let mut tx = self.store.write().await?;
+        if let Releaser::Admin(acting) = by {
+            let Some(rechecked) = recheck(tx.as_mut(), acting).await? else {
+                debug!(user_id = %acting.actor.id, "an agent's release was refused: the session is gone");
+                return Err(ReleaseAgentError::SessionGone);
+            };
+            authorize(
+                &rechecked.actor,
+                Permission::ReleaseAgent,
+                &ResourceContext::Global,
+            )
+            .map_err(ReleaseAgentError::Denied)?;
+        }
         let agent = tx
             .agents()
             .find(id)
@@ -224,34 +287,50 @@ impl AgentService {
         if agent.enabled {
             return Err(ReleaseAgentError::Enabled);
         }
-        let released = tx.bots().release_all(id).await?;
-        if released.is_empty() {
+        let bots = tx.bots().release_all(id).await?;
+        if bots.is_empty() {
             // Nothing to release: dropping the transaction writes nothing.
-            return Ok(released);
-        }
-        for bot in &released {
-            let metadata = AuditMetadata::new()
-                .id("agent", id)?
-                .text("reason", DetachReason::AgentReleased.as_str())?;
+            drop(tx);
+        } else {
+            for bot in &bots {
+                let metadata = AuditMetadata::new()
+                    .id("agent", id)?
+                    .text("reason", DetachReason::AgentReleased.as_str())?;
+                let entry = self
+                    .audit
+                    .entry(AuditAction::BOT_DETACH, AuditOutcome::Success)
+                    .target(AuditTarget::Bot(*bot))
+                    .metadata(metadata);
+                tx.audit().record(&entry).await?;
+            }
+            let metadata =
+                AuditMetadata::new().int("count", i64::try_from(bots.len()).unwrap_or(i64::MAX))?;
             let entry = self
                 .audit
-                .entry(AuditAction::BOT_DETACH, AuditOutcome::Success)
-                .target(AuditTarget::Bot(*bot))
-                .metadata(metadata);
-            tx.audit().record(&entry).await?;
+                .entry(AuditAction::AGENT_RELEASE, AuditOutcome::Success)
+                .target(AuditTarget::Agent(id));
+            let entry = match by {
+                Releaser::Admin(acting) => entry
+                    .actor(acting.actor.id)
+                    .ip(acting.ip)
+                    .metadata(metadata.text("via", "http")?),
+                Releaser::Host => entry.metadata(metadata.text("via", "cli")?),
+            };
+            tx.commit(entry).await?;
+            self.live_hints.bots(&bots);
+            self.reconcile.changed(Change::Store);
+            info!(agent_id = %id, agent = %agent.name, bots = bots.len(), "a disabled agent's bots were released");
         }
-        let metadata = AuditMetadata::new()
-            .int("count", i64::try_from(released.len()).unwrap_or(i64::MAX))?
-            .text("via", "cli")?;
-        let entry = self
-            .audit
-            .entry(AuditAction::AGENT_RELEASE, AuditOutcome::Success)
-            .target(AuditTarget::Agent(id))
-            .metadata(metadata);
-        tx.commit(entry).await?;
-        self.live_hints.bots(&released);
-        info!(agent_id = %id, agent = %agent.name, bots = released.len(), "a disabled agent's bots were released");
-        Ok(released)
+        let listed = self
+            .store
+            .agents()
+            .listed(id)
+            .await?
+            .ok_or(ReleaseAgentError::NotFound)?;
+        Ok(ReleasedAgent {
+            bots,
+            view: self.view(listed, now),
+        })
     }
 
     /// Disables agent `id` for `by` and ends its stream: the agent as the

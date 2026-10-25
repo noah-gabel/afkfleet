@@ -19,13 +19,16 @@ use std::sync::Arc;
 use fleet_api_types::accounts::{
     AccountPage, AccountResponse, ChangeGrantRequest, CreateGrantRequest,
     CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
-    LinkFlowResponse, LinkStartedResponse,
+    HeldGrantPage, LinkFlowResponse, LinkStartedResponse,
 };
+use fleet_api_types::agents::{AgentPage, AgentResponse};
+use fleet_api_types::audit::{AuditPage, AuditPageQuery};
 use fleet_api_types::auth::{LoginRequest, RegisterRequest, RegisterResponse, StepUpRequest};
 use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
 use fleet_api_types::chat::{
     ChatCommandRequest, ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse,
 };
+use fleet_api_types::ids::AgentId;
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
@@ -266,6 +269,72 @@ impl<S: SessionStore> Client<S> {
         self.core.mfa_reset().await
     }
 
+    /// `GET /audit`: one page of the audit log, newest first (Admins and
+    /// the Owner): each entry as the log stores it. `query`'s `before` is
+    /// the `next` of the page before.
+    ///
+    /// # Errors
+    /// The server's 403 for a Member, 422 (a `limit` outside 1 to 100, a
+    /// `before` below 1) or 429 as [`ClientError::Api`]; any other error as
+    /// for every authenticated call.
+    pub async fn audit(&self, query: &AuditPageQuery) -> Result<AuditPage, ClientError> {
+        self.core.audit(query).await
+    }
+
+    /// `GET /agents`: a page of the agents, newest first, with their status
+    /// and bots count (Admins and the Owner).
+    ///
+    /// # Errors
+    /// The server's 403 for a Member, or 422; any other error as for every
+    /// authenticated call.
+    pub async fn agents(&self, query: &PageQuery<AgentId>) -> Result<AgentPage, ClientError> {
+        self.core.agents(query).await
+    }
+
+    /// `POST /agents/{id}/release`: releases a disabled agent's bots, on the
+    /// caller's word that its host and its bots are stopped, so they can be
+    /// placed elsewhere (Admins and the Owner, after a step-up). The agent
+    /// as the list shows it after.
+    ///
+    /// # Errors
+    /// The server's 403 (`step_up_required` without a fresh step-up;
+    /// `forbidden` for a Member), 404, 409 (`agent_not_disabled`) or 429 as
+    /// [`ClientError::Api`]; any other error as for every authenticated
+    /// call.
+    pub async fn release_agent(&self, id: AgentId) -> Result<AgentResponse, ClientError> {
+        self.core.release_agent(id).await
+    }
+
+    /// `GET /users/{id}/grants`: a page of the grants the user holds,
+    /// dormant ones included, newest account first: the review at a role
+    /// change (the Owner's).
+    ///
+    /// # Errors
+    /// The server's 403 (an Admin, or a Member on themselves), 404 (no such
+    /// user, or a Member on another), 422 or 429 as [`ClientError::Api`];
+    /// any other error as for every authenticated call.
+    pub async fn user_grants(
+        &self,
+        id: UserId,
+        query: &PageQuery<AccountId>,
+    ) -> Result<HeldGrantPage, ClientError> {
+        self.core.user_grants(id, query).await
+    }
+
+    /// `GET /users/{id}/shared-accounts`: a page of the user's accounts that
+    /// at least one grant shares, newest first; [`Client::account_grants`]
+    /// lists each one's grants (the Owner's).
+    ///
+    /// # Errors
+    /// As [`Client::user_grants`].
+    pub async fn shared_accounts(
+        &self,
+        id: UserId,
+        query: &PageQuery<AccountId>,
+    ) -> Result<AccountPage, ClientError> {
+        self.core.shared_accounts(id, query).await
+    }
+
     /// `GET /users`: a page of the users (Admins and the Owner).
     ///
     /// # Errors
@@ -502,6 +571,20 @@ impl<S: SessionStore> Client<S> {
     /// call.
     pub async fn revoke_grant(&self, id: AccountId, user: UserId) -> Result<(), ClientError> {
         self.core.revoke_grant(id, user).await
+    }
+
+    /// `DELETE /accounts/{id}/grants/me`: gives up the caller's own grant,
+    /// leaving the shared account, after [`Client::step_up`] within 5
+    /// minutes.
+    ///
+    /// # Errors
+    /// The server's 403 (`step_up_required` without a fresh step-up,
+    /// `forbidden` for the account's owner, the Owner, or an Admin on a
+    /// Member's account) or 404 (no such account, or no grant on it), as
+    /// [`ClientError::Api`]; any other error as for every authenticated
+    /// call.
+    pub async fn leave_account(&self, id: AccountId) -> Result<(), ClientError> {
+        self.core.leave_account(id).await
     }
 
     /// `GET /bots`: a page of the bots the caller may see, newest first.

@@ -272,6 +272,12 @@ async fn build(db: &Database, docs: ApiDocs, extra: impl FnOnce(Routes) -> Route
         bots: idle_bots(db),
         modes: idle_modes(db),
         events: idle_events(db),
+        audit: fleet_server::app::audit::AuditService::new(
+            std::sync::Arc::new(fleet_testkit::system::ManualClock::new(
+                chrono::DateTime::UNIX_EPOCH,
+            )),
+            std::sync::Arc::new(db.clone()),
+        ),
     });
     let ids = RequestIds::new(Arc::new(clock()), Arc::new(SeededRandom::new(5)));
     let (app, entries) = extra(api_routes(Routes::new(&limits))).finish(state, &http(), ids, docs);
@@ -505,6 +511,11 @@ async fn the_setup_and_step_up_routes_are_registered_with_their_access_and_class
                 "/api/v1/agents/{id}/disable",
                 RateClass::Standard
             ),
+            entry(
+                Method::POST,
+                "/api/v1/agents/{id}/release",
+                RateClass::Standard
+            ),
             entry(Method::DELETE, "/api/v1/invites/{id}", RateClass::Standard),
             entry(Method::DELETE, "/api/v1/accounts/{id}", RateClass::Standard),
             entry(
@@ -530,6 +541,11 @@ async fn the_setup_and_step_up_routes_are_registered_with_their_access_and_class
             entry(
                 Method::DELETE,
                 "/api/v1/accounts/{id}/grants/{user}",
+                RateClass::Standard
+            ),
+            entry(
+                Method::DELETE,
+                "/api/v1/accounts/{id}/grants/me",
                 RateClass::Standard
             ),
             entry(Method::PATCH, "/api/v1/bots/{id}", RateClass::Standard),
@@ -577,6 +593,17 @@ async fn the_authed_routes_are_registered_with_their_class(
             ),
             entry(Method::GET, "/api/v1/users", RateClass::Standard),
             entry(Method::GET, "/api/v1/agents", RateClass::Standard),
+            entry(Method::GET, "/api/v1/audit", RateClass::Standard),
+            entry(
+                Method::GET,
+                "/api/v1/users/{id}/grants",
+                RateClass::Standard
+            ),
+            entry(
+                Method::GET,
+                "/api/v1/users/{id}/shared-accounts",
+                RateClass::Standard,
+            ),
             entry(Method::GET, "/api/v1/invites", RateClass::Standard),
             entry(Method::POST, "/api/v1/accounts/link", RateClass::Standard),
             entry(

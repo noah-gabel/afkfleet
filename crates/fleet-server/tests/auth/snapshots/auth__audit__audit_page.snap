@@ -1,0 +1,64 @@
+---
+source: crates/fleet-server/tests/auth/audit.rs
+expression: page
+---
+{
+  "items": [
+    {
+      "action": "retention.purge",
+      "at": "[T0+3s]",
+      "id": "[row]",
+      "metadata": [
+        {
+          "int": 1200,
+          "key": "chat_by_age"
+        },
+        {
+          "key": "since",
+          "text": "[T0-3600s]"
+        }
+      ],
+      "outcome": "success"
+    },
+    {
+      "action": "agent.connect",
+      "at": "[T0+2s]",
+      "id": "[row]",
+      "ip": "2001:db8::7",
+      "metadata": [
+        {
+          "key": "reason",
+          "text": "expired"
+        }
+      ],
+      "outcome": "failure",
+      "target": {
+        "id": "[agent-6]",
+        "kind": "agent"
+      }
+    },
+    {
+      "action": "bot.set_server",
+      "actor": "[admin]",
+      "at": "[T0+1s]",
+      "id": "[row]",
+      "ip": "192.0.2.10",
+      "metadata": [
+        {
+          "key": "address",
+          "text": "play.example.com"
+        },
+        {
+          "flag": true,
+          "key": "first"
+        }
+      ],
+      "outcome": "success",
+      "target": {
+        "id": "[bot-5]",
+        "kind": "bot"
+      }
+    }
+  ],
+  "next": "[row]"
+}

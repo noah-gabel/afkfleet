@@ -1,0 +1,17 @@
+---
+source: crates/fleet-server/tests/api_error.rs
+expression: seen
+---
+{
+  "status": 409,
+  "headers": {
+    "content-type": "application/json"
+  },
+  "body": {
+    "error": {
+      "code": "agent_not_disabled",
+      "message": "Only a disabled agent's bots can be released. Disable the agent first.",
+      "request_id": "test-request-id"
+    }
+  }
+}

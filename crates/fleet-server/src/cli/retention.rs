@@ -20,7 +20,7 @@ use tokio_util::sync::CancellationToken;
 use tracing::{debug, info, warn};
 
 use super::housekeeping::every;
-use crate::app::retention::{Deleted, RetentionService, RetentionTimings, Tally};
+use crate::app::retention::{Deleted, RetentionService, RetentionTimings, SummaryError, Tally};
 use crate::http::error::chain;
 
 /// The retention task: its service and its pace.
@@ -31,20 +31,33 @@ pub struct Retention {
 }
 
 impl Retention {
-    /// The task over `service`, at `timings`' pace.
+    /// The task over `service`, at `timings`' pace, its pause too: the
+    /// timings are the one source (R63).
     #[must_use]
-    pub const fn new(service: RetentionService, timings: RetentionTimings) -> Self {
-        Self { service, timings }
+    pub fn new(service: RetentionService, timings: RetentionTimings) -> Self {
+        Self {
+            service: service.with_pause(timings.pause),
+            timings,
+        }
     }
 
     /// The same task at `timings`' pace instead, for tests that can't wait
     /// a minute.
     #[must_use]
     pub fn with_timings(self, timings: RetentionTimings) -> Self {
-        Self {
-            service: self.service.with_pause(timings.pause),
-            timings,
-        }
+        Self::new(self.service, timings)
+    }
+
+    /// Its service.
+    #[must_use]
+    pub const fn service(&self) -> &RetentionService {
+        &self.service
+    }
+
+    /// Its pace.
+    #[must_use]
+    pub const fn timings(&self) -> RetentionTimings {
+        self.timings
     }
 
     /// Runs until `stop` is cancelled, then records what the runs since the
@@ -101,7 +114,7 @@ impl Retention {
             lock(tally).passed();
             return;
         }
-        match self.service.record(&due).await {
+        match self.service.record(&due, stop).await {
             Ok(()) => {
                 info!(
                     chat_by_age = deleted.chat_by_age,
@@ -115,6 +128,8 @@ impl Retention {
                 );
                 lock(tally).recorded(self.service.now());
             }
+            // The stop came first: its own summary records the tally.
+            Err(SummaryError::Stopped) => {}
             Err(error) => warn!(
                 error = %chain(&error),
                 "the retention's summary couldn't be recorded; the next run tries again"

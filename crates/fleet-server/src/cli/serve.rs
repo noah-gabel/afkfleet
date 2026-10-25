@@ -53,8 +53,9 @@
 //!    runtime's shutdown ends them right after.
 //! 3. The housekeeping ends (it stopped at the signal, or after its current
 //!    purge batch), the retention task (after its current batch, and its
-//!    summary, which waits at most 1 s for the write connection), the link flows (each stopped at the signal, or after a
-//!    commit that started) and the reconciler (after its current pass),
+//!    summary, which waits at most 1 s for the write connection), the link
+//!    flows (each stopped at the signal, or after a commit that started)
+//!    and the reconciler (after its current pass),
 //!    then the database closes, all with the rest of the deadline, at least
 //!    [`DATABASE_CLOSE`]. If that doesn't finish in time, that's an `error`
 //!    and exit 4.
@@ -92,6 +93,7 @@ use crate::app::agents::ingest::{IngestBounds, IngestTimings, IngestWriter, inge
 use crate::app::agents::{
     AgentConnectionService, AgentService, AssignmentService, SessionGrantService,
 };
+use crate::app::audit::AuditService;
 use crate::app::auth::TokenService;
 use crate::app::bots::{BotService, ChatWait};
 use crate::app::challenges::Challenges;
@@ -453,45 +455,35 @@ pub fn app_with(
     let vault: Arc<dyn Vault> = Arc::new(XChaChaVault::new(keys, Arc::clone(&random)));
     let (reconcile, inbox) = hint_queue(config.grpc.is_some() && ca.is_some());
     let hints = Hints::new(&reconcile, &events);
+    let shared = Shared {
+        clock: &clock,
+        random: &random,
+        store: &store,
+    };
     let (link_flows, accounts) = account_services(
         config,
         &reconcile,
-        LinkFlowPorts {
-            clock: Arc::clone(&clock),
-            random: Arc::clone(&random),
-            store: Arc::clone(&store),
-            vault: Arc::clone(&vault),
-            microsoft: Arc::clone(&microsoft),
-            pace,
-            live_hints: hints.live(),
-        },
+        shared.link_flow_ports(&vault, &microsoft, pace, hints.live()),
     );
     let token_port: Arc<dyn Tokens> = Arc::new(Sha256Tokens::new(Arc::clone(&random)));
-    let (tokens, invites) = token_services(config, &clock, &random, &store, &token_port);
-    let challenges = Challenges::new(Arc::clone(&clock), Arc::clone(&token_port));
-    // A ticket for every socket the cap allows at once.
-    let tickets = EventTickets::new(Arc::clone(&clock), Arc::clone(&token_port))
-        .with_per_user(config.rate_limits.ws_connections_per_user);
-    let mfa = mfa_service(&clock, &random, &store, Arc::clone(&vault), &challenges);
-    let limits = RateLimits::new(&config.rate_limits, limiter_clock);
-    let lockout = lockout_service(config, &clock, &store, lockout_key);
-    let users = user_service(&clock, &random, &store, &passwords, &hints);
-    let login = login_service(
-        &clock,
-        &random,
-        &store,
-        passwords,
-        (&lockout, &tokens, &mfa),
+    let auth = auth_services(
+        config,
+        shared,
+        AuthPorts {
+            vault: Arc::clone(&vault),
+            tokens: &token_port,
+            passwords,
+            lockout_key,
+        },
+        &hints,
     );
-    let grants =
-        GrantService::new(Arc::clone(&clock), Arc::clone(&store)).with_live_hints(hints.live());
+    let limits = RateLimits::new(&config.rate_limits, limiter_clock);
     let ids = RequestIds::new(Arc::clone(&clock), Arc::clone(&random));
-    let (agents, agent_service) = agent_services(&clock, &store, &hints);
-    let modes = mode_service(config, &clock, &random, &store, &hints);
-    let bots = bot_service(config, &clock, &random, &store, &agents, &events, reconcile);
+    let audit = AuditService::new(Arc::clone(&clock), Arc::clone(&store));
+    let fleet = fleet_services(config, shared, &hints, &events, reconcile);
     let retention = retention(config, &clock, &store);
     let shutdown = CancellationToken::new();
-    let (sockets, live) = live_events(&tickets, &events, &store, &shutdown);
+    let (sockets, live) = live_events(&auth.tickets, &events, &store, &shutdown);
     let (enrollment_tokens, grpc) = control_plane_services(
         config,
         ca,
@@ -503,7 +495,7 @@ pub fn app_with(
             tokens: token_port,
             limits: limits.clone(),
             ids: ids.clone(),
-            registry: agents.clone(),
+            registry: fleet.registry.clone(),
             vault,
             microsoft,
             shutdown: shutdown.clone(),
@@ -512,20 +504,21 @@ pub fn app_with(
     );
     let state = AppState::new(Services {
         health: HealthService::new(store),
-        tokens,
+        tokens: auth.tokens,
         limits: limits.clone(),
-        mfa,
-        login,
-        users,
-        invites,
+        mfa: auth.mfa,
+        login: auth.login,
+        users: auth.users,
+        invites: auth.invites,
         link_flows: link_flows.clone(),
         accounts,
-        grants,
+        grants: fleet.grants,
         enrollment_tokens,
-        agents: agent_service,
-        bots,
-        modes,
+        agents: fleet.agents,
+        bots: fleet.bots,
+        modes: fleet.modes,
         events: live,
+        audit,
     });
     App {
         router: router(
@@ -534,7 +527,14 @@ pub fn app_with(
             ids,
             ApiDocs::for_dev_mode(config.dev_mode),
         ),
-        housekeeping: housekeeping(limits, lockout, challenges, tickets, &link_flows, agents),
+        housekeeping: housekeeping(
+            limits,
+            auth.lockout,
+            auth.challenges,
+            auth.tickets,
+            &link_flows,
+            fleet.registry,
+        ),
         retention,
         link_flows,
         grpc,
@@ -562,39 +562,152 @@ fn live_events(
     (sockets, live)
 }
 
-/// Logging in over the app's ports, `passwords`, and its lockout, tokens
-/// and second factor.
-fn login_service(
-    clock: &Arc<dyn Clock>,
-    random: &Arc<dyn SecureRandom>,
-    store: &Arc<dyn Store>,
+/// The fleet's side of the app.
+struct FleetServices {
+    grants: GrantService,
+    /// Each agent's one stream.
+    registry: AgentRegistry,
+    agents: AgentService,
+    modes: ModeService,
+    bots: BotService,
+}
+
+/// The fleet's side over `shared`, hinting with `hints` and `reconcile`, the
+/// bots' chat waiting on `events`: the accounts' sharing, the agents (each
+/// one's stream, and the service that ends them), modes and bots.
+fn fleet_services(
+    config: &ServerConfig,
+    shared: Shared<'_>,
+    hints: &Hints,
+    events: &EventBus,
+    reconcile: Arc<dyn Reconcile>,
+) -> FleetServices {
+    let Shared {
+        clock,
+        random,
+        store,
+    } = shared;
+    let grants =
+        GrantService::new(Arc::clone(clock), Arc::clone(store)).with_live_hints(hints.live());
+    let (registry, agents) = agent_services(clock, store, hints);
+    let modes = mode_service(config, clock, random, store, hints);
+    let bots = bot_service(config, clock, random, store, &registry, events, reconcile);
+    FleetServices {
+        grants,
+        registry,
+        agents,
+        modes,
+        bots,
+    }
+}
+
+/// What every service shares: the app's clock, randomness and store.
+#[derive(Clone, Copy)]
+struct Shared<'a> {
+    clock: &'a Arc<dyn Clock>,
+    random: &'a Arc<dyn SecureRandom>,
+    store: &'a Arc<dyn Store>,
+}
+
+impl Shared<'_> {
+    /// The link flows' ports: these, sealing with `vault`, asking
+    /// `microsoft`, waiting at `pace`, telling the sockets through
+    /// `live_hints`.
+    fn link_flow_ports(
+        self,
+        vault: &Arc<dyn Vault>,
+        microsoft: &Arc<dyn MicrosoftAuthProvider>,
+        pace: Arc<dyn Pace>,
+        live_hints: Arc<dyn LiveHints>,
+    ) -> LinkFlowPorts {
+        LinkFlowPorts {
+            clock: Arc::clone(self.clock),
+            random: Arc::clone(self.random),
+            store: Arc::clone(self.store),
+            vault: Arc::clone(vault),
+            microsoft: Arc::clone(microsoft),
+            pace,
+            live_hints,
+        }
+    }
+}
+
+/// What the sign-in side runs on besides [`Shared`]: the vault that seals
+/// TOTP secrets, the tokens' port, the password hasher and the lockout's
+/// key.
+struct AuthPorts<'a> {
+    vault: Arc<dyn Vault>,
+    tokens: &'a Arc<dyn Tokens>,
     passwords: Arc<dyn Passwords>,
-    (lockout, tokens, mfa): (&LockoutService, &TokenService, &MfaService),
-) -> LoginService {
-    LoginService::new(
+    lockout_key: SecretBox<[u8; 32]>,
+}
+
+/// The sign-in side of the app.
+struct AuthServices {
+    tokens: TokenService,
+    invites: InviteService,
+    challenges: Challenges,
+    tickets: EventTickets,
+    mfa: MfaService,
+    lockout: LockoutService,
+    users: UserService,
+    login: LoginService,
+}
+
+/// The sign-in side over `shared` and `ports`, with `[auth]`'s policies:
+/// sessions and invites, login challenges, a live events ticket for every
+/// socket the cap allows at once, second factors, the lockout, users
+/// (hinting with `hints`) and logins.
+fn auth_services(
+    config: &ServerConfig,
+    shared: Shared<'_>,
+    ports: AuthPorts<'_>,
+    hints: &Hints,
+) -> AuthServices {
+    let Shared {
+        clock,
+        random,
+        store,
+    } = shared;
+    let (tokens, invites) = token_services(config, clock, random, store, ports.tokens);
+    let challenges = Challenges::new(Arc::clone(clock), Arc::clone(ports.tokens));
+    let tickets = EventTickets::new(Arc::clone(clock), Arc::clone(ports.tokens))
+        .with_per_user(config.rate_limits.ws_connections_per_user);
+    let mfa = mfa_service(clock, random, store, ports.vault, &challenges);
+    let lockout = lockout_service(config, clock, store, ports.lockout_key);
+    let users = user_service(clock, random, store, &ports.passwords, hints);
+    let login = LoginService::new(
         Arc::clone(clock),
         Arc::clone(random),
         Arc::clone(store),
-        passwords,
+        ports.passwords,
         lockout.clone(),
         tokens.clone(),
         mfa.clone(),
-    )
+    );
+    AuthServices {
+        tokens,
+        invites,
+        challenges,
+        tickets,
+        mfa,
+        lockout,
+        users,
+        login,
+    }
 }
 
 /// The retention task over `store`, by the config's retention and session
 /// lifetimes, at its default pace.
 fn retention(config: &ServerConfig, clock: &Arc<dyn Clock>, store: &Arc<dyn Store>) -> Retention {
-    let timings = RetentionTimings::default();
     Retention::new(
         RetentionService::new(
             Arc::clone(clock),
             Arc::clone(store),
             config.retention(),
             config.auth.sessions,
-            timings.pause,
         ),
-        timings,
+        RetentionTimings::default(),
     )
 }
 
@@ -704,7 +817,8 @@ fn agent_services(
         Arc::clone(store),
         Arc::new(agents.clone()),
     )
-    .with_live_hints(hints.live());
+    .with_live_hints(hints.live())
+    .with_reconcile(Arc::clone(&hints.reconcile));
     (agents, service)
 }
 
@@ -1623,5 +1737,80 @@ mod tests {
         assert_eq!(timeouts.drain, Duration::from_secs(15));
         assert_eq!(timeouts.close, Duration::from_secs(5));
         assert_eq!(timeouts.deadline(), Duration::from_secs(20));
+    }
+
+    /// serve's retention keeps what the config's three keys say, cuts
+    /// sessions by the config's absolute lifetime, and runs at S45's pace.
+    #[tokio::test]
+    async fn the_retention_takes_the_configs_keys_and_lifetimes_at_the_default_pace() {
+        use fleet_core::auth::SessionPolicy;
+        use fleet_core::retention::{AuditRetention, ChatBound, ChatRetention};
+        use fleet_startup::config::LogConfig;
+        use fleet_testkit::system::ManualClock;
+
+        use crate::config::{
+            AccountsConfig, AuditConfig, AuthConfig, ChatConfig, DatabaseConfig, RateLimitConfig,
+            VaultConfig,
+        };
+        use crate::http::rate_limit::TrustedProxies;
+        use crate::infra::sqlite::{Database, DatabaseOptions};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("afkfleet.db");
+        std::fs::File::create(&path).unwrap();
+        let database = Database::connect(
+            sqlx::sqlite::SqliteConnectOptions::new().filename(&path),
+            DatabaseOptions::default(),
+        )
+        .await
+        .unwrap();
+        let sessions = SessionPolicy::try_new(
+            Duration::from_mins(5),
+            Duration::from_hours(48),
+            Duration::from_hours(240),
+        )
+        .unwrap();
+        let config = ServerConfig {
+            dev_mode: false,
+            http: HttpConfig {
+                bind: HttpConfig::DEFAULT_BIND,
+                request_timeout: Duration::from_secs(15),
+                max_body_bytes: 65_536,
+                trusted_proxies: TrustedProxies::default(),
+            },
+            database: DatabaseConfig { path },
+            log: LogConfig::default(),
+            auth: AuthConfig {
+                sessions,
+                ..AuthConfig::default()
+            },
+            rate_limits: RateLimitConfig::default(),
+            vault: VaultConfig {
+                key_files: std::collections::BTreeMap::new(),
+                active_key_id: 1,
+            },
+            accounts: AccountsConfig::default(),
+            chat: ChatConfig {
+                retention: ChatRetention::try_new(3).unwrap(),
+                bound: ChatBound::try_new(500).unwrap(),
+                ..ChatConfig::default()
+            },
+            audit: AuditConfig {
+                retention: AuditRetention::try_new(120).unwrap(),
+            },
+            grpc: None,
+        };
+        let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(chrono::DateTime::UNIX_EPOCH));
+        let store: Arc<dyn Store> = Arc::new(database.clone());
+
+        let built = retention(&config, &clock, &store);
+
+        assert_eq!(built.service().policy(), config.retention());
+        assert_eq!(built.service().policy().bound.lines(), 500);
+        assert_eq!(built.service().sessions(), sessions);
+        assert_eq!(built.timings(), RetentionTimings::default());
+        assert_eq!(built.service().pause(), RetentionTimings::default().pause);
+        drop(built);
+        database.close().await;
     }
 }

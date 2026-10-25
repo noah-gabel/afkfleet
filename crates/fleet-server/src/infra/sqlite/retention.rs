@@ -2,18 +2,21 @@
 //! ADR-0020, S45, S46, R50).
 //!
 //! SQLite's `DELETE … LIMIT` needs a compile option the bundled library
-//! lacks, so each delete picks its rows by a subquery over an index, the
-//! oldest first, as the lockout purge does. Times compare as text: the
+//! lacks, so each delete picks its rows by a subquery over an index, as the
+//! lockout purge does: the oldest first, but for the replaced refresh
+//! tokens, which go in no set order, all of an expired session's before
+//! it. Times compare as text: the
 //! stored form sorts in time order (`convert`).
 
 use chrono::{DateTime, Utc};
 use fleet_core::id::BotId;
 use sqlx::{Executor, Sqlite, SqliteConnection};
 
-use super::convert::{id_text, parse_id, time_text};
+use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::store_error;
 use crate::ports::audit::AuditEntryId;
 use crate::ports::chat::ChatMessageId;
+use crate::ports::retention::{AuditCut, AuditPurged, KeptEntry};
 use crate::ports::store::StoreError;
 
 /// The stored form of `at` in `table`'s `column`, or
@@ -70,36 +73,58 @@ where
     Ok(cut.map(ChatMessageId::new))
 }
 
-/// The highest audit ID that, with every one below it, is dated at or
-/// before `before`: one below the first entry dated after it, found by a
-/// walk in ID order that stops there, or the last ID when none is.
+/// Where the audit log's prefix ends: one below the first entry dated
+/// after `before`, found by a walk in ID order that stops there, with that
+/// entry; or the last ID when none is.
 pub(super) async fn audit_cut<'e, E>(
     executor: E,
     before: DateTime<Utc>,
-) -> Result<Option<AuditEntryId>, StoreError>
+) -> Result<Option<AuditCut>, StoreError>
 where
     E: Executor<'e, Database = Sqlite>,
 {
     let before = stored_time(before, "audit_log", "at")?;
     let row = sqlx::query!(
-        r#"SELECT
-               (SELECT id FROM audit_log WHERE at > ? ORDER BY id LIMIT 1) AS "first_kept: i64",
-               (SELECT MAX(id) FROM audit_log) AS "last: i64""#,
+        r#"SELECT kept.id AS "first_kept?: i64", kept.at AS "first_kept_at?: String",
+                  (SELECT MAX(id) FROM audit_log) AS "last: i64"
+           FROM (SELECT 1)
+           LEFT JOIN (SELECT id, at FROM audit_log WHERE at > ? ORDER BY id LIMIT 1) AS kept"#,
         before
     )
     .fetch_one(executor)
     .await
     .map_err(store_error)?;
-    let cut = match (row.first_kept, row.last) {
-        (Some(first_kept), _) => Some(first_kept.saturating_sub(1)),
-        (None, last) => last,
+    let Some(last) = row.last else {
+        return Ok(None);
     };
-    Ok(cut.map(AuditEntryId::new))
+    let Some(first_kept) = row.first_kept else {
+        return Ok(Some(AuditCut {
+            through: AuditEntryId::new(last),
+            first_kept: None,
+        }));
+    };
+    let at = row
+        .first_kept_at
+        .as_deref()
+        .and_then(parse_time)
+        .ok_or(StoreError::Corrupt {
+            table: "audit_log",
+            column: "at",
+            rowid: first_kept,
+        })?;
+    Ok(Some(AuditCut {
+        through: AuditEntryId::new(first_kept.saturating_sub(1)),
+        first_kept: Some(KeptEntry {
+            id: AuditEntryId::new(first_kept),
+            at,
+        }),
+    }))
 }
 
 /// Deletes at most `limit` replaced refresh tokens of sessions created at or
 /// before `created_by`, over `sessions(created_at)` and the tokens'
-/// `session_id` index.
+/// `session_id` index, in no set order: the sessions go only once every one
+/// of theirs is gone.
 pub(super) async fn delete_expired_rotations(
     conn: &mut SqliteConnection,
     created_by: DateTime<Utc>,
@@ -193,25 +218,29 @@ pub(super) async fn delete_chat_through(
 }
 
 /// Deletes at most `limit` audit entries with an ID at or below `cut`, the
-/// oldest first.
+/// lowest first, and answers how many and the highest ID among them.
 pub(super) async fn delete_audit_through(
     conn: &mut SqliteConnection,
     cut: AuditEntryId,
     limit: u32,
-) -> Result<u64, StoreError> {
+) -> Result<AuditPurged, StoreError> {
     let cut = cut.get();
     let limit = i64::from(limit);
-    let done = sqlx::query!(
-        "DELETE FROM audit_log WHERE id IN (
-             SELECT id FROM audit_log WHERE id <= ? ORDER BY id LIMIT ?
-         )",
+    let deleted = sqlx::query_scalar!(
+        r#"DELETE FROM audit_log WHERE id IN (
+               SELECT id FROM audit_log WHERE id <= ? ORDER BY id LIMIT ?
+           )
+           RETURNING id AS "id!: i64""#,
         cut,
         limit
     )
-    .execute(conn)
+    .fetch_all(conn)
     .await
     .map_err(store_error)?;
-    Ok(done.rows_affected())
+    Ok(AuditPurged {
+        count: u64::try_from(deleted.len()).unwrap_or(u64::MAX),
+        through: deleted.iter().max().copied().map(AuditEntryId::new),
+    })
 }
 
 /// Deletes at most `limit` unused invites that expired at or before

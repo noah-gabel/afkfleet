@@ -43,7 +43,9 @@ use crate::ports::enrollment_tokens::{
     EnrollmentToken, EnrollmentTokenReads, EnrollmentTokenWrites, NewEnrollmentToken,
 };
 use crate::ports::envelopes::{EnvelopeReads, EnvelopeWrites, SealedEnvelope, SealedRecord};
-use crate::ports::grants::{AccountGrant, GrantReads, GrantWrites, InsertGrantError, ListedGrant};
+use crate::ports::grants::{
+    AccountGrant, GrantReads, GrantWrites, HeldGrant, InsertGrantError, ListedGrant,
+};
 use crate::ports::invites::{
     Invite, InviteReads, InviteWrites, ListedInvite, NewInvite, RevokedInvite,
 };
@@ -56,7 +58,7 @@ use crate::ports::modes::{
 };
 use crate::ports::page::Page;
 use crate::ports::recovery_codes::RecoveryCodeHash;
-use crate::ports::retention::{RetentionReads, RetentionWrites};
+use crate::ports::retention::{AuditCut, AuditPurged, RetentionBatch, RetentionReads};
 use crate::ports::sessions::{
     LiveSince, NewSession, RefreshLookup, Rotation, Session, SessionReads, SessionWithUser,
     SessionWrites,
@@ -185,6 +187,15 @@ impl AccountReads for Reads {
     ) -> Result<Vec<ListedAccount>, StoreError> {
         accounts::awaiting_review(&self.pool, viewer, page).await
     }
+
+    async fn shared_of(
+        &self,
+        owner: UserId,
+        viewer: UserId,
+        page: Page<AccountId>,
+    ) -> Result<Vec<ListedAccount>, StoreError> {
+        accounts::shared_of(&self.pool, owner, viewer, page).await
+    }
 }
 
 #[async_trait]
@@ -195,6 +206,14 @@ impl GrantReads for Reads {
         page: Page<UserId>,
     ) -> Result<Vec<ListedGrant>, StoreError> {
         grants::list(&self.pool, account, page).await
+    }
+
+    async fn held_by(
+        &self,
+        user: UserId,
+        page: Page<AccountId>,
+    ) -> Result<Vec<HeldGrant>, StoreError> {
+        grants::held_by(&self.pool, user, page).await
     }
 }
 
@@ -443,10 +462,6 @@ impl WriteTx for SqliteWriteTx {
     }
 
     fn audit(&mut self) -> &mut dyn AuditWrites {
-        self
-    }
-
-    fn retention(&mut self) -> &mut dyn RetentionWrites {
         self
     }
 
@@ -1021,13 +1036,28 @@ impl RetentionReads for Reads {
         retention::chat_cut(&self.pool, bot, keep).await
     }
 
-    async fn audit_cut(&self, before: DateTime<Utc>) -> Result<Option<AuditEntryId>, StoreError> {
+    async fn audit_cut(&self, before: DateTime<Utc>) -> Result<Option<AuditCut>, StoreError> {
         retention::audit_cut(&self.pool, before).await
     }
 }
 
+/// One batch of the retention task on the one write connection (R57).
+/// Dropping it rolls back.
+pub(super) struct SqliteRetentionBatch {
+    tx: Transaction<'static, Sqlite>,
+    /// The database's commit count, moved once a commit was asked for.
+    commits: Arc<CommitCount>,
+}
+
+impl fmt::Debug for SqliteRetentionBatch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SqliteRetentionBatch")
+            .finish_non_exhaustive()
+    }
+}
+
 #[async_trait]
-impl RetentionWrites for SqliteWriteTx {
+impl RetentionBatch for SqliteRetentionBatch {
     async fn delete_expired_rotations(
         &mut self,
         created_by: DateTime<Utc>,
@@ -1065,7 +1095,7 @@ impl RetentionWrites for SqliteWriteTx {
         &mut self,
         cut: AuditEntryId,
         limit: u32,
-    ) -> Result<u64, StoreError> {
+    ) -> Result<AuditPurged, StoreError> {
         retention::delete_audit_through(&mut self.tx, cut, limit).await
     }
 
@@ -1084,6 +1114,12 @@ impl RetentionWrites for SqliteWriteTx {
     ) -> Result<u64, StoreError> {
         retention::delete_unused_enrollment_tokens(&mut self.tx, expired_by, limit).await
     }
+
+    async fn commit(self: Box<Self>) -> Result<(), StoreError> {
+        let counted = self.commits.start();
+        let Self { tx, .. } = *self;
+        finish(tx, &counted).await
+    }
 }
 
 #[async_trait]
@@ -1095,6 +1131,18 @@ impl Store for Database {
             .await
             .map_err(store_error)?;
         Ok(Box::new(SqliteWriteTx {
+            tx,
+            commits: Arc::clone(&self.commits),
+        }))
+    }
+
+    async fn retention_batch(&self) -> Result<Box<dyn RetentionBatch>, StoreError> {
+        let tx = self
+            .write
+            .begin_with(BEGIN_IMMEDIATE)
+            .await
+            .map_err(store_error)?;
+        Ok(Box::new(SqliteRetentionBatch {
             tx,
             commits: Arc::clone(&self.commits),
         }))

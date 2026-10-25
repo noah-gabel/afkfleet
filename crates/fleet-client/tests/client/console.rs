@@ -8,7 +8,8 @@ use std::collections::VecDeque;
 use std::io;
 use std::sync::{Arc, Mutex};
 
-use fleet_api_types::accounts::CreateOfflineAccountRequest;
+use fleet_api_types::accounts::{CreateGrantRequest, CreateOfflineAccountRequest, GrantLevel};
+use fleet_api_types::users::{UserPatchRequest, UserRole};
 use fleet_api_types::{BotId, PageQuery, SecretText};
 use fleet_client::{Client, ClientConfig, MemoryStore, ServerUrl, SessionStore, StoreError, Trust};
 use fleet_testkit::system::ManualClock;
@@ -16,7 +17,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use tokio::sync::watch;
 
 use crate::dev_console::{self, DEV_SERVER, Ended, HELP, Terminal};
-use crate::support::{OWNER, PASSWORD, Server};
+use crate::support::{OWNER, PASSWORD, Server, step_up};
 
 /// A line of the script that moves the server's clock on by 31 days, past
 /// the session's 30, before the next line is read.
@@ -1330,4 +1331,200 @@ fn a_mode_event_never_prints_its_steps() {
     assert!(shown.starts_with("mode "), "{shown}");
     assert!(!shown.contains("canary"), "{shown}");
     assert!(!shown.contains("warp"), "{shown}");
+}
+
+/// `users` lists every user with their role; `audit` shows the newest page
+/// of the audit log oldest first, each entry on a line of its own.
+#[tokio::test]
+async fn users_lists_every_user_and_audit_the_newest_entries_oldest_first() {
+    let server = Server::start().await;
+    let (owner, _, app) = server.owner().await;
+    step_up(&owner).await;
+    let (_bob, bob) = server.member(&owner, "bob").await;
+    // A code of the step the Member's login moved the clock to.
+    server.next_step();
+    let code = server.code(&app).expose().to_owned();
+    let (client, _) = server.client();
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &["users", "audit"]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let said = &terminal.said;
+    assert!(said.contains(&format!("{bob} bob member")), "{said:?}");
+    assert!(
+        said.iter().any(|line| line.ends_with(" owner owner")),
+        "{said:?}"
+    );
+    let entries: Vec<i64> = said
+        .iter()
+        .filter_map(|line| line.strip_prefix('#'))
+        .map(|rest| rest.split(' ').next().unwrap().parse().unwrap())
+        .collect();
+    assert!(entries.len() > 2, "{said:?}");
+    assert!(entries.windows(2).all(|pair| pair[0] < pair[1]), "{said:?}");
+    assert!(
+        said.iter()
+            .any(|line| line.starts_with('#') && line.contains(" invite.create success by ")),
+        "{said:?}"
+    );
+    server.stop().await;
+}
+
+/// `agents` lists every agent with its bots; `release` asks for the
+/// password again, as the server wants, and releases a disabled one's bot.
+#[tokio::test]
+async fn release_asks_for_the_password_again_and_releases_a_disabled_agents_bots() {
+    let server = Server::start().await;
+    let (owner, code) = owner_and_code(&server).await;
+    let bot = bot_of(&owner, "AfkBot9").await;
+    let agent = server.agent_holding(bot, 1, true).await;
+    let (client, _) = server.client();
+    let release = format!("release {agent}");
+    let mut terminal = Scripted::new(
+        &[PASSWORD, &code, PASSWORD],
+        &["agents", &release, "agents"],
+    );
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let said = &terminal.said;
+    let listed: Vec<&String> = said
+        .iter()
+        .filter(|line| line.starts_with(&agent.to_string()))
+        .collect();
+    assert_eq!(listed.len(), 3, "{said:?}");
+    assert!(listed[0].ends_with(" agent-1 disabled bots=1"), "{said:?}");
+    assert!(listed[1].ends_with(" agent-1 disabled bots=0"), "{said:?}");
+    assert!(listed[2].ends_with(" agent-1 disabled bots=0"), "{said:?}");
+    assert!(
+        terminal.secrets.is_empty(),
+        "the password was asked for again"
+    );
+    server.stop().await;
+}
+
+/// `held` shows the grants a promoted user holds, dormant now, and `shared`
+/// the accounts of theirs a grant shares (the Owner's review).
+#[tokio::test]
+async fn held_and_shared_show_the_review_of_a_users_grants() {
+    let server = Server::start().await;
+    let (owner, _, app) = server.owner().await;
+    step_up(&owner).await;
+    let (alice, _) = server.member(&owner, "alice").await;
+    let (_bob, bob) = server.member(&owner, "bob").await;
+    let account = alice
+        .create_offline_account(&CreateOfflineAccountRequest {
+            name: SecretText::new("AfkBot4".to_owned()),
+        })
+        .await
+        .unwrap()
+        .id;
+    step_up(&alice).await;
+    alice
+        .create_grant(
+            account,
+            &CreateGrantRequest {
+                username: SecretText::new("bob".to_owned()),
+                level: GrantLevel::Control,
+            },
+        )
+        .await
+        .unwrap();
+    owner
+        .patch_user(
+            bob,
+            &UserPatchRequest {
+                role: Some(UserRole::Admin),
+                disabled: None,
+            },
+        )
+        .await
+        .unwrap();
+    let alice_id = owner
+        .users(&PageQuery {
+            before: None,
+            limit: None,
+        })
+        .await
+        .unwrap()
+        .items
+        .into_iter()
+        .find(|user| user.username.as_str() == "alice")
+        .unwrap()
+        .id;
+    server.next_step();
+    let code = server.code(&app).expose().to_owned();
+    let (client, _) = server.client();
+    let held = format!("held {bob}");
+    let shared = format!("shared {alice_id}");
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &[&held, &shared]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let said = &terminal.said;
+    assert!(
+        said.contains(&format!(
+            "{account} AfkBot4 of alice control by alice (dormant)"
+        )),
+        "{said:?}"
+    );
+    assert!(
+        said.iter()
+            .any(|line| line.starts_with(&format!("{account} AfkBot4 offline "))),
+        "{said:?}"
+    );
+    server.stop().await;
+}
+
+/// `leave` asks for the password again, as the server wants, and gives up
+/// the user's grant; a second `leave` shows the server's 404.
+#[tokio::test]
+async fn leave_asks_for_the_password_again_and_gives_up_the_grant() {
+    let server = Server::start().await;
+    let (owner, _, _) = server.owner().await;
+    step_up(&owner).await;
+    let (alice, _) = server.member(&owner, "alice").await;
+    let (_bob, _, app) = server.member_with_app(&owner, "bob").await;
+    let account = alice
+        .create_offline_account(&CreateOfflineAccountRequest {
+            name: SecretText::new("AfkBot4".to_owned()),
+        })
+        .await
+        .unwrap()
+        .id;
+    step_up(&alice).await;
+    alice
+        .create_grant(
+            account,
+            &CreateGrantRequest {
+                username: SecretText::new("bob".to_owned()),
+                level: GrantLevel::View,
+            },
+        )
+        .await
+        .unwrap();
+    let code = server.code(&app).expose().to_owned();
+    let (client, _) = server.client();
+    let leave = format!("leave {account}");
+    let mut terminal = Scripted::new(&[PASSWORD, &code, PASSWORD], &[&leave, &leave]);
+
+    let ended = dev_console::run(&client, "bob", &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let said = &terminal.said;
+    assert!(
+        said.contains(&format!("left account {account}")),
+        "{said:?}"
+    );
+    let text = terminal.text();
+    assert!(text.contains("not_found"), "{text}");
+    assert!(!text.contains(PASSWORD), "{text}");
+    assert!(
+        terminal.secrets.is_empty(),
+        "the password was asked for again"
+    );
+    server.stop().await;
 }

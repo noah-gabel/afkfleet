@@ -103,7 +103,7 @@ fn account(
     let required = match permission {
         // Reviewing a link needs only to see the account; the rank rule
         // below decides.
-        Permission::ViewBot | Permission::ReviewLink => GrantLevel::View,
+        Permission::ViewBot | Permission::ReviewLink | Permission::LeaveAccount => GrantLevel::View,
         Permission::ControlBot => GrantLevel::Control,
         Permission::SendChat(check) | Permission::SetBotMode(check) => {
             if check.needs_manage() {
@@ -127,6 +127,7 @@ fn account(
         | Permission::ViewAgents
         | Permission::EnrollAgent
         | Permission::DisableAgent
+        | Permission::ReleaseAgent
         | Permission::ViewAuditLog
         | Permission::RevokeInvite
         | Permission::ViewMode
@@ -134,6 +135,7 @@ fn account(
         | Permission::DeleteMode
         | Permission::SetRole { .. }
         | Permission::SetDisabled
+        | Permission::ReviewUserGrants
         | Permission::UsePersonal => return Err(AuthzError::WrongResource),
     };
     let Some(level) = effective_level(actor, owner, grant) else {
@@ -145,7 +147,12 @@ fn account(
     // A pending link is reviewed by someone above its linker, by the
     // owner's current role; no grant counts (ADR-0018).
     let reviews = !matches!(permission, Permission::ReviewLink) || manages_user(actor, owner);
-    allow(level >= required && !to_self && reviews)
+    // Leaving gives up a grant: only one held without implicit Manage, which
+    // the owner, the Owner and an Admin on a Member's account have instead
+    // (ADR-0020, S51).
+    let leaves = !matches!(permission, Permission::LeaveAccount)
+        || (grant.is_some() && !manages(actor, owner));
+    allow(level >= required && !to_self && reviews && leaves)
 }
 
 fn global(actor: &Actor, permission: Permission) -> Result<(), AuthzError> {
@@ -161,6 +168,7 @@ fn global(actor: &Actor, permission: Permission) -> Result<(), AuthzError> {
         | Permission::ListInvites
         | Permission::ViewAgents
         | Permission::DisableAgent
+        | Permission::ReleaseAgent
         | Permission::ViewAuditLog => actor.role >= Role::Admin,
         // An agent receives session tokens for the bots assigned to it, so
         // only the Owner decides which agents exist (ADR-0010).
@@ -176,12 +184,14 @@ fn global(actor: &Actor, permission: Permission) -> Result<(), AuthzError> {
         | Permission::RelinkAccount
         | Permission::DeleteAccount
         | Permission::ReviewLink
+        | Permission::LeaveAccount
         | Permission::RevokeInvite
         | Permission::ViewMode
         | Permission::UpdateMode { .. }
         | Permission::DeleteMode
         | Permission::SetRole { .. }
         | Permission::SetDisabled
+        | Permission::ReviewUserGrants
         | Permission::UsePersonal => return Err(AuthzError::WrongResource),
     };
     allow(allowed)
@@ -210,6 +220,7 @@ fn invite(actor: &Actor, permission: Permission, role: Role) -> Result<(), Authz
         | Permission::RelinkAccount
         | Permission::DeleteAccount
         | Permission::ReviewLink
+        | Permission::LeaveAccount
         | Permission::LinkAccount
         | Permission::CreateMode { .. }
         | Permission::ListUsers
@@ -218,12 +229,14 @@ fn invite(actor: &Actor, permission: Permission, role: Role) -> Result<(), Authz
         | Permission::ViewAgents
         | Permission::EnrollAgent
         | Permission::DisableAgent
+        | Permission::ReleaseAgent
         | Permission::ViewAuditLog
         | Permission::ViewMode
         | Permission::UpdateMode { .. }
         | Permission::DeleteMode
         | Permission::SetRole { .. }
         | Permission::SetDisabled
+        | Permission::ReviewUserGrants
         | Permission::UsePersonal => return Err(AuthzError::WrongResource),
     }
     if actor.role < Role::Admin {
@@ -254,6 +267,7 @@ fn mode(
         | Permission::RelinkAccount
         | Permission::DeleteAccount
         | Permission::ReviewLink
+        | Permission::LeaveAccount
         | Permission::LinkAccount
         | Permission::CreateMode { .. }
         | Permission::ListUsers
@@ -262,10 +276,12 @@ fn mode(
         | Permission::ViewAgents
         | Permission::EnrollAgent
         | Permission::DisableAgent
+        | Permission::ReleaseAgent
         | Permission::ViewAuditLog
         | Permission::RevokeInvite
         | Permission::SetRole { .. }
         | Permission::SetDisabled
+        | Permission::ReviewUserGrants
         | Permission::UsePersonal => return Err(AuthzError::WrongResource),
     };
     let visible = match (owner, visibility) {
@@ -306,6 +322,9 @@ fn user(actor: &Actor, permission: Permission, target: UserRef) -> Result<(), Au
             actor.role == Role::Owner && role != Role::Owner && manages_user(actor, target)
         }
         Permission::SetDisabled => manages_user(actor, target),
+        // The review at a role change is the Owner's, who changes roles
+        // (ADR-0020, S50).
+        Permission::ReviewUserGrants => actor.role == Role::Owner && manages_user(actor, target),
         Permission::ViewBot
         | Permission::ControlBot
         | Permission::SendChat(_)
@@ -316,6 +335,7 @@ fn user(actor: &Actor, permission: Permission, target: UserRef) -> Result<(), Au
         | Permission::RelinkAccount
         | Permission::DeleteAccount
         | Permission::ReviewLink
+        | Permission::LeaveAccount
         | Permission::LinkAccount
         | Permission::CreateMode { .. }
         | Permission::ListUsers
@@ -324,6 +344,7 @@ fn user(actor: &Actor, permission: Permission, target: UserRef) -> Result<(), Au
         | Permission::ViewAgents
         | Permission::EnrollAgent
         | Permission::DisableAgent
+        | Permission::ReleaseAgent
         | Permission::ViewAuditLog
         | Permission::RevokeInvite
         | Permission::ViewMode
@@ -364,6 +385,7 @@ fn personal(actor: &Actor, permission: Permission, owner: UserId) -> Result<(), 
         | Permission::RelinkAccount
         | Permission::DeleteAccount
         | Permission::ReviewLink
+        | Permission::LeaveAccount
         | Permission::LinkAccount
         | Permission::CreateMode { .. }
         | Permission::ListUsers
@@ -372,13 +394,15 @@ fn personal(actor: &Actor, permission: Permission, owner: UserId) -> Result<(), 
         | Permission::ViewAgents
         | Permission::EnrollAgent
         | Permission::DisableAgent
+        | Permission::ReleaseAgent
         | Permission::ViewAuditLog
         | Permission::RevokeInvite
         | Permission::ViewMode
         | Permission::UpdateMode { .. }
         | Permission::DeleteMode
         | Permission::SetRole { .. }
-        | Permission::SetDisabled => return Err(AuthzError::WrongResource),
+        | Permission::SetDisabled
+        | Permission::ReviewUserGrants => return Err(AuthzError::WrongResource),
     }
     // Not even the Owner sees another user's sessions or link flows.
     if actor.id == owner {
@@ -501,7 +525,7 @@ mod tests {
     }
 
     /// How many variants [`Permission`] has.
-    const PERMISSION_VARIANTS: usize = 26;
+    const PERMISSION_VARIANTS: usize = 29;
 
     /// The variant's index, and the kind of context it applies to.
     ///
@@ -536,6 +560,9 @@ mod tests {
             Permission::SetDisabled => (23, Kind::User),
             Permission::UsePersonal => (24, Kind::Personal),
             Permission::ReviewLink => (25, Kind::Account),
+            Permission::ReleaseAgent => (26, Kind::Global),
+            Permission::ReviewUserGrants => (27, Kind::User),
+            Permission::LeaveAccount => (28, Kind::Account),
         }
     }
 
@@ -572,6 +599,7 @@ mod tests {
             ("RelinkAccount", Permission::RelinkAccount),
             ("DeleteAccount", Permission::DeleteAccount),
             ("ReviewLink", Permission::ReviewLink),
+            ("LeaveAccount", Permission::LeaveAccount),
             ("LinkAccount", Permission::LinkAccount),
             (
                 "CreateMode private",
@@ -600,6 +628,7 @@ mod tests {
             ("ViewAgents", Permission::ViewAgents),
             ("EnrollAgent", Permission::EnrollAgent),
             ("DisableAgent", Permission::DisableAgent),
+            ("ReleaseAgent", Permission::ReleaseAgent),
             ("ViewAuditLog", Permission::ViewAuditLog),
             ("RevokeInvite", Permission::RevokeInvite),
             ("ViewMode", Permission::ViewMode),
@@ -618,6 +647,7 @@ mod tests {
             ("SetRole admin", Permission::SetRole { role: Role::Admin }),
             ("SetRole owner", Permission::SetRole { role: Role::Owner }),
             ("SetDisabled", Permission::SetDisabled),
+            ("ReviewUserGrants", Permission::ReviewUserGrants),
             ("UsePersonal", Permission::UsePersonal),
         ]
     }

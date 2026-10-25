@@ -37,6 +37,7 @@
 //! - [`agents`]: the agents: creating an enrollment token.
 //! - [`app`]: the desktop app's IPC types, between its Rust side and its UI;
 //!   exported to TypeScript, never on the HTTP wire.
+//! - [`audit`]: the audit log's pages, Admin+.
 //! - [`auth`]: logging in, refreshing, stepping up and registering.
 //! - [`bots`]: the bots, their status, and the server and mode a user
 //!   sets.
@@ -65,6 +66,7 @@
 pub mod accounts;
 pub mod agents;
 pub mod app;
+pub mod audit;
 pub mod auth;
 pub mod bots;
 pub mod chat;

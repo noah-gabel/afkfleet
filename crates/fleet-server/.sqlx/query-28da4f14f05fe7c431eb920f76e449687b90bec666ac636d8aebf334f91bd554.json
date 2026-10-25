@@ -1,0 +1,45 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT kept.id AS \"first_kept?: i64\", kept.at AS \"first_kept_at?: String\",\n                  (SELECT MAX(id) FROM audit_log) AS \"last: i64\"\n           FROM (SELECT 1)\n           LEFT JOIN (SELECT id, at FROM audit_log WHERE at > ? ORDER BY id LIMIT 1) AS kept",
+  "describe": {
+    "columns": [
+      {
+        "name": "first_kept?: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "audit_log",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "first_kept_at?: String",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "audit_log",
+            "name": "at"
+          }
+        }
+      },
+      {
+        "name": "last: i64",
+        "ordinal": 2,
+        "type_info": "Integer",
+        "origin": "Expression"
+      }
+    ],
+    "parameters": {
+      "Right": 1
+    },
+    "nullable": [
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "28da4f14f05fe7c431eb920f76e449687b90bec666ac636d8aebf334f91bd554"
+}

@@ -1,6 +1,7 @@
-//! The agents' routes (Plan.md P10.3, P10.10, Appendix B, ADR-0019):
-//! `POST /api/v1/agents/enrollment-tokens`, `GET /api/v1/agents` and
-//! `POST /api/v1/agents/{id}/disable`.
+//! The agents' routes (Plan.md P10.3, P10.10, P11.9, Appendix B, ADR-0019,
+//! ADR-0020): `POST /api/v1/agents/enrollment-tokens`, `GET
+//! /api/v1/agents`, `POST /api/v1/agents/{id}/disable` and `POST
+//! /api/v1/agents/{id}/release`.
 //!
 //! - **Creating an enrollment token** is the Owner's and needs a step-up
 //!   (`SteppedUpUser`, the handler's first extractor), like the admin writes
@@ -19,6 +20,11 @@
 //!   stream ended before the answer. An agent disabled already answers as
 //!   it is. It works with the control plane off too: an agent enrolled
 //!   before can still be disabled.
+//! - **Releasing a disabled agent's bots** is Admin+ (`ReleaseAgent`) and
+//!   needs a step-up, authorized before anything is read and again in the
+//!   service's transaction (ADR-0020, S49). The caller vouches that the
+//!   agent's host and its bots are stopped. An enabled agent is 409
+//!   `agent_not_disabled`; one that holds no bots answers as it is.
 
 use axum::Json;
 use axum::extract::State;
@@ -31,7 +37,7 @@ use fleet_core::authz::{Permission, ResourceContext};
 use fleet_core::id::AgentId;
 
 use super::{acting, page, secret_text, timestamp};
-use crate::app::agents::{AgentView, DisableAgentError, Disabler};
+use crate::app::agents::{AgentView, DisableAgentError, Disabler, ReleaseAgentError, Releaser};
 use crate::app::enrollment::{CreateTokenError, Creator};
 use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, SteppedUpUser, ValidPath, ValidQuery};
@@ -181,4 +187,47 @@ pub(crate) async fn disable_agent(
             other @ DisableAgentError::Audit(_) => ApiError::internal(other),
         })?;
     Ok(Json(agent_response(&disabled.view)?))
+}
+
+/// `POST /api/v1/agents/{id}/release`: releases a disabled agent's bots, on
+/// the caller's word that its host and its bots are stopped, so they can be
+/// placed elsewhere. Needs a step-up.
+#[utoipa::path(
+    post,
+    path = "/api/v1/agents/{id}/release",
+    operation_id = "release_agent",
+    tag = "agents",
+    params(("id" = String, Path, description = "The agent's ID.")),
+    responses(
+        (status = 200, description = "The agent, its bots released and placed again as soon as an agent can take them. One that held none answers as it is.", body = AgentResponse),
+        (status = 401, description = "No valid access token.", body = ErrorResponse),
+        (status = 403, description = "Step up first: `POST /auth/step-up`; or only Admins and the Owner release agents.", body = ErrorResponse),
+        (status = 404, description = "No such agent.", body = ErrorResponse),
+        (status = 409, description = "`agent_not_disabled`: the agent is enabled; disable it first.", body = ErrorResponse),
+        (status = 429, description = "Too many requests.", body = ErrorResponse,
+            headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
+        (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
+    ),
+)]
+pub(crate) async fn release_agent(
+    user: SteppedUpUser,
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    ValidPath(id): ValidPath<AgentId>,
+) -> Result<Json<AgentResponse>, ApiError> {
+    let user = user.user();
+    user.require(Permission::ReleaseAgent, &ResourceContext::Global)?;
+    let released = state
+        .agents
+        .release(Releaser::Admin(&acting(user, ip)), id)
+        .await
+        .map_err(|error| match error {
+            ReleaseAgentError::NotFound => ApiError::NotFound,
+            ReleaseAgentError::Enabled => ApiError::AgentNotDisabled,
+            ReleaseAgentError::SessionGone => ApiError::Unauthorized,
+            ReleaseAgentError::Denied(error) => ApiError::from(error),
+            ReleaseAgentError::Store(error) => ApiError::from(error),
+            other @ ReleaseAgentError::Audit(_) => ApiError::internal(other),
+        })?;
+    Ok(Json(agent_response(&released.view)?))
 }

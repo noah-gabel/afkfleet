@@ -65,6 +65,24 @@ impl<E: OpenEnum> Open<E> {
     }
 }
 
+impl<E: OpenEnum> Open<E> {
+    /// The value a stored name says, as the server reads it back from what
+    /// it wrote: known when this version lists it, else its cleaned text,
+    /// exactly as reading the wire does (ADR-0020, R66). A name outside the
+    /// list comes only from a newer server's rows after a downgrade.
+    #[must_use]
+    pub fn recorded(name: &str) -> Self {
+        let value = E::ALL
+            .iter()
+            .find(|known| known.as_str() == name)
+            .map_or_else(
+                || Value::Unknown(BoundedText::new(name)),
+                |known| Value::Known(*known),
+            );
+        Self(value)
+    }
+}
+
 impl<E> From<E> for Open<E> {
     fn from(value: E) -> Self {
         Self(Value::Known(value))
@@ -80,14 +98,7 @@ impl<E: OpenEnum> Serialize for Open<E> {
 impl<'de, E: OpenEnum> Deserialize<'de> for Open<E> {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = String::deserialize(deserializer)?;
-        let value = E::ALL
-            .iter()
-            .find(|known| known.as_str() == raw)
-            .map_or_else(
-                || Value::Unknown(BoundedText::new(&raw)),
-                |known| Value::Known(*known),
-            );
-        Ok(Self(value))
+        Ok(Self::recorded(&raw))
     }
 }
 
@@ -161,6 +172,18 @@ mod tests {
         let color = read(&json);
 
         assert_eq!(color.as_str(), "x".repeat(UNKNOWN_MAX_CHARS));
+    }
+
+    #[test]
+    fn a_recorded_name_reads_as_the_wire_does() {
+        let known = Open::<Color>::recorded("dark_blue");
+        let unknown = Open::<Color>::recorded("pur\nple");
+
+        assert_eq!(known.known(), Some(Color::DarkBlue));
+        assert_eq!(known, read(r#""dark_blue""#));
+        assert_eq!(unknown.known(), None);
+        assert_eq!(unknown.as_str(), "pur | ple");
+        assert_eq!(unknown, read(r#""pur\nple""#));
     }
 
     #[test]

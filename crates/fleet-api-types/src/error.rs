@@ -108,6 +108,9 @@ pub enum ErrorCode {
     /// The user holds as many live events sockets open as the server allows:
     /// try again after `Retry-After` (429; ADR-0020, S35).
     TooManyConnections,
+    /// A release of an agent that's still enabled: only a disabled agent's
+    /// bots are released (409; ADR-0020, S49).
+    AgentNotDisabled,
 }
 
 impl ErrorCode {
@@ -159,6 +162,9 @@ impl ErrorCode {
             Self::TooManyConnections => {
                 "Live updates are already open in too many places. Close the app somewhere else, or try again in a minute."
             }
+            Self::AgentNotDisabled => {
+                "Only a disabled agent's bots can be released. Disable the agent first."
+            }
         }
     }
 }
@@ -192,6 +198,7 @@ impl OpenEnum for ErrorCode {
         Self::ModeInUseByOthers,
         Self::ModeInUse,
         Self::TooManyConnections,
+        Self::AgentNotDisabled,
     ];
 
     fn as_str(self) -> &'static str {
@@ -223,6 +230,7 @@ impl OpenEnum for ErrorCode {
             Self::ModeInUseByOthers => "mode_in_use_by_others",
             Self::ModeInUse => "mode_in_use",
             Self::TooManyConnections => "too_many_connections",
+            Self::AgentNotDisabled => "agent_not_disabled",
         }
     }
 }
@@ -336,10 +344,11 @@ mod tests {
             ErrorCode::ModeInUseByOthers => 24,
             ErrorCode::ModeInUse => 25,
             ErrorCode::TooManyConnections => 26,
+            ErrorCode::AgentNotDisabled => 27,
         }
     }
 
-    const CODES: usize = 27;
+    const CODES: usize = 28;
 
     #[test]
     fn all_lists_every_code_exactly_once() {
@@ -471,6 +480,11 @@ mod tests {
         ErrorCode::ModeInUse,
         "mode_in_use",
         "A bot uses this mode, so it can't be deleted. Switch every bot to another mode first."
+    )]
+    #[case(
+        ErrorCode::AgentNotDisabled,
+        "agent_not_disabled",
+        "Only a disabled agent's bots can be released. Disable the agent first."
     )]
     #[case(
         ErrorCode::TooManyConnections,

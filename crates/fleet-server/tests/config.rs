@@ -1432,6 +1432,32 @@ fn the_retention_takes_its_three_keys() {
     });
 }
 
+/// The retention's three keys, set in the file, are overridden by the
+/// environment, as every other key is.
+#[test]
+fn environment_variables_override_the_retentions_keys() {
+    in_jail(|jail| {
+        jail.set_env("AFKFLEET_SERVER__CHAT__RETENTION_DAYS", 3);
+        jail.set_env("AFKFLEET_SERVER__CHAT__MAX_LINES_PER_BOT", 100);
+        jail.set_env("AFKFLEET_SERVER__AUDIT__RETENTION_DAYS", 730);
+        let toml = format!(
+            "{}\n[chat]\nretention_days = 7\nmax_lines_per_bot = 500\n[audit]\nretention_days = 100\n",
+            minimal(jail)
+        );
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert_eq!(
+            config.retention(),
+            fleet_core::retention::RetentionPolicy {
+                chat: ChatRetention::try_new(3).unwrap(),
+                bound: ChatBound::try_new(100).unwrap(),
+                audit: AuditRetention::try_new(730).unwrap(),
+            }
+        );
+    });
+}
+
 #[test]
 fn an_empty_list_of_trusted_proxies_trusts_nobody() {
     in_jail(|jail| {

@@ -74,7 +74,7 @@ use fleet_server::ports::login_attempts::{LoginAttemptReads, LoginAttemptWrites}
 use fleet_server::ports::mfa::{MfaReads, MfaWrites};
 use fleet_server::ports::modes::{ModeReads, ModeWrites};
 use fleet_server::ports::page::{Page, PageLimit};
-use fleet_server::ports::retention::{RetentionReads, RetentionWrites};
+use fleet_server::ports::retention::{RetentionBatch, RetentionReads};
 use fleet_server::ports::sessions::{NewSession, SessionReads, SessionWrites};
 use fleet_server::ports::store::{Store, StoreError, UnauditedWrite, WriteTx};
 use fleet_server::ports::tokens::TokenHash;
@@ -330,10 +330,6 @@ impl WriteTx for FailingTx {
         self.inner.audit()
     }
 
-    fn retention(&mut self) -> &mut dyn RetentionWrites {
-        self.inner.retention()
-    }
-
     async fn commit(
         self: Box<Self>,
         entry: fleet_server::ports::audit::NewAuditEntry,
@@ -524,6 +520,10 @@ impl Store for FailingCommits {
 
     fn retention(&self) -> &dyn RetentionReads {
         self.inner.retention()
+    }
+
+    async fn retention_batch(&self) -> Result<Box<dyn RetentionBatch>, StoreError> {
+        self.inner.retention_batch().await
     }
 
     async fn ping(&self) -> Result<(), StoreError> {

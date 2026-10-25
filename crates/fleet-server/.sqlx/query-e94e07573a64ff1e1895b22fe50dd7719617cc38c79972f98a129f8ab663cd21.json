@@ -1,0 +1,182 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT a.rowid AS \"rowid!: i64\", a.id AS \"id!\", a.owner_user_id AS \"owner_user_id!\",\n                  o.role AS \"owner_role!\", o.username AS \"owner_name!\",\n                  o.rowid AS \"owner_rowid!: i64\", a.kind AS \"kind!\", a.mc_uuid AS \"mc_uuid?\",\n                  a.mc_name AS \"mc_name!\", a.status AS \"status!\",\n                  a.status_reason AS \"status_reason?\", a.created_at AS \"created_at!\",\n                  g.level AS \"grant_level?\", g.rowid AS \"grant_rowid?: i64\"\n           FROM mc_accounts AS a\n           JOIN users AS o ON o.id = a.owner_user_id\n           LEFT JOIN account_grants AS g ON g.account_id = a.id AND g.user_id = ?\n           WHERE a.owner_user_id = ?\n             AND EXISTS (SELECT 1 FROM account_grants AS shared WHERE shared.account_id = a.id)\n             AND (? IS NULL OR a.id < ?)\n           ORDER BY a.id DESC\n           LIMIT ?",
+  "describe": {
+    "columns": [
+      {
+        "name": "rowid!: i64",
+        "ordinal": 0,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "id!",
+        "ordinal": 1,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "name": "owner_user_id!",
+        "ordinal": 2,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "owner_user_id"
+          }
+        }
+      },
+      {
+        "name": "owner_role!",
+        "ordinal": 3,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "role"
+          }
+        }
+      },
+      {
+        "name": "owner_name!",
+        "ordinal": 4,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "username"
+          }
+        }
+      },
+      {
+        "name": "owner_rowid!: i64",
+        "ordinal": 5,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "users",
+            "name": "rowid"
+          }
+        }
+      },
+      {
+        "name": "kind!",
+        "ordinal": 6,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "kind"
+          }
+        }
+      },
+      {
+        "name": "mc_uuid?",
+        "ordinal": 7,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "mc_uuid"
+          }
+        }
+      },
+      {
+        "name": "mc_name!",
+        "ordinal": 8,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "mc_name"
+          }
+        }
+      },
+      {
+        "name": "status!",
+        "ordinal": 9,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "status"
+          }
+        }
+      },
+      {
+        "name": "status_reason?",
+        "ordinal": 10,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "status_reason"
+          }
+        }
+      },
+      {
+        "name": "created_at!",
+        "ordinal": 11,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "mc_accounts",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "name": "grant_level?",
+        "ordinal": 12,
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "account_grants",
+            "name": "level"
+          }
+        }
+      },
+      {
+        "name": "grant_rowid?: i64",
+        "ordinal": 13,
+        "type_info": "Integer",
+        "origin": {
+          "Table": {
+            "table": "account_grants",
+            "name": "rowid"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Right": 5
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      false,
+      false,
+      true,
+      false,
+      true,
+      false
+    ]
+  },
+  "hash": "e94e07573a64ff1e1895b22fe50dd7719617cc38c79972f98a129f8ab663cd21"
+}

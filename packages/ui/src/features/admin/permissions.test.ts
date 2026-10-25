@@ -67,6 +67,7 @@ describe("userActions", () => {
       "SetRole admin",
       "SetRole owner",
       "SetDisabled",
+      "ReviewUserGrants",
     ]);
     expect(users.rows).toHaveLength(11);
   });
@@ -81,6 +82,7 @@ describe("userActions", () => {
         actions.setRole.admin,
         actions.setRole.owner,
         actions.setDisabled,
+        actions.reviewGrants,
       ];
 
       expect(allowed, `${actorLabel} on ${targetLabel}`).toEqual(
@@ -99,6 +101,7 @@ describe("userActions", () => {
       expect(actions).toEqual({
         setRole: { member: false, admin: false, owner: false },
         setDisabled: false,
+        reviewGrants: false,
       });
     }
   });

@@ -205,6 +205,19 @@ pub trait AccountReads: Send + Sync + fmt::Debug {
         viewer: UserId,
     ) -> Result<Option<ListedAccount>, StoreError>;
 
+    /// One page of the accounts `owner` owns that at least one grant
+    /// shares, newest first, as `viewer` sees them, one row more than the
+    /// page: the review at a role change (ADR-0020, S50).
+    ///
+    /// # Errors
+    /// [`StoreError`], including [`StoreError::Corrupt`].
+    async fn shared_of(
+        &self,
+        owner: UserId,
+        viewer: UserId,
+        page: Page<AccountId>,
+    ) -> Result<Vec<ListedAccount>, StoreError>;
+
     /// One page of the accounts `viewer` may see, newest first: their own,
     /// those granted to them, every Member's for an Admin, and all of them
     /// for the Owner, by the owners' current roles (ADR-0010). The caller

@@ -269,7 +269,7 @@ const LABELS: &[(&str, &str)] = &[
 /// for a mode's writes, `role` for a role change, `chat` for a user's line
 /// (published by its send), or nothing, with why ([`LABELS`]). A write
 /// without an audit entry says so too, in a match a new one doesn't compile
-/// without (the retention's, say).
+/// without, and so does the retention's batch.
 #[test]
 fn every_audit_action_is_labelled_with_what_it_tells_the_sockets() {
     let labels = LABELS;
@@ -294,17 +294,21 @@ fn every_audit_action_is_labelled_with_what_it_tells_the_sockets() {
         UnauditedWrite::EventBatch => {
             "nothing: its lines and the agent's reports are on the bus already"
         }
-        UnauditedWrite::RetentionPurge => {
-            "nothing: deleted chat is fetched, not pushed (S42); ended sessions, old entries, invites and enrollment tokens no socket shows"
-        }
     };
     for write in [
         UnauditedWrite::SessionTouch,
         UnauditedWrite::SessionRotate,
         UnauditedWrite::LoginAttemptsPurge,
         UnauditedWrite::EventBatch,
-        UnauditedWrite::RetentionPurge,
     ] {
         assert!(unaudited(&write).starts_with("nothing"), "{write:?}");
     }
+    assert!(
+        RETENTION_BATCH.starts_with("nothing"),
+        "the retention's batch"
+    );
 }
+
+/// What a retention batch, committed without an entry in its own
+/// transaction (R57), tells the live events sockets.
+const RETENTION_BATCH: &str = "nothing: deleted chat is fetched, not pushed (S42); ended sessions, old entries, invites and enrollment tokens no socket shows";

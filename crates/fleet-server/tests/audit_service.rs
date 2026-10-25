@@ -178,6 +178,37 @@ async fn pages_follow_the_cursor_without_overlap(
     db.close().await;
 }
 
+/// A page names the next one only when an entry older than its last
+/// follows: a full page with nothing older names none (R64).
+#[sqlx::test(migrations = false)]
+async fn a_page_names_the_next_only_when_an_older_entry_follows(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (service, _clock, db) = service(options, DatabaseOptions::default()).await;
+    let mut ids = Vec::new();
+    for n in 0..4 {
+        let entry = service.entry(action(&format!("x.e{n}")), AuditOutcome::Success);
+        ids.push(service.record(entry).await.unwrap());
+    }
+
+    let first = service.page(page(None, 2)).await.unwrap();
+    let last = service.page(page(first.next, 2)).await.unwrap();
+    let whole = service.page(page(None, 4)).await.unwrap();
+    let short = service.page(page(None, 5)).await.unwrap();
+
+    assert_eq!(first.next, Some(ids[2]));
+    assert_eq!(
+        last.items.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        [ids[1], ids[0]]
+    );
+    assert_eq!(last.next, None);
+    assert_eq!(whole.items.len(), 4);
+    assert_eq!(whole.next, None);
+    assert_eq!(short.next, None);
+    db.close().await;
+}
+
 #[sqlx::test(migrations = false)]
 async fn a_failure_is_recorded_after_its_change_rolled_back(
     _pool: SqlitePoolOptions,

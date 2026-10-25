@@ -481,6 +481,55 @@ pub struct GrantPage {
     pub next: Option<UserId>,
 }
 
+/// An account named by its ID and Minecraft name.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct AccountLabel {
+    /// The account's ID.
+    #[ts(type = "string")]
+    #[schema(schema_with = id_schema)]
+    pub id: AccountId,
+    /// Its Minecraft name.
+    #[ts(type = "string")]
+    #[schema(schema_with = BoundedText::<MC_NAME_MAX_CHARS>::schema)]
+    pub name: BoundedText<MC_NAME_MAX_CHARS>,
+}
+
+/// A grant a user holds, as `GET /users/{id}/grants` lists it: the review
+/// at a role change (the Owner's; ADR-0020, S50).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct HeldGrantResponse {
+    /// The account it shares.
+    pub account: AccountLabel,
+    /// Who owns the account.
+    pub owner: UserLabel,
+    /// What it allows.
+    #[ts(as = "GrantLevel")]
+    #[schema(value_type = GrantLevel)]
+    pub level: Open<GrantLevel>,
+    /// Who set it last.
+    pub granted_by: UserLabel,
+    /// When it was set last.
+    #[ts(type = "string")]
+    #[schema(schema_with = Timestamp::schema)]
+    pub granted_at: Timestamp,
+    /// Whether it's dormant: the user's role gives Manage on the account
+    /// now, so the grant adds nothing, and it counts again after a demotion.
+    pub dormant: bool,
+}
+
+/// `GET /users/{id}/grants`: one page of the grants a user holds, newest
+/// account first.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
+pub struct HeldGrantPage {
+    /// The grants.
+    pub items: Vec<HeldGrantResponse>,
+    /// The `before` of the next page, when one follows: an account's ID.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(as = "Option<String>", optional)]
+    #[schema(schema_with = id_schema, nullable = false)]
+    pub next: Option<AccountId>,
+}
+
 /// The new offline account.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, ToSchema)]
 pub struct CreatedOfflineAccountResponse {

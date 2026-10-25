@@ -22,7 +22,7 @@ use fleet_core::mode::ModeDefinition;
 use fleet_core::placement::Unplaced;
 use fleet_core::system::Clock as _;
 use fleet_proto::control::{Assignment, LifecycleCommand, ServerMessage};
-use fleet_server::app::agents::AgentService;
+use fleet_server::app::agents::{AgentService, Releaser};
 use fleet_server::app::bots::{BotAction, BotService, Controlled};
 use fleet_server::grpc::control::ONE_HELLO;
 use fleet_server::grpc::registry::{AgentRegistry, RefusedReports};
@@ -485,12 +485,12 @@ async fn a_disabled_agents_released_bot_goes_to_the_next_agent(
         Arc::new(port.db.clone()),
         Arc::new(AgentRegistry::new(clock)),
     )
-    .release(first.id)
+    .release(Releaser::Host, first.id)
     .await
     .unwrap();
     port.changed();
 
-    assert_eq!(released, [bot]);
+    assert_eq!(released.bots, [bot]);
     assert_eq!(two.assigned().await.spec.id, bot);
     port.stop().await;
 }

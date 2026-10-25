@@ -13,7 +13,9 @@
 //!   implicit Manage. The account's owner, the Owner, and an Admin on a
 //!   Member's account have implicit Manage. Admins have none on the Owner's
 //!   or other Admins' accounts. Only Manage edits grants, nobody grants
-//!   above their own level, and nobody grants to themselves.
+//!   above their own level, and nobody grants to themselves. A grantee
+//!   without implicit Manage may give up their own grant
+//!   ([`Permission::LeaveAccount`]).
 //!   A pending link is approved or refused by someone above its owner (the
 //!   Owner for Admins' and Members' links, an Admin for Members'), whatever
 //!   grant anyone holds ([`Permission::ReviewLink`]).
@@ -24,9 +26,13 @@
 //!   they're an Admin, and by the Owner. Private modes follow the account
 //!   rule.
 //! - **Users and invites.** Admins disable Members and handle Member
-//!   invites. Only the Owner changes roles, handles Admin invites and
-//!   enrolls agents. Nobody acts on themselves or on the Owner, and nobody
+//!   invites. Only the Owner changes roles, reviews a user's grants at a
+//!   role change ([`Permission::ReviewUserGrants`]), handles Admin invites
+//!   and enrolls agents. Nobody acts on themselves or on the Owner, and nobody
 //!   becomes the Owner this way.
+//! - **Agents and the audit log.** Admins and the Owner list agents,
+//!   disable them, release a disabled one's bots
+//!   ([`Permission::ReleaseAgent`]), and read the audit log.
 //! - **Personal resources** (profile, sessions, 2FA, link flows, event
 //!   tickets) belong to one user only.
 //!

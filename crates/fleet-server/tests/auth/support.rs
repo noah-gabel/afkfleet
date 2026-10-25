@@ -71,7 +71,7 @@ use fleet_server::ports::modes::{
 use fleet_server::ports::page::Page;
 use fleet_server::ports::passwords::{HashError, Passwords, VerifyError};
 use fleet_server::ports::reconcile::{Change, Reconcile};
-use fleet_server::ports::retention::{RetentionReads, RetentionWrites};
+use fleet_server::ports::retention::{RetentionBatch, RetentionReads};
 use fleet_server::ports::sessions::{
     LiveSince, Session, SessionReads, SessionWithUser, SessionWrites,
 };
@@ -607,10 +607,6 @@ impl WriteTx for HookedTx {
         self.inner.audit()
     }
 
-    fn retention(&mut self) -> &mut dyn RetentionWrites {
-        self.inner.retention()
-    }
-
     async fn commit(self: Box<Self>, entry: NewAuditEntry) -> Result<AuditEntryId, StoreError> {
         let Self {
             inner,
@@ -696,10 +692,6 @@ impl WriteTx for LosingTx {
 
     fn audit(&mut self) -> &mut dyn AuditWrites {
         self.inner.audit()
-    }
-
-    fn retention(&mut self) -> &mut dyn RetentionWrites {
-        self.inner.retention()
     }
 
     async fn commit(self: Box<Self>, entry: NewAuditEntry) -> Result<AuditEntryId, StoreError> {
@@ -1062,6 +1054,10 @@ impl Store for HookedStore {
         self.inner.retention()
     }
 
+    async fn retention_batch(&self) -> Result<Box<dyn RetentionBatch>, StoreError> {
+        self.inner.retention_batch().await
+    }
+
     async fn ping(&self) -> Result<(), StoreError> {
         self.inner.ping().await
     }
@@ -1265,8 +1261,8 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
     let enrollment_tokens = settings
         .control_plane
         .then(|| enrollment_tokens(&clock, &random, &hooked));
-    let (registry, agents) = agents(&clock, &hooked, &heard);
     let hints = Arc::new(Hinted::default());
+    let (registry, agents) = agents(&clock, &hooked, (&heard, &hints));
     let bots = bot_service(
         &clock,
         &random,
@@ -1303,6 +1299,10 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
             (&hints, &heard),
         ),
         events: live_events.clone(),
+        audit: fleet_server::app::audit::AuditService::new(
+            Arc::new(clock.clone()),
+            Arc::new(hooked.clone()),
+        ),
     });
     let app = app(state, &clock);
     insert_alice(&db, alice, alice_hash).await;
@@ -1462,7 +1462,7 @@ async fn insert_alice(db: &Database, alice: UserId, hash: PasswordHash) {
 fn agents(
     clock: &ManualClock,
     hooked: &HookedStore,
-    heard: &Arc<Heard>,
+    (heard, hints): (&Arc<Heard>, &Arc<Hinted>),
 ) -> (AgentRegistry, AgentService) {
     let registry = AgentRegistry::new(Arc::new(clock.clone()));
     let agents = AgentService::new(
@@ -1470,7 +1470,8 @@ fn agents(
         Arc::new(hooked.clone()),
         Arc::new(registry.clone()),
     )
-    .with_live_hints(Arc::clone(heard) as Arc<dyn LiveHints>);
+    .with_live_hints(Arc::clone(heard) as Arc<dyn LiveHints>)
+    .with_reconcile(Arc::clone(hints) as Arc<dyn Reconcile>);
     (registry, agents)
 }
 

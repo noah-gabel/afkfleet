@@ -2,7 +2,8 @@
 //! back, and the two traits. Append-only: recording and listing are the
 //! only operations ([`AuditWrites::record`] and [`AuditReads::list`]), and
 //! the counts the limits read; only the retention task deletes old entries,
-//! through a port of its own (`ports::retention`; ADR-0020, R50).
+//! through a transaction of its own (`ports::retention`; ADR-0020, R50,
+//! R57).
 
 use core::fmt;
 use std::net::IpAddr;
@@ -55,6 +56,9 @@ pub enum AuditLimitError {
 impl AuditLimit {
     /// The largest page.
     pub const MAX: u8 = 100;
+    /// The smallest page, one entry: what decides whether an older page
+    /// follows (ADR-0020, R64).
+    pub const ONE: Self = Self(1);
 
     /// Checks a page size.
     ///
