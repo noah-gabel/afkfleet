@@ -737,6 +737,14 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         expect_empty(answer, 204)
     }
 
+    pub(crate) async fn leave_account(self: &Arc<Self>, id: AccountId) -> Result<(), ClientError> {
+        let url = self
+            .server
+            .api(&["accounts", &id.to_string(), "grants", "me"]);
+        let answer = self.authed(Method::DELETE, url, None).await?;
+        expect_empty(answer, 204)
+    }
+
     /// `/accounts/{id}/grants/{user}`.
     fn grant_url(&self, id: AccountId, user: UserId) -> Url {
         self.server
@@ -2858,6 +2866,28 @@ mod tests {
                 sent(&approve, None),
                 sent(&refuse, None)
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn leaving_deletes_the_callers_own_grant_and_brings_back_a_refusal() {
+        let core = signed_in().await;
+        let leave = format!("DELETE /api/v1/accounts/{ACCOUNT}/grants/me");
+        core.transport.on(&leave, Ok(raw(204, b"")));
+        core.transport
+            .on(&leave, Ok(refusal(403, "step_up_required")));
+
+        let left = core.leave_account(id(ACCOUNT)).await;
+        let refused = core.leave_account(id(ACCOUNT)).await.unwrap_err();
+
+        assert!(left.is_ok(), "{left:?}");
+        assert!(
+            is_api(&refused, 403, ErrorCode::StepUpRequired),
+            "{refused:?}"
+        );
+        assert_eq!(
+            core.transport.seen(),
+            [sent(&leave, None), sent(&leave, None)]
         );
     }
 

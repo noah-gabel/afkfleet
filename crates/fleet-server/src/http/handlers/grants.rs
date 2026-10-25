@@ -1,6 +1,7 @@
-//! The grant routes (Plan.md P9.6, §7.3, Appendix B; ADR-0010, ADR-0018):
-//! `GET` and `POST /api/v1/accounts/{id}/grants`, `PUT` and `DELETE
-//! /api/v1/accounts/{id}/grants/{user}`.
+//! The grant routes (Plan.md P9.6, P11.9, §7.3, Appendix B; ADR-0010,
+//! ADR-0018, ADR-0020): `GET` and `POST /api/v1/accounts/{id}/grants`, `PUT`
+//! and `DELETE /api/v1/accounts/{id}/grants/{user}`, and `DELETE
+//! /api/v1/accounts/{id}/grants/me`.
 //!
 //! - **Listing** needs Manage on the account (`ManageGrants`); an account
 //!   the caller may not see is 404.
@@ -9,6 +10,9 @@
 //!   `username` ([`UNGRANTABLE`]), and the route spends its own per-user
 //!   limit, so names can't be probed fast (ADR-0018, group E).
 //! - **Changing** and **revoking** go by the grantee's ID.
+//! - **Leaving** is the grantee's own: any level, without implicit Manage
+//!   (`LeaveAccount`; ADR-0020, S51). The path's `me` names no one else, so
+//!   it never reaches another user's grant.
 //!
 //! Every write needs a step-up (`SteppedUpUser`, the handlers' first
 //! extractor), and is authorized here and again in the service's
@@ -27,7 +31,7 @@ use fleet_core::id::{AccountId, UserId};
 use fleet_core::value::Username;
 
 use super::{acting, label, page, timestamp};
-use crate::app::grants::{ChangeGrantError, CreateGrantError, RevokeGrantError};
+use crate::app::grants::{ChangeGrantError, CreateGrantError, LeaveGrantError, RevokeGrantError};
 use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, SteppedUpUser, ValidJson, ValidPath, ValidQuery};
 use crate::http::rate_limit::ClientIp;
@@ -221,6 +225,47 @@ pub(crate) async fn revoke(
             RevokeGrantError::Denied(error) => ApiError::from(error),
             RevokeGrantError::Store(error) => ApiError::from(error),
             other @ RevokeGrantError::Audit(_) => ApiError::internal(other),
+        })?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// `DELETE /api/v1/accounts/{id}/grants/me`: the caller gives up their own
+/// grant on the account. Needs a step-up.
+#[utoipa::path(
+    delete,
+    path = "/api/v1/accounts/{id}/grants/me",
+    operation_id = "leave_account",
+    tag = "accounts",
+    params(("id" = String, Path, description = "The account's ID.")),
+    responses(
+        (status = 204, description = "The caller's grant is gone: they left the account."),
+        (status = 401, description = "No valid access token.", body = ErrorResponse),
+        (status = 403, description = "Step up first: `POST /auth/step-up`; or the caller has the account through ownership or their role, not a grant.", body = ErrorResponse),
+        (status = 404, description = "No such account, or one the caller holds no grant on.", body = ErrorResponse),
+        (status = 429, description = "Too many requests.", body = ErrorResponse,
+            headers(("Retry-After" = u32, description = "Seconds to wait before trying again."))),
+        (status = "default", description = "Any other answer the server gives, in the error envelope.", body = ErrorResponse),
+    ),
+)]
+pub(crate) async fn leave(
+    user: SteppedUpUser,
+    State(state): State<AppState>,
+    ClientIp(ip): ClientIp,
+    ValidPath(id): ValidPath<AccountId>,
+) -> Result<StatusCode, ApiError> {
+    let user = user.user();
+    let account = facts(&state, &user.actor(), id).await?;
+    user.require(Permission::LeaveAccount, &account.context())?;
+    state
+        .grants
+        .leave(&acting(user, ip), id)
+        .await
+        .map_err(|error| match error {
+            LeaveGrantError::NotFound => ApiError::NotFound,
+            LeaveGrantError::SessionGone => ApiError::Unauthorized,
+            LeaveGrantError::Denied(error) => ApiError::from(error),
+            LeaveGrantError::Store(error) => ApiError::from(error),
+            other @ LeaveGrantError::Audit(_) => ApiError::internal(other),
         })?;
     Ok(StatusCode::NO_CONTENT)
 }

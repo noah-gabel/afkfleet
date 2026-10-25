@@ -234,3 +234,40 @@ async fn grants_are_created_by_name_changed_listed_and_revoked() {
     assert!(is_api(&missing, 404, ErrorCode::NotFound), "{missing:?}");
     server.stop().await;
 }
+
+#[tokio::test]
+async fn a_grantee_leaves_a_shared_account_after_a_step_up() {
+    let server = Server::start().await;
+    let (owner, _, _) = server.owner().await;
+    step_up(&owner).await;
+    let (alice, _) = server.member(&owner, "alice").await;
+    let (bob, _) = server.member(&owner, "bob").await;
+    let account = create(&alice, "AfkBot1").await;
+    step_up(&alice).await;
+    alice
+        .create_grant(
+            account,
+            &CreateGrantRequest {
+                username: SecretText::new("bob".to_owned()),
+                level: GrantLevel::View,
+            },
+        )
+        .await
+        .unwrap();
+
+    let unstepped = bob.leave_account(account).await.unwrap_err();
+    step_up(&bob).await;
+    bob.leave_account(account).await.unwrap();
+    let listed = bob.accounts(&all()).await.unwrap();
+    let again = bob.leave_account(account).await.unwrap_err();
+    let by_owner = alice.leave_account(account).await.unwrap_err();
+
+    assert!(
+        is_api(&unstepped, 403, ErrorCode::StepUpRequired),
+        "{unstepped:?}"
+    );
+    assert_eq!(listed.items, []);
+    assert!(is_api(&again, 404, ErrorCode::NotFound), "{again:?}");
+    assert!(is_api(&by_owner, 403, ErrorCode::Forbidden), "{by_owner:?}");
+    server.stop().await;
+}

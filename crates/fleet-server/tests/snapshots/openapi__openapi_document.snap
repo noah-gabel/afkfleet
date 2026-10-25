@@ -3474,6 +3474,97 @@ expression: answer.json()
         "x-step-up": true
       }
     },
+    "/api/v1/accounts/{id}/grants/me": {
+      "delete": {
+        "operationId": "leave_account",
+        "parameters": [
+          {
+            "description": "The account's ID.",
+            "in": "path",
+            "name": "id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The caller's grant is gone: they left the account."
+          },
+          "401": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No valid access token."
+          },
+          "403": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Step up first: `POST /auth/step-up`; or the caller has the account through ownership or their role, not a grant."
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "No such account, or one the caller holds no grant on."
+          },
+          "429": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Too many requests.",
+            "headers": {
+              "Retry-After": {
+                "description": "Seconds to wait before trying again.",
+                "schema": {
+                  "format": "int32",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              }
+            }
+          },
+          "default": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Any other answer the server gives, in the error envelope."
+          }
+        },
+        "security": [
+          {
+            "access_token": []
+          }
+        ],
+        "summary": "`DELETE /api/v1/accounts/{id}/grants/me`: the caller gives up their own\ngrant on the account. Needs a step-up.",
+        "tags": [
+          "accounts"
+        ],
+        "x-step-up": true
+      }
+    },
     "/api/v1/accounts/{id}/grants/{user}": {
       "delete": {
         "operationId": "revoke_grant",

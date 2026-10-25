@@ -16,7 +16,9 @@
 //! `agents` every agent, for Admins and the Owner; `release` releases a
 //! disabled agent's bots, asking for the password again when the server
 //! wants it; `held` and `shared` show the review of a user's grants at a
-//! role change, the Owner's (P11.9; ADR-0020, R67).
+//! role change, the Owner's; `leave` gives up the user's own grant on a
+//! shared account, asking for the password again when the server wants it
+//! (P11.9; ADR-0020, R67, S51).
 
 use core::fmt::Write as _;
 use core::pin::Pin;
@@ -87,7 +89,7 @@ pub(crate) fn arguments(args: &[String]) -> Option<(&str, &str)> {
 }
 
 /// The commands, as the console lists them.
-pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | mode <id> <mode> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | history <id> [before] | modes | new-mode <json> | edit-mode <id> <json> | delete-mode <id> | events | users | audit [before] | agents | release <agent-id> | held <user-id> [before] | shared <user-id> [before] | quit";
+pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | mode <id> <mode> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | history <id> [before] | modes | new-mode <json> | edit-mode <id> <json> | delete-mode <id> | events | users | audit [before] | agents | release <agent-id> | held <user-id> [before] | shared <user-id> [before] | leave <account-id> | quit";
 
 /// How many 2FA codes a login may try.
 const CODES: usize = 3;
@@ -144,6 +146,8 @@ enum Command {
     Held(UserId, Option<AccountId>),
     /// One page of a user's accounts that a grant shares.
     Shared(UserId, Option<AccountId>),
+    /// The user's own grant on an account given up.
+    Leave(AccountId),
     Quit,
 }
 
@@ -195,6 +199,7 @@ impl Command {
                 user(id).map(|id| Self::Shared(id, Some(before)))
             }
             ["release", id] => id.parse::<AgentId>().ok().map(Self::Release),
+            ["leave", id] => id.parse::<AccountId>().ok().map(Self::Leave),
             ["audit"] => Some(Self::Audit(None)),
             ["audit", before] => {
                 let before = before.parse::<i64>().ok()?;
@@ -375,6 +380,7 @@ async fn command_of<S: SessionStore>(
         Command::Release(id) => release(client, id, terminal).await,
         Command::Held(id, before) => held(client, id, before, terminal).await,
         Command::Shared(id, before) => shared(client, id, before, terminal).await,
+        Command::Leave(id) => leave(client, id, terminal).await,
         Command::Quit => Ok(()),
     };
     match done {
@@ -504,6 +510,26 @@ async fn release<S: SessionStore>(
         other => other?,
     };
     terminal.say(&agent_line_of(&agent));
+    Ok(())
+}
+
+/// Gives up the user's own grant on account `id`, with a step-up when the
+/// server asks, once.
+async fn leave<S: SessionStore>(
+    client: &Client<S>,
+    id: AccountId,
+    terminal: &mut impl Terminal,
+) -> Result<(), ClientError> {
+    match client.leave_account(id).await {
+        Err(ClientError::Api(failure)) if failure.is(ErrorCode::StepUpRequired) => {
+            if !stepped_up(client, terminal).await? {
+                return Ok(());
+            }
+            client.leave_account(id).await?;
+        }
+        other => other?,
+    }
+    terminal.say(&format!("left account {id}"));
     Ok(())
 }
 
@@ -1286,6 +1312,19 @@ mod tests {
             held_line_of(&grant),
             "018bcfe5-6800-7404-8404-040404040404 AfkBot4 of alice control by alice (dormant)"
         );
+    }
+
+    #[test]
+    fn leave_takes_one_account() {
+        let id = "018bcfe5-6800-7404-8404-040404040404";
+
+        assert_eq!(
+            Command::parse(&format!(" leave {id} ")),
+            Some(Command::Leave(id.parse().unwrap()))
+        );
+        assert_eq!(Command::parse("leave"), None);
+        assert_eq!(Command::parse("leave not-an-id"), None);
+        assert_eq!(Command::parse(&format!("leave {id} now")), None);
     }
 
     #[test]

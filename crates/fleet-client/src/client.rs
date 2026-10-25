@@ -573,6 +573,20 @@ impl<S: SessionStore> Client<S> {
         self.core.revoke_grant(id, user).await
     }
 
+    /// `DELETE /accounts/{id}/grants/me`: gives up the caller's own grant,
+    /// leaving the shared account, after [`Client::step_up`] within 5
+    /// minutes.
+    ///
+    /// # Errors
+    /// The server's 403 (`step_up_required` without a fresh step-up,
+    /// `forbidden` for the account's owner, the Owner, or an Admin on a
+    /// Member's account) or 404 (no such account, or no grant on it), as
+    /// [`ClientError::Api`]; any other error as for every authenticated
+    /// call.
+    pub async fn leave_account(&self, id: AccountId) -> Result<(), ClientError> {
+        self.core.leave_account(id).await
+    }
+
     /// `GET /bots`: a page of the bots the caller may see, newest first.
     ///
     /// # Errors

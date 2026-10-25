@@ -40,6 +40,7 @@
 //! | `POST /api/v1/accounts/{id}/grants` | user + step-up (Manage) | shares the account with a user named in the body |
 //! | `PUT /api/v1/accounts/{id}/grants/{user}` | user + step-up (Manage) | changes a grant |
 //! | `DELETE /api/v1/accounts/{id}/grants/{user}` | user + step-up (Manage) | revokes a grant |
+//! | `DELETE /api/v1/accounts/{id}/grants/me` | user + step-up (a grantee without implicit Manage) | gives up the caller's own grant: they leave the account |
 //! | `POST /api/v1/agents/enrollment-tokens` | user + step-up (the Owner; while `[grpc]` is configured) | a new enrollment token, in its bundle, shown this once |
 //! | `GET /api/v1/agents` | user (Admin+) | one page of agents, with their status |
 //! | `POST /api/v1/agents/{id}/disable` | user + step-up (Admin+) | disables an agent for good: every certificate revoked, its stream ended |
@@ -268,6 +269,7 @@ pub fn api_routes(routes: Routes) -> Routes {
         .step_up_route(RateClass::Standard, routes!(grants::create))
         .step_up_route(RateClass::Standard, routes!(grants::change))
         .step_up_route(RateClass::Standard, routes!(grants::revoke))
+        .step_up_route(RateClass::Standard, routes!(grants::leave))
         .step_up_route(
             RateClass::Standard,
             routes!(agents::create_enrollment_token),

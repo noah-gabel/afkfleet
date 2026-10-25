@@ -218,6 +218,20 @@ Member  another Member  404       403   403      403
 Member  an Admin        404       403   403      403
 Member  the Owner       404       403   403      403
 
+### LeaveAccount
+actor   owner           no grant  view  control  manage
+Owner   self            403       403   403      403
+Owner   a Member        403       403   403      403
+Owner   an Admin        403       403   403      403
+Admin   self            403       403   403      403
+Admin   a Member        403       403   403      403
+Admin   another Admin   404       ok    ok       ok
+Admin   the Owner       404       ok    ok       ok
+Member  self            403       403   403      403
+Member  another Member  404       ok    ok       ok
+Member  an Admin        404       ok    ok       ok
+Member  the Owner       404       ok    ok       ok
+
 ## Fleet-wide
 Columns: the actor's role.
 

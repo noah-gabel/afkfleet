@@ -53,6 +53,8 @@ const UNUSABLE: &str = "a grant by name was refused";
 const CHANGED: &str = "a grant was changed";
 /// What a revoked grant logs.
 const REVOKED: &str = "a grant was revoked";
+/// What a grantee leaving an account logs.
+const LEFT: &str = "a grantee left an account";
 
 /// Why a name can't be granted. The API answers every one alike.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,6 +89,27 @@ pub struct HeldView {
     pub held: HeldGrant,
     /// Whether the holder's role gives Manage on the account now.
     pub dormant: bool,
+}
+
+/// Why a grantee couldn't leave an account.
+#[derive(Debug, thiserror::Error)]
+pub enum LeaveGrantError {
+    /// The acting user's session ended, or they were disabled, meanwhile.
+    #[error("the acting session is gone")]
+    SessionGone,
+    /// There's no such account.
+    #[error("the account doesn't exist")]
+    NotFound,
+    /// `authorize()` refused it on the fresh facts: no grant to give up
+    /// (404), or implicit Manage instead (403).
+    #[error("the actor may not leave the account")]
+    Denied(#[source] AuthzError),
+    /// The audit entry couldn't be built.
+    #[error("the audit entry can't be built")]
+    Audit(#[from] AuditError),
+    /// The database failed.
+    #[error(transparent)]
+    Store(#[from] StoreError),
 }
 
 /// Why a grant wasn't created.
@@ -212,6 +235,52 @@ impl GrantService {
     ) -> Result<Paged<ListedGrant, UserId>, StoreError> {
         let rows = self.store.grants().list(account, page).await?;
         Ok(Paged::split(rows, page.limit, |grant| grant.grant.user))
+    }
+
+    /// Ends `by`'s own grant on `account`: they leave a shared account
+    /// (ADR-0020, S51). The actor and the account are read again and
+    /// `LeaveAccount` authorized in the transaction, so a grant revoked
+    /// meanwhile is 404 and one whose holder has implicit Manage now is
+    /// refused; recorded as `grant.revoke` with `via` = `leave`, and the
+    /// account's bot told to the sockets after the commit.
+    ///
+    /// # Errors
+    /// [`LeaveGrantError`].
+    pub async fn leave(&self, by: &ActingUser, account: AccountId) -> Result<(), LeaveGrantError> {
+        let mut tx = self.store.write().await?;
+        let (actor, listed) = match reread(tx.as_mut(), by, account).await? {
+            Reread::SessionGone => return Err(LeaveGrantError::SessionGone),
+            Reread::NotFound => return Err(LeaveGrantError::NotFound),
+            Reread::Found { actor, account, .. } => (actor, account),
+        };
+        authorize(&actor, Permission::LeaveAccount, &listed.context())
+            .map_err(LeaveGrantError::Denied)?;
+        // `authorize()` allows leaving only with a grant, read in this
+        // transaction, so neither refusal below can come.
+        let level = listed
+            .grant
+            .ok_or(LeaveGrantError::Denied(AuthzError::NotFound))?;
+        if !tx.grants().delete(account, actor.id).await? {
+            return Err(LeaveGrantError::Denied(AuthzError::NotFound));
+        }
+        let bot = tx.bots().id_of_account(account).await?;
+        let entry = self
+            .entry(
+                AuditAction::GRANT_REVOKE,
+                AuditOutcome::Success,
+                by,
+                account,
+            )
+            .metadata(
+                AuditMetadata::new()
+                    .id("grantee", actor.id)?
+                    .text("level", level.as_str())?
+                    .text("via", "leave")?,
+            );
+        tx.commit(entry).await?;
+        self.live_hints.bots(bot.as_slice());
+        info!(user_id = %actor.id, account_id = %account, "{LEFT}");
+        Ok(())
     }
 
     /// The grants `holder` holds on `page`, newest account first, each

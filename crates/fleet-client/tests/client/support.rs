@@ -230,6 +230,17 @@ impl Server {
         owner: &Client<S>,
         username: &str,
     ) -> (Client<MemoryStore>, UserId) {
+        let (client, id, _) = self.member_with_app(owner, username).await;
+        (client, id)
+    }
+
+    /// [`Server::member`], with the Member's authenticator app, so another
+    /// client can log in as them.
+    pub(crate) async fn member_with_app<S: SessionStore>(
+        &self,
+        owner: &Client<S>,
+        username: &str,
+    ) -> (Client<MemoryStore>, UserId, Totp) {
         let invite = owner
             .create_invite(&CreateInviteRequest {
                 role: UserRole::Member,
@@ -241,8 +252,8 @@ impl Server {
             .register(&register(invite.code.expose(), username, PASSWORD))
             .await
             .unwrap();
-        self.first_login(&client, username).await;
-        (client, registered.id)
+        let app = self.first_login(&client, username).await;
+        (client, registered.id, app)
     }
 
     /// A Microsoft account of `owner`'s, numbered `n`, waiting for

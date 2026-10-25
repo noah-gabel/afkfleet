@@ -1478,3 +1478,53 @@ async fn held_and_shared_show_the_review_of_a_users_grants() {
     );
     server.stop().await;
 }
+
+/// `leave` asks for the password again, as the server wants, and gives up
+/// the user's grant; a second `leave` shows the server's 404.
+#[tokio::test]
+async fn leave_asks_for_the_password_again_and_gives_up_the_grant() {
+    let server = Server::start().await;
+    let (owner, _, _) = server.owner().await;
+    step_up(&owner).await;
+    let (alice, _) = server.member(&owner, "alice").await;
+    let (_bob, _, app) = server.member_with_app(&owner, "bob").await;
+    let account = alice
+        .create_offline_account(&CreateOfflineAccountRequest {
+            name: SecretText::new("AfkBot4".to_owned()),
+        })
+        .await
+        .unwrap()
+        .id;
+    step_up(&alice).await;
+    alice
+        .create_grant(
+            account,
+            &CreateGrantRequest {
+                username: SecretText::new("bob".to_owned()),
+                level: GrantLevel::View,
+            },
+        )
+        .await
+        .unwrap();
+    let code = server.code(&app).expose().to_owned();
+    let (client, _) = server.client();
+    let leave = format!("leave {account}");
+    let mut terminal = Scripted::new(&[PASSWORD, &code, PASSWORD], &[&leave, &leave]);
+
+    let ended = dev_console::run(&client, "bob", &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let said = &terminal.said;
+    assert!(
+        said.contains(&format!("left account {account}")),
+        "{said:?}"
+    );
+    let text = terminal.text();
+    assert!(text.contains("not_found"), "{text}");
+    assert!(!text.contains(PASSWORD), "{text}");
+    assert!(
+        terminal.secrets.is_empty(),
+        "the password was asked for again"
+    );
+    server.stop().await;
+}

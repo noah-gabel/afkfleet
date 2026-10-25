@@ -103,7 +103,7 @@ fn account(
     let required = match permission {
         // Reviewing a link needs only to see the account; the rank rule
         // below decides.
-        Permission::ViewBot | Permission::ReviewLink => GrantLevel::View,
+        Permission::ViewBot | Permission::ReviewLink | Permission::LeaveAccount => GrantLevel::View,
         Permission::ControlBot => GrantLevel::Control,
         Permission::SendChat(check) | Permission::SetBotMode(check) => {
             if check.needs_manage() {
@@ -147,7 +147,12 @@ fn account(
     // A pending link is reviewed by someone above its linker, by the
     // owner's current role; no grant counts (ADR-0018).
     let reviews = !matches!(permission, Permission::ReviewLink) || manages_user(actor, owner);
-    allow(level >= required && !to_self && reviews)
+    // Leaving gives up a grant: only one held without implicit Manage, which
+    // the owner, the Owner and an Admin on a Member's account have instead
+    // (ADR-0020, S51).
+    let leaves = !matches!(permission, Permission::LeaveAccount)
+        || (grant.is_some() && !manages(actor, owner));
+    allow(level >= required && !to_self && reviews && leaves)
 }
 
 fn global(actor: &Actor, permission: Permission) -> Result<(), AuthzError> {
@@ -179,6 +184,7 @@ fn global(actor: &Actor, permission: Permission) -> Result<(), AuthzError> {
         | Permission::RelinkAccount
         | Permission::DeleteAccount
         | Permission::ReviewLink
+        | Permission::LeaveAccount
         | Permission::RevokeInvite
         | Permission::ViewMode
         | Permission::UpdateMode { .. }
@@ -214,6 +220,7 @@ fn invite(actor: &Actor, permission: Permission, role: Role) -> Result<(), Authz
         | Permission::RelinkAccount
         | Permission::DeleteAccount
         | Permission::ReviewLink
+        | Permission::LeaveAccount
         | Permission::LinkAccount
         | Permission::CreateMode { .. }
         | Permission::ListUsers
@@ -260,6 +267,7 @@ fn mode(
         | Permission::RelinkAccount
         | Permission::DeleteAccount
         | Permission::ReviewLink
+        | Permission::LeaveAccount
         | Permission::LinkAccount
         | Permission::CreateMode { .. }
         | Permission::ListUsers
@@ -327,6 +335,7 @@ fn user(actor: &Actor, permission: Permission, target: UserRef) -> Result<(), Au
         | Permission::RelinkAccount
         | Permission::DeleteAccount
         | Permission::ReviewLink
+        | Permission::LeaveAccount
         | Permission::LinkAccount
         | Permission::CreateMode { .. }
         | Permission::ListUsers
@@ -376,6 +385,7 @@ fn personal(actor: &Actor, permission: Permission, owner: UserId) -> Result<(), 
         | Permission::RelinkAccount
         | Permission::DeleteAccount
         | Permission::ReviewLink
+        | Permission::LeaveAccount
         | Permission::LinkAccount
         | Permission::CreateMode { .. }
         | Permission::ListUsers
@@ -515,7 +525,7 @@ mod tests {
     }
 
     /// How many variants [`Permission`] has.
-    const PERMISSION_VARIANTS: usize = 28;
+    const PERMISSION_VARIANTS: usize = 29;
 
     /// The variant's index, and the kind of context it applies to.
     ///
@@ -552,6 +562,7 @@ mod tests {
             Permission::ReviewLink => (25, Kind::Account),
             Permission::ReleaseAgent => (26, Kind::Global),
             Permission::ReviewUserGrants => (27, Kind::User),
+            Permission::LeaveAccount => (28, Kind::Account),
         }
     }
 
@@ -588,6 +599,7 @@ mod tests {
             ("RelinkAccount", Permission::RelinkAccount),
             ("DeleteAccount", Permission::DeleteAccount),
             ("ReviewLink", Permission::ReviewLink),
+            ("LeaveAccount", Permission::LeaveAccount),
             ("LinkAccount", Permission::LinkAccount),
             (
                 "CreateMode private",

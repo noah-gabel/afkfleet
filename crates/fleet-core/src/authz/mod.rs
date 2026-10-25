@@ -13,7 +13,9 @@
 //!   implicit Manage. The account's owner, the Owner, and an Admin on a
 //!   Member's account have implicit Manage. Admins have none on the Owner's
 //!   or other Admins' accounts. Only Manage edits grants, nobody grants
-//!   above their own level, and nobody grants to themselves.
+//!   above their own level, and nobody grants to themselves. A grantee
+//!   without implicit Manage may give up their own grant
+//!   ([`Permission::LeaveAccount`]).
 //!   A pending link is approved or refused by someone above its owner (the
 //!   Owner for Admins' and Members' links, an Admin for Members'), whatever
 //!   grant anyone holds ([`Permission::ReviewLink`]).

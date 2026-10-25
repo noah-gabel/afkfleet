@@ -389,6 +389,7 @@ async fn the_document_lists_exactly_the_api_routes(
             ("/api/v1/accounts/{id}/approve", "post"),
             ("/api/v1/accounts/{id}/grants", "get"),
             ("/api/v1/accounts/{id}/grants", "post"),
+            ("/api/v1/accounts/{id}/grants/me", "delete"),
             ("/api/v1/accounts/{id}/grants/{user}", "delete"),
             ("/api/v1/accounts/{id}/grants/{user}", "put"),
             ("/api/v1/accounts/{id}/refuse", "post"),

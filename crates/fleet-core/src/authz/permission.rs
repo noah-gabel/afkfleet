@@ -47,6 +47,10 @@ pub enum Permission {
     /// Members'. The actor must see the account; a grant never counts, and
     /// nobody reviews their own (ADR-0018).
     ReviewLink,
+    /// Give up one's own grant on the account: any grantee without implicit
+    /// Manage, at any level (ADR-0020, S51). The account's owner, the Owner
+    /// and an Admin on a Member's account hold none to give up.
+    LeaveAccount,
 
     // Fleet-wide (`ResourceContext::Global`).
     /// Link a new Microsoft account (every role; P9.4 checks the quota).

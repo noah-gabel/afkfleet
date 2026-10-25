@@ -5,7 +5,9 @@
 //! every name that can't be granted gets the same 422, recorded without the
 //! name; creating by name spends its own limit; a pending account takes no
 //! grant; a raise for someone with implicit Manage is refused; every write
-//! is audited and re-checked in its transaction.
+//! is audited and re-checked in its transaction. A grantee leaves an
+//! account through `DELETE /api/v1/accounts/{id}/grants/me` (P11.9;
+//! ADR-0020, S51).
 
 use core::num::NonZeroU32;
 use std::sync::Arc;
@@ -16,7 +18,7 @@ use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget};
 use fleet_core::authz::{AuthzError, GrantLevel, Role};
 use fleet_core::id::{AccountId, UserId};
 use fleet_server::app::grants::{
-    ChangeGrantError, CreateGrantError, GrantService, RevokeGrantError,
+    ChangeGrantError, CreateGrantError, GrantService, LeaveGrantError, RevokeGrantError,
 };
 use fleet_server::config::{AccountsConfig, Rate, RateLimitConfig};
 use fleet_server::ports::live_hints::LiveHints;
@@ -55,6 +57,17 @@ async fn revoke(setup: &HttpSetup, by: &Person, id: AccountId, user: UserId) -> 
         .api(
             Method::DELETE,
             &format!("/accounts/{id}/grants/{user}"),
+            by,
+            None,
+        )
+        .await
+}
+
+async fn leave(setup: &HttpSetup, by: &Person, id: AccountId) -> Seen {
+    setup
+        .api(
+            Method::DELETE,
+            &format!("/accounts/{id}/grants/me"),
             by,
             None,
         )
@@ -462,6 +475,7 @@ async fn every_grant_write_needs_a_fresh_step_up(
         .await,
         change(&setup, &alice, id, bob.id, "manage").await,
         revoke(&setup, &alice, id, bob.id).await,
+        leave(&setup, &bob, id).await,
     ];
 
     for seen in answers {
@@ -731,4 +745,217 @@ async fn a_raise_on_a_pending_account_is_refused_in_the_transaction(
         setup.grant_of(id, bob.id).await.unwrap().level,
         GrantLevel::View
     );
+}
+
+// --- Leaving ----------------------------------------------------------------------------
+
+#[sqlx::test(migrations = false)]
+async fn a_grantee_leaves_at_any_level_audited_as_a_revoke_via_leave(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+    let id = setup.add_account(alice.id, 2, None).await;
+
+    for (n, level, name) in [
+        (3, GrantLevel::View, "view"),
+        (4, GrantLevel::Control, "control"),
+        (5, GrantLevel::Manage, "manage"),
+    ] {
+        let grantee = setup.stepped_up(n, Role::Member).await;
+        setup.add_grant(id, grantee.id, level, alice.id).await;
+
+        let seen = leave(&setup, &grantee, id).await;
+
+        assert_eq!(seen.status, 204, "{name}: {}", seen.text);
+        assert_eq!(setup.grant_of(id, grantee.id).await, None, "{name}");
+        let entry = setup
+            .entries(&AuditAction::GRANT_REVOKE)
+            .await
+            .pop()
+            .unwrap();
+        assert_eq!(entry.outcome, AuditOutcome::Success);
+        assert_eq!(entry.actor, Some(grantee.id), "{name}");
+        assert_eq!(entry.ip, Some("192.0.2.10".parse().unwrap()));
+        assert_eq!(
+            entry.target,
+            Some(RecordedTarget::Known(AuditTarget::Account(id)))
+        );
+        assert_eq!(meta(&entry, "grantee"), Some(text(&grantee.id.to_string())));
+        assert_eq!(meta(&entry, "level"), Some(text(name)));
+        assert_eq!(meta(&entry, "via"), Some(text("leave")));
+    }
+}
+
+#[sqlx::test(migrations = false)]
+async fn who_has_the_account_through_ownership_or_a_role_cant_leave_it(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let alice = setup.stepped_up(1, Role::Member).await;
+    let owner = setup.stepped_up(2, Role::Owner).await;
+    let admin = setup.stepped_up(3, Role::Admin).await;
+    let id = setup.add_account(alice.id, 4, None).await;
+    // A grant from before the Admin's promotion, dormant now.
+    setup
+        .add_grant(id, admin.id, GrantLevel::View, alice.id)
+        .await;
+
+    let mut seen = Vec::new();
+    for by in [&alice, &owner, &admin] {
+        seen.push(leave(&setup, by, id).await);
+    }
+
+    for seen in &seen {
+        assert_eq!(seen.status, 403, "{}", seen.text);
+        assert_eq!(seen.code(), "forbidden");
+    }
+    assert!(setup.grant_of(id, admin.id).await.is_some());
+    assert_eq!(setup.entries(&AuditAction::GRANT_REVOKE).await, []);
+}
+
+#[sqlx::test(migrations = false)]
+async fn without_a_grant_or_an_account_there_is_nothing_to_leave(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+    let bob = setup.stepped_up(2, Role::Member).await;
+    let id = setup.add_account(alice.id, 3, None).await;
+    let unknown = AccountId::new_v7(at(T0), [99; 10]).unwrap();
+
+    let ungranted = leave(&setup, &bob, id).await;
+    let missing = leave(&setup, &bob, unknown).await;
+
+    for seen in [&ungranted, &missing] {
+        assert_eq!(seen.status, 404, "{}", seen.text);
+        assert_eq!(seen.code(), "not_found");
+    }
+}
+
+/// The handler saw a grant its holder no longer has by the transaction, a
+/// holder promoted to implicit Manage meanwhile, and a session gone: nothing
+/// is written.
+#[sqlx::test(migrations = false)]
+async fn leaving_re_checks_the_grant_and_the_session_in_its_transaction(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+    let bob = setup.person(2, Role::Member).await;
+    let gone = setup.person(3, Role::Member).await;
+    let promoted = setup.person(5, Role::Member).await;
+    let id = setup.add_account(alice.id, 4, None).await;
+    for holder in [gone.id, promoted.id] {
+        setup
+            .add_grant(id, holder, GrantLevel::View, alice.id)
+            .await;
+    }
+    setup.set_disabled(gone.id, true).await;
+    setup.set_role(promoted.id, Role::Admin).await;
+    let grants = service(&setup);
+
+    let revoked_meanwhile = grants.leave(&bob.acting(), id).await;
+    let now_managing = grants.leave(&promoted.acting(), id).await;
+    let without_session = grants.leave(&gone.acting(), id).await;
+
+    assert!(
+        matches!(
+            revoked_meanwhile,
+            Err(LeaveGrantError::Denied(AuthzError::NotFound))
+        ),
+        "{revoked_meanwhile:?}"
+    );
+    assert!(
+        matches!(
+            now_managing,
+            Err(LeaveGrantError::Denied(AuthzError::Forbidden))
+        ),
+        "{now_managing:?}"
+    );
+    assert!(
+        matches!(without_session, Err(LeaveGrantError::SessionGone)),
+        "{without_session:?}"
+    );
+    assert!(setup.grant_of(id, gone.id).await.is_some());
+    assert!(setup.grant_of(id, promoted.id).await.is_some());
+    assert_eq!(setup.entries(&AuditAction::GRANT_REVOKE).await, []);
+}
+
+#[sqlx::test(migrations = false)]
+async fn leaving_tells_the_sockets_the_bot_after_its_commit(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+    let bob = setup.person(2, Role::Member).await;
+    let id = setup.add_account(alice.id, 3, None).await;
+    let bot = setup.add_bot(id, 3).await;
+    setup
+        .add_grant(id, bob.id, GrantLevel::Control, alice.id)
+        .await;
+    let heard = Arc::new(Heard::new(&setup.db));
+    let grants = service(&setup).with_live_hints(Arc::clone(&heard) as Arc<dyn LiveHints>);
+
+    grants.leave(&bob.acting(), id).await.unwrap();
+    let after = (heard.take(), heard.once(&[bot]));
+    let again = grants.leave(&bob.acting(), id).await;
+
+    assert_eq!(after.0, after.1);
+    assert!(again.is_err(), "{again:?}");
+    assert_eq!(heard.take(), Vec::new(), "nothing left to leave");
+}
+
+#[sqlx::test(migrations = false)]
+async fn without_credentials_leaving_is_401(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+    let id = setup.add_account(alice.id, 2, None).await;
+
+    let seen = setup
+        .request(
+            Method::DELETE,
+            &format!("/api/v1/accounts/{id}/grants/me"),
+            None,
+            None,
+        )
+        .await;
+
+    assert_eq!(seen.status, 401, "{}", seen.text);
+}
+
+#[sqlx::test(migrations = false)]
+async fn leaving_spends_the_users_limit(_pool: SqlitePoolOptions, options: SqliteConnectOptions) {
+    let setup = HttpSetup::with(
+        options,
+        &RateLimitConfig {
+            per_user: Rate::per_second(NonZeroU32::MIN, NonZeroU32::MIN),
+            ..RateLimitConfig::default()
+        },
+        AccountsConfig::default(),
+    )
+    .await;
+    let alice = setup.person(1, Role::Member).await;
+    let bob = setup.stepped_up(2, Role::Member).await;
+    let id = setup.add_account(alice.id, 3, None).await;
+    setup
+        .add_grant(id, bob.id, GrantLevel::View, alice.id)
+        .await;
+    assert_eq!(
+        setup.api(Method::GET, "/accounts", &bob, None).await.status,
+        200
+    );
+
+    let seen = leave(&setup, &bob, id).await;
+
+    assert_eq!(seen.status, 429, "{}", seen.text);
+    assert!(setup.grant_of(id, bob.id).await.is_some());
 }

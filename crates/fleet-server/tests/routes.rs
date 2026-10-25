@@ -543,6 +543,11 @@ async fn the_setup_and_step_up_routes_are_registered_with_their_access_and_class
                 "/api/v1/accounts/{id}/grants/{user}",
                 RateClass::Standard
             ),
+            entry(
+                Method::DELETE,
+                "/api/v1/accounts/{id}/grants/me",
+                RateClass::Standard
+            ),
             entry(Method::PATCH, "/api/v1/bots/{id}", RateClass::Standard),
             entry(
                 Method::POST,

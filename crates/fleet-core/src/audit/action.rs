@@ -281,9 +281,11 @@ audit_actions! {
     /// and `previous_level`.
     GRANT_SET_LEVEL = "grant.set_level";
 
-    /// A user revoked another user's grant on an account (P9.6). Outcome:
-    /// Success. Target: the account. Metadata: `grantee` (their ID) and
-    /// `level` (the one revoked).
+    /// A grant on an account ended: a Manage holder revoked another user's
+    /// (P9.6), or its grantee left the account, `via` = `leave` (P11.9;
+    /// ADR-0020, S51). Outcome: Success. Target: the account. Metadata:
+    /// `grantee` (their ID), `level` (the one revoked), and `via` when the
+    /// grantee left.
     GRANT_REVOKE = "grant.revoke";
 
     /// An enrollment token was created for one new agent (P10.3, ADR-0019):
