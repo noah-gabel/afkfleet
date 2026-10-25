@@ -93,6 +93,7 @@ use crate::app::agents::ingest::{IngestBounds, IngestTimings, IngestWriter, inge
 use crate::app::agents::{
     AgentConnectionService, AgentService, AssignmentService, SessionGrantService,
 };
+use crate::app::audit::AuditService;
 use crate::app::auth::TokenService;
 use crate::app::bots::{BotService, ChatWait};
 use crate::app::challenges::Challenges;
@@ -478,6 +479,7 @@ pub fn app_with(
     );
     let limits = RateLimits::new(&config.rate_limits, limiter_clock);
     let ids = RequestIds::new(Arc::clone(&clock), Arc::clone(&random));
+    let audit = AuditService::new(Arc::clone(&clock), Arc::clone(&store));
     let fleet = fleet_services(config, shared, &hints, &events, reconcile);
     let retention = retention(config, &clock, &store);
     let shutdown = CancellationToken::new();
@@ -516,6 +518,7 @@ pub fn app_with(
         bots: fleet.bots,
         modes: fleet.modes,
         events: live,
+        audit,
     });
     App {
         router: router(

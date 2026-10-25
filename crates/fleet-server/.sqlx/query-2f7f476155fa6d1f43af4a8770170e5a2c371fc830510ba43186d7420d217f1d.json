@@ -1,0 +1,12 @@
+{
+  "db_name": "SQLite",
+  "query": "INSERT INTO audit_log (at, action, target_type, target_id, outcome, metadata_json)\n           VALUES ('2027-01-15T08:00:05.000Z', 'agent.teleport', 'planet',\n                   '018bcfe5-6800-7cdc-8dcd-cdcdcdcd0009', 'success',\n                   '{\"depth\": 1.5, \"far\": 9007199254740993, \"nested\": {\"a\": 1}}')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Right": 0
+    },
+    "nullable": []
+  },
+  "hash": "2f7f476155fa6d1f43af4a8770170e5a2c371fc830510ba43186d7420d217f1d"
+}

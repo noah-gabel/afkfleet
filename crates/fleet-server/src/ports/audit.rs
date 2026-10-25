@@ -56,6 +56,9 @@ pub enum AuditLimitError {
 impl AuditLimit {
     /// The largest page.
     pub const MAX: u8 = 100;
+    /// The smallest page, one entry: what decides whether an older page
+    /// follows (ADR-0020, R64).
+    pub const ONE: Self = Self(1);
 
     /// Checks a page size.
     ///

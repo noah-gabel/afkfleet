@@ -35,6 +35,7 @@ use crate::app::{
     LoginStepResponse, LogoutResponse, ServerProfileRequest, ServerProfileResponse,
     ServerProfileState, SetupStepResponse,
 };
+use crate::audit::AuditPage;
 use crate::auth::{
     LoginMfaRequest, LoginRequest, LoginResponse, RefreshRequest, RegisterRequest,
     RegisterResponse, StepUpRequest, TokenResponse,
@@ -217,7 +218,8 @@ fn write_api(config: &Config) -> Result<(), TypeScriptError> {
     CreateModeRequest::export_all(config).map_err(TypeScriptError::Export)?;
     UpdateModeRequest::export_all(config).map_err(TypeScriptError::Export)?;
     EventTicketResponse::export_all(config).map_err(TypeScriptError::Export)?;
-    EventMessage::export_all(config).map_err(TypeScriptError::Export)
+    EventMessage::export_all(config).map_err(TypeScriptError::Export)?;
+    AuditPage::export_all(config).map_err(TypeScriptError::Export)
 }
 
 /// Writes the app's root IPC types, and every type they use.

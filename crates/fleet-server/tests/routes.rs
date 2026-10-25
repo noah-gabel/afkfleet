@@ -272,6 +272,12 @@ async fn build(db: &Database, docs: ApiDocs, extra: impl FnOnce(Routes) -> Route
         bots: idle_bots(db),
         modes: idle_modes(db),
         events: idle_events(db),
+        audit: fleet_server::app::audit::AuditService::new(
+            std::sync::Arc::new(fleet_testkit::system::ManualClock::new(
+                chrono::DateTime::UNIX_EPOCH,
+            )),
+            std::sync::Arc::new(db.clone()),
+        ),
     });
     let ids = RequestIds::new(Arc::new(clock()), Arc::new(SeededRandom::new(5)));
     let (app, entries) = extra(api_routes(Routes::new(&limits))).finish(state, &http(), ids, docs);
@@ -577,6 +583,7 @@ async fn the_authed_routes_are_registered_with_their_class(
             ),
             entry(Method::GET, "/api/v1/users", RateClass::Standard),
             entry(Method::GET, "/api/v1/agents", RateClass::Standard),
+            entry(Method::GET, "/api/v1/audit", RateClass::Standard),
             entry(Method::GET, "/api/v1/invites", RateClass::Standard),
             entry(Method::POST, "/api/v1/accounts/link", RateClass::Standard),
             entry(

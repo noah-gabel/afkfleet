@@ -12,7 +12,8 @@
 //! command's arguments only for Manage holders (ADR-0020, S9, S11, U3).
 //! `events` prints the live events, one line each, until Enter (P11.5;
 //! ADR-0020, S37): never the socket's URL, its ticket or the token it
-//! opens with.
+//! opens with. `audit` shows a page of the audit log and `users` every user,
+//! for Admins and the Owner (P11.9; ADR-0020, R67).
 
 use core::fmt::Write as _;
 use core::pin::Pin;
@@ -20,6 +21,7 @@ use core::time::Duration;
 use std::io;
 
 use fleet_api_types::accounts::CreateOfflineAccountRequest;
+use fleet_api_types::audit::{AuditEntryResponse, AuditPageQuery};
 use fleet_api_types::auth::{LoginRequest, StepUpRequest};
 use fleet_api_types::bots::{BotModeRequest, BotPatchRequest, BotResponse, BotStatus};
 use fleet_api_types::chat::{
@@ -78,7 +80,7 @@ pub(crate) fn arguments(args: &[String]) -> Option<(&str, &str)> {
 }
 
 /// The commands, as the console lists them.
-pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | mode <id> <mode> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | history <id> [before] | modes | new-mode <json> | edit-mode <id> <json> | delete-mode <id> | events | quit";
+pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | mode <id> <mode> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | history <id> [before] | modes | new-mode <json> | edit-mode <id> <json> | delete-mode <id> | events | users | audit [before] | quit";
 
 /// How many 2FA codes a login may try.
 const CODES: usize = 3;
@@ -122,6 +124,10 @@ enum Command {
     DeleteMode(ModeId),
     /// The live events, until Enter.
     Events,
+    /// Every user, for Admins and the Owner.
+    Users,
+    /// One page of the audit log: the newest, or the one before an entry.
+    Audit(Option<SafeInt>),
     Quit,
 }
 
@@ -159,6 +165,14 @@ impl Command {
         match words.as_slice() {
             ["modes"] => Some(Self::Modes),
             ["events"] => Some(Self::Events),
+            ["users"] => Some(Self::Users),
+            ["audit"] => Some(Self::Audit(None)),
+            ["audit", before] => {
+                let before = before.parse::<i64>().ok()?;
+                SafeInt::try_new(before)
+                    .ok()
+                    .map(|before| Self::Audit(Some(before)))
+            }
             ["delete-mode", id] => id.parse::<ModeId>().ok().map(Self::DeleteMode),
             ["mode", id, mode] => bot(id)
                 .zip(mode.parse::<ModeId>().ok())
@@ -326,6 +340,8 @@ async fn command_of<S: SessionStore>(
         Command::EditMode(id, json) => edit_mode(client, id, &json, terminal).await,
         Command::DeleteMode(id) => delete_mode(client, id, terminal).await,
         Command::Events => events(client, terminal).await,
+        Command::Users => users(client, terminal).await,
+        Command::Audit(before) => audit(client, before, terminal).await,
         Command::Quit => Ok(()),
     };
     match done {
@@ -365,6 +381,97 @@ async fn bots<S: SessionStore>(
         terminal.say("no bots yet: `offline <name>` adds one");
     }
     Ok(())
+}
+
+/// Every page of the users, one line each: the ID, the name, the role, and
+/// whether they're disabled.
+async fn users<S: SessionStore>(
+    client: &Client<S>,
+    terminal: &mut impl Terminal,
+) -> Result<(), ClientError> {
+    let mut before = None;
+    loop {
+        let page = client
+            .users(&PageQuery {
+                before,
+                limit: None,
+            })
+            .await?;
+        for user in &page.items {
+            let disabled = if user.disabled { " (disabled)" } else { "" };
+            terminal.say(&format!(
+                "{} {} {}{disabled}",
+                user.id,
+                user.username,
+                user.role.as_str()
+            ));
+        }
+        match page.next {
+            Some(next) => before = Some(next),
+            None => break,
+        }
+    }
+    Ok(())
+}
+
+/// One page of the audit log, the one before `before` or the newest,
+/// oldest first, and where the older entries start.
+async fn audit<S: SessionStore>(
+    client: &Client<S>,
+    before: Option<SafeInt>,
+    terminal: &mut impl Terminal,
+) -> Result<(), ClientError> {
+    let page = client
+        .audit(&AuditPageQuery {
+            before,
+            limit: None,
+        })
+        .await?;
+    for entry in page.items.iter().rev() {
+        terminal.say(&audit_line_of(entry));
+    }
+    if let Some(next) = page.next {
+        terminal.say(&format!("older: audit {next}"));
+    }
+    Ok(())
+}
+
+/// One audit entry: its ID, time, action and outcome; who, from where and
+/// on what, when it says; and its details, as the server sends them.
+fn audit_line_of(entry: &AuditEntryResponse) -> String {
+    let mut shown = format!(
+        "#{} {} {} {}",
+        entry.id,
+        entry.at,
+        entry.action.as_str(),
+        entry.outcome.as_str()
+    );
+    if let Some(actor) = entry.actor {
+        let _ = write!(shown, " by {actor}");
+    }
+    if let Some(ip) = &entry.ip {
+        let _ = write!(shown, " from {ip}");
+    }
+    if let Some(target) = &entry.target {
+        let _ = write!(shown, " on {} {}", target.kind.as_str(), target.id);
+    }
+    let details: Vec<String> = entry
+        .metadata
+        .iter()
+        .map(|detail| {
+            let value = match (&detail.text, detail.int, detail.flag) {
+                (Some(text), _, _) => text.to_string(),
+                (None, Some(int), _) => int.to_string(),
+                (None, None, Some(flag)) => flag.to_string(),
+                (None, None, None) => "?".to_owned(),
+            };
+            format!("{}={value}", detail.key)
+        })
+        .collect();
+    if !details.is_empty() {
+        let _ = write!(shown, ": {}", details.join(", "));
+    }
+    shown
 }
 
 /// One page of the bot `id`'s chat, the one before `before` or the newest,
@@ -970,6 +1077,58 @@ mod tests {
                 assert_eq!(Command::parse(&line), None, "{line:?}");
             }
         }
+    }
+
+    #[test]
+    fn audit_takes_maybe_the_entry_to_page_before_and_users_nothing() {
+        assert_eq!(Command::parse("audit"), Some(Command::Audit(None)));
+        assert_eq!(
+            Command::parse(" audit 41 "),
+            Some(Command::Audit(Some(SafeInt::try_new(41).unwrap())))
+        );
+        assert_eq!(Command::parse("users"), Some(Command::Users));
+        assert_eq!(Command::parse("audit x"), None);
+        assert_eq!(Command::parse("audit 1 2"), None);
+        assert_eq!(Command::parse("users all"), None);
+    }
+
+    #[test]
+    fn an_audit_line_shows_who_from_where_on_what_and_its_details() {
+        let entry: AuditEntryResponse = serde_json::from_value(serde_json::json!({
+            "id": 41,
+            "at": "2027-01-15T08:00:01.000Z",
+            "actor": "018bcfe5-6800-7101-8101-010101010101",
+            "ip": "192.0.2.10",
+            "action": "bot.set_server",
+            "target": { "kind": "bot", "id": "018bcfe5-6800-7202-8202-020202020202" },
+            "outcome": "success",
+            "metadata": [
+                { "key": "address", "text": "play.example.com" },
+                { "key": "count", "int": 3 },
+                { "key": "first", "flag": true }
+            ]
+        }))
+        .unwrap();
+        let bare: AuditEntryResponse = serde_json::from_value(serde_json::json!({
+            "id": 7,
+            "at": "2027-01-15T08:00:02.000Z",
+            "action": "retention.purge",
+            "outcome": "success",
+            "metadata": []
+        }))
+        .unwrap();
+
+        assert_eq!(
+            audit_line_of(&entry),
+            "#41 2027-01-15T08:00:01.000Z bot.set_server success \
+             by 018bcfe5-6800-7101-8101-010101010101 from 192.0.2.10 \
+             on bot 018bcfe5-6800-7202-8202-020202020202: \
+             address=play.example.com, count=3, first=true"
+        );
+        assert_eq!(
+            audit_line_of(&bare),
+            "#7 2027-01-15T08:00:02.000Z retention.purge success"
+        );
     }
 
     #[test]

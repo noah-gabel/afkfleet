@@ -81,6 +81,7 @@ use fleet_api_types::accounts::{
     CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
     LinkFlowResponse, LinkStartedResponse,
 };
+use fleet_api_types::audit::{AuditPage, AuditPageQuery};
 use fleet_api_types::auth::{
     LoginMfaRequest, LoginRequest, LoginResponse, LoginStatus, RefreshRequest, RegisterRequest,
     RegisterResponse, StepUpRequest, TokenResponse,
@@ -807,6 +808,15 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
 
     /// One page of the bot `id`'s chat, newest first, as the caller may see
     /// it (200).
+    pub(crate) async fn audit(
+        self: &Arc<Self>,
+        query: &AuditPageQuery,
+    ) -> Result<AuditPage, ClientError> {
+        let url = with_cursor(self.server.api(&["audit"]), query.before, query.limit);
+        let answer = self.authed(Method::GET, url, None).await?;
+        expect_json(answer, 200)
+    }
+
     pub(crate) async fn chat(
         self: &Arc<Self>,
         id: BotId,
@@ -1196,13 +1206,19 @@ fn refresh_body(token: &SecretString) -> Vec<u8> {
 }
 
 /// `url` with the chat page's parameters, if it has any.
-fn with_chat_page(mut url: Url, query: &ChatPageQuery) -> Url {
-    if query.before.is_some() || query.limit.is_some() {
+fn with_chat_page(url: Url, query: &ChatPageQuery) -> Url {
+    with_cursor(url, query.before, query.limit)
+}
+
+/// `url` with a row ID cursor's page parameters, `before` and `limit`, if
+/// it has any: the chat history's and the audit log's.
+fn with_cursor(mut url: Url, before: Option<fleet_api_types::SafeInt>, limit: Option<u32>) -> Url {
+    if before.is_some() || limit.is_some() {
         let mut pairs = url.query_pairs_mut();
-        if let Some(before) = query.before {
+        if let Some(before) = before {
             pairs.append_pair("before", &before.to_string());
         }
-        if let Some(limit) = query.limit {
+        if let Some(limit) = limit {
             pairs.append_pair("limit", &limit.to_string());
         }
     }
@@ -2955,6 +2971,63 @@ mod tests {
             ),
             "{error:?}"
         );
+    }
+
+    fn an_audit_page() -> AuditPage {
+        serde_json::from_value(json!({
+            "items": [{
+                "id": 41,
+                "at": "2027-01-15T08:00:00.000Z",
+                "action": "retention.purge",
+                "outcome": "success",
+                "metadata": [{ "key": "chat_by_age", "int": 3 }]
+            }],
+            "next": 41
+        }))
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn the_audit_log_is_read_from_its_route() {
+        let core = signed_in().await;
+        let route = "GET /api/v1/audit";
+        core.transport.on(route, Ok(dto(200, &an_audit_page())));
+
+        let page = core
+            .audit(&AuditPageQuery {
+                before: Some(fleet_api_types::SafeInt::try_new(42).unwrap()),
+                limit: Some(10),
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(page, an_audit_page());
+        assert_eq!(core.transport.seen(), [sent(route, None)]);
+    }
+
+    #[rstest]
+    #[case::a_member(403, ErrorCode::Forbidden)]
+    #[case::out_of_range(422, ErrorCode::ValidationFailed)]
+    #[case::too_many(429, ErrorCode::RateLimited)]
+    #[tokio::test]
+    async fn a_refused_audit_page_comes_back_with_the_servers_code(
+        #[case] status: u16,
+        #[case] code: ErrorCode,
+    ) {
+        use fleet_api_types::OpenEnum as _;
+        let core = signed_in().await;
+        let route = "GET /api/v1/audit";
+        core.transport.on(route, Ok(refusal(status, code.as_str())));
+
+        let error = core
+            .audit(&AuditPageQuery {
+                before: None,
+                limit: None,
+            })
+            .await
+            .unwrap_err();
+
+        assert!(is_api(&error, status, code), "{error:?}");
     }
 
     fn a_chat_page() -> ChatPage {

@@ -41,6 +41,7 @@
 //! | `POST /api/v1/agents/enrollment-tokens` | user + step-up (the Owner; while `[grpc]` is configured) | a new enrollment token, in its bundle, shown this once |
 //! | `GET /api/v1/agents` | user (Admin+) | one page of agents, with their status |
 //! | `POST /api/v1/agents/{id}/disable` | user + step-up (Admin+) | disables an agent for good: every certificate revoked, its stream ended |
+//! | `GET /api/v1/audit` | user (Admin+) | one page of the audit log, newest first, each entry as stored |
 //! | `GET /api/v1/bots` | user | one page of the bots the user may see, each under its account's field rule |
 //! | `GET /api/v1/bots/{id}` | user (View) | one bot, with what the server knows of its state |
 //! | `PATCH /api/v1/bots/{id}` | user + step-up (Manage) | the Minecraft server the bot joins |
@@ -76,7 +77,8 @@ use axum::Router;
 use utoipa_axum::routes;
 
 use super::handlers::{
-    accounts, agents, auth, bots, chat, events, grants, health, invites, me, mfa, modes, users,
+    accounts, agents, audit, auth, bots, chat, events, grants, health, invites, me, mfa, modes,
+    users,
 };
 use super::middleware::RequestIds;
 use super::openapi::ApiDocs;
@@ -85,6 +87,7 @@ use super::routes::{RateClass, Routes};
 use super::ws::LiveEvents;
 use crate::app::accounts::AccountService;
 use crate::app::agents::AgentService;
+use crate::app::audit::AuditService;
 use crate::app::auth::TokenService;
 use crate::app::bots::BotService;
 use crate::app::enrollment::EnrollmentTokenService;
@@ -136,6 +139,8 @@ pub struct AppState {
     pub(crate) modes: ModeService,
     /// The live events: the tickets, the bus and the sockets (P11.5).
     pub(crate) events: LiveEvents,
+    /// The audit log, read by Admins and the Owner (P11.9).
+    pub(crate) audit: AuditService,
 }
 
 /// Every service the handlers share, by name, so each one is a line of its
@@ -173,6 +178,8 @@ pub struct Services {
     pub modes: ModeService,
     /// The live events: the tickets, the bus and the sockets.
     pub events: LiveEvents,
+    /// The audit log, read by Admins and the Owner.
+    pub audit: AuditService,
 }
 
 impl AppState {
@@ -195,6 +202,7 @@ impl AppState {
             bots,
             modes,
             events,
+            audit,
         } = services;
         Self {
             health,
@@ -212,6 +220,7 @@ impl AppState {
             bots,
             modes,
             events,
+            audit,
         }
     }
 }
@@ -260,6 +269,7 @@ pub fn api_routes(routes: Routes) -> Routes {
         )
         .authed_route(RateClass::Standard, routes!(agents::list_agents))
         .step_up_route(RateClass::Standard, routes!(agents::disable_agent))
+        .authed_route(RateClass::Standard, routes!(audit::list))
         .authed_route(RateClass::Standard, routes!(bots::list))
         .authed_route(RateClass::Standard, routes!(bots::get))
         .step_up_route(RateClass::Standard, routes!(bots::patch))

@@ -30,6 +30,7 @@ use crate::accounts::{
     LinkFlowResponse, LinkStartedResponse,
 };
 use crate::agents::{AgentPage, AgentResponse, AgentStatus, CreatedEnrollmentTokenResponse};
+use crate::audit::AuditPage;
 use crate::auth::{
     LoginMfaRequest, LoginRequest, LoginResponse, RefreshRequest, RegisterRequest,
     RegisterResponse, StepUpRequest, TokenResponse,
@@ -102,6 +103,7 @@ pub fn components() -> BTreeMap<String, RefOr<Schema>> {
     add::<UpdateModeRequest>(&mut schemas);
     add::<EventTicketResponse>(&mut schemas);
     add::<EventMessage>(&mut schemas);
+    add::<AuditPage>(&mut schemas);
     schemas.into_iter().collect()
 }
 

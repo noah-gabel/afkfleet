@@ -1299,6 +1299,10 @@ pub(crate) async fn setup_with(options: SqliteConnectOptions, settings: Options)
             (&hints, &heard),
         ),
         events: live_events.clone(),
+        audit: fleet_server::app::audit::AuditService::new(
+            Arc::new(clock.clone()),
+            Arc::new(hooked.clone()),
+        ),
     });
     let app = app(state, &clock);
     insert_alice(&db, alice, alice_hash).await;

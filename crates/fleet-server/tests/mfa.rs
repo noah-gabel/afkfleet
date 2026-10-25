@@ -213,6 +213,12 @@ async fn setup_with(options: SqliteConnectOptions, limits: &RateLimitConfig) -> 
         bots: idle_bots(&db),
         modes: idle_modes(&db),
         events: idle_events(&db),
+        audit: fleet_server::app::audit::AuditService::new(
+            std::sync::Arc::new(fleet_testkit::system::ManualClock::new(
+                chrono::DateTime::UNIX_EPOCH,
+            )),
+            std::sync::Arc::new(db.clone()),
+        ),
     });
     let http = HttpConfig {
         bind: HttpConfig::DEFAULT_BIND,

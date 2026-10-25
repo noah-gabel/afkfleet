@@ -26,6 +26,10 @@ use fleet_api_types::agents::{
     AGENT_NAME_MAX_CHARS, AGENT_VERSION_MAX_CHARS, AgentPage, AgentResponse, AgentStatus,
     BUNDLE_CHARS, CreatedEnrollmentTokenResponse, FINGERPRINT_CHARS,
 };
+use fleet_api_types::audit::{
+    AUDIT_KEY_MAX_CHARS, AUDIT_TEXT_MAX_CHARS, AuditActionName, AuditDetail, AuditEntryResponse,
+    AuditOutcomeName, AuditPage, AuditTargetKind, AuditTargetResponse, IP_MAX_CHARS,
+};
 use fleet_api_types::auth::{
     ACCESS_TOKEN_MAX_SECS, LoginMfaRequest, LoginRequest, LoginResponse, LoginStatus,
     NEW_PASSWORD_MAX_CHARS, PASSWORD_MAX_CHARS, REFRESH_TOKEN_MAX_SECS, RefreshRequest,
@@ -90,9 +94,6 @@ fn declarations() -> BTreeMap<String, String> {
         ("AccountPage", AccountPage::decl(&config)),
         ("AccountResponse", AccountResponse::decl(&config)),
         ("AccountStatus", AccountStatus::decl(&config)),
-        ("AgentPage", AgentPage::decl(&config)),
-        ("AgentResponse", AgentResponse::decl(&config)),
-        ("AgentStatus", AgentStatus::decl(&config)),
         ("AccountRestriction", AccountRestriction::decl(&config)),
         ("BotAgent", BotAgent::decl(&config)),
         ("BotModeRequest", BotModeRequest::decl(&config)),
@@ -182,8 +183,26 @@ fn declarations() -> BTreeMap<String, String> {
     .into_iter()
     .chain(mode_declarations(&config))
     .chain(event_declarations(&config))
+    .chain(admin_declarations(&config))
     .map(|(name, declaration)| (name.to_owned(), declaration))
     .collect()
+}
+
+/// ts-rs's declaration of every agents and audit log type, the admin
+/// screens' (ADR-0019, S31; ADR-0020, R65).
+fn admin_declarations(config: &Config) -> [(&'static str, String); 10] {
+    [
+        ("AgentPage", AgentPage::decl(config)),
+        ("AgentResponse", AgentResponse::decl(config)),
+        ("AgentStatus", AgentStatus::decl(config)),
+        ("AuditActionName", AuditActionName::decl(config)),
+        ("AuditDetail", AuditDetail::decl(config)),
+        ("AuditEntryResponse", AuditEntryResponse::decl(config)),
+        ("AuditOutcomeName", AuditOutcomeName::decl(config)),
+        ("AuditPage", AuditPage::decl(config)),
+        ("AuditTargetKind", AuditTargetKind::decl(config)),
+        ("AuditTargetResponse", AuditTargetResponse::decl(config)),
+    ]
 }
 
 /// ts-rs's declaration of every live events type (ADR-0020, S36, R28).
@@ -534,6 +553,12 @@ fn safe_int_is_a_component_spanning_exactly_the_safe_range() {
 #[case::mode_updated_at("ModeResponse", "updated_at", TIMESTAMP_CHARS)]
 #[case::mode_message("ModeAction", "message", MODE_MESSAGE_MAX_CHARS)]
 #[case::mode_page_next("ModePage", "next", ID_CHARS)]
+#[case::audit_at("AuditEntryResponse", "at", TIMESTAMP_CHARS)]
+#[case::audit_actor("AuditEntryResponse", "actor", ID_CHARS)]
+#[case::audit_ip("AuditEntryResponse", "ip", IP_MAX_CHARS)]
+#[case::audit_target_id("AuditTargetResponse", "id", ID_CHARS)]
+#[case::audit_key("AuditDetail", "key", AUDIT_KEY_MAX_CHARS)]
+#[case::audit_text("AuditDetail", "text", AUDIT_TEXT_MAX_CHARS)]
 fn a_text_field_is_capped_at_its_constant(
     #[case] component: &str,
     #[case] field: &str,
@@ -548,7 +573,7 @@ fn a_text_field_is_capped_at_its_constant(
 }
 
 /// Every text field whose cap the cases above check.
-const CHECKED_TEXTS: [(&str, &str); 112] = [
+const CHECKED_TEXTS: [(&str, &str); 118] = [
     ("ErrorBody", "message"),
     ("ErrorBody", "request_id"),
     ("FieldError", "path"),
@@ -623,6 +648,12 @@ const CHECKED_TEXTS: [(&str, &str); 112] = [
     ("AgentResponse", "id"),
     ("AgentResponse", "name"),
     ("AgentResponse", "version"),
+    ("AuditEntryResponse", "at"),
+    ("AuditEntryResponse", "actor"),
+    ("AuditEntryResponse", "ip"),
+    ("AuditTargetResponse", "id"),
+    ("AuditDetail", "key"),
+    ("AuditDetail", "text"),
     ("AgentResponse", "connected_since"),
     ("AgentResponse", "last_seen_at"),
     ("AgentResponse", "not_after"),

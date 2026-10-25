@@ -21,6 +21,7 @@ use fleet_api_types::accounts::{
     CreateOfflineAccountRequest, CreatedOfflineAccountResponse, GrantPage, GrantResponse,
     LinkFlowResponse, LinkStartedResponse,
 };
+use fleet_api_types::audit::{AuditPage, AuditPageQuery};
 use fleet_api_types::auth::{LoginRequest, RegisterRequest, RegisterResponse, StepUpRequest};
 use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
 use fleet_api_types::chat::{
@@ -264,6 +265,18 @@ impl<S: SessionStore> Client<S> {
     /// other error as for every authenticated call.
     pub async fn mfa_reset(&self) -> Result<Duration, ClientError> {
         self.core.mfa_reset().await
+    }
+
+    /// `GET /audit`: one page of the audit log, newest first (Admins and
+    /// the Owner): each entry as the log stores it. `query`'s `before` is
+    /// the `next` of the page before.
+    ///
+    /// # Errors
+    /// The server's 403 for a Member, 422 (a `limit` outside 1 to 100, a
+    /// `before` below 1) or 429 as [`ClientError::Api`]; any other error as
+    /// for every authenticated call.
+    pub async fn audit(&self, query: &AuditPageQuery) -> Result<AuditPage, ClientError> {
+        self.core.audit(query).await
     }
 
     /// `GET /users`: a page of the users (Admins and the Owner).

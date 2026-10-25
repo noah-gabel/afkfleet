@@ -9,6 +9,7 @@
 //!   /api/v1/accounts/{id}`, `POST /api/v1/accounts/{id}/approve`,
 //!   `/refuse` and `/relink` (P9.6).
 //! - [`agents`]: `POST /api/v1/agents/enrollment-tokens` (P10.3).
+//! - [`audit`]: `GET /api/v1/audit` (P11.9).
 //! - [`bots`]: `GET /api/v1/bots`, `GET` and `PATCH /api/v1/bots/{id}`,
 //!   `PUT /api/v1/bots/{id}/mode`, and `POST /api/v1/bots/{id}/start`,
 //!   `/stop`, `/restart`, `/reset` and `/resume` (P11.2).
@@ -34,6 +35,7 @@
 
 pub(super) mod accounts;
 pub(super) mod agents;
+pub(super) mod audit;
 pub(super) mod auth;
 pub(super) mod bots;
 pub(super) mod chat;

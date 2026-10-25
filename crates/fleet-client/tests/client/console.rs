@@ -16,7 +16,7 @@ use secrecy::{ExposeSecret as _, SecretString};
 use tokio::sync::watch;
 
 use crate::dev_console::{self, DEV_SERVER, Ended, HELP, Terminal};
-use crate::support::{OWNER, PASSWORD, Server};
+use crate::support::{OWNER, PASSWORD, Server, step_up};
 
 /// A line of the script that moves the server's clock on by 31 days, past
 /// the session's 30, before the next line is read.
@@ -1330,4 +1330,42 @@ fn a_mode_event_never_prints_its_steps() {
     assert!(shown.starts_with("mode "), "{shown}");
     assert!(!shown.contains("canary"), "{shown}");
     assert!(!shown.contains("warp"), "{shown}");
+}
+
+/// `users` lists every user with their role; `audit` shows the newest page
+/// of the audit log oldest first, each entry on a line of its own.
+#[tokio::test]
+async fn users_lists_every_user_and_audit_the_newest_entries_oldest_first() {
+    let server = Server::start().await;
+    let (owner, _, app) = server.owner().await;
+    step_up(&owner).await;
+    let (_bob, bob) = server.member(&owner, "bob").await;
+    // A code of the step the Member's login moved the clock to.
+    server.next_step();
+    let code = server.code(&app).expose().to_owned();
+    let (client, _) = server.client();
+    let mut terminal = Scripted::new(&[PASSWORD, &code], &["users", "audit"]);
+
+    let ended = dev_console::run(&client, OWNER, &mut terminal).await;
+
+    assert_eq!(ended, Ended::LoggedOut);
+    let said = &terminal.said;
+    assert!(said.contains(&format!("{bob} bob member")), "{said:?}");
+    assert!(
+        said.iter().any(|line| line.ends_with(" owner owner")),
+        "{said:?}"
+    );
+    let entries: Vec<i64> = said
+        .iter()
+        .filter_map(|line| line.strip_prefix('#'))
+        .map(|rest| rest.split(' ').next().unwrap().parse().unwrap())
+        .collect();
+    assert!(entries.len() > 2, "{said:?}");
+    assert!(entries.windows(2).all(|pair| pair[0] < pair[1]), "{said:?}");
+    assert!(
+        said.iter()
+            .any(|line| line.starts_with('#') && line.contains(" invite.create success by ")),
+        "{said:?}"
+    );
+    server.stop().await;
 }
