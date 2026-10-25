@@ -840,8 +840,8 @@ async fn without_a_grant_or_an_account_there_is_nothing_to_leave(
 }
 
 /// The handler saw a grant its holder no longer has by the transaction, a
-/// holder promoted to implicit Manage meanwhile, and a session gone: nothing
-/// is written.
+/// holder promoted to implicit Manage meanwhile, a session gone and an
+/// account gone: nothing is written.
 #[sqlx::test(migrations = false)]
 async fn leaving_re_checks_the_grant_and_the_session_in_its_transaction(
     _pool: SqlitePoolOptions,
@@ -865,7 +865,13 @@ async fn leaving_re_checks_the_grant_and_the_session_in_its_transaction(
     let revoked_meanwhile = grants.leave(&bob.acting(), id).await;
     let now_managing = grants.leave(&promoted.acting(), id).await;
     let without_session = grants.leave(&gone.acting(), id).await;
+    let unknown = AccountId::new_v7(at(T0), [99; 10]).unwrap();
+    let account_gone = grants.leave(&bob.acting(), unknown).await;
 
+    assert!(
+        matches!(account_gone, Err(LeaveGrantError::NotFound)),
+        "{account_gone:?}"
+    );
     assert!(
         matches!(
             revoked_meanwhile,

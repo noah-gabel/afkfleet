@@ -927,7 +927,7 @@ Built as planned, one PR on `p11/p11.9-admin-endpoints`, in nine commits: PR #70
 - `GET /audit`: MA1 (the projection swapping two names and dropping the target), MA2 (no `next`), MK1 (the console not parsing `users` and `audit`), MK2 (the audit line without its address).
 - The release: MR1 (an unknown agent answered 409, not 404), MWR (serve's agents service without the live hints).
 - The review: MG1 (an unknown user answered 403, not 404), MG2 (`dormant` always false), MK3 (the held line without ` (dormant)`).
-- Leaving: ML1 (no leaving term in `authorize()`), ML2 (no `authorize()` in the service, which the re-check test's holder promoted meanwhile catches), ML3 (the console not parsing `leave`), ML4 (axum's plain `Path` in place of `ValidPath`: a malformed ID 400, not 404).
+- Leaving: ML1 (no leaving term in `authorize()`), ML2 (no `authorize()` in the service, which the re-check test's holder promoted meanwhile catches), ML3 (the console not parsing `leave`), ML4 (axum's plain `Path` in place of `ValidPath`: a malformed ID 400, not 404), ML5 (an account gone by the transaction answered `SessionGone`: a service error path the coverage run showed untested).
 
 *Snapshots* (read before accepting): the OpenAPI document (the five new operations, the release and leaving with `x-step-up`, and the audit, held-grant and account-label components); the authorization matrix (`ReleaseAgent`, `ReviewUserGrants`, `LeaveAccount`); one audit page (`auth__audit__audit_page`); the `agent_not_disabled` envelope (`api_error__agent_not_disabled`).
 
