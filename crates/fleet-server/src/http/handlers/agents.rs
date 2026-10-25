@@ -226,7 +226,9 @@ pub(crate) async fn release_agent(
             ReleaseAgentError::Enabled => ApiError::AgentNotDisabled,
             ReleaseAgentError::SessionGone => ApiError::Unauthorized,
             ReleaseAgentError::Denied(error) => ApiError::from(error),
-            ReleaseAgentError::Store(error) => ApiError::from(error),
+            ReleaseAgentError::Store(error) | ReleaseAgentError::ReleasedUnread { error, .. } => {
+                ApiError::from(error)
+            }
             other @ ReleaseAgentError::Audit(_) => ApiError::internal(other),
         })?;
     Ok(Json(agent_response(&released.view)?))

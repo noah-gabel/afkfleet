@@ -145,6 +145,16 @@ pub enum ReleaseAgentError {
     /// The database failed.
     #[error(transparent)]
     Store(#[from] StoreError),
+    /// The bots were released and the release committed, but the agent
+    /// couldn't be read again after it.
+    #[error("the agent's bots were released, but the agent couldn't be read again")]
+    ReleasedUnread {
+        /// The bots released, in ID order.
+        bots: Vec<BotId>,
+        /// Why the agent couldn't be read.
+        #[source]
+        error: StoreError,
+    },
 }
 
 /// Who disables an agent.
@@ -321,12 +331,11 @@ impl AgentService {
             self.reconcile.changed(Change::Store);
             info!(agent_id = %id, agent = %agent.name, bots = bots.len(), "a disabled agent's bots were released");
         }
-        let listed = self
-            .store
-            .agents()
-            .listed(id)
-            .await?
-            .ok_or(ReleaseAgentError::NotFound)?;
+        let listed = match self.store.agents().listed(id).await {
+            Ok(listed) => listed.ok_or(ReleaseAgentError::NotFound)?,
+            // Committed already: whoever called says the bots went.
+            Err(error) => return Err(ReleaseAgentError::ReleasedUnread { bots, error }),
+        };
         Ok(ReleasedAgent {
             bots,
             view: self.view(listed, now),

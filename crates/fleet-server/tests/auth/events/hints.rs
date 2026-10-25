@@ -11,6 +11,7 @@ use fleet_core::audit::AuditAction;
 use fleet_core::authz::Role;
 use fleet_core::id::{AgentId, BotId};
 use fleet_core::mode::ModePreset;
+use fleet_server::app::retention::Phase;
 use fleet_server::ports::store::{Store as _, UnauditedWrite};
 use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -269,7 +270,7 @@ const LABELS: &[(&str, &str)] = &[
 /// for a mode's writes, `role` for a role change, `chat` for a user's line
 /// (published by its send), or nothing, with why ([`LABELS`]). A write
 /// without an audit entry says so too, in a match a new one doesn't compile
-/// without, and so does the retention's batch.
+/// without, and so does the retention's batch, by the phase it deletes for.
 #[test]
 fn every_audit_action_is_labelled_with_what_it_tells_the_sockets() {
     let labels = LABELS;
@@ -303,12 +304,28 @@ fn every_audit_action_is_labelled_with_what_it_tells_the_sockets() {
     ] {
         assert!(unaudited(&write).starts_with("nothing"), "{write:?}");
     }
-    assert!(
-        RETENTION_BATCH.starts_with("nothing"),
-        "the retention's batch"
-    );
+    // A retention batch, committed without an entry in its own transaction
+    // (R57), by the phase it deletes for; `events::chat`'s
+    // `a_retention_run_deleting_a_viewers_chat_sends_their_socket_nothing`
+    // runs one under an open socket.
+    let retention = |phase: &Phase| match phase {
+        Phase::Sessions => "nothing: ended sessions no socket shows",
+        Phase::ChatByAge | Phase::ChatBySize => {
+            "nothing: deleted chat is fetched, not pushed (S42)"
+        }
+        Phase::Audit => "nothing: old entries no socket shows",
+        Phase::Invites | Phase::EnrollmentTokens => {
+            "nothing: invites and enrollment tokens no socket shows"
+        }
+    };
+    for phase in [
+        Phase::Sessions,
+        Phase::ChatByAge,
+        Phase::ChatBySize,
+        Phase::Audit,
+        Phase::Invites,
+        Phase::EnrollmentTokens,
+    ] {
+        assert!(retention(&phase).starts_with("nothing"), "{phase:?}");
+    }
 }
-
-/// What a retention batch, committed without an entry in its own
-/// transaction (R57), tells the live events sockets.
-const RETENTION_BATCH: &str = "nothing: deleted chat is fetched, not pushed (S42); ended sessions, old entries, invites and enrollment tokens no socket shows";

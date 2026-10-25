@@ -17,11 +17,11 @@ use chrono::{DateTime, Utc};
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::auth::{InviteTtl, LockoutPolicy, NewPassword, SessionPolicy};
 use fleet_core::authz::{Actor, CommandAllowlist, GrantLevel, Role};
-use fleet_core::id::{AccountId, BotId, InviteId, ModeId, SessionId, UserId};
+use fleet_core::id::{AccountId, AgentId, BotId, InviteId, ModeId, SessionId, UserId};
 use fleet_core::mode::ModeName;
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock as _;
-use fleet_core::value::Username;
+use fleet_core::value::{AgentName, Username};
 use fleet_server::app::agents::AgentService;
 use fleet_server::app::auth::TokenService;
 use fleet_server::app::bots::{BotService, ChatWait};
@@ -52,7 +52,7 @@ use fleet_server::infra::crypto::vault::{VaultKeys, XChaChaVault};
 use fleet_server::infra::qr::SvgQr;
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::accounts::{AccountReads, AccountWrites};
-use fleet_server::ports::agents::{AgentReads, AgentWrites};
+use fleet_server::ports::agents::{Agent, AgentCert, AgentReads, AgentWrites, ListedAgent};
 use fleet_server::ports::audit::{
     AuditEntryId, AuditLimit, AuditPage, AuditReads, AuditRecord, AuditWrites, NewAuditEntry,
 };
@@ -254,6 +254,7 @@ pub(crate) struct HookedStore {
     sessions: HookedSessions,
     bots: HookedBots,
     modes: HookedModes,
+    agents: HookedAgents,
 }
 
 impl HookedStore {
@@ -268,6 +269,10 @@ impl HookedStore {
                 hanging: Arc::new(tokio::sync::watch::Sender::new(0)),
                 find_behind_writes: Arc::default(),
                 found: Arc::new(tokio::sync::watch::Sender::new(0)),
+            },
+            agents: HookedAgents {
+                inner: inner.clone(),
+                fail_listed: Arc::default(),
             },
             modes: HookedModes {
                 inner: inner.clone(),
@@ -324,6 +329,13 @@ impl HookedStore {
     /// database does (P11.5).
     pub(crate) fn fail_rights_reads(&self) {
         *self.bots.fail_access.lock().unwrap() = true;
+    }
+
+    /// From now on, reading one agent as the list shows it
+    /// (`AgentReads::listed`, what a disable and a release answer) fails as
+    /// a busy database does.
+    pub(crate) fn fail_agent_reads(&self) {
+        *self.agents.fail_listed.lock().unwrap() = true;
     }
 
     /// From now on, reading one mode with its owner (`ModeReads::listed`, a
@@ -1027,7 +1039,7 @@ impl Store for HookedStore {
     }
 
     fn agents(&self) -> &dyn AgentReads {
-        self.inner.agents()
+        &self.agents
     }
 
     fn bots(&self) -> &dyn BotReads {
@@ -1995,4 +2007,46 @@ fn idle_accounts(
             max_per_member: core::num::NonZeroU32::MIN,
         },
     )
+}
+
+/// The agents' reads, of which [`HookedStore::fail_agent_reads`] fails
+/// `listed`.
+#[derive(Debug, Clone)]
+struct HookedAgents {
+    inner: Database,
+    fail_listed: Arc<Mutex<bool>>,
+}
+
+#[async_trait]
+impl AgentReads for HookedAgents {
+    async fn find(&self, id: AgentId) -> Result<Option<Agent>, StoreError> {
+        self.inner.agents().find(id).await
+    }
+
+    async fn name_taken(&self, name: &AgentName) -> Result<bool, StoreError> {
+        self.inner.agents().name_taken(name).await
+    }
+
+    async fn certs(&self, id: AgentId) -> Result<Vec<AgentCert>, StoreError> {
+        self.inner.agents().certs(id).await
+    }
+
+    async fn cert(&self, fingerprint: CertFingerprint) -> Result<Option<AgentCert>, StoreError> {
+        self.inner.agents().cert(fingerprint).await
+    }
+
+    async fn admissible(&self, now: DateTime<Utc>) -> Result<Vec<CertFingerprint>, StoreError> {
+        self.inner.agents().admissible(now).await
+    }
+
+    async fn list(&self, page: Page<AgentId>) -> Result<Vec<ListedAgent>, StoreError> {
+        self.inner.agents().list(page).await
+    }
+
+    async fn listed(&self, id: AgentId) -> Result<Option<ListedAgent>, StoreError> {
+        if *self.fail_listed.lock().unwrap() {
+            return Err(StoreError::Busy);
+        }
+        self.inner.agents().listed(id).await
+    }
 }

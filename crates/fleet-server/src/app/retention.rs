@@ -19,9 +19,10 @@
 //!
 //! **A batch** deletes at most [`BATCH`] rows of one table in its own write
 //! transaction, the store's retention batch, which can only delete and
-//! commits without an audit entry (U20, R57), then pauses ([`RetentionTimings::pause`]), so the ingest's ticks and
-//! logins get the one write connection between batches and the live events
-//! sockets see a bounded rate of commits (S45). A batch that deleted nothing
+//! commits without an audit entry (U20, R57), then pauses
+//! ([`RetentionTimings::pause`]), so the ingest's ticks and logins get the
+//! one write connection between batches and the live events sockets see a
+//! bounded rate of commits (S45). A batch that deleted nothing
 //! rolls back, so a quiet run commits nothing and moves no commit count. The
 //! retention publishes nothing on the bus (S42).
 //!
@@ -684,7 +685,9 @@ fn summary(
         .int("audit_entries", count(deleted.audit_entries))?
         .int(
             "audit_through",
-            tally.audit_through.map_or(0, AuditEntryId::get),
+            tally
+                .audit_through
+                .map_or(0, |through| through.get().min(AuditMetadata::MAX_INT)),
         )?
         .int("invites", count(deleted.invites))?
         .int("enrollments", count(deleted.enrollments))?
@@ -794,9 +797,9 @@ mod tests {
         assert_eq!(recorded, Tally::new(at("2027-05-01T01:00:00Z")));
     }
 
-    /// Counts past 2^53 − 1, the largest integer the audit keeps, are
-    /// recorded as that largest one: a refused summary would be kept and
-    /// refused again at every try.
+    /// Counts past 2^53 − 1, the largest integer the audit keeps, and an
+    /// `audit_through` past it, are recorded as that largest one: a refused
+    /// summary would be kept and refused again at every try.
     #[test]
     fn a_summary_records_counts_past_the_safe_range_as_the_largest_it_keeps() {
         let when = at("2027-05-01T00:00:00Z");
@@ -811,6 +814,7 @@ mod tests {
             invites: u64::MAX,
             enrollments: u64::MAX,
         };
+        huge.audit_through = Some(AuditEntryId::new(i64::MAX));
         tally.add(&huge);
 
         let entry = summary(
@@ -833,11 +837,12 @@ mod tests {
                     "audit_entries",
                     "invites",
                     "enrollments",
+                    "audit_through",
                 ]
                 .contains(key)
             })
             .collect();
-        assert_eq!(counts.len(), 7);
+        assert_eq!(counts.len(), 8);
         assert!(
             counts
                 .iter()

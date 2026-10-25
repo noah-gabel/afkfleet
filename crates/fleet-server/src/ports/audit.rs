@@ -17,6 +17,10 @@ use fleet_core::id::UserId;
 
 use super::store::StoreError;
 
+/// The audit log's table, as a [`StoreError`] names it: a
+/// [`StoreError::Corrupt`] of this table names an entry by its ID.
+pub const TABLE: &str = "audit_log";
+
 /// An audit entry's ID. With one writer, IDs follow the order of commits, so
 /// the log is ordered and paged by ID, never by time (ADR-0015).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -197,7 +201,9 @@ pub trait AuditReads: Send + Sync + fmt::Debug {
     ///
     /// # Errors
     /// [`StoreError::Corrupt`] for a row that doesn't read back, naming its
-    /// ID, and the other [`StoreError`]s.
+    /// ID (the `rowid`, which is the entry's ID), so `AuditService::page`
+    /// can list it and step past it (ADR-0020, S52); and the other
+    /// [`StoreError`]s.
     async fn list(&self, page: AuditPage) -> Result<Vec<AuditRecord>, StoreError>;
 
     /// The wrong 2FA codes typed for `user` since their previous login,

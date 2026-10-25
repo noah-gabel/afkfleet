@@ -4,10 +4,18 @@
 //! Each entry shows what the audit log stores, built the same for every
 //! viewer: when, who (the acting user's ID and the client's IP address,
 //! none for the server's own entries, such as `retention.purge`), which
-//! action, on what target, its outcome, and its metadata, every value of
-//! which the server made (names from closed sets, IDs, times and counts,
-//! never text a client sent; ADR-0016). An entry may name a target that
-//! was deleted since, an invite or a session say; it lists as it is.
+//! action, on what target, its outcome, and its metadata. The server
+//! writes each metadata value itself: names from closed sets, IDs, times
+//! and counts, and values a user typed or a Minecraft server or an agent
+//! reported, cleaned and stored as given: a bot's server address
+//! (`server_host`, `previous_server_host`), a Minecraft account's name
+//! and UUID (`name`, `previous_name`, `uuid`: a link, an approval, a
+//! deletion, an offline account, a session token's rename), an agent's
+//! `name` and `version`, a certificate's `fingerprint`, a conflicting
+//! connection's `live_ip`, an allowlisted command's `command_name`. Never
+//! a secret, a password, a chat line or a command's arguments (ADR-0016;
+//! ADR-0020, S6). An entry may name a target that was deleted since, an
+//! invite or a session say; it lists as it is.
 //!
 //! The action's name, the target's kind and the outcome are [`Open`]: an
 //! older app reads a name only a newer server records as unknown text, and
@@ -298,7 +306,10 @@ pub struct AuditDetail {
     #[ts(type = "string")]
     #[schema(schema_with = BoundedText::<AUDIT_KEY_MAX_CHARS>::schema)]
     pub key: BoundedText<AUDIT_KEY_MAX_CHARS>,
-    /// A text value: a name from a closed set, an ID or a time.
+    /// A text value: a name from a closed set, an ID or a time, or a value a
+    /// user typed or a server or agent reported, as stored: a server
+    /// address, a Minecraft name, an agent's name or version, a certificate
+    /// fingerprint, an IP address, a command's name.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(as = "Option<String>", optional)]
     #[schema(schema_with = BoundedText::<AUDIT_TEXT_MAX_CHARS>::schema, nullable = false)]
@@ -358,6 +369,11 @@ pub struct AuditEntryResponse {
 pub struct AuditPage {
     /// The entries.
     pub items: Vec<AuditEntryResponse>,
+    /// The IDs of this page's entries that don't read back, newest first:
+    /// each is still stored, and shown by its ID alone, in its place among
+    /// `items` by ID; the server's log names why (ADR-0020, S52). Together
+    /// with `items`, at most the page's `limit`.
+    pub unreadable: Vec<SafeInt>,
     /// The `before` of the next page, when one follows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
@@ -417,9 +433,6 @@ impl IntoParams for AuditPageQuery {
 #[cfg(test)]
 mod tests {
     use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget};
-    use fleet_core::id::{
-        AccountId, AgentId, BotId, EnrollmentTokenId, InviteId, ModeId, SessionId,
-    };
     use rstest::rstest;
     use serde_json::json;
 
@@ -438,26 +451,12 @@ mod tests {
 
     #[test]
     fn every_target_kind_fleet_core_records_has_its_name_in_the_same_order() {
-        let at = chrono::DateTime::from_timestamp_millis(1_800_000_000_000).unwrap();
-        let random = [7; 10];
-        let targets = [
-            AuditTarget::User(UserId::new_v7(at, random).unwrap()),
-            AuditTarget::Account(AccountId::new_v7(at, random).unwrap()),
-            AuditTarget::Bot(BotId::new_v7(at, random).unwrap()),
-            AuditTarget::Agent(AgentId::new_v7(at, random).unwrap()),
-            AuditTarget::Mode(ModeId::new_v7(at, random).unwrap()),
-            AuditTarget::Session(SessionId::new_v7(at, random).unwrap()),
-            AuditTarget::Invite(InviteId::new_v7(at, random).unwrap()),
-            AuditTarget::EnrollmentToken(EnrollmentTokenId::new_v7(at, random).unwrap()),
-        ];
-
         let names: Vec<&str> = AuditTargetKind::ALL
             .iter()
             .map(|kind| kind.as_str())
             .collect();
-        let core: Vec<&str> = targets.iter().map(AuditTarget::kind).collect();
 
-        assert_eq!(names, core);
+        assert_eq!(names, AuditTarget::KINDS);
     }
 
     #[test]
@@ -510,7 +509,7 @@ mod tests {
             "target": { "kind": "bot", "id": "018bcfe5-6800-7202-8202-020202020202" },
             "outcome": "success",
             "metadata": [
-                { "key": "address", "text": "example.com" },
+                { "key": "server_host", "text": "example.com" },
                 { "key": "count", "int": 3 },
                 { "key": "fresh", "flag": true }
             ]
@@ -526,7 +525,7 @@ mod tests {
             "outcome": "success",
             "metadata": []
         });
-        let page = json!({ "items": [entry_json(), bare.clone()], "next": 7 });
+        let page = json!({ "items": [entry_json(), bare.clone()], "unreadable": [9], "next": 7 });
 
         for json in [entry_json(), bare] {
             let back: AuditEntryResponse = serde_json::from_value(json.clone()).unwrap();

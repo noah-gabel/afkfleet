@@ -4106,14 +4106,14 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.6, Phase 11, group E's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U18–U22, S44–S46, R47–R56): **group E is P11.6 alone** (P11.7 moved to G, U18), on `p11/p11.6-retention`, its first commit PR #67's follow-ups. The notes above are decided there:
   > - **The keys** (the user's): `[chat] max_lines_per_bot` 100–200,000, 50,000 by default (U19); `[chat] retention_days` 1–30, 14 by default (U21); `[audit] retention_days` 90–730, 365 by default, a new section, since every entry holds a user's IP address (U22).
-  > - **Recording** (the user's, U20): each batch commits through a new exemption, `UnauditedWrite::RetentionPurge` (deletes only, five tables, only the retention task); one `retention.purge` entry, counts and cut-offs and never text, after every 60th run that deleted anything and at stop.
+  > - **Recording** (the user's, U20): each batch commits through a new exemption, `UnauditedWrite::RetentionPurge` (since R57: `Store::retention_batch`) (deletes only, five tables, only the retention task); one `retention.purge` entry, counts and cut-offs and never text, after every 60th run that deleted anything and at stop.
   > - **`secure_delete = ON`** on every connection (S44): deleted rows are overwritten, freed pages included.
   > - **The task** (S45): its own, unwatched, every 60 s, the first run one interval in, batches of 1000 with a 100 ms pause after each commit; sessions (their rotated tokens first), chat by age, chat by size bot by bot, the audit log as an ID prefix, then invites and enrollment tokens; a phase with nothing due commits nothing.
   > - **Invites and enrollment tokens** (S46): unused ones whose `expires_at` is past the audit retention go; used ones never.
   > - **Mine** (R50–R56): the deletes in their own port, `ports::retention`; an item goes once `now >= its time + its retention`, cut from one clock read per run in fleet-core; logs carry counts only; the stop's summary waits at most 1 s; `RetentionTimings`; the socket table's label.
 
   > Note (P11.6, Phase 11, group E) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U18–U22, S44–S46, R47–R56): **the retention job, as built; P11.6 ticked here.**
-  > - **The task:** `cli::retention` runs `app::retention::RetentionService::run_once` every 60 s on serve's `JoinSet`, with or without `[grpc]`; each run cuts once (fleet-core's `retention`), deletes phase by phase in batches of 1000 through `ports::retention`, each committed with `UnauditedWrite::RetentionPurge` and followed by a 100 ms pause, and a quiet run commits nothing. A failed phase is one `warn`; the next run tries again.
+  > - **The task:** `cli::retention` runs `app::retention::RetentionService::run_once` every 60 s on serve's `JoinSet`, with or without `[grpc]`; each run cuts once (fleet-core's `retention`), deletes phase by phase in batches of 1000 through `ports::retention`, each committed with `UnauditedWrite::RetentionPurge` (since R57: `Store::retention_batch`) and followed by a 100 ms pause, and a quiet run commits nothing. A failed phase is one `warn`; the next run tries again.
   > - **The summary:** one `retention.purge` entry after every 60th run that deleted anything and at the stop (within 1 s), its 14 keys the counts and cut-offs; a failed one keeps its counts.
   > - **`secure_delete = ON`** on every connection; three tests scan the files after a close for deleted text, red with OFF and with FAST.
   > - **Tests:** the `retention` binary (the store's deletes and cuts at their boundaries, a seeded model of both bounds, a run racing the ingest, failing midway and stopped, the summary, the task, the at-rest scans) and serve's retention without `[grpc]`.
@@ -4142,6 +4142,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **Clients** (R67): fleet-client's methods for each, and `just dev-bots`' verbs. **The text** friends read: `agent_not_disabled`, approved as drafted.
 
   > Note (P11.9, Phase 11, group F as built) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group F)"): **built as planned, one PR,** the four parts with fleet-client's methods and the console's verbs (`users`, `audit`, `agents`, `release`, `held`, `shared`, `leave`). *Deviations:* no 422 test for the release or leaving, which take no body or query (a malformed ID is 404), as for the disable route; `AuditActionName`'s OpenAPI schema is written by hand from fleet-core's list, since utoipa's derive doesn't read the names a macro gives serde; the admin screens' permission mirror (`packages/ui`) gains `reviewGrants`, since its test reads the matrix. About 8,000 lines added, above the planned 6,000 to 7,500 (about 1,700 of them generated).
+
+  > Note (P11.9, PR #71's review, fixed in group G1's first commit) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U28, S52, R70–R72, R79): **`GET /audit` lists a row that doesn't read back by its ID alone** (`unreadable`, in its place, the pages going on past it, one `warn` per entry), so one changed row no longer hides the log around it (S52); the docs say what the audit's metadata really holds (names, IDs, times, counts, and values users typed or servers reported, never a secret or a chat line); `agent release` says the bots went when its read after the commit fails; and the server takes a pong naming any ping that waits (U28, R79).
 
   - **Dashboard:** a card per bot with a state badge, uptime, server, mode and last disconnect reason.
   - **Bot detail:**
@@ -4663,7 +4665,7 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 | `POST /bots/{id}/start\|stop\|restart\|reset\|resume` | Control | Lifecycle |
 | `POST /bots/{id}/chat` · `POST /bots/{id}/command` · `GET /bots/{id}/chat` | Control (`/command`: step-up; a command off the allowlist: Manage) / View | Chat |
 | `GET/POST /modes` · `PUT/DELETE /modes/{id}` | Member+ (own) / Admin+ (shared) (`POST`, `PUT` with a command off the allowlist: their `/with-commands` step-up twins; `DELETE`: step-up) | Modes |
-| `GET /agents` · `POST /agents/enrollment-tokens` · `POST /agents/{id}/disable` · `POST /agents/{id}/release` | Admin+ (`disable`, `release`: step-up) | Agents; a disabled agent's bots released (P11.9) |
+| `GET /agents` · `POST /agents/enrollment-tokens` · `POST /agents/{id}/disable` · `POST /agents/{id}/release` | Admin+ (`disable`, `release`: step-up); `enrollment-tokens`: the Owner's, step-up | Agents; a disabled agent's bots released (P11.9) |
 | `GET /audit` | Admin+ | Audit log (cursor-paginated) |
 | `POST /events/ticket` · `GET /events?ticket=` | user | WebSocket live events |
 | `GET /health/live` · `GET /health/ready` | public (no prefix) | Health |

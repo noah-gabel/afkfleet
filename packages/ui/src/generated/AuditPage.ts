@@ -11,6 +11,13 @@ export type AuditPage = {
  */
 items: Array<AuditEntryResponse>, 
 /**
+ * The IDs of this page's entries that don't read back, newest first:
+ * each is still stored, and shown by its ID alone, in its place among
+ * `items` by ID; the server's log names why (ADR-0020, S52). Together
+ * with `items`, at most the page's `limit`.
+ */
+unreadable: Array<SafeInt>, 
+/**
  * The `before` of the next page, when one follows.
  */
 next?: SafeInt, };

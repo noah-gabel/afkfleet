@@ -210,6 +210,72 @@ async fn a_client_that_answers_the_pings_stays_open(
     assert_eq!(setup.live_events.sockets().open(), 1);
 }
 
+/// Two pings wait, as after a client's stall, and the client answers each
+/// with its own pong, oldest first, as tungstenite does: the second pong
+/// names a ping the server sent, so it's taken, and the socket stays open
+/// through the pings that follow (ADR-0020, U28, R79).
+#[sqlx::test(migrations = false)]
+async fn a_client_answering_two_waiting_pings_one_by_one_stays_open(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    // The short pings, and room past two of them before the idle close.
+    let setup = setup_with(
+        options,
+        Options {
+            sockets: SocketTimings {
+                idle_timeout: Duration::from_secs(2),
+                ..SHORT
+            },
+            ..Options::default()
+        },
+    )
+    .await;
+    let alice = setup.alice_person().await;
+    let served = Served::start(&setup).await;
+    let mut stream = ready(&setup, &served, &alice.token).await.into_inner();
+
+    let mut waiting = Vec::new();
+    while waiting.len() < 2 {
+        let (opcode, payload) = raw_frame(&mut stream).await;
+        assert_eq!(opcode, 0x9, "a ping, not {opcode:#x}");
+        waiting.push(payload);
+    }
+    for payload in &waiting {
+        stream.write_all(&pong(payload)).await.unwrap();
+    }
+    for _ in 0..3 {
+        let (opcode, payload) = raw_frame(&mut stream).await;
+        assert_eq!(opcode, 0x9, "a ping, not a close: {payload:?}");
+        stream.write_all(&pong(&payload)).await.unwrap();
+    }
+
+    assert_eq!(setup.live_events.sockets().open(), 1);
+}
+
+/// A masked pong echoing `payload`, as a client sends one.
+fn pong(payload: &[u8]) -> Vec<u8> {
+    masked(0x8A, u16::try_from(payload.len()).unwrap(), payload)
+}
+
+/// The next frame the server wrote on `stream`, read raw: its opcode and
+/// payload. The server's frames are unmasked, and these are short.
+async fn raw_frame(stream: &mut tokio::net::TcpStream) -> (u8, Vec<u8>) {
+    let mut header = [0_u8; 2];
+    timeout(PATIENCE, stream.read_exact(&mut header))
+        .await
+        .expect("a frame came in time")
+        .unwrap();
+    let length = usize::from(header[1] & 0x7F);
+    assert!(length <= 125, "a frame this test doesn't expect");
+    let mut payload = vec![0; length];
+    timeout(PATIENCE, stream.read_exact(&mut payload))
+        .await
+        .expect("its payload came in time")
+        .unwrap();
+    (header[0] & 0x0F, payload)
+}
+
 #[sqlx::test(migrations = false)]
 async fn a_client_that_never_answers_a_ping_is_closed_with_4000(
     _pool: SqlitePoolOptions,

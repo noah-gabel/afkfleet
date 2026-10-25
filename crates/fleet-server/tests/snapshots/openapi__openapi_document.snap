@@ -359,10 +359,18 @@ expression: answer.json()
           "next": {
             "$ref": "#/components/schemas/SafeInt",
             "description": "The `before` of the next page, when one follows."
+          },
+          "unreadable": {
+            "description": "The IDs of this page's entries that don't read back, newest first:\neach is still stored, and shown by its ID alone, in its place among\n`items` by ID; the server's log names why (ADR-0020, S52). Together\nwith `items`, at most the page's `limit`.",
+            "items": {
+              "$ref": "#/components/schemas/SafeInt"
+            },
+            "type": "array"
           }
         },
         "required": [
-          "items"
+          "items",
+          "unreadable"
         ],
         "type": "object"
       },

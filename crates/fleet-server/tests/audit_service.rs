@@ -16,11 +16,12 @@ use fleet_core::authz::Role;
 use fleet_core::id::UserId;
 use fleet_core::system::{Clock, mint};
 use fleet_core::value::Username;
-use fleet_server::app::audit::AuditService;
+use fleet_server::app::audit::{AuditService, ListedAuditEntry};
 use fleet_server::infra::sqlite::{Database, DatabaseOptions};
 use fleet_server::ports::audit::{AuditEntryId, AuditLimit, AuditPage};
 use fleet_server::ports::store::{Store, StoreError};
 use fleet_server::ports::users::{NewUser, PasswordHash};
+use fleet_testkit::log_capture;
 use fleet_testkit::system::{ManualClock, SeededRandom};
 use secrecy::SecretString;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -199,7 +200,10 @@ async fn a_page_names_the_next_only_when_an_older_entry_follows(
 
     assert_eq!(first.next, Some(ids[2]));
     assert_eq!(
-        last.items.iter().map(|entry| entry.id).collect::<Vec<_>>(),
+        last.items
+            .iter()
+            .map(ListedAuditEntry::id)
+            .collect::<Vec<_>>(),
         [ids[1], ids[0]]
     );
     assert_eq!(last.next, None);
@@ -256,5 +260,169 @@ async fn recording_while_another_transaction_holds_the_writer_is_busy(
 
     assert!(matches!(result, Err(StoreError::Busy)), "{result:?}");
     drop(held);
+    db.close().await;
+}
+
+/// Records `n` entries, oldest first, and answers their IDs in that order.
+async fn entries(service: &AuditService, n: usize) -> Vec<AuditEntryId> {
+    let mut ids = Vec::new();
+    for at in 0..n {
+        let entry = service.entry(action(&format!("x.e{at}")), AuditOutcome::Success);
+        ids.push(service.record(entry).await.unwrap());
+    }
+    ids
+}
+
+/// A date the table's CHECK takes and no calendar has: the row's `at` no
+/// longer reads back.
+const BROKEN_AT: &str = "2027-13-45T08:00:00.000Z";
+
+/// An action that isn't a dotted name: the row's `action` no longer reads
+/// back.
+const BROKEN_ACTION: &str = "NoDots";
+
+/// Changes entry `id`'s time, outside the server, to [`BROKEN_AT`].
+async fn break_time(db: &Database, id: AuditEntryId) {
+    let id = id.get();
+    sqlx::query!("UPDATE audit_log SET at = ? WHERE id = ?", BROKEN_AT, id)
+        .execute(db.write_pool())
+        .await
+        .unwrap();
+}
+
+/// Changes entry `id`'s action, outside the server, to [`BROKEN_ACTION`].
+async fn break_action(db: &Database, id: AuditEntryId) {
+    let id = id.get();
+    sqlx::query!(
+        "UPDATE audit_log SET action = ? WHERE id = ?",
+        BROKEN_ACTION,
+        id
+    )
+    .execute(db.write_pool())
+    .await
+    .unwrap();
+}
+
+/// What a page lists, in order: each entry's ID, and whether it reads back.
+fn listed(items: &[ListedAuditEntry]) -> Vec<(AuditEntryId, bool)> {
+    items
+        .iter()
+        .map(|entry| (entry.id(), matches!(entry, ListedAuditEntry::Readable(_))))
+        .collect()
+}
+
+/// The middle of five entries no longer reads back: the page lists it by
+/// its ID in its place, the others as they are (ADR-0020, S52).
+#[sqlx::test(migrations = false)]
+async fn an_entry_that_doesnt_read_back_is_listed_by_its_id_in_its_place(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (service, _clock, db) = service(options, DatabaseOptions::default()).await;
+    let ids = entries(&service, 5).await;
+    break_time(&db, ids[2]).await;
+
+    let whole = service.page(page(None, 10)).await.unwrap();
+
+    assert_eq!(
+        listed(&whole.items),
+        [
+            (ids[4], true),
+            (ids[3], true),
+            (ids[2], false),
+            (ids[1], true),
+            (ids[0], true),
+        ]
+    );
+    assert_eq!(whole.next, None);
+    db.close().await;
+}
+
+/// A full page whose next older entry doesn't read back still names the
+/// next page, and the pages go on past it to the end (S52, R64).
+#[sqlx::test(migrations = false)]
+async fn a_full_page_followed_by_an_unreadable_entry_names_the_next_page(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (service, _clock, db) = service(options, DatabaseOptions::default()).await;
+    let ids = entries(&service, 5).await;
+    break_time(&db, ids[2]).await;
+
+    let first = service.page(page(None, 2)).await.unwrap();
+    let second = service.page(page(first.next, 2)).await.unwrap();
+    let third = service.page(page(second.next, 2)).await.unwrap();
+
+    assert_eq!(listed(&first.items), [(ids[4], true), (ids[3], true)]);
+    assert_eq!(first.next, Some(ids[3]));
+    assert_eq!(listed(&second.items), [(ids[2], false), (ids[1], true)]);
+    assert_eq!(second.next, Some(ids[1]));
+    assert_eq!(listed(&third.items), [(ids[0], true)]);
+    assert_eq!(third.next, None);
+    db.close().await;
+}
+
+/// Two entries that don't read back, the page read three times: one `warn`
+/// each, naming the entry and the column, never the stored value (S52).
+#[sqlx::test(migrations = false)]
+async fn each_unreadable_entry_warns_once_with_its_id_and_column_never_its_value(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    log_capture::install().unwrap();
+    let (service, _clock, db) = service(options, DatabaseOptions::default()).await;
+    let ids = entries(&service, 4).await;
+    break_time(&db, ids[1]).await;
+    break_action(&db, ids[2]).await;
+
+    for _ in 0..3 {
+        service.page(page(None, 10)).await.unwrap();
+    }
+
+    assert_eq!(
+        log_capture::count("fleet_server::app::audit", "doesn't read back"),
+        2
+    );
+    for (id, column) in [(ids[1], "at"), (ids[2], "action")] {
+        let entry = format!("audit_entry={}", id.get());
+        let named = format!("column={column}");
+        assert_eq!(
+            log_capture::count("fleet_server::app::audit", &entry),
+            1,
+            "{entry}"
+        );
+        assert_eq!(
+            log_capture::count("fleet_server::app::audit", &named),
+            1,
+            "{named}"
+        );
+    }
+    log_capture::check_absent(BROKEN_AT).unwrap();
+    log_capture::check_absent(BROKEN_ACTION).unwrap();
+    db.close().await;
+}
+
+/// The retention deletes the entry a full page's probe found, and every
+/// older one, before the next page is read: that page comes back empty,
+/// with no next (R64).
+#[sqlx::test(migrations = false)]
+async fn the_retention_deleting_the_probed_entry_leaves_an_empty_last_page(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let (service, _clock, db) = service(options, DatabaseOptions::default()).await;
+    let ids = entries(&service, 3).await;
+    let first = service.page(page(None, 2)).await.unwrap();
+    let probed = ids[0].get();
+    sqlx::query!("DELETE FROM audit_log WHERE id <= ?", probed)
+        .execute(db.write_pool())
+        .await
+        .unwrap();
+
+    let last = service.page(page(first.next, 2)).await.unwrap();
+
+    assert_eq!(first.next, Some(ids[1]));
+    assert!(last.items.is_empty(), "{:?}", last.items);
+    assert_eq!(last.next, None);
     db.close().await;
 }

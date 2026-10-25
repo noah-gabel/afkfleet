@@ -154,7 +154,7 @@ async fn a_summary_waiting_for_the_write_connection_never_holds_up_the_stop(
     let running = tokio::spawn(task(&store, 1).run(stop.clone()));
     held.reached(PATIENCE).await;
     stop.cancel();
-    let ended = timeout(STOP_WAIT + Duration::from_secs(1), running).await;
+    let ended = timeout(STOP_WAIT + PATIENCE, running).await;
     drop(held);
 
     ended

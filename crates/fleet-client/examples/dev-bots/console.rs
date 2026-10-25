@@ -27,7 +27,7 @@ use std::io;
 
 use fleet_api_types::accounts::{CreateOfflineAccountRequest, HeldGrantResponse};
 use fleet_api_types::agents::AgentResponse;
-use fleet_api_types::audit::{AuditEntryResponse, AuditPageQuery};
+use fleet_api_types::audit::{AuditEntryResponse, AuditPage, AuditPageQuery};
 use fleet_api_types::auth::{LoginRequest, StepUpRequest};
 use fleet_api_types::bots::{BotModeRequest, BotPatchRequest, BotResponse, BotStatus};
 use fleet_api_types::chat::{
@@ -624,13 +624,34 @@ async fn audit<S: SessionStore>(
             limit: None,
         })
         .await?;
-    for entry in page.items.iter().rev() {
-        terminal.say(&audit_line_of(entry));
+    for line in audit_lines_of(&page) {
+        terminal.say(&line);
     }
     if let Some(next) = page.next {
         terminal.say(&format!("older: audit {next}"));
     }
     Ok(())
+}
+
+/// A line for each entry of `page`, oldest first: each that reads, and each
+/// that doesn't by its ID alone, in its place (ADR-0020, S52); one line
+/// saying so for an empty page.
+fn audit_lines_of(page: &AuditPage) -> Vec<String> {
+    let mut lines: Vec<(i64, String)> = page
+        .items
+        .iter()
+        .map(|entry| (entry.id.get(), audit_line_of(entry)))
+        .chain(
+            page.unreadable
+                .iter()
+                .map(|id| (id.get(), format!("#{id} unreadable"))),
+        )
+        .collect();
+    if lines.is_empty() {
+        return vec!["no audit entries".to_owned()];
+    }
+    lines.sort_unstable_by_key(|(id, _)| *id);
+    lines.into_iter().map(|(_, line)| line).collect()
 }
 
 /// One audit entry: its ID, time, action and outcome; who, from where and
@@ -1367,9 +1388,8 @@ mod tests {
             "target": { "kind": "bot", "id": "018bcfe5-6800-7202-8202-020202020202" },
             "outcome": "success",
             "metadata": [
-                { "key": "address", "text": "play.example.com" },
-                { "key": "count", "int": 3 },
-                { "key": "first", "flag": true }
+                { "key": "server_host", "text": "play.example.com" },
+                { "key": "server_port", "int": 25565 }
             ]
         }))
         .unwrap();
@@ -1387,12 +1407,54 @@ mod tests {
             "#41 2027-01-15T08:00:01.000Z bot.set_server success \
              by 018bcfe5-6800-7101-8101-010101010101 from 192.0.2.10 \
              on bot 018bcfe5-6800-7202-8202-020202020202: \
-             address=play.example.com, count=3, first=true"
+             server_host=play.example.com, server_port=25565"
         );
         assert_eq!(
             audit_line_of(&bare),
             "#7 2027-01-15T08:00:02.000Z retention.purge success"
         );
+    }
+
+    #[test]
+    fn an_audit_page_shows_an_unreadable_entry_in_its_place_oldest_first() {
+        let page: AuditPage = serde_json::from_value(serde_json::json!({
+            "items": [
+                {
+                    "id": 9,
+                    "at": "2027-01-15T08:00:03.000Z",
+                    "action": "user.set_disabled",
+                    "outcome": "success",
+                    "metadata": [{ "key": "disabled", "flag": true }]
+                },
+                {
+                    "id": 7,
+                    "at": "2027-01-15T08:00:01.000Z",
+                    "action": "retention.purge",
+                    "outcome": "success",
+                    "metadata": []
+                }
+            ],
+            "unreadable": [8],
+            "next": 7
+        }))
+        .unwrap();
+
+        assert_eq!(
+            audit_lines_of(&page),
+            [
+                "#7 2027-01-15T08:00:01.000Z retention.purge success",
+                "#8 unreadable",
+                "#9 2027-01-15T08:00:03.000Z user.set_disabled success: disabled=true",
+            ]
+        );
+    }
+
+    #[test]
+    fn an_empty_audit_page_says_so() {
+        let page: AuditPage =
+            serde_json::from_value(serde_json::json!({ "items": [], "unreadable": [] })).unwrap();
+
+        assert_eq!(audit_lines_of(&page), ["no audit entries"]);
     }
 
     #[test]

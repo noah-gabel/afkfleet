@@ -238,12 +238,34 @@ pub(crate) struct Viewer {
     /// open or the last `resync`, and every bot sent since, until it's
     /// removed (R32).
     seen: BTreeSet<BotId>,
-    slots: VecDeque<Slot>,
+    slots: VecDeque<Queued>,
     /// Events taken on rights a commit outran, in the bus's order: judged
     /// once the gate read the rights again (R47).
     unjudged: VecDeque<Arc<BusEvent>>,
+    /// Whether the events being judged are a replay's, so the slots they
+    /// make say so (R70).
+    replaying: bool,
     bots: BotService,
     modes: ModeService,
+}
+
+/// A slot and where it came from: a replay of events that waited unjudged,
+/// or anything else (the gate, an event taken live). A replay runs once no
+/// slot the last one made is still queued (R61, R70).
+#[derive(Debug)]
+struct Queued {
+    slot: Slot,
+    replayed: bool,
+}
+
+impl Queued {
+    /// `slot`, made by anything but a replay.
+    const fn live(slot: Slot) -> Self {
+        Self {
+            slot,
+            replayed: false,
+        }
+    }
 }
 
 /// One thing a socket owes its viewer, in the bus's order.
@@ -289,8 +311,17 @@ impl Viewer {
             seen: BTreeSet::new(),
             slots: VecDeque::new(),
             unjudged: VecDeque::new(),
+            replaying: false,
             bots,
             modes,
+        }
+    }
+
+    /// `slot`, marked as made by a replay while one runs.
+    const fn queued(&self, slot: Slot) -> Queued {
+        Queued {
+            slot,
+            replayed: self.replaying,
         }
     }
 
@@ -341,8 +372,8 @@ impl Viewer {
         }
         let visible = self.rights.visible(&self.actor);
         let joined: BTreeSet<BotId> = visible.difference(&self.seen).copied().collect();
-        for slot in &mut self.slots {
-            if let Slot::Bots(reads) = slot {
+        for queued in &mut self.slots {
+            if let Slot::Bots(reads) = &mut queued.slot {
                 reads.views = None;
                 // Read below, at the front: once is enough.
                 reads.ids.retain(|bot| !joined.contains(bot));
@@ -352,15 +383,15 @@ impl Viewer {
             // A removal still waiting for a bot seen again never goes: its
             // read below says what it is now.
             drop_removals(&mut self.slots, &joined);
-            self.slots.push_front(Slot::Bots(BotReads {
+            self.slots.push_front(Queued::live(Slot::Bots(BotReads {
                 ids: joined,
                 views: None,
-            }));
+            })));
         }
         let left: Vec<BotId> = self.seen.difference(&visible).copied().collect();
         for bot in left.into_iter().rev() {
             self.seen.remove(&bot);
-            self.slots.push_front(Slot::Removed(bot));
+            self.slots.push_front(Queued::live(Slot::Removed(bot)));
         }
         Ok(true)
     }
@@ -379,20 +410,24 @@ impl Viewer {
     /// Notes that `ids`, bots the viewer sees or saw, may read differently:
     /// merged into the first unread read it holds, or a new one at the end.
     fn hint(&mut self, ids: BTreeSet<BotId>) {
-        let unread = self.slots.iter_mut().find_map(|slot| match slot {
-            Slot::Bots(reads) if reads.views.is_none() => Some(reads),
-            _ => None,
-        });
-        match unread {
-            Some(reads) => reads.ids.extend(ids),
-            None => self
-                .slots
-                .push_back(Slot::Bots(BotReads { ids, views: None })),
+        let unread = self
+            .slots
+            .iter_mut()
+            .find_map(|queued| match &mut queued.slot {
+                Slot::Bots(reads) if reads.views.is_none() => Some(reads),
+                _ => None,
+            });
+        if let Some(reads) = unread {
+            reads.ids.extend(ids);
+        } else {
+            let queued = self.queued(Slot::Bots(BotReads { ids, views: None }));
+            self.slots.push_back(queued);
         }
     }
 
-    /// The next bot of `reads`, read now with the rest if it wasn't yet.
-    async fn bot_step(&mut self, mut reads: BotReads) -> Result<Step, Unprojected> {
+    /// The next bot of `reads`, read now with the rest if it wasn't yet; what
+    /// it gives back keeps its slot's origin, `replayed`.
+    async fn bot_step(&mut self, mut reads: BotReads, replayed: bool) -> Result<Step, Unprojected> {
         let mut views = if let Some(views) = reads.views.take() {
             views
         } else {
@@ -418,7 +453,10 @@ impl Viewer {
             if self.outrun() {
                 // A commit landed during the read: read again on the next
                 // turn, under the rights it made (S43).
-                self.slots.push_front(Slot::Bots(reads));
+                self.slots.push_front(Queued {
+                    slot: Slot::Bots(reads),
+                    replayed,
+                });
                 return Ok(Step::Nothing);
             }
             views
@@ -429,7 +467,10 @@ impl Viewer {
         let view = views.remove(&bot);
         if !reads.ids.is_empty() {
             reads.views = Some(views);
-            self.slots.push_front(Slot::Bots(reads));
+            self.slots.push_front(Queued {
+                slot: Slot::Bots(reads),
+                replayed,
+            });
         }
         Ok(self.bot_frame(bot, view))
     }
@@ -528,7 +569,8 @@ impl Viewer {
                 if matches!(agent.kind, LiveEventKind::Status(_)) {
                     self.hint(BTreeSet::from([bot]));
                 } else {
-                    self.slots.push_back(Slot::Agent(event));
+                    let queued = self.queued(Slot::Agent(event));
+                    self.slots.push_back(queued);
                 }
                 Ok(Taken::Counted)
             }
@@ -552,13 +594,18 @@ impl Viewer {
                 });
                 // Read once, at its first place (R33): one waiting already is
                 // read as the mode is then.
-                let waiting = self.slots.iter_mut().find_map(|slot| match slot {
-                    Slot::Mode { id, saw: queued } if *id == mode.id => Some(queued),
-                    _ => None,
-                });
-                match waiting {
-                    Some(queued) => *queued |= saw,
-                    None => self.slots.push_back(Slot::Mode { id: mode.id, saw }),
+                let waiting = self
+                    .slots
+                    .iter_mut()
+                    .find_map(|queued| match &mut queued.slot {
+                        Slot::Mode { id, saw: queued } if *id == mode.id => Some(queued),
+                        _ => None,
+                    });
+                if let Some(queued) = waiting {
+                    *queued |= saw;
+                } else {
+                    let queued = self.queued(Slot::Mode { id: mode.id, saw });
+                    self.slots.push_back(queued);
                 }
                 Ok(Taken::Counted)
             }
@@ -567,7 +614,8 @@ impl Viewer {
             // their socket.
             BusEvent::RoleChanged { user } => {
                 if *user != self.actor.id && self.actor.role == Role::Admin {
-                    self.slots.push_back(Slot::RoleChanged);
+                    let queued = self.queued(Slot::RoleChanged);
+                    self.slots.push_back(queued);
                     Ok(Taken::Counted)
                 } else {
                     Ok(Taken::Uncounted)
@@ -582,6 +630,13 @@ impl Viewer {
     /// another commit outran the rights; the rest wait until what this
     /// replay made went out (R47, R48, R61).
     fn replay(&mut self) {
+        self.replaying = true;
+        self.replay_events();
+        self.replaying = false;
+    }
+
+    /// [`Self::replay`]'s loop, the slots it makes marked as a replay's.
+    fn replay_events(&mut self) {
         let mut counted = 0_usize;
         while counted < MERGE_MAX {
             let Some(event) = self.unjudged.pop_front() else {
@@ -638,8 +693,9 @@ impl Project for Viewer {
 
     async fn next(&mut self) -> Result<Step, Unprojected> {
         // A replay makes slots only once those of the last one went out, so
-        // the slots hold at most one wake's worth, whatever waits (R61).
-        let sent = self.slots.is_empty();
+        // the slots hold at most one wake's worth, whatever waits (R61); the
+        // gate's own slots never hold it back (R70).
+        let sent = !self.slots.iter().any(|queued| queued.replayed);
         if !self.gate().await? {
             return Ok(Step::Nothing);
         }
@@ -654,24 +710,29 @@ impl Project for Viewer {
         if sent {
             self.replay();
         }
-        match self.slots.pop_front() {
-            None => Ok(Step::Nothing),
-            Some(Slot::Removed(bot)) => Ok(Step::Send(Box::new(EventMessage::bot_removed(bot)))),
-            Some(Slot::Bots(reads)) => self.bot_step(reads).await,
-            Some(Slot::Agent(event)) => Ok(event
+        let Some(Queued { slot, replayed }) = self.slots.pop_front() else {
+            return Ok(Step::Nothing);
+        };
+        match slot {
+            Slot::Removed(bot) => Ok(Step::Send(Box::new(EventMessage::bot_removed(bot)))),
+            Slot::Bots(reads) => self.bot_step(reads, replayed).await,
+            Slot::Agent(event) => Ok(event
                 .agent()
                 .map_or(Step::Nothing, |event| self.agent_step(event))),
-            Some(Slot::Mode { id, saw }) => {
+            Slot::Mode { id, saw } => {
                 let step = self.mode_step(id, saw).await?;
                 if self.outrun() {
                     // A commit landed during the read: read again on the
                     // next turn (S43).
-                    self.slots.push_front(Slot::Mode { id, saw });
+                    self.slots.push_front(Queued {
+                        slot: Slot::Mode { id, saw },
+                        replayed,
+                    });
                     return Ok(Step::Nothing);
                 }
                 Ok(step)
             }
-            Some(Slot::RoleChanged) => Ok(Step::Resync),
+            Slot::RoleChanged => Ok(Step::Resync),
         }
     }
 
@@ -685,8 +746,8 @@ impl Project for Viewer {
 
 /// Drops every `bot_removed` still waiting in `slots` for a bot of `shown`,
 /// which the viewer is taken to see again (R41).
-fn drop_removals(slots: &mut VecDeque<Slot>, shown: &BTreeSet<BotId>) {
-    slots.retain(|slot| !matches!(slot, Slot::Removed(bot) if shown.contains(bot)));
+fn drop_removals(slots: &mut VecDeque<Queued>, shown: &BTreeSet<BotId>) {
+    slots.retain(|queued| !matches!(queued.slot, Slot::Removed(bot) if shown.contains(&bot)));
 }
 
 /// A paused or failed bot's state and reason, as `GET /bots/{id}` names
@@ -809,7 +870,7 @@ mod tests {
         let slots: Vec<(ModeId, bool)> = viewer
             .slots
             .iter()
-            .filter_map(|slot| match slot {
+            .filter_map(|queued| match &queued.slot {
                 Slot::Mode { id, saw } => Some((*id, *saw)),
                 _ => None,
             })
@@ -873,6 +934,65 @@ mod tests {
         db.close().await;
     }
 
+    /// Ten mode events wait unjudged while the gate keeps queueing its own
+    /// slots ahead of them, a `bot_removed` every turn, as access granted
+    /// and revoked around one viewer makes it: the replay still runs, since
+    /// only slots a replay made hold the next one back, and every event is
+    /// judged at once (R70).
+    #[tokio::test]
+    async fn a_replay_still_runs_while_the_gates_own_slots_keep_coming() {
+        let dir = tempfile::tempdir().unwrap();
+        let owner = UserId::new_v7(at(), [1; 10]).unwrap();
+        let (mut viewer, db) = viewer(
+            &dir,
+            Actor {
+                id: owner,
+                role: Role::Owner,
+            },
+        )
+        .await;
+        viewer.rights = Arc::new(Rights::new(
+            0,
+            Access {
+                bots: Vec::new(),
+                grants: Vec::new(),
+                users: vec![UserAccess {
+                    user: owner,
+                    role: Role::Owner,
+                    enabled: true,
+                }],
+            },
+        ));
+        for n in 0..10_u8 {
+            viewer
+                .unjudged
+                .push_back(Arc::new(BusEvent::Mode(ModeEvent {
+                    id: ModeId::new_v7(at(), [n; 10]).unwrap(),
+                    was: None,
+                })));
+        }
+
+        let mut turns = 0_u8;
+        while !viewer.unjudged.is_empty() && turns < 100 {
+            // The gate's own slot, at the front, as it queues one for a bot
+            // that left the viewer's sight.
+            viewer
+                .slots
+                .push_front(Queued::live(Slot::Removed(bot(turns))));
+            viewer.next().await.unwrap();
+            turns += 1;
+        }
+
+        assert!(
+            viewer.unjudged.is_empty(),
+            "{} events still wait after {turns} turns",
+            viewer.unjudged.len()
+        );
+        assert_eq!(turns, 1, "judged on the first turn");
+        drop(viewer);
+        db.close().await;
+    }
+
     /// A resync while the removals of bots 2 and 3 wait, on rights that show
     /// bots 1 and 2: the viewer fetches bot 2 with the rest, so only bot 3's
     /// removal still goes.
@@ -912,14 +1032,17 @@ mod tests {
             },
         ));
         viewer.seen = BTreeSet::from([bot(1)]);
-        viewer.slots = VecDeque::from([Slot::Removed(bot(2)), Slot::Removed(bot(3))]);
+        viewer.slots = VecDeque::from([
+            Queued::live(Slot::Removed(bot(2))),
+            Queued::live(Slot::Removed(bot(3))),
+        ]);
 
         viewer.resynced();
 
         let waiting: Vec<BotId> = viewer
             .slots
             .iter()
-            .filter_map(|slot| match slot {
+            .filter_map(|queued| match &queued.slot {
                 Slot::Removed(bot) => Some(*bot),
                 _ => None,
             })

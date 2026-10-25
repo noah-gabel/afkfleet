@@ -816,8 +816,8 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         self.send_line(id, "command", json(request)).await
     }
 
-    /// One page of the bot `id`'s chat, newest first, as the caller may see
-    /// it (200).
+    /// One page of the agents, newest first, with their status and bots
+    /// count (200).
     pub(crate) async fn agents(
         self: &Arc<Self>,
         query: &PageQuery<AgentId>,
@@ -872,6 +872,8 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         expect_json(answer, 200)
     }
 
+    /// One page of the bot `id`'s chat, newest first, as the caller may see
+    /// it (200).
     pub(crate) async fn chat(
         self: &Arc<Self>,
         id: BotId,
@@ -3178,7 +3180,8 @@ mod tests {
                 "outcome": "success",
                 "metadata": [{ "key": "chat_by_age", "int": 3 }]
             }],
-            "next": 41
+            "unreadable": [40],
+            "next": 40
         }))
         .unwrap()
     }
