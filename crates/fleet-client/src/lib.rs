@@ -30,9 +30,15 @@
 //!   `session.rs`.
 //! - **Bounded:** a connection gets [`CONNECT_TIMEOUT`], a whole request
 //!   [`REQUEST_TIMEOUT`], each store call [`STORE_TIMEOUT`], and a response
-//!   body at most [`MAX_RESPONSE_BYTES`].
+//!   body at most [`MAX_RESPONSE_BYTES`]. The live events socket's upgrade
+//!   gets the request's timeout too, and each of its frames at most
+//!   [`MAX_RESPONSE_BYTES`].
 //! - **No redirects, no proxies, no automatic retries.** A 429 or 503 comes
-//!   back with its `retry_after`.
+//!   back with its `retry_after`. The one thing that tries again by itself
+//!   is the live events socket, by its own reconnect policy: jittered waits
+//!   of 1 to 30 s, a `Retry-After` up to 60 s, one prompt reconnect for the
+//!   4001 an access token's end brings, and a new ticket every time
+//!   ([`LiveEvents`]; ADR-0020, S54). A REST call never retries.
 //! - **Certificates are always checked:** against the system's roots, or
 //!   only against a configured CA ([`Trust`]).
 //!
@@ -40,7 +46,13 @@
 //! Through `tracing`, never a token, a body or a query: `debug` for a
 //! refresh and a retry, `info` when the session ends, `warn` when a new
 //! refresh token couldn't be saved (the store is cleared instead), `error`
-//! when the store couldn't even be cleared.
+//! when the store couldn't even be cleared. The live events socket logs each
+//! time it goes down with its cause and wait: `info` for a 1001 and the
+//! expected 4001, `warn` for 4000, 4002, 1008, a code the protocol doesn't
+//! name, an answer that doesn't read, silence or a missing `ready`, and a
+//! cause repeated in a row at `debug`; never its ticket, its URL or a
+//! frame. tungstenite logs every frame at `trace`, so every binary's filter
+//! caps its targets at `info` (fleet-startup; ADR-0020, S56).
 
 use core::time::Duration;
 
