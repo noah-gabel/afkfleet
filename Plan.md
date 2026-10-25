@@ -3834,7 +3834,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   | D1 | `p11/p11.5-live-events` | P11.5: the socket and its security: tickets, `POST /events/ticket`, `GET /events`, its limits, liveness and shutdown |
 >   | D2 | `p11/p11.5-events-per-viewer` | P11.5: the bot, chat and mode events, filtered per viewer (ticked here) |
 >   | E | `p11/p11.6-retention` | P11.6 (P11.7 moved to G at its planning, U18) |
->   | F | `p11/p11.9-admin-endpoints` | P11.9's backend: `GET /audit`, `agent release` over the API, the grants review at a role change |
+>   | F | `p11/p11.9-admin-endpoints` | P11.9's backend: `GET /audit`, `agent release` over the API, the grants review at a role change, leaving a shared account (U23) |
 >   | G | `p11/p11.8-events-in-the-app` | P11.8, and P11.7 over fleet-client's own socket (U18) |
 >   | H | `p11/p11.9-bot-screens` | P11.9's dashboard and bot detail; the DoD's first check |
 >   | I | `p11/p11.9-mode-editor` | P11.9's mode editor |
@@ -4140,6 +4140,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The grants review** (S50): `GET /users/{id}/grants` (held, with `dormant`) and `GET /users/{id}/shared-accounts`, the Owner's only (`ReviewUserGrants`); revoking through the existing route.
   > - **Leaving** (U23, S51): `DELETE /accounts/{id}/grants/me`, step-up, a new `LeaveAccount` for any grantee without implicit Manage, audited as `grant.revoke` with `via` = `leave`.
   > - **Clients** (R67): fleet-client's methods for each, and `just dev-bots`' verbs. **The text** friends read: `agent_not_disabled`, approved as drafted.
+
+  > Note (P11.9, Phase 11, group F as built) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group F)"): **built as planned, one PR,** the four parts with fleet-client's methods and the console's verbs (`users`, `audit`, `agents`, `release`, `held`, `shared`, `leave`). *Deviations:* no 422 test for the release or leaving, which take no body or query (a malformed ID is 404), as for the disable route; `AuditActionName`'s OpenAPI schema is written by hand from fleet-core's list, since utoipa's derive doesn't read the names a macro gives serde. About 8,000 lines added, above the planned 6,000 to 7,500 (about 1,700 of them generated).
 
   - **Dashboard:** a card per bot with a state badge, uptime, server, mode and last disconnect reason.
   - **Bot detail:**
@@ -4649,17 +4651,19 @@ All routes are prefixed with `/api/v1`. The required level is checked through `a
 | `POST /me/mfa/enroll` · `/confirm` · `/reset` | setup token (enroll, confirm); user + step-up (reset) | 2FA: enroll answers a new secret, confirm stores it with 10 recovery codes; reset answers a setup token whose confirm replaces the authenticator and revokes the user's other sessions (group D) |
 | `GET /me/sessions` · `DELETE /me/sessions/{id}` | user | Session management |
 | `GET /users` · `PATCH /users/{id}` | Admin+ (`PATCH`: step-up) | Role, disable |
+| `GET /users/{id}/grants` · `GET /users/{id}/shared-accounts` | Owner | The grants review at a role change: the grants the user holds (dormant ones marked), and their accounts a grant shares (P11.9) |
 | `POST /invites` · `GET /invites` · `DELETE /invites/{id}` | Admin+ (`POST`, `DELETE`: step-up) | Invites |
 | `POST /accounts/link` · `GET /accounts/link/{flow}` | Member+ | Microsoft device-code flow |
 | `GET /accounts` · `GET /accounts/awaiting-approval` · `GET/DELETE /accounts/{id}` | View / Manage (`DELETE`: step-up) | MC accounts; the pending links the caller may review |
 | `POST /accounts/{id}/approve` · `/refuse` | above the owner (step-up) | Review a pending link |
 | `POST /accounts/{id}/relink` | Manage | Link the account again (a link flow) |
 | `GET/POST /accounts/{id}/grants` · `PUT/DELETE /accounts/{id}/grants/{user}` | Manage (writes: step-up) | Sharing |
+| `DELETE /accounts/{id}/grants/me` | a grantee without implicit Manage (step-up) | Leave a shared account (P11.9) |
 | `GET /bots` · `GET/PATCH /bots/{id}` · `PUT /bots/{id}/mode` | View / Manage (`PATCH`: step-up) / Control | Bots and their state; the server address; the mode |
 | `POST /bots/{id}/start\|stop\|restart\|reset\|resume` | Control | Lifecycle |
 | `POST /bots/{id}/chat` · `POST /bots/{id}/command` · `GET /bots/{id}/chat` | Control (`/command`: step-up; a command off the allowlist: Manage) / View | Chat |
 | `GET/POST /modes` · `PUT/DELETE /modes/{id}` | Member+ (own) / Admin+ (shared) (`POST`, `PUT` with a command off the allowlist: their `/with-commands` step-up twins; `DELETE`: step-up) | Modes |
-| `GET /agents` · `POST /agents/enrollment-tokens` · `POST /agents/{id}/disable` | Admin+ | Agents |
+| `GET /agents` · `POST /agents/enrollment-tokens` · `POST /agents/{id}/disable` · `POST /agents/{id}/release` | Admin+ (`disable`, `release`: step-up) | Agents; a disabled agent's bots released (P11.9) |
 | `GET /audit` | Admin+ | Audit log (cursor-paginated) |
 | `POST /events/ticket` · `GET /events?ticket=` | user | WebSocket live events |
 | `GET /health/live` · `GET /health/ready` | public (no prefix) | Health |
