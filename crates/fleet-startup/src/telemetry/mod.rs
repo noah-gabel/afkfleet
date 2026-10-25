@@ -7,10 +7,12 @@
 //!   colored only on a terminal. Both go to stdout, or to stderr for a
 //!   command whose stdout carries its result alone ([`init_on`]).
 //! - **The filter** is the operator's `[log] filter`, with two rules no
-//!   binary can change (ADR-0011):
+//!   binary can change (ADR-0011, ADR-0020):
 //!   - `azalea_auth` never logs below `info`, because its `trace` lines hold
 //!     secrets: the agent's chat-signing private key, and the server's
-//!     Microsoft tokens (P9.3)
+//!     Microsoft tokens (P9.3); nor do `tungstenite` and `tokio_tungstenite`,
+//!     whose `trace` lines hold every WebSocket frame, chat text included
+//!     ([`FIXED_CAPS`], S56)
 //!   - panic reports always get through
 //!
 //!   A binary adds its own rules through [`FilterRules`]; the agent adds
@@ -32,7 +34,7 @@ use tracing_subscriber::util::SubscriberInitExt as _;
 
 use crate::config::LogConfig;
 
-pub use filter::{FilterRules, NoRules};
+pub use filter::{FIXED_CAPS, FilterRules, NoRules};
 pub use format::layer_with;
 pub use panic::PANIC_TARGET;
 

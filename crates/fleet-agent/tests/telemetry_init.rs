@@ -29,7 +29,7 @@ fn init_installs_once_and_log_records_are_filtered_by_their_targets() {
 
     let capture = LogBuffer::default();
     let subscriber = tracing_subscriber::registry().with(layer(
-        &config("trace,azalea_auth::certs=trace"),
+        &config("trace,azalea_auth::certs=trace,tungstenite=trace"),
         false,
         capture.clone(),
     ));
@@ -37,6 +37,10 @@ fn init_installs_once_and_log_records_are_filtered_by_their_targets() {
         log::debug!(target: "azalea_auth::certs", "dropped by the azalea_auth cap");
         log::info!(target: "azalea_auth::certs", "kept at info");
         log::debug!(target: "reqwest::connect", "kept at debug");
+        // tungstenite logs only through `log`; its frames are capped too
+        // (ADR-0020, S56).
+        log::trace!(target: "tungstenite::protocol", "dropped by the tungstenite cap");
+        log::info!(target: "tungstenite::protocol", "a frame line kept at info");
     });
 
     let messages: Vec<(String, String)> = capture
@@ -55,6 +59,10 @@ fn init_installs_once_and_log_records_are_filtered_by_their_targets() {
         [
             ("azalea_auth::certs".to_owned(), "kept at info".to_owned()),
             ("reqwest::connect".to_owned(), "kept at debug".to_owned()),
+            (
+                "tungstenite::protocol".to_owned(),
+                "a frame line kept at info".to_owned()
+            ),
         ]
     );
 }

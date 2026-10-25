@@ -16,8 +16,8 @@
 //! - [`secret_file`]: reading a secret from a `*_file` key's file, owner-only,
 //!   capped, with errors that never show its content (ADR-0016).
 //!
-//! The filter always caps `azalea_auth` at `info` and always lets panic
-//! reports through. A binary can only add rules on top, through
+//! The filter always caps `azalea_auth`, `tungstenite` and `tokio_tungstenite`
+//! at `info` and always lets panic reports through. A binary can only add rules on top, through
 //! [`telemetry::FilterRules`]: the agent adds azalea's.
 
 pub mod config;

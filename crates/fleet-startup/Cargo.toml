@@ -1,6 +1,6 @@
 [package]
 name = "fleet-startup"
-description = "Process start-up and lifecycle code shared by afkfleet's binaries: the config loader with key-path errors, the [log] section, logging with the azalea_auth cap and a panic hook, the stop signals, and the secret-file loader."
+description = "Process start-up and lifecycle code shared by afkfleet's binaries: the config loader with key-path errors, the [log] section, logging with its fixed caps (azalea_auth, tungstenite, tokio_tungstenite) and a panic hook, the stop signals, and the secret-file loader."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

@@ -1,7 +1,7 @@
 //! The log layer's filter: the operator's `[log] filter` with azalea's rules
 //! on top (ADR-0011, ADR-0014).
 //!
-//! It's `(EnvFilter ∧ azalea cap ∧ azalea_auth cap) ∨ panic reports`:
+//! It's `(EnvFilter ∧ azalea cap ∧ the fixed caps) ∨ panic reports`:
 //! - **`EnvFilter`** runs the operator's directives, with a default for azalea
 //!   in front: `warn`, or the operator's global level if that's lower (`off`
 //!   when there's none), so the default only ever lowers azalea. It's left
@@ -13,9 +13,10 @@
 //!   directives naming it set. A span directive without a target (such as
 //!   `[mc_session]=debug`) can enable everything inside a span, but never
 //!   azalea's kick rendering.
-//! - **The `azalea_auth` cap** keeps `azalea_auth` at `info` whatever the
-//!   filter says: its `trace` lines hold the chat-signing private key.
-//!   fleet-startup applies it to every binary's filter.
+//! - **The fixed caps** keep `azalea_auth` at `info` whatever the filter
+//!   says (its `trace` lines hold the chat-signing private key), and
+//!   tungstenite's targets with it (ADR-0020, S56). fleet-startup applies
+//!   them to every binary's filter.
 //! - **Panic reports** always get through, since the default panic hook is
 //!   gone (fleet-startup too).
 //!

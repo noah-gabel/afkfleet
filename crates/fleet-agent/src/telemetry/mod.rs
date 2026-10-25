@@ -11,7 +11,8 @@
 //!     broad `debug` can't turn on azalea's own kick rendering, which a
 //!     hostile server can crash or slow down
 //!   - `azalea_auth` never logs below `info`, because its `trace` lines hold
-//!     the chat-signing private key (fleet-startup applies this one)
+//!     the chat-signing private key, nor do tungstenite's targets
+//!     (fleet-startup applies these)
 //!   - panic reports always get through (fleet-startup too)
 //! - **The panic hook** replaces the default one and logs one `error` event
 //!   with the location, the thread and the payload. The payload is untrusted

@@ -1,12 +1,15 @@
 //! The log layer's filter: the operator's `[log] filter`, a binary's own
-//! rules, and two rules no binary can change (ADR-0011, ADR-0015).
+//! rules, and two rules no binary can change (ADR-0011, ADR-0015, ADR-0020).
 //!
-//! It's `(EnvFilter ∧ the binary's cap ∧ azalea_auth cap) ∨ panic reports`:
+//! It's `(EnvFilter ∧ the binary's cap ∧ the fixed caps) ∨ panic reports`:
 //! - **`EnvFilter`** runs the operator's directives, after any defaults the
 //!   binary puts in front.
 //! - **The binary's cap** is whatever its [`FilterRules::cap`] returns.
-//! - **The `azalea_auth` cap** keeps `azalea_auth` at `info` whatever the
-//!   filter says: its `trace` lines hold secrets.
+//! - **The fixed caps** ([`FIXED_CAPS`]) keep `azalea_auth`, whose `trace`
+//!   lines hold secrets, and `tungstenite` and `tokio_tungstenite`, which
+//!   log every WebSocket frame, chat text included, at `trace` and a close
+//!   frame's reason at `debug`, at `info` whatever the filter says
+//!   (ADR-0020, S56).
 //! - **Panic reports** always get through, since the default panic hook is
 //!   gone.
 //!
@@ -22,11 +25,15 @@ use tracing_subscriber::registry::LookupSpan;
 use super::panic::PANIC_TARGET;
 use crate::config::LogFilter;
 
-/// azalea-auth's target, whose `trace` lines hold secrets.
-const AZALEA_AUTH: &str = "azalea_auth";
+/// The targets no filter can lift above `info`: azalea-auth's, whose
+/// `trace` lines hold secrets, and tungstenite's and tokio-tungstenite's,
+/// whose `trace` lines hold every WebSocket frame, chat text included
+/// (ADR-0011, ADR-0020, S56). `Targets` matches by prefix, so each crate is
+/// named: `tokio_tungstenite` doesn't start with `tungstenite`.
+pub const FIXED_CAPS: [&str; 3] = ["azalea_auth", "tungstenite", "tokio_tungstenite"];
 
-/// A binary's own additions to the log filter. They can't weaken the
-/// `azalea_auth` cap or the panic passthrough, which the filter applies
+/// A binary's own additions to the log filter. They can't weaken the fixed
+/// caps ([`FIXED_CAPS`]) or the panic passthrough, which the filter applies
 /// outside them.
 pub trait FilterRules {
     /// Directives to put in front of the operator's, or `None`. They must be
@@ -62,11 +69,10 @@ where
     EnvFilter::builder()
         .parse_lossy(text)
         .and(rules.cap(filter))
-        .and(
-            Targets::new()
-                .with_default(LevelFilter::TRACE)
-                .with_target(AZALEA_AUTH, LevelFilter::INFO),
-        )
+        .and(FIXED_CAPS.iter().fold(
+            Targets::new().with_default(LevelFilter::TRACE),
+            |caps, target| caps.with_target(*target, LevelFilter::INFO),
+        ))
         .or(Targets::new().with_target(PANIC_TARGET, LevelFilter::ERROR))
 }
 
@@ -111,12 +117,15 @@ mod tests {
         };
     }
 
-    /// The targets every case is checked for, in this order.
-    const TARGETS: [&str; 4] = [
+    /// The targets every case is checked for, in this order: tungstenite's
+    /// is the one its frames log under (`tungstenite::protocol`).
+    const TARGETS: [&str; 6] = [
         "fleet_server",
         "sqlx::query",
         "azalea_auth",
         "azalea_auth::certs",
+        "tungstenite::protocol",
+        "tokio_tungstenite",
     ];
 
     fn probe_all() {
@@ -124,23 +133,30 @@ mod tests {
         probe!("sqlx::query");
         probe!("azalea_auth");
         probe!("azalea_auth::certs");
+        probe!("tungstenite::protocol");
+        probe!("tokio_tungstenite");
     }
 
     /// Runs `emit` under a layer with no rules and `filter`, and returns the
     /// most verbose level that got through for each probe target (`OFF` for
     /// none).
-    fn most_verbose(filter: &str, emit: impl FnOnce()) -> [LevelFilter; 4] {
+    fn most_verbose(filter: &str, emit: impl FnOnce()) -> [LevelFilter; 6] {
+        most_verbose_with(filter, &NoRules, emit)
+    }
+
+    /// [`most_verbose`] under `rules`.
+    fn most_verbose_with(
+        filter: &str,
+        rules: &dyn FilterRules,
+        emit: impl FnOnce(),
+    ) -> [LevelFilter; 6] {
         let buffer = LogBuffer::default();
         let config = LogConfig {
             format: LogFormat::Json,
             filter: LogFilter::try_from(filter).unwrap(),
         };
-        let subscriber = tracing_subscriber::registry().with(layer_with(
-            &config,
-            &NoRules,
-            false,
-            buffer.clone(),
-        ));
+        let subscriber =
+            tracing_subscriber::registry().with(layer_with(&config, rules, false, buffer.clone()));
         tracing::subscriber::with_default(subscriber, emit);
 
         let mut seen: BTreeMap<String, LevelFilter> = BTreeMap::new();
@@ -160,18 +176,44 @@ mod tests {
     const TRACE: LevelFilter = LevelFilter::TRACE;
 
     #[rstest]
-    #[case::default("info", [INFO, INFO, INFO, INFO])]
-    #[case::broad_debug("debug", [DEBUG, DEBUG, INFO, INFO])]
-    #[case::everything_trace("trace", [TRACE, TRACE, INFO, INFO])]
-    #[case::one_target("warn,sqlx=debug", [WARN, DEBUG, WARN, WARN])]
-    #[case::auth_trace("azalea_auth=trace", [OFF, OFF, INFO, INFO])]
-    #[case::certs_trace("info,azalea_auth::certs=trace", [INFO, INFO, INFO, INFO])]
-    #[case::everything_off("off", [OFF, OFF, OFF, OFF])]
-    fn no_rules_leave_the_filter_to_the_operator_but_cap_azalea_auth(
+    #[case::default("info", [INFO, INFO, INFO, INFO, INFO, INFO])]
+    #[case::broad_debug("debug", [DEBUG, DEBUG, INFO, INFO, INFO, INFO])]
+    #[case::everything_trace("trace", [TRACE, TRACE, INFO, INFO, INFO, INFO])]
+    #[case::one_target("warn,sqlx=debug", [WARN, DEBUG, WARN, WARN, WARN, WARN])]
+    #[case::auth_trace("azalea_auth=trace", [OFF, OFF, INFO, INFO, OFF, OFF])]
+    #[case::certs_trace("info,azalea_auth::certs=trace", [INFO, INFO, INFO, INFO, INFO, INFO])]
+    #[case::tungstenite_trace(
+        "info,tungstenite=trace,tokio_tungstenite=trace",
+        [INFO, INFO, INFO, INFO, INFO, INFO]
+    )]
+    #[case::everything_off("off", [OFF, OFF, OFF, OFF, OFF, OFF])]
+    fn no_rules_leave_the_filter_to_the_operator_but_keep_the_fixed_caps(
         #[case] filter: &str,
-        #[case] expected: [LevelFilter; 4],
+        #[case] expected: [LevelFilter; 6],
     ) {
         assert_eq!(most_verbose(filter, probe_all), expected, "{filter}");
+    }
+
+    /// Rules that ask for every fixed target at `trace` and cap nothing.
+    struct Lifting;
+
+    impl FilterRules for Lifting {
+        fn env_defaults(&self, _filter: &LogFilter) -> Option<String> {
+            Some("azalea_auth=trace,tungstenite=trace,tokio_tungstenite=trace".to_owned())
+        }
+
+        fn cap(&self, _filter: &LogFilter) -> Targets {
+            Targets::new().with_default(LevelFilter::TRACE)
+        }
+
+        fn warn_at_startup(&self, _filter: &LogFilter) {}
+    }
+
+    #[test]
+    fn a_binarys_rules_cant_lift_the_fixed_caps() {
+        let seen = most_verbose_with("trace", &Lifting, probe_all);
+
+        assert_eq!(seen, [TRACE, TRACE, INFO, INFO, INFO, INFO]);
     }
 
     #[rstest]
