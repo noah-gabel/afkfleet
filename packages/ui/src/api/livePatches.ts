@@ -6,7 +6,7 @@
 // page that has more after it). No patch creates a query's entry: the layer writes only over
 // data a query holds; and data of another shape than its key's is left as it is, never a
 // throw inside the cache's notify (R90).
-import type { InfiniteData, QueryKey } from "@tanstack/react-query";
+import type { DataTag, QueryKey } from "@tanstack/react-query";
 
 import type { AccountResponse } from "../generated/AccountResponse";
 import type { BotResponse } from "../generated/BotResponse";
@@ -40,10 +40,9 @@ export type LivePatch =
   /** Resets the query: empty, read again when shown. */
   | { readonly kind: "reset"; readonly queryKey: QueryKey };
 
-/** One page of a list the server answers newest first. */
-interface Page<T> {
-  readonly items: readonly T[];
-  readonly next?: unknown;
+/** A list's pages as an infinite query keeps them: each page's items, newest first. */
+interface Paged<I> {
+  readonly pages: readonly { readonly items: readonly I[]; readonly next?: unknown }[];
 }
 
 /** An item of such a list: its ID orders it, a UUID v7's text or a row's number. */
@@ -62,34 +61,15 @@ export function patchesFor(event: EventMessage): LivePatch[] {
       const line = event.line;
       return event.bot_id === undefined || line === undefined
         ? []
-        : [
-            set(
-              chatKey(event.bot_id),
-              onPages((data) => placed(data, line)),
-            ),
-          ];
+        : [pagesPatch(chatKey(event.bot_id), (data) => placed(data, line))];
     }
     case "mode": {
       const mode = event.mode;
-      return mode === undefined
-        ? []
-        : [
-            set(
-              MODES_LIST_KEY,
-              onPages((data) => placed(data, mode)),
-            ),
-          ];
+      return mode === undefined ? [] : [pagesPatch(MODES_LIST_KEY, (data) => placed(data, mode))];
     }
     case "mode_removed": {
       const id = event.mode_id;
-      return id === undefined
-        ? []
-        : [
-            set(
-              MODES_LIST_KEY,
-              onPages((data) => without(data, id)),
-            ),
-          ];
+      return id === undefined ? [] : [pagesPatch(MODES_LIST_KEY, (data) => without(data, id))];
     }
     case "ready":
     case "resync":
@@ -109,14 +89,11 @@ export function patchesFor(event: EventMessage): LivePatch[] {
 function botPatches(bot: BotResponse): LivePatch[] {
   const account = bot.account;
   return [
-    set(
-      BOTS_LIST_KEY,
-      onPages((data) => placed(data, bot)),
-    ),
-    set(botKey(bot.id), () => bot),
+    pagesPatch(BOTS_LIST_KEY, (data) => placed(data, bot)),
+    entryPatch(botKey(bot.id), bot),
     set(
       ACCOUNT_LIST_KEY,
-      onPages((data) => placed(data, account)),
+      onPages((data) => placed<Listed, Paged<Listed>>(data, account)),
     ),
     set(accountKey(account.id), () => account),
     { kind: "invalidate", queryKey: grantsKey(account.id) },
@@ -129,10 +106,7 @@ function botPatches(bot: BotResponse): LivePatch[] {
 /** A `bot_removed`'s changes: no bot→account mapping here, so every account is read again. */
 function removedPatches(id: string): LivePatch[] {
   return [
-    set(
-      BOTS_LIST_KEY,
-      onPages((data) => without(data, id)),
-    ),
+    pagesPatch(BOTS_LIST_KEY, (data) => without(data, id)),
     { kind: "remove", queryKey: botKey(id) },
     { kind: "reset", queryKey: chatKey(id) },
     { kind: "invalidate", queryKey: ACCOUNTS_KEY },
@@ -166,15 +140,30 @@ function set(queryKey: QueryKey, update: LiveUpdater): LivePatch {
   return { kind: "set", queryKey, update };
 }
 
-/** An update of a list's pages; data of any other shape is left as it is. */
-function onPages(
-  update: (data: InfiniteData<Page<Listed>>) => InfiniteData<Page<Listed>>,
-): LiveUpdater {
+/**
+ * A patch over the list's pages under the tagged `queryKey`, its update typed by the key's
+ * data (R90); data of another shape is left as it is.
+ */
+export function pagesPatch<D extends Paged<Listed>>(
+  queryKey: DataTag<QueryKey, D>,
+  update: (data: NoInfer<D>) => NoInfer<D>,
+): LivePatch {
+  // The pages' shape is checked here; their items' types are the tag's.
+  return { kind: "set", queryKey, update: (data) => (isPages(data) ? update(data as D) : data) };
+}
+
+/** A patch that replaces the entry under the tagged `queryKey` with `value`, of its type. */
+export function entryPatch<T>(queryKey: DataTag<QueryKey, T>, value: NoInfer<T>): LivePatch {
+  return { kind: "set", queryKey, update: () => value };
+}
+
+/** An update of an untagged list's pages; data of any other shape is left as it is. */
+function onPages(update: (data: Paged<Listed>) => Paged<Listed>): LiveUpdater {
   return (data) => (isPages(data) ? update(data) : data);
 }
 
 /** Whether `data` holds a list's pages as an infinite query keeps them. */
-function isPages(data: unknown): data is InfiniteData<Page<Listed>> {
+function isPages(data: unknown): data is Paged<Listed> {
   if (typeof data !== "object" || data === null) {
     return false;
   }
@@ -199,13 +188,12 @@ function isList(data: unknown): data is readonly object[] {
  * `data` with `item` in it: in its place when cached, otherwise where the keyset paging rule
  * puts it, newest first; unchanged when it belongs to a page not loaded yet.
  */
-export function placed<T extends Listed>(
-  data: InfiniteData<Page<T>>,
-  item: T,
-): InfiniteData<Page<T>> {
+export function placed<I extends Listed, D extends Paged<I>>(data: D, item: I): D {
   const at = data.pages.findIndex((page) => page.items.some((one) => one.id === item.id));
   if (at >= 0) {
-    return withPage(data, at, (items) => items.map((one) => (one.id === item.id ? item : one)));
+    return withPage<I, D>(data, at, (items) =>
+      items.map((one) => (one.id === item.id ? item : one)),
+    );
   }
   const into = data.pages.findIndex((page, index) => {
     const oldest = page.items.at(-1);
@@ -215,7 +203,7 @@ export function placed<T extends Listed>(
   if (into < 0) {
     return data;
   }
-  return withPage(data, into, (items) => {
+  return withPage<I, D>(data, into, (items) => {
     const before = items.findIndex((one) => newer(item.id, one.id));
     return before < 0
       ? [...items, item]
@@ -224,12 +212,9 @@ export function placed<T extends Listed>(
 }
 
 /** `data` without the item `id`; unchanged when it holds none. */
-export function without<T extends Listed>(
-  data: InfiniteData<Page<T>>,
-  id: T["id"],
-): InfiniteData<Page<T>> {
+export function without<I extends Listed, D extends Paged<I>>(data: D, id: I["id"]): D {
   const at = data.pages.findIndex((page) => page.items.some((one) => one.id === id));
-  return at < 0 ? data : withPage(data, at, (items) => items.filter((one) => one.id !== id));
+  return at < 0 ? data : withPage<I, D>(data, at, (items) => items.filter((one) => one.id !== id));
 }
 
 /** Whether ID `a` is newer than `b`: a larger row number, or a later UUID v7, whose text
@@ -238,16 +223,16 @@ function newer(a: string | number, b: string | number): boolean {
   return typeof a === "number" && typeof b === "number" ? a > b : String(a) > String(b);
 }
 
-/** `data` with page `at`'s items changed by `change`. */
-function withPage<T>(
-  data: InfiniteData<Page<T>>,
+/** `data` with page `at`'s items changed by `change`; the same type, since the items are. */
+function withPage<I, D extends Paged<I>>(
+  data: D,
   at: number,
-  change: (items: readonly T[]) => readonly T[],
-): InfiniteData<Page<T>> {
+  change: (items: readonly I[]) => readonly I[],
+): D {
   return {
     ...data,
     pages: data.pages.map((page, index) =>
       index === at ? { ...page, items: change(page.items) } : page,
     ),
-  };
+  } as D;
 }

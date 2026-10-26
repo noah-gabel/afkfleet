@@ -65,10 +65,10 @@ export function line(id: number, text = `line ${id}`): ChatLine {
   };
 }
 
-/** The pages of a list, as an infinite query holds them. */
-export function pages<T>(
-  ...list: { items: T[]; next?: string | number }[]
-): InfiniteData<{ items: T[]; next?: string | number }> {
+/** The pages of a list, as an infinite query holds them; `N` is its cursor's type. */
+export function pages<T, N extends string | number = string>(
+  ...list: { items: T[]; next?: N }[]
+): InfiniteData<{ items: T[]; next?: N }, N | undefined> {
   return {
     pages: list,
     pageParams: list.map((_, index) => (index === 0 ? undefined : list[index - 1]?.next)),

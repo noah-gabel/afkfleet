@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ApiClient } from "../api/ApiClient";
 import type { ApiError } from "../api/ApiError";
 import { FakeApiClient, fakeApiError, fakeWatch } from "../api/FakeApiClient";
+import { PAGE_MAX } from "../api/limits";
 import {
   ACCOUNT_LIST_KEY,
   AWAITING_KEY,
@@ -17,12 +18,17 @@ import {
   accountsQuery,
   awaitingQuery,
   BOTS_LIST_KEY,
+  botKey,
+  botQuery,
+  botsQuery,
   chatKey,
   grantsKey,
   MODES_LIST_KEY,
+  modesQuery,
 } from "../api/queries";
 import type { AccountPage } from "../generated/AccountPage";
 import type { AccountResponse } from "../generated/AccountResponse";
+import type { BotPage } from "../generated/BotPage";
 import type { LiveUpdateMessage } from "../generated/LiveUpdateMessage";
 import { account, accountId } from "../test/accounts";
 import { deferred } from "../test/fixtures";
@@ -88,6 +94,11 @@ function shown(client: ReturnType<typeof createQueryClient>, options: unknown) {
   const observer = new QueryObserver(client, options as QueryObserverOptions);
   undo.push(observer.subscribe(() => {}));
   return observer;
+}
+
+/** The args of every call `fake` got of `method`. */
+function argsOf(fake: FakeApiClient, method: keyof ApiClient): (readonly unknown[])[] {
+  return fake.calls.filter((call) => call.method === method).map((call) => call.args);
 }
 
 /** How many times `fake` was asked `method`. */
@@ -577,6 +588,83 @@ describe("the Header's hint (U30)", () => {
 
     expect(stopped).toMatchObject({ kind: "stopped", error: { code: "certificate" } });
     expect(stores.live.getState().hint).toEqual({ kind: "none" });
+  });
+});
+
+describe("the bots' and modes' queries", () => {
+  /** The bots every page of `data` holds. */
+  function bots(data: unknown) {
+    return (data as InfiniteData<BotPage> | undefined)?.pages.flatMap((page) => page.items) ?? [];
+  }
+
+  it("read the bots a page at a time, and a bot frame reaches their pages", async () => {
+    const { watch, fake, queryClient } = setup({
+      bots: async (before) =>
+        before === undefined ? { items: [bot(3), bot(1)], next: botId(1) } : { items: [] },
+    });
+
+    await queryClient.fetchInfiniteQuery(botsQuery(fake));
+    watch.latest().push(botFrame(bot(2)));
+    watch.latest().push(botFrame(bot(3, { desired_state: "running" })));
+
+    expect(argsOf(fake, "bots")).toEqual([[undefined, undefined]]);
+    expect(bots(queryClient.getQueryData(BOTS_LIST_KEY))).toEqual([
+      bot(3, { desired_state: "running" }),
+      bot(2),
+      bot(1),
+    ]);
+  });
+
+  it("read one bot, which follows its frames until it's removed", async () => {
+    const { watch, fake, queryClient } = setup({ bot: async () => bot(1) });
+
+    await queryClient.fetchQuery(botQuery(fake, botId(1)));
+    watch.latest().push(botFrame(bot(1, { desired_state: "running" })));
+    const followed = queryClient.getQueryData(botKey(botId(1)));
+    watch.latest().push(event({ type: "bot_removed", bot_id: botId(1) }));
+
+    expect(argsOf(fake, "bot")).toEqual([[botId(1)]]);
+    expect(followed).toEqual(bot(1, { desired_state: "running" }));
+    expect(queryClient.getQueryState(botKey(botId(1)))).toBeUndefined();
+  });
+
+  it("read every page of the modes as one list's pages, which a mode frame reaches", async () => {
+    const { watch, fake, queryClient } = setup({
+      modes: async (before) =>
+        before === undefined
+          ? { items: [mode(5), mode(4)], next: modeId(4) }
+          : { items: [mode(2)] },
+    });
+
+    await queryClient.fetchQuery(modesQuery(fake));
+    watch.latest().push(event({ type: "mode", mode_id: modeId(3), mode: mode(3) }));
+
+    expect(argsOf(fake, "modes")).toEqual([
+      [undefined, PAGE_MAX],
+      [modeId(4), PAGE_MAX],
+    ]);
+    expect(queryClient.getQueryData(MODES_LIST_KEY)?.pages.flatMap((page) => page.items)).toEqual([
+      mode(5),
+      mode(4),
+      mode(3),
+      mode(2),
+    ]);
+  });
+
+  it("fail the modes' read when one of its pages fails", async () => {
+    const { fake, queryClient } = setup({
+      modes: async (before) => {
+        if (before === undefined) {
+          return { items: [mode(5)], next: modeId(5) };
+        }
+        throw fakeApiError("unreachable");
+      },
+    });
+
+    const read = await queryClient.fetchQuery(modesQuery(fake)).catch((error: unknown) => error);
+
+    expect((read as ApiError).error.code).toBe("unreachable");
+    expect(queryClient.getQueryData(MODES_LIST_KEY)).toBeUndefined();
   });
 });
 

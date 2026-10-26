@@ -5,7 +5,14 @@ import type { AccountResponse } from "../generated/AccountResponse";
 import type { EventMessage } from "../generated/EventMessage";
 import { account, accountId } from "../test/accounts";
 import { bot, botId, line, mode, modeId, pages } from "../test/live";
-import { type LivePatch, patchesFor, READ_AGAIN } from "./livePatches";
+import {
+  entryPatch,
+  type LivePatch,
+  pagesPatch,
+  patchesFor,
+  placed,
+  READ_AGAIN,
+} from "./livePatches";
 import {
   ACCOUNT_LIST_KEY,
   ACCOUNTS_KEY,
@@ -202,5 +209,18 @@ describe("the other events", () => {
     expect(patchesFor({ type: "bot" })).toEqual([]);
     expect(patchesFor({ type: "chat", bot_id: botId(1) })).toEqual([]);
     expect(patchesFor({ type: "mode" })).toEqual([]);
+  });
+});
+
+describe("the bindings H adds (R90)", () => {
+  it("bind each key to its own shape, so a wrong one doesn't compile", () => {
+    // @ts-expect-error: the bots' pages hold bots, never modes.
+    const wrongItem = pagesPatch(BOTS_LIST_KEY, (data) => placed(data, mode(1)));
+    // @ts-expect-error: one bot's entry is a bot, never a mode.
+    const wrongEntry = entryPatch(botKey(botId(1)), mode(1));
+    // @ts-expect-error: the modes' pages hold modes, never chat lines.
+    const wrongPages = pagesPatch(MODES_LIST_KEY, (data) => placed(data, line(1)));
+
+    expect([wrongItem.kind, wrongEntry.kind, wrongPages.kind]).toEqual(["set", "set", "set"]);
   });
 });

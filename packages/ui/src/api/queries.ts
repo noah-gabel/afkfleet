@@ -6,7 +6,10 @@
 // (CLAUDE.md, ADR-0017). A Microsoft link's start answers its user code, so it's a direct
 // call too; its status carries none and is a query (features/accounts).
 import {
+  type DataTag,
+  type InfiniteData,
   infiniteQueryOptions,
+  type QueryKey,
   queryOptions,
   useInfiniteQuery,
   useQuery,
@@ -14,8 +17,12 @@ import {
 
 import type { AccountPage } from "../generated/AccountPage";
 import type { AccountResponse } from "../generated/AccountResponse";
+import type { BotPage } from "../generated/BotPage";
+import type { BotResponse } from "../generated/BotResponse";
+import type { ChatPage } from "../generated/ChatPage";
 import type { GrantPage } from "../generated/GrantPage";
 import type { InvitePage } from "../generated/InvitePage";
+import type { ModePage } from "../generated/ModePage";
 import type { SessionPage } from "../generated/SessionPage";
 import type { UserPage } from "../generated/UserPage";
 import type { ApiClient } from "./ApiClient";
@@ -188,21 +195,82 @@ export function useGrants(id: string, enabled: boolean) {
   return useInfiniteQuery({ ...grantsQuery(useApiClient(), id), enabled });
 }
 
-// The bots', their chat's and the modes' keys (P11.8; ADR-0020, S60): the live events
-// patch whatever these hold, and H adds the queries that read them.
+// The bots', their chat's and the modes' keys (P11.8, P11.9; ADR-0020, S60, R90): the live
+// events patch whatever these hold. Each is tagged with the data its query holds, so a query
+// or a live patch of another shape doesn't compile.
+
+/** `key`, tagged with the data `T` its query holds. */
+function tagged<T>(): <K extends QueryKey>(key: K) => DataTag<K, T> {
+  return <K extends QueryKey>(key: K) => key as DataTag<K, T>;
+}
 
 /** The bots the user may see, every page loaded so far. */
-export const BOTS_LIST_KEY = ["bots", "list"] as const;
+export const BOTS_LIST_KEY = tagged<InfiniteData<BotPage, string | undefined>>()([
+  "bots",
+  "list",
+] as const);
 
 /** One bot's key. */
 export function botKey(id: string) {
-  return ["bots", "one", id] as const;
+  return tagged<BotResponse>()(["bots", "one", id] as const);
 }
 
 /** The key of one bot's chat, every page loaded so far. */
 export function chatKey(id: string) {
-  return ["bots", "chat", id] as const;
+  return tagged<InfiniteData<ChatPage, number | undefined>>()(["bots", "chat", id] as const);
 }
 
-/** The modes the user may see, every page loaded so far. */
-export const MODES_LIST_KEY = ["modes", "list"] as const;
+/** The modes the user may see: every page, read at once (S68). */
+export const MODES_LIST_KEY = tagged<InfiniteData<ModePage, string | undefined>>()([
+  "modes",
+  "list",
+] as const);
+
+/** The bots the user may see, a page at a time, newest first. */
+export function botsQuery(api: ApiClient) {
+  return infiniteQueryOptions({
+    queryKey: BOTS_LIST_KEY,
+    queryFn: ({ pageParam }) => api.bots(pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (page: BotPage) => page.next,
+  });
+}
+
+/** The bots, through the app's client. */
+export function useBots() {
+  return useInfiniteQuery(botsQuery(useApiClient()));
+}
+
+/** One bot, as the user sees it. */
+export function botQuery(api: ApiClient, id: string) {
+  return queryOptions({ queryKey: botKey(id), queryFn: () => api.bot(id) });
+}
+
+/** One bot, through the app's client. */
+export function useBot(id: string) {
+  return useQuery(botQuery(useApiClient(), id));
+}
+
+/** Every page of the modes the user may see, as one list's pages; one failed page fails it all. */
+async function everyMode(api: ApiClient): Promise<InfiniteData<ModePage, string | undefined>> {
+  const pages: ModePage[] = [];
+  const pageParams: (string | undefined)[] = [];
+  let before: string | undefined;
+  do {
+    const page = await api.modes(before, PAGE_MAX);
+    pages.push(page);
+    pageParams.push(before);
+    before = page.next;
+  } while (before !== undefined);
+  return { pages, pageParams };
+}
+
+/** Every mode the user may see (S68 in ADR-0020): the names the bots' screens show. */
+export function modesQuery(api: ApiClient) {
+  return queryOptions({ queryKey: MODES_LIST_KEY, queryFn: () => everyMode(api) });
+}
+
+/** Every mode, through the app's client. */
+export function useModes() {
+  return useQuery(modesQuery(useApiClient()));
+}
