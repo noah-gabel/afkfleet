@@ -12,6 +12,8 @@
 //   only a call that started after that can take it down again.
 // - `notices`: the warnings Home's user dismissed, for the sign-in (the session's
 //   generation) they dismissed them in; a new sign-in shows them again (Plan.md P8.7).
+// - `live`: what the live events layer (live.ts) is asked from outside it: a new watch, after
+//   a server profile save that changed nothing (P11.8, S61).
 import { createStore, type StoreApi } from "zustand/vanilla";
 
 /** Where the user's session stands, as far as the UI knows. */
@@ -73,11 +75,20 @@ export interface NoticesState {
   dismiss(warning: HomeWarning, generation: number): void;
 }
 
+/** The live events store; see the module comment. */
+export interface LiveState {
+  /** How many new watches were asked for. */
+  readonly restarts: number;
+  /** Asks for a new watch of the current session. */
+  restart(): void;
+}
+
 /** The stores of one App. */
 export interface AppStores {
   readonly session: StoreApi<SessionState>;
   readonly connection: StoreApi<ConnectionState>;
   readonly notices: StoreApi<NoticesState>;
+  readonly live: StoreApi<LiveState>;
 }
 
 /** Fresh stores for one App. */
@@ -157,6 +168,12 @@ export function createAppStores(): AppStores {
         if (!earlier.includes(warning)) {
           set({ dismissed: { generation, warnings: [...earlier, warning] } });
         }
+      },
+    })),
+    live: createStore<LiveState>()((set, get) => ({
+      restarts: 0,
+      restart() {
+        set({ restarts: get().restarts + 1 });
       },
     })),
   };

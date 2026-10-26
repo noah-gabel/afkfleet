@@ -39,8 +39,11 @@ export function AccountScreen({ id }: { id: string }) {
   const writes = useAccountWrites();
   const navigate = useNavigate();
 
-  if (account.error !== null && account.data === undefined) {
-    const error = toApiError(account.error).error;
+  // A read that failed shows instead of the account only before it was ever read, or when
+  // it answers 404: the account went while its screen was open (P11.8, S60).
+  const failure = account.error === null ? null : toApiError(account.error).error;
+  if (failure !== null && (account.data === undefined || failure.api?.status === 404)) {
+    const error = failure;
     return (
       <main className="flex max-w-3xl flex-col gap-4 p-6">
         <p role="alert">{error.api?.status === 404 ? NOT_FOUND : describeError(error)}</p>

@@ -2,7 +2,7 @@ import { screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../../api/ApiClient";
-import { fakeApiError } from "../../api/FakeApiClient";
+import { fakeApiError, fakeWatch } from "../../api/FakeApiClient";
 import type { AccountResponse } from "../../generated/AccountResponse";
 import type { GrantResponse } from "../../generated/GrantResponse";
 import { formatTime } from "../../lib/time";
@@ -136,6 +136,29 @@ describe("an account's screen", () => {
     expect(await screen.findByText(NOT_FOUND)).toBeDefined();
     await app.user.click(screen.getByRole("link", { name: "Back to accounts" }));
     expect(app.path()).toBe("/accounts");
+  });
+
+  it("says so when the account goes while its screen is open and its read answers 404", async () => {
+    const watch = fakeWatch();
+    let gone = false;
+    await atAccount(ID, {
+      watchEvents: watch.handler,
+      account: async () => {
+        if (gone) {
+          throw refusal(404, "not_found");
+        }
+        return account(1);
+      },
+    });
+    await screen.findByText("AfkBot1");
+
+    gone = true;
+    watch.latest().push({
+      update: "event",
+      event: { type: "bot_removed", bot_id: "01900000-0000-7000-8000-000000000201" },
+    });
+
+    expect(await screen.findByText(NOT_FOUND)).toBeDefined();
   });
 
   it("notes that a pending link waits for approval", async () => {

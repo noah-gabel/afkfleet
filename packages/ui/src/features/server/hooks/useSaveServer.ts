@@ -10,6 +10,8 @@
 // until its answer, so a call that answers `no_session` meanwhile (the old server's session
 // is gone) shows no "session ended"; `none` or an error that changed nothing goes back to
 // signed in, in the same generation.
+// An identical profile's save stops the live events watch on the Rust side, so `none` asks
+// for a new one (S61).
 // A profile holds no secret (an origin and a CA's certificates), so this is a mutation.
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "@tanstack/react-router";
@@ -39,7 +41,7 @@ export function useSaveServer() {
   const api = useApiClient();
   const queryClient = useQueryClient();
   const router = useRouter();
-  const { session } = useAppStores();
+  const { session, live } = useAppStores();
   const mutation = useMutation({
     mutationFn: (request: ServerProfileRequest) => api.setServerProfile(request),
   });
@@ -76,6 +78,8 @@ export function useSaveServer() {
     if (answer.change === "none") {
       if (signedIn) {
         session.getState().cancelLogout();
+        // The save stopped the live events watch; the session goes on, so a new one starts.
+        live.getState().restart();
         toast.info(UNCHANGED);
       } else {
         await router.navigate({ to: "/login" });
