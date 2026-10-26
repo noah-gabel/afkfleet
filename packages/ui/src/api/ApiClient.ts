@@ -4,6 +4,8 @@
 // method rejects with an `ApiError` (ApiError.ts).
 import type { AccountPage } from "../generated/AccountPage";
 import type { AccountResponse } from "../generated/AccountResponse";
+import type { BotPage } from "../generated/BotPage";
+import type { BotResponse } from "../generated/BotResponse";
 import type { ChangeGrantRequest } from "../generated/ChangeGrantRequest";
 import type { CreatedInviteResponse } from "../generated/CreatedInviteResponse";
 import type { CreatedOfflineAccountResponse } from "../generated/CreatedOfflineAccountResponse";
@@ -22,6 +24,7 @@ import type { LogoutResponse } from "../generated/LogoutResponse";
 import type { MeResponse } from "../generated/MeResponse";
 import type { MfaConfirmResponse } from "../generated/MfaConfirmResponse";
 import type { MfaEnrollResponse } from "../generated/MfaEnrollResponse";
+import type { ModePage } from "../generated/ModePage";
 import type { PasswordChangeRequest } from "../generated/PasswordChangeRequest";
 import type { RegisterRequest } from "../generated/RegisterRequest";
 import type { RegisterResponse } from "../generated/RegisterResponse";
@@ -118,6 +121,12 @@ export interface ApiClient {
    * ticket.
    */
   watchEvents(onUpdate: (update: LiveUpdateMessage) => void): Promise<void>;
+  /** A page of the bots the caller may see, newest first (P11.9). */
+  bots(before?: string, limit?: number): Promise<BotPage>;
+  /** One bot, as the caller sees it. */
+  bot(id: string): Promise<BotResponse>;
+  /** A page of the modes the caller may see, newest first. */
+  modes(before?: string, limit?: number): Promise<ModePage>;
 }
 
 /** A method of the API. */
@@ -161,4 +170,7 @@ export const API_METHODS = [
   "revokeGrant",
   "openVerificationLink",
   "watchEvents",
+  "bots",
+  "bot",
+  "modes",
 ] as const satisfies readonly ApiMethod[];

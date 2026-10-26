@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-modes"
+description = "Enables the modes command without any pre-configured scope."
+commands.allow = ["modes"]
+
+[[permission]]
+identifier = "deny-modes"
+description = "Denies the modes command without any pre-configured scope."
+commands.deny = ["modes"]

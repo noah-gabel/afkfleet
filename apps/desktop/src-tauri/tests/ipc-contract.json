@@ -292,6 +292,27 @@
       "inputs": ["<onUpdate>"],
       "args": { "updates": "__CHANNEL__:0" },
       "expect": { "error": "no_server" }
+    },
+    {
+      "command": "bots",
+      "method": "bots",
+      "inputs": ["01900000-0000-7000-8000-00000000000b", 10],
+      "args": { "before": "01900000-0000-7000-8000-00000000000b", "limit": 10 },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "bot",
+      "method": "bot",
+      "inputs": ["01900000-0000-7000-8000-00000000000b"],
+      "args": { "id": "01900000-0000-7000-8000-00000000000b" },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "modes",
+      "method": "modes",
+      "inputs": ["01900000-0000-7000-8000-00000000000c", 10],
+      "args": { "before": "01900000-0000-7000-8000-00000000000c", "limit": 10 },
+      "expect": { "error": "no_server" }
     }
   ]
 }

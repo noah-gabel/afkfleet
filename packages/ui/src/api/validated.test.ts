@@ -59,6 +59,9 @@ function client() {
     revokeGrant: ok,
     openVerificationLink: ok,
     watchEvents: ok,
+    bots: ok,
+    bot: ok,
+    modes: ok,
   });
   return { fake, api: validated(fake) as ApiClient };
 }
@@ -250,6 +253,31 @@ describe("validated", () => {
         api.createGrant(ID, { username: "afkbot2", level: "view", note: 1 } as never),
       ),
     ).toEqual([""]);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("passes valid bot and mode reads through unchanged", async () => {
+    const { fake, api } = client();
+
+    await api.bots(ID, PAGE_MAX);
+    await api.bots(undefined, undefined);
+    await api.bot(ID);
+    await api.modes(ID, 1);
+
+    expect(fake.calls.map((call) => [call.method, call.args])).toEqual([
+      ["bots", [ID, PAGE_MAX]],
+      ["bots", [undefined, undefined]],
+      ["bot", [ID]],
+      ["modes", [ID, 1]],
+    ]);
+  });
+
+  it("refuses a bot or mode ID that isn't one, and a page out of range", async () => {
+    const { fake, api } = client();
+
+    expect(await refusedFields(api.bots("x", 0))).toEqual(["before", "limit"]);
+    expect(await refusedFields(api.bot("x"))).toEqual(["id"]);
+    expect(await refusedFields(api.modes(undefined, PAGE_MAX + 1))).toEqual(["limit"]);
     expect(fake.calls).toEqual([]);
   });
 

@@ -123,6 +123,9 @@ export function watched(client: ApiClient, stores: AppStores, events: WatchEvent
     revokeGrant: watch((id, user) => client.revokeGrant(id, user)),
     openVerificationLink: watch(() => client.openVerificationLink()),
     watchEvents: watchLive,
+    bots: watch((before, limit) => client.bots(before, limit)),
+    bot: watch((id) => client.bot(id)),
+    modes: watch((before, limit) => client.modes(before, limit)),
   };
 }
 

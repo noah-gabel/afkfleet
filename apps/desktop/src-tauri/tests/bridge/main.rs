@@ -10,6 +10,7 @@
 mod account;
 mod accounts;
 mod auth;
+mod bots;
 mod live;
 mod support;
 mod switch;

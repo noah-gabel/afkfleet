@@ -1,14 +1,16 @@
 // The e2e suite's fake backend (Plan.md P8.9, ADR-0017): the desktop app's Rust side and the
-// server in one, answering the 36 commands of src-tauri/tests/ipc-contract.json with the
+// server in one, answering the 39 commands of src-tauri/tests/ipc-contract.json with the
 // generated types, the Rust side's fixed `CommandError` messages and the server's error
 // codes. It keeps the state one test needs, fresh per test: users with their passwords and
 // authenticators, invites, the one session the app holds, the pending login or setup step,
-// the session's step-up, and the Microsoft accounts with their grants and the one link flow.
+// the session's step-up, the Microsoft accounts with their grants and the one link flow, and
+// each account's bot, as the server makes one with every account, and the two built-in modes.
 // A flow reads `waiting` once, then `linked`, its account pending unless the Owner linked
 // it.
 //
 // A live events watch (`watch_events`) is held open until a newer one starts (`Ok`) or the
-// session ends (`no_session`), as the Rust side holds it; no spec pushes an update yet.
+// session ends (`no_session`), as the Rust side holds it; a spec pushes updates into the page
+// through the e2e build's hook, after changing the fake (`setBot`) so REST answers the same.
 //
 // An authenticator here has one valid code at a time (`code(username)`), which a successful
 // use replaces, like a TOTP code that can't be used twice. A pending setup expects
@@ -18,6 +20,9 @@ import type { AccountPage } from "@afkfleet/ui/generated/AccountPage";
 import type { AccountResponse } from "@afkfleet/ui/generated/AccountResponse";
 import type { AccountStatus } from "@afkfleet/ui/generated/AccountStatus";
 import type { ApiErrorDetails } from "@afkfleet/ui/generated/ApiErrorDetails";
+import type { BotPage } from "@afkfleet/ui/generated/BotPage";
+import type { BotResponse } from "@afkfleet/ui/generated/BotResponse";
+import type { BotStatus } from "@afkfleet/ui/generated/BotStatus";
 import type { CommandError } from "@afkfleet/ui/generated/CommandError";
 import type { CommandErrorCode } from "@afkfleet/ui/generated/CommandErrorCode";
 import type { CreatedInviteResponse } from "@afkfleet/ui/generated/CreatedInviteResponse";
@@ -35,6 +40,8 @@ import type { LogoutResponse } from "@afkfleet/ui/generated/LogoutResponse";
 import type { MeResponse } from "@afkfleet/ui/generated/MeResponse";
 import type { MfaConfirmResponse } from "@afkfleet/ui/generated/MfaConfirmResponse";
 import type { MfaEnrollResponse } from "@afkfleet/ui/generated/MfaEnrollResponse";
+import type { ModePage } from "@afkfleet/ui/generated/ModePage";
+import type { ModeResponse } from "@afkfleet/ui/generated/ModeResponse";
 import type { RegisterResponse } from "@afkfleet/ui/generated/RegisterResponse";
 import type { ServerProfileState } from "@afkfleet/ui/generated/ServerProfileState";
 import type { SessionPage } from "@afkfleet/ui/generated/SessionPage";
@@ -98,6 +105,9 @@ export const COMMANDS = [
   "revoke_grant",
   "open_verification_link",
   "watch_events",
+  "bots",
+  "bot",
+  "modes",
 ] as const;
 
 /** One command. */
@@ -181,7 +191,7 @@ interface Session {
   steppedUp: boolean;
 }
 
-/** A Microsoft or offline account the fake keeps, with its grants. */
+/** A Microsoft or offline account the fake keeps, with its grants and its bot. */
 interface Account {
   readonly id: string;
   name: string;
@@ -190,6 +200,39 @@ interface Account {
   readonly ownerId: string;
   readonly linkedAt: string;
   readonly grants: Map<string, { level: GrantLevel; readonly by: string }>;
+  readonly bot: Bot;
+}
+
+/** An account's bot: what the server keeps and reports of it. */
+interface Bot {
+  readonly id: string;
+  modeId: string;
+  serverAddress?: string;
+  desiredState: BotResponse["desired_state"];
+  status: BotStatus;
+}
+
+/** The built-in modes, with the IDs the server's seeds give them. */
+const MODES: readonly ModeResponse[] = [
+  builtIn("01a14202-2800-7000-8000-000000000002", "farm"),
+  builtIn("01a14202-2800-7000-8000-000000000001", "afk"),
+];
+
+/** A built-in mode: no owner, read-only for everyone. */
+function builtIn(id: string, name: string): ModeResponse {
+  return {
+    id,
+    name,
+    visibility: "shared",
+    ownership: "built_in",
+    editable: false,
+    deletable: false,
+    visibility_editable: false,
+    version: 1,
+    created_at: "2026-10-13T08:00:00.000Z",
+    updated_at: "2026-10-13T08:00:00.000Z",
+    steps: [],
+  };
 }
 
 /** The one link flow: its user, the account it links again, and its reads. */
@@ -623,14 +666,21 @@ export class FakeBackend {
 
   #addAccount(owner: User, kind: AccountKind, status: AccountStatus, name?: string): Account {
     this.#accountNames += 1;
+    const accountId = id(this.#next());
     const account: Account = {
-      id: id(this.#next()),
+      id: accountId,
       name: name ?? `AfkBot${this.#accountNames}`,
       kind,
       status,
       ownerId: owner.id,
       linkedAt: "2026-10-13T12:00:00.000Z",
       grants: new Map(),
+      bot: {
+        id: id(this.#next()),
+        modeId: MODES[1]?.id ?? "",
+        desiredState: "stopped",
+        status: { kind: "unplaced", why: "stopped" },
+      },
     };
     this.#accounts.push(account);
     return account;
@@ -671,6 +721,49 @@ export class FakeBackend {
         ? { owner: { id: owner.id, username: owner.username }, linked_at: account.linkedAt }
         : {}),
     };
+  }
+
+  /** `account`'s bot as `user` sees it: the address for Control and above. */
+  #botResponse(user: User, account: Account): BotResponse {
+    const level = this.#level(user, account) ?? "view";
+    const bot = account.bot;
+    return {
+      id: bot.id,
+      account: this.#accountResponse(user, account),
+      ...(level !== "view" && bot.serverAddress !== undefined
+        ? { server_address: bot.serverAddress }
+        : {}),
+      mode_id: bot.modeId,
+      desired_state: bot.desiredState,
+      status: bot.status,
+    };
+  }
+
+  /** Changes the bot of the account named `name`, as its agent's reports or a write would. */
+  setBot(name: string, changes: Partial<Omit<Bot, "id">>): void {
+    const account = this.#accounts.find((one) => one.name === name);
+    if (account === undefined) {
+      throw new Error(`the fake has no account ${name}`);
+    }
+    Object.assign(account.bot, changes);
+  }
+
+  /** The bot of the account named `name`, as the Owner sees it. */
+  bot(name: string): BotResponse {
+    const account = this.#accounts.find((one) => one.name === name);
+    if (account === undefined) {
+      throw new Error(`the fake has no account ${name}`);
+    }
+    return this.#botResponse(this.#user(OWNER), account);
+  }
+
+  /** Removes the account named `name`, and its bot with it. */
+  removeAccount(name: string): void {
+    const at = this.#accounts.findIndex((one) => one.name === name);
+    if (at < 0) {
+      throw new Error(`the fake has no account ${name}`);
+    }
+    this.#accounts.splice(at, 1);
   }
 
   /** `account`, if `user` may see it, with what they hold on it. */
@@ -874,6 +967,24 @@ export class FakeBackend {
             return value();
           }),
         );
+      case "bots":
+        return this.#signedIn((session) =>
+          value({
+            items: [...this.#accounts]
+              .reverse()
+              .filter((account) => this.#level(session.user, account) !== null)
+              .map((account) => this.#botResponse(session.user, account)),
+          } satisfies BotPage),
+        );
+      case "bot":
+        return this.#signedIn((session) => {
+          const account = this.#accounts.find((one) => one.bot.id === String(args.id));
+          return account === undefined || this.#level(session.user, account) === null
+            ? api(404, "not_found")
+            : value(this.#botResponse(session.user, account));
+        });
+      case "modes":
+        return this.#signedIn(() => value({ items: [...MODES] } satisfies ModePage));
       case "approve_account":
         return this.#review(args.id, true);
       case "refuse_account":

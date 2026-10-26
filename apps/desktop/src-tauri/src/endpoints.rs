@@ -24,12 +24,16 @@ use fleet_api_types::app::{
     SetupStepResponse,
 };
 use fleet_api_types::auth::{LoginRequest, RegisterRequest, RegisterResponse, StepUpRequest};
+use fleet_api_types::bots::{BotPage, BotResponse};
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
+use fleet_api_types::modes::ModePage;
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
-use fleet_api_types::{AccountId, InviteId, LinkFlowId, PageQuery, SecretText, SessionId, UserId};
+use fleet_api_types::{
+    AccountId, BotId, InviteId, LinkFlowId, ModeId, PageQuery, SecretText, SessionId, UserId,
+};
 use fleet_client::{ClientError, LoginStep, VerifiedLink};
 use garde::Validate;
 
@@ -500,6 +504,45 @@ impl<F: StoreFactory> AppState<F> {
             .revoke_grant(id, user)
             .await
             .map_err(error::client)
+    }
+
+    /// The `bots` command: a page of the bots the caller may see, newest
+    /// first.
+    ///
+    /// # Errors
+    /// `invalid_input` for a limit out of range, `no_server`, `no_session`.
+    pub async fn bots(
+        &self,
+        before: Option<BotId>,
+        limit: Option<u32>,
+    ) -> Result<BotPage, CommandError> {
+        let query = page(before, limit)?;
+        let conn = self.conn.read().await;
+        conn.client()?.bots(&query).await.map_err(error::client)
+    }
+
+    /// The `bot` command: one bot, as the caller sees it.
+    ///
+    /// # Errors
+    /// `no_server`, `no_session`, or `api` 404.
+    pub async fn bot(&self, id: BotId) -> Result<BotResponse, CommandError> {
+        let conn = self.conn.read().await;
+        conn.client()?.bot(id).await.map_err(error::client)
+    }
+
+    /// The `modes` command: a page of the modes the caller may see, newest
+    /// first.
+    ///
+    /// # Errors
+    /// As `bots`.
+    pub async fn modes(
+        &self,
+        before: Option<ModeId>,
+        limit: Option<u32>,
+    ) -> Result<ModePage, CommandError> {
+        let query = page(before, limit)?;
+        let conn = self.conn.read().await;
+        conn.client()?.modes(&query).await.map_err(error::client)
     }
 
     /// A link or re-link start's outcome: a good link is held and the

@@ -15,6 +15,7 @@ use crate::state::AppState;
 
 pub(crate) mod accounts;
 pub(crate) mod auth;
+pub(crate) mod bots;
 pub(crate) mod grants;
 pub(crate) mod invites;
 pub(crate) mod links;

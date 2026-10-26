@@ -73,6 +73,9 @@ export const COMMANDS = [
   "revoke_grant",
   "open_verification_link",
   "watch_events",
+  "bots",
+  "bot",
+  "modes",
 ];
 
 /** The whole of `app.security`. */
