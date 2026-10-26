@@ -61,10 +61,12 @@ test.describe("anything else rejects with a plain string", () => {
 });
 
 test("through TauriApiClient: a refusal is an ApiError of it, anything else `ipc`", async () => {
+  const noChannel = () => "__CHANNEL__:0";
   const refused = new TauriApiClient(
     fetchInvoke(answering(JSON.stringify({ ok: false, error: REFUSAL }))),
+    noChannel,
   );
-  const broken = new TauriApiClient(fetchInvoke(answering("not json")));
+  const broken = new TauriApiClient(fetchInvoke(answering("not json")), noChannel);
 
   const first = await refused.me().catch((error: unknown) => error);
   const second = await broken.me().catch((error: unknown) => error);

@@ -32,8 +32,8 @@ use crate::accounts::{
 };
 use crate::agents::{AgentPage, AgentResponse, AgentStatus, CreatedEnrollmentTokenResponse};
 use crate::app::{
-    LoginStepResponse, LogoutResponse, ServerProfileRequest, ServerProfileResponse,
-    ServerProfileState, SetupStepResponse,
+    LiveUpdateMessage, LoginStepResponse, LogoutResponse, ServerProfileRequest,
+    ServerProfileResponse, ServerProfileState, SetupStepResponse,
 };
 use crate::audit::AuditPage;
 use crate::auth::{
@@ -230,7 +230,8 @@ fn write_app(config: &Config) -> Result<(), TypeScriptError> {
     SetupStepResponse::export_all(config).map_err(TypeScriptError::Export)?;
     ServerProfileRequest::export_all(config).map_err(TypeScriptError::Export)?;
     ServerProfileResponse::export_all(config).map_err(TypeScriptError::Export)?;
-    ServerProfileState::export_all(config).map_err(TypeScriptError::Export)
+    ServerProfileState::export_all(config).map_err(TypeScriptError::Export)?;
+    LiveUpdateMessage::export_all(config).map_err(TypeScriptError::Export)
 }
 
 /// Lists how `dir` differs from the export in `scratch`, by file name. A missing

@@ -58,6 +58,7 @@ function client() {
     changeGrant: ok,
     revokeGrant: ok,
     openVerificationLink: ok,
+    watchEvents: ok,
   });
   return { fake, api: validated(fake) as ApiClient };
 }
@@ -216,8 +217,9 @@ describe("validated", () => {
     await api.changeGrant(ID, USER, { level: "manage" });
     await api.revokeGrant(ID, USER);
     await api.openVerificationLink();
+    await api.watchEvents(() => undefined);
 
-    expect(fake.calls).toHaveLength(15);
+    expect(fake.calls).toHaveLength(16);
     expect(fake.calls[11]?.args).toEqual([ID, { username: "afkbot2", level: "control" }]);
   });
 

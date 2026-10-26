@@ -7,7 +7,7 @@ import { vi } from "vitest";
 
 import { AppRoot } from "../App";
 import type { ApiClient } from "../api/ApiClient";
-import { FakeApiClient } from "../api/FakeApiClient";
+import { FakeApiClient, fakeWatch } from "../api/FakeApiClient";
 import { createAppRuntime } from "../app/runtime";
 
 /** What `renderApp` hands a test. */
@@ -21,12 +21,15 @@ export interface RenderedApp {
   readonly restart: ReturnType<typeof vi.fn>;
 }
 
-/** The App over a FakeApiClient scripted with `handlers`. */
+/**
+ * The App over a FakeApiClient scripted with `handlers`; a held live events watch unless
+ * they script one, as the app's Rust side holds it.
+ */
 export function renderApp(
   handlers: Partial<ApiClient> = {},
   options: { advanceTimers?: (ms: number) => unknown; strict?: boolean } = {},
 ): RenderedApp {
-  const fake = new FakeApiClient(handlers);
+  const fake = new FakeApiClient({ watchEvents: fakeWatch().handler, ...handlers });
   const runtime = createAppRuntime(fake);
   const restart = vi.fn();
   const user = userEvent.setup(

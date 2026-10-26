@@ -123,9 +123,10 @@ impl World {
 
     /// Waits until the newest `bot` frame of `bot` on `live` meets
     /// `condition` and equals what `GET /bots/{id}` answers the Owner at
-    /// that moment (ADR-0020, S58); returns it. Each frame gets one GET, at
-    /// the wake after it came, and only if it meets `condition`: a repeated
-    /// frame is just another one, and nothing polls the API.
+    /// that moment (ADR-0020, S58); returns it. At each wake only the newest
+    /// frame not yet looked at gets a GET, if it meets `condition`; the
+    /// frames before it in that wake are skipped. A repeated frame is just
+    /// another one, and nothing polls the API.
     pub(crate) async fn live_settles(
         &self,
         live: &Live,

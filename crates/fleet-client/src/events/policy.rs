@@ -26,6 +26,8 @@
 use core::time::Duration;
 use std::hash::{BuildHasher as _, Hasher as _, RandomState};
 
+use tracing::Level;
+
 /// The first backoff step.
 pub const RECONNECT_BASE: Duration = Duration::from_secs(1);
 
@@ -120,6 +122,37 @@ pub(crate) fn decide(end: End, prompt_left: bool) -> Action {
     }
 }
 
+/// The close codes the protocol names (`SocketClose`), and a normal close.
+const KNOWN_CODES: [u16; 7] = [1000, 1001, 1008, 1013, 4000, 4001, 4002];
+
+/// The level the line about `end` logs at, `action` being what follows it
+/// and `repeat` whether the last line logged the same end (S54, R86).
+#[must_use]
+pub(crate) fn level(end: End, action: Action, repeat: bool) -> Level {
+    if repeat {
+        return Level::DEBUG;
+    }
+    match action {
+        // The expected 4001, once per access token's life.
+        Action::Prompt => Level::INFO,
+        Action::Slow | Action::Park => Level::WARN,
+        Action::Backoff { .. } => match end {
+            // A 4001 again before a socket stayed live: the expected one's
+            // repeat.
+            End::Closed(Some(4001)) => Level::DEBUG,
+            End::Closed(Some(4000 | 4002 | 1008)) | End::Silent | End::NoReady => Level::WARN,
+            End::Closed(Some(code)) if !KNOWN_CODES.contains(&code) => Level::WARN,
+            End::Closed(_)
+            | End::Lost
+            | End::TooLarge
+            | End::EarlyEvent
+            | End::Handshake
+            | End::Ticket(_)
+            | End::Upgrade(_) => Level::INFO,
+        },
+    }
+}
+
 /// Which request was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Request {
@@ -175,6 +208,19 @@ impl Backoff {
         }
     }
 
+    /// What follows `end`, as [`Backoff::after`] will decide it, live for
+    /// `live` after its `ready` if it got one.
+    #[must_use]
+    pub(crate) fn action(&self, end: End, live: Option<Duration>) -> Action {
+        decide(end, self.prompt_left || Self::stable(live))
+    }
+
+    /// Whether a socket live for `live` stayed long enough for the failures
+    /// to start over.
+    fn stable(live: Option<Duration>) -> bool {
+        live.is_some_and(|live| live >= STABLE_AFTER)
+    }
+
     /// The waits, their jitter seeded by the OS.
     #[must_use]
     pub(crate) fn seeded() -> Self {
@@ -186,7 +232,7 @@ impl Backoff {
     /// The wait after an attempt that ended in `end`, live for `live` after
     /// its `ready` if it got one; `None` when the socket gives up.
     pub(crate) fn after(&mut self, end: End, live: Option<Duration>) -> Option<Duration> {
-        if live.is_some_and(|live| live >= STABLE_AFTER) {
+        if Self::stable(live) {
             self.failures = 0;
             self.prompt_left = true;
         }
@@ -321,6 +367,144 @@ mod tests {
                 "{code}"
             );
         }
+    }
+
+    /// Every end the socket can meet, each request's refusals by status.
+    fn every_end() -> Vec<End> {
+        let mut ends = vec![
+            End::Lost,
+            End::Silent,
+            End::NoReady,
+            End::TooLarge,
+            End::EarlyEvent,
+            End::Handshake,
+            End::Closed(None),
+        ];
+        ends.extend(
+            [1000, 1001, 1008, 1013, 4000, 4001, 4002, 4999].map(|code| End::Closed(Some(code))),
+        );
+        for request in [End::Ticket, End::Upgrade] {
+            ends.extend(
+                [
+                    Refused::Unreachable,
+                    Refused::TimedOut,
+                    Refused::Local,
+                    Refused::Certificate,
+                    Refused::Malformed,
+                ]
+                .map(request),
+            );
+            ends.extend(
+                [
+                    200, 201, 301, 302, 400, 401, 403, 404, 405, 408, 422, 429, 500, 502, 503,
+                ]
+                .map(|code| request(status(code))),
+            );
+        }
+        ends
+    }
+
+    #[rstest]
+    #[case::shutdown(End::Closed(Some(1001)), Level::INFO)]
+    #[case::busy(End::Closed(Some(1013)), Level::INFO)]
+    #[case::normal_close(End::Closed(Some(1000)), Level::INFO)]
+    #[case::no_code(End::Closed(None), Level::INFO)]
+    #[case::no_pong(End::Closed(Some(4000)), Level::WARN)]
+    #[case::too_slow(End::Closed(Some(4002)), Level::WARN)]
+    #[case::refused_frame(End::Closed(Some(1008)), Level::WARN)]
+    #[case::unknown_code(End::Closed(Some(4999)), Level::WARN)]
+    #[case::lost(End::Lost, Level::INFO)]
+    #[case::silent(End::Silent, Level::WARN)]
+    #[case::no_ready(End::NoReady, Level::WARN)]
+    #[case::too_large(End::TooLarge, Level::INFO)]
+    #[case::early_event(End::EarlyEvent, Level::WARN)]
+    #[case::handshake(End::Handshake, Level::WARN)]
+    #[case::ticket_unreachable(End::Ticket(Refused::Unreachable), Level::INFO)]
+    #[case::ticket_timed_out(End::Ticket(Refused::TimedOut), Level::INFO)]
+    #[case::ticket_local(End::Ticket(Refused::Local), Level::INFO)]
+    #[case::ticket_certificate(End::Ticket(Refused::Certificate), Level::WARN)]
+    #[case::ticket_malformed(End::Ticket(Refused::Malformed), Level::WARN)]
+    #[case::ticket_408(End::Ticket(status(408)), Level::INFO)]
+    #[case::ticket_429(End::Ticket(status(429)), Level::INFO)]
+    #[case::ticket_500(End::Ticket(status(500)), Level::INFO)]
+    #[case::ticket_503(End::Ticket(status(503)), Level::INFO)]
+    #[case::ticket_400(End::Ticket(status(400)), Level::WARN)]
+    #[case::ticket_403(End::Ticket(status(403)), Level::WARN)]
+    #[case::ticket_404(End::Ticket(status(404)), Level::WARN)]
+    #[case::ticket_405(End::Ticket(status(405)), Level::WARN)]
+    #[case::ticket_422(End::Ticket(status(422)), Level::WARN)]
+    #[case::ticket_302(End::Ticket(status(302)), Level::WARN)]
+    #[case::upgrade_unreachable(End::Upgrade(Refused::Unreachable), Level::INFO)]
+    #[case::upgrade_401(End::Upgrade(status(401)), Level::INFO)]
+    #[case::upgrade_404(End::Upgrade(status(404)), Level::INFO)]
+    #[case::upgrade_429(End::Upgrade(status(429)), Level::INFO)]
+    #[case::upgrade_200(End::Upgrade(status(200)), Level::WARN)]
+    #[case::upgrade_301(End::Upgrade(status(301)), Level::WARN)]
+    #[case::upgrade_400(End::Upgrade(status(400)), Level::WARN)]
+    #[case::upgrade_403(End::Upgrade(status(403)), Level::WARN)]
+    #[case::upgrade_405(End::Upgrade(status(405)), Level::WARN)]
+    #[case::upgrade_malformed(End::Upgrade(Refused::Malformed), Level::WARN)]
+    fn each_end_logs_at_its_level(#[case] end: End, #[case] expected: Level) {
+        for prompt_left in [true, false] {
+            assert_eq!(
+                level(end, decide(end, prompt_left), false),
+                expected,
+                "{end:?}, prompt left: {prompt_left}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_slow_end_logs_at_warn() {
+        let mut slow = 0;
+        for end in every_end() {
+            let action = decide(end, true);
+            if action == Action::Slow {
+                slow += 1;
+                assert_eq!(level(end, action, false), Level::WARN, "{end:?}");
+            }
+        }
+        // The ticket's 200, 201, 301, 302, 400, 401, 403, 404, 405, 422 and
+        // malformed answer, the upgrade's 200, 201, 301, 302, 400, 403, 405,
+        // 422 and malformed answer, a bad 101 and an early event.
+        assert_eq!(slow, 22);
+    }
+
+    #[test]
+    fn only_the_expected_4001_logs_at_info_and_one_the_policy_backs_off_for_at_debug() {
+        let end = End::Closed(Some(4001));
+
+        assert_eq!(level(end, decide(end, true), false), Level::INFO);
+        assert_eq!(level(end, decide(end, false), false), Level::DEBUG);
+    }
+
+    #[test]
+    fn an_end_repeated_in_a_row_logs_at_debug() {
+        for end in every_end() {
+            for prompt_left in [true, false] {
+                assert_eq!(
+                    level(end, decide(end, prompt_left), true),
+                    Level::DEBUG,
+                    "{end:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_action_is_the_one_after_takes() {
+        let end = End::Closed(Some(4001));
+        let mut backoff = Backoff::new(9);
+
+        let first = backoff.action(end, Some(secs(5)));
+        backoff.after(end, Some(secs(5)));
+        let storm = backoff.action(end, Some(secs(5)));
+        let after_a_stable_one = backoff.action(end, Some(STABLE_AFTER));
+
+        assert_eq!(first, Action::Prompt);
+        assert_eq!(storm, BACKOFF);
+        assert_eq!(after_a_stable_one, Action::Prompt);
+        assert_eq!(backoff.action(End::Handshake, None), Action::Slow);
     }
 
     #[test]

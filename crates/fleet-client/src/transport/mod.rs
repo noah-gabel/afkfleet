@@ -173,20 +173,26 @@ pub(crate) struct ReqwestTransport {
 impl ReqwestTransport {
     /// A transport that trusts `trust`, bounded by `timeouts`.
     pub(crate) fn new(trust: &Trust, timeouts: Timeouts) -> Result<Self, BuildError> {
-        let builder = reqwest::Client::builder()
-            .connect_timeout(timeouts.connect)
-            .timeout(timeouts.request)
-            .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .http1_only();
-        let builder = match trust {
-            Trust::System => builder,
-            Trust::CustomCa(ca) => builder.tls_certs_only(ca.certificates()),
-        };
-        let client = builder
+        let client = builder(trust, timeouts)
             .build()
             .map_err(|error| BuildError(Box::new(error.without_url())))?;
         Ok(Self { client, timeouts })
+    }
+}
+
+/// The one reqwest client builder: `timeouts`, no redirects, no proxy,
+/// HTTP/1.1 only, since h2 has no upgrade for the live events socket
+/// (ADR-0020, R75), and the certificates `trust` names.
+fn builder(trust: &Trust, timeouts: Timeouts) -> reqwest::ClientBuilder {
+    let builder = reqwest::Client::builder()
+        .connect_timeout(timeouts.connect)
+        .timeout(timeouts.request)
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .http1_only();
+    match trust {
+        Trust::System => builder,
+        Trust::CustomCa(ca) => builder.tls_certs_only(ca.certificates()),
     }
 }
 
@@ -475,6 +481,14 @@ mod tests {
             .unwrap_err();
 
         assert!(matches!(error, TransportError::Unreachable(_)), "{error:?}");
+    }
+
+    #[test]
+    fn the_client_speaks_http_1_1_only_so_the_upgrade_is_never_h2() {
+        // reqwest's builder shows the preference only when it's HTTP/1 alone.
+        let shown = format!("{:?}", builder(&Trust::System, short()));
+
+        assert!(shown.contains("http1_only: true"), "{shown}");
     }
 
     #[test]

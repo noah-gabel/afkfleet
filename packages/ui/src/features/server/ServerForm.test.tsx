@@ -2,7 +2,7 @@ import { act, fireEvent, screen, waitFor, within } from "@testing-library/react"
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../../api/ApiClient";
-import { fakeApiError } from "../../api/FakeApiClient";
+import { fakeApiError, fakeWatch } from "../../api/FakeApiClient";
 import { CA_PEM_MAX_BYTES } from "../../api/limits";
 import { SESSION_ENDED } from "../../app/leave";
 import type { ProfileUnreadable } from "../../generated/ProfileUnreadable";
@@ -264,6 +264,35 @@ describe("the server settings, signed in", () => {
     expect(await screen.findByText("Nothing changed; you're still logged in.")).toBeDefined();
     expect(app.path()).toBe("/server");
     expect(app.runtime.stores.session.getState().phase).toBe("signed_in");
+  });
+
+  it("starts a new live events watch when nothing changed (S61)", async () => {
+    const watch = fakeWatch();
+    const unchanged = await atServer({
+      watchEvents: watch.handler,
+      setServerProfile: async () => ({ change: "none", profile: { url: ORIGIN } }),
+    });
+
+    await unchanged.user.click(screen.getByRole("button", { name: "Save" }));
+    await unchanged.user.click(await screen.findByRole("button", { name: "Save and log out" }));
+    await screen.findByText("Nothing changed; you're still logged in.");
+
+    expect(watch.calls).toHaveLength(2);
+  });
+
+  it("starts no live events watch after a switch", async () => {
+    const watch = fakeWatch();
+    const app = await atServer({
+      watchEvents: watch.handler,
+      setServerProfile: async () => SWITCHED,
+    });
+
+    await typeUrl(app, NEW_URL);
+    await app.user.click(screen.getByRole("button", { name: "Save" }));
+    await app.user.click(await screen.findByRole("button", { name: "Save and log out" }));
+    await waitFor(() => expect(app.path()).toBe("/login"));
+
+    expect(watch.calls).toHaveLength(1);
   });
 
   it("logs out quietly after a switch and goes to the login", async () => {

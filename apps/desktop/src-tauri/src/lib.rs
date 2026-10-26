@@ -11,6 +11,9 @@
 //! to the server only through fleet-client. [`state::AppState`] holds the server profile
 //! ([`profile`]) and the client; the refresh token lives in the OS keychain
 //! ([`keychain`]); no token ever reaches the UI or the state.
+//! The session's live events reach the UI over a Tauri `Channel`, through one
+//! long-running command (P11.8, ADR-0020): fleet-client's socket in Rust, never its
+//! ticket or token in an update.
 //!
 //! Microsoft's sign-in page (P9.8, ADR-0018) opens through `ShellOpener`:
 //! tauri-plugin-opener's free `open_url`, on the one link the state holds
@@ -22,6 +25,7 @@ mod endpoints;
 mod error;
 mod focus;
 pub mod keychain;
+mod live;
 mod navigation;
 pub mod profile;
 pub mod startup;
@@ -81,6 +85,7 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         commands::grants::change_grant,
         commands::grants::revoke_grant,
         commands::links::open_verification_link,
+        commands::live::watch_events,
     ])
 }
 

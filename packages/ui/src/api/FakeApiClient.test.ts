@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { API_METHODS } from "./ApiClient";
 import { ApiError } from "./ApiError";
-import { FakeApiClient, fakeApiError } from "./FakeApiClient";
+import { FakeApiClient, fakeApiError, fakeWatch } from "./FakeApiClient";
 
 describe("FakeApiClient", () => {
   it("answers through the scripted handler and records the call", async () => {
@@ -78,5 +78,39 @@ describe("fakeApiError", () => {
     expect(
       fakeApiError("invalid_input", { fields: [{ path: "code", message: "x" }] }).error.fields,
     ).toEqual([{ path: "code", message: "x" }]);
+  });
+});
+
+describe("fakeWatch", () => {
+  it("holds each watch until the test ends it, handing on what the test pushes", async () => {
+    const watch = fakeWatch();
+    const fake = new FakeApiClient({ watchEvents: watch.handler });
+    const got: unknown[] = [];
+
+    const watching = fake.watchEvents((update) => got.push(update));
+    watch.latest().push({ update: "refetch", reason: "ready" });
+    watch.latest().end();
+    watch.latest().push({ update: "refetch", reason: "resync" });
+    await watching;
+
+    expect(got).toEqual([{ update: "refetch", reason: "ready" }]);
+    expect(watch.latest().ended).toBe(true);
+  });
+
+  it("stops the older watch when a newer one starts, as the app does", async () => {
+    const watch = fakeWatch();
+    const fake = new FakeApiClient({ watchEvents: watch.handler });
+
+    const older = fake.watchEvents(() => undefined);
+    const newer = fake.watchEvents(() => undefined);
+
+    await expect(older).resolves.toBeUndefined();
+    expect(watch.calls.map((call) => call.ended)).toEqual([true, false]);
+    watch.latest().fail(fakeApiError("no_session"));
+    await expect(newer).rejects.toMatchObject({ error: { code: "no_session" } });
+  });
+
+  it("names no watch before one started", () => {
+    expect(() => fakeWatch().latest()).toThrow("no watch started");
   });
 });

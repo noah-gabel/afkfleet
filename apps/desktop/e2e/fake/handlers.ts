@@ -15,7 +15,7 @@ export function handlers(backend: FakeBackend) {
       const args = (await request.json()) as Record<string, unknown>;
       const command = String(params.command);
       try {
-        return HttpResponse.json(backend.handle(command, args));
+        return HttpResponse.json(await backend.handle(command, args));
       } catch {
         return HttpResponse.json({ ok: false, error: `the fake doesn't know ${command}` });
       }

@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "../api/ApiError";
-import { FakeApiClient, fakeApiError } from "../api/FakeApiClient";
+import { FakeApiClient, fakeApiError, fakeWatch } from "../api/FakeApiClient";
 import type { CommandErrorCode } from "../generated/CommandErrorCode";
+import type { LiveUpdateMessage } from "../generated/LiveUpdateMessage";
 import type { MeResponse } from "../generated/MeResponse";
 import { createAppStores } from "./stores";
 import { watched } from "./watched";
@@ -183,5 +184,76 @@ describe("watched", () => {
 
     expect(failures).toEqual(["failed", "failed"]);
     expect(stores.connection.getState().status).toBe("ok");
+  });
+});
+
+/** A disconnect whose connect failed with `code`. */
+function notOpened(code: CommandErrorCode): LiveUpdateMessage {
+  return {
+    update: "disconnected",
+    disconnect: { why: "not_opened", error: { code, message: `fake ${code}` } },
+    retry_in_secs: 2,
+  };
+}
+
+describe("watched's live events", () => {
+  it.each([
+    ["unreachable", "down"],
+    ["timed_out", "down"],
+    ["certificate", "certificate"],
+  ] as const)("an update whose connect was %s raises the banner as %s", async (code, status) => {
+    const watch = fakeWatch();
+    const { client, stores } = setup({ watchEvents: watch.handler });
+    const got: LiveUpdateMessage[] = [];
+
+    const watching = client.watchEvents((update) => got.push(update));
+    watch.latest().push(notOpened(code));
+
+    expect(stores.connection.getState().status).toBe(status);
+    expect(got).toEqual([notOpened(code)]);
+    watch.latest().end();
+    await watching;
+  });
+
+  it("leaves the banner alone for an update whose connect was refused otherwise", async () => {
+    const watch = fakeWatch();
+    const { client, stores } = setup({ watchEvents: watch.handler });
+
+    const watching = client.watchEvents(() => undefined);
+    watch.latest().push(notOpened("api"));
+    watch.latest().push({ update: "refetch", reason: "ready" });
+    watch.latest().end();
+    await watching;
+
+    expect(stores.connection.getState().status).toBe("ok");
+  });
+
+  it("takes no banner down when a watch stops: that says nothing of the server", async () => {
+    const watch = fakeWatch();
+    const { client, stores, events } = setup({ watchEvents: watch.handler });
+    stores.connection.getState().fail("down");
+
+    const watching = client.watchEvents(() => undefined);
+    watch.latest().end();
+    await watching;
+
+    expect(stores.connection.getState().status).toBe("down");
+    expect(events.recovered).not.toHaveBeenCalled();
+  });
+
+  it("ends the session once for a watch that rejects with no_session, and raises the certificate banner", async () => {
+    const watch = fakeWatch();
+    const { client, stores, events } = setup({ watchEvents: watch.handler });
+    stores.session.getState().signIn();
+
+    const ending = client.watchEvents(() => undefined).catch((error: unknown) => error);
+    watch.latest().fail(fakeApiError("no_session"));
+    const refused = client.watchEvents(() => undefined).catch((error: unknown) => error);
+    watch.latest().fail(fakeApiError("certificate"));
+
+    expect(((await ending) as ApiError).error.code).toBe("no_session");
+    expect(((await refused) as ApiError).error.code).toBe("certificate");
+    expect(events.sessionEnded).toHaveBeenCalledTimes(1);
+    expect(stores.connection.getState().status).toBe("certificate");
   });
 });

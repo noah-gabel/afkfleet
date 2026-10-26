@@ -18,6 +18,7 @@ pub(crate) mod auth;
 pub(crate) mod grants;
 pub(crate) mod invites;
 pub(crate) mod links;
+pub(crate) mod live;
 pub(crate) mod me;
 pub(crate) mod mfa;
 pub(crate) mod server;

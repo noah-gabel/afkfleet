@@ -13,9 +13,10 @@
 //!   the server's pings ([`Pings`]: at most [`PONG_CREDITS`] outstanding,
 //!   each numbered by its payload, so a pong names the ping it answers), and
 //!   a close. Anything else (text, binary, a ping, a pong naming no ping
-//!   that waits, a frame too large, a protocol error) is refused with 1008. A lost
-//!   connection is told apart, and closes nothing: an `io::Error` among the
-//!   error's sources, or the connection ending without a close frame.
+//!   that waits, a frame too large, a protocol error) is refused with 1008.
+//!   A lost connection is told apart, and closes nothing: an `io::Error`
+//!   among the error's sources, or the connection ending without a close
+//!   frame.
 //! - **`resync` and the session check** ([`Gap`]): a socket that lagged
 //!   behind the bus says so once, without a count, and never more often
 //!   than one gap; a socket checks its session after the commit count

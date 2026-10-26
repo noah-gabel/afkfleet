@@ -373,6 +373,10 @@ pub struct AuditPage {
     /// each is still stored, and shown by its ID alone, in its place among
     /// `items` by ID; the server's log names why (ADR-0020, S52). Together
     /// with `items`, at most the page's `limit`.
+    // Always sent, so required in the schema; a page from an older server,
+    // without it, reads as none.
+    #[serde(default)]
+    #[schema(required = true)]
     pub unreadable: Vec<SafeInt>,
     /// The `before` of the next page, when one follows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -533,6 +537,17 @@ mod tests {
         }
         let back: AuditPage = serde_json::from_value(page.clone()).unwrap();
         assert_eq!(serde_json::to_value(back).unwrap(), page);
+    }
+
+    #[test]
+    fn an_older_servers_page_without_unreadable_reads_with_none() {
+        let page = json!({ "items": [entry_json()] });
+
+        let back: AuditPage = serde_json::from_value(page).unwrap();
+
+        assert_eq!(back.items.len(), 1);
+        assert_eq!(back.unreadable, Vec::<SafeInt>::new());
+        assert_eq!(back.next, None);
     }
 
     #[test]

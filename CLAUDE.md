@@ -140,7 +140,7 @@ On Linux, every workspace-wide Rust recipe adds `--exclude afkfleet-desktop`: th
 
 **Shared types:**
 - Every API DTO lives in `fleet-api-types` (serde + garde + ts-rs + utoipa). A test keeps its `OpenAPI` schemas equal to the TypeScript export.
-- The desktop app's IPC types (`CommandError`, the login step, the logout outcome, the server profile's types) live in `fleet-api-types::app`: exported by `just gen` with the DTOs, left out of the `OpenAPI` document (ADR-0017).
+- The desktop app's IPC types (`CommandError`, the login step, the logout outcome, the server profile's types, the live events' updates) live in `fleet-api-types::app`: exported by `just gen` with the DTOs, left out of the `OpenAPI` document (ADR-0017).
 - Never hand-write a TypeScript type that mirrors a Rust DTO.
 
 **Config:**

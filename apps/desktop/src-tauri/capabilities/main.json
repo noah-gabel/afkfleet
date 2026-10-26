@@ -38,6 +38,7 @@
     "allow-create-grant",
     "allow-change-grant",
     "allow-revoke-grant",
-    "allow-open-verification-link"
+    "allow-open-verification-link",
+    "allow-watch-events"
   ]
 }

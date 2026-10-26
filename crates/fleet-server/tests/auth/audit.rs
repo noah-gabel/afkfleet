@@ -172,10 +172,10 @@ async fn reading_the_audit_log_spends_the_users_limit(
     assert_eq!(seen.status, 429, "{}", seen.text);
 }
 
-/// Three entries, as the newest page shows them to an Admin: a user's
-/// change with its IP, target and details; an agent's refused connect
-/// with its IP and reason; and the retention's summary, the server's own,
-/// with no actor, IP or target.
+/// Four entries, as the newest page shows them to an Admin: an Admin
+/// disabling a Member, with its IP, target and details; a bot's new server;
+/// an agent's refused connect with its IP and reason; and the retention's
+/// summary, the server's own, with no actor, IP or target.
 #[sqlx::test(migrations = false)]
 async fn each_entry_shows_what_the_log_stores_and_the_servers_own_has_no_actor_ip_or_target(
     _pool: SqlitePoolOptions,
@@ -183,6 +183,7 @@ async fn each_entry_shows_what_the_log_stores_and_the_servers_own_has_no_actor_i
 ) {
     let setup = setup(options).await;
     let admin = setup.person(2, "admin", Role::Admin).await;
+    let member = setup.person(3, "member", Role::Member).await;
     let bot = BotId::new_v7(at(T0), [5; 10]).unwrap();
     let agent = AgentId::new_v7(at(T0), [6; 10]).unwrap();
     setup
@@ -194,7 +195,7 @@ async fn each_entry_shows_what_the_log_stores_and_the_servers_own_has_no_actor_i
             )
             .actor(admin.id)
             .ip("192.0.2.10".parse().unwrap())
-            .target(AuditTarget::User(admin.id))
+            .target(AuditTarget::User(member.id))
             .metadata(
                 AuditMetadata::new()
                     .flag("disabled", true)
@@ -266,6 +267,7 @@ async fn each_entry_shows_what_the_log_stores_and_the_servers_own_has_no_actor_i
         &seen.body,
         &[
             (admin.id.to_string(), "admin"),
+            (member.id.to_string(), "member"),
             (bot.to_string(), "bot-5"),
             (agent.to_string(), "agent-6"),
         ],

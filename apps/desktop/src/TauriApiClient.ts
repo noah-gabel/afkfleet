@@ -1,7 +1,7 @@
 // The UI's API client in the desktop app (Plan.md P8.5, ADR-0017): each method invokes
 // the Rust command of the same name with exactly the args `src-tauri/tests/ipc-contract.json`
-// lists. Tauri's `invoke` is injected, so tests pass a fake; this file imports nothing from
-// Tauri but its types. A rejection that's a `CommandError` becomes an `ApiError` of it;
+// lists. Tauri's `invoke` and the factory of the live events' `Channel` are injected, so
+// tests and the e2e build pass their own; this file imports nothing from Tauri but its types. A rejection that's a `CommandError` becomes an `ApiError` of it;
 // anything else (Tauri's own refusals are plain strings) becomes `ipc`, its text dropped.
 import type { ApiClient } from "@afkfleet/ui";
 import { toApiError } from "@afkfleet/ui";
@@ -18,6 +18,7 @@ import type { GrantResponse } from "@afkfleet/ui/generated/GrantResponse";
 import type { InvitePage } from "@afkfleet/ui/generated/InvitePage";
 import type { LinkFlowResponse } from "@afkfleet/ui/generated/LinkFlowResponse";
 import type { LinkStartedResponse } from "@afkfleet/ui/generated/LinkStartedResponse";
+import type { LiveUpdateMessage } from "@afkfleet/ui/generated/LiveUpdateMessage";
 import type { LoginRequest } from "@afkfleet/ui/generated/LoginRequest";
 import type { LoginStepResponse } from "@afkfleet/ui/generated/LoginStepResponse";
 import type { LogoutResponse } from "@afkfleet/ui/generated/LogoutResponse";
@@ -41,13 +42,25 @@ import type { InvokeArgs } from "@tauri-apps/api/core";
 /** Tauri's `invoke`, as this client uses it. */
 export type Invoke = <T>(command: string, args?: InvokeArgs) => Promise<T>;
 
+/**
+ * Opens a channel whose messages go to `onMessage`, and answers the value `invoke` sends for
+ * it: `@tauri-apps/api/core`'s `Channel` in the app, which needs Tauri's internals in the
+ * page.
+ */
+export type OpenChannel = <T>(onMessage: (message: T) => void) => unknown;
+
 /** The desktop app's API client; see the module comment. */
 export class TauriApiClient implements ApiClient {
   readonly #invoke: Invoke;
+  readonly #openChannel: OpenChannel;
 
-  /** A client over `invoke`: `@tauri-apps/api/core`'s in the app, a fake in tests. */
-  constructor(invoke: Invoke) {
+  /**
+   * A client over `invoke` and `openChannel`: `@tauri-apps/api/core`'s in the app, fakes in
+   * tests.
+   */
+  constructor(invoke: Invoke, openChannel: OpenChannel) {
     this.#invoke = invoke;
+    this.#openChannel = openChannel;
   }
 
   /** Invokes `command` with `args`, every rejection as an `ApiError`. */
@@ -199,5 +212,20 @@ export class TauriApiClient implements ApiClient {
 
   openVerificationLink(): Promise<void> {
     return this.#call("open_verification_link");
+  }
+
+  async watchEvents(onUpdate: (update: LiveUpdateMessage) => void): Promise<void> {
+    // Updates reach `onUpdate` only while the call runs.
+    let open = true;
+    const updates = this.#openChannel<LiveUpdateMessage>((update) => {
+      if (open) {
+        onUpdate(update);
+      }
+    });
+    try {
+      await this.#call("watch_events", { updates });
+    } finally {
+      open = false;
+    }
   }
 }

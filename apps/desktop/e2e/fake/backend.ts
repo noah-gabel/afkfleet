@@ -1,11 +1,14 @@
 // The e2e suite's fake backend (Plan.md P8.9, ADR-0017): the desktop app's Rust side and the
-// server in one, answering the 35 commands of src-tauri/tests/ipc-contract.json with the
+// server in one, answering the 36 commands of src-tauri/tests/ipc-contract.json with the
 // generated types, the Rust side's fixed `CommandError` messages and the server's error
 // codes. It keeps the state one test needs, fresh per test: users with their passwords and
 // authenticators, invites, the one session the app holds, the pending login or setup step,
 // the session's step-up, and the Microsoft accounts with their grants and the one link flow.
 // A flow reads `waiting` once, then `linked`, its account pending unless the Owner linked
 // it.
+//
+// A live events watch (`watch_events`) is held open until a newer one starts (`Ok`) or the
+// session ends (`no_session`), as the Rust side holds it; no spec pushes an update yet.
 //
 // An authenticator here has one valid code at a time (`code(username)`), which a successful
 // use replaces, like a TOTP code that can't be used twice. A pending setup expects
@@ -94,6 +97,7 @@ export const COMMANDS = [
   "change_grant",
   "revoke_grant",
   "open_verification_link",
+  "watch_events",
 ] as const;
 
 /** One command. */
@@ -207,6 +211,8 @@ export class FakeBackend {
   readonly #users: User[] = [];
   readonly #invites: Invite[] = [];
   #session: Session | null = null;
+  /** How the live events watch the app holds open ends: settled by a newer one or a logout. */
+  #watch: ((outcome: Outcome) => void) | null = null;
   #pending: Pending | null = null;
   readonly #accounts: Account[] = [];
   #flow: Flow | null = null;
@@ -291,8 +297,11 @@ export class FakeBackend {
     return this.#invites.at(-1)?.code;
   }
 
-  /** Runs `command` with `args`, as the app's Rust side and the server would. */
-  handle(command: string, args: Record<string, unknown>): Outcome {
+  /**
+   * Runs `command` with `args`, as the app's Rust side and the server would: at once, but a
+   * live events watch, which answers when it ends.
+   */
+  handle(command: string, args: Record<string, unknown>): Outcome | Promise<Outcome> {
     const request = (args.request ?? {}) as Record<string, unknown>;
     switch (command as Command) {
       case "server_profile":
@@ -306,6 +315,7 @@ export class FakeBackend {
       case "login_mfa":
         return this.#loginMfa(String(args.code));
       case "logout":
+        this.#endWatch(refused("no_session"));
         this.#session = null;
         return value({ server: "ended" } satisfies LogoutResponse);
       case "register":
@@ -364,9 +374,28 @@ export class FakeBackend {
         return this.#createInvite(String(request.role));
       case "revoke_invite":
         return this.#revokeInvite(String(args.id));
+      case "watch_events":
+        return this.#startWatch();
       default:
         return this.#accountCommand(command as Command, args);
     }
+  }
+
+  /** A new watch: held until a newer one starts or the session ends, which stops the older. */
+  #startWatch(): Outcome | Promise<Outcome> {
+    if (this.#session === null) {
+      return refused("no_session");
+    }
+    this.#endWatch(value());
+    return new Promise((resolve) => {
+      this.#watch = resolve;
+    });
+  }
+
+  /** Ends the held watch, if there is one, with `outcome`. */
+  #endWatch(outcome: Outcome): void {
+    this.#watch?.(outcome);
+    this.#watch = null;
   }
 
   #signedIn(then: (session: Session) => Outcome): Outcome {

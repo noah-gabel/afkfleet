@@ -153,9 +153,14 @@ export function awaitingQuery(api: ApiClient, enabled: boolean) {
   });
 }
 
+/** One account's key. */
+export function accountKey(id: string) {
+  return ["accounts", "one", id] as const;
+}
+
 /** One account, as the user sees it. */
 export function accountQuery(api: ApiClient, id: string) {
-  return queryOptions({ queryKey: ["accounts", "one", id], queryFn: () => api.account(id) });
+  return queryOptions({ queryKey: accountKey(id), queryFn: () => api.account(id) });
 }
 
 /** One account, through the app's client. */
@@ -164,9 +169,14 @@ export function useAccount(id: string) {
 }
 
 /** Who else has access to account `id`, a page at a time. */
+/** The key of who else has access to account `id`. */
+export function grantsKey(id: string) {
+  return ["accounts", "grants", id] as const;
+}
+
 export function grantsQuery(api: ApiClient, id: string) {
   return infiniteQueryOptions({
-    queryKey: ["accounts", "grants", id],
+    queryKey: grantsKey(id),
     queryFn: ({ pageParam }) => api.accountGrants(id, pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (page: GrantPage) => page.next,
@@ -177,3 +187,22 @@ export function grantsQuery(api: ApiClient, id: string) {
 export function useGrants(id: string, enabled: boolean) {
   return useInfiniteQuery({ ...grantsQuery(useApiClient(), id), enabled });
 }
+
+// The bots', their chat's and the modes' keys (P11.8; ADR-0020, S60): the live events
+// patch whatever these hold, and H adds the queries that read them.
+
+/** The bots the user may see, every page loaded so far. */
+export const BOTS_LIST_KEY = ["bots", "list"] as const;
+
+/** One bot's key. */
+export function botKey(id: string) {
+  return ["bots", "one", id] as const;
+}
+
+/** The key of one bot's chat, every page loaded so far. */
+export function chatKey(id: string) {
+  return ["bots", "chat", id] as const;
+}
+
+/** The modes the user may see, every page loaded so far. */
+export const MODES_LIST_KEY = ["modes", "list"] as const;
