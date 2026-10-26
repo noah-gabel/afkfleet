@@ -42,8 +42,8 @@ The queue and the mode runner are built against the fake before the actor, so th
   - At most 16 entries, each 1–1024 characters, which is the kick-message cap. Matching is exact against the whole message, so a shorter cap could make a long custom proxy message impossible to configure.
   - Matching is exact and case-sensitive. Entries are taken as written, without trimming. Duplicates count once.
   - An entry with a character the kick sanitizer strips (`§`, a control character other than `\n`, a bidi control or an invisible character) is rejected, since it could never match. The error names the entry's index and the character's position, never the text.
-- **Config.** The standalone agent takes `conflict_texts = […]` per `[[standalone.bots]]` entry; a missing key means an empty list (P5.1). In managed mode they're stored per server, set once in the app for all bots on that server (P11).
-- **The chat format** for plugin chat in system messages is display-only. It's deferred to the server side (P11.9) and stays out of `BotSpec`.
+- **Config.** The standalone agent takes `conflict_texts = […]` per `[[standalone.bots]]` entry; a missing key means an empty list (P5.1). In managed mode they're stored per server, set once in the app for all bots on that server (P11; *scheduled in [ADR-0020](0020-bot-operations-and-phase-11-refinements.md), S66: Phase 11's group H4*).
+- **The chat format** for plugin chat in system messages is display-only. It's deferred to the server side (P11.9) and stays out of `BotSpec`. *Scheduled in [ADR-0020](0020-bot-operations-and-phase-11-refinements.md) (S66): group H4, after the conflict texts.*
 
 ### Credentials (P4.3)
 - **The port lives in `fleet_core::mc`**, next to `SessionCredentials`: `session(SessionRequest { bot_id, account, fresh })` returns `SessionCredentials` or `CredentialError { retryable }`. Its fake is in fleet-testkit, `OfflineCredentials` in fleet-runtime, and the managed implementation in fleet-agent (P10).
@@ -289,7 +289,7 @@ Approved by the user; all are in Plan.md §5:
   - **P10.7** *(group D)*: the agent maps `FleetEventKind::Removed` too, since P10.5's move waits for it.
   - **P11.1** *(group B)*: `chat_messages` can record outgoing mode chat from `ModeChatSent`.
   - **P11.3:** its rule for commands with message arguments covers mode chat too.
-  - **P11.9:** the chat format is parsed on the server.
+  - **P11.9:** the chat format is parsed on the server *(group H4, S66 in [ADR-0020](0020-bot-operations-and-phase-11-refinements.md))*.
 
 ## Alternatives considered
 - **`BotSpec` in fleet-runtime.** The server would build proto messages straight from its rows, and validation would be split over two paths.
