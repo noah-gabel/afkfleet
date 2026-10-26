@@ -52,7 +52,7 @@ async fn a_started_bot_is_seen_online_chatting_both_ways_and_stopped_as_get_show
     world
         .logs
         .until("both lines on the socket", async || {
-            live.lines_in(bot).len() == texts.len()
+            live.lines_in(bot).len() >= texts.len()
         })
         .await;
     let lines_in = live.lines_in(bot);

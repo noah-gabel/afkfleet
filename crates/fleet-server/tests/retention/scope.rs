@@ -32,80 +32,157 @@ fn sources(dir: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
+/// What a source file left open: a literal or a comment, with the line it
+/// starts on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Unterminated {
+    String { line: usize },
+    RawString { line: usize },
+    Comment { line: usize },
+}
+
 /// `text` with its comments, string literals and char literals blanked out,
-/// newlines kept, so what's left is code and its lines still count.
-fn code_of(text: &str) -> String {
-    let chars: Vec<char> = text.chars().collect();
-    let mut code = String::with_capacity(text.len());
-    let mut i = 0;
-    let blank = |c: char| if c == '\n' { '\n' } else { ' ' };
-    while i < chars.len() {
-        let rest = &chars[i..];
-        if rest.starts_with(&['/', '/']) {
-            while i < chars.len() && chars[i] != '\n' {
-                code.push(' ');
-                i += 1;
+/// newlines kept, so what's left is code and its lines still count; or what
+/// a literal or a comment left open, with the line it starts on.
+fn code_of(text: &str) -> Result<String, Unterminated> {
+    let mut reader = Reader {
+        chars: text.chars().collect(),
+        at: 0,
+        line: 1,
+        code: String::with_capacity(text.len()),
+    };
+    while let Some(next) = reader.peek() {
+        let line = reader.line;
+        if reader.starts_with(&['/', '/']) {
+            while reader.peek().is_some_and(|c| c != '\n') {
+                reader.blank();
             }
-        } else if rest.starts_with(&['/', '*']) {
+        } else if reader.starts_with(&['/', '*']) {
             let mut depth = 0_usize;
             loop {
-                let rest = &chars[i..];
-                if rest.starts_with(&['/', '*']) {
+                if reader.starts_with(&['/', '*']) {
                     depth += 1;
-                    code.push_str("  ");
-                    i += 2;
-                } else if rest.starts_with(&['*', '/']) {
+                    reader.blank_n(2);
+                } else if reader.starts_with(&['*', '/']) {
                     depth -= 1;
-                    code.push_str("  ");
-                    i += 2;
+                    reader.blank_n(2);
                     if depth == 0 {
                         break;
                     }
+                } else if reader.peek().is_some() {
+                    reader.blank();
                 } else {
-                    code.push(blank(chars[i]));
-                    i += 1;
+                    return Err(Unterminated::Comment { line });
                 }
             }
-        } else if chars[i] == 'r'
-            && (i == 0 || !is_ident(chars[i - 1]))
-            && rest.iter().skip(1).take_while(|c| **c == '#').count() + 1 < rest.len()
-            && rest[1 + rest.iter().skip(1).take_while(|c| **c == '#').count()] == '"'
-        {
-            let hashes = rest.iter().skip(1).take_while(|c| **c == '#').count();
+        } else if let Some((open, hashes)) = reader.raw_string() {
             let close: Vec<char> = std::iter::once('"')
                 .chain(std::iter::repeat_n('#', hashes))
                 .collect();
-            let open = 2 + hashes;
-            code.extend(std::iter::repeat_n(' ', open));
-            i += open;
-            while !chars[i..].starts_with(&close) {
-                code.push(blank(chars[i]));
-                i += 1;
-            }
-            code.extend(std::iter::repeat_n(' ', close.len()));
-            i += close.len();
-        } else if chars[i] == '"' {
-            code.push(' ');
-            i += 1;
-            while chars[i] != '"' {
-                let step = if chars[i] == '\\' { 2 } else { 1 };
-                for c in &chars[i..i + step] {
-                    code.push(blank(*c));
+            reader.blank_n(open);
+            while !reader.starts_with(&close) {
+                if reader.peek().is_none() {
+                    return Err(Unterminated::RawString { line });
                 }
-                i += step;
+                reader.blank();
             }
-            code.push(' ');
-            i += 1;
-        } else if chars[i] == '\'' && char_literal_len(rest).is_some() {
-            let len = char_literal_len(rest).unwrap();
-            code.extend(std::iter::repeat_n(' ', len));
-            i += len;
+            reader.blank_n(close.len());
+        } else if next == '"' {
+            reader.blank();
+            loop {
+                match reader.peek() {
+                    None => return Err(Unterminated::String { line }),
+                    Some('"') => break,
+                    Some('\\') => {
+                        reader.blank();
+                        if reader.peek().is_none() {
+                            return Err(Unterminated::String { line });
+                        }
+                        reader.blank();
+                    }
+                    Some(_) => reader.blank(),
+                }
+            }
+            reader.blank();
+        } else if let Some(len) = char_literal_len(reader.rest()).filter(|_| next == '\'') {
+            reader.blank_n(len);
         } else {
-            code.push(chars[i]);
-            i += 1;
+            reader.keep();
         }
     }
-    code
+    Ok(reader.code)
+}
+
+/// The code reader's place in a text, and what it kept so far.
+struct Reader {
+    chars: Vec<char>,
+    at: usize,
+    line: usize,
+    code: String,
+}
+
+impl Reader {
+    fn peek(&self) -> Option<char> {
+        self.chars.get(self.at).copied()
+    }
+
+    fn rest(&self) -> &[char] {
+        self.chars.get(self.at..).unwrap_or_default()
+    }
+
+    fn starts_with(&self, prefix: &[char]) -> bool {
+        self.rest().starts_with(prefix)
+    }
+
+    /// Takes the next char as code.
+    fn keep(&mut self) {
+        if let Some(c) = self.peek() {
+            self.code.push(c);
+            self.step(c);
+        }
+    }
+
+    /// Takes the next char blanked: a space, or the newline it is.
+    fn blank(&mut self) {
+        if let Some(c) = self.peek() {
+            self.code.push(if c == '\n' { '\n' } else { ' ' });
+            self.step(c);
+        }
+    }
+
+    fn blank_n(&mut self, n: usize) {
+        for _ in 0..n {
+            self.blank();
+        }
+    }
+
+    fn step(&mut self, c: char) {
+        self.at += 1;
+        if c == '\n' {
+            self.line += 1;
+        }
+    }
+
+    /// The raw string opening here (`r"`, `r#"`, `br"`, `br#"`, `cr"`,
+    /// `cr#"`, …): how long the opening is, and its hashes.
+    fn raw_string(&self) -> Option<(usize, usize)> {
+        let before = self.at.checked_sub(1).and_then(|at| self.chars.get(at));
+        if before.is_some_and(|c| is_ident(*c)) {
+            return None;
+        }
+        let rest = self.rest();
+        let prefix = usize::from(matches!(rest.first(), Some('b' | 'c')));
+        if rest.get(prefix) != Some(&'r') {
+            return None;
+        }
+        let hashes = rest
+            .iter()
+            .skip(prefix + 1)
+            .take_while(|c| **c == '#')
+            .count();
+        let quote = prefix + 1 + hashes;
+        (rest.get(quote) == Some(&'"')).then_some((quote + 1, hashes))
+    }
 }
 
 /// Whether `c` may be part of an identifier.
@@ -149,14 +226,29 @@ fn the_code_reader_skips_comments_and_literals_and_keeps_lines() {
         "let a = 1; // x_y\n",
         "/* x_y /* x_y */ */ let b = \"x_y \\\" x_y\";\n",
         "let c = r#\"x_y \"x_y\"# ; let d = '\"'; fn e<'a>(f: &'a str) {}\n",
+        "let g = br\"x_y\\\"; let h = br#\"x_y \"x_y\"#; let i = cr\"x_y\\\";\n",
+        "let j = cr#\"x_y \"x_y\"#; let k = b\"x_y\"; let l = c\"x_y\"; let m = b'\"';\n",
         "x_y(); x_yz(); ax_y();\n",
     );
 
-    let code = code_of(text);
+    let code = code_of(text).unwrap();
 
-    assert_eq!(code.lines().count(), 4);
-    assert_eq!(uses(&code, "x_y"), [(4, "")]);
+    assert_eq!(code.lines().count(), 6);
+    assert_eq!(uses(&code, "x_y"), [(6, "")]);
     assert!(code.contains("fn e<'a>(f: &'a str)"), "{code}");
+}
+
+#[rstest::rstest]
+#[case::string("let a = 1;\nlet b = \"x_y;\n", Unterminated::String { line: 2 })]
+#[case::escape_at_the_end("let b = \"x_y\\", Unterminated::String { line: 1 })]
+#[case::raw_string("let c = r#\"x_y\"\n;\n", Unterminated::RawString { line: 1 })]
+#[case::byte_raw_string("\nlet c = br\"x_y", Unterminated::RawString { line: 2 })]
+#[case::comment("/* x_y /* x_y */\n", Unterminated::Comment { line: 1 })]
+fn an_unterminated_literal_or_comment_is_named_with_its_line(
+    #[case] text: &str,
+    #[case] expected: Unterminated,
+) {
+    assert_eq!(code_of(text), Err(expected));
 }
 
 /// The server's own sources name `Store::retention_batch` only where it's
@@ -172,7 +264,8 @@ fn only_the_retention_service_opens_a_retention_batch() {
 
     let mut found: Vec<String> = Vec::new();
     for file in &files {
-        let code = code_of(&std::fs::read_to_string(file).unwrap());
+        let code = code_of(&std::fs::read_to_string(file).unwrap())
+            .unwrap_or_else(|unterminated| panic!("{}: {unterminated:?}", file.display()));
         let name = file
             .strip_prefix(&src)
             .unwrap()

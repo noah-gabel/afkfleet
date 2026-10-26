@@ -47,12 +47,15 @@
 //! refresh and a retry, `info` when the session ends, `warn` when a new
 //! refresh token couldn't be saved (the store is cleared instead), `error`
 //! when the store couldn't even be cleared. The live events socket logs each
-//! time it goes down with its cause and wait: `info` for a 1001 and the
-//! expected 4001, `warn` for 4000, 4002, 1008, a code the protocol doesn't
-//! name, an answer that doesn't read, silence or a missing `ready`, and a
-//! cause repeated in a row at `debug`; never its ticket, its URL or a
-//! frame. tungstenite logs every frame at `trace`, so every binary's filter
-//! caps its targets at `info` (fleet-startup; ADR-0020, S56).
+//! time it goes down with its cause and wait, at the level its reconnect
+//! policy gives it: `warn` for every cause that waits the plateau (an answer
+//! that won't change in seconds, a bad 101, an event before `ready`), for
+//! 4000, 4002, 1008, a code the protocol doesn't name, silence and a missing
+//! `ready`; `info` for the expected 4001, a 1001 and the other waits;
+//! `debug` for a 4001 again before a socket stayed live and a cause repeated
+//! in a row; never its ticket, its URL or a frame. tungstenite logs every
+//! frame at `trace`, so every binary's filter caps its targets at `info`
+//! (fleet-startup; ADR-0020, S56).
 
 use core::time::Duration;
 

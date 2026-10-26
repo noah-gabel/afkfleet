@@ -5,9 +5,10 @@
 //! wakes [`Logs::until`](super::logs::Logs::until).
 //!
 //! A step compares frames with what `GET /bots/{id}` answers at that moment
-//! ([`World::live_settles`](super::world::World::live_settles)): each `bot`
-//! frame is looked at once, the newest first, so a repeated frame is just
-//! another one, and nothing polls the API.
+//! ([`World::live_settles`](super::world::World::live_settles)): at each wake
+//! only the newest `bot` frame not yet looked at gets a GET, and the frames
+//! before it in that wake are skipped, so a repeated frame is just another
+//! one, and nothing polls the API.
 
 use std::sync::{Arc, Mutex};
 

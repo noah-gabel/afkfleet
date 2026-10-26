@@ -50,21 +50,25 @@ pub(crate) enum Handshake {
 }
 
 /// Whether a 101's `headers` answer the upgrade that offered `key`: an
-/// upgrade to `websocket`, the key's own accept, and nothing the client
-/// didn't offer (RFC 6455, 4.1).
+/// upgrade to exactly `websocket`, a `Connection` naming `Upgrade`, the key's
+/// own accept, and nothing the client didn't offer (RFC 6455, 4.1). Case
+/// doesn't matter in either name.
 pub(crate) fn checked(headers: &HeaderMap, key: &str) -> Result<(), Handshake> {
-    let names = |name, token: &str| {
-        headers
-            .get_all(name)
-            .iter()
-            .filter_map(|value| value.to_str().ok())
-            .flat_map(|value| value.split(','))
-            .any(|part| part.trim().eq_ignore_ascii_case(token))
+    let mut upgrades = headers.get_all(UPGRADE).iter();
+    let upgrade = match (upgrades.next(), upgrades.next()) {
+        (Some(only), None) => only.as_bytes(),
+        _ => b"",
     };
-    if !names(UPGRADE, "websocket") {
+    if !upgrade.eq_ignore_ascii_case(b"websocket") {
         return Err(Handshake::NoUpgrade);
     }
-    if !names(CONNECTION, "upgrade") {
+    let connection_upgrades = headers
+        .get_all(CONNECTION)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .any(|token| token.trim().eq_ignore_ascii_case("upgrade"));
+    if !connection_upgrades {
         return Err(Handshake::NoConnection);
     }
     let expected = derive_accept_key(key.as_bytes());
@@ -174,6 +178,21 @@ mod tests {
         }
 
         assert_eq!(checked(&headers, &key), Err(refused));
+    }
+
+    #[rstest]
+    #[case::a_list(&["websocket, h2c"])]
+    #[case::two_headers(&["websocket", "h2c"])]
+    #[case::a_padded_list(&["h2c ,websocket"])]
+    fn an_upgrade_header_that_isnt_exactly_websocket_is_refused(#[case] values: &[&'static str]) {
+        let key = generate_key();
+        let mut headers = answering(&key);
+        headers.remove(UPGRADE);
+        for value in values {
+            headers.append(UPGRADE, HeaderValue::from_static(value));
+        }
+
+        assert_eq!(checked(&headers, &key), Err(Handshake::NoUpgrade));
     }
 
     #[test]

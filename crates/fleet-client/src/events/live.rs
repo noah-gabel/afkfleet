@@ -10,8 +10,8 @@ use std::collections::VecDeque;
 use std::sync::Arc;
 
 use fleet_api_types::events::{EventMessage, EventMessageKind, Received};
-use futures_util::StreamExt as _;
 use futures_util::future::{Either, select};
+use futures_util::{SinkExt, StreamExt as _};
 use secrecy::ExposeSecret as _;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::watch;
@@ -21,9 +21,11 @@ use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
-use tracing::{debug, info, warn};
+use tracing::{Level, debug, info, warn};
 
-use super::policy::{Backoff, CLOSE_TIMEOUT, End, READY_TIMEOUT, Refused, SILENCE_TIMEOUT};
+use super::policy::{
+    Action, Backoff, CLOSE_TIMEOUT, End, READY_TIMEOUT, Refused, SILENCE_TIMEOUT, level,
+};
 use super::read as read_frame;
 use super::upgrade;
 use crate::error::{ClientError, Unexpected};
@@ -313,6 +315,8 @@ enum State<X> {
     Connecting(Pin<Box<dyn Future<Output = Result<WebSocketStream<X>, Failed>> + Send>>),
     /// A socket open, live once its `ready` came.
     Open(Box<Open<X>>),
+    /// An open socket closing after an end already decided.
+    Closing(Box<Closing<X>>),
     /// Over.
     Ended(LiveEnd),
 }
@@ -325,6 +329,7 @@ impl<X> State<X> {
             Self::Connecting(_) => "connecting",
             Self::Open(open) if open.ready.is_none() => "opening",
             Self::Open(_) => "live",
+            Self::Closing(_) => "closing",
             Self::Ended(_) => "ended",
         }
     }
@@ -338,6 +343,65 @@ struct Open<X> {
     /// When it's taken for gone: [`READY_TIMEOUT`] after the 101 until
     /// `ready`, then [`SILENCE_TIMEOUT`] after the last frame.
     deadline: Instant,
+}
+
+/// A socket closing: the end it closes for is decided and kept here, so a
+/// `recv` dropped during the close loses neither it nor the close (R81).
+struct Closing<X> {
+    socket: WebSocketStream<X>,
+    /// When the close is given up: [`CLOSE_TIMEOUT`] after the decision.
+    until: Instant,
+    /// How it closes.
+    how: Close,
+    /// What follows it.
+    then: Then,
+}
+
+/// How a socket closes.
+#[derive(Clone, Copy)]
+enum Close {
+    /// The server closed it: read on until it's gone, so tungstenite's
+    /// answer goes out.
+    Drain,
+    /// The client closes it: its 1000 is queued once, then flushed.
+    Send { queued: bool },
+}
+
+/// The retry an end decided, waiting for its socket's close.
+struct Then {
+    end: End,
+    why: Disconnect,
+    /// How long the socket had been live when it ended, if it was.
+    live: Option<Duration>,
+}
+
+impl<X> Closing<X>
+where
+    X: AsyncRead + AsyncWrite + Unpin,
+{
+    /// Closes the socket. Cancel-safe: a call dropped midway goes on where
+    /// it stopped at the next.
+    async fn close(&mut self) {
+        match &mut self.how {
+            Close::Drain => while self.socket.next().await.is_some() {},
+            Close::Send { queued } => {
+                if !*queued {
+                    if self
+                        .socket
+                        .feed(Message::Close(Some(normal())))
+                        .await
+                        .is_err()
+                    {
+                        return;
+                    }
+                    *queued = true;
+                }
+                // tokio-tungstenite's `poll_close` only flushes a close
+                // that's queued already, at every call.
+                let _ = SinkExt::close(&mut self.socket).await;
+            }
+        }
+    }
 }
 
 /// Why a connect didn't open a socket.
@@ -383,19 +447,32 @@ impl<S: SessionStore, T: Transport> Machine<S, T> {
             },
             State::Open(open) => {
                 let read = timeout_at(open.deadline, open.socket.next()).await;
-                self.frame(read).await;
+                self.frame(read);
+            }
+            State::Closing(closing) => {
+                let _ = timeout_at(closing.until, closing.close()).await;
+                let old = core::mem::replace(
+                    &mut self.state,
+                    State::Waiting {
+                        until: Instant::now(),
+                    },
+                );
+                if let State::Closing(closing) = old {
+                    let Then { end, why, live } = closing.then;
+                    self.retry(end, why, live);
+                }
             }
         }
     }
 
     /// What a read of the open socket brought: a frame, its end, or its
     /// deadline.
-    async fn frame(&mut self, read: Read) {
+    fn frame(&mut self, read: Read) {
         let next = {
             let State::Open(open) = &mut self.state else {
                 return;
             };
-            judge(open, read).await
+            judge(open, read)
         };
         match next {
             Next::Nothing => {}
@@ -406,17 +483,28 @@ impl<S: SessionStore, T: Transport> Machine<S, T> {
                 self.queued.push_back(update);
             }
             Next::Retry(end, why) => self.retry_open(end, why),
-            Next::CloseRetry(end, why) => self.close_and_retry(end, why).await,
+            Next::Close(end, why, how) => self.close_then(end, why, how),
         }
     }
 
-    /// Closes the open socket, within [`CLOSE_TIMEOUT`], then retries.
-    async fn close_and_retry(&mut self, end: End, why: Disconnect) {
+    /// Closes the open socket as `how` says, then retries after `end`: both
+    /// decided now, before the close's first await (R81).
+    fn close_then(&mut self, end: End, why: Disconnect, how: Close) {
         let live = self.live_for();
-        if let State::Open(open) = &mut self.state {
-            let _ = timeout(CLOSE_TIMEOUT, open.socket.close(Some(normal()))).await;
+        let old = core::mem::replace(
+            &mut self.state,
+            State::Waiting {
+                until: Instant::now(),
+            },
+        );
+        if let State::Open(open) = old {
+            self.state = State::Closing(Box::new(Closing {
+                socket: open.socket,
+                until: Instant::now() + CLOSE_TIMEOUT,
+                how,
+                then: Then { end, why, live },
+            }));
         }
-        self.retry(end, why, live);
     }
 
     /// Retries after the open socket's `end`, live for as long as it was.
@@ -436,12 +524,13 @@ impl<S: SessionStore, T: Transport> Machine<S, T> {
     /// Waits as the policy says after `end`, telling the consumer `why`, or
     /// ends when the policy gives up.
     fn retry(&mut self, end: End, why: Disconnect, live: Option<Duration>) {
+        let action = self.backoff.action(end, live);
         let Some(wait) = self.backoff.after(end, live) else {
             warn!(cause = ?end, "the live events socket's server certificate was refused: it stops");
             self.state = State::Ended(LiveEnd::Certificate);
             return;
         };
-        self.log(end, wait);
+        self.log(end, action, wait);
         self.state = State::Waiting {
             until: Instant::now() + wait,
         };
@@ -451,40 +540,37 @@ impl<S: SessionStore, T: Transport> Machine<S, T> {
         });
     }
 
-    /// One line for `end`, at its level the first time in a row, then at
-    /// `debug` (S54).
-    fn log(&mut self, end: End, wait: Duration) {
+    /// One line for `end`, which `action` follows, at the level the policy
+    /// gives it: its own the first time in a row, then `debug` (S54, R86).
+    fn log(&mut self, end: End, action: Action, wait: Duration) {
         let wait_ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX);
-        if self.last_logged == Some(end) {
-            debug!(cause = ?end, wait_ms, "the live events socket is down again: it reconnects");
-            return;
-        }
+        let repeat = self.last_logged == Some(end);
         self.last_logged = Some(end);
-        let expected = matches!(end, End::Closed(Some(1001 | 4001)));
-        let warned = matches!(
-            end,
-            End::Closed(Some(4000 | 4002 | 1008))
-                | End::Silent
-                | End::NoReady
-                | End::EarlyEvent
-                | End::Handshake
-        ) || matches!(end, End::Closed(Some(code)) if !KNOWN_CODES.contains(&code))
-            || matches!(
-                end,
-                End::Ticket(Refused::Malformed) | End::Upgrade(Refused::Malformed)
-            );
-        if warned && !expected {
-            warn!(cause = ?end, wait_ms, "the live events socket is down: it reconnects");
-        } else {
-            info!(cause = ?end, wait_ms, "the live events socket is down: it reconnects");
+        match level(end, action, repeat) {
+            Level::WARN => {
+                warn!(cause = ?end, wait_ms, "the live events socket is down: it reconnects");
+            }
+            Level::INFO => {
+                info!(cause = ?end, wait_ms, "the live events socket is down: it reconnects");
+            }
+            _ => {
+                debug!(cause = ?end, wait_ms, "the live events socket is down again: it reconnects");
+            }
         }
     }
 
-    /// Ends the socket for `end`, sending its close first if one is open.
+    /// Ends the socket for `end`, closing it first if one is open or
+    /// closing.
     async fn finish(&mut self, end: LiveEnd) {
         let old = core::mem::replace(&mut self.state, State::Ended(end));
-        if let State::Open(mut open) = old {
-            let _ = timeout(CLOSE_TIMEOUT, open.socket.close(Some(normal()))).await;
+        match old {
+            State::Open(mut open) => {
+                let _ = timeout(CLOSE_TIMEOUT, open.socket.close(Some(normal()))).await;
+            }
+            State::Closing(mut closing) => {
+                let _ = timeout_at(closing.until, closing.close()).await;
+            }
+            State::Waiting { .. } | State::Connecting(_) | State::Ended(_) => {}
         }
     }
 }
@@ -501,25 +587,25 @@ enum Next {
     Update(LiveUpdate),
     /// The socket is gone: retry after `End`.
     Retry(End, Disconnect),
-    /// Close the socket, then retry after `End`.
-    CloseRetry(End, Disconnect),
+    /// Close the socket as `Close` says, then retry after `End`.
+    Close(End, Disconnect, Close),
 }
+
+/// Our own close, queued at its first step.
+const SEND: Close = Close::Send { queued: false };
 
 /// What `read`, the open socket's last read, asks for: frames before
 /// `ready` other than `ready` end the socket; after it, each frame moves the
 /// silence deadline.
-async fn judge<X>(open: &mut Open<X>, read: Read) -> Next
-where
-    X: AsyncRead + AsyncWrite + Unpin,
-{
+fn judge<X>(open: &mut Open<X>, read: Read) -> Next {
     let now = Instant::now();
     let message = match read {
         Err(_elapsed) if open.ready.is_some() => {
-            return Next::CloseRetry(End::Silent, Disconnect::Silent);
+            return Next::Close(End::Silent, Disconnect::Silent, SEND);
         }
-        Err(_elapsed) => return Next::CloseRetry(End::NoReady, Disconnect::Silent),
+        Err(_elapsed) => return Next::Close(End::NoReady, Disconnect::Silent, SEND),
         Ok(Some(Err(WsError::Capacity(_)))) => {
-            return Next::CloseRetry(End::TooLarge, Disconnect::Lost);
+            return Next::Close(End::TooLarge, Disconnect::Lost, SEND);
         }
         Ok(None | Some(Err(_))) => return Next::Retry(End::Lost, Disconnect::Lost),
         Ok(Some(Ok(message))) => message,
@@ -535,11 +621,7 @@ where
             let code = frame.map(|frame| u16::from(frame.code));
             // tungstenite queued the close's answer: read on, briefly, so it
             // goes out.
-            let _ = timeout(CLOSE_TIMEOUT, async {
-                while open.socket.next().await.is_some() {}
-            })
-            .await;
-            return Next::Retry(End::Closed(code), Disconnect::Closed { code });
+            return Next::Close(End::Closed(code), Disconnect::Closed { code }, Close::Drain);
         }
         // tungstenite answers each ping itself; a pong or a raw frame only
         // shows the server is there.
@@ -561,14 +643,11 @@ where
                 Next::Update(LiveUpdate::Refetch(RefetchReason::Resync))
             }
             _ if live => Next::Update(LiveUpdate::Event(event)),
-            _ => Next::CloseRetry(End::EarlyEvent, Disconnect::Lost),
+            _ => Next::Close(End::EarlyEvent, Disconnect::Lost, SEND),
         },
-        Received::Unreadable => Next::CloseRetry(End::EarlyEvent, Disconnect::Lost),
+        Received::Unreadable => Next::Close(End::EarlyEvent, Disconnect::Lost, SEND),
     }
 }
-
-/// The close codes the protocol names (`SocketClose`), and a normal close.
-const KNOWN_CODES: [u16; 7] = [1000, 1001, 1008, 1013, 4000, 4001, 4002];
 
 /// The client's own close: 1000, normal.
 fn normal() -> CloseFrame {
@@ -585,13 +664,24 @@ where
     S: SessionStore,
     T: Transport,
 {
-    let (ticket, bearer) = core.events_ticket().await.map_err(|error| match error {
-        ClientError::NoSession => Failed::End(LiveEnd::NoSession),
-        error => Failed::Retry {
-            end: End::Ticket(refused(&error)),
-            error: Box::new(error),
-        },
-    })?;
+    let (ticket, bearer) = core
+        .events_ticket()
+        .await
+        .map_err(|failure| match failure.error {
+            ClientError::NoSession => Failed::End(LiveEnd::NoSession),
+            error => Failed::Retry {
+                // A refused answer's status and wait, whatever its body, as
+                // the upgrade's below.
+                end: End::Ticket(failure.refusal.map_or_else(
+                    || refused(&error),
+                    |refusal| Refused::Status {
+                        status: refusal.status,
+                        retry_after: refusal.retry_after,
+                    },
+                )),
+                error: Box::new(error),
+            },
+        })?;
     let request = upgrade::request(core.server(), ticket.expose_secret(), bearer);
     let key = request.key.clone();
     let switched = core.upgrade(request).await.map_err(|error| Failed::Retry {
@@ -666,6 +756,18 @@ mod tests {
     type TestCore = Core<MemoryStore, Scripted>;
     type TestLive = Live<MemoryStore, Scripted>;
 
+    /// How long a test may take, in paused time: far past every wait in
+    /// these tests, the 60 s `Retry-After` cap included.
+    const TEST_BOUND: Duration = Duration::from_secs(600);
+
+    /// `test`, failing once [`TEST_BOUND`] has passed: an upgrade no test
+    /// scripted never answers, and paused time doesn't move without a timer.
+    async fn bounded(test: impl Future<Output = ()>) {
+        timeout(TEST_BOUND, test)
+            .await
+            .expect("the test didn't end within its bound");
+    }
+
     fn answer(status: u16, body: &Value) -> Incoming {
         Incoming {
             status,
@@ -707,6 +809,19 @@ mod tests {
         ));
         core.hold_access("afk_at_1");
         core
+    }
+
+    #[tokio::test(start_paused = true)]
+    #[should_panic(expected = "the test didn't end within its bound")]
+    async fn an_upgrade_no_test_scripted_fails_the_bound_instead_of_hanging() {
+        let core = core().await;
+        core.transport().on(TICKET, Ok(ticket(1)));
+        let mut live = live(&core);
+
+        bounded(async {
+            let _ = live.recv().await;
+        })
+        .await;
     }
 
     fn live(core: &Arc<TestCore>) -> TestLive {
@@ -754,36 +869,42 @@ mod tests {
 
     #[tokio::test(start_paused = true)]
     async fn a_connect_spends_a_new_ticket_with_the_sessions_bearer_and_ready_asks_for_a_refetch() {
-        let core = core().await;
+        bounded(async {
+            let core = core().await;
 
-        let (_live, _server) = live_socket(&core).await;
+            let (_live, _server) = live_socket(&core).await;
 
-        let upgrades = core.transport().upgrades();
-        assert_eq!(upgrades.len(), 1);
-        assert_eq!(upgrades[0].path, "/api/v1/events");
-        assert_eq!(upgrades[0].ticket.as_deref(), Some("afk_wt_ticket1"));
-        assert_eq!(upgrades[0].bearer, "afk_at_1");
-        assert_eq!(
-            core.transport().bearers(TICKET),
-            [Some("afk_at_1".to_owned())]
-        );
+            let upgrades = core.transport().upgrades();
+            assert_eq!(upgrades.len(), 1);
+            assert_eq!(upgrades[0].path, "/api/v1/events");
+            assert_eq!(upgrades[0].ticket.as_deref(), Some("afk_wt_ticket1"));
+            assert_eq!(upgrades[0].bearer, "afk_at_1");
+            assert_eq!(
+                core.transport().bearers(TICKET),
+                [Some("afk_at_1".to_owned())]
+            );
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn events_come_as_they_are_and_a_kind_only_a_newer_server_knows_is_skipped() {
-        let core = core().await;
-        let (mut live, mut server) = live_socket(&core).await;
+        bounded(async {
+            let core = core().await;
+            let (mut live, mut server) = live_socket(&core).await;
 
-        let sending = async {
-            server.send_text(r#"{"type":"bot_teleported"}"#).await;
-            server.send_text(REMOVED).await;
-        };
-        let ((), update) = join!(sending, live.recv());
+            let sending = async {
+                server.send_text(r#"{"type":"bot_teleported"}"#).await;
+                server.send_text(REMOVED).await;
+            };
+            let ((), update) = join!(sending, live.recv());
 
-        let Ok(LiveUpdate::Event(event)) = update else {
-            panic!("not an event: {update:?}");
-        };
-        assert_eq!(event.kind.known(), Some(EventMessageKind::BotRemoved));
+            let Ok(LiveUpdate::Event(event)) = update else {
+                panic!("not an event: {update:?}");
+            };
+            assert_eq!(event.kind.known(), Some(EventMessageKind::BotRemoved));
+        })
+        .await;
     }
 
     #[rstest::rstest]
@@ -795,28 +916,34 @@ mod tests {
         #[case] frame: &str,
         #[case] reason: RefetchReason,
     ) {
-        let core = core().await;
-        let (mut live, mut server) = live_socket(&core).await;
+        bounded(async {
+            let core = core().await;
+            let (mut live, mut server) = live_socket(&core).await;
 
-        let ((), update) = join!(server.send_text(frame), live.recv());
+            let ((), update) = join!(server.send_text(frame), live.recv());
 
-        assert!(
-            matches!(update, Ok(LiveUpdate::Refetch(got)) if got == reason),
-            "{update:?}"
-        );
+            assert!(
+                matches!(update, Ok(LiveUpdate::Refetch(got)) if got == reason),
+                "{update:?}"
+            );
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_binary_frame_asks_for_a_refetch() {
-        let core = core().await;
-        let (mut live, mut server) = live_socket(&core).await;
+        bounded(async {
+            let core = core().await;
+            let (mut live, mut server) = live_socket(&core).await;
 
-        let ((), update) = join!(server.send_binary(&[0]), live.recv());
+            let ((), update) = join!(server.send_binary(&[0]), live.recv());
 
-        assert!(
-            matches!(update, Ok(LiveUpdate::Refetch(RefetchReason::Unreadable))),
-            "{update:?}"
-        );
+            assert!(
+                matches!(update, Ok(LiveUpdate::Refetch(RefetchReason::Unreadable))),
+                "{update:?}"
+            );
+        })
+        .await;
     }
 
     #[rstest::rstest]
@@ -829,301 +956,374 @@ mod tests {
     #[case::no_code(None)]
     #[tokio::test(start_paused = true)]
     async fn a_close_backs_off_and_the_next_connect_spends_a_new_ticket(#[case] code: Option<u16>) {
-        let core = core().await;
-        let (mut live, mut server) = live_socket(&core).await;
-        let mut next = connects(&core, 2);
+        bounded(async {
+            let core = core().await;
+            let (mut live, mut server) = live_socket(&core).await;
+            let mut next = connects(&core, 2);
 
-        let ((), update) = join!(server.close(code), live.recv());
-        let (why, retry_in) = disconnected(update);
-        let down = Instant::now();
-        let ((), again) = join!(next.send_text(READY), live.recv());
+            let ((), update) = join!(server.close(code), live.recv());
+            let (why, retry_in) = disconnected(update);
+            let down = Instant::now();
+            let ((), again) = join!(next.send_text(READY), live.recv());
 
-        assert!(
-            matches!(why, Disconnect::Closed { code: got } if got == code),
-            "{why:?}"
-        );
-        assert!(within(retry_in, 1, 2), "{retry_in:?}");
-        assert!(matches!(
-            again,
-            Ok(LiveUpdate::Refetch(RefetchReason::Ready))
-        ));
-        let upgrades = core.transport().upgrades();
-        assert_eq!(
-            upgrades[1].at - down,
-            retry_in,
-            "connected when the wait ended"
-        );
-        assert_eq!(tickets(&core), ["afk_wt_ticket1", "afk_wt_ticket2"]);
+            assert!(
+                matches!(why, Disconnect::Closed { code: got } if got == code),
+                "{why:?}"
+            );
+            assert!(within(retry_in, 1, 2), "{retry_in:?}");
+            assert!(matches!(
+                again,
+                Ok(LiveUpdate::Refetch(RefetchReason::Ready))
+            ));
+            let upgrades = core.transport().upgrades();
+            assert_eq!(
+                upgrades[1].at - down,
+                retry_in,
+                "connected when the wait ended"
+            );
+            assert_eq!(tickets(&core), ["afk_wt_ticket1", "afk_wt_ticket2"]);
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn the_servers_close_is_answered_before_the_wait() {
-        let core = core().await;
-        let (mut live, mut server) = live_socket(&core).await;
+        bounded(async {
+            let core = core().await;
+            let (mut live, mut server) = live_socket(&core).await;
 
-        let closing = async {
-            server.close(Some(1001)).await;
-            server.next().await
-        };
-        let (answer, update) = join!(closing, live.recv());
+            let closing = async {
+                server.close(Some(1001)).await;
+                server.next().await
+            };
+            let (answer, update) = join!(closing, live.recv());
 
-        assert!(
-            matches!(&answer, Some(Message::Close(Some(frame))) if u16::from(frame.code) == 1001),
-            "{answer:?}"
-        );
-        assert!(matches!(
-            disconnected(update).0,
-            Disconnect::Closed { code: Some(1001) }
-        ));
+            assert!(
+                matches!(&answer, Some(Message::Close(Some(frame))) if u16::from(frame.code) == 1001),
+                "{answer:?}"
+            );
+            assert!(matches!(
+                disconnected(update).0,
+                Disconnect::Closed { code: Some(1001) }
+            ));
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_lost_connection_backs_off() {
-        let core = core().await;
-        let (mut live, server) = live_socket(&core).await;
-        drop(server);
+        bounded(async {
+            let core = core().await;
+            let (mut live, server) = live_socket(&core).await;
+            drop(server);
 
-        let (why, retry_in) = disconnected(live.recv().await);
+            let (why, retry_in) = disconnected(live.recv().await);
 
-        assert!(matches!(why, Disconnect::Lost), "{why:?}");
-        assert!(within(retry_in, 1, 2), "{retry_in:?}");
+            assert!(matches!(why, Disconnect::Lost), "{why:?}");
+            assert!(within(retry_in, 1, 2), "{retry_in:?}");
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn the_first_4001_reconnects_at_once_and_a_second_before_a_stable_socket_backs_off() {
-        let core = core().await;
-        let (mut live, mut server) = live_socket(&core).await;
-        let mut second = connects(&core, 2);
+        bounded(async {
+            let core = core().await;
+            let (mut live, mut server) = live_socket(&core).await;
+            let mut second = connects(&core, 2);
 
-        let ((), first) = join!(server.close(Some(4001)), live.recv());
-        let ((), ready) = join!(second.send_text(READY), live.recv());
-        let ((), storm) = join!(second.close(Some(4001)), live.recv());
+            let ((), first) = join!(server.close(Some(4001)), live.recv());
+            let ((), ready) = join!(second.send_text(READY), live.recv());
+            let ((), storm) = join!(second.close(Some(4001)), live.recv());
 
-        assert_eq!(disconnected(first).1, Duration::ZERO);
-        assert!(matches!(
-            ready,
-            Ok(LiveUpdate::Refetch(RefetchReason::Ready))
-        ));
-        assert!(within(disconnected(storm).1, 1, 2));
+            assert_eq!(disconnected(first).1, Duration::ZERO);
+            assert!(matches!(
+                ready,
+                Ok(LiveUpdate::Refetch(RefetchReason::Ready))
+            ));
+            assert!(within(disconnected(storm).1, 1, 2));
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_4001_reconnects_with_the_token_its_tickets_refresh_brought() {
-        let core = core().await;
-        let (mut live, mut server) = live_socket(&core).await;
-        core.transport()
-            .on(TICKET, Ok(refusal(401, "unauthorized", None)));
-        core.transport().on(
-            REFRESH,
-            Ok(answer(
-                200,
-                &json!({
-                    "access_token": "afk_at_2",
-                    "refresh_token": "afk_rt_2",
-                    "access_expires_in": 900,
-                    "refresh_expires_in": 604_800,
-                }),
-            )),
-        );
-        let mut next = connects(&core, 2);
+        bounded(async {
+            let core = core().await;
+            let (mut live, mut server) = live_socket(&core).await;
+            core.transport()
+                .on(TICKET, Ok(refusal(401, "unauthorized", None)));
+            core.transport().on(
+                REFRESH,
+                Ok(answer(
+                    200,
+                    &json!({
+                        "access_token": "afk_at_2",
+                        "refresh_token": "afk_rt_2",
+                        "access_expires_in": 900,
+                        "refresh_expires_in": 604_800,
+                    }),
+                )),
+            );
+            let mut next = connects(&core, 2);
 
-        let ((), closed) = join!(server.close(Some(4001)), live.recv());
-        let ((), again) = join!(next.send_text(READY), live.recv());
+            let ((), closed) = join!(server.close(Some(4001)), live.recv());
+            let ((), again) = join!(next.send_text(READY), live.recv());
 
-        assert_eq!(disconnected(closed).1, Duration::ZERO);
-        assert!(matches!(
-            again,
-            Ok(LiveUpdate::Refetch(RefetchReason::Ready))
-        ));
-        let upgrades = core.transport().upgrades();
-        assert_eq!(upgrades[1].bearer, "afk_at_2");
-        assert_eq!(upgrades[1].ticket.as_deref(), Some("afk_wt_ticket2"));
+            assert_eq!(disconnected(closed).1, Duration::ZERO);
+            assert!(matches!(
+                again,
+                Ok(LiveUpdate::Refetch(RefetchReason::Ready))
+            ));
+            let upgrades = core.transport().upgrades();
+            assert_eq!(upgrades[1].bearer, "afk_at_2");
+            assert_eq!(upgrades[1].ticket.as_deref(), Some("afk_wt_ticket2"));
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn too_many_connections_waits_its_retry_after() {
-        let core = core().await;
-        core.transport().on(TICKET, Ok(ticket(1)));
-        core.transport()
-            .refuse_upgrade(refusal(429, "too_many_connections", Some(45)));
-        let mut next = connects(&core, 2);
-        let mut live = live(&core);
+        bounded(async {
+            let core = core().await;
+            core.transport().on(TICKET, Ok(ticket(1)));
+            core.transport()
+                .refuse_upgrade(refusal(429, "too_many_connections", Some(45)));
+            let mut next = connects(&core, 2);
+            let mut live = live(&core);
 
-        let (why, retry_in) = disconnected(live.recv().await);
-        let down = Instant::now();
-        let ((), again) = join!(next.send_text(READY), live.recv());
+            let (why, retry_in) = disconnected(live.recv().await);
+            let down = Instant::now();
+            let ((), again) = join!(next.send_text(READY), live.recv());
 
-        assert!(
-            matches!(&why, Disconnect::NotOpened(ClientError::Api(failure)) if failure.status == 429),
-            "{why:?}"
-        );
-        assert_eq!(retry_in, Duration::from_secs(45));
-        assert!(matches!(
-            again,
-            Ok(LiveUpdate::Refetch(RefetchReason::Ready))
-        ));
-        assert_eq!(
-            core.transport().upgrades()[1].at - down,
-            Duration::from_secs(45)
-        );
+            assert!(
+                matches!(&why, Disconnect::NotOpened(ClientError::Api(failure)) if failure.status == 429),
+                "{why:?}"
+            );
+            assert_eq!(retry_in, Duration::from_secs(45));
+            assert!(matches!(
+                again,
+                Ok(LiveUpdate::Refetch(RefetchReason::Ready))
+            ));
+            assert_eq!(
+                core.transport().upgrades()[1].at - down,
+                Duration::from_secs(45)
+            );
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_refused_ticket_on_the_upgrade_backs_off_then_spends_a_new_one() {
-        let core = core().await;
-        core.transport().on(TICKET, Ok(ticket(1)));
-        core.transport()
-            .refuse_upgrade(refusal(404, "not_found", None));
-        let mut next = connects(&core, 2);
-        let mut live = live(&core);
+        bounded(async {
+            let core = core().await;
+            core.transport().on(TICKET, Ok(ticket(1)));
+            core.transport()
+                .refuse_upgrade(refusal(404, "not_found", None));
+            let mut next = connects(&core, 2);
+            let mut live = live(&core);
 
-        let (why, retry_in) = disconnected(live.recv().await);
-        let ((), again) = join!(next.send_text(READY), live.recv());
+            let (why, retry_in) = disconnected(live.recv().await);
+            let ((), again) = join!(next.send_text(READY), live.recv());
 
-        assert!(
-            matches!(why, Disconnect::NotOpened(ClientError::Api(_))),
-            "{why:?}"
-        );
-        assert!(within(retry_in, 1, 2), "{retry_in:?}");
-        assert!(matches!(
-            again,
-            Ok(LiveUpdate::Refetch(RefetchReason::Ready))
-        ));
-        assert_eq!(tickets(&core), ["afk_wt_ticket1", "afk_wt_ticket2"]);
+            assert!(
+                matches!(why, Disconnect::NotOpened(ClientError::Api(_))),
+                "{why:?}"
+            );
+            assert!(within(retry_in, 1, 2), "{retry_in:?}");
+            assert!(matches!(
+                again,
+                Ok(LiveUpdate::Refetch(RefetchReason::Ready))
+            ));
+            assert_eq!(tickets(&core), ["afk_wt_ticket1", "afk_wt_ticket2"]);
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_ticket_refused_with_a_retry_after_waits_it() {
-        let core = core().await;
-        core.transport()
-            .on(TICKET, Ok(refusal(503, "unavailable", Some(10))));
-        let mut next = connects(&core, 1);
-        let mut live = live(&core);
+        bounded(async {
+            let core = core().await;
+            core.transport()
+                .on(TICKET, Ok(refusal(503, "unavailable", Some(10))));
+            let mut next = connects(&core, 1);
+            let mut live = live(&core);
 
-        let (why, retry_in) = disconnected(live.recv().await);
-        let ((), again) = join!(next.send_text(READY), live.recv());
+            let (why, retry_in) = disconnected(live.recv().await);
+            let ((), again) = join!(next.send_text(READY), live.recv());
 
-        assert!(
-            matches!(&why, Disconnect::NotOpened(ClientError::Api(failure)) if failure.status == 503),
-            "{why:?}"
-        );
-        assert_eq!(retry_in, Duration::from_secs(10));
-        assert!(matches!(
-            again,
-            Ok(LiveUpdate::Refetch(RefetchReason::Ready))
-        ));
-        assert_eq!(tickets(&core), ["afk_wt_ticket1"]);
+            assert!(
+                matches!(&why, Disconnect::NotOpened(ClientError::Api(failure)) if failure.status == 503),
+                "{why:?}"
+            );
+            assert_eq!(retry_in, Duration::from_secs(10));
+            assert!(matches!(
+                again,
+                Ok(LiveUpdate::Refetch(RefetchReason::Ready))
+            ));
+            assert_eq!(tickets(&core), ["afk_wt_ticket1"]);
+        })
+        .await;
+    }
+
+    #[rstest::rstest]
+    #[case::rate_limited(429, 45)]
+    #[case::busy(503, 20)]
+    #[tokio::test(start_paused = true)]
+    async fn a_ticket_refused_without_the_apis_envelope_still_waits_its_retry_after(
+        #[case] status: u16,
+        #[case] retry_after: u64,
+    ) {
+        bounded(async {
+            let core = core().await;
+            core.transport().on(
+                TICKET,
+                Ok(Incoming {
+                    status,
+                    retry_after: Some(Duration::from_secs(retry_after)),
+                    body: b"a proxy's plain text".to_vec(),
+                }),
+            );
+            let mut live = live(&core);
+
+            let (why, retry_in) = disconnected(live.recv().await);
+
+            assert!(matches!(why, Disconnect::NotOpened(_)), "{why:?}");
+            assert_eq!(retry_in, Duration::from_secs(retry_after));
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn an_upgrade_without_an_answer_backs_off() {
-        let core = core().await;
-        core.transport().on(TICKET, Ok(ticket(1)));
-        core.transport()
-            .fail_upgrade(TransportError::Unreachable(None));
-        let mut live = live(&core);
+        bounded(async {
+            let core = core().await;
+            core.transport().on(TICKET, Ok(ticket(1)));
+            core.transport()
+                .fail_upgrade(TransportError::Unreachable(None));
+            let mut live = live(&core);
 
-        let (why, retry_in) = disconnected(live.recv().await);
+            let (why, retry_in) = disconnected(live.recv().await);
 
-        assert!(
-            matches!(why, Disconnect::NotOpened(ClientError::Unreachable(_))),
-            "{why:?}"
-        );
-        assert!(within(retry_in, 1, 2), "{retry_in:?}");
+            assert!(
+                matches!(why, Disconnect::NotOpened(ClientError::Unreachable(_))),
+                "{why:?}"
+            );
+            assert!(within(retry_in, 1, 2), "{retry_in:?}");
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_frame_over_its_limit_is_closed_and_backs_off() {
-        let core = core().await;
-        let (mut live, mut server) = live_socket(&core).await;
-        let too_large = u64::try_from(upgrade::MAX_EVENT_FRAME).unwrap() + 1;
-        let mut header = vec![0x81, 127];
-        header.extend_from_slice(&too_large.to_be_bytes());
+        bounded(async {
+            let core = core().await;
+            let (mut live, mut server) = live_socket(&core).await;
+            let too_large = u64::try_from(upgrade::MAX_EVENT_FRAME).unwrap() + 1;
+            let mut header = vec![0x81, 127];
+            header.extend_from_slice(&too_large.to_be_bytes());
 
-        let sending = async {
-            server.raw(&header).await;
-            server.next().await
-        };
-        let (close, update) = join!(sending, live.recv());
+            let sending = async {
+                server.raw(&header).await;
+                server.next().await
+            };
+            let (close, update) = join!(sending, live.recv());
 
-        let (why, retry_in) = disconnected(update);
-        assert!(matches!(why, Disconnect::Lost), "{why:?}");
-        assert!(within(retry_in, 1, 2), "{retry_in:?}");
-        assert!(matches!(close, Some(Message::Close(_))), "{close:?}");
+            let (why, retry_in) = disconnected(update);
+            assert!(matches!(why, Disconnect::Lost), "{why:?}");
+            assert!(within(retry_in, 1, 2), "{retry_in:?}");
+            assert!(matches!(close, Some(Message::Close(_))), "{close:?}");
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_frame_that_breaks_the_protocol_loses_the_socket() {
-        let core = core().await;
-        let (mut live, mut server) = live_socket(&core).await;
+        bounded(async {
+            let core = core().await;
+            let (mut live, mut server) = live_socket(&core).await;
 
-        // A text frame with a reserved bit set, which no extension here
-        // allows.
-        let ((), update) = join!(server.raw(&[0xC1, 0x00]), live.recv());
+            // A text frame with a reserved bit set, which no extension here
+            // allows.
+            let ((), update) = join!(server.raw(&[0xC1, 0x00]), live.recv());
 
-        let (why, retry_in) = disconnected(update);
-        assert!(matches!(why, Disconnect::Lost), "{why:?}");
-        assert!(within(retry_in, 1, 2), "{retry_in:?}");
+            let (why, retry_in) = disconnected(update);
+            assert!(matches!(why, Disconnect::Lost), "{why:?}");
+            assert!(within(retry_in, 1, 2), "{retry_in:?}");
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_live_socket_without_a_frame_for_30_s_is_taken_for_gone() {
-        let core = core().await;
-        let (mut live, _server) = live_socket(&core).await;
-        let since = Instant::now();
+        bounded(async {
+            let core = core().await;
+            let (mut live, _server) = live_socket(&core).await;
+            let since = Instant::now();
 
-        let (why, _) = disconnected(live.recv().await);
+            let (why, _) = disconnected(live.recv().await);
 
-        assert!(matches!(why, Disconnect::Silent), "{why:?}");
-        assert_eq!(since.elapsed(), SILENCE_TIMEOUT);
+            assert!(matches!(why, Disconnect::Silent), "{why:?}");
+            assert_eq!(since.elapsed(), SILENCE_TIMEOUT);
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn any_frame_moves_the_silence_deadline() {
-        let core = core().await;
-        let (mut live, mut server) = live_socket(&core).await;
-        let since = Instant::now();
+        bounded(async {
+            let core = core().await;
+            let (mut live, mut server) = live_socket(&core).await;
+            let since = Instant::now();
 
-        let pinging = async {
-            sleep(Duration::from_secs(29)).await;
-            server.ping().await;
-            let pong = server.next().await;
-            let close = server.next().await;
-            (pong, close, since.elapsed())
-        };
-        let ((pong, close, closed_after), update) = join!(pinging, live.recv());
+            let pinging = async {
+                sleep(Duration::from_secs(29)).await;
+                server.ping().await;
+                let pong = server.next().await;
+                let close = server.next().await;
+                (pong, close, since.elapsed())
+            };
+            let ((pong, close, closed_after), update) = join!(pinging, live.recv());
 
-        assert!(matches!(disconnected(update).0, Disconnect::Silent));
-        assert!(matches!(pong, Some(Message::Pong(_))), "{pong:?}");
-        assert!(matches!(close, Some(Message::Close(_))), "{close:?}");
-        assert_eq!(closed_after, Duration::from_secs(29) + SILENCE_TIMEOUT);
+            assert!(matches!(disconnected(update).0, Disconnect::Silent));
+            assert!(matches!(pong, Some(Message::Pong(_))), "{pong:?}");
+            assert!(matches!(close, Some(Message::Close(_))), "{close:?}");
+            assert_eq!(closed_after, Duration::from_secs(29) + SILENCE_TIMEOUT);
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_socket_that_never_says_ready_is_taken_for_gone_after_20_s() {
-        let core = core().await;
-        let _server = connects(&core, 1);
-        let mut live = live(&core);
-        let since = Instant::now();
+        bounded(async {
+            let core = core().await;
+            let _server = connects(&core, 1);
+            let mut live = live(&core);
+            let since = Instant::now();
 
-        let (why, retry_in) = disconnected(live.recv().await);
+            let (why, retry_in) = disconnected(live.recv().await);
 
-        assert!(matches!(why, Disconnect::Silent), "{why:?}");
-        assert_eq!(since.elapsed(), READY_TIMEOUT);
-        assert!(within(retry_in, 1, 2), "{retry_in:?}");
+            assert!(matches!(why, Disconnect::Silent), "{why:?}");
+            assert_eq!(since.elapsed(), READY_TIMEOUT);
+            assert!(within(retry_in, 1, 2), "{retry_in:?}");
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn an_event_before_ready_waits_the_plateau() {
-        let core = core().await;
-        let mut server = connects(&core, 1);
-        let mut live = live(&core);
+        bounded(async {
+            let core = core().await;
+            let mut server = connects(&core, 1);
+            let mut live = live(&core);
 
-        let ((), update) = join!(server.send_text(REMOVED), live.recv());
+            let ((), update) = join!(server.send_text(REMOVED), live.recv());
 
-        let (why, retry_in) = disconnected(update);
-        assert!(matches!(why, Disconnect::Lost), "{why:?}");
-        assert!(within(retry_in, 15, 30), "{retry_in:?}");
+            let (why, retry_in) = disconnected(update);
+            assert!(matches!(why, Disconnect::Lost), "{why:?}");
+            assert!(within(retry_in, 15, 30), "{retry_in:?}");
+        })
+        .await;
     }
 
     #[rstest::rstest]
@@ -1133,165 +1333,260 @@ mod tests {
     async fn a_101_with_a_wrong_or_missing_accept_drops_its_connection_and_waits_the_plateau(
         #[case] accept: Accept,
     ) {
-        let core = core().await;
-        core.transport().on(TICKET, Ok(ticket(1)));
-        let mut server = core
-            .transport()
-            .switch_with(accept, reqwest::header::HeaderMap::new());
-        let mut live = live(&core);
+        bounded(async {
+            let core = core().await;
+            core.transport().on(TICKET, Ok(ticket(1)));
+            let mut server = core
+                .transport()
+                .switch_with(accept, reqwest::header::HeaderMap::new());
+            let mut live = live(&core);
 
-        let (why, retry_in) = disconnected(live.recv().await);
+            let (why, retry_in) = disconnected(live.recv().await);
 
-        assert!(server.next().await.is_none(), "the client end is gone");
-        assert!(
-            matches!(
-                why,
-                Disconnect::NotOpened(ClientError::UnexpectedResponse {
-                    status: 101,
-                    reason: Unexpected::Handshake
-                })
-            ),
-            "{why:?}"
-        );
-        assert!(within(retry_in, 15, 30), "{retry_in:?}");
+            assert!(server.next().await.is_none(), "the client end is gone");
+            assert!(
+                matches!(
+                    why,
+                    Disconnect::NotOpened(ClientError::UnexpectedResponse {
+                        status: 101,
+                        reason: Unexpected::Handshake
+                    })
+                ),
+                "{why:?}"
+            );
+            assert!(within(retry_in, 15, 30), "{retry_in:?}");
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn the_sessions_end_ends_the_socket_at_once_with_its_close() {
-        let core = core().await;
-        let (mut live, mut server) = live_socket(&core).await;
-        core.discard().await.unwrap();
+        bounded(async {
+            let core = core().await;
+            let (mut live, mut server) = live_socket(&core).await;
+            core.discard().await.unwrap();
 
-        let (close, ended) = join!(server.next(), live.recv());
+            let (close, ended) = join!(server.next(), live.recv());
 
-        assert!(matches!(ended, Err(LiveEnd::NoSession)), "{ended:?}");
-        assert!(
-            matches!(&close, Some(Message::Close(Some(frame))) if u16::from(frame.code) == 1000),
-            "{close:?}"
-        );
-        assert!(matches!(live.recv().await, Err(LiveEnd::NoSession)));
+            assert!(matches!(ended, Err(LiveEnd::NoSession)), "{ended:?}");
+            assert!(
+                matches!(&close, Some(Message::Close(Some(frame))) if u16::from(frame.code) == 1000),
+                "{close:?}"
+            );
+            assert!(matches!(live.recv().await, Err(LiveEnd::NoSession)));
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_session_whose_refresh_finds_no_token_ends_it_at_the_ticket() {
-        let core = Arc::new(Core::new(
-            ServerUrl::parse("https://example.com").unwrap(),
-            Scripted::default(),
-            MemoryStore::new(),
-            Duration::from_secs(5),
-        ));
-        let mut live = live(&core);
+        bounded(async {
+            let core = Arc::new(Core::new(
+                ServerUrl::parse("https://example.com").unwrap(),
+                Scripted::default(),
+                MemoryStore::new(),
+                Duration::from_secs(5),
+            ));
+            let mut live = live(&core);
 
-        let ended = live.recv().await;
+            let ended = live.recv().await;
 
-        assert!(matches!(ended, Err(LiveEnd::NoSession)), "{ended:?}");
-        assert_eq!(core.transport().upgrades(), []);
+            assert!(matches!(ended, Err(LiveEnd::NoSession)), "{ended:?}");
+            assert_eq!(core.transport().upgrades(), []);
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_refused_certificate_ends_the_socket_with_no_wait() {
-        let core = core().await;
-        core.transport().on(
-            TICKET,
-            Err(TransportError::Certificate(Box::new(
-                std::io::Error::other("refused"),
-            ))),
-        );
-        let mut live = live(&core);
+        bounded(async {
+            let core = core().await;
+            core.transport().on(
+                TICKET,
+                Err(TransportError::Certificate(Box::new(
+                    std::io::Error::other("refused"),
+                ))),
+            );
+            let mut live = live(&core);
 
-        let ended = live.recv().await;
+            let ended = live.recv().await;
 
-        assert!(matches!(ended, Err(LiveEnd::Certificate)), "{ended:?}");
-        assert!(matches!(live.recv().await, Err(LiveEnd::Certificate)));
+            assert!(matches!(ended, Err(LiveEnd::Certificate)), "{ended:?}");
+            assert!(matches!(live.recv().await, Err(LiveEnd::Certificate)));
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_stop_before_the_first_recv_ends_it_without_a_connect() {
-        let core = core().await;
-        let mut live = live(&core);
-        live.stopper().stop();
+        bounded(async {
+            let core = core().await;
+            let mut live = live(&core);
+            live.stopper().stop();
 
-        let ended = live.recv().await;
+            let ended = live.recv().await;
 
-        assert!(matches!(ended, Err(LiveEnd::Stopped)), "{ended:?}");
-        assert_eq!(core.transport().routes(), Vec::<String>::new());
+            assert!(matches!(ended, Err(LiveEnd::Stopped)), "{ended:?}");
+            assert_eq!(core.transport().routes(), Vec::<String>::new());
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_stop_during_a_wait_ends_it_at_once() {
-        let core = core().await;
-        let (mut live, server) = live_socket(&core).await;
-        drop(server);
-        let (_, retry_in) = disconnected(live.recv().await);
-        let stop = live.stopper();
-        let since = Instant::now();
+        bounded(async {
+            let core = core().await;
+            let (mut live, server) = live_socket(&core).await;
+            drop(server);
+            let (_, retry_in) = disconnected(live.recv().await);
+            let stop = live.stopper();
+            let since = Instant::now();
 
-        let stopping = async {
-            sleep(retry_in / 2).await;
-            stop.stop();
-        };
-        let ((), ended) = join!(stopping, live.recv());
+            let stopping = async {
+                sleep(retry_in / 2).await;
+                stop.stop();
+            };
+            let ((), ended) = join!(stopping, live.recv());
 
-        assert!(matches!(ended, Err(LiveEnd::Stopped)), "{ended:?}");
-        assert_eq!(since.elapsed(), retry_in / 2);
-        assert_eq!(core.transport().upgrades().len(), 1);
+            assert!(matches!(ended, Err(LiveEnd::Stopped)), "{ended:?}");
+            assert_eq!(since.elapsed(), retry_in / 2);
+            assert_eq!(core.transport().upgrades().len(), 1);
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_live_socket_sends_only_pongs_and_its_close() {
-        let core = core().await;
-        let (mut live, mut server) = live_socket(&core).await;
-        let stop = live.stopper();
+        bounded(async {
+            let core = core().await;
+            let (mut live, mut server) = live_socket(&core).await;
+            let stop = live.stopper();
 
-        let talking = async {
-            server.ping().await;
-            let pong = server.next().await;
-            stop.stop();
-            let close = server.next().await;
-            (pong, close)
-        };
-        let ((pong, close), ended) = join!(talking, live.recv());
+            let talking = async {
+                server.ping().await;
+                let pong = server.next().await;
+                stop.stop();
+                let close = server.next().await;
+                (pong, close)
+            };
+            let ((pong, close), ended) = join!(talking, live.recv());
 
-        assert!(matches!(pong, Some(Message::Pong(_))), "{pong:?}");
-        assert!(
-            matches!(&close, Some(Message::Close(Some(frame))) if u16::from(frame.code) == 1000),
-            "{close:?}"
-        );
-        assert!(matches!(ended, Err(LiveEnd::Stopped)));
+            assert!(matches!(pong, Some(Message::Pong(_))), "{pong:?}");
+            assert!(
+                matches!(&close, Some(Message::Close(Some(frame))) if u16::from(frame.code) == 1000),
+                "{close:?}"
+            );
+            assert!(matches!(ended, Err(LiveEnd::Stopped)));
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_recv_dropped_during_a_wait_keeps_its_deadline() {
-        let core = core().await;
-        let (mut live, server) = live_socket(&core).await;
-        drop(server);
-        let (_, retry_in) = disconnected(live.recv().await);
-        let down = Instant::now();
-        let mut next = connects(&core, 2);
+        bounded(async {
+            let core = core().await;
+            let (mut live, server) = live_socket(&core).await;
+            drop(server);
+            let (_, retry_in) = disconnected(live.recv().await);
+            let down = Instant::now();
+            let mut next = connects(&core, 2);
 
-        let dropped = timeout(retry_in / 2, live.recv()).await;
-        let ((), again) = join!(next.send_text(READY), live.recv());
+            let dropped = timeout(retry_in / 2, live.recv()).await;
+            let ((), again) = join!(next.send_text(READY), live.recv());
 
-        assert!(dropped.is_err(), "nothing came within half the wait");
-        assert!(matches!(
-            again,
-            Ok(LiveUpdate::Refetch(RefetchReason::Ready))
-        ));
-        assert_eq!(core.transport().upgrades()[1].at - down, retry_in);
+            assert!(dropped.is_err(), "nothing came within half the wait");
+            assert!(matches!(
+                again,
+                Ok(LiveUpdate::Refetch(RefetchReason::Ready))
+            ));
+            assert_eq!(core.transport().upgrades()[1].at - down, retry_in);
+        })
+        .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_recv_dropped_while_the_servers_close_drains_keeps_its_prompt_reconnect() {
+        bounded(async {
+            let core = core().await;
+            let (mut live, mut server) = live_socket(&core).await;
+            // The client's pong to this ping waits unread in the pipe, so the
+            // close's answer can't go out until the server reads.
+            let closing = async {
+                server.ping().await;
+                server.close(Some(4001)).await;
+            };
+            let ((), dropped) = join!(closing, timeout(CLOSE_TIMEOUT / 2, live.recv()));
+
+            let reading = async { (server.next().await, server.next().await) };
+            let ((pong, answer), update) = join!(reading, live.recv());
+
+            assert!(dropped.is_err(), "the drain was still waiting");
+            assert!(matches!(pong, Some(Message::Pong(_))), "{pong:?}");
+            assert!(
+                matches!(&answer, Some(Message::Close(Some(frame))) if u16::from(frame.code) == 4001),
+                "{answer:?}"
+            );
+            let (why, retry_in) = disconnected(update);
+            assert!(
+                matches!(why, Disconnect::Closed { code: Some(4001) }),
+                "{why:?}"
+            );
+            assert_eq!(retry_in, Duration::ZERO, "the expected 4001's prompt reconnect");
+        })
+        .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_recv_dropped_during_its_own_close_keeps_its_outcome_and_deadline() {
+        bounded(async {
+            let core = core().await;
+            let mut server = connects(&core, 1);
+            let mut live = live(&core);
+            // An event before `ready` closes the socket; the client's pong to
+            // the ping before it waits unread, so the close can't go out.
+            let sending = async {
+                server.ping().await;
+                server.send_text(REMOVED).await;
+            };
+            let ((), dropped) = join!(sending, async {
+                let decided = Instant::now();
+                (timeout(CLOSE_TIMEOUT / 2, live.recv()).await, decided)
+            });
+            let (dropped, decided) = dropped;
+
+            let update = live.recv().await;
+
+            assert!(dropped.is_err(), "the close was still waiting");
+            let (why, retry_in) = disconnected(update);
+            assert!(matches!(why, Disconnect::Lost), "{why:?}");
+            assert!(
+                within(retry_in, 15, 30),
+                "the early event's plateau: {retry_in:?}"
+            );
+            assert_eq!(
+                decided.elapsed(),
+                CLOSE_TIMEOUT,
+                "the close was given up at its own deadline"
+            );
+        })
+        .await;
     }
 
     #[tokio::test(start_paused = true)]
     async fn a_dropped_socket_has_ended_and_its_stopper_shows_no_secret() {
-        let core = core().await;
-        let (live, _server) = live_socket(&core).await;
-        let stop = live.stopper();
+        bounded(async {
+            let core = core().await;
+            let (live, _server) = live_socket(&core).await;
+            let stop = live.stopper();
 
-        drop(live);
+            drop(live);
 
-        timeout(Duration::from_secs(1), stop.ended()).await.unwrap();
-        assert_eq!(
-            format!("{stop:?}"),
-            "LiveStop { stopped: false, ended: true }"
-        );
+            timeout(Duration::from_secs(1), stop.ended()).await.unwrap();
+            assert_eq!(
+                format!("{stop:?}"),
+                "LiveStop { stopped: false, ended: true }"
+            );
+        })
+        .await;
     }
 }

@@ -1039,7 +1039,7 @@ Built as planned, one PR on `p11/p11.8-client-socket`, in ten commits: PR #71's 
 
 *Snapshots* (read before accepting): the OpenAPI document (`AuditPage.unreadable`, the audit docs' descriptions) and the audit page (`auth__audit__audit_page`: a realistic `bot.set_server` entry and `unreadable`), both in the first commit.
 
-*Size:* about 5,950 lines added and 1,040 removed, within the planned 5,000 to 7,000; about 50 of them generated (snapshots, `.sqlx`, the TypeScript export).
+*Size:* about 5,950 lines added and 1,040 removed, within the planned 5,000 to 7,000; 83 of them generated (snapshots, `.sqlx`, the TypeScript export).
 
 ### Notes for later groups
 - **B2 (P11.3's history):** built (above).

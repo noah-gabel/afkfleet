@@ -986,14 +986,26 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
     /// at once, and never shows either.
     pub(crate) async fn events_ticket(
         self: &Arc<Self>,
-    ) -> Result<(SecretString, SecretString), ClientError> {
+    ) -> Result<(SecretString, SecretString), Box<TicketFailure>> {
         let answer = self
             .authed(Method::POST, self.server.api(&["events", "ticket"]), None)
-            .await?;
-        let ticket: EventTicketResponse = expect_json(answer, 200)?;
+            .await
+            .map_err(TicketFailure::unanswered)?;
+        let refusal = Refusal {
+            status: answer.status,
+            retry_after: answer.retry_after,
+        };
+        let ticket: EventTicketResponse = expect_json(answer, 200).map_err(|error| {
+            Box::new(TicketFailure {
+                error,
+                refusal: (refusal.status != 200).then_some(refusal),
+            })
+        })?;
         // The token the ticket's request went with, or a newer one of the
         // same session: the ticket belongs to the session.
-        let access = self.current_access().ok_or(ClientError::NoSession)?;
+        let access = self
+            .current_access()
+            .ok_or_else(|| TicketFailure::unanswered(ClientError::NoSession))?;
         Ok((SecretString::from(ticket.ticket.expose()), access.token))
     }
 
@@ -1359,6 +1371,32 @@ fn transport_error(error: TransportError) -> ClientError {
         TransportError::Certificate(cause) => ClientError::Certificate(cause),
         TransportError::TimedOut(cause) => ClientError::TimedOut(cause),
         TransportError::TooLarge => ClientError::TooLarge,
+    }
+}
+
+/// Why a live events ticket wasn't had: the error, and the answer's status
+/// and `Retry-After` when the server refused, whatever its body (a proxy's
+/// 429 or 503 is plain text; ADR-0020, G2's first commit, point c).
+#[derive(Debug)]
+pub(crate) struct TicketFailure {
+    pub(crate) error: ClientError,
+    pub(crate) refusal: Option<Refusal>,
+}
+
+/// A refused answer's status and the wait it asked for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct Refusal {
+    pub(crate) status: u16,
+    pub(crate) retry_after: Option<Duration>,
+}
+
+impl TicketFailure {
+    /// `error`, with no answer to read.
+    fn unanswered(error: ClientError) -> Box<Self> {
+        Box::new(Self {
+            error,
+            refusal: None,
+        })
     }
 }
 
