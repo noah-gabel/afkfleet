@@ -8,7 +8,8 @@
 // and packages/ui's web entry the way they ship (into target/e2e/), builds the e2e bundle,
 // and runs this check:
 // - no shipped bundle holds the e2e build's marker (e2e/app/marker.ts, repeated here on
-//   purpose) or fetchInvoke's path `/e2e/ipc/`;
+//   purpose), fetchInvoke's path `/e2e/ipc/`, or the live events hook's name
+//   (e2e/app/push.ts's `PUSH_HOOK`, repeated too);
 // - the e2e bundle does hold the marker, so the search finds what it looks for;
 // - every bundle exists and holds files, so a skipped build can't pass.
 // Exits with 1, naming each problem. Tests: scripts/e2e-bundle-guard.test.mjs.
@@ -21,7 +22,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 export const MARKER = "afkfleet-e2e-build-only";
 
 /** What no shipped bundle may hold. */
-export const NEEDLES = [MARKER, "/e2e/ipc/"];
+export const NEEDLES = [MARKER, "/e2e/ipc/", "__afkfleetE2ePush"];
 
 /** Every file under `folder`, as `{ path, text }`, `path` relative to `folder`. */
 export function files(folder) {

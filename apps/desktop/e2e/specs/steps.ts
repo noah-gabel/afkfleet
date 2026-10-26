@@ -1,5 +1,8 @@
 // What the e2e specs do on a page, as a user does it (Plan.md P8.9).
+import type { LiveUpdateMessage } from "@afkfleet/ui/generated/LiveUpdateMessage";
 import type { Page } from "@playwright/test";
+
+import { PUSH_HOOK } from "../app/push";
 import { type FakeBackend, PASSWORD } from "../fake/backend";
 import { expect } from "../fixtures";
 
@@ -47,6 +50,16 @@ export async function setUp2fa(page: Page, backend: FakeBackend, username: strin
   await enterCode(page, backend.code(username));
   await expectHome(page, username);
   return copied;
+}
+
+/** Pushes `update` into the page's live events, as the app's Rust side sends one (push.ts). */
+export async function push(page: Page, update: LiveUpdateMessage): Promise<void> {
+  await page.evaluate(
+    ([hook, sent]) => {
+      (window as unknown as Record<string, (update: unknown) => void>)[hook]?.(sent);
+    },
+    [PUSH_HOOK, update] as const,
+  );
 }
 
 /** Home, for `username`: the bots' heading, and the Header's user, with `role` when given. */
