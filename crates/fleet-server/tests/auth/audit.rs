@@ -188,6 +188,25 @@ async fn each_entry_shows_what_the_log_stores_and_the_servers_own_has_no_actor_i
     setup
         .record(
             NewAuditEntry::new(
+                at(T0 + 500),
+                AuditAction::USER_SET_DISABLED,
+                AuditOutcome::Success,
+            )
+            .actor(admin.id)
+            .ip("192.0.2.10".parse().unwrap())
+            .target(AuditTarget::User(admin.id))
+            .metadata(
+                AuditMetadata::new()
+                    .flag("disabled", true)
+                    .unwrap()
+                    .int("sessions_revoked", 2)
+                    .unwrap(),
+            ),
+        )
+        .await;
+    setup
+        .record(
+            NewAuditEntry::new(
                 at(T0 + 1000),
                 AuditAction::BOT_SET_SERVER,
                 AuditOutcome::Success,
@@ -197,9 +216,9 @@ async fn each_entry_shows_what_the_log_stores_and_the_servers_own_has_no_actor_i
             .target(AuditTarget::Bot(bot))
             .metadata(
                 AuditMetadata::new()
-                    .text("address", "play.example.com")
+                    .text("server_host", "play.example.com")
                     .unwrap()
-                    .flag("first", true)
+                    .int("server_port", 25565)
                     .unwrap(),
             ),
         )
@@ -234,7 +253,7 @@ async fn each_entry_shows_what_the_log_stores_and_the_servers_own_has_no_actor_i
         .await;
 
     let seen = setup
-        .get(&format!("{AUDIT}?limit=3"), Some(&admin.token))
+        .get(&format!("{AUDIT}?limit=4"), Some(&admin.token))
         .await;
 
     assert_eq!(seen.status, 200, "{}", seen.text);
@@ -345,6 +364,60 @@ async fn names_and_values_only_a_newer_server_records_list_as_text(
             { "key": "nested", "text": "{\"a\":1}" },
         ])
     );
+}
+
+/// The second-newest entry no longer reads back (its time changed outside
+/// the server): every page around it answers 200, its ID is in its page's
+/// `unreadable`, the pages chain to the oldest entry, and no body holds the
+/// stored value (ADR-0020, S52).
+#[sqlx::test(migrations = false)]
+async fn an_entry_that_doesnt_read_back_lists_by_its_id_and_the_pages_go_on_past_it(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    const BROKEN_AT: &str = "2027-13-45T08:00:00.000Z";
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    let all = setup.audit_ids().await;
+    let broken = all[1];
+    sqlx::query!(
+        "UPDATE audit_log SET at = ? WHERE id = ?",
+        BROKEN_AT,
+        broken
+    )
+    .execute(setup.db.write_pool())
+    .await
+    .unwrap();
+
+    let mut listed = Vec::new();
+    let mut unreadable = Vec::new();
+    let mut next = None::<i64>;
+    for _ in 0..all.len() {
+        let query = next.map_or(String::new(), |before| format!("&before={before}"));
+        let seen = setup
+            .get(&format!("{AUDIT}?limit=2{query}"), Some(&admin.token))
+            .await;
+        assert_eq!(seen.status, 200, "{}", seen.text);
+        assert!(!seen.text.contains("2027-13-45"), "{}", seen.text);
+        let skipped: Vec<i64> = seen.body["unreadable"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|id| id.as_i64().unwrap())
+            .collect();
+        listed.extend(ids(&seen.body));
+        listed.extend(&skipped);
+        unreadable.extend(skipped);
+        next = seen.body.get("next").map(|next| next.as_i64().unwrap());
+        if next.is_none() {
+            break;
+        }
+    }
+
+    listed.sort_unstable_by(|a, b| b.cmp(a));
+    assert_eq!(listed, all, "every entry, each once");
+    assert_eq!(unreadable, [broken]);
+    assert_eq!(next, None, "the last page was reached");
 }
 
 /// Reading the log twice, the second within the session's touch minute:

@@ -14,12 +14,9 @@ use uuid::Uuid;
 use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::store_error;
 use crate::ports::audit::{
-    AuditEntryId, AuditPage, AuditRecord, FailedCodeAttempts, NewAuditEntry,
+    AuditEntryId, AuditPage, AuditRecord, FailedCodeAttempts, NewAuditEntry, TABLE,
 };
 use crate::ports::store::StoreError;
-
-/// The table, as errors name it.
-const TABLE: &str = "audit_log";
 
 /// A row as stored, before its values are checked.
 struct AuditRow {

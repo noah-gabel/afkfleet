@@ -32,32 +32,178 @@ fn sources(dir: &Path, found: &mut Vec<PathBuf>) {
     }
 }
 
-/// The server's own sources call `Store::retention_batch` in one place, the
-/// retention service: no other service opens the transaction that deletes
-/// without an audit entry.
+/// `text` with its comments, string literals and char literals blanked out,
+/// newlines kept, so what's left is code and its lines still count.
+fn code_of(text: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut code = String::with_capacity(text.len());
+    let mut i = 0;
+    let blank = |c: char| if c == '\n' { '\n' } else { ' ' };
+    while i < chars.len() {
+        let rest = &chars[i..];
+        if rest.starts_with(&['/', '/']) {
+            while i < chars.len() && chars[i] != '\n' {
+                code.push(' ');
+                i += 1;
+            }
+        } else if rest.starts_with(&['/', '*']) {
+            let mut depth = 0_usize;
+            loop {
+                let rest = &chars[i..];
+                if rest.starts_with(&['/', '*']) {
+                    depth += 1;
+                    code.push_str("  ");
+                    i += 2;
+                } else if rest.starts_with(&['*', '/']) {
+                    depth -= 1;
+                    code.push_str("  ");
+                    i += 2;
+                    if depth == 0 {
+                        break;
+                    }
+                } else {
+                    code.push(blank(chars[i]));
+                    i += 1;
+                }
+            }
+        } else if chars[i] == 'r'
+            && (i == 0 || !is_ident(chars[i - 1]))
+            && rest.iter().skip(1).take_while(|c| **c == '#').count() + 1 < rest.len()
+            && rest[1 + rest.iter().skip(1).take_while(|c| **c == '#').count()] == '"'
+        {
+            let hashes = rest.iter().skip(1).take_while(|c| **c == '#').count();
+            let close: Vec<char> = std::iter::once('"')
+                .chain(std::iter::repeat_n('#', hashes))
+                .collect();
+            let open = 2 + hashes;
+            code.extend(std::iter::repeat_n(' ', open));
+            i += open;
+            while !chars[i..].starts_with(&close) {
+                code.push(blank(chars[i]));
+                i += 1;
+            }
+            code.extend(std::iter::repeat_n(' ', close.len()));
+            i += close.len();
+        } else if chars[i] == '"' {
+            code.push(' ');
+            i += 1;
+            while chars[i] != '"' {
+                let step = if chars[i] == '\\' { 2 } else { 1 };
+                for c in &chars[i..i + step] {
+                    code.push(blank(*c));
+                }
+                i += step;
+            }
+            code.push(' ');
+            i += 1;
+        } else if chars[i] == '\'' && char_literal_len(rest).is_some() {
+            let len = char_literal_len(rest).unwrap();
+            code.extend(std::iter::repeat_n(' ', len));
+            i += len;
+        } else {
+            code.push(chars[i]);
+            i += 1;
+        }
+    }
+    code
+}
+
+/// Whether `c` may be part of an identifier.
+fn is_ident(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// The length of the char literal `rest` starts with (`'x'`, `'\n'`,
+/// `'\''`, `'\u{1F600}'`), or `None` for a lifetime or a label.
+fn char_literal_len(rest: &[char]) -> Option<usize> {
+    match rest.get(1)? {
+        '\\' => rest
+            .iter()
+            .skip(3)
+            .position(|c| *c == '\'')
+            .map(|at| at + 4),
+        _ => (rest.get(2) == Some(&'\'')).then_some(3),
+    }
+}
+
+/// Each use of the identifier `name` in `code`: its line, and the code on
+/// that line before it.
+fn uses<'a>(code: &'a str, name: &str) -> Vec<(usize, &'a str)> {
+    code.lines()
+        .enumerate()
+        .flat_map(|(index, line)| {
+            line.match_indices(name)
+                .filter(move |(at, _)| {
+                    let before = line[..*at].chars().next_back();
+                    let after = line[at + name.len()..].chars().next();
+                    !before.is_some_and(is_ident) && !after.is_some_and(is_ident)
+                })
+                .map(move |(at, _)| (index + 1, &line[..at]))
+        })
+        .collect()
+}
+
+#[test]
+fn the_code_reader_skips_comments_and_literals_and_keeps_lines() {
+    let text = concat!(
+        "let a = 1; // x_y\n",
+        "/* x_y /* x_y */ */ let b = \"x_y \\\" x_y\";\n",
+        "let c = r#\"x_y \"x_y\"# ; let d = '\"'; fn e<'a>(f: &'a str) {}\n",
+        "x_y(); x_yz(); ax_y();\n",
+    );
+
+    let code = code_of(text);
+
+    assert_eq!(code.lines().count(), 4);
+    assert_eq!(uses(&code, "x_y"), [(4, "")]);
+    assert!(code.contains("fn e<'a>(f: &'a str)"), "{code}");
+}
+
+/// The server's own sources name `Store::retention_batch` only where it's
+/// declared, where the store implements it and once in the retention
+/// service, which calls it: no other service opens the transaction that
+/// deletes without an audit entry, by any path (a method call, a fully
+/// qualified call, a method reference, a second caller in the service).
 #[test]
 fn only_the_retention_service_opens_a_retention_batch() {
     let src = Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
     let mut files = Vec::new();
     sources(&src, &mut files);
 
-    let callers: Vec<String> = files
+    let mut found: Vec<String> = Vec::new();
+    for file in &files {
+        let code = code_of(&std::fs::read_to_string(file).unwrap());
+        let name = file
+            .strip_prefix(&src)
+            .unwrap()
+            .to_string_lossy()
+            .replace('\\', "/");
+        for (line, before) in uses(&code, "retention_batch") {
+            let kind = if before.trim_end().ends_with("fn") {
+                "fn"
+            } else if before.trim_end().ends_with('.') {
+                "call"
+            } else {
+                "other"
+            };
+            found.push(format!("{name}:{kind}:{line}"));
+        }
+    }
+    let shape: Vec<String> = found
         .iter()
-        .filter(|file| {
-            std::fs::read_to_string(file)
-                .unwrap()
-                .contains(".retention_batch(")
-        })
-        .map(|file| {
-            file.strip_prefix(&src)
-                .unwrap()
-                .to_string_lossy()
-                .replace('\\', "/")
-        })
+        .map(|use_| use_.rsplit_once(':').unwrap().0.to_owned())
         .collect();
 
     assert!(files.len() > 100, "the sources were read: {}", files.len());
-    assert_eq!(callers, ["app/retention.rs"]);
+    let mut expected = [
+        "app/retention.rs:call",
+        "infra/sqlite/store.rs:fn",
+        "ports/store.rs:fn",
+    ];
+    expected.sort_unstable();
+    let mut shape = shape;
+    shape.sort();
+    assert_eq!(shape, expected, "every use: {found:?}");
 }
 
 /// One kind of the retention's deletes, in the service's order.

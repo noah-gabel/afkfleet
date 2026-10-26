@@ -22,8 +22,12 @@ use super::name::{self, Dots};
 ///   `security.refresh_token_reuse`.
 /// - **Success or failure is the outcome column,** never part of the name.
 /// - **Details** such as `via` and `role` go into the metadata. Their values
-///   are names from closed enums, or typed values the server made (IDs,
-///   timestamps), never text a client sent.
+///   are names from closed enums, typed values the server made (IDs,
+///   timestamps, counts), or a value a user typed or a Minecraft server or
+///   an agent reported, cleaned and cut as [`super::AuditMetadata`] stores
+///   text (a server address, a Minecraft name or UUID, an agent's name and
+///   version, a fingerprint); never a secret, a password, a chat line or a
+///   command's arguments.
 /// - **A merged name is never renamed or dropped:** it's stored in rows
 ///   forever. A snapshot of every name makes any change show in review.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -369,8 +373,8 @@ audit_actions! {
     /// Outcome: Success. No actor and no IP. Target: the bot (which may be
     /// gone with its account). Metadata: `agent` and `reason`: `removed` (the
     /// agent's `Removed` of a bot the server released), `not_running` (its
-    /// hello didn't list the bot) or `agent_released` (the server's host
-    /// released the disabled agent's bots).
+    /// hello didn't list the bot) or `agent_released` (the disabled agent's
+    /// bots were released, through the API or by the server's host).
     BOT_DETACH = "bot.detach";
 
     /// An agent's hello listed a bot the server hadn't assigned to it
@@ -381,13 +385,15 @@ audit_actions! {
     /// agent its row names, when it names one).
     BOT_STRAY = "bot.stray";
 
-    /// The server's host released a disabled agent's bots (P10.5, ADR-0019,
-    /// S32, R25): every bot assigned to it and every release record naming
-    /// it cleared in one transaction, each with its own `bot.detach`, so the
-    /// bots can be placed elsewhere. The operator vouches that the agent's
-    /// host and its bots are stopped. Outcome: Success. No actor and no IP.
-    /// Target: the agent. Metadata: `count` (how many bots and records) and
-    /// `via` (`cli`). Releasing nothing is no entry.
+    /// An Admin or the Owner, or the server's host, released a disabled
+    /// agent's bots (P10.5, ADR-0019, S32, R25; P11.9, ADR-0020, S49): every
+    /// bot assigned to it and every release record naming it cleared in one
+    /// transaction, each with its own `bot.detach`, so the bots can be placed
+    /// elsewhere. Whoever releases vouches that the agent's host and its bots
+    /// are stopped. Outcome: Success. Actor and IP: the user's (`via` =
+    /// `http`), or none from the host (`via` = `cli`). Target: the agent.
+    /// Metadata: `count` (how many bots and records) and `via`. Releasing
+    /// nothing is no entry.
     AGENT_RELEASE = "agent.release";
 
     /// A user set a bot's server address (P11.2, ADR-0019, S53). Outcome:

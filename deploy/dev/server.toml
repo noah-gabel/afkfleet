@@ -23,7 +23,7 @@ dev_mode = true
 
 [log]
 format = "pretty"
-filter = "info"                          # EnvFilter syntax; azalea_auth stays at info
+filter = "info"                          # EnvFilter syntax; azalea_auth and tungstenite stay at info
 
 [vault]
 active_key_id = 1                        # the key in master_key_files.1, from just dev-server

@@ -414,15 +414,22 @@ describe("checkClientFeatures", () => {
   /** fleet-client's line as `cargo tree` prints it, at a placeholder path. */
   const LINE = "fleet-client v0.1.0 (/path/to/afkfleet/crates/fleet-client)|";
 
-  it("accepts fleet-client with no features, or with others", () => {
+  it("accepts fleet-client with exactly the features it lists: none", () => {
     assert.deepEqual(checkClientFeatures(`${LINE}\n`), []);
-    assert.deepEqual(checkClientFeatures(`${LINE}something\r\n`), []);
+    assert.deepEqual(checkClientFeatures(`${LINE}\r\n`), []);
   });
 
-  it("names dev-console as never allowed in the app", () => {
-    const output = `${LINE}other,dev-console\n`;
+  it("refuses every feature it doesn't list, each by name", () => {
+    const problems = checkClientFeatures(`${LINE}other,dev-console\r\n`);
 
-    assert.match(checkClientFeatures(output).join("\n"), /dev-console.*never/);
+    assert.equal(problems.length, 2);
+    assert.match(problems[0] ?? "", /`other`.*S57/);
+    assert.match(problems[1] ?? "", /`dev-console`.*S57/);
+  });
+
+  it("names a listed feature fleet-client lacks", () => {
+    assert.match(checkClientFeatures(`${LINE}\n`, ["sink"]).join("\n"), /lacks.*sink/);
+    assert.deepEqual(checkClientFeatures(`${LINE}sink\n`, ["sink"]), []);
   });
 
   it("refuses output it can't read", () => {

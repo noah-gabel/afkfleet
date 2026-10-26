@@ -9,7 +9,8 @@
 //!   `SafeInt` cursor, without filters (S48); each built by
 //!   [`audit_entry`] the same for every viewer (ADR-0010's P7.13): what the
 //!   log stores, its names as `Open` values, the server's own entries
-//!   without actor, IP or target.
+//!   without actor, IP or target. A row that doesn't read back is listed by
+//!   its ID alone, under `unreadable`, so the pages go on past it (S52).
 //! - **Nothing else:** it reads through the read connections, writes
 //!   nothing and tells the live events sockets nothing.
 
@@ -23,6 +24,7 @@ use fleet_core::audit::{RecordedTarget, RecordedValue};
 use fleet_core::authz::{Permission, ResourceContext};
 
 use super::timestamp;
+use crate::app::audit::ListedAuditEntry;
 use crate::http::error::ApiError;
 use crate::http::extractors::{AuthUser, ValidQuery};
 use crate::http::router::AppState;
@@ -58,12 +60,19 @@ pub(crate) async fn list(
         limit: AuditLimit::new(query.limit_or_default()).map_err(ApiError::internal)?,
     };
     let listed = state.audit.page(page).await?;
+    let mut items = Vec::new();
+    let mut unreadable = Vec::new();
+    for entry in &listed.items {
+        match entry {
+            ListedAuditEntry::Readable(record) => items.push(audit_entry(record)?),
+            ListedAuditEntry::Unreadable(id) => {
+                unreadable.push(SafeInt::try_new(id.get()).map_err(ApiError::internal)?);
+            }
+        }
+    }
     Ok(Json(AuditPage {
-        items: listed
-            .items
-            .iter()
-            .map(audit_entry)
-            .collect::<Result<_, _>>()?,
+        items,
+        unreadable,
         next: listed
             .next
             .map(|next| SafeInt::try_new(next.get()))

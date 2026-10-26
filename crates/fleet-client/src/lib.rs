@@ -11,19 +11,11 @@
 //!   memory, the refresh token only in a [`SessionStore`] (the OS keychain in
 //!   the app), and the password step's mfa or setup token only in its
 //!   memory. Methods take codes, never tokens, and nothing the client
-//!   returns, logs or formats holds one.
-//!   *One exception, for the dev console alone* (ADR-0020, U15, R16): with
-//!   the non-default `dev-console` feature, `Client::events_handshake`
-//!   hands the live events socket's handshake, the session's access token
-//!   as its `Authorization` value, to `just dev-bots`' `events`. That
-//!   example and this crate's tests enable it, through the crate's
-//!   dev-dependency on itself; so do the lint and workspace-wide test
-//!   builds, since `just clippy` passes `--all-features` and cargo unifies
-//!   the dev-dependency's feature into the one fleet-client every member's
-//!   tests link. The desktop app's own build never has it, so the app can't
-//!   call it: `just tauri-check` reads its resolved features and fails if
-//!   it ever does. P11.8 opens the socket inside the client, and removes the
-//!   feature and this exception.
+//!   returns, logs or formats holds one. The live events socket opens inside
+//!   the client too ([`LiveEvents`]): its tickets and the access token it
+//!   upgrades with stay there (ADR-0020, U25, S53, R80). The crate has no
+//!   features, and `just tauri-check` fails if the desktop app's build ever
+//!   resolves one (S57).
 //! - **One refresh at a time, and only on a 401 `unauthorized` from an
 //!   authenticated route** (ADR-0016). A request whose token a refresh
 //!   already replaced is retried once with the current one instead. An
@@ -38,9 +30,15 @@
 //!   `session.rs`.
 //! - **Bounded:** a connection gets [`CONNECT_TIMEOUT`], a whole request
 //!   [`REQUEST_TIMEOUT`], each store call [`STORE_TIMEOUT`], and a response
-//!   body at most [`MAX_RESPONSE_BYTES`].
+//!   body at most [`MAX_RESPONSE_BYTES`]. The live events socket's upgrade
+//!   gets the request's timeout too, and each of its frames at most
+//!   [`MAX_RESPONSE_BYTES`].
 //! - **No redirects, no proxies, no automatic retries.** A 429 or 503 comes
-//!   back with its `retry_after`.
+//!   back with its `retry_after`. The one thing that tries again by itself
+//!   is the live events socket, by its own reconnect policy: jittered waits
+//!   of 1 to 30 s, a `Retry-After` up to 60 s, one prompt reconnect for the
+//!   4001 an access token's end brings, and a new ticket every time
+//!   ([`LiveEvents`]; ADR-0020, S54). A REST call never retries.
 //! - **Certificates are always checked:** against the system's roots, or
 //!   only against a configured CA ([`Trust`]).
 //!
@@ -48,7 +46,13 @@
 //! Through `tracing`, never a token, a body or a query: `debug` for a
 //! refresh and a retry, `info` when the session ends, `warn` when a new
 //! refresh token couldn't be saved (the store is cleared instead), `error`
-//! when the store couldn't even be cleared.
+//! when the store couldn't even be cleared. The live events socket logs each
+//! time it goes down with its cause and wait: `info` for a 1001 and the
+//! expected 4001, `warn` for 4000, 4002, 1008, a code the protocol doesn't
+//! name, an answer that doesn't read, silence or a missing `ready`, and a
+//! cause repeated in a row at `debug`; never its ticket, its URL or a
+//! frame. tungstenite logs every frame at `trace`, so every binary's filter
+//! caps its targets at `info` (fleet-startup; ADR-0020, S56).
 
 use core::time::Duration;
 
@@ -65,6 +69,7 @@ mod transport;
 
 pub use client::{Client, ClientConfig, LoginStep};
 pub use error::{ApiFailure, BuildError, ClientError, Unexpected};
+pub use events::{Disconnect, LiveEnd, LiveEvents, LiveStop, LiveUpdate, RefetchReason};
 pub use link::{VerifiedLink, VerifiedLinkError};
 pub use store::{MemoryStore, SessionStore, StoreError, StoreOp};
 pub use trust::{CaError, CustomCa, Trust};

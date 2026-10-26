@@ -9,59 +9,75 @@ use crate::id::{
     AccountId, AgentId, BotId, EnrollmentTokenId, InviteId, ModeId, SessionId, UserId,
 };
 
-/// What an entry touched, stored as `target_type` and `target_id`. Each
-/// variant holds its typed ID, so the type and the ID can never disagree.
-/// Later phases add variants when their ID types arrive.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum AuditTarget {
-    /// A user.
-    User(UserId),
-    /// A linked Minecraft account.
-    Account(AccountId),
-    /// A bot.
-    Bot(BotId),
-    /// An agent.
-    Agent(AgentId),
-    /// A mode.
-    Mode(ModeId),
-    /// A session: one login's token family (P7, group D).
-    Session(SessionId),
-    /// An invite to register (P7, group E).
-    Invite(InviteId),
-    /// An agent's enrollment token (P10.3).
-    EnrollmentToken(EnrollmentTokenId),
+/// Defines [`AuditTarget`] from one list of variants, each with its ID type
+/// and its stored name, so the variants, [`AuditTarget::KINDS`], the names
+/// and reading a stored target back can't drift apart.
+macro_rules! audit_targets {
+    ($($(#[doc = $doc:literal])* $variant:ident($id:ident) = $name:literal;)*) => {
+        /// What an entry touched, stored as `target_type` and `target_id`.
+        /// Each variant holds its typed ID, so the type and the ID can never
+        /// disagree. Later phases add variants when their ID types arrive.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+        pub enum AuditTarget {
+            $(
+                $(#[doc = $doc])*
+                $variant($id),
+            )*
+        }
+
+        impl AuditTarget {
+            /// Every stored type name, in the variants' order.
+            pub const KINDS: &'static [&'static str] = &[$($name),*];
+
+            /// Returns the stable name stored in the `target_type` column.
+            #[must_use]
+            pub const fn kind(&self) -> &'static str {
+                match self {
+                    $(Self::$variant(_) => $name,)*
+                }
+            }
+
+            /// Returns the ID stored in the `target_id` column.
+            #[must_use]
+            pub fn id(&self) -> Uuid {
+                match self {
+                    $(Self::$variant(id) => *id.as_uuid(),)*
+                }
+            }
+
+            /// The known target a stored `kind` names, with `id` as its typed
+            /// ID; `None` for a kind this version doesn't know.
+            fn known(kind: &str, id: Uuid) -> Option<Result<Self, AuditError>> {
+                match kind {
+                    $($name => Some(
+                        $id::try_from(id)
+                            .map(Self::$variant)
+                            .map_err(|_| AuditError::TargetId),
+                    ),)*
+                    _ => None,
+                }
+            }
+        }
+    };
 }
 
-impl AuditTarget {
-    /// Returns the stable name stored in the `target_type` column.
-    #[must_use]
-    pub const fn kind(&self) -> &'static str {
-        match self {
-            Self::User(_) => "user",
-            Self::Account(_) => "account",
-            Self::Bot(_) => "bot",
-            Self::Agent(_) => "agent",
-            Self::Mode(_) => "mode",
-            Self::Session(_) => "session",
-            Self::Invite(_) => "invite",
-            Self::EnrollmentToken(_) => "enrollment_token",
-        }
-    }
-
-    /// Returns the ID stored in the `target_id` column.
-    #[must_use]
-    pub fn id(&self) -> Uuid {
-        match self {
-            Self::User(id) => *id.as_uuid(),
-            Self::Account(id) => *id.as_uuid(),
-            Self::Bot(id) => *id.as_uuid(),
-            Self::Agent(id) => *id.as_uuid(),
-            Self::Mode(id) => *id.as_uuid(),
-            Self::Session(id) => *id.as_uuid(),
-            Self::Invite(id) => *id.as_uuid(),
-            Self::EnrollmentToken(id) => *id.as_uuid(),
-        }
-    }
+audit_targets! {
+    /// A user.
+    User(UserId) = "user";
+    /// A linked Minecraft account.
+    Account(AccountId) = "account";
+    /// A bot.
+    Bot(BotId) = "bot";
+    /// An agent.
+    Agent(AgentId) = "agent";
+    /// A mode.
+    Mode(ModeId) = "mode";
+    /// A session: one login's token family (P7, group D).
+    Session(SessionId) = "session";
+    /// An invite to register (P7, group E).
+    Invite(InviteId) = "invite";
+    /// An agent's enrollment token (P10.3).
+    EnrollmentToken(EnrollmentTokenId) = "enrollment_token";
 }
 
 /// A stored target type this version may not know: a name of `a`–`z`,
@@ -112,18 +128,10 @@ impl RecordedTarget {
     /// [`AuditError::TargetId`] when a known type's ID isn't a version 7
     /// UUID, and the name errors when `kind` isn't a valid name.
     pub fn from_parts(kind: &str, id: Uuid) -> Result<Self, AuditError> {
-        let known = match kind {
-            "user" => UserId::try_from(id).map(AuditTarget::User),
-            "account" => AccountId::try_from(id).map(AuditTarget::Account),
-            "bot" => BotId::try_from(id).map(AuditTarget::Bot),
-            "agent" => AgentId::try_from(id).map(AuditTarget::Agent),
-            "mode" => ModeId::try_from(id).map(AuditTarget::Mode),
-            "session" => SessionId::try_from(id).map(AuditTarget::Session),
-            "invite" => InviteId::try_from(id).map(AuditTarget::Invite),
-            "enrollment_token" => EnrollmentTokenId::try_from(id).map(AuditTarget::EnrollmentToken),
-            _ => return TargetKind::try_from(kind).map(|kind| Self::Unrecognized { kind, id }),
-        };
-        known.map(Self::Known).map_err(|_| AuditError::TargetId)
+        match AuditTarget::known(kind, id) {
+            Some(known) => known.map(Self::Known),
+            None => TargetKind::try_from(kind).map(|kind| Self::Unrecognized { kind, id }),
+        }
     }
 }
 
@@ -172,6 +180,28 @@ mod tests {
                 "enrollment_token"
             ]
         );
+    }
+
+    #[test]
+    fn the_kinds_are_every_variants_name_in_order() {
+        let kinds = every_target().map(|target| target.kind());
+
+        assert_eq!(AuditTarget::KINDS, kinds);
+    }
+
+    #[test]
+    fn every_kind_reads_back_as_a_known_target_of_that_kind() {
+        let id = every_target()[0].id();
+
+        for kind in AuditTarget::KINDS {
+            let read = RecordedTarget::from_parts(kind, id).unwrap();
+
+            assert!(
+                matches!(read, RecordedTarget::Known(target) if target.kind() == *kind),
+                "{kind}: {read:?}"
+            );
+        }
+        assert_eq!(AuditTarget::KINDS.len(), every_target().len());
     }
 
     #[test]

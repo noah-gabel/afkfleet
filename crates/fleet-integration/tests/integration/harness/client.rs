@@ -8,7 +8,7 @@ use core::time::Duration;
 
 use fleet_api_types::accounts::CreateOfflineAccountRequest;
 use fleet_api_types::auth::{LoginRequest, StepUpRequest};
-use fleet_api_types::bots::{BotModeRequest, BotPatchRequest};
+use fleet_api_types::bots::{BotModeRequest, BotPatchRequest, BotResponse};
 use fleet_api_types::chat::{ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse};
 use fleet_api_types::mfa::CODE_MAX_CHARS;
 use fleet_api_types::modes::{
@@ -21,6 +21,7 @@ use fleet_core::id::{BotId, ModeId};
 use fleet_core::system::Clock as _;
 use totp_rs::Totp;
 
+use super::live::Live;
 use super::server::{OWNER, PASSWORD, Server};
 
 /// One step that does `action`, which takes no field, every 250 ms.
@@ -252,6 +253,16 @@ impl Owner {
                 },
             )
             .await
+    }
+
+    /// `bot` as `GET /bots/{id}` shows it to the Owner now.
+    pub(crate) async fn shown(&self, bot: BotId) -> BotResponse {
+        self.client.bot(bot).await.unwrap()
+    }
+
+    /// The Owner's live events, read by a task of their own (S58).
+    pub(crate) fn live(&self) -> Live {
+        Live::open(self.client.live_events())
     }
 
     /// The newest page of `bot`'s chat, as this user may see it.

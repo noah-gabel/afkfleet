@@ -91,7 +91,6 @@ use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotRespons
 use fleet_api_types::chat::{
     ChatCommandRequest, ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse,
 };
-#[cfg(feature = "dev-console")]
 use fleet_api_types::events::EventTicketResponse;
 use fleet_api_types::ids::AgentId;
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
@@ -111,15 +110,14 @@ use secrecy::{ExposeSecret as _, SecretString};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 use tokio::sync::Mutex as AsyncMutex;
+use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
 use crate::client::LoginStep;
 use crate::error::{ApiFailure, ClientError, Unexpected};
-#[cfg(feature = "dev-console")]
-use crate::events::EventsHandshake;
 use crate::store::{SessionStore, StoreError, StoreOp};
-use crate::transport::{Incoming, Outgoing, Transport, TransportError};
+use crate::transport::{Incoming, Outgoing, Transport, TransportError, Upgrade, UpgradeRequest};
 use crate::url::ServerUrl;
 
 /// A bot's lifecycle call: its path segment, and the statuses that answer
@@ -221,6 +219,9 @@ pub(crate) struct Core<S, T> {
     refresh_lock: Arc<AsyncMutex<()>>,
     /// Guards the epoch and every store write; never held across a request.
     gate: AsyncMutex<()>,
+    /// The epoch, as every end moves it: a live events socket ends with the
+    /// session it was opened for (ADR-0020, S53).
+    epochs: watch::Sender<u64>,
 }
 
 /// What the session holds. Behind a std mutex that's never held across an
@@ -285,7 +286,36 @@ impl<S, T> Core<S, T> {
             state: Mutex::new(State::default()),
             refresh_lock: Arc::new(AsyncMutex::new(())),
             gate: AsyncMutex::new(()),
+            epochs: watch::Sender::new(0),
         }
+    }
+
+    /// The session's epoch now, which every end moves.
+    pub(crate) fn epoch(&self) -> u64 {
+        self.state().epoch
+    }
+
+    /// The epoch as every end moves it.
+    pub(crate) fn epochs(&self) -> watch::Receiver<u64> {
+        self.epochs.subscribe()
+    }
+
+    /// The transport, for the live events socket's unit tests.
+    #[cfg(test)]
+    pub(crate) const fn transport(&self) -> &T {
+        &self.transport
+    }
+
+    /// Gives the session `token` as its access token, as a login would
+    /// have, for the live events socket's unit tests.
+    #[cfg(test)]
+    pub(crate) fn hold_access(&self, token: &str) {
+        let mut state = self.state();
+        state.generations = state.generations.wrapping_add(1);
+        state.access = Some(Access {
+            token: SecretString::from(token),
+            generation: state.generations,
+        });
     }
 
     pub(crate) fn server(&self) -> &ServerUrl {
@@ -816,8 +846,8 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         self.send_line(id, "command", json(request)).await
     }
 
-    /// One page of the bot `id`'s chat, newest first, as the caller may see
-    /// it (200).
+    /// One page of the agents, newest first, with their status and bots
+    /// count (200).
     pub(crate) async fn agents(
         self: &Arc<Self>,
         query: &PageQuery<AgentId>,
@@ -872,6 +902,8 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         expect_json(answer, 200)
     }
 
+    /// One page of the bot `id`'s chat, newest first, as the caller may see
+    /// it (200).
     pub(crate) async fn chat(
         self: &Arc<Self>,
         id: BotId,
@@ -948,10 +980,13 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         expect_empty(answer, 204)
     }
 
-    /// `POST /events/ticket`, and the socket's URL and bearer with it
-    /// (`dev-console` only; ADR-0020, U15).
-    #[cfg(feature = "dev-console")]
-    pub(crate) async fn events_handshake(self: &Arc<Self>) -> Result<EventsHandshake, ClientError> {
+    /// `POST /events/ticket`: a ticket for one connect of the live events
+    /// socket, and the access token it goes with, of the same session
+    /// (ADR-0020, S28, S53). Both stay in the client: the socket spends them
+    /// at once, and never shows either.
+    pub(crate) async fn events_ticket(
+        self: &Arc<Self>,
+    ) -> Result<(SecretString, SecretString), ClientError> {
         let answer = self
             .authed(Method::POST, self.server.api(&["events", "ticket"]), None)
             .await?;
@@ -959,8 +994,22 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         // The token the ticket's request went with, or a newer one of the
         // same session: the ticket belongs to the session.
         let access = self.current_access().ok_or(ClientError::NoSession)?;
-        let url = self.server.events(ticket.ticket.expose());
-        Ok(EventsHandshake::new(url.as_str(), &access.token))
+        Ok((SecretString::from(ticket.ticket.expose()), access.token))
+    }
+
+    /// Sends `request`, the live events socket's upgrade, over the
+    /// transport (ADR-0020, U25).
+    pub(crate) async fn upgrade(
+        &self,
+        request: UpgradeRequest,
+    ) -> Result<Upgrade<T::Socket>, ClientError>
+    where
+        T: Transport,
+    {
+        self.transport
+            .upgrade(request)
+            .await
+            .map_err(transport_error)
     }
 
     // ---- Sending ----
@@ -981,12 +1030,7 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
                 body,
             })
             .await
-            .map_err(|error| match error {
-                TransportError::Unreachable(cause) => ClientError::Unreachable(cause),
-                TransportError::Certificate(cause) => ClientError::Certificate(cause),
-                TransportError::TimedOut(cause) => ClientError::TimedOut(cause),
-                TransportError::TooLarge => ClientError::TooLarge,
-            })
+            .map_err(transport_error)
     }
 
     /// Sends an authenticated request with the session's rules; see the
@@ -1191,6 +1235,7 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         state.epoch = state.epoch.wrapping_add(1);
         state.access = None;
         state.pending = None;
+        self.epochs.send_replace(state.epoch);
     }
 
     /// Revokes the session of `access_token` on the server, best effort.
@@ -1307,6 +1352,29 @@ fn expect_json<R: DeserializeOwned>(answer: Incoming, status: u16) -> Result<R, 
     expect_json_of(answer, &[status])
 }
 
+/// What a transport's failure means for the caller.
+fn transport_error(error: TransportError) -> ClientError {
+    match error {
+        TransportError::Unreachable(cause) => ClientError::Unreachable(cause),
+        TransportError::Certificate(cause) => ClientError::Certificate(cause),
+        TransportError::TimedOut(cause) => ClientError::TimedOut(cause),
+        TransportError::TooLarge => ClientError::TooLarge,
+    }
+}
+
+/// What `answer`, an upgrade answered without a 101, means: the server's
+/// refusal, or an answer the route never gives (ADR-0020, U25).
+pub(crate) fn upgrade_refusal(answer: Incoming) -> ClientError {
+    match with_status(answer, 101) {
+        Err(error) => error,
+        // A 101 comes as a switch, never as a refusal.
+        Ok(answer) => ClientError::UnexpectedResponse {
+            status: answer.status,
+            reason: Unexpected::Status,
+        },
+    }
+}
+
 /// The route's answer for any of `statuses`, read as `R`.
 fn expect_json_of<R: DeserializeOwned>(
     answer: Incoming,
@@ -1387,7 +1455,7 @@ fn chain(error: &dyn Error) -> String {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::{HashMap, VecDeque};
+
     use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
     use fleet_api_types::ErrorCode;
@@ -1398,7 +1466,8 @@ mod tests {
 
     use super::*;
     use crate::store::{MemoryStore, StoreError, StoreOp};
-    use crate::transport::{Outgoing, TransportError};
+    use crate::transport::TransportError;
+    use crate::transport::scripted::{Scripted, Seen};
 
     /// Bounds every wait of these tests, so a hang fails with a clear
     /// message instead of running until CI's job timeout.
@@ -1470,106 +1539,6 @@ mod tests {
         Incoming {
             status,
             ..profile()
-        }
-    }
-
-    /// An answer the test holds until it releases it.
-    #[derive(Clone, Default)]
-    struct Gate {
-        arrived: Arc<Notify>,
-        release: Arc<Notify>,
-    }
-
-    struct Reply {
-        gate: Option<Gate>,
-        result: Result<Incoming, TransportError>,
-    }
-
-    /// What the transport was sent.
-    #[derive(Debug, Clone, PartialEq)]
-    struct Seen {
-        route: String,
-        bearer: Option<String>,
-        body: Option<Value>,
-    }
-
-    /// A transport that answers each route from its script, in order, and
-    /// records what it was sent.
-    #[derive(Default)]
-    struct Scripted {
-        replies: Mutex<HashMap<String, VecDeque<Reply>>>,
-        seen: Mutex<Vec<Seen>>,
-    }
-
-    impl Scripted {
-        fn push(&self, route: &str, reply: Reply) {
-            self.replies
-                .lock()
-                .unwrap()
-                .entry(route.to_owned())
-                .or_default()
-                .push_back(reply);
-        }
-
-        fn on(&self, route: &str, result: Result<Incoming, TransportError>) {
-            self.push(route, Reply { gate: None, result });
-        }
-
-        fn held(&self, route: &str, incoming: Incoming) -> Gate {
-            let gate = Gate::default();
-            self.push(
-                route,
-                Reply {
-                    gate: Some(gate.clone()),
-                    result: Ok(incoming),
-                },
-            );
-            gate
-        }
-
-        fn seen(&self) -> Vec<Seen> {
-            self.seen.lock().unwrap().clone()
-        }
-
-        fn routes(&self) -> Vec<String> {
-            self.seen().into_iter().map(|seen| seen.route).collect()
-        }
-
-        fn bearers(&self, route: &str) -> Vec<Option<String>> {
-            self.seen()
-                .into_iter()
-                .filter(|seen| seen.route == route)
-                .map(|seen| seen.bearer)
-                .collect()
-        }
-    }
-
-    impl Transport for Scripted {
-        async fn send(&self, request: Outgoing) -> Result<Incoming, TransportError> {
-            let route = format!("{} {}", request.method, request.url.path());
-            self.seen.lock().unwrap().push(Seen {
-                route: route.clone(),
-                bearer: request
-                    .bearer
-                    .as_ref()
-                    .map(|token| token.expose_secret().to_owned()),
-                body: request
-                    .body
-                    .as_ref()
-                    .map(|body| serde_json::from_slice(body).unwrap()),
-            });
-            let reply = self
-                .replies
-                .lock()
-                .unwrap()
-                .get_mut(&route)
-                .and_then(VecDeque::pop_front);
-            let reply = reply.unwrap_or_else(|| panic!("no answer scripted for {route}"));
-            if let Some(gate) = reply.gate {
-                gate.arrived.notify_one();
-                gate.release.notified().await;
-            }
-            reply.result
         }
     }
 
@@ -3178,7 +3147,8 @@ mod tests {
                 "outcome": "success",
                 "metadata": [{ "key": "chat_by_age", "int": 3 }]
             }],
-            "next": 41
+            "unreadable": [40],
+            "next": 40
         }))
         .unwrap()
     }

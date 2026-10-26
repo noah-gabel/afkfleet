@@ -1,5 +1,7 @@
 //! The server's log layer caps `azalea_auth` at `info`, whatever the
-//! configured filter names (Plan.md P9.3, ADR-0011, ADR-0015, ADR-0018).
+//! configured filter names (Plan.md P9.3, ADR-0011, ADR-0015, ADR-0018), and
+//! tungstenite's targets with it, which axum's WebSocket logs under
+//! (ADR-0020, S56).
 //!
 //! fleet-server has no azalea-auth code (ADR-0018), so the cap is a guard,
 //! and the test logs under azalea-auth's targets itself. The config is
@@ -143,5 +145,52 @@ fn azalea_auth_stays_at_info_when_the_environment_names_it() {
 
         // The environment won: `fleet_server` is at trace.
         assert_capped(&logs, true);
+    });
+}
+
+/// tungstenite's targets, which axum's WebSocket logs under, stay at `info`
+/// whatever the file or the environment names: their `trace` lines hold
+/// every frame, chat text included (ADR-0020, S56).
+#[rstest]
+#[case::the_file("trace,tungstenite=trace,tokio_tungstenite=trace", None)]
+#[case::the_environment("info", Some("trace,tungstenite=trace,tokio_tungstenite=trace"))]
+fn tungstenites_targets_stay_at_info_whatever_the_filter_names(
+    #[case] file: &str,
+    #[case] environment: Option<&str>,
+) {
+    in_jail(|jail| {
+        if let Some(filter) = environment {
+            jail.set_env("AFKFLEET_SERVER__LOG__FILTER", filter);
+        }
+        let config = config_with(jail, file);
+        let logs = LogBuffer::default();
+        let subscriber = tracing_subscriber::registry().with(layer_with(
+            &config.log,
+            &NoRules,
+            false,
+            logs.clone(),
+        ));
+
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::trace!(target: "tungstenite::protocol", "{}", message("tungstenite::protocol", "trace"));
+            tracing::debug!(target: "tungstenite::protocol", "{}", message("tungstenite::protocol", "debug"));
+            tracing::info!(target: "tungstenite::protocol", "{}", message("tungstenite::protocol", "info"));
+            tracing::trace!(target: "tokio_tungstenite", "{}", message("tokio_tungstenite", "trace"));
+            tracing::debug!(target: "tokio_tungstenite", "{}", message("tokio_tungstenite", "debug"));
+            tracing::info!(target: "tokio_tungstenite", "{}", message("tokio_tungstenite", "info"));
+            tracing::trace!(target: "fleet_server", "{}", message("fleet_server", "trace"));
+        });
+
+        for target in ["tungstenite::protocol", "tokio_tungstenite"] {
+            for level in BELOW {
+                assert_eq!(count(&logs, target, level), 0, "{target} at {level}");
+            }
+            assert_eq!(count(&logs, target, "info"), 1, "{target} at info");
+        }
+        assert_eq!(
+            count(&logs, "fleet_server", "trace"),
+            1,
+            "everything at trace"
+        );
     });
 }

@@ -4,23 +4,30 @@
 //! reason reaches only viewers with Control or more, and a lowered grant
 //! hides the next line's arguments at once.
 
+use fleet_core::auth::SessionPolicy;
 use fleet_core::authz::{GrantLevel, Role};
 use fleet_core::bot::{BotSnapshot, BotState};
 use fleet_core::chat::{ChatKind, ChatMessage, IncomingChat};
 use fleet_core::id::{AccountId, BotId, ChatRequestId};
+use fleet_core::retention::RetentionPolicy;
 use fleet_core::system::Clock as _;
 use fleet_core::value::Username;
 use fleet_proto::control::ChatFailedReason;
 use fleet_server::app::events::{LiveEvent, LiveEventKind, NotSent};
+use fleet_server::app::retention::RetentionService;
+use fleet_server::http::ws::SocketTimings;
 use fleet_server::ports::chat::{ChatEntry, ChatRecord, ListedChat, NewChatMessage};
 use fleet_server::ports::live_hints::LiveHints as _;
 use fleet_server::ports::store::Store as _;
+use fleet_testkit::system::ManualClock;
 use serde_json::{Value, json};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+use std::sync::Arc;
+use tokio_util::sync::CancellationToken;
 
 use super::super::bots::Stream;
-use super::super::support::{Person, Setup, setup, setup_entry};
-use super::{PATIENCE, Served, Socket, next_event_after_pings, ready};
+use super::super::support::{Options, Person, Setup, setup, setup_entry, setup_with};
+use super::{PATIENCE, Served, Socket, next_event_after_pings, ready, until_quiet};
 
 /// A planted argument: only viewers with Manage see it.
 const CANARY: &str = "hunter2-canary";
@@ -161,6 +168,55 @@ async fn history(setup: &Setup, bot: BotId, person: &Person) -> Vec<Value> {
         .await;
     assert_eq!(seen.status, 200, "{}", seen.text);
     seen.body["items"].as_array().unwrap().clone()
+}
+
+/// A retention run deletes the bot's chat while its owner's socket is open:
+/// the commits move its count and its rights are read again, but it gets
+/// no frame, since deleted chat is fetched, not pushed (S42, R55), as the
+/// hints table says of a retention batch (PR #71's review).
+#[sqlx::test(migrations = false)]
+async fn a_retention_run_deleting_a_viewers_chat_sends_their_socket_nothing(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup_with(
+        options,
+        Options {
+            sockets: SocketTimings {
+                ping_interval: core::time::Duration::from_millis(100),
+                idle_timeout: core::time::Duration::from_secs(5),
+                ..SocketTimings::default()
+            },
+            ..Options::default()
+        },
+    )
+    .await;
+    let chatting = chatting(&setup).await;
+    let old = IncomingChat::from_parts(ChatKind::System, None, "an old line", false).unwrap();
+    said(&setup, &chatting, ChatEntry::Received(old), None, None).await;
+    let served = Served::start(&setup).await;
+    let mut socket = ready(&setup, &served, &chatting.member.token).await;
+    let commits = *setup.db.commits().borrow();
+    // The retention's own clock, past the chat's cut: the server's stays,
+    // so the socket's session lives on.
+    let later = setup.clock.now() + chrono::TimeDelta::days(15);
+    let retention = RetentionService::new(
+        Arc::new(ManualClock::new(later)),
+        Arc::new(setup.db.clone()),
+        RetentionPolicy::default(),
+        SessionPolicy::default(),
+    )
+    .with_pause(core::time::Duration::ZERO);
+
+    let run = retention.run_once(&CancellationToken::new()).await;
+
+    assert!(run.deleted.chat_by_age >= 1, "{run:?}");
+    assert!(*setup.db.commits().borrow() > commits, "a batch committed");
+    assert_eq!(until_quiet(&mut socket).await, Vec::<Value>::new());
+    assert_eq!(
+        history(&setup, chatting.bot, &chatting.member).await,
+        Vec::<Value>::new()
+    );
 }
 
 fn request(n: u8) -> ChatRequestId {

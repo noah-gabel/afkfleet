@@ -816,6 +816,41 @@ async fn who_has_the_account_through_ownership_or_a_role_cant_leave_it(
     assert_eq!(setup.entries(&AuditAction::GRANT_REVOKE).await, []);
 }
 
+/// `/grants/me` takes only `DELETE`: any other method is 405, so a `PUT`
+/// or `PATCH` meant for `/grants/{user}` never reaches a grant for a user
+/// named "me", and nothing changes (PR #71's review).
+#[sqlx::test(migrations = false)]
+async fn grants_me_takes_only_delete_and_any_other_method_is_405(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = HttpSetup::new(options).await;
+    let alice = setup.person(1, Role::Member).await;
+    let bob = setup.stepped_up(2, Role::Member).await;
+    let id = setup.add_account(alice.id, 3, None).await;
+    setup
+        .add_grant(id, bob.id, GrantLevel::View, alice.id)
+        .await;
+
+    for method in [Method::PUT, Method::PATCH, Method::POST, Method::GET] {
+        let seen = setup
+            .api(
+                method.clone(),
+                &format!("/accounts/{id}/grants/me"),
+                &bob,
+                Some(json!({ "level": "control" })),
+            )
+            .await;
+
+        assert_eq!(seen.status, 405, "{method}: {}", seen.text);
+    }
+    assert_eq!(
+        setup.grant_of(id, bob.id).await.unwrap().level,
+        GrantLevel::View
+    );
+    assert_eq!(setup.entries(&AuditAction::GRANT_SET_LEVEL).await, []);
+}
+
 #[sqlx::test(migrations = false)]
 async fn without_a_grant_or_an_account_there_is_nothing_to_leave(
     _pool: SqlitePoolOptions,

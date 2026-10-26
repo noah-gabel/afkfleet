@@ -52,12 +52,12 @@ use fleet_core::agent::AgentStatus;
 use fleet_core::id::AgentId;
 use fleet_core::system::{Clock, SecureRandom};
 use secrecy::ExposeSecret as _;
-use tracing::error;
+use tracing::{error, warn};
 
 use super::DATABASE_CLOSE;
 use crate::app::agents::{
     AgentService, AgentView, DisableAgentError, DisabledAgent, Disabler, ReleaseAgentError,
-    Releaser,
+    ReleasedAgent, Releaser,
 };
 use crate::app::enrollment::{
     CreateTokenError, CreatedEnrollmentToken, Creator, EnrollmentTokenService,
@@ -284,16 +284,38 @@ pub async fn release(
         Err(error) => return fail(err, "the database can't be opened", &error),
     };
     let agents = agent_service(&database, clock);
-    let exit = match agents.release(Releaser::Host, id).await {
+    let exit = released_said(id, agents.release(Releaser::Host, id).await, out, err);
+    close(database, exit, err).await
+}
+
+/// What `agent release` says of `outcome`, the release of agent `id`'s bots,
+/// on `out` and `err`, and its exit.
+fn released_said(
+    id: AgentId,
+    outcome: Result<ReleasedAgent, ReleaseAgentError>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Exit {
+    match outcome {
         Ok(released) => print_released(id, released.bots.len(), out, err),
         Err(ReleaseAgentError::NotFound) => refuse(err, &format!("no agent has the ID {id}")),
         Err(ReleaseAgentError::Enabled) => refuse(
             err,
             &format!("the agent {id} is enabled: disable it first, and stop its host and its bots"),
         ),
+        // Committed already: said as done, and the failed read after it.
+        Err(ReleaseAgentError::ReleasedUnread { bots, error }) => {
+            let exit = print_released(id, bots.len(), out, err);
+            let chain = chain(&error);
+            warn!(error = %chain, "the agent couldn't be read again after its bots were released");
+            let _ = writeln!(
+                err,
+                "afkfleet-server: the bots were released, but the agent couldn't be read again: {chain}"
+            );
+            exit
+        }
         Err(error) => fail(err, "the agent's bots couldn't be released", &error),
-    };
-    close(database, exit, err).await
+    }
 }
 
 /// Says on `out` how many of agent `id`'s bots were released.
@@ -1145,6 +1167,39 @@ mod tests {
 "
             )
         );
+    }
+
+    /// The release committed, then reading the agent again failed: the
+    /// command says the bots were released, as they were, and the failed
+    /// read on stderr, and exits 0.
+    #[test]
+    fn a_release_whose_read_after_its_commit_failed_says_the_bots_went() {
+        let agent = AgentId::new_v7(at(NOW), [1; 10]).unwrap();
+        let bot = BotId::new_v7(at(NOW), [2; 10]).unwrap();
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+
+        let exit = released_said(
+            agent,
+            Err(ReleaseAgentError::ReleasedUnread {
+                bots: vec![bot],
+                error: crate::ports::store::StoreError::Busy,
+            }),
+            &mut out,
+            &mut err,
+        );
+
+        assert_eq!(exit, Exit::Done);
+        assert!(
+            String::from_utf8(out)
+                .unwrap()
+                .starts_with(&format!("Released 1 bot of the agent {agent}")),
+        );
+        let err = String::from_utf8(err).unwrap();
+        assert!(
+            err.contains("the bots were released, but the agent couldn't be read again"),
+            "{err}"
+        );
+        assert!(!err.contains("couldn't be released"), "{err}");
     }
 
     #[test]

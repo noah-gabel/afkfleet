@@ -507,7 +507,8 @@ async fn an_audit_entry_dated_in_the_future_warns_once_that_the_log_keeps_what_f
     log_capture::install().unwrap();
     let db = database(options).await;
     entries(&db, 2, audit_cut()).await;
-    entries(&db, 1, now() + days(2)).await;
+    let future = now() + days(2);
+    entries(&db, 1, future).await;
     entries(&db, 2, audit_cut()).await;
     let ids = entry_ids(&db).await;
     let store = WatchedStore::new(db.clone());
@@ -519,10 +520,14 @@ async fn an_audit_entry_dated_in_the_future_warns_once_that_the_log_keeps_what_f
     assert_eq!(first.deleted.audit_entries, 2);
     assert_eq!(second.deleted.audit_entries, 0);
     assert_eq!(entry_ids(&db).await, ids[2..]);
+    let warned = |needle: &str| log_capture::count("fleet_server::app::retention", needle);
+    assert_eq!(warned("dated in the future"), 1);
     assert_eq!(
-        log_capture::count("fleet_server::app::retention", "dated in the future"),
-        1
+        warned(&format!("audit_entry={}", ids[2])),
+        1,
+        "the entry named"
     );
+    assert_eq!(warned(&format!("dated={future}")), 1, "its date named");
     db.close().await;
 }
 

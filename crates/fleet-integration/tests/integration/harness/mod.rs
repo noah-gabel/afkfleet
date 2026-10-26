@@ -12,6 +12,8 @@
 //!   case that ever runs one account twice.
 //! - [`client`]: the Owner, logged in with 2FA, who changes bots only
 //!   through the real HTTP API.
+//! - [`live`]: the Owner's live events socket, read by a task of its own,
+//!   each update logged (P11.7, S58).
 //! - [`logs`]: the one log of the server and every agent, which wakes the
 //!   waits.
 //! - [`world`]: all of them for one case.
@@ -19,6 +21,7 @@
 pub(crate) mod agent;
 pub(crate) mod client;
 pub(crate) mod ledger;
+pub(crate) mod live;
 pub(crate) mod logs;
 pub(crate) mod proxy;
 pub(crate) mod server;

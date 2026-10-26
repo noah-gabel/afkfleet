@@ -12,7 +12,10 @@ export type AuditDetail = {
  */
 key: string, 
 /**
- * A text value: a name from a closed set, an ID or a time.
+ * A text value: a name from a closed set, an ID or a time, or a value a
+ * user typed or a server or agent reported, as stored: a server
+ * address, a Minecraft name, an agent's name or version, a certificate
+ * fingerprint, an IP address, a command's name.
  */
 text?: string, 
 /**

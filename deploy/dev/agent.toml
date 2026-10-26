@@ -30,7 +30,7 @@ name = "dev-agent"
 
 [log]
 format = "pretty"
-filter = "info"                          # EnvFilter syntax; azalea stays at warn unless named, azalea_auth at info
+filter = "info"                          # EnvFilter syntax; azalea stays at warn unless named, azalea_auth and tungstenite at info
 
 [[standalone.bots]]
 username = "AfkBot1"

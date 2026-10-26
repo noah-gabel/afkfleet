@@ -13,8 +13,8 @@
 //   `COMMANDS`, in order
 // - tauri's resolved features, which `cargo tree` reports; `devtools`, `dynamic-acl` and
 //   `custom-protocol` are named as never allowed
-// - fleet-client's resolved features in the app: never `dev-console`, which hands out the
-//   session's access token for `just dev-bots` alone (ADR-0020, U15)
+// - fleet-client's resolved features in the app: exactly `CLIENT_FEATURES`, none (ADR-0020,
+//   S57)
 //
 // The expected values live here on purpose: changing a hardening setting means changing
 // this check too, deliberately, with an ADR. A new command goes into `COMMANDS` here and
@@ -126,10 +126,10 @@ export const CLIENT_TREE_ARGS = CARGO_TREE_ARGS.map((arg) =>
 );
 
 /**
- * fleet-client's features the desktop app must never have: `dev-console` hands out the
- * session's access token, for `just dev-bots` alone (ADR-0020, U15).
+ * fleet-client's features in the desktop app, exactly: none. A feature joins this list
+ * only with an ADR, so a new one fails the check until it's decided (ADR-0020, S57).
  */
-const FORBIDDEN_CLIENT_FEATURES = ["dev-console"];
+const CLIENT_FEATURES = [];
 
 /** Each capability permission that grants one of the app's own commands. */
 function commandGrants() {
@@ -367,8 +367,11 @@ export function checkFeatures(output) {
   return problems;
 }
 
-/** Checks `cargo tree`'s output for fleet-client's features. Returns one message per problem. */
-export function checkClientFeatures(output) {
+/**
+ * Checks `cargo tree`'s output for fleet-client's features: exactly `expected`, by default
+ * `CLIENT_FEATURES`. Returns one message per problem.
+ */
+export function checkClientFeatures(output, expected = CLIENT_FEATURES) {
   const lines = output
     .split("\n")
     .map((line) => line.trimEnd())
@@ -378,10 +381,17 @@ export function checkClientFeatures(output) {
     return [`cargo tree's output for fleet-client can't be read: \`${output.trim()}\``];
   }
   const features = (match[1] ?? "").split(",").filter((feature) => feature !== "");
-  return FORBIDDEN_CLIENT_FEATURES.filter((feature) => features.includes(feature)).map(
-    (feature) =>
-      `fleet-client's \`${feature}\` feature is on in the desktop app, but it must never be (ADR-0020, U15)`,
-  );
+  const problems = features
+    .filter((feature) => !expected.includes(feature))
+    .map(
+      (feature) =>
+        `fleet-client's \`${feature}\` feature is on in the desktop app, but the check doesn't list it: a feature joins only with an ADR (ADR-0020, S57)`,
+    );
+  const missing = expected.filter((feature) => !features.includes(feature));
+  if (missing.length > 0) {
+    problems.push(`fleet-client lacks features the check expects: ${missing.join(", ")}`);
+  }
+  return problems;
 }
 
 /**

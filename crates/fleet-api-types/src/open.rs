@@ -8,10 +8,12 @@
 //! `sanitize_untrusted` and cut at [`UNKNOWN_MAX_CHARS`] characters, like
 //! every text a client reads. Only a value that isn't a string fails.
 //!
-//! The server can only build an `Open` from a known value, so it never sends
-//! a made-up one. A DTO field holding one carries `#[ts(as = "E")]`: the
-//! TypeScript type lists exactly the values this version knows, and app code
-//! that branches on it always keeps a default branch.
+//! The server builds an `Open` from a known value, or with [`Open::recorded`]
+//! from a name it read back from its own storage, which a newer version may
+//! have written after a downgrade; it never invents one. A DTO field holding
+//! one carries `#[ts(as = "E")]`: the TypeScript type lists exactly the
+//! values this version knows, and app code that branches on it always keeps
+//! a default branch.
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 

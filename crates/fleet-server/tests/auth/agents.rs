@@ -7,6 +7,7 @@
 //! refused; the re-checks in the transaction; the limits.
 
 use core::num::NonZeroU32;
+use std::sync::Arc;
 
 use chrono::TimeDelta;
 use fleet_core::audit::{
@@ -17,12 +18,13 @@ use fleet_core::id::{AgentId, BotId, RequestId};
 use fleet_core::pki::CertFingerprint;
 use fleet_core::system::Clock as _;
 use fleet_core::value::AgentName;
+use fleet_server::app::agents::{AgentService, ReleaseAgentError, Releaser};
 use fleet_server::config::{Rate, RateLimitConfig};
 use fleet_server::grpc::registry::{Halt, Lease};
 use fleet_server::ports::agent_connections::{Admitted, StreamEnd};
 use fleet_server::ports::agents::{NewAgent, NewAgentCert};
 use fleet_server::ports::reconcile::Change;
-use fleet_server::ports::store::Store as _;
+use fleet_server::ports::store::{Store as _, StoreError};
 use serde_json::json;
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tokio::sync::{mpsc, oneshot};
@@ -472,6 +474,38 @@ async fn an_admin_releases_a_disabled_agents_bots_audited_with_who_vouched_and_h
     );
 }
 
+/// The release commits, then reading the agent again fails: the service
+/// says the bots were released, which they were, so the host's command can
+/// say so (PR #71's review).
+#[sqlx::test(migrations = false)]
+async fn a_release_whose_read_after_its_commit_fails_says_the_bots_went(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let owner = setup.person(3, "owner", Role::Owner).await;
+    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let (agent, bot) = setup.disabled_with_a_bot(&owner, &admin).await;
+    let agents = AgentService::new(
+        Arc::new(setup.clock.clone()),
+        Arc::new(setup.hooked.clone()),
+        Arc::new(setup.registry.clone()),
+    );
+    setup.hooked.fail_agent_reads();
+
+    let released = agents.release(Releaser::Host, agent).await;
+
+    match released {
+        Err(ReleaseAgentError::ReleasedUnread { bots, error }) => {
+            assert_eq!(bots, [bot]);
+            assert!(matches!(error, StoreError::Busy), "{error:?}");
+        }
+        other => panic!("not released but unread: {other:?}"),
+    }
+    assert_eq!(setup.holder(bot).await, None);
+    assert_eq!(setup.releases().await, 1);
+}
+
 #[sqlx::test(migrations = false)]
 async fn releasing_an_enabled_agent_is_409_and_keeps_its_bots(
     _pool: SqlitePoolOptions,
@@ -505,6 +539,7 @@ async fn releasing_an_agent_that_holds_no_bots_answers_it_and_records_nothing(
     let agent = setup.agent(1).await;
     assert_eq!(setup.disable(agent, &admin).await.status, 200);
     setup.hints.take();
+    setup.heard.take();
 
     let seen = setup.release(agent, &admin).await;
 
@@ -512,6 +547,7 @@ async fn releasing_an_agent_that_holds_no_bots_answers_it_and_records_nothing(
     assert_eq!(seen.body["bots"], json!(0));
     assert_eq!(setup.releases().await, 0);
     assert_eq!(setup.hints.take(), []);
+    assert_eq!(setup.heard.take(), [], "no socket hint");
 }
 
 #[sqlx::test(migrations = false)]

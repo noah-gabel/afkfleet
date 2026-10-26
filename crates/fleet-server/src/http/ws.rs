@@ -10,9 +10,10 @@
 //!   the server writes goes out one frame at a time, with at most
 //!   [`MAX_WRITE_BUFFER`] bytes buffered.
 //! - **What a client may send** ([`classify`]): a pong that answers one of
-//!   the server's pings ([`Pings`]: at most [`PONG_CREDITS`] outstanding),
-//!   and a close. Anything else (text, binary, a ping, a pong nobody asked
-//!   for, a frame too large, a protocol error) is refused with 1008. A lost
+//!   the server's pings ([`Pings`]: at most [`PONG_CREDITS`] outstanding,
+//!   each numbered by its payload, so a pong names the ping it answers), and
+//!   a close. Anything else (text, binary, a ping, a pong naming no ping
+//!   that waits, a frame too large, a protocol error) is refused with 1008. A lost
 //!   connection is told apart, and closes nothing: an `io::Error` among the
 //!   error's sources, or the connection ending without a close frame.
 //! - **`resync` and the session check** ([`Gap`]): a socket that lagged
@@ -481,10 +482,10 @@ impl<P: Project> Running<P> {
                 () = stop.cancelled() => return Ended::closed(SocketClose::ShuttingDown, "the server is shutting down"),
                 () = &mut expiry => return Ended::closed(SocketClose::Unauthenticated, "its access token expired"),
                 received = self.socket.recv() => match classify(received) {
-                    Inbound::Pong if pings.answered() => {
+                    Inbound::Pong(number) if pings.answered(number) => {
                         idle.as_mut().reset(Instant::now() + timings.idle_timeout);
                     }
-                    Inbound::Pong | Inbound::Refused => {
+                    Inbound::Pong(_) | Inbound::Refused => {
                         return Ended::closed(SocketClose::RefusedFrame, "the client sent a frame the server doesn't take");
                     }
                     Inbound::Close => return Ended::ClientClosed,
@@ -492,8 +493,10 @@ impl<P: Project> Running<P> {
                 },
                 () = &mut idle => return Ended::closed(SocketClose::Idle, "no pong came in time"),
                 _ = ticker.tick() => {
-                    if pings.send()
-                        && let Err(failed) = self.send_frame(Message::Ping(Bytes::new())).await
+                    if let Some(payload) = pings.send()
+                        && let Err(failed) = self
+                            .send_frame(Message::Ping(Bytes::copy_from_slice(&payload)))
+                            .await
                     {
                         return failed.ended();
                     }
@@ -745,8 +748,9 @@ pub fn refused_upgrade(rejection: &WebSocketUpgradeRejection) -> ApiError {
 /// What a client's frame is to the socket.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Inbound {
-    /// A pong: it must answer a ping.
-    Pong,
+    /// A pong, with the ping number its payload names, when it's 8 bytes:
+    /// it must answer a ping that waits ([`Pings`]).
+    Pong(Option<u64>),
     /// The client closes.
     Close,
     /// Anything the server doesn't take: closed with 1008.
@@ -762,7 +766,11 @@ pub fn classify(received: Option<Result<Message, axum::Error>>) -> Inbound {
     match received {
         None => Inbound::Lost,
         Some(Err(error)) if connection_gone(&error) => Inbound::Lost,
-        Some(Ok(Message::Pong(_))) => Inbound::Pong,
+        Some(Ok(Message::Pong(payload))) => Inbound::Pong(
+            <[u8; 8]>::try_from(payload.as_ref())
+                .ok()
+                .map(u64::from_be_bytes),
+        ),
         Some(Ok(Message::Close(_))) => Inbound::Close,
         Some(Ok(Message::Text(_) | Message::Binary(_) | Message::Ping(_)) | Err(_)) => {
             Inbound::Refused
@@ -791,31 +799,46 @@ fn connection_gone(error: &(dyn std::error::Error + 'static)) -> bool {
     false
 }
 
-/// The pings that wait for a pong.
+/// The pings that wait for a pong, numbered (ADR-0020, R79): each ping's
+/// payload is its number, 8 bytes big-endian, and a pong echoes it, so the
+/// server knows which ping it answers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Pings {
-    outstanding: u8,
+    /// The number the next ping gets.
+    next: u64,
+    /// How many of the latest pings wait: those numbered from `next -
+    /// waiting` to `next - 1`.
+    waiting: u8,
 }
 
 impl Pings {
-    /// Whether one more ping may go out: no more than [`PONG_CREDITS`] wait.
-    /// Counted when it may.
-    pub fn send(&mut self) -> bool {
-        if self.outstanding >= PONG_CREDITS {
-            return false;
+    /// The next ping's payload, when one more may go out: no more than
+    /// [`PONG_CREDITS`] wait. Counted when it may.
+    pub fn send(&mut self) -> Option<[u8; 8]> {
+        if self.waiting >= PONG_CREDITS {
+            return None;
         }
-        self.outstanding = self.outstanding.saturating_add(1);
-        true
+        let number = self.next;
+        self.next = self.next.wrapping_add(1);
+        self.waiting = self.waiting.saturating_add(1);
+        Some(number.to_be_bytes())
     }
 
-    /// Whether a pong answers: it does while any ping waits, and answers them
-    /// all, since a client may answer only the latest (RFC 6455, 5.5.3); one
-    /// that comes while none waits is refused.
-    pub fn answered(&mut self) -> bool {
-        if self.outstanding == 0 {
+    /// Whether a pong naming ping `number` answers: it does when that ping
+    /// waits, and answers it and every older one, since a client may answer
+    /// only the latest (RFC 6455, 5.5.3), or each in turn, as tungstenite
+    /// does after a stall; the newer ones still wait. Any other pong is
+    /// refused: one nobody asked for, or one naming no ping that waits.
+    pub fn answered(&mut self, number: Option<u64>) -> bool {
+        let Some(number) = number else {
+            return false;
+        };
+        // How far back from the newest ping it names: 0 for the newest.
+        let back = self.next.wrapping_sub(1).wrapping_sub(number);
+        if back >= u64::from(self.waiting) {
             return false;
         }
-        self.outstanding = 0;
+        self.waiting = u8::try_from(back).unwrap_or(0);
         true
     }
 }
@@ -992,14 +1015,19 @@ mod tests {
         assert_eq!(MAX_WRITE_BUFFER, 131_072);
     }
 
+    /// The number a ping's `payload` names, as a pong echoing it reads.
+    fn number(payload: [u8; 8]) -> u64 {
+        u64::from_be_bytes(payload)
+    }
+
     #[test]
     fn a_pong_answers_a_ping_and_an_unsolicited_one_is_refused() {
         let mut pings = Pings::default();
 
-        let unasked = pings.answered();
-        assert!(pings.send());
-        let answer = pings.answered();
-        let again = pings.answered();
+        let unasked = pings.answered(Some(0));
+        let sent = pings.send().unwrap();
+        let answer = pings.answered(Some(number(sent)));
+        let again = pings.answered(Some(number(sent)));
 
         assert!(!unasked);
         assert!(answer);
@@ -1010,7 +1038,7 @@ mod tests {
     fn no_more_than_three_pings_wait_for_a_pong() {
         let mut pings = Pings::default();
 
-        let sent: Vec<_> = (0..4).map(|_| pings.send()).collect();
+        let sent: Vec<_> = (0..4).map(|_| pings.send().is_some()).collect();
 
         assert_eq!(sent, [true, true, true, false]);
     }
@@ -1019,17 +1047,49 @@ mod tests {
     fn one_pong_answers_every_ping_that_waits() {
         // RFC 6455, 5.5.3: a client may answer only the latest ping.
         let mut pings = Pings::default();
-        for _ in 0..3 {
-            assert!(pings.send());
-        }
+        let sent: Vec<[u8; 8]> = (0..3).map(|_| pings.send().unwrap()).collect();
 
-        let answer = pings.answered();
-        let second = pings.answered();
-        let room: Vec<_> = (0..4).map(|_| pings.send()).collect();
+        let answer = pings.answered(Some(number(sent[2])));
+        let second = pings.answered(Some(number(sent[2])));
+        let older = pings.answered(Some(number(sent[0])));
+        let room: Vec<_> = (0..4).map(|_| pings.send().is_some()).collect();
 
         assert!(answer);
         assert!(!second, "nothing waits for a second pong");
+        assert!(!older, "an older ping was answered with the latest");
         assert_eq!(room, [true, true, true, false]);
+    }
+
+    #[test]
+    fn each_pong_in_turn_answers_its_ping_and_the_newer_ones_still_wait() {
+        // tungstenite answers each ping it reads, so after a stall the
+        // pongs come one by one, oldest first (R79).
+        let mut pings = Pings::default();
+        let sent: Vec<[u8; 8]> = (0..3).map(|_| pings.send().unwrap()).collect();
+
+        let answers: Vec<bool> = sent
+            .iter()
+            .map(|payload| pings.answered(Some(number(*payload))))
+            .collect();
+        let after = pings.answered(Some(number(sent[2])));
+
+        assert_eq!(answers, [true, true, true]);
+        assert!(!after);
+        assert_eq!(sent, [[0; 8], 1_u64.to_be_bytes(), 2_u64.to_be_bytes()]);
+    }
+
+    #[test]
+    fn a_pong_naming_no_ping_that_waits_is_refused_and_changes_nothing() {
+        let mut pings = Pings::default();
+        let sent = pings.send().unwrap();
+
+        let never_sent = pings.answered(Some(5));
+        let not_a_number = pings.answered(None);
+        let answer = pings.answered(Some(number(sent)));
+
+        assert!(!never_sent);
+        assert!(!not_a_number);
+        assert!(answer, "the ping still waited");
     }
 
     #[test]
@@ -1100,7 +1160,10 @@ mod tests {
 
     #[test]
     fn a_pong_and_a_close_are_taken_and_everything_else_is_refused() {
-        let answer = classify(Some(Ok(Message::Pong(Bytes::from_static(b"x")))));
+        let answer = classify(Some(Ok(Message::Pong(Bytes::copy_from_slice(
+            &7_u64.to_be_bytes(),
+        )))));
+        let short = classify(Some(Ok(Message::Pong(Bytes::from_static(b"x")))));
         let close = classify(Some(Ok(Message::Close(Some(CloseFrame {
             code: 1000,
             reason: "bye".into(),
@@ -1110,7 +1173,8 @@ mod tests {
         let binary = classify(Some(Ok(Message::Binary(Bytes::from_static(b"\x00")))));
         let client_ping = classify(Some(Ok(Message::Ping(Bytes::new()))));
 
-        assert_eq!(answer, Inbound::Pong);
+        assert_eq!(answer, Inbound::Pong(Some(7)));
+        assert_eq!(short, Inbound::Pong(None));
         assert_eq!(close, Inbound::Close);
         assert_eq!(bare_close, Inbound::Close);
         assert_eq!(text, Inbound::Refused);

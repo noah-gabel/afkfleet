@@ -1,12 +1,14 @@
 //! The real server and the real managed agent together, in-process
 //! (Plan.md P10.9; ADR-0019, U19, S72): one test binary, so the harness is
-//! shared by every case and by P11.7's full flow later.
+//! shared by every case and by P11.7's full flow.
 //!
 //! - [`harness`]: the server through serve's own wiring, managed agents
 //!   enrolled with it and run over the bots' fake connector, a stalling
 //!   proxy in front of each agent, the Owner's client, the bots' ledger and
 //!   the one log every wait wakes on.
 //! - [`loopback`]: P10.9's cases over mTLS on `127.0.0.1`.
+//! - [`full_flow`]: P11.7's full flow, a bot started, seen Online, chatting
+//!   both ways and stopped on the Owner's live events (ADR-0020, S58).
 //! - [`managed_check`]: Phase 10's managed check, a manual test only the
 //!   user runs, with their own Microsoft account.
 //! - [`slow_on_respawn`]: the slow on-respawn case (ADR-0020, S26): a real
@@ -21,6 +23,7 @@
 //! [`harness::logs::PATIENCE`].
 #![cfg(test)]
 
+mod full_flow;
 mod harness;
 mod loopback;
 mod managed_check;
