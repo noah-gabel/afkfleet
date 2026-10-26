@@ -1,5 +1,5 @@
 {
-  "description": "The IPC contract between TauriApiClient and the Rust commands (ADR-0017): for every command in build.rs's COMMANDS, the ApiClient method and its inputs, the exact args object TauriApiClient sends, and the answer the mock app without a server profile gives. Placeholder values only. Tested by apps/desktop/src/TauriApiClient.test.ts, src-tauri/tests/acl.rs and scripts/tauri-hardening.mjs.",
+  "description": "The IPC contract between TauriApiClient and the Rust commands (ADR-0017): for every command in build.rs's COMMANDS, the ApiClient method and its inputs, the exact args object TauriApiClient sends, and the answer the mock app without a server profile gives. Placeholder values only; the input <onUpdate> stands for the update callback, whose channel Tauri reads from __CHANNEL__:<id>. Tested by apps/desktop/src/TauriApiClient.test.ts, src-tauri/tests/acl.rs and scripts/tauri-hardening.mjs.",
   "commands": [
     {
       "command": "server_profile",
@@ -285,6 +285,13 @@
       "inputs": [],
       "args": {},
       "expect": { "error": "no_verification_link" }
+    },
+    {
+      "command": "watch_events",
+      "method": "watchEvents",
+      "inputs": ["<onUpdate>"],
+      "args": { "updates": "__CHANNEL__:0" },
+      "expect": { "error": "no_server" }
     }
   ]
 }

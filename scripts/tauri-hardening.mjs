@@ -72,6 +72,7 @@ export const COMMANDS = [
   "change_grant",
   "revoke_grant",
   "open_verification_link",
+  "watch_events",
 ];
 
 /** The whole of `app.security`. */

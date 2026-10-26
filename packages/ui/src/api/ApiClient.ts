@@ -15,6 +15,7 @@ import type { GrantResponse } from "../generated/GrantResponse";
 import type { InvitePage } from "../generated/InvitePage";
 import type { LinkFlowResponse } from "../generated/LinkFlowResponse";
 import type { LinkStartedResponse } from "../generated/LinkStartedResponse";
+import type { LiveUpdateMessage } from "../generated/LiveUpdateMessage";
 import type { LoginRequest } from "../generated/LoginRequest";
 import type { LoginStepResponse } from "../generated/LoginStepResponse";
 import type { LogoutResponse } from "../generated/LogoutResponse";
@@ -108,6 +109,13 @@ export interface ApiClient {
   revokeGrant(id: string, user: string): Promise<void>;
   /** Opens Microsoft's sign-in page: the link the newest start answered with, checked in Rust. */
   openVerificationLink(): Promise<void>;
+  /**
+   * Watches the session's live events (P11.8): every update goes to `onUpdate`, in order,
+   * until the watch ends. It resolves once the watch was stopped (a newer watch, or a
+   * server switch) and rejects when the session ends (`no_session`) or the server's
+   * certificate is refused. No update holds a token or a ticket.
+   */
+  watchEvents(onUpdate: (update: LiveUpdateMessage) => void): Promise<void>;
 }
 
 /** A method of the API. */
@@ -150,4 +158,5 @@ export const API_METHODS = [
   "changeGrant",
   "revokeGrant",
   "openVerificationLink",
+  "watchEvents",
 ] as const satisfies readonly ApiMethod[];

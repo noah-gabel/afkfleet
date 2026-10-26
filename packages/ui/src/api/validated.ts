@@ -88,6 +88,8 @@ export function validated(client: ApiClient): ApiClient {
       return client.revokeGrant(id, user);
     },
     openVerificationLink: () => client.openVerificationLink(),
+    // No input: the callback is the UI's own.
+    watchEvents: (onUpdate) => client.watchEvents(onUpdate),
   };
 }
 

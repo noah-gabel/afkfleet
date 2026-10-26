@@ -46,6 +46,7 @@ const COMMANDS: &[&str] = &[
     "change_grant",
     "revoke_grant",
     "open_verification_link",
+    "watch_events",
 ];
 
 fn main() -> Result<(), Box<dyn Error>> {

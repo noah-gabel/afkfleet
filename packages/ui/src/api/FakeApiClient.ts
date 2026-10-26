@@ -18,6 +18,7 @@ import type { GrantResponse } from "../generated/GrantResponse";
 import type { InvitePage } from "../generated/InvitePage";
 import type { LinkFlowResponse } from "../generated/LinkFlowResponse";
 import type { LinkStartedResponse } from "../generated/LinkStartedResponse";
+import type { LiveUpdateMessage } from "../generated/LiveUpdateMessage";
 import type { LoginRequest } from "../generated/LoginRequest";
 import type { LoginStepResponse } from "../generated/LoginStepResponse";
 import type { LogoutResponse } from "../generated/LogoutResponse";
@@ -207,6 +208,77 @@ export class FakeApiClient implements ApiClient {
   async openVerificationLink(): Promise<void> {
     return this.#handler("openVerificationLink", [])();
   }
+
+  async watchEvents(onUpdate: (update: LiveUpdateMessage) => void): Promise<void> {
+    return this.#handler("watchEvents", [onUpdate])(onUpdate);
+  }
+}
+
+/** One watch a `fakeWatch` handler took: the test sends its updates and ends it. */
+export interface FakeWatchCall {
+  /** Sends `update` to the watch, as the Rust side would; nothing once it ended. */
+  push(update: LiveUpdateMessage): void;
+  /** Ends the watch as a stopped one: its call resolves. */
+  end(): void;
+  /** Ends the watch with `error`, as a session's end or a refused certificate does. */
+  fail(error: ApiError): void;
+  /** Whether it ended. */
+  readonly ended: boolean;
+}
+
+/** The live events' fake: a `watchEvents` handler and every watch it took. */
+export interface FakeWatch {
+  /** The handler for `FakeApiClient`'s `watchEvents`. */
+  readonly handler: ApiClient["watchEvents"];
+  /** Every watch so far, in order. */
+  readonly calls: readonly FakeWatchCall[];
+  /** The newest watch; it throws when none started. */
+  latest(): FakeWatchCall;
+}
+
+/**
+ * A fake of the live events (R78): each `watchEvents` call is held until the test ends it,
+ * and, as in the app, a newer watch stops the older one.
+ */
+export function fakeWatch(): FakeWatch {
+  const calls: FakeWatchCall[] = [];
+  return {
+    handler: (onUpdate) =>
+      new Promise<void>((resolve, reject) => {
+        calls.at(-1)?.end();
+        let ended = false;
+        calls.push({
+          push(update) {
+            if (!ended) {
+              onUpdate(update);
+            }
+          },
+          end() {
+            if (!ended) {
+              ended = true;
+              resolve();
+            }
+          },
+          fail(error) {
+            if (!ended) {
+              ended = true;
+              reject(error);
+            }
+          },
+          get ended() {
+            return ended;
+          },
+        });
+      }),
+    calls,
+    latest() {
+      const call = calls.at(-1);
+      if (call === undefined) {
+        throw new Error("no watch started");
+      }
+      return call;
+    },
+  };
 }
 
 /** What a test's error may carry besides its code. */

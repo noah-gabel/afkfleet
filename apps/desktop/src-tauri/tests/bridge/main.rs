@@ -10,5 +10,6 @@
 mod account;
 mod accounts;
 mod auth;
+mod live;
 mod support;
 mod switch;

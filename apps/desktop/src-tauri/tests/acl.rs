@@ -189,7 +189,7 @@ fn every_contract_command_passes_the_acl_and_answers_as_the_contract_says() {
             (_, _, answer) => panic!("{command}: unexpected answer {answer:?}"),
         }
     }
-    assert_eq!(entries.len(), 35);
+    assert_eq!(entries.len(), 36);
 }
 
 /// An Ok answer must parse as `command`'s own response type and equal the expected
@@ -231,4 +231,42 @@ fn a_command_with_an_unknown_argument_shape_is_refused_before_it_runs() {
         "Tauri couldn't read its arguments",
         "{error}"
     );
+}
+
+#[test]
+fn a_watch_whose_updates_arent_a_channel_is_refused_before_it_runs() {
+    let dir = TempDir::new().unwrap();
+    let window = app_window(&dir);
+
+    let answer = invoke(&window, "watch_events", serde_json::json!({ "updates": 5 }));
+
+    let error = answer.expect_err("a watch ran without a channel");
+    assert!(
+        serde_json::from_value::<CommandError>(error.clone()).is_err(),
+        "{error}"
+    );
+    assert_eq!(
+        rejection_kind(&error),
+        "Tauri couldn't read its arguments",
+        "{error}"
+    );
+}
+
+/// Tauri hands a channel's updates of 8 KiB and more to the webview through
+/// its own fetch command, which the ACL lets through without a core grant:
+/// it answers its own refusal here (no channel to read), never the ACL's.
+#[test]
+fn the_channels_own_fetch_needs_no_core_grant() {
+    let dir = TempDir::new().unwrap();
+    let window = app_window(&dir);
+
+    let answer = invoke(
+        &window,
+        "plugin:__TAURI_CHANNEL__|fetch",
+        Value::Object(serde_json::Map::new()),
+    );
+
+    let error = answer.expect_err("a fetch without a channel answered");
+    assert_ne!(rejection_kind(&error), "the ACL refused it", "{error}");
+    assert!(error.to_string().contains("channel id"), "{error}");
 }

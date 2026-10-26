@@ -6,6 +6,8 @@
 //!   one async `RwLock` for its whole client call, and
 //!   [`AppState::set_server_profile`] takes it exclusively, so nothing runs on
 //!   the old client after a switch. A command takes the guard exactly once.
+//!   The live events watch holds its shared guard for its whole life, so a
+//!   switch stops it first, once the new server answered (the `live` module).
 //! - **A stored session resumes only under the exact profile it was created
 //!   with.** Setting a profile identical to the current one (same origin,
 //!   same certificates) changes nothing. Any other profile logs out of the
@@ -36,6 +38,7 @@ use tauri::async_runtime::RwLock;
 
 use crate::error;
 use crate::keychain::StoreFactory;
+use crate::live::LiveSlot;
 use crate::profile::{self, Loaded, ServerProfile};
 
 /// Opens a checked link to Microsoft's sign-in page in the default browser.
@@ -68,6 +71,9 @@ pub struct AppState<F: StoreFactory> {
     /// The newest link or re-link answer's checked link. Its guard is held
     /// only to read or replace it, never across an `.await`.
     link: Mutex<Option<VerifiedLink>>,
+    /// The live events watch that may run ([`crate::live`]). Its guard is
+    /// held only to read or replace it, never across an `.await`.
+    pub(crate) live: Mutex<LiveSlot>,
 }
 
 /// The current connection, or why there's none.
@@ -118,6 +124,7 @@ impl<F: StoreFactory> AppState<F> {
             conn: RwLock::new(conn),
             opener,
             link: Mutex::new(None),
+            live: Mutex::new(LiveSlot::default()),
         }
     }
 
@@ -184,7 +191,14 @@ impl<F: StoreFactory> AppState<F> {
         let client = connect(&self.factory, &profile)?;
         client.health_live().await.map_err(error::client)?;
 
+        // The live events watch stops once the new server answered, before the
+        // exclusive guard, and every watch that starts meanwhile starts
+        // stopped: none holds its read guard across the switch (S61, R82).
+        let switching = self.begin_switch();
         let mut conn = self.conn.write().await;
+        // Declared after the write guard, so the switch ends before it's
+        // released and a watch the answer starts isn't refused.
+        let _switching = switching;
         if let Conn::Set(current) = &*conn
             && current.profile.same_as(&profile)
         {

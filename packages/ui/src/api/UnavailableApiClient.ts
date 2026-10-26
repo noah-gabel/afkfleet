@@ -49,4 +49,5 @@ export class UnavailableApiClient implements ApiClient {
   changeGrant = unavailable;
   revokeGrant = unavailable;
   openVerificationLink = unavailable;
+  watchEvents = unavailable;
 }
