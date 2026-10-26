@@ -615,7 +615,7 @@ describe("the bots' and modes' queries", () => {
     ]);
   });
 
-  it("read one bot, which follows its frames until it's removed", async () => {
+  it("read one bot, which follows its frames until it's removed, which drops its data (R98)", async () => {
     const { watch, fake, queryClient } = setup({ bot: async () => bot(1) });
 
     await queryClient.fetchQuery(botQuery(fake, botId(1)));
@@ -625,7 +625,7 @@ describe("the bots' and modes' queries", () => {
 
     expect(argsOf(fake, "bot")).toEqual([[botId(1)]]);
     expect(followed).toEqual(bot(1, { desired_state: "running" }));
-    expect(queryClient.getQueryState(botKey(botId(1)))).toBeUndefined();
+    expect(queryClient.getQueryData(botKey(botId(1)))).toBeUndefined();
   });
 
   it("read every page of the modes as one list's pages, which a mode frame reaches", async () => {

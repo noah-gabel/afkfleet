@@ -150,14 +150,15 @@ describe("the waiting list from a bot frame (S65)", () => {
 });
 
 describe("the other events", () => {
-  it("bot_removed takes the bot off the list, drops it, resets its chat and reads every account again", () => {
+  it("bot_removed takes the bot off the list, resets it and its chat and reads every account again", () => {
     const removed: EventMessage = { type: "bot_removed", bot_id: botId(3) };
     const cached = pages({ items: [bot(5), bot(3)] });
 
     expect(itemsOf(patched(removed, BOTS_LIST_KEY, cached))).toEqual([bot(5)]);
+    // Reset, not removed: an open screen reads the bot again, and shows its 404 (R98).
     expect(patchesFor(removed)).toEqual(
       expect.arrayContaining([
-        { kind: "remove", queryKey: botKey(botId(3)) },
+        { kind: "reset", queryKey: botKey(botId(3)) },
         { kind: "reset", queryKey: chatKey(botId(3)) },
         { kind: "invalidate", queryKey: ACCOUNTS_KEY },
       ]),

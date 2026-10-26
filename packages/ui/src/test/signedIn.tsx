@@ -47,6 +47,17 @@ export async function atScreen(
   return app;
 }
 
+/** The App signed in, then on bot `id`'s screen. */
+export async function atBot(
+  id: string,
+  handlers: Partial<ApiClient> = {},
+  options: SignedInOptions = {},
+) {
+  const app = await signedIn(handlers, options);
+  await act(() => app.runtime.router.navigate({ to: "/bots/$id", params: { id } }));
+  return app;
+}
+
 /** The App signed in, then on account `id`'s screen, or on its link-again screen. */
 export async function atAccount(
   id: string,

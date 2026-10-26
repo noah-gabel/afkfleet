@@ -103,11 +103,15 @@ function botPatches(bot: BotResponse): LivePatch[] {
   ];
 }
 
-/** A `bot_removed`'s changes: no bot→account mapping here, so every account is read again. */
+/**
+ * A `bot_removed`'s changes: no bot→account mapping here, so every account is read again.
+ * The bot's own query is reset, not removed: a screen that shows it reads it again and
+ * shows its 404, where a removed query would leave it on the gone bot (R98).
+ */
 function removedPatches(id: string): LivePatch[] {
   return [
     pagesPatch(BOTS_LIST_KEY, (data) => without(data, id)),
-    { kind: "remove", queryKey: botKey(id) },
+    { kind: "reset", queryKey: botKey(id) },
     { kind: "reset", queryKey: chatKey(id) },
     { kind: "invalidate", queryKey: ACCOUNTS_KEY },
   ];
