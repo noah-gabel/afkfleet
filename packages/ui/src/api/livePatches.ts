@@ -4,7 +4,8 @@
 // account as `GET /accounts/{id}` shows it, so a patch replaces what's cached; an item not
 // cached yet is placed by the keyset paging rule (newest first by ID, never below a loaded
 // page that has more after it). No patch creates a query's entry: the layer writes only over
-// data a query holds.
+// data a query holds; and data of another shape than its key's is left as it is, never a
+// throw inside the cache's notify (R90).
 import type { InfiniteData, QueryKey } from "@tanstack/react-query";
 
 import type { AccountResponse } from "../generated/AccountResponse";
@@ -61,15 +62,34 @@ export function patchesFor(event: EventMessage): LivePatch[] {
       const line = event.line;
       return event.bot_id === undefined || line === undefined
         ? []
-        : [set(chatKey(event.bot_id), (data) => placed(pages(data), line))];
+        : [
+            set(
+              chatKey(event.bot_id),
+              onPages((data) => placed(data, line)),
+            ),
+          ];
     }
     case "mode": {
       const mode = event.mode;
-      return mode === undefined ? [] : [set(MODES_LIST_KEY, (data) => placed(pages(data), mode))];
+      return mode === undefined
+        ? []
+        : [
+            set(
+              MODES_LIST_KEY,
+              onPages((data) => placed(data, mode)),
+            ),
+          ];
     }
     case "mode_removed": {
       const id = event.mode_id;
-      return id === undefined ? [] : [set(MODES_LIST_KEY, (data) => without(pages(data), id))];
+      return id === undefined
+        ? []
+        : [
+            set(
+              MODES_LIST_KEY,
+              onPages((data) => without(data, id)),
+            ),
+          ];
     }
     case "ready":
     case "resync":
@@ -89,19 +109,30 @@ export function patchesFor(event: EventMessage): LivePatch[] {
 function botPatches(bot: BotResponse): LivePatch[] {
   const account = bot.account;
   return [
-    set(BOTS_LIST_KEY, (data) => placed(pages(data), bot)),
+    set(
+      BOTS_LIST_KEY,
+      onPages((data) => placed(data, bot)),
+    ),
     set(botKey(bot.id), () => bot),
-    set(ACCOUNT_LIST_KEY, (data) => placed(pages(data), account)),
+    set(
+      ACCOUNT_LIST_KEY,
+      onPages((data) => placed(data, account)),
+    ),
     set(accountKey(account.id), () => account),
     { kind: "invalidate", queryKey: grantsKey(account.id) },
-    set(AWAITING_KEY, (data) => awaiting(data as readonly AccountResponse[], account)),
+    set(AWAITING_KEY, (data) =>
+      isList(data) ? awaiting(data as readonly AccountResponse[], account) : data,
+    ),
   ];
 }
 
 /** A `bot_removed`'s changes: no bot→account mapping here, so every account is read again. */
 function removedPatches(id: string): LivePatch[] {
   return [
-    set(BOTS_LIST_KEY, (data) => without(pages(data), id)),
+    set(
+      BOTS_LIST_KEY,
+      onPages((data) => without(data, id)),
+    ),
     { kind: "remove", queryKey: botKey(id) },
     { kind: "reset", queryKey: chatKey(id) },
     { kind: "invalidate", queryKey: ACCOUNTS_KEY },
@@ -135,9 +166,33 @@ function set(queryKey: QueryKey, update: LiveUpdater): LivePatch {
   return { kind: "set", queryKey, update };
 }
 
-/** `data` as the pages of a list. */
-function pages(data: unknown): InfiniteData<Page<Listed>> {
-  return data as InfiniteData<Page<Listed>>;
+/** An update of a list's pages; data of any other shape is left as it is. */
+function onPages(
+  update: (data: InfiniteData<Page<Listed>>) => InfiniteData<Page<Listed>>,
+): LiveUpdater {
+  return (data) => (isPages(data) ? update(data) : data);
+}
+
+/** Whether `data` holds a list's pages as an infinite query keeps them. */
+function isPages(data: unknown): data is InfiniteData<Page<Listed>> {
+  if (typeof data !== "object" || data === null) {
+    return false;
+  }
+  const pages: unknown = (data as { pages?: unknown }).pages;
+  return (
+    Array.isArray(pages) &&
+    pages.every(
+      (page: unknown) =>
+        typeof page === "object" && page !== null && isList((page as { items?: unknown }).items),
+    )
+  );
+}
+
+/** Whether `data` is a list of objects. */
+function isList(data: unknown): data is readonly object[] {
+  return (
+    Array.isArray(data) && data.every((item: unknown) => typeof item === "object" && item !== null)
+  );
 }
 
 /**

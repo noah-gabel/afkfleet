@@ -1043,8 +1043,10 @@ pub(crate) async fn events<S: SessionStore>(client: &Client<S>, terminal: &mut i
             // Both are cancel-safe: `recv` is, and Enter's future is kept
             // across turns.
             _ = &mut enter => {
-                live.close().await;
-                terminal.say(end_line(LiveEnd::Stopped));
+                // A session's end decided before Enter stands: its close
+                // may still have been running in the `recv` this dropped.
+                let end = live.close().await;
+                terminal.say(end_line(end));
                 return;
             }
             update = live.recv() => match update {

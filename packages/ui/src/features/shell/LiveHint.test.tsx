@@ -131,6 +131,37 @@ describe("the live events' hint", () => {
     expect(spoken()).toBe(text);
   });
 
+  it("says the watch stopped when it ends by itself, and Reconnect starts a new one (R91)", async () => {
+    const { app, watch, time } = await live();
+    const text = "Live updates stopped. Screens update when you open them.";
+
+    watch.latest().end();
+    await time.advance(0);
+    const stoppedShown = shown();
+    const stoppedSpoken = spoken();
+    await app.user.click(header().getByRole("button", { name: "Reconnect" }));
+    await time.advance(0);
+
+    expect(stoppedShown).toContain(text);
+    expect(stoppedSpoken).toBe(text);
+    expect(watch.calls).toHaveLength(2);
+    expect(shown()).not.toContain("Live updates");
+    expect(header().queryByRole("button", { name: "Reconnect" })).toBeNull();
+  });
+
+  it("offers Reconnect after a stop with an error too (U47)", async () => {
+    const { app, watch, time } = await live();
+
+    watch
+      .latest()
+      .fail(new ApiError({ code: "ipc", message: "The app couldn't run the request." }));
+    await time.advance(0);
+    await app.user.click(header().getByRole("button", { name: "Reconnect" }));
+    await time.advance(0);
+
+    expect(watch.calls).toHaveLength(2);
+  });
+
   it("says nothing when the watch ends with the session", async () => {
     const { watch, time } = await live();
 

@@ -101,6 +101,12 @@ where
 
 #[cfg(test)]
 mod tests {
+    use fleet_api_types::app::LiveUpdateMessage;
+    use fleet_api_types::bots::{
+        KICK_KEY_MAX_CHARS, KICK_MESSAGE_MAX_CHARS, SERVER_ADDRESS_MAX_CHARS,
+    };
+    use fleet_api_types::chat::{CHAT_SENDER_MAX_CHARS, CHAT_TEXT_MAX_CHARS};
+    use fleet_api_types::events::{EventMessage, Received};
     use rstest::rstest;
     use secrecy::ExposeSecret as _;
 
@@ -201,5 +207,93 @@ mod tests {
 
         assert_eq!(config.max_frame_size, Some(1024 * 1024));
         assert_eq!(config.max_message_size, Some(1024 * 1024));
+    }
+
+    /// `count` four-byte characters: the most bytes a text of `count`
+    /// characters can take.
+    fn widest(count: usize) -> String {
+        "\u{1F600}".repeat(count)
+    }
+
+    /// The frame `json` as the server sends it, and the update the app's
+    /// channel carries for it, both checked to read.
+    fn sizes(json: &serde_json::Value) -> (usize, usize) {
+        let event: EventMessage = serde_json::from_value(json.clone()).unwrap();
+        let frame = serde_json::to_string(&event).unwrap();
+        let read: EventMessage = serde_json::from_str(&frame).unwrap();
+        assert!(
+            matches!(read.received(), Received::Event(_)),
+            "the frame reads"
+        );
+        let update = LiveUpdateMessage::Event {
+            event: Box::new(event),
+        };
+        (frame.len(), serde_json::to_string(&update).unwrap().len())
+    }
+
+    /// R97: the largest frames a kind can be, built at their caps. Each fits
+    /// the socket's limit many times over, and the chat line's and the bot's
+    /// pass the 8 KiB from which Tauri's channel hands an update to the
+    /// webview through its own fetch, so a real frame can take that path,
+    /// though only a Minecraft server's long text makes one.
+    #[test]
+    fn the_largest_frames_fit_the_limit_and_pass_eight_kib() {
+        const ID: &str = "01900000-0000-7000-8000-000000000201";
+        const AT: &str = "2026-10-26T12:00:00.000Z";
+        let chat = serde_json::json!({
+            "type": "chat",
+            "bot_id": ID,
+            "line": {
+                "id": 9_007_199_254_740_991_u64,
+                "at": AT,
+                "direction": "in",
+                "kind": "whisper",
+                "text": widest(CHAT_TEXT_MAX_CHARS),
+                "truncated": true,
+                "arguments_hidden": false,
+                "sender": { "name": widest(CHAT_SENDER_MAX_CHARS), "uuid": ID },
+                "mine": false,
+            },
+        });
+        let bot = serde_json::json!({
+            "type": "bot",
+            "bot_id": ID,
+            "bot": {
+                "id": ID,
+                "account": {
+                    "id": ID,
+                    "name": "AfkBot1",
+                    "kind": "microsoft",
+                    "status": "active",
+                    "level": "manage",
+                    "owner": { "id": ID, "username": "a".repeat(32) },
+                    "linked_at": AT,
+                },
+                "server_address": "a".repeat(SERVER_ADDRESS_MAX_CHARS),
+                "mode_id": ID,
+                "desired_state": "running",
+                "status": {
+                    "kind": "reported",
+                    "state": "backoff",
+                    "since": AT,
+                    "attempt": u32::MAX,
+                    "last_disconnect": {
+                        "kind": "kicked",
+                        "key": "a".repeat(KICK_KEY_MAX_CHARS),
+                        "message": widest(KICK_MESSAGE_MAX_CHARS),
+                    },
+                },
+                "agent": { "id": ID, "name": "agent", "status": "online" },
+            },
+        });
+
+        for (kind, json) in [("chat", chat), ("bot", bot)] {
+            let (frame, update) = sizes(&json);
+            assert!(
+                frame < MAX_EVENT_FRAME / 16,
+                "{kind}: a frame of {frame} bytes"
+            );
+            assert!(update > 8 * 1024, "{kind}: an update of {update} bytes");
+        }
     }
 }

@@ -1,13 +1,15 @@
 // The Header's line about the live events (Plan.md P11.8; ADR-0020, U30, R85): only while a
-// reconnect waits, counting down, or once the watch stopped with an error that isn't the
-// session's end; nothing while live, and nothing for the routine reconnect that doesn't
-// wait. A screen reader hears each change once, never each second: the ticking line is
-// hidden from it, and the status region holds the text the change started with.
+// reconnect waits, counting down, or once the watch stopped, with an error that isn't the
+// session's end or by itself (R91), each stop ending with Reconnect (U47); nothing while
+// live, and nothing for the routine reconnect that doesn't wait. A screen reader hears each
+// change once, never each second: the ticking line is hidden from it, and the status region
+// holds the text the change started with.
 import { useEffect, useState } from "react";
 
 import { describeError } from "../../../api/describeError";
 import { useLive } from "../../../app/context";
 import type { LiveHint as Hint } from "../../../app/stores";
+import { Button } from "../../../components/ui/button";
 import type { CommandError } from "../../../generated/CommandError";
 
 /** After `too_many_connections`: D's approved text, the server's own message. */
@@ -24,8 +26,14 @@ export function pausedSpoken(seconds: number): string {
   return `Live updates paused. Reconnecting in ${seconds} seconds.`;
 }
 
-/** The line once the watch stopped with `error`; the period isn't doubled. */
-export function stopped(error: CommandError): string {
+/** The line once the watch stopped by itself while signed in (R91). */
+export const STOPPED = "Live updates stopped. Screens update when you open them.";
+
+/** The line once the watch stopped with `error`, or by itself; the period isn't doubled. */
+export function stopped(error: CommandError | null): string {
+  if (error === null) {
+    return STOPPED;
+  }
   const why = describeError(error);
   const sentence = /[.!?]$/.test(why) ? why : `${why}.`;
   return `Live updates stopped: ${sentence} Screens update when you open them.`;
@@ -34,11 +42,17 @@ export function stopped(error: CommandError): string {
 /** The line; see the module comment. */
 export function LiveHint() {
   const hint = useLive((state) => state.hint);
+  const restart = useLive((state) => state.restart);
   const left = useSecondsLeft(hint);
   const [shown, spoken] = texts(hint, left);
   return (
-    <div className="text-sm text-muted-foreground">
+    <div className="flex items-center gap-2 text-sm text-muted-foreground">
       {shown === "" ? null : <span aria-hidden="true">{shown}</span>}
+      {hint.kind === "stopped" ? (
+        <Button size="xs" variant="outline" onClick={restart}>
+          Reconnect
+        </Button>
+      ) : null}
       <span role="status" className="sr-only">
         {spoken}
       </span>

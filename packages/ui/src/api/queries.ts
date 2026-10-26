@@ -168,12 +168,12 @@ export function useAccount(id: string) {
   return useQuery(accountQuery(useApiClient(), id));
 }
 
-/** Who else has access to account `id`, a page at a time. */
 /** The key of who else has access to account `id`. */
 export function grantsKey(id: string) {
   return ["accounts", "grants", id] as const;
 }
 
+/** Who else has access to account `id`, a page at a time. */
 export function grantsQuery(api: ApiClient, id: string) {
   return infiniteQueryOptions({
     queryKey: grantsKey(id),

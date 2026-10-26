@@ -18,6 +18,7 @@ use afkfleet_desktop::profile::PROFILE_FILE;
 use afkfleet_desktop::state::{AppState, LinkOpener, OpenError};
 use fleet_api_types::app::{CommandError, LogoutResponse, ServerProfileState};
 use fleet_client::VerifiedLink;
+use rstest::rstest;
 use serde_json::Value;
 use tauri::ipc::{CallbackFn, InvokeBody, InvokeResponseBody};
 use tauri::test::{INVOKE_KEY, MockRuntime, get_ipc_response, mock_builder};
@@ -114,7 +115,9 @@ fn rejection_kind(value: &Value) -> &'static str {
     let text = value.as_str().unwrap_or_default();
     if text.contains("not allowed") {
         "the ACL refused it"
-    } else if text.contains("invalid args") {
+    } else if text.contains("invalid args") || text.contains("invalid channel value") {
+        // A channel argument that's a string, but not `__CHANNEL__:<id>`, is
+        // refused with the channel's own message, before the command runs.
         "Tauri couldn't read its arguments"
     } else if text.contains("not found") {
         "no handler is registered for it"
@@ -233,12 +236,19 @@ fn a_command_with_an_unknown_argument_shape_is_refused_before_it_runs() {
     );
 }
 
-#[test]
-fn a_watch_whose_updates_arent_a_channel_is_refused_before_it_runs() {
+#[rstest]
+#[case::a_number(serde_json::json!(5))]
+#[case::a_string(serde_json::json!("x"))]
+#[case::a_channels_prefix_without_an_id(serde_json::json!("__CHANNEL__:x"))]
+fn a_watch_whose_updates_arent_a_channel_is_refused_before_it_runs(#[case] updates: Value) {
     let dir = TempDir::new().unwrap();
     let window = app_window(&dir);
 
-    let answer = invoke(&window, "watch_events", serde_json::json!({ "updates": 5 }));
+    let answer = invoke(
+        &window,
+        "watch_events",
+        serde_json::json!({ "updates": updates }),
+    );
 
     let error = answer.expect_err("a watch ran without a channel");
     assert!(

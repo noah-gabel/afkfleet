@@ -10,9 +10,13 @@
 //!   send into the dead page.
 //! - **A switch stops it.** `set_server_profile` stops the watch just before
 //!   its exclusive guard, after the new server answered, and a watch that
-//!   starts while a switch runs is stopped at once (R82): no watch holds its
-//!   read guard across a switch, and an identical profile's save restarts
-//!   the socket on the same session.
+//!   registers while the switch runs, its read taken before the writer asked
+//!   for the guard, is stopped at birth (R82): no watch holds its read guard
+//!   across a switch, and an identical profile's save restarts the socket on
+//!   the same session. A watch whose read was queued behind the writer isn't
+//!   one of them: [`Exclusive`] ends the switch before the guard is
+//!   released, so it registers after the switch and runs on the new
+//!   connection.
 //! - **It ends** `Ok` when stopped, or when the channel refuses an update,
 //!   which then never delivers again (S64); with `no_session` when the
 //!   session ends; with `certificate` when the server's certificate is
@@ -22,6 +26,7 @@
 //!   seconds; a failed connect's error as any command's. Never the ticket or
 //!   the token: fleet-client spends both inside itself.
 
+use core::ops::{Deref, DerefMut};
 use core::time::Duration;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
@@ -89,6 +94,7 @@ impl LiveSlot {
 }
 
 /// A running switch, ended when this is dropped.
+#[must_use = "the switch ends when this is dropped"]
 pub(crate) struct Switching<'a> {
     slot: &'a Mutex<LiveSlot>,
 }
@@ -99,8 +105,47 @@ impl Drop for Switching<'_> {
     }
 }
 
-/// `slot`'s guard. A poisoned lock still holds a whole slot: every change
-/// to it is one assignment.
+/// A switch's exclusive guard: the switch, and the connection's write guard
+/// `G`. The switch ends before the guard is released, since a struct's
+/// fields drop in their declared order, so a watch whose read was queued
+/// behind the writer registers after the switch and runs on the new
+/// connection rather than starting stopped (R82).
+#[must_use = "the switch and the guard end when this is dropped"]
+pub(crate) struct Exclusive<'a, G> {
+    /// Dropped first: the switch ends.
+    _switching: Switching<'a>,
+    /// Then the guard is released.
+    guard: G,
+}
+
+impl<'a, G> Exclusive<'a, G> {
+    /// The guard `guard`, taken during `switching`.
+    pub(crate) const fn new(switching: Switching<'a>, guard: G) -> Self {
+        Self {
+            _switching: switching,
+            guard,
+        }
+    }
+}
+
+impl<G: Deref> Deref for Exclusive<'_, G> {
+    type Target = G::Target;
+
+    fn deref(&self) -> &G::Target {
+        &self.guard
+    }
+}
+
+impl<G: DerefMut> DerefMut for Exclusive<'_, G> {
+    fn deref_mut(&mut self) -> &mut G::Target {
+        &mut self.guard
+    }
+}
+
+/// `slot`'s guard. A poisoned lock still holds a usable slot: a guard is
+/// held only inside [`lock`]'s callers here, whose writes are plain
+/// assignments and [`LiveStop::stop`], none of which can panic, so no panic
+/// leaves a slot half-changed.
 fn lock(slot: &Mutex<LiveSlot>) -> MutexGuard<'_, LiveSlot> {
     slot.lock().unwrap_or_else(PoisonError::into_inner)
 }
@@ -129,7 +174,7 @@ impl<F: StoreFactory> AppState<F> {
                     if updates.send(message(update)).is_err() {
                         // The channel numbers each update before it's sent,
                         // so after a refused one it never delivers again.
-                        live.close().await;
+                        let _closed = live.close().await;
                         break Ok(());
                     }
                 }
@@ -140,8 +185,9 @@ impl<F: StoreFactory> AppState<F> {
         ended
     }
 
-    /// Starts a switch: stops the watch, and every watch that starts before
-    /// the answer is dropped starts stopped.
+    /// Starts a switch: stops the watch, and every watch that registers
+    /// before the answer is dropped starts stopped.
+    #[must_use = "the switch ends when the answer is dropped"]
     pub(crate) fn begin_switch(&self) -> Switching<'_> {
         lock(&self.live).begin_switch();
         Switching { slot: &self.live }
@@ -194,6 +240,8 @@ fn answer(end: LiveEnd) -> Result<(), CommandError> {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
     use fleet_api_types::events::{EventMessage, EventMessageKind};
     use fleet_client::{Client, ClientConfig, ClientError, MemoryStore, ServerUrl, Trust};
     use rstest::rstest;
@@ -240,6 +288,38 @@ mod tests {
         assert!(running.is_stopped());
         assert!(during.is_stopped());
         assert!(!after.is_stopped());
+    }
+
+    /// A guard that notes, when it's released, whether the switch had
+    /// ended.
+    struct Probe<'a> {
+        slot: &'a Mutex<LiveSlot>,
+        ended_first: &'a AtomicBool,
+    }
+
+    impl Drop for Probe<'_> {
+        fn drop(&mut self) {
+            let ended = lock(self.slot).switching == 0;
+            self.ended_first.store(ended, Ordering::SeqCst);
+        }
+    }
+
+    #[test]
+    fn a_switchs_exclusive_guard_ends_the_switch_before_it_is_released() {
+        let slot = Mutex::new(LiveSlot::default());
+        let ended_first = AtomicBool::new(false);
+        lock(&slot).begin_switch();
+        let exclusive = Exclusive::new(
+            Switching { slot: &slot },
+            Probe {
+                slot: &slot,
+                ended_first: &ended_first,
+            },
+        );
+
+        drop(exclusive);
+
+        assert!(ended_first.load(Ordering::SeqCst));
     }
 
     #[test]

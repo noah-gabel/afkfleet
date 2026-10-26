@@ -7,27 +7,35 @@
 //   (`Ok`) starts nothing: a newer watch or a switch stopped it, and a restart there would
 //   skip the socket's backoff.
 // - **Only the current watch counts** (S62): the newest one of the current generation while
-//   the session isn't signed out. An update or an end of any other changes nothing.
+//   the session isn't signed out. An update or an end of any other changes nothing, the
+//   banner included: the current watch's failed connect and refused certificate raise it
+//   here, not in `watched()` (R88).
 // - **A refetch drops every hold and reads everything again** (S60): `ready`, `resync` and an
 //   unreadable frame each supersede the events before them.
 // - **An event patches the cache** (livePatches.ts), **held per query** (S60): a change for a
 //   query that's fetching waits until its fetch succeeds, then all of its held changes are
 //   applied in order, at most `HOLD_MAX`; past that, the query is read once more instead. A
 //   fetch that fails applies them to the data it keeps, without a read, keeping its error
-//   (S63). A cancelled fetch's hold carries over to the fetch that replaced it, and a
-//   removed query's goes with it.
+//   (S63). A cancelled fetch's hold carries over to the fetch that replaced it; a cancel that
+//   reverts the query applies its hold at once, as a failed fetch does (R89); and a removed
+//   query's goes with it.
+// - **A first load reads once more** (R87): a refetch or an invalidation that lands while a
+//   query without data fetches joins that fetch, whose success would then show what was read
+//   before it as fresh; so such a query is read once more after it.
 // - **The Header's hint** (U30, `stores.live`): a reconnect that waits, noting a
-//   `too_many_connections`; the watch's stop with an error that isn't the session's end;
-//   nothing otherwise. Every refetch, event, new watch and sign-out clears it.
+//   `too_many_connections`; the watch's stop with an error that isn't the session's end, or
+//   its stop by itself while signed in with no server save running (S64's broken channel,
+//   R91); nothing otherwise. Every refetch, event, new watch and sign-out clears it.
 // Building it has no side effects; `attach` starts following the session.
 import type { Query, QueryCacheNotifyEvent, QueryClient, QueryKey } from "@tanstack/react-query";
 
 import type { ApiClient } from "../api/ApiClient";
-import { ApiError } from "../api/ApiError";
+import { toApiError } from "../api/ApiError";
 import { type LivePatch, patchesFor, READ_AGAIN } from "../api/livePatches";
 import type { LiveDisconnect } from "../generated/LiveDisconnect";
 import type { LiveUpdateMessage } from "../generated/LiveUpdateMessage";
 import type { AppStores, LiveHint } from "./stores";
+import { connectionFailed } from "./watched";
 
 /** The most changes held for one query while it fetches; past it, it's read once more. */
 export const HOLD_MAX = 1024;
@@ -42,6 +50,9 @@ export interface LiveLayer {
 
 /** A change that writes over a query's data. */
 type SetPatch = Extract<LivePatch, { kind: "set" }>;
+
+/** What a change only the server can decide asks of its query: a read, a stale mark, or nothing. */
+type ReadAgain = "read" | "stale" | "nothing";
 
 /** The changes held for one query while it fetches. */
 interface Hold {
@@ -82,9 +93,13 @@ export function createLiveLayer(
     hint({ kind: "none" });
     apiClient
       .watchEvents((update) => {
-        if (current?.number === number) {
-          apply(update);
+        if (current?.number !== number) {
+          return;
         }
+        if (update.update === "disconnected" && update.disconnect.why === "not_opened") {
+          connectionFailed(stores, update.disconnect.error.code);
+        }
+        apply(update);
       })
       .then(
         () => ended(number, null),
@@ -92,7 +107,10 @@ export function createLiveLayer(
       );
   }
 
-  /** What watch `number`'s end changes: nothing unless it's the current one. */
+  /**
+   * What watch `number`'s end changes: nothing unless it's the current one. `rejection` is
+   * `null` for a stop.
+   */
   function ended(number: number, rejection: unknown): void {
     if (current?.number !== number) {
       return;
@@ -100,12 +118,24 @@ export function createLiveLayer(
     const generation = current.generation;
     current = null;
     holds.clear();
-    if (rejection instanceof ApiError && rejection.error.code === "certificate") {
+    if (rejection === null) {
+      // A newer watch or a server save stops it too, but neither while signed in with
+      // nothing under way: then its channel broke (S64, R91).
+      const phase = stores.session.getState().phase;
+      hint(phase === "signed_in" ? { kind: "stopped", error: null } : { kind: "none" });
+      return;
+    }
+    const error = toApiError(rejection).error;
+    if (error.code === "no_session") {
+      // A session's end ends the screens too.
+      hint({ kind: "none" });
+      return;
+    }
+    if (error.code === "certificate") {
       certificateEnded = generation;
     }
-    // A stop says nothing, and a session's end ends the screens too.
-    const stopped = rejection instanceof ApiError && rejection.error.code !== "no_session";
-    hint(stopped ? { kind: "stopped", error: rejection.error } : { kind: "none" });
+    connectionFailed(stores, error.code);
+    hint({ kind: "stopped", error });
   }
 
   /** What the current watch's `update` changes. */
@@ -114,6 +144,9 @@ export function createLiveLayer(
       case "refetch":
         hint({ kind: "none" });
         holds.clear();
+        for (const query of cache.getAll()) {
+          readOnceMore(query);
+        }
         void queryClient.invalidateQueries();
         return;
       case "event":
@@ -142,6 +175,9 @@ export function createLiveLayer(
   function change(patch: LivePatch): void {
     switch (patch.kind) {
       case "invalidate":
+        for (const query of cache.findAll({ queryKey: patch.queryKey })) {
+          readOnceMore(query);
+        }
         void queryClient.invalidateQueries({ queryKey: patch.queryKey });
         return;
       case "remove":
@@ -160,7 +196,7 @@ export function createLiveLayer(
         if (query.state.fetchStatus === "fetching") {
           hold(query, patch);
         } else {
-          write(query, [patch], query.state.status !== "error");
+          write(query, [patch], query.state.status === "error" ? "nothing" : "read");
         }
         return;
       }
@@ -174,6 +210,23 @@ export function createLiveLayer(
     const query = cache.find({ queryKey, exact: true });
     if (query !== undefined) {
       holds.delete(query.queryHash);
+    }
+  }
+
+  /**
+   * Has `query` read once more after its fetch, when it's a first load: a refetch or an
+   * invalidation now joins that fetch instead of starting one (R87).
+   */
+  function readOnceMore(query: Query): void {
+    if (query.state.fetchStatus !== "fetching" || query.state.data !== undefined) {
+      return;
+    }
+    const held = holds.get(query.queryHash);
+    if (held === undefined) {
+      holds.set(query.queryHash, { patches: [], overflowed: true });
+    } else {
+      held.patches.length = 0;
+      held.overflowed = true;
     }
   }
 
@@ -195,19 +248,19 @@ export function createLiveLayer(
   /**
    * Writes `patches`, in order, over the data `query` holds; nothing when it holds none.
    * A query in error keeps its error and its stale mark (S63). An update only the server can
-   * decide reads the query once more, if `mayRead`.
+   * decide reads the query once more, marks it stale, or neither, as `readAgain` says.
    */
-  function write(query: Query, patches: readonly SetPatch[], mayRead: boolean): void {
+  function write(query: Query, patches: readonly SetPatch[], readAgain: ReadAgain): void {
     const before = query.state.data;
     if (before === undefined) {
       return;
     }
     let data: unknown = before;
-    let readAgain = false;
+    let wanted = false;
     for (const patch of patches) {
       const next = patch.update(data);
       if (next === READ_AGAIN) {
-        readAgain = true;
+        wanted = true;
       } else {
         data = next;
       }
@@ -219,8 +272,21 @@ export function createLiveLayer(
         queryClient.setQueryData(query.queryKey, data);
       }
     }
-    if (readAgain && mayRead) {
+    if (wanted) {
+      settle(query, readAgain);
+    }
+  }
+
+  /** Reads `query` once more, marks it stale, or neither, as `how` says. */
+  function settle(query: Query, how: ReadAgain): void {
+    if (how === "read") {
       void queryClient.invalidateQueries({ queryKey: query.queryKey, exact: true });
+    } else if (how === "stale") {
+      void queryClient.invalidateQueries({
+        queryKey: query.queryKey,
+        exact: true,
+        refetchType: "none",
+      });
     }
   }
 
@@ -241,13 +307,22 @@ export function createLiveLayer(
     if (action.type === "success" && action.manual !== true) {
       holds.delete(event.query.queryHash);
       if (held.overflowed) {
-        void queryClient.invalidateQueries({ queryKey: event.query.queryKey, exact: true });
+        settle(event.query, "read");
       } else {
-        write(event.query, held.patches, true);
+        write(event.query, held.patches, "read");
       }
     } else if (action.type === "error") {
       holds.delete(event.query.queryHash);
-      write(event.query, held.patches, false);
+      write(event.query, held.patches, "nothing");
+    } else if (action.type === "setState" && event.query.state.fetchStatus !== "fetching") {
+      // A cancel that reverted the query (R89): no success or error follows, so its held
+      // changes apply now to the data it kept, without a read, as a failed fetch's do.
+      holds.delete(event.query.queryHash);
+      if (held.overflowed) {
+        settle(event.query, "stale");
+      } else {
+        write(event.query, held.patches, "stale");
+      }
     }
   }
 

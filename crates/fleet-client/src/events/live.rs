@@ -16,7 +16,7 @@ use secrecy::ExposeSecret as _;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::sync::watch;
 use tokio::time::error::Elapsed;
-use tokio::time::{Instant, sleep_until, timeout, timeout_at};
+use tokio::time::{Instant, sleep_until, timeout_at};
 use tokio_tungstenite::WebSocketStream;
 use tokio_tungstenite::tungstenite::protocol::CloseFrame;
 use tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode;
@@ -24,7 +24,7 @@ use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tracing::{Level, debug, info, warn};
 
 use super::policy::{
-    Action, Backoff, CLOSE_TIMEOUT, End, READY_TIMEOUT, Refused, SILENCE_TIMEOUT, level,
+    Action, Backoff, CLOSE_TIMEOUT, End, READY_TIMEOUT, Refused, SILENCE_TIMEOUT, level, repeats,
 };
 use super::read as read_frame;
 use super::upgrade;
@@ -202,9 +202,11 @@ impl<S: SessionStore> LiveEvents<S> {
         self.live.stopper()
     }
 
-    /// Stops the socket and closes it, within [`CLOSE_TIMEOUT`].
-    pub async fn close(self) {
-        self.live.close().await;
+    /// Stops the socket and closes it, within [`CLOSE_TIMEOUT`]. Answers how
+    /// it ended: [`LiveEnd::Stopped`], unless an end was decided before, such
+    /// as the session's, whose close a dropped `recv` left running.
+    pub async fn close(self) -> LiveEnd {
+        self.live.close().await
     }
 }
 
@@ -266,14 +268,20 @@ impl<S: SessionStore, T: Transport> Live<S, T> {
                 self.stop.ended.send_replace(true);
                 return Err(end);
             }
-            if *self.stopped.borrow_and_update() {
-                self.machine.finish(LiveEnd::Stopped).await;
-                continue;
-            }
-            if *self.epochs.borrow_and_update() != self.epoch {
-                info!("the session ended: the live events socket closes");
-                self.machine.finish(LiveEnd::NoSession).await;
-                continue;
+            // Both are marked seen at every turn, so their `changed` below
+            // waits for a new change; an end once decided stands.
+            let stopped = *self.stopped.borrow_and_update();
+            let session_ended = *self.epochs.borrow_and_update() != self.epoch;
+            if !self.machine.ending() {
+                if stopped {
+                    self.machine.finish(LiveEnd::Stopped);
+                    continue;
+                }
+                if session_ended {
+                    info!("the session ended: the live events socket closes");
+                    self.machine.finish(LiveEnd::NoSession);
+                    continue;
+                }
             }
             // Each branch is cancel-safe: `changed` loses no change, and the
             // machine's step keeps its progress in its state.
@@ -286,18 +294,25 @@ impl<S: SessionStore, T: Transport> Live<S, T> {
                     Either::Left((Either::Left((Err(_), _)) | Either::Right((Err(_), _)), _))
                 )
             };
-            if sender_gone {
+            if sender_gone && !self.machine.ending() {
                 // The stop's sender lives in `self.stop` and the epoch's in
                 // the session, so only a session dropped meanwhile: it can't
                 // refresh any more.
-                self.machine.finish(LiveEnd::NoSession).await;
+                self.machine.finish(LiveEnd::NoSession);
             }
         }
     }
 
-    pub(crate) async fn close(mut self) {
+    pub(crate) async fn close(mut self) -> LiveEnd {
         self.stop.stop();
-        self.machine.finish(LiveEnd::Stopped).await;
+        self.machine.finish(LiveEnd::Stopped);
+        loop {
+            if let State::Ended(end) = self.machine.state {
+                return end;
+            }
+            // Only a close is left: its step ends within its deadline.
+            self.machine.step().await;
+        }
     }
 }
 
@@ -346,7 +361,8 @@ struct Open<X> {
 }
 
 /// A socket closing: the end it closes for is decided and kept here, so a
-/// `recv` dropped during the close loses neither it nor the close (R81).
+/// `recv` dropped during the close loses neither it nor the close (R81,
+/// R92).
 struct Closing<X> {
     socket: WebSocketStream<X>,
     /// When the close is given up: [`CLOSE_TIMEOUT`] after the decision.
@@ -354,7 +370,15 @@ struct Closing<X> {
     /// How it closes.
     how: Close,
     /// What follows it.
-    then: Then,
+    then: After,
+}
+
+/// What follows a socket's close.
+enum After {
+    /// The retry an end decided.
+    Retry(Then),
+    /// The socket's own end: stopped, or the session's.
+    End(LiveEnd),
 }
 
 /// How a socket closes.
@@ -458,8 +482,10 @@ impl<S: SessionStore, T: Transport> Machine<S, T> {
                     },
                 );
                 if let State::Closing(closing) = old {
-                    let Then { end, why, live } = closing.then;
-                    self.retry(end, why, live);
+                    match closing.then {
+                        After::Retry(Then { end, why, live }) => self.retry(end, why, live),
+                        After::End(end) => self.state = State::Ended(end),
+                    }
                 }
             }
         }
@@ -502,7 +528,7 @@ impl<S: SessionStore, T: Transport> Machine<S, T> {
                 socket: open.socket,
                 until: Instant::now() + CLOSE_TIMEOUT,
                 how,
-                then: Then { end, why, live },
+                then: After::Retry(Then { end, why, live }),
             }));
         }
     }
@@ -524,8 +550,8 @@ impl<S: SessionStore, T: Transport> Machine<S, T> {
     /// Waits as the policy says after `end`, telling the consumer `why`, or
     /// ends when the policy gives up.
     fn retry(&mut self, end: End, why: Disconnect, live: Option<Duration>) {
-        let action = self.backoff.action(end, live);
-        let Some(wait) = self.backoff.after(end, live) else {
+        let (action, wait) = self.backoff.next(end, live);
+        let Some(wait) = wait else {
             warn!(cause = ?end, "the live events socket's server certificate was refused: it stops");
             self.state = State::Ended(LiveEnd::Certificate);
             return;
@@ -544,7 +570,7 @@ impl<S: SessionStore, T: Transport> Machine<S, T> {
     /// gives it: its own the first time in a row, then `debug` (S54, R86).
     fn log(&mut self, end: End, action: Action, wait: Duration) {
         let wait_ms = u64::try_from(wait.as_millis()).unwrap_or(u64::MAX);
-        let repeat = self.last_logged == Some(end);
+        let repeat = repeats(self.last_logged, end);
         self.last_logged = Some(end);
         match level(end, action, repeat) {
             Level::WARN => {
@@ -559,16 +585,36 @@ impl<S: SessionStore, T: Transport> Machine<S, T> {
         }
     }
 
-    /// Ends the socket for `end`, closing it first if one is open or
-    /// closing.
-    async fn finish(&mut self, end: LiveEnd) {
+    /// Whether the socket's own end is decided: ended, or closing for it.
+    const fn ending(&self) -> bool {
+        match &self.state {
+            State::Ended(_) => true,
+            State::Closing(closing) => matches!(closing.then, After::End(_)),
+            State::Waiting { .. } | State::Connecting(_) | State::Open(_) => false,
+        }
+    }
+
+    /// Decides the socket's end, `end`, unless one is decided already, which
+    /// stands: an open socket closes first, as a step of its own (R92), so a
+    /// `recv` dropped during the close loses neither the end nor the close;
+    /// a closing one closes for the end instead of its retry.
+    fn finish(&mut self, end: LiveEnd) {
+        if self.ending() {
+            return;
+        }
         let old = core::mem::replace(&mut self.state, State::Ended(end));
         match old {
-            State::Open(mut open) => {
-                let _ = timeout(CLOSE_TIMEOUT, open.socket.close(Some(normal()))).await;
+            State::Open(open) => {
+                self.state = State::Closing(Box::new(Closing {
+                    socket: open.socket,
+                    until: Instant::now() + CLOSE_TIMEOUT,
+                    how: SEND,
+                    then: After::End(end),
+                }));
             }
             State::Closing(mut closing) => {
-                let _ = timeout_at(closing.until, closing.close()).await;
+                closing.then = After::End(end);
+                self.state = State::Closing(closing);
             }
             State::Waiting { .. } | State::Connecting(_) | State::Ended(_) => {}
         }
@@ -738,7 +784,7 @@ fn refused(error: &ClientError) -> Refused {
 mod tests {
     use serde_json::{Value, json};
     use tokio::join;
-    use tokio::time::sleep;
+    use tokio::time::{sleep, timeout};
     use tokio_tungstenite::tungstenite::Message;
 
     use super::*;
@@ -1568,6 +1614,79 @@ mod tests {
                 CLOSE_TIMEOUT,
                 "the close was given up at its own deadline"
             );
+        })
+        .await;
+    }
+
+    /// The socket's pong to a ping waits unread in the pipe, so its close
+    /// can't go out until the server reads; then the session ends.
+    async fn session_ends_while_the_close_waits(
+        core: &Arc<TestCore>,
+        live: &mut TestLive,
+        server: &mut PipeServer,
+    ) {
+        server.ping().await;
+        let read_the_ping = timeout(Duration::from_millis(1), live.recv()).await;
+        assert!(read_the_ping.is_err(), "a ping is no update");
+        core.discard().await.unwrap();
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_recv_dropped_during_the_sessions_end_close_keeps_the_end_and_the_close() {
+        bounded(async {
+            let core = core().await;
+            let (mut live, mut server) = live_socket(&core).await;
+            session_ends_while_the_close_waits(&core, &mut live, &mut server).await;
+            let dropped = timeout(CLOSE_TIMEOUT / 2, live.recv()).await;
+
+            let reading = async { (server.next().await, server.next().await) };
+            let ((pong, close), ended) = join!(reading, live.recv());
+
+            assert!(dropped.is_err(), "the close was still waiting");
+            assert!(matches!(pong, Some(Message::Pong(_))), "{pong:?}");
+            assert!(
+                matches!(&close, Some(Message::Close(Some(frame))) if u16::from(frame.code) == 1000),
+                "{close:?}"
+            );
+            assert!(matches!(ended, Err(LiveEnd::NoSession)), "{ended:?}");
+        })
+        .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_close_after_the_sessions_end_answers_it_and_sends_the_close() {
+        bounded(async {
+            let core = core().await;
+            let (mut live, mut server) = live_socket(&core).await;
+            session_ends_while_the_close_waits(&core, &mut live, &mut server).await;
+            let dropped = timeout(CLOSE_TIMEOUT / 2, live.recv()).await;
+
+            let reading = async { (server.next().await, server.next().await) };
+            let ((_, close), ended) = join!(reading, live.close());
+
+            assert!(dropped.is_err(), "the close was still waiting");
+            assert!(
+                matches!(&close, Some(Message::Close(Some(frame))) if u16::from(frame.code) == 1000),
+                "{close:?}"
+            );
+            assert_eq!(ended, LiveEnd::NoSession);
+        })
+        .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn a_close_answers_stopped_when_nothing_ended_it_before() {
+        bounded(async {
+            let core = core().await;
+            let (live, mut server) = live_socket(&core).await;
+
+            let (close, ended) = join!(server.next(), live.close());
+
+            assert!(
+                matches!(&close, Some(Message::Close(Some(frame))) if u16::from(frame.code) == 1000),
+                "{close:?}"
+            );
+            assert_eq!(ended, LiveEnd::Stopped);
         })
         .await;
     }

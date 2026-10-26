@@ -153,6 +153,37 @@ pub(crate) fn level(end: End, action: Action, repeat: bool) -> Level {
     }
 }
 
+/// Whether `end` repeats `last`, the end logged before it: the same cause,
+/// whatever wait a refusal asked for (S54, R92).
+#[must_use]
+pub(crate) fn repeats(last: Option<End>, end: End) -> bool {
+    last.map(End::cause) == Some(end.cause())
+}
+
+impl End {
+    /// The end without the wait a refusal asked for.
+    const fn cause(self) -> Self {
+        match self {
+            Self::Ticket(refused) => Self::Ticket(refused.cause()),
+            Self::Upgrade(refused) => Self::Upgrade(refused.cause()),
+            other => other,
+        }
+    }
+}
+
+impl Refused {
+    /// The refusal without the wait it asked for.
+    const fn cause(self) -> Self {
+        match self {
+            Self::Status { status, .. } => Self::Status {
+                status,
+                retry_after: None,
+            },
+            other => other,
+        }
+    }
+}
+
 /// Which request was refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Request {
@@ -213,6 +244,15 @@ impl Backoff {
     #[must_use]
     pub(crate) fn action(&self, end: End, live: Option<Duration>) -> Action {
         decide(end, self.prompt_left || Self::stable(live))
+    }
+
+    /// What follows `end` and the wait before it, `None` when the socket
+    /// gives up: the action as it stood before the wait's turn changed the
+    /// count, decided here at once so no caller can take them the other way
+    /// round (R92).
+    pub(crate) fn next(&mut self, end: End, live: Option<Duration>) -> (Action, Option<Duration>) {
+        let action = self.action(end, live);
+        (action, self.after(end, live))
     }
 
     /// Whether a socket live for `live` stayed long enough for the failures
@@ -444,6 +484,15 @@ mod tests {
     #[case::upgrade_403(End::Upgrade(status(403)), Level::WARN)]
     #[case::upgrade_405(End::Upgrade(status(405)), Level::WARN)]
     #[case::upgrade_malformed(End::Upgrade(Refused::Malformed), Level::WARN)]
+    #[case::upgrade_timed_out(End::Upgrade(Refused::TimedOut), Level::INFO)]
+    #[case::upgrade_local(End::Upgrade(Refused::Local), Level::INFO)]
+    #[case::upgrade_certificate(End::Upgrade(Refused::Certificate), Level::WARN)]
+    #[case::upgrade_408(End::Upgrade(status(408)), Level::INFO)]
+    #[case::upgrade_500(End::Upgrade(status(500)), Level::INFO)]
+    #[case::upgrade_502(End::Upgrade(status(502)), Level::INFO)]
+    #[case::upgrade_503(End::Upgrade(status(503)), Level::INFO)]
+    #[case::ticket_401(End::Ticket(status(401)), Level::WARN)]
+    #[case::ticket_502(End::Ticket(status(502)), Level::INFO)]
     fn each_end_logs_at_its_level(#[case] end: End, #[case] expected: Level) {
         for prompt_left in [true, false] {
             assert_eq!(
@@ -489,6 +538,53 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn next_judges_the_action_before_the_waits_turn() {
+        let end = End::Closed(Some(4001));
+        let mut backoff = Backoff::new(9);
+
+        let (first, first_wait) = backoff.next(end, Some(secs(5)));
+        let (storm, storm_wait) = backoff.next(end, Some(secs(5)));
+        let (parked, parked_wait) = backoff.next(End::Upgrade(Refused::Certificate), None);
+
+        assert_eq!(first, Action::Prompt);
+        assert_eq!(first_wait, Some(Duration::ZERO));
+        assert_eq!(storm, BACKOFF);
+        assert!(
+            storm_wait.is_some_and(|wait| wait >= RECONNECT_BASE),
+            "{storm_wait:?}"
+        );
+        assert_eq!(parked, Action::Park);
+        assert_eq!(parked_wait, None);
+    }
+
+    #[test]
+    fn a_refusal_repeats_whatever_wait_it_asked_for() {
+        let asked = |status: u16, secs: Option<u64>| {
+            End::Ticket(Refused::Status {
+                status,
+                retry_after: secs.map(Duration::from_secs),
+            })
+        };
+
+        assert!(repeats(Some(asked(429, Some(45))), asked(429, Some(20))));
+        assert!(repeats(Some(asked(429, None)), asked(429, Some(20))));
+        assert!(!repeats(Some(asked(429, Some(45))), asked(503, Some(45))));
+        assert!(!repeats(
+            Some(asked(429, Some(45))),
+            End::Upgrade(Refused::Status {
+                status: 429,
+                retry_after: Some(Duration::from_secs(45))
+            })
+        ));
+        assert!(repeats(Some(End::Lost), End::Lost));
+        assert!(!repeats(None, End::Lost));
+        assert!(!repeats(
+            Some(End::Closed(Some(1001))),
+            End::Closed(Some(1013))
+        ));
     }
 
     #[test]

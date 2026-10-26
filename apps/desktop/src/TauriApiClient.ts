@@ -1,8 +1,9 @@
 // The UI's API client in the desktop app (Plan.md P8.5, ADR-0017): each method invokes
 // the Rust command of the same name with exactly the args `src-tauri/tests/ipc-contract.json`
 // lists. Tauri's `invoke` and the factory of the live events' `Channel` are injected, so
-// tests and the e2e build pass their own; this file imports nothing from Tauri but its types. A rejection that's a `CommandError` becomes an `ApiError` of it;
-// anything else (Tauri's own refusals are plain strings) becomes `ipc`, its text dropped.
+// tests and the e2e build pass their own; this file imports nothing from Tauri but its
+// types. A rejection that's a `CommandError` becomes an `ApiError` of it; anything else
+// (Tauri's own refusals are plain strings) becomes `ipc`, its text dropped.
 import type { ApiClient } from "@afkfleet/ui";
 import { toApiError } from "@afkfleet/ui";
 import type { AccountPage } from "@afkfleet/ui/generated/AccountPage";

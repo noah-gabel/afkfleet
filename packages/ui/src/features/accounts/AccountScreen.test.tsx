@@ -7,7 +7,7 @@ import type { AccountResponse } from "../../generated/AccountResponse";
 import type { GrantResponse } from "../../generated/GrantResponse";
 import { formatTime } from "../../lib/time";
 import { account, accountId, BOB_ID, grant, seenBelowManage } from "../../test/accounts";
-import { me } from "../../test/fixtures";
+import { deferred, me } from "../../test/fixtures";
 import { fakeTime } from "../../test/renderApp";
 import { expectWait, limited } from "../../test/retryWait";
 import { atAccount } from "../../test/signedIn";
@@ -159,6 +159,28 @@ describe("an account's screen", () => {
     });
 
     expect(await screen.findByText(NOT_FOUND)).toBeDefined();
+  });
+
+  it("says so when the account goes during its screen's first read (R87)", async () => {
+    const watch = fakeWatch();
+    const first = deferred<AccountResponse>();
+    let reads = 0;
+    await atAccount(ID, {
+      watchEvents: watch.handler,
+      account: () => {
+        reads += 1;
+        return reads === 1 ? first.promise : Promise.reject(refusal(404, "not_found"));
+      },
+    });
+
+    watch.latest().push({
+      update: "event",
+      event: { type: "bot_removed", bot_id: "01900000-0000-7000-8000-000000000201" },
+    });
+    first.resolve(account(1));
+
+    expect(await screen.findByText(NOT_FOUND)).toBeDefined();
+    expect(reads).toBe(2);
   });
 
   it("notes that a pending link waits for approval", async () => {

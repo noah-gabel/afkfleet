@@ -111,9 +111,11 @@ export interface ApiClient {
   openVerificationLink(): Promise<void>;
   /**
    * Watches the session's live events (P11.8): every update goes to `onUpdate`, in order,
-   * until the watch ends. It resolves once the watch was stopped (a newer watch, or a
-   * server switch) and rejects when the session ends (`no_session`) or the server's
-   * certificate is refused. No update holds a token or a ticket.
+   * until the watch ends. It resolves once the watch was stopped: by a newer watch, a
+   * server switch, or the app's channel refusing an update (S64). It rejects with
+   * `no_server` without a server, `no_session` when the session ends or there's none, and
+   * `certificate` when the server's certificate is refused. No update holds a token or a
+   * ticket.
    */
   watchEvents(onUpdate: (update: LiveUpdateMessage) => void): Promise<void>;
 }
