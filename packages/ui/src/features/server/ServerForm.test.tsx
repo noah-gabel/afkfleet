@@ -12,6 +12,7 @@ import type { SessionPage } from "../../generated/SessionPage";
 import { deferred, me, ORIGIN, PROFILE } from "../../test/fixtures";
 import { fakeTime, renderApp } from "../../test/renderApp";
 import { expectWait, limited } from "../../test/retryWait";
+import { onHome } from "../../test/signedIn";
 import { CERTIFICATE_HELP } from "./certificateHelp";
 
 const NEW_URL = "https://afk.example.com";
@@ -47,7 +48,7 @@ async function atSetup(
 /** The App signed in, on the Server screen. */
 async function atServer(handlers: Partial<ApiClient> = {}, state: ServerProfileState = PROFILE) {
   const app = renderApp({ serverProfile: async () => state, me: async () => me(), ...handlers });
-  await screen.findByText(/Signed in as afkbot1/);
+  await onHome("afkbot1");
   await app.user.click(screen.getByRole("link", { name: "Server" }));
   await screen.findByRole("heading", { name: "Server" });
   return app;

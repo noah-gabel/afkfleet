@@ -1,6 +1,6 @@
 // The signed-in screens' test helpers: the App signed in over a FakeApiClient, on Home or
 // on another screen. Placeholders only (CLAUDE.md).
-import { act, screen } from "@testing-library/react";
+import { act, screen, within } from "@testing-library/react";
 
 import type { ApiClient } from "../api/ApiClient";
 import type { MeResponse } from "../generated/MeResponse";
@@ -15,17 +15,29 @@ export interface SignedInOptions {
   readonly strict?: boolean;
 }
 
-/** The App signed in as `options.user`, on Home. */
+/** Waits until Home shows for `username`: its bots' heading, and the Header's user. */
+export async function onHome(username = me().username): Promise<void> {
+  await screen.findByRole("heading", { name: "Bots" });
+  await within(screen.getByRole("banner")).findByText(username, { exact: true });
+}
+
+/** The App signed in as `options.user`, on Home, without bots unless `handlers` give some. */
 export async function signedIn(handlers: Partial<ApiClient> = {}, options: SignedInOptions = {}) {
   const user = options.user ?? me();
   const app = renderApp(
-    { serverProfile: async () => PROFILE, me: async () => user, ...handlers },
+    {
+      serverProfile: async () => PROFILE,
+      me: async () => user,
+      bots: async () => ({ items: [] }),
+      modes: async () => ({ items: [] }),
+      ...handlers,
+    },
     {
       ...(options.advanceTimers === undefined ? {} : { advanceTimers: options.advanceTimers }),
       ...(options.strict === undefined ? {} : { strict: options.strict }),
     },
   );
-  await screen.findByText(new RegExp(`Signed in as ${user.username}`));
+  await onHome(user.username);
   return app;
 }
 

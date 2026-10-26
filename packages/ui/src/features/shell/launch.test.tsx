@@ -6,6 +6,7 @@ import { ME_STALE_MS } from "../../api/queries";
 import type { CommandErrorCode } from "../../generated/CommandErrorCode";
 import { me, PROFILE } from "../../test/fixtures";
 import { renderApp } from "../../test/renderApp";
+import { onHome } from "../../test/signedIn";
 import { CERTIFICATE_HELP } from "../server/certificateHelp";
 
 describe("the launch", () => {
@@ -33,13 +34,13 @@ describe("the launch", () => {
       phase: "signed_in",
       generation: 1,
     });
-    expect(await screen.findByText(/Signed in as afkbot1/)).toBeDefined();
+    await onHome("afkbot1");
   });
 
   it("caches the user it found, so Home doesn't ask again", async () => {
     const app = renderApp({ serverProfile: async () => PROFILE, me: async () => me() });
 
-    await screen.findByText(/Signed in as afkbot1/);
+    await onHome("afkbot1");
 
     expect(app.fake.calls.filter((call) => call.method === "me")).toHaveLength(1);
     expect(app.runtime.queryClient.getQueryState(["me"])?.dataUpdatedAt).toBeGreaterThan(

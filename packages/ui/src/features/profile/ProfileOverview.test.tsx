@@ -5,7 +5,7 @@ import type { MeResponse } from "../../generated/MeResponse";
 import type { SessionPage } from "../../generated/SessionPage";
 import { formatTime } from "../../lib/time";
 import { me } from "../../test/fixtures";
-import { atScreen, signedIn } from "../../test/signedIn";
+import { atScreen, onHome, signedIn } from "../../test/signedIn";
 import { failedCodesWarning, recoveryCodesWarning } from "./components/SecurityWarnings";
 
 /** The current session alone. */
@@ -133,7 +133,7 @@ describe("Home's warnings", () => {
     await act(() => app.runtime.router.navigate({ to: "/profile" }));
     expect(await screen.findByText(failedCodesWarning(1, LAST_WRONG))).toBeDefined();
     await act(() => app.runtime.router.navigate({ to: "/home" }));
-    await screen.findByText(/Signed in as afkbot1/);
+    await onHome("afkbot1");
     expect(screen.queryByText(failedCodesWarning(1, LAST_WRONG))).toBeNull();
 
     act(() => app.runtime.stores.session.getState().signIn());

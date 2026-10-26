@@ -6,6 +6,7 @@ import type { ApiErrorDetails } from "../../generated/ApiErrorDetails";
 import type { MeResponse } from "../../generated/MeResponse";
 import { deferred, me, PROFILE } from "../../test/fixtures";
 import { fakeTime, renderApp } from "../../test/renderApp";
+import { onHome } from "../../test/signedIn";
 import { CERTIFICATE_HELP } from "../server/certificateHelp";
 
 const DOWN = "Can't reach the server. Trying again every 10 s.";
@@ -32,7 +33,7 @@ async function signedIn(check: () => Promise<void>) {
     },
     { advanceTimers: time.advanceTimers },
   );
-  await screen.findByText(/Signed in as afkbot1/);
+  await onHome("afkbot1");
   /** Makes the next `me` calls answer `answer`. */
   const meAnswers = (answer: () => Promise<MeResponse>) => {
     next = answer;

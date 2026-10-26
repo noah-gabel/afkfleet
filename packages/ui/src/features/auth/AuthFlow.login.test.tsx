@@ -7,6 +7,7 @@ import { SESSION_ENDED } from "../../app/leave";
 import { me } from "../../test/fixtures";
 import { fakeTime } from "../../test/renderApp";
 import { expectWait, limited } from "../../test/retryWait";
+import { onHome } from "../../test/signedIn";
 import {
   atLogin,
   CODES,
@@ -95,7 +96,7 @@ describe("logging in", () => {
       phase: "signed_in",
       generation: 1,
     });
-    expect(await screen.findByText(/Signed in as afkbot1/)).toBeDefined();
+    await onHome("afkbot1");
   });
 
   it("counts wrong codes and sends the third back to the password step", async () => {
@@ -260,7 +261,7 @@ describe("the first login's 2FA setup", () => {
     await app.user.click(await screen.findByLabelText("I've saved these codes"));
     await app.user.click(screen.getByRole("button", { name: "Continue" }));
     await enterCode(app, "111222");
-    await screen.findByText(/Signed in as afkbot1/);
+    await onHome("afkbot1");
 
     const cached = cacheText(app);
     for (const secret of [PASSWORD, SECRET, ENROLLMENT.qr_svg, ...CODES]) {

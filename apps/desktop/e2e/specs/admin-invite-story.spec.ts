@@ -4,14 +4,14 @@
 
 import { OWNER, PASSWORD } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
-import { enterCode, logIn, setUp2fa } from "./steps";
+import { enterCode, expectHome, logIn, setUp2fa } from "./steps";
 
 test("an invite goes from the Owner to a new user who sets up 2FA", async ({ page, context }) => {
   const backend = await fakeBackend(context);
   await page.goto("/");
   await logIn(page, OWNER);
   await enterCode(page, backend.code(OWNER));
-  await expect(page.getByText(`Signed in as ${OWNER}`, { exact: false })).toBeVisible();
+  await expectHome(page, OWNER);
 
   await page.getByRole("link", { name: "Invites" }).click();
   await page.getByRole("button", { name: "Create invite" }).click();
