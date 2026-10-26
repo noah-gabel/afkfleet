@@ -12,9 +12,12 @@
 //   only a call that started after that can take it down again.
 // - `notices`: the warnings Home's user dismissed, for the sign-in (the session's
 //   generation) they dismissed them in; a new sign-in shows them again (Plan.md P8.7).
-// - `live`: what the live events layer (live.ts) is asked from outside it: a new watch, after
-//   a server profile save that changed nothing (P11.8, S61).
+// - `live`: the live events layer's (live.ts) hint for the Header while a reconnect waits or
+//   after the watch stopped (U30), and what it's asked from outside: a new watch, after a
+//   server profile save that changed nothing (P11.8, S61).
 import { createStore, type StoreApi } from "zustand/vanilla";
+
+import type { CommandError } from "../generated/CommandError";
 
 /** Where the user's session stands, as far as the UI knows. */
 export type SessionPhase = "starting" | "signed_out" | "signed_in" | "logging_out";
@@ -75,8 +78,27 @@ export interface NoticesState {
   dismiss(warning: HomeWarning, generation: number): void;
 }
 
+/** What the Header says about the live events (U30). */
+export type LiveHint =
+  /** Nothing: live, or a reconnect that doesn't wait. */
+  | { readonly kind: "none" }
+  /** A reconnect waits `secs` seconds, until `until` (ms since the epoch); `tooMany` after
+   * `too_many_connections`. */
+  | {
+      readonly kind: "waiting";
+      readonly secs: number;
+      readonly until: number;
+      readonly tooMany: boolean;
+    }
+  /** The watch stopped with `error`, which isn't a session's end. */
+  | { readonly kind: "stopped"; readonly error: CommandError };
+
 /** The live events store; see the module comment. */
 export interface LiveState {
+  /** The Header's hint. */
+  readonly hint: LiveHint;
+  /** Shows `hint`. */
+  setHint(hint: LiveHint): void;
   /** How many new watches were asked for. */
   readonly restarts: number;
   /** Asks for a new watch of the current session. */
@@ -171,6 +193,10 @@ export function createAppStores(): AppStores {
       },
     })),
     live: createStore<LiveState>()((set, get) => ({
+      hint: { kind: "none" },
+      setHint(hint) {
+        set({ hint });
+      },
       restarts: 0,
       restart() {
         set({ restarts: get().restarts + 1 });

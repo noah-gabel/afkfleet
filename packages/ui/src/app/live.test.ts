@@ -24,7 +24,7 @@ import type { AccountResponse } from "../generated/AccountResponse";
 import type { LiveUpdateMessage } from "../generated/LiveUpdateMessage";
 import { account, accountId } from "../test/accounts";
 import { deferred } from "../test/fixtures";
-import { accountFrame, bot, botFrame, pages, refetch } from "../test/live";
+import { accountFrame, bot, botFrame, disconnected, pages, refetch } from "../test/live";
 import { createLiveLayer, HOLD_MAX } from "./live";
 import { createQueryClient } from "./queryClient";
 import { createAppStores } from "./stores";
@@ -512,5 +512,38 @@ describe("when a watch starts (S61, R73)", () => {
     await settle();
 
     expect(watch.calls).toHaveLength(2);
+  });
+});
+
+describe("the Header's hint (U30)", () => {
+  it("shows nothing for the routine reconnect, which doesn't wait", () => {
+    const { watch, stores } = setup();
+
+    watch.latest().push(disconnected(0));
+
+    expect(stores.live.getState().hint).toEqual({ kind: "none" });
+  });
+
+  it("waits while a reconnect does, and goes at a sign-out", () => {
+    const { watch, stores } = setup();
+
+    watch.latest().push(disconnected(10));
+    const waiting = stores.live.getState().hint;
+    stores.session.getState().signOut();
+
+    expect(waiting).toMatchObject({ kind: "waiting", secs: 10, tooMany: false });
+    expect(stores.live.getState().hint).toEqual({ kind: "none" });
+  });
+
+  it("says the watch stopped after a refused certificate, until a new watch starts", async () => {
+    const { watch, stores, layer } = setup();
+
+    watch.latest().fail(fakeApiError("certificate"));
+    await settle();
+    const stopped = stores.live.getState().hint;
+    layer.recovered();
+
+    expect(stopped).toMatchObject({ kind: "stopped", error: { code: "certificate" } });
+    expect(stores.live.getState().hint).toEqual({ kind: "none" });
   });
 });

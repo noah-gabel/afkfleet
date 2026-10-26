@@ -1,11 +1,12 @@
-// The header of the signed-in screens (Plan.md P8.6): the app's name, who is signed in
-// with which role, and "Log out" (useLogout).
+// The header of the signed-in screens (Plan.md P8.6): the app's name, the live events' hint
+// (LiveHint, P11.8), who is signed in with which role, and "Log out" (useLogout).
 import { LogOutIcon } from "lucide-react";
 
 import { useMe } from "../../../api/queries";
 import { Button } from "../../../components/ui/button";
 import { useLogout } from "../hooks/useLogout";
 import { roleLabel } from "../nav";
+import { LiveHint } from "./LiveHint";
 
 /** The header. */
 export function Header() {
@@ -14,6 +15,7 @@ export function Header() {
   return (
     <header className="flex items-center justify-between border-b px-4 py-2">
       <span className="font-semibold tracking-tight">afkfleet</span>
+      <LiveHint />
       <div className="flex items-center gap-3 text-sm">
         {user === undefined ? null : (
           <>

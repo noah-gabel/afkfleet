@@ -16,14 +16,18 @@
 //   fetch that fails applies them to the data it keeps, without a read, keeping its error
 //   (S63). A cancelled fetch's hold carries over to the fetch that replaced it, and a
 //   removed query's goes with it.
+// - **The Header's hint** (U30, `stores.live`): a reconnect that waits, noting a
+//   `too_many_connections`; the watch's stop with an error that isn't the session's end;
+//   nothing otherwise. Every refetch, event, new watch and sign-out clears it.
 // Building it has no side effects; `attach` starts following the session.
 import type { Query, QueryCacheNotifyEvent, QueryClient, QueryKey } from "@tanstack/react-query";
 
 import type { ApiClient } from "../api/ApiClient";
 import { ApiError } from "../api/ApiError";
 import { type LivePatch, patchesFor, READ_AGAIN } from "../api/livePatches";
+import type { LiveDisconnect } from "../generated/LiveDisconnect";
 import type { LiveUpdateMessage } from "../generated/LiveUpdateMessage";
-import type { AppStores } from "./stores";
+import type { AppStores, LiveHint } from "./stores";
 
 /** The most changes held for one query while it fetches; past it, it's read once more. */
 export const HOLD_MAX = 1024;
@@ -75,6 +79,7 @@ export function createLiveLayer(
     current = { number, generation };
     certificateEnded = null;
     holds.clear();
+    hint({ kind: "none" });
     apiClient
       .watchEvents((update) => {
         if (current?.number === number) {
@@ -98,24 +103,38 @@ export function createLiveLayer(
     if (rejection instanceof ApiError && rejection.error.code === "certificate") {
       certificateEnded = generation;
     }
+    // A stop says nothing, and a session's end ends the screens too.
+    const stopped = rejection instanceof ApiError && rejection.error.code !== "no_session";
+    hint(stopped ? { kind: "stopped", error: rejection.error } : { kind: "none" });
   }
 
   /** What the current watch's `update` changes. */
   function apply(update: LiveUpdateMessage): void {
     switch (update.update) {
       case "refetch":
+        hint({ kind: "none" });
         holds.clear();
         void queryClient.invalidateQueries();
         return;
       case "event":
+        hint({ kind: "none" });
         for (const patch of patchesFor(update.event)) {
           change(patch);
         }
         return;
       case "disconnected":
+        hint(waiting(update.disconnect, update.retry_in_secs));
         return;
       default:
         return;
+    }
+  }
+
+  /** Shows `next` in the Header, unless it's already shown. */
+  function hint(next: LiveHint): void {
+    const shown = stores.live.getState().hint;
+    if (shown.kind !== "none" || next.kind !== "none") {
+      stores.live.getState().setHint(next);
     }
   }
 
@@ -238,6 +257,7 @@ export function createLiveLayer(
     if (!inSession()) {
       current = null;
       holds.clear();
+      hint({ kind: "none" });
       return;
     }
     if (session.phase === "signed_in" && session.generation !== started) {
@@ -280,4 +300,17 @@ export function createLiveLayer(
       }
     },
   };
+}
+
+/**
+ * The hint for a socket that went down for `disconnect` and waits `secs` (U30): nothing for
+ * no wait, the routine reconnect an access token's end asks for.
+ */
+function waiting(disconnect: LiveDisconnect, secs: number): LiveHint {
+  if (secs <= 0) {
+    return { kind: "none" };
+  }
+  const tooMany =
+    disconnect.why === "not_opened" && disconnect.error.api?.code === "too_many_connections";
+  return { kind: "waiting", secs, until: Date.now() + secs * 1000, tooMany };
 }
