@@ -13,12 +13,17 @@
 //! - The server profile goes in as a [`ServerProfileRequest`] and comes back
 //!   as a [`ServerProfileView`]: the origin and the custom CA's fingerprints,
 //!   never the CA's text.
+//! - The live events reach the UI as [`LiveUpdateMessage`]s on the
+//!   `watch_events` command's channel: the server's frames, why to fetch
+//!   again, and why the socket went down with its wait; never the ticket or
+//!   the token the socket spent.
 
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::error::{ErrorCode, FieldError, MESSAGE_MAX_CHARS, REQUEST_ID_MAX_CHARS};
+use crate::events::EventMessage;
 use crate::open::Open;
 use crate::text::BoundedText;
 
@@ -368,6 +373,68 @@ pub enum ProfileUnreadable {
     Client,
 }
 
+/// One update on the `watch_events` command's channel: what the live events
+/// socket says next (Plan.md P11.8; ADR-0020, S59). No token and no ticket
+/// is in it: the client spends both inside itself.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+#[serde(tag = "update", rename_all = "snake_case")]
+pub enum LiveUpdateMessage {
+    /// Fetch everything shown: after every `ready`, a `resync`, or a frame
+    /// that didn't read. It supersedes the events before it.
+    Refetch {
+        /// Why.
+        reason: LiveRefetchReason,
+    },
+    /// An event of a kind this version knows.
+    Event {
+        /// The event, as the server built it for this viewer.
+        // Boxed, so the other updates stay small.
+        event: Box<EventMessage>,
+    },
+    /// The socket is down; it connects again once `retry_in_secs` passed.
+    Disconnected {
+        /// Why.
+        disconnect: LiveDisconnect,
+        /// Seconds until the next connect, rounded up: 0 for the reconnect
+        /// an access token's end asks for, which no one needs to see.
+        retry_in_secs: u32,
+    },
+}
+
+/// Why everything is to be fetched again.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum LiveRefetchReason {
+    /// The socket is live: it says `ready` after every connect.
+    Ready,
+    /// The server says some events didn't reach this socket.
+    Resync,
+    /// A frame didn't read, so one may have been missed.
+    Unreadable,
+}
+
+/// Why the live events socket went down.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(tag = "why", rename_all = "snake_case")]
+pub enum LiveDisconnect {
+    /// The server closed it, with this code, or without one.
+    Closed {
+        /// The close code.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[ts(optional)]
+        code: Option<u16>,
+    },
+    /// The connection went without a close, or broke the protocol.
+    Lost,
+    /// No frame came in time: the server is taken for gone.
+    Silent,
+    /// A connect failed: its ticket's request, or its upgrade.
+    NotOpened {
+        /// What failed, as any command's error says it.
+        error: CommandError,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
@@ -375,6 +442,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::events::EventMessageKind;
 
     /// Each code's position, through an exhaustive match: a new variant
     /// doesn't compile until it's added here, and then the test below fails
@@ -700,5 +768,89 @@ mod tests {
             paths,
             BTreeSet::from(["ca_pem".to_owned(), "url".to_owned()])
         );
+    }
+
+    const BOT: &str = "01900000-0000-7000-8000-000000000001";
+
+    #[test]
+    fn each_live_update_is_tagged_by_what_it_is_and_reads_back() {
+        let removed = EventMessage::bot_removed(serde_json::from_value(json!(BOT)).unwrap());
+        let updates = [
+            (
+                LiveUpdateMessage::Refetch {
+                    reason: LiveRefetchReason::Ready,
+                },
+                json!({ "update": "refetch", "reason": "ready" }),
+            ),
+            (
+                LiveUpdateMessage::Event {
+                    event: Box::new(removed),
+                },
+                json!({ "update": "event", "event": { "type": "bot_removed", "bot_id": BOT } }),
+            ),
+            (
+                LiveUpdateMessage::Disconnected {
+                    disconnect: LiveDisconnect::Closed { code: Some(1001) },
+                    retry_in_secs: 2,
+                },
+                json!({
+                    "update": "disconnected",
+                    "disconnect": { "why": "closed", "code": 1001 },
+                    "retry_in_secs": 2
+                }),
+            ),
+        ];
+
+        for (update, expected) in updates {
+            assert_eq!(serde_json::to_value(&update).unwrap(), expected);
+            let back: LiveUpdateMessage = serde_json::from_value(expected).unwrap();
+            assert_eq!(back, update);
+        }
+        assert_eq!(
+            [
+                LiveRefetchReason::Ready,
+                LiveRefetchReason::Resync,
+                LiveRefetchReason::Unreadable
+            ]
+            .map(|reason| serde_json::to_value(reason).unwrap()),
+            [json!("ready"), json!("resync"), json!("unreadable")]
+        );
+        assert_eq!(
+            serde_json::from_value::<EventMessage>(json!({ "type": "bot_removed", "bot_id": BOT }))
+                .unwrap()
+                .kind
+                .known(),
+            Some(EventMessageKind::BotRemoved)
+        );
+    }
+
+    #[test]
+    fn each_disconnect_says_why_and_a_failed_connect_carries_its_error() {
+        let disconnects = [
+            (
+                LiveDisconnect::Closed { code: None },
+                json!({ "why": "closed" }),
+            ),
+            (LiveDisconnect::Lost, json!({ "why": "lost" })),
+            (LiveDisconnect::Silent, json!({ "why": "silent" })),
+            (
+                LiveDisconnect::NotOpened {
+                    error: CommandError::new(CommandErrorCode::Unreachable),
+                },
+                json!({
+                    "why": "not_opened",
+                    "error": {
+                        "code": "unreachable",
+                        "message": CommandErrorCode::Unreachable.message()
+                    }
+                }),
+            ),
+        ];
+
+        for (disconnect, expected) in disconnects {
+            assert_eq!(serde_json::to_value(&disconnect).unwrap(), expected);
+            let back: LiveDisconnect = serde_json::from_value(expected).unwrap();
+            assert_eq!(back, disconnect);
+        }
     }
 }
