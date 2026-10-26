@@ -4169,6 +4169,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
   > - **The user's:** the capability's 13 grants (U32); `target/dod-run/` never read (U33); chat sends direct, the history cached (U34); Home as the dashboard, the hint in the Header, a roomy labelled grid (U35–U37); Stop beside Resume and Reset, other controls hidden (U38); two columns, chat right (U39); a native mode select that switches at once (U40); the address's Change inline (U41); a toast and a Home line (U42); the console's order, columns and styling (U43, U44); the send box (U45); the timeline (U46); Reconnect (U47); refusals inline (U48); no time mark (U49); at the plan review, `[control_plane] public_targets` (U50), the DoD steps in two parts (U51), and the cleanup's messages (U52). The texts are ADR-0020's table.
   > - **Decided by the review agents** (approved at the plan review): S66–S72. Reconciliations: R87–R97.
 
+  > Note (P11.9, as built in H1) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group H1)"): **Home is the bots' dashboard and each bot has a read-only screen,** on `bots`, `bot` and `modes` (U32), with PR #74's follow-ups first and the e2e build's push hook with its first live spec. *Deviations:* the detail came before Home (the card's typed link needs its route); a `bot_removed` resets the bot's query rather than removing it, so an open screen shows its 404 (R98); the uptime ticks each second in its first minute; R97's frame test lives in fleet-client, beside the limit it checks.
+
   - **Dashboard:** a card per bot with a state badge, uptime, server, mode and last disconnect reason.
   - **Bot detail:**
     - controls and a mode selector

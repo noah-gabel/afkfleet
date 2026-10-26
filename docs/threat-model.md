@@ -155,7 +155,7 @@ To be written per boundary (STRIDE: spoofing, tampering, repudiation, informatio
 ### Desktop app (B2, B7)
 *Expanded in P8 (ADR-0007, ADR-0017).*
 
-**What crosses B2, the webview and the app's Rust side.** The UI calls the 36 commands its one capability grants, and nothing else: no core command and no plugin API, and `withGlobalTauri` is off. tauri-plugin-opener isn't registered: the Rust side calls its free `open_url`, from one command without arguments, on the link it checked (P9.8).
+**What crosses B2, the webview and the app's Rust side.** The UI calls the 39 commands its one capability grants, and nothing else: no core command and no plugin API, and `withGlobalTauri` is off. tauri-plugin-opener isn't registered: the Rust side calls its free `open_url`, from one command without arguments, on the link it checked (P9.8).
 - **Into Rust:**
   - the server's address and a custom CA's certificates
   - usernames, passwords (login, registration, step-up, a new password), 2FA and recovery codes, invite codes

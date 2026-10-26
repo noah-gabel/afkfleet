@@ -1216,6 +1216,26 @@ CLAUDE.md's step 3 counts twenty-one group branches.
 | Chat marks | "(arguments hidden)"; truncated "(cut short)"; "pending"; "sent"; failed "not sent: bot offline / needs signed chat / too fast / bot unreachable", or "not sent" without a reason |
 | Send box | placeholder "Message or /command"; "Send"; spinner `aria-label` "Sending…"; the command's step-up prompt: "Enter your password to send this command. It counts for 5 minutes." |
 
+### As built (group H1)
+Built as planned, one PR on `p11/p11.9-bot-screens`, in eight commits: PR #74's follow-ups (above), the planning record, `bots`, `bot` and `modes` end to end, the queries on G2's keys, the read-only bot detail, Home as the dashboard, the e2e build's push hook with the first live spec, and the docs. Each new test ran red before its code, against a stub with the real signature (texts and durations answering empty, a screen showing only the name, queries reading nothing or under the wrong key, untyped patch helpers, a Home with only its heading renamed), or, for a test that pins working code, by a mutation restored from a saved copy and checked by checksum.
+
+*Choices made while building:*
+- **The detail before Home:** the card's link is typed by TanStack Router, so the route came first; the plan had them the other way round.
+- **R98. A `bot_removed` resets the bot's query instead of removing it:** a removed query left an open screen's observer on the gone bot, while a reset reads it again and shows its 404; an unwatched query keeps no data, so S60's "drops a cached bot" still holds.
+- **Reconnect attempt** shows while a bot backs off, or for a later attempt's connect: attempt 1 isn't a reconnect. **A card** shows how the last session ended only while the bot isn't online, the user's roomy-grid sketch; the screen always shows it.
+- **The uptime** ticks each second in its first minute, then each minute (R93's "once a minute" from the start would show "0 s" for a minute).
+- **Home's compact lines** are one `NoticeLine` (an alert, one line, a thin left rule): the 2FA and recovery-code warnings and the waiting count; the profile keeps its boxes. H2's notices use it too.
+- **The sign-in line went (U35),** so fourteen tests and the e2e specs wait for Home's heading and the Header's user instead (`onHome`, `expectHome`), and the signed-in tests answer `bots` and `modes` empty by default.
+- **Tagging H's keys found the test helper `pages()` looser than the API's pages** (a cursor of either type, untyped page params): it now takes its cursor's type.
+- **The push hook** is `window.__afkfleetE2ePush`, set by the e2e entry's channel factory (`e2e/app/push.ts`), which keeps the newest watch's handler; a spec changes the fake first (`setBot`, `removeAccount`), so REST answers what each frame says.
+- **shadcn's Badge** is copied from the radix-nova registry with the usual edits.
+
+*Mutations* (each failed its tests, then was restored): MB1–MB4 (the hold's pinning tests, above); MP1–MP3 (the level rows, above); MAX_EVENT_FRAME at 8 KiB (R97's test); ME1 (the e2e entry without the hook: the live spec never saw Online) and ME2 (the fake without `bots`: its contract test).
+
+*Snapshots:* none.
+
+*Size:* about 3,550 lines added and 340 removed, below the planned 5,200: the follow-ups came to about 1,350, the three commands to about 550, the screens to about 1,250 with their tests; 33 of them generated (three permission files).
+
 ### Notes for later groups
 - **B2 (P11.3's history):** built (above).
 - **C (P11.4):** decided at C's planning (above), built in C1, C2 and C3.
