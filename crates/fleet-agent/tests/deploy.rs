@@ -8,6 +8,8 @@
 //! - `deploy/dev/stack-checks.json`'s numbers are the compose agent's, and
 //!   `deploy/compose.isolated.yaml` unpublishes the server's port, as the
 //!   compose e2e test and the demo assume
+//! - the definition-of-done checks' agent config loads with exactly `just dod-agent`'s and
+//!   `just dod-enroll`'s exports and dials only its container (ADR-0020, S72)
 //!
 //! The configs are loaded inside `figment::Jail` with an empty environment,
 //! so a developer's own `AFKFLEET_AGENT__…` variables can't change them.
@@ -20,8 +22,9 @@ use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use fleet_agent::config::{AgentConfig, AgentMode, StandaloneBot, load};
+use fleet_agent::config::{AgentConfig, AgentMode, LogFormat, StandaloneBot, load};
 use fleet_agent::run::RUNTIME_SHUTDOWN;
+use fleet_core::net::AddressClass;
 use fleet_testkit::jail::in_jail;
 use stack_checks::{expected_restart_errors, expected_warnings, millis, stack_checks};
 
@@ -372,4 +375,118 @@ fn every_expected_line_names_its_target_a_message_prefix_and_why() {
             );
         }
     }
+}
+
+// --- deploy/dod/agent.toml (ADR-0020, U1, U50, S72, R124) ---
+
+/// The repository's `path`.
+fn repo(path: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(path)
+}
+
+/// `recipe`'s exports, its paths under target/dod-run moved into `root`.
+fn dod_exports(recipe: &str, root: &Path) -> Vec<(String, String)> {
+    let justfile = std::fs::read_to_string(repo("justfile")).unwrap();
+    fleet_testkit::justfile::recipe(&justfile, recipe)
+        .unwrap()
+        .exports_under(&["target", "dod-run"], root)
+        .unwrap()
+}
+
+/// Loads `deploy/dod/agent.toml` with exactly `recipe`'s exports, in a jail
+/// whose folder stands for target/dod-run (U33: never the real one).
+fn load_dod_config(recipe: &str) -> (AgentConfig, PathBuf) {
+    let path = repo("deploy/dod/agent.toml");
+    let mut loaded = None;
+    in_jail(|jail| {
+        let dir = jail.directory().to_owned();
+        let exports = dod_exports(recipe, &dir);
+        jail.clear_env();
+        for (name, value) in &exports {
+            jail.set_env(name, value);
+        }
+        loaded = Some((load(&path), dir));
+    });
+    let (config, dir) = loaded.unwrap();
+    (
+        config.unwrap_or_else(|error| panic!("deploy/dod/agent.toml should load: {error}")),
+        dir,
+    )
+}
+
+#[test]
+fn the_dod_agent_loads_with_dod_agents_exports_and_dials_only_its_container() {
+    let (config, dir) = load_dod_config("dod-agent");
+
+    assert_eq!(config.name.as_str(), "dod-agent");
+    assert_eq!(config.log.format, LogFormat::Pretty);
+    assert_eq!(config.log.filter.as_str(), "info");
+    assert_eq!(config.heartbeat_file, dir.join("agent").join("agent.alive"));
+    let AgentMode::ControlPlane(plane) = &config.mode else {
+        panic!("a managed config");
+    };
+    assert_eq!(plane.url, "https://127.0.0.1:7453");
+    assert_eq!(plane.ca_cert_file, dir.join("pki").join("ca.crt"));
+    assert_eq!(plane.cert_file, dir.join("agent").join("agent.crt"));
+    assert_eq!(plane.key_file, dir.join("agent").join("agent.key"));
+    assert_eq!(
+        plane
+            .private_targets
+            .networks()
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["127.0.0.1/32"]
+    );
+    // U50: the user's rule, no account of theirs on a public server yet.
+    assert!(!plane.public_targets);
+    let policy = config.mode.target_policy();
+    assert_eq!(
+        policy
+            .check("8.8.8.8".parse().unwrap())
+            .map_err(|refused| refused.class()),
+        Err(AddressClass::Public)
+    );
+    assert_eq!(policy.check("127.0.0.1".parse().unwrap()), Ok(()));
+}
+
+#[test]
+fn dod_enroll_writes_the_identity_dod_agent_runs() {
+    let root = Path::new("/dod-run");
+    let agent = dod_exports("dod-agent", root);
+
+    let enroll = dod_exports("dod-enroll", root);
+
+    for export in &enroll {
+        assert!(agent.contains(export), "{export:?}");
+    }
+    let names: Vec<&str> = enroll.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(
+        names,
+        [
+            "AFKFLEET_AGENT__CONTROL_PLANE__CA_CERT_FILE",
+            "AFKFLEET_AGENT__CONTROL_PLANE__CERT_FILE",
+            "AFKFLEET_AGENT__CONTROL_PLANE__KEY_FILE",
+            "AFKFLEET_AGENT__LOG__FILTER",
+        ]
+    );
+    let (config, _) = load_dod_config("dod-enroll");
+    assert!(matches!(config.mode, AgentMode::ControlPlane(_)));
+}
+
+#[test]
+fn the_dod_minecraft_server_gets_at_least_30_s_to_stop_gracefully() {
+    let compose = std::fs::read_to_string(repo("deploy/compose.dod.yaml")).unwrap();
+
+    let grace = compose
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("stop_grace_period:"))
+        .and_then(|value| value.trim().strip_suffix('s'))
+        .and_then(|seconds| seconds.parse().ok())
+        .map(Duration::from_secs)
+        .unwrap();
+
+    assert!(grace >= Duration::from_secs(30), "{grace:?}");
 }

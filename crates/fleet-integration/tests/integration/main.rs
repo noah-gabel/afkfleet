@@ -7,6 +7,9 @@
 //!   proxy in front of each agent, the Owner's client, the bots' ledger and
 //!   the one log every wait wakes on.
 //! - [`loopback`]: P10.9's cases over mTLS on `127.0.0.1`.
+//! - [`dod_kit`]: the definition-of-done checks' kit (ADR-0020, S72): the server's and the
+//!   agent's configs, loaded with exactly their recipes' exports, fit each
+//!   other and their Minecraft container.
 //! - [`full_flow`]: P11.7's full flow, a bot started, seen Online, chatting
 //!   both ways and stopped on the Owner's live events (ADR-0020, S58).
 //! - [`managed_check`]: Phase 10's managed check, a manual test only the
@@ -23,6 +26,7 @@
 //! [`harness::logs::PATIENCE`].
 #![cfg(test)]
 
+mod dod_kit;
 mod full_flow;
 mod harness;
 mod loopback;

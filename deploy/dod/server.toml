@@ -1,0 +1,37 @@
+# The server's config for the definition of done's checks with a real account
+# (ADR-0020, U1, S72): Phase 11's first check, and later M's 24-hour run. Only
+# the user runs it, through the dod-* recipes (`just dod-server`, `dod-owner`,
+# `dod-enrollment-token`); the AI never does.
+#
+# Not dev mode: the checks run the server as production would, with offline
+# accounts refused. Its ports are its own, so it runs beside `just dev-server`
+# without sharing an origin or a Credential Manager entry with it.
+#
+# The six paths must be absolute, which a committed file can't hold for every
+# machine, so they aren't set here: the recipes pass them, all inside the
+# checks' own folder, target/dod-run/ (U1), never target/dev-server/:
+# AFKFLEET_SERVER__DATABASE__PATH (target/dod-run/afkfleet.db),
+# AFKFLEET_SERVER__VAULT__MASTER_KEY_FILES__1 (target/dod-run/vault-key-1, which
+# `just dod-server` creates when it's missing and never overwrites) and the four
+# AFKFLEET_SERVER__GRPC__*_FILE (target/dod-run/pki/, created with `pki init`
+# when missing). Because [grpc] is set here, every command's validation needs
+# all six (R126). They also export AFKFLEET_SERVER__LOG__FILTER="info", so no
+# chat text reaches the terminal or a log (chat is logged only at debug).
+
+dev_mode = false
+
+[http]
+bind = "127.0.0.1:8090"                  # the app's address: http://127.0.0.1:8090
+
+[log]
+format = "pretty"
+filter = "info"                          # the recipes export info too; chat is only at debug
+
+[vault]
+active_key_id = 1                        # the key in master_key_files.1, target/dod-run/vault-key-1
+
+[accounts]
+allow_offline = false                    # a real Microsoft account only
+
+[grpc]
+bind = "127.0.0.1:7453"                  # the agents' port; deploy/dod/agent.toml dials it

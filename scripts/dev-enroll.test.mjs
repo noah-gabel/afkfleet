@@ -1,18 +1,18 @@
 // Tests for dev-enroll.mjs. Run with `just scripts-test`.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-import { ENROLL, enrollInto } from "./dev-enroll.mjs";
+import { enrollCommand, enrollInto, parseArgs } from "./dev-enroll.mjs";
+import { recipeBody, recipeParameters } from "./justfile.mjs";
 
 const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
 const SCRIPT = path.join(SCRIPTS, "dev-enroll.mjs");
-const JUSTFILE = path.join(SCRIPTS, "..", "justfile");
 
 /** A stand-in for the agent: counts the bytes on its stdin, prints the count, exits 3. */
 const COUNTING = [
@@ -29,21 +29,6 @@ beforeEach(() => {
 afterEach(() => {
   rmSync(dir, { recursive: true, force: true });
 });
-
-/** The lines of `recipe`'s body in the justfile, without their indentation. */
-function recipeBody(recipe) {
-  const lines = readFileSync(JUSTFILE, "utf8").split("\n");
-  const start = lines.findIndex((line) => line.startsWith(`${recipe} `) || line === `${recipe}:`);
-  assert.notEqual(start, -1, `the justfile has no recipe ${recipe}`);
-  const body = [];
-  for (const line of lines.slice(start + 1)) {
-    if (!line.startsWith("    ")) {
-      break;
-    }
-    body.push(line.trim());
-  }
-  return body;
-}
 
 describe("enrollInto", () => {
   it("creates the folder and runs the command on this process's stdin and stdout, with its exit code", () => {
@@ -70,9 +55,11 @@ describe("enrollInto", () => {
 
     assert.equal(status, 1);
   });
+});
 
-  it("runs the agent's enroll with the managed dev config", () => {
-    assert.deepEqual(ENROLL, [
+describe("enrollCommand", () => {
+  it("runs the agent's enroll with the config it's given", () => {
+    assert.deepEqual(enrollCommand(false, "deploy/dev/agent.managed.toml"), [
       "cargo",
       [
         "run",
@@ -88,11 +75,51 @@ describe("enrollInto", () => {
       ],
     ]);
   });
+
+  it("builds it in release only when asked", () => {
+    assert.deepEqual(enrollCommand(true, "deploy/dod/agent.toml"), [
+      "cargo",
+      [
+        "run",
+        "--quiet",
+        "--release",
+        "-p",
+        "fleet-agent",
+        "--bin",
+        "afkfleet-agent",
+        "--",
+        "enroll",
+        "--config",
+        "deploy/dod/agent.toml",
+      ],
+    ]);
+  });
 });
 
 describe("the command line", () => {
-  it("refuses anything but one absolute folder with exit 2", () => {
-    for (const args of [[], ["target/dev-agent"], [dir, dir]]) {
+  it("reads an optional --release, the config and one absolute folder", () => {
+    assert.deepEqual(parseArgs(["deploy/dev/agent.managed.toml", dir]), {
+      release: false,
+      config: "deploy/dev/agent.managed.toml",
+      folder: dir,
+    });
+    assert.deepEqual(parseArgs(["--release", "deploy/dod/agent.toml", dir]), {
+      release: true,
+      config: "deploy/dod/agent.toml",
+      folder: dir,
+    });
+  });
+
+  it("refuses anything else with exit 2", () => {
+    for (const args of [
+      [],
+      [dir],
+      ["--release", dir],
+      ["deploy/dev/agent.managed.toml"],
+      ["deploy/dev/agent.managed.toml", "target/dev-agent"],
+      ["deploy/dev/agent.managed.toml", dir, dir],
+      ["--debug", "deploy/dev/agent.managed.toml", dir],
+    ]) {
       const ran = spawnSync(process.execPath, [SCRIPT, ...args], { encoding: "utf8" });
 
       assert.equal(ran.status, 2, JSON.stringify(args));
@@ -103,24 +130,11 @@ describe("the command line", () => {
 
 describe("just dev-enroll", () => {
   it("is one line, so no earlier line can take the piped bundle", () => {
-    assert.deepEqual(recipeBody("dev-enroll"), ['node scripts/dev-enroll.mjs "{{ dir }}"']);
+    assert.deepEqual(recipeBody("dev-enroll"), [
+      'node scripts/dev-enroll.mjs deploy/dev/agent.managed.toml "{{ dir }}"',
+    ]);
   });
 });
-
-/** The parameters of `recipe`'s header, by name, each with its default. */
-function recipeParameters(recipe) {
-  const header = readFileSync(JUSTFILE, "utf8")
-    .split("\n")
-    .find((line) => line.startsWith(`${recipe} `));
-  assert.ok(header, `the justfile has no recipe ${recipe}`);
-  const parameters = {};
-  for (const [, name, value] of header.matchAll(
-    /(\$?[A-Za-z_][A-Za-z0-9_]*)=(\((?:[^()]|\([^()]*\))*\)|"[^"]*")/g,
-  )) {
-    parameters[name] = value;
-  }
-  return parameters;
-}
 
 describe("just dev-managed-agent", () => {
   it("runs the identity dev-enroll leaves: the same folder, CA, key and certificate", () => {

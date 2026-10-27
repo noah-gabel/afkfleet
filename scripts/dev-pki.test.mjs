@@ -8,9 +8,14 @@ import process from "node:process";
 import { afterEach, beforeEach, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
 
-import { ensurePki, NAMES } from "./dev-pki.mjs";
+import { ensurePki, NAMES, parseArgs, pkiInitCommand } from "./dev-pki.mjs";
+import { recipeBody } from "./justfile.mjs";
 
-const SCRIPT = path.join(path.dirname(fileURLToPath(import.meta.url)), "dev-pki.mjs");
+const SCRIPTS = path.dirname(fileURLToPath(import.meta.url));
+const SCRIPT = path.join(SCRIPTS, "dev-pki.mjs");
+
+/** The config dev-server passes. */
+const DEV = "deploy/dev/server.toml";
 
 let dir;
 
@@ -82,12 +87,75 @@ describe("ensurePki", () => {
   });
 });
 
+describe("pkiInitCommand", () => {
+  it("runs pki init with the config it's given and the names", () => {
+    assert.deepEqual(pkiInitCommand(false, DEV), [
+      "cargo",
+      [
+        "run",
+        "-p",
+        "fleet-server",
+        "--bin",
+        "afkfleet-server",
+        "--",
+        "pki",
+        "init",
+        "--config",
+        DEV,
+        ...NAMES,
+      ],
+    ]);
+  });
+
+  it("builds it in release only when asked", () => {
+    assert.deepEqual(pkiInitCommand(true, "deploy/dod/server.toml"), [
+      "cargo",
+      [
+        "run",
+        "--release",
+        "-p",
+        "fleet-server",
+        "--bin",
+        "afkfleet-server",
+        "--",
+        "pki",
+        "init",
+        "--config",
+        "deploy/dod/server.toml",
+        ...NAMES,
+      ],
+    ]);
+  });
+
+  it("names the DoD agent's address too, which dials the DoD server by its IP", () => {
+    const agent = readFileSync(path.join(SCRIPTS, "..", "deploy", "dod", "agent.toml"), "utf8");
+    const host = agent.match(/^url = "https:\/\/([^:/"]+):\d+"$/m)?.[1];
+
+    assert.equal(host, "127.0.0.1");
+    assert.ok(NAMES.some((name, at) => name === host && NAMES[at - 1] === "--ip"));
+  });
+});
+
 describe("the command line", () => {
-  it("refuses anything but four absolute paths with exit 2", () => {
+  it("reads an optional --release, the config and four absolute paths", () => {
+    const paths = files(dir);
+
+    assert.deepEqual(parseArgs([DEV, ...paths]), { release: false, config: DEV, files: paths });
+    assert.deepEqual(parseArgs(["--release", "deploy/dod/server.toml", ...paths]), {
+      release: true,
+      config: "deploy/dod/server.toml",
+      files: paths,
+    });
+  });
+
+  it("refuses anything else with exit 2", () => {
     for (const args of [
       [],
-      files(dir).slice(0, 3),
-      ["ca.crt", "ca.key", "server.crt", "server.key"],
+      files(dir),
+      ["--release", ...files(dir)],
+      [DEV, ...files(dir).slice(0, 3)],
+      [DEV, "ca.crt", "ca.key", "server.crt", "server.key"],
+      [DEV, ...files(dir), "extra"],
     ]) {
       const ran = spawnSync(process.execPath, [SCRIPT, ...args], { encoding: "utf8" });
 
@@ -102,9 +170,19 @@ describe("the command line", () => {
       writeFileSync(file, "the dev PKI");
     }
 
-    const ran = spawnSync(process.execPath, [SCRIPT, ...paths], { encoding: "utf8" });
+    const ran = spawnSync(process.execPath, [SCRIPT, DEV, ...paths], { encoding: "utf8" });
 
     assert.equal(ran.status, 0, ran.stderr);
     assert.equal(ran.stdout, "");
+  });
+});
+
+describe("just dev-server", () => {
+  it("creates the PKI with the dev config, not in release", () => {
+    assert.ok(
+      recipeBody("dev-server").includes(
+        'node scripts/dev-pki.mjs deploy/dev/server.toml "{{ AFKFLEET_SERVER__GRPC__CA_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__CA_KEY_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_CERT_FILE }}" "{{ AFKFLEET_SERVER__GRPC__SERVER_KEY_FILE }}"',
+      ),
+    );
   });
 });
