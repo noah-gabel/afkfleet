@@ -4180,6 +4180,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.9, as built in H3) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group H3)"): **a bot's screen has its chat:** the history with live lines, newest at the bottom, and a send box that sends a line, or a command after the password, each line someone sent marked pending, sent or not sent from the chat's own outcome key; on the three chat commands (49 grants). *Deviations:* an older page that couldn't be read keeps "Show older" to try again; ADR-0017 holds no command count to change.
 
+  > Note (P11.9, group H5) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group H5)"): nothing of P11.9's: H5 built the DoD's kit and the agent's `public_targets` (U50), recorded under Phase 11's DoD.
+
   - **Dashboard:** a card per bot with a state badge, uptime, server, mode and last disconnect reason.
   - **Bot detail:**
     - controls and a mode selector
@@ -4248,11 +4250,15 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.11, from Phase 8, group E, the user's addition) ([ADR-0017](docs/adr/0017-fleet-client-and-desktop-conventions-and-phase-8-refinements.md)): **Stable screenshots.** The screenshot tests need a stable rendering, but P8.9's suite drives the installed Edge, whose version moves with Windows and the runner image. P11.11 decides then how to keep screenshots stable, for example one fixed OS with a pixel tolerance, or a pinned browser whose download is verified.
 
+  > Note (P11.11, after H3, the user's note) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), notes for L): the app looks poor throughout. Button placement, spacing and general styling need rework on every screen, and L's brief starts from it.
+
 **DoD:**
 - Pressing Start in the app brings a bot with a real Microsoft account Online on a real server (moved from Phase 10, the user's choice, U1 in ADR-0019).
 - The user's real fleet runs for 24 h, managed from the app. Every event shows up live, and the logs contain no unhandled errors.
 
 > Note (Phase 11's DoD, group H3's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U1, U50–U52, S72): **the first check runs on group H5's branch** (`p11/p11-dod-kit`), with its own folder `target/dod-run/`, its `dod-*` recipes (the user's alone) and an agent that dials no public address. After the user presses Start, the Minecraft server's own `rcon-cli list` confirms the bot (the user's addition at H3's plan review). Its outcome is recorded there.
+
+> Note (Phase 11's DoD, as built in H5) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group H5)", U1, U33, U50–U52, S72, R122–R130): **the kit is built,** on `p11/p11-dod-kit`: `deploy/dod/server.toml` and `agent.toml`, `deploy/compose.dod.yaml` (online mode, published only on `127.0.0.1:25566`, the dev service's RCON and pins), and the recipes `dod-mc-up`, `dod-mc-down`, `dod-server`, `dod-owner`, `dod-enrollment-token`, `dod-enroll`, `dod-agent`, `dod-app` and `dod-clean`, the user's alone: their own ports, release builds at `info`, everything in `target/dod-run/`, nothing secret on a command line. The agent dials no public address (U50, `public_targets = false`). Default-profile tests load both configs with exactly each recipe's exports, read through fleet-testkit's justfile reader and `scripts/justfile.mjs`, and the cleanup's refusals run on a temporary repository. The steps, in two parts (U51), and what to do and what's safe to share for each likely failure are the README's "The DoD's first check" and the PR's. *The user's change at the plan review:* after the check, log out while `dod-server` still runs, then close the app and stop the rest.
 
 ---
 

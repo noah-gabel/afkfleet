@@ -269,7 +269,7 @@ afkfleet-agent run --config agent.toml
 - **Standalone mode** (`[standalone]`) is for development only: its bots use offline accounts, which only an offline-mode server accepts, and its servers aren't checked.
 - **Managed mode** (`[control_plane]`, P10.7): the server gives the agent its bots. `run` reads the key, the certificate and the CA `enroll` left, checks them, and logs both fingerprints; a missing file, another CA's or another key's certificate, or one that expired (or isn't valid yet by this host's clock) is a startup error that names the file and the fix. The agent then connects to `url` and reconnects by itself whenever the server is gone.
   - `[control_plane] private_targets` lists the private networks its bots may dial, empty by default: at most 32 networks in CIDR form, each inside loopback, `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, `100.64.0.0/10` or `fc00::/7`, such as `["192.168.1.0/24"]` for a Minecraft server on the LAN. Public addresses need no entry, and never-dialled ones (a cloud's metadata service, link-local, documentation addresses) can't be listed. A bot whose server resolves to an address the agent refuses reads `connect_failed`/`blocked`, and the agent logs one warning.
-  - `[control_plane] public_targets` says whether its bots may dial public addresses, `true` by default; with `false` a public address is refused like an unlisted private one. The DoD checks' agent sets it to `false` (see [the DoD's first check](#the-dods-first-check)); it's a parse error under `[standalone]`.
+  - `[control_plane] public_targets` says whether its bots may dial public addresses, `true` by default; with `false` a public address is refused like an unlisted private one. The DoD checks' agent sets it to `false` (see the DoD's first check under [Development](#development)); it's a parse error under `[standalone]`.
 - **Enrolling** (`[control_plane]`): `afkfleet-agent enroll --config agent.toml` reads an enrollment bundle (from the server's Owner or its host, see [Running the server](#running-the-server)) from stdin only, e.g. `$bundle | afkfleet-agent enroll --config agent.toml` in PowerShell; a terminal is refused, and there's no flag or variable for it.
   - `[control_plane] url` is the server's gRPC port as `https://host:port`, a name or address its certificate holds. `ca_cert_file` is the server's CA certificate: `enroll` checks it against the fingerprint in the bundle and sends nothing when they differ, showing both. `cert_file` and `key_file` are where the agent's certificate and key go; their folder must exist. All three are absolute paths, each a different file.
   - The agent makes its key itself and never sends it; only a certificate request goes to the server. Both files are written owner-only and never replaced: an identity that exists is refused, so to enroll again, move the old files away (each enrollment makes a new agent). On Windows, files get no owner-only permissions of their own: they inherit their folder's, so keep them in a folder only you can open, such as one under your user profile; `enroll` says so there.
@@ -423,6 +423,15 @@ just demo-agent # the Phase 5 demo: the Docker agent's five bots for an hour wit
 just test-real-account # the real-account check: you only (see below)
 just test-ms-account # the Microsoft check with your own account: you only (see below)
 just test-managed-account # the managed check: your own account's bot Online through the control plane, you only (see below)
+just dod-mc-up # the DoD checks' online-mode Minecraft server on 127.0.0.1:25566, you only (see below)
+just dod-mc-down # remove it with its world, you only
+just dod-server # the DoD checks' server, release, on 127.0.0.1:8090, its data in target/dod-run/, you only
+just dod-owner alice # the DoD database's Owner, the password typed hidden, you only
+just dod-enrollment-token # an enrollment token for dod-server: $bundle = just dod-enrollment-token, you only
+just dod-enroll # enroll the DoD agent, the bundle on stdin: $bundle | just dod-enroll, you only
+just dod-agent # run the DoD agent (no public address), you only
+just dod-app # build and start the release app for dod-server, you only
+just dod-clean # delete target/dod-run/ once the DoD is finished, you only
 just db-prepare # after changing a query or adding a migration: refresh crates/fleet-server/.sqlx/
 just gen       # after changing an API type: refresh packages/ui/src/generated/
 just dev-app   # run the desktop app with Vite's dev server (hot reload)
@@ -493,6 +502,52 @@ When the test ends, its container is removed together with its volumes, which ho
 3. It never prints a token, your Minecraft name, your UUID or a path; a failed step names a state, a reason or an API code. A leak names only what kind of secret it was and the log line's level and target. If the steps overrun their 520 s, it stops them, prints "the steps within their budget: FAIL" and still tears everything down. Report every step's pass or FAIL, with a FAIL's text.
 
 Only Ctrl+C, or the profile's 10-minute limit, can leave things behind. If they do, delete the `afkfleet-managed-check-…` folder in your temp directory (it holds your Minecraft name and UUID as plain text; the token in it can't be opened, since its key ended with the run), and remove the container: find it with `docker ps -a`, then `docker rm -fv <id>`. To end the sign-in's consent at Microsoft too, remove the app under Privacy, Apps and services, in your Microsoft account.
+
+**The DoD's first check** (Phase 11 on) is Phase 11's first definition of done: pressing Start in the app brings a bot with your own Microsoft account Online on a real online-mode server. It needs your real account, so only you run it; the AI never runs a `dod-*` recipe and never reads anything in `target/dod-run/`. Its server, agent and app are release builds with their own ports (HTTP `127.0.0.1:8090`, gRPC `127.0.0.1:7453`, Minecraft `127.0.0.1:25566`), so they run beside the dev stack. Everything they keep, the database with your account's sealed refresh token, the vault key that opens it, the PKI and the agent's identity, is in `target/dod-run/`, which M's 24-hour run reuses. They log at `info` to their terminals only, so no chat text is printed. The agent dials only the local container, never a public address (`public_targets = false`). Nothing secret goes on a command line: `dod-owner` asks for the password hidden, and `dod-enroll` reads the bundle from stdin.
+
+*Part one: the check.*
+1. **Prepare:** Docker Desktop running, internet, and a Microsoft account that owns Minecraft: Java Edition with a profile, with nobody playing on it (a second login pauses the bot). Close every afkfleet app: the app runs once, and a second start only brings the first window forward. Sign out of any other server in the app: the app keeps one server, and at launch, while a stopped server's session is still stored, it waits for that server and offers no other. So if you were last signed in to `dev-server`, start it, log out and stop it again.
+2. **The stack,** each long-running recipe in its own PowerShell terminal at the repository's root:
+   1. `just dod-mc-up`: it waits until the server is healthy, at most 5 minutes (the first start downloads the server).
+   2. `just dod-server`: the first run builds in release, which takes minutes. It creates `target/dod-run/` with its vault key and PKI, then serves `127.0.0.1:8090`, the agents' port on `127.0.0.1:7453`.
+   3. In a second terminal, `just dod-owner <name>`: your afkfleet Owner's name; the password twice, hidden.
+   4. In the same terminal: `$bundle = just dod-enrollment-token`, then `$bundle | just dod-enroll`, then `Remove-Variable bundle`.
+   5. There: `just dod-agent`.
+   6. In a third terminal, `just dod-app`. It builds the release app, prints "Enter http://127.0.0.1:8090 as the server's address in the app." and starts it.
+3. **In the app:**
+   1. Enter `http://127.0.0.1:8090`, on the setup screen or under "Server settings" on the login screen. Log in, and set up 2FA.
+   2. Accounts, then "Link Microsoft account": read the warning and press "Get a code". Microsoft's page opens; enter the code there, sign in with your account and approve. The screen reads "… is linked."
+   3. Home shows the account's bot. Open it, and under Settings, Server, press "Set", enter `127.0.0.1:25566`, then "Save" and your password.
+   4. Press Start: "Signing in", then "Connecting", then "Online".
+4. **Confirm it independently:** `docker compose --file deploy/compose.dod.yaml exec minecraft rcon-cli list`. The server's own list shows one player, yours. It prints your Minecraft name in your terminal only.
+5. **Report the outcome:** each step's pass or fail, the states the timeline showed on the way to Online, and the player count `rcon-cli list` printed. Never the name.
+6. **After the check:**
+   1. Stop the bot in the app: it reads "Stopped".
+   2. Log out, then close the app. Logging out while `dod-server` still runs removes the app's stored session for `127.0.0.1:8090` from the Credential Manager, so the next start of the app isn't stuck waiting for the DoD server.
+   3. Ctrl+C `dod-agent`, then `dod-server`.
+   4. `just dod-mc-down`: the container and its world go, and with them your player's name.
+
+   `target/dod-run/` stays: it holds the account, sealed, for M's 24-hour run, where you log in again. Don't run `dod-clean`.
+
+*Part two: when the DoD is finished* (after M's 24-hour run, or if you give it up):
+1. `just dod-server`, then `just dod-app`. Log in, delete the account (Accounts, open it, Delete, your password), log out, and close the app. Logging out removes the app's credential for `127.0.0.1:8090`.
+2. Ctrl+C `dod-server`, and run `just dod-mc-down` if the container is up.
+3. `just dod-clean`. It removes `target/dod-run/` and nothing else. While `dod-server` or `dod-agent` still runs it refuses, and says what to do; after a crash that left `afkfleet.db-wal`, start `just dod-server` once, stop it with Ctrl+C, then clean again.
+4. Optionally, end the app's consent at Microsoft: Privacy, then Apps and services, in your Microsoft account.
+
+*If something fails.* Never share a token, a code (Microsoft's, 2FA or recovery), the bundle, your Minecraft or Microsoft name, your UUID, or anything that holds one:
+- the app's "… is linked." line, its cards, toasts and Home lines (they name the account), or a screenshot of them;
+- `rcon-cli`'s player list;
+- the container's log once your bot has joined;
+- azalea's own "Error during authentication: …" line in `dod-agent`'s terminal, which can carry the session server's answer: its first words are enough.
+
+Always safe to share: the app's state badge and its "Reason" and "Last disconnect" texts, and a log line's level, target and message, with the bot's `bot_id`, the agent's name (`dod-agent`) and the address `127.0.0.1:25566`. The server's and the agent's own lines at `info` carry only IDs, never a name, a code or a token.
+- **"Blocked"** (Last disconnect "Blocked: its agent refuses this address. Ask whoever runs the agent to allow it."): the agent refused the address before dialling it. The bot's server isn't exactly `127.0.0.1:25566`: `localhost` may resolve to `::1`, which isn't listed, and this agent never dials a public address. `dod-agent`'s terminal shows one warning, "the server's address is refused before dialling: …", with the address's `class`. Stop, set the server to `127.0.0.1:25566` (Change, Save, your password), and Start. Safe to share: the Last disconnect text, the warning's `class` and `range`, and whether the address you set was `127.0.0.1:25566`; not another address you tried.
+- **The bot stays on "Signing in":** the agent asked the server for the bot's Minecraft session and is waiting; the server signs in to Microsoft and Minecraft for it, which can take up to 2 minutes when they're slow. A retryable refusal ("no session is available right now; backing off") or 150 s without an answer ("the session request timed out; backing off") puts the bot on "Reconnecting", and it asks again; `dod-server`'s terminal says why in its "a session request was denied" line (`reason`, `error`). If the bot reads "Failed: Its session was refused: link the account again, then Reset", "Failed: Microsoft refused its sign-in: link the account again", "Not running: Its account must be linked again" or "Not running: Its account's link was refused", link the account again (Accounts, open it, link it again), then Reset or Start. Otherwise wait 5 minutes and report what it reads. Safe to share: the badge, how long it stayed, the Reason, and the level, target, message and `reason` and `error` fields of each warning or error in both terminals.
+- **A Microsoft link error** (the link screen's line): "The sign-in was declined at Microsoft." means Decline or Cancel was pressed: try again and approve. "The code expired before it was entered." means the time the screen showed ("It works until …") passed: get a new code. "This Microsoft account doesn't own Minecraft: Java Edition.", "… has no Minecraft profile yet …" or one of Xbox's refusals means the account can't play Java Edition yet: do what the line says, then link again. "The link couldn't be finished." means Microsoft or Minecraft answered unexpectedly: try again in a few minutes. "You can't start a link right now. …" or "The server can't start a link right now: it's busy, or Microsoft can't be reached.": wait a minute and try again. Safe to share: that line; never the code it showed, or the account's name.
+- **The container isn't healthy** (`just dod-mc-up` fails at 5 minutes, or the bot reads "Couldn't connect: connection refused"): its first start downloads the server jar and builds the world, which needs internet and 2 GB of memory, and port 25566 may be taken. `docker compose --file deploy/compose.dod.yaml ps` shows its state and `docker compose --file deploy/compose.dod.yaml logs minecraft --tail 50` why; then `just dod-mc-down` and `just dod-mc-up` again. Safe to share: the `ps` line's state, and log lines from before your bot ever joined; once it has joined, the log names your player, so share nothing from it.
+- **"Paused: Someone logged in with its account":** someone plays on the account. Leave the game, then Resume.
+- **"Not running: Waiting for an agent with room", or "Agent offline":** `dod-agent` isn't connected. Check its terminal: an exit 5 means the server refused it, and it says why. Safe to share: its last lines' level, target and message.
 
 `just --list` shows every recipe; [`CLAUDE.md`](CLAUDE.md) describes them and the project's working rules.
 
