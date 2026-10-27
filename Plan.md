@@ -3821,7 +3821,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Introduces:** `tokio-tungstenite`, `futures-util` (WebSocket client).
 
 > Note (P11, Phase 11's planning, 2026-10-19) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)):
-> - **Twenty-one group branches** (fourteen groups since H's planning added H4; groups B, D and G in two PRs, C in three and H in four since their planning). Phase 11 is built in group PRs like Phases 2–10: one branch and one commit per task, in this order, each after the previous PR is merged. Backend first; each screen comes after the endpoints it needs.
+> - **Twenty-two group branches** (fourteen groups since H's planning added H4; groups B, D and G in two PRs, C in three and H in five since their planning, H5 added at H3's). Phase 11 is built in group PRs like Phases 2–10: one branch and one commit per task, in this order, each after the previous PR is merged. Backend first; each screen comes after the endpoints it needs.
 >
 >   | Group | Branch | Tasks |
 >   |---|---|---|
@@ -3839,7 +3839,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   | G2 | `p11/p11.8-events-in-the-app` | P11.8: the Tauri `Channel` and the UI's cache, with a hint while a reconnect waits (ticked here) |
 >   | H1 | `p11/p11.9-bot-screens` | P11.9's dashboard and a read-only bot detail |
 >   | H2 | `p11/p11.9-bot-controls` | P11.9's controls, Settings, notices and timeline |
->   | H3 | `p11/p11.9-bot-chat` | P11.9's chat console and send box; the DoD's first check |
+>   | H3 | `p11/p11.9-bot-chat` | P11.9's chat console and send box |
+>   | H5 | `p11/p11-dod-kit` | The DoD's kit and its first check, with the agent's `public_targets` (U50; split from H3 at its plan review) |
 >   | H4 | `p11/p11.9-server-settings` | P11.9's per-server settings: the conflict texts, then the chat format (added at H's planning, S66) |
 >   | I | `p11/p11.9-mode-editor` | P11.9's mode editor |
 >   | J | `p11/p11.9-admin-screens` | P11.9's admin screens (ticked here) |
@@ -3847,7 +3848,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 >   | L | `p11/p11.11-design-pass` | P11.11 |
 >   | M | `p11/p11-wrap-up` | The threat model, the README, the DoD's 24-hour run |
 >
->   - **P11.3 is spread over A, B1 and B2** (B was split at its plan review: about 8,000–9,000 lines in one; ADR-0020, group B), **P11.4 over C1, C2 and C3** (C was split at its plan review: about 11,500 lines in one; ADR-0020, group C), **P11.5 over D1 and D2** (D was split at its plan review: about 11,600 lines in one; ADR-0020, group D), **P11.8 over G1 and G2** (G was split at its plan review: about 10,300 lines in one; ADR-0020, group G), and **P11.9 over F, H1–H4, I and J** (H was split at its plan review: about 13,300 lines in one; H4 was added there; ADR-0020, group H), each ticked in its last group, as P10.5 was over C and D. Each group aims at Phase 10's F or H in size (about 5,300 lines); one that grows past it is split at its plan review.
+>   - **P11.3 is spread over A, B1 and B2** (B was split at its plan review: about 8,000–9,000 lines in one; ADR-0020, group B), **P11.4 over C1, C2 and C3** (C was split at its plan review: about 11,500 lines in one; ADR-0020, group C), **P11.5 over D1 and D2** (D was split at its plan review: about 11,600 lines in one; ADR-0020, group D), **P11.8 over G1 and G2** (G was split at its plan review: about 10,300 lines in one; ADR-0020, group G), and **P11.9 over F, H1–H4, I and J** (H was split at its plan review: about 13,300 lines in one; H4 was added there; ADR-0020, group H; H3's plan review moved the DoD's kit to H5, about 5,550 lines in one), each ticked in its last group, as P10.5 was over C and D. Each group aims at Phase 10's F or H in size (about 5,300 lines); one that grows past it is split at its plan review.
 >   - **New dependencies** arrive with their group, each shown to the user with its version, license and release date: axum's `ws` feature (tokio-tungstenite and tungstenite 0.29.0, which axum 0.8.9 pins), tokio-tungstenite as fleet-server's dev-dependency, and futures-util and moka only if D needs them (*approved at D's planning, U11:* axum's `ws`, tokio-tungstenite and futures-util as dev-dependencies of fleet-server and fleet-client; no moka, S29); tokio-tungstenite as fleet-integration's dev-dependency in E (*moved to G with P11.7 at E's planning, U18*); tokio-tungstenite and futures-util in fleet-client in G, its TLS features G's question (*answered at G's planning, U25:* `handshake` only and `sink`, the socket an upgrade on reqwest's own connection, nothing new in Cargo.lock); single Radix packages in H, I and J; bundled fonts in L.
 >   - **Who decides what:** the review agents decide each group's open questions (CLAUDE.md's step 10); the user decides P11.6's size bound (E), P11.11's stable screenshots and visual direction (L), every text friends read (one table per group plan), the looks and UX questions, and whether the chat console names who sent each line (B).
 > - **The DoD's two checks** are the user's, with their own accounts. The first ("pressing Start in the app …") in H, once the bot screens exist; the second (24 h) in M, after the design pass. Each manual check gets default-profile tests that run its own setup, config and log check without the account (Phase 10's lesson).
@@ -4175,6 +4176,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 
   > Note (P11.9, as built in H2) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), "As built (group H2)"): **a bot's screen drives it:** the controls its state offers and the viewer's level allows (a View holder reads that they can't control it), Settings (the mode by S68's `unlisted_command`; the server after a step-up), and a timeline from the in-memory live record, whose notices toast and wait on Home; on the seven write commands (46 grants) and S73's effect. *Deviations:* U53, the user's approval of an `#[expect(clippy::struct_excessive_bools)]` on `ModeResponse`; four snapshots gained the flag, not one; R105 changed two H1 screen tests.
 
+  > Note (P11.9, Phase 11, group H3's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), R112–R126): **the chat, on `p11/p11.9-bot-chat`,** its first commit PR #76's follow-ups (R112–R114). H3 measured about 5,550 lines with the DoD's kit, so its plan review moved the kit, with U50's `public_targets`, to a new group **H5** (`p11/p11-dod-kit`, R122–R126), on whose branch the user runs the DoD's first check. *Reconciliations:* the loss counter and the connected flag (R115); marks, pending from the send's start and from frames for every viewer (R116); the send box leaves judgements to the server (R117), locks during its password prompt (R118) and is a `chat` holder's (R119); older chat pages must move on (R120); the outcome key lives as long as the session (R121). *The user's changes at the plan review:* chat times as HH:MM, the seconds in the time's tooltip, since U49 was decided on HH:MM; and the DoD check's `rcon-cli list`, with compose.dod's RCON pinned to the dev service's.
+
   - **Dashboard:** a card per bot with a state badge, uptime, server, mode and last disconnect reason.
   - **Bot detail:**
     - controls and a mode selector
@@ -4246,6 +4249,8 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **DoD:**
 - Pressing Start in the app brings a bot with a real Microsoft account Online on a real server (moved from Phase 10, the user's choice, U1 in ADR-0019).
 - The user's real fleet runs for 24 h, managed from the app. Every event shows up live, and the logs contain no unhandled errors.
+
+> Note (Phase 11's DoD, group H3's planning) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U1, U50–U52, S72): **the first check runs on group H5's branch** (`p11/p11-dod-kit`), with its own folder `target/dod-run/`, its `dod-*` recipes (the user's alone) and an agent that dials no public address. After the user presses Start, the Minecraft server's own `rcon-cli list` confirms the bot (the user's addition at H3's plan review). Its outcome is recorded there.
 
 ---
 
