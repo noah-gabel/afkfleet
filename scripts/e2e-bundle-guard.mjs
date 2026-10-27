@@ -9,8 +9,8 @@
 // and runs this check:
 // - no shipped bundle holds the e2e build's marker (e2e/app/marker.ts, repeated here on
 //   purpose), fetchInvoke's path `/e2e/ipc/`, or the live events hook's name
-//   (e2e/app/push.ts's `PUSH_HOOK`, repeated too);
-// - the e2e bundle does hold the marker, so the search finds what it looks for;
+//   (e2e/app/push.ts's `PUSH_HOOK`, repeated too; a test pins both copies to their sources);
+// - the e2e bundle does hold every one of them, so the search finds what it looks for;
 // - every bundle exists and holds files, so a skipped build can't pass.
 // Exits with 1, naming each problem. Tests: scripts/e2e-bundle-guard.test.mjs.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -21,8 +21,11 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 /** The e2e build's marker: e2e/app/marker.ts's `E2E_MARKER`. */
 export const MARKER = "afkfleet-e2e-build-only";
 
+/** The live events hook's name: e2e/app/push.ts's `PUSH_HOOK`. */
+export const PUSH_HOOK = "__afkfleetE2ePush";
+
 /** What no shipped bundle may hold. */
-export const NEEDLES = [MARKER, "/e2e/ipc/", "__afkfleetE2ePush"];
+export const NEEDLES = [MARKER, "/e2e/ipc/", PUSH_HOOK];
 
 /** Every file under `folder`, as `{ path, text }`, `path` relative to `folder`. */
 export function files(folder) {
@@ -73,8 +76,13 @@ export function check({ shipped, e2e }) {
   }
   const missing = empty(e2e);
   problems.push(...missing);
-  if (missing.length === 0 && !files(e2e).some((file) => file.text.includes(MARKER))) {
-    problems.push(`${e2e} doesn't hold the marker, so the check proves nothing`);
+  if (missing.length === 0) {
+    const built = files(e2e);
+    for (const needle of NEEDLES) {
+      if (!built.some((file) => file.text.includes(needle))) {
+        problems.push(`${e2e} doesn't hold "${needle}", so the check proves nothing`);
+      }
+    }
   }
   return problems;
 }

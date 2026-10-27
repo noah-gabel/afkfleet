@@ -26,8 +26,12 @@ import type { ModePage } from "../generated/ModePage";
 import type { SessionPage } from "../generated/SessionPage";
 import type { UserPage } from "../generated/UserPage";
 import type { ApiClient } from "./ApiClient";
+import { ApiError } from "./ApiError";
 import { useApiClient } from "./context";
 import { PAGE_MAX } from "./limits";
+
+/** Why a read of every page failed when the server's pages didn't move on (R99). */
+export const PAGES_DONT_MOVE_ON = "The server sent a list this app doesn't understand.";
 
 /** How long `me` stays fresh: a role changed by an Admin shows within about a minute. */
 export const ME_STALE_MS = 60_000;
@@ -134,16 +138,49 @@ export function useAccounts() {
 /** The links waiting for the user's approval: all of them, for the count. */
 export const AWAITING_KEY = ["accounts", "awaiting"] as const;
 
-/** Every page of the links waiting for the user's approval; one failed page fails it all. */
-async function everyAwaiting(api: ApiClient): Promise<AccountResponse[]> {
-  const items: AccountResponse[] = [];
+/** A list's pages, read one after another, with the cursor each was asked with. */
+interface EveryPage<P> {
+  readonly pages: P[];
+  readonly pageParams: (string | undefined)[];
+}
+
+/**
+ * Every page `read` answers, newest first, until a page has no `next`. One failed page fails
+ * the read, and so does a `next` that doesn't move past the cursor it was asked with (an ID's
+ * text sorts by its time) or that was asked before: a server bug never loops (R99). Once
+ * `signal` aborts, no further page is asked for.
+ */
+async function everyPage<P extends { readonly next?: string }>(
+  read: (before: string | undefined) => Promise<P>,
+  signal: AbortSignal,
+): Promise<EveryPage<P>> {
+  const pages: P[] = [];
+  const pageParams: (string | undefined)[] = [];
+  const asked = new Set<string>();
   let before: string | undefined;
   do {
-    const page = await api.accountsAwaitingApproval(before, PAGE_MAX);
-    items.push(...page.items);
-    before = page.next;
+    if (pages.length > 0) {
+      signal.throwIfAborted();
+    }
+    const page = await read(before);
+    pages.push(page);
+    pageParams.push(before);
+    const next = page.next;
+    if (next !== undefined && ((before !== undefined && next >= before) || asked.has(next))) {
+      throw new ApiError({ code: "unexpected_response", message: PAGES_DONT_MOVE_ON });
+    }
+    if (before !== undefined) {
+      asked.add(before);
+    }
+    before = next;
   } while (before !== undefined);
-  return items;
+  return { pages, pageParams };
+}
+
+/** Every page of the links waiting for the user's approval; one failed page fails it all. */
+async function everyAwaiting(api: ApiClient, signal: AbortSignal): Promise<AccountResponse[]> {
+  const read = await everyPage((before) => api.accountsAwaitingApproval(before, PAGE_MAX), signal);
+  return read.pages.flatMap((page) => page.items);
 }
 
 /**
@@ -154,7 +191,7 @@ async function everyAwaiting(api: ApiClient): Promise<AccountResponse[]> {
 export function awaitingQuery(api: ApiClient, enabled: boolean) {
   return queryOptions({
     queryKey: AWAITING_KEY,
-    queryFn: () => everyAwaiting(api),
+    queryFn: ({ signal }) => everyAwaiting(api, signal),
     enabled,
     refetchOnWindowFocus: true,
   });
@@ -252,22 +289,19 @@ export function useBot(id: string) {
 }
 
 /** Every page of the modes the user may see, as one list's pages; one failed page fails it all. */
-async function everyMode(api: ApiClient): Promise<InfiniteData<ModePage, string | undefined>> {
-  const pages: ModePage[] = [];
-  const pageParams: (string | undefined)[] = [];
-  let before: string | undefined;
-  do {
-    const page = await api.modes(before, PAGE_MAX);
-    pages.push(page);
-    pageParams.push(before);
-    before = page.next;
-  } while (before !== undefined);
-  return { pages, pageParams };
+function everyMode(
+  api: ApiClient,
+  signal: AbortSignal,
+): Promise<InfiniteData<ModePage, string | undefined>> {
+  return everyPage((before) => api.modes(before, PAGE_MAX), signal);
 }
 
 /** Every mode the user may see (S68 in ADR-0020): the names the bots' screens show. */
 export function modesQuery(api: ApiClient) {
-  return queryOptions({ queryKey: MODES_LIST_KEY, queryFn: () => everyMode(api) });
+  return queryOptions({
+    queryKey: MODES_LIST_KEY,
+    queryFn: ({ signal }) => everyMode(api, signal),
+  });
 }
 
 /** Every mode, through the app's client. */

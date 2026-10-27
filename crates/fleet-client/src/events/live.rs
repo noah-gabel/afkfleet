@@ -115,7 +115,9 @@ impl LiveStop {
     }
 
     /// Stops the socket: its next or current `recv` closes it and answers
-    /// [`LiveEnd::Stopped`]. Never blocks.
+    /// [`LiveEnd::Stopped`], unless an end was decided before, which stands:
+    /// after the session's end, it answers [`LiveEnd::NoSession`]. Never
+    /// blocks.
     pub fn stop(&self) {
         self.stopped.send_replace(true);
     }
@@ -294,11 +296,15 @@ impl<S: SessionStore, T: Transport> Live<S, T> {
                     Either::Left((Either::Left((Err(_), _)) | Either::Right((Err(_), _)), _))
                 )
             };
-            if sender_gone && !self.machine.ending() {
-                // The stop's sender lives in `self.stop` and the epoch's in
-                // the session, so only a session dropped meanwhile: it can't
-                // refresh any more.
-                self.machine.finish(LiveEnd::NoSession);
+            if sender_gone {
+                // Not reached today: the stop's sender lives in `self.stop` and
+                // the epoch's in the session `self.machine.core` holds, so both
+                // outlive these receivers. Were one gone, its `changed` would
+                // answer at once at every turn and no step could run, a close
+                // included, so the socket ends here at once: with the end
+                // decided before, else the session's, which can't refresh any
+                // more (R101).
+                self.machine.end_now(LiveEnd::NoSession);
             }
         }
     }
@@ -592,6 +598,20 @@ impl<S: SessionStore, T: Transport> Machine<S, T> {
             State::Closing(closing) => matches!(closing.then, After::End(_)),
             State::Waiting { .. } | State::Connecting(_) | State::Open(_) => false,
         }
+    }
+
+    /// Ends the socket at once, without its close: with the end decided
+    /// before, else `end` (R101).
+    fn end_now(&mut self, end: LiveEnd) {
+        let end = match &self.state {
+            State::Ended(decided) => *decided,
+            State::Closing(closing) => match closing.then {
+                After::End(decided) => decided,
+                After::Retry(_) => end,
+            },
+            State::Waiting { .. } | State::Connecting(_) | State::Open(_) => end,
+        };
+        self.state = State::Ended(end);
     }
 
     /// Decides the socket's end, `end`, unless one is decided already, which
@@ -1670,6 +1690,33 @@ mod tests {
                 "{close:?}"
             );
             assert_eq!(ended, LiveEnd::NoSession);
+        })
+        .await;
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn ending_at_once_keeps_an_end_decided_before_and_else_is_the_sessions() {
+        bounded(async {
+            let core = core().await;
+            let mut waiting = live(&core);
+            let (mut closing, _server) = live_socket(&core).await;
+            closing.machine.finish(LiveEnd::Stopped);
+            let was_closing = matches!(closing.machine.state, State::Closing(_));
+
+            waiting.machine.end_now(LiveEnd::NoSession);
+            closing.machine.end_now(LiveEnd::NoSession);
+
+            assert!(was_closing, "an open socket closes first");
+            assert!(matches!(
+                waiting.machine.state,
+                State::Ended(LiveEnd::NoSession)
+            ));
+            assert!(matches!(
+                closing.machine.state,
+                State::Ended(LiveEnd::Stopped)
+            ));
+            assert!(matches!(waiting.recv().await, Err(LiveEnd::NoSession)));
+            assert!(matches!(closing.recv().await, Err(LiveEnd::Stopped)));
         })
         .await;
     }

@@ -8,11 +8,13 @@ import type { BotAgent } from "../../generated/BotAgent";
 import type { BotResponse } from "../../generated/BotResponse";
 import type { BotStateKind } from "../../generated/BotStateKind";
 import type { BotStateReason } from "../../generated/BotStateReason";
+import type { BotStatus } from "../../generated/BotStatus";
 import type { ConnectFailure } from "../../generated/ConnectFailure";
 import type { LastDisconnect } from "../../generated/LastDisconnect";
 import type { ModeResponse } from "../../generated/ModeResponse";
 import type { SessionServerFailure } from "../../generated/SessionServerFailure";
 import type { UnplacedReason } from "../../generated/UnplacedReason";
+import { formatClock, formatDate } from "../../lib/time";
 
 /** Home's heading. */
 export const BOTS_HEADING = "Bots";
@@ -25,8 +27,10 @@ export const LOADING_BOTS = "Loading bots…";
 export const BOT_NOT_FOUND = "This bot doesn't exist, or you can't see it.";
 /** A bot's mode the viewer can't see: another user's private mode (S68). */
 export const HIDDEN_MODE = "A mode you can't see";
-/** A mode's name while the modes load, or when they couldn't be read. */
+/** A mode's name while the modes load. */
 export const MODE_LOADING = "…";
+/** A mode's name when the modes couldn't be read. */
+export const MODE_FAILED = "Couldn't load the mode";
 /** The link back from a bot's screen. */
 export const BACK_HOME = "Home";
 
@@ -40,6 +44,9 @@ export const LABEL = {
   reason: "Reason",
   lastDisconnect: "Last disconnect",
   agent: "Agent",
+  notRunning: "Not running",
+  paused: "Paused",
+  failed: "Failed",
 } as const;
 
 /** Home when the bots couldn't be read. */
@@ -52,9 +59,17 @@ export function openBot(name: string): string {
   return `Open ${name}`;
 }
 
-/** An unreachable agent's last word. */
-export function agentLastSeen(clock: string): string {
-  return `Its agent was last seen ${clock}.`;
+/** When an unreachable agent was last seen: at a time today, on a date before today. */
+export function agentLastSeen(iso: string, now: number): string {
+  const seen = new Date(iso);
+  const today = new Date(now);
+  const sameDay =
+    seen.getFullYear() === today.getFullYear() &&
+    seen.getMonth() === today.getMonth() &&
+    seen.getDate() === today.getDate();
+  return sameDay
+    ? `Its agent was last seen at ${formatClock(iso)}.`
+    : `Its agent was last seen on ${formatDate(iso)} at ${formatClock(iso)}.`;
 }
 
 /** The badge's look, one of the Badge's variants. */
@@ -166,19 +181,18 @@ export function unplacedText(why: UnplacedReason): string {
   }
 }
 
-/**
- * A bot's reason, if it has one: a paused or failed state's, wherever the state rests, or
- * why a bot that should run isn't placed. Never that it's wanted stopped: its badge says so.
- */
-export function reasonText(bot: Pick<BotResponse, "status">): string | null {
-  const { status } = bot;
-  if ((status.state === "paused" || status.state === "failed") && status.reason !== undefined) {
-    return stateReasonText(status.reason);
-  }
-  if (status.kind === "unplaced" && status.why !== undefined && status.why !== "stopped") {
-    return unplacedText(status.why);
-  }
-  return null;
+/** Why a paused or failed bot rests, wherever its state rests; null for any other state. */
+export function restingText(status: BotStatus): string | null {
+  return (status.state === "paused" || status.state === "failed") && status.reason !== undefined
+    ? stateReasonText(status.reason)
+    : null;
+}
+
+/** Why a bot that should run isn't placed; never that it's wanted stopped: its badge says so. */
+export function notRunningText(status: BotStatus): string | null {
+  return status.kind === "unplaced" && status.why !== undefined && status.why !== "stopped"
+    ? unplacedText(status.why)
+    : null;
 }
 
 /** How a bot's last session ended. */

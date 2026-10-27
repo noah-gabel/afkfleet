@@ -32,6 +32,8 @@ import type { Query, QueryCacheNotifyEvent, QueryClient, QueryKey } from "@tanst
 import type { ApiClient } from "../api/ApiClient";
 import { toApiError } from "../api/ApiError";
 import { type LivePatch, patchesFor, READ_AGAIN } from "../api/livePatches";
+import { BOTS_LIST_KEY, botKey } from "../api/queries";
+import type { BotResponse } from "../generated/BotResponse";
 import type { LiveDisconnect } from "../generated/LiveDisconnect";
 import type { LiveUpdateMessage } from "../generated/LiveUpdateMessage";
 import type { AppStores, LiveHint } from "./stores";
@@ -151,7 +153,7 @@ export function createLiveLayer(
         return;
       case "event":
         hint({ kind: "none" });
-        for (const patch of patchesFor(update.event)) {
+        for (const patch of patchesFor(update.event, cachedBot)) {
           change(patch);
         }
         return;
@@ -161,6 +163,17 @@ export function createLiveLayer(
       default:
         return;
     }
+  }
+
+  /** Bot `id` as its own query or the bots' list holds it. */
+  function cachedBot(id: string): BotResponse | undefined {
+    return (
+      queryClient.getQueryData(botKey(id)) ??
+      queryClient
+        .getQueryData(BOTS_LIST_KEY)
+        ?.pages.flatMap((page) => page.items)
+        .find((bot) => bot.id === id)
+    );
   }
 
   /** Shows `next` in the Header, unless it's already shown. */
@@ -179,10 +192,6 @@ export function createLiveLayer(
           readOnceMore(query);
         }
         void queryClient.invalidateQueries({ queryKey: patch.queryKey });
-        return;
-      case "remove":
-        drop(patch.queryKey);
-        queryClient.removeQueries({ queryKey: patch.queryKey, exact: true });
         return;
       case "reset":
         drop(patch.queryKey);
@@ -247,10 +256,16 @@ export function createLiveLayer(
 
   /**
    * Writes `patches`, in order, over the data `query` holds; nothing when it holds none.
-   * A query in error keeps its error and its stale mark (S63). An update only the server can
-   * decide reads the query once more, marks it stale, or neither, as `readAgain` says.
+   * A query in error keeps its error and its stale mark (S63), and so does one written
+   * `dataOnly` (R89's revert), whatever its status. An update only the server can decide
+   * reads the query once more, marks it stale, or neither, as `readAgain` says.
    */
-  function write(query: Query, patches: readonly SetPatch[], readAgain: ReadAgain): void {
+  function write(
+    query: Query,
+    patches: readonly SetPatch[],
+    readAgain: ReadAgain,
+    dataOnly = false,
+  ): void {
     const before = query.state.data;
     if (before === undefined) {
       return;
@@ -266,7 +281,7 @@ export function createLiveLayer(
       }
     }
     if (data !== before) {
-      if (query.state.status === "error") {
+      if (dataOnly || query.state.status === "error") {
         query.setState({ ...query.state, data });
       } else {
         queryClient.setQueryData(query.queryKey, data);
@@ -321,7 +336,7 @@ export function createLiveLayer(
       if (held.overflowed) {
         settle(event.query, "stale");
       } else {
-        write(event.query, held.patches, "stale");
+        write(event.query, held.patches, "stale", true);
       }
     }
   }

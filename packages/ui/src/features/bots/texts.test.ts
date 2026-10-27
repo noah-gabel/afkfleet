@@ -3,12 +3,15 @@ import { describe, expect, it } from "vitest";
 import type { BotResponse } from "../../generated/BotResponse";
 import type { BotStatus } from "../../generated/BotStatus";
 import type { LastDisconnect } from "../../generated/LastDisconnect";
+import { formatClock, formatDate } from "../../lib/time";
 import { bot, mode } from "../../test/live";
 import {
+  agentLastSeen,
   agentText,
   disconnectText,
   modeName,
-  reasonText,
+  notRunningText,
+  restingText,
   stateBadge,
   stateReasonText,
   unplacedText,
@@ -85,25 +88,27 @@ describe("a bot's reason", () => {
   });
 
   it("is a paused or failed state's reason, wherever the state rests", () => {
-    expect(reasonText(withStatus({ kind: "reported", state: "paused", reason: "banned" }))).toBe(
+    expect(restingText({ kind: "reported", state: "paused", reason: "banned" })).toBe(
       "Banned from this server",
     );
     expect(
-      reasonText(
-        withStatus({ kind: "unplaced", why: "no_server", state: "failed", reason: "auth" }),
-      ),
+      restingText({ kind: "unplaced", why: "no_server", state: "failed", reason: "auth" }),
     ).toBe("Microsoft refused its sign-in: link the account again");
-    expect(
-      reasonText(withStatus({ kind: "unknown", state: "paused", reason: "duplicate_login" })),
-    ).toBe("Someone logged in with its account");
+    expect(restingText({ kind: "unknown", state: "paused", reason: "duplicate_login" })).toBe(
+      "Someone logged in with its account",
+    );
+    expect(restingText({ kind: "reported", state: "online" })).toBeNull();
   });
 
   it("is why a bot isn't running, but never that it's wanted stopped", () => {
-    expect(reasonText(withStatus({ kind: "unplaced", why: "no_server", state: "stopped" }))).toBe(
+    expect(notRunningText({ kind: "unplaced", why: "no_server", state: "stopped" })).toBe(
       "No server set",
     );
-    expect(reasonText(withStatus({ kind: "unplaced", why: "stopped" }, "stopped"))).toBeNull();
-    expect(reasonText(withStatus({ kind: "reported", state: "online" }))).toBeNull();
+    expect(
+      notRunningText({ kind: "unplaced", why: "pending", state: "failed", reason: "auth" }),
+    ).toBe("Its account waits for approval");
+    expect(notRunningText({ kind: "unplaced", why: "stopped" })).toBeNull();
+    expect(notRunningText({ kind: "reported", state: "online" })).toBeNull();
   });
 });
 
@@ -177,6 +182,17 @@ describe("a bot's last disconnect", () => {
 });
 
 describe("the other texts", () => {
+  it("say when an agent was last seen: at a time today, on a date before today", () => {
+    const now = new Date(2026, 9, 26, 14, 5).getTime();
+    const today = new Date(2026, 9, 26, 0, 30).toISOString();
+    const yesterday = new Date(2026, 9, 25, 23, 30).toISOString();
+
+    expect(agentLastSeen(today, now)).toBe(`Its agent was last seen at ${formatClock(today)}.`);
+    expect(agentLastSeen(yesterday, now)).toBe(
+      `Its agent was last seen on ${formatDate(yesterday)} at ${formatClock(yesterday)}.`,
+    );
+  });
+
   it("name a built-in mode as such", () => {
     expect(modeName(mode(1, { name: "afk", ownership: "built_in" }))).toBe("afk (built in)");
     expect(modeName(mode(2, { name: "My loop", ownership: "mine" }))).toBe("My loop");

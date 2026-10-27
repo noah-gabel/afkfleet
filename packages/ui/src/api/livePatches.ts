@@ -35,8 +35,6 @@ export type LivePatch =
   | { readonly kind: "set"; readonly queryKey: QueryKey; readonly update: LiveUpdater }
   /** Reads every query under the key again. */
   | { readonly kind: "invalidate"; readonly queryKey: QueryKey }
-  /** Drops the query. */
-  | { readonly kind: "remove"; readonly queryKey: QueryKey }
   /** Resets the query: empty, read again when shown. */
   | { readonly kind: "reset"; readonly queryKey: QueryKey };
 
@@ -50,13 +48,19 @@ interface Listed {
   readonly id: string | number;
 }
 
-/** The changes `event` asks for; none for a kind that changes no cache. */
-export function patchesFor(event: EventMessage): LivePatch[] {
+/** The bot `id` as the cache holds it, if it holds it. */
+export type CachedBot = (id: string) => BotResponse | undefined;
+
+/**
+ * The changes `event` asks for; none for a kind that changes no cache. `cached` finds a bot
+ * the cache holds, whose account a `bot_removed` resets.
+ */
+export function patchesFor(event: EventMessage, cached: CachedBot): LivePatch[] {
   switch (event.type) {
     case "bot":
       return event.bot === undefined ? [] : botPatches(event.bot);
     case "bot_removed":
-      return event.bot_id === undefined ? [] : removedPatches(event.bot_id);
+      return event.bot_id === undefined ? [] : removedPatches(event.bot_id, cached(event.bot_id));
     case "chat": {
       const line = event.line;
       return event.bot_id === undefined || line === undefined
@@ -104,15 +108,19 @@ function botPatches(bot: BotResponse): LivePatch[] {
 }
 
 /**
- * A `bot_removed`'s changes: no bot→account mapping here, so every account is read again.
- * The bot's own query is reset, not removed: a screen that shows it reads it again and
- * shows its 404, where a removed query would leave it on the gone bot (R98).
+ * A `bot_removed`'s changes. The bot's own query is reset, not removed: a screen that shows
+ * it reads it again and shows its 404, where a removed query would leave it on the gone bot
+ * (R98). So is its account's, when the cached bot names it; and since the frame itself
+ * names no account, every account is read again.
  */
-function removedPatches(id: string): LivePatch[] {
+function removedPatches(id: string, bot: BotResponse | undefined): LivePatch[] {
   return [
     pagesPatch(BOTS_LIST_KEY, (data) => without(data, id)),
     { kind: "reset", queryKey: botKey(id) },
     { kind: "reset", queryKey: chatKey(id) },
+    ...(bot === undefined
+      ? []
+      : [{ kind: "reset", queryKey: accountKey(bot.account.id) } as const]),
     { kind: "invalidate", queryKey: ACCOUNTS_KEY },
   ];
 }

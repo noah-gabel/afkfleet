@@ -10,8 +10,7 @@ import { describeError } from "../../../api/describeError";
 import { useBot, useModes } from "../../../api/queries";
 import { Button } from "../../../components/ui/button";
 import { useNow } from "../../../hooks/useNow";
-import { formatClock } from "../../../lib/time";
-import { botFacts, uptimeTick } from "../facts";
+import { botFacts, modesOf, uptimeNextChange } from "../facts";
 import { agentLastSeen, BACK_HOME, BOT_NOT_FOUND } from "../texts";
 import { Facts, StateBadge } from "./BotParts";
 
@@ -21,7 +20,7 @@ export function BotScreen({ id }: { id: string }) {
   const modes = useModes();
   const nameId = useId();
   const data = bot.data;
-  const now = useNow(data === undefined ? 60_000 : uptimeTick(data, Date.now()));
+  const now = useNow((at) => (data === undefined ? 60_000 : uptimeNextChange(data, at)));
 
   // A read that failed shows instead of the bot only before it was ever read, or when it
   // answers 404: the bot went while its screen was open.
@@ -37,12 +36,7 @@ export function BotScreen({ id }: { id: string }) {
   if (data === undefined) {
     return <main className="p-6" />;
   }
-  const facts = botFacts(
-    data,
-    modes.data?.pages.flatMap((page) => page.items),
-    now,
-    "screen",
-  );
+  const facts = botFacts(data, modesOf(modes), now, "screen");
   const lastSeen = data.status.kind === "unknown" ? data.status.agent_last_seen_at : undefined;
   return (
     <main className="grid gap-6 p-6 lg:grid-cols-2">
@@ -53,9 +47,9 @@ export function BotScreen({ id }: { id: string }) {
           </h1>
           <StateBadge bot={data} />
         </div>
-        <Facts facts={facts} />
+        <Facts facts={facts} place="screen" />
         {lastSeen === undefined ? null : (
-          <p className="text-sm text-muted-foreground">{agentLastSeen(formatClock(lastSeen))}</p>
+          <p className="text-sm text-muted-foreground">{agentLastSeen(lastSeen, now)}</p>
         )}
         <BackLink />
       </section>

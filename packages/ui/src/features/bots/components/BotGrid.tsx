@@ -12,9 +12,8 @@ import { useBots, useModes } from "../../../api/queries";
 import { Button } from "../../../components/ui/button";
 import { Card, CardContent, CardHeader } from "../../../components/ui/card";
 import type { BotResponse } from "../../../generated/BotResponse";
-import type { ModeResponse } from "../../../generated/ModeResponse";
 import { useNow } from "../../../hooks/useNow";
-import { botFacts, uptimeTick } from "../facts";
+import { botFacts, type Modes, modesOf, uptimeNextChange } from "../facts";
 import {
   BOTS_HEADING,
   botsFailed,
@@ -31,8 +30,8 @@ export function BotGrid() {
   const modes = useModes();
   const items = bots.data?.pages.flatMap((page) => page.items) ?? [];
   // The quickest tick any shown uptime needs.
-  const now = useNow(Math.min(60_000, ...items.map((bot) => uptimeTick(bot, Date.now()))));
-  const known = modes.data?.pages.flatMap((page) => page.items);
+  const now = useNow((at) => Math.min(...items.map((bot) => uptimeNextChange(bot, at))));
+  const known = modesOf(modes);
   return (
     <section className="flex flex-col gap-4">
       <h1 className="text-2xl font-semibold tracking-tight">{BOTS_HEADING}</h1>
@@ -105,20 +104,12 @@ function Body({
 }
 
 /** One bot's card: the whole card is its link (U35). */
-function BotCard({
-  bot,
-  modes,
-  now,
-}: {
-  bot: BotResponse;
-  modes: readonly ModeResponse[] | undefined;
-  now: number;
-}) {
+function BotCard({ bot, modes, now }: { bot: BotResponse; modes: Modes; now: number }) {
   const name = bot.account.name;
   return (
     <Card className="relative h-full gap-3 py-4 transition-colors hover:bg-muted/40">
       <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
-        <h2 className="font-semibold">
+        <h2 className="text-lg font-semibold">
           <Link
             to="/bots/$id"
             params={{ id: bot.id }}
@@ -131,7 +122,7 @@ function BotCard({
         <StateBadge bot={bot} />
       </CardHeader>
       <CardContent>
-        <Facts facts={botFacts(bot, modes, now, "card")} />
+        <Facts facts={botFacts(bot, modes, now, "card")} place="card" />
       </CardContent>
     </Card>
   );
