@@ -5,6 +5,7 @@
 
 import {
   CA_PEM_MAX_BYTES,
+  CHAT_MESSAGE_MAX_UNITS,
   CODE_MAX_CHARS,
   ID_CHARS,
   MC_NAME_MAX_CHARS,
@@ -168,3 +169,36 @@ export const serverAddress = z
 export const botPatchRequest = z.strictObject({ server_address: serverAddress });
 
 export const botModeRequest = z.strictObject({ mode_id: id });
+
+/**
+ * A chat page's cursor: a line's ID, an integer of at least 1 that a JavaScript number holds
+ * exactly, in the server's words.
+ */
+export const chatCursor = z
+  .number()
+  .int()
+  .min(1, "lower than 1")
+  .max(Number.MAX_SAFE_INTEGER, "greater than 9007199254740991");
+
+/**
+ * A chat line, once trimmed: not empty and at most `CHAT_MESSAGE_MAX_UNITS` UTF-16 units, in
+ * the server's words (ADR-0020, R117). The server checks its characters; the desktop's own
+ * check before the request says the same.
+ */
+export const chatMessage = z
+  .string()
+  .refine((text) => text.trim().length > 0, "must not be empty")
+  .refine(
+    (text) => text.trim().length <= CHAT_MESSAGE_MAX_UNITS,
+    `must be at most ${CHAT_MESSAGE_MAX_UNITS} characters, an emoji counting as 2`,
+  );
+
+export const chatSendRequest = z.strictObject({ message: chatMessage });
+
+/** A command for `/command`: a chat line that starts with `/` once trimmed (S8). */
+export const chatCommandRequest = z.strictObject({
+  message: chatMessage.refine(
+    (text) => text.trim().startsWith("/"),
+    "must be a command, starting with /",
+  ),
+});

@@ -20,3 +20,4 @@ export const MC_NAME_MAX_CHARS = 16;
 export const MODE_NAME_MAX_CHARS = 32;
 export const MODE_MAX_STEPS = 32;
 export const SERVER_ADDRESS_MAX_CHARS = 259;
+export const CHAT_MESSAGE_MAX_UNITS = 256;

@@ -5,6 +5,7 @@ import { ApiError } from "./ApiError";
 import { FakeApiClient } from "./FakeApiClient";
 import {
   CA_PEM_MAX_BYTES,
+  CHAT_MESSAGE_MAX_UNITS,
   CODE_MAX_CHARS,
   MC_NAME_MAX_CHARS,
   NEW_PASSWORD_MAX_CHARS,
@@ -70,8 +71,24 @@ function client() {
     restartBot: ok,
     resetBot: ok,
     resumeBot: ok,
+    botChat: ok,
+    sendChat: ok,
+    sendCommand: ok,
   });
   return { fake, api: validated(fake) as ApiClient };
+}
+
+/** The fields `call` was refused for, each with its message, or a failure if it passed. */
+async function refused(call: Promise<unknown>): Promise<{ path: string; message: string }[]> {
+  try {
+    await call;
+  } catch (rejection) {
+    expect(rejection).toBeInstanceOf(ApiError);
+    const error = (rejection as ApiError).error;
+    expect(error.code).toBe("invalid_input");
+    return (error.fields ?? []).map((field) => ({ path: field.path, message: field.message }));
+  }
+  throw new Error("the call wasn't refused");
 }
 
 /** The paths of the fields `call` was refused for, or a failure if it passed. */
@@ -336,6 +353,48 @@ describe("validated", () => {
     ]) {
       expect(await refusedFields(call)).toEqual(["id"]);
     }
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("passes the chat's valid pages, lines and commands through unchanged", async () => {
+    const { fake, api } = client();
+    const longest = "é".repeat(CHAT_MESSAGE_MAX_UNITS);
+    const emoji = "😀".repeat(CHAT_MESSAGE_MAX_UNITS / 2);
+
+    await api.botChat(ID);
+    await api.botChat(ID, 1, PAGE_MAX);
+    await api.sendChat(ID, { message: `  ${longest}  ` });
+    await api.sendChat(ID, { message: emoji });
+    await api.sendChat(ID, { message: "/spawn" });
+    await api.sendCommand(ID, { message: "  /op AfkBot2" });
+
+    expect(fake.calls.map((call) => [call.method, call.args])).toEqual([
+      ["botChat", [ID, undefined, undefined]],
+      ["botChat", [ID, 1, PAGE_MAX]],
+      ["sendChat", [ID, { message: `  ${longest}  ` }]],
+      ["sendChat", [ID, { message: emoji }]],
+      ["sendChat", [ID, { message: "/spawn" }]],
+      ["sendCommand", [ID, { message: "  /op AfkBot2" }]],
+    ]);
+  });
+
+  it("refuses the chat's bad ID, cursor and limit, an empty or too long line, and a command without its /", async () => {
+    const { fake, api } = client();
+
+    expect(await refusedFields(api.botChat("x", 0, 0))).toEqual(["id", "before", "limit"]);
+    expect(await refusedFields(api.botChat(ID, 1.5))).toEqual(["before"]);
+    expect(await refused(api.sendChat("x", { message: "   " }))).toEqual([
+      { path: "id", message: "must be an ID" },
+      { path: "message", message: "must not be empty" },
+    ]);
+    expect(
+      await refused(api.sendChat(ID, { message: `${"😀".repeat(CHAT_MESSAGE_MAX_UNITS / 2)}a` })),
+    ).toEqual([
+      { path: "message", message: "must be at most 256 characters, an emoji counting as 2" },
+    ]);
+    expect(await refused(api.sendCommand(ID, { message: "hello /spawn" }))).toEqual([
+      { path: "message", message: "must be a command, starting with /" },
+    ]);
     expect(fake.calls).toEqual([]);
   });
 

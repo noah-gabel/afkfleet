@@ -112,6 +112,25 @@ export function validated(client: ApiClient): ApiClient {
     restartBot: async (id) => client.restartBot(check(schemas.id, id, "id")),
     resetBot: async (id) => client.resetBot(check(schemas.id, id, "id")),
     resumeBot: async (id) => client.resumeBot(check(schemas.id, id, "id")),
+    botChat: async (id, before, limit) => {
+      checkAll([
+        ...problems(schemas.id, id, "id"),
+        ...(before === undefined ? [] : problems(schemas.chatCursor, before, "before")),
+        ...(limit === undefined ? [] : problems(schemas.limit, limit, "limit")),
+      ]);
+      return client.botChat(id, before, limit);
+    },
+    sendChat: async (id, request) => {
+      checkAll([...problems(schemas.id, id, "id"), ...problems(schemas.chatSendRequest, request)]);
+      return client.sendChat(id, request);
+    },
+    sendCommand: async (id, request) => {
+      checkAll([
+        ...problems(schemas.id, id, "id"),
+        ...problems(schemas.chatCommandRequest, request),
+      ]);
+      return client.sendCommand(id, request);
+    },
   };
 }
 

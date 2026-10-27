@@ -1,11 +1,13 @@
-//! The bots' and modes' commands (Plan.md P11.9; ADR-0020, U32, S73): the
-//! reads the bot screens show, and the bot's writes: its server (after a
-//! step-up), its mode, and its lifecycle calls.
+//! The bots' and modes' commands (Plan.md P11.9; ADR-0020, U32, U34, S73):
+//! the reads the bot screens show, the bot's writes (its server after a
+//! step-up, its mode, its lifecycle calls), and its chat: the history, a
+//! line, and a command after a step-up.
 
 use fleet_api_types::app::{BotCommandResponse, CommandError};
 use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
+use fleet_api_types::chat::{ChatCommandRequest, ChatPage, ChatSendRequest, ChatSendResponse};
 use fleet_api_types::modes::ModePage;
-use fleet_api_types::{BotId, ModeId};
+use fleet_api_types::{BotId, ModeId, SafeInt};
 
 use super::Managed;
 
@@ -82,4 +84,32 @@ pub(crate) async fn resume_bot(
     id: BotId,
 ) -> Result<BotCommandResponse, CommandError> {
     state.resume_bot(id).await
+}
+
+#[tauri::command]
+pub(crate) async fn bot_chat(
+    state: Managed<'_>,
+    id: BotId,
+    before: Option<SafeInt>,
+    limit: Option<u32>,
+) -> Result<ChatPage, CommandError> {
+    state.bot_chat(id, before, limit).await
+}
+
+#[tauri::command]
+pub(crate) async fn send_chat(
+    state: Managed<'_>,
+    id: BotId,
+    request: ChatSendRequest,
+) -> Result<ChatSendResponse, CommandError> {
+    state.send_chat(id, request).await
+}
+
+#[tauri::command]
+pub(crate) async fn send_command(
+    state: Managed<'_>,
+    id: BotId,
+    request: ChatCommandRequest,
+) -> Result<ChatSendResponse, CommandError> {
+    state.send_command(id, request).await
 }

@@ -57,6 +57,9 @@ const COMMANDS: &[&str] = &[
     "restart_bot",
     "reset_bot",
     "resume_bot",
+    "bot_chat",
+    "send_chat",
+    "send_command",
 ];
 
 fn main() -> Result<(), Box<dyn Error>> {

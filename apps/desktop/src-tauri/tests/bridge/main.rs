@@ -11,6 +11,7 @@ mod account;
 mod accounts;
 mod auth;
 mod bots;
+mod chat;
 mod live;
 mod support;
 mod switch;

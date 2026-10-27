@@ -14,6 +14,10 @@ import type { BotPage } from "@afkfleet/ui/generated/BotPage";
 import type { BotPatchRequest } from "@afkfleet/ui/generated/BotPatchRequest";
 import type { BotResponse } from "@afkfleet/ui/generated/BotResponse";
 import type { ChangeGrantRequest } from "@afkfleet/ui/generated/ChangeGrantRequest";
+import type { ChatCommandRequest } from "@afkfleet/ui/generated/ChatCommandRequest";
+import type { ChatPage } from "@afkfleet/ui/generated/ChatPage";
+import type { ChatSendRequest } from "@afkfleet/ui/generated/ChatSendRequest";
+import type { ChatSendResponse } from "@afkfleet/ui/generated/ChatSendResponse";
 import type { CreatedInviteResponse } from "@afkfleet/ui/generated/CreatedInviteResponse";
 import type { CreatedOfflineAccountResponse } from "@afkfleet/ui/generated/CreatedOfflineAccountResponse";
 import type { CreateGrantRequest } from "@afkfleet/ui/generated/CreateGrantRequest";
@@ -219,6 +223,18 @@ export class TauriApiClient implements ApiClient {
 
   resumeBot(id: string): Promise<BotCommandResponse> {
     return this.#call("resume_bot", { id });
+  }
+
+  botChat(id: string, before?: number, limit?: number): Promise<ChatPage> {
+    return this.#call("bot_chat", { id, before, limit });
+  }
+
+  sendChat(id: string, request: ChatSendRequest): Promise<ChatSendResponse> {
+    return this.#call("send_chat", { id, request });
+  }
+
+  sendCommand(id: string, request: ChatCommandRequest): Promise<ChatSendResponse> {
+    return this.#call("send_command", { id, request });
   }
 
   account(id: string): Promise<AccountResponse> {
