@@ -12,6 +12,7 @@ import { Button } from "../../../components/ui/button";
 import { useNow } from "../../../hooks/useNow";
 import { botFacts, modesOf, uptimeNextChange } from "../facts";
 import { agentLastSeen, BACK_HOME, BOT_NOT_FOUND } from "../texts";
+import { BotControls } from "./BotControls";
 import { Facts, StateBadge } from "./BotParts";
 
 /** Bot `id`. */
@@ -51,6 +52,7 @@ export function BotScreen({ id }: { id: string }) {
         {lastSeen === undefined ? null : (
           <p className="text-sm text-muted-foreground">{agentLastSeen(lastSeen, now)}</p>
         )}
+        <BotControls bot={data} />
         <BackLink />
       </section>
     </main>

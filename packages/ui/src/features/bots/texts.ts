@@ -305,3 +305,16 @@ function agentStatusText(status: AgentStatus): string {
       return String(status);
   }
 }
+
+/** The controls' labels (U38). */
+export const CONTROL = {
+  start: "Start",
+  stop: "Stop",
+  restart: "Restart",
+  resume: "Resume",
+  reset: "Reset",
+} as const;
+/** After a call its bot's agent was sent (S73). */
+export const SENT_NOTE = "Sent. The state changes when its agent reports back.";
+/** Where the controls would be, for a viewer whose level allows none (U38). */
+export const VIEW_ONLY = "You can view this bot but not control it.";
