@@ -9,8 +9,10 @@ import {
   type DataTag,
   type InfiniteData,
   infiniteQueryOptions,
+  type QueryClient,
   type QueryKey,
   queryOptions,
+  skipToken,
   useInfiniteQuery,
   useQuery,
 } from "@tanstack/react-query";
@@ -20,6 +22,7 @@ import type { AccountResponse } from "../generated/AccountResponse";
 import type { BotPage } from "../generated/BotPage";
 import type { BotResponse } from "../generated/BotResponse";
 import type { ChatPage } from "../generated/ChatPage";
+import type { ChatSendResponse } from "../generated/ChatSendResponse";
 import type { GrantPage } from "../generated/GrantPage";
 import type { InvitePage } from "../generated/InvitePage";
 import type { ModePage } from "../generated/ModePage";
@@ -27,6 +30,7 @@ import type { SessionPage } from "../generated/SessionPage";
 import type { UserPage } from "../generated/UserPage";
 import type { ApiClient } from "./ApiClient";
 import { ApiError } from "./ApiError";
+import { answered, type ChatOutcomes } from "./chatOutcomes";
 import { useApiClient } from "./context";
 import { PAGE_MAX } from "./limits";
 
@@ -147,8 +151,8 @@ interface EveryPage<P> {
 /**
  * Every page `read` answers, newest first, until a page has no `next`. One failed page fails
  * the read, and so does a `next` that doesn't move past the cursor it was asked with (an ID's
- * text sorts by its time) or that was asked before: a server bug never loops (R99). Once
- * `signal` aborts, no further page is asked for.
+ * text sorts by its time): the cursors only fall, so none is asked twice and a server bug
+ * never loops (R99). Once `signal` aborts, no further page is asked for.
  */
 async function everyPage<P extends { readonly next?: string }>(
   read: (before: string | undefined) => Promise<P>,
@@ -156,7 +160,6 @@ async function everyPage<P extends { readonly next?: string }>(
 ): Promise<EveryPage<P>> {
   const pages: P[] = [];
   const pageParams: (string | undefined)[] = [];
-  const asked = new Set<string>();
   let before: string | undefined;
   do {
     if (pages.length > 0) {
@@ -166,11 +169,8 @@ async function everyPage<P extends { readonly next?: string }>(
     pages.push(page);
     pageParams.push(before);
     const next = page.next;
-    if (next !== undefined && ((before !== undefined && next >= before) || asked.has(next))) {
+    if (next !== undefined && before !== undefined && next >= before) {
       throw new ApiError({ code: "unexpected_response", message: PAGES_DONT_MOVE_ON });
-    }
-    if (before !== undefined) {
-      asked.add(before);
     }
     before = next;
   } while (before !== undefined);
@@ -257,6 +257,14 @@ export function chatKey(id: string) {
   return tagged<InfiniteData<ChatPage, number | undefined>>()(["bots", "chat", id] as const);
 }
 
+/**
+ * The key of one bot's chat outcomes (S70): what came of the lines sent, by chat request,
+ * never text. Its query is never fetched; the live patches and the send box write it.
+ */
+export function chatOutcomesKey(id: string) {
+  return tagged<ChatOutcomes>()(["bots", "chat-outcomes", id] as const);
+}
+
 /** The modes the user may see: every page, read at once (S68). */
 export const MODES_LIST_KEY = tagged<InfiniteData<ModePage, string | undefined>>()([
   "modes",
@@ -286,6 +294,69 @@ export function botQuery(api: ApiClient, id: string) {
 /** One bot, through the app's client. */
 export function useBot(id: string) {
   return useQuery(botQuery(useApiClient(), id));
+}
+
+/** One bot's chat, a page at a time, newest first. */
+export function chatQuery(api: ApiClient, id: string) {
+  return infiniteQueryOptions({
+    queryKey: chatKey(id),
+    queryFn: async ({ pageParam }) => movedOn(await api.botChat(id, pageParam), pageParam),
+    initialPageParam: undefined as number | undefined,
+    getNextPageParam: (page: ChatPage) => page.next,
+  });
+}
+
+/**
+ * `page`, read with the cursor `before`, if its `next` moves past it (R120, R99's rule for
+ * the chat): otherwise the read fails, so a server bug never loops.
+ */
+function movedOn(page: ChatPage, before: number | undefined): ChatPage {
+  if (page.next !== undefined && before !== undefined && page.next >= before) {
+    throw new ApiError({ code: "unexpected_response", message: PAGES_DONT_MOVE_ON });
+  }
+  return page;
+}
+
+/** One bot's chat, through the app's client. */
+export function useChat(id: string) {
+  return useInfiniteQuery(chatQuery(useApiClient(), id));
+}
+
+/**
+ * One bot's chat outcomes (S70, R121): empty until written, never fetched, kept while the
+ * session lasts; the session's end empties the cache, and a `bot_removed` resets them.
+ */
+export function chatOutcomesQuery(id: string) {
+  return queryOptions({
+    queryKey: chatOutcomesKey(id),
+    queryFn: skipToken,
+    initialData: {} as ChatOutcomes,
+    gcTime: Number.POSITIVE_INFINITY,
+    staleTime: Number.POSITIVE_INFINITY,
+  });
+}
+
+/** One bot's chat outcomes, as its screen holds them. */
+export function useChatOutcomes(id: string): ChatOutcomes {
+  return useQuery(chatOutcomesQuery(id)).data ?? NO_OUTCOMES;
+}
+
+/** No outcomes. */
+const NO_OUTCOMES: ChatOutcomes = {};
+
+/**
+ * Links a send's `answer` into bot `id`'s outcomes, the send begun at loss count `since`;
+ * only into outcomes a screen holds, so an answer after the session's end builds nothing.
+ */
+export function recordAnswer(
+  queryClient: QueryClient,
+  id: string,
+  answer: ChatSendResponse,
+  since: number,
+): void {
+  queryClient.setQueryData(chatOutcomesKey(id), (outcomes) =>
+    outcomes === undefined ? undefined : answered(outcomes, answer, since),
+  );
 }
 
 /** Every page of the modes the user may see, as one list's pages; one failed page fails it all. */

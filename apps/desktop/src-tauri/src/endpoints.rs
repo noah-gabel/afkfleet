@@ -25,6 +25,9 @@ use fleet_api_types::app::{
 };
 use fleet_api_types::auth::{LoginRequest, RegisterRequest, RegisterResponse, StepUpRequest};
 use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
+use fleet_api_types::chat::{
+    ChatCommandRequest, ChatPage, ChatPageQuery, ChatSendRequest, ChatSendResponse,
+};
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
@@ -32,7 +35,8 @@ use fleet_api_types::modes::ModePage;
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
 use fleet_api_types::{
-    AccountId, BotId, InviteId, LinkFlowId, ModeId, PageQuery, SecretText, SessionId, UserId,
+    AccountId, BotId, InviteId, LinkFlowId, ModeId, PageQuery, SafeInt, SecretText, SessionId,
+    UserId,
 };
 use fleet_client::{BotCommandAnswer, ClientError, LoginStep, VerifiedLink};
 use garde::Validate;
@@ -640,6 +644,67 @@ impl<F: StoreFactory> AppState<F> {
         Ok(commanded(answer))
     }
 
+    /// The `bot_chat` command: a page of the bot's chat, newest first, older
+    /// than `before` (P11.3).
+    ///
+    /// # Errors
+    /// `invalid_input` for a cursor below 1 or a limit outside 1 to 100,
+    /// `no_server`, `no_session`, or `api` 404 or 429.
+    pub async fn bot_chat(
+        &self,
+        id: BotId,
+        before: Option<SafeInt>,
+        limit: Option<u32>,
+    ) -> Result<ChatPage, CommandError> {
+        let query = ChatPageQuery { before, limit };
+        validate(&query)?;
+        let conn = self.conn.read().await;
+        conn.client()?.chat(id, &query).await.map_err(error::client)
+    }
+
+    /// The `send_chat` command: a line for the bot to send, plain chat or a
+    /// command on the server's allowlist (ADR-0020, S4, S5). A typed command
+    /// may hold a password, so the line goes nowhere but the request.
+    ///
+    /// # Errors
+    /// `invalid_input` for a line the server would refuse, `no_server`,
+    /// `no_session`, or `api` 403 (`command_needs_step_up` for a manager's
+    /// command off the allowlist, `forbidden` below), 404, 409
+    /// (`bot_not_online`, `chat_unavailable`, `bot_unreachable`), 422 or 429.
+    pub async fn send_chat(
+        &self,
+        id: BotId,
+        request: ChatSendRequest,
+    ) -> Result<ChatSendResponse, CommandError> {
+        validate(&request)?;
+        let conn = self.conn.read().await;
+        conn.client()?
+            .send_chat(id, &request)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `send_command` command: any command, after `step_up` within 5
+    /// minutes (ADR-0020, S4, S8).
+    ///
+    /// # Errors
+    /// `invalid_input` for a line that isn't a command or that the server
+    /// would refuse, `no_server`, `no_session`, or `api` 403
+    /// (`step_up_required`, or `forbidden` below Manage), 404, 409, 422 or
+    /// 429.
+    pub async fn send_command(
+        &self,
+        id: BotId,
+        request: ChatCommandRequest,
+    ) -> Result<ChatSendResponse, CommandError> {
+        validate(&request)?;
+        let conn = self.conn.read().await;
+        conn.client()?
+            .send_command(id, &request)
+            .await
+            .map_err(error::client)
+    }
+
     /// A link or re-link start's outcome: a good link is held and the
     /// answer returned; a bad one drops the answer, its code included, and
     /// forgets the held link; a refusal leaves the held link as it was.
@@ -716,6 +781,35 @@ mod tests {
     use crate::state::{AppState, LinkOpener, OpenError};
 
     const GOOD: &str = "https://www.microsoft.com/link";
+
+    #[test]
+    fn a_commands_answer_keeps_its_bot_and_says_sent_or_cleared_as_the_client_did() {
+        let bot: super::BotResponse = serde_json::from_value(serde_json::json!({
+            "id": "018bcfe5-6800-7202-8202-020202020202",
+            "account": {
+                "id": "018bcfe5-6800-7101-8101-010101010101",
+                "name": "AfkBot1",
+                "kind": "offline",
+                "status": "active",
+                "level": "control"
+            },
+            "mode_id": "01a14202-2800-7000-8000-000000000001",
+            "desired_state": "running",
+            "status": { "kind": "reported", "state": "paused", "reason": "duplicate_login" }
+        }))
+        .unwrap();
+        let answer = |effect| fleet_client::BotCommandAnswer {
+            bot: bot.clone(),
+            effect,
+        };
+
+        let sent = super::commanded(answer(fleet_client::BotCommandEffect::Sent));
+        let cleared = super::commanded(answer(fleet_client::BotCommandEffect::Cleared));
+
+        assert_eq!(sent.bot, bot);
+        assert_eq!(sent.effect, super::BotCommandEffect::Sent);
+        assert_eq!(cleared.effect, super::BotCommandEffect::Cleared);
+    }
 
     /// One memory store per call: these tests never log in.
     struct Memory;

@@ -1,9 +1,11 @@
-import { screen } from "@testing-library/react";
+import { act, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../../api/ApiClient";
+import { botKey } from "../../api/queries";
 import type { BotResponse } from "../../generated/BotResponse";
 import { account } from "../../test/accounts";
+import { deferred } from "../../test/fixtures";
 import { bot, botId, mode } from "../../test/live";
 import { fakeTime } from "../../test/renderApp";
 import { expectWait, limited } from "../../test/retryWait";
@@ -109,6 +111,52 @@ describe("a bot's controls", () => {
     await app.user.click(screen.getByRole("button", { name: "Restart" }));
 
     expect(await screen.findByText(SENT_NOTE)).toBeDefined();
+  });
+
+  it("drop the note once the bot changes, for good, even when its state comes back (R106)", async () => {
+    const { app } = await controls(
+      ONLINE,
+      { restartBot: async () => ({ bot: ONLINE, effect: "sent" }) },
+      ONLINE,
+    );
+    await app.user.click(screen.getByRole("button", { name: "Restart" }));
+    expect(await screen.findByText(SENT_NOTE)).toBeDefined();
+    const stopping = bot(1, {
+      ...ONLINE,
+      status: { kind: "reported", state: "stopping", since: SINCE, restarting: true },
+    });
+
+    act(() => {
+      app.runtime.queryClient.setQueryData(botKey(ID), stopping);
+    });
+    expect(await screen.findByText("Stopping")).toBeDefined();
+    expect(screen.queryByText(SENT_NOTE)).toBeNull();
+    act(() => {
+      app.runtime.queryClient.setQueryData(botKey(ID), ONLINE);
+    });
+
+    expect(await screen.findByText("Online")).toBeDefined();
+    expect(screen.queryByText(SENT_NOTE)).toBeNull();
+  });
+
+  it("drop the note as the next action starts (R106)", async () => {
+    const stopped = deferred<BotResponse>();
+    const { app } = await controls(
+      ONLINE,
+      {
+        restartBot: async () => ({ bot: ONLINE, effect: "sent" }),
+        stopBot: () => stopped.promise,
+      },
+      ONLINE,
+    );
+    await app.user.click(screen.getByRole("button", { name: "Restart" }));
+    expect(await screen.findByText(SENT_NOTE)).toBeDefined();
+
+    await app.user.click(screen.getByRole("button", { name: "Stop" }));
+
+    expect(app.fake.calls.filter((call) => call.method === "stopBot")).toHaveLength(1);
+    expect(screen.queryByText(SENT_NOTE)).toBeNull();
+    stopped.resolve(ONLINE);
   });
 
   it("say nothing was sent when a resume cleared a stored state", async () => {

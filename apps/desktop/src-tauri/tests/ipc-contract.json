@@ -371,6 +371,33 @@
       "inputs": ["01900000-0000-7000-8000-00000000000b"],
       "args": { "id": "01900000-0000-7000-8000-00000000000b" },
       "expect": { "error": "no_server" }
+    },
+    {
+      "command": "bot_chat",
+      "method": "botChat",
+      "inputs": ["01900000-0000-7000-8000-00000000000b", 42, 10],
+      "args": { "id": "01900000-0000-7000-8000-00000000000b", "before": 42, "limit": 10 },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "send_chat",
+      "method": "sendChat",
+      "inputs": ["01900000-0000-7000-8000-00000000000b", { "message": "hello" }],
+      "args": {
+        "id": "01900000-0000-7000-8000-00000000000b",
+        "request": { "message": "hello" }
+      },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "send_command",
+      "method": "sendCommand",
+      "inputs": ["01900000-0000-7000-8000-00000000000b", { "message": "/spawn" }],
+      "args": {
+        "id": "01900000-0000-7000-8000-00000000000b",
+        "request": { "message": "/spawn" }
+      },
+      "expect": { "error": "no_server" }
     }
   ]
 }

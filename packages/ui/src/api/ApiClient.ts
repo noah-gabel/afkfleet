@@ -10,6 +10,10 @@ import type { BotPage } from "../generated/BotPage";
 import type { BotPatchRequest } from "../generated/BotPatchRequest";
 import type { BotResponse } from "../generated/BotResponse";
 import type { ChangeGrantRequest } from "../generated/ChangeGrantRequest";
+import type { ChatCommandRequest } from "../generated/ChatCommandRequest";
+import type { ChatPage } from "../generated/ChatPage";
+import type { ChatSendRequest } from "../generated/ChatSendRequest";
+import type { ChatSendResponse } from "../generated/ChatSendResponse";
 import type { CreatedInviteResponse } from "../generated/CreatedInviteResponse";
 import type { CreatedOfflineAccountResponse } from "../generated/CreatedOfflineAccountResponse";
 import type { CreateGrantRequest } from "../generated/CreateGrantRequest";
@@ -147,6 +151,16 @@ export interface ApiClient {
   resetBot(id: string): Promise<BotCommandResponse>;
   /** Lets a paused bot join again: `sent` to its agent, or its stored state `cleared`. */
   resumeBot(id: string): Promise<BotCommandResponse>;
+  /** A page of the bot's chat, newest first, older than the line `before` (P11.3). */
+  botChat(id: string, before?: number, limit?: number): Promise<ChatPage>;
+  /**
+   * Has the bot send a line (Control): plain chat or a command on the server's allowlist.
+   * A manager's command off it is 403 `command_needs_step_up`, for `sendCommand` (S4). A
+   * typed command may hold a password, so this is always a direct call (U34).
+   */
+  sendChat(id: string, request: ChatSendRequest): Promise<ChatSendResponse>;
+  /** Has the bot send any command (Manage for one off the allowlist), after a step-up (S8). */
+  sendCommand(id: string, request: ChatCommandRequest): Promise<ChatSendResponse>;
 }
 
 /** A method of the API. */
@@ -200,4 +214,7 @@ export const API_METHODS = [
   "restartBot",
   "resetBot",
   "resumeBot",
+  "botChat",
+  "sendChat",
+  "sendCommand",
 ] as const satisfies readonly ApiMethod[];

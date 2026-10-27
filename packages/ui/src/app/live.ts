@@ -29,6 +29,9 @@
 // - **The live record** (S71): every update of the current watch, and its end, go to the
 //   record the timeline and the notices show; a bots query's read fills in what it doesn't
 //   know, a bot's 404 drops it, and each sign-in and sign-out clears it.
+// - **The chat's loss count** (S70, R115, `stores.live`): moved at each start, the current
+//   watch's end and every refetch, so a pending chat mark ends with what may have been
+//   missed; and whether the current watch is live, from its refetch until it goes down.
 // Building it has no side effects; `attach` starts following the session.
 import type { Query, QueryCacheNotifyEvent, QueryClient, QueryKey } from "@tanstack/react-query";
 
@@ -97,6 +100,7 @@ export function createLiveLayer(
     certificateEnded = null;
     holds.clear();
     hint({ kind: "none" });
+    lost(false);
     apiClient
       .watchEvents((update) => {
         if (current?.number !== number) {
@@ -124,6 +128,7 @@ export function createLiveLayer(
     const generation = current.generation;
     current = null;
     holds.clear();
+    lost(false);
     stores.record.getState().down(Date.now());
     if (rejection === null) {
       // A newer watch or a server save stops it too, but neither while signed in with
@@ -151,6 +156,7 @@ export function createLiveLayer(
     switch (update.update) {
       case "refetch":
         hint({ kind: "none" });
+        lost(true);
         holds.clear();
         for (const query of cache.getAll()) {
           readOnceMore(query);
@@ -164,11 +170,22 @@ export function createLiveLayer(
         }
         return;
       case "disconnected":
+        stores.live.getState().setConnected(false);
         hint(waiting(update.disconnect, update.retry_in_secs));
         return;
       default:
         return;
     }
+  }
+
+  /**
+   * Updates may have been missed: a start, the current watch's end or a refetch, after which
+   * the watch is `connected` or not (S70, R115).
+   */
+  function lost(connected: boolean): void {
+    const live = stores.live.getState();
+    live.lost();
+    live.setConnected(connected);
   }
 
   /** Bot `id` as its own query or the bots' list holds it. */
@@ -383,6 +400,7 @@ export function createLiveLayer(
     if (!inSession()) {
       current = null;
       holds.clear();
+      stores.live.getState().setConnected(false);
       hint({ kind: "none" });
       stores.record.getState().clear();
       return;

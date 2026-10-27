@@ -590,8 +590,12 @@ fn fleet_services(
     let grants =
         GrantService::new(Arc::clone(clock), Arc::clone(store)).with_live_hints(hints.live());
     let (registry, agents) = agent_services(clock, store, hints);
-    let modes = mode_service(config, clock, random, store, hints);
-    let bots = bot_service(config, clock, random, store, &registry, events, reconcile);
+    // One allowlist for both: a mode's `unlisted_command` (S68) is what the bots' mode switch
+    // authorizes with (R113).
+    let allowlist = &config.chat.command_allowlist;
+    let modes = mode_service(clock, random, store, hints).with_allowlist(allowlist.clone());
+    let bots = bot_service(config, clock, random, store, &registry, events, reconcile)
+        .with_allowlist(allowlist.clone());
     FleetServices {
         grants,
         registry,
@@ -823,9 +827,9 @@ fn agent_services(
 }
 
 /// The bots' service over the app's ports, reading `registry`'s streams and
-/// the agents' answers to chat on `events`, with `[chat]`'s allowlist, a chat
-/// line's wait under the request timeout, and hinting `reconcile` after each
-/// write.
+/// the agents' answers to chat on `events`, with a chat line's wait under the
+/// request timeout, and hinting `reconcile` after each write; its allowlist
+/// comes from [`fleet_services`].
 fn bot_service(
     config: &ServerConfig,
     clock: &Arc<dyn Clock>,
@@ -843,23 +847,20 @@ fn bot_service(
         events.clone(),
         config.accounts.allow_offline,
     )
-    .with_allowlist(config.chat.command_allowlist.clone())
     .with_reconcile(reconcile)
     .with_live_hints(Arc::new(events.clone()))
     .with_chat_wait(ChatWait::new(config.http.request_timeout))
 }
 
-/// The modes' service over the app's ports, with `[chat]`'s allowlist,
-/// hinting `reconcile` after each real edit so the bots get it.
+/// The modes' service over the app's ports, hinting `reconcile` after each
+/// real edit so the bots get it; its allowlist comes from [`fleet_services`].
 fn mode_service(
-    config: &ServerConfig,
     clock: &Arc<dyn Clock>,
     random: &Arc<dyn SecureRandom>,
     store: &Arc<dyn Store>,
     hints: &Hints,
 ) -> ModeService {
     ModeService::new(Arc::clone(clock), Arc::clone(random), Arc::clone(store))
-        .with_allowlist(config.chat.command_allowlist.clone())
         .with_reconcile(Arc::clone(&hints.reconcile))
         .with_live_hints(hints.live())
 }
@@ -1811,6 +1812,93 @@ mod tests {
         assert_eq!(built.timings(), RetentionTimings::default());
         assert_eq!(built.service().pause(), RetentionTimings::default().pause);
         drop(built);
+        database.close().await;
+    }
+
+    /// The bots' and the modes' services judge commands by `[chat]`'s one
+    /// allowlist, so a mode's `unlisted_command` is what the mode switch
+    /// authorizes with (S68, R113).
+    #[tokio::test]
+    async fn the_bots_and_the_modes_judge_commands_by_the_configs_one_allowlist() {
+        use fleet_core::authz::CommandAllowlist;
+        use fleet_core::chat::ChatMessage;
+        use fleet_core::mode::ModeDefinition;
+        use fleet_testkit::system::{ManualClock, SeededRandom};
+
+        use fleet_startup::config::LogConfig;
+
+        use crate::config::{
+            AccountsConfig, AuditConfig, AuthConfig, ChatConfig, DatabaseConfig, RateLimitConfig,
+            VaultConfig,
+        };
+        use crate::infra::sqlite::{Database, DatabaseOptions};
+        use crate::ports::reconcile::NoReconcile;
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("afkfleet.db");
+        std::fs::File::create(&path).unwrap();
+        let database = Database::connect(
+            sqlx::sqlite::SqliteConnectOptions::new().filename(&path),
+            DatabaseOptions::default(),
+        )
+        .await
+        .unwrap();
+        let config = ServerConfig {
+            dev_mode: false,
+            http: HttpConfig {
+                bind: HttpConfig::DEFAULT_BIND,
+                request_timeout: Duration::from_secs(15),
+                max_body_bytes: 65_536,
+                trusted_proxies: TrustedProxies::default(),
+            },
+            database: DatabaseConfig { path },
+            log: LogConfig::default(),
+            auth: AuthConfig::default(),
+            rate_limits: RateLimitConfig::default(),
+            vault: VaultConfig {
+                key_files: std::collections::BTreeMap::new(),
+                active_key_id: 1,
+            },
+            accounts: AccountsConfig::default(),
+            chat: ChatConfig {
+                command_allowlist: CommandAllowlist::try_new(&["/spawn"]).unwrap(),
+                ..ChatConfig::default()
+            },
+            audit: AuditConfig::default(),
+            grpc: None,
+        };
+        let clock: Arc<dyn Clock> = Arc::new(ManualClock::new(chrono::DateTime::UNIX_EPOCH));
+        let random: Arc<dyn SecureRandom> = Arc::new(SeededRandom::new(7));
+        let store: Arc<dyn Store> = Arc::new(database.clone());
+        let events = EventBus::new();
+        let reconcile: Arc<dyn Reconcile> = Arc::new(NoReconcile);
+        let hints = Hints::new(&reconcile, &events);
+        let shared = Shared {
+            clock: &clock,
+            random: &random,
+            store: &store,
+        };
+
+        let services = fleet_services(&config, shared, &hints, &events, reconcile);
+
+        for (line, needs_manage) in [("/spawn home", false), ("/op AfkBot2", true)] {
+            let message = ChatMessage::try_from(line).unwrap();
+            let definition: ModeDefinition = serde_json::from_value(serde_json::json!({ "steps": [
+                { "action": { "type": "send_chat", "message": line }, "schedule": { "type": "at_start" }, "probability": 100 }
+            ] }))
+            .unwrap();
+            assert_eq!(
+                services.bots.command_check(&message).needs_manage(),
+                needs_manage,
+                "{line}"
+            );
+            assert_eq!(
+                services.modes.command_check(&definition).needs_manage(),
+                needs_manage,
+                "{line}"
+            );
+        }
+        drop(services);
         database.close().await;
     }
 }

@@ -11,6 +11,10 @@ import type { BotPage } from "../generated/BotPage";
 import type { BotPatchRequest } from "../generated/BotPatchRequest";
 import type { BotResponse } from "../generated/BotResponse";
 import type { ChangeGrantRequest } from "../generated/ChangeGrantRequest";
+import type { ChatCommandRequest } from "../generated/ChatCommandRequest";
+import type { ChatPage } from "../generated/ChatPage";
+import type { ChatSendRequest } from "../generated/ChatSendRequest";
+import type { ChatSendResponse } from "../generated/ChatSendResponse";
 import type { CommandErrorCode } from "../generated/CommandErrorCode";
 import type { CreatedInviteResponse } from "../generated/CreatedInviteResponse";
 import type { CreatedOfflineAccountResponse } from "../generated/CreatedOfflineAccountResponse";
@@ -213,6 +217,18 @@ export class FakeApiClient implements ApiClient {
 
   async resumeBot(id: string): Promise<BotCommandResponse> {
     return this.#handler("resumeBot", [id])(id);
+  }
+
+  async botChat(id: string, before?: number, limit?: number): Promise<ChatPage> {
+    return this.#handler("botChat", [id, before, limit])(id, before, limit);
+  }
+
+  async sendChat(id: string, request: ChatSendRequest): Promise<ChatSendResponse> {
+    return this.#handler("sendChat", [id, request])(id, request);
+  }
+
+  async sendCommand(id: string, request: ChatCommandRequest): Promise<ChatSendResponse> {
+    return this.#handler("sendCommand", [id, request])(id, request);
   }
 
   async account(id: string): Promise<AccountResponse> {

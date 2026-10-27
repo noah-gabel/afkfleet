@@ -16,7 +16,7 @@ import type { ModeResponse } from "../../generated/ModeResponse";
 import type { SessionServerFailure } from "../../generated/SessionServerFailure";
 import type { UnplacedReason } from "../../generated/UnplacedReason";
 import { formatDuration } from "../../lib/duration";
-import { formatClock, formatClockSeconds, formatDate } from "../../lib/time";
+import { formatClock, formatClockSeconds, formatDate, sameDay } from "../../lib/time";
 
 /** Home's heading. */
 export const BOTS_HEADING = "Bots";
@@ -63,13 +63,7 @@ export function openBot(name: string): string {
 
 /** When an unreachable agent was last seen: at a time today, on a date before today. */
 export function agentLastSeen(iso: string, now: number): string {
-  const seen = new Date(iso);
-  const today = new Date(now);
-  const sameDay =
-    seen.getFullYear() === today.getFullYear() &&
-    seen.getMonth() === today.getMonth() &&
-    seen.getDate() === today.getDate();
-  return sameDay
+  return sameDay(iso, now)
     ? `Its agent was last seen at ${formatClock(iso)}.`
     : `Its agent was last seen on ${formatDate(iso)} at ${formatClock(iso)}.`;
 }
@@ -343,6 +337,38 @@ export const TIMELINE = {
   note: "Since you signed in, while the app is open.",
   empty: "Nothing yet.",
 } as const;
+/** The chat console and its send box (U43–U45, S7, S9, S70; H3's texts). */
+export const CHAT = {
+  heading: "Chat",
+  older: "Show older",
+  noOlder: "No older lines.",
+  empty: "No chat yet.",
+  loading: "Loading chat…",
+  server: "Server",
+  you: "You",
+  aUser: "a user",
+  modeTag: "mode",
+  argumentsHidden: "(arguments hidden)",
+  cutShort: "(cut short)",
+  pending: "pending",
+  sent: "sent",
+  notSent: "not sent",
+  placeholder: "Message or /command",
+  send: "Send",
+  sending: "Sending…",
+  commandStepUp: "Enter your password to send this command. It counts for 5 minutes.",
+} as const;
+
+/** The chat's history that couldn't be read. */
+export function chatFailed(why: string): string {
+  return `Couldn't load the chat: ${why}`;
+}
+
+/** An older page of the chat that couldn't be read. */
+export function olderFailed(why: string): string {
+  return `Couldn't load older lines: ${why}`;
+}
+
 /** A notice's way to its bot's screen. */
 export const OPEN = "Open";
 /** A bot the app never saw, where a notice names it. */

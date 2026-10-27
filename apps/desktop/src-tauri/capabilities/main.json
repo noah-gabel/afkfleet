@@ -49,6 +49,9 @@
     "allow-stop-bot",
     "allow-restart-bot",
     "allow-reset-bot",
-    "allow-resume-bot"
+    "allow-resume-bot",
+    "allow-bot-chat",
+    "allow-send-chat",
+    "allow-send-command"
   ]
 }

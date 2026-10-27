@@ -83,6 +83,9 @@ export const COMMANDS = [
   "restart_bot",
   "reset_bot",
   "resume_bot",
+  "bot_chat",
+  "send_chat",
+  "send_command",
 ];
 
 /** The whole of `app.security`. */

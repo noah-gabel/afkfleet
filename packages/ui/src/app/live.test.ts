@@ -23,6 +23,8 @@ import {
   botQuery,
   botsQuery,
   chatKey,
+  chatOutcomesKey,
+  chatOutcomesQuery,
   grantsKey,
   MODES_LIST_KEY,
   modesQuery,
@@ -1080,5 +1082,89 @@ describe("the live record (S71)", () => {
 
     expect(filled).toEqual([botId(1), botId(2)]);
     expect(Object.keys(stores.record.getState().record.bots)).toEqual([botId(2)]);
+  });
+});
+
+describe("the loss counter and the connected flag (S70, R115)", () => {
+  it("count a loss at a watch's start, at the current watch's end and at every refetch", async () => {
+    const { watch, stores } = setup();
+    const losses = () => stores.live.getState().losses;
+    const started = losses();
+    const replaced = watch.latest();
+    stores.live.getState().restart();
+    const restarted = losses();
+    replaced.end();
+    await settle();
+    const afterOld = losses();
+
+    watch.latest().push(refetch("ready"));
+    watch.latest().push(refetch("resync"));
+    const refetched = losses();
+    watch.latest().end();
+    await settle();
+
+    expect([started, restarted, afterOld, refetched, losses()]).toEqual([1, 2, 2, 4, 5]);
+  });
+
+  it("is connected from a refetch until a disconnect, an end, a new start or a sign-out", async () => {
+    const { watch, stores } = setup();
+    const connected = () => stores.live.getState().connected;
+    const seen: boolean[] = [connected()];
+
+    watch.latest().push(refetch("ready"));
+    seen.push(connected());
+    watch.latest().push(disconnected(5));
+    seen.push(connected());
+    watch.latest().push(refetch("ready"));
+    stores.live.getState().restart();
+    seen.push(connected());
+    watch.latest().push(refetch("ready"));
+    watch.latest().end();
+    await settle();
+    seen.push(connected());
+    stores.live.getState().restart();
+    watch.latest().push(refetch("ready"));
+    stores.session.getState().signOut();
+    seen.push(connected());
+
+    expect(seen).toEqual([false, true, false, false, false, false]);
+  });
+
+  it("never starts a watch by itself", () => {
+    const { fake, stores } = setup();
+    const before = asked(fake, "watchEvents");
+
+    stores.live.getState().lost();
+    stores.live.getState().setConnected(true);
+
+    expect(asked(fake, "watchEvents")).toBe(before);
+  });
+
+  it("lets a user's line and its chat_sent reach the outcomes a screen holds, and none nobody holds", () => {
+    const { watch, queryClient } = setup();
+    shown(queryClient, chatOutcomesQuery(botId(1)));
+    const request = "01900000-0000-7000-8000-0000000004a1";
+
+    for (const n of [1, 2]) {
+      watch.latest().push(event({ type: "chat", bot_id: botId(n), line: line(8), request }));
+      watch.latest().push(event({ type: "chat_sent", bot_id: botId(n), request }));
+    }
+
+    expect(queryClient.getQueryData(chatOutcomesKey(botId(1)))).toEqual({
+      [request]: { line: 8, final: { kind: "sent" } },
+    });
+    expect(queryClient.getQueryData(chatOutcomesKey(botId(2)))).toBeUndefined();
+  });
+
+  it("resets a bot's outcomes at bot_removed, which a screen then holds empty", async () => {
+    const { watch, queryClient } = setup();
+    shown(queryClient, chatOutcomesQuery(botId(1)));
+    const request = "01900000-0000-7000-8000-0000000004a1";
+    watch.latest().push(event({ type: "chat_sent", bot_id: botId(1), request }));
+
+    watch.latest().push(event({ type: "bot_removed", bot_id: botId(1) }));
+    await settle();
+
+    expect(queryClient.getQueryData(chatOutcomesKey(botId(1)))).toEqual({});
   });
 });

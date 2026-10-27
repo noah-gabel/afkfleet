@@ -1,12 +1,15 @@
 // The e2e suite's fake backend (Plan.md P8.9, ADR-0017): the desktop app's Rust side and the
-// server in one, answering the 46 commands of src-tauri/tests/ipc-contract.json with the
+// server in one, answering the 49 commands of src-tauri/tests/ipc-contract.json with the
 // generated types, the Rust side's fixed `CommandError` messages and the server's error
 // codes. It keeps the state one test needs, fresh per test: users with their passwords and
 // authenticators, invites, the one session the app holds, the pending login or setup step,
 // the session's step-up, the Microsoft accounts with their grants and the one link flow, and
 // each account's bot, as the server makes one with every account, and the modes: the two
 // built-in ones and another user's shared `warp`, which sends a command off the allowlist.
-// The bot writes follow the server's simplest answers (ADR-0019, S50; ADR-0020, S73).
+// The bot writes follow the server's simplest answers (ADR-0019, S50; ADR-0020, S73), and so
+// does the chat: each bot's lines, a line sent only to an online bot, a command off the
+// allowlist only through `/command` after a step-up (S4, S8), answered `sent` or, by
+// `chatOutcome`, `pending` (S5); `addChat` keeps a spec's pushed line in REST too.
 // A flow reads `waiting` once, then `linked`, its account pending unless the Owner linked
 // it.
 //
@@ -26,6 +29,10 @@ import type { BotCommandResponse } from "@afkfleet/ui/generated/BotCommandRespon
 import type { BotPage } from "@afkfleet/ui/generated/BotPage";
 import type { BotResponse } from "@afkfleet/ui/generated/BotResponse";
 import type { BotStatus } from "@afkfleet/ui/generated/BotStatus";
+import type { ChatLine } from "@afkfleet/ui/generated/ChatLine";
+import type { ChatPage } from "@afkfleet/ui/generated/ChatPage";
+import type { ChatSendOutcome } from "@afkfleet/ui/generated/ChatSendOutcome";
+import type { ChatSendResponse } from "@afkfleet/ui/generated/ChatSendResponse";
 import type { CommandError } from "@afkfleet/ui/generated/CommandError";
 import type { CommandErrorCode } from "@afkfleet/ui/generated/CommandErrorCode";
 import type { CreatedInviteResponse } from "@afkfleet/ui/generated/CreatedInviteResponse";
@@ -118,6 +125,9 @@ export const COMMANDS = [
   "restart_bot",
   "reset_bot",
   "resume_bot",
+  "bot_chat",
+  "send_chat",
+  "send_command",
 ] as const;
 
 /** One command. */
@@ -145,6 +155,8 @@ const API_MESSAGES: Partial<Record<ErrorCode, string>> = {
   not_found: "The resource doesn't exist.",
   conflict: "The request conflicts with the current state.",
   validation_failed: "Some fields are invalid.",
+  bot_not_online: "Only an online bot can send chat.",
+  command_needs_step_up: "This command needs your password: confirm it's you to send it.",
 };
 
 /** A refusal of the Rust side. */
@@ -220,6 +232,8 @@ interface Bot {
   serverAddress?: string;
   desiredState: BotResponse["desired_state"];
   status: BotStatus;
+  /** Its chat, oldest first, as the server keeps it: the whole line, every field. */
+  readonly chat: ChatLine[];
 }
 
 /** The modes, newest first: another user's shared `warp`, then the built-in ones with the IDs
@@ -233,6 +247,9 @@ const MODES: readonly ModeResponse[] = [
   builtIn("01a14202-2800-7000-8000-000000000002", "farm"),
   builtIn("01a14202-2800-7000-8000-000000000001", "afk"),
 ];
+
+/** The server's `[chat] command_allowlist`: commands a Control holder may send. */
+const ALLOWLIST: readonly string[] = ["/spawn"];
 
 /** The mode a new bot runs: `afk`. */
 const AFK = "01a14202-2800-7000-8000-000000000001";
@@ -283,6 +300,11 @@ export class FakeBackend {
   #accountNames = 0;
   #ids = 100;
   #codes = 0;
+  #lines = 0;
+  /** What a line sent to an online bot answers: `sent` (200), or `pending` (202). */
+  chatOutcome: ChatSendOutcome = "sent";
+  /** The last line sent, with its request, for a spec to push its `chat` and `chat_sent`. */
+  lastSend: { readonly request: string; readonly line: ChatLine } | null = null;
 
   constructor() {
     this.#addUser(OWNER, "owner", true);
@@ -700,6 +722,7 @@ export class FakeBackend {
         modeId: AFK,
         desiredState: "stopped",
         status: { kind: "unplaced", why: "stopped" },
+        chat: [],
       },
     };
     this.#accounts.push(account);
@@ -816,6 +839,111 @@ export class FakeBackend {
       return answer("cleared");
     }
     return answer("sent");
+  }
+
+  /**
+   * A line `user` at `level` has the bot send through `route` (ADR-0020, S4, S5, S8): a
+   * command off the allowlist only through `/command` and for Manage (`/chat` points a
+   * manager there), an online bot only; then the line is kept and answered with
+   * `chatOutcome`.
+   */
+  #send(
+    user: User,
+    account: Account,
+    level: GrantLevel,
+    message: string,
+    route: "chat" | "command",
+  ): Outcome {
+    const line = message.trim();
+    if (route === "command" && !line.startsWith("/")) {
+      return api(422, "validation_failed", [
+        { path: "message", message: "must be a command, starting with /" },
+      ]);
+    }
+    const name = line.split(/\s/u)[0] ?? "";
+    if (line.startsWith("/") && !ALLOWLIST.includes(name)) {
+      if (level !== "manage") {
+        return api(403, "forbidden");
+      }
+      if (route === "chat") {
+        return api(403, "command_needs_step_up");
+      }
+    }
+    const { status } = account.bot;
+    if (status.kind !== "reported" || status.state !== "online") {
+      return api(409, "bot_not_online");
+    }
+    const kept: ChatLine = {
+      id: this.#nextLine(),
+      at: new Date().toISOString(),
+      direction: "out",
+      kind: "user",
+      text: line,
+      truncated: false,
+      arguments_hidden: false,
+      sent_by: { id: user.id, username: user.username },
+      mine: true,
+    };
+    account.bot.chat.push(kept);
+    const answer: ChatSendResponse = {
+      request_id: id(this.#next()),
+      message_id: kept.id,
+      outcome: this.chatOutcome,
+    };
+    this.lastSend = { request: answer.request_id, line: kept };
+    return value(answer);
+  }
+
+  /**
+   * A page of `account`'s chat as `user` at `level` reads it, newest first, older than
+   * `before`: a command a user or a mode sent shows only its name below Manage (S9), and
+   * who sent a user's line only to Manage (U3).
+   */
+  #chatPage(
+    user: User,
+    account: Account,
+    level: GrantLevel,
+    before: unknown,
+    limit: unknown,
+  ): ChatPage {
+    const size = typeof limit === "number" ? limit : 50;
+    const older = [...account.bot.chat]
+      .reverse()
+      .filter((line) => typeof before !== "number" || line.id < before);
+    const items = older.slice(0, size).map((line): ChatLine => {
+      const mine = line.sent_by?.id === user.id;
+      const { sent_by: sentBy, ...rest } = line;
+      const sent = level === "manage" && sentBy !== undefined ? { sent_by: sentBy } : {};
+      const cut =
+        level !== "manage" && (line.kind === "user" || line.kind === "mode")
+          ? line.text.match(/^(\/\S*)\s+\S/u)?.[1]
+          : undefined;
+      return cut === undefined
+        ? { ...rest, ...sent, mine }
+        : { ...rest, ...sent, text: cut, arguments_hidden: true, mine };
+    });
+    const last = items.at(-1);
+    return older.length > size && last !== undefined ? { items, next: last.id } : { items };
+  }
+
+  /** The next chat line's ID: a newer line has a greater one. */
+  #nextLine(): number {
+    this.#lines += 1;
+    return this.#lines;
+  }
+
+  /**
+   * Adds `line` to the chat of the bot of the account named `name`, as its agent would
+   * report it; returns the line with its ID, for a spec to push as the `chat` frame.
+   */
+  addChat(name: string, line: Omit<ChatLine, "id">): ChatLine {
+    const account = this.#accounts.find((one) => one.name === name);
+    if (account === undefined) {
+      throw new Error(`the fake has no account ${name}`);
+    }
+    const kept: ChatLine = { ...line, id: this.#nextLine() };
+    account.bot.chat.push(kept);
+    return kept;
   }
 
   /** Changes the bot of the account named `name`, as its agent's reports or a write would. */
@@ -1101,6 +1229,26 @@ export class FakeBackend {
         return this.#signedIn((session) =>
           this.#botWrite(session, args.id, "control", (account) =>
             this.#command(session.user, account, command),
+          ),
+        );
+      case "bot_chat":
+        return this.#signedIn((session) => {
+          const account = this.#accounts.find((one) => one.bot.id === String(args.id));
+          const level = account === undefined ? null : this.#level(session.user, account);
+          return account === undefined || level === null
+            ? api(404, "not_found")
+            : value(this.#chatPage(session.user, account, level, args.before, args.limit));
+        });
+      case "send_chat":
+        return this.#signedIn((session) =>
+          this.#botWrite(session, args.id, "control", (account, level) =>
+            this.#send(session.user, account, level, String(request.message), "chat"),
+          ),
+        );
+      case "send_command":
+        return this.#steppedUp((session) =>
+          this.#botWrite(session, args.id, "control", (account, level) =>
+            this.#send(session.user, account, level, String(request.message), "command"),
           ),
         );
       case "approve_account":

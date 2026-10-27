@@ -14,7 +14,9 @@
 //   generation) they dismissed them in; a new sign-in shows them again (Plan.md P8.7).
 // - `live`: the live events layer's (live.ts) hint for the Header while a reconnect waits or
 //   after the watch stopped (U30), and what it's asked from outside: a new watch, after a
-//   server profile save that changed nothing (P11.8, S61).
+//   server profile save that changed nothing (P11.8, S61). Also what the chat's send box
+//   reads (S70, R115): a count of the moments updates may have been missed, and whether the
+//   current watch is live.
 // - `record`: the live record (api/liveRecord.ts, S71) that the timeline and the notices
 //   show, which the live layer feeds and clears; and the bot whose screen is open (R109).
 import { createStore, type StoreApi } from "zustand/vanilla";
@@ -120,6 +122,17 @@ export interface LiveState {
   readonly restarts: number;
   /** Asks for a new watch of the current session. */
   restart(): void;
+  /**
+   * Moved whenever live updates may have been missed: a watch's start, the current watch's
+   * end and every refetch (S70, R115). A pending chat line's mark lasts while it stays.
+   */
+  readonly losses: number;
+  /** Live updates may have been missed. */
+  lost(): void;
+  /** The current watch is live: from its refetch until its disconnect or its end (R115). */
+  readonly connected: boolean;
+  /** Says whether the current watch is live; the same value again changes nothing. */
+  setConnected(connected: boolean): void;
 }
 
 /** The live record's store; see the module comment. */
@@ -240,6 +253,17 @@ export function createAppStores(): AppStores {
       restarts: 0,
       restart() {
         set({ restarts: get().restarts + 1 });
+      },
+      losses: 0,
+      lost() {
+        set({ losses: get().losses + 1 });
+      },
+      connected: false,
+      setConnected(connected) {
+        // Only a change notifies: the live layer follows this store, and sets it as it does.
+        if (get().connected !== connected) {
+          set({ connected });
+        }
       },
     })),
     record: createStore<RecordState>()((set, get) => ({

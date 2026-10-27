@@ -1,21 +1,25 @@
 // The reads that take every page at once (ADR-0020, S68, R99): a server whose pages don't
 // move on fails the read instead of looping, and a cancelled read stops between pages.
-import type { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { type QueryClient, QueryObserver } from "@tanstack/react-query";
+import { describe, expect, it, vi } from "vitest";
 
 import { createQueryClient } from "../app/queryClient";
 import { accountId } from "../test/accounts";
 import { deferred } from "../test/fixtures";
-import { modeId } from "../test/live";
+import { botId, modeId } from "../test/live";
 import type { ApiClient } from "./ApiClient";
 import { ApiError } from "./ApiError";
 import { FakeApiClient } from "./FakeApiClient";
 import {
   AWAITING_KEY,
   awaitingQuery,
+  chatOutcomesKey,
+  chatOutcomesQuery,
+  chatQuery,
   MODES_LIST_KEY,
   modesQuery,
   PAGES_DONT_MOVE_ON,
+  recordAnswer,
 } from "./queries";
 
 /** An empty page, with `next` when more come. */
@@ -136,5 +140,101 @@ describe.each(LISTS)("reading every page of $name", (list) => {
     await settle();
 
     expect(cursors(fake, list)).toEqual([undefined]);
+  });
+});
+
+describe("the chat's pages (R120)", () => {
+  it("fail an older page whose next doesn't move past the cursor it was asked with", async () => {
+    const fake = new FakeApiClient({
+      botChat: async (_id, before) => ({ items: [], next: before ?? 5 }),
+    });
+
+    const read = await createQueryClient()
+      .fetchInfiniteQuery({ ...chatQuery(fake, botId(1)), pages: 2 })
+      .catch((error: unknown) => error);
+
+    expect(didntMoveOn(read)).toBe(true);
+  });
+
+  it("read older pages whose next moves on, to their end", async () => {
+    const fake = new FakeApiClient({
+      botChat: async (_id, before) =>
+        before === undefined ? { items: [], next: 5 } : { items: [] },
+    });
+
+    const read = await createQueryClient().fetchInfiniteQuery({
+      ...chatQuery(fake, botId(1)),
+      pages: 2,
+    });
+
+    expect(read.pageParams).toEqual([undefined, 5]);
+  });
+});
+
+describe("the chat's outcomes (S70, R121)", () => {
+  const REQUEST = "01900000-0000-7000-8000-0000000004a1";
+  const ANSWER = { request_id: REQUEST, message_id: 7, outcome: "pending" } as const;
+
+  /** The outcomes of bot 1 held by a screen, as the console holds them. */
+  function held(queryClient: QueryClient) {
+    const observer = new QueryObserver(queryClient, chatOutcomesQuery(botId(1)));
+    return observer.subscribe(() => {});
+  }
+
+  it("hold nothing at first, and a send's answer links its line, pending from its start", () => {
+    const queryClient = createQueryClient();
+    const stop = held(queryClient);
+
+    const before = queryClient.getQueryData(chatOutcomesKey(botId(1)));
+    recordAnswer(queryClient, botId(1), ANSWER, 2);
+
+    expect(before).toEqual({});
+    expect(queryClient.getQueryData(chatOutcomesKey(botId(1)))).toEqual({
+      [REQUEST]: { line: 7, pendingSince: 2 },
+    });
+    stop();
+  });
+
+  it("keep their data when everything is read again, and are never fetched", async () => {
+    const queryClient = createQueryClient();
+    const stop = held(queryClient);
+    recordAnswer(queryClient, botId(1), ANSWER, 2);
+
+    await queryClient.invalidateQueries();
+
+    expect(queryClient.getQueryData(chatOutcomesKey(botId(1)))).toEqual({
+      [REQUEST]: { line: 7, pendingSince: 2 },
+    });
+    expect(queryClient.isFetching()).toBe(0);
+    stop();
+  });
+
+  it("outlive their screen past the cache's usual 5 minutes (R121)", () => {
+    vi.useFakeTimers();
+    try {
+      const queryClient = createQueryClient();
+      const stop = held(queryClient);
+      recordAnswer(queryClient, botId(1), ANSWER, 2);
+
+      stop();
+      vi.advanceTimersByTime(5 * 60_000 + 1);
+
+      expect(queryClient.getQueryData(chatOutcomesKey(botId(1)))).toEqual({
+        [REQUEST]: { line: 7, pendingSince: 2 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("build nothing for an answer after the session's end emptied the cache", () => {
+    const queryClient = createQueryClient();
+    const stop = held(queryClient);
+    queryClient.clear();
+
+    recordAnswer(queryClient, botId(1), ANSWER, 2);
+
+    expect(queryClient.getQueryData(chatOutcomesKey(botId(1)))).toBeUndefined();
+    stop();
   });
 });

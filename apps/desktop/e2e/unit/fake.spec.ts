@@ -3,10 +3,11 @@
 import { readFileSync } from "node:fs";
 
 import type { BotPage } from "@afkfleet/ui/generated/BotPage";
+import type { ChatPage } from "@afkfleet/ui/generated/ChatPage";
 import type { ModePage } from "@afkfleet/ui/generated/ModePage";
 import { expect, test } from "@playwright/test";
 
-import { COMMANDS, FakeBackend, OWNER, PASSWORD } from "../fake/backend";
+import { COMMANDS, FakeBackend, MEMBER, OWNER, PASSWORD } from "../fake/backend";
 
 /** The built-in `farm` mode, as the server seeds it. */
 const FARM = "01a14202-2800-7000-8000-000000000002";
@@ -102,6 +103,89 @@ test("lets only a manager choose a mode that sends a command off the allowlist",
 
   expect(unlisted?.name).toBe("warp");
   expect(chosen).toMatchObject({ ok: true, value: { mode_id: unlisted?.id } });
+});
+
+test("refuses a Control holder that mode, and lets them choose a listed one", async () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(OWNER) });
+  backend.addAccount(OWNER);
+  const shared = backend.bot("AfkBot1");
+  backend.handle("step_up", { request: { password: PASSWORD } });
+  const granted = await backend.handle("create_grant", {
+    id: shared.account.id,
+    request: { username: MEMBER, level: "control" },
+  });
+  backend.handle("logout", {});
+  backend.handle("login", { request: { username: MEMBER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(MEMBER) });
+  const modes = (await backend.handle("modes", {})) as { ok: true; value: ModePage };
+  const unlisted = modes.value.items.find((mode) => mode.unlisted_command);
+
+  const refused = await backend.handle("set_bot_mode", {
+    id: shared.id,
+    request: { mode_id: unlisted?.id },
+  });
+  const listed = await backend.handle("set_bot_mode", {
+    id: shared.id,
+    request: { mode_id: FARM },
+  });
+
+  expect(granted).toMatchObject({ ok: true, value: { level: "control" } });
+  expect(refused).toMatchObject({ ok: false, error: { api: { status: 403, code: "forbidden" } } });
+  expect(listed).toMatchObject({ ok: true, value: { mode_id: FARM } });
+});
+
+test("keeps each bot's chat: lines a page at a time, a line sent online, a command after a step-up", async () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(OWNER) });
+  backend.addAccount(OWNER);
+  const id = backend.bot("AfkBot1").id;
+  const said = (text: string) =>
+    backend.addChat("AfkBot1", {
+      at: "2026-10-27T12:00:00.000Z",
+      direction: "in",
+      kind: "system",
+      text,
+      truncated: false,
+      arguments_hidden: false,
+      mine: false,
+    });
+  const lines = [said("one"), said("two"), said("three")];
+
+  const first = (await backend.handle("bot_chat", { id, limit: 2 })) as {
+    ok: true;
+    value: ChatPage;
+  };
+  const rest = await backend.handle("bot_chat", { id, before: first.value.next, limit: 2 });
+  const offline = await backend.handle("send_chat", { id, request: { message: "hello" } });
+  backend.setBot("AfkBot1", { status: { kind: "reported", state: "online" } });
+  backend.chatOutcome = "pending";
+  const sent = await backend.handle("send_chat", { id, request: { message: " hello " } });
+  const pointed = await backend.handle("send_chat", { id, request: { message: "/op AfkBot2" } });
+  const asked = await backend.handle("send_command", { id, request: { message: "/op AfkBot2" } });
+  backend.handle("step_up", { request: { password: PASSWORD } });
+  const command = await backend.handle("send_command", { id, request: { message: "/op AfkBot2" } });
+
+  expect(first.value.items.map((line) => line.text)).toEqual(["three", "two"]);
+  expect(first.value.next).toBe(lines[1]?.id);
+  expect(rest).toEqual({ ok: true, value: { items: [lines[0]] } });
+  expect(offline).toMatchObject({
+    ok: false,
+    error: { api: { status: 409, code: "bot_not_online" } },
+  });
+  expect(sent).toMatchObject({ ok: true, value: { outcome: "pending" } });
+  expect(backend.lastSend?.line).toMatchObject({ kind: "user", text: "/op AfkBot2", mine: true });
+  expect(pointed).toMatchObject({
+    ok: false,
+    error: { api: { status: 403, code: "command_needs_step_up" } },
+  });
+  expect(asked).toMatchObject({
+    ok: false,
+    error: { api: { status: 403, code: "step_up_required" } },
+  });
+  expect(command).toMatchObject({ ok: true, value: { request_id: backend.lastSend?.request } });
 });
 
 test("refuses a command it doesn't know", () => {

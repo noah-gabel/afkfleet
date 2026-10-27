@@ -157,6 +157,27 @@ describe("a bot's Settings: the mode", () => {
     expect(await screen.findByText("isn't a mode you can use")).toBeDefined();
     expect(calls(app, "modes")).toBe(before + 1);
   });
+
+  it("read the bot again on a 404, which shows the screen's own 404", async () => {
+    let reads = 0;
+    const { app } = await settings(seen("control"), {
+      bot: async () => {
+        reads += 1;
+        if (reads > 1) {
+          throw refusal(404, "not_found");
+        }
+        return seen("control");
+      },
+      setBotMode: async () => {
+        throw refusal(404, "not_found");
+      },
+    });
+
+    await app.user.selectOptions(await selector(), FARM.id);
+
+    expect(await screen.findByText("This bot doesn't exist, or you can't see it.")).toBeDefined();
+    expect(reads).toBe(2);
+  });
 });
 
 describe("a bot's Settings: the server", () => {
@@ -191,6 +212,92 @@ describe("a bot's Settings: the server", () => {
       [ID, { server_address: "127.0.0.1:25565" }],
       [ID, { server_address: "127.0.0.1:25565" }],
     ]);
+  });
+
+  it("lock the address and Save while the password is asked, so what's sent is what's shown", async () => {
+    let asked = 0;
+    const { app, current } = await settings(seen("manage"), {
+      patchBot: async (_id, request) => {
+        asked += 1;
+        if (asked === 1) {
+          throw refusal(403, "step_up_required");
+        }
+        current.bot = seen("manage", request.server_address);
+        return current.bot;
+      },
+    });
+    const section = within(screen.getByRole("region", { name: "Settings" }));
+
+    await app.user.click(section.getByRole("button", { name: "Change" }));
+    const field = section.getByLabelText("Server address") as HTMLInputElement;
+    await app.user.clear(field);
+    await app.user.type(field, "127.0.0.1:25565");
+    await app.user.click(section.getByRole("button", { name: "Save" }));
+    const password = await screen.findByLabelText("Current password");
+    await app.user.type(field, "99");
+
+    expect(field.value).toBe("127.0.0.1:25565");
+    expect(section.getByRole("button", { name: "Save" })).toHaveProperty("disabled", true);
+    const shown = field.value;
+    await app.user.type(password, "a password");
+    await app.user.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(await section.findByText("127.0.0.1:25565")).toBeDefined();
+    expect(
+      app.fake.calls.filter((call) => call.method === "patchBot").map((call) => call.args),
+    ).toEqual([
+      [ID, { server_address: shown }],
+      [ID, { server_address: shown }],
+    ]);
+  });
+
+  it("lock the address while the first save is in flight, so the password sends what's shown", async () => {
+    const first = deferred<BotResponse>();
+    let asked = 0;
+    const { app, current } = await settings(seen("manage"), {
+      patchBot: async (_id, request) => {
+        asked += 1;
+        if (asked === 1) {
+          return first.promise;
+        }
+        current.bot = seen("manage", request.server_address);
+        return current.bot;
+      },
+    });
+    const section = within(screen.getByRole("region", { name: "Settings" }));
+
+    await app.user.click(section.getByRole("button", { name: "Change" }));
+    const field = section.getByLabelText("Server address") as HTMLInputElement;
+    await app.user.clear(field);
+    await app.user.type(field, "127.0.0.1:25565");
+    await app.user.click(section.getByRole("button", { name: "Save" }));
+    await app.user.type(field, "99");
+    const shown = field.value;
+    first.reject(refusal(403, "step_up_required"));
+    await app.user.type(await screen.findByLabelText("Current password"), "a password");
+    await app.user.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(shown).toBe("127.0.0.1:25565");
+    expect(await section.findByText("127.0.0.1:25565")).toBeDefined();
+    expect(
+      app.fake.calls.filter((call) => call.method === "patchBot").map((call) => call.args),
+    ).toEqual([
+      [ID, { server_address: shown }],
+      [ID, { server_address: shown }],
+    ]);
+  });
+
+  it("disable Cancel while a save is in flight", async () => {
+    const answer = deferred<BotResponse>();
+    const { app } = await settings(seen("manage"), { patchBot: () => answer.promise });
+    const section = within(screen.getByRole("region", { name: "Settings" }));
+
+    await app.user.click(section.getByRole("button", { name: "Change" }));
+    await app.user.click(section.getByRole("button", { name: "Save" }));
+
+    expect(section.getByRole("button", { name: "Cancel" })).toHaveProperty("disabled", true);
+    answer.resolve(seen("manage"));
+    expect(await section.findByRole("button", { name: "Change" })).toBeDefined();
   });
 
   it("set a server where none is, and cancel without a call", async () => {

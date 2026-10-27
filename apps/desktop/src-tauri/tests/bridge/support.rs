@@ -26,9 +26,10 @@ use fleet_client::{
 use fleet_core::account::AccountStatus;
 use fleet_core::audit::{AuditAction, AuditOutcome};
 use fleet_core::auth::NewPassword;
-use fleet_core::id::{AccountId, UserId};
+use fleet_core::chat::IncomingChat;
+use fleet_core::id::{AccountId, AgentId, BotId, UserId};
 use fleet_core::system::Clock as _;
-use fleet_core::value::Username;
+use fleet_core::value::{AgentName, Username};
 use fleet_server::app::users::UserService;
 use fleet_server::cli::serve::{Exit, ServerPorts, ShutdownTimeouts, app_with, serve};
 use fleet_server::config::{
@@ -42,7 +43,9 @@ use fleet_server::infra::msauth::ReqwestMicrosoftAuth;
 use fleet_server::infra::sqlite::{self, Database, DatabaseOptions};
 use fleet_server::infra::system::TokioPace;
 use fleet_server::ports::accounts::{AccountCredential, McAccount};
+use fleet_server::ports::agents::NewAgent;
 use fleet_server::ports::audit::NewAuditEntry;
+use fleet_server::ports::chat::{ChatEntry, NewChatMessage};
 use fleet_server::ports::passwords::Passwords;
 use fleet_server::ports::store::Store as _;
 use fleet_startup::signals::{ShutdownSignals, Signal};
@@ -282,6 +285,44 @@ impl Server {
         );
         tx.commit(entry).await.unwrap();
         id
+    }
+
+    /// `texts` in `bot`'s chat, oldest first, as system messages its agent
+    /// reported: rows no route can make without an agent, so the bot is
+    /// assigned to an agent made for it first (fleet-client's tests do the
+    /// same).
+    pub(crate) async fn said(&self, bot: BotId, texts: &[&str]) {
+        let now = self.clock.now();
+        let agent = AgentId::new_v7(now, [0x5A; 10]).unwrap();
+        let mut tx = self.db.write().await.unwrap();
+        tx.agents()
+            .insert(&NewAgent {
+                id: agent,
+                name: AgentName::try_from("agent-chat").unwrap(),
+                created_at: now,
+            })
+            .await
+            .unwrap();
+        assert!(tx.bots().assign(bot, agent).await.unwrap());
+        for text in texts {
+            let stored = tx
+                .chat()
+                .append(&NewChatMessage {
+                    bot,
+                    agent,
+                    at: now,
+                    entry: ChatEntry::Received(IncomingChat::system(text)),
+                })
+                .await
+                .unwrap();
+            assert!(stored.is_some());
+        }
+        let entry = NewAuditEntry::new(
+            now,
+            AuditAction::try_from("test.chat_setup").unwrap(),
+            AuditOutcome::Success,
+        );
+        tx.commit(entry).await.unwrap();
     }
 
     /// A bridge set up for this server, with the Owner logged in.

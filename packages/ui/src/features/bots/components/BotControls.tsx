@@ -5,13 +5,14 @@
 // One call at a time, each a direct call: nothing about it belongs in a cache. An answer is
 // never written over the cached bot, since a live frame may already be newer (R102): the bot
 // is read again, its frames held meanwhile (S60). A call its agent was sent says so until the
-// bot changes (R106). A refusal shows by the controls (U48): a 409's or a 403's message,
-// after which the bot is read again, as it is after a 404, which shows the screen's own 404.
+// bot changes or the next action, and not again when the bot comes back to that state (R106).
+// A refusal shows by the controls (U48): a 409's or a 403's message, after which the bot is
+// read again, as it is after a 404, which shows the screen's own 404.
 // A 429 counts down on the controls that spend the bot's limit, never on Stop, which the
 // limit exempts (S52, R104).
 import { useQueryClient } from "@tanstack/react-query";
 import { LoaderCircleIcon } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { toApiError } from "../../../api/ApiError";
 import { useApiClient } from "../../../api/context";
@@ -46,6 +47,11 @@ export function BotControls({ bot }: { bot: BotResponse }) {
   /** The bot's state when a call was sent to its agent. */
   const [sentAt, setSentAt] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  const shown = stateOf(bot);
+  // The bot changed since the call was sent: its note goes for good (R106).
+  useEffect(() => {
+    setSentAt((sent) => (sent === null || sent === shown ? sent : null));
+  }, [shown]);
 
   if (!botActions(bot.account.level).control) {
     return <p className="text-sm text-muted-foreground">{VIEW_ONLY}</p>;
@@ -135,7 +141,7 @@ export function BotControls({ bot }: { bot: BotResponse }) {
           </Button>
         ))}
       </div>
-      {sentAt !== null && sentAt === stateOf(bot) ? (
+      {sentAt !== null && sentAt === shown ? (
         <p role="status" className="text-sm text-muted-foreground">
           {SENT_NOTE}
         </p>
