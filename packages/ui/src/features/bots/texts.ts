@@ -2,6 +2,7 @@
 // state, its reasons and its last disconnect read as. Every value comes from an `Open<…>`,
 // so each switch has a default branch that shows a value this version doesn't know as it
 // came. A kick's message is a Minecraft server's text: shown as plain text, as it came.
+import type { Entry, Notice } from "../../api/liveRecord";
 import type { AccountRestriction } from "../../generated/AccountRestriction";
 import type { AgentStatus } from "../../generated/AgentStatus";
 import type { BotAgent } from "../../generated/BotAgent";
@@ -14,7 +15,8 @@ import type { LastDisconnect } from "../../generated/LastDisconnect";
 import type { ModeResponse } from "../../generated/ModeResponse";
 import type { SessionServerFailure } from "../../generated/SessionServerFailure";
 import type { UnplacedReason } from "../../generated/UnplacedReason";
-import { formatClock, formatDate } from "../../lib/time";
+import { formatDuration } from "../../lib/duration";
+import { formatClock, formatClockSeconds, formatDate } from "../../lib/time";
 
 /** Home's heading. */
 export const BOTS_HEADING = "Bots";
@@ -334,3 +336,87 @@ export const SETTINGS = {
   save: "Save",
   cancel: "Cancel",
 } as const;
+
+/** The timeline (U46). */
+export const TIMELINE = {
+  heading: "Timeline",
+  note: "Since you signed in, while the app is open.",
+  empty: "Nothing yet.",
+} as const;
+/** A notice's way to its bot's screen. */
+export const OPEN = "Open";
+/** A bot the app never saw, where a notice names it. */
+export const UNKNOWN_BOT = "A bot";
+
+/**
+ * A timeline entry's text, the modes named by `modeNamed` (U46, R111): a status as its badge,
+ * with why it doesn't run and a new last disconnect after it.
+ */
+export function entryText(entry: Entry, modeNamed: (id: string) => string): string {
+  switch (entry.kind) {
+    case "status": {
+      const { status } = entry;
+      const last = entry.newDisconnect ? status.last_disconnect : undefined;
+      return [
+        stateBadge({ status, desired_state: entry.desired }).text,
+        notRunningText(status),
+        restingText(status),
+        last === undefined ? null : disconnectText(last),
+      ]
+        .filter((part) => part !== null)
+        .join(" · ");
+    }
+    case "died":
+      return entry.count === 1
+        ? "Died"
+        : `Died ${entry.count}×, last at ${formatClockSeconds(entry.at)}`;
+    case "alert":
+      return `${entry.state === "failed" ? "Failed" : "Paused"}: ${stateReasonText(entry.reason)}`;
+    case "mode":
+      return `Mode: ${modeNamed(entry.from)} → ${modeNamed(entry.to)}`;
+    case "desired":
+      return entry.desired === "stopped" ? "Stop requested" : "Start requested";
+    default: {
+      const unknown: never = entry;
+      return String(unknown);
+    }
+  }
+}
+
+/** A gap's text: how long live updates were down. */
+export function gapText(downMs: number): string {
+  return `Live updates were down for ${formatDuration(downMs)}; some events may be missing.`;
+}
+
+/** A notice's toast, as the event happens. */
+export function noticeToast(notice: Notice): string {
+  return notice.kind === "died" ? `${nameOf(notice)} died.` : noticeLine(notice);
+}
+
+/** A notice's line on Home, until it's dismissed or its bot's screen opened. */
+export function noticeLine(notice: Notice): string {
+  const name = nameOf(notice);
+  switch (notice.kind) {
+    case "died":
+      return notice.count === 1
+        ? `${name} died at ${formatClock(notice.at)}.`
+        : `${name} died ${notice.count} times, last at ${formatClock(notice.at)}.`;
+    case "paused":
+      return `${name} was paused: ${stateReasonText(notice.reason)}.`;
+    case "failed":
+      return `${name} failed: ${stateReasonText(notice.reason)}.`;
+    case "blocked":
+      return `${name} can't connect: its agent refuses this server's address.`;
+    case "respawn":
+      return `${name} couldn't respawn and left the server. It reconnects by itself.`;
+    default: {
+      const unknown: never = notice;
+      return String(unknown);
+    }
+  }
+}
+
+/** The bot a notice names, or "A bot" for one never seen. */
+function nameOf(notice: Notice): string {
+  return notice.name ?? UNKNOWN_BOT;
+}

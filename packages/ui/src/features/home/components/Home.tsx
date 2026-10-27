@@ -4,6 +4,7 @@
 import { useMe } from "../../../api/queries";
 import { WaitingAlert } from "../../accounts/components/WaitingAlert";
 import { BotGrid } from "../../bots/components/BotGrid";
+import { BotNotices } from "../../bots/components/BotNotices";
 import { SecurityWarnings } from "../../profile/components/SecurityWarnings";
 
 /** The first signed-in screen. */
@@ -15,6 +16,7 @@ export function Home() {
         <div className="flex flex-col gap-2 empty:hidden">
           <SecurityWarnings user={user} place="home" />
           <WaitingAlert />
+          <BotNotices />
         </div>
       )}
       <BotGrid />

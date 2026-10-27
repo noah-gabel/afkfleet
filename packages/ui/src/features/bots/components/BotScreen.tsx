@@ -3,11 +3,12 @@
 // A read that answers 404 says the bot doesn't exist or can't be seen, also when it goes
 // while its screen is open (a `bot_removed` resets its query, which reads it again, R98).
 import { Link } from "@tanstack/react-router";
-import { useId } from "react";
+import { useEffect, useId } from "react";
 
 import { toApiError } from "../../../api/ApiError";
 import { describeError } from "../../../api/describeError";
 import { useBot, useModes } from "../../../api/queries";
+import { useRecord } from "../../../app/context";
 import { Button } from "../../../components/ui/button";
 import { useNow } from "../../../hooks/useNow";
 import { botFacts, modesOf, uptimeNextChange } from "../facts";
@@ -16,10 +17,19 @@ import { agentLastSeen, BACK_HOME, BOT_NOT_FOUND } from "../texts";
 import { BotControls } from "./BotControls";
 import { Facts, StateBadge } from "./BotParts";
 import { BotSettings } from "./BotSettings";
+import { BotTimeline } from "./BotTimeline";
 
 /** Bot `id`. */
 export function BotScreen({ id }: { id: string }) {
   const bot = useBot(id);
+  const setOpen = useRecord((state) => state.setOpen);
+  // Its notices are acknowledged while it's open (U42, R109).
+  useEffect(() => {
+    setOpen(id);
+    return () => {
+      setOpen(null);
+    };
+  }, [id, setOpen]);
   const modes = useModes();
   const nameId = useId();
   const data = bot.data;
@@ -60,6 +70,7 @@ export function BotScreen({ id }: { id: string }) {
         )}
         <BotControls bot={data} />
         <BotSettings bot={data} />
+        <BotTimeline id={data.id} />
         <BackLink />
       </section>
     </main>

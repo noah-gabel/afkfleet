@@ -265,7 +265,8 @@ export function createAppStores(): AppStores {
         set({ open: botId, record: botId === null ? record : acknowledge(record, botId) });
       },
       clear() {
-        set({ record: emptyRecord() });
+        // The IDs go on growing, so the toaster never takes a new notice for one it showed.
+        set({ record: { ...emptyRecord(), sequence: get().record.sequence } });
       },
     })),
   };

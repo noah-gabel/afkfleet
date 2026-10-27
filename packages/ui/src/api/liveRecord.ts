@@ -82,16 +82,22 @@ export interface Gap {
 /** What a notice is about. */
 export type NoticeKind = "died" | "paused" | "failed" | "blocked" | "respawn";
 
-/** A notice: Home's line, and, as it came, a toast. `name` is null for a bot never seen. */
-export interface Notice {
+/** What every notice has. `name` is null for a bot never seen. */
+interface NoticeOf {
   readonly id: number;
   readonly botId: string;
   readonly name: string | null;
-  readonly kind: NoticeKind;
   readonly count: number;
   readonly at: string;
-  readonly reason?: BotStateReason;
 }
+
+/** What a notice is about: a paused or failed one with its reason. */
+type NoticeAbout =
+  | { readonly kind: Exclude<NoticeKind, "paused" | "failed"> }
+  | { readonly kind: "paused" | "failed"; readonly reason: BotStateReason };
+
+/** A notice: Home's line, and, as it came, a toast. */
+export type Notice = NoticeOf & NoticeAbout;
 
 /** One bot's part of the record. */
 export interface BotRecord {
@@ -363,7 +369,7 @@ function alerted(
  */
 function noticed(
   record: LiveRecord,
-  what: Omit<Notice, "id" | "count">,
+  what: Omit<NoticeOf, "id" | "count"> & NoticeAbout,
   open: string | null,
 ): LiveRecord {
   const sequence = record.sequence + 1;

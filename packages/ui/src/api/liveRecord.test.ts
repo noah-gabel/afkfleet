@@ -224,7 +224,9 @@ describe("the live record's notices (S71, U42)", () => {
 
     const record = observed([alert("paused"), alert("failed")]);
 
-    expect(record.notices.map((notice) => [notice.kind, notice.reason])).toEqual([
+    expect(
+      record.notices.map((notice) => [notice.kind, "reason" in notice ? notice.reason : null]),
+    ).toEqual([
       ["paused", "banned"],
       ["failed", "banned"],
     ]);

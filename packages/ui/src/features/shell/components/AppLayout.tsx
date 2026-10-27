@@ -2,6 +2,7 @@
 // the left, the screen beside it.
 import { Outlet } from "@tanstack/react-router";
 
+import { LiveNotices } from "../../bots/components/LiveNotices";
 import { Header } from "./Header";
 import { Nav } from "./Nav";
 
@@ -9,6 +10,7 @@ import { Nav } from "./Nav";
 export function AppLayout() {
   return (
     <div className="flex flex-1 flex-col">
+      <LiveNotices />
       <Header />
       <div className="flex flex-1">
         <Nav />
