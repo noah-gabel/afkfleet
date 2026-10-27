@@ -1254,6 +1254,37 @@ The points the user named after PR #75's merge, fixed in the first commit of gro
 7. **g:** R101 with its test (red against a no-op `end_now`); `LiveStop::stop`'s doc says an end decided before stands, so it can answer `NoSession`; `Backoff::action` and `after` are private, `next` their one caller; R89's revert writes data only, whatever the status, and its test checks the stale mark is kept (red: `setQueryData` cleared it); R98's test reads through a `QueryObserver` and sees the 404 (mutation MR1, `reset` back to `remove`); the unused `remove` patch kind went; a `bot_removed` resets the cached bot's account query too, found through the bot's own query or the list (red: the account's data stayed).
 8. **h. PR #75's hands-on, corrected:** it said a stop shows a Last disconnect. It doesn't: only a session that ended on its own (a kick, a failed connect, a crash, a timeout) records one (ADR-0013, `BotActor::ended`), and a stop the user asked for isn't one. While the agent reports the bot, an earlier session's end still shows; once stopped, the bot reads unplaced, which carries none. PR #75's description stays as merged; H2's hands-on checks it.
 
+### Group H2's planning
+H2 builds on H's planning above; nothing there was asked again. The user approved the plan with three changes: no edit of a merged PR's description (the section above records PR #75's corrected step), the paging error's text (R99's), and a hands-on line saying the per-bot limit's countdown is the limit working.
+
+*Decided by a review agent (approved by the user at the plan review):*
+- **S73 (not security). The app knows a lifecycle call's 202.** fleet-client's `restart_bot`, `reset_bot` and `resume_bot` answer the bot with the call's effect, read from the HTTP status: 202 `Sent`, 200 `Cleared` (restart only ever answers 202). The three desktop commands answer `fleet_api_types::app::BotCommandResponse { bot, effect }`, its `BotCommandEffect` the closed `sent | cleared`, exported by `just gen`; the controls show "Sent. The state changes when its agent reports back." only for `sent`. It amends ADR-0019's S56 and R34 for these three methods; the HTTP API and S50 don't change, and U32 holds (one fleet-client method per command). *Rejected:* inferring the status from the answered bot (S50's table copied into the UI, and wrong in a race: a clear's `Change::Store` can place the bot before the handler reads it back); the note after every success (a 200 clear involves no agent); a server field (S50 changed for a fact the status carries).
+
+*Reconciliations (mine), beside R99–R101 above:*
+- **R102. A write's answer isn't written over the cache.** A `bot` frame may already be newer than the HTTP answer (a restart's frames can pass its 202), so after a success the bot is read again, its frames held meanwhile (S60).
+- **R103. `controlsFor` beyond R94:** Stopping, or a reported Stopped while wanted Running, offers Stop; wanted Stopped with a sticky state, Resume or Reset alone (Stop would change nothing); an unknown desired state, Start.
+- **R104. A 429's countdown disables the controls that spend the per-bot limit** (Start, Restart, Resume, Reset); Stop stays enabled, since S52 exempts it. A mode switch's 429 disables the selector, the server's its Save.
+- **R105. Each value shows once on the screen** (U35's "nothing shown twice"): Mode and Server sit in Settings where the viewer can change them, otherwise among the facts. Control: the mode in Settings, the address among the facts; Manage: both in Settings; View: both among the facts (the address only when sent). The cards don't change.
+- **R106. The "Sent…" note** stays until the bot changes or the next action.
+- **R107. A gap** runs from when the watch was known down (its `disconnected` update, or its end) to the refetch; a `resync` or an unreadable frame has no down time, so it counts 0 s, which U46 hides like the routine reconnect.
+- **R108. First sight.** A `bot` frame for a bot with no known status records its status as an entry; a fill-in from a read never records one.
+- **R109. A notice for the bot whose screen is open** is acknowledged at once: its toast still shows, its Home line doesn't stay.
+- **R110. Toasts come from a shell component** (`LiveNotices`) reading the record's store, never from the live layer; "Open" goes to the bot's screen, and Home's line uses NoticeLine's "Dismiss".
+- **R111. A status entry whose last disconnect changed** shows it after the state.
+
+*The texts* (approved at the plan review, beside the table above):
+
+| Where | Text |
+|---|---|
+| A bot both unplaced and resting | two facts, the not-running one first: "Not running", then "Paused" or "Failed"; one reason alone stays "Reason" |
+| Timeline, a status whose last disconnect changed (R111) | "{badge} · {last disconnect}", e.g. "Reconnecting · Kicked: Testing" |
+| Timeline, a status with both reasons | "{badge} · {not running} · {resting reason}" |
+| A notice for a bot whose name isn't known yet | "A bot" in place of {name} |
+| A read whose pages don't move on (R99) | "The server sent a list this app doesn't understand." |
+| The user's texts from PR #75's review | "You can view this bot but not control it." (U38); "Couldn't load the mode"; "Its agent was last seen at {clock}." / "Its agent was last seen on {date} at {clock}." |
+
+The server-address field's own checks use the server's 422 wording ("must not be empty", "must be at most 259 characters, with a host of at most 253").
+
 ### Notes for later groups
 - **B2 (P11.3's history):** built (above).
 - **C (P11.4):** decided at C's planning (above), built in C1, C2 and C3.
