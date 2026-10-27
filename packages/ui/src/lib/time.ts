@@ -30,3 +30,14 @@ export function formatDate(iso: string): string {
 export function formatClockSeconds(iso: string): string {
   return CLOCK_SECONDS.format(new Date(iso));
 }
+
+/** Whether `iso` falls on the day `now` (ms since the epoch) does, in the user's time zone. */
+export function sameDay(iso: string, now: number): boolean {
+  const at = new Date(iso);
+  const today = new Date(now);
+  return (
+    at.getFullYear() === today.getFullYear() &&
+    at.getMonth() === today.getMonth() &&
+    at.getDate() === today.getDate()
+  );
+}

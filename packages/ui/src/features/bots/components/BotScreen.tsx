@@ -15,6 +15,7 @@ import { useNow } from "../../../hooks/useNow";
 import { botFacts, modesOf, uptimeNextChange } from "../facts";
 import { botActions } from "../permissions";
 import { agentLastSeen, BACK_HOME, BOT_NOT_FOUND } from "../texts";
+import { BotChat } from "./BotChat";
 import { BotControls } from "./BotControls";
 import { Facts, StateBadge } from "./BotParts";
 import { BotSettings } from "./BotSettings";
@@ -74,6 +75,7 @@ export function BotScreen({ id }: { id: string }) {
         <BotTimeline id={data.id} />
         <BackLink />
       </section>
+      <BotChat bot={data} />
     </main>
   );
 }

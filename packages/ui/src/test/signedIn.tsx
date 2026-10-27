@@ -30,6 +30,7 @@ export async function signedIn(handlers: Partial<ApiClient> = {}, options: Signe
       me: async () => user,
       bots: async () => ({ items: [] }),
       modes: async () => ({ items: [] }),
+      botChat: async () => ({ items: [] }),
       ...handlers,
     },
     {
