@@ -54,6 +54,20 @@ describe("check", () => {
     );
   });
 
+  it("names a shipped file that holds the e2e build's live events hook", () => {
+    withBundles(
+      {
+        desktop: { "assets/app.js": 'window["__afkfleetE2ePush"]=p' },
+        e2e: E2E,
+      },
+      (at) => {
+        assert.deepEqual(check({ shipped: [at("desktop")], e2e: at("e2e") }), [
+          `${at("desktop")}/assets/app.js holds "__afkfleetE2ePush": the e2e build reached a shipped bundle`,
+        ]);
+      },
+    );
+  });
+
   it("fails an e2e bundle without the marker: the search would prove nothing", () => {
     withBundles({ desktop: CLEAN, e2e: CLEAN }, (at) => {
       assert.deepEqual(check({ shipped: [at("desktop")], e2e: at("e2e") }), [

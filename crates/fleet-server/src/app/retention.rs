@@ -114,6 +114,16 @@ pub enum Phase {
 }
 
 impl Phase {
+    /// Every phase, in the order a run takes them.
+    pub const ORDER: [Self; 6] = [
+        Self::Sessions,
+        Self::ChatByAge,
+        Self::ChatBySize,
+        Self::Audit,
+        Self::Invites,
+        Self::EnrollmentTokens,
+    ];
+
     /// The phase's name in a log line.
     #[must_use]
     pub const fn name(self) -> &'static str {
@@ -417,15 +427,7 @@ impl RetentionService {
             failed: Vec::new(),
             stopped: false,
         };
-        let phases = [
-            Phase::Sessions,
-            Phase::ChatByAge,
-            Phase::ChatBySize,
-            Phase::Audit,
-            Phase::Invites,
-            Phase::EnrollmentTokens,
-        ];
-        for phase in phases {
+        for phase in Phase::ORDER {
             if stop.is_cancelled() {
                 run.stopped = true;
                 break;

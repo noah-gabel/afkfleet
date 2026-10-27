@@ -5,6 +5,8 @@
 import type { AccountPage } from "../generated/AccountPage";
 import type { AccountResponse } from "../generated/AccountResponse";
 import type { ApiErrorDetails } from "../generated/ApiErrorDetails";
+import type { BotPage } from "../generated/BotPage";
+import type { BotResponse } from "../generated/BotResponse";
 import type { ChangeGrantRequest } from "../generated/ChangeGrantRequest";
 import type { CommandErrorCode } from "../generated/CommandErrorCode";
 import type { CreatedInviteResponse } from "../generated/CreatedInviteResponse";
@@ -25,6 +27,7 @@ import type { LogoutResponse } from "../generated/LogoutResponse";
 import type { MeResponse } from "../generated/MeResponse";
 import type { MfaConfirmResponse } from "../generated/MfaConfirmResponse";
 import type { MfaEnrollResponse } from "../generated/MfaEnrollResponse";
+import type { ModePage } from "../generated/ModePage";
 import type { PasswordChangeRequest } from "../generated/PasswordChangeRequest";
 import type { RegisterRequest } from "../generated/RegisterRequest";
 import type { RegisterResponse } from "../generated/RegisterResponse";
@@ -167,6 +170,18 @@ export class FakeApiClient implements ApiClient {
 
   async accountsAwaitingApproval(before?: string, limit?: number): Promise<AccountPage> {
     return this.#handler("accountsAwaitingApproval", [before, limit])(before, limit);
+  }
+
+  async bots(before?: string, limit?: number): Promise<BotPage> {
+    return this.#handler("bots", [before, limit])(before, limit);
+  }
+
+  async bot(id: string): Promise<BotResponse> {
+    return this.#handler("bot", [id])(id);
+  }
+
+  async modes(before?: string, limit?: number): Promise<ModePage> {
+    return this.#handler("modes", [before, limit])(before, limit);
   }
 
   async account(id: string): Promise<AccountResponse> {

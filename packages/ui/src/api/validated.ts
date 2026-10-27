@@ -90,6 +90,15 @@ export function validated(client: ApiClient): ApiClient {
     openVerificationLink: () => client.openVerificationLink(),
     // No input: the callback is the UI's own.
     watchEvents: (onUpdate) => client.watchEvents(onUpdate),
+    bots: async (before, limit) => {
+      checkPage(before, limit);
+      return client.bots(before, limit);
+    },
+    bot: async (id) => client.bot(check(schemas.id, id, "id")),
+    modes: async (before, limit) => {
+      checkPage(before, limit);
+      return client.modes(before, limit);
+    },
   };
 }
 

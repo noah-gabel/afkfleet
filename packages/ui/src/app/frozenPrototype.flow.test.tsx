@@ -5,6 +5,7 @@
 // Vitest runs each test file in its own worker, so the freeze stays in this file; the app's
 // modules are imported only after it.
 import { describe, expect, it } from "vitest";
+import { onHome } from "../test/signedIn";
 
 Object.freeze(Object.prototype);
 
@@ -54,7 +55,7 @@ describe("with a frozen Object.prototype", () => {
     await app.user.click(screen.getByRole("button", { name: "Continue" }));
     await app.user.type(await screen.findByLabelText("Code"), "111222");
     await app.user.click(screen.getByRole("button", { name: "Verify" }));
-    await screen.findByText(/Signed in as afkbot1/);
+    await onHome("afkbot1");
     await app.user.click(screen.getByRole("button", { name: "Log out" }));
 
     await waitFor(() => expect(app.path()).toBe("/login"));

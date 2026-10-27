@@ -86,6 +86,9 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         commands::grants::revoke_grant,
         commands::links::open_verification_link,
         commands::live::watch_events,
+        commands::bots::bots,
+        commands::bots::bot,
+        commands::bots::modes,
     ])
 }
 

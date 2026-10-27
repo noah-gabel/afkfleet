@@ -6,7 +6,7 @@ import { PAGE_MAX } from "../../api/limits";
 import type { AccountResponse } from "../../generated/AccountResponse";
 import { account, accountId, BOB_ID } from "../../test/accounts";
 import { me } from "../../test/fixtures";
-import { signedIn } from "../../test/signedIn";
+import { onHome, signedIn } from "../../test/signedIn";
 import { refusal } from "../../test/signIn";
 
 /** Bob's pending link `n`. */
@@ -61,7 +61,7 @@ describe("the links waiting for approval", () => {
   it("are never read for a Member, who sees neither", async () => {
     const app = await home([pending(1)], me());
 
-    await screen.findByText(/Signed in as/);
+    await onHome();
     expect(reads(app)).toBe(0);
     expect(screen.queryByText(/waiting for your approval/)).toBeNull();
   });
@@ -127,9 +127,10 @@ describe("the links waiting for approval", () => {
     expect(reads(app)).toBe(before + 1);
   });
 
-  it("leave Home's placeholder to the bots", async () => {
+  it("leave Home to the bots: no placeholder", async () => {
     await home([]);
 
-    expect(await screen.findByText("Bots arrive in a later version.")).toBeDefined();
+    expect(await screen.findByRole("heading", { name: "Bots" })).toBeDefined();
+    expect(screen.queryByText("Bots arrive in a later version.")).toBeNull();
   });
 });

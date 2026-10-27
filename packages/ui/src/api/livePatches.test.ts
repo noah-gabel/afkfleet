@@ -5,7 +5,14 @@ import type { AccountResponse } from "../generated/AccountResponse";
 import type { EventMessage } from "../generated/EventMessage";
 import { account, accountId } from "../test/accounts";
 import { bot, botId, line, mode, modeId, pages } from "../test/live";
-import { type LivePatch, patchesFor, READ_AGAIN } from "./livePatches";
+import {
+  entryPatch,
+  type LivePatch,
+  pagesPatch,
+  patchesFor,
+  placed,
+  READ_AGAIN,
+} from "./livePatches";
 import {
   ACCOUNT_LIST_KEY,
   ACCOUNTS_KEY,
@@ -143,14 +150,15 @@ describe("the waiting list from a bot frame (S65)", () => {
 });
 
 describe("the other events", () => {
-  it("bot_removed takes the bot off the list, drops it, resets its chat and reads every account again", () => {
+  it("bot_removed takes the bot off the list, resets it and its chat and reads every account again", () => {
     const removed: EventMessage = { type: "bot_removed", bot_id: botId(3) };
     const cached = pages({ items: [bot(5), bot(3)] });
 
     expect(itemsOf(patched(removed, BOTS_LIST_KEY, cached))).toEqual([bot(5)]);
+    // Reset, not removed: an open screen reads the bot again, and shows its 404 (R98).
     expect(patchesFor(removed)).toEqual(
       expect.arrayContaining([
-        { kind: "remove", queryKey: botKey(botId(3)) },
+        { kind: "reset", queryKey: botKey(botId(3)) },
         { kind: "reset", queryKey: chatKey(botId(3)) },
         { kind: "invalidate", queryKey: ACCOUNTS_KEY },
       ]),
@@ -202,5 +210,18 @@ describe("the other events", () => {
     expect(patchesFor({ type: "bot" })).toEqual([]);
     expect(patchesFor({ type: "chat", bot_id: botId(1) })).toEqual([]);
     expect(patchesFor({ type: "mode" })).toEqual([]);
+  });
+});
+
+describe("the bindings H adds (R90)", () => {
+  it("bind each key to its own shape, so a wrong one doesn't compile", () => {
+    // @ts-expect-error: the bots' pages hold bots, never modes.
+    const wrongItem = pagesPatch(BOTS_LIST_KEY, (data) => placed(data, mode(1)));
+    // @ts-expect-error: one bot's entry is a bot, never a mode.
+    const wrongEntry = entryPatch(botKey(botId(1)), mode(1));
+    // @ts-expect-error: the modes' pages hold modes, never chat lines.
+    const wrongPages = pagesPatch(MODES_LIST_KEY, (data) => placed(data, line(1)));
+
+    expect([wrongItem.kind, wrongEntry.kind, wrongPages.kind]).toEqual(["set", "set", "set"]);
   });
 });

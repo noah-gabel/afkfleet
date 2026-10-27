@@ -5,7 +5,7 @@ import type { ApiClient } from "../../api/ApiClient";
 import { deferred } from "../../test/fixtures";
 import { fakeTime } from "../../test/renderApp";
 import { expectWait, limited } from "../../test/retryWait";
-import { atScreen, type SignedInOptions } from "../../test/signedIn";
+import { atScreen, onHome, type SignedInOptions } from "../../test/signedIn";
 import { cacheText, PASSWORD, refusal } from "../../test/signIn";
 import { PASSWORD_CHANGED } from "./components/ProfileFlow";
 import { STEP_ENDED } from "./profileFlowReducer";
@@ -231,7 +231,7 @@ describe("changing the password", () => {
     await act(() => app.runtime.router.navigate({ to: "/home" }));
     await act(async () => answer.resolve());
 
-    await screen.findByText(/Signed in as afkbot1/);
+    await onHome("afkbot1");
     expect(app.path()).toBe("/home");
     expect(screen.queryByLabelText("New password")).toBeNull();
   });

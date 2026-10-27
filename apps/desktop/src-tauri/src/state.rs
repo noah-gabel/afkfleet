@@ -38,7 +38,7 @@ use tauri::async_runtime::RwLock;
 
 use crate::error;
 use crate::keychain::StoreFactory;
-use crate::live::LiveSlot;
+use crate::live::{Exclusive, LiveSlot};
 use crate::profile::{self, Loaded, ServerProfile};
 
 /// Opens a checked link to Microsoft's sign-in page in the default browser.
@@ -192,13 +192,14 @@ impl<F: StoreFactory> AppState<F> {
         client.health_live().await.map_err(error::client)?;
 
         // The live events watch stops once the new server answered, before the
-        // exclusive guard, and every watch that starts meanwhile starts
-        // stopped: none holds its read guard across the switch (S61, R82).
+        // exclusive guard, and a watch that registers meanwhile, its read
+        // taken before this writer asked for the guard, starts stopped: none
+        // holds its read guard across the switch (S61, R82). `Exclusive` ends
+        // the switch before the guard is released, so a watch whose read was
+        // queued behind this writer registers after the switch and runs on the
+        // new connection.
         let switching = self.begin_switch();
-        let mut conn = self.conn.write().await;
-        // Declared after the write guard, so the switch ends before it's
-        // released and a watch the answer starts isn't refused.
-        let _switching = switching;
+        let mut conn = Exclusive::new(switching, self.conn.write().await);
         if let Conn::Set(current) = &*conn
             && current.profile.same_as(&profile)
         {

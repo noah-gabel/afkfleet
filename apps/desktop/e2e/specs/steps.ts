@@ -1,5 +1,8 @@
 // What the e2e specs do on a page, as a user does it (Plan.md P8.9).
+import type { LiveUpdateMessage } from "@afkfleet/ui/generated/LiveUpdateMessage";
 import type { Page } from "@playwright/test";
+
+import { PUSH_HOOK } from "../app/push";
 import { type FakeBackend, PASSWORD } from "../fake/backend";
 import { expect } from "../fixtures";
 
@@ -45,6 +48,26 @@ export async function setUp2fa(page: Page, backend: FakeBackend, username: strin
   await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByText(/Wait until your authenticator app shows a new code/)).toBeVisible();
   await enterCode(page, backend.code(username));
-  await expect(page.getByText(`Signed in as ${username}`, { exact: false })).toBeVisible();
+  await expectHome(page, username);
   return copied;
+}
+
+/** Pushes `update` into the page's live events, as the app's Rust side sends one (push.ts). */
+export async function push(page: Page, update: LiveUpdateMessage): Promise<void> {
+  await page.evaluate(
+    ([hook, sent]) => {
+      (window as unknown as Record<string, (update: unknown) => void>)[hook]?.(sent);
+    },
+    [PUSH_HOOK, update] as const,
+  );
+}
+
+/** Home, for `username`: the bots' heading, and the Header's user, with `role` when given. */
+export async function expectHome(page: Page, username: string, role?: string): Promise<void> {
+  await expect(page.getByRole("heading", { name: "Bots" })).toBeVisible();
+  const banner = page.getByRole("banner");
+  await expect(banner.getByText(username, { exact: true })).toBeVisible();
+  if (role !== undefined) {
+    await expect(banner.getByText(role, { exact: true })).toBeVisible();
+  }
 }

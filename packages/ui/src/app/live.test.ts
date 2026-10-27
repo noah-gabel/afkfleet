@@ -9,6 +9,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ApiClient } from "../api/ApiClient";
 import type { ApiError } from "../api/ApiError";
 import { FakeApiClient, fakeApiError, fakeWatch } from "../api/FakeApiClient";
+import { PAGE_MAX } from "../api/limits";
 import {
   ACCOUNT_LIST_KEY,
   AWAITING_KEY,
@@ -17,17 +18,38 @@ import {
   accountsQuery,
   awaitingQuery,
   BOTS_LIST_KEY,
+  botKey,
+  botQuery,
+  botsQuery,
+  chatKey,
   grantsKey,
+  MODES_LIST_KEY,
+  modesQuery,
 } from "../api/queries";
 import type { AccountPage } from "../generated/AccountPage";
 import type { AccountResponse } from "../generated/AccountResponse";
+import type { BotPage } from "../generated/BotPage";
 import type { LiveUpdateMessage } from "../generated/LiveUpdateMessage";
 import { account, accountId } from "../test/accounts";
 import { deferred } from "../test/fixtures";
-import { accountFrame, bot, botFrame, disconnected, pages, refetch } from "../test/live";
+import {
+  accountFrame,
+  bot,
+  botFrame,
+  botId,
+  disconnected,
+  event,
+  line,
+  mode,
+  modeId,
+  notOpened,
+  pages,
+  refetch,
+} from "../test/live";
 import { createLiveLayer, HOLD_MAX } from "./live";
 import { createQueryClient } from "./queryClient";
 import { createAppStores } from "./stores";
+import { watched } from "./watched";
 
 /** What a test attached or subscribed, undone after it. */
 const undo: (() => void)[] = [];
@@ -74,6 +96,11 @@ function shown(client: ReturnType<typeof createQueryClient>, options: unknown) {
   return observer;
 }
 
+/** The args of every call `fake` got of `method`. */
+function argsOf(fake: FakeApiClient, method: keyof ApiClient): (readonly unknown[])[] {
+  return fake.calls.filter((call) => call.method === method).map((call) => call.args);
+}
+
 /** How many times `fake` was asked `method`. */
 function asked(fake: FakeApiClient, method: keyof ApiClient): number {
   return fake.calls.filter((call) => call.method === method).length;
@@ -90,6 +117,19 @@ async function settle(): Promise<void> {
 /** The accounts of every page `data` holds. */
 function listed(data: unknown): AccountResponse[] {
   return (data as InfiniteData<AccountPage> | undefined)?.pages.flatMap((page) => page.items) ?? [];
+}
+
+/** An `account` handler whose reads each wait for the test, in the order they were asked. */
+function reads() {
+  const answers: ReturnType<typeof deferred<AccountResponse>>[] = [];
+  return {
+    answers,
+    account: () => {
+      const answer = deferred<AccountResponse>();
+      answers.push(answer);
+      return answer.promise;
+    },
+  };
 }
 
 describe("the cache", () => {
@@ -307,9 +347,9 @@ describe("a failed fetch (S63)", () => {
     expect(asked(fake, "accountsAwaitingApproval")).toBe(1);
   });
 
-  it("drops a removed query's hold", async () => {
-    const answer = deferred<AccountResponse>();
-    const { watch, fake, queryClient } = setup({ account: () => answer.promise });
+  it("drops a removed query's hold: the next query under its key replays nothing", async () => {
+    const { answers, account: read } = reads();
+    const { watch, fake, queryClient } = setup({ account: read });
     queryClient.setQueryData(accountKey(accountId(3)), account(3));
 
     const refetching = queryClient
@@ -317,8 +357,11 @@ describe("a failed fetch (S63)", () => {
       .catch(() => undefined);
     watch.latest().push(accountFrame(3, { name: "Held" }));
     queryClient.clear();
-    queryClient.setQueryData(accountKey(accountId(3)), account(3, { name: "New session" }));
-    answer.resolve(account(3));
+    const fresh = queryClient.fetchQuery(accountQuery(fake, accountId(3)));
+    answers[1]?.resolve(account(3, { name: "New session" }));
+    await fresh;
+    await settle();
+    answers[0]?.resolve(account(3));
     await refetching;
     await settle();
 
@@ -544,6 +587,368 @@ describe("the Header's hint (U30)", () => {
     layer.recovered();
 
     expect(stopped).toMatchObject({ kind: "stopped", error: { code: "certificate" } });
+    expect(stores.live.getState().hint).toEqual({ kind: "none" });
+  });
+});
+
+describe("the bots' and modes' queries", () => {
+  /** The bots every page of `data` holds. */
+  function bots(data: unknown) {
+    return (data as InfiniteData<BotPage> | undefined)?.pages.flatMap((page) => page.items) ?? [];
+  }
+
+  it("read the bots a page at a time, and a bot frame reaches their pages", async () => {
+    const { watch, fake, queryClient } = setup({
+      bots: async (before) =>
+        before === undefined ? { items: [bot(3), bot(1)], next: botId(1) } : { items: [] },
+    });
+
+    await queryClient.fetchInfiniteQuery(botsQuery(fake));
+    watch.latest().push(botFrame(bot(2)));
+    watch.latest().push(botFrame(bot(3, { desired_state: "running" })));
+
+    expect(argsOf(fake, "bots")).toEqual([[undefined, undefined]]);
+    expect(bots(queryClient.getQueryData(BOTS_LIST_KEY))).toEqual([
+      bot(3, { desired_state: "running" }),
+      bot(2),
+      bot(1),
+    ]);
+  });
+
+  it("read one bot, which follows its frames until it's removed, which drops its data (R98)", async () => {
+    const { watch, fake, queryClient } = setup({ bot: async () => bot(1) });
+
+    await queryClient.fetchQuery(botQuery(fake, botId(1)));
+    watch.latest().push(botFrame(bot(1, { desired_state: "running" })));
+    const followed = queryClient.getQueryData(botKey(botId(1)));
+    watch.latest().push(event({ type: "bot_removed", bot_id: botId(1) }));
+
+    expect(argsOf(fake, "bot")).toEqual([[botId(1)]]);
+    expect(followed).toEqual(bot(1, { desired_state: "running" }));
+    expect(queryClient.getQueryData(botKey(botId(1)))).toBeUndefined();
+  });
+
+  it("read every page of the modes as one list's pages, which a mode frame reaches", async () => {
+    const { watch, fake, queryClient } = setup({
+      modes: async (before) =>
+        before === undefined
+          ? { items: [mode(5), mode(4)], next: modeId(4) }
+          : { items: [mode(2)] },
+    });
+
+    await queryClient.fetchQuery(modesQuery(fake));
+    watch.latest().push(event({ type: "mode", mode_id: modeId(3), mode: mode(3) }));
+
+    expect(argsOf(fake, "modes")).toEqual([
+      [undefined, PAGE_MAX],
+      [modeId(4), PAGE_MAX],
+    ]);
+    expect(queryClient.getQueryData(MODES_LIST_KEY)?.pages.flatMap((page) => page.items)).toEqual([
+      mode(5),
+      mode(4),
+      mode(3),
+      mode(2),
+    ]);
+  });
+
+  it("fail the modes' read when one of its pages fails", async () => {
+    const { fake, queryClient } = setup({
+      modes: async (before) => {
+        if (before === undefined) {
+          return { items: [mode(5)], next: modeId(5) };
+        }
+        throw fakeApiError("unreachable");
+      },
+    });
+
+    const read = await queryClient.fetchQuery(modesQuery(fake)).catch((error: unknown) => error);
+
+    expect((read as ApiError).error.code).toBe("unreachable");
+    expect(queryClient.getQueryData(MODES_LIST_KEY)).toBeUndefined();
+  });
+});
+
+describe("a first load (R87)", () => {
+  it("is read once more when a refetch lands during it", async () => {
+    const { answers, account: read } = reads();
+    const { watch, fake, queryClient } = setup({ account: read });
+    shown(queryClient, accountQuery(fake, accountId(3)));
+    await settle();
+
+    watch.latest().push(refetch("ready"));
+    answers[0]?.resolve(account(3, { name: "Read before the refetch" }));
+    await settle();
+    answers[1]?.resolve(account(3, { name: "Read after it" }));
+    await settle();
+
+    expect(asked(fake, "account")).toBe(2);
+    expect(queryClient.getQueryData(accountKey(accountId(3)))).toEqual(
+      account(3, { name: "Read after it" }),
+    );
+  });
+
+  it("is read once more when an invalidation lands during it", async () => {
+    const { answers, account: read } = reads();
+    const { watch, fake, queryClient } = setup({ account: read });
+    shown(queryClient, accountQuery(fake, accountId(3)));
+    await settle();
+
+    watch.latest().push(event({ type: "bot_removed", bot_id: botId(9) }));
+    answers[0]?.resolve(account(3, { name: "Read before the removal" }));
+    await settle();
+    answers[1]?.resolve(account(3, { name: "Read after it" }));
+    await settle();
+
+    expect(asked(fake, "account")).toBe(2);
+    expect(queryClient.getQueryData(accountKey(accountId(3)))).toEqual(
+      account(3, { name: "Read after it" }),
+    );
+  });
+});
+
+describe("the hold", () => {
+  it("carries a cancelled fetch's hold into the fetch that replaced it", async () => {
+    const { answers, account: read } = reads();
+    const { watch, fake, queryClient } = setup({ account: read });
+    queryClient.setQueryData(accountKey(accountId(3)), account(3));
+
+    const first = queryClient
+      .fetchQuery({ ...accountQuery(fake, accountId(3)), staleTime: 0 })
+      .catch(() => undefined);
+    watch.latest().push(accountFrame(3, { name: "Held" }));
+    const replacing = queryClient.refetchQueries({
+      queryKey: accountKey(accountId(3)),
+      exact: true,
+    });
+    answers[1]?.resolve(account(3, { name: "Read again" }));
+    await replacing;
+    await settle();
+    answers[0]?.resolve(account(3, { name: "Cancelled" }));
+    await first;
+    await settle();
+
+    expect(asked(fake, "account")).toBe(2);
+    expect(queryClient.getQueryData(accountKey(accountId(3)))).toEqual(
+      account(3, { name: "Held" }),
+    );
+  });
+
+  it("replays held events in the order they came", async () => {
+    const answer = deferred<ReturnType<typeof pages>>();
+    const { watch, queryClient } = setup();
+    queryClient.setQueryData(MODES_LIST_KEY, pages({ items: [mode(1)] }));
+
+    const refetching = queryClient.fetchQuery({
+      queryKey: MODES_LIST_KEY,
+      queryFn: () => answer.promise,
+      staleTime: 0,
+    });
+    watch.latest().push(event({ type: "mode", mode_id: modeId(2), mode: mode(2) }));
+    watch.latest().push(event({ type: "mode_removed", mode_id: modeId(2) }));
+    answer.resolve(pages({ items: [mode(1)] }));
+    await refetching;
+    await settle();
+
+    expect(queryClient.getQueryData(MODES_LIST_KEY)).toEqual(pages({ items: [mode(1)] }));
+  });
+
+  it(`replays exactly ${HOLD_MAX} held events`, async () => {
+    const answer = deferred<AccountResponse>();
+    const { watch, fake, queryClient } = setup({ account: () => answer.promise });
+    queryClient.setQueryData(accountKey(accountId(3)), account(3));
+
+    const refetching = queryClient.fetchQuery({
+      ...accountQuery(fake, accountId(3)),
+      staleTime: 0,
+    });
+    for (let n = 0; n < HOLD_MAX; n += 1) {
+      watch.latest().push(accountFrame(3, { name: `AfkBot${n}` }));
+    }
+    answer.resolve(account(3, { name: "Fetched" }));
+    await refetching;
+    await settle();
+
+    const state = queryClient.getQueryState(accountKey(accountId(3)));
+    expect(state?.data).toEqual(account(3, { name: `AfkBot${HOLD_MAX - 1}` }));
+    expect(state?.isInvalidated).toBe(false);
+  });
+});
+
+describe("a reverted cancellation (R89)", () => {
+  it("applies its hold to the data it kept, and a later fetch replays nothing old", async () => {
+    const { answers, account: read } = reads();
+    const { watch, fake, queryClient } = setup({ account: read });
+    queryClient.setQueryData(accountKey(accountId(3)), account(3));
+
+    const cancelled = queryClient
+      .fetchQuery({ ...accountQuery(fake, accountId(3)), staleTime: 0 })
+      .catch(() => undefined);
+    watch.latest().push(accountFrame(3, { name: "Held" }));
+    await queryClient.cancelQueries({ queryKey: accountKey(accountId(3)), exact: true });
+    await cancelled;
+    await settle();
+    const afterTheCancel = queryClient.getQueryState(accountKey(accountId(3)));
+    const later = queryClient.fetchQuery({ ...accountQuery(fake, accountId(3)), staleTime: 0 });
+    answers[1]?.resolve(account(3, { name: "Fresh" }));
+    await later;
+    await settle();
+
+    expect(afterTheCancel?.data).toEqual(account(3, { name: "Held" }));
+    expect(afterTheCancel?.fetchStatus).toBe("idle");
+    expect(queryClient.getQueryData(accountKey(accountId(3)))).toEqual(
+      account(3, { name: "Fresh" }),
+    );
+  });
+
+  it("applies the hold of a query that read its signal when its last screen goes", async () => {
+    const { answers, account: read } = reads();
+    const { watch, queryClient } = setup();
+    queryClient.setQueryData(accountKey(accountId(3)), account(3));
+    const observer = new QueryObserver(queryClient, {
+      queryKey: accountKey(accountId(3)),
+      queryFn: ({ signal }) => {
+        signal.throwIfAborted();
+        return read();
+      },
+      staleTime: 0,
+    });
+    const unsubscribe = observer.subscribe(() => {});
+    await settle();
+
+    watch.latest().push(accountFrame(3, { name: "Held" }));
+    unsubscribe();
+    await settle();
+    answers[0]?.resolve(account(3, { name: "Read before the change" }));
+    await settle();
+
+    expect(queryClient.getQueryData(accountKey(accountId(3)))).toEqual(
+      account(3, { name: "Held" }),
+    );
+  });
+});
+
+describe("a cache entry of another shape (R90)", () => {
+  const shapes: unknown[] = [
+    { nope: 1 },
+    "text",
+    [null],
+    { pages: [null] },
+    { pages: [{ items: [null] }] },
+  ];
+
+  it.each([
+    ["the bots list", BOTS_LIST_KEY, botFrame(bot(1))],
+    ["the accounts list", ACCOUNT_LIST_KEY, accountFrame(1, {})],
+    ["the waiting list", AWAITING_KEY, accountFrame(1, { status: "pending" })],
+    ["a bot's chat", chatKey(botId(1)), event({ type: "chat", bot_id: botId(1), line: line(5) })],
+    ["the modes list", MODES_LIST_KEY, event({ type: "mode", mode_id: modeId(2), mode: mode(2) })],
+    [
+      "the modes list, at a removal",
+      MODES_LIST_KEY,
+      event({ type: "mode_removed", mode_id: modeId(2) }),
+    ],
+  ] as const)("leaves %s alone and throws nothing", (_, key, update) => {
+    for (const shape of shapes) {
+      const { watch, queryClient } = setup();
+      queryClient.setQueryData(key, shape);
+
+      expect(() => watch.latest().push(update)).not.toThrow();
+      expect(queryClient.getQueryData(key)).toEqual(shape);
+    }
+  });
+});
+
+describe("the banner (S62, R88)", () => {
+  /** A layer over `watched(fake)`, as the runtime builds it, signed in. */
+  function watchedSetup(handlers: Partial<ApiClient>) {
+    const stores = createAppStores();
+    const client = watched(new FakeApiClient(handlers), stores, {
+      sessionEnded: () => {},
+      recovered: () => {},
+    });
+    const layer = createLiveLayer(client, createQueryClient(), stores);
+    undo.push(layer.attach());
+    stores.session.getState().signIn();
+    return { stores, layer };
+  }
+
+  it.each([
+    ["unreachable", "down"],
+    ["timed_out", "down"],
+    ["certificate", "certificate"],
+  ] as const)("the current watch's update whose connect was %s raises it as %s", (code, status) => {
+    const watch = fakeWatch();
+    const { stores } = watchedSetup({ watchEvents: watch.handler });
+
+    watch.latest().push(notOpened(code));
+
+    expect(stores.connection.getState().status).toBe(status);
+  });
+
+  it("leaves it alone for an update whose connect was refused otherwise", () => {
+    const watch = fakeWatch();
+    const { stores } = watchedSetup({ watchEvents: watch.handler });
+
+    watch.latest().push(notOpened("api"));
+
+    expect(stores.connection.getState().status).toBe("ok");
+  });
+
+  it("a replaced watch's update whose connect failed raises nothing", () => {
+    const watch = manualWatch();
+    const { stores } = watchedSetup({ watchEvents: watch.handler });
+    stores.live.getState().restart();
+
+    watch.calls[0]?.push(notOpened("unreachable"));
+
+    expect(watch.calls).toHaveLength(2);
+    expect(stores.connection.getState().status).toBe("ok");
+  });
+
+  it("a replaced watch's refused certificate raises nothing; the current one's does", async () => {
+    const watch = manualWatch();
+    const { stores } = watchedSetup({ watchEvents: watch.handler });
+    stores.live.getState().restart();
+
+    watch.calls[0]?.fail(fakeApiError("certificate"));
+    await settle();
+    const afterTheOld = stores.connection.getState().status;
+    watch.calls[1]?.fail(fakeApiError("certificate"));
+    await settle();
+
+    expect(afterTheOld).toBe("ok");
+    expect(stores.connection.getState().status).toBe("certificate");
+  });
+});
+
+describe("a watch that stops by itself (S64, R91)", () => {
+  it("says so while signed in", async () => {
+    const { watch, stores } = setup();
+
+    watch.latest().end();
+    await settle();
+
+    expect(stores.live.getState().hint).toEqual({ kind: "stopped", error: null });
+  });
+
+  it("says nothing while a server save runs", async () => {
+    const { watch, stores } = setup();
+    stores.session.getState().beginLogout();
+
+    watch.latest().end();
+    await settle();
+
+    expect(stores.live.getState().hint).toEqual({ kind: "none" });
+  });
+
+  it("a restart starts one new watch, which clears it", async () => {
+    const { watch, stores } = setup();
+    watch.latest().end();
+    await settle();
+
+    stores.live.getState().restart();
+
+    expect(watch.calls).toHaveLength(2);
     expect(stores.live.getState().hint).toEqual({ kind: "none" });
   });
 });

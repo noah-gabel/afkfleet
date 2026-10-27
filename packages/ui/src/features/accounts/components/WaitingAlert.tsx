@@ -1,12 +1,13 @@
 // How many links wait for the user's approval (Plan.md P9.8, the user's U13 at group F's plan
-// review): an alert on Home that can't be dismissed, and a badge on the nav's Accounts, for
+// review): an alert on Home that can't be dismissed, one compact line above the bots since
+// Phase 11's U35, and a badge on the nav's Accounts, for
 // Admins and the Owner. Both are hidden while the count loads and when none wait; a read
 // that failed says so on Home, and the badge then shows nothing (S5 in ADR-0018's group F).
 import { Link } from "@tanstack/react-router";
 
 import { toApiError } from "../../../api/ApiError";
 import { describeError } from "../../../api/describeError";
-import { Alert, AlertDescription } from "../../../components/ui/alert";
+import { NoticeLine } from "../../../components/NoticeLine";
 import { Button } from "../../../components/ui/button";
 import { useAwaitingApproval } from "../hooks/useAwaitingApproval";
 import { badgeNumber, waitingAlert, waitingFailed } from "../texts";
@@ -29,14 +30,15 @@ export function WaitingAlert() {
     return null;
   }
   return (
-    <Alert>
-      <AlertDescription className="flex flex-col gap-2 text-foreground">
-        <p>{waitingAlert(count)}</p>
-        <Button asChild size="sm" variant="outline" className="self-start">
+    <NoticeLine
+      action={
+        <Button asChild size="xs" variant="outline">
           <Link to="/accounts">Review</Link>
         </Button>
-      </AlertDescription>
-    </Alert>
+      }
+    >
+      {waitingAlert(count)}
+    </NoticeLine>
   );
 }
 

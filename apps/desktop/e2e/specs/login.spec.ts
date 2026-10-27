@@ -2,7 +2,7 @@
 
 import { OWNER } from "../fake/backend";
 import { expect, fakeBackend, test } from "../fixtures";
-import { enterCode, logIn } from "./steps";
+import { enterCode, expectHome, logIn } from "./steps";
 
 test("logs in with the password, then a code, after one wrong code", async ({ page, context }) => {
   const backend = await fakeBackend(context);
@@ -14,7 +14,7 @@ test("logs in with the password, then a code, after one wrong code", async ({ pa
   await expect(page.getByText("Wrong code. 2 tries left.")).toBeVisible();
   await enterCode(page, backend.code(OWNER));
 
-  await expect(page.getByText(`Signed in as ${OWNER} (Owner)`, { exact: false })).toBeVisible();
+  await expectHome(page, OWNER, "Owner");
 });
 
 test("refuses a wrong password without a code step", async ({ page, context }) => {

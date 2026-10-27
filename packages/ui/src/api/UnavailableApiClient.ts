@@ -38,6 +38,9 @@ export class UnavailableApiClient implements ApiClient {
   linkStatus = unavailable;
   createOfflineAccount = unavailable;
   accounts = unavailable;
+  bots = unavailable;
+  bot = unavailable;
+  modes = unavailable;
   accountsAwaitingApproval = unavailable;
   account = unavailable;
   deleteAccount = unavailable;

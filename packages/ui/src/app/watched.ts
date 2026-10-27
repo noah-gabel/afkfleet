@@ -8,8 +8,9 @@
 //   re-login;
 // - a success takes the banner down if the call started after it went up, which then does
 //   what a successful check does (`recovered`);
-// - the live events' watch: an update whose connect failed puts the banner up as a call's
-//   failure would, and its end takes nothing down (S59, R84).
+// - the live events' watch: only its `no_session` counts here, as any call's; whether its
+//   updates and its other ends raise the banner is the live layer's to say, since only it
+//   knows which watch is current (S62, R88), and its end takes nothing down (S59, R84).
 // The error is rethrown as it came, as an `ApiError`.
 import type { ApiClient } from "../api/ApiClient";
 import { type ApiError, toApiError } from "../api/ApiError";
@@ -47,39 +48,20 @@ export function watched(client: ApiClient, stores: AppStores, events: WatchEvent
   }
 
   /**
-   * The live events' watch (S59, R84): a rejection counts as any call's, and an update
-   * whose connect failed as a failure of its own; but its end doesn't take the banner down,
-   * since a stopped watch says nothing about the server.
+   * The live events' watch (S59, R84, R88): its updates go on as they came, and of its ends
+   * only `no_session` counts here; the live layer raises the banner for the current watch's.
+   * Its end never takes the banner down, since a stopped watch says nothing about the server.
    */
   async function watchLive(onUpdate: Parameters<ApiClient["watchEvents"]>[0]): Promise<void> {
     const generation = stores.session.getState().generation;
     try {
-      await client.watchEvents((update) => {
-        if (update.update === "disconnected" && update.disconnect.why === "not_opened") {
-          connectFailed(update.disconnect.error.code);
-        }
-        onUpdate(update);
-      });
+      await client.watchEvents(onUpdate);
     } catch (rejection) {
       const error = toApiError(rejection);
-      failed(error, generation);
+      if (error.error.code === "no_session") {
+        failed(error, generation);
+      }
       throw error;
-    }
-  }
-
-  /** What a live events connect that failed with `code` changes: only the banner. */
-  function connectFailed(code: CommandErrorCode): void {
-    switch (code) {
-      case "unreachable":
-      case "timed_out":
-        stores.connection.getState().fail("down");
-        return;
-      case "certificate":
-        stores.connection.getState().fail("certificate");
-        return;
-      default:
-        // The socket waits and tries again by itself.
-        return;
     }
   }
 
@@ -88,10 +70,8 @@ export function watched(client: ApiClient, stores: AppStores, events: WatchEvent
     switch (error.error.code) {
       case "unreachable":
       case "timed_out":
-        stores.connection.getState().fail("down");
-        return;
       case "certificate":
-        stores.connection.getState().fail("certificate");
+        connectionFailed(stores, error.error.code);
         return;
       case "no_session":
         if (stores.session.getState().endIfSignedIn(generation)) {
@@ -143,5 +123,26 @@ export function watched(client: ApiClient, stores: AppStores, events: WatchEvent
     revokeGrant: watch((id, user) => client.revokeGrant(id, user)),
     openVerificationLink: watch(() => client.openVerificationLink()),
     watchEvents: watchLive,
+    bots: watch((before, limit) => client.bots(before, limit)),
+    bot: watch((id) => client.bot(id)),
+    modes: watch((before, limit) => client.modes(before, limit)),
   };
+}
+
+/**
+ * What a failure with `code` changes for the banner: `unreachable` and `timed_out` put it up,
+ * `certificate` its certificate state; nothing for any other code.
+ */
+export function connectionFailed(stores: AppStores, code: CommandErrorCode): void {
+  switch (code) {
+    case "unreachable":
+    case "timed_out":
+      stores.connection.getState().fail("down");
+      return;
+    case "certificate":
+      stores.connection.getState().fail("certificate");
+      return;
+    default:
+      return;
+  }
 }

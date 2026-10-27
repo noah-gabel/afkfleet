@@ -319,7 +319,8 @@ fn every_audit_action_is_labelled_with_what_it_tells_the_sockets() {
         }
     };
     // Every phase, walked by an exhaustive match like the labels': a new
-    // phase fails to compile here until it has its place in the chain.
+    // phase fails to compile here until it has its place in the chain, and
+    // the chain is the run's own order, so it links every phase a run takes.
     let after = |phase: Option<Phase>| match phase {
         None => Some(Phase::Sessions),
         Some(Phase::Sessions) => Some(Phase::ChatByAge),
@@ -330,11 +331,11 @@ fn every_audit_action_is_labelled_with_what_it_tells_the_sockets() {
         Some(Phase::EnrollmentTokens) => None,
     };
     let mut phase = after(None);
-    let mut walked = 0;
+    let mut walked = Vec::new();
     while let Some(current) = phase {
         assert!(retention(&current).starts_with("nothing"), "{current:?}");
-        walked += 1;
+        walked.push(current);
         phase = after(Some(current));
     }
-    assert_eq!(walked, 6);
+    assert_eq!(walked, Phase::ORDER);
 }

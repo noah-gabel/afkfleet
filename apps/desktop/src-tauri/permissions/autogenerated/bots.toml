@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-bots"
+description = "Enables the bots command without any pre-configured scope."
+commands.allow = ["bots"]
+
+[[permission]]
+identifier = "deny-bots"
+description = "Denies the bots command without any pre-configured scope."
+commands.deny = ["bots"]

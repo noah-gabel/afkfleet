@@ -6,10 +6,11 @@ import { SESSION_ENDED } from "../../app/leave";
 import type { LogoutResponse } from "../../generated/LogoutResponse";
 import { me, PROFILE } from "../../test/fixtures";
 import { renderApp } from "../../test/renderApp";
+import { onHome } from "../../test/signedIn";
 
 async function signedIn(logout: () => Promise<LogoutResponse>, role = me("owner", "ownername")) {
   const app = renderApp({ serverProfile: async () => PROFILE, me: async () => role, logout });
-  await screen.findByText(/Signed in as ownername/);
+  await onHome("ownername");
   return app;
 }
 
@@ -79,7 +80,7 @@ describe("the header", () => {
           answer = resolve;
         }),
     });
-    await screen.findByText(/Signed in as afkbot1/);
+    await onHome("afkbot1");
 
     await app.user.click(screen.getByRole("button", { name: "Log out" }));
     await app.runtime.apiClient.sessions().catch(() => {});

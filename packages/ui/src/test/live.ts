@@ -5,6 +5,7 @@ import type { InfiniteData } from "@tanstack/react-query";
 import type { AccountResponse } from "../generated/AccountResponse";
 import type { BotResponse } from "../generated/BotResponse";
 import type { ChatLine } from "../generated/ChatLine";
+import type { CommandErrorCode } from "../generated/CommandErrorCode";
 import type { EventMessage } from "../generated/EventMessage";
 import type { LiveUpdateMessage } from "../generated/LiveUpdateMessage";
 import type { ModeResponse } from "../generated/ModeResponse";
@@ -64,10 +65,10 @@ export function line(id: number, text = `line ${id}`): ChatLine {
   };
 }
 
-/** The pages of a list, as an infinite query holds them. */
-export function pages<T>(
-  ...list: { items: T[]; next?: string | number }[]
-): InfiniteData<{ items: T[]; next?: string | number }> {
+/** The pages of a list, as an infinite query holds them; `N` is its cursor's type. */
+export function pages<T, N extends string | number = string>(
+  ...list: { items: T[]; next?: N }[]
+): InfiniteData<{ items: T[]; next?: N }, N | undefined> {
   return {
     pages: list,
     pageParams: list.map((_, index) => (index === 0 ? undefined : list[index - 1]?.next)),
@@ -97,4 +98,13 @@ export function refetch(reason: "ready" | "resync" | "unreadable" = "ready"): Li
 /** A disconnect that waits `secs` before the next connect. */
 export function disconnected(secs: number): LiveUpdateMessage {
   return { update: "disconnected", disconnect: { why: "lost" }, retry_in_secs: secs };
+}
+
+/** A disconnect whose connect failed with `code`. */
+export function notOpened(code: CommandErrorCode): LiveUpdateMessage {
+  return {
+    update: "disconnected",
+    disconnect: { why: "not_opened", error: { code, message: `fake ${code}` } },
+    retry_in_secs: 2,
+  };
 }

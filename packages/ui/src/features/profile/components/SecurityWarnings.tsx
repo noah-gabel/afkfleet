@@ -10,6 +10,7 @@ import { Link } from "@tanstack/react-router";
 
 import { useNotices, useSession } from "../../../app/context";
 import type { HomeWarning } from "../../../app/stores";
+import { NoticeLine } from "../../../components/NoticeLine";
 import { Alert, AlertDescription } from "../../../components/ui/alert";
 import { Button } from "../../../components/ui/button";
 import type { MeResponse } from "../../../generated/MeResponse";
@@ -85,26 +86,28 @@ function Warning({
   action: { to: "/profile/password" | "/profile/2fa"; label: string };
   onDismiss: () => void;
 }) {
+  if (place === "home") {
+    // Home's compact line (U35): to the profile, and Dismiss.
+    return (
+      <NoticeLine
+        action={
+          <Button asChild size="xs" variant="outline">
+            <Link to="/profile">Open your profile</Link>
+          </Button>
+        }
+        onDismiss={onDismiss}
+      >
+        {text}
+      </NoticeLine>
+    );
+  }
   return (
     <Alert>
       <AlertDescription className="flex flex-col gap-2 text-foreground">
         <p>{text}</p>
-        <div className="flex gap-2">
-          {place === "home" ? (
-            <>
-              <Button asChild size="sm" variant="outline">
-                <Link to="/profile">Open your profile</Link>
-              </Button>
-              <Button type="button" size="sm" variant="ghost" onClick={onDismiss}>
-                Dismiss
-              </Button>
-            </>
-          ) : (
-            <Button asChild size="sm" variant="outline">
-              <Link to={action.to}>{action.label}</Link>
-            </Button>
-          )}
-        </div>
+        <Button asChild size="sm" variant="outline" className="self-start">
+          <Link to={action.to}>{action.label}</Link>
+        </Button>
       </AlertDescription>
     </Alert>
   );

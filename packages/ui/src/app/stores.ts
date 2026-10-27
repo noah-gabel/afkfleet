@@ -90,8 +90,11 @@ export type LiveHint =
       readonly until: number;
       readonly tooMany: boolean;
     }
-  /** The watch stopped with `error`, which isn't a session's end. */
-  | { readonly kind: "stopped"; readonly error: CommandError };
+  /**
+   * The watch stopped with `error`, which isn't a session's end; `null` when it stopped by
+   * itself while signed in, with no save running (S64's broken channel, R91).
+   */
+  | { readonly kind: "stopped"; readonly error: CommandError | null };
 
 /** The live events store; see the module comment. */
 export interface LiveState {

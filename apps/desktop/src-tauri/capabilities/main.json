@@ -39,6 +39,9 @@
     "allow-change-grant",
     "allow-revoke-grant",
     "allow-open-verification-link",
-    "allow-watch-events"
+    "allow-watch-events",
+    "allow-bots",
+    "allow-bot",
+    "allow-modes"
   ]
 }

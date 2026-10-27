@@ -7,7 +7,9 @@ use tauri::ipc::Channel;
 use super::Managed;
 
 /// Forwards the session's live events to `updates` until the watch is
-/// stopped, by a newer one or a server switch, or the session ends.
+/// stopped (by a newer one, a server switch, or `updates` refusing an update,
+/// after which it never delivers again: S64), or the session ends
+/// (`no_session`), or the server's certificate is refused (`certificate`).
 #[tauri::command]
 pub(crate) async fn watch_events(
     state: Managed<'_>,

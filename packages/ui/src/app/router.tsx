@@ -6,7 +6,9 @@
 //   /setup           server setup while signed out
 //   /login /register the sign-in flows
 //   (app)            signed in only: header, navigation
-//     /home /server
+//     /home          the bots' dashboard
+//       /bots/$id    one bot
+//     /server
 //     /accounts      the Microsoft accounts the user may see
 //       /accounts/link /accounts/$id /accounts/$id/link-again
 //     /profile       the user's own account, sessions and warnings
@@ -23,6 +25,7 @@ import {
 } from "../features/accounts/routes";
 import { adminRoute, invitesRoute, usersRoute } from "../features/admin/routes";
 import { loginRoute, registerRoute } from "../features/auth/routes";
+import { botRoute } from "../features/bots/routes";
 import { homeRoute } from "../features/home/routes";
 import { mfaRoute, passwordRoute, profileRoute } from "../features/profile/routes";
 import { serverRoute, setupRoute } from "../features/server/routes";
@@ -39,6 +42,7 @@ const routeTree = rootRoute.addChildren([
   registerRoute,
   appRoute.addChildren([
     homeRoute,
+    botRoute,
     accountsRoute,
     linkRoute,
     accountRoute,

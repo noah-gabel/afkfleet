@@ -93,7 +93,7 @@
                 "patterns": [
                   {
                     "group": ["@tauri-apps/**", "!@tauri-apps/api/core"],
-                    "message": "The desktop app uses only @tauri-apps/api/core (invoke); any other Tauri API needs a capability grant and an ADR (ADR-0017)."
+                    "message": "The desktop app uses only @tauri-apps/api/core (invoke, and Channel for the live events); any other Tauri API needs a capability grant and an ADR (ADR-0017)."
                   }
                 ]
               }
@@ -113,7 +113,7 @@
                 "patterns": [
                   {
                     "group": ["@tauri-apps/**", "!@tauri-apps/api/core"],
-                    "message": "The desktop app uses only @tauri-apps/api/core (invoke); any other Tauri API needs a capability grant and an ADR (ADR-0017)."
+                    "message": "The desktop app uses only @tauri-apps/api/core (invoke, and Channel for the live events); any other Tauri API needs a capability grant and an ADR (ADR-0017)."
                   },
                   {
                     "group": ["**/e2e", "**/e2e/**"],

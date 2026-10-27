@@ -1,12 +1,15 @@
 // The UI's API client in the desktop app (Plan.md P8.5, ADR-0017): each method invokes
 // the Rust command of the same name with exactly the args `src-tauri/tests/ipc-contract.json`
 // lists. Tauri's `invoke` and the factory of the live events' `Channel` are injected, so
-// tests and the e2e build pass their own; this file imports nothing from Tauri but its types. A rejection that's a `CommandError` becomes an `ApiError` of it;
-// anything else (Tauri's own refusals are plain strings) becomes `ipc`, its text dropped.
+// tests and the e2e build pass their own; this file imports nothing from Tauri but its
+// types. A rejection that's a `CommandError` becomes an `ApiError` of it; anything else
+// (Tauri's own refusals are plain strings) becomes `ipc`, its text dropped.
 import type { ApiClient } from "@afkfleet/ui";
 import { toApiError } from "@afkfleet/ui";
 import type { AccountPage } from "@afkfleet/ui/generated/AccountPage";
 import type { AccountResponse } from "@afkfleet/ui/generated/AccountResponse";
+import type { BotPage } from "@afkfleet/ui/generated/BotPage";
+import type { BotResponse } from "@afkfleet/ui/generated/BotResponse";
 import type { ChangeGrantRequest } from "@afkfleet/ui/generated/ChangeGrantRequest";
 import type { CreatedInviteResponse } from "@afkfleet/ui/generated/CreatedInviteResponse";
 import type { CreatedOfflineAccountResponse } from "@afkfleet/ui/generated/CreatedOfflineAccountResponse";
@@ -25,6 +28,7 @@ import type { LogoutResponse } from "@afkfleet/ui/generated/LogoutResponse";
 import type { MeResponse } from "@afkfleet/ui/generated/MeResponse";
 import type { MfaConfirmResponse } from "@afkfleet/ui/generated/MfaConfirmResponse";
 import type { MfaEnrollResponse } from "@afkfleet/ui/generated/MfaEnrollResponse";
+import type { ModePage } from "@afkfleet/ui/generated/ModePage";
 import type { PasswordChangeRequest } from "@afkfleet/ui/generated/PasswordChangeRequest";
 import type { RegisterRequest } from "@afkfleet/ui/generated/RegisterRequest";
 import type { RegisterResponse } from "@afkfleet/ui/generated/RegisterResponse";
@@ -172,6 +176,18 @@ export class TauriApiClient implements ApiClient {
 
   accountsAwaitingApproval(before?: string, limit?: number): Promise<AccountPage> {
     return this.#call("accounts_awaiting_approval", { before, limit });
+  }
+
+  bots(before?: string, limit?: number): Promise<BotPage> {
+    return this.#call("bots", { before, limit });
+  }
+
+  bot(id: string): Promise<BotResponse> {
+    return this.#call("bot", { id });
+  }
+
+  modes(before?: string, limit?: number): Promise<ModePage> {
+    return this.#call("modes", { before, limit });
   }
 
   account(id: string): Promise<AccountResponse> {

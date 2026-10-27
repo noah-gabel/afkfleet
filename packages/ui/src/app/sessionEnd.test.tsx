@@ -6,6 +6,7 @@ import type { LogoutResponse } from "../generated/LogoutResponse";
 import type { SessionPage } from "../generated/SessionPage";
 import { deferred, me, PROFILE } from "../test/fixtures";
 import { renderApp } from "../test/renderApp";
+import { onHome } from "../test/signedIn";
 import { SESSION_ENDED } from "./leave";
 
 const NO_SESSION = async (): Promise<never> => {
@@ -15,7 +16,7 @@ const NO_SESSION = async (): Promise<never> => {
 /** The App, signed in on Home. */
 async function signedIn(handlers: Parameters<typeof renderApp>[0] = {}) {
   const app = renderApp({ serverProfile: async () => PROFILE, me: async () => me(), ...handlers });
-  await screen.findByText(/Signed in as afkbot1/);
+  await onHome("afkbot1");
   return app;
 }
 

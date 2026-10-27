@@ -5,6 +5,7 @@ import { fakeApiError } from "../api/FakeApiClient";
 import type { UserRole } from "../generated/UserRole";
 import { me, PROFILE } from "../test/fixtures";
 import { renderApp } from "../test/renderApp";
+import { onHome } from "../test/signedIn";
 
 const NOT_FOUND = "This page doesn't exist or isn't available to you.";
 
@@ -15,7 +16,7 @@ async function signedInAs(role: UserRole) {
     users: async () => ({ items: [] }),
     invites: async () => ({ items: [] }),
   });
-  await screen.findByText(/Signed in as afkbot1/);
+  await onHome("afkbot1");
   return app;
 }
 
