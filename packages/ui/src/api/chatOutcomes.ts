@@ -39,10 +39,17 @@ export function linked(outcomes: ChatOutcomes, request: string, line: number): C
   return kept?.line === undefined ? withOutcome(outcomes, request, { ...kept, line }) : outcomes;
 }
 
-/** `outcomes` with `request`'s final, unless it has one already. */
+/**
+ * `outcomes` with `request`'s final, unless it has one already; a final ends pending, so the
+ * record is the same whichever came first.
+ */
 export function finished(outcomes: ChatOutcomes, request: string, final: ChatFinal): ChatOutcomes {
   const kept = outcomes[request];
-  return kept?.final === undefined ? withOutcome(outcomes, request, { ...kept, final }) : outcomes;
+  if (kept?.final !== undefined) {
+    return outcomes;
+  }
+  const { pendingSince: _ended, ...rest } = kept ?? {};
+  return withOutcome(outcomes, request, { ...rest, final });
 }
 
 /** `outcomes` with a send's `answer`, the send begun at loss count `since`. */

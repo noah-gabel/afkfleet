@@ -1381,9 +1381,19 @@ Built as planned, one PR on `p11/p11.9-bot-chat`, in eight commits: PR #76's fol
 
 *Mutations* (each failed its tests, then was restored): MA1 (the respawn rule never firing), MA2 (the whole bot compared), MC1 (`Sent` and `Cleared` swapped in `commanded`), MK1 (`command_bot` posting a reset whatever it was asked), MN1 (no clear of R106's note as the next action starts: a first test version, whose Stop answered at once, passed it, since a stop's answer clears the note too, and was rewritten with a Stop that waits), MF1 (the fake's manager check only for View), MS1 (the modes' service without the allowlist), MF2 (the fake's send without its online check), ML4 (`connected` starting a watch), MR2 (`recordAnswer` without its guard), MK2 (the console's anchor never applied), MS2 (a send box for View), MS3 (the typed command cached under a key), ME4 (no `chat_sent` patch: the e2e spec never read "sent"; a first ME4, `[] && [patch]`, changed nothing, since an empty array is truthy, and was redone). The ACL test's count and its three entries changed together, without a red run of their own; the bridge tests of the same commands ran red.
 
+*PR #77's review, fixed on the branch before the merge* (the user's points, in one more commit; H5 stays the DoD kit alone). Each test ran red before its fix, or, where it pinned working code, by a mutation restored from a saved copy:
+1. **The console on a narrow window:** below `lg` the chat had no height, so its log grew instead of scrolling and the send box slid away. It now takes 70 % of the window's height there. An e2e check at a 900 px wide window with 60 lines: the log scrolls inside itself, and its last line and the send box are in view; red: the log didn't scroll.
+2. **U44:** a server's, an announcement's or a join or leave line is muted italic as a whole line, not only its "Server" label; red: only the label was.
+3. **The address while a save runs:** the field and Save are locked while the first request runs too, not only while the password is asked, so an edit during it can't be lost to the replay; red: the field took typing during a pending first request.
+4. **Tests:** "You" for the viewer's own line whatever `sent_by` says (mutation MY1, `sent_by` before `mine`); the send box's 404 reads the bot again (MS4, only a 403 read it); R121's `gcTime`, the outcomes still there 5 minutes and 1 ms after their screen went (MG2, the default `gcTime`); and the "never pending over a final" test asserts the stored record, red: a final after pending kept `pendingSince`, so `finished` now drops it and the record is the same in either order.
+5. **A late answer** links only into the sign-in its send began in: the send box compares the session's generation, so an answer that comes after a sign-out and a new sign-in never lands in the new session's outcomes; red: it did.
+6. **The console's columns** line up across lines (each line a row of the list's own grid, `subgrid`); a sender's name is capped to its column, the whole name its tooltip; and while following, the log stays at its bottom when its own height changes, as when a prompt or a refusal appears under the send box (a `ResizeObserver`; where a browser has none, it doesn't). Red: each line had its own grid, no cap or tooltip, and no observer.
+7. **Docs:** the threat model's caches row records U34's exception for the chat's history, and B2's "Into Rust" names a chat line or command as able to hold a password; README says only someone who manages the bot sends a command off the allowlist, after their password; Plan.md counts fifteen groups.
+8. **The e2e spec** finds the user's own line by its exact text; red: the substring matched the server's line too (two lines).
+
 *Snapshots:* none.
 
-*Size:* about 3,300 lines added and 90 removed, the docs included, below the planned 3,800; 33 of them generated (three permission files).
+*Size:* about 3,300 lines added and 90 removed, the docs included, below the planned 3,800; 33 of them generated (three permission files). PR #77's review added about 330 more.
 
 ### Notes for later groups
 - **B2 (P11.3's history):** built (above).

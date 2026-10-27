@@ -56,6 +56,8 @@ describe("the chat's outcomes (S70)", () => {
       (now) => finished(now, REQUEST, { kind: "sent" }),
     );
 
+    expect(sentFirst[REQUEST]).toEqual({ line: 7, final: { kind: "sent" } });
+    expect(pendingFirst[REQUEST]).toEqual({ line: 7, final: { kind: "sent" } });
     expect(marks(sentFirst, 3).get(7)).toEqual({ kind: "sent" });
     expect(marks(pendingFirst, 3).get(7)).toEqual({ kind: "sent" });
   });

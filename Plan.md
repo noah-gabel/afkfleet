@@ -3821,7 +3821,7 @@ Responses use `429` with a `Retry-After` header. The client IP is the socket pee
 **Introduces:** `tokio-tungstenite`, `futures-util` (WebSocket client).
 
 > Note (P11, Phase 11's planning, 2026-10-19) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md)):
-> - **Twenty-two group branches** (fourteen groups since H's planning added H4; groups B, D and G in two PRs, C in three and H in five since their planning, H5 added at H3's). Phase 11 is built in group PRs like Phases 2–10: one branch and one commit per task, in this order, each after the previous PR is merged. Backend first; each screen comes after the endpoints it needs.
+> - **Twenty-two group branches** (fifteen groups since H's planning added H4 and H3's added H5; groups B, D and G in two PRs, C in three and H in five since their planning). Phase 11 is built in group PRs like Phases 2–10: one branch and one commit per task, in this order, each after the previous PR is merged. Backend first; each screen comes after the endpoints it needs.
 >
 >   | Group | Branch | Tasks |
 >   |---|---|---|

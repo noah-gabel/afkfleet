@@ -49,7 +49,8 @@ test("a server's line shows, and the user's own line shows pending, then sent", 
     update: "event",
     event: { type: "chat", bot_id: id, line: sent.line, request: sent.request },
   });
-  const own = chat.getByRole("listitem").filter({ hasText: "hello" });
+  const own = chat.getByRole("listitem").filter({ has: page.getByText("hello", { exact: true }) });
+  await expect(own).toHaveCount(1);
   await expect(own.getByText("pending", { exact: true })).toBeVisible();
   await push(page, {
     update: "event",
@@ -58,4 +59,43 @@ test("a server's line shows, and the user's own line shows pending, then sent", 
 
   await expect(own.getByText("sent", { exact: true })).toBeVisible();
   await expect(own.getByText("pending", { exact: true })).toHaveCount(0);
+});
+
+test("on a narrow window, the log scrolls inside itself and the send box stays in view", async ({
+  page,
+  context,
+}) => {
+  await page.setViewportSize({ width: 900, height: 700 });
+  const backend = await fakeBackend(context);
+  backend.addAccount(OWNER);
+  backend.setBot("AfkBot1", {
+    desiredState: "running",
+    status: { kind: "reported", state: "online" },
+  });
+  for (let n = 1; n <= 60; n += 1) {
+    backend.addChat("AfkBot1", {
+      at: new Date().toISOString(),
+      direction: "in",
+      kind: "chat",
+      text: `line ${n}`,
+      sender: { name: "Steve" },
+      truncated: false,
+      arguments_hidden: false,
+      mine: false,
+    });
+  }
+  await page.goto("/");
+  await logIn(page, OWNER);
+  await enterCode(page, backend.code(OWNER));
+  await expectHome(page, OWNER);
+  await page.getByRole("link", { name: "Open AfkBot1" }).click();
+  const chat = page.getByRole("main").getByRole("region", { name: "Chat" });
+  const log = chat.getByRole("log");
+  await expect(log.getByText("line 60", { exact: true })).toBeVisible();
+
+  await chat.evaluate((section) => section.scrollIntoView({ block: "start" }));
+
+  expect(await log.evaluate((list) => list.scrollHeight > list.clientHeight)).toBe(true);
+  await expect(log.getByText("line 60", { exact: true })).toBeInViewport();
+  await expect(chat.getByRole("textbox", { name: "Message or /command" })).toBeInViewport();
 });

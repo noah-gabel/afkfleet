@@ -263,6 +263,50 @@ describe("the send box (U45, S70)", () => {
     expect(reads).toBe(before + 1);
   });
 
+  it("reads the bot again on a 404, which shows the screen's own 404", async () => {
+    let reads = 0;
+    const { app } = await sendBox({
+      bot: async () => {
+        reads += 1;
+        if (reads > 1) {
+          throw refusal(404, "not_found");
+        }
+        return seen();
+      },
+      sendChat: async () => {
+        throw refusal(404, "not_found");
+      },
+    });
+
+    await app.user.type(field(), "hello");
+    await app.user.click(screen.getByRole("button", { name: "Send" }));
+
+    expect(await screen.findByText("This bot doesn't exist, or you can't see it.")).toBeDefined();
+    expect(reads).toBe(2);
+  });
+
+  it("records a late answer only into the sign-in it was sent in", async () => {
+    const late = deferred<ChatSendResponse>();
+    const { app } = await sendBox({ sendChat: () => late.promise });
+    await app.user.type(field(), "hello");
+    await app.user.click(screen.getByRole("button", { name: "Send" }));
+    const { queryClient, router, stores } = app.runtime;
+
+    await act(async () => {
+      stores.session.getState().signOut();
+      queryClient.clear();
+      stores.session.getState().signIn();
+      await router.navigate({ to: "/bots/$id", params: { id: ID } });
+    });
+    await screen.findByRole("textbox", { name: "Message or /command" });
+    await act(async () => {
+      late.resolve(answer(9));
+      await Promise.resolve();
+    });
+
+    expect(queryClient.getQueryData(chatOutcomesKey(ID))).toEqual({});
+  });
+
   it("offers a View holder no box", async () => {
     await sendBox({}, "view");
 

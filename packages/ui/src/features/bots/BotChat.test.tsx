@@ -270,6 +270,82 @@ describe("the chat console, live (S70)", () => {
   });
 });
 
+describe("the chat console's look (PR #77's review)", () => {
+  it("mutes a server's, an announcement's and a join or leave line whole, in italics (U44)", async () => {
+    await console_(async () =>
+      page([
+        said(2, { kind: "announcement", text: "Restart in 5 minutes" }),
+        said(1, { kind: "system", text: "AfkBot2 joined the game" }),
+      ]),
+    );
+
+    for (const text of ["AfkBot2 joined the game", "Restart in 5 minutes"]) {
+      const item = (await screen.findByText(text)).closest("li");
+      expect(item?.className).toContain("italic");
+      expect(item?.className).toContain("text-muted-foreground");
+    }
+  });
+
+  it("lines the columns up across lines: each line a row of the list's own columns", async () => {
+    await console_(async () => page([said(2), said(1)]));
+
+    const item = (await screen.findByText("line 1")).closest("li");
+
+    expect(item?.parentElement?.className).toContain("grid-cols-[auto_auto_minmax(0,1fr)]");
+    expect(item?.className).toContain("grid-cols-subgrid");
+    expect(item?.className).toContain("col-span-3");
+  });
+
+  it("caps a long sender's name, the whole name its tooltip", async () => {
+    const name = "AVeryLongPlayerNameThatGoesOnAndOnAndOn";
+    await console_(async () => page([said(1, { sender: { name } })]));
+
+    const sender = await screen.findByText(name);
+
+    expect(sender.className).toContain("truncate");
+    expect(sender.getAttribute("title")).toBe(name);
+  });
+});
+
+describe("the chat console's place when its height changes", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("stays at the bottom while following, when something under it takes room", async () => {
+    let resized: (() => void) | null = null;
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        constructor(callback: () => void) {
+          resized = callback;
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    await console_(async () => page([said(1)]));
+    await screen.findByText("line 1");
+    const log = screen.getByRole("log");
+    const box = { height: 1000, client: 200, top: 800 };
+    Object.defineProperty(log, "scrollHeight", { configurable: true, get: () => box.height });
+    Object.defineProperty(log, "clientHeight", { configurable: true, get: () => box.client });
+    Object.defineProperty(log, "scrollTop", {
+      configurable: true,
+      get: () => box.top,
+      set: (top: number) => {
+        box.top = top;
+      },
+    });
+    log.dispatchEvent(new Event("scroll"));
+
+    box.client = 120;
+    act(() => resized?.());
+
+    expect(box.top).toBe(1000);
+  });
+});
+
 describe("the chat console's place", () => {
   it("keeps the reader's place when older lines load above", async () => {
     const olderPage = deferred<ChatPage>();

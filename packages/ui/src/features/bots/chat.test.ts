@@ -45,6 +45,9 @@ describe("a chat line's sender (U3, U43, S7)", () => {
       look: "user",
       asked: "You asked AfkBot1 to send:",
     });
+    expect(
+      senderOf(sent({ mine: true, sent_by: { id: "u", username: "afkowner" } }), BOT).label,
+    ).toBe("You");
     expect(senderOf(sent({ sent_by: { id: "u", username: "afkowner" } }), BOT)).toEqual({
       label: "afkowner",
       look: "user",

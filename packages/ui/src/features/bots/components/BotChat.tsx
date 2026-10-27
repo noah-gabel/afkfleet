@@ -13,7 +13,7 @@
 //   their own key (chatOutcomes.ts); a pending mark lasts while no live update was missed.
 
 import { cn } from "cn";
-import { type ReactNode, useLayoutEffect, useRef } from "react";
+import { type ReactNode, useEffect, useLayoutEffect, useRef } from "react";
 
 import { toApiError } from "../../../api/ApiError";
 import { type ChatMark, marks } from "../../../api/chatOutcomes";
@@ -66,6 +66,25 @@ export function BotChat({ bot, children }: { bot: BotResponse; children?: ReactN
     }
   }, [oldest, newest]);
 
+  // When the list's own height changes (a prompt or a refusal under the send box takes room),
+  // it stays at its bottom while following. Where the browser has no ResizeObserver, it doesn't.
+  const loaded = chat.data !== undefined;
+  useEffect(() => {
+    const list = box.current;
+    if (!loaded || list === null || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      if (following.current) {
+        list.scrollTop = list.scrollHeight;
+      }
+    });
+    observer.observe(list);
+    return () => {
+      observer.disconnect();
+    };
+  }, [loaded]);
+
   function older(): void {
     const list = box.current;
     if (list !== null) {
@@ -78,7 +97,7 @@ export function BotChat({ bot, children }: { bot: BotResponse; children?: ReactN
   return (
     <section
       aria-label={CHAT.heading}
-      className="flex min-h-96 flex-col gap-3 lg:h-[calc(100dvh-8rem)]"
+      className="flex h-[70dvh] min-h-96 flex-col gap-3 lg:h-[calc(100dvh-8rem)]"
     >
       <h2 className="text-lg font-semibold">{CHAT.heading}</h2>
       {chat.isPending ? <p className="text-sm text-muted-foreground">{CHAT.loading}</p> : null}
@@ -121,7 +140,7 @@ export function BotChat({ bot, children }: { bot: BotResponse; children?: ReactN
               <p className="text-muted-foreground">{CHAT.empty}</p>
             )}
           </div>
-          <ol className="flex flex-col gap-2">
+          <ol className="grid grid-cols-[auto_auto_minmax(0,1fr)] gap-x-2 gap-y-2">
             {lines.map((line) => (
               <Line
                 key={line.id}
@@ -156,7 +175,8 @@ function Line({
   return (
     <li
       className={cn(
-        "grid grid-cols-[auto_auto_minmax(0,1fr)] items-baseline gap-x-2 text-sm",
+        "col-span-3 grid grid-cols-subgrid items-baseline text-sm",
+        sender.look === "server" && "italic text-muted-foreground",
         line.mine && "border-l-2 border-primary pl-2",
       )}
     >
@@ -192,26 +212,50 @@ function Line({
 function SenderCell({ sender }: { sender: Sender }) {
   switch (sender.look) {
     case "player":
-      return <span className="font-medium text-primary">{sender.label}</span>;
+      return <Capped className="font-medium text-primary" label={sender.label} />;
     case "server":
-      return <span className="italic text-muted-foreground">{sender.label}</span>;
+      return <Capped label={sender.label} />;
     case "mode":
       return (
-        <span className="flex items-baseline gap-1 font-medium">
+        <span className="flex min-w-0 items-baseline gap-1 font-medium">
           <Badge variant="outline" className="px-1.5 py-0 text-xs font-normal">
             {CHAT.modeTag}
           </Badge>
-          {sender.label}
+          <Capped label={sender.label} />
         </span>
       );
     case "user":
       return (
-        <span className="font-medium">
+        <span className="min-w-0 font-medium">
           <span className="sr-only">{sender.asked}</span>
-          <span aria-hidden="true">{sender.label}</span>
+          <Capped label={sender.label} hidden />
         </span>
       );
     default:
       return <span />;
   }
+}
+
+/**
+ * A sender's name, capped to its column, the whole name its tooltip; `hidden` from screen
+ * readers where the line already reads it (a user's line, S7).
+ */
+function Capped({
+  label,
+  className,
+  hidden = false,
+}: {
+  label: string | null;
+  className?: string;
+  hidden?: boolean;
+}) {
+  return (
+    <span
+      className={cn("block max-w-40 truncate", className)}
+      title={label ?? undefined}
+      aria-hidden={hidden ? true : undefined}
+    >
+      {label}
+    </span>
+  );
 }

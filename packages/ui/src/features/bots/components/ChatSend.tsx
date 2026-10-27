@@ -6,7 +6,8 @@
 // - **While it runs** the box is locked, with a spinner; the server answers within its 6 s
 //   wait (S5), so no timer here. On 200 or 202 it empties, and the answer links the line to
 //   its request in the chat's outcomes, sent or pending from the loss count the send began
-//   at (S70, R116); without a live watch the chat is read once more (R115).
+//   at (S70, R116), only within the sign-in it began in; without a live watch the chat is
+//   read once more (R115).
 // - **A command off the allowlist** (`command_needs_step_up`, S4) goes, as typed, to
 //   `/command` (S8) through the step-up: the box stays locked while the password is asked,
 //   so what's sent is what's shown (R118).
@@ -41,6 +42,12 @@ import { StepUpPrompt } from "../../admin/components/StepUpPrompt";
 import { useStepUpAction } from "../../admin/hooks/useStepUpAction";
 import { CHAT } from "../texts";
 
+/** When a send began: the loss count for its pending mark, and the sign-in it's of. */
+interface Begun {
+  readonly losses: number;
+  readonly generation: number;
+}
+
 /** The key of the command that waits for the password. */
 const COMMAND = "command";
 
@@ -48,7 +55,7 @@ const COMMAND = "command";
 export function ChatSend({ bot }: { bot: BotResponse }) {
   const api = useApiClient();
   const queryClient = useQueryClient();
-  const { live } = useAppStores();
+  const { live, session } = useAppStores();
   const alive = useAlive();
   const wait = useRetryWait();
   const fieldId = useId();
@@ -63,9 +70,21 @@ export function ChatSend({ bot }: { bot: BotResponse }) {
   const asking = commands.prompt === COMMAND;
   const locked = sending || commands.running !== null || asking;
 
-  /** A send's answer: the line linked to its request, the box emptied (S70, U45). */
-  function answered(answer: ChatSendResponse, since: number): void {
-    recordAnswer(queryClient, bot.id, answer, since);
+  /** When a send began: the loss count, and the sign-in's generation. */
+  function begin(): Begun {
+    return { losses: live.getState().losses, generation: session.getState().generation };
+  }
+
+  /**
+   * A send's answer: the line linked to its request, the box emptied (S70, U45); nothing
+   * for an answer that comes in a later sign-in than its send began in, whose screen and
+   * outcomes are another session's.
+   */
+  function answered(answer: ChatSendResponse, begun: Begun): void {
+    if (session.getState().generation !== begun.generation) {
+      return;
+    }
+    recordAnswer(queryClient, bot.id, answer, begun.losses);
     if (!live.getState().connected) {
       void queryClient.invalidateQueries({ queryKey: chatKey(bot.id), exact: true });
     }
@@ -98,9 +117,9 @@ export function ChatSend({ bot }: { bot: BotResponse }) {
     void commands.attempt({
       key: COMMAND,
       run: async () => {
-        const since = live.getState().losses;
+        const begun = begin();
         try {
-          answered(await api.sendCommand(bot.id, { message }), since);
+          answered(await api.sendCommand(bot.id, { message }), begun);
         } catch (rejection) {
           const error = toApiError(rejection).error;
           if (isStepUpRequired(error)) {
@@ -118,10 +137,10 @@ export function ChatSend({ bot }: { bot: BotResponse }) {
     }
     setFailure(null);
     wait.reset();
-    const since = live.getState().losses;
+    const begun = begin();
     setSending(true);
     try {
-      answered(await api.sendChat(bot.id, { message }), since);
+      answered(await api.sendChat(bot.id, { message }), begun);
     } catch (rejection) {
       const error = toApiError(rejection).error;
       if (error.api?.code === "command_needs_step_up") {

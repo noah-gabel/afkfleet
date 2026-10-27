@@ -1,7 +1,7 @@
 // The reads that take every page at once (ADR-0020, S68, R99): a server whose pages don't
 // move on fails the read instead of looping, and a cancelled read stops between pages.
 import { type QueryClient, QueryObserver } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { createQueryClient } from "../app/queryClient";
 import { accountId } from "../test/accounts";
@@ -207,6 +207,24 @@ describe("the chat's outcomes (S70, R121)", () => {
     });
     expect(queryClient.isFetching()).toBe(0);
     stop();
+  });
+
+  it("outlive their screen past the cache's usual 5 minutes (R121)", () => {
+    vi.useFakeTimers();
+    try {
+      const queryClient = createQueryClient();
+      const stop = held(queryClient);
+      recordAnswer(queryClient, botId(1), ANSWER, 2);
+
+      stop();
+      vi.advanceTimersByTime(5 * 60_000 + 1);
+
+      expect(queryClient.getQueryData(chatOutcomesKey(botId(1)))).toEqual({
+        [REQUEST]: { line: 7, pendingSince: 2 },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("build nothing for an answer after the session's end emptied the cache", () => {

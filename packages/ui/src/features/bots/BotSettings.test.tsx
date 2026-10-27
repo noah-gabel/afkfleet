@@ -251,6 +251,42 @@ describe("a bot's Settings: the server", () => {
     ]);
   });
 
+  it("lock the address while the first save is in flight, so the password sends what's shown", async () => {
+    const first = deferred<BotResponse>();
+    let asked = 0;
+    const { app, current } = await settings(seen("manage"), {
+      patchBot: async (_id, request) => {
+        asked += 1;
+        if (asked === 1) {
+          return first.promise;
+        }
+        current.bot = seen("manage", request.server_address);
+        return current.bot;
+      },
+    });
+    const section = within(screen.getByRole("region", { name: "Settings" }));
+
+    await app.user.click(section.getByRole("button", { name: "Change" }));
+    const field = section.getByLabelText("Server address") as HTMLInputElement;
+    await app.user.clear(field);
+    await app.user.type(field, "127.0.0.1:25565");
+    await app.user.click(section.getByRole("button", { name: "Save" }));
+    await app.user.type(field, "99");
+    const shown = field.value;
+    first.reject(refusal(403, "step_up_required"));
+    await app.user.type(await screen.findByLabelText("Current password"), "a password");
+    await app.user.click(screen.getByRole("button", { name: "Continue" }));
+
+    expect(shown).toBe("127.0.0.1:25565");
+    expect(await section.findByText("127.0.0.1:25565")).toBeDefined();
+    expect(
+      app.fake.calls.filter((call) => call.method === "patchBot").map((call) => call.args),
+    ).toEqual([
+      [ID, { server_address: shown }],
+      [ID, { server_address: shown }],
+    ]);
+  });
+
   it("disable Cancel while a save is in flight", async () => {
     const answer = deferred<BotResponse>();
     const { app } = await settings(seen("manage"), { patchBot: () => answer.promise });

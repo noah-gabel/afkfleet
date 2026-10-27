@@ -10,8 +10,8 @@
 //   again, as the controls do.
 // - **The server** (Manage): the address with Change, which opens a field in place; Save asks
 //   for the password when the server wants it (useStepUpAction), and spends the bot's limit,
-//   whose 429 counts down on Save. While the password is asked, the field and Save are
-//   locked, and while a save runs, Cancel is.
+//   whose 429 counts down on Save. While a save runs or the password is asked, the field and
+//   Save are locked, and while a save runs, Cancel is.
 // Every answer reads the bot again rather than writing over the cache (R102).
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
@@ -251,9 +251,10 @@ function ServerSetting({ bot }: { bot: BotResponse }) {
     );
   }
 
-  // While the password is asked, the write that waits for it is the one shown: the field and
-  // Save are locked, so what's sent after the step-up is what's on the screen.
+  // While a save runs or the password is asked, the write that waits is the one shown: the
+  // field and Save are locked, so what's sent after the step-up is what's on the screen.
   const asking = writes.prompt === key;
+  const locked = asking || writes.running !== null;
   return (
     <div className="flex flex-col gap-3">
       <form className="flex flex-col gap-3" noValidate onSubmit={(event) => void submit(event)}>
@@ -267,7 +268,7 @@ function ServerSetting({ bot }: { bot: BotResponse }) {
             <Input
               {...control}
               autoComplete="off"
-              readOnly={asking}
+              readOnly={locked}
               {...form.register("server_address")}
             />
           )}
@@ -279,11 +280,7 @@ function ServerSetting({ bot }: { bot: BotResponse }) {
         )}
         <RetryWaitMessage wait={wait} />
         <div className="flex gap-2">
-          <Button
-            type="submit"
-            size="sm"
-            disabled={writes.running !== null || wait.waiting !== null || asking}
-          >
+          <Button type="submit" size="sm" disabled={locked || wait.waiting !== null}>
             {SETTINGS.save}
           </Button>
           <Button
