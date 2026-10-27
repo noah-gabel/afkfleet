@@ -4,7 +4,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApiClient } from "../../api/ApiClient";
 import { fakeWatch } from "../../api/FakeApiClient";
 import type { BotResponse } from "../../generated/BotResponse";
-import { formatClock, formatTime } from "../../lib/time";
+import { formatClock, formatDate, formatTime } from "../../lib/time";
+import { account } from "../../test/accounts";
 import { bot, botFrame, botId, event, mode, modeId } from "../../test/live";
 import { fakeTime } from "../../test/renderApp";
 import { atBot } from "../../test/signedIn";
@@ -50,10 +51,14 @@ const ONLINE = bot(1, {
 describe("a bot's screen", () => {
   it("shows an online bot: its state, server, mode, since when and for how long", async () => {
     await botScreen(ONLINE);
+    const mode = (await screen.findByRole("combobox", { name: "Mode" })) as HTMLSelectElement;
 
     expect(screen.getByText("Online")).toBeDefined();
-    expect(fact("Server")).toBe("127.0.0.1:25565");
-    expect(fact("Mode")).toBe("afk (built in)");
+    // A manager's server and mode show in Settings, not among the facts (R105).
+    expect(fact("Server")).toBeNull();
+    expect(fact("Mode")).toBeNull();
+    expect(screen.getByText("127.0.0.1:25565")).toBeDefined();
+    expect(mode.selectedOptions[0]?.text).toBe("afk (built in)");
     expect(fact("State since")).toBe(formatTime(SINCE));
     expect(fact("Uptime")).toBe("2 h 5 min");
     expect(fact("Last disconnect")).toBeNull();
@@ -66,6 +71,39 @@ describe("a bot's screen", () => {
     await time.advance(60_000);
 
     expect(fact("Uptime")).toBe("2 h 6 min");
+  });
+
+  it("counts the uptime each second in its first minute, then each minute", async () => {
+    const since = new Date(NOW.getTime() - 58_000).toISOString();
+    const { time } = await botScreen(
+      bot(1, {
+        desired_state: "running",
+        status: { kind: "reported", state: "online", since, online_since: since, attempt: 1 },
+      }),
+    );
+    const shown = [fact("Uptime")];
+
+    for (const step of [1000, 1000, 59_000, 1000]) {
+      await time.advance(step);
+      shown.push(fact("Uptime"));
+    }
+
+    expect(shown).toEqual(["58 s", "59 s", "1 min", "1 min", "2 min"]);
+  });
+
+  it("changes the uptime on its whole minute, however long after it the screen opened", async () => {
+    const since = new Date(NOW.getTime() - (2 * 3600 + 5 * 60 + 30) * 1000).toISOString();
+    const { time } = await botScreen(
+      bot(1, {
+        desired_state: "running",
+        status: { kind: "reported", state: "online", since, online_since: since, attempt: 1 },
+      }),
+    );
+    const before = fact("Uptime");
+
+    await time.advance(30_000);
+
+    expect([before, fact("Uptime")]).toEqual(["2 h 5 min", "2 h 6 min"]);
   });
 
   it("shows a reconnecting bot's attempt and how its last session ended", async () => {
@@ -120,7 +158,44 @@ describe("a bot's screen", () => {
     );
 
     expect(screen.getByText("Agent offline")).toBeDefined();
-    expect(screen.getByText(`Its agent was last seen ${formatClock(SINCE)}.`)).toBeDefined();
+    expect(screen.getByText(`Its agent was last seen at ${formatClock(SINCE)}.`)).toBeDefined();
+  });
+
+  it("says on which day its agent was last seen before today", async () => {
+    const seen = new Date(NOW.getTime() - 3 * 24 * 3600 * 1000).toISOString();
+    await botScreen(
+      bot(1, {
+        desired_state: "running",
+        status: { kind: "unknown", state: "online", since: seen, agent_last_seen_at: seen },
+      }),
+    );
+
+    expect(
+      screen.getByText(`Its agent was last seen on ${formatDate(seen)} at ${formatClock(seen)}.`),
+    ).toBeDefined();
+  });
+
+  it("gives both reasons of a bot that isn't placed and rests paused", async () => {
+    await botScreen(
+      bot(1, {
+        desired_state: "running",
+        status: { kind: "unplaced", why: "no_server", state: "paused", reason: "banned" },
+      }),
+    );
+
+    expect(fact("Not running")).toBe("No server set");
+    expect(fact("Paused")).toBe("Banned from this server");
+    expect(fact("Reason")).toBeNull();
+  });
+
+  it("says the mode couldn't be loaded when the modes can't be read", async () => {
+    await botScreen(ONLINE, {
+      modes: async () => {
+        throw refusal(500, "internal");
+      },
+    });
+
+    expect(await screen.findByText("Couldn't load the mode")).toBeDefined();
   });
 
   it("shows its agent when the server sends it, as it does to Admins and the Owner", async () => {
@@ -134,7 +209,7 @@ describe("a bot's screen", () => {
   });
 
   it("names a mode the viewer can't see as such, never by its ID", async () => {
-    await botScreen(bot(1, { mode_id: modeId(9) }));
+    await botScreen(bot(1, { account: account(1, { level: "view" }), mode_id: modeId(9) }));
 
     expect(fact("Mode")).toBe(HIDDEN_MODE);
     expect(screen.queryByText(modeId(9))).toBeNull();

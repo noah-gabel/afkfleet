@@ -1548,6 +1548,7 @@ mod tests {
             "editable": editable,
             "deletable": editable,
             "visibility_editable": false,
+            "unlisted_command": false,
             "version": version,
             "created_at": "2027-01-15T08:00:00.000Z",
             "updated_at": "2027-01-15T08:00:00.000Z",

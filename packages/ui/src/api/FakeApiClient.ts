@@ -5,7 +5,10 @@
 import type { AccountPage } from "../generated/AccountPage";
 import type { AccountResponse } from "../generated/AccountResponse";
 import type { ApiErrorDetails } from "../generated/ApiErrorDetails";
+import type { BotCommandResponse } from "../generated/BotCommandResponse";
+import type { BotModeRequest } from "../generated/BotModeRequest";
 import type { BotPage } from "../generated/BotPage";
+import type { BotPatchRequest } from "../generated/BotPatchRequest";
 import type { BotResponse } from "../generated/BotResponse";
 import type { ChangeGrantRequest } from "../generated/ChangeGrantRequest";
 import type { CommandErrorCode } from "../generated/CommandErrorCode";
@@ -182,6 +185,34 @@ export class FakeApiClient implements ApiClient {
 
   async modes(before?: string, limit?: number): Promise<ModePage> {
     return this.#handler("modes", [before, limit])(before, limit);
+  }
+
+  async patchBot(id: string, request: BotPatchRequest): Promise<BotResponse> {
+    return this.#handler("patchBot", [id, request])(id, request);
+  }
+
+  async setBotMode(id: string, request: BotModeRequest): Promise<BotResponse> {
+    return this.#handler("setBotMode", [id, request])(id, request);
+  }
+
+  async startBot(id: string): Promise<BotResponse> {
+    return this.#handler("startBot", [id])(id);
+  }
+
+  async stopBot(id: string): Promise<BotResponse> {
+    return this.#handler("stopBot", [id])(id);
+  }
+
+  async restartBot(id: string): Promise<BotCommandResponse> {
+    return this.#handler("restartBot", [id])(id);
+  }
+
+  async resetBot(id: string): Promise<BotCommandResponse> {
+    return this.#handler("resetBot", [id])(id);
+  }
+
+  async resumeBot(id: string): Promise<BotCommandResponse> {
+    return this.#handler("resumeBot", [id])(id);
   }
 
   async account(id: string): Promise<AccountResponse> {

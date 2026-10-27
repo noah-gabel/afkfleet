@@ -4,7 +4,10 @@
 // method rejects with an `ApiError` (ApiError.ts).
 import type { AccountPage } from "../generated/AccountPage";
 import type { AccountResponse } from "../generated/AccountResponse";
+import type { BotCommandResponse } from "../generated/BotCommandResponse";
+import type { BotModeRequest } from "../generated/BotModeRequest";
 import type { BotPage } from "../generated/BotPage";
+import type { BotPatchRequest } from "../generated/BotPatchRequest";
 import type { BotResponse } from "../generated/BotResponse";
 import type { ChangeGrantRequest } from "../generated/ChangeGrantRequest";
 import type { CreatedInviteResponse } from "../generated/CreatedInviteResponse";
@@ -127,6 +130,23 @@ export interface ApiClient {
   bot(id: string): Promise<BotResponse>;
   /** A page of the modes the caller may see, newest first. */
   modes(before?: string, limit?: number): Promise<ModePage>;
+  /**
+   * Sets the bot's server (Manage, after a step-up, ADR-0019, S47): the bot as it reads
+   * after. A 403 `step_up_required` asks for the password first.
+   */
+  patchBot(id: string, request: BotPatchRequest): Promise<BotResponse>;
+  /** Sets the bot's mode (Control; Manage for a mode with `unlisted_command`, S68). */
+  setBotMode(id: string, request: BotModeRequest): Promise<BotResponse>;
+  /** The bot should run (Control): the bot, unplaced with why where it can't run yet. */
+  startBot(id: string): Promise<BotResponse>;
+  /** The bot should be stopped (Control); a paused or failed bot keeps its state (S51). */
+  stopBot(id: string): Promise<BotResponse>;
+  /** Restarts a running bot's run through its agent (Control): always `sent` (S73). */
+  restartBot(id: string): Promise<BotCommandResponse>;
+  /** Lets a failed bot try again: `sent` to its agent, or its stored state `cleared`. */
+  resetBot(id: string): Promise<BotCommandResponse>;
+  /** Lets a paused bot join again: `sent` to its agent, or its stored state `cleared`. */
+  resumeBot(id: string): Promise<BotCommandResponse>;
 }
 
 /** A method of the API. */
@@ -173,4 +193,11 @@ export const API_METHODS = [
   "bots",
   "bot",
   "modes",
+  "patchBot",
+  "setBotMode",
+  "startBot",
+  "stopBot",
+  "restartBot",
+  "resetBot",
+  "resumeBot",
 ] as const satisfies readonly ApiMethod[];

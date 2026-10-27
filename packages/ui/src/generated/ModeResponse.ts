@@ -43,6 +43,12 @@ deletable: boolean,
  */
 visibility_editable: boolean, 
 /**
+ * Whether one of its chat steps sends a command off the server's
+ * allowlist, so choosing it for a bot needs Manage on the bot rather
+ * than Control: the check `PUT /bots/{id}/mode` authorizes with (S68).
+ */
+unlisted_command: boolean, 
+/**
  * 1 when it was created, one more on every change.
  */
 version: number, 

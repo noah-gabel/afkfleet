@@ -1,10 +1,12 @@
 // The e2e suite's fake backend (Plan.md P8.9, ADR-0017): the desktop app's Rust side and the
-// server in one, answering the 39 commands of src-tauri/tests/ipc-contract.json with the
+// server in one, answering the 46 commands of src-tauri/tests/ipc-contract.json with the
 // generated types, the Rust side's fixed `CommandError` messages and the server's error
 // codes. It keeps the state one test needs, fresh per test: users with their passwords and
 // authenticators, invites, the one session the app holds, the pending login or setup step,
 // the session's step-up, the Microsoft accounts with their grants and the one link flow, and
-// each account's bot, as the server makes one with every account, and the two built-in modes.
+// each account's bot, as the server makes one with every account, and the modes: the two
+// built-in ones and another user's shared `warp`, which sends a command off the allowlist.
+// The bot writes follow the server's simplest answers (ADR-0019, S50; ADR-0020, S73).
 // A flow reads `waiting` once, then `linked`, its account pending unless the Owner linked
 // it.
 //
@@ -20,6 +22,7 @@ import type { AccountPage } from "@afkfleet/ui/generated/AccountPage";
 import type { AccountResponse } from "@afkfleet/ui/generated/AccountResponse";
 import type { AccountStatus } from "@afkfleet/ui/generated/AccountStatus";
 import type { ApiErrorDetails } from "@afkfleet/ui/generated/ApiErrorDetails";
+import type { BotCommandResponse } from "@afkfleet/ui/generated/BotCommandResponse";
 import type { BotPage } from "@afkfleet/ui/generated/BotPage";
 import type { BotResponse } from "@afkfleet/ui/generated/BotResponse";
 import type { BotStatus } from "@afkfleet/ui/generated/BotStatus";
@@ -108,6 +111,13 @@ export const COMMANDS = [
   "bots",
   "bot",
   "modes",
+  "patch_bot",
+  "set_bot_mode",
+  "start_bot",
+  "stop_bot",
+  "restart_bot",
+  "reset_bot",
+  "resume_bot",
 ] as const;
 
 /** One command. */
@@ -212,11 +222,20 @@ interface Bot {
   status: BotStatus;
 }
 
-/** The built-in modes, with the IDs the server's seeds give them. */
+/** The modes, newest first: another user's shared `warp`, then the built-in ones with the IDs
+ * the server's seeds give them. */
 const MODES: readonly ModeResponse[] = [
+  {
+    ...builtIn("01a14202-2800-7000-8000-000000000003", "warp"),
+    ownership: "someone_else",
+    unlisted_command: true,
+  },
   builtIn("01a14202-2800-7000-8000-000000000002", "farm"),
   builtIn("01a14202-2800-7000-8000-000000000001", "afk"),
 ];
+
+/** The mode a new bot runs: `afk`. */
+const AFK = "01a14202-2800-7000-8000-000000000001";
 
 /** A built-in mode: no owner, read-only for everyone. */
 function builtIn(id: string, name: string): ModeResponse {
@@ -228,6 +247,7 @@ function builtIn(id: string, name: string): ModeResponse {
     editable: false,
     deletable: false,
     visibility_editable: false,
+    unlisted_command: false,
     version: 1,
     created_at: "2026-10-13T08:00:00.000Z",
     updated_at: "2026-10-13T08:00:00.000Z",
@@ -677,7 +697,7 @@ export class FakeBackend {
       grants: new Map(),
       bot: {
         id: id(this.#next()),
-        modeId: MODES[1]?.id ?? "",
+        modeId: AFK,
         desiredState: "stopped",
         status: { kind: "unplaced", why: "stopped" },
       },
@@ -737,6 +757,65 @@ export class FakeBackend {
       desired_state: bot.desiredState,
       status: bot.status,
     };
+  }
+
+  /**
+   * The bot `id` for a write that needs `least`: 404 when `session`'s user can't see it,
+   * 403 below `least`; otherwise `then` with its account and the user's level.
+   */
+  #botWrite(
+    session: Session,
+    id: unknown,
+    least: "control" | "manage",
+    then: (account: Account, level: GrantLevel) => Outcome,
+  ): Outcome {
+    const account = this.#accounts.find((one) => one.bot.id === String(id));
+    const level = account === undefined ? null : this.#level(session.user, account);
+    if (account === undefined || level === null) {
+      return api(404, "not_found");
+    }
+    const enough = level === "manage" || (least === "control" && level === "control");
+    return enough ? then(account, level) : api(403, "forbidden");
+  }
+
+  /** `bot` wanted running or stopped: a paused or failed one keeps its state (S51). */
+  #want(bot: Bot, running: boolean): void {
+    bot.desiredState = running ? "running" : "stopped";
+    const { state, reason } = bot.status;
+    const resting =
+      (state === "paused" || state === "failed") && reason !== undefined ? { state, reason } : {};
+    if (!running) {
+      bot.status = { kind: "unplaced", why: "stopped", ...resting };
+    } else if (bot.serverAddress === undefined) {
+      bot.status = { kind: "unplaced", why: "no_server", ...resting };
+    } else {
+      bot.status = { kind: "awaiting_report", since: new Date().toISOString() };
+    }
+  }
+
+  /**
+   * A restart, a reset or a resume (S50, S73): sent to a reported bot in the state it needs,
+   * cleared for a resting bot that runs nowhere, otherwise the server's 409.
+   */
+  #command(user: User, account: Account, command: string): Outcome {
+    const { status } = account.bot;
+    const needs = command === "reset_bot" ? "failed" : "paused";
+    const answer = (effect: BotCommandResponse["effect"]) =>
+      value({ bot: this.#botResponse(user, account), effect } satisfies BotCommandResponse);
+    if (command === "restart_bot") {
+      const running = ["online", "connecting", "awaiting_session", "backoff"];
+      return status.kind === "reported" && running.includes(String(status.state))
+        ? answer("sent")
+        : api(409, "bot_not_running");
+    }
+    if (status.state !== needs) {
+      return api(409, needs === "failed" ? "bot_not_failed" : "bot_not_paused");
+    }
+    if (status.kind === "unplaced") {
+      account.bot.status = { kind: "unplaced", why: status.why ?? "stopped" };
+      return answer("cleared");
+    }
+    return answer("sent");
   }
 
   /** Changes the bot of the account named `name`, as its agent's reports or a write would. */
@@ -985,6 +1064,45 @@ export class FakeBackend {
         });
       case "modes":
         return this.#signedIn(() => value({ items: [...MODES] } satisfies ModePage));
+      case "patch_bot":
+        return this.#steppedUp((session) =>
+          this.#botWrite(session, args.id, "manage", (account) => {
+            account.bot.serverAddress = String(request.server_address);
+            return value(this.#botResponse(session.user, account));
+          }),
+        );
+      case "set_bot_mode":
+        return this.#signedIn((session) =>
+          this.#botWrite(session, args.id, "control", (account, level) => {
+            const mode = MODES.find((one) => one.id === String(request.mode_id));
+            if (mode === undefined) {
+              return api(422, "validation_failed", [
+                { path: "mode_id", message: "isn't a mode you can use" },
+              ]);
+            }
+            if (mode.unlisted_command && level !== "manage") {
+              return api(403, "forbidden");
+            }
+            account.bot.modeId = mode.id;
+            return value(this.#botResponse(session.user, account));
+          }),
+        );
+      case "start_bot":
+      case "stop_bot":
+        return this.#signedIn((session) =>
+          this.#botWrite(session, args.id, "control", (account) => {
+            this.#want(account.bot, command === "start_bot");
+            return value(this.#botResponse(session.user, account));
+          }),
+        );
+      case "restart_bot":
+      case "reset_bot":
+      case "resume_bot":
+        return this.#signedIn((session) =>
+          this.#botWrite(session, args.id, "control", (account) =>
+            this.#command(session.user, account, command),
+          ),
+        );
       case "approve_account":
         return this.#review(args.id, true);
       case "refuse_account":

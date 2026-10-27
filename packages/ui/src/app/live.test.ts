@@ -1,10 +1,11 @@
 import {
   type InfiniteData,
   InfiniteQueryObserver,
+  type QueryClient,
   QueryObserver,
   type QueryObserverOptions,
 } from "@tanstack/react-query";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../api/ApiClient";
 import type { ApiError } from "../api/ApiError";
@@ -46,6 +47,7 @@ import {
   pages,
   refetch,
 } from "../test/live";
+import { refusal } from "../test/signIn";
 import { createLiveLayer, HOLD_MAX } from "./live";
 import { createQueryClient } from "./queryClient";
 import { createAppStores } from "./stores";
@@ -615,18 +617,70 @@ describe("the bots' and modes' queries", () => {
     ]);
   });
 
-  it("read one bot, which follows its frames until it's removed, which drops its data (R98)", async () => {
-    const { watch, fake, queryClient } = setup({ bot: async () => bot(1) });
+  it("read one bot, which follows its frames until it's removed: a screen on it reads it again and sees its 404 (R98)", async () => {
+    let gone = false;
+    const { watch, fake, queryClient } = setup({
+      bot: async () => {
+        if (gone) {
+          throw refusal(404, "not_found");
+        }
+        return bot(1);
+      },
+    });
+    const observer = new QueryObserver(queryClient, botQuery(fake, botId(1)));
+    undo.push(observer.subscribe(() => {}));
+    await settle();
 
-    await queryClient.fetchQuery(botQuery(fake, botId(1)));
     watch.latest().push(botFrame(bot(1, { desired_state: "running" })));
     const followed = queryClient.getQueryData(botKey(botId(1)));
+    gone = true;
     watch.latest().push(event({ type: "bot_removed", bot_id: botId(1) }));
+    await settle();
 
-    expect(argsOf(fake, "bot")).toEqual([[botId(1)]]);
+    expect(argsOf(fake, "bot")).toEqual([[botId(1)], [botId(1)]]);
     expect(followed).toEqual(bot(1, { desired_state: "running" }));
     expect(queryClient.getQueryData(botKey(botId(1)))).toBeUndefined();
+    expect((observer.getCurrentResult().error as ApiError | null)?.error.api?.status).toBe(404);
   });
+
+  it.each([
+    [
+      "its own query",
+      (queryClient: QueryClient, fake: FakeApiClient) =>
+        queryClient.fetchQuery(botQuery(fake, botId(1))),
+    ],
+    [
+      "the list",
+      (queryClient: QueryClient, fake: FakeApiClient) =>
+        queryClient.fetchInfiniteQuery(botsQuery(fake)),
+    ],
+  ])(
+    "reset a removed bot's account, the bot cached in %s: its data goes, a screen on it reads it again",
+    async (_where, cache) => {
+      let gone = false;
+      const { watch, fake, queryClient } = setup({
+        bot: async () => bot(1),
+        bots: async () => ({ items: [bot(1)] }),
+        account: async () => {
+          if (gone) {
+            throw refusal(404, "not_found");
+          }
+          return account(1);
+        },
+      });
+      await cache(queryClient, fake);
+      const observer = new QueryObserver(queryClient, accountQuery(fake, accountId(1)));
+      undo.push(observer.subscribe(() => {}));
+      await settle();
+
+      gone = true;
+      watch.latest().push(event({ type: "bot_removed", bot_id: botId(1) }));
+      await settle();
+
+      expect(queryClient.getQueryData(accountKey(accountId(1)))).toBeUndefined();
+      expect((observer.getCurrentResult().error as ApiError | null)?.error.api?.status).toBe(404);
+    },
+  );
 
   it("read every page of the modes as one list's pages, which a mode frame reaches", async () => {
     const { watch, fake, queryClient } = setup({
@@ -779,6 +833,12 @@ describe("a reverted cancellation (R89)", () => {
     const { answers, account: read } = reads();
     const { watch, fake, queryClient } = setup({ account: read });
     queryClient.setQueryData(accountKey(accountId(3)), account(3));
+    // Marked stale before the fetch: the revert keeps that mark, and so must the hold's data.
+    await queryClient.invalidateQueries({
+      queryKey: accountKey(accountId(3)),
+      exact: true,
+      refetchType: "none",
+    });
 
     const cancelled = queryClient
       .fetchQuery({ ...accountQuery(fake, accountId(3)), staleTime: 0 })
@@ -795,6 +855,7 @@ describe("a reverted cancellation (R89)", () => {
 
     expect(afterTheCancel?.data).toEqual(account(3, { name: "Held" }));
     expect(afterTheCancel?.fetchStatus).toBe("idle");
+    expect(afterTheCancel?.isInvalidated).toBe(true);
     expect(queryClient.getQueryData(accountKey(accountId(3)))).toEqual(
       account(3, { name: "Fresh" }),
     );
@@ -950,5 +1011,74 @@ describe("a watch that stops by itself (S64, R91)", () => {
 
     expect(watch.calls).toHaveLength(2);
     expect(stores.live.getState().hint).toEqual({ kind: "none" });
+  });
+});
+
+describe("the live record (S71)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("records the current watch's frames, never a replaced one's", async () => {
+    const { watch, stores } = setup();
+    const first = watch.latest();
+    stores.live.getState().restart();
+
+    first.push(botFrame(bot(1)));
+    watch.latest().push(botFrame(bot(2)));
+
+    expect(Object.keys(stores.record.getState().record.bots)).toEqual([botId(2)]);
+  });
+
+  it("clears at sign-out and at a new generation", async () => {
+    const { watch, stores } = setup();
+    watch.latest().push(botFrame(bot(1)));
+    stores.session.getState().signOut();
+    const signedOut = stores.record.getState().record;
+    watch.latest().push(botFrame(bot(2)));
+    stores.session.getState().signIn();
+    watch.latest().push(botFrame(bot(3)));
+    stores.session.getState().signIn();
+
+    expect(signedOut.bots).toEqual({});
+    expect(stores.record.getState().record.bots).toEqual({});
+  });
+
+  it("marks a gap when a new watch of the same sign-in is ready after the last one ended", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2026-10-26T14:00:00.000Z"));
+    const { watch, stores } = setup();
+    watch.latest().push(refetch("ready"));
+    watch.latest().end();
+    await settle();
+
+    vi.setSystemTime(Date.parse("2026-10-26T14:00:10.000Z"));
+    stores.live.getState().restart();
+    watch.latest().push(refetch("ready"));
+
+    expect(stores.record.getState().record.gaps).toEqual([
+      { arrived: Date.parse("2026-10-26T14:00:10.000Z"), downMs: 10_000 },
+    ]);
+  });
+
+  it("fills in what a bot read knows, and drops a bot whose read answers 404", async () => {
+    let gone = false;
+    const { fake, queryClient, stores } = setup({
+      bots: async () => ({ items: [bot(1), bot(2)] }),
+      bot: async () => {
+        if (gone) {
+          throw refusal(404, "not_found");
+        }
+        return bot(1);
+      },
+    });
+
+    await queryClient.fetchInfiniteQuery(botsQuery(fake));
+    const filled = Object.keys(stores.record.getState().record.bots);
+    gone = true;
+    await queryClient.fetchQuery(botQuery(fake, botId(1))).catch(() => undefined);
+
+    expect(filled).toEqual([botId(1), botId(2)]);
+    expect(Object.keys(stores.record.getState().record.bots)).toEqual([botId(2)]);
   });
 });

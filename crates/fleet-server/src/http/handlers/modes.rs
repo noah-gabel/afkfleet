@@ -89,7 +89,10 @@ pub(crate) async fn list(
     let items = listed
         .items
         .iter()
-        .map(|listed| mode_response(&actor, listed))
+        .map(|listed| {
+            let check = state.modes.command_check(&listed.mode.definition);
+            mode_response(&actor, listed, check)
+        })
         .collect::<Result<_, _>>()?;
     Ok(Json(ModePage {
         items,
@@ -198,7 +201,11 @@ async fn creating(
         })?;
     Ok((
         StatusCode::CREATED,
-        Json(mode_response(&user.actor(), &created)?),
+        Json(mode_response(
+            &user.actor(),
+            &created,
+            state.modes.command_check(&created.mode.definition),
+        )?),
     ))
 }
 
@@ -335,7 +342,8 @@ async fn editing(
             | UpdateModeError::Lost
             | UpdateModeError::Audit(_)) => ApiError::internal(other),
         })?;
-    Ok(Json(mode_response(&user.actor(), edited.mode())?))
+    let check = state.modes.command_check(&edited.mode().mode.definition);
+    Ok(Json(mode_response(&user.actor(), edited.mode(), check)?))
 }
 
 /// `DELETE /api/v1/modes/{id}`: deletes a mode no bot uses, after a

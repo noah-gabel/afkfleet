@@ -313,6 +313,64 @@
       "inputs": ["01900000-0000-7000-8000-00000000000c", 10],
       "args": { "before": "01900000-0000-7000-8000-00000000000c", "limit": 10 },
       "expect": { "error": "no_server" }
+    },
+    {
+      "command": "patch_bot",
+      "method": "patchBot",
+      "inputs": ["01900000-0000-7000-8000-00000000000b", { "server_address": "play.example.com" }],
+      "args": {
+        "id": "01900000-0000-7000-8000-00000000000b",
+        "request": { "server_address": "play.example.com" }
+      },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "set_bot_mode",
+      "method": "setBotMode",
+      "inputs": [
+        "01900000-0000-7000-8000-00000000000b",
+        { "mode_id": "01900000-0000-7000-8000-00000000000c" }
+      ],
+      "args": {
+        "id": "01900000-0000-7000-8000-00000000000b",
+        "request": { "mode_id": "01900000-0000-7000-8000-00000000000c" }
+      },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "start_bot",
+      "method": "startBot",
+      "inputs": ["01900000-0000-7000-8000-00000000000b"],
+      "args": { "id": "01900000-0000-7000-8000-00000000000b" },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "stop_bot",
+      "method": "stopBot",
+      "inputs": ["01900000-0000-7000-8000-00000000000b"],
+      "args": { "id": "01900000-0000-7000-8000-00000000000b" },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "restart_bot",
+      "method": "restartBot",
+      "inputs": ["01900000-0000-7000-8000-00000000000b"],
+      "args": { "id": "01900000-0000-7000-8000-00000000000b" },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "reset_bot",
+      "method": "resetBot",
+      "inputs": ["01900000-0000-7000-8000-00000000000b"],
+      "args": { "id": "01900000-0000-7000-8000-00000000000b" },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "resume_bot",
+      "method": "resumeBot",
+      "inputs": ["01900000-0000-7000-8000-00000000000b"],
+      "args": { "id": "01900000-0000-7000-8000-00000000000b" },
+      "expect": { "error": "no_server" }
     }
   ]
 }

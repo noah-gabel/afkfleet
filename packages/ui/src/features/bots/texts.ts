@@ -2,17 +2,21 @@
 // state, its reasons and its last disconnect read as. Every value comes from an `Open<…>`,
 // so each switch has a default branch that shows a value this version doesn't know as it
 // came. A kick's message is a Minecraft server's text: shown as plain text, as it came.
+import type { Entry, Notice } from "../../api/liveRecord";
 import type { AccountRestriction } from "../../generated/AccountRestriction";
 import type { AgentStatus } from "../../generated/AgentStatus";
 import type { BotAgent } from "../../generated/BotAgent";
 import type { BotResponse } from "../../generated/BotResponse";
 import type { BotStateKind } from "../../generated/BotStateKind";
 import type { BotStateReason } from "../../generated/BotStateReason";
+import type { BotStatus } from "../../generated/BotStatus";
 import type { ConnectFailure } from "../../generated/ConnectFailure";
 import type { LastDisconnect } from "../../generated/LastDisconnect";
 import type { ModeResponse } from "../../generated/ModeResponse";
 import type { SessionServerFailure } from "../../generated/SessionServerFailure";
 import type { UnplacedReason } from "../../generated/UnplacedReason";
+import { formatDuration } from "../../lib/duration";
+import { formatClock, formatClockSeconds, formatDate } from "../../lib/time";
 
 /** Home's heading. */
 export const BOTS_HEADING = "Bots";
@@ -25,8 +29,10 @@ export const LOADING_BOTS = "Loading bots…";
 export const BOT_NOT_FOUND = "This bot doesn't exist, or you can't see it.";
 /** A bot's mode the viewer can't see: another user's private mode (S68). */
 export const HIDDEN_MODE = "A mode you can't see";
-/** A mode's name while the modes load, or when they couldn't be read. */
+/** A mode's name while the modes load. */
 export const MODE_LOADING = "…";
+/** A mode's name when the modes couldn't be read. */
+export const MODE_FAILED = "Couldn't load the mode";
 /** The link back from a bot's screen. */
 export const BACK_HOME = "Home";
 
@@ -40,6 +46,9 @@ export const LABEL = {
   reason: "Reason",
   lastDisconnect: "Last disconnect",
   agent: "Agent",
+  notRunning: "Not running",
+  paused: "Paused",
+  failed: "Failed",
 } as const;
 
 /** Home when the bots couldn't be read. */
@@ -52,9 +61,17 @@ export function openBot(name: string): string {
   return `Open ${name}`;
 }
 
-/** An unreachable agent's last word. */
-export function agentLastSeen(clock: string): string {
-  return `Its agent was last seen ${clock}.`;
+/** When an unreachable agent was last seen: at a time today, on a date before today. */
+export function agentLastSeen(iso: string, now: number): string {
+  const seen = new Date(iso);
+  const today = new Date(now);
+  const sameDay =
+    seen.getFullYear() === today.getFullYear() &&
+    seen.getMonth() === today.getMonth() &&
+    seen.getDate() === today.getDate();
+  return sameDay
+    ? `Its agent was last seen at ${formatClock(iso)}.`
+    : `Its agent was last seen on ${formatDate(iso)} at ${formatClock(iso)}.`;
 }
 
 /** The badge's look, one of the Badge's variants. */
@@ -166,19 +183,18 @@ export function unplacedText(why: UnplacedReason): string {
   }
 }
 
-/**
- * A bot's reason, if it has one: a paused or failed state's, wherever the state rests, or
- * why a bot that should run isn't placed. Never that it's wanted stopped: its badge says so.
- */
-export function reasonText(bot: Pick<BotResponse, "status">): string | null {
-  const { status } = bot;
-  if ((status.state === "paused" || status.state === "failed") && status.reason !== undefined) {
-    return stateReasonText(status.reason);
-  }
-  if (status.kind === "unplaced" && status.why !== undefined && status.why !== "stopped") {
-    return unplacedText(status.why);
-  }
-  return null;
+/** Why a paused or failed bot rests, wherever its state rests; null for any other state. */
+export function restingText(status: BotStatus): string | null {
+  return (status.state === "paused" || status.state === "failed") && status.reason !== undefined
+    ? stateReasonText(status.reason)
+    : null;
+}
+
+/** Why a bot that should run isn't placed; never that it's wanted stopped: its badge says so. */
+export function notRunningText(status: BotStatus): string | null {
+  return status.kind === "unplaced" && status.why !== undefined && status.why !== "stopped"
+    ? unplacedText(status.why)
+    : null;
 }
 
 /** How a bot's last session ended. */
@@ -290,4 +306,117 @@ function agentStatusText(status: AgentStatus): string {
     default:
       return String(status);
   }
+}
+
+/** The controls' labels (U38). */
+export const CONTROL = {
+  start: "Start",
+  stop: "Stop",
+  restart: "Restart",
+  resume: "Resume",
+  reset: "Reset",
+} as const;
+/** After a call its bot's agent was sent (S73). */
+export const SENT_NOTE = "Sent. The state changes when its agent reports back.";
+/** Where the controls would be, for a viewer whose level allows none (U38). */
+export const VIEW_ONLY = "You can view this bot but not control it.";
+
+/** Settings (U40, U41, S68, S69). */
+export const SETTINGS = {
+  heading: "Settings",
+  mode: "Mode",
+  switching: "Switching…",
+  modeForbidden: "Only someone who manages this bot can choose that mode.",
+  server: "Server",
+  change: "Change",
+  set: "Set",
+  notSet: "Not set",
+  address: "Server address",
+  addressHint: "Host or host:port, e.g. play.example.com",
+  save: "Save",
+  cancel: "Cancel",
+} as const;
+
+/** The timeline (U46). */
+export const TIMELINE = {
+  heading: "Timeline",
+  note: "Since you signed in, while the app is open.",
+  empty: "Nothing yet.",
+} as const;
+/** A notice's way to its bot's screen. */
+export const OPEN = "Open";
+/** A bot the app never saw, where a notice names it. */
+export const UNKNOWN_BOT = "A bot";
+
+/**
+ * A timeline entry's text, the modes named by `modeNamed` (U46, R111): a status as its badge,
+ * with why it doesn't run and a new last disconnect after it.
+ */
+export function entryText(entry: Entry, modeNamed: (id: string) => string): string {
+  switch (entry.kind) {
+    case "status": {
+      const { status } = entry;
+      const last = entry.newDisconnect ? status.last_disconnect : undefined;
+      return [
+        stateBadge({ status, desired_state: entry.desired }).text,
+        notRunningText(status),
+        restingText(status),
+        last === undefined ? null : disconnectText(last),
+      ]
+        .filter((part) => part !== null)
+        .join(" · ");
+    }
+    case "died":
+      return entry.count === 1
+        ? "Died"
+        : `Died ${entry.count}×, last at ${formatClockSeconds(entry.at)}`;
+    case "alert":
+      return `${entry.state === "failed" ? "Failed" : "Paused"}: ${stateReasonText(entry.reason)}`;
+    case "mode":
+      return `Mode: ${modeNamed(entry.from)} → ${modeNamed(entry.to)}`;
+    case "desired":
+      return entry.desired === "stopped" ? "Stop requested" : "Start requested";
+    default: {
+      const unknown: never = entry;
+      return String(unknown);
+    }
+  }
+}
+
+/** A gap's text: how long live updates were down. */
+export function gapText(downMs: number): string {
+  return `Live updates were down for ${formatDuration(downMs)}; some events may be missing.`;
+}
+
+/** A notice's toast, as the event happens. */
+export function noticeToast(notice: Notice): string {
+  return notice.kind === "died" ? `${nameOf(notice)} died.` : noticeLine(notice);
+}
+
+/** A notice's line on Home, until it's dismissed or its bot's screen opened. */
+export function noticeLine(notice: Notice): string {
+  const name = nameOf(notice);
+  switch (notice.kind) {
+    case "died":
+      return notice.count === 1
+        ? `${name} died at ${formatClock(notice.at)}.`
+        : `${name} died ${notice.count} times, last at ${formatClock(notice.at)}.`;
+    case "paused":
+      return `${name} was paused: ${stateReasonText(notice.reason)}.`;
+    case "failed":
+      return `${name} failed: ${stateReasonText(notice.reason)}.`;
+    case "blocked":
+      return `${name} can't connect: its agent refuses this server's address.`;
+    case "respawn":
+      return `${name} couldn't respawn and left the server. It reconnects by itself.`;
+    default: {
+      const unknown: never = notice;
+      return String(unknown);
+    }
+  }
+}
+
+/** The bot a notice names, or "A bot" for one never seen. */
+function nameOf(notice: Notice): string {
+  return notice.name ?? UNKNOWN_BOT;
 }

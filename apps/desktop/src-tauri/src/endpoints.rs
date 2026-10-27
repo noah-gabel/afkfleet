@@ -20,11 +20,11 @@ use fleet_api_types::accounts::{
     LinkFlowResponse, LinkStartedResponse,
 };
 use fleet_api_types::app::{
-    CommandError, CommandErrorCode, LoginStepKind, LoginStepResponse, LogoutResponse,
-    SetupStepResponse,
+    BotCommandEffect, BotCommandResponse, CommandError, CommandErrorCode, LoginStepKind,
+    LoginStepResponse, LogoutResponse, SetupStepResponse,
 };
 use fleet_api_types::auth::{LoginRequest, RegisterRequest, RegisterResponse, StepUpRequest};
-use fleet_api_types::bots::{BotPage, BotResponse};
+use fleet_api_types::bots::{BotModeRequest, BotPage, BotPatchRequest, BotResponse};
 use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, InvitePage};
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
@@ -34,7 +34,7 @@ use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
 use fleet_api_types::{
     AccountId, BotId, InviteId, LinkFlowId, ModeId, PageQuery, SecretText, SessionId, UserId,
 };
-use fleet_client::{ClientError, LoginStep, VerifiedLink};
+use fleet_client::{BotCommandAnswer, ClientError, LoginStep, VerifiedLink};
 use garde::Validate;
 
 use crate::error;
@@ -545,6 +545,101 @@ impl<F: StoreFactory> AppState<F> {
         conn.client()?.modes(&query).await.map_err(error::client)
     }
 
+    /// The `patch_bot` command: the bot's server, after `step_up` within 5
+    /// minutes (ADR-0019, S47).
+    ///
+    /// # Errors
+    /// `invalid_input` for an address the server would refuse, `no_server`,
+    /// `no_session`, or `api` 403 (`step_up_required`, or `forbidden`
+    /// below Manage), 404, 422 or 429.
+    pub async fn patch_bot(
+        &self,
+        id: BotId,
+        request: BotPatchRequest,
+    ) -> Result<BotResponse, CommandError> {
+        validate(&request)?;
+        let conn = self.conn.read().await;
+        conn.client()?
+            .patch_bot(id, &request)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `set_bot_mode` command: the bot's mode.
+    ///
+    /// # Errors
+    /// `no_server`, `no_session`, or `api` 403 (a mode only Manage may
+    /// choose), 404, 422 (a mode the caller can't use) or 429.
+    pub async fn set_bot_mode(
+        &self,
+        id: BotId,
+        request: BotModeRequest,
+    ) -> Result<BotResponse, CommandError> {
+        validate(&request)?;
+        let conn = self.conn.read().await;
+        conn.client()?
+            .set_bot_mode(id, &request)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `start_bot` command: the bot should run.
+    ///
+    /// # Errors
+    /// `no_server`, `no_session`, or `api` 403, 404 or 429.
+    pub async fn start_bot(&self, id: BotId) -> Result<BotResponse, CommandError> {
+        let conn = self.conn.read().await;
+        conn.client()?.start_bot(id).await.map_err(error::client)
+    }
+
+    /// The `stop_bot` command: the bot should be stopped.
+    ///
+    /// # Errors
+    /// `no_server`, `no_session`, or `api` 403 or 404.
+    pub async fn stop_bot(&self, id: BotId) -> Result<BotResponse, CommandError> {
+        let conn = self.conn.read().await;
+        conn.client()?.stop_bot(id).await.map_err(error::client)
+    }
+
+    /// The `restart_bot` command: the bot's run restarted by its agent.
+    ///
+    /// # Errors
+    /// `no_server`, `no_session`, or `api` 403, 404, 409
+    /// (`bot_not_running`, `bot_unreachable`) or 429.
+    pub async fn restart_bot(&self, id: BotId) -> Result<BotCommandResponse, CommandError> {
+        let conn = self.conn.read().await;
+        let answer = conn
+            .client()?
+            .restart_bot(id)
+            .await
+            .map_err(error::client)?;
+        Ok(commanded(answer))
+    }
+
+    /// The `reset_bot` command: a failed bot tries again, sent to its agent
+    /// or its stored state cleared, as the answer's effect says.
+    ///
+    /// # Errors
+    /// `no_server`, `no_session`, or `api` 403, 404, 409
+    /// (`bot_not_failed`, `bot_unreachable`) or 429.
+    pub async fn reset_bot(&self, id: BotId) -> Result<BotCommandResponse, CommandError> {
+        let conn = self.conn.read().await;
+        let answer = conn.client()?.reset_bot(id).await.map_err(error::client)?;
+        Ok(commanded(answer))
+    }
+
+    /// The `resume_bot` command: a paused bot joins again, sent to its agent
+    /// or its stored state cleared, as the answer's effect says.
+    ///
+    /// # Errors
+    /// `no_server`, `no_session`, or `api` 403, 404, 409
+    /// (`bot_not_paused`, `bot_unreachable`) or 429.
+    pub async fn resume_bot(&self, id: BotId) -> Result<BotCommandResponse, CommandError> {
+        let conn = self.conn.read().await;
+        let answer = conn.client()?.resume_bot(id).await.map_err(error::client)?;
+        Ok(commanded(answer))
+    }
+
     /// A link or re-link start's outcome: a good link is held and the
     /// answer returned; a bad one drops the answer, its code included, and
     /// forgets the held link; a refusal leaves the held link as it was.
@@ -562,6 +657,17 @@ impl<F: StoreFactory> AppState<F> {
             self.hold_link(None);
             Err(CommandError::new(CommandErrorCode::InvalidVerificationLink))
         }
+    }
+}
+
+/// A restart's, reset's or resume's answer, for the UI (ADR-0020, S73).
+fn commanded(answer: BotCommandAnswer) -> BotCommandResponse {
+    BotCommandResponse {
+        bot: answer.bot,
+        effect: match answer.effect {
+            fleet_client::BotCommandEffect::Sent => BotCommandEffect::Sent,
+            fleet_client::BotCommandEffect::Cleared => BotCommandEffect::Cleared,
+        },
     }
 }
 

@@ -91,6 +91,21 @@ describe("Home", () => {
     expect(fact(stopped, "Reason")).toBeNull();
   });
 
+  it("says a card's mode couldn't be loaded when the modes can't be read", async () => {
+    await home(
+      { items: [ONLINE] },
+      {
+        modes: async () => {
+          throw refusal(500, "internal");
+        },
+      },
+    );
+
+    const online = await card("AfkBot2");
+
+    expect(await online.findByText("Couldn't load the mode")).toBeDefined();
+  });
+
   it("shows why a bot isn't running, and no address where the server sent none", async () => {
     await home({
       items: [bot(1, { desired_state: "running", status: { kind: "unplaced", why: "no_server" } })],

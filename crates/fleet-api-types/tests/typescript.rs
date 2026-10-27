@@ -37,7 +37,7 @@ fn exported() -> (TempDir, BTreeMap<String, String>) {
 }
 
 /// Every file the export writes, sorted: one per type.
-const EXPORTED_FILES: [&str; 121] = [
+const EXPORTED_FILES: [&str; 123] = [
     "AccountKind.ts",
     "AccountLabel.ts",
     "AccountPage.ts",
@@ -56,6 +56,8 @@ const EXPORTED_FILES: [&str; 121] = [
     "AuditTargetKind.ts",
     "AuditTargetResponse.ts",
     "BotAgent.ts",
+    "BotCommandEffect.ts",
+    "BotCommandResponse.ts",
     "BotModeRequest.ts",
     "BotPage.ts",
     "BotPatchRequest.ts",
@@ -170,8 +172,10 @@ fn the_export_writes_one_file_per_type() {
 
 /// The desktop app's IPC types (ADR-0017): never on the HTTP wire, so the
 /// `OpenAPI` document leaves them out.
-const APP_TYPES: [&str; 16] = [
+const APP_TYPES: [&str; 18] = [
     "ApiErrorDetails.ts",
+    "BotCommandEffect.ts",
+    "BotCommandResponse.ts",
     "CommandError.ts",
     "CommandErrorCode.ts",
     "CustomCaView.ts",

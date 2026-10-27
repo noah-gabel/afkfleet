@@ -4,54 +4,10 @@
 // ipc-contract.json keeps the commands in step.
 import { describe, expect, it } from "vitest";
 
-import matrix from "../../../../../crates/fleet-core/src/authz/snapshots/fleet_core__authz__authorize__tests__authorization_matrix.snap?raw";
 import type { InviteResponse } from "../../generated/InviteResponse";
 import type { UserRole } from "../../generated/UserRole";
+import { role, table } from "../../test/authzMatrix";
 import { type Actor, canRevoke, canRevokeRole, inviteRoles, userActions } from "./permissions";
-
-/** A table of the snapshot: its header's columns and its rows' cells. */
-interface Table {
-  readonly header: readonly string[];
-  readonly rows: readonly (readonly string[])[];
-}
-
-/** The table that follows the heading `heading` (and its description and blank line). */
-function table(heading: string): Table {
-  const lines = matrix.split(/\r?\n/);
-  const start = lines.indexOf(heading);
-  expect(start, `the snapshot has no "${heading}"`).toBeGreaterThanOrEqual(0);
-  const cells = (line: string) => line.trim().split(/\s{2,}/);
-  let at = start + 1;
-  while (at < lines.length && !/\s{2,}/.test(lines[at] ?? "")) {
-    at += 1;
-  }
-  const header = cells(lines[at] ?? "");
-  const rows: string[][] = [];
-  for (at += 1; at < lines.length && (lines[at] ?? "").trim() !== ""; at += 1) {
-    rows.push(cells(lines[at] ?? ""));
-  }
-  return { header, rows };
-}
-
-/** The roles the matrix names, as the API writes them. */
-function role(label: string): UserRole {
-  switch (label) {
-    case "Owner":
-    case "the Owner":
-    case "an Owner":
-      return "owner";
-    case "Admin":
-    case "an Admin":
-    case "another Admin":
-      return "admin";
-    case "Member":
-    case "a Member":
-    case "another Member":
-      return "member";
-    default:
-      throw new Error(`a role the test doesn't know: ${label}`);
-  }
-}
 
 const ACTOR_ID = "01900000-0000-7000-8000-000000000001";
 const OTHER_ID = "01900000-0000-7000-8000-000000000002";

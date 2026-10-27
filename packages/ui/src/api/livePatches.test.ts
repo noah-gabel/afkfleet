@@ -6,6 +6,7 @@ import type { EventMessage } from "../generated/EventMessage";
 import { account, accountId } from "../test/accounts";
 import { bot, botId, line, mode, modeId, pages } from "../test/live";
 import {
+  type CachedBot,
   entryPatch,
   type LivePatch,
   pagesPatch,
@@ -27,7 +28,7 @@ import {
 
 /** What `event`'s patch for `queryKey` makes of `data`. */
 function patched(event: EventMessage, queryKey: QueryKey, data: unknown): unknown {
-  const patch = patchesFor(event).find(
+  const patch = patchesFor(event, () => undefined).find(
     (one): one is Extract<LivePatch, { kind: "set" }> =>
       one.kind === "set" && JSON.stringify(one.queryKey) === JSON.stringify(queryKey),
   );
@@ -107,7 +108,7 @@ describe("a bot frame", () => {
     expect(patched(renamed, accountKey(accountId(3)), account(3))).toEqual(
       account(3, { name: "AfkBot33" }),
     );
-    expect(patchesFor(renamed)).toContainEqual({
+    expect(patchesFor(renamed, () => undefined)).toContainEqual({
       kind: "invalidate",
       queryKey: grantsKey(accountId(3)),
     });
@@ -156,13 +157,25 @@ describe("the other events", () => {
 
     expect(itemsOf(patched(removed, BOTS_LIST_KEY, cached))).toEqual([bot(5)]);
     // Reset, not removed: an open screen reads the bot again, and shows its 404 (R98).
-    expect(patchesFor(removed)).toEqual(
+    expect(patchesFor(removed, () => undefined)).toEqual(
       expect.arrayContaining([
         { kind: "reset", queryKey: botKey(botId(3)) },
         { kind: "reset", queryKey: chatKey(botId(3)) },
         { kind: "invalidate", queryKey: ACCOUNTS_KEY },
       ]),
     );
+  });
+
+  it("bot_removed resets the account of a bot the cache holds, and no account otherwise", () => {
+    const removed: EventMessage = { type: "bot_removed", bot_id: botId(3) };
+    const resets = (cached: CachedBot) =>
+      patchesFor(removed, cached).filter((patch) => patch.kind === "reset");
+
+    expect(resets((id) => (id === botId(3) ? bot(3) : undefined))).toContainEqual({
+      kind: "reset",
+      queryKey: accountKey(accountId(3)),
+    });
+    expect(resets(() => undefined)).toHaveLength(2);
   });
 
   it("chat merges its line into the bot's chat by the row's ID", () => {
@@ -203,13 +216,13 @@ describe("the other events", () => {
   ])("%s patches nothing", (type) => {
     const notice = { type, bot_id: botId(1) } as EventMessage;
 
-    expect(patchesFor(notice)).toEqual([]);
+    expect(patchesFor(notice, () => undefined)).toEqual([]);
   });
 
   it("a frame missing what its kind carries patches nothing", () => {
-    expect(patchesFor({ type: "bot" })).toEqual([]);
-    expect(patchesFor({ type: "chat", bot_id: botId(1) })).toEqual([]);
-    expect(patchesFor({ type: "mode" })).toEqual([]);
+    expect(patchesFor({ type: "bot" }, () => undefined)).toEqual([]);
+    expect(patchesFor({ type: "chat", bot_id: botId(1) }, () => undefined)).toEqual([]);
+    expect(patchesFor({ type: "mode" }, () => undefined)).toEqual([]);
   });
 });
 

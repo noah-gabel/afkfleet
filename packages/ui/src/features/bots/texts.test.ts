@@ -1,14 +1,21 @@
 import { describe, expect, it } from "vitest";
-
+import type { Entry, Notice } from "../../api/liveRecord";
 import type { BotResponse } from "../../generated/BotResponse";
 import type { BotStatus } from "../../generated/BotStatus";
 import type { LastDisconnect } from "../../generated/LastDisconnect";
+import { formatClock, formatClockSeconds, formatDate } from "../../lib/time";
 import { bot, mode } from "../../test/live";
 import {
+  agentLastSeen,
   agentText,
   disconnectText,
+  entryText,
+  gapText,
   modeName,
-  reasonText,
+  noticeLine,
+  noticeToast,
+  notRunningText,
+  restingText,
   stateBadge,
   stateReasonText,
   unplacedText,
@@ -85,25 +92,27 @@ describe("a bot's reason", () => {
   });
 
   it("is a paused or failed state's reason, wherever the state rests", () => {
-    expect(reasonText(withStatus({ kind: "reported", state: "paused", reason: "banned" }))).toBe(
+    expect(restingText({ kind: "reported", state: "paused", reason: "banned" })).toBe(
       "Banned from this server",
     );
     expect(
-      reasonText(
-        withStatus({ kind: "unplaced", why: "no_server", state: "failed", reason: "auth" }),
-      ),
+      restingText({ kind: "unplaced", why: "no_server", state: "failed", reason: "auth" }),
     ).toBe("Microsoft refused its sign-in: link the account again");
-    expect(
-      reasonText(withStatus({ kind: "unknown", state: "paused", reason: "duplicate_login" })),
-    ).toBe("Someone logged in with its account");
+    expect(restingText({ kind: "unknown", state: "paused", reason: "duplicate_login" })).toBe(
+      "Someone logged in with its account",
+    );
+    expect(restingText({ kind: "reported", state: "online" })).toBeNull();
   });
 
   it("is why a bot isn't running, but never that it's wanted stopped", () => {
-    expect(reasonText(withStatus({ kind: "unplaced", why: "no_server", state: "stopped" }))).toBe(
+    expect(notRunningText({ kind: "unplaced", why: "no_server", state: "stopped" })).toBe(
       "No server set",
     );
-    expect(reasonText(withStatus({ kind: "unplaced", why: "stopped" }, "stopped"))).toBeNull();
-    expect(reasonText(withStatus({ kind: "reported", state: "online" }))).toBeNull();
+    expect(
+      notRunningText({ kind: "unplaced", why: "pending", state: "failed", reason: "auth" }),
+    ).toBe("Its account waits for approval");
+    expect(notRunningText({ kind: "unplaced", why: "stopped" })).toBeNull();
+    expect(notRunningText({ kind: "reported", state: "online" })).toBeNull();
   });
 });
 
@@ -177,6 +186,17 @@ describe("a bot's last disconnect", () => {
 });
 
 describe("the other texts", () => {
+  it("say when an agent was last seen: at a time today, on a date before today", () => {
+    const now = new Date(2026, 9, 26, 14, 5).getTime();
+    const today = new Date(2026, 9, 26, 0, 30).toISOString();
+    const yesterday = new Date(2026, 9, 25, 23, 30).toISOString();
+
+    expect(agentLastSeen(today, now)).toBe(`Its agent was last seen at ${formatClock(today)}.`);
+    expect(agentLastSeen(yesterday, now)).toBe(
+      `Its agent was last seen on ${formatDate(yesterday)} at ${formatClock(yesterday)}.`,
+    );
+  });
+
   it("name a built-in mode as such", () => {
     expect(modeName(mode(1, { name: "afk", ownership: "built_in" }))).toBe("afk (built in)");
     expect(modeName(mode(2, { name: "My loop", ownership: "mine" }))).toBe("My loop");
@@ -196,5 +216,103 @@ describe("the other texts", () => {
         status: status as "online",
       }),
     ).toBe(text);
+  });
+});
+
+describe("the timeline's texts (U46, R111)", () => {
+  const AT = "2026-10-26T14:00:05.000Z";
+  const named = (id: string) => `mode ${id}`;
+
+  it.each([
+    [
+      {
+        kind: "status",
+        arrived: 0,
+        desired: "running",
+        newDisconnect: false,
+        status: { kind: "reported", state: "online" },
+      },
+      "Online",
+    ],
+    [
+      {
+        kind: "status",
+        arrived: 0,
+        desired: "running",
+        newDisconnect: true,
+        status: {
+          kind: "reported",
+          state: "backoff",
+          last_disconnect: { kind: "kicked", message: "Testing" },
+        },
+      },
+      "Reconnecting · Kicked: Testing",
+    ],
+    [
+      {
+        kind: "status",
+        arrived: 0,
+        desired: "running",
+        newDisconnect: false,
+        status: { kind: "unplaced", why: "no_server", state: "paused", reason: "banned" },
+      },
+      "Paused · No server set · Banned from this server",
+    ],
+    [{ kind: "died", arrived: 0, at: AT, count: 1 }, "Died"],
+    [{ kind: "died", arrived: 0, at: AT, count: 3 }, `Died 3×, last at ${formatClockSeconds(AT)}`],
+    [
+      { kind: "alert", arrived: 0, at: AT, state: "paused", reason: "banned" },
+      "Paused: Banned from this server",
+    ],
+    [
+      { kind: "alert", arrived: 0, at: AT, state: "failed", reason: "crash_loop" },
+      "Failed: It kept crashing",
+    ],
+    [{ kind: "mode", arrived: 0, from: "a", to: "b" }, "Mode: mode a → mode b"],
+    [{ kind: "desired", arrived: 0, desired: "running" }, "Start requested"],
+    [{ kind: "desired", arrived: 0, desired: "stopped" }, "Stop requested"],
+  ] as [Entry, string][])("read %o as %s", (entry, text) => {
+    expect(entryText(entry, named)).toBe(text);
+  });
+
+  it("say how long live updates were down", () => {
+    expect(gapText(754_000)).toBe("Live updates were down for 12 min; some events may be missing.");
+  });
+});
+
+describe("the notices' texts (U42)", () => {
+  const AT = "2026-10-26T14:00:05.000Z";
+  const base = { id: 1, botId: "b", name: "AfkBot1", count: 1, at: AT };
+
+  it.each([
+    [{ ...base, kind: "died" }, "AfkBot1 died.", `AfkBot1 died at ${formatClock(AT)}.`],
+    [
+      { ...base, kind: "died", count: 3 },
+      "AfkBot1 died.",
+      `AfkBot1 died 3 times, last at ${formatClock(AT)}.`,
+    ],
+    [
+      { ...base, kind: "paused", reason: "banned" },
+      "AfkBot1 was paused: Banned from this server.",
+      "AfkBot1 was paused: Banned from this server.",
+    ],
+    [
+      { ...base, kind: "failed", reason: "auth" },
+      "AfkBot1 failed: Microsoft refused its sign-in: link the account again.",
+      "AfkBot1 failed: Microsoft refused its sign-in: link the account again.",
+    ],
+    [
+      { ...base, kind: "blocked" },
+      "AfkBot1 can't connect: its agent refuses this server's address.",
+      "AfkBot1 can't connect: its agent refuses this server's address.",
+    ],
+    [
+      { ...base, kind: "respawn" },
+      "AfkBot1 couldn't respawn and left the server. It reconnects by itself.",
+      "AfkBot1 couldn't respawn and left the server. It reconnects by itself.",
+    ],
+    [{ ...base, kind: "died", name: null }, "A bot died.", `A bot died at ${formatClock(AT)}.`],
+  ] as [Notice, string, string][])("read %o as its toast and its line", (notice, toast, line) => {
+    expect([noticeToast(notice), noticeLine(notice)]).toEqual([toast, line]);
   });
 });

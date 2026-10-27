@@ -15,9 +15,23 @@
 // - `live`: the live events layer's (live.ts) hint for the Header while a reconnect waits or
 //   after the watch stopped (U30), and what it's asked from outside: a new watch, after a
 //   server profile save that changed nothing (P11.8, S61).
+// - `record`: the live record (api/liveRecord.ts, S71) that the timeline and the notices
+//   show, which the live layer feeds and clears; and the bot whose screen is open (R109).
 import { createStore, type StoreApi } from "zustand/vanilla";
 
+import {
+  acknowledge,
+  dismiss,
+  down,
+  drop,
+  emptyRecord,
+  known,
+  type LiveRecord,
+  observe,
+} from "../api/liveRecord";
+import type { BotResponse } from "../generated/BotResponse";
 import type { CommandError } from "../generated/CommandError";
+import type { LiveUpdateMessage } from "../generated/LiveUpdateMessage";
 
 /** Where the user's session stands, as far as the UI knows. */
 export type SessionPhase = "starting" | "signed_out" | "signed_in" | "logging_out";
@@ -108,12 +122,35 @@ export interface LiveState {
   restart(): void;
 }
 
+/** The live record's store; see the module comment. */
+export interface RecordState {
+  /** The record. */
+  readonly record: LiveRecord;
+  /** The bot whose screen is open: its notices are acknowledged as they come (R109). */
+  readonly open: string | null;
+  /** The current watch's `update` arrived at `now`. */
+  observe(update: LiveUpdateMessage, now: number): void;
+  /** The current watch ended at `now`. */
+  down(now: number): void;
+  /** A read answered `bots`: they're known where the record doesn't know them yet. */
+  known(bots: readonly BotResponse[]): void;
+  /** Bot `botId` is gone: its read answered 404. */
+  drop(botId: string): void;
+  /** Notice `id` was dismissed. */
+  dismiss(id: number): void;
+  /** Bot `botId`'s screen opened, acknowledging its notices; null when it closed. */
+  setOpen(botId: string | null): void;
+  /** A sign-out or a new sign-in: nothing is kept. */
+  clear(): void;
+}
+
 /** The stores of one App. */
 export interface AppStores {
   readonly session: StoreApi<SessionState>;
   readonly connection: StoreApi<ConnectionState>;
   readonly notices: StoreApi<NoticesState>;
   readonly live: StoreApi<LiveState>;
+  readonly record: StoreApi<RecordState>;
 }
 
 /** Fresh stores for one App. */
@@ -203,6 +240,33 @@ export function createAppStores(): AppStores {
       restarts: 0,
       restart() {
         set({ restarts: get().restarts + 1 });
+      },
+    })),
+    record: createStore<RecordState>()((set, get) => ({
+      record: emptyRecord(),
+      open: null,
+      observe(update, now) {
+        set({ record: observe(get().record, update, now, get().open) });
+      },
+      down(now) {
+        set({ record: down(get().record, now) });
+      },
+      known(bots) {
+        set({ record: known(get().record, bots) });
+      },
+      drop(botId) {
+        set({ record: drop(get().record, botId) });
+      },
+      dismiss(id) {
+        set({ record: dismiss(get().record, id) });
+      },
+      setOpen(botId) {
+        const { record } = get();
+        set({ open: botId, record: botId === null ? record : acknowledge(record, botId) });
+      },
+      clear() {
+        // The IDs go on growing, so the toaster never takes a new notice for one it showed.
+        set({ record: { ...emptyRecord(), sequence: get().record.sequence } });
       },
     })),
   };

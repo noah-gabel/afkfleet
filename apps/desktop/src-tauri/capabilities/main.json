@@ -42,6 +42,13 @@
     "allow-watch-events",
     "allow-bots",
     "allow-bot",
-    "allow-modes"
+    "allow-modes",
+    "allow-patch-bot",
+    "allow-set-bot-mode",
+    "allow-start-bot",
+    "allow-stop-bot",
+    "allow-restart-bot",
+    "allow-reset-bot",
+    "allow-resume-bot"
   ]
 }

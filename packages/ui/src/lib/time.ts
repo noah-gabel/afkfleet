@@ -3,6 +3,8 @@
 const FORMAT = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" });
 const WITH_ZONE = new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "long" });
 const CLOCK = new Intl.DateTimeFormat(undefined, { timeStyle: "short" });
+const DATE = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" });
+const CLOCK_SECONDS = new Intl.DateTimeFormat(undefined, { timeStyle: "medium" });
 
 /** `iso` as the user reads a date and time. */
 export function formatTime(iso: string): string {
@@ -17,4 +19,14 @@ export function formatTimeWithZone(iso: string): string {
 /** `iso` as a time of day, for something that ends within the hour (a link's code). */
 export function formatClock(iso: string): string {
   return CLOCK.format(new Date(iso));
+}
+
+/** `iso`'s day, as the user reads a date: the app's date format, without the time. */
+export function formatDate(iso: string): string {
+  return DATE.format(new Date(iso));
+}
+
+/** `iso` as a time of day to the second, the timeline's (U46). */
+export function formatClockSeconds(iso: string): string {
+  return CLOCK_SECONDS.format(new Date(iso));
 }

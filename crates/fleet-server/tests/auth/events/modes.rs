@@ -151,6 +151,8 @@ async fn each_viewers_mode_frame_equals_their_modes_entry(
         let entry = listed(&setup, watchers.shared, person).await.unwrap();
         assert_eq!(frame, mode_frame(watchers.shared, &entry), "{name}");
         assert_eq!(frame.to_string().contains(CANARY), edits, "{name}: {frame}");
+        // `/warp` is off the default, empty allowlist (S68).
+        assert_eq!(frame["mode"]["unlisted_command"], true, "{name}: {frame}");
     }
 }
 

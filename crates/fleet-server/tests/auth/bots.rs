@@ -1005,6 +1005,71 @@ async fn a_mode_whose_commands_are_on_the_allowlist_needs_only_control(
     assert_eq!(setup.bot_row(bot).await.mode, home);
 }
 
+/// What `GET /modes` answers a Control holder of each mode's
+/// `unlisted_command` says exactly whether they may switch the bot to it:
+/// 200 for false, 403 for true (ADR-0020, S68). The modes: plain chat, an
+/// allowlisted command, and an unlisted one at start and on respawn.
+#[sqlx::test(migrations = false)]
+async fn a_control_holder_may_switch_to_exactly_the_modes_whose_flag_is_false(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup_with(
+        options,
+        Options {
+            allowlist: CommandAllowlist::try_new(&["/home"]).unwrap(),
+            ..Options::default()
+        },
+    )
+    .await;
+    let owner = setup.person(2, "owner", Role::Admin).await;
+    let controller = setup.person(3, "controller", Role::Member).await;
+    let (account, bot) = setup.bot_of(owner.id, 10).await;
+    setup
+        .share(account, controller.id, GrantLevel::Control, owner.id)
+        .await;
+    let step = |message: &str, schedule: &str| {
+        json!({ "steps": [{ "action": { "type": "send_chat", "message": message }, "schedule": { "type": schedule }, "probability": 100 }] })
+            .to_string()
+    };
+    setup.custom_mode(1, owner.id, "shared").await;
+    for (n, definition) in [
+        (2, step("hello there", "at_start")),
+        (3, step("/spawn", "at_start")),
+        (4, step("/spawn", "on_respawn")),
+    ] {
+        setup
+            .custom_mode_of(n, owner.id, "shared", &definition)
+            .await;
+    }
+
+    let listed = setup
+        .get("/api/v1/modes?limit=100", Some(&controller.token))
+        .await;
+    let mut answers = Vec::new();
+    for mode in listed.body["items"].as_array().unwrap() {
+        let id: ModeId = mode["id"].as_str().unwrap().parse().unwrap();
+        let switched = setup.set_mode(bot, id, &controller).await;
+        answers.push((
+            mode["name"].as_str().unwrap().to_owned(),
+            mode["unlisted_command"].clone(),
+            switched.status,
+        ));
+    }
+
+    assert_eq!(listed.status, 200, "{}", listed.text);
+    let flagged: Vec<_> = answers
+        .iter()
+        .filter(|(_, flag, _)| *flag == json!(true))
+        .map(|(name, _, _)| name.as_str())
+        .collect();
+    assert_eq!(flagged, ["home 4", "home 3"], "{answers:?}");
+    for (name, flag, status) in &answers {
+        let expected = if *flag == json!(true) { 403 } else { 200 };
+        assert_eq!(*status, expected, "{name}: {answers:?}");
+    }
+}
+
 // --- Start and stop (S48, S50, S51) -------------------------------------------------------
 
 #[sqlx::test(migrations = false)]

@@ -1149,7 +1149,7 @@ CLAUDE.md's step 3 counts twenty-one group branches.
 - **U35. Home is the dashboard, kept very clean:** the cards right after the Header; the sign-in line and "Bots arrive in a later version." gone; the warnings (the 2FA and recovery-code warnings, the links waiting for approval) one compact line each above the cards, only while they apply, never large boxes; a card shows the bot's name and its state badge prominently, its details in small muted text, no buttons, the whole card opening the detail; an empty state with one clear next step; generous spacing, nothing shown twice. L refines the looks.
 - **U36. The live hint stays in the Header** (U30), on every screen.
 - **U37. A roomy grid, labelled:** fewer, larger cards per row, each detail on its own line with a small muted label, a field the bot doesn't have left out.
-- **U38. Controls:** running states Stop and Restart; Stopped, Start; **Paused, Resume and Stop; Failed, Reset and Stop** (S51); waiting to run or an unreachable agent, Stop; controls the viewer's level doesn't allow aren't shown.
+- **U38. Controls:** running states Stop and Restart; Stopped, Start; **Paused, Resume and Stop; Failed, Reset and Stop** (S51); waiting to run or an unreachable agent, Stop; controls the viewer's level doesn't allow aren't shown, and a viewer whose level allows none (View) sees one small muted line where the controls would be, "You can view this bot but not control it." *(The line was the user's answer at the planning, lost from the record and restored at PR #75's review.)*
 - **U39. The detail in two columns:** status, controls, Settings and the timeline on the left; the chat console and its send box on the right, filling the height; one column on a narrow window.
 - **U40. The mode selector:** a native drop-down that switches at once ("Switching…" meanwhile); modes the viewer may not pick are hidden. A styled Radix Select is out: its `react-remove-scroll` injects a runtime `<style>`, which the CSP blocks.
 - **U41. The server address:** text with Change, which turns it into a field with Save and Cancel in place; the step-up prompt inline.
@@ -1166,7 +1166,7 @@ CLAUDE.md's step 3 counts twenty-one group branches.
 - **U50. The DoD agent never dials a public address** (the user's rule: no Minecraft account of theirs on public servers yet). A new agent setting, `[control_plane] public_targets` (default `true`, so nothing else changes); under `false` a public address is refused exactly as an unlisted private one: one `warn`, `ConnectFailure::Blocked`, never dialled, and the app shows its "Blocked" text. `deploy/dod/agent.toml` sets it to `false` with a comment citing the rule. Tests: fleet-core's check refuses a public address under it and still allows the listed `127.0.0.1`; the agent's config reads it (default `true`, `false` read, refused under standalone as `private_targets` is); fleet-integration's DoD test asserts the file's `false`. M decides whether the 24-hour run changes it.
 - **U51. The DoD steps come in two parts.** After H's check: Stop the bot in the app, close the app, stop the agent and the server, `just dod-mc-down`; `target/dod-run/` stays (U1 keeps the account for M) and the cleanup doesn't run. When the DoD is finished, after M's run or if the user gives it up: `just dod-server` and `just dod-app`, log in, delete the account, log out and close the app, stop the server, `just dod-mc-down` if it's up, then `just dod-clean`, and optionally end the app's consent in the Microsoft account.
 - **U52. The cleanup's refusals say what to do:** a leftover `afkfleet.db-wal` after a crash says to start `just dod-server` once, stop it, then clean again; a test checks each refusal's message, and one pins that `dod-agent`'s heartbeat file is the path the cleanup checks.
-- **The texts:** the table below, approved with three changes: a user's own lines' sender "You", the gap "Live updates were down for {duration}; some events may be missing.", and `owner_disabled` "Its owner's login is disabled".
+- **The texts:** the table below, approved with four changes: a user's own lines' sender "You", the gap "Live updates were down for {duration}; some events may be missing.", `owner_disabled` "Its owner's login is disabled", and a View holder's line where the controls would be, "You can view this bot but not control it." (U38; restored at PR #75's review).
 
 *Decided by the review agents, approved by the user at the plan review:*
 - **S66 (security). Parsed senders and the per-server chat format move to the new group H4, with the per-server conflict texts.** The format needs per-server storage, which exists to hold the conflict texts that ADR-0013 and ADR-0019's U1 owe Phase 11, yet no group had them (a proxy's plain-text duplicate login can't be configured in managed mode today). Both share one table, key, permission, routes, audit and screen; the format stays on the server (ADR-0013), and P11.9 still ticks in J. H's console shows only the sender a player packet named; a parsed sender, once built, goes in its own optional field, never in `sender`. *Rejected:* building it in H (a permission, routes, a migration and a reconciler change inside a screens group); dropping it (the user's Phase 3 request).
@@ -1191,7 +1191,7 @@ CLAUDE.md's step 3 counts twenty-one group branches.
 - **R95. G's note "the `chat` patch then keeps `request`"** is met by S70's link, not by a field on the line.
 - **R96. Names:** the 13 commands above and their methods (`bots`, `bot`, `modes`, `patchBot`, `setBotMode`, `startBot` … `resumeBot`, `botChat`, `sendChat`, `sendCommand`); `features/bots/`; the route `/bots/$id`; the `dod-*` recipes.
 
-*The texts* (the user's approval at the plan review, with the three changes above; the server's error texts, `StepUpPrompt`, `RetryWaitMessage` and G2's hint texts stay; every status text has a default branch showing the server's value as it came):
+*The texts* (the user's approval at the plan review, with the four changes above; the server's error texts, `StepUpPrompt`, `RetryWaitMessage` and G2's hint texts stay; every status text has a default branch showing the server's value as it came):
 
 | Where | Text |
 |---|---|
@@ -1206,7 +1206,7 @@ CLAUDE.md's step 3 counts twenty-one group branches.
 | Reason (not running) | no_server "No server set"; owner_disabled "Its owner's login is disabled"; pending "Its account waits for approval"; reauth_required "Its account must be linked again"; refused "Its account's link was refused"; offline_not_allowed "This server doesn't allow offline accounts"; awaiting_agent "Waiting for an agent with room" |
 | Last disconnect | kicked "Kicked: {message}" (or "Kicked ({key})"); connection_closed "Connection closed"; connect_failed "Couldn't connect: {connection refused / timed out / address not found / host unreachable / network error}"; blocked "Blocked: its agent refuses this address. Ask whoever runs the agent to allow it."; auth_rejected "The server refused its sign-in"; account_restricted "Account restricted: {banned / multiplayer turned off}"; session_server_failed "Minecraft's session server {was unreachable / rate-limited it / timed out / answered unexpectedly}"; session_crashed "Its session crashed"; watchdog_timeout "It stopped responding"; liveness_timeout "The server stopped answering"; respawn_failed "It couldn't respawn after dying" |
 | Detail (H1) | back link "Home"; labels "State since", "Uptime", "Reconnect attempt", "Reason", "Last disconnect", "Agent" ("{name} · online / offline / certificate expired / disabled", Admins and the Owner only); unknown: "Its agent was last seen {clock}."; 404: "This bot doesn't exist, or you can't see it." |
-| Controls (H2) | "Start", "Stop", "Restart", "Resume", "Reset"; after a 202: "Sent. The state changes when its agent reports back." |
+| Controls (H2) | "Start", "Stop", "Restart", "Resume", "Reset"; after a 202: "Sent. The state changes when its agent reports back."; a View holder, small and muted where the controls would be: "You can view this bot but not control it." |
 | Settings (H2) | heading "Settings"; "Mode"; "Switching…"; mode 403: "Only someone who manages this bot can choose that mode."; "Server"; "Change" (or "Set" when there's none: "Not set"); field "Server address", hint "Host or host:port, e.g. play.example.com"; "Save", "Cancel" |
 | Timeline (H2) | heading "Timeline"; note "Since you signed in, while the app is open."; empty "Nothing yet."; entries: the badge text (" · {reason}"); "Died" / "Died {n}×, last at {clock}"; "Paused: {reason}" / "Failed: {reason}"; "Mode: {old} → {new}"; "Start requested" / "Stop requested"; gap "Live updates were down for {duration}; some events may be missing." |
 | Notices (H2), toast / Home line | died "{name} died." / "{name} died at {clock}." ({n} times: "{name} died {n} times, last at {clock}."); paused "{name} was paused: {reason}."; failed "{name} failed: {reason}."; blocked "{name} can't connect: its agent refuses this server's address."; respawn "{name} couldn't respawn and left the server. It reconnects by itself."; actions "Open", dismiss "Dismiss" (the ✕'s label) |
@@ -1235,6 +1235,80 @@ Built as planned, one PR on `p11/p11.9-bot-screens`, in eight commits: PR #74's 
 *Snapshots:* none.
 
 *Size:* about 3,550 lines added and 340 removed, below the planned 5,200: the follow-ups came to about 1,350, the three commands to about 550, the screens to about 1,250 with their tests; 33 of them generated (three permission files).
+
+### PR #75's review follow-ups (group H2's first commit)
+The points the user named after PR #75's merge, fixed in the first commit of group H2 (`p11/p11.9-bot-controls`). Each new test ran red before its code: against the code as it stood, against a stub with the real signature, or, for a test that pins working code, by a mutation restored from a saved copy and checked by checksum.
+
+*My choices in the fixes (the user named what to fix):*
+- **R99 (c). Pages that don't move on fail the read.** `everyAwaiting` and `everyMode` share one `everyPage`: a page's `next` must be older than the cursor it was asked with (an ID's text sorts by its time, as the live patches' `newer` reads it) and never one asked before, or the read fails with `unexpected_response`, "The server sent a list this app doesn't understand." (the user's wording at the plan review). Once the query's `signal` aborts, no further page is asked for.
+- **R100 (d). The uptime renders at its next change:** `useNow(nextIn)` reads the clock at each render and schedules one timer for the next, at the uptime's next whole second in its first minute, then its next whole minute (`uptimeNextChange`), a minute at most; the grid takes the soonest of its cards. A render for any other reason schedules again from its own reading, so a count is never late by up to a tick.
+- **R101 (g). A gone sender ends the socket at once.** It can't happen today: the stop's sender lives in the socket's own stopper and the epoch's in the session its core holds. Were one gone, its `changed` would answer at once at every turn and no step could run, a close included, so `end_now` ends the socket there, with the end decided before (a stop's, say), else `NoSession`.
+
+*The points:*
+1. **a:** U38 and the texts table gain the View holder's line, and the plan review's text changes count four.
+2. **b:** the bundle guard requires every needle in the e2e bundle, the marker, `/e2e/ipc/` and the push hook, each missing one named ("… doesn't hold "{needle}", so the check proves nothing"); `PUSH_HOOK` is exported beside `MARKER`. The tests for the path and the hook ran red against the check that looked for the marker alone; a test that reads `e2e/app/marker.ts` and `push.ts` pins both values to their sources (mutation MG1, the hook's name changed in the guard).
+3. **c:** a `next` equal to its cursor and an A→B→A cycle fail each of the two reads, red: they looped until the test's server gave up after 5 pages; a read cancelled after its first page asks no second, red: it asked on.
+4. **d:** the uptime's change on its whole minute 30 s after the screen opened, red: the old interval counted 60 s from the mount; `uptimeNextChange`'s cases, red against a stub; the per-second count from 58 s to "2 min", which the old code met too, pinned by mutation MU1 (no per-second tick).
+5. **e:** a card's name is larger than its details, and their values are small and muted like their labels. No test: L refines the looks.
+6. **f:** "Its agent was last seen at {clock}." today, "… on {date} at {clock}." before (`formatDate`, the app's medium date); a bot both unplaced and resting Paused or Failed shows both reasons, "Not running" first, then "Paused" or "Failed" (one alone stays "Reason"); "Couldn't load the mode" when the modes can't be read (`modesOf`). Eleven tests, red against stubs.
+7. **g:** R101 with its test (red against a no-op `end_now`); `LiveStop::stop`'s doc says an end decided before stands, so it can answer `NoSession`; `Backoff::action` and `after` are private, `next` their one caller; R89's revert writes data only, whatever the status, and its test checks the stale mark is kept (red: `setQueryData` cleared it); R98's test reads through a `QueryObserver` and sees the 404 (mutation MR1, `reset` back to `remove`); the unused `remove` patch kind went; a `bot_removed` resets the cached bot's account query too, found through the bot's own query or the list (red: the account's data stayed).
+8. **h. PR #75's hands-on, corrected:** it said a stop shows a Last disconnect. It doesn't: only a session that ended on its own (a kick, a failed connect, a crash, a timeout) records one (ADR-0013, `BotActor::ended`), and a stop the user asked for isn't one. While the agent reports the bot, an earlier session's end still shows; once stopped, the bot reads unplaced, which carries none. PR #75's description stays as merged; H2's hands-on checks it.
+
+### Group H2's planning
+H2 builds on H's planning above; nothing there was asked again. The user approved the plan with three changes: no edit of a merged PR's description (the section above records PR #75's corrected step), the paging error's text (R99's), and a hands-on line saying the per-bot limit's countdown is the limit working.
+
+*Decided by a review agent (approved by the user at the plan review):*
+- **S73 (not security). The app knows a lifecycle call's 202.** fleet-client's `restart_bot`, `reset_bot` and `resume_bot` answer the bot with the call's effect, read from the HTTP status: 202 `Sent`, 200 `Cleared` (restart only ever answers 202). The three desktop commands answer `fleet_api_types::app::BotCommandResponse { bot, effect }`, its `BotCommandEffect` the closed `sent | cleared`, exported by `just gen`; the controls show "Sent. The state changes when its agent reports back." only for `sent`. It amends ADR-0019's S56 and R34 for these three methods; the HTTP API and S50 don't change, and U32 holds (one fleet-client method per command). *Rejected:* inferring the status from the answered bot (S50's table copied into the UI, and wrong in a race: a clear's `Change::Store` can place the bot before the handler reads it back); the note after every success (a 200 clear involves no agent); a server field (S50 changed for a fact the status carries).
+
+*The user's answer while building (step 10's first case, a lint):*
+- **U53. `ModeResponse` carries four bools** once S68 adds `unlisted_command` beside `editable`, `deletable` and `visibility_editable`, which clippy's pedantic `struct_excessive_bools` refuses. The user approved `#[expect(clippy::struct_excessive_bools, reason = …)]` on `ModeResponse` alone: each flag is an independent fact the server reports, as the wire carries it. *The other options:* a newtype for the flag, serialized as a plain boolean; the three rights nested in a `rights` object (a wire change amending S14).
+
+*Reconciliations (mine), beside R99–R101 above:*
+- **R102. A write's answer isn't written over the cache.** A `bot` frame may already be newer than the HTTP answer (a restart's frames can pass its 202), so after a success the bot is read again, its frames held meanwhile (S60).
+- **R103. `controlsFor` beyond R94:** Stopping, or a reported Stopped while wanted Running, offers Stop; wanted Stopped with a sticky state, Resume or Reset alone (Stop would change nothing); an unknown desired state, Start.
+- **R104. A 429's countdown disables the controls that spend the per-bot limit** (Start, Restart, Resume, Reset); Stop stays enabled, since S52 exempts it. A mode switch's 429 disables the selector, the server's its Save.
+- **R105. Each value shows once on the screen** (U35's "nothing shown twice"): Mode and Server sit in Settings where the viewer can change them, otherwise among the facts. Control: the mode in Settings, the address among the facts; Manage: both in Settings; View: both among the facts (the address only when sent). The cards don't change.
+- **R106. The "Sent…" note** stays until the bot changes or the next action.
+- **R107. A gap** runs from when the watch was known down (its `disconnected` update, or its end) to the refetch; a `resync` or an unreadable frame has no down time, so it counts 0 s, which U46 hides like the routine reconnect.
+- **R108. First sight.** A `bot` frame for a bot with no known status records its status as an entry; a fill-in from a read never records one.
+- **R109. A notice for the bot whose screen is open** is acknowledged at once: its toast still shows, its Home line doesn't stay.
+- **R110. Toasts come from a shell component** (`LiveNotices`) reading the record's store, never from the live layer; "Open" goes to the bot's screen, and Home's line uses NoticeLine's "Dismiss".
+- **R111. A status entry whose last disconnect changed** shows it after the state.
+
+*The texts* (approved at the plan review, beside the table above):
+
+| Where | Text |
+|---|---|
+| A bot both unplaced and resting | two facts, the not-running one first: "Not running", then "Paused" or "Failed"; one reason alone stays "Reason" |
+| Timeline, a status whose last disconnect changed (R111) | "{badge} · {last disconnect}", e.g. "Reconnecting · Kicked: Testing" |
+| Timeline, a status with both reasons | "{badge} · {not running} · {resting reason}" |
+| A notice for a bot whose name isn't known yet | "A bot" in place of {name} |
+| A read whose pages don't move on (R99) | "The server sent a list this app doesn't understand." |
+| The user's texts from PR #75's review | "You can view this bot but not control it." (U38); "Couldn't load the mode"; "Its agent was last seen at {clock}." / "Its agent was last seen on {date} at {clock}." |
+
+The server-address field's own checks use the server's 422 wording ("must not be empty", "must be at most 259 characters, with a host of at most 253").
+
+### As built (group H2)
+Built as planned, one PR on `p11/p11.9-bot-controls`, in eleven commits: PR #75's follow-ups (above), the planning record, S68's flag, the seven write commands with S73, S67's permissions, the controls, Settings, the live record, the notices and the timeline, the e2e specs, and the docs. Each new test ran red before its code, against a stub with the real signature (a mode answer's flag always false, endpoints answering `ipc`, an effect always `sent`, permissions allowing nothing, controls and Settings rendering nothing, a record that keeps nothing, texts answering empty), or, for a test that pins working code, by a mutation restored from a saved copy and checked by checksum.
+
+*Choices made while building:*
+- **U53** (above): the user's answer when S68's fourth bool tripped clippy.
+- **S68's check is the caller's:** `mode_response` takes the `CommandCheck` its caller computes through `ModeService::command_check`, so its unit test reads the flag in the existing per-viewer test under the default, empty allowlist; the kinds of step (plain chat, an allowlisted command, an unlisted one at start and on respawn) are the integration test's.
+- **Four snapshots gained the flag, not one:** beside the OpenAPI document, the created, the edited and the per-viewer modes (40 modes there, 17 flagged, each checked against its steps under the empty allowlist).
+- **S73's types:** fleet-client's own `BotCommandAnswer` and `BotCommandEffect`, which the desktop maps to `app::BotCommandResponse`, as `LoginStep` is mapped.
+- **R105 moved a manager's server and mode** out of two H1 screen tests' facts and into Settings; the hidden-mode test is now a View holder's.
+- **A notice is a union:** a paused or failed one always carries its reason, so no text is needed for one without.
+- **The record's IDs keep growing across its clears,** so the toaster never takes a new notice for one it showed; a death merges with the one before only when no gap came between them.
+- **The e2e fake lists a third mode,** another user's shared `warp`, which sends a command off the allowlist; H1's live spec reads the state badge, since the timeline lists the states too.
+- **The shared matrix reader** (`packages/ui/src/test/authzMatrix.ts`) is the admin test's general table reader, with the accounts test's level rule and grant-table check.
+
+*Mutations* (each failed its tests, then was restored): MG1 (the guard's hook name), MU1 (no per-second uptime tick), MR1 (R98's reset back to a removal), MV1 (the bot writes passing `validated` unchecked), ME3 (Home without its notice lines and the screen without Settings: both new e2e specs failed); and, for four tests that passed against their stubs (which hold on an empty state), MS1 (Settings shown to a View holder), ML1 (every gap kept, however short), ML2 (a `bot_removed` keeping the bot) and ML3 (no clear at sign-out).
+
+*`just check`'s find:* clicking a toast's Open through user-event ran sonner's swipe handler, which calls `setPointerCapture`, missing from jsdom's elements: an unhandled error after a passing test. That test clicks with `fireEvent.click`.
+
+*Snapshots:* `openapi_document`, `mode_created`, `modes_as_each_viewer_sees_them` and `mode_updated`, each gaining `unlisted_command`; none else.
+
+*Size:* about 4,900 lines added and 350 removed, the docs included, as planned (about 4,900); about 150 of them generated (the TypeScript types and seven permission files) or snapshots.
 
 ### Notes for later groups
 - **B2 (P11.3's history):** built (above).

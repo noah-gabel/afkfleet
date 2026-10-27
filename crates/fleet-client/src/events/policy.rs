@@ -242,7 +242,7 @@ impl Backoff {
     /// What follows `end`, as [`Backoff::after`] will decide it, live for
     /// `live` after its `ready` if it got one.
     #[must_use]
-    pub(crate) fn action(&self, end: End, live: Option<Duration>) -> Action {
+    fn action(&self, end: End, live: Option<Duration>) -> Action {
         decide(end, self.prompt_left || Self::stable(live))
     }
 
@@ -271,7 +271,7 @@ impl Backoff {
 
     /// The wait after an attempt that ended in `end`, live for `live` after
     /// its `ready` if it got one; `None` when the socket gives up.
-    pub(crate) fn after(&mut self, end: End, live: Option<Duration>) -> Option<Duration> {
+    fn after(&mut self, end: End, live: Option<Duration>) -> Option<Duration> {
         if Self::stable(live) {
             self.failures = 0;
             self.prompt_left = true;

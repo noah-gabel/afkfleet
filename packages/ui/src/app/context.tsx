@@ -6,7 +6,14 @@ import { createContext, type ReactNode, useContext } from "react";
 import { useStore } from "zustand";
 
 import type { ApiClient } from "../api/ApiClient";
-import type { AppStores, ConnectionState, LiveState, NoticesState, SessionState } from "./stores";
+import type {
+  AppStores,
+  ConnectionState,
+  LiveState,
+  NoticesState,
+  RecordState,
+  SessionState,
+} from "./stores";
 
 /** The router's context: what every route's `beforeLoad` and `loader` receive. */
 export interface RouterContext {
@@ -50,4 +57,9 @@ export function useNotices<T>(select: (state: NoticesState) => T): T {
 /** A value of the live events store, re-rendering when it changes. */
 export function useLive<T>(select: (state: LiveState) => T): T {
   return useStore(useAppStores().live, select);
+}
+
+/** A value of the live record's store, re-rendering when it changes. */
+export function useRecord<T>(select: (state: RecordState) => T): T {
+  return useStore(useAppStores().record, select);
 }

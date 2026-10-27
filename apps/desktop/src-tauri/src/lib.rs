@@ -89,6 +89,13 @@ pub fn configure<R: Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
         commands::bots::bots,
         commands::bots::bot,
         commands::bots::modes,
+        commands::bots::patch_bot,
+        commands::bots::set_bot_mode,
+        commands::bots::start_bot,
+        commands::bots::stop_bot,
+        commands::bots::restart_bot,
+        commands::bots::reset_bot,
+        commands::bots::resume_bot,
     ])
 }
 

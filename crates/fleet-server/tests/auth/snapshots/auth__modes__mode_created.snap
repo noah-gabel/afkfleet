@@ -47,6 +47,7 @@ expression: "redacted(&seen.body, &[(id.clone(), \"the mode\")])"
       }
     }
   ],
+  "unlisted_command": false,
   "updated_at": "[T0]",
   "version": 1,
   "visibility": "private",

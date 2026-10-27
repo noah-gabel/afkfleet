@@ -770,6 +770,10 @@ impl OpenEnum for ModeOwnership {
 
 /// A mode as its viewer may see it (S14, S15).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS, ToSchema)]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "each flag is an independent fact the server reports, as the wire carries it (ADR-0020, U53)"
+)]
 pub struct ModeResponse {
     /// The mode's ID.
     #[ts(type = "string")]
@@ -800,6 +804,10 @@ pub struct ModeResponse {
     /// Whether the viewer may make it private if it's shared, or shared if
     /// it's private.
     pub visibility_editable: bool,
+    /// Whether one of its chat steps sends a command off the server's
+    /// allowlist, so choosing it for a bot needs Manage on the bot rather
+    /// than Control: the check `PUT /bots/{id}/mode` authorizes with (S68).
+    pub unlisted_command: bool,
     /// 1 when it was created, one more on every change.
     #[schema(schema_with = integer_schema::<1, { u32::MAX }>)]
     pub version: u32,
@@ -1635,6 +1643,7 @@ mod tests {
             "editable": true,
             "deletable": true,
             "visibility_editable": false,
+            "unlisted_command": false,
             "version": 3,
             "created_at": "2027-01-15T08:00:00.000Z",
             "updated_at": "2027-01-15T09:00:00.000Z",

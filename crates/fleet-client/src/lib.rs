@@ -70,7 +70,7 @@ pub mod url;
 mod session;
 mod transport;
 
-pub use client::{Client, ClientConfig, LoginStep};
+pub use client::{BotCommandAnswer, BotCommandEffect, Client, ClientConfig, LoginStep};
 pub use error::{ApiFailure, BuildError, ClientError, Unexpected};
 pub use events::{Disconnect, LiveEnd, LiveEvents, LiveStop, LiveUpdate, RefetchReason};
 pub use link::{VerifiedLink, VerifiedLinkError};

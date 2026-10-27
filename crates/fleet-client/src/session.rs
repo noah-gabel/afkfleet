@@ -114,7 +114,7 @@ use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, info, warn};
 
-use crate::client::LoginStep;
+use crate::client::{BotCommandAnswer, BotCommandEffect, LoginStep};
 use crate::error::{ApiFailure, ClientError, Unexpected};
 use crate::store::{SessionStore, StoreError, StoreOp};
 use crate::transport::{Incoming, Outgoing, Transport, TransportError, Upgrade, UpgradeRequest};
@@ -823,9 +823,36 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         id: BotId,
         call: BotCall,
     ) -> Result<BotResponse, ClientError> {
+        self.lifecycle(id, call).await.map(|(bot, _)| bot)
+    }
+
+    /// A restart, a reset or a resume: the bot, with what the call did as
+    /// its status said, 202 sent and 200 cleared (ADR-0020, S73).
+    pub(crate) async fn command_bot(
+        self: &Arc<Self>,
+        id: BotId,
+        call: BotCall,
+    ) -> Result<BotCommandAnswer, ClientError> {
+        let (bot, status) = self.lifecycle(id, call).await?;
+        // `statuses` lets only 202 and 200 through.
+        let effect = if status == 202 {
+            BotCommandEffect::Sent
+        } else {
+            BotCommandEffect::Cleared
+        };
+        Ok(BotCommandAnswer { bot, effect })
+    }
+
+    /// A lifecycle call's bot and the status it came with.
+    async fn lifecycle(
+        self: &Arc<Self>,
+        id: BotId,
+        call: BotCall,
+    ) -> Result<(BotResponse, u16), ClientError> {
         let url = self.server.api(&["bots", &id.to_string(), call.segment()]);
         let answer = self.authed(Method::POST, url, None).await?;
-        expect_json_of(answer, call.statuses())
+        let status = answer.status;
+        expect_json_of(answer, call.statuses()).map(|bot| (bot, status))
     }
 
     // ---- Chat (Plan.md P11.3) ----
@@ -3031,6 +3058,34 @@ mod tests {
     }
 
     #[rstest]
+    #[case::restart_sent(BotCall::Restart, "restart", 202, BotCommandEffect::Sent)]
+    #[case::reset_sent(BotCall::Reset, "reset", 202, BotCommandEffect::Sent)]
+    #[case::reset_cleared(BotCall::Reset, "reset", 200, BotCommandEffect::Cleared)]
+    #[case::resume_sent(BotCall::Resume, "resume", 202, BotCommandEffect::Sent)]
+    #[case::resume_cleared(BotCall::Resume, "resume", 200, BotCommandEffect::Cleared)]
+    #[tokio::test]
+    async fn a_command_answers_the_bot_with_what_its_status_says_it_did(
+        #[case] call: BotCall,
+        #[case] segment: &str,
+        #[case] status: u16,
+        #[case] effect: BotCommandEffect,
+    ) {
+        let core = signed_in().await;
+        let route = format!("POST /api/v1/bots/{BOT}/{segment}");
+        core.transport.on(&route, Ok(dto(status, &a_bot())));
+
+        let answered = core.command_bot(id(BOT), call).await.unwrap();
+
+        assert_eq!(
+            answered,
+            BotCommandAnswer {
+                bot: a_bot(),
+                effect
+            }
+        );
+    }
+
+    #[rstest]
     #[case::start_accepted(BotCall::Start, "start", 202)]
     #[case::stop_accepted(BotCall::Stop, "stop", 202)]
     #[case::restart_done(BotCall::Restart, "restart", 200)]
@@ -3313,6 +3368,7 @@ mod tests {
             "editable": true,
             "deletable": true,
             "visibility_editable": false,
+            "unlisted_command": false,
             "version": 1,
             "created_at": "2027-01-15T08:00:00.000Z",
             "updated_at": "2027-01-15T08:00:00.000Z",
@@ -3679,7 +3735,7 @@ mod tests {
         let route = format!("POST /api/v1/bots/{BOT}/{segment}");
         core.transport.on(&route, Ok(refusal(409, code.as_str())));
 
-        let error = core.control_bot(id(BOT), call).await.unwrap_err();
+        let error = core.command_bot(id(BOT), call).await.unwrap_err();
 
         assert!(is_api(&error, 409, code), "{error:?}");
         assert_eq!(core.transport.routes(), [route]);

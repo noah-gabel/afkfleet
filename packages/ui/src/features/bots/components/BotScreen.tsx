@@ -1,27 +1,40 @@
-// A bot's screen (Plan.md P11.9; ADR-0020, U39): its state and its facts, read-only for now,
-// in the left of the two columns U39 sets side by side; the chat comes into the right one.
+// A bot's screen (Plan.md P11.9; ADR-0020, U39): its state and its facts, its controls, its
+// Settings and its timeline, in the left of the two columns U39 sets side by side; the chat
+// comes into the right one. While it's open, its notices are acknowledged (R109).
 // A read that answers 404 says the bot doesn't exist or can't be seen, also when it goes
 // while its screen is open (a `bot_removed` resets its query, which reads it again, R98).
 import { Link } from "@tanstack/react-router";
-import { useId } from "react";
+import { useEffect, useId } from "react";
 
 import { toApiError } from "../../../api/ApiError";
 import { describeError } from "../../../api/describeError";
 import { useBot, useModes } from "../../../api/queries";
+import { useRecord } from "../../../app/context";
 import { Button } from "../../../components/ui/button";
 import { useNow } from "../../../hooks/useNow";
-import { formatClock } from "../../../lib/time";
-import { botFacts, uptimeTick } from "../facts";
+import { botFacts, modesOf, uptimeNextChange } from "../facts";
+import { botActions } from "../permissions";
 import { agentLastSeen, BACK_HOME, BOT_NOT_FOUND } from "../texts";
+import { BotControls } from "./BotControls";
 import { Facts, StateBadge } from "./BotParts";
+import { BotSettings } from "./BotSettings";
+import { BotTimeline } from "./BotTimeline";
 
 /** Bot `id`. */
 export function BotScreen({ id }: { id: string }) {
   const bot = useBot(id);
+  const setOpen = useRecord((state) => state.setOpen);
+  // Its notices are acknowledged while it's open (U42, R109).
+  useEffect(() => {
+    setOpen(id);
+    return () => {
+      setOpen(null);
+    };
+  }, [id, setOpen]);
   const modes = useModes();
   const nameId = useId();
   const data = bot.data;
-  const now = useNow(data === undefined ? 60_000 : uptimeTick(data, Date.now()));
+  const now = useNow((at) => (data === undefined ? 60_000 : uptimeNextChange(data, at)));
 
   // A read that failed shows instead of the bot only before it was ever read, or when it
   // answers 404: the bot went while its screen was open.
@@ -37,12 +50,11 @@ export function BotScreen({ id }: { id: string }) {
   if (data === undefined) {
     return <main className="p-6" />;
   }
-  const facts = botFacts(
-    data,
-    modes.data?.pages.flatMap((page) => page.items),
-    now,
-    "screen",
-  );
+  const actions = botActions(data.account.level);
+  const facts = botFacts(data, modesOf(modes), now, "screen", {
+    mode: actions.chooseMode,
+    server: actions.configure,
+  });
   const lastSeen = data.status.kind === "unknown" ? data.status.agent_last_seen_at : undefined;
   return (
     <main className="grid gap-6 p-6 lg:grid-cols-2">
@@ -53,10 +65,13 @@ export function BotScreen({ id }: { id: string }) {
           </h1>
           <StateBadge bot={data} />
         </div>
-        <Facts facts={facts} />
+        <Facts facts={facts} place="screen" />
         {lastSeen === undefined ? null : (
-          <p className="text-sm text-muted-foreground">{agentLastSeen(formatClock(lastSeen))}</p>
+          <p className="text-sm text-muted-foreground">{agentLastSeen(lastSeen, now)}</p>
         )}
+        <BotControls bot={data} />
+        <BotSettings bot={data} />
+        <BotTimeline id={data.id} />
         <BackLink />
       </section>
     </main>
