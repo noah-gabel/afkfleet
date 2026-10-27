@@ -1288,6 +1288,26 @@ H2 builds on H's planning above; nothing there was asked again. The user approve
 
 The server-address field's own checks use the server's 422 wording ("must not be empty", "must be at most 259 characters, with a host of at most 253").
 
+### As built (group H2)
+Built as planned, one PR on `p11/p11.9-bot-controls`, in eleven commits: PR #75's follow-ups (above), the planning record, S68's flag, the seven write commands with S73, S67's permissions, the controls, Settings, the live record, the notices and the timeline, the e2e specs, and the docs. Each new test ran red before its code, against a stub with the real signature (a mode answer's flag always false, endpoints answering `ipc`, an effect always `sent`, permissions allowing nothing, controls and Settings rendering nothing, a record that keeps nothing, texts answering empty), or, for a test that pins working code, by a mutation restored from a saved copy and checked by checksum.
+
+*Choices made while building:*
+- **U53** (above): the user's answer when S68's fourth bool tripped clippy.
+- **S68's check is the caller's:** `mode_response` takes the `CommandCheck` its caller computes through `ModeService::command_check`, so its unit test reads the flag in the existing per-viewer test under the default, empty allowlist; the kinds of step (plain chat, an allowlisted command, an unlisted one at start and on respawn) are the integration test's.
+- **Four snapshots gained the flag, not one:** beside the OpenAPI document, the created, the edited and the per-viewer modes (40 modes there, 17 flagged, each checked against its steps under the empty allowlist).
+- **S73's types:** fleet-client's own `BotCommandAnswer` and `BotCommandEffect`, which the desktop maps to `app::BotCommandResponse`, as `LoginStep` is mapped.
+- **R105 moved a manager's server and mode** out of two H1 screen tests' facts and into Settings; the hidden-mode test is now a View holder's.
+- **A notice is a union:** a paused or failed one always carries its reason, so no text is needed for one without.
+- **The record's IDs keep growing across its clears,** so the toaster never takes a new notice for one it showed; a death merges with the one before only when no gap came between them.
+- **The e2e fake lists a third mode,** another user's shared `warp`, which sends a command off the allowlist; H1's live spec reads the state badge, since the timeline lists the states too.
+- **The shared matrix reader** (`packages/ui/src/test/authzMatrix.ts`) is the admin test's general table reader, with the accounts test's level rule and grant-table check.
+
+*Mutations* (each failed its tests, then was restored): MG1 (the guard's hook name), MU1 (no per-second uptime tick), MR1 (R98's reset back to a removal), MV1 (the bot writes passing `validated` unchecked), ME3 (Home without its notice lines and the screen without Settings: both new e2e specs failed).
+
+*Snapshots:* `openapi_document`, `mode_created`, `modes_as_each_viewer_sees_them` and `mode_updated`, each gaining `unlisted_command`; none else.
+
+*Size:* about 5,000 lines added and 350 removed, the docs included, as planned (about 4,900); about 160 of them generated (the TypeScript types and seven permission files) or snapshots.
+
 ### Notes for later groups
 - **B2 (P11.3's history):** built (above).
 - **C (P11.4):** decided at C's planning (above), built in C1, C2 and C3.
