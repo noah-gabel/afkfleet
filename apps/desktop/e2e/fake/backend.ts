@@ -228,6 +228,7 @@ function builtIn(id: string, name: string): ModeResponse {
     editable: false,
     deletable: false,
     visibility_editable: false,
+    unlisted_command: false,
     version: 1,
     created_at: "2026-10-13T08:00:00.000Z",
     updated_at: "2026-10-13T08:00:00.000Z",

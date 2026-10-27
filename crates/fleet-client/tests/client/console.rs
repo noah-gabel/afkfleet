@@ -1272,6 +1272,7 @@ fn a_mode_frame(message: &str) -> serde_json::Value {
             "editable": true,
             "deletable": true,
             "visibility_editable": true,
+            "unlisted_command": false,
             "version": 3,
             "created_at": EVENT_AT,
             "updated_at": EVENT_AT,

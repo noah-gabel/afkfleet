@@ -43,6 +43,7 @@ export function mode(n: number, changes: Partial<ModeResponse> = {}): ModeRespon
     editable: true,
     deletable: true,
     visibility_editable: true,
+    unlisted_command: false,
     version: 1,
     created_at: "2026-10-15T10:00:00.000Z",
     updated_at: "2026-10-15T10:00:00.000Z",

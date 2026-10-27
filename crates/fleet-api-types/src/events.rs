@@ -626,6 +626,7 @@ mod tests {
             "editable": false,
             "deletable": false,
             "visibility_editable": false,
+            "unlisted_command": false,
             "version": 2,
             "created_at": AT,
             "updated_at": AT,

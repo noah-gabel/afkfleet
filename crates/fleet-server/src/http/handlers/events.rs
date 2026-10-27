@@ -339,7 +339,8 @@ impl Viewer {
         if let Some(listed) = seen_now {
             // A mode that doesn't build is the internal error a `GET /modes`
             // answers; the socket sends nothing.
-            if let Ok(shown) = mode_response(&self.actor, &listed) {
+            let check = self.modes.command_check(&listed.mode.definition);
+            if let Ok(shown) = mode_response(&self.actor, &listed, check) {
                 return Ok(Step::Send(Box::new(EventMessage::mode(shown))));
             }
             debug!(mode_id = %id, "a live events socket couldn't build a mode's frame");

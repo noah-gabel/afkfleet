@@ -1865,6 +1865,10 @@ expression: answer.json()
             },
             "type": "array"
           },
+          "unlisted_command": {
+            "description": "Whether one of its chat steps sends a command off the server's\nallowlist, so choosing it for a bot needs Manage on the bot rather\nthan Control: the check `PUT /bots/{id}/mode` authorizes with (S68).",
+            "type": "boolean"
+          },
           "updated_at": {
             "maxLength": 24,
             "type": "string"
@@ -1891,6 +1895,7 @@ expression: answer.json()
           "editable",
           "deletable",
           "visibility_editable",
+          "unlisted_command",
           "version",
           "created_at",
           "updated_at",

@@ -62,7 +62,7 @@ use fleet_api_types::modes::{
 use fleet_api_types::users::UserLabel;
 use fleet_api_types::{BoundedText, FieldError, PageQuery, SafeInt, SecretText, Timestamp};
 use fleet_core::authz::{
-    Actor, GrantLevel, ModeVisibility, Permission, Role, authorize, effective_level,
+    Actor, CommandCheck, GrantLevel, ModeVisibility, Permission, Role, authorize, effective_level,
 };
 use fleet_core::chat::{ChatMessage, ChatSender, Redacted};
 use fleet_core::id::UserId;
@@ -290,9 +290,17 @@ fn shown(message: &ChatMessage, whole: bool) -> Redacted<'_> {
 /// - **A command's arguments** in a chat step only for a viewer who may
 ///   edit the mode; below that `/` and the name, with `arguments_hidden`.
 ///
+/// - **Whether it sends a command off the allowlist** for everyone, as
+///   `check` found it: the check `PUT /bots/{id}/mode` authorizes with, so
+///   a Control holder is offered only the modes they may choose (S68).
+///
 /// The list checked `ViewMode` already, so a mode the viewer may not see is
 /// a bug, answered as the internal error.
-fn mode_response(viewer: &Actor, listed: &ListedMode) -> Result<ModeResponse, ApiError> {
+fn mode_response(
+    viewer: &Actor,
+    listed: &ListedMode,
+    check: CommandCheck,
+) -> Result<ModeResponse, ApiError> {
     let context = listed.context();
     authorize(viewer, Permission::ViewMode, &context)
         .map_err(|_| ApiError::internal("a mode the viewer may not see was answered"))?;
@@ -325,6 +333,7 @@ fn mode_response(viewer: &Actor, listed: &ListedMode) -> Result<ModeResponse, Ap
         visibility_editable: may(Permission::UpdateMode {
             visibility: switched,
         }),
+        unlisted_command: check.needs_manage(),
         version: mode.version.get(),
         created_at: timestamp(mode.created_at)?,
         updated_at: timestamp(mode.updated_at)?,
@@ -490,6 +499,11 @@ mod tests {
         }
     }
 
+    /// What the default, empty allowlist says of `listed`'s commands.
+    fn check(listed: &ListedMode) -> CommandCheck {
+        fleet_core::authz::CommandAllowlist::default().check_mode(&listed.mode.definition)
+    }
+
     /// Every flag and field rule of a mode's answer, for every viewer role,
     /// every owner (built in, the viewer, a Member, an Admin, the Owner) and
     /// both visibilities: each right is exactly what `authorize()` answers,
@@ -519,7 +533,7 @@ mod tests {
                     let listed = listed_mode(owner, visibility);
                     let context = listed.context();
                     if authorize(&viewer, Permission::ViewMode, &context).is_err() {
-                        assert!(mode_response(&viewer, &listed).is_err());
+                        assert!(mode_response(&viewer, &listed, check(&listed)).is_err());
                         continue;
                     }
                     let may = |permission| authorize(&viewer, permission, &context).is_ok();
@@ -529,10 +543,12 @@ mod tests {
                     };
                     let case = format!("{role:?} on {owner:?}'s {visibility:?}");
 
-                    let answer = mode_response(&viewer, &listed).unwrap();
+                    let answer = mode_response(&viewer, &listed, check(&listed)).unwrap();
 
                     let editable = may(Permission::UpdateMode { visibility });
                     assert_eq!(answer.editable, editable, "{case}");
+                    // `/login` is off the default, empty allowlist (S68).
+                    assert!(answer.unlisted_command, "{case}");
                     assert_eq!(answer.deletable, may(Permission::DeleteMode), "{case}");
                     assert_eq!(
                         answer.visibility_editable,

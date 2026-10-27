@@ -23,6 +23,7 @@ expression: "redacted(&seen.body, &[(id.to_string(), \"the mode\")])"
       }
     }
   ],
+  "unlisted_command": false,
   "updated_at": "[T0]",
   "version": 2,
   "visibility": "private",
