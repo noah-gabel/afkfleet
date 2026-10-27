@@ -20,6 +20,7 @@ import { BotControls } from "./BotControls";
 import { Facts, StateBadge } from "./BotParts";
 import { BotSettings } from "./BotSettings";
 import { BotTimeline } from "./BotTimeline";
+import { ChatSend } from "./ChatSend";
 
 /** Bot `id`. */
 export function BotScreen({ id }: { id: string }) {
@@ -75,7 +76,7 @@ export function BotScreen({ id }: { id: string }) {
         <BotTimeline id={data.id} />
         <BackLink />
       </section>
-      <BotChat bot={data} />
+      <BotChat bot={data}>{actions.chat ? <ChatSend bot={data} /> : null}</BotChat>
     </main>
   );
 }
