@@ -1058,6 +1058,7 @@ mod tests {
                 cert_file: dir.join(AGENT).join("agent.crt"),
                 key_file: dir.join(AGENT).join("agent.key"),
                 private_targets: PrivateTargets::default(),
+                public_targets: true,
             };
             let path = dir.join("agent.toml");
             std::fs::write(&path, agent_toml(&dir, &plane)).unwrap();

@@ -4636,6 +4636,8 @@ retention_days = 365                     # 90–730: every entry holds a user's 
 
 > Note (Appendix A, Phase 11, group E) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U19, U21, U22): `[chat]` gains `retention_days` (1–30, 14 by default) and `max_lines_per_bot` (100–200,000, 50,000), and a new `[audit]` section `retention_days` (90–730, 365); an error names the key. Unused invites and enrollment tokens are kept `[audit] retention_days` past their expiry (S46).
 
+> Note (Appendix A, Phase 11, group H5) ([ADR-0020](docs/adr/0020-bot-operations-and-phase-11-refinements.md), U50, R122): the agent's `[control_plane]` gains `public_targets` (a bool, `true` by default): with `false` a public address is refused like an unlisted private one (`blocked`), and the policy of a connector nobody configured refuses public addresses too. A parse error under `[standalone]`. `deploy/dod/agent.toml` sets it to `false`.
+
 `agent.toml`
 ```toml
 name = "agent-1"
@@ -4667,6 +4669,7 @@ ca_cert_file = "/run/secrets/fleet_ca_cert"
 cert_file = "/data/agent.crt"
 key_file = "/data/agent.key"
 private_targets = []                     # private networks the bots may dial (at most 32, each inside a private range)
+public_targets = true                    # whether the bots may dial public addresses
 
 # [standalone]                           # dev only; mutually exclusive with [control_plane]
 # [[standalone.bots]]

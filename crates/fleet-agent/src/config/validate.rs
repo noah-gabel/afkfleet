@@ -307,6 +307,7 @@ fn control_plane_config(
         cert_file: cert_file.clone(),
         key_file: key_file.clone(),
         private_targets,
+        public_targets: raw.public_targets.unwrap_or(true),
     })
 }
 

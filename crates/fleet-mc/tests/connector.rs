@@ -137,9 +137,13 @@ async fn a_closed_port_fails_with_refused() {
 
 // --- The target check (ADR-0019, S46, S69) ---
 
-/// `127.0.0.1/32` listed.
+/// `127.0.0.1/32` listed, public addresses dialled, as a managed agent's
+/// default `public_targets` has it.
 fn loopback_listed() -> TargetPolicy {
-    TargetPolicy::Checked(PrivateTargets::try_new(vec!["127.0.0.1/32".parse().unwrap()]).unwrap())
+    TargetPolicy::Checked {
+        private: PrivateTargets::try_new(vec!["127.0.0.1/32".parse().unwrap()]).unwrap(),
+        public: true,
+    }
 }
 
 #[tokio::test]

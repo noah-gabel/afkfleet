@@ -73,8 +73,8 @@ impl fmt::Debug for AzaleaConnector {
 
 impl AzaleaConnector {
     /// Creates a connector with its own host pool, both tuned by `config`.
-    /// Its sessions dial only what [`TargetPolicy::default`], the strictest,
-    /// allows, until [`AzaleaConnector::with_targets`] sets the process's
+    /// Its sessions dial only what [`TargetPolicy::default`], the strictest
+    /// (no private address, no public one), allows, until [`AzaleaConnector::with_targets`] sets the process's
     /// policy: a connector nobody configured fails closed (ADR-0019, S69).
     #[must_use]
     pub fn new(config: &McConfig) -> Self {
@@ -91,7 +91,8 @@ impl AzaleaConnector {
 
     /// The connector with `targets` deciding which resolved addresses its
     /// sessions may dial: [`TargetPolicy::Unchecked`] in standalone mode,
-    /// the agent's `[control_plane] private_targets` in managed mode. A
+    /// the agent's `[control_plane] private_targets` and `public_targets`
+    /// in managed mode. A
     /// refused address is never dialled; the session ends with
     /// [`ConnectFailure::Blocked`](fleet_core::disconnect::ConnectFailure::Blocked).
     #[must_use]

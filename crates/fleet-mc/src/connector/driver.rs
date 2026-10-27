@@ -290,7 +290,7 @@ fn permitted(
         socket = %address.socket,
         class = class.as_str(),
         range = class.range().map_or("", Range::as_str),
-        "the server's address is refused before dialling: it's never dialled, or private and not in [control_plane] private_targets"
+        "the server's address is refused before dialling: it's never dialled, private and not in [control_plane] private_targets, or public while [control_plane] public_targets is false"
     );
     sink.terminate(Terminal::ConnectionFailed(ConnectFailure::Blocked));
     false
@@ -920,15 +920,18 @@ mod tests {
         }
     }
 
+    #[rstest]
+    #[case::unlisted_loopback("127.0.0.1:25565")]
+    #[case::public("8.8.8.8:25565")]
     #[tokio::test]
-    async fn a_refused_socket_ends_the_session_as_blocked() {
+    async fn a_refused_socket_ends_the_session_as_blocked(#[case] socket: &str) {
         let (sink, mut events) = open();
         let server: ServerAddress = "mc.example.com".parse().unwrap();
 
         let allowed = permitted(
             &TargetPolicy::default(),
             &server,
-            &resolved(&server, "127.0.0.1:25565"),
+            &resolved(&server, socket),
             &sink,
         );
 
@@ -943,13 +946,20 @@ mod tests {
     async fn a_permitted_socket_leaves_the_session_going() {
         let (sink, mut events) = open();
         let server: ServerAddress = "mc.example.com".parse().unwrap();
-        let listed = TargetPolicy::Checked(
-            fleet_core::net::PrivateTargets::try_new(vec!["127.0.0.1/32".parse().unwrap()])
-                .unwrap(),
-        );
+        let listed = TargetPolicy::Checked {
+            private: fleet_core::net::PrivateTargets::try_new(vec![
+                "127.0.0.1/32".parse().unwrap(),
+            ])
+            .unwrap(),
+            public: false,
+        };
+        let public_dialled = TargetPolicy::Checked {
+            private: fleet_core::net::PrivateTargets::default(),
+            public: true,
+        };
 
         let public = permitted(
-            &TargetPolicy::default(),
+            &public_dialled,
             &server,
             &resolved(&server, "8.8.8.8:25565"),
             &sink,

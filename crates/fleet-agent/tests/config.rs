@@ -19,7 +19,9 @@ use fleet_agent::config::{
 use fleet_core::bot::BotAccount;
 use fleet_core::disconnect::{ConflictTexts, ConflictTextsError};
 use fleet_core::mode::{ModePreset, UnknownPresetError};
-use fleet_core::net::{IpNetError, PrivateTargets, PrivateTargetsError, TargetPolicy};
+use fleet_core::net::{
+    AddressClass, IpNetError, PrivateTargets, PrivateTargetsError, TargetPolicy,
+};
 use fleet_core::resilience::{CircuitPolicy, RetryPolicy, RetryPolicyError};
 use fleet_core::value::{AgentNameError, McUsernameError};
 use fleet_mc::McConfig;
@@ -54,6 +56,10 @@ fn parse_error(result: Result<AgentConfig, ConfigError>) -> ParseError {
         Err(ConfigError::Parse(error)) => *error,
         other => panic!("expected a parse error, got {other:?}"),
     }
+}
+
+fn ip(text: &str) -> std::net::IpAddr {
+    text.parse().unwrap()
 }
 
 fn keys(problems: &Problems) -> Vec<String> {
@@ -258,6 +264,7 @@ fn a_control_plane_section_makes_a_managed_agent() {
                 cert_file: dir.join("agent.crt"),
                 key_file: dir.join("agent.key"),
                 private_targets: PrivateTargets::default(),
+                public_targets: true,
             })
         );
     });
@@ -875,7 +882,10 @@ fn a_managed_agent_lists_no_private_targets_by_default_and_checks_every_address(
         assert_eq!(plane(&config).private_targets, PrivateTargets::default());
         assert_eq!(
             config.mode.target_policy(),
-            TargetPolicy::Checked(PrivateTargets::default())
+            TargetPolicy::Checked {
+                private: PrivateTargets::default(),
+                public: true,
+            }
         );
     });
 }
@@ -894,7 +904,13 @@ fn listed_private_targets_are_read_into_the_policy() {
         ])
         .unwrap();
         assert_eq!(plane(&config).private_targets, expected);
-        assert_eq!(config.mode.target_policy(), TargetPolicy::Checked(expected));
+        assert_eq!(
+            config.mode.target_policy(),
+            TargetPolicy::Checked {
+                private: expected,
+                public: true,
+            }
+        );
     });
 }
 
@@ -1001,5 +1017,77 @@ fn a_refused_private_target_is_named_by_its_own_index_after_one_that_didnt_parse
                 ProblemKind::PrivateTargets(PrivateTargetsError::NotPrivate { index: 1 }),
             ]
         );
+    });
+}
+
+// --- [control_plane] public_targets (ADR-0020, U50) ---
+
+#[test]
+fn a_managed_agent_dials_public_addresses_by_default() {
+    in_jail(|jail| {
+        let toml = managed(jail, "https://fleet.example.com:7443", FILES);
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert!(plane(&config).public_targets);
+        assert_eq!(config.mode.target_policy().check(ip("8.8.8.8")), Ok(()));
+    });
+}
+
+#[test]
+fn public_targets_false_is_read_into_the_policy() {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}public_targets = false\n",
+            with_targets(jail, &["127.0.0.1/32"])
+        );
+
+        let config = load_toml(jail, &toml).unwrap();
+
+        assert!(!plane(&config).public_targets);
+        let policy = config.mode.target_policy();
+        assert_eq!(
+            policy
+                .check(ip("8.8.8.8"))
+                .map_err(|refused| refused.class()),
+            Err(AddressClass::Public)
+        );
+        assert_eq!(policy.check(ip("127.0.0.1")), Ok(()));
+    });
+}
+
+#[test]
+fn public_targets_that_isnt_a_bool_is_a_parse_error() {
+    in_jail(|jail| {
+        let toml = format!(
+            "{}public_targets = \"no\"\n",
+            managed(jail, "https://fleet.example.com:7443", FILES)
+        );
+
+        let error = parse_error(load_toml(jail, &toml));
+
+        assert_eq!(error.key().to_string(), "control_plane.public_targets");
+        assert!(matches!(error.problem(), ParseProblem::WrongType { .. }));
+    });
+}
+
+#[test]
+fn public_targets_under_standalone_is_a_parse_error() {
+    in_jail(|jail| {
+        let toml = r#"
+name = "agent-1"
+
+[standalone]
+public_targets = false
+
+[[standalone.bots]]
+username = "AfkBot1"
+server = "localhost:25565"
+mode = "afk"
+"#;
+
+        let error = parse_error(load_toml(jail, toml));
+
+        assert!(error.to_string().contains("public_targets"), "{error}");
     });
 }
