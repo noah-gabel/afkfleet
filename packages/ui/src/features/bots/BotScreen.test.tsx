@@ -5,6 +5,7 @@ import type { ApiClient } from "../../api/ApiClient";
 import { fakeWatch } from "../../api/FakeApiClient";
 import type { BotResponse } from "../../generated/BotResponse";
 import { formatClock, formatDate, formatTime } from "../../lib/time";
+import { account } from "../../test/accounts";
 import { bot, botFrame, botId, event, mode, modeId } from "../../test/live";
 import { fakeTime } from "../../test/renderApp";
 import { atBot } from "../../test/signedIn";
@@ -50,10 +51,14 @@ const ONLINE = bot(1, {
 describe("a bot's screen", () => {
   it("shows an online bot: its state, server, mode, since when and for how long", async () => {
     await botScreen(ONLINE);
+    const mode = (await screen.findByRole("combobox", { name: "Mode" })) as HTMLSelectElement;
 
     expect(screen.getByText("Online")).toBeDefined();
-    expect(fact("Server")).toBe("127.0.0.1:25565");
-    expect(fact("Mode")).toBe("afk (built in)");
+    // A manager's server and mode show in Settings, not among the facts (R105).
+    expect(fact("Server")).toBeNull();
+    expect(fact("Mode")).toBeNull();
+    expect(screen.getByText("127.0.0.1:25565")).toBeDefined();
+    expect(mode.selectedOptions[0]?.text).toBe("afk (built in)");
     expect(fact("State since")).toBe(formatTime(SINCE));
     expect(fact("Uptime")).toBe("2 h 5 min");
     expect(fact("Last disconnect")).toBeNull();
@@ -204,7 +209,7 @@ describe("a bot's screen", () => {
   });
 
   it("names a mode the viewer can't see as such, never by its ID", async () => {
-    await botScreen(bot(1, { mode_id: modeId(9) }));
+    await botScreen(bot(1, { account: account(1, { level: "view" }), mode_id: modeId(9) }));
 
     expect(fact("Mode")).toBe(HIDDEN_MODE);
     expect(screen.queryByText(modeId(9))).toBeNull();

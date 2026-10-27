@@ -11,9 +11,11 @@ import { useBot, useModes } from "../../../api/queries";
 import { Button } from "../../../components/ui/button";
 import { useNow } from "../../../hooks/useNow";
 import { botFacts, modesOf, uptimeNextChange } from "../facts";
+import { botActions } from "../permissions";
 import { agentLastSeen, BACK_HOME, BOT_NOT_FOUND } from "../texts";
 import { BotControls } from "./BotControls";
 import { Facts, StateBadge } from "./BotParts";
+import { BotSettings } from "./BotSettings";
 
 /** Bot `id`. */
 export function BotScreen({ id }: { id: string }) {
@@ -37,7 +39,11 @@ export function BotScreen({ id }: { id: string }) {
   if (data === undefined) {
     return <main className="p-6" />;
   }
-  const facts = botFacts(data, modesOf(modes), now, "screen");
+  const actions = botActions(data.account.level);
+  const facts = botFacts(data, modesOf(modes), now, "screen", {
+    mode: actions.chooseMode,
+    server: actions.configure,
+  });
   const lastSeen = data.status.kind === "unknown" ? data.status.agent_last_seen_at : undefined;
   return (
     <main className="grid gap-6 p-6 lg:grid-cols-2">
@@ -53,6 +59,7 @@ export function BotScreen({ id }: { id: string }) {
           <p className="text-sm text-muted-foreground">{agentLastSeen(lastSeen, now)}</p>
         )}
         <BotControls bot={data} />
+        <BotSettings bot={data} />
         <BackLink />
       </section>
     </main>

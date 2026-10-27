@@ -318,3 +318,19 @@ export const CONTROL = {
 export const SENT_NOTE = "Sent. The state changes when its agent reports back.";
 /** Where the controls would be, for a viewer whose level allows none (U38). */
 export const VIEW_ONLY = "You can view this bot but not control it.";
+
+/** Settings (U40, U41, S68, S69). */
+export const SETTINGS = {
+  heading: "Settings",
+  mode: "Mode",
+  switching: "Switching…",
+  modeForbidden: "Only someone who manages this bot can choose that mode.",
+  server: "Server",
+  change: "Change",
+  set: "Set",
+  notSet: "Not set",
+  address: "Server address",
+  addressHint: "Host or host:port, e.g. play.example.com",
+  save: "Save",
+  cancel: "Cancel",
+} as const;

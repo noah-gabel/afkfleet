@@ -50,14 +50,34 @@ export type Place = "card" | "screen";
 const SECOND = 1000;
 const MINUTE = 60_000;
 
-/** `bot`'s facts at `now`, with `modes` every mode the viewer may see (none while loading). */
-export function botFacts(bot: BotResponse, modes: Modes, now: number, place: Place): Fact[] {
+/** The values a bot's screen shows in its Settings instead (R105). */
+export interface InSettings {
+  readonly mode: boolean;
+  readonly server: boolean;
+}
+
+/** Nothing in Settings: a card, or a viewer who may change neither. */
+const NOT_IN_SETTINGS: InSettings = { mode: false, server: false };
+
+/**
+ * `bot`'s facts at `now`, with `modes` every mode the viewer may see; those `inSettings`
+ * says the screen shows in its Settings are left out, so nothing shows twice (R105).
+ */
+export function botFacts(
+  bot: BotResponse,
+  modes: Modes,
+  now: number,
+  place: Place,
+  inSettings: InSettings = NOT_IN_SETTINGS,
+): Fact[] {
   const { status } = bot;
   const facts: Fact[] = [];
-  if (bot.server_address !== undefined) {
+  if (bot.server_address !== undefined && !inSettings.server) {
     facts.push({ term: LABEL.server, value: bot.server_address });
   }
-  facts.push({ term: LABEL.mode, value: modeLabel(bot.mode_id, modes) });
+  if (!inSettings.mode) {
+    facts.push({ term: LABEL.mode, value: modeLabel(bot.mode_id, modes) });
+  }
   if (place === "screen" && status.since !== undefined) {
     facts.push({ term: LABEL.stateSince, value: formatTime(status.since) });
   }
