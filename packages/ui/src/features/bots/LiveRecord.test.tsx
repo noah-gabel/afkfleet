@@ -1,4 +1,4 @@
-import { screen, within } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeWatch } from "../../api/FakeApiClient";
@@ -127,7 +127,10 @@ describe("the notices (U42, R109, R110)", () => {
     await push(watch, refetch("ready"), botFrame(ONLINE), died());
 
     const toast = (await screen.findByText("AfkBot1 died.")).closest<HTMLElement>("li");
-    await app.user.click(within(toast ?? document.body).getByRole("button", { name: "Open" }));
+    // A click alone: sonner's swipe handler takes the pointer on pointerdown, which jsdom's
+    // elements can't (no `setPointerCapture`).
+    fireEvent.click(within(toast ?? document.body).getByRole("button", { name: "Open" }));
+    await screen.findByRole("heading", { name: "AfkBot1" });
 
     expect(app.path()).toBe(`/bots/${ID}`);
   });

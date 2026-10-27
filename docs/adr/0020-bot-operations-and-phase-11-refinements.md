@@ -1302,11 +1302,13 @@ Built as planned, one PR on `p11/p11.9-bot-controls`, in eleven commits: PR #75'
 - **The e2e fake lists a third mode,** another user's shared `warp`, which sends a command off the allowlist; H1's live spec reads the state badge, since the timeline lists the states too.
 - **The shared matrix reader** (`packages/ui/src/test/authzMatrix.ts`) is the admin test's general table reader, with the accounts test's level rule and grant-table check.
 
-*Mutations* (each failed its tests, then was restored): MG1 (the guard's hook name), MU1 (no per-second uptime tick), MR1 (R98's reset back to a removal), MV1 (the bot writes passing `validated` unchecked), ME3 (Home without its notice lines and the screen without Settings: both new e2e specs failed).
+*Mutations* (each failed its tests, then was restored): MG1 (the guard's hook name), MU1 (no per-second uptime tick), MR1 (R98's reset back to a removal), MV1 (the bot writes passing `validated` unchecked), ME3 (Home without its notice lines and the screen without Settings: both new e2e specs failed); and, for four tests that passed against their stubs (which hold on an empty state), MS1 (Settings shown to a View holder), ML1 (every gap kept, however short), ML2 (a `bot_removed` keeping the bot) and ML3 (no clear at sign-out).
+
+*`just check`'s find:* clicking a toast's Open through user-event ran sonner's swipe handler, which calls `setPointerCapture`, missing from jsdom's elements: an unhandled error after a passing test. That test clicks with `fireEvent.click`.
 
 *Snapshots:* `openapi_document`, `mode_created`, `modes_as_each_viewer_sees_them` and `mode_updated`, each gaining `unlisted_command`; none else.
 
-*Size:* about 5,000 lines added and 350 removed, the docs included, as planned (about 4,900); about 160 of them generated (the TypeScript types and seven permission files) or snapshots.
+*Size:* about 4,900 lines added and 350 removed, the docs included, as planned (about 4,900); about 150 of them generated (the TypeScript types and seven permission files) or snapshots.
 
 ### Notes for later groups
 - **B2 (P11.3's history):** built (above).

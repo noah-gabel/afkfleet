@@ -1,5 +1,6 @@
-// A bot's screen (Plan.md P11.9; ADR-0020, U39): its state and its facts, read-only for now,
-// in the left of the two columns U39 sets side by side; the chat comes into the right one.
+// A bot's screen (Plan.md P11.9; ADR-0020, U39): its state and its facts, its controls, its
+// Settings and its timeline, in the left of the two columns U39 sets side by side; the chat
+// comes into the right one. While it's open, its notices are acknowledged (R109).
 // A read that answers 404 says the bot doesn't exist or can't be seen, also when it goes
 // while its screen is open (a `bot_removed` resets its query, which reads it again, R98).
 import { Link } from "@tanstack/react-router";
