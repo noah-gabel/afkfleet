@@ -834,12 +834,7 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
         call: BotCall,
     ) -> Result<BotCommandAnswer, ClientError> {
         let (bot, status) = self.lifecycle(id, call).await?;
-        // `statuses` lets only 202 and 200 through.
-        let effect = if status == 202 {
-            BotCommandEffect::Sent
-        } else {
-            BotCommandEffect::Cleared
-        };
+        let effect = effect_of(status)?;
         Ok(BotCommandAnswer { bot, effect })
     }
 
@@ -1454,6 +1449,19 @@ fn expect_json_of<R: DeserializeOwned>(
             Unexpected::Body
         },
     })
+}
+
+/// What a restart, a reset or a resume did, by its answer's status (ADR-0020, S73, R114):
+/// 202 sent to its agent, 200 cleared; any other status isn't one of theirs.
+fn effect_of(status: u16) -> Result<BotCommandEffect, ClientError> {
+    match status {
+        202 => Ok(BotCommandEffect::Sent),
+        200 => Ok(BotCommandEffect::Cleared),
+        _ => Err(ClientError::UnexpectedResponse {
+            status,
+            reason: Unexpected::Status,
+        }),
+    }
 }
 
 /// The route's answer for `status`, without a body to read.
@@ -3033,6 +3041,21 @@ mod tests {
         );
     }
 
+    /// `call` as `Client` makes it: a start or a stop through `control_bot`, a restart, a
+    /// reset or a resume through `command_bot`.
+    async fn as_the_client_calls(
+        core: &Arc<TestCore>,
+        call: BotCall,
+    ) -> Result<BotResponse, ClientError> {
+        match call {
+            BotCall::Start | BotCall::Stop => core.control_bot(id(BOT), call).await,
+            BotCall::Restart | BotCall::Reset | BotCall::Resume => core
+                .command_bot(id(BOT), call)
+                .await
+                .map(|answer| answer.bot),
+        }
+    }
+
     #[rstest]
     #[case::start(BotCall::Start, "start", 200)]
     #[case::stop(BotCall::Stop, "stop", 200)]
@@ -3051,7 +3074,7 @@ mod tests {
         let route = format!("POST /api/v1/bots/{BOT}/{segment}");
         core.transport.on(&route, Ok(dto(status, &a_bot())));
 
-        let answered = core.control_bot(id(BOT), call).await.unwrap();
+        let answered = as_the_client_calls(&core, call).await.unwrap();
 
         assert_eq!(answered, a_bot());
         assert_eq!(core.transport.seen(), [sent(&route, None)]);
@@ -3101,7 +3124,7 @@ mod tests {
         let route = format!("POST /api/v1/bots/{BOT}/{segment}");
         core.transport.on(&route, Ok(dto(status, &a_bot())));
 
-        let error = core.control_bot(id(BOT), call).await.unwrap_err();
+        let error = as_the_client_calls(&core, call).await.unwrap_err();
 
         assert!(
             matches!(
@@ -3110,6 +3133,29 @@ mod tests {
             ),
             "{error:?}"
         );
+    }
+
+    #[rstest]
+    #[case::sent(202, Some(BotCommandEffect::Sent))]
+    #[case::cleared(200, Some(BotCommandEffect::Cleared))]
+    #[case::created(201, None)]
+    #[case::accepted_empty(204, None)]
+    fn a_commands_effect_is_its_status_202_sent_200_cleared_and_nothing_else(
+        #[case] status: u16,
+        #[case] effect: Option<BotCommandEffect>,
+    ) {
+        let decided = effect_of(status);
+
+        match effect {
+            Some(effect) => assert_eq!(decided.unwrap(), effect),
+            None => assert!(
+                matches!(
+                    decided,
+                    Err(ClientError::UnexpectedResponse { status: s, reason: Unexpected::Status }) if s == status
+                ),
+                "{decided:?}"
+            ),
+        }
     }
 
     const REVIEWED: &str = "018bcfe5-6800-7303-8303-030303030303";

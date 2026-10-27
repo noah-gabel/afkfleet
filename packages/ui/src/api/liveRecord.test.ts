@@ -147,6 +147,59 @@ describe("the live record's entries (S71)", () => {
 
     expect(kinds(observed([botFrame(paused), alert], start))).toEqual(["alert"]);
     expect(kinds(observed([alert, botFrame(paused)], start))).toEqual(["alert"]);
+    expect(kinds(observed([alert, botFrame(paused)]))).toEqual(["alert"]);
+  });
+
+  it("records a later change in the alert's state and reason after the alert (R112)", () => {
+    const resting = { state: "paused", reason: "banned" } as const;
+    const alert = event({ type: "bot_alert", bot_id: botId(1), at: SINCE, ...resting });
+    const paused = withStatus({ kind: "reported", since: SINCE, ...resting });
+    const agentOffline = withStatus({
+      kind: "unknown",
+      agent_last_seen_at: SINCE,
+      ...resting,
+    });
+    const ownerDisabled = withStatus({ kind: "unplaced", why: "owner_disabled", ...resting });
+
+    const record = observed(
+      [botFrame(paused), alert, botFrame(agentOffline), botFrame(paused), botFrame(ownerDisabled)],
+      known(readied(), [withStatus(ONLINE)]),
+    );
+
+    expect(kinds(record)).toEqual(["alert", "status", "status", "status"]);
+  });
+
+  it("keeps an alert apart from a status that didn't enter its state and reason (R112)", () => {
+    const resting = { state: "paused", reason: "banned" } as const;
+    const alert = event({ type: "bot_alert", bot_id: botId(1), at: SINCE, ...resting });
+    const paused = withStatus({ kind: "reported", since: SINCE, ...resting });
+    const agentOffline = withStatus({
+      kind: "unknown",
+      agent_last_seen_at: SINCE,
+      ...resting,
+    });
+
+    const record = observed(
+      [botFrame(paused), alert, botFrame(agentOffline), alert],
+      known(readied(), [withStatus(ONLINE)]),
+    );
+
+    expect(kinds(record)).toEqual(["alert", "status", "alert"]);
+  });
+
+  it("records nothing for a frame that changed only its agent or its address", () => {
+    const record = observed(
+      [
+        botFrame(
+          withStatus(ONLINE, { agent: { id: botId(9), name: "dev-agent", status: "online" } }),
+        ),
+        botFrame(withStatus(ONLINE, { server_address: "play.example.com" })),
+      ],
+      known(readied(), [withStatus(ONLINE)]),
+    );
+
+    expect(kinds(record)).toEqual([]);
+    expect(record.notices).toEqual([]);
   });
 
   it("keeps at most 100 entries per bot, dropping the oldest", () => {
@@ -255,6 +308,30 @@ describe("the live record's notices (S71, U42)", () => {
 
     expect(fromOnline.notices.map((notice) => notice.kind)).toEqual(["respawn"]);
     expect(carriedOn.notices).toEqual([]);
+  });
+
+  it("gives no respawn notice when an Online bot that still carries an old one stops", () => {
+    const old = { last_disconnect: { kind: "respawn_failed" } } as const;
+    const stopping = (restarting: boolean) =>
+      botFrame(
+        withStatus({ kind: "reported", state: "stopping", since: SINCE, restarting, ...old }),
+      );
+
+    const stopped = observed([botFrame(withStatus({ ...ONLINE, ...old })), stopping(false)]);
+    const restarted = observed([botFrame(withStatus({ ...ONLINE, ...old })), stopping(true)]);
+
+    expect(stopped.notices).toEqual([]);
+    expect(restarted.notices).toEqual([]);
+  });
+
+  it("gives a respawn notice when an Online bot backs off after its respawn failed", () => {
+    const failed = botFrame(
+      withStatus({ ...BACKOFF, last_disconnect: { kind: "respawn_failed" } }),
+    );
+
+    const record = observed([botFrame(withStatus(ONLINE)), failed]);
+
+    expect(record.notices.map((notice) => notice.kind)).toEqual(["respawn"]);
   });
 
   it("toasts a notice for the bot whose screen is open but keeps no line of it (R109)", () => {

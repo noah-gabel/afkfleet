@@ -1,4 +1,4 @@
-import { fireEvent, screen, within } from "@testing-library/react";
+import { fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { fakeWatch } from "../../api/FakeApiClient";
@@ -79,6 +79,19 @@ describe("the notices (U42, R109, R110)", () => {
     const line = document.querySelector<HTMLElement>("[data-slot=notice-line]");
     await app.user.click(within(line ?? document.body).getByRole("button", { name: "Dismiss" }));
     expect(lines()).toEqual([]);
+  });
+
+  it("dismiss every toast at a sign-out, so the next user never sees one", async () => {
+    const { watch, handlers } = live();
+    const app = await signedIn({ ...handlers, logout: async () => ({ server: "ended" }) });
+    await screen.findByRole("link", { name: "Open AfkBot1" });
+    await push(watch, refetch("ready"), botFrame(ONLINE), died());
+    expect(await screen.findByText("AfkBot1 died.")).toBeDefined();
+
+    await app.user.click(screen.getByRole("button", { name: "Log out" }));
+
+    await waitFor(() => expect(app.path()).toBe("/login"));
+    await waitFor(() => expect(screen.queryByText("AfkBot1 died.")).toBeNull());
   });
 
   it("open the bot's screen from Home's line, which then goes", async () => {

@@ -717,6 +717,35 @@ mod tests {
 
     const GOOD: &str = "https://www.microsoft.com/link";
 
+    #[test]
+    fn a_commands_answer_keeps_its_bot_and_says_sent_or_cleared_as_the_client_did() {
+        let bot: super::BotResponse = serde_json::from_value(serde_json::json!({
+            "id": "018bcfe5-6800-7202-8202-020202020202",
+            "account": {
+                "id": "018bcfe5-6800-7101-8101-010101010101",
+                "name": "AfkBot1",
+                "kind": "offline",
+                "status": "active",
+                "level": "control"
+            },
+            "mode_id": "01a14202-2800-7000-8000-000000000001",
+            "desired_state": "running",
+            "status": { "kind": "reported", "state": "paused", "reason": "duplicate_login" }
+        }))
+        .unwrap();
+        let answer = |effect| fleet_client::BotCommandAnswer {
+            bot: bot.clone(),
+            effect,
+        };
+
+        let sent = super::commanded(answer(fleet_client::BotCommandEffect::Sent));
+        let cleared = super::commanded(answer(fleet_client::BotCommandEffect::Cleared));
+
+        assert_eq!(sent.bot, bot);
+        assert_eq!(sent.effect, super::BotCommandEffect::Sent);
+        assert_eq!(cleared.effect, super::BotCommandEffect::Cleared);
+    }
+
     /// One memory store per call: these tests never log in.
     struct Memory;
 

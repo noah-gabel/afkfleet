@@ -6,7 +6,7 @@ import type { BotPage } from "@afkfleet/ui/generated/BotPage";
 import type { ModePage } from "@afkfleet/ui/generated/ModePage";
 import { expect, test } from "@playwright/test";
 
-import { COMMANDS, FakeBackend, OWNER, PASSWORD } from "../fake/backend";
+import { COMMANDS, FakeBackend, MEMBER, OWNER, PASSWORD } from "../fake/backend";
 
 /** The built-in `farm` mode, as the server seeds it. */
 const FARM = "01a14202-2800-7000-8000-000000000002";
@@ -102,6 +102,37 @@ test("lets only a manager choose a mode that sends a command off the allowlist",
 
   expect(unlisted?.name).toBe("warp");
   expect(chosen).toMatchObject({ ok: true, value: { mode_id: unlisted?.id } });
+});
+
+test("refuses a Control holder that mode, and lets them choose a listed one", async () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(OWNER) });
+  backend.addAccount(OWNER);
+  const shared = backend.bot("AfkBot1");
+  backend.handle("step_up", { request: { password: PASSWORD } });
+  const granted = await backend.handle("create_grant", {
+    id: shared.account.id,
+    request: { username: MEMBER, level: "control" },
+  });
+  backend.handle("logout", {});
+  backend.handle("login", { request: { username: MEMBER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(MEMBER) });
+  const modes = (await backend.handle("modes", {})) as { ok: true; value: ModePage };
+  const unlisted = modes.value.items.find((mode) => mode.unlisted_command);
+
+  const refused = await backend.handle("set_bot_mode", {
+    id: shared.id,
+    request: { mode_id: unlisted?.id },
+  });
+  const listed = await backend.handle("set_bot_mode", {
+    id: shared.id,
+    request: { mode_id: FARM },
+  });
+
+  expect(granted).toMatchObject({ ok: true, value: { level: "control" } });
+  expect(refused).toMatchObject({ ok: false, error: { api: { status: 403, code: "forbidden" } } });
+  expect(listed).toMatchObject({ ok: true, value: { mode_id: FARM } });
 });
 
 test("refuses a command it doesn't know", () => {

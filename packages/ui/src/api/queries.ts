@@ -147,8 +147,8 @@ interface EveryPage<P> {
 /**
  * Every page `read` answers, newest first, until a page has no `next`. One failed page fails
  * the read, and so does a `next` that doesn't move past the cursor it was asked with (an ID's
- * text sorts by its time) or that was asked before: a server bug never loops (R99). Once
- * `signal` aborts, no further page is asked for.
+ * text sorts by its time): the cursors only fall, so none is asked twice and a server bug
+ * never loops (R99). Once `signal` aborts, no further page is asked for.
  */
 async function everyPage<P extends { readonly next?: string }>(
   read: (before: string | undefined) => Promise<P>,
@@ -156,7 +156,6 @@ async function everyPage<P extends { readonly next?: string }>(
 ): Promise<EveryPage<P>> {
   const pages: P[] = [];
   const pageParams: (string | undefined)[] = [];
-  const asked = new Set<string>();
   let before: string | undefined;
   do {
     if (pages.length > 0) {
@@ -166,11 +165,8 @@ async function everyPage<P extends { readonly next?: string }>(
     pages.push(page);
     pageParams.push(before);
     const next = page.next;
-    if (next !== undefined && ((before !== undefined && next >= before) || asked.has(next))) {
+    if (next !== undefined && before !== undefined && next >= before) {
       throw new ApiError({ code: "unexpected_response", message: PAGES_DONT_MOVE_ON });
-    }
-    if (before !== undefined) {
-      asked.add(before);
     }
     before = next;
   } while (before !== undefined);

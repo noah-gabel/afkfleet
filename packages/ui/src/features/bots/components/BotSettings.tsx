@@ -6,10 +6,12 @@
 //   `unlisted_command`; the bot's mode is its value, by name, or "A mode you can't see" when
 //   the list lacks it, and a choice only when the viewer may choose it. The current mode is
 //   never sent. A 403 says only a manager may choose that mode and reads the bot and the
-//   modes again; a 422 shows its field text and reads the modes again.
+//   modes again; a 422 shows its field text and reads the modes again; a 404 reads the bot
+//   again, as the controls do.
 // - **The server** (Manage): the address with Change, which opens a field in place; Save asks
 //   for the password when the server wants it (useStepUpAction), and spends the bot's limit,
-//   whose 429 counts down on Save.
+//   whose 429 counts down on Save. While the password is asked, the field and Save are
+//   locked, and while a save runs, Cancel is.
 // Every answer reads the bot again rather than writing over the cache (R102).
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useQueryClient } from "@tanstack/react-query";
@@ -95,6 +97,10 @@ function ModeSetting({ bot, actions }: { bot: BotResponse; actions: BotActions }
       void queryClient.invalidateQueries({ queryKey: MODES_LIST_KEY, exact: true });
       const field = fieldErrorsOf(error).find((one) => one.path === "mode_id");
       return field?.message ?? describeError(error);
+    }
+    if (status === 404) {
+      // As the controls do: the read shows the screen's own 404.
+      void queryClient.invalidateQueries({ queryKey: botKey(bot.id), exact: true });
     }
     return describeError(error);
   }
@@ -245,6 +251,9 @@ function ServerSetting({ bot }: { bot: BotResponse }) {
     );
   }
 
+  // While the password is asked, the write that waits for it is the one shown: the field and
+  // Save are locked, so what's sent after the step-up is what's on the screen.
+  const asking = writes.prompt === key;
   return (
     <div className="flex flex-col gap-3">
       <form className="flex flex-col gap-3" noValidate onSubmit={(event) => void submit(event)}>
@@ -255,7 +264,12 @@ function ServerSetting({ bot }: { bot: BotResponse }) {
           error={form.formState.errors.server_address?.message}
         >
           {(control) => (
-            <Input {...control} autoComplete="off" {...form.register("server_address")} />
+            <Input
+              {...control}
+              autoComplete="off"
+              readOnly={asking}
+              {...form.register("server_address")}
+            />
           )}
         </FormField>
         {formError === undefined ? null : (
@@ -268,7 +282,7 @@ function ServerSetting({ bot }: { bot: BotResponse }) {
           <Button
             type="submit"
             size="sm"
-            disabled={writes.running !== null || wait.waiting !== null}
+            disabled={writes.running !== null || wait.waiting !== null || asking}
           >
             {SETTINGS.save}
           </Button>
@@ -276,6 +290,7 @@ function ServerSetting({ bot }: { bot: BotResponse }) {
             type="button"
             variant="outline"
             size="sm"
+            disabled={writes.running !== null}
             onClick={() => {
               writes.cancel();
               setEditing(false);

@@ -7,8 +7,9 @@
 // - **Entries,** per bot, at most `ENTRIES_MAX`, the oldest dropped: a status that changed
 //   against the bot's last known one (kind, state, reason, why, since, attempt, restarting,
 //   last disconnect; never the agent or the address), a bot's first frame included (R108);
-//   deaths, consecutive ones merged with their count; an alert, merged with the status it
-//   comes beside; a mode and a desired state that changed. A repeated frame changes nothing.
+//   deaths, consecutive ones merged with their count; an alert, merged with the status beside
+//   it that entered its state and reason (R112); a mode and a desired state that changed. A
+//   repeated frame changes nothing.
 //   A fill-in from a read only gives a bot it doesn't know its last known state.
 // - **Gaps,** app-wide, at most `GAPS_MAX`: each refetch after the generation's first
 //   `ready`, as long as the watch was known down before it (its `disconnected` update or its
@@ -49,7 +50,10 @@ export interface Known {
 
 /** One entry of a bot's timeline; `arrived` is when it came, in ms since the epoch. */
 export type Entry =
-  /** Its status changed; `newDisconnect` when it came with a new last disconnect (R111). */
+  /**
+   * Its status changed; `newDisconnect` when it came with a new last disconnect (R111), and
+   * `entered` when its state or reason did, or none was known (R112).
+   */
   | {
       readonly kind: "status";
       readonly arrived: number;
@@ -57,6 +61,7 @@ export type Entry =
       readonly status: BotStatus;
       readonly desired: DesiredState;
       readonly newDisconnect: boolean;
+      readonly entered: boolean;
     }
   /** It died, `count` times in a row, the last at `at`. */
   | { readonly kind: "died"; readonly arrived: number; readonly at: string; readonly count: number }
@@ -270,7 +275,14 @@ function framed(
   }
   if (before === undefined || statusKey(before.status) !== statusKey(after.status)) {
     const latest = kept.entries.at(-1);
+    // Only the status that entered the alert's state and reason is the alert's own (R112): a
+    // later change in that state, its agent going or coming back, say, is an entry of its own.
+    const entered =
+      before === undefined ||
+      before.status.state !== after.status.state ||
+      before.status.reason !== after.status.reason;
     const merged =
+      entered &&
       latest?.kind === "alert" &&
       latest.state === after.status.state &&
       latest.reason === after.status.reason;
@@ -287,6 +299,7 @@ function framed(
           after.status.last_disconnect !== undefined &&
           JSON.stringify(after.status.last_disconnect) !==
             JSON.stringify(before?.status.last_disconnect),
+        entered,
       });
     }
   }
@@ -302,11 +315,13 @@ function framed(
   if (blocks) {
     next = noticed(next, { botId: bot.id, name: after.name, kind: "blocked", at }, open);
   }
+  // A failed respawn always ends in a backoff. A bot keeps its last disconnect until a later
+  // session ends on its own, so an Online bot that stops may still carry an old one.
   if (
     before?.status.kind === "reported" &&
     before.status.state === "online" &&
     after.status.kind === "reported" &&
-    after.status.state !== "online" &&
+    after.status.state === "backoff" &&
     after.status.last_disconnect?.kind === "respawn_failed"
   ) {
     next = noticed(next, { botId: bot.id, name: after.name, kind: "respawn", at }, open);
@@ -348,6 +363,7 @@ function alerted(
   const latest = kept.entries.at(-1);
   const besideItsStatus =
     latest?.kind === "status" &&
+    latest.entered &&
     latest.status.state === alert.state &&
     latest.status.reason === alert.reason;
   const entry: Entry = { kind: "alert", arrived: now, ...alert };
