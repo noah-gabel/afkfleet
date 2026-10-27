@@ -1366,6 +1366,25 @@ CLAUDE.md's step 3 counts twenty-two group branches.
 
 The DoD kit's terminal texts, which only the user reads (`dod-app`'s line and `dod-clean`'s messages), are recorded with H5.
 
+### As built (group H3)
+Built as planned, one PR on `p11/p11.9-bot-chat`, in eight commits: PR #76's follow-ups (above), the planning record, the three chat commands end to end (49 grants), the outcome key with the loss counter, the console, the send box, the e2e spec and the docs. Each new test ran red before its code, against a stub with the real signature (endpoints answering `ipc`, a `validated` that passed chat calls through unchecked, outcomes that changed nothing and marked nothing, a store whose counter never moved, a console rendering only its heading, a send box rendering nothing, helpers answering no sender and empty texts), or, for a test that pins working code, by a mutation restored from a saved copy and checked by checksum.
+
+*Choices made while building:*
+- **An older page that couldn't be read** says so above the list and keeps "Show older" as the way to try again; the planned "in place of 'Show older'" would have left no way to retry.
+- **The console's place** is kept by an effect keyed on the first and the last line shown: older lines that came keep the reader's place, new ones are followed while the list was at its bottom. A first version silenced Biome's dependency rule with an ignore comment, which the lint rules don't allow; the keyed effect needs none.
+- **`stores.live.setConnected`** notifies only on a change: the layer follows that store and sets the flag at a sign-out, so an unconditional write called itself again.
+- **The send box follows `ServerSetting`'s pattern** (its write shows every refusal itself and rethrows only `step_up_required`), and the prompt takes its text (`StepUpPrompt`'s new `text`).
+- **`lib/time`'s `sameDay`** is shared by the chat's times and `agentLastSeen`.
+- **The signed-in test helper** answers an empty chat by default, as it does `bots` and `modes`, since every bot screen now reads its chat.
+- **The e2e fake** keeps each bot's chat with a `/spawn` allowlist, answers a send `sent` or, by `chatOutcome`, `pending`, keeps the last send for a spec to push (`lastSend`), and adds a line through `addChat`.
+- **ADR-0017** holds no command count, so it didn't change; the threat model's B2 counts 49.
+
+*Mutations* (each failed its tests, then was restored): MA1 (the respawn rule never firing), MA2 (the whole bot compared), MC1 (`Sent` and `Cleared` swapped in `commanded`), MK1 (`command_bot` posting a reset whatever it was asked), MN1 (no clear of R106's note as the next action starts: a first test version, whose Stop answered at once, passed it, since a stop's answer clears the note too, and was rewritten with a Stop that waits), MF1 (the fake's manager check only for View), MS1 (the modes' service without the allowlist), MF2 (the fake's send without its online check), ML4 (`connected` starting a watch), MR2 (`recordAnswer` without its guard), MK2 (the console's anchor never applied), MS2 (a send box for View), MS3 (the typed command cached under a key), ME4 (no `chat_sent` patch: the e2e spec never read "sent"; a first ME4, `[] && [patch]`, changed nothing, since an empty array is truthy, and was redone). The ACL test's count and its three entries changed together, without a red run of their own; the bridge tests of the same commands ran red.
+
+*Snapshots:* none.
+
+*Size:* about 3,300 lines added and 90 removed, the docs included, below the planned 3,800; 33 of them generated (three permission files).
+
 ### Notes for later groups
 - **B2 (P11.3's history):** built (above).
 - **C (P11.4):** decided at C's planning (above), built in C1, C2 and C3.
