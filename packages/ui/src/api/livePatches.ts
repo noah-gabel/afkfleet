@@ -5,12 +5,14 @@
 // cached yet is placed by the keyset paging rule (newest first by ID, never below a loaded
 // page that has more after it). No patch creates a query's entry: the layer writes only over
 // data a query holds; and data of another shape than its key's is left as it is, never a
-// throw inside the cache's notify (R90).
+// throw inside the cache's notify (R90). A user's line, its `chat_sent` and its
+// `chat_failed` also write the bot's chat outcomes (chatOutcomes.ts, S70), never its lines.
 import type { DataTag, QueryKey } from "@tanstack/react-query";
 
 import type { AccountResponse } from "../generated/AccountResponse";
 import type { BotResponse } from "../generated/BotResponse";
 import type { EventMessage } from "../generated/EventMessage";
+import { type ChatFinal, type ChatOutcomes, finished, isOutcomes, linked } from "./chatOutcomes";
 import {
   ACCOUNT_LIST_KEY,
   ACCOUNTS_KEY,
@@ -19,6 +21,7 @@ import {
   BOTS_LIST_KEY,
   botKey,
   chatKey,
+  chatOutcomesKey,
   grantsKey,
   MODES_LIST_KEY,
 } from "./queries";
@@ -62,10 +65,31 @@ export function patchesFor(event: EventMessage, cached: CachedBot): LivePatch[] 
     case "bot_removed":
       return event.bot_id === undefined ? [] : removedPatches(event.bot_id, cached(event.bot_id));
     case "chat": {
-      const line = event.line;
-      return event.bot_id === undefined || line === undefined
-        ? []
-        : [pagesPatch(chatKey(event.bot_id), (data) => placed(data, line))];
+      const { bot_id: botId, line, request } = event;
+      if (botId === undefined || line === undefined) {
+        return [];
+      }
+      return [
+        pagesPatch(chatKey(botId), (data) => placed(data, line)),
+        // A user's line: its request is linked to it (S70).
+        ...(request === undefined
+          ? []
+          : [outcomesPatch(botId, (outcomes) => linked(outcomes, request, line.id))]),
+      ];
+    }
+    case "chat_sent":
+    case "chat_failed": {
+      const { bot_id: botId, request, failure } = event;
+      if (botId === undefined || request === undefined) {
+        return [];
+      }
+      const final: ChatFinal =
+        event.type === "chat_sent"
+          ? { kind: "sent" }
+          : failure === undefined
+            ? { kind: "failed" }
+            : { kind: "failed", failure };
+      return [outcomesPatch(botId, (outcomes) => finished(outcomes, request, final))];
     }
     case "mode": {
       const mode = event.mode;
@@ -79,8 +103,6 @@ export function patchesFor(event: EventMessage, cached: CachedBot): LivePatch[] 
     case "resync":
     case "bot_died":
     case "bot_alert":
-    case "chat_sent":
-    case "chat_failed":
       // A refetch comes as its own update; the rest are notices, which patch nothing.
       return [];
     default:
@@ -118,6 +140,7 @@ function removedPatches(id: string, bot: BotResponse | undefined): LivePatch[] {
     pagesPatch(BOTS_LIST_KEY, (data) => without(data, id)),
     { kind: "reset", queryKey: botKey(id) },
     { kind: "reset", queryKey: chatKey(id) },
+    { kind: "reset", queryKey: chatOutcomesKey(id) },
     ...(bot === undefined
       ? []
       : [{ kind: "reset", queryKey: accountKey(bot.account.id) } as const]),
@@ -145,6 +168,15 @@ function awaiting(
     default:
       return READ_AGAIN;
   }
+}
+
+/** A patch of bot `botId`'s chat outcomes (S70); data of another shape is left as it is. */
+function outcomesPatch(botId: string, update: (outcomes: ChatOutcomes) => ChatOutcomes): LivePatch {
+  return {
+    kind: "set",
+    queryKey: chatOutcomesKey(botId),
+    update: (data) => (isOutcomes(data) ? update(data) : data),
+  };
 }
 
 /** A patch that writes over `queryKey`'s data. */

@@ -22,9 +22,12 @@ import {
   BOTS_LIST_KEY,
   botKey,
   chatKey,
+  chatOutcomesKey,
   grantsKey,
   MODES_LIST_KEY,
 } from "./queries";
+
+const REQUEST = "01900000-0000-7000-8000-0000000004a1";
 
 /** What `event`'s patch for `queryKey` makes of `data`. */
 function patched(event: EventMessage, queryKey: QueryKey, data: unknown): unknown {
@@ -161,6 +164,7 @@ describe("the other events", () => {
       expect.arrayContaining([
         { kind: "reset", queryKey: botKey(botId(3)) },
         { kind: "reset", queryKey: chatKey(botId(3)) },
+        { kind: "reset", queryKey: chatOutcomesKey(botId(3)) },
         { kind: "invalidate", queryKey: ACCOUNTS_KEY },
       ]),
     );
@@ -175,7 +179,7 @@ describe("the other events", () => {
       kind: "reset",
       queryKey: accountKey(accountId(3)),
     });
-    expect(resets(() => undefined)).toHaveLength(2);
+    expect(resets(() => undefined)).toHaveLength(3);
   });
 
   it("chat merges its line into the bot's chat by the row's ID", () => {
@@ -188,6 +192,36 @@ describe("the other events", () => {
       line(9, "edited"),
       line(7),
     ]);
+  });
+
+  it("chat links a user's line to its request in the bot's outcomes (S70)", () => {
+    const chat: EventMessage = { type: "chat", bot_id: botId(1), line: line(8), request: REQUEST };
+
+    expect(patched(chat, chatOutcomesKey(botId(1)), {})).toEqual({ [REQUEST]: { line: 8 } });
+    expect(
+      patchesFor({ type: "chat", bot_id: botId(1), line: line(8) }, () => undefined).map(
+        (patch) => patch.queryKey,
+      ),
+    ).toEqual([chatKey(botId(1))]);
+  });
+
+  it("chat_sent and chat_failed give the request its final, with the failure when given (S70)", () => {
+    const key = chatOutcomesKey(botId(1));
+    const sent: EventMessage = { type: "chat_sent", bot_id: botId(1), request: REQUEST };
+    const failed: EventMessage = {
+      type: "chat_failed",
+      bot_id: botId(1),
+      request: REQUEST,
+      failure: "chat_unavailable",
+    };
+    const unexplained: EventMessage = { type: "chat_failed", bot_id: botId(1), request: REQUEST };
+
+    expect(patched(sent, key, {})).toEqual({ [REQUEST]: { final: { kind: "sent" } } });
+    expect(patched(failed, key, {})).toEqual({
+      [REQUEST]: { final: { kind: "failed", failure: "chat_unavailable" } },
+    });
+    expect(patched(unexplained, key, {})).toEqual({ [REQUEST]: { final: { kind: "failed" } } });
+    expect(patched(sent, key, ["of another shape"])).toEqual(["of another shape"]);
   });
 
   it("mode replaces or places the mode, and mode_removed takes it off", () => {
