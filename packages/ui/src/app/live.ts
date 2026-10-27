@@ -26,6 +26,9 @@
 //   `too_many_connections`; the watch's stop with an error that isn't the session's end, or
 //   its stop by itself while signed in with no server save running (S64's broken channel,
 //   R91); nothing otherwise. Every refetch, event, new watch and sign-out clears it.
+// - **The live record** (S71): every update of the current watch, and its end, go to the
+//   record the timeline and the notices show; a bots query's read fills in what it doesn't
+//   know, a bot's 404 drops it, and each sign-in and sign-out clears it.
 // Building it has no side effects; `attach` starts following the session.
 import type { Query, QueryCacheNotifyEvent, QueryClient, QueryKey } from "@tanstack/react-query";
 
@@ -33,6 +36,7 @@ import type { ApiClient } from "../api/ApiClient";
 import { toApiError } from "../api/ApiError";
 import { type LivePatch, patchesFor, READ_AGAIN } from "../api/livePatches";
 import { BOTS_LIST_KEY, botKey } from "../api/queries";
+import type { BotPage } from "../generated/BotPage";
 import type { BotResponse } from "../generated/BotResponse";
 import type { LiveDisconnect } from "../generated/LiveDisconnect";
 import type { LiveUpdateMessage } from "../generated/LiveUpdateMessage";
@@ -120,6 +124,7 @@ export function createLiveLayer(
     const generation = current.generation;
     current = null;
     holds.clear();
+    stores.record.getState().down(Date.now());
     if (rejection === null) {
       // A newer watch or a server save stops it too, but neither while signed in with
       // nothing under way: then its channel broke (S64, R91).
@@ -142,6 +147,7 @@ export function createLiveLayer(
 
   /** What the current watch's `update` changes. */
   function apply(update: LiveUpdateMessage): void {
+    stores.record.getState().observe(update, Date.now());
     switch (update.update) {
       case "refetch":
         hint({ kind: "none" });
@@ -341,6 +347,36 @@ export function createLiveLayer(
     }
   }
 
+  /**
+   * What a bots query's read tells the live record (S71): the bots it read, where the record
+   * doesn't know them yet; and that a bot whose read answered 404 is gone.
+   */
+  function recorded(event: QueryCacheNotifyEvent): void {
+    if (event.type !== "updated") {
+      return;
+    }
+    const [root, which, id] = event.query.queryKey;
+    if (root !== "bots" || (which !== "list" && which !== "one")) {
+      return;
+    }
+    const record = stores.record.getState();
+    if (event.action.type === "success") {
+      const data: unknown = event.query.state.data;
+      if (which === "one" && isBot(data)) {
+        record.known([data]);
+      } else if (which === "list" && isBotPages(data)) {
+        record.known(data.pages.flatMap((page) => page.items));
+      }
+    } else if (
+      event.action.type === "error" &&
+      which === "one" &&
+      typeof id === "string" &&
+      toApiError(event.action.error).error.api?.status === 404
+    ) {
+      record.drop(id);
+    }
+  }
+
   /** Follows the session's phase and the restarts asked for. */
   function followed(): void {
     const session = stores.session.getState();
@@ -348,10 +384,12 @@ export function createLiveLayer(
       current = null;
       holds.clear();
       hint({ kind: "none" });
+      stores.record.getState().clear();
       return;
     }
     if (session.phase === "signed_in" && session.generation !== started) {
       started = session.generation;
+      stores.record.getState().clear();
       start();
       return;
     }
@@ -369,6 +407,7 @@ export function createLiveLayer(
       restarts = stores.live.getState().restarts;
       const unsubscribes = [
         cache.subscribe(fetched),
+        cache.subscribe(recorded),
         stores.session.subscribe(followed),
         stores.live.subscribe(followed),
       ];
@@ -390,6 +429,30 @@ export function createLiveLayer(
       }
     },
   };
+}
+
+/** Whether `data` is a bot, as a bot's query holds it. */
+function isBot(data: unknown): data is BotResponse {
+  return typeof data === "object" && data !== null && "status" in data && "account" in data;
+}
+
+/** Whether `data` holds bots' pages, as the bots' list holds them. */
+function isBotPages(data: unknown): data is { readonly pages: readonly BotPage[] } {
+  if (typeof data !== "object" || data === null || !("pages" in data)) {
+    return false;
+  }
+  const { pages } = data;
+  return (
+    Array.isArray(pages) &&
+    pages.every(
+      (page: unknown) =>
+        typeof page === "object" &&
+        page !== null &&
+        "items" in page &&
+        Array.isArray(page.items) &&
+        page.items.every(isBot),
+    )
+  );
 }
 
 /**

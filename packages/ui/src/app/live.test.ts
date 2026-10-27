@@ -5,7 +5,7 @@ import {
   QueryObserver,
   type QueryObserverOptions,
 } from "@tanstack/react-query";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { ApiClient } from "../api/ApiClient";
 import type { ApiError } from "../api/ApiError";
@@ -1011,5 +1011,74 @@ describe("a watch that stops by itself (S64, R91)", () => {
 
     expect(watch.calls).toHaveLength(2);
     expect(stores.live.getState().hint).toEqual({ kind: "none" });
+  });
+});
+
+describe("the live record (S71)", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("records the current watch's frames, never a replaced one's", async () => {
+    const { watch, stores } = setup();
+    const first = watch.latest();
+    stores.live.getState().restart();
+
+    first.push(botFrame(bot(1)));
+    watch.latest().push(botFrame(bot(2)));
+
+    expect(Object.keys(stores.record.getState().record.bots)).toEqual([botId(2)]);
+  });
+
+  it("clears at sign-out and at a new generation", async () => {
+    const { watch, stores } = setup();
+    watch.latest().push(botFrame(bot(1)));
+    stores.session.getState().signOut();
+    const signedOut = stores.record.getState().record;
+    watch.latest().push(botFrame(bot(2)));
+    stores.session.getState().signIn();
+    watch.latest().push(botFrame(bot(3)));
+    stores.session.getState().signIn();
+
+    expect(signedOut.bots).toEqual({});
+    expect(stores.record.getState().record.bots).toEqual({});
+  });
+
+  it("marks a gap when a new watch of the same sign-in is ready after the last one ended", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(Date.parse("2026-10-26T14:00:00.000Z"));
+    const { watch, stores } = setup();
+    watch.latest().push(refetch("ready"));
+    watch.latest().end();
+    await settle();
+
+    vi.setSystemTime(Date.parse("2026-10-26T14:00:10.000Z"));
+    stores.live.getState().restart();
+    watch.latest().push(refetch("ready"));
+
+    expect(stores.record.getState().record.gaps).toEqual([
+      { arrived: Date.parse("2026-10-26T14:00:10.000Z"), downMs: 10_000 },
+    ]);
+  });
+
+  it("fills in what a bot read knows, and drops a bot whose read answers 404", async () => {
+    let gone = false;
+    const { fake, queryClient, stores } = setup({
+      bots: async () => ({ items: [bot(1), bot(2)] }),
+      bot: async () => {
+        if (gone) {
+          throw refusal(404, "not_found");
+        }
+        return bot(1);
+      },
+    });
+
+    await queryClient.fetchInfiniteQuery(botsQuery(fake));
+    const filled = Object.keys(stores.record.getState().record.bots);
+    gone = true;
+    await queryClient.fetchQuery(botQuery(fake, botId(1))).catch(() => undefined);
+
+    expect(filled).toEqual([botId(1), botId(2)]);
+    expect(Object.keys(stores.record.getState().record.bots)).toEqual([botId(2)]);
   });
 });
