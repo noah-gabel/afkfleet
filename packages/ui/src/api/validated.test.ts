@@ -10,6 +10,7 @@ import {
   NEW_PASSWORD_MAX_CHARS,
   PAGE_MAX,
   PASSWORD_MAX_CHARS,
+  SERVER_ADDRESS_MAX_CHARS,
   SERVER_URL_MAX_BYTES,
   TOKEN_MAX_CHARS,
   USERNAME_MAX_CHARS,
@@ -62,6 +63,13 @@ function client() {
     bots: ok,
     bot: ok,
     modes: ok,
+    patchBot: ok,
+    setBotMode: ok,
+    startBot: ok,
+    stopBot: ok,
+    restartBot: ok,
+    resetBot: ok,
+    resumeBot: ok,
   });
   return { fake, api: validated(fake) as ApiClient };
 }
@@ -278,6 +286,56 @@ describe("validated", () => {
     expect(await refusedFields(api.bots("x", 0))).toEqual(["before", "limit"]);
     expect(await refusedFields(api.bot("x"))).toEqual(["id"]);
     expect(await refusedFields(api.modes(undefined, PAGE_MAX + 1))).toEqual(["limit"]);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("passes valid bot writes through unchanged", async () => {
+    const { fake, api } = client();
+    const address = "a".repeat(SERVER_ADDRESS_MAX_CHARS);
+
+    await api.patchBot(ID, { server_address: "play.example.com:25566" });
+    await api.patchBot(ID, { server_address: address });
+    await api.setBotMode(ID, { mode_id: ID });
+    await api.startBot(ID);
+    await api.stopBot(ID);
+    await api.restartBot(ID);
+    await api.resetBot(ID);
+    await api.resumeBot(ID);
+
+    expect(fake.calls.map((call) => [call.method, call.args])).toEqual([
+      ["patchBot", [ID, { server_address: "play.example.com:25566" }]],
+      ["patchBot", [ID, { server_address: address }]],
+      ["setBotMode", [ID, { mode_id: ID }]],
+      ["startBot", [ID]],
+      ["stopBot", [ID]],
+      ["restartBot", [ID]],
+      ["resetBot", [ID]],
+      ["resumeBot", [ID]],
+    ]);
+  });
+
+  it("refuses a bot write's bad ID, an empty or too long address and a mode that isn't an ID", async () => {
+    const { fake, api } = client();
+
+    expect(await refusedFields(api.patchBot("x", { server_address: "" }))).toEqual([
+      "id",
+      "server_address",
+    ]);
+    expect(
+      await refusedFields(
+        api.patchBot(ID, { server_address: "a".repeat(SERVER_ADDRESS_MAX_CHARS + 1) }),
+      ),
+    ).toEqual(["server_address"]);
+    expect(await refusedFields(api.setBotMode(ID, { mode_id: "x" }))).toEqual(["mode_id"]);
+    for (const call of [
+      api.startBot("x"),
+      api.stopBot("x"),
+      api.restartBot("x"),
+      api.resetBot("x"),
+      api.resumeBot("x"),
+    ]) {
+      expect(await refusedFields(call)).toEqual(["id"]);
+    }
     expect(fake.calls).toEqual([]);
   });
 

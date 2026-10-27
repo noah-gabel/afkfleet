@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-resume-bot"
+description = "Enables the resume_bot command without any pre-configured scope."
+commands.allow = ["resume_bot"]
+
+[[permission]]
+identifier = "deny-resume-bot"
+description = "Denies the resume_bot command without any pre-configured scope."
+commands.deny = ["resume_bot"]

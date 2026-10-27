@@ -126,6 +126,13 @@ export function watched(client: ApiClient, stores: AppStores, events: WatchEvent
     bots: watch((before, limit) => client.bots(before, limit)),
     bot: watch((id) => client.bot(id)),
     modes: watch((before, limit) => client.modes(before, limit)),
+    patchBot: watch((id, request) => client.patchBot(id, request)),
+    setBotMode: watch((id, request) => client.setBotMode(id, request)),
+    startBot: watch((id) => client.startBot(id)),
+    stopBot: watch((id) => client.stopBot(id)),
+    restartBot: watch((id) => client.restartBot(id)),
+    resetBot: watch((id) => client.resetBot(id)),
+    resumeBot: watch((id) => client.resumeBot(id)),
   };
 }
 

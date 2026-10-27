@@ -99,6 +99,19 @@ export function validated(client: ApiClient): ApiClient {
       checkPage(before, limit);
       return client.modes(before, limit);
     },
+    patchBot: async (id, request) => {
+      checkAll([...problems(schemas.id, id, "id"), ...problems(schemas.botPatchRequest, request)]);
+      return client.patchBot(id, request);
+    },
+    setBotMode: async (id, request) => {
+      checkAll([...problems(schemas.id, id, "id"), ...problems(schemas.botModeRequest, request)]);
+      return client.setBotMode(id, request);
+    },
+    startBot: async (id) => client.startBot(check(schemas.id, id, "id")),
+    stopBot: async (id) => client.stopBot(check(schemas.id, id, "id")),
+    restartBot: async (id) => client.restartBot(check(schemas.id, id, "id")),
+    resetBot: async (id) => client.resetBot(check(schemas.id, id, "id")),
+    resumeBot: async (id) => client.resumeBot(check(schemas.id, id, "id")),
   };
 }
 

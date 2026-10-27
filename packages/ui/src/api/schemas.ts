@@ -13,6 +13,7 @@ import {
   NEW_PASSWORD_MIN_CHARS,
   PAGE_MAX,
   PASSWORD_MAX_CHARS,
+  SERVER_ADDRESS_MAX_CHARS,
   SERVER_URL_MAX_BYTES,
   TOKEN_MAX_CHARS,
   USERNAME_MAX_CHARS,
@@ -151,3 +152,19 @@ export const grantLevel = z.enum(["view", "control", "manage"]);
 export const createGrantRequest = z.strictObject({ username, level: grantLevel });
 
 export const changeGrantRequest = z.strictObject({ level: grantLevel });
+
+/**
+ * A bot's server address: not empty, and at most `SERVER_ADDRESS_MAX_CHARS` characters, in
+ * the server's words; the server checks its host and port.
+ */
+export const serverAddress = z
+  .string()
+  .refine((text) => text.length > 0, "must not be empty")
+  .refine(
+    (text) => chars(text) <= SERVER_ADDRESS_MAX_CHARS,
+    `must be at most ${SERVER_ADDRESS_MAX_CHARS} characters, with a host of at most 253`,
+  );
+
+export const botPatchRequest = z.strictObject({ server_address: serverAddress });
+
+export const botModeRequest = z.strictObject({ mode_id: id });

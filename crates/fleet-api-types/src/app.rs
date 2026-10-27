@@ -22,6 +22,7 @@ use garde::Validate;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::bots::BotResponse;
 use crate::error::{ErrorCode, FieldError, MESSAGE_MAX_CHARS, REQUEST_ID_MAX_CHARS};
 use crate::events::EventMessage;
 use crate::open::Open;
@@ -255,6 +256,30 @@ pub struct LoginStepResponse {
     pub expires_in: u32,
 }
 
+/// What a `restart_bot`, `reset_bot` or `resume_bot` command did, as the
+/// server's status said (ADR-0020, S73). Closed: the app's Rust side and its
+/// UI ship together.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BotCommandEffect {
+    /// 202: sent to the bot's agent; its state changes when the agent
+    /// reports back.
+    Sent,
+    /// 200: the bot runs nowhere, and its stored Paused or Failed state was
+    /// cleared; no agent was involved.
+    Cleared,
+}
+
+/// The `restart_bot`, `reset_bot` and `resume_bot` commands' answer: the
+/// bot as it reads after the call, and what the call did (ADR-0020, S73).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+pub struct BotCommandResponse {
+    /// The bot, as `GET /bots/{id}` shows it to the caller after the call.
+    pub bot: BotResponse,
+    /// What the call did.
+    pub effect: BotCommandEffect,
+}
+
 /// The `mfa_reset` command's answer: the setup step for `mfa_enroll` and
 /// `mfa_confirm` has started.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -443,6 +468,35 @@ mod tests {
 
     use super::*;
     use crate::events::EventMessageKind;
+
+    #[test]
+    fn a_bot_commands_answer_says_what_it_did_in_snake_case() {
+        let json = json!({
+            "bot": {
+                "id": "018bcfe5-6800-7202-8202-020202020202",
+                "account": {
+                    "id": "018bcfe5-6800-7101-8101-010101010101",
+                    "name": "AfkBot1",
+                    "kind": "offline",
+                    "status": "active",
+                    "level": "control"
+                },
+                "mode_id": "01a14202-2800-7000-8000-000000000001",
+                "desired_state": "running",
+                "status": { "kind": "reported", "state": "paused", "reason": "duplicate_login" }
+            },
+            "effect": "sent"
+        });
+
+        let answer: BotCommandResponse = serde_json::from_value(json.clone()).unwrap();
+
+        assert_eq!(answer.effect, BotCommandEffect::Sent);
+        assert_eq!(serde_json::to_value(&answer).unwrap(), json);
+        assert_eq!(
+            serde_json::to_value(BotCommandEffect::Cleared).unwrap(),
+            json!("cleared")
+        );
+    }
 
     /// Each code's position, through an exhaustive match: a new variant
     /// doesn't compile until it's added here, and then the test below fails

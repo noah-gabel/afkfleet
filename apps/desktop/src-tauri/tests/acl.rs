@@ -192,7 +192,7 @@ fn every_contract_command_passes_the_acl_and_answers_as_the_contract_says() {
             (_, _, answer) => panic!("{command}: unexpected answer {answer:?}"),
         }
     }
-    assert_eq!(entries.len(), 39);
+    assert_eq!(entries.len(), 46);
 }
 
 /// An Ok answer must parse as `command`'s own response type and equal the expected

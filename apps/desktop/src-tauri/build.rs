@@ -50,6 +50,13 @@ const COMMANDS: &[&str] = &[
     "bots",
     "bot",
     "modes",
+    "patch_bot",
+    "set_bot_mode",
+    "start_bot",
+    "stop_bot",
+    "restart_bot",
+    "reset_bot",
+    "resume_bot",
 ];
 
 fn main() -> Result<(), Box<dyn Error>> {

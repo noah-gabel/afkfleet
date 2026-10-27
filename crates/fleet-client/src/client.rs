@@ -75,6 +75,28 @@ pub enum LoginStep {
     },
 }
 
+/// What a restart, a reset or a resume did, as its status said (ADR-0020,
+/// S73).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BotCommandEffect {
+    /// 202: sent to the bot's agent; its state changes when the agent
+    /// reports back.
+    Sent,
+    /// 200: the bot runs nowhere, and its stored Paused or Failed state was
+    /// cleared; no agent was involved.
+    Cleared,
+}
+
+/// [`Client::restart_bot`]'s, [`Client::reset_bot`]'s and
+/// [`Client::resume_bot`]'s answer.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BotCommandAnswer {
+    /// The bot as it reads after the call.
+    pub bot: BotResponse,
+    /// What the call did.
+    pub effect: BotCommandEffect,
+}
+
 /// The API's client; see the [module docs](self). Clones share one session.
 pub struct Client<S> {
     core: Arc<Core<S, ReqwestTransport>>,
@@ -657,37 +679,39 @@ impl<S: SessionStore> Client<S> {
     }
 
     /// `POST /bots/{id}/restart`: restarts a running bot's run (Control),
-    /// sent to its agent.
+    /// sent to its agent: always [`BotCommandEffect::Sent`].
     ///
     /// # Errors
     /// The server's 403, 404, 409 (`bot_not_running`, `bot_unreachable`) or
     /// 429 as [`ClientError::Api`]; any other error as for every
     /// authenticated call.
-    pub async fn restart_bot(&self, id: BotId) -> Result<BotResponse, ClientError> {
-        self.core.control_bot(id, BotCall::Restart).await
+    pub async fn restart_bot(&self, id: BotId) -> Result<BotCommandAnswer, ClientError> {
+        self.core.command_bot(id, BotCall::Restart).await
     }
 
     /// `POST /bots/{id}/reset`: lets a failed bot try again (Control): sent
-    /// to its agent, or, where it runs nowhere, its stored state cleared.
+    /// to its agent, or, where it runs nowhere, its stored state cleared, as
+    /// the answer's effect says.
     ///
     /// # Errors
     /// The server's 403, 404, 409 (`bot_not_failed`, `bot_unreachable`) or
     /// 429 as [`ClientError::Api`]; any other error as for every
     /// authenticated call.
-    pub async fn reset_bot(&self, id: BotId) -> Result<BotResponse, ClientError> {
-        self.core.control_bot(id, BotCall::Reset).await
+    pub async fn reset_bot(&self, id: BotId) -> Result<BotCommandAnswer, ClientError> {
+        self.core.command_bot(id, BotCall::Reset).await
     }
 
     /// `POST /bots/{id}/resume`: lets a paused bot join again (Control):
     /// sent to its agent, or, where it runs nowhere, its stored state
-    /// cleared. A human playing the account is kicked.
+    /// cleared, as the answer's effect says. A human playing the account is
+    /// kicked.
     ///
     /// # Errors
     /// The server's 403, 404, 409 (`bot_not_paused`, `bot_unreachable`) or
     /// 429 as [`ClientError::Api`]; any other error as for every
     /// authenticated call.
-    pub async fn resume_bot(&self, id: BotId) -> Result<BotResponse, ClientError> {
-        self.core.control_bot(id, BotCall::Resume).await
+    pub async fn resume_bot(&self, id: BotId) -> Result<BotCommandAnswer, ClientError> {
+        self.core.command_bot(id, BotCall::Resume).await
     }
 
     /// `GET /bots/{id}/chat`: one page of the bot's chat, newest first, as

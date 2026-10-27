@@ -8,7 +8,10 @@ import type { ApiClient } from "@afkfleet/ui";
 import { toApiError } from "@afkfleet/ui";
 import type { AccountPage } from "@afkfleet/ui/generated/AccountPage";
 import type { AccountResponse } from "@afkfleet/ui/generated/AccountResponse";
+import type { BotCommandResponse } from "@afkfleet/ui/generated/BotCommandResponse";
+import type { BotModeRequest } from "@afkfleet/ui/generated/BotModeRequest";
 import type { BotPage } from "@afkfleet/ui/generated/BotPage";
+import type { BotPatchRequest } from "@afkfleet/ui/generated/BotPatchRequest";
 import type { BotResponse } from "@afkfleet/ui/generated/BotResponse";
 import type { ChangeGrantRequest } from "@afkfleet/ui/generated/ChangeGrantRequest";
 import type { CreatedInviteResponse } from "@afkfleet/ui/generated/CreatedInviteResponse";
@@ -188,6 +191,34 @@ export class TauriApiClient implements ApiClient {
 
   modes(before?: string, limit?: number): Promise<ModePage> {
     return this.#call("modes", { before, limit });
+  }
+
+  patchBot(id: string, request: BotPatchRequest): Promise<BotResponse> {
+    return this.#call("patch_bot", { id, request });
+  }
+
+  setBotMode(id: string, request: BotModeRequest): Promise<BotResponse> {
+    return this.#call("set_bot_mode", { id, request });
+  }
+
+  startBot(id: string): Promise<BotResponse> {
+    return this.#call("start_bot", { id });
+  }
+
+  stopBot(id: string): Promise<BotResponse> {
+    return this.#call("stop_bot", { id });
+  }
+
+  restartBot(id: string): Promise<BotCommandResponse> {
+    return this.#call("restart_bot", { id });
+  }
+
+  resetBot(id: string): Promise<BotCommandResponse> {
+    return this.#call("reset_bot", { id });
+  }
+
+  resumeBot(id: string): Promise<BotCommandResponse> {
+    return this.#call("resume_bot", { id });
   }
 
   account(id: string): Promise<AccountResponse> {
