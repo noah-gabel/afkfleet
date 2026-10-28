@@ -9,6 +9,9 @@
 // - An Admin only disables or enables Members.
 // - A Member invite is an Admin's or the Owner's to create and revoke, an Admin invite only
 //   the Owner's, an Owner invite nobody's.
+// - The Minecraft servers' settings are Admins' and the Owner's to read and, after a step-up,
+//   to write (ADR-0020, S75): the gate of their screens, under the admin layout's
+//   `requireAdmin`.
 // A role this app doesn't know (the server's `UserRole` is open) gets nothing, and nothing
 // is offered on one.
 import type { InviteResponse } from "../../generated/InviteResponse";
@@ -77,6 +80,20 @@ export function inviteRoles(role: UserRole): readonly ("member" | "admin")[] {
 /** Whether `role` may revoke an invite for `inviteRole`: as it may create one. */
 export function canRevokeRole(role: UserRole, inviteRole: UserRole): boolean {
   return (inviteRoles(role) as readonly UserRole[]).includes(inviteRole);
+}
+
+/** What a role may do with the Minecraft servers' settings. */
+export interface ServerSettingsAccess {
+  /** Reading every server's settings (`ViewServerSettings`). */
+  readonly view: boolean;
+  /** Creating, editing and deleting them (`ConfigureServerSettings`). */
+  readonly configure: boolean;
+}
+
+/** What `role` may do with the servers' settings: Admins and the Owner everything. */
+export function serverSettingsAccess(role: UserRole): ServerSettingsAccess {
+  const admin = role === "admin" || role === "owner";
+  return { view: admin, configure: admin };
 }
 
 /** Whether `role` may revoke `invite` now: only a pending one changes. */

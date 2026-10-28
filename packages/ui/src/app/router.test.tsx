@@ -15,6 +15,7 @@ async function signedInAs(role: UserRole) {
     me: async () => me(role),
     users: async () => ({ items: [] }),
     invites: async () => ({ items: [] }),
+    serverSettings: async () => ({ items: [] }),
   });
   await onHome("afkbot1");
   return app;
@@ -63,27 +64,55 @@ describe("the router", () => {
   it.each<UserRole>(["admin", "owner"])("shows an %s the admin screens too", async (role) => {
     const app = await signedInAs(role);
 
-    expect(navLinks()).toEqual(["Home", "Accounts", "Server", "Profile", "Users", "Invites"]);
+    expect(navLinks()).toEqual([
+      "Home",
+      "Accounts",
+      "Server",
+      "Profile",
+      "Users",
+      "Invites",
+      "Minecraft servers",
+    ]);
     await app.user.click(screen.getByRole("link", { name: "Users" }));
     expect(await screen.findByRole("heading", { name: "Users", level: 1 })).toBeDefined();
     await app.user.click(screen.getByRole("link", { name: "Invites" }));
     expect(await screen.findByRole("heading", { name: "Invites", level: 1 })).toBeDefined();
+    await app.user.click(screen.getByRole("link", { name: "Minecraft servers" }));
+    expect(
+      await screen.findByRole("heading", { name: "Minecraft servers", level: 1 }),
+    ).toBeDefined();
   });
 
-  it.each(["/admin/users", "/admin/invites"] as const)(
-    "answers a Member on %s with not found",
-    async (to) => {
-      const app = await signedInAs("member");
+  it.each([
+    ["/admin/users", "users"],
+    ["/admin/invites", "invites"],
+    ["/admin/servers", "serverSettings"],
+    ["/admin/servers/new", "serverSettings"],
+  ] as const)("answers a Member on %s with not found, never calling %s", async (to, method) => {
+    const app = await signedInAs("member");
 
-      await act(() => app.runtime.router.navigate({ to }));
+    await act(() => app.runtime.router.navigate({ to }));
 
-      expect(await screen.findByText(NOT_FOUND)).toBeDefined();
-      expect(screen.queryByRole("heading", { name: /^(Users|Invites)$/ })).toBeNull();
-      expect(app.fake.calls.map((call) => call.method)).not.toContain(
-        to === "/admin/users" ? "users" : "invites",
-      );
-    },
-  );
+    expect(await screen.findByText(NOT_FOUND)).toBeDefined();
+    expect(
+      screen.queryByRole("heading", { name: /^(Users|Invites|Minecraft servers|Add a server)$/ }),
+    ).toBeNull();
+    expect(app.fake.calls.map((call) => call.method)).not.toContain(method);
+  });
+
+  it("answers a Member on a server's settings with not found, never reading them", async () => {
+    const app = await signedInAs("member");
+
+    await act(() =>
+      app.runtime.router.navigate({
+        to: "/admin/servers/$id",
+        params: { id: "01900000-0000-7000-8000-000000000201" },
+      }),
+    );
+
+    expect(await screen.findByText(NOT_FOUND)).toBeDefined();
+    expect(app.fake.calls.map((call) => call.method)).not.toContain("serverSettings");
+  });
 
   it("gives a role this app doesn't know only a Member's rights", async () => {
     const app = await signedInAs("superuser" as UserRole);

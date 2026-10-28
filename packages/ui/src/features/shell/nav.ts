@@ -8,7 +8,14 @@ export type Privilege = "member" | "admin";
 
 /** One navigation entry. */
 export interface NavItem {
-  readonly to: "/home" | "/accounts" | "/server" | "/profile" | "/admin/users" | "/admin/invites";
+  readonly to:
+    | "/home"
+    | "/accounts"
+    | "/server"
+    | "/profile"
+    | "/admin/users"
+    | "/admin/invites"
+    | "/admin/servers";
   readonly label: string;
   readonly privilege: Privilege;
 }
@@ -21,6 +28,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { to: "/profile", label: "Profile", privilege: "member" },
   { to: "/admin/users", label: "Users", privilege: "admin" },
   { to: "/admin/invites", label: "Invites", privilege: "admin" },
+  { to: "/admin/servers", label: "Minecraft servers", privilege: "admin" },
 ];
 
 /** The privilege of `role`; an unknown role is a Member's. */

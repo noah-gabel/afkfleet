@@ -32,6 +32,7 @@ describe("navItems", () => {
       "/profile",
       "/admin/users",
       "/admin/invites",
+      "/admin/servers",
     ]);
   });
 });

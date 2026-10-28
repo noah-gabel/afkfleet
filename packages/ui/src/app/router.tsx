@@ -15,6 +15,7 @@
 //       /profile/password /profile/2fa   one route per flow, beside the overview
 //     /admin         Admins and the Owner only; anyone else gets "not found"
 //       /admin/users /admin/invites
+//       /admin/servers /admin/servers/new /admin/servers/$id   the Minecraft servers' settings
 import { createMemoryHistory, createRouter } from "@tanstack/react-router";
 
 import {
@@ -29,6 +30,7 @@ import { botRoute } from "../features/bots/routes";
 import { homeRoute } from "../features/home/routes";
 import { mfaRoute, passwordRoute, profileRoute } from "../features/profile/routes";
 import { serverRoute, setupRoute } from "../features/server/routes";
+import { newServerRoute, serverSettingsRoute, serversRoute } from "../features/servers/routes";
 import { NotFound } from "../features/shell/components/NotFound";
 import { RouteError } from "../features/shell/components/RouteError";
 import { appRoute, launchRoute } from "../features/shell/routes";
@@ -51,7 +53,13 @@ const routeTree = rootRoute.addChildren([
     profileRoute,
     passwordRoute,
     mfaRoute,
-    adminRoute.addChildren([usersRoute, invitesRoute]),
+    adminRoute.addChildren([
+      usersRoute,
+      invitesRoute,
+      serversRoute,
+      newServerRoute,
+      serverSettingsRoute,
+    ]),
   ]),
 ]);
 
