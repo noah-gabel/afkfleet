@@ -10,8 +10,11 @@
 // does the chat: each bot's lines, a line sent only to an online bot, a command off the
 // allowlist only through `/command` after a step-up (S4, S8), answered `sent` or, by
 // `chatOutcome`, `pending` (S5); `addChat` keeps a spec's pushed line in REST too.
-// The servers' settings are an Admin's or the Owner's: the list is empty, and a write needs
-// the step-up, then finds nothing.
+// The servers' settings are an Admin's or the Owner's, each write after the step-up, as the
+// server keeps them (ADR-0020, S74, S77, S78): a server keyed lowercase with its port always
+// written (25565 when none is given), its texts sorted and counted once, answered as their
+// lines; a stale version is 409 `server_settings_changed`, a server that has settings 422
+// at `server`, the hundred and first 409 `conflict`, and an ID it doesn't hold 404.
 // A flow reads `waiting` once, then `linked`, its account pending unless the Owner linked
 // it.
 //
@@ -57,6 +60,7 @@ import type { ModeResponse } from "@afkfleet/ui/generated/ModeResponse";
 import type { RegisterResponse } from "@afkfleet/ui/generated/RegisterResponse";
 import type { ServerProfileState } from "@afkfleet/ui/generated/ServerProfileState";
 import type { ServerSettingsPage } from "@afkfleet/ui/generated/ServerSettingsPage";
+import type { ServerSettingsResponse } from "@afkfleet/ui/generated/ServerSettingsResponse";
 import type { SessionPage } from "@afkfleet/ui/generated/SessionPage";
 import type { SetupStepResponse } from "@afkfleet/ui/generated/SetupStepResponse";
 import type { UserPage } from "@afkfleet/ui/generated/UserPage";
@@ -164,6 +168,8 @@ const API_MESSAGES: Partial<Record<ErrorCode, string>> = {
   validation_failed: "Some fields are invalid.",
   bot_not_online: "Only an online bot can send chat.",
   command_needs_step_up: "This command needs your password: confirm it's you to send it.",
+  server_settings_changed:
+    "These settings changed since you opened them. Load them again to see the change.",
 };
 
 /** A refusal of the Rust side. */
@@ -288,6 +294,37 @@ interface Flow {
   linked?: Account;
 }
 
+/** A server's settings the fake keeps. */
+interface Settings {
+  readonly id: string;
+  server: string;
+  texts: string[];
+  version: number;
+}
+
+/** The key the server answers for `server`: lowercase, the port always written. */
+function keyOf(server: string): string {
+  const lower = server.toLowerCase();
+  return lower.includes(":") ? lower : `${lower}:25565`;
+}
+
+/** A request's texts as the server keeps them: sorted, each once. */
+function textsOf(texts: unknown): string[] {
+  return [...new Set(Array.isArray(texts) ? texts.map(String) : [])].sort();
+}
+
+/** `settings` as the server answers them: each text as its lines. */
+function settingsResponse(settings: Settings): ServerSettingsResponse {
+  return {
+    id: settings.id,
+    server: settings.server,
+    conflict_texts: settings.texts.map((text) => ({ lines: text.split("\n") })),
+    version: settings.version,
+    created_at: "2026-10-28T08:00:00.000Z",
+    updated_at: "2026-10-28T08:00:00.000Z",
+  };
+}
+
 /** A pending login or setup step. */
 type Pending =
   | { readonly kind: "mfa"; readonly user: User; tries: number }
@@ -302,6 +339,8 @@ export class FakeBackend {
   #watch: ((outcome: Outcome) => void) | null = null;
   #pending: Pending | null = null;
   readonly #accounts: Account[] = [];
+  /** The servers' settings, newest first. */
+  #settings: Settings[] = [];
   #flow: Flow | null = null;
   #opened = 0;
   #accountNames = 0;
@@ -469,11 +508,26 @@ export class FakeBackend {
       case "watch_events":
         return this.#startWatch();
       case "server_settings":
-        return this.#admin(() => value({ items: [] } satisfies ServerSettingsPage));
+        return this.#admin(() =>
+          value({ items: this.#settings.map(settingsResponse) } satisfies ServerSettingsPage),
+        );
       case "create_server_settings":
+        return this.#steppedUp(() => this.#admin(() => this.#createSettings(request)));
       case "update_server_settings":
+        return this.#steppedUp(() =>
+          this.#admin(() => this.#updateSettings(String(args.id), request)),
+        );
       case "delete_server_settings":
-        return this.#steppedUp(() => this.#admin(() => api(404, "not_found")));
+        return this.#steppedUp(() =>
+          this.#admin(() => {
+            const kept = this.#settings.filter((one) => one.id !== String(args.id));
+            if (kept.length === this.#settings.length) {
+              return api(404, "not_found");
+            }
+            this.#settings = kept;
+            return value();
+          }),
+        );
       default:
         return this.#accountCommand(command as Command, args);
     }
@@ -687,6 +741,54 @@ export class FakeBackend {
       this.#invites.push(invite);
       return value({ code: invite.code, invite: invite.response } satisfies CreatedInviteResponse);
     });
+  }
+
+  /** A server's new settings, as the server's create answers them. */
+  #createSettings(request: Record<string, unknown>): Outcome {
+    const server = keyOf(String(request.server));
+    const texts = textsOf(request.conflict_texts);
+    if (texts.length === 0) {
+      return api(422, "validation_failed", [
+        { path: "conflict_texts", message: "must hold at least one text" },
+      ]);
+    }
+    if (this.#settings.some((one) => one.server === server)) {
+      return api(422, "validation_failed", [{ path: "server", message: "already has settings" }]);
+    }
+    if (this.#settings.length >= 100) {
+      return api(409, "conflict");
+    }
+    const settings: Settings = { id: id(this.#next()), server, texts, version: 1 };
+    this.#settings = [settings, ...this.#settings];
+    return value(settingsResponse(settings));
+  }
+
+  /** Settings `target` as an edit leaves them, at the version it read. */
+  #updateSettings(target: string, request: Record<string, unknown>): Outcome {
+    const settings = this.#settings.find((one) => one.id === target);
+    if (settings === undefined) {
+      return api(404, "not_found");
+    }
+    const server = keyOf(String(request.server));
+    const texts = textsOf(request.conflict_texts);
+    if (server === settings.server && texts.join("\0") === settings.texts.join("\0")) {
+      return value(settingsResponse(settings));
+    }
+    if (Number(request.version) !== settings.version) {
+      return api(409, "server_settings_changed");
+    }
+    if (texts.length === 0) {
+      return api(422, "validation_failed", [
+        { path: "conflict_texts", message: "must hold at least one text" },
+      ]);
+    }
+    if (this.#settings.some((one) => one.id !== target && one.server === server)) {
+      return api(422, "validation_failed", [{ path: "server", message: "already has settings" }]);
+    }
+    settings.server = server;
+    settings.texts = texts;
+    settings.version += 1;
+    return value(settingsResponse(settings));
   }
 
   #revokeInvite(target: string): Outcome {
