@@ -21,3 +21,7 @@ export const MODE_NAME_MAX_CHARS = 32;
 export const MODE_MAX_STEPS = 32;
 export const SERVER_ADDRESS_MAX_CHARS = 259;
 export const CHAT_MESSAGE_MAX_UNITS = 256;
+export const CONFLICT_TEXTS_MAX = 16;
+export const CONFLICT_TEXT_MAX_CHARS = 1024;
+export const SERVER_SETTINGS_MAX = 100;
+export const SERVER_SETTINGS_PAGE_MAX = 10;

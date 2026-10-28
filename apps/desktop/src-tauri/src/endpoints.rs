@@ -32,11 +32,15 @@ use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, Invit
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
 use fleet_api_types::modes::ModePage;
+use fleet_api_types::server_settings::{
+    CreateServerSettingsRequest, ServerSettingsPage, ServerSettingsPageQuery,
+    ServerSettingsResponse, UpdateServerSettingsRequest,
+};
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
 use fleet_api_types::{
-    AccountId, BotId, InviteId, LinkFlowId, ModeId, PageQuery, SafeInt, SecretText, SessionId,
-    UserId,
+    AccountId, BotId, InviteId, LinkFlowId, ModeId, PageQuery, SafeInt, SecretText,
+    ServerSettingsId, SessionId, UserId,
 };
 use fleet_client::{BotCommandAnswer, ClientError, LoginStep, VerifiedLink};
 use garde::Validate;
@@ -701,6 +705,81 @@ impl<F: StoreFactory> AppState<F> {
         let conn = self.conn.read().await;
         conn.client()?
             .send_command(id, &request)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `server_settings` command: a page of the servers' settings,
+    /// newest first, at most 10 (Admins and the Owner; ADR-0020, S75).
+    ///
+    /// # Errors
+    /// `invalid_input` for a page out of range, `no_server`, `no_session`,
+    /// or `api` 403 (`forbidden`: not an Admin or the Owner) or 429.
+    pub async fn server_settings(
+        &self,
+        before: Option<ServerSettingsId>,
+        limit: Option<u32>,
+    ) -> Result<ServerSettingsPage, CommandError> {
+        let query = ServerSettingsPageQuery { before, limit };
+        validate(&query)?;
+        let conn = self.conn.read().await;
+        conn.client()?
+            .server_settings(&query)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `create_server_settings` command: a server's new settings, after
+    /// `step_up` within 5 minutes (ADR-0020, U54).
+    ///
+    /// # Errors
+    /// `invalid_input` for a field the server would refuse, `no_server`,
+    /// `no_session`, or `api` 403 (`step_up_required`, or `forbidden`),
+    /// 409 (`conflict`: the most servers have settings), 422 (a server that
+    /// has settings already) or 429.
+    pub async fn create_server_settings(
+        &self,
+        request: CreateServerSettingsRequest,
+    ) -> Result<ServerSettingsResponse, CommandError> {
+        validate(&request)?;
+        let conn = self.conn.read().await;
+        conn.client()?
+            .create_server_settings(&request)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `update_server_settings` command: the settings `id` as they
+    /// should be from now on, at the `version` read, after `step_up`
+    /// within 5 minutes (ADR-0020, S77).
+    ///
+    /// # Errors
+    /// `invalid_input` for a field the server would refuse, `no_server`,
+    /// `no_session`, or `api` 403 (`step_up_required`, or `forbidden`),
+    /// 404, 409 (`server_settings_changed`), 422 or 429.
+    pub async fn update_server_settings(
+        &self,
+        id: ServerSettingsId,
+        request: UpdateServerSettingsRequest,
+    ) -> Result<ServerSettingsResponse, CommandError> {
+        validate(&request)?;
+        let conn = self.conn.read().await;
+        conn.client()?
+            .update_server_settings(id, &request)
+            .await
+            .map_err(error::client)
+    }
+
+    /// The `delete_server_settings` command: the settings `id` removed,
+    /// after `step_up` within 5 minutes (ADR-0020, S78).
+    ///
+    /// # Errors
+    /// `no_server`, `no_session`, or `api` 403 (`step_up_required`, or
+    /// `forbidden`), 404 or 429.
+    pub async fn delete_server_settings(&self, id: ServerSettingsId) -> Result<(), CommandError> {
+        let conn = self.conn.read().await;
+        conn.client()?
+            .delete_server_settings(id)
             .await
             .map_err(error::client)
     }

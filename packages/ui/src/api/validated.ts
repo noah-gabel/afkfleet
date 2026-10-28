@@ -131,6 +131,23 @@ export function validated(client: ApiClient): ApiClient {
       ]);
       return client.sendCommand(id, request);
     },
+    serverSettings: async (before, limit) => {
+      checkAll([
+        ...(before === undefined ? [] : problems(schemas.id, before, "before")),
+        ...(limit === undefined ? [] : problems(schemas.serverSettingsLimit, limit, "limit")),
+      ]);
+      return client.serverSettings(before, limit);
+    },
+    createServerSettings: async (request) =>
+      client.createServerSettings(check(schemas.createServerSettingsRequest, request)),
+    updateServerSettings: async (id, request) => {
+      checkAll([
+        ...problems(schemas.id, id, "id"),
+        ...problems(schemas.updateServerSettingsRequest, request),
+      ]);
+      return client.updateServerSettings(id, request);
+    },
+    deleteServerSettings: async (id) => client.deleteServerSettings(check(schemas.id, id, "id")),
   };
 }
 

@@ -23,6 +23,7 @@ pub(crate) mod live;
 pub(crate) mod me;
 pub(crate) mod mfa;
 pub(crate) mod server;
+pub(crate) mod server_settings;
 pub(crate) mod users;
 
 /// The managed state, as a command takes it.

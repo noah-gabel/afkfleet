@@ -136,6 +136,10 @@ export function watched(client: ApiClient, stores: AppStores, events: WatchEvent
     botChat: watch((id, before, limit) => client.botChat(id, before, limit)),
     sendChat: watch((id, request) => client.sendChat(id, request)),
     sendCommand: watch((id, request) => client.sendCommand(id, request)),
+    serverSettings: watch((before, limit) => client.serverSettings(before, limit)),
+    createServerSettings: watch((request) => client.createServerSettings(request)),
+    updateServerSettings: watch((id, request) => client.updateServerSettings(id, request)),
+    deleteServerSettings: watch((id) => client.deleteServerSettings(id)),
   };
 }
 

@@ -86,6 +86,10 @@ export const COMMANDS = [
   "bot_chat",
   "send_chat",
   "send_command",
+  "server_settings",
+  "create_server_settings",
+  "update_server_settings",
+  "delete_server_settings",
 ];
 
 /** The whole of `app.security`. */

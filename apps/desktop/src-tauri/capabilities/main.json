@@ -52,6 +52,10 @@
     "allow-resume-bot",
     "allow-bot-chat",
     "allow-send-chat",
-    "allow-send-command"
+    "allow-send-command",
+    "allow-server-settings",
+    "allow-create-server-settings",
+    "allow-update-server-settings",
+    "allow-delete-server-settings"
   ]
 }

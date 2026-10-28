@@ -21,6 +21,7 @@ import type { CreatedOfflineAccountResponse } from "../generated/CreatedOfflineA
 import type { CreateGrantRequest } from "../generated/CreateGrantRequest";
 import type { CreateInviteRequest } from "../generated/CreateInviteRequest";
 import type { CreateOfflineAccountRequest } from "../generated/CreateOfflineAccountRequest";
+import type { CreateServerSettingsRequest } from "../generated/CreateServerSettingsRequest";
 import type { FieldError } from "../generated/FieldError";
 import type { GrantPage } from "../generated/GrantPage";
 import type { GrantResponse } from "../generated/GrantResponse";
@@ -41,9 +42,12 @@ import type { RegisterResponse } from "../generated/RegisterResponse";
 import type { ServerProfileRequest } from "../generated/ServerProfileRequest";
 import type { ServerProfileResponse } from "../generated/ServerProfileResponse";
 import type { ServerProfileState } from "../generated/ServerProfileState";
+import type { ServerSettingsPage } from "../generated/ServerSettingsPage";
+import type { ServerSettingsResponse } from "../generated/ServerSettingsResponse";
 import type { SessionPage } from "../generated/SessionPage";
 import type { SetupStepResponse } from "../generated/SetupStepResponse";
 import type { StepUpRequest } from "../generated/StepUpRequest";
+import type { UpdateServerSettingsRequest } from "../generated/UpdateServerSettingsRequest";
 import type { UserPage } from "../generated/UserPage";
 import type { UserPatchRequest } from "../generated/UserPatchRequest";
 import type { UserResponse } from "../generated/UserResponse";
@@ -229,6 +233,27 @@ export class FakeApiClient implements ApiClient {
 
   async sendCommand(id: string, request: ChatCommandRequest): Promise<ChatSendResponse> {
     return this.#handler("sendCommand", [id, request])(id, request);
+  }
+
+  async serverSettings(before?: string, limit?: number): Promise<ServerSettingsPage> {
+    return this.#handler("serverSettings", [before, limit])(before, limit);
+  }
+
+  async createServerSettings(
+    request: CreateServerSettingsRequest,
+  ): Promise<ServerSettingsResponse> {
+    return this.#handler("createServerSettings", [request])(request);
+  }
+
+  async updateServerSettings(
+    id: string,
+    request: UpdateServerSettingsRequest,
+  ): Promise<ServerSettingsResponse> {
+    return this.#handler("updateServerSettings", [id, request])(id, request);
+  }
+
+  async deleteServerSettings(id: string): Promise<void> {
+    return this.#handler("deleteServerSettings", [id])(id);
   }
 
   async account(id: string): Promise<AccountResponse> {

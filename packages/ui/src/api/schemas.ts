@@ -7,6 +7,8 @@ import {
   CA_PEM_MAX_BYTES,
   CHAT_MESSAGE_MAX_UNITS,
   CODE_MAX_CHARS,
+  CONFLICT_TEXT_MAX_CHARS,
+  CONFLICT_TEXTS_MAX,
   ID_CHARS,
   MC_NAME_MAX_CHARS,
   MC_NAME_MIN_CHARS,
@@ -15,6 +17,7 @@ import {
   PAGE_MAX,
   PASSWORD_MAX_CHARS,
   SERVER_ADDRESS_MAX_CHARS,
+  SERVER_SETTINGS_PAGE_MAX,
   SERVER_URL_MAX_BYTES,
   TOKEN_MAX_CHARS,
   USERNAME_MAX_CHARS,
@@ -167,6 +170,43 @@ export const serverAddress = z
   );
 
 export const botPatchRequest = z.strictObject({ server_address: serverAddress });
+
+/** A page size of the servers' settings: 1 to `SERVER_SETTINGS_PAGE_MAX`. */
+export const serverSettingsLimit = z
+  .number()
+  .int()
+  .min(1)
+  .max(SERVER_SETTINGS_PAGE_MAX, `must be between 1 and ${SERVER_SETTINGS_PAGE_MAX}`);
+
+/**
+ * One conflict text: at most `CONFLICT_TEXT_MAX_CHARS` characters, in the server's words. The
+ * server checks the rest: that it isn't empty, and its characters (ADR-0020, S77).
+ */
+export const conflictText = z
+  .string()
+  .refine(
+    (text) => chars(text) <= CONFLICT_TEXT_MAX_CHARS,
+    `must be at most ${CONFLICT_TEXT_MAX_CHARS} characters`,
+  );
+
+/** A server's conflict texts: at most `CONFLICT_TEXTS_MAX`, in the server's words. */
+export const conflictTexts = z
+  .array(conflictText)
+  .refine(
+    (texts) => texts.length <= CONFLICT_TEXTS_MAX,
+    `must hold at most ${CONFLICT_TEXTS_MAX} texts`,
+  );
+
+export const createServerSettingsRequest = z.strictObject({
+  server: serverAddress,
+  conflict_texts: conflictTexts,
+});
+
+export const updateServerSettingsRequest = z.strictObject({
+  version: z.number().int().min(1),
+  server: serverAddress,
+  conflict_texts: conflictTexts,
+});
 
 export const botModeRequest = z.strictObject({ mode_id: id });
 

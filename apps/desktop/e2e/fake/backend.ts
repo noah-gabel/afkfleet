@@ -1,5 +1,5 @@
 // The e2e suite's fake backend (Plan.md P8.9, ADR-0017): the desktop app's Rust side and the
-// server in one, answering the 49 commands of src-tauri/tests/ipc-contract.json with the
+// server in one, answering the 53 commands of src-tauri/tests/ipc-contract.json with the
 // generated types, the Rust side's fixed `CommandError` messages and the server's error
 // codes. It keeps the state one test needs, fresh per test: users with their passwords and
 // authenticators, invites, the one session the app holds, the pending login or setup step,
@@ -10,6 +10,8 @@
 // does the chat: each bot's lines, a line sent only to an online bot, a command off the
 // allowlist only through `/command` after a step-up (S4, S8), answered `sent` or, by
 // `chatOutcome`, `pending` (S5); `addChat` keeps a spec's pushed line in REST too.
+// The servers' settings are an Admin's or the Owner's: the list is empty, and a write needs
+// the step-up, then finds nothing.
 // A flow reads `waiting` once, then `linked`, its account pending unless the Owner linked
 // it.
 //
@@ -54,6 +56,7 @@ import type { ModePage } from "@afkfleet/ui/generated/ModePage";
 import type { ModeResponse } from "@afkfleet/ui/generated/ModeResponse";
 import type { RegisterResponse } from "@afkfleet/ui/generated/RegisterResponse";
 import type { ServerProfileState } from "@afkfleet/ui/generated/ServerProfileState";
+import type { ServerSettingsPage } from "@afkfleet/ui/generated/ServerSettingsPage";
 import type { SessionPage } from "@afkfleet/ui/generated/SessionPage";
 import type { SetupStepResponse } from "@afkfleet/ui/generated/SetupStepResponse";
 import type { UserPage } from "@afkfleet/ui/generated/UserPage";
@@ -128,6 +131,10 @@ export const COMMANDS = [
   "bot_chat",
   "send_chat",
   "send_command",
+  "server_settings",
+  "create_server_settings",
+  "update_server_settings",
+  "delete_server_settings",
 ] as const;
 
 /** One command. */
@@ -461,6 +468,12 @@ export class FakeBackend {
         return this.#revokeInvite(String(args.id));
       case "watch_events":
         return this.#startWatch();
+      case "server_settings":
+        return this.#admin(() => value({ items: [] } satisfies ServerSettingsPage));
+      case "create_server_settings":
+      case "update_server_settings":
+      case "delete_server_settings":
+        return this.#steppedUp(() => this.#admin(() => api(404, "not_found")));
       default:
         return this.#accountCommand(command as Command, args);
     }
