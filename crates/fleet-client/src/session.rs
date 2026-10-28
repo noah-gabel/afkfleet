@@ -100,8 +100,8 @@ use fleet_api_types::mfa::{
 };
 use fleet_api_types::modes::{CreateModeRequest, ModePage, ModeResponse, UpdateModeRequest};
 use fleet_api_types::server_settings::{
-    CreateServerSettingsRequest, ServerSettingsPage, ServerSettingsResponse,
-    UpdateServerSettingsRequest,
+    CreateServerSettingsRequest, ServerSettingsPage, ServerSettingsPageQuery,
+    ServerSettingsResponse, UpdateServerSettingsRequest,
 };
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
@@ -958,9 +958,15 @@ impl<S: SessionStore, T: Transport> Core<S, T> {
     /// One page of the servers' settings, newest first (200).
     pub(crate) async fn server_settings(
         self: &Arc<Self>,
-        query: &PageQuery<ServerSettingsId>,
+        query: &ServerSettingsPageQuery,
     ) -> Result<ServerSettingsPage, ClientError> {
-        let url = with_page(self.server.api(&["server-settings"]), query);
+        let url = with_page(
+            self.server.api(&["server-settings"]),
+            &PageQuery {
+                before: query.before,
+                limit: query.limit,
+            },
+        );
         let answer = self.authed(Method::GET, url, None).await?;
         expect_json(answer, 200)
     }

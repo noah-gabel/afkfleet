@@ -26,13 +26,14 @@ import type { ChatSendResponse } from "../generated/ChatSendResponse";
 import type { GrantPage } from "../generated/GrantPage";
 import type { InvitePage } from "../generated/InvitePage";
 import type { ModePage } from "../generated/ModePage";
+import type { ServerSettingsResponse } from "../generated/ServerSettingsResponse";
 import type { SessionPage } from "../generated/SessionPage";
 import type { UserPage } from "../generated/UserPage";
 import type { ApiClient } from "./ApiClient";
 import { ApiError } from "./ApiError";
 import { answered, type ChatOutcomes } from "./chatOutcomes";
 import { useApiClient } from "./context";
-import { PAGE_MAX } from "./limits";
+import { PAGE_MAX, SERVER_SETTINGS_PAGE_MAX } from "./limits";
 
 /** Why a read of every page failed when the server's pages didn't move on (R99). */
 export const PAGES_DONT_MOVE_ON = "The server sent a list this app doesn't understand.";
@@ -378,4 +379,36 @@ export function modesQuery(api: ApiClient) {
 /** Every mode, through the app's client. */
 export function useModes() {
   return useQuery(modesQuery(useApiClient()));
+}
+
+/** The servers' settings: every page, read at once (ADR-0020, R136). */
+export const SERVER_SETTINGS_KEY = ["server-settings"] as const;
+
+/** Every page of the servers' settings, newest first; one failed page fails it all. */
+async function everyServerSettings(
+  api: ApiClient,
+  signal: AbortSignal,
+): Promise<ServerSettingsResponse[]> {
+  const read = await everyPage(
+    (before) => api.serverSettings(before, SERVER_SETTINGS_PAGE_MAX),
+    signal,
+  );
+  return read.pages.flatMap((page) => page.items);
+}
+
+/**
+ * Every server's settings (Admins and the Owner, S75): at most 100 rows, read 10 a page, so a
+ * page of rows at their caps fits a client's answer cap. Nothing on the socket carries them,
+ * so the screens read them again when they mount and after their own writes.
+ */
+export function serverSettingsQuery(api: ApiClient) {
+  return queryOptions({
+    queryKey: SERVER_SETTINGS_KEY,
+    queryFn: ({ signal }) => everyServerSettings(api, signal),
+  });
+}
+
+/** Every server's settings, through the app's client. */
+export function useServerSettings() {
+  return useQuery(serverSettingsQuery(useApiClient()));
 }

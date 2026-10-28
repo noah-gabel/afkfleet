@@ -3,9 +3,11 @@
 //! step-up every write needs, a stale version, a missing row and a field
 //! error's path. Who may do what is fleet-server's to test.
 
+use fleet_api_types::ErrorCode;
 use fleet_api_types::server_settings::ConflictTextsInput;
-use fleet_api_types::server_settings::{CreateServerSettingsRequest, UpdateServerSettingsRequest};
-use fleet_api_types::{ErrorCode, PageQuery, ServerSettingsId};
+use fleet_api_types::server_settings::{
+    CreateServerSettingsRequest, ServerSettingsPageQuery, UpdateServerSettingsRequest,
+};
 
 use crate::support::{Server, is_api, step_up};
 
@@ -24,8 +26,8 @@ fn update(version: u32, server: &str, texts: &[&str]) -> UpdateServerSettingsReq
     }
 }
 
-fn first_page() -> PageQuery<ServerSettingsId> {
-    PageQuery {
+fn first_page() -> ServerSettingsPageQuery {
+    ServerSettingsPageQuery {
         before: None,
         limit: None,
     }

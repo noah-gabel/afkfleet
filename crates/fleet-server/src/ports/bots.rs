@@ -122,6 +122,10 @@ pub struct UnreadableBot {
     pub column: &'static str,
     /// The row's rowid.
     pub rowid: i64,
+    /// Whether what doesn't read back is its server's settings, not a row
+    /// of its own (ADR-0020, R132): the reconciler logs that row once a
+    /// pass, never each bot on its server.
+    pub by_server: bool,
 }
 
 /// Everything the reconciler reads, from one snapshot of the database.

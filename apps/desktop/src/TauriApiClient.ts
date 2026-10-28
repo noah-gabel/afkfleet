@@ -23,6 +23,7 @@ import type { CreatedOfflineAccountResponse } from "@afkfleet/ui/generated/Creat
 import type { CreateGrantRequest } from "@afkfleet/ui/generated/CreateGrantRequest";
 import type { CreateInviteRequest } from "@afkfleet/ui/generated/CreateInviteRequest";
 import type { CreateOfflineAccountRequest } from "@afkfleet/ui/generated/CreateOfflineAccountRequest";
+import type { CreateServerSettingsRequest } from "@afkfleet/ui/generated/CreateServerSettingsRequest";
 import type { GrantPage } from "@afkfleet/ui/generated/GrantPage";
 import type { GrantResponse } from "@afkfleet/ui/generated/GrantResponse";
 import type { InvitePage } from "@afkfleet/ui/generated/InvitePage";
@@ -42,9 +43,12 @@ import type { RegisterResponse } from "@afkfleet/ui/generated/RegisterResponse";
 import type { ServerProfileRequest } from "@afkfleet/ui/generated/ServerProfileRequest";
 import type { ServerProfileResponse } from "@afkfleet/ui/generated/ServerProfileResponse";
 import type { ServerProfileState } from "@afkfleet/ui/generated/ServerProfileState";
+import type { ServerSettingsPage } from "@afkfleet/ui/generated/ServerSettingsPage";
+import type { ServerSettingsResponse } from "@afkfleet/ui/generated/ServerSettingsResponse";
 import type { SessionPage } from "@afkfleet/ui/generated/SessionPage";
 import type { SetupStepResponse } from "@afkfleet/ui/generated/SetupStepResponse";
 import type { StepUpRequest } from "@afkfleet/ui/generated/StepUpRequest";
+import type { UpdateServerSettingsRequest } from "@afkfleet/ui/generated/UpdateServerSettingsRequest";
 import type { UserPage } from "@afkfleet/ui/generated/UserPage";
 import type { UserPatchRequest } from "@afkfleet/ui/generated/UserPatchRequest";
 import type { UserResponse } from "@afkfleet/ui/generated/UserResponse";
@@ -235,6 +239,25 @@ export class TauriApiClient implements ApiClient {
 
   sendCommand(id: string, request: ChatCommandRequest): Promise<ChatSendResponse> {
     return this.#call("send_command", { id, request });
+  }
+
+  serverSettings(before?: string, limit?: number): Promise<ServerSettingsPage> {
+    return this.#call("server_settings", { before, limit });
+  }
+
+  createServerSettings(request: CreateServerSettingsRequest): Promise<ServerSettingsResponse> {
+    return this.#call("create_server_settings", { request });
+  }
+
+  updateServerSettings(
+    id: string,
+    request: UpdateServerSettingsRequest,
+  ): Promise<ServerSettingsResponse> {
+    return this.#call("update_server_settings", { id, request });
+  }
+
+  deleteServerSettings(id: string): Promise<void> {
+    return this.#call("delete_server_settings", { id });
   }
 
   account(id: string): Promise<AccountResponse> {

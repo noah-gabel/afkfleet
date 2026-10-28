@@ -3,7 +3,9 @@
 //! hints the reconciler, whose next pass sends the agent that holds the bot
 //! an `Update` with the edited steps. The bot runs them in the session it
 //! has: the same session, no new `Assign` (P10.5), so the hold keeps its
-//! `since` (PR #64's review).
+//! `since` (PR #64's review). The steps must come within [`HINTED`], before
+//! the periodic pass could bring them, so the case proves the hint's wiring
+//! (PR #79's review).
 
 use core::time::Duration;
 
@@ -13,6 +15,7 @@ use fleet_server::grpc::registry::{HoldEntry, ViewPhase};
 use fleet_testkit::mc::Performed;
 
 use crate::harness::agent::RunOptions;
+use crate::harness::logs::HINTED;
 use crate::harness::server::ServerOptions;
 use crate::harness::world::World;
 
@@ -69,12 +72,17 @@ async fn an_edited_mode_reaches_its_held_bot_as_an_update_without_a_new_session(
                 .all(|step| step.action == fleet_core::mode::Action::SwingArm)
         })
     };
-    world
+    let hinted = world
         .logs
-        .until("the edited steps are sent", async || {
+        .within(HINTED, async || {
             held().is_some_and(|entry| edited_steps_sent(&entry))
         })
         .await;
+    assert!(
+        hinted,
+        "the edited steps are sent: not within {HINTED:?}, so no hint started a pass\n{}",
+        world.logs.buffer().text()
+    );
     world
         .logs
         .until("the bot swings", async || swung(&session) > 0)

@@ -7,11 +7,14 @@ import {
   CA_PEM_MAX_BYTES,
   CHAT_MESSAGE_MAX_UNITS,
   CODE_MAX_CHARS,
+  CONFLICT_TEXT_MAX_CHARS,
+  CONFLICT_TEXTS_MAX,
   MC_NAME_MAX_CHARS,
   NEW_PASSWORD_MAX_CHARS,
   PAGE_MAX,
   PASSWORD_MAX_CHARS,
   SERVER_ADDRESS_MAX_CHARS,
+  SERVER_SETTINGS_PAGE_MAX,
   SERVER_URL_MAX_BYTES,
   TOKEN_MAX_CHARS,
   USERNAME_MAX_CHARS,
@@ -74,6 +77,10 @@ function client() {
     botChat: ok,
     sendChat: ok,
     sendCommand: ok,
+    serverSettings: ok,
+    createServerSettings: ok,
+    updateServerSettings: ok,
+    deleteServerSettings: ok,
   });
   return { fake, api: validated(fake) as ApiClient };
 }
@@ -303,6 +310,64 @@ describe("validated", () => {
     expect(await refusedFields(api.bots("x", 0))).toEqual(["before", "limit"]);
     expect(await refusedFields(api.bot("x"))).toEqual(["id"]);
     expect(await refusedFields(api.modes(undefined, PAGE_MAX + 1))).toEqual(["limit"]);
+    expect(fake.calls).toEqual([]);
+  });
+
+  it("passes the servers' settings' valid pages and writes through unchanged", async () => {
+    const { fake, api } = client();
+    // A character outside the BMP counts once, as the server counts it.
+    const longest = "😀".repeat(CONFLICT_TEXT_MAX_CHARS);
+    const most = Array.from({ length: CONFLICT_TEXTS_MAX }, (_, n) => `Text ${n}`);
+    const create = { server: "mc.example.com", conflict_texts: [longest, "Two\nlines"] };
+    const update = { version: 1, server: "mc.example.com:25566", conflict_texts: most };
+
+    await api.serverSettings();
+    await api.serverSettings(ID, SERVER_SETTINGS_PAGE_MAX);
+    await api.createServerSettings(create);
+    await api.updateServerSettings(ID, update);
+    await api.deleteServerSettings(ID);
+
+    expect(fake.calls.map((call) => [call.method, call.args])).toEqual([
+      ["serverSettings", [undefined, undefined]],
+      ["serverSettings", [ID, SERVER_SETTINGS_PAGE_MAX]],
+      ["createServerSettings", [create]],
+      ["updateServerSettings", [ID, update]],
+      ["deleteServerSettings", [ID]],
+    ]);
+  });
+
+  it("refuses a servers' settings page past 10, too long a text, too many, a version below 1 and a bad ID", async () => {
+    const { fake, api } = client();
+    const tooLong = "x".repeat(CONFLICT_TEXT_MAX_CHARS + 1);
+    const tooMany = Array.from({ length: CONFLICT_TEXTS_MAX + 1 }, (_, n) => `Text ${n}`);
+
+    expect(await refusedFields(api.serverSettings("x", SERVER_SETTINGS_PAGE_MAX + 1))).toEqual([
+      "before",
+      "limit",
+    ]);
+    expect(
+      await refused(
+        api.createServerSettings({ server: "mc.example.com", conflict_texts: ["One", tooLong] }),
+      ),
+    ).toEqual([{ path: "conflict_texts[1]", message: "must be at most 1024 characters" }]);
+    expect(
+      await refused(api.createServerSettings({ server: "", conflict_texts: tooMany })),
+    ).toEqual([
+      { path: "server", message: "must not be empty" },
+      { path: "conflict_texts", message: "must hold at most 16 texts" },
+    ]);
+    expect(
+      await refusedFields(
+        api.updateServerSettings("x", {
+          version: 0,
+          server: "mc.example.com",
+          conflict_texts: ["One"],
+        }),
+      ),
+    ).toEqual(["id", "version"]);
+    expect(await refusedFields(api.deleteServerSettings("x"))).toEqual(["id"]);
+    const unknown = { server: "mc.example.com", conflict_texts: ["One"], chat_formats: [] };
+    expect(await refusedFields(api.createServerSettings(unknown))).toEqual([""]);
     expect(fake.calls).toEqual([]);
   });
 

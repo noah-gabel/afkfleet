@@ -157,18 +157,20 @@ To be written per boundary (STRIDE: spoofing, tampering, repudiation, informatio
 ### Desktop app (B2, B7)
 *Expanded in P8 (ADR-0007, ADR-0017).*
 
-**What crosses B2, the webview and the app's Rust side.** The UI calls the 49 commands its one capability grants, and nothing else: no core command and no plugin API, and `withGlobalTauri` is off. tauri-plugin-opener isn't registered: the Rust side calls its free `open_url`, from one command without arguments, on the link it checked (P9.8).
+**What crosses B2, the webview and the app's Rust side.** The UI calls the 53 commands its one capability grants, and nothing else: no core command and no plugin API, and `withGlobalTauri` is off. tauri-plugin-opener isn't registered: the Rust side calls its free `open_url`, from one command without arguments, on the link it checked (P9.8).
 - **Into Rust:**
   - the server's address and a custom CA's certificates
   - usernames, passwords (login, registration, step-up, a new password), 2FA and recovery codes, invite codes
   - IDs and page cursors
   - a username to share an account with, an offline account's name
   - a chat line or a command for a bot to send, which may hold a password (a direct call, U34)
+  - a Minecraft server's address and its conflict texts (Admins and the Owner, after a step-up; ADR-0020, U56)
 - **Back to the UI:**
   - profiles, users, invites and sessions
   - the 2FA setup's secret, its QR code and the recovery codes, once each
   - a new invite's code, once
   - accounts and their grants; a Microsoft link's user code and the checked link to Microsoft's page, once per start
+  - the Minecraft servers' settings, to Admins and the Owner (ADR-0020, S75)
   - errors: a closed code with a fixed message and the server's details
   - the live events (P11.8), over one long-running command's Tauri `Channel`: the server's frames as this viewer's REST shows them, why to fetch again, and why the socket went down with its wait; the socket, its ticket and its token stay in fleet-client
 - **Never a token.** fleet-client keeps the access token and the login's step tokens in memory, and the refresh token lives in the Windows Credential Manager.
@@ -403,6 +405,7 @@ A Minecraft server never receives the Minecraft token, and an agent never holds 
 - **Chat senders are server-attributed, not verified.** azalea 0.16 never verifies chat signatures, and fleet-mc shows a player message's `unsigned_content` when the server sends one. So a sender's name, its UUID and the text are only what the server claims. No permission or trigger decision may rely on a chat sender; a feature that needs one must verify the signature and use the signed body, in its own ADR (ADR-0011).
 - **Plain-text duplicate-login kicks aren't recognized by default.** The classifier only knows the vanilla key `multiplayer.disconnect.duplicate_login`. A proxy or plugin that kicks the bot with plain text when a human logs in makes the bot reconnect and kick the human; the circuit breaker only limits how often. Conflict texts name such kicks: per bot in a standalone agent's config (P5.1), and per server in managed mode, set by Admins and the Owner (P11.9). They're empty by default, so someone has to configure them (ADR-0010; ADR-0020, U54).
 - **An Admin's conflict text pauses every bot on that server, the Owner's too** (ADR-0020, U54, S75). A text that matches a routine kick ("Timed out", say) pauses bots that would have reconnected, until someone resumes them; Admins and the Owner read every server's settings, rows the Owner wrote included. Each write is one audit entry naming the server, and Resume brings a bot back.
+- **The longest conflict texts in the widest characters don't fit one request** (ADR-0020, PR #79's review). 16 texts of 1024 characters are valid, but in four-byte characters (emoji, say) they come to 64 KiB, past the default 64 KiB `[http] max_body_bytes`, so the server answers 413 and stores nothing; in three-byte characters they fit, about 49 KiB. The user accepted it: real kick messages are far shorter, and an operator may raise the limit up to 1 MiB (`server_settings::sixteen_texts_of_four_byte_characters_are_413`, `server_settings::the_largest_valid_request_fits_the_body_limit`).
 - **A hung azalea thread can't be killed.** Each bot has its own host thread and Bevy App with a single-threaded executor, so a panic or a hang affects exactly one bot (ADR-0008 §2–3). A hung thread is abandoned and leaks until the process restarts. Above the abandoned-thread limit the agent exits and Docker restarts it, which briefly disconnects every bot on that agent (ADR-0008 §5, Plan.md §6 row 8). If hangs turn out to be frequent, a process-per-bot connector is the fallback (ADR-0004).
 - **azalea 0.16's NBT chat decoder is exponential.** It parses the nested `with` arguments of a translation twice per level, so a hostile server can send a small chat component that hangs the bot's host thread while decoding it, before fleet-mc ever sees it. The hang stays in that bot's thread: the thread is abandoned and counted, and after 3 abandoned threads the agent exits and Docker restarts it (ADR-0011, Plan.md §6 row 8). Removal trigger: an azalea release that fixes the decoder.
 - **azalea's trace logs contain secrets.** Both binaries cap `azalea_auth` at `info`, whatever the operator's filter says, and a redaction test checks each cap (ADR-0011).

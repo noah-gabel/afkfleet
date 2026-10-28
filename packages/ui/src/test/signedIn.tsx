@@ -51,7 +51,9 @@ export async function atScreen(
     | "/profile/password"
     | "/profile/2fa"
     | "/admin/users"
-    | "/admin/invites",
+    | "/admin/invites"
+    | "/admin/servers"
+    | "/admin/servers/new",
   handlers: Partial<ApiClient> = {},
   options: SignedInOptions = {},
 ) {

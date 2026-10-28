@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 
+use fleet_api_types::server_settings::SERVER_SETTINGS_PAGE_MAX;
 use fleet_core::audit::{AuditAction, AuditOutcome, AuditTarget, RecordedTarget};
 use fleet_core::authz::Role;
 use fleet_core::disconnect::ConflictTexts;
@@ -30,6 +31,35 @@ const SETTINGS: &str = "/api/v1/server-settings";
 /// A settings row's route.
 fn path(id: ServerSettingsId) -> String {
     format!("{SETTINGS}/{id}")
+}
+
+/// fleet-client's `MAX_RESPONSE_BYTES`: fleet-server doesn't depend on
+/// fleet-client, so it's written out, as modes' test has it.
+const CLIENT_CAP: usize = 1024 * 1024;
+
+/// The longest server key `n` makes: a host of 253 characters, four labels
+/// of 63, 63, 63 and 61, and a five-digit port.
+fn longest_server(n: u8) -> String {
+    format!(
+        "{n:02}{}.{}.{}.{}:65535",
+        "a".repeat(61),
+        "b".repeat(63),
+        "c".repeat(63),
+        "d".repeat(61)
+    )
+}
+
+/// 16 distinct texts of 1024 characters each, every character `width` bytes
+/// in UTF-8: CJK ideographs for 3, emoji for 4, each text its own one.
+fn widest_texts(width: usize, offset: u32) -> Vec<String> {
+    let first = if width == 3 { 0x4E00 } else { 0x1_F600 };
+    (0..16)
+        .map(|n| {
+            let character = char::from_u32(first + offset + n).unwrap();
+            assert_eq!(character.len_utf8(), width);
+            character.to_string().repeat(1024)
+        })
+        .collect()
 }
 
 /// A create's body.
@@ -124,6 +154,17 @@ impl Setup {
     /// would, without an entry of its own kind: made an hour before now,
     /// `n` milliseconds apart, so their IDs sort by `n`.
     async fn add_settings(&self, n: u8, server: &str) -> ServerSettingsId {
+        self.add_settings_with(n, server, &["Already connected"])
+            .await
+    }
+
+    /// As [`Setup::add_settings`], with the conflict texts `texts`.
+    async fn add_settings_with(
+        &self,
+        n: u8,
+        server: &str,
+        texts: &[impl AsRef<str>],
+    ) -> ServerSettingsId {
         let created = at(T0 - 3_600_000 + i64::from(n));
         let id = ServerSettingsId::new_v7(created, [n; 10]).unwrap();
         let mut tx = self.db.write().await.unwrap();
@@ -131,7 +172,7 @@ impl Setup {
             .insert(&NewServerSettings {
                 id,
                 server: key(server),
-                conflict_texts: ConflictTexts::try_new(&["Already connected"]).unwrap(),
+                conflict_texts: ConflictTexts::try_new(texts).unwrap(),
                 created_at: created,
             })
             .await
@@ -345,6 +386,69 @@ async fn the_list_pages_newest_first(_pool: SqlitePoolOptions, options: SqliteCo
     assert_eq!(first.body["next"], newer.to_string());
     assert_eq!(second.body["items"][0]["id"], older.to_string());
     assert_eq!(second.body.get("next"), None);
+}
+
+/// A page holds at most 10 rows, and 10 by default, so a page of rows at
+/// their caps fits a client's answer cap (PR #79's review).
+#[sqlx::test(migrations = false)]
+async fn a_limit_past_ten_is_422_and_a_page_holds_ten_by_default(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    for n in 0..11 {
+        setup.add_settings(n, &format!("s{n}.example.com")).await;
+    }
+
+    let past = setup.list_settings(&admin, "?limit=11").await;
+    let first = setup.list_settings(&admin, "").await;
+
+    assert_eq!(past.status, 422, "{}", past.text);
+    assert_eq!(
+        past.body["error"]["fields"],
+        json!([{ "path": "limit", "message": "greater than 10" }])
+    );
+    assert_eq!(first.body["items"].as_array().unwrap().len(), 10);
+    let next = first.body["next"].as_str().unwrap();
+    let second = setup
+        .list_settings(&admin, &format!("?before={next}"))
+        .await;
+    assert_eq!(second.body["items"].as_array().unwrap().len(), 1);
+    assert_eq!(second.body.get("next"), None);
+}
+
+/// The longest page, rows at every cap (the longest server, 16 texts of
+/// 1024 four-byte characters), fits fleet-client's 1 MiB answer cap.
+#[sqlx::test(migrations = false)]
+async fn the_longest_page_fits_a_clients_answer_cap(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = setup.person(2, "admin", Role::Admin).await;
+    let rows = u8::try_from(SERVER_SETTINGS_PAGE_MAX).unwrap();
+    for n in 0..rows {
+        setup
+            .add_settings_with(n, &longest_server(n), &widest_texts(4, 0))
+            .await;
+    }
+
+    let seen = setup
+        .list_settings(&admin, &format!("?limit={SERVER_SETTINGS_PAGE_MAX}"))
+        .await;
+
+    assert_eq!(seen.status, 200, "{}", seen.text);
+    assert_eq!(
+        seen.body["items"].as_array().unwrap().len(),
+        usize::from(rows)
+    );
+    assert!(
+        seen.text.len() > usize::from(rows) * 16 * 1024 * 4,
+        "the rows are at their caps: {} bytes",
+        seen.text.len()
+    );
+    assert!(seen.text.len() < CLIENT_CAP, "{} bytes", seen.text.len());
 }
 
 /// A malformed or unknown ID is 404 for an Admin, an edit's and a
@@ -845,4 +949,154 @@ async fn every_route_spends_the_users_request_limit(
         assert_eq!(second.headers["retry-after"], "1", "{route}");
         setup.clock.advance(core::time::Duration::from_secs(1));
     }
+}
+
+/// `authorize()` runs before any row is read, in the service too (S75): an
+/// Admin demoted right before the write is 403 for an unknown ID and for a
+/// server that has settings already, never 404 or 422.
+#[sqlx::test(migrations = false)]
+async fn a_demoted_admin_is_403_before_any_row_is_read(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    setup.add_settings(1, "mc.example.com").await;
+    let other = setup.add_settings(2, "play.example.com").await;
+    let unknown = ServerSettingsId::new_v7(at(T0), [0xEE; 10]).unwrap();
+
+    let mut seen = Vec::new();
+    for write in 0..4_u8 {
+        // An Admin of their own for each write, demoted right before it.
+        let admin = stepped_up(&setup, 3 + write, &format!("admin{write}"), Role::Admin).await;
+        setup
+            .hooked
+            .queue(Meanwhile::SetRole(admin.id, Role::Member));
+        seen.push(match write {
+            0 => {
+                setup
+                    .edit_settings(&admin, unknown, edit_body(1, "mc.example.com", &["Two"]))
+                    .await
+            }
+            1 => setup.delete_settings(&admin, unknown).await,
+            2 => {
+                setup
+                    .create_settings(&admin, create_body("mc.example.com", &["One"]))
+                    .await
+            }
+            _ => {
+                setup
+                    .edit_settings(&admin, other, edit_body(1, "mc.example.com", &["One"]))
+                    .await
+            }
+        });
+    }
+
+    for (write, seen) in seen.iter().enumerate() {
+        assert_eq!(
+            (seen.status, seen.code()),
+            (403, "forbidden"),
+            "write {write}: {}",
+            seen.text
+        );
+    }
+    assert_eq!(setup.settings_entries().await, 0);
+}
+
+/// The largest valid request, the longest server and 16 texts of 1024
+/// three-byte characters, fits the default 64 KiB body limit: a create's
+/// and an edit's.
+#[sqlx::test(migrations = false)]
+async fn the_largest_valid_request_fits_the_body_limit(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let server = longest_server(0);
+    let create = json!({ "server": server, "conflict_texts": widest_texts(3, 0) });
+    let edit = json!({ "version": 1, "server": server, "conflict_texts": widest_texts(3, 16) });
+
+    let created = setup.create_settings(&admin, create.clone()).await;
+
+    assert!(
+        create.to_string().len() > 48 * 1024,
+        "{}",
+        create.to_string().len()
+    );
+    assert!(
+        edit.to_string().len() > 48 * 1024,
+        "{}",
+        edit.to_string().len()
+    );
+    assert_eq!(created.status, 201, "{}", created.text);
+    let edited = setup
+        .edit_settings(&admin, created_id(&created), edit)
+        .await;
+    assert_eq!(edited.status, 200, "{}", edited.text);
+    assert_eq!(edited.body["version"], 2);
+}
+
+/// 16 texts of 1024 four-byte characters are valid but don't fit the
+/// default 64 KiB body limit: 413, and nothing is written (accepted at PR
+/// #79's review; an operator may raise `[http] max_body_bytes`).
+#[sqlx::test(migrations = false)]
+async fn sixteen_texts_of_four_byte_characters_are_413(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let body = json!({ "server": "mc.example.com", "conflict_texts": widest_texts(4, 0) });
+
+    let seen = setup.create_settings(&admin, body).await;
+    let listed = setup.list_settings(&admin, "").await;
+
+    assert_eq!(
+        (seen.status, seen.code()),
+        (413, "payload_too_large"),
+        "{}",
+        seen.text
+    );
+    assert_eq!(listed.body["items"], json!([]));
+    assert_eq!(setup.settings_entries().await, 0);
+}
+
+/// An edit's texts are refused at the same paths as a create's: the list's
+/// rules at `conflict_texts`, an entry's at `conflict_texts[i]`. Nothing is
+/// written.
+#[sqlx::test(migrations = false)]
+async fn an_edits_broken_texts_are_422_at_their_paths(
+    _pool: SqlitePoolOptions,
+    options: SqliteConnectOptions,
+) {
+    let setup = setup(options).await;
+    let admin = stepped_up(&setup, 2, "admin", Role::Admin).await;
+    let id = setup.add_settings(1, "mc.example.com").await;
+    let before = setup.stored_settings(id).await;
+    let seventeen: Vec<String> = (0..17).map(|n| format!("Text {n}")).collect();
+    let seventeen: Vec<&str> = seventeen.iter().map(String::as_str).collect();
+    let long = "x".repeat(1025);
+
+    for (texts, field, message) in [
+        (vec![], "conflict_texts", "must hold at least one text"),
+        (seventeen, "conflict_texts", "must hold at most 16 texts"),
+        (vec!["One", ""], "conflict_texts[1]", "must not be empty"),
+        (
+            vec![long.as_str()],
+            "conflict_texts[0]",
+            "must be at most 1024 characters",
+        ),
+    ] {
+        let seen = setup
+            .edit_settings(&admin, id, edit_body(1, "mc.example.com", &texts))
+            .await;
+
+        assert_eq!(seen.status, 422, "{field}: {}", seen.text);
+        assert_eq!(
+            seen.body["error"]["fields"],
+            json!([{ "path": field, "message": message }])
+        );
+    }
+    assert_eq!(setup.stored_settings(id).await, before);
+    assert_eq!(setup.settings_entries().await, 0);
 }

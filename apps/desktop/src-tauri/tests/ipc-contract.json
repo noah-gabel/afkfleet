@@ -398,6 +398,46 @@
         "request": { "message": "/spawn" }
       },
       "expect": { "error": "no_server" }
+    },
+    {
+      "command": "server_settings",
+      "method": "serverSettings",
+      "inputs": ["01900000-0000-7000-8000-00000000000d", 10],
+      "args": { "before": "01900000-0000-7000-8000-00000000000d", "limit": 10 },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "create_server_settings",
+      "method": "createServerSettings",
+      "inputs": [{ "server": "mc.example.com", "conflict_texts": ["Already connected"] }],
+      "args": {
+        "request": { "server": "mc.example.com", "conflict_texts": ["Already connected"] }
+      },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "update_server_settings",
+      "method": "updateServerSettings",
+      "inputs": [
+        "01900000-0000-7000-8000-00000000000d",
+        { "version": 1, "server": "mc.example.com", "conflict_texts": ["Already connected"] }
+      ],
+      "args": {
+        "id": "01900000-0000-7000-8000-00000000000d",
+        "request": {
+          "version": 1,
+          "server": "mc.example.com",
+          "conflict_texts": ["Already connected"]
+        }
+      },
+      "expect": { "error": "no_server" }
+    },
+    {
+      "command": "delete_server_settings",
+      "method": "deleteServerSettings",
+      "inputs": ["01900000-0000-7000-8000-00000000000d"],
+      "args": { "id": "01900000-0000-7000-8000-00000000000d" },
+      "expect": { "error": "no_server" }
     }
   ]
 }

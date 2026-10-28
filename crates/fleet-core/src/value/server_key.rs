@@ -28,7 +28,7 @@ pub enum ServerKeyError {
 }
 
 /// A Minecraft server's identity: its host and port, the port always
-/// written. Two addresses that dial the same server have the same key.
+/// written. Addresses that fleet-mc hands azalea alike have the same key.
 ///
 /// It's built from a [`ServerAddress`] and can't fail; reading a stored key
 /// back with [`TryFrom<&str>`] accepts only the text [`fmt::Display`] writes,

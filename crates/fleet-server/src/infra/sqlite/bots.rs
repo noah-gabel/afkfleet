@@ -606,13 +606,17 @@ fn fleet_records(
     for row in rows {
         match record_from_row(row) {
             Ok(record) => match unreadable_texts(server_texts, &record) {
-                // Left alone, as a bot whose mode doesn't read (S37, R132).
-                Some(rowid) => unreadable.push(unreadable_bot(
-                    row,
-                    "server_settings",
-                    "conflict_texts",
-                    rowid,
-                )?),
+                // Left alone, as a bot whose mode doesn't read (S37, R132),
+                // and logged by its server's row, not on its own.
+                Some(rowid) => unreadable.push(UnreadableBot {
+                    by_server: true,
+                    ..unreadable_bot(
+                        row,
+                        server_settings::SERVER_SETTINGS,
+                        "conflict_texts",
+                        rowid,
+                    )?
+                }),
                 None => bots.push(record),
             },
             Err(StoreError::Corrupt {
@@ -630,7 +634,10 @@ fn fleet_records(
 /// back.
 fn unreadable_texts(texts: &ServerTexts, record: &BotRecord) -> Option<i64> {
     let server = record.bot.server.as_ref()?;
-    texts.unreadable.get(&ServerKey::from(server)).copied()
+    texts
+        .unreadable
+        .get(&ServerKey::from(server))
+        .map(|row| row.rowid)
 }
 
 /// Who may see which bot (S30): every bot with its account's owner, every
@@ -1161,6 +1168,7 @@ fn unreadable_bot(
         table,
         column,
         rowid,
+        by_server: false,
     })
 }
 
@@ -1184,6 +1192,7 @@ fn unreadable_record(
         table,
         column,
         rowid,
+        by_server: false,
     })
 }
 

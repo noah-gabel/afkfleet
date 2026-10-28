@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-delete-server-settings"
+description = "Enables the delete_server_settings command without any pre-configured scope."
+commands.allow = ["delete_server_settings"]
+
+[[permission]]
+identifier = "deny-delete-server-settings"
+description = "Denies the delete_server_settings command without any pre-configured scope."
+commands.deny = ["delete_server_settings"]

@@ -30,6 +30,16 @@ pub(crate) const RECONNECT_MAX: Duration = fleet_proto::control::RECONNECT_DELAY
 /// 30 s), with as much again to spare, since CI retries nothing.
 pub(crate) const PATIENCE: Duration = Duration::from_secs(90);
 
+/// The longest a case waits for a write's hint to reach an agent: a third
+/// of the reconciler's periodic pass, so what comes within it came from the
+/// hint serve wires to the write, never from the pass (PR #79's review).
+pub(crate) const HINTED: Duration = Duration::from_secs(10);
+
+const _: () = assert!(
+    HINTED.as_secs() * 3 <= fleet_server::grpc::reconciler::RECONCILE_INTERVAL.as_secs(),
+    "a hinted wait must end well before the periodic pass"
+);
+
 /// How often a wait looks again without a new line.
 const RECHECK: Duration = Duration::from_millis(100);
 

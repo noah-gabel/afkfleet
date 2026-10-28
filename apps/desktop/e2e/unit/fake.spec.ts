@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import type { BotPage } from "@afkfleet/ui/generated/BotPage";
 import type { ChatPage } from "@afkfleet/ui/generated/ChatPage";
 import type { ModePage } from "@afkfleet/ui/generated/ModePage";
+import type { ServerSettingsResponse } from "@afkfleet/ui/generated/ServerSettingsResponse";
 import { expect, test } from "@playwright/test";
 
 import { COMMANDS, FakeBackend, MEMBER, OWNER, PASSWORD } from "../fake/backend";
@@ -186,6 +187,69 @@ test("keeps each bot's chat: lines a page at a time, a line sent online, a comma
     error: { api: { status: 403, code: "step_up_required" } },
   });
   expect(command).toMatchObject({ ok: true, value: { request_id: backend.lastSend?.request } });
+});
+
+test("keeps the servers' settings: writes after a step-up, the key, the version, and 404", async () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: OWNER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(OWNER) });
+  const request = { server: "MC.example.com", conflict_texts: ["b", "a\nlines", "b"] };
+
+  const unstepped = await backend.handle("create_server_settings", { request });
+  backend.handle("step_up", { request: { password: PASSWORD } });
+  const created = (await backend.handle("create_server_settings", { request })) as {
+    ok: true;
+    value: ServerSettingsResponse;
+  };
+  const taken = await backend.handle("create_server_settings", { request });
+  const id = created.value.id;
+  const edit = { server: "mc.example.com:25565", conflict_texts: ["c"] };
+  const stale = await backend.handle("update_server_settings", {
+    id,
+    request: { version: 2, ...edit },
+  });
+  const edited = await backend.handle("update_server_settings", {
+    id,
+    request: { version: 1, ...edit },
+  });
+  const listed = await backend.handle("server_settings", {});
+  const removed = await backend.handle("delete_server_settings", { id });
+  const gone = await backend.handle("delete_server_settings", { id });
+
+  expect(unstepped).toMatchObject({
+    ok: false,
+    error: { api: { status: 403, code: "step_up_required" } },
+  });
+  expect(created.value).toMatchObject({
+    server: "mc.example.com:25565",
+    conflict_texts: [{ lines: ["a", "lines"] }, { lines: ["b"] }],
+    version: 1,
+  });
+  expect(taken).toMatchObject({
+    ok: false,
+    error: { api: { status: 422, fields: [{ path: "server", message: "already has settings" }] } },
+  });
+  expect(stale).toMatchObject({
+    ok: false,
+    error: { api: { status: 409, code: "server_settings_changed" } },
+  });
+  expect(edited).toMatchObject({
+    ok: true,
+    value: { version: 2, conflict_texts: [{ lines: ["c"] }] },
+  });
+  expect(listed).toMatchObject({ ok: true, value: { items: [{ id, version: 2 }] } });
+  expect(removed).toEqual({ ok: true });
+  expect(gone).toMatchObject({ ok: false, error: { api: { status: 404 } } });
+});
+
+test("lets only Admins and the Owner read the servers' settings", async () => {
+  const backend = new FakeBackend();
+  backend.handle("login", { request: { username: MEMBER, password: PASSWORD } });
+  backend.handle("login_mfa", { code: backend.code(MEMBER) });
+
+  const read = await backend.handle("server_settings", {});
+
+  expect(read).toMatchObject({ ok: false, error: { api: { status: 403, code: "forbidden" } } });
 });
 
 test("refuses a command it doesn't know", () => {

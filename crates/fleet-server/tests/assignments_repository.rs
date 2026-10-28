@@ -33,7 +33,7 @@ use fleet_server::ports::agents::NewAgent;
 use fleet_server::ports::audit::NewAuditEntry;
 use fleet_server::ports::bots::{NewBot, ReleaseRecord, UnreadableBot};
 use fleet_server::ports::page::{Page, PageLimit};
-use fleet_server::ports::server_settings::NewServerSettings;
+use fleet_server::ports::server_settings::{NewServerSettings, UnreadableSettings};
 use fleet_server::ports::store::{Store, StoreError};
 use fleet_server::ports::users::{NewUser, PasswordHash};
 use secrecy::SecretString;
@@ -642,6 +642,7 @@ async fn a_bot_whose_row_doesnt_read_back_is_unreadable_and_the_others_read(
             table: "bots",
             column: "server_address",
             rowid: fleet.unreadable[0].rowid,
+            by_server: false,
         }]
     );
 }
@@ -757,11 +758,21 @@ async fn a_bot_whose_servers_texts_dont_read_back_is_unreadable_and_the_others_r
             table: "server_settings",
             column: "conflict_texts",
             rowid: setup.settings_rowid(row).await,
+            by_server: true,
         }]
     );
     assert_eq!(
         fleet.server_texts.of(&"mc.example.com".parse().unwrap()),
         None
+    );
+    assert_eq!(
+        fleet.server_texts.unreadable.get(&ServerKey::from(
+            &"mc.example.com".parse::<ServerAddress>().unwrap()
+        )),
+        Some(&UnreadableSettings {
+            rowid: setup.settings_rowid(row).await,
+            id: Some(row),
+        })
     );
 }
 

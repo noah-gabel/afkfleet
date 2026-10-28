@@ -7,7 +7,15 @@ import { describe, expect, it } from "vitest";
 import type { InviteResponse } from "../../generated/InviteResponse";
 import type { UserRole } from "../../generated/UserRole";
 import { role, table } from "../../test/authzMatrix";
-import { type Actor, canRevoke, canRevokeRole, inviteRoles, userActions } from "./permissions";
+import { privilegeOf } from "../shell/nav";
+import {
+  type Actor,
+  canRevoke,
+  canRevokeRole,
+  inviteRoles,
+  serverSettingsAccess,
+  userActions,
+} from "./permissions";
 
 const ACTOR_ID = "01900000-0000-7000-8000-000000000001";
 const OTHER_ID = "01900000-0000-7000-8000-000000000002";
@@ -122,5 +130,42 @@ describe("canRevoke", () => {
     for (const state of ["used", "revoked", "expired"] as const) {
       expect(canRevoke("owner", invite("member", state))).toBe(false);
     }
+  });
+});
+
+describe("serverSettingsAccess", () => {
+  const fleet = table("## Fleet-wide");
+  const row = (name: string) => fleet.rows.find(([permission]) => permission === name) ?? [];
+
+  it("reads the matrix's two rows of the servers' settings as they are", () => {
+    expect(row("ViewServerSettings")).toEqual(["ViewServerSettings", "ok", "ok", "403"]);
+    expect(row("ConfigureServerSettings")).toEqual(["ConfigureServerSettings", "ok", "ok", "403"]);
+  });
+
+  it("allows exactly what the matrix allows, for every role", () => {
+    for (const name of ["ViewServerSettings", "ConfigureServerSettings"] as const) {
+      const [, ...cells] = row(name);
+      fleet.header.slice(1).forEach((actorLabel, column) => {
+        const access = serverSettingsAccess(role(actorLabel));
+        const allowed = name === "ViewServerSettings" ? access.view : access.configure;
+
+        expect(allowed, `${actorLabel}: ${name}`).toBe(cells[column] === "ok");
+      });
+    }
+  });
+
+  it("lets in through the admin layout's gate exactly who may read them", () => {
+    for (const actorLabel of fleet.header.slice(1)) {
+      const actor = role(actorLabel);
+
+      expect(serverSettingsAccess(actor).view, actorLabel).toBe(privilegeOf(actor) === "admin");
+    }
+  });
+
+  it("gives a role this app doesn't know nothing", () => {
+    expect(serverSettingsAccess("superuser" as UserRole)).toEqual({
+      view: false,
+      configure: false,
+    });
   });
 });

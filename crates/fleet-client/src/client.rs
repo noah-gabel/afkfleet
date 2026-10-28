@@ -34,8 +34,8 @@ use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
 use fleet_api_types::modes::{CreateModeRequest, ModePage, ModeResponse, UpdateModeRequest};
 use fleet_api_types::server_settings::{
-    CreateServerSettingsRequest, ServerSettingsPage, ServerSettingsResponse,
-    UpdateServerSettingsRequest,
+    CreateServerSettingsRequest, ServerSettingsPage, ServerSettingsPageQuery,
+    ServerSettingsResponse, UpdateServerSettingsRequest,
 };
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
@@ -866,11 +866,11 @@ impl<S: SessionStore> Client<S> {
     ///
     /// # Errors
     /// The server's 403 (`forbidden`: not an Admin or the Owner) or 422 (a
-    /// `limit` outside 1 to 100), as [`ClientError::Api`]; any other error as
+    /// `limit` outside 1 to 10), as [`ClientError::Api`]; any other error as
     /// for every authenticated call.
     pub async fn server_settings(
         &self,
-        query: &PageQuery<ServerSettingsId>,
+        query: &ServerSettingsPageQuery,
     ) -> Result<ServerSettingsPage, ClientError> {
         self.core.server_settings(query).await
     }

@@ -19,6 +19,7 @@ import type { CreatedOfflineAccountResponse } from "../generated/CreatedOfflineA
 import type { CreateGrantRequest } from "../generated/CreateGrantRequest";
 import type { CreateInviteRequest } from "../generated/CreateInviteRequest";
 import type { CreateOfflineAccountRequest } from "../generated/CreateOfflineAccountRequest";
+import type { CreateServerSettingsRequest } from "../generated/CreateServerSettingsRequest";
 import type { GrantPage } from "../generated/GrantPage";
 import type { GrantResponse } from "../generated/GrantResponse";
 import type { InvitePage } from "../generated/InvitePage";
@@ -38,9 +39,12 @@ import type { RegisterResponse } from "../generated/RegisterResponse";
 import type { ServerProfileRequest } from "../generated/ServerProfileRequest";
 import type { ServerProfileResponse } from "../generated/ServerProfileResponse";
 import type { ServerProfileState } from "../generated/ServerProfileState";
+import type { ServerSettingsPage } from "../generated/ServerSettingsPage";
+import type { ServerSettingsResponse } from "../generated/ServerSettingsResponse";
 import type { SessionPage } from "../generated/SessionPage";
 import type { SetupStepResponse } from "../generated/SetupStepResponse";
 import type { StepUpRequest } from "../generated/StepUpRequest";
+import type { UpdateServerSettingsRequest } from "../generated/UpdateServerSettingsRequest";
 import type { UserPage } from "../generated/UserPage";
 import type { UserPatchRequest } from "../generated/UserPatchRequest";
 import type { UserResponse } from "../generated/UserResponse";
@@ -161,6 +165,20 @@ export interface ApiClient {
   sendChat(id: string, request: ChatSendRequest): Promise<ChatSendResponse>;
   /** Has the bot send any command (Manage for one off the allowlist), after a step-up (S8). */
   sendCommand(id: string, request: ChatCommandRequest): Promise<ChatSendResponse>;
+  /** A page of the servers' settings, newest first, at most 10 (Admins and the Owner). */
+  serverSettings(before?: string, limit?: number): Promise<ServerSettingsPage>;
+  /** A Minecraft server's new settings, after a step-up (Admins and the Owner, U54). */
+  createServerSettings(request: CreateServerSettingsRequest): Promise<ServerSettingsResponse>;
+  /**
+   * The settings as they should be from now on, at the `version` read, after a step-up: 409
+   * `server_settings_changed` when they changed since (S77).
+   */
+  updateServerSettings(
+    id: string,
+    request: UpdateServerSettingsRequest,
+  ): Promise<ServerSettingsResponse>;
+  /** Deletes a server's settings, after a step-up. */
+  deleteServerSettings(id: string): Promise<void>;
 }
 
 /** A method of the API. */
@@ -217,4 +235,8 @@ export const API_METHODS = [
   "botChat",
   "sendChat",
   "sendCommand",
+  "serverSettings",
+  "createServerSettings",
+  "updateServerSettings",
+  "deleteServerSettings",
 ] as const satisfies readonly ApiMethod[];

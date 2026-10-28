@@ -12,7 +12,7 @@ use fleet_core::bot::{
     StickyState,
 };
 use fleet_core::disconnect::{ConflictKind, ConflictTexts};
-use fleet_core::id::{AccountId, AgentId, BotId, RequestId};
+use fleet_core::id::{AccountId, AgentId, BotId, RequestId, ServerSettingsId};
 use fleet_core::mode::ModeDefinition;
 use fleet_core::pki::CertFingerprint;
 use fleet_core::placement::{DetachReason, McIdentity, UnassignReason, Unplaced};
@@ -37,6 +37,7 @@ use crate::ports::agent_connections::{Admitted, StreamEnd};
 use crate::ports::assignments::{AssignError, Assigned};
 use crate::ports::bots::{Bot, BotRecord, Fleet, ReleaseRecord, UnreadableBot};
 use crate::ports::live_agents::LiveAgents as _;
+use crate::ports::server_settings::UnreadableSettings;
 use crate::ports::store::StoreError;
 
 const T0: &str = "2027-01-15T08:00:00Z";
@@ -922,11 +923,10 @@ async fn the_fallback_server_brings_its_own_texts_and_an_unreadable_row_sends_no
     {
         let mut state = store.state();
         state.fleet.server_texts.readable.clear();
-        state
-            .fleet
-            .server_texts
-            .unreadable
-            .insert(server_key("play.example.com"), 1);
+        state.fleet.server_texts.unreadable.insert(
+            server_key("play.example.com"),
+            UnreadableSettings { rowid: 1, id: None },
+        );
     }
     running.hints.changed(Change::Store);
     tokio::time::sleep(Duration::from_secs(1)).await;
@@ -1271,6 +1271,7 @@ async fn an_unreadable_bot_is_left_alone_and_logged_each_pass_and_the_rest_recon
         table: "bots",
         column: "server_address",
         rowid: 9,
+        by_server: false,
     });
     // Its agent's stream holds it from before its row stopped reading back.
     let mut stream = connect(&registry, 1, 2, Vec::new(), 8);
@@ -1308,6 +1309,130 @@ async fn an_unreadable_bot_is_left_alone_and_logged_each_pass_and_the_rest_recon
         .unwrap();
     assert_eq!(logged.len(), 2, "once per pass");
     assert_eq!(logged[0]["level"], "ERROR");
+    running.stop().await;
+}
+
+/// Two servers' settings rows whose texts don't read back in `store`: one,
+/// `settings`, with three bots on its server; one whose ID doesn't read,
+/// with none. And a bot whose own mode doesn't read back.
+fn broken_settings(store: &Store, settings: ServerSettingsId) {
+    let mut state = store.state();
+    let texts = &mut state.fleet.server_texts.unreadable;
+    texts.insert(
+        server_key("broken.example.com"),
+        UnreadableSettings {
+            rowid: 4,
+            id: Some(settings),
+        },
+    );
+    // A row no bot plays on is logged too; this one's ID doesn't read.
+    texts.insert(
+        server_key("empty.example.com"),
+        UnreadableSettings { rowid: 5, id: None },
+    );
+    for n in [7, 8, 9] {
+        state.fleet.unreadable.push(UnreadableBot {
+            bot: bot(n),
+            agent: None,
+            identity: None,
+            table: "server_settings",
+            column: "conflict_texts",
+            rowid: 4,
+            by_server: true,
+        });
+    }
+    state.fleet.unreadable.push(UnreadableBot {
+        bot: bot(6),
+        agent: None,
+        identity: None,
+        table: "modes",
+        column: "definition_json",
+        rowid: 3,
+        by_server: false,
+    });
+}
+
+/// A server's settings row whose texts don't read back is logged once a
+/// pass, with its ID and key, however many bots play there; those bots
+/// aren't logged on their own, and a bot whose own row doesn't read back
+/// still is (R132, PR #79's review).
+#[tokio::test(start_paused = true)]
+async fn an_unreadable_servers_settings_row_is_logged_once_a_pass_not_once_per_bot() {
+    let buffer = LogBuffer::default();
+    let config = LogConfig {
+        format: LogFormat::Json,
+        filter: "info".parse().unwrap(),
+    };
+    let subscriber =
+        tracing_subscriber::registry().with(layer_with(&config, &NoRules, false, buffer.clone()));
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let registry = registry();
+    let store = Store::with(vec![record(2)], &[1]);
+    let settings = ServerSettingsId::new_v7(at(T0), [4; 10]).unwrap();
+    broken_settings(&store, settings);
+    // A welcomed stream that holds nothing.
+    let mut stream = connect(&registry, 1, 2, Vec::new(), 8);
+    let generation = registry.placement_view().first().unwrap().generation;
+    registry
+        .settle(
+            agent(1),
+            generation,
+            Vec::new(),
+            ServerMessage::Reconcile(Vec::new()),
+        )
+        .unwrap();
+    assert_eq!(reconciled(stream.next().await), []);
+
+    let running = start(&registry, &store, 8);
+    let first = stream.next().await;
+    running.hints.changed(Change::Store);
+    let second = stream.next().await;
+
+    assert!(
+        matches!(first, Some(ServerMessage::Assign(ref a)) if a.spec.id == bot(2)),
+        "{first:?}"
+    );
+    assert_eq!(
+        second.map(|_| ()),
+        None,
+        "the bots on that server are left alone"
+    );
+    let rows = buffer
+        .lines_with("a server's settings don't read back: the reconciler leaves its bots alone until they're fixed")
+        .unwrap();
+    assert_eq!(rows.len(), 4, "each row once a pass, two passes");
+    let mut servers: Vec<&str> = rows
+        .iter()
+        .map(|line| line["server"].as_str().unwrap())
+        .collect();
+    servers.sort_unstable();
+    assert_eq!(
+        servers,
+        [
+            "broken.example.com:25565",
+            "broken.example.com:25565",
+            "empty.example.com:25565",
+            "empty.example.com:25565"
+        ]
+    );
+    for line in &rows {
+        assert_eq!(line["level"], "ERROR");
+        let id = &line["server_settings_id"];
+        if line["server"] == "broken.example.com:25565" {
+            assert_eq!(id, &settings.to_string(), "{line}");
+        } else {
+            assert!(id.is_null(), "an ID that doesn't read isn't named: {line}");
+        }
+    }
+    let bots = buffer
+        .lines_with("a bot doesn't read back: the reconciler leaves it alone until it's fixed")
+        .unwrap();
+    assert_eq!(
+        bots.len(),
+        2,
+        "only the bot whose own row doesn't read, once a pass"
+    );
+    assert!(bots.iter().all(|line| line["bot_id"] == bot(6).to_string()));
     running.stop().await;
 }
 
