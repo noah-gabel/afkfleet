@@ -15,6 +15,9 @@ use fleet_api_types::modes::{
     CreateModeRequest, ModeActionKind, ModeActionRequest, ModeResponse, ModeScheduleKind,
     ModeScheduleRequest, ModeStepRequest, ModeSteps, ModeVisibility, UpdateModeRequest,
 };
+use fleet_api_types::server_settings::{
+    ConflictTextsInput, CreateServerSettingsRequest, ServerSettingsResponse,
+};
 use fleet_api_types::{PageQuery, SecretText};
 use fleet_client::{Client, ClientConfig, ClientError, LoginStep, MemoryStore, ServerUrl, Trust};
 use fleet_core::id::{BotId, ModeId};
@@ -217,6 +220,24 @@ impl Owner {
                     steps: every_quarter_second(action),
                 },
             )
+            .await
+            .unwrap()
+    }
+
+    /// Gives the Minecraft server `server` the conflict texts `texts`, as an
+    /// Admin or the Owner does after a step-up (P11.9; ADR-0020, S77).
+    pub(crate) async fn server_settings(
+        &self,
+        server: &str,
+        texts: &[&str],
+    ) -> ServerSettingsResponse {
+        self.client
+            .create_server_settings(&CreateServerSettingsRequest {
+                server: server.to_owned(),
+                conflict_texts: ConflictTextsInput(
+                    texts.iter().map(|text| (*text).to_owned()).collect(),
+                ),
+            })
             .await
             .unwrap()
     }

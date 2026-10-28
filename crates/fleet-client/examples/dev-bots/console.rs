@@ -18,7 +18,13 @@
 //! password again when the server wants it; `held` and `shared` show the
 //! review of a user's grants at a role change, the Owner's; `leave` gives up
 //! the user's own grant on a shared account, asking for the password again
-//! when the server wants it (P11.9; ADR-0020, R67, S51).
+//! when the server wants it (P11.9; ADR-0020, R67, S51). `servers` shows
+//! every server's settings, a line each, for Admins and the Owner;
+//! `new-server` and `edit-server` take their JSON, `delete-server` an ID,
+//! each asking for the password again when the server wants it; a line
+//! shows a server's key and how many conflict texts it has, never a text,
+//! and JSON that isn't server settings is said so, never repeated (P11.9;
+//! ADR-0020, S77).
 
 use core::fmt::Write as _;
 use core::pin::Pin;
@@ -37,8 +43,11 @@ use fleet_api_types::ids::AgentId;
 use fleet_api_types::modes::{
     CreateModeRequest, ModeOwnership, ModeResponse, ModeVisibility, UpdateModeRequest,
 };
+use fleet_api_types::server_settings::{
+    CreateServerSettingsRequest, ServerSettingsResponse, UpdateServerSettingsRequest,
+};
 use fleet_api_types::{
-    AccountId, BotId, ErrorCode, ModeId, PageQuery, SafeInt, SecretText, UserId,
+    AccountId, BotId, ErrorCode, ModeId, PageQuery, SafeInt, SecretText, ServerSettingsId, UserId,
 };
 use fleet_client::events::{Received, SocketClose};
 use fleet_client::{
@@ -84,7 +93,7 @@ pub(crate) fn arguments(args: &[String]) -> Option<(&str, &str)> {
 }
 
 /// The commands, as the console lists them.
-pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | mode <id> <mode> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | history <id> [before] | modes | new-mode <json> | edit-mode <id> <json> | delete-mode <id> | events | users | audit [before] | agents | release <agent-id> | held <user-id> [before] | shared <user-id> [before] | leave <account-id> | quit";
+pub(crate) const HELP: &str = "commands: bots | bot <id> | offline <name> | server <id> <address> | mode <id> <mode> | start <id> | stop <id> | chat <id> <text> | command <id> <text> | history <id> [before] | modes | new-mode <json> | edit-mode <id> <json> | delete-mode <id> | events | users | audit [before] | agents | release <agent-id> | held <user-id> [before] | shared <user-id> [before] | leave <account-id> | servers | new-server <json> | edit-server <id> <json> | delete-server <id> | quit";
 
 /// How many 2FA codes a login may try.
 const CODES: usize = 3;
@@ -143,6 +152,15 @@ enum Command {
     Shared(UserId, Option<AccountId>),
     /// The user's own grant on an account given up.
     Leave(AccountId),
+    /// Every server's settings, for Admins and the Owner.
+    Servers,
+    /// A server's new settings: the rest of the line, as typed, their JSON.
+    NewServer(String),
+    /// A server's settings edited: the rest of the line, as typed, their
+    /// JSON with the version read.
+    EditServer(ServerSettingsId, String),
+    /// A server's settings deleted.
+    DeleteServer(ServerSettingsId),
     Quit,
 }
 
@@ -159,6 +177,12 @@ impl Command {
             match verb {
                 "chat" => return bot(id).map(|id| Self::Chat(id, text.to_owned())),
                 "command" => return bot(id).map(|id| Self::Slash(id, text.to_owned())),
+                "edit-server" => {
+                    return id
+                        .parse::<ServerSettingsId>()
+                        .ok()
+                        .map(|id| Self::EditServer(id, text.to_owned()));
+                }
                 // An edit's JSON is the rest of the line, as typed.
                 "edit-mode" => {
                     return id
@@ -169,17 +193,21 @@ impl Command {
                 _ => {}
             }
         }
-        // A new mode's JSON is the rest of the line, as typed.
-        if let Some(("new-mode", json)) = line
+        // A new mode's or server's JSON is the rest of the line, as typed.
+        match line
             .trim_start()
             .split_once(char::is_whitespace)
             .filter(|(_, json)| !json.trim().is_empty())
         {
-            return Some(Self::NewMode(json.to_owned()));
+            Some(("new-mode", json)) => return Some(Self::NewMode(json.to_owned())),
+            Some(("new-server", json)) => return Some(Self::NewServer(json.to_owned())),
+            _ => {}
         }
         let words: Vec<&str> = line.split_whitespace().collect();
         match words.as_slice() {
             ["modes"] => Some(Self::Modes),
+            ["servers"] => Some(Self::Servers),
+            ["delete-server", id] => id.parse::<ServerSettingsId>().ok().map(Self::DeleteServer),
             ["events"] => Some(Self::Events),
             ["users"] => Some(Self::Users),
             ["agents"] => Some(Self::Agents),
@@ -379,6 +407,10 @@ async fn command_of<S: SessionStore>(
         Command::Held(id, before) => held(client, id, before, terminal).await,
         Command::Shared(id, before) => shared(client, id, before, terminal).await,
         Command::Leave(id) => leave(client, id, terminal).await,
+        Command::Servers => servers(client, terminal).await,
+        Command::NewServer(json) => new_server(client, &json, terminal).await,
+        Command::EditServer(id, json) => edit_server(client, id, &json, terminal).await,
+        Command::DeleteServer(id) => delete_server(client, id, terminal).await,
         Command::Quit => Ok(()),
     };
     match done {
@@ -877,6 +909,115 @@ async fn delete_mode<S: SessionStore>(
     }
     terminal.say(&format!("mode {id} deleted"));
     Ok(())
+}
+
+/// Every page of the servers' settings, a line each.
+async fn servers<S: SessionStore>(
+    client: &Client<S>,
+    terminal: &mut impl Terminal,
+) -> Result<(), ClientError> {
+    let mut before = None;
+    loop {
+        let page = client
+            .server_settings(&PageQuery {
+                before,
+                limit: None,
+            })
+            .await?;
+        for settings in &page.items {
+            terminal.say(&server_line_of(settings));
+        }
+        match page.next {
+            Some(next) => before = Some(next),
+            None => break,
+        }
+    }
+    Ok(())
+}
+
+/// Creates the server settings `json` holds, with a step-up when the
+/// server asks, once. JSON that isn't server settings is said so, never
+/// repeated: serde's message would quote it.
+async fn new_server<S: SessionStore>(
+    client: &Client<S>,
+    json: &str,
+    terminal: &mut impl Terminal,
+) -> Result<(), ClientError> {
+    let Ok(request) = serde_json::from_str::<CreateServerSettingsRequest>(json) else {
+        terminal.say(
+            "not server settings' JSON: {\"server\", \"conflict_texts\"}, as the README shows; nothing was sent",
+        );
+        return Ok(());
+    };
+    let settings = match client.create_server_settings(&request).await {
+        Err(ClientError::Api(failure)) if failure.is(ErrorCode::StepUpRequired) => {
+            if !stepped_up(client, terminal).await? {
+                return Ok(());
+            }
+            client.create_server_settings(&request).await?
+        }
+        other => other?,
+    };
+    terminal.say(&server_line_of(&settings));
+    Ok(())
+}
+
+/// Edits the server settings `id` as `json` holds them; see [`new_server`].
+async fn edit_server<S: SessionStore>(
+    client: &Client<S>,
+    id: ServerSettingsId,
+    json: &str,
+    terminal: &mut impl Terminal,
+) -> Result<(), ClientError> {
+    let Ok(request) = serde_json::from_str::<UpdateServerSettingsRequest>(json) else {
+        terminal.say(
+            "not server settings' JSON: {\"version\", \"server\", \"conflict_texts\"}, as the README shows; nothing was sent",
+        );
+        return Ok(());
+    };
+    let settings = match client.update_server_settings(id, &request).await {
+        Err(ClientError::Api(failure)) if failure.is(ErrorCode::StepUpRequired) => {
+            if !stepped_up(client, terminal).await? {
+                return Ok(());
+            }
+            client.update_server_settings(id, &request).await?
+        }
+        other => other?,
+    };
+    terminal.say(&server_line_of(&settings));
+    Ok(())
+}
+
+/// Deletes the server settings `id`, with a step-up when the server asks,
+/// once.
+async fn delete_server<S: SessionStore>(
+    client: &Client<S>,
+    id: ServerSettingsId,
+    terminal: &mut impl Terminal,
+) -> Result<(), ClientError> {
+    match client.delete_server_settings(id).await {
+        Err(ClientError::Api(failure)) if failure.is(ErrorCode::StepUpRequired) => {
+            if !stepped_up(client, terminal).await? {
+                return Ok(());
+            }
+            client.delete_server_settings(id).await?;
+        }
+        other => other?,
+    }
+    terminal.say(&format!("server settings {id} deleted"));
+    Ok(())
+}
+
+/// One server's settings as a line: `server <id> <key> texts <n> version
+/// <v>`, the version `edit-server` sends back; never a text.
+fn server_line_of(settings: &ServerSettingsResponse) -> String {
+    format!(
+        "server {} {} texts {} version {}",
+        settings.id,
+        settings.server,
+        settings.conflict_texts.len(),
+        settings.version
+    )
 }
 
 /// One mode as a line: `mode <id> <name> <kind>`, then ` mine` and
@@ -1493,6 +1634,35 @@ mod tests {
                 format!("{at} system: Steve joined the game"),
             ]
         );
+    }
+
+    #[test]
+    fn the_server_settings_verbs_take_their_ids_and_new_server_the_rest_of_the_line() {
+        let id = "018bcfe5-6800-7bab-abab-abababababab";
+        let settings: ServerSettingsId = id.parse().unwrap();
+        let json = r#"{"server": "mc.example.com", "conflict_texts": ["One"]}"#;
+
+        assert_eq!(Command::parse("servers"), Some(Command::Servers));
+        assert_eq!(
+            Command::parse(&format!("new-server {json}")),
+            Some(Command::NewServer(json.to_owned()))
+        );
+        assert_eq!(Command::parse("new-server"), None);
+        assert_eq!(Command::parse("new-server   "), None);
+        assert_eq!(
+            Command::parse(&format!("edit-server {id} {json}")),
+            Some(Command::EditServer(settings, json.to_owned()))
+        );
+        assert_eq!(Command::parse(&format!("edit-server {id}")), None);
+        assert_eq!(
+            Command::parse(&format!("edit-server not-an-id {json}")),
+            None
+        );
+        assert_eq!(
+            Command::parse(&format!("delete-server {id}")),
+            Some(Command::DeleteServer(settings))
+        );
+        assert_eq!(Command::parse("delete-server not-an-id"), None);
     }
 
     #[test]

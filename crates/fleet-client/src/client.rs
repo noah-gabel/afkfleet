@@ -33,10 +33,15 @@ use fleet_api_types::invites::{CreateInviteRequest, CreatedInviteResponse, Invit
 use fleet_api_types::me::{MeResponse, PasswordChangeRequest};
 use fleet_api_types::mfa::{CODE_MAX_CHARS, MfaConfirmResponse, MfaEnrollResponse};
 use fleet_api_types::modes::{CreateModeRequest, ModePage, ModeResponse, UpdateModeRequest};
+use fleet_api_types::server_settings::{
+    CreateServerSettingsRequest, ServerSettingsPage, ServerSettingsResponse,
+    UpdateServerSettingsRequest,
+};
 use fleet_api_types::sessions::SessionPage;
 use fleet_api_types::users::{UserPage, UserPatchRequest, UserResponse};
 use fleet_api_types::{
-    AccountId, BotId, InviteId, LinkFlowId, ModeId, PageQuery, SecretText, SessionId, UserId,
+    AccountId, BotId, InviteId, LinkFlowId, ModeId, PageQuery, SecretText, ServerSettingsId,
+    SessionId, UserId,
 };
 
 use crate::error::{BuildError, ClientError};
@@ -854,6 +859,63 @@ impl<S: SessionStore> Client<S> {
     /// error as for every authenticated call.
     pub async fn delete_mode(&self, id: ModeId) -> Result<(), ClientError> {
         self.core.delete_mode(id).await
+    }
+
+    /// `GET /server-settings`: a page of the servers' settings, newest
+    /// first; Admins and the Owner only (P11.9; ADR-0020, S75).
+    ///
+    /// # Errors
+    /// The server's 403 (`forbidden`: not an Admin or the Owner) or 422 (a
+    /// `limit` outside 1 to 100), as [`ClientError::Api`]; any other error as
+    /// for every authenticated call.
+    pub async fn server_settings(
+        &self,
+        query: &PageQuery<ServerSettingsId>,
+    ) -> Result<ServerSettingsPage, ClientError> {
+        self.core.server_settings(query).await
+    }
+
+    /// `POST /server-settings`: a server's new settings (201), after
+    /// [`Client::step_up`] within 5 minutes (P11.9; ADR-0020, U54).
+    ///
+    /// # Errors
+    /// The server's 403 (`step_up_required`, or `forbidden`: not an Admin
+    /// or the Owner), 409 (`conflict`: 100 servers have settings already)
+    /// or 422 (a field that breaks its rule, at its path; a server that has
+    /// settings already at `server`), as [`ClientError::Api`]; any other
+    /// error as for every authenticated call.
+    pub async fn create_server_settings(
+        &self,
+        request: &CreateServerSettingsRequest,
+    ) -> Result<ServerSettingsResponse, ClientError> {
+        self.core.create_server_settings(request).await
+    }
+
+    /// `PUT /server-settings/{id}`: the settings as they should be, at the
+    /// `version` the caller read (200: as they now are, unchanged when the
+    /// edit asks for what's stored), after [`Client::step_up`] within 5
+    /// minutes (S77).
+    ///
+    /// # Errors
+    /// The server's 403 (`step_up_required`, or `forbidden`), 404, 409
+    /// (`server_settings_changed`: they changed since `version`) or 422, as
+    /// [`ClientError::Api`]; any other error as for every authenticated call.
+    pub async fn update_server_settings(
+        &self,
+        id: ServerSettingsId,
+        request: &UpdateServerSettingsRequest,
+    ) -> Result<ServerSettingsResponse, ClientError> {
+        self.core.update_server_settings(id, request).await
+    }
+
+    /// `DELETE /server-settings/{id}`: deletes a server's settings, after
+    /// [`Client::step_up`] within 5 minutes.
+    ///
+    /// # Errors
+    /// The server's 403 (`step_up_required`, or `forbidden`) or 404, as
+    /// [`ClientError::Api`]; any other error as for every authenticated call.
+    pub async fn delete_server_settings(&self, id: ServerSettingsId) -> Result<(), ClientError> {
+        self.core.delete_server_settings(id).await
     }
 
     /// The live events socket of this client's session (P11.8; ADR-0020,

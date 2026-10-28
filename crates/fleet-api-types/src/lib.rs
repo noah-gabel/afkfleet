@@ -91,7 +91,8 @@ pub mod users;
 
 pub use error::{ErrorBody, ErrorCode, ErrorResponse, FieldError};
 pub use ids::{
-    AccountId, BotId, EnrollmentTokenId, InviteId, LinkFlowId, ModeId, SessionId, UserId,
+    AccountId, BotId, EnrollmentTokenId, InviteId, LinkFlowId, ModeId, ServerSettingsId, SessionId,
+    UserId,
 };
 pub use int::{SafeInt, SafeIntError};
 pub use open::{Open, OpenEnum};
