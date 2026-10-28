@@ -42,7 +42,6 @@ use chrono::{DateTime, Utc};
 use fleet_core::agent::{AgentStatus, status};
 use fleet_core::bot::{BotSpec, LastReport, LastState, StickyState};
 use fleet_core::chat::ChatRate;
-use fleet_core::disconnect::ConflictTexts;
 use fleet_core::id::{AgentId, BotId};
 use fleet_core::placement::{
     AgentFacts, AgentPlan, BotFacts, DetachReason, Facts, Held, HoldFacts, Let, Listed, Phase,
@@ -63,6 +62,7 @@ use crate::ports::assignments::{AssignError, Assignments};
 use crate::ports::bots::{BotRecord, Fleet};
 use crate::ports::live_hints::{LiveHints, NoLiveHints};
 use crate::ports::reconcile::{Change, Reconcile};
+use crate::ports::server_settings::ServerTexts;
 use crate::ports::store::StoreError;
 
 /// How often a full pass runs besides the hints.
@@ -529,7 +529,7 @@ impl Reconciler {
         let mut assignments = Vec::new();
         let mut holds = Vec::new();
         for (run, record) in runs {
-            let Some(spec) = spec_of(record, run, None, self.chat_rate) else {
+            let Some(spec) = spec_of(record, run, None, self.chat_rate, known.texts) else {
                 // The planner lets a bot without a server go; held so its
                 // `Removed` still clears it.
                 holds.push((run.bot, releasing(now)));
@@ -580,7 +580,7 @@ impl Reconciler {
         let now = self.clock.now();
         for (run, record) in runs {
             if run.placed {
-                let Some(spec) = spec_of(record, run, None, self.chat_rate) else {
+                let Some(spec) = spec_of(record, run, None, self.chat_rate, known.texts) else {
                     continue;
                 };
                 let entry = HoldEntry {
@@ -610,7 +610,7 @@ impl Reconciler {
                 }
                 continue;
             };
-            let spec = spec_of(record, run, kept.sent.as_ref(), self.chat_rate);
+            let spec = spec_of(record, run, kept.sent.as_ref(), self.chat_rate, known.texts);
             let entry = HoldEntry {
                 hold: Hold::Assigned,
                 since: kept.since,
@@ -658,7 +658,7 @@ impl Reconciler {
         record: &BotRecord,
         now: DateTime<Utc>,
     ) -> Option<Result<(), SendError>> {
-        let spec = spec_of(record, run, None, self.chat_rate)?;
+        let spec = spec_of(record, run, None, self.chat_rate, known.texts)?;
         let entry = HoldEntry {
             hold: Hold::Assigned,
             since: now,
@@ -698,6 +698,8 @@ impl Reconciler {
 /// What one pass knows: the stored bots and the live streams, by ID.
 struct Known<'a> {
     registry: &'a AgentRegistry,
+    /// Every server's conflict texts, from the fleet's snapshot.
+    texts: &'a ServerTexts,
     records: HashMap<BotId, &'a BotRecord>,
     views: &'a [LiveView],
     /// Each live stream's reports: its hello's, or its held bots' latest.
@@ -729,6 +731,7 @@ impl<'a> Known<'a> {
         }
         Self {
             registry,
+            texts: &fleet.server_texts,
             records: fleet
                 .bots
                 .iter()
@@ -881,25 +884,30 @@ fn rests(report: &LatestReport) -> bool {
 }
 
 /// `run`'s spec from `record`, with the server of the spec last sent while
-/// the bot has none any more, and `chat_rate`.
+/// the bot has none any more, that server's conflict texts from `texts`,
+/// and `chat_rate`.
 fn spec_of(
     record: &BotRecord,
     run: &Run,
     sent: Option<&BotSpec>,
     chat_rate: ChatRate,
+    texts: &ServerTexts,
 ) -> Option<BotSpec> {
     let server = record
         .bot
         .server
         .clone()
         .or_else(|| sent.map(|spec| spec.server.clone()))?;
+    // A server whose row's texts don't read back is never sent empty ones:
+    // the last spec stays (R132).
+    let conflict_texts = texts.of(&server)?;
     Some(BotSpec {
         id: record.bot.id,
         account: record.account.clone(),
         server,
         mode: record.mode.clone(),
         desired: run.desired,
-        conflict_texts: ConflictTexts::default(),
+        conflict_texts,
         chat_rate,
     })
 }

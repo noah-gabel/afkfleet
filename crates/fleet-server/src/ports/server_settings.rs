@@ -11,12 +11,13 @@
 
 use core::fmt;
 use core::num::NonZeroU32;
+use std::collections::HashMap;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use fleet_core::disconnect::ConflictTexts;
 use fleet_core::id::ServerSettingsId;
-use fleet_core::value::ServerKey;
+use fleet_core::value::{ServerAddress, ServerKey};
 
 use super::page::Page;
 use super::store::StoreError;
@@ -36,6 +37,30 @@ pub struct StoredServerSettings {
     pub created_at: DateTime<Utc>,
     /// When it last changed.
     pub updated_at: DateTime<Utc>,
+}
+
+/// Every server's conflict texts, read with the fleet in one snapshot
+/// (ADR-0020, S76, R132): what each bot's spec carries.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ServerTexts {
+    /// The texts of each server whose row reads back.
+    pub readable: HashMap<ServerKey, ConflictTexts>,
+    /// The servers whose row's texts don't read back, with the row's rowid:
+    /// their bots are left alone, never sent texts that fail open.
+    pub unreadable: HashMap<ServerKey, i64>,
+}
+
+impl ServerTexts {
+    /// The texts a bot on `server` gets: none when the server has no
+    /// settings, and `None` when its row's texts don't read back.
+    #[must_use]
+    pub fn of(&self, server: &ServerAddress) -> Option<ConflictTexts> {
+        let key = ServerKey::from(server);
+        if self.unreadable.contains_key(&key) {
+            return None;
+        }
+        Some(self.readable.get(&key).cloned().unwrap_or_default())
+    }
 }
 
 /// Reading the servers' settings through the read connections.
@@ -159,4 +184,51 @@ pub trait ServerSettingsWrites: Send {
     /// # Errors
     /// [`StoreError`].
     async fn delete(&mut self, id: ServerSettingsId) -> Result<bool, StoreError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(address: &str) -> ServerKey {
+        ServerKey::from(&address.parse::<ServerAddress>().unwrap())
+    }
+
+    fn texts(entries: &[&str]) -> ConflictTexts {
+        ConflictTexts::try_new(entries).unwrap()
+    }
+
+    fn server_texts() -> ServerTexts {
+        ServerTexts {
+            readable: HashMap::from([(key("mc.example.com"), texts(&["Already connected"]))]),
+            unreadable: HashMap::from([(key("broken.example.com"), 7)]),
+        }
+    }
+
+    #[test]
+    fn a_bot_gets_its_servers_texts_however_its_address_is_written() {
+        let server_texts = server_texts();
+
+        for address in ["mc.example.com", "MC.example.com:25565"] {
+            assert_eq!(
+                server_texts.of(&address.parse().unwrap()),
+                Some(texts(&["Already connected"])),
+                "{address}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_server_without_settings_gives_no_texts_and_an_unreadable_one_none_at_all() {
+        let server_texts = server_texts();
+
+        assert_eq!(
+            server_texts.of(&"mc.example.com:25566".parse().unwrap()),
+            Some(ConflictTexts::default())
+        );
+        assert_eq!(
+            server_texts.of(&"broken.example.com".parse().unwrap()),
+            None
+        );
+    }
 }

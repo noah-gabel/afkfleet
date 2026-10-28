@@ -17,7 +17,8 @@ use super::convert::{id_text, parse_id, parse_time, time_text};
 use super::error::{store_error, unique_violation};
 use crate::ports::page::Page;
 use crate::ports::server_settings::{
-    NewServerSettings, ServerSettingsChange, StoredServerSettings, WriteServerSettingsError,
+    NewServerSettings, ServerSettingsChange, ServerTexts, StoredServerSettings,
+    WriteServerSettingsError,
 };
 use crate::ports::store::StoreError;
 
@@ -194,6 +195,39 @@ pub(super) async fn delete(
         .await
         .map_err(store_error)?;
     Ok(done.rows_affected() == 1)
+}
+
+/// Every server's conflict texts, for the fleet's snapshot (ADR-0020, R132):
+/// a row whose server doesn't read back fails the read, since its bots
+/// can't be told; one whose texts don't is unreadable, by its server.
+pub(super) async fn texts_by_server(
+    conn: &mut SqliteConnection,
+) -> Result<ServerTexts, StoreError> {
+    let rows = sqlx::query!(
+        r#"SELECT rowid AS "rowid!: i64", server AS "server!",
+                  conflict_texts AS "conflict_texts!"
+           FROM server_settings"#
+    )
+    .fetch_all(conn)
+    .await
+    .map_err(store_error)?;
+    let mut texts = ServerTexts::default();
+    for row in rows {
+        let server = ServerKey::try_from(row.server.as_str()).map_err(|_| StoreError::Corrupt {
+            table: SERVER_SETTINGS,
+            column: "server",
+            rowid: row.rowid,
+        })?;
+        match stored_texts(&row.conflict_texts) {
+            Some(read) => {
+                texts.readable.insert(server, read);
+            }
+            None => {
+                texts.unreadable.insert(server, row.rowid);
+            }
+        }
+    }
+    Ok(texts)
 }
 
 /// A write's error: the unique key's refusal as [`WriteServerSettingsError::ServerTaken`].
